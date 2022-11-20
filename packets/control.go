@@ -1,0 +1,176 @@
+package packets
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+)
+
+// ErrFailRemaining indicates remaining data does not match the size of sent data.
+var ErrFailRemaining = errors.New("remaining data length does not match data size")
+
+// Constants assigned to each of the MQTT packet types
+const (
+	ConnectType = iota + 1
+	ConnAckType
+	PublishType
+	PubAckType
+	PubRecType
+	PubRelType
+	PubCompType
+	SubscribeType
+	SubAckType
+	UnsubscribeType
+	UnsubAckType
+	PingReqType
+	PingRespType
+	DisconnectType
+)
+
+// PacketNames maps the constants for each of the MQTT packet types
+// to a string representation of their name.
+var PacketNames = map[uint8]string{
+	ConnectType:     "CONNECT",
+	ConnAckType:     "CONNACK",
+	PublishType:     "PUBLISH",
+	PubAckType:      "PUBACK",
+	PubRecType:      "PUBREC",
+	PubRelType:      "PUBREL",
+	PubCompType:     "PUBCOMP",
+	SubscribeType:   "SUBSCRIBE",
+	SubAckType:      "SUBACK",
+	UnsubscribeType: "UNSUBSCRIBE",
+	UnsubAckType:    "UNSUBACK",
+	PingReqType:     "PINGREQ",
+	PingRespType:    "PINGRESP",
+	DisconnectType:  "DISCONNECT",
+}
+
+// ControlPacket defines the interface for structures intended to hold
+// decoded MQTT packets, either from being read or before being written.
+type ControlPacket interface {
+	Write(io.Writer) error
+	Unpack(io.Reader) error
+	String() string
+	Details() Details
+}
+
+// Details struct returned by the Details() function called on
+// ControlPackets to present details of the Qos and MessageID
+// of the ControlPacket
+type Details struct {
+	Qos       byte
+	MessageID uint16
+}
+
+// ReadPacket takes an instance of an io.Reader (such as net.Conn) and attempts
+// to read an MQTT packet from the stream. It returns a ControlPacket
+// representing the decoded MQTT packet and an error. One of these returns will
+// always be nil, a nil ControlPacket indicating an error occurred.
+func ReadPacket(r io.Reader) (ControlPacket, error) {
+	var fh FixedHeader
+	b := make([]byte, 1)
+
+	_, err := io.ReadFull(r, b)
+	if err != nil {
+		return nil, err
+	}
+
+	err = fh.unpack(b[0], r)
+	if err != nil {
+		return nil, err
+	}
+
+	cp, err := NewControlPacketWithHeader(fh)
+	if err != nil {
+		return nil, err
+	}
+
+	packetBytes := make([]byte, fh.RemainingLength)
+	n, err := io.ReadFull(r, packetBytes)
+	if err != nil {
+		return nil, err
+	}
+	if n != fh.RemainingLength {
+		return nil, ErrFailRemaining
+	}
+
+	err = cp.Unpack(bytes.NewBuffer(packetBytes))
+	return cp, err
+}
+
+// NewControlPacket is used to create a new ControlPacket of the type specified
+// by packetType, this is usually done by reference to the packet type constants
+// defined in packets.go. The newly created ControlPacket is empty and a pointer
+// is returned.
+func NewControlPacket(packetType byte) ControlPacket {
+	switch packetType {
+	case ConnectType:
+		return &Connect{FixedHeader: FixedHeader{MessageType: ConnectType}}
+	case ConnAckType:
+		return &ConnAck{FixedHeader: FixedHeader{MessageType: ConnAckType}}
+	case DisconnectType:
+		return &Disconnect{FixedHeader: FixedHeader{MessageType: DisconnectType}}
+	case PublishType:
+		return &Publish{FixedHeader: FixedHeader{MessageType: PublishType}}
+	case PubAckType:
+		return &PubAck{FixedHeader: FixedHeader{MessageType: PubAckType}}
+	case PubRecType:
+		return &PubRec{FixedHeader: FixedHeader{MessageType: PubRecType}}
+	case PubRelType:
+		return &PubRel{FixedHeader: FixedHeader{MessageType: PubRelType, Qos: 1}}
+	case PubCompType:
+		return &PubComp{FixedHeader: FixedHeader{MessageType: PubCompType}}
+	case SubscribeType:
+		return &Subscribe{FixedHeader: FixedHeader{MessageType: SubscribeType, Qos: 1}}
+	case SubAckType:
+		return &SubAck{FixedHeader: FixedHeader{MessageType: SubAckType}}
+	case UnsubscribeType:
+		return &Unsubscribe{FixedHeader: FixedHeader{MessageType: UnsubscribeType, Qos: 1}}
+	case UnsubAckType:
+		return &UnSubAck{FixedHeader: FixedHeader{MessageType: UnsubAckType}}
+	case PingReqType:
+		return &PingReq{FixedHeader: FixedHeader{MessageType: PingReqType}}
+	case PingRespType:
+		return &PingResp{FixedHeader: FixedHeader{MessageType: PingRespType}}
+	}
+	return nil
+}
+
+// NewControlPacketWithHeader is used to create a new ControlPacket of the type
+// specified within the FixedHeader that is passed to the function.
+// The newly created ControlPacket is empty and a pointer is returned.
+func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
+	switch fh.MessageType {
+	case ConnectType:
+		return &Connect{FixedHeader: fh}, nil
+	case ConnAckType:
+		return &ConnAck{FixedHeader: fh}, nil
+	case DisconnectType:
+		return &Disconnect{FixedHeader: fh}, nil
+	case PublishType:
+		return &Publish{FixedHeader: fh}, nil
+	case PubAckType:
+		return &PubAck{FixedHeader: fh}, nil
+	case PubRecType:
+		return &PubRec{FixedHeader: fh}, nil
+	case PubRelType:
+		return &PubRel{FixedHeader: fh}, nil
+	case PubCompType:
+		return &PubComp{FixedHeader: fh}, nil
+	case SubscribeType:
+		return &Subscribe{FixedHeader: fh}, nil
+	case SubAckType:
+		return &SubAck{FixedHeader: fh}, nil
+	case UnsubscribeType:
+		return &Unsubscribe{FixedHeader: fh}, nil
+	case UnsubAckType:
+		return &UnSubAck{FixedHeader: fh}, nil
+	case PingReqType:
+		return &PingReq{FixedHeader: fh}, nil
+	case PingRespType:
+		return &PingResp{FixedHeader: fh}, nil
+	}
+	return nil, fmt.Errorf("unsupported packet type 0x%x", fh.MessageType)
+}
