@@ -11,18 +11,18 @@ import (
 // SubAck is an internal representation of the fields of the SUBACK MQTT packet.
 type SubAck struct {
 	FixedHeader
-	MessageID   uint16
+	ID          uint16
 	ReturnCodes []byte
 }
 
 func (pkt *SubAck) String() string {
-	return fmt.Sprintf("%s\nmessage_id: %d\n", pkt.FixedHeader, pkt.MessageID)
+	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
 func (pkt *SubAck) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
-	body.Write(codec.EncodeUint16(pkt.MessageID))
+	body.Write(codec.EncodeUint16(pkt.ID))
 	body.Write(pkt.ReturnCodes)
 	pkt.FixedHeader.RemainingLength = body.Len()
 	packet := pkt.FixedHeader.pack()
@@ -37,7 +37,7 @@ func (pkt *SubAck) Write(w io.Writer) error {
 func (pkt *SubAck) Unpack(b io.Reader) error {
 	var qosBuffer bytes.Buffer
 	var err error
-	pkt.MessageID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(b)
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func (pkt *SubAck) Unpack(b io.Reader) error {
 }
 
 // Details returns a Details struct containing the Qos and
-// MessageID of this ControlPacket
+// ID of this ControlPacket
 func (pkt *SubAck) Details() Details {
-	return Details{Qos: 0, MessageID: pkt.MessageID}
+	return Details{Qos: 0, ID: pkt.ID}
 }

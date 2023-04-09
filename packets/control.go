@@ -59,11 +59,11 @@ type ControlPacket interface {
 }
 
 // Details struct returned by the Details() function called on
-// ControlPackets to present details of the Qos and MessageID
+// ControlPackets to present details of the Qos and ID
 // of the ControlPacket
 type Details struct {
-	Qos       byte
-	MessageID uint16
+	Qos byte
+	ID  uint16
 }
 
 // ReadPacket takes an instance of an io.Reader (such as net.Conn) and attempts

@@ -11,18 +11,18 @@ import (
 // Unsubscribe is an internal representation of the fields of the UNSUBSCRIBE MQTT packet.
 type Unsubscribe struct {
 	FixedHeader
-	MessageID uint16
-	Topics    []string
+	ID     uint16
+	Topics []string
 }
 
 func (pkt *Unsubscribe) String() string {
-	return fmt.Sprintf("%s\nmessage_id: %d\n", pkt.FixedHeader, pkt.MessageID)
+	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
 func (pkt *Unsubscribe) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
-	body.Write(codec.EncodeUint16(pkt.MessageID))
+	body.Write(codec.EncodeUint16(pkt.ID))
 	for _, topic := range pkt.Topics {
 		body.Write(codec.EncodeString(topic))
 	}
@@ -38,7 +38,7 @@ func (pkt *Unsubscribe) Write(w io.Writer) error {
 // header has been read
 func (pkt *Unsubscribe) Unpack(b io.Reader) error {
 	var err error
-	pkt.MessageID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(b)
 
 	if err != nil {
 		return err
@@ -51,7 +51,7 @@ func (pkt *Unsubscribe) Unpack(b io.Reader) error {
 	return err
 }
 
-// Details returns a struct containing the Qos and message_id of this control packet.
+// Details returns a struct containing the Qos and packet_id of this control packet.
 func (pkt *Unsubscribe) Details() Details {
-	return Details{Qos: 1, MessageID: pkt.MessageID}
+	return Details{Qos: 1, ID: pkt.ID}
 }

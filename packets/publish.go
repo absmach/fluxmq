@@ -16,12 +16,12 @@ var ErrPublishInvalidLength = errors.New("error unpacking publish, payload lengt
 type Publish struct {
 	FixedHeader
 	TopicName string
-	MessageID uint16
+	ID        uint16
 	Payload   []byte
 }
 
 func (pkt *Publish) String() string {
-	return fmt.Sprintf("%s\ntopic_name: %s\nmessage_id: %d\npayload: %s\n", pkt.FixedHeader, pkt.TopicName, pkt.MessageID, pkt.Payload)
+	return fmt.Sprintf("%s\ntopic_name: %s\npacket_id: %d\npayload: %s\n", pkt.FixedHeader, pkt.TopicName, pkt.ID, pkt.Payload)
 }
 
 func (pkt *Publish) Write(w io.Writer) error {
@@ -30,7 +30,7 @@ func (pkt *Publish) Write(w io.Writer) error {
 
 	body.Write(codec.EncodeString(pkt.TopicName))
 	if pkt.Qos > 0 {
-		body.Write(codec.EncodeUint16(pkt.MessageID))
+		body.Write(codec.EncodeUint16(pkt.ID))
 	}
 	pkt.FixedHeader.RemainingLength = body.Len() + len(pkt.Payload)
 	packet := pkt.FixedHeader.pack()
@@ -52,7 +52,7 @@ func (pkt *Publish) Unpack(b io.Reader) error {
 	}
 
 	if pkt.Qos > 0 {
-		pkt.MessageID, err = codec.DecodeUint16(b)
+		pkt.ID, err = codec.DecodeUint16(b)
 		if err != nil {
 			return err
 		}
@@ -82,7 +82,7 @@ func (pkt *Publish) Copy() *Publish {
 }
 
 // Details returns a Details struct containing the Qos and
-// MessageID of this ControlPacket
+// ID of this ControlPacket
 func (pkt *Publish) Details() Details {
-	return Details{Qos: pkt.Qos, MessageID: pkt.MessageID}
+	return Details{Qos: pkt.Qos, ID: pkt.ID}
 }

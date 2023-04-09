@@ -36,7 +36,7 @@ func (pkt *Auth) Unpack(b io.Reader) error {
 }
 
 // Details returns a Details struct containing the Qos and
-// MessageID of this ControlPacket
+// ID of this ControlPacket
 func (pkt *Auth) Details() Details {
-	return Details{Qos: 0, MessageID: 0}
+	return Details{Qos: 0, ID: 0}
 }

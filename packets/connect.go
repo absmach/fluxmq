@@ -176,7 +176,7 @@ func (c *Connect) Validate() byte {
 }
 
 // Details returns a Details struct containing the Qos and
-// MessageID of this ControlPacket
+// ID of this ControlPacket
 func (c *Connect) Details() Details {
-	return Details{Qos: 0, MessageID: 0}
+	return Details{Qos: 0, ID: 0}
 }

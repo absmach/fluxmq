@@ -11,23 +11,23 @@ import (
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet
 type Subscribe struct {
 	FixedHeader
-	MessageID uint16
-	Topics    []string
-	Qoss      []byte
+	ID     uint16
+	Topics []string
+	QoSs   []byte
 }
 
 func (pkt *Subscribe) String() string {
-	return fmt.Sprintf("%s\nmessage_id: %d\ntopics: %s\n", pkt.FixedHeader, pkt.MessageID, pkt.Topics)
+	return fmt.Sprintf("%s\npacket_id: %d\ntopics: %s\n", pkt.FixedHeader, pkt.ID, pkt.Topics)
 }
 
 func (pkt *Subscribe) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.Write(codec.EncodeUint16(pkt.MessageID))
+	body.Write(codec.EncodeUint16(pkt.ID))
 	for i, topic := range pkt.Topics {
 		body.Write(codec.EncodeString(topic))
-		body.WriteByte(pkt.Qoss[i])
+		body.WriteByte(pkt.QoSs[i])
 	}
 	pkt.FixedHeader.RemainingLength = body.Len()
 	packet := pkt.FixedHeader.pack()
@@ -41,7 +41,7 @@ func (pkt *Subscribe) Write(w io.Writer) error {
 // header has been read
 func (pkt *Subscribe) Unpack(b io.Reader) error {
 	var err error
-	pkt.MessageID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(b)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (pkt *Subscribe) Unpack(b io.Reader) error {
 		if err != nil {
 			return err
 		}
-		pkt.Qoss = append(pkt.Qoss, qos)
+		pkt.QoSs = append(pkt.QoSs, qos)
 		payloadLength -= 2 + len(topic) + 1 //2 bytes of string length, plus string, plus 1 byte for Qos
 	}
 
@@ -64,7 +64,7 @@ func (pkt *Subscribe) Unpack(b io.Reader) error {
 }
 
 // Details returns a Details struct containing the Qos and
-// MessageID of this ControlPacket
+// ID of this ControlPacket
 func (pkt *Subscribe) Details() Details {
-	return Details{Qos: 1, MessageID: pkt.MessageID}
+	return Details{Qos: 1, ID: pkt.ID}
 }
