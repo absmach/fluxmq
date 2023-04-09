@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -15,17 +14,14 @@ type Auth struct {
 }
 
 func (pkt *Auth) String() string {
-	return fmt.Sprintf("%s \nReason Code %s", pkt.FixedHeader, pkt.ReasonCode)
+	return fmt.Sprintf("%s\nreason_code %d\n", pkt.FixedHeader, pkt.ReasonCode)
 }
 
 func (pkt *Auth) Write(w io.Writer) error {
-	var body bytes.Buffer
 	var err error
-
-	body.WriteByte(pkt.ReasonCode)
 	pkt.FixedHeader.RemainingLength = 2
 	packet := pkt.FixedHeader.pack()
-	packet.Write(body.Bytes())
+	packet.Write([]byte{pkt.ReasonCode})
 	_, err = packet.WriteTo(w)
 
 	return err
