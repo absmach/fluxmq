@@ -12,7 +12,7 @@ var ErrFailRemaining = errors.New("remaining data length does not match data siz
 
 // Constants assigned to each of the MQTT packet types
 const (
-	ConnectType = iota + 1
+	ConnectType = iota + 1 // 0 value is forbidden
 	ConnAckType
 	PublishType
 	PubAckType
@@ -26,6 +26,7 @@ const (
 	PingReqType
 	PingRespType
 	DisconnectType
+	AuthType
 )
 
 // PacketNames maps the constants for each of the MQTT packet types
@@ -45,6 +46,7 @@ var PacketNames = map[uint8]string{
 	PingReqType:     "PINGREQ",
 	PingRespType:    "PINGRESP",
 	DisconnectType:  "DISCONNECT",
+	AuthType:        "AUTH",
 }
 
 // ControlPacket defines the interface for structures intended to hold

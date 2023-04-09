@@ -3,16 +3,22 @@ package packets
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
 
+// ErrMaxLengthExceeded represents an error for invalid length int size.
+// Length is positive integer of variable length.
+var ErrMaxLengthExceeded = errors.New("max length value exceeded")
+
+const maxMultiplier = 128 * 128 * 128
 const headerFormat = "type: %s: dup: %t qos: %d retain: %t remaining_length: %d\n"
 
 // FixedHeader is a struct to hold the decoded information from
 // the fixed header of an MQTT ControlPacket.
 type FixedHeader struct {
-	MessageType     byte
+	PacketType      byte
 	Dup             bool
 	Qos             byte
 	Retain          bool
@@ -20,7 +26,7 @@ type FixedHeader struct {
 }
 
 func (fh FixedHeader) String() string {
-	return fmt.Sprintf(headerFormat, PacketNames[fh.MessageType], fh.Dup, fh.Qos, fh.Retain, fh.RemainingLength)
+	return fmt.Sprintf(headerFormat, PacketNames[fh.PacketType], fh.Dup, fh.Qos, fh.Retain, fh.RemainingLength)
 }
 
 func boolToByte(b bool) byte {
@@ -34,13 +40,13 @@ func boolToByte(b bool) byte {
 
 func (fh *FixedHeader) pack() bytes.Buffer {
 	var header bytes.Buffer
-	header.WriteByte(fh.MessageType<<4 | boolToByte(fh.Dup)<<3 | fh.Qos<<1 | boolToByte(fh.Retain))
+	header.WriteByte(fh.PacketType<<4 | boolToByte(fh.Dup)<<3 | fh.Qos<<1 | boolToByte(fh.Retain))
 	header.Write(encodeLength(fh.RemainingLength))
 	return header
 }
 
 func (fh *FixedHeader) unpack(typeAndFlags byte, r io.Reader) error {
-	fh.MessageType = typeAndFlags >> 4
+	fh.PacketType = typeAndFlags >> 4
 	fh.Dup = (typeAndFlags>>3)&0x01 > 0
 	fh.Qos = (typeAndFlags >> 1) & 0x03
 	fh.Retain = typeAndFlags&0x01 > 0
@@ -122,21 +128,21 @@ func encodeLength(length int) []byte {
 }
 
 func decodeLength(r io.Reader) (int, error) {
-	var rLength uint32
-	var multiplier uint32
-	b := make([]byte, 1)
-	for multiplier < 27 { //fix: Infinite '(digit & 128) == 1' will cause the dead loop
-		_, err := io.ReadFull(r, b)
+	var value uint32
+	b := byte(128)
+	multiplier := uint32(1)
+	buff := make([]byte, 1)
+	for b&128 != 0 {
+		if multiplier > maxMultiplier {
+			return 0, ErrMaxLengthExceeded
+		}
+		_, err := io.ReadFull(r, buff)
 		if err != nil {
 			return 0, err
 		}
-
-		digit := b[0]
-		rLength |= uint32(digit&127) << multiplier
-		if (digit & 128) == 0 {
-			break
-		}
-		multiplier += 7
+		b = buff[0]
+		value += uint32(b&127) * multiplier
+		multiplier *= 128
 	}
-	return int(rLength), nil
+	return int(value), nil
 }
