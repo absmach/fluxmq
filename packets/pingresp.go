@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"fmt"
 	"io"
 )
 
@@ -10,13 +9,12 @@ type PingResp struct {
 	FixedHeader
 }
 
-func (pr *PingResp) String() string {
-	str := fmt.Sprintf("%s", pr.FixedHeader)
-	return str
+func (pkt *PingResp) String() string {
+	return pkt.FixedHeader.String()
 }
 
-func (pr *PingResp) Write(w io.Writer) error {
-	packet := pr.FixedHeader.pack()
+func (pkt *PingResp) Write(w io.Writer) error {
+	packet := pkt.FixedHeader.pack()
 	_, err := packet.WriteTo(w)
 
 	return err
@@ -24,12 +22,12 @@ func (pr *PingResp) Write(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (pr *PingResp) Unpack(b io.Reader) error {
+func (pkt *PingResp) Unpack(b io.Reader) error {
 	return nil
 }
 
 // Details returns a Details struct containing the Qos and
 // MessageID of this ControlPacket
-func (pr *PingResp) Details() Details {
+func (pkt *PingResp) Details() Details {
 	return Details{Qos: 0, MessageID: 0}
 }

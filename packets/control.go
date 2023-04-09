@@ -109,33 +109,33 @@ func ReadPacket(r io.Reader) (ControlPacket, error) {
 func NewControlPacket(packetType byte) ControlPacket {
 	switch packetType {
 	case ConnectType:
-		return &Connect{FixedHeader: FixedHeader{MessageType: ConnectType}}
+		return &Connect{FixedHeader: FixedHeader{PacketType: ConnectType}}
 	case ConnAckType:
-		return &ConnAck{FixedHeader: FixedHeader{MessageType: ConnAckType}}
+		return &ConnAck{FixedHeader: FixedHeader{PacketType: ConnAckType}}
 	case DisconnectType:
-		return &Disconnect{FixedHeader: FixedHeader{MessageType: DisconnectType}}
+		return &Disconnect{FixedHeader: FixedHeader{PacketType: DisconnectType}}
 	case PublishType:
-		return &Publish{FixedHeader: FixedHeader{MessageType: PublishType}}
+		return &Publish{FixedHeader: FixedHeader{PacketType: PublishType}}
 	case PubAckType:
-		return &PubAck{FixedHeader: FixedHeader{MessageType: PubAckType}}
+		return &PubAck{FixedHeader: FixedHeader{PacketType: PubAckType}}
 	case PubRecType:
-		return &PubRec{FixedHeader: FixedHeader{MessageType: PubRecType}}
+		return &PubRec{FixedHeader: FixedHeader{PacketType: PubRecType}}
 	case PubRelType:
-		return &PubRel{FixedHeader: FixedHeader{MessageType: PubRelType, Qos: 1}}
+		return &PubRel{FixedHeader: FixedHeader{PacketType: PubRelType, Qos: 1}}
 	case PubCompType:
-		return &PubComp{FixedHeader: FixedHeader{MessageType: PubCompType}}
+		return &PubComp{FixedHeader: FixedHeader{PacketType: PubCompType}}
 	case SubscribeType:
-		return &Subscribe{FixedHeader: FixedHeader{MessageType: SubscribeType, Qos: 1}}
+		return &Subscribe{FixedHeader: FixedHeader{PacketType: SubscribeType, Qos: 1}}
 	case SubAckType:
-		return &SubAck{FixedHeader: FixedHeader{MessageType: SubAckType}}
+		return &SubAck{FixedHeader: FixedHeader{PacketType: SubAckType}}
 	case UnsubscribeType:
-		return &Unsubscribe{FixedHeader: FixedHeader{MessageType: UnsubscribeType, Qos: 1}}
+		return &Unsubscribe{FixedHeader: FixedHeader{PacketType: UnsubscribeType, Qos: 1}}
 	case UnsubAckType:
-		return &UnSubAck{FixedHeader: FixedHeader{MessageType: UnsubAckType}}
+		return &UnSubAck{FixedHeader: FixedHeader{PacketType: UnsubAckType}}
 	case PingReqType:
-		return &PingReq{FixedHeader: FixedHeader{MessageType: PingReqType}}
+		return &PingReq{FixedHeader: FixedHeader{PacketType: PingReqType}}
 	case PingRespType:
-		return &PingResp{FixedHeader: FixedHeader{MessageType: PingRespType}}
+		return &PingResp{FixedHeader: FixedHeader{PacketType: PingRespType}}
 	}
 	return nil
 }
@@ -144,7 +144,7 @@ func NewControlPacket(packetType byte) ControlPacket {
 // specified within the FixedHeader that is passed to the function.
 // The newly created ControlPacket is empty and a pointer is returned.
 func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
-	switch fh.MessageType {
+	switch fh.PacketType {
 	case ConnectType:
 		return &Connect{FixedHeader: fh}, nil
 	case ConnAckType:
@@ -174,5 +174,5 @@ func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 	case PingRespType:
 		return &PingResp{FixedHeader: fh}, nil
 	}
-	return nil, fmt.Errorf("unsupported packet type 0x%x", fh.MessageType)
+	return nil, fmt.Errorf("unsupported packet type 0x%x", fh.PacketType)
 }

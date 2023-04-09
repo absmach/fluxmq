@@ -2,9 +2,15 @@ package packets
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+
+	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
+
+// ErrPublishInvalidLength represents invalid length of PUBLISH packet.
+var ErrPublishInvalidLength = errors.New("error unpacking publish, payload length < 0")
 
 // Publish is an internal representation of the fields of the PUBLISH MQTT packet.
 type Publish struct {
@@ -14,22 +20,22 @@ type Publish struct {
 	Payload   []byte
 }
 
-func (p *Publish) String() string {
-	return p.FixedHeader.String() + fmt.Sprintf("topic_name: %s\nmessage_id: %d\n", p.TopicName, p.MessageID) + fmt.Sprintf("payload: %s", string(p.Payload))
+func (pkt *Publish) String() string {
+	return fmt.Sprintf("%s\ntopic_name: %s\nmessage_id: %d\npayload: %s\n", pkt.FixedHeader, pkt.TopicName, pkt.MessageID, pkt.Payload)
 }
 
-func (p *Publish) Write(w io.Writer) error {
+func (pkt *Publish) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.Write(encodeString(p.TopicName))
-	if p.Qos > 0 {
-		body.Write(encodeUint16(p.MessageID))
+	body.Write(codec.EncodeString(pkt.TopicName))
+	if pkt.Qos > 0 {
+		body.Write(codec.EncodeUint16(pkt.MessageID))
 	}
-	p.FixedHeader.RemainingLength = body.Len() + len(p.Payload)
-	packet := p.FixedHeader.pack()
+	pkt.FixedHeader.RemainingLength = body.Len() + len(pkt.Payload)
+	packet := pkt.FixedHeader.pack()
 	packet.Write(body.Bytes())
-	packet.Write(p.Payload)
+	packet.Write(pkt.Payload)
 	_, err = w.Write(packet.Bytes())
 
 	return err
@@ -37,28 +43,28 @@ func (p *Publish) Write(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (p *Publish) Unpack(b io.Reader) error {
-	var payloadLength = p.FixedHeader.RemainingLength
+func (pkt *Publish) Unpack(b io.Reader) error {
+	var payloadLength = pkt.FixedHeader.RemainingLength
 	var err error
-	p.TopicName, err = decodeString(b)
+	pkt.TopicName, err = codec.DecodeString(b)
 	if err != nil {
 		return err
 	}
 
-	if p.Qos > 0 {
-		p.MessageID, err = decodeUint16(b)
+	if pkt.Qos > 0 {
+		pkt.MessageID, err = codec.DecodeUint16(b)
 		if err != nil {
 			return err
 		}
-		payloadLength -= len(p.TopicName) + 4
+		payloadLength -= len(pkt.TopicName) + 4
 	} else {
-		payloadLength -= len(p.TopicName) + 2
+		payloadLength -= len(pkt.TopicName) + 2
 	}
 	if payloadLength < 0 {
-		return fmt.Errorf("Error unpacking publish, payload length < 0")
+		return ErrPublishInvalidLength
 	}
-	p.Payload = make([]byte, payloadLength)
-	_, err = b.Read(p.Payload)
+	pkt.Payload = make([]byte, payloadLength)
+	_, err = b.Read(pkt.Payload)
 
 	return err
 }
@@ -67,16 +73,16 @@ func (p *Publish) Unpack(b io.Reader) error {
 // but an empty fixed header, useful for when you want to deliver
 // a message with different properties such as Qos but the same
 // content
-func (p *Publish) Copy() *Publish {
+func (pkt *Publish) Copy() *Publish {
 	newP := NewControlPacket(PublishType).(*Publish)
-	newP.TopicName = p.TopicName
-	newP.Payload = p.Payload
+	newP.TopicName = pkt.TopicName
+	newP.Payload = pkt.Payload
 
 	return newP
 }
 
 // Details returns a Details struct containing the Qos and
 // MessageID of this ControlPacket
-func (p *Publish) Details() Details {
-	return Details{Qos: p.Qos, MessageID: p.MessageID}
+func (pkt *Publish) Details() Details {
+	return Details{Qos: pkt.Qos, MessageID: pkt.MessageID}
 }

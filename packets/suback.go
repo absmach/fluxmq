@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
 
 // SubAck is an internal representation of the fields of the SUBACK MQTT packet.
@@ -13,17 +15,17 @@ type SubAck struct {
 	ReturnCodes []byte
 }
 
-func (sa *SubAck) String() string {
-	return sa.FixedHeader.String() + fmt.Sprintf("message_id: %d", sa.MessageID)
+func (pkt *SubAck) String() string {
+	return fmt.Sprintf("%s\nmessage_id: %d\n", pkt.FixedHeader, pkt.MessageID)
 }
 
-func (sa *SubAck) Write(w io.Writer) error {
+func (pkt *SubAck) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
-	body.Write(encodeUint16(sa.MessageID))
-	body.Write(sa.ReturnCodes)
-	sa.FixedHeader.RemainingLength = body.Len()
-	packet := sa.FixedHeader.pack()
+	body.Write(codec.EncodeUint16(pkt.MessageID))
+	body.Write(pkt.ReturnCodes)
+	pkt.FixedHeader.RemainingLength = body.Len()
+	packet := pkt.FixedHeader.pack()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 
@@ -32,10 +34,10 @@ func (sa *SubAck) Write(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (sa *SubAck) Unpack(b io.Reader) error {
+func (pkt *SubAck) Unpack(b io.Reader) error {
 	var qosBuffer bytes.Buffer
 	var err error
-	sa.MessageID, err = decodeUint16(b)
+	pkt.MessageID, err = codec.DecodeUint16(b)
 	if err != nil {
 		return err
 	}
@@ -44,13 +46,13 @@ func (sa *SubAck) Unpack(b io.Reader) error {
 	if err != nil {
 		return err
 	}
-	sa.ReturnCodes = qosBuffer.Bytes()
+	pkt.ReturnCodes = qosBuffer.Bytes()
 
 	return nil
 }
 
 // Details returns a Details struct containing the Qos and
 // MessageID of this ControlPacket
-func (sa *SubAck) Details() Details {
-	return Details{Qos: 0, MessageID: sa.MessageID}
+func (pkt *SubAck) Details() Details {
+	return Details{Qos: 0, MessageID: pkt.MessageID}
 }

@@ -3,6 +3,8 @@ package packets
 import (
 	"fmt"
 	"io"
+
+	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
 
 // PubAck is an internal representation of the fields of the PUBACK MQTT packet.
@@ -11,18 +13,15 @@ type PubAck struct {
 	MessageID uint16
 }
 
-func (pa *PubAck) String() string {
-	str := fmt.Sprintf("%s", pa.FixedHeader)
-	str += " "
-	str += fmt.Sprintf("message_id: %d", pa.MessageID)
-	return str
+func (pkt *PubAck) String() string {
+	return fmt.Sprintf("%s\nmessage_id: %d", pkt.FixedHeader, pkt.MessageID)
 }
 
-func (pa *PubAck) Write(w io.Writer) error {
+func (pkt *PubAck) Write(w io.Writer) error {
 	var err error
-	pa.FixedHeader.RemainingLength = 2
-	packet := pa.FixedHeader.pack()
-	packet.Write(encodeUint16(pa.MessageID))
+	pkt.FixedHeader.RemainingLength = 2
+	packet := pkt.FixedHeader.pack()
+	packet.Write(codec.EncodeUint16(pkt.MessageID))
 	_, err = packet.WriteTo(w)
 
 	return err
@@ -30,15 +29,15 @@ func (pa *PubAck) Write(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (pa *PubAck) Unpack(b io.Reader) error {
+func (pkt *PubAck) Unpack(b io.Reader) error {
 	var err error
-	pa.MessageID, err = decodeUint16(b)
+	pkt.MessageID, err = codec.DecodeUint16(b)
 
 	return err
 }
 
 // Details returns a Details struct containing the Qos and
 // MessageID of this ControlPacket
-func (pa *PubAck) Details() Details {
-	return Details{Qos: pa.Qos, MessageID: pa.MessageID}
+func (pkt *PubAck) Details() Details {
+	return Details{Qos: pkt.Qos, MessageID: pkt.MessageID}
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
 
 // Unsubscribe is an internal representation of the fields of the UNSUBSCRIBE MQTT packet.
@@ -13,19 +15,19 @@ type Unsubscribe struct {
 	Topics    []string
 }
 
-func (u *Unsubscribe) String() string {
-	return u.FixedHeader.String() + fmt.Sprintf("message_id: %d", u.MessageID)
+func (pkt *Unsubscribe) String() string {
+	return fmt.Sprintf("%s\nmessage_id: %d\n", pkt.FixedHeader, pkt.MessageID)
 }
 
-func (u *Unsubscribe) Write(w io.Writer) error {
+func (pkt *Unsubscribe) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
-	body.Write(encodeUint16(u.MessageID))
-	for _, topic := range u.Topics {
-		body.Write(encodeString(topic))
+	body.Write(codec.EncodeUint16(pkt.MessageID))
+	for _, topic := range pkt.Topics {
+		body.Write(codec.EncodeString(topic))
 	}
-	u.FixedHeader.RemainingLength = body.Len()
-	packet := u.FixedHeader.pack()
+	pkt.FixedHeader.RemainingLength = body.Len()
+	packet := pkt.FixedHeader.pack()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 
@@ -34,21 +36,22 @@ func (u *Unsubscribe) Write(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (u *Unsubscribe) Unpack(b io.Reader) error {
+func (pkt *Unsubscribe) Unpack(b io.Reader) error {
 	var err error
-	u.MessageID, err = decodeUint16(b)
+	pkt.MessageID, err = codec.DecodeUint16(b)
+
 	if err != nil {
 		return err
 	}
 
-	for topic, err := decodeString(b); err == nil && topic != ""; topic, err = decodeString(b) {
-		u.Topics = append(u.Topics, topic)
+	for topic, err := codec.DecodeString(b); err == nil && topic != ""; topic, err = codec.DecodeString(b) {
+		pkt.Topics = append(pkt.Topics, topic)
 	}
 
 	return err
 }
 
-// Details returns a struct containing the Qos and Message ID of this control packet.
-func (u *Unsubscribe) Details() Details {
-	return Details{Qos: 1, MessageID: u.MessageID}
+// Details returns a struct containing the Qos and message_id of this control packet.
+func (pkt *Unsubscribe) Details() Details {
+	return Details{Qos: 1, MessageID: pkt.MessageID}
 }

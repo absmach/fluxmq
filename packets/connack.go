@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
 
 // ConnackReturnCodes is a map of the error codes constants for Connect()
@@ -26,21 +28,18 @@ type ConnAck struct {
 	ReturnCode     byte
 }
 
-func (ca *ConnAck) String() string {
-	str := fmt.Sprintf("%s", ca.FixedHeader)
-	str += " "
-	str += fmt.Sprintf("sessionpresent: %t returncode: %d", ca.SessionPresent, ca.ReturnCode)
-	return str
+func (pkt *ConnAck) String() string {
+	return fmt.Sprintf("%s SessionPresent: %t ReturnCode %d", pkt.FixedHeader, pkt.SessionPresent, pkt.ReturnCode)
 }
 
-func (ca *ConnAck) Write(w io.Writer) error {
+func (pkt *ConnAck) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.WriteByte(boolToByte(ca.SessionPresent))
-	body.WriteByte(ca.ReturnCode)
-	ca.FixedHeader.RemainingLength = 2
-	packet := ca.FixedHeader.pack()
+	body.WriteByte(codec.EncodeBool(pkt.SessionPresent))
+	body.WriteByte(pkt.ReturnCode)
+	pkt.FixedHeader.RemainingLength = 2
+	packet := pkt.FixedHeader.pack()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 
@@ -49,19 +48,19 @@ func (ca *ConnAck) Write(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (ca *ConnAck) Unpack(b io.Reader) error {
-	flags, err := decodeByte(b)
+func (pkt *ConnAck) Unpack(b io.Reader) error {
+	flags, err := codec.DecodeByte(b)
 	if err != nil {
 		return err
 	}
-	ca.SessionPresent = 1&flags > 0
-	ca.ReturnCode, err = decodeByte(b)
+	pkt.SessionPresent = 1&flags > 0
+	pkt.ReturnCode, err = codec.DecodeByte(b)
 
 	return err
 }
 
 // Details returns a Details struct containing the Qos and
 // MessageID of this ControlPacket
-func (ca *ConnAck) Details() Details {
+func (pkt *ConnAck) Details() Details {
 	return Details{Qos: 0, MessageID: 0}
 }

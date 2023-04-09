@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
 
 // Error codes returned by Connect()
@@ -18,7 +20,8 @@ const (
 	ErrProtocolViolation            = 0xFF
 )
 
-const stringFormat = `protocol_version: %d
+const stringFormat = `%s
+protocol_version: %d
 protocol_name: %s
 clean_session: %t
 will: %t
@@ -38,7 +41,7 @@ type Connect struct {
 	FixedHeader
 	ProtocolName    string
 	ProtocolVersion byte
-	CleanSession    bool
+	CleanStart      bool
 	WillFlag        bool
 	WillQos         byte
 	WillRetain      bool
@@ -55,7 +58,7 @@ type Connect struct {
 }
 
 func (c *Connect) String() string {
-	return c.FixedHeader.String() + " " + fmt.Sprintf(stringFormat, c.ProtocolVersion, c.ProtocolName, c.CleanSession,
+	return fmt.Sprintf(stringFormat, c.FixedHeader, c.ProtocolVersion, c.ProtocolName, c.CleanStart,
 		c.WillFlag, c.WillQos, c.WillRetain, c.UsernameFlag, c.PasswordFlag, c.KeepAlive,
 		c.ClientIdentifier, c.WillTopic, c.WillMessage, c.Username, c.Password)
 }
@@ -64,20 +67,20 @@ func (c *Connect) Write(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.Write(encodeString(c.ProtocolName))
+	body.Write(codec.EncodeString(c.ProtocolName))
 	body.WriteByte(c.ProtocolVersion)
-	body.WriteByte(boolToByte(c.CleanSession)<<1 | boolToByte(c.WillFlag)<<2 | c.WillQos<<3 | boolToByte(c.WillRetain)<<5 | boolToByte(c.PasswordFlag)<<6 | boolToByte(c.UsernameFlag)<<7)
-	body.Write(encodeUint16(c.KeepAlive))
-	body.Write(encodeString(c.ClientIdentifier))
+	body.WriteByte(codec.EncodeBool(c.CleanStart)<<1 | codec.EncodeBool(c.WillFlag)<<2 | c.WillQos<<3 | codec.EncodeBool(c.WillRetain)<<5 | codec.EncodeBool(c.PasswordFlag)<<6 | codec.EncodeBool(c.UsernameFlag)<<7)
+	body.Write(codec.EncodeUint16(c.KeepAlive))
+	body.Write(codec.EncodeString(c.ClientIdentifier))
 	if c.WillFlag {
-		body.Write(encodeString(c.WillTopic))
-		body.Write(encodeBytes(c.WillMessage))
+		body.Write(codec.EncodeString(c.WillTopic))
+		body.Write(codec.EncodeBytes(c.WillMessage))
 	}
 	if c.UsernameFlag {
-		body.Write(encodeString(c.Username))
+		body.Write(codec.EncodeString(c.Username))
 	}
 	if c.PasswordFlag {
-		body.Write(encodeBytes(c.Password))
+		body.Write(codec.EncodeBytes(c.Password))
 	}
 	c.FixedHeader.RemainingLength = body.Len()
 	packet := c.FixedHeader.pack()
@@ -91,51 +94,51 @@ func (c *Connect) Write(w io.Writer) error {
 // header has been read
 func (c *Connect) Unpack(b io.Reader) error {
 	var err error
-	c.ProtocolName, err = decodeString(b)
+	c.ProtocolName, err = codec.DecodeString(b)
 	if err != nil {
 		return err
 	}
-	c.ProtocolVersion, err = decodeByte(b)
+	c.ProtocolVersion, err = codec.DecodeByte(b)
 	if err != nil {
 		return err
 	}
-	options, err := decodeByte(b)
+	options, err := codec.DecodeByte(b)
 	if err != nil {
 		return err
 	}
 	c.ReservedBit = 1 & options
-	c.CleanSession = 1&(options>>1) > 0
+	c.CleanStart = 1&(options>>1) > 0
 	c.WillFlag = 1&(options>>2) > 0
 	c.WillQos = 3 & (options >> 3)
 	c.WillRetain = 1&(options>>5) > 0
 	c.PasswordFlag = 1&(options>>6) > 0
 	c.UsernameFlag = 1&(options>>7) > 0
-	c.KeepAlive, err = decodeUint16(b)
+	c.KeepAlive, err = codec.DecodeUint16(b)
 	if err != nil {
 		return err
 	}
-	c.ClientIdentifier, err = decodeString(b)
+	c.ClientIdentifier, err = codec.DecodeString(b)
 	if err != nil {
 		return err
 	}
 	if c.WillFlag {
-		c.WillTopic, err = decodeString(b)
+		c.WillTopic, err = codec.DecodeString(b)
 		if err != nil {
 			return err
 		}
-		c.WillMessage, err = decodeBytes(b)
+		c.WillMessage, err = codec.DecodeBytes(b)
 		if err != nil {
 			return err
 		}
 	}
 	if c.UsernameFlag {
-		c.Username, err = decodeString(b)
+		c.Username, err = codec.DecodeString(b)
 		if err != nil {
 			return err
 		}
 	}
 	if c.PasswordFlag {
-		c.Password, err = decodeBytes(b)
+		c.Password, err = codec.DecodeBytes(b)
 		if err != nil {
 			return err
 		}
@@ -165,7 +168,7 @@ func (c *Connect) Validate() byte {
 		//Bad size field
 		return ErrProtocolViolation
 	}
-	if len(c.ClientIdentifier) == 0 && !c.CleanSession {
+	if len(c.ClientIdentifier) == 0 && !c.CleanStart {
 		//Bad client identifier
 		return ErrRefusedIDRejected
 	}
