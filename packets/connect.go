@@ -178,5 +178,5 @@ func (c *Connect) Validate() byte {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (c *Connect) Details() Details {
-	return Details{Qos: 0, ID: 0}
+	return Details{Type: ConnectType, ID: 0, Qos: 0}
 }

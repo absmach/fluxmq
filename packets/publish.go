@@ -84,5 +84,5 @@ func (pkt *Publish) Copy() *Publish {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *Publish) Details() Details {
-	return Details{Qos: pkt.Qos, ID: pkt.ID}
+	return Details{Type: PublishType, ID: pkt.ID, Qos: pkt.Qos}
 }

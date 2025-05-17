@@ -39,5 +39,5 @@ func (pkt *UnSubAck) Unpack(b io.Reader) error {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *UnSubAck) Details() Details {
-	return Details{Qos: 0, ID: pkt.ID}
+	return Details{Type: UnsubAckType, ID: pkt.ID, Qos: 0}
 }

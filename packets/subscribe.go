@@ -66,5 +66,5 @@ func (pkt *Subscribe) Unpack(b io.Reader) error {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *Subscribe) Details() Details {
-	return Details{Qos: 1, ID: pkt.ID}
+	return Details{Type: SubscribeType, ID: pkt.ID, Qos: 1}
 }

@@ -52,5 +52,5 @@ func (pkt *Unsubscribe) Unpack(b io.Reader) error {
 
 // Details returns a struct containing the Qos and packet_id of this control packet.
 func (pkt *Unsubscribe) Details() Details {
-	return Details{Qos: 1, ID: pkt.ID}
+	return Details{Type: UnsubscribeType, ID: pkt.ID, Qos: pkt.Qos}
 }

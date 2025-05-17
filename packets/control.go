@@ -62,8 +62,9 @@ type ControlPacket interface {
 // ControlPackets to present details of the Qos and ID
 // of the ControlPacket
 type Details struct {
-	Qos byte
-	ID  uint16
+	Type byte
+	ID   uint16
+	Qos  byte
 }
 
 // ReadPacket takes an instance of an io.Reader (such as net.Conn) and attempts

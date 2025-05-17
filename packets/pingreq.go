@@ -29,5 +29,5 @@ func (pkt *PingReq) Unpack(b io.Reader) error {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *PingReq) Details() Details {
-	return Details{Qos: 0, ID: 0}
+	return Details{Type: PingReqType, ID: 0, Qos: 0}
 }
