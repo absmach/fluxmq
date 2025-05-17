@@ -10,7 +10,8 @@ import (
 // PubRec is an internal representation of the fields of the PUBREC MQTT packet.
 type PubRec struct {
 	FixedHeader
-	ID uint16
+	Properties *BasicProperties
+	ID         uint16
 }
 
 func (pkt *PubRec) String() string {

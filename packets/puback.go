@@ -10,7 +10,8 @@ import (
 // PubAck is an internal representation of the fields of the PUBACK MQTT packet.
 type PubAck struct {
 	FixedHeader
-	ID uint16
+	Properties *BasicProperties
+	ID         uint16
 }
 
 func (pkt *PubAck) String() string {

@@ -12,33 +12,41 @@ var ErrMaxLengthExceeded = errors.New("max length value exceeded")
 
 const maxMultiplier = 128 * 128 * 128
 
-func DecodeByte(b io.Reader) (byte, error) {
-	ret := make([]byte, 1)
-	_, err := b.Read(ret)
+func DecodeByte(r io.Reader) (byte, error) {
+	b := make([]byte, 1)
+	_, err := io.ReadFull(r, b)
 	if err != nil {
 		return 0, err
 	}
-
-	return ret[0], nil
+	return b[0], nil
 }
 
-func DecodeUint16(b io.Reader) (uint16, error) {
+func DecodeUint16(r io.Reader) (uint16, error) {
 	num := make([]byte, 2)
-	_, err := b.Read(num)
+	_, err := io.ReadFull(r, num)
 	if err != nil {
 		return 0, err
 	}
 	return binary.BigEndian.Uint16(num), nil
 }
 
-func DecodeBytes(b io.Reader) ([]byte, error) {
-	fieldLength, err := DecodeUint16(b)
+func DecodeUint32(r io.Reader) (uint32, error) {
+	num := make([]byte, 4)
+	_, err := io.ReadFull(r, num)
+	if err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint32(num), nil
+}
+
+func DecodeBytes(r io.Reader) ([]byte, error) {
+	fieldLength, err := DecodeUint16(r)
 	if err != nil {
 		return nil, err
 	}
 
 	field := make([]byte, fieldLength)
-	_, err = b.Read(field)
+	_, err = io.ReadFull(r, field)
 	if err != nil {
 		return nil, err
 	}
@@ -46,27 +54,31 @@ func DecodeBytes(b io.Reader) ([]byte, error) {
 	return field, nil
 }
 
-func DecodeString(b io.Reader) (string, error) {
-	buf, err := DecodeBytes(b)
+func DecodeString(r io.Reader) (string, error) {
+	buf, err := DecodeBytes(r)
 	return string(buf), err
 }
 
-func DecodeLength(r io.Reader) (int, error) {
-	var value uint32
-	b := byte(128)
-	multiplier := uint32(1)
-	buff := make([]byte, 1)
-	for b&128 != 0 {
+// DecodeVBI is used for Variable Byte Integers used to
+// encode length in a minimal way.
+func DecodeVBI(r io.Reader) (int, error) {
+	var vbi uint32
+	var multiplier uint32
+	var bytes [1]byte
+	for {
+		_, err := io.ReadFull(r, bytes[:])
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		digit := bytes[0]
+		vbi |= uint32(digit&0x7F) << multiplier
+		if (digit & 0x80) == 0 {
+			break
+		}
+		multiplier += 7
 		if multiplier > maxMultiplier {
 			return 0, ErrMaxLengthExceeded
 		}
-		_, err := io.ReadFull(r, buff)
-		if err != nil {
-			return 0, err
-		}
-		b = buff[0]
-		value += uint32(b&127) * multiplier
-		multiplier *= 128
 	}
-	return int(value), nil
+	return int(vbi), nil
 }

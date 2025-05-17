@@ -10,7 +10,8 @@ import (
 // PubComp is an internal representation of the fields of the PUBCOMP MQTT packet.
 type PubComp struct {
 	FixedHeader
-	ID uint16
+	Properties *BasicProperties
+	ID         uint16
 }
 
 func (pkt *PubComp) String() string {

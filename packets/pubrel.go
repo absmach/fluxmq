@@ -10,7 +10,8 @@ import (
 // PubRel is an internal representation of the fields of the PUBREL MQTT packet.
 type PubRel struct {
 	FixedHeader
-	ID uint16
+	Properties *BasicProperties
+	ID         uint16
 }
 
 func (pkt *PubRel) String() string {

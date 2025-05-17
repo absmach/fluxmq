@@ -11,8 +11,60 @@ import (
 // Unsubscribe is an internal representation of the fields of the UNSUBSCRIBE MQTT packet.
 type Unsubscribe struct {
 	FixedHeader
-	ID     uint16
-	Topics []string
+	Properties *UnsubscribeProperties
+	ID         uint16
+	Topics     []string
+}
+
+type UnsubscribeProperties struct {
+	// ReasonString is a UTF8 string representing the reason associated with
+	// this response, intended to be human readable for diagnostic purposes.
+	ReasonString string
+	// User is a slice of user provided properties (key and value).
+	User []User
+}
+
+func (p *UnsubscribeProperties) Unpack(r io.Reader) error {
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	for {
+		prop, err := codec.DecodeByte(r)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch prop {
+		case UserProp:
+			k, err := codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+			v, err := codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+			p.User = append(p.User, User{k, v})
+		}
+	}
+}
+
+func (p *UnsubscribeProperties) encode() []byte {
+	var ret []byte
+	if len(p.User) > 0 {
+		for _, u := range p.User {
+			ret = append(ret, codec.EncodeString(u.Key)...)
+			ret = append(ret, codec.EncodeString(u.Value)...)
+		}
+	}
+
+	return ret
 }
 
 func (pkt *Unsubscribe) String() string {
@@ -52,5 +104,5 @@ func (pkt *Unsubscribe) Unpack(b io.Reader) error {
 
 // Details returns a struct containing the Qos and packet_id of this control packet.
 func (pkt *Unsubscribe) Details() Details {
-	return Details{Type: UnsubscribeType, ID: pkt.ID, Qos: pkt.Qos}
+	return Details{Type: UnsubscribeType, ID: pkt.ID, Qos: 1}
 }

@@ -15,9 +15,105 @@ var ErrPublishInvalidLength = errors.New("error unpacking publish, payload lengt
 // Publish is an internal representation of the fields of the PUBLISH MQTT packet.
 type Publish struct {
 	FixedHeader
-	TopicName string
-	ID        uint16
-	Payload   []byte
+	Properties *PublishProperties
+	TopicName  string
+	ID         uint16
+	Payload    []byte
+}
+
+type PublishProperties struct {
+	// PayloadFormat indicates the format of the payload of the message
+	// 0 is unspecified bytes
+	// 1 is UTF8 encoded character data
+	PayloadFormat *byte
+	// MessageExpiry is the lifetime of the message in seconds.
+	MessageExpiry *uint32
+	// // TopicAliasMax is the highest value permitted as a Topic Alias.
+	TopicAliasMax *uint16
+	// ResponseTopic is a UTF8 string indicating the topic name to which any
+	// response to this message should be sent.
+	ResponseTopic string
+	// CorrelationData is binary data used to associate future response
+	// messages with the original request message.
+	CorrelationData []byte
+	// User is a slice of user provided properties (key and value).
+	User []User
+	// SubscriptionIdentifier is an identifier of the subscription to which
+	// the Publish matched.
+	SubscriptionIdentifier *int
+	// ContentType is a UTF8 string describing the content of the message
+	// for example it could be a MIME type.
+	ContentType string
+}
+
+func (p *PublishProperties) Unpack(r io.Reader) error {
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	for {
+		prop, err := codec.DecodeByte(r)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch prop {
+		case PayloadFormatProp:
+			pf, err := codec.DecodeByte(r)
+			if err != nil {
+				return err
+			}
+			p.PayloadFormat = &pf
+		case MessageExpiryProp:
+			me, err := codec.DecodeUint32(r)
+			if err != nil {
+				return err
+			}
+			p.MessageExpiry = &me
+		case ContentTypeProp:
+			p.ContentType, err = codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+		case TopicAliasMaximumProp:
+			tam, err := codec.DecodeUint16(r)
+			if err != nil {
+				return err
+			}
+			p.TopicAliasMax = &tam
+		case ResponseTopicProp:
+			p.ResponseTopic, err = codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+		case CorrelationDataProp:
+			p.CorrelationData, err = codec.DecodeBytes(r)
+			if err != nil {
+				return err
+			}
+		case UserProp:
+			k, err := codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+			v, err := codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+			p.User = append(p.User, User{k, v})
+		case SubscriptionIdentifierProp:
+			si, err := codec.DecodeVBI(r)
+			if err != nil {
+				return err
+			}
+			p.SubscriptionIdentifier = &si
+		}
+	}
 }
 
 func (pkt *Publish) String() string {

@@ -11,9 +11,55 @@ import (
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet
 type Subscribe struct {
 	FixedHeader
-	ID     uint16
-	Topics []string
-	QoSs   []byte
+	Properties *SubscribeProperties
+	ID         uint16
+	Topics     []string
+	QoSs       []byte
+}
+
+type SubscribeProperties struct {
+	// SubscriptionIdentifier is an identifier of the subscription to which
+	// the Publish matched.
+	SubscriptionIdentifier *int
+	// User is a slice of user provided properties (key and value).
+	User []User
+}
+
+func (p *SubscribeProperties) Unpack(r io.Reader) error {
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	for {
+		prop, err := codec.DecodeByte(r)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch prop {
+		case SubscriptionIdentifierProp:
+			si, err := codec.DecodeVBI(r)
+			if err != nil {
+				return err
+			}
+			p.SubscriptionIdentifier = &si
+		case UserProp:
+			k, err := codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+			v, err := codec.DecodeString(r)
+			if err != nil {
+				return err
+			}
+			p.User = append(p.User, User{k, v})
+		}
+	}
 }
 
 func (pkt *Subscribe) String() string {

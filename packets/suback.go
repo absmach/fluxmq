@@ -11,6 +11,7 @@ import (
 // SubAck is an internal representation of the fields of the SUBACK MQTT packet.
 type SubAck struct {
 	FixedHeader
+	Properties  *BasicProperties
 	ID          uint16
 	ReturnCodes []byte
 }

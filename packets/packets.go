@@ -68,9 +68,11 @@ func (fh FixedHeader) String() string {
 }
 
 func (fh *FixedHeader) encode() bytes.Buffer {
+	// ret := []byte{fh.PacketType<<4 | codec.EncodeBool(fh.Dup)<<3 | fh.Qos<<1 | codec.EncodeBool(fh.Retain)}
+	// return append(ret, codec.EncodeLength(fh.RemainingLength)...)
 	var header bytes.Buffer
 	header.WriteByte(fh.PacketType<<4 | codec.EncodeBool(fh.Dup)<<3 | fh.Qos<<1 | codec.EncodeBool(fh.Retain))
-	header.Write(codec.EncodeLength(fh.RemainingLength))
+	header.Write(codec.EncodeVBI(fh.RemainingLength))
 	return header
 }
 
@@ -81,7 +83,7 @@ func (fh *FixedHeader) decode(typeAndFlags byte, r io.Reader) error {
 	fh.Retain = typeAndFlags&0x01 > 0
 
 	var err error
-	fh.RemainingLength, err = codec.DecodeLength(r)
+	fh.RemainingLength, err = codec.DecodeVBI(r)
 	return err
 }
 
@@ -111,9 +113,12 @@ func ReadPacket(r io.Reader) (ControlPacket, error) {
 	var fh FixedHeader
 	b := make([]byte, 1)
 
-	_, err := io.ReadFull(r, b)
+	n, err := io.ReadFull(r, b)
 	if err != nil {
 		return nil, err
+	}
+	if n != 1 {
+		return nil, io.ErrUnexpectedEOF
 	}
 
 	err = fh.decode(b[0], r)
@@ -127,15 +132,14 @@ func ReadPacket(r io.Reader) (ControlPacket, error) {
 	}
 
 	packetBytes := make([]byte, fh.RemainingLength)
-	n, err := io.ReadFull(r, packetBytes)
+	n, err = io.ReadFull(r, packetBytes)
 	if err != nil {
 		return nil, err
 	}
 	if n != fh.RemainingLength {
 		return nil, ErrFailRemaining
 	}
-
-	err = cp.Unpack(bytes.NewBuffer(packetBytes))
+	err = cp.Unpack(bytes.NewReader(packetBytes))
 	return cp, err
 }
 

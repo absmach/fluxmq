@@ -10,7 +10,8 @@ import (
 // UnSubAck is an internal representation of the fields of the UNSUBACK MQTT packet.
 type UnSubAck struct {
 	FixedHeader
-	ID uint16
+	Properties *BasicProperties
+	ID         uint16
 }
 
 func (pkt *UnSubAck) String() string {
