@@ -13,8 +13,8 @@ func (pkt *PingReq) String() string {
 	return pkt.FixedHeader.String()
 }
 
-func (pkt *PingReq) Write(w io.Writer) error {
-	packet := pkt.FixedHeader.pack()
+func (pkt *PingReq) Pack(w io.Writer) error {
+	packet := pkt.FixedHeader.encode()
 	_, err := packet.WriteTo(w)
 
 	return err

@@ -11,8 +11,8 @@ func (d *Disconnect) String() string {
 	return d.FixedHeader.String()
 }
 
-func (d *Disconnect) Write(w io.Writer) error {
-	packet := d.FixedHeader.pack()
+func (d *Disconnect) Pack(w io.Writer) error {
+	packet := d.FixedHeader.encode()
 	_, err := packet.WriteTo(w)
 
 	return err

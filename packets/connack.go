@@ -32,14 +32,14 @@ func (pkt *ConnAck) String() string {
 	return fmt.Sprintf("%s SessionPresent: %t ReturnCode %d", pkt.FixedHeader, pkt.SessionPresent, pkt.ReturnCode)
 }
 
-func (pkt *ConnAck) Write(w io.Writer) error {
+func (pkt *ConnAck) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
 	body.WriteByte(codec.EncodeBool(pkt.SessionPresent))
 	body.WriteByte(pkt.ReturnCode)
 	pkt.FixedHeader.RemainingLength = 2
-	packet := pkt.FixedHeader.pack()
+	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 

@@ -19,13 +19,13 @@ func (pkt *SubAck) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
-func (pkt *SubAck) Write(w io.Writer) error {
+func (pkt *SubAck) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 	body.Write(codec.EncodeUint16(pkt.ID))
 	body.Write(pkt.ReturnCodes)
 	pkt.FixedHeader.RemainingLength = body.Len()
-	packet := pkt.FixedHeader.pack()
+	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 

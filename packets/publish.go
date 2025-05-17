@@ -24,7 +24,7 @@ func (pkt *Publish) String() string {
 	return fmt.Sprintf("%s\ntopic_name: %s\npacket_id: %d\npayload: %s\n", pkt.FixedHeader, pkt.TopicName, pkt.ID, pkt.Payload)
 }
 
-func (pkt *Publish) Write(w io.Writer) error {
+func (pkt *Publish) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
@@ -33,7 +33,7 @@ func (pkt *Publish) Write(w io.Writer) error {
 		body.Write(codec.EncodeUint16(pkt.ID))
 	}
 	pkt.FixedHeader.RemainingLength = body.Len() + len(pkt.Payload)
-	packet := pkt.FixedHeader.pack()
+	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
 	packet.Write(pkt.Payload)
 	_, err = w.Write(packet.Bytes())
@@ -44,7 +44,7 @@ func (pkt *Publish) Write(w io.Writer) error {
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
 func (pkt *Publish) Unpack(b io.Reader) error {
-	var payloadLength = pkt.FixedHeader.RemainingLength
+	payloadLength := pkt.FixedHeader.RemainingLength
 	var err error
 	pkt.TopicName, err = codec.DecodeString(b)
 	if err != nil {

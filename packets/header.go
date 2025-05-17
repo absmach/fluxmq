@@ -24,14 +24,14 @@ func (fh FixedHeader) String() string {
 	return fmt.Sprintf(headerFormat, PacketNames[fh.PacketType], fh.Dup, fh.Qos, fh.Retain, fh.RemainingLength)
 }
 
-func (fh *FixedHeader) pack() bytes.Buffer {
+func (fh *FixedHeader) encode() bytes.Buffer {
 	var header bytes.Buffer
 	header.WriteByte(fh.PacketType<<4 | codec.EncodeBool(fh.Dup)<<3 | fh.Qos<<1 | codec.EncodeBool(fh.Retain))
 	header.Write(codec.EncodeLength(fh.RemainingLength))
 	return header
 }
 
-func (fh *FixedHeader) unpack(typeAndFlags byte, r io.Reader) error {
+func (fh *FixedHeader) decode(typeAndFlags byte, r io.Reader) error {
 	fh.PacketType = typeAndFlags >> 4
 	fh.Dup = (typeAndFlags>>3)&0x01 > 0
 	fh.Qos = (typeAndFlags >> 1) & 0x03

@@ -63,7 +63,7 @@ func (c *Connect) String() string {
 		c.ClientIdentifier, c.WillTopic, c.WillMessage, c.Username, c.Password)
 }
 
-func (c *Connect) Write(w io.Writer) error {
+func (c *Connect) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
@@ -83,7 +83,7 @@ func (c *Connect) Write(w io.Writer) error {
 		body.Write(codec.EncodeBytes(c.Password))
 	}
 	c.FixedHeader.RemainingLength = body.Len()
-	packet := c.FixedHeader.pack()
+	packet := c.FixedHeader.encode()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 
@@ -153,23 +153,23 @@ func (c *Connect) Validate() byte {
 		return ErrRefusedBadUsernameOrPassword
 	}
 	if c.ReservedBit != 0 {
-		//Bad reserved bit
+		// Bad reserved bit
 		return ErrProtocolViolation
 	}
 	if (c.ProtocolName == "MQIsdp" && c.ProtocolVersion != 3) || (c.ProtocolName == "MQTT" && c.ProtocolVersion != 4) {
-		//Mismatched or unsupported protocol version
+		// Mismatched or unsupported protocol version
 		return ErrRefusedBadProtocolVersion
 	}
 	if c.ProtocolName != "MQIsdp" && c.ProtocolName != "MQTT" {
-		//Bad protocol name
+		// Bad protocol name
 		return ErrProtocolViolation
 	}
 	if len(c.ClientIdentifier) > 65535 || len(c.Username) > 65535 || len(c.Password) > 65535 {
-		//Bad size field
+		// Bad size field
 		return ErrProtocolViolation
 	}
 	if len(c.ClientIdentifier) == 0 && !c.CleanStart {
-		//Bad client identifier
+		// Bad client identifier
 		return ErrRefusedIDRejected
 	}
 	return Accepted

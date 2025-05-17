@@ -32,6 +32,7 @@ const (
 // PacketNames maps the constants for each of the MQTT packet types
 // to a string representation of their name.
 var PacketNames = map[uint8]string{
+	AuthType:        "AUTH",
 	ConnectType:     "CONNECT",
 	ConnAckType:     "CONNACK",
 	PublishType:     "PUBLISH",
@@ -46,13 +47,12 @@ var PacketNames = map[uint8]string{
 	PingReqType:     "PINGREQ",
 	PingRespType:    "PINGRESP",
 	DisconnectType:  "DISCONNECT",
-	AuthType:        "AUTH",
 }
 
 // ControlPacket defines the interface for structures intended to hold
 // decoded MQTT packets, either from being read or before being written.
 type ControlPacket interface {
-	Write(io.Writer) error
+	Pack(io.Writer) error
 	Unpack(io.Reader) error
 	String() string
 	Details() Details
@@ -79,7 +79,7 @@ func ReadPacket(r io.Reader) (ControlPacket, error) {
 		return nil, err
 	}
 
-	err = fh.unpack(b[0], r)
+	err = fh.decode(b[0], r)
 	if err != nil {
 		return nil, err
 	}

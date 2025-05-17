@@ -20,7 +20,7 @@ func (pkt *Auth) String() string {
 func (pkt *Auth) Write(w io.Writer) error {
 	var err error
 	pkt.FixedHeader.RemainingLength = 2
-	packet := pkt.FixedHeader.pack()
+	packet := pkt.FixedHeader.encode()
 	packet.Write([]byte{pkt.ReasonCode})
 	_, err = packet.WriteTo(w)
 

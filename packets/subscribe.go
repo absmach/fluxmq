@@ -3,8 +3,9 @@ package packets
 import (
 	"bytes"
 	"fmt"
-	codec "github.com/dborovcanin/mqtt/packets/codec"
 	"io"
+
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet
@@ -19,7 +20,7 @@ func (pkt *Subscribe) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\ntopics: %s\n", pkt.FixedHeader, pkt.ID, pkt.Topics)
 }
 
-func (pkt *Subscribe) Write(w io.Writer) error {
+func (pkt *Subscribe) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
@@ -29,7 +30,7 @@ func (pkt *Subscribe) Write(w io.Writer) error {
 		body.WriteByte(pkt.QoSs[i])
 	}
 	pkt.FixedHeader.RemainingLength = body.Len()
-	packet := pkt.FixedHeader.pack()
+	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 
@@ -56,7 +57,7 @@ func (pkt *Subscribe) Unpack(b io.Reader) error {
 			return err
 		}
 		pkt.QoSs = append(pkt.QoSs, qos)
-		payloadLength -= 2 + len(topic) + 1 //2 bytes of string length, plus string, plus 1 byte for Qos
+		payloadLength -= 2 + len(topic) + 1 // 2 bytes of string length, plus string, plus 1 byte for Qos
 	}
 
 	return nil

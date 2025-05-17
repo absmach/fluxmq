@@ -35,10 +35,8 @@ func EncodeString(field string) []byte {
 }
 
 func EncodeBool(b bool) byte {
-	switch b {
-	case true:
+	if b {
 		return 1
-	default:
-		return 0
 	}
+	return 0
 }
