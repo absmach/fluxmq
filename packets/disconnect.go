@@ -1,8 +1,6 @@
 package packets
 
-import (
-	"io"
-)
+import "io"
 
 // Disconnect is an internal representation of the fields of the DISCONNECT MQTT packet
 type Disconnect struct {

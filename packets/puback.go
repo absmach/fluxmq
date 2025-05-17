@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mbroker/packets/codec"
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // PubAck is an internal representation of the fields of the PUBACK MQTT packet.

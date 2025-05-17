@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mbroker/packets/codec"
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // Auth is an internal representation of the fields of Auth MQTT packet.

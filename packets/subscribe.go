@@ -3,9 +3,8 @@ package packets
 import (
 	"bytes"
 	"fmt"
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 	"io"
-
-	codec "github.com/dborovcanin/mbroker/packets/codec"
 )
 
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet

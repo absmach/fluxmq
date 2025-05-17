@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mbroker/packets/codec"
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // ConnackReturnCodes is a map of the error codes constants for Connect()

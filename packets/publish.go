@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mbroker/packets/codec"
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // ErrPublishInvalidLength represents invalid length of PUBLISH packet.

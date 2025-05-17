@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dborovcanin/mbroker/packets/codec"
+	"github.com/dborovcanin/mqtt/packets/codec"
 )
 
 const headerFormat = "type: %s: dup: %t qos: %d retain: %t remaining_length: %d\n"

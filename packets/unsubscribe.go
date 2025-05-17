@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mbroker/packets/codec"
+	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // Unsubscribe is an internal representation of the fields of the UNSUBSCRIBE MQTT packet.
@@ -39,7 +39,6 @@ func (pkt *Unsubscribe) Write(w io.Writer) error {
 func (pkt *Unsubscribe) Unpack(b io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(b)
-
 	if err != nil {
 		return err
 	}

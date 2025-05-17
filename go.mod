@@ -1,3 +1,3 @@
-module github.com/dborovcanin/mbroker
+module github.com/dborovcanin/mqtt
 
-go 1.20
+go 1.24.3
