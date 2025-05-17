@@ -1,3 +1,3 @@
-# mBroker
+# MQTT
 
-mBroker is a lightening fast, highly scalable MQTT 5.0 broker written in Go.
+MQTT is a utility package for handling MQTT messages. It is **not an MQTT broker or client**, but rather a library for working with MQTT protocol packets.
