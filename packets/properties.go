@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets/codec"
@@ -171,6 +172,8 @@ func (p *BasicProperties) Unpack(r io.Reader) error {
 				return err
 			}
 			p.User = append(p.User, User{k, v})
+		default:
+			return fmt.Errorf("invalid property type %d", prop)
 		}
 	}
 }

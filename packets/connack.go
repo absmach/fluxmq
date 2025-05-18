@@ -195,6 +195,8 @@ func (p *ConnAckProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("invalid property type %d for connack packet", prop)
 		}
 	}
 }

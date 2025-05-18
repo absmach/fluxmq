@@ -153,6 +153,8 @@ func (p *ConnectProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("invalid property type %d for connect packet", prop)
 		}
 	}
 }
@@ -273,6 +275,8 @@ func (p *WillProperties) Unpack(r io.Reader) error {
 				return err
 			}
 			p.User = append(p.User, User{k, v})
+		default:
+			return fmt.Errorf("invalid will property type %d", prop)
 		}
 	}
 }

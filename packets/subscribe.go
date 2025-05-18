@@ -58,6 +58,8 @@ func (p *SubscribeProperties) Unpack(r io.Reader) error {
 				return err
 			}
 			p.User = append(p.User, User{k, v})
+		default:
+			return fmt.Errorf("invalid property type %d for subscribe packet", prop)
 		}
 	}
 }

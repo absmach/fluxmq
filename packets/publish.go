@@ -106,6 +106,8 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 				return err
 			}
 			p.SubscriptionIdentifier = &si
+		default:
+			return fmt.Errorf("invalid property type %d for publish packet", prop)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"fmt"
 	"io"
 
 	codec "github.com/dborovcanin/mqtt/packets/codec"
@@ -71,6 +72,8 @@ func (p *DisconnectProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("invalid property type %d for disconnect packet", prop)
 		}
 	}
 }
