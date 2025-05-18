@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -195,7 +194,7 @@ func (p *ConnAckProperties) Unpack(r io.Reader) error {
 	}
 }
 
-func (p *ConnAckProperties) encode() []byte {
+func (p *ConnAckProperties) Encode() []byte {
 	var ret []byte
 	if p.SessionExpiryInterval != nil {
 		ret = append(ret, codec.EncodeUint32(*p.SessionExpiryInterval)...)
@@ -257,15 +256,19 @@ func (pkt *ConnAck) String() string {
 }
 
 func (pkt *ConnAck) Pack(w io.Writer) error {
-	var body bytes.Buffer
-	var err error
-
-	body.WriteByte(codec.EncodeBool(pkt.SessionPresent))
-	body.WriteByte(pkt.ReasonCode)
-	pkt.FixedHeader.RemainingLength = 2
-	packet := pkt.FixedHeader.encode()
-	packet.Write(body.Bytes())
-	_, err = packet.WriteTo(w)
+	bytes := pkt.FixedHeader.Encode()
+	bytes = append(bytes, codec.EncodeBool(pkt.SessionPresent))
+	bytes = append(bytes, pkt.ReasonCode)
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
+	}
+	_, err := w.Write(bytes)
 
 	return err
 }

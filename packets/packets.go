@@ -38,7 +38,6 @@ const (
 // PacketNames maps the constants for each of the MQTT packet types
 // to a string representation of their name.
 var PacketNames = map[uint8]string{
-	AuthType:        "AUTH",
 	ConnectType:     "CONNECT",
 	ConnAckType:     "CONNACK",
 	PublishType:     "PUBLISH",
@@ -53,6 +52,7 @@ var PacketNames = map[uint8]string{
 	PingReqType:     "PINGREQ",
 	PingRespType:    "PINGRESP",
 	DisconnectType:  "DISCONNECT",
+	AuthType:        "AUTH",
 }
 
 // ControlPacket defines the interface for structures intended to hold
@@ -151,6 +151,8 @@ func NewControlPacket(packetType byte) ControlPacket {
 		return &PingReq{FixedHeader: FixedHeader{PacketType: PingReqType}}
 	case PingRespType:
 		return &PingResp{FixedHeader: FixedHeader{PacketType: PingRespType}}
+	case AuthType:
+		return &Auth{FixedHeader: FixedHeader{PacketType: AuthType}}
 	}
 	return nil
 }

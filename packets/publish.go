@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -29,8 +28,8 @@ type PublishProperties struct {
 	PayloadFormat *byte
 	// MessageExpiry is the lifetime of the message in seconds.
 	MessageExpiry *uint32
-	// // TopicAliasMax is the highest value permitted as a Topic Alias.
-	TopicAliasMax *uint16
+	// TopicAlias is an identifier of a Topic Alias.
+	TopicAlias *uint16
 	// ResponseTopic is a UTF8 string indicating the topic name to which any
 	// response to this message should be sent.
 	ResponseTopic string
@@ -39,9 +38,9 @@ type PublishProperties struct {
 	CorrelationData []byte
 	// User is a slice of user provided properties (key and value).
 	User []User
-	// SubscriptionIdentifier is an identifier of the subscription to which
+	// SubscriptionID is an identifier of the subscription to which
 	// the Publish matched.
-	SubscriptionIdentifier *int
+	SubscriptionID *int
 	// ContentType is a UTF8 string describing the content of the message
 	// for example it could be a MIME type.
 	ContentType string
@@ -75,11 +74,11 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 				return err
 			}
 		case TopicAliasMaximumProp:
-			tam, err := codec.DecodeUint16(r)
+			ta, err := codec.DecodeUint16(r)
 			if err != nil {
 				return err
 			}
-			p.TopicAliasMax = &tam
+			p.TopicAlias = &ta
 		case ResponseTopicProp:
 			p.ResponseTopic, err = codec.DecodeString(r)
 			if err != nil {
@@ -105,11 +104,44 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.SubscriptionIdentifier = &si
+			p.SubscriptionID = &si
 		default:
 			return fmt.Errorf("invalid property type %d for publish packet", prop)
 		}
 	}
+}
+
+func (p *PublishProperties) Encode() []byte {
+	var ret []byte
+	if p.PayloadFormat != nil {
+		ret = append(ret, *p.PayloadFormat)
+	}
+	if p.MessageExpiry != nil {
+		ret = append(ret, codec.EncodeUint32(*p.MessageExpiry)...)
+	}
+	if p.TopicAlias != nil {
+		ret = append(ret, codec.EncodeUint16(*p.TopicAlias)...)
+	}
+	if p.ResponseTopic != "" {
+		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseTopic))...)
+	}
+	if len(p.CorrelationData) > 0 {
+		ret = append(ret, p.CorrelationData...)
+	}
+	if len(p.User) > 0 {
+		for _, u := range p.User {
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
+		}
+	}
+	if p.SubscriptionID != nil {
+		ret = append(ret, codec.EncodeVBI(*p.SubscriptionID)...)
+	}
+	if p.ContentType != "" {
+		ret = append(ret, codec.EncodeBytes([]byte(p.ContentType))...)
+	}
+
+	return ret
 }
 
 func (pkt *Publish) String() string {
@@ -117,18 +149,22 @@ func (pkt *Publish) String() string {
 }
 
 func (pkt *Publish) Pack(w io.Writer) error {
-	var body bytes.Buffer
-	var err error
-
-	body.Write(codec.EncodeBytes([]byte(pkt.TopicName)))
+	bytes := pkt.FixedHeader.Encode()
+	bytes = append(bytes, codec.EncodeBytes([]byte(pkt.TopicName))...)
 	if pkt.QoS > 0 {
-		body.Write(codec.EncodeUint16(pkt.ID))
+		bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
 	}
-	pkt.FixedHeader.RemainingLength = body.Len() + len(pkt.Payload)
-	packet := pkt.FixedHeader.encode()
-	packet.Write(body.Bytes())
-	packet.Write(pkt.Payload)
-	_, err = w.Write(packet.Bytes())
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
+	}
+	bytes = append(bytes, pkt.Payload...)
+	_, err := w.Write(bytes)
 
 	return err
 }

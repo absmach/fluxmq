@@ -10,6 +10,7 @@ import (
 // Auth is an internal representation of the fields of Auth MQTT packet.
 type Auth struct {
 	FixedHeader
+	// Variable Header
 	ReasonCode byte
 	Properties *AuthProperties
 }
@@ -72,12 +73,13 @@ func (pkt *Auth) String() string {
 	return fmt.Sprintf("%s\nreason_code %d\n", pkt.FixedHeader, pkt.ReasonCode)
 }
 
-func (pkt *Auth) Write(w io.Writer) error {
-	var err error
-	pkt.FixedHeader.RemainingLength = 2
-	packet := pkt.FixedHeader.encode()
-	packet.Write([]byte{pkt.ReasonCode})
-	_, err = packet.WriteTo(w)
+func (pkt *Auth) Pack(w io.Writer) error {
+	bytes := pkt.FixedHeader.Encode()
+	bytes = append(bytes, byte(pkt.ReasonCode))
+	if pkt.Properties != nil {
+		bytes = append(bytes, pkt.Encode()...)
+	}
+	_, err := w.Write(bytes)
 
 	return err
 }

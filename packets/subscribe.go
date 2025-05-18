@@ -11,8 +11,9 @@ import (
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet
 type Subscribe struct {
 	FixedHeader
-	Properties *SubscribeProperties
+	// Variable Header
 	ID         uint16
+	Properties *SubscribeProperties
 	Topics     []string
 	QoSs       []byte
 }

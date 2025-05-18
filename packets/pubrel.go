@@ -21,10 +21,22 @@ func (pkt *PubRel) String() string {
 }
 
 func (pkt *PubRel) Pack(w io.Writer) error {
-	var err error
-	pkt.FixedHeader.RemainingLength = 2
-	packet := pkt.FixedHeader.encode()
-	_, err = packet.WriteTo(w)
+	bytes := pkt.FixedHeader.Encode()
+	// Variable Header
+	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	if pkt.ReasonCode != nil {
+		bytes = append(bytes, *pkt.ReasonCode)
+	}
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
+	}
+	_, err := w.Write(bytes)
 
 	return err
 }

@@ -14,8 +14,8 @@ func (pkt *PingResp) String() string {
 }
 
 func (pkt *PingResp) Pack(w io.Writer) error {
-	packet := pkt.FixedHeader.encode()
-	_, err := packet.WriteTo(w)
+	bytes := pkt.FixedHeader.Encode()
+	_, err := w.Write(bytes)
 
 	return err
 }

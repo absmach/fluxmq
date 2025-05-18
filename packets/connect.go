@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -52,12 +51,12 @@ type Connect struct {
 	KeepAlive       uint16
 	Properties      *ConnectProperties
 	// Payload
-	ClientIdentifier string
-	WillProperties   *WillProperties
-	WillTopic        string
-	WillPayload      []byte
-	Username         string
-	Password         []byte
+	ClientID       string
+	WillProperties *WillProperties
+	WillTopic      string
+	WillPayload    []byte
+	Username       string
+	Password       []byte
 }
 
 type ConnectProperties struct {
@@ -159,7 +158,7 @@ func (p *ConnectProperties) Unpack(r io.Reader) error {
 	}
 }
 
-func (p *ConnectProperties) encode() []byte {
+func (p *ConnectProperties) Encode() []byte {
 	var ret []byte
 
 	if p.SessionExpiryInterval != nil {
@@ -281,7 +280,7 @@ func (p *WillProperties) Unpack(r io.Reader) error {
 	}
 }
 
-func (p *WillProperties) encode() []byte {
+func (p *WillProperties) Encode() []byte {
 	var ret []byte
 	if p.WillDelayInterval != nil {
 		ret = append(ret, codec.EncodeUint32(*p.WillDelayInterval)...)
@@ -314,32 +313,67 @@ func (p *WillProperties) encode() []byte {
 func (pkt *Connect) String() string {
 	return fmt.Sprintf(stringFormat, pkt.FixedHeader, pkt.ProtocolVersion, pkt.ProtocolName, pkt.CleanStart,
 		pkt.WillFlag, pkt.WillQoS, pkt.WillRetain, pkt.UsernameFlag, pkt.PasswordFlag, pkt.KeepAlive,
-		pkt.ClientIdentifier, pkt.WillTopic, pkt.WillPayload, pkt.Username, pkt.Password)
+		pkt.ClientID, pkt.WillTopic, pkt.WillPayload, pkt.Username, pkt.Password)
+}
+
+func (pkt *Connect) PackFlags() byte {
+	var flags byte
+	if pkt.UsernameFlag {
+		flags |= 1 << 7
+	}
+	if pkt.PasswordFlag {
+		flags |= 1 << 6
+	}
+	if pkt.WillRetain {
+		flags |= 1 << 5
+	}
+	flags |= (pkt.WillQoS & 0x03) << 3
+	if pkt.WillFlag {
+		flags |= 1 << 2
+	}
+	if pkt.CleanStart {
+		flags |= 1 << 1
+	}
+
+	return flags
 }
 
 func (pkt *Connect) Pack(w io.Writer) error {
-	var body bytes.Buffer
-	var err error
-
-	body.Write(codec.EncodeBytes([]byte(pkt.ProtocolName)))
-	body.WriteByte(pkt.ProtocolVersion)
-	body.WriteByte(codec.EncodeBool(pkt.CleanStart)<<1 | codec.EncodeBool(pkt.WillFlag)<<2 | pkt.WillQoS<<3 | codec.EncodeBool(pkt.WillRetain)<<5 | codec.EncodeBool(pkt.PasswordFlag)<<6 | codec.EncodeBool(pkt.UsernameFlag)<<7)
-	body.Write(codec.EncodeUint16(pkt.KeepAlive))
-	body.Write(codec.EncodeBytes([]byte(pkt.ClientIdentifier)))
+	bytes := pkt.FixedHeader.Encode()
+	// Variable Header
+	bytes = append(bytes, codec.EncodeBytes([]byte(pkt.ProtocolName))...)
+	bytes = append(bytes, pkt.ProtocolVersion)
+	bytes = append(bytes, pkt.PackFlags())
+	bytes = append(bytes, codec.EncodeUint16(pkt.KeepAlive)...)
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
+	}
+	// Payload
+	bytes = append(bytes, codec.EncodeBytes([]byte(pkt.ClientID))...)
 	if pkt.WillFlag {
-		body.Write(codec.EncodeBytes([]byte(pkt.WillTopic)))
-		body.Write(codec.EncodeBytes(pkt.WillPayload))
+		if pkt.Properties != nil {
+			props := pkt.Properties.Encode()
+			l := len(props)
+			proplen := codec.EncodeVBI(l)
+			bytes = append(bytes, proplen...)
+			if l > 0 {
+				bytes = append(bytes, props...)
+			}
+		}
 	}
 	if pkt.UsernameFlag {
-		body.Write(codec.EncodeBytes([]byte(pkt.Username)))
+		bytes = append(bytes, codec.EncodeBytes([]byte(pkt.Username))...)
 	}
 	if pkt.PasswordFlag {
-		body.Write(codec.EncodeBytes(pkt.Password))
+		bytes = append(bytes, pkt.Password...)
 	}
-	pkt.FixedHeader.RemainingLength = body.Len()
-	packet := pkt.FixedHeader.encode()
-	packet.Write(body.Bytes())
-	_, err = packet.WriteTo(w)
+	_, err := w.Write(bytes)
 
 	return err
 }
@@ -382,7 +416,7 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 			pkt.Properties = &p
 		}
 	}
-	pkt.ClientIdentifier, err = codec.DecodeString(r)
+	pkt.ClientID, err = codec.DecodeString(r)
 	if err != nil {
 		return err
 	}
@@ -441,11 +475,11 @@ func (pkt *Connect) Validate() byte {
 		// Bad protocol name
 		return ErrProtocolViolation
 	}
-	if len(pkt.ClientIdentifier) > 65535 || len(pkt.Username) > 65535 || len(pkt.Password) > 65535 {
+	if len(pkt.ClientID) > 65535 || len(pkt.Username) > 65535 || len(pkt.Password) > 65535 {
 		// Bad size field
 		return ErrProtocolViolation
 	}
-	if len(pkt.ClientIdentifier) == 0 && !pkt.CleanStart {
+	if len(pkt.ClientID) == 0 && !pkt.CleanStart {
 		// Bad client identifier
 		return ErrRefusedIDRejected
 	}

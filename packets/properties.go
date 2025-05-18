@@ -89,7 +89,7 @@ func (p *BasicProperties) Unpack(r io.Reader) error {
 	}
 }
 
-func (p *BasicProperties) encode() []byte {
+func (p *BasicProperties) Encode() []byte {
 	var ret []byte
 	if p.ReasonString != "" {
 		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
