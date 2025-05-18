@@ -79,16 +79,16 @@ func (p *DisconnectProperties) decode() []byte {
 		ret = append(ret, codec.EncodeUint32(*p.SessionExpiryInterval)...)
 	}
 	if p.ReasonString != "" {
-		ret = append(ret, codec.EncodeString(p.ReasonString)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.ServerReference != "" {
-		ret = append(ret, codec.EncodeString(p.ServerReference)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ServerReference))...)
 	}
 
 	return ret

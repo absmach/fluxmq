@@ -124,7 +124,7 @@ func (pkt *Publish) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.Write(codec.EncodeString(pkt.TopicName))
+	body.Write(codec.EncodeBytes([]byte(pkt.TopicName)))
 	if pkt.Qos > 0 {
 		body.Write(codec.EncodeUint16(pkt.ID))
 	}

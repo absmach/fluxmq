@@ -59,8 +59,8 @@ func (p *UnsubscribeProperties) encode() []byte {
 	var ret []byte
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 
@@ -76,7 +76,7 @@ func (pkt *Unsubscribe) Pack(w io.Writer) error {
 	var err error
 	body.Write(codec.EncodeUint16(pkt.ID))
 	for _, topic := range pkt.Topics {
-		body.Write(codec.EncodeString(topic))
+		body.Write(codec.EncodeBytes([]byte(topic)))
 	}
 	pkt.FixedHeader.RemainingLength = body.Len()
 	packet := pkt.FixedHeader.encode()

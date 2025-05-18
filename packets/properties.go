@@ -178,12 +178,12 @@ func (p *BasicProperties) Unpack(r io.Reader) error {
 func (p *BasicProperties) encode() []byte {
 	var ret []byte
 	if p.ReasonString != "" {
-		ret = append(ret, codec.EncodeString(p.ReasonString)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 
@@ -377,10 +377,10 @@ func (p *Properties) encode() []byte {
 		ret = append(ret, codec.EncodeUint32(*p.MessageExpiry)...)
 	}
 	if p.ContentType != "" {
-		ret = append(ret, codec.EncodeString(p.ContentType)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ContentType))...)
 	}
 	if p.ResponseTopic != "" {
-		ret = append(ret, codec.EncodeString(p.ResponseTopic)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseTopic))...)
 	}
 	if len(p.CorrelationData) > 0 {
 		ret = append(ret, p.CorrelationData...)
@@ -392,13 +392,13 @@ func (p *Properties) encode() []byte {
 		ret = append(ret, codec.EncodeUint32(*p.SessionExpiryInterval)...)
 	}
 	if p.AssignedClientID != "" {
-		ret = append(ret, codec.EncodeString(p.AssignedClientID)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.AssignedClientID))...)
 	}
 	if p.ServerKeepAlive != nil {
 		ret = append(ret, codec.EncodeUint16(*p.ServerKeepAlive)...)
 	}
 	if p.AuthMethod != "" {
-		ret = append(ret, codec.EncodeString(p.AuthMethod)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.AuthMethod))...)
 	}
 	if len(p.AuthData) > 0 {
 		ret = append(ret, p.AuthData...)
@@ -413,13 +413,13 @@ func (p *Properties) encode() []byte {
 		ret = append(ret, *p.RequestResponseInfo)
 	}
 	if p.ResponseInfo != "" {
-		ret = append(ret, codec.EncodeString(p.ResponseInfo)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseInfo))...)
 	}
 	if p.ServerReference != "" {
-		ret = append(ret, codec.EncodeString(p.ServerReference)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ServerReference))...)
 	}
 	if p.ReasonString != "" {
-		ret = append(ret, codec.EncodeString(p.ReasonString)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
 	if p.ReceiveMax != nil {
 		ret = append(ret, codec.EncodeUint16(*p.ReceiveMax)...)
@@ -438,8 +438,8 @@ func (p *Properties) encode() []byte {
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.MaximumPacketSize != nil {

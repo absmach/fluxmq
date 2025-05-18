@@ -217,18 +217,18 @@ func (p *ConnAckProperties) encode() []byte {
 		ret = append(ret, codec.EncodeUint16(uint16(*p.MaximumPacketSize))...)
 	}
 	if p.AssignedClientID != "" {
-		ret = append(ret, codec.EncodeString(p.AssignedClientID)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.AssignedClientID))...)
 	}
 	if p.TopicAliasMax != nil {
 		ret = append(ret, codec.EncodeUint16(*p.TopicAliasMax)...)
 	}
 	if p.ReasonString != "" {
-		ret = append(ret, codec.EncodeString(p.ReasonString)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.WildcardSubAvailable != nil {
@@ -241,13 +241,13 @@ func (p *ConnAckProperties) encode() []byte {
 		ret = append(ret, codec.EncodeUint16(*p.ServerKeepAlive)...)
 	}
 	if p.ResponseInfo != "" {
-		ret = append(ret, codec.EncodeString(p.ResponseInfo)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseInfo))...)
 	}
 	if p.ServerReference != "" {
-		ret = append(ret, codec.EncodeString(p.ServerReference)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ServerReference))...)
 	}
 	if p.AuthMethod != "" {
-		ret = append(ret, codec.EncodeString(p.AuthMethod)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.AuthMethod))...)
 	}
 	if len(p.AuthData) > 0 {
 		ret = append(ret, p.AuthData...)

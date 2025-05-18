@@ -42,10 +42,6 @@ func EncodeVBI(num int) []byte {
 	}
 }
 
-func EncodeString(field string) []byte {
-	return EncodeBytes([]byte(field))
-}
-
 func EncodeBool(b bool) byte {
 	if b {
 		return 1

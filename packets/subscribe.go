@@ -72,7 +72,7 @@ func (pkt *Subscribe) Pack(w io.Writer) error {
 
 	body.Write(codec.EncodeUint16(pkt.ID))
 	for i, topic := range pkt.Topics {
-		body.Write(codec.EncodeString(topic))
+		body.Write(codec.EncodeBytes([]byte(topic)))
 		body.WriteByte(pkt.QoSs[i])
 	}
 	pkt.FixedHeader.RemainingLength = body.Len()

@@ -188,12 +188,12 @@ func (p *ConnectProperties) encode() []byte {
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.AuthMethod != "" {
-		ret = append(ret, codec.EncodeString(p.AuthMethod)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.AuthMethod))...)
 	}
 	if len(p.AuthData) > 0 {
 		ret = append(ret, p.AuthData...)
@@ -304,18 +304,18 @@ func (p *WillProperties) encode() []byte {
 		ret = append(ret, codec.EncodeUint32(*p.MessageExpiry)...)
 	}
 	if p.ContentType != "" {
-		ret = append(ret, codec.EncodeString(p.ContentType)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ContentType))...)
 	}
 	if p.ResponseTopic != "" {
-		ret = append(ret, codec.EncodeString(p.ResponseTopic)...)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseTopic))...)
 	}
 	if len(p.CorrelationData) > 0 {
 		ret = append(ret, p.CorrelationData...)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, codec.EncodeString(u.Key)...)
-			ret = append(ret, codec.EncodeString(u.Value)...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 
@@ -332,17 +332,17 @@ func (c *Connect) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.Write(codec.EncodeString(c.ProtocolName))
+	body.Write(codec.EncodeBytes([]byte(c.ProtocolName)))
 	body.WriteByte(c.ProtocolVersion)
 	body.WriteByte(codec.EncodeBool(c.CleanStart)<<1 | codec.EncodeBool(c.WillFlag)<<2 | c.WillQoS<<3 | codec.EncodeBool(c.WillRetain)<<5 | codec.EncodeBool(c.PasswordFlag)<<6 | codec.EncodeBool(c.UsernameFlag)<<7)
 	body.Write(codec.EncodeUint16(c.KeepAlive))
-	body.Write(codec.EncodeString(c.ClientIdentifier))
+	body.Write(codec.EncodeBytes([]byte(c.ClientIdentifier)))
 	if c.WillFlag {
-		body.Write(codec.EncodeString(c.WillTopic))
+		body.Write(codec.EncodeBytes([]byte(c.WillTopic)))
 		body.Write(codec.EncodeBytes(c.WillPayload))
 	}
 	if c.UsernameFlag {
-		body.Write(codec.EncodeString(c.Username))
+		body.Write(codec.EncodeBytes([]byte(c.Username)))
 	}
 	if c.PasswordFlag {
 		body.Write(codec.EncodeBytes(c.Password))
