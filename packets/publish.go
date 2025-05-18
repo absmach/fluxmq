@@ -15,9 +15,10 @@ var ErrPublishInvalidLength = errors.New("error unpacking publish, payload lengt
 // Publish is an internal representation of the fields of the PUBLISH MQTT packet.
 type Publish struct {
 	FixedHeader
-	Properties *PublishProperties
-	TopicName  string
+	// Variable Header
 	ID         uint16
+	TopicName  string
+	Properties *PublishProperties
 	Payload    []byte
 }
 
@@ -47,13 +48,6 @@ type PublishProperties struct {
 }
 
 func (p *PublishProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
@@ -125,7 +119,7 @@ func (pkt *Publish) Pack(w io.Writer) error {
 	var err error
 
 	body.Write(codec.EncodeBytes([]byte(pkt.TopicName)))
-	if pkt.Qos > 0 {
+	if pkt.QoS > 0 {
 		body.Write(codec.EncodeUint16(pkt.ID))
 	}
 	pkt.FixedHeader.RemainingLength = body.Len() + len(pkt.Payload)
@@ -137,30 +131,30 @@ func (pkt *Publish) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *Publish) Unpack(b io.Reader) error {
-	payloadLength := pkt.FixedHeader.RemainingLength
+func (pkt *Publish) Unpack(r io.Reader, v byte) error {
 	var err error
-	pkt.TopicName, err = codec.DecodeString(b)
-	if err != nil {
+	if pkt.TopicName, err = codec.DecodeString(r); err != nil {
 		return err
 	}
-
-	if pkt.Qos > 0 {
-		pkt.ID, err = codec.DecodeUint16(b)
+	if pkt.QoS > 0 {
+		if pkt.ID, err = codec.DecodeUint16(r); err != nil {
+			return err
+		}
+	}
+	if v == V5 {
+		length, err := codec.DecodeVBI(r)
 		if err != nil {
 			return err
 		}
-		payloadLength -= len(pkt.TopicName) + 4
-	} else {
-		payloadLength -= len(pkt.TopicName) + 2
+		if length != 0 {
+			p := PublishProperties{}
+			if err := p.Unpack(r); err != nil {
+				return err
+			}
+			pkt.Properties = &p
+		}
 	}
-	if payloadLength < 0 {
-		return ErrPublishInvalidLength
-	}
-	pkt.Payload = make([]byte, payloadLength)
-	_, err = b.Read(pkt.Payload)
+	pkt.Payload, err = io.ReadAll(r)
 
 	return err
 }
@@ -177,8 +171,6 @@ func (pkt *Publish) Copy() *Publish {
 	return newP
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
 func (pkt *Publish) Details() Details {
-	return Details{Type: PublishType, ID: pkt.ID, Qos: pkt.Qos}
+	return Details{Type: PublishType, ID: pkt.ID, Qos: pkt.QoS}
 }

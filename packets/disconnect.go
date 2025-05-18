@@ -9,6 +9,8 @@ import (
 // Disconnect is an internal representation of the fields of the DISCONNECT MQTT packet
 type Disconnect struct {
 	FixedHeader
+	// Variable Header
+	ReasonCode *byte
 	Properties *DisconnectProperties
 }
 
@@ -105,14 +107,29 @@ func (d *Disconnect) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (d *Disconnect) Unpack(b io.Reader) error {
+func (d *Disconnect) Unpack(r io.Reader, v byte) error {
+	if v == V5 {
+		rc, err := codec.DecodeByte(r)
+		if err != nil {
+			return err
+		}
+		d.ReasonCode = &rc
+		p := DisconnectProperties{}
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length == 0 {
+			return nil
+		}
+		if err := p.Unpack(r); err != nil {
+			return err
+		}
+		d.Properties = &p
+	}
 	return nil
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
 func (d *Disconnect) Details() Details {
 	return Details{Type: DisconnectType, ID: 0, Qos: 0}
 }

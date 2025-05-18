@@ -11,9 +11,11 @@ import (
 // SubAck is an internal representation of the fields of the SUBACK MQTT packet.
 type SubAck struct {
 	FixedHeader
-	Properties  *BasicProperties
-	ID          uint16
-	ReturnCodes []byte
+	// Variable Header
+	ID         uint16
+	Properties *BasicProperties
+	// Payload
+	ReturnCodes *[]byte
 }
 
 func (pkt *SubAck) String() string {
@@ -24,7 +26,9 @@ func (pkt *SubAck) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 	body.Write(codec.EncodeUint16(pkt.ID))
-	body.Write(pkt.ReturnCodes)
+	if pkt.ReturnCodes != nil {
+		body.Write(*pkt.ReturnCodes)
+	}
 	pkt.FixedHeader.RemainingLength = body.Len()
 	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
@@ -33,27 +37,35 @@ func (pkt *SubAck) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *SubAck) Unpack(b io.Reader) error {
-	var qosBuffer bytes.Buffer
+func (pkt *SubAck) Unpack(r io.Reader, v byte) error {
 	var err error
-	pkt.ID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
+	if v == V5 {
+		p := BasicProperties{}
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length != 0 {
 
-	_, err = qosBuffer.ReadFrom(b)
-	if err != nil {
-		return err
+			if err := p.Unpack(r); err != nil {
+				return err
+			}
+			pkt.Properties = &p
+		}
+		rc, err := codec.DecodeBytes(r)
+		if err != nil {
+			return err
+		}
+		pkt.ReturnCodes = &rc
 	}
-	pkt.ReturnCodes = qosBuffer.Bytes()
 
 	return nil
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
 func (pkt *SubAck) Details() Details {
 	return Details{Type: SubAckType, ID: pkt.ID, Qos: 0}
 }

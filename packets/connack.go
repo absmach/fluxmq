@@ -274,9 +274,7 @@ func (pkt *ConnAck) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *ConnAck) Unpack(b io.Reader) error {
+func (pkt *ConnAck) Unpack(b io.Reader, v byte) error {
 	flags, err := codec.DecodeByte(b)
 	if err != nil {
 		return err
@@ -287,8 +285,6 @@ func (pkt *ConnAck) Unpack(b io.Reader) error {
 	return err
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
 func (pkt *ConnAck) Details() Details {
 	return Details{Type: ConnAckType, ID: 0, Qos: 0}
 }

@@ -83,9 +83,7 @@ func (pkt *Subscribe) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *Subscribe) Unpack(b io.Reader) error {
+func (pkt *Subscribe) Unpack(b io.Reader, v byte) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(b)
 	if err != nil {

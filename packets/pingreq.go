@@ -20,14 +20,10 @@ func (pkt *PingReq) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *PingReq) Unpack(b io.Reader) error {
+func (pkt *PingReq) Unpack(r io.Reader, v byte) error {
 	return nil
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
 func (pkt *PingReq) Details() Details {
 	return Details{Type: PingReqType, ID: 0, Qos: 0}
 }

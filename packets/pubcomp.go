@@ -10,12 +10,14 @@ import (
 // PubComp is an internal representation of the fields of the PUBCOMP MQTT packet.
 type PubComp struct {
 	FixedHeader
-	Properties *BasicProperties
+	// Variable Header
 	ID         uint16
+	ReasonCode *byte
+	Properties *BasicProperties
 }
 
 func (pkt *PubComp) String() string {
-	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
+	return fmt.Sprintf("%s\npacket_id: %d\nreason_code %b", pkt.FixedHeader, pkt.ID, *pkt.ReasonCode)
 }
 
 func (pkt *PubComp) Pack(w io.Writer) error {
@@ -30,15 +32,37 @@ func (pkt *PubComp) Pack(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (pkt *PubComp) Unpack(b io.Reader) error {
+func (pkt *PubComp) Unpack(r io.Reader, v byte) error {
 	var err error
-	pkt.ID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(r)
+	if err != nil {
+		return err
+	}
+	if v == V5 {
+		rc, err := codec.DecodeByte(r)
+		if err != nil {
+			return err
+		}
+		pkt.ReasonCode = &rc
+		p := BasicProperties{}
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length == 0 {
+			return nil
+		}
+		if err := p.Unpack(r); err != nil {
+			return err
+		}
+		pkt.Properties = &p
+	}
 
-	return err
+	return nil
 }
 
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *PubComp) Details() Details {
-	return Details{Type: PubCompType, ID: pkt.ID, Qos: pkt.Qos}
+	return Details{Type: PubCompType, ID: pkt.ID, Qos: pkt.QoS}
 }

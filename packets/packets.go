@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
-const headerFormat = "type: %s: dup: %t qos: %d retain: %t remaining_length: %d\n"
+const (
+	V31  byte = 0x3
+	V311 byte = 0x4
+	V5   byte = 0x05
+)
 
 // ErrFailRemaining indicates remaining data does not match the size of sent data.
 var ErrFailRemaining = errors.New("remaining data length does not match data size")
@@ -53,45 +55,17 @@ var PacketNames = map[uint8]string{
 	DisconnectType:  "DISCONNECT",
 }
 
-// FixedHeader is a struct to hold the decoded information from
-// the fixed header of an MQTT ControlPacket.
-type FixedHeader struct {
-	PacketType      byte
-	Dup             bool
-	Qos             byte
-	Retain          bool
-	RemainingLength int
-}
-
-func (fh FixedHeader) String() string {
-	return fmt.Sprintf(headerFormat, PacketNames[fh.PacketType], fh.Dup, fh.Qos, fh.Retain, fh.RemainingLength)
-}
-
-func (fh *FixedHeader) encode() bytes.Buffer {
-	// ret := []byte{fh.PacketType<<4 | codec.EncodeBool(fh.Dup)<<3 | fh.Qos<<1 | codec.EncodeBool(fh.Retain)}
-	// return append(ret, codec.EncodeLength(fh.RemainingLength)...)
-	var header bytes.Buffer
-	header.WriteByte(fh.PacketType<<4 | codec.EncodeBool(fh.Dup)<<3 | fh.Qos<<1 | codec.EncodeBool(fh.Retain))
-	header.Write(codec.EncodeVBI(fh.RemainingLength))
-	return header
-}
-
-func (fh *FixedHeader) decode(typeAndFlags byte, r io.Reader) error {
-	fh.PacketType = typeAndFlags >> 4
-	fh.Dup = (typeAndFlags>>3)&0x01 > 0
-	fh.Qos = (typeAndFlags >> 1) & 0x03
-	fh.Retain = typeAndFlags&0x01 > 0
-
-	var err error
-	fh.RemainingLength, err = codec.DecodeVBI(r)
-	return err
-}
-
 // ControlPacket defines the interface for structures intended to hold
 // decoded MQTT packets, either from being read or before being written.
 type ControlPacket interface {
-	Pack(io.Writer) error
-	Unpack(io.Reader) error
+	Pack(w io.Writer) error
+	// Unpack receives an IO reader and a protocol version so
+	// the same packet can be reaused for multiple protocol version.
+	// In the server implmentation, protocvol version will be bound
+	// to the underlying connection (mixing versions is not allowed),
+	// but we're trying to keep parsers decoupled from the broker and
+	// client implemention.
+	Unpack(r io.Reader, v byte) error
 	String() string
 	Details() Details
 }
@@ -109,11 +83,11 @@ type Details struct {
 // to read an MQTT packet from the stream. It returns a ControlPacket
 // representing the decoded MQTT packet and an error. One of these returns will
 // always be nil, a nil ControlPacket indicating an error occurred.
-func ReadPacket(r io.Reader) (ControlPacket, error) {
+func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	var fh FixedHeader
 	b := make([]byte, 1)
 
-	n, err := io.ReadFull(r, b)
+	n, err := io.ReadAtLeast(r, b, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -132,14 +106,14 @@ func ReadPacket(r io.Reader) (ControlPacket, error) {
 	}
 
 	packetBytes := make([]byte, fh.RemainingLength)
-	n, err = io.ReadFull(r, packetBytes)
+	n, err = io.ReadAtLeast(r, packetBytes, fh.RemainingLength)
 	if err != nil {
 		return nil, err
 	}
 	if n != fh.RemainingLength {
 		return nil, ErrFailRemaining
 	}
-	err = cp.Unpack(bytes.NewReader(packetBytes))
+	err = cp.Unpack(bytes.NewReader(packetBytes), v)
 	return cp, err
 }
 
@@ -162,15 +136,15 @@ func NewControlPacket(packetType byte) ControlPacket {
 	case PubRecType:
 		return &PubRec{FixedHeader: FixedHeader{PacketType: PubRecType}}
 	case PubRelType:
-		return &PubRel{FixedHeader: FixedHeader{PacketType: PubRelType, Qos: 1}}
+		return &PubRel{FixedHeader: FixedHeader{PacketType: PubRelType, QoS: 1}}
 	case PubCompType:
 		return &PubComp{FixedHeader: FixedHeader{PacketType: PubCompType}}
 	case SubscribeType:
-		return &Subscribe{FixedHeader: FixedHeader{PacketType: SubscribeType, Qos: 1}}
+		return &Subscribe{FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1}}
 	case SubAckType:
 		return &SubAck{FixedHeader: FixedHeader{PacketType: SubAckType}}
 	case UnsubscribeType:
-		return &Unsubscribe{FixedHeader: FixedHeader{PacketType: UnsubscribeType, Qos: 1}}
+		return &Unsubscribe{FixedHeader: FixedHeader{PacketType: UnsubscribeType, QoS: 1}}
 	case UnsubAckType:
 		return &UnSubAck{FixedHeader: FixedHeader{PacketType: UnsubAckType}}
 	case PingReqType:

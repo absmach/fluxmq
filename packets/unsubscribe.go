@@ -11,27 +11,19 @@ import (
 // Unsubscribe is an internal representation of the fields of the UNSUBSCRIBE MQTT packet.
 type Unsubscribe struct {
 	FixedHeader
-	Properties *UnsubscribeProperties
+	// Variable Header
 	ID         uint16
-	Topics     []string
+	Properties *UnsubscribeProperties
+	// Payload
+	Topics []string
 }
 
 type UnsubscribeProperties struct {
-	// ReasonString is a UTF8 string representing the reason associated with
-	// this response, intended to be human readable for diagnostic purposes.
-	ReasonString string
 	// User is a slice of user provided properties (key and value).
 	User []User
 }
 
 func (p *UnsubscribeProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
@@ -86,23 +78,37 @@ func (pkt *Unsubscribe) Pack(w io.Writer) error {
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *Unsubscribe) Unpack(b io.Reader) error {
+func (pkt *Unsubscribe) Unpack(r io.Reader, v byte) error {
 	var err error
-	pkt.ID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-
-	for topic, err := codec.DecodeString(b); err == nil && topic != ""; topic, err = codec.DecodeString(b) {
-		pkt.Topics = append(pkt.Topics, topic)
+	if v == V5 {
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length != 0 {
+			p := UnsubscribeProperties{}
+			if err := p.Unpack(r); err != nil {
+				return err
+			}
+			pkt.Properties = &p
+		}
 	}
-
-	return err
+	for {
+		t, err := codec.DecodeBytes(r)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		pkt.Topics = append(pkt.Topics, string(t))
+	}
 }
 
-// Details returns a struct containing the Qos and packet_id of this control packet.
 func (pkt *Unsubscribe) Details() Details {
 	return Details{Type: UnsubscribeType, ID: pkt.ID, Qos: 1}
 }

@@ -39,22 +39,21 @@ password: %s`
 // Connect is an internal representation of the fields of the MQTT CONNECT packet.
 type Connect struct {
 	FixedHeader
+	// Variable Header
 	ProtocolName    string
 	ProtocolVersion byte
-	CleanStart      bool
-	WillFlag        bool
-	WillQoS         byte
-	WillRetain      bool
 	UsernameFlag    bool
 	PasswordFlag    bool
+	WillRetain      bool
+	WillQoS         byte
+	WillFlag        bool
+	CleanStart      bool
 	ReservedBit     byte
 	KeepAlive       uint16
-
-	Properties     *ConnectProperties
-	WillProperties *WillProperties
-
+	Properties      *ConnectProperties
 	// Payload
 	ClientIdentifier string
+	WillProperties   *WillProperties
 	WillTopic        string
 	WillPayload      []byte
 	Username         string
@@ -89,13 +88,6 @@ type ConnectProperties struct {
 }
 
 func (p *ConnectProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
@@ -229,13 +221,6 @@ type WillProperties struct {
 }
 
 func (p *WillProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
@@ -357,53 +342,79 @@ func (c *Connect) Pack(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (c *Connect) Unpack(b io.Reader) error {
+func (c *Connect) Unpack(r io.Reader, v byte) error {
 	var err error
-	c.ProtocolName, err = codec.DecodeString(b)
+	c.ProtocolName, err = codec.DecodeString(r)
 	if err != nil {
 		return err
 	}
-	c.ProtocolVersion, err = codec.DecodeByte(b)
+	c.ProtocolVersion, err = codec.DecodeByte(r)
 	if err != nil {
 		return err
 	}
-	options, err := codec.DecodeByte(b)
+	opts, err := codec.DecodeByte(r)
 	if err != nil {
 		return err
 	}
-	c.ReservedBit = 1 & options
-	c.CleanStart = 1&(options>>1) > 0
-	c.WillFlag = 1&(options>>2) > 0
-	c.WillQoS = 3 & (options >> 3)
-	c.WillRetain = 1&(options>>5) > 0
-	c.PasswordFlag = 1&(options>>6) > 0
-	c.UsernameFlag = 1&(options>>7) > 0
-	c.KeepAlive, err = codec.DecodeUint16(b)
+	c.ReservedBit = 1 & opts
+	c.CleanStart = 1&(opts>>1) > 0
+	c.WillFlag = 1&(opts>>2) > 0
+	c.WillQoS = 3 & (opts >> 3)
+	c.WillRetain = 1&(opts>>5) > 0
+	c.PasswordFlag = 1&(opts>>6) > 0
+	c.UsernameFlag = 1&(opts>>7) > 0
+	c.KeepAlive, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	c.ClientIdentifier, err = codec.DecodeString(b)
+	if v == V5 {
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length != 0 {
+			p := ConnectProperties{}
+			if err := p.Unpack(r); err != nil {
+				return err
+			}
+			c.Properties = &p
+		}
+	}
+	c.ClientIdentifier, err = codec.DecodeString(r)
 	if err != nil {
 		return err
 	}
 	if c.WillFlag {
-		c.WillTopic, err = codec.DecodeString(b)
+		if v == V5 {
+			length, err := codec.DecodeVBI(r)
+			if err != nil {
+				return err
+			}
+			if length != 0 {
+				p := WillProperties{}
+				if err := p.Unpack(r); err != nil {
+					return err
+				}
+				c.WillProperties = &p
+			}
+		}
+		c.WillTopic, err = codec.DecodeString(r)
 		if err != nil {
 			return err
 		}
-		c.WillPayload, err = codec.DecodeBytes(b)
+		c.WillPayload, err = codec.DecodeBytes(r)
 		if err != nil {
 			return err
 		}
 	}
 	if c.UsernameFlag {
-		c.Username, err = codec.DecodeString(b)
+		c.Username, err = codec.DecodeString(r)
 		if err != nil {
 			return err
 		}
 	}
 	if c.PasswordFlag {
-		c.Password, err = codec.DecodeBytes(b)
+		c.Password, err = codec.DecodeBytes(r)
 		if err != nil {
 			return err
 		}

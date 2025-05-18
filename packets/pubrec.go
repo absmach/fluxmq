@@ -10,35 +10,53 @@ import (
 // PubRec is an internal representation of the fields of the PUBREC MQTT packet.
 type PubRec struct {
 	FixedHeader
-	Properties *BasicProperties
+	// Variable Header
 	ID         uint16
+	ReasonCode *byte
+	Properties *BasicProperties
 }
 
 func (pkt *PubRec) String() string {
-	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
+	return fmt.Sprintf("%s\npacket_id: %d\nreason_code: %b", pkt.FixedHeader, pkt.ID, *pkt.ReasonCode)
 }
 
 func (pkt *PubRec) Pack(w io.Writer) error {
 	var err error
 	pkt.FixedHeader.RemainingLength = 2
 	packet := pkt.FixedHeader.encode()
-	packet.Write(codec.EncodeUint16(pkt.ID))
 	_, err = packet.WriteTo(w)
 
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (pkt *PubRec) Unpack(b io.Reader) error {
+func (pkt *PubRec) Unpack(r io.Reader, v byte) error {
 	var err error
-	pkt.ID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(r)
+	if err != nil {
+		return err
+	}
+	if v == V5 {
+		rc, err := codec.DecodeByte(r)
+		if err != nil {
+			return err
+		}
+		pkt.ReasonCode = &rc
+		p := BasicProperties{}
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length != 0 {
+			if err := p.Unpack(r); err != nil {
+				return err
+			}
+			pkt.Properties = &p
+		}
+	}
 
-	return err
+	return nil
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
 func (pkt *PubRec) Details() Details {
-	return Details{Type: PubRecType, ID: pkt.ID, Qos: pkt.Qos}
+	return Details{Type: PubAckType, Qos: pkt.QoS}
 }
