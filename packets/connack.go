@@ -24,9 +24,10 @@ var ConnackReturnCodes = map[uint8]string{
 // ConnAck is an internal representation of the fields of the ConnAck MQTT packet.
 type ConnAck struct {
 	FixedHeader
-	Properties     ConnAckProperties
+	// Variable Header
 	SessionPresent bool
-	ReturnCode     byte
+	ReasonCode     byte
+	Properties     *ConnAckProperties
 }
 
 type ConnAckProperties struct {
@@ -85,13 +86,6 @@ type ConnAckProperties struct {
 }
 
 func (p *ConnAckProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
@@ -259,7 +253,7 @@ func (p *ConnAckProperties) encode() []byte {
 }
 
 func (pkt *ConnAck) String() string {
-	return fmt.Sprintf("%s SessionPresent: %t ReturnCode %d", pkt.FixedHeader, pkt.SessionPresent, pkt.ReturnCode)
+	return fmt.Sprintf("%s SessionPresent: %t ReturnCode %d", pkt.FixedHeader, pkt.SessionPresent, pkt.ReasonCode)
 }
 
 func (pkt *ConnAck) Pack(w io.Writer) error {
@@ -267,7 +261,7 @@ func (pkt *ConnAck) Pack(w io.Writer) error {
 	var err error
 
 	body.WriteByte(codec.EncodeBool(pkt.SessionPresent))
-	body.WriteByte(pkt.ReturnCode)
+	body.WriteByte(pkt.ReasonCode)
 	pkt.FixedHeader.RemainingLength = 2
 	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
@@ -276,13 +270,26 @@ func (pkt *ConnAck) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *ConnAck) Unpack(b io.Reader, v byte) error {
-	flags, err := codec.DecodeByte(b)
+func (pkt *ConnAck) Unpack(r io.Reader, v byte) error {
+	flags, err := codec.DecodeByte(r)
 	if err != nil {
 		return err
 	}
 	pkt.SessionPresent = 1&flags > 0
-	pkt.ReturnCode, err = codec.DecodeByte(b)
+	pkt.ReasonCode, err = codec.DecodeByte(r)
+	if v == V5 {
+		length, err := codec.DecodeVBI(r)
+		if err != nil {
+			return err
+		}
+		if length != 0 {
+			prop := ConnAckProperties{}
+			if err := prop.Unpack(r); err != nil {
+				return err
+			}
+			pkt.Properties = &prop
+		}
+	}
 
 	return err
 }

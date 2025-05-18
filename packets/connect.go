@@ -311,48 +311,46 @@ func (p *WillProperties) encode() []byte {
 	return ret
 }
 
-func (c *Connect) String() string {
-	return fmt.Sprintf(stringFormat, c.FixedHeader, c.ProtocolVersion, c.ProtocolName, c.CleanStart,
-		c.WillFlag, c.WillQoS, c.WillRetain, c.UsernameFlag, c.PasswordFlag, c.KeepAlive,
-		c.ClientIdentifier, c.WillTopic, c.WillPayload, c.Username, c.Password)
+func (pkt *Connect) String() string {
+	return fmt.Sprintf(stringFormat, pkt.FixedHeader, pkt.ProtocolVersion, pkt.ProtocolName, pkt.CleanStart,
+		pkt.WillFlag, pkt.WillQoS, pkt.WillRetain, pkt.UsernameFlag, pkt.PasswordFlag, pkt.KeepAlive,
+		pkt.ClientIdentifier, pkt.WillTopic, pkt.WillPayload, pkt.Username, pkt.Password)
 }
 
-func (c *Connect) Pack(w io.Writer) error {
+func (pkt *Connect) Pack(w io.Writer) error {
 	var body bytes.Buffer
 	var err error
 
-	body.Write(codec.EncodeBytes([]byte(c.ProtocolName)))
-	body.WriteByte(c.ProtocolVersion)
-	body.WriteByte(codec.EncodeBool(c.CleanStart)<<1 | codec.EncodeBool(c.WillFlag)<<2 | c.WillQoS<<3 | codec.EncodeBool(c.WillRetain)<<5 | codec.EncodeBool(c.PasswordFlag)<<6 | codec.EncodeBool(c.UsernameFlag)<<7)
-	body.Write(codec.EncodeUint16(c.KeepAlive))
-	body.Write(codec.EncodeBytes([]byte(c.ClientIdentifier)))
-	if c.WillFlag {
-		body.Write(codec.EncodeBytes([]byte(c.WillTopic)))
-		body.Write(codec.EncodeBytes(c.WillPayload))
+	body.Write(codec.EncodeBytes([]byte(pkt.ProtocolName)))
+	body.WriteByte(pkt.ProtocolVersion)
+	body.WriteByte(codec.EncodeBool(pkt.CleanStart)<<1 | codec.EncodeBool(pkt.WillFlag)<<2 | pkt.WillQoS<<3 | codec.EncodeBool(pkt.WillRetain)<<5 | codec.EncodeBool(pkt.PasswordFlag)<<6 | codec.EncodeBool(pkt.UsernameFlag)<<7)
+	body.Write(codec.EncodeUint16(pkt.KeepAlive))
+	body.Write(codec.EncodeBytes([]byte(pkt.ClientIdentifier)))
+	if pkt.WillFlag {
+		body.Write(codec.EncodeBytes([]byte(pkt.WillTopic)))
+		body.Write(codec.EncodeBytes(pkt.WillPayload))
 	}
-	if c.UsernameFlag {
-		body.Write(codec.EncodeBytes([]byte(c.Username)))
+	if pkt.UsernameFlag {
+		body.Write(codec.EncodeBytes([]byte(pkt.Username)))
 	}
-	if c.PasswordFlag {
-		body.Write(codec.EncodeBytes(c.Password))
+	if pkt.PasswordFlag {
+		body.Write(codec.EncodeBytes(pkt.Password))
 	}
-	c.FixedHeader.RemainingLength = body.Len()
-	packet := c.FixedHeader.encode()
+	pkt.FixedHeader.RemainingLength = body.Len()
+	packet := pkt.FixedHeader.encode()
 	packet.Write(body.Bytes())
 	_, err = packet.WriteTo(w)
 
 	return err
 }
 
-// Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
-func (c *Connect) Unpack(r io.Reader, v byte) error {
+func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 	var err error
-	c.ProtocolName, err = codec.DecodeString(r)
+	pkt.ProtocolName, err = codec.DecodeString(r)
 	if err != nil {
 		return err
 	}
-	c.ProtocolVersion, err = codec.DecodeByte(r)
+	pkt.ProtocolVersion, err = codec.DecodeByte(r)
 	if err != nil {
 		return err
 	}
@@ -360,14 +358,14 @@ func (c *Connect) Unpack(r io.Reader, v byte) error {
 	if err != nil {
 		return err
 	}
-	c.ReservedBit = 1 & opts
-	c.CleanStart = 1&(opts>>1) > 0
-	c.WillFlag = 1&(opts>>2) > 0
-	c.WillQoS = 3 & (opts >> 3)
-	c.WillRetain = 1&(opts>>5) > 0
-	c.PasswordFlag = 1&(opts>>6) > 0
-	c.UsernameFlag = 1&(opts>>7) > 0
-	c.KeepAlive, err = codec.DecodeUint16(r)
+	pkt.ReservedBit = 1 & opts
+	pkt.CleanStart = 1&(opts>>1) > 0
+	pkt.WillFlag = 1&(opts>>2) > 0
+	pkt.WillQoS = 3 & (opts >> 3)
+	pkt.WillRetain = 1&(opts>>5) > 0
+	pkt.PasswordFlag = 1&(opts>>6) > 0
+	pkt.UsernameFlag = 1&(opts>>7) > 0
+	pkt.KeepAlive, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
@@ -381,14 +379,14 @@ func (c *Connect) Unpack(r io.Reader, v byte) error {
 			if err := p.Unpack(r); err != nil {
 				return err
 			}
-			c.Properties = &p
+			pkt.Properties = &p
 		}
 	}
-	c.ClientIdentifier, err = codec.DecodeString(r)
+	pkt.ClientIdentifier, err = codec.DecodeString(r)
 	if err != nil {
 		return err
 	}
-	if c.WillFlag {
+	if pkt.WillFlag {
 		if v == V5 {
 			length, err := codec.DecodeVBI(r)
 			if err != nil {
@@ -399,26 +397,26 @@ func (c *Connect) Unpack(r io.Reader, v byte) error {
 				if err := p.Unpack(r); err != nil {
 					return err
 				}
-				c.WillProperties = &p
+				pkt.WillProperties = &p
 			}
 		}
-		c.WillTopic, err = codec.DecodeString(r)
+		pkt.WillTopic, err = codec.DecodeString(r)
 		if err != nil {
 			return err
 		}
-		c.WillPayload, err = codec.DecodeBytes(r)
-		if err != nil {
-			return err
-		}
-	}
-	if c.UsernameFlag {
-		c.Username, err = codec.DecodeString(r)
+		pkt.WillPayload, err = codec.DecodeBytes(r)
 		if err != nil {
 			return err
 		}
 	}
-	if c.PasswordFlag {
-		c.Password, err = codec.DecodeBytes(r)
+	if pkt.UsernameFlag {
+		pkt.Username, err = codec.DecodeString(r)
+		if err != nil {
+			return err
+		}
+	}
+	if pkt.PasswordFlag {
+		pkt.Password, err = codec.DecodeBytes(r)
 		if err != nil {
 			return err
 		}
@@ -427,36 +425,33 @@ func (c *Connect) Unpack(r io.Reader, v byte) error {
 	return nil
 }
 
-// Validate performs validation of the fields of a Connect packet
-func (c *Connect) Validate() byte {
-	if c.PasswordFlag && !c.UsernameFlag {
+func (pkt *Connect) Validate() byte {
+	if pkt.PasswordFlag && !pkt.UsernameFlag {
 		return ErrRefusedBadUsernameOrPassword
 	}
-	if c.ReservedBit != 0 {
+	if pkt.ReservedBit != 0 {
 		// Bad reserved bit
 		return ErrProtocolViolation
 	}
-	if (c.ProtocolName == "MQIsdp" && c.ProtocolVersion != 3) || (c.ProtocolName == "MQTT" && c.ProtocolVersion != 4) {
+	if (pkt.ProtocolName == "MQIsdp" && pkt.ProtocolVersion != 3) || (pkt.ProtocolName == "MQTT" && pkt.ProtocolVersion != 4) {
 		// Mismatched or unsupported protocol version
 		return ErrRefusedBadProtocolVersion
 	}
-	if c.ProtocolName != "MQIsdp" && c.ProtocolName != "MQTT" {
+	if pkt.ProtocolName != "MQIsdp" && pkt.ProtocolName != "MQTT" {
 		// Bad protocol name
 		return ErrProtocolViolation
 	}
-	if len(c.ClientIdentifier) > 65535 || len(c.Username) > 65535 || len(c.Password) > 65535 {
+	if len(pkt.ClientIdentifier) > 65535 || len(pkt.Username) > 65535 || len(pkt.Password) > 65535 {
 		// Bad size field
 		return ErrProtocolViolation
 	}
-	if len(c.ClientIdentifier) == 0 && !c.CleanStart {
+	if len(pkt.ClientIdentifier) == 0 && !pkt.CleanStart {
 		// Bad client identifier
 		return ErrRefusedIDRejected
 	}
 	return Accepted
 }
 
-// Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
-func (c *Connect) Details() Details {
+func (pkt *Connect) Details() Details {
 	return Details{Type: ConnectType, ID: 0, Qos: 0}
 }

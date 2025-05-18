@@ -99,24 +99,24 @@ func (p *DisconnectProperties) decode() []byte {
 	return ret
 }
 
-func (d *Disconnect) String() string {
-	return d.FixedHeader.String()
+func (pkt *Disconnect) String() string {
+	return pkt.FixedHeader.String()
 }
 
-func (d *Disconnect) Pack(w io.Writer) error {
-	packet := d.FixedHeader.encode()
+func (pkt *Disconnect) Pack(w io.Writer) error {
+	packet := pkt.FixedHeader.encode()
 	_, err := packet.WriteTo(w)
 
 	return err
 }
 
-func (d *Disconnect) Unpack(r io.Reader, v byte) error {
+func (pkt *Disconnect) Unpack(r io.Reader, v byte) error {
 	if v == V5 {
 		rc, err := codec.DecodeByte(r)
 		if err != nil {
 			return err
 		}
-		d.ReasonCode = &rc
+		pkt.ReasonCode = &rc
 		p := DisconnectProperties{}
 		length, err := codec.DecodeVBI(r)
 		if err != nil {
@@ -128,11 +128,11 @@ func (d *Disconnect) Unpack(r io.Reader, v byte) error {
 		if err := p.Unpack(r); err != nil {
 			return err
 		}
-		d.Properties = &p
+		pkt.Properties = &p
 	}
 	return nil
 }
 
-func (d *Disconnect) Details() Details {
+func (pkt *Disconnect) Details() Details {
 	return Details{Type: DisconnectType, ID: 0, Qos: 0}
 }
