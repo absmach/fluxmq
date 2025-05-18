@@ -1,7 +1,6 @@
 package codec
 
 import (
-	"encoding/binary"
 	"errors"
 	"io"
 )
@@ -13,8 +12,8 @@ var ErrMaxLengthExceeded = errors.New("max length value exceeded")
 const maxMultiplier = 128 * 128 * 128
 
 func DecodeByte(r io.Reader) (byte, error) {
-	b := make([]byte, 1)
-	_, err := io.ReadAtLeast(r, b, 1)
+	var b [1]byte
+	_, err := io.ReadFull(r, b[:])
 	if err != nil {
 		return 0, err
 	}
@@ -22,21 +21,23 @@ func DecodeByte(r io.Reader) (byte, error) {
 }
 
 func DecodeUint16(r io.Reader) (uint16, error) {
-	num := make([]byte, 2)
-	_, err := io.ReadAtLeast(r, num, 2)
+	var num [2]byte
+	_, err := io.ReadFull(r, num[:])
 	if err != nil {
 		return 0, err
 	}
-	return binary.BigEndian.Uint16(num), nil
+
+	return uint16(num[1]) | uint16(num[0])<<8, nil
 }
 
 func DecodeUint32(r io.Reader) (uint32, error) {
-	num := make([]byte, 4)
-	_, err := io.ReadAtLeast(r, num, 4)
+	var num [4]byte
+	_, err := io.ReadFull(r, num[:])
 	if err != nil {
 		return 0, err
 	}
-	return binary.BigEndian.Uint32(num), nil
+
+	return uint32(num[3]) | uint32(num[2])<<8 | uint32(num[1])<<16 | uint32(num[0])<<24, nil
 }
 
 func DecodeBytes(r io.Reader) ([]byte, error) {
@@ -44,9 +45,8 @@ func DecodeBytes(r io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	field := make([]byte, fieldLength)
-	_, err = io.ReadAtLeast(r, field, int(fieldLength))
+	_, err = io.ReadFull(r, field)
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +64,10 @@ func DecodeString(r io.Reader) (string, error) {
 func DecodeVBI(r io.Reader) (int, error) {
 	var vbi uint32
 	var multiplier uint32
-	bytes := make([]byte, 1)
+	var bytes [1]byte
 
 	for {
-		_, err := io.ReadAtLeast(r, bytes, 1)
+		_, err := io.ReadFull(r, bytes[:])
 		if err != nil && err != io.EOF {
 			return 0, err
 		}

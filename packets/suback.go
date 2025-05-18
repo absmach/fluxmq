@@ -14,7 +14,7 @@ type SubAck struct {
 	ID         uint16
 	Properties *BasicProperties
 	// Payload
-	ReasonCodes *[]byte
+	Opts []SubOption
 }
 
 func (pkt *SubAck) String() string {
@@ -34,9 +34,6 @@ func (pkt *SubAck) Pack(w io.Writer) error {
 			bytes = append(bytes, props...)
 		}
 	}
-	if pkt.ReasonCodes != nil {
-		bytes = append(bytes, *pkt.ReasonCodes...)
-	}
 	_, err := w.Write(bytes)
 
 	return err
@@ -55,20 +52,24 @@ func (pkt *SubAck) Unpack(r io.Reader, v byte) error {
 			return err
 		}
 		if length != 0 {
-
 			if err := p.Unpack(r); err != nil {
 				return err
 			}
 			pkt.Properties = &p
 		}
-		rc, err := codec.DecodeBytes(r)
+	}
+	// Read subscription options.
+	for {
+		opt := SubOption{}
+		err := opt.Unpack(r, v)
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		pkt.ReasonCodes = &rc
+		pkt.Opts = append(pkt.Opts, opt)
 	}
-
-	return nil
 }
 
 func (pkt *SubAck) Details() Details {

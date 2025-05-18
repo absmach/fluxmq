@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -14,8 +13,63 @@ type Subscribe struct {
 	// Variable Header
 	ID         uint16
 	Properties *SubscribeProperties
-	Topics     []string
-	QoSs       []byte
+	Opts       []SubOption
+}
+
+// SubOption represent a subscription optins. For more information, check spec:
+// https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901169
+// Fields in the struct are reordered for memory alignment.
+//
+//	Topic
+//	MaxQoS
+//	NoLocal
+//	RetainAsPublished
+//	RetainHandling
+type SubOption struct {
+	Topic             string
+	RetainHandling    *byte
+	NoLocal           *bool
+	RetainAsPublished *bool
+	MaxQoS            byte
+}
+
+func (s *SubOption) Pack() byte {
+	var ret byte
+	ret |= s.MaxQoS & 0x03
+	if s.NoLocal != nil {
+		ret |= 1 << 2
+	}
+	if s.RetainAsPublished != nil {
+		ret |= 1 << 3
+	}
+	if s.RetainHandling != nil {
+		ret |= (*s.RetainHandling << 4) & 0x30
+	}
+	return ret
+}
+
+func (s *SubOption) Unpack(r io.Reader, v byte) error {
+	topic, err := codec.DecodeString(r)
+	if err != nil {
+		return err
+	}
+	var b [1]byte
+	if _, err := io.ReadAtLeast(r, b[:], 1); err != nil {
+		return err
+	}
+	s.Topic = topic
+	flags := b[0]
+	s.MaxQoS = flags & 0x03
+	if v == V5 {
+		noLocal := (flags & (1 << 2)) != 0
+		retainAsPublished := (flags & (1 << 3)) != 0
+		rh := (flags >> 4) & 0x03
+		s.NoLocal = &noLocal
+		s.RetainAsPublished = &retainAsPublished
+		s.RetainHandling = &rh
+	}
+
+	return nil
 }
 
 type SubscribeProperties struct {
@@ -66,48 +120,44 @@ func (p *SubscribeProperties) Unpack(r io.Reader) error {
 }
 
 func (pkt *Subscribe) String() string {
-	return fmt.Sprintf("%s\npacket_id: %d\ntopics: %s\n", pkt.FixedHeader, pkt.ID, pkt.Topics)
+	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
 func (pkt *Subscribe) Pack(w io.Writer) error {
-	var body bytes.Buffer
-	var err error
-
-	body.Write(codec.EncodeUint16(pkt.ID))
-	for i, topic := range pkt.Topics {
-		body.Write(codec.EncodeBytes([]byte(topic)))
-		body.WriteByte(pkt.QoSs[i])
-	}
-	pkt.FixedHeader.RemainingLength = body.Len()
-	packet := pkt.FixedHeader.encode()
-	packet.Write(body.Bytes())
-	_, err = packet.WriteTo(w)
-
-	return err
+	return nil
 }
 
-func (pkt *Subscribe) Unpack(b io.Reader, v byte) error {
+func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {
 	var err error
-	pkt.ID, err = codec.DecodeUint16(b)
+	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	payloadLength := pkt.FixedHeader.RemainingLength - 2
-	for payloadLength > 0 {
-		topic, err := codec.DecodeString(b)
+	if v == V5 {
+		length, err := codec.DecodeVBI(r)
 		if err != nil {
 			return err
 		}
-		pkt.Topics = append(pkt.Topics, topic)
-		qos, err := codec.DecodeByte(b)
-		if err != nil {
-			return err
+		if length != 0 {
+			p := SubscribeProperties{}
+			if err := p.Unpack(r); err != nil {
+				return err
+			}
+			pkt.Properties = &p
 		}
-		pkt.QoSs = append(pkt.QoSs, qos)
-		payloadLength -= 2 + len(topic) + 1 // 2 bytes of string length, plus string, plus 1 byte for Qos
 	}
-
-	return nil
+	// Read subscription options.
+	for {
+		opt := SubOption{}
+		err := opt.Unpack(r, v)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		pkt.Opts = append(pkt.Opts, opt)
+	}
 }
 
 // Details returns a Details struct containing the Qos and
