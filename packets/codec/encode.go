@@ -1,27 +1,25 @@
 package codec
 
-import "encoding/binary"
+// Encode methods rewrite some of bigEndian methods
+// to avoid unnecessary function calls and checks.
 
 func EncodeBytes(field []byte) []byte {
-	fieldLength := make([]byte, 2)
-	binary.BigEndian.PutUint16(fieldLength, uint16(len(field)))
-	return append(fieldLength, field...)
-}
-
-func EncodeByte(b byte) []byte {
-	return []byte{b}
+	v := len(field)
+	b := []byte{byte(v >> 8), byte(v)}
+	return append(b, field...)
 }
 
 func EncodeUint16(num uint16) []byte {
-	bytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(bytes, num)
-	return bytes
+	return []byte{byte(num >> 8), byte(num)}
 }
 
 func EncodeUint32(num uint32) []byte {
-	bytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(bytes, num)
-	return bytes
+	b := make([]byte, 4)
+	b[0] = byte(num >> 24)
+	b[1] = byte(num >> 16)
+	b[2] = byte(num >> 8)
+	b[3] = byte(num)
+	return b
 }
 
 // EncodeVBI is used for Variable Byte Integers used to

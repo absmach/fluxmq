@@ -7,14 +7,14 @@ import (
 )
 
 // ErrMaxLengthExceeded represents an error for invalid length int size.
-// Length is positive integer of variable length.
+// Length is positive integer of variable bytes integer.
 var ErrMaxLengthExceeded = errors.New("max length value exceeded")
 
 const maxMultiplier = 128 * 128 * 128
 
 func DecodeByte(r io.Reader) (byte, error) {
 	b := make([]byte, 1)
-	_, err := io.ReadFull(r, b)
+	_, err := io.ReadAtLeast(r, b, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -23,7 +23,7 @@ func DecodeByte(r io.Reader) (byte, error) {
 
 func DecodeUint16(r io.Reader) (uint16, error) {
 	num := make([]byte, 2)
-	_, err := io.ReadFull(r, num)
+	_, err := io.ReadAtLeast(r, num, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -32,7 +32,7 @@ func DecodeUint16(r io.Reader) (uint16, error) {
 
 func DecodeUint32(r io.Reader) (uint32, error) {
 	num := make([]byte, 4)
-	_, err := io.ReadFull(r, num)
+	_, err := io.ReadAtLeast(r, num, 4)
 	if err != nil {
 		return 0, err
 	}
@@ -46,7 +46,7 @@ func DecodeBytes(r io.Reader) ([]byte, error) {
 	}
 
 	field := make([]byte, fieldLength)
-	_, err = io.ReadFull(r, field)
+	_, err = io.ReadAtLeast(r, field, int(fieldLength))
 	if err != nil {
 		return nil, err
 	}
@@ -64,9 +64,10 @@ func DecodeString(r io.Reader) (string, error) {
 func DecodeVBI(r io.Reader) (int, error) {
 	var vbi uint32
 	var multiplier uint32
-	var bytes [1]byte
+	bytes := make([]byte, 1)
+
 	for {
-		_, err := io.ReadFull(r, bytes[:])
+		_, err := io.ReadAtLeast(r, bytes, 1)
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
