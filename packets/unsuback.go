@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -16,7 +15,7 @@ type UnSubAck struct {
 	ID         uint16
 	Properties *BasicProperties
 	// Payload
-	ReturnCodes *[]byte
+	ReasonCodes *[]byte
 }
 
 func (pkt *UnSubAck) String() string {
@@ -24,16 +23,21 @@ func (pkt *UnSubAck) String() string {
 }
 
 func (pkt *UnSubAck) Pack(w io.Writer) error {
-	var body bytes.Buffer
-	var err error
-	body.Write(codec.EncodeUint16(pkt.ID))
-	if pkt.ReturnCodes != nil {
-		body.Write(*pkt.ReturnCodes)
+	bytes := pkt.FixedHeader.Encode()
+	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
 	}
-	pkt.FixedHeader.RemainingLength = body.Len()
-	packet := pkt.FixedHeader.encode()
-	packet.Write(body.Bytes())
-	_, err = packet.WriteTo(w)
+	if pkt.ReasonCodes != nil {
+		bytes = append(bytes, *pkt.ReasonCodes...)
+	}
+	_, err := w.Write(bytes)
 
 	return err
 }
@@ -60,7 +64,7 @@ func (pkt *UnSubAck) Unpack(r io.Reader, v byte) error {
 		if err != nil {
 			return err
 		}
-		pkt.ReturnCodes = &rc
+		pkt.ReasonCodes = &rc
 	}
 
 	return nil

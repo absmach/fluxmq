@@ -43,7 +43,7 @@ func (s *SubOption) Pack() byte {
 		ret |= 1 << 3
 	}
 	if s.RetainHandling != nil {
-		ret |= (*s.RetainHandling << 4) & 0x30
+		ret |= (*s.RetainHandling & 0x03) << 4
 	}
 	return ret
 }
@@ -54,7 +54,7 @@ func (s *SubOption) Unpack(r io.Reader, v byte) error {
 		return err
 	}
 	var b [1]byte
-	if _, err := io.ReadAtLeast(r, b[:], 1); err != nil {
+	if _, err := io.ReadFull(r, b[:]); err != nil {
 		return err
 	}
 	s.Topic = topic

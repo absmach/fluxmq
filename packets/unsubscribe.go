@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -49,13 +48,11 @@ func (p *UnsubscribeProperties) Unpack(r io.Reader) error {
 	}
 }
 
-func (p *UnsubscribeProperties) encode() []byte {
+func (p *UnsubscribeProperties) Encode() []byte {
 	var ret []byte
-	if len(p.User) > 0 {
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+	for _, u := range p.User {
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 
 	return ret
@@ -66,16 +63,22 @@ func (pkt *Unsubscribe) String() string {
 }
 
 func (pkt *Unsubscribe) Pack(w io.Writer) error {
-	var body bytes.Buffer
-	var err error
-	body.Write(codec.EncodeUint16(pkt.ID))
-	for _, topic := range pkt.Topics {
-		body.Write(codec.EncodeBytes([]byte(topic)))
+	bytes := pkt.FixedHeader.Encode()
+	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
 	}
-	pkt.FixedHeader.RemainingLength = body.Len()
-	packet := pkt.FixedHeader.encode()
-	packet.Write(body.Bytes())
-	_, err = packet.WriteTo(w)
+	for _, t := range pkt.Topics {
+		bytes = append(bytes, codec.EncodeBytes([]byte(t))...)
+	}
+
+	_, err := w.Write(bytes)
 
 	return err
 }
