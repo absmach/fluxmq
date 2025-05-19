@@ -85,9 +85,9 @@ type Details struct {
 // always be nil, a nil ControlPacket indicating an error occurred.
 func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	var fh FixedHeader
-	b := make([]byte, 1)
+	var b [1]byte
 
-	n, err := io.ReadAtLeast(r, b, 1)
+	n, err := io.ReadFull(r, b[:])
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 		return nil, io.ErrUnexpectedEOF
 	}
 
-	err = fh.decode(b[0], r)
+	err = fh.Decode(b[0], r)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	}
 
 	packetBytes := make([]byte, fh.RemainingLength)
-	n, err = io.ReadAtLeast(r, packetBytes, fh.RemainingLength)
+	n, err = io.ReadFull(r, packetBytes)
 	if err != nil {
 		return nil, err
 	}

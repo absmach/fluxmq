@@ -1,7 +1,6 @@
 package packets
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -29,14 +28,7 @@ func (fh FixedHeader) Encode() []byte {
 	return append(ret, codec.EncodeVBI(fh.RemainingLength)...)
 }
 
-func (fh *FixedHeader) encode() bytes.Buffer {
-	var header bytes.Buffer
-	header.WriteByte(fh.PacketType<<4 | codec.EncodeBool(fh.Dup)<<3 | fh.QoS<<1 | codec.EncodeBool(fh.Retain))
-	header.Write(codec.EncodeVBI(fh.RemainingLength))
-	return header
-}
-
-func (fh *FixedHeader) decode(typeAndFlags byte, r io.Reader) error {
+func (fh *FixedHeader) Decode(typeAndFlags byte, r io.Reader) error {
 	fh.PacketType = typeAndFlags >> 4
 	fh.Dup = (typeAndFlags>>3)&0x01 > 0
 	fh.QoS = (typeAndFlags >> 1) & 0x03

@@ -209,7 +209,7 @@ func (p *ConnAckProperties) Encode() []byte {
 		ret = append(ret, *p.RetainAvailable)
 	}
 	if p.MaximumPacketSize != nil {
-		ret = append(ret, codec.EncodeUint16(uint16(*p.MaximumPacketSize))...)
+		ret = append(ret, codec.EncodeUint32(*p.MaximumPacketSize)...)
 	}
 	if p.AssignedClientID != "" {
 		ret = append(ret, codec.EncodeBytes([]byte(p.AssignedClientID))...)

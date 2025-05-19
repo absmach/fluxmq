@@ -9,6 +9,7 @@ func EncodeBytes(field []byte) []byte {
 	return append(b, field...)
 }
 
+// Could be inlined for optimization.
 func EncodeUint16(num uint16) []byte {
 	return []byte{byte(num >> 8), byte(num)}
 }
