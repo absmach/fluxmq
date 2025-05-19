@@ -87,12 +87,9 @@ func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	var fh FixedHeader
 	var b [1]byte
 
-	n, err := io.ReadFull(r, b[:])
+	_, err := io.ReadFull(r, b[:])
 	if err != nil {
 		return nil, err
-	}
-	if n != 1 {
-		return nil, io.ErrUnexpectedEOF
 	}
 
 	err = fh.Decode(b[0], r)
@@ -106,7 +103,7 @@ func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	}
 
 	packetBytes := make([]byte, fh.RemainingLength)
-	n, err = io.ReadFull(r, packetBytes)
+	n, err := io.ReadFull(r, packetBytes)
 	if err != nil {
 		return nil, err
 	}
