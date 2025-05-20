@@ -149,8 +149,7 @@ func (pkt *Publish) String() string {
 }
 
 func (pkt *Publish) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	bytes = append(bytes, codec.EncodeBytes([]byte(pkt.TopicName))...)
+	bytes := codec.EncodeBytes([]byte(pkt.TopicName))
 	if pkt.QoS > 0 {
 		bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
 	}
@@ -163,7 +162,9 @@ func (pkt *Publish) Pack(w io.Writer) error {
 			bytes = append(bytes, props...)
 		}
 	}
+	pkt.FixedHeader.RemainingLength = len(bytes) + len(pkt.Payload)
 	bytes = append(bytes, pkt.Payload...)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err

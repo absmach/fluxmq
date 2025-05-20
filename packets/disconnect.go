@@ -11,7 +11,6 @@ import (
 type Disconnect struct {
 	FixedHeader
 	// Variable Header
-	ReasonCode *byte
 	Properties *DisconnectProperties
 }
 
@@ -104,10 +103,7 @@ func (pkt *Disconnect) String() string {
 }
 
 func (pkt *Disconnect) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	if pkt.ReasonCode != nil {
-		bytes = append(bytes, *pkt.ReasonCode)
-	}
+	bytes := []byte{}
 	if pkt.Properties != nil {
 		if pkt.Properties != nil {
 			props := pkt.Properties.Encode()
@@ -119,6 +115,8 @@ func (pkt *Disconnect) Pack(w io.Writer) error {
 			}
 		}
 	}
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err
@@ -126,11 +124,6 @@ func (pkt *Disconnect) Pack(w io.Writer) error {
 
 func (pkt *Disconnect) Unpack(r io.Reader, v byte) error {
 	if v == V5 {
-		rc, err := codec.DecodeByte(r)
-		if err != nil {
-			return err
-		}
-		pkt.ReasonCode = &rc
 		p := DisconnectProperties{}
 		length, err := codec.DecodeVBI(r)
 		if err != nil {

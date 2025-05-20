@@ -339,9 +339,8 @@ func (pkt *Connect) PackFlags() byte {
 }
 
 func (pkt *Connect) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
 	// Variable Header
-	bytes = append(bytes, codec.EncodeBytes([]byte(pkt.ProtocolName))...)
+	bytes := codec.EncodeBytes([]byte(pkt.ProtocolName))
 	bytes = append(bytes, pkt.ProtocolVersion)
 	bytes = append(bytes, pkt.PackFlags())
 	bytes = append(bytes, codec.EncodeUint16(pkt.KeepAlive)...)
@@ -373,6 +372,8 @@ func (pkt *Connect) Pack(w io.Writer) error {
 	if pkt.PasswordFlag {
 		bytes = append(bytes, pkt.Password...)
 	}
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err
