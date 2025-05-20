@@ -339,7 +339,6 @@ func (pkt *Connect) PackFlags() byte {
 }
 
 func (pkt *Connect) Pack(w io.Writer) error {
-	// Variable Header
 	bytes := codec.EncodeBytes([]byte(pkt.ProtocolName))
 	bytes = append(bytes, pkt.ProtocolVersion)
 	bytes = append(bytes, pkt.PackFlags())
@@ -372,6 +371,7 @@ func (pkt *Connect) Pack(w io.Writer) error {
 	if pkt.PasswordFlag {
 		bytes = append(bytes, pkt.Password...)
 	}
+	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(bytes)
 	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)

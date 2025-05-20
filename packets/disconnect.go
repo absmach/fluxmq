@@ -115,6 +115,7 @@ func (pkt *Disconnect) Pack(w io.Writer) error {
 			}
 		}
 	}
+	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(bytes)
 	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)

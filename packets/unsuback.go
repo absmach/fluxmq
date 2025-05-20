@@ -23,8 +23,7 @@ func (pkt *UnSubAck) String() string {
 }
 
 func (pkt *UnSubAck) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	bytes := codec.EncodeUint16(pkt.ID)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -37,6 +36,9 @@ func (pkt *UnSubAck) Pack(w io.Writer) error {
 	if pkt.ReasonCodes != nil {
 		bytes = append(bytes, *pkt.ReasonCodes...)
 	}
+	// Take care size is calculated properly if someone tempered with the packet.
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err

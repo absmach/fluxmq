@@ -256,9 +256,7 @@ func (pkt *ConnAck) String() string {
 }
 
 func (pkt *ConnAck) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	bytes = append(bytes, codec.EncodeBool(pkt.SessionPresent))
-	bytes = append(bytes, pkt.ReasonCode)
+	bytes := []byte{codec.EncodeBool(pkt.SessionPresent), pkt.ReasonCode}
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -268,6 +266,9 @@ func (pkt *ConnAck) Pack(w io.Writer) error {
 			bytes = append(bytes, props...)
 		}
 	}
+	// Take care size is calculated properly if someone tempered with the packet.
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err

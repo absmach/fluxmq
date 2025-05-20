@@ -21,9 +21,7 @@ func (pkt *PubRec) String() string {
 }
 
 func (pkt *PubRec) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	// Variable Header
-	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	bytes := codec.EncodeUint16(pkt.ID)
 	if pkt.ReasonCode != nil {
 		bytes = append(bytes, *pkt.ReasonCode)
 	}
@@ -36,6 +34,9 @@ func (pkt *PubRec) Pack(w io.Writer) error {
 			bytes = append(bytes, props...)
 		}
 	}
+	// Take care size is calculated properly if someone tempered with the packet.
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err

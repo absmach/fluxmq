@@ -33,19 +33,19 @@ type SubOption struct {
 	MaxQoS            byte
 }
 
-func (s *SubOption) Pack() byte {
-	var ret byte
-	ret |= s.MaxQoS & 0x03
+func (s *SubOption) Encode() []byte {
+	var flag byte
+	flag |= s.MaxQoS & 0x03
 	if s.NoLocal != nil {
-		ret |= 1 << 2
+		flag |= 1 << 2
 	}
 	if s.RetainAsPublished != nil {
-		ret |= 1 << 3
+		flag |= 1 << 3
 	}
 	if s.RetainHandling != nil {
-		ret |= (*s.RetainHandling & 0x03) << 4
+		flag |= (*s.RetainHandling & 0x03) << 4
 	}
-	return ret
+	return append([]byte{flag}, []byte(s.Topic)...)
 }
 
 func (s *SubOption) Unpack(r io.Reader, v byte) error {
@@ -119,12 +119,35 @@ func (p *SubscribeProperties) Unpack(r io.Reader) error {
 	}
 }
 
+func (p *SubscribeProperties) Encode() []byte {
+	return []byte{}
+}
+
 func (pkt *Subscribe) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
 func (pkt *Subscribe) Pack(w io.Writer) error {
-	return nil
+	bytes := codec.EncodeUint16(pkt.ID)
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		bytes = append(bytes, proplen...)
+		if l > 0 {
+			bytes = append(bytes, props...)
+		}
+	}
+	// Payload
+	for _, opt := range pkt.Opts {
+		bytes = append(bytes, opt.Encode()...)
+	}
+	// Take care size is calculated properly if someone tempered with the packet.
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
+	_, err := w.Write(bytes)
+
+	return err
 }
 
 func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {

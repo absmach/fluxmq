@@ -81,8 +81,7 @@ type Details struct {
 
 // ReadPacket takes an instance of an io.Reader (such as net.Conn) and attempts
 // to read an MQTT packet from the stream. It returns a ControlPacket
-// representing the decoded MQTT packet and an error. One of these returns will
-// always be nil, a nil ControlPacket indicating an error occurred.
+// representing the decoded MQTT packet and an error.
 func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	var fh FixedHeader
 	var b [1]byte
@@ -114,10 +113,7 @@ func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
 	return cp, err
 }
 
-// NewControlPacket is used to create a new ControlPacket of the type specified
-// by packetType, this is usually done by reference to the packet type constants
-// defined in packets.go. The newly created ControlPacket is empty and a pointer
-// is returned.
+// NewControlPacket is used to create a new ControlPacket of the specified type.
 func NewControlPacket(packetType byte) ControlPacket {
 	switch packetType {
 	case ConnectType:
@@ -154,9 +150,8 @@ func NewControlPacket(packetType byte) ControlPacket {
 	return nil
 }
 
-// NewControlPacketWithHeader is used to create a new ControlPacket of the type
-// specified within the FixedHeader that is passed to the function.
-// The newly created ControlPacket is empty and a pointer is returned.
+// NewControlPacketWithHeader is used to create a new ControlPacket with the
+// header and type specified by the provided header.
 func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 	switch fh.PacketType {
 	case ConnectType:

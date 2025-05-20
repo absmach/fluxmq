@@ -162,6 +162,7 @@ func (pkt *Publish) Pack(w io.Writer) error {
 			bytes = append(bytes, props...)
 		}
 	}
+	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(bytes) + len(pkt.Payload)
 	bytes = append(bytes, pkt.Payload...)
 	bytes = append(pkt.FixedHeader.Encode(), bytes...)

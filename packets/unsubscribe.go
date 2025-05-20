@@ -63,8 +63,7 @@ func (pkt *Unsubscribe) String() string {
 }
 
 func (pkt *Unsubscribe) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	bytes := codec.EncodeUint16(pkt.ID)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -77,7 +76,9 @@ func (pkt *Unsubscribe) Pack(w io.Writer) error {
 	for _, t := range pkt.Topics {
 		bytes = append(bytes, codec.EncodeBytes([]byte(t))...)
 	}
-
+	// Take care size is calculated properly if someone tempered with the packet.
+	pkt.FixedHeader.RemainingLength = len(bytes)
+	bytes = append(pkt.FixedHeader.Encode(), bytes...)
 	_, err := w.Write(bytes)
 
 	return err
