@@ -375,7 +375,7 @@ func (pkt *Connect) Encode() []byte {
 		ret = append(ret, codec.EncodeBytes([]byte(pkt.Username))...)
 	}
 	if pkt.PasswordFlag {
-		ret = append(ret, pkt.Password...)
+		ret = append(ret, codec.EncodeBytes(pkt.Password)...)
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(ret)

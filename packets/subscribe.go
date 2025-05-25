@@ -45,7 +45,7 @@ func (s *SubOption) Encode() []byte {
 	if s.RetainHandling != nil {
 		flag |= (*s.RetainHandling & 0x03) << 4
 	}
-	return append([]byte{flag}, []byte(s.Topic)...)
+	return append(codec.EncodeBytes([]byte(s.Topic)), flag)
 }
 
 func (s *SubOption) Unpack(r io.Reader, v byte) error {
