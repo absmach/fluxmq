@@ -14,7 +14,8 @@ type SubAck struct {
 	ID         uint16
 	Properties *BasicProperties
 	// Payload
-	ReasonCodes []byte
+	ReasonCodes *[]byte // MQTT 5
+	Reason      *byte   // MQTT 3
 }
 
 func (pkt *SubAck) String() string {
@@ -32,7 +33,13 @@ func (pkt *SubAck) Encode() []byte {
 			ret = append(ret, props...)
 		}
 	}
-	ret = append(ret, pkt.ReasonCodes...)
+	if pkt.ReasonCodes != nil {
+		ret = append(ret, codec.EncodeBytes(*pkt.ReasonCodes)...)
+	}
+	if pkt.Reason != nil {
+		ret = append(ret, *pkt.Reason)
+	}
+
 	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(ret)
 	ret = append(pkt.FixedHeader.Encode(), ret...)
@@ -51,7 +58,14 @@ func (pkt *SubAck) Unpack(r io.Reader, v byte) error {
 	if err != nil {
 		return err
 	}
-	if v == V5 {
+	switch v {
+	case V311, V31:
+		r, err := codec.DecodeByte(r)
+		if err != nil {
+			return err
+		}
+		pkt.Reason = &r
+	case V5:
 		p := BasicProperties{}
 		length, err := codec.DecodeVBI(r)
 		if err != nil {
@@ -63,9 +77,13 @@ func (pkt *SubAck) Unpack(r io.Reader, v byte) error {
 			}
 			pkt.Properties = &p
 		}
-		pkt.ReasonCodes, err = codec.DecodeBytes(r)
+		rcs, err := codec.DecodeBytes(r)
+		if err != nil {
+			return err
+		}
+		pkt.ReasonCodes = &rcs
 	}
-	return err
+	return nil
 }
 
 func (pkt *SubAck) Details() Details {
