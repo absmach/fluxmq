@@ -62,25 +62,29 @@ func (pkt *Unsubscribe) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
-func (pkt *Unsubscribe) Pack(w io.Writer) error {
-	bytes := codec.EncodeUint16(pkt.ID)
+func (pkt *Unsubscribe) Encode() []byte {
+	ret := codec.EncodeUint16(pkt.ID)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
 		proplen := codec.EncodeVBI(l)
-		bytes = append(bytes, proplen...)
+		ret = append(ret, proplen...)
 		if l > 0 {
-			bytes = append(bytes, props...)
+			ret = append(ret, props...)
 		}
 	}
 	for _, t := range pkt.Topics {
-		bytes = append(bytes, codec.EncodeBytes([]byte(t))...)
+		ret = append(ret, codec.EncodeBytes([]byte(t))...)
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
-	pkt.FixedHeader.RemainingLength = len(bytes)
-	bytes = append(pkt.FixedHeader.Encode(), bytes...)
-	_, err := w.Write(bytes)
+	pkt.FixedHeader.RemainingLength = len(ret)
+	ret = append(pkt.FixedHeader.Encode(), ret...)
 
+	return ret
+}
+
+func (pkt *Unsubscribe) Pack(w io.Writer) error {
+	_, err := w.Write(pkt.Encode())
 	return err
 }
 

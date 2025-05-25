@@ -58,6 +58,7 @@ var PacketNames = map[uint8]string{
 // ControlPacket defines the interface for structures intended to hold
 // decoded MQTT packets, either from being read or before being written.
 type ControlPacket interface {
+	Encode() []byte
 	Pack(w io.Writer) error
 	// Unpack receives an IO reader and a protocol version so
 	// the same packet can be reaused for multiple protocol version.
@@ -82,35 +83,36 @@ type Details struct {
 // ReadPacket takes an instance of an io.Reader (such as net.Conn) and attempts
 // to read an MQTT packet from the stream. It returns a ControlPacket
 // representing the decoded MQTT packet and an error.
-func ReadPacket(r io.Reader, v byte) (ControlPacket, error) {
+func ReadPacket(r io.Reader, v byte) (ControlPacket, []byte, error) {
 	var fh FixedHeader
-	var b [1]byte
+	b := make([]byte, 1)
 
-	_, err := io.ReadFull(r, b[:])
+	_, err := io.ReadFull(r, b)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	err = fh.Decode(b[0], r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cp, err := NewControlPacketWithHeader(fh)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	packetBytes := make([]byte, fh.RemainingLength)
 	n, err := io.ReadFull(r, packetBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if n != fh.RemainingLength {
-		return nil, ErrFailRemaining
+		return nil, nil, ErrFailRemaining
 	}
+
 	err = cp.Unpack(bytes.NewReader(packetBytes), v)
-	return cp, err
+	return cp, append(fh.Encode(), packetBytes...), err
 }
 
 // NewControlPacket is used to create a new ControlPacket of the specified type.

@@ -74,12 +74,12 @@ func (pkt *Auth) String() string {
 }
 
 func (pkt *Auth) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	bytes = append(bytes, byte(pkt.ReasonCode))
+	ret := pkt.FixedHeader.Encode()
+	ret = append(ret, byte(pkt.ReasonCode))
 	if pkt.Properties != nil {
-		bytes = append(bytes, pkt.Encode()...)
+		ret = append(ret, pkt.Encode()...)
 	}
-	_, err := w.Write(bytes)
+	_, err := w.Write(ret)
 
 	return err
 }

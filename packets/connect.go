@@ -283,24 +283,30 @@ func (p *WillProperties) Unpack(r io.Reader) error {
 func (p *WillProperties) Encode() []byte {
 	var ret []byte
 	if p.WillDelayInterval != nil {
+		ret = append(ret, WillDelayIntervalProp)
 		ret = append(ret, codec.EncodeUint32(*p.WillDelayInterval)...)
 	}
 	if p.PayloadFormat != nil {
-		ret = append(ret, *p.PayloadFormat)
+		ret = append(ret, PayloadFormatProp, *p.PayloadFormat)
 	}
 	if p.MessageExpiry != nil {
+		ret = append(ret, MessageExpiryProp)
 		ret = append(ret, codec.EncodeUint32(*p.MessageExpiry)...)
 	}
 	if p.ContentType != "" {
+		ret = append(ret, ContentTypeProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ContentType))...)
 	}
 	if p.ResponseTopic != "" {
+		ret = append(ret, ResponseTopicProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseTopic))...)
 	}
 	if len(p.CorrelationData) > 0 {
+		ret = append(ret, CorrelationDataProp)
 		ret = append(ret, p.CorrelationData...)
 	}
 	if len(p.User) > 0 {
+		ret = append(ret, UserProp)
 		for _, u := range p.User {
 			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
 			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
@@ -338,44 +344,48 @@ func (pkt *Connect) PackFlags() byte {
 	return flags
 }
 
-func (pkt *Connect) Pack(w io.Writer) error {
-	bytes := codec.EncodeBytes([]byte(pkt.ProtocolName))
-	bytes = append(bytes, pkt.ProtocolVersion)
-	bytes = append(bytes, pkt.PackFlags())
-	bytes = append(bytes, codec.EncodeUint16(pkt.KeepAlive)...)
+func (pkt *Connect) Encode() []byte {
+	ret := codec.EncodeBytes([]byte(pkt.ProtocolName))
+	ret = append(ret, pkt.ProtocolVersion)
+	ret = append(ret, pkt.PackFlags())
+	ret = append(ret, codec.EncodeUint16(pkt.KeepAlive)...)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
 		proplen := codec.EncodeVBI(l)
-		bytes = append(bytes, proplen...)
+		ret = append(ret, proplen...)
 		if l > 0 {
-			bytes = append(bytes, props...)
+			ret = append(ret, props...)
 		}
 	}
 	// Payload
-	bytes = append(bytes, codec.EncodeBytes([]byte(pkt.ClientID))...)
+	ret = append(ret, codec.EncodeBytes([]byte(pkt.ClientID))...)
 	if pkt.WillFlag {
 		if pkt.Properties != nil {
 			props := pkt.Properties.Encode()
 			l := len(props)
 			proplen := codec.EncodeVBI(l)
-			bytes = append(bytes, proplen...)
+			ret = append(ret, proplen...)
 			if l > 0 {
-				bytes = append(bytes, props...)
+				ret = append(ret, props...)
 			}
 		}
 	}
 	if pkt.UsernameFlag {
-		bytes = append(bytes, codec.EncodeBytes([]byte(pkt.Username))...)
+		ret = append(ret, codec.EncodeBytes([]byte(pkt.Username))...)
 	}
 	if pkt.PasswordFlag {
-		bytes = append(bytes, pkt.Password...)
+		ret = append(ret, pkt.Password...)
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
-	pkt.FixedHeader.RemainingLength = len(bytes)
-	bytes = append(pkt.FixedHeader.Encode(), bytes...)
-	_, err := w.Write(bytes)
+	pkt.FixedHeader.RemainingLength = len(ret)
+	ret = append(pkt.FixedHeader.Encode(), ret...)
 
+	return ret
+}
+
+func (pkt *Connect) Pack(w io.Writer) error {
+	_, err := w.Write(pkt.Encode())
 	return err
 }
 

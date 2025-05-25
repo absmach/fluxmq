@@ -64,14 +64,13 @@ func DecodeString(r io.Reader) (string, error) {
 func DecodeVBI(r io.Reader) (int, error) {
 	var vbi uint32
 	var multiplier uint32
-	var bytes [1]byte
-
+	var b [1]byte
 	for {
-		_, err := io.ReadFull(r, bytes[:])
+		_, err := io.ReadFull(r, b[:])
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
-		digit := bytes[0]
+		digit := b[0]
 		vbi |= uint32(digit&0x7F) << multiplier
 		if (digit & 0x80) == 0 {
 			break

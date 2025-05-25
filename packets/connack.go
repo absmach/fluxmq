@@ -255,22 +255,25 @@ func (pkt *ConnAck) String() string {
 	return fmt.Sprintf("%s SessionPresent: %t ReturnCode %d", pkt.FixedHeader, pkt.SessionPresent, pkt.ReasonCode)
 }
 
-func (pkt *ConnAck) Pack(w io.Writer) error {
-	bytes := []byte{codec.EncodeBool(pkt.SessionPresent), pkt.ReasonCode}
+func (pkt *ConnAck) Encode() []byte {
+	ret := []byte{codec.EncodeBool(pkt.SessionPresent), pkt.ReasonCode}
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
 		proplen := codec.EncodeVBI(l)
-		bytes = append(bytes, proplen...)
+		ret = append(ret, proplen...)
 		if l > 0 {
-			bytes = append(bytes, props...)
+			ret = append(ret, props...)
 		}
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
-	pkt.FixedHeader.RemainingLength = len(bytes)
-	bytes = append(pkt.FixedHeader.Encode(), bytes...)
-	_, err := w.Write(bytes)
+	pkt.FixedHeader.RemainingLength = len(ret)
+	ret = append(pkt.FixedHeader.Encode(), ret...)
+	return ret
+}
 
+func (pkt *ConnAck) Pack(w io.Writer) error {
+	_, err := w.Write(pkt.Encode())
 	return err
 }
 

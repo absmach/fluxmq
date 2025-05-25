@@ -92,9 +92,11 @@ func (p *BasicProperties) Unpack(r io.Reader) error {
 func (p *BasicProperties) Encode() []byte {
 	var ret []byte
 	if p.ReasonString != "" {
+		ret = append(ret, ReasonStringProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
 	if len(p.User) > 0 {
+		ret = append(ret, UserProp)
 		for _, u := range p.User {
 			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
 			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)

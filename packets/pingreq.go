@@ -13,9 +13,14 @@ func (pkt *PingReq) String() string {
 	return pkt.FixedHeader.String()
 }
 
+func (pkt *PingReq) Encode() []byte {
+	return pkt.FixedHeader.Encode()
+}
+
 func (pkt *PingReq) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
-	_, err := w.Write(bytes)
+	// No need for an extra function call of pkt.Encode().
+	res := pkt.FixedHeader.Encode()
+	_, err := w.Write(res)
 
 	return err
 }

@@ -114,30 +114,37 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 func (p *PublishProperties) Encode() []byte {
 	var ret []byte
 	if p.PayloadFormat != nil {
-		ret = append(ret, *p.PayloadFormat)
+		ret = append(ret, PayloadFormatProp, *p.PayloadFormat)
 	}
 	if p.MessageExpiry != nil {
+		ret = append(ret, MessageExpiryProp)
 		ret = append(ret, codec.EncodeUint32(*p.MessageExpiry)...)
 	}
 	if p.TopicAlias != nil {
+		ret = append(ret, TopicAliasProp)
 		ret = append(ret, codec.EncodeUint16(*p.TopicAlias)...)
 	}
 	if p.ResponseTopic != "" {
+		ret = append(ret, ResponseTopicProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseTopic))...)
 	}
 	if len(p.CorrelationData) > 0 {
+		ret = append(ret, CorrelationDataProp)
 		ret = append(ret, p.CorrelationData...)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
+			ret = append(ret, UserProp)
 			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
 			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.SubscriptionID != nil {
+		ret = append(ret, SubscriptionIdentifierProp)
 		ret = append(ret, codec.EncodeVBI(*p.SubscriptionID)...)
 	}
 	if p.ContentType != "" {
+		ret = append(ret, ContentTypeProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ContentType))...)
 	}
 
@@ -148,26 +155,30 @@ func (pkt *Publish) String() string {
 	return fmt.Sprintf("%s\ntopic_name: %s\npacket_id: %d\npayload: %s\n", pkt.FixedHeader, pkt.TopicName, pkt.ID, pkt.Payload)
 }
 
-func (pkt *Publish) Pack(w io.Writer) error {
-	bytes := codec.EncodeBytes([]byte(pkt.TopicName))
+func (pkt *Publish) Encode() []byte {
+	ret := codec.EncodeBytes([]byte(pkt.TopicName))
 	if pkt.QoS > 0 {
-		bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+		ret = append(ret, codec.EncodeUint16(pkt.ID)...)
 	}
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
 		proplen := codec.EncodeVBI(l)
-		bytes = append(bytes, proplen...)
+		ret = append(ret, proplen...)
 		if l > 0 {
-			bytes = append(bytes, props...)
+			ret = append(ret, props...)
 		}
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
-	pkt.FixedHeader.RemainingLength = len(bytes) + len(pkt.Payload)
-	bytes = append(bytes, pkt.Payload...)
-	bytes = append(pkt.FixedHeader.Encode(), bytes...)
-	_, err := w.Write(bytes)
+	pkt.FixedHeader.RemainingLength = len(ret) + len(pkt.Payload)
+	ret = append(ret, pkt.Payload...)
+	ret = append(pkt.FixedHeader.Encode(), ret...)
 
+	return ret
+}
+
+func (pkt *Publish) Pack(w io.Writer) error {
+	_, err := w.Write(pkt.Encode())
 	return err
 }
 

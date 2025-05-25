@@ -20,24 +20,28 @@ func (pkt *PubAck) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\nreason_code: %b", pkt.FixedHeader, pkt.ID, *pkt.ReasonCode)
 }
 
-func (pkt *PubAck) Pack(w io.Writer) error {
-	bytes := pkt.FixedHeader.Encode()
+func (pkt *PubAck) Encode() []byte {
+	ret := pkt.FixedHeader.Encode()
 	// Variable Header
-	bytes = append(bytes, codec.EncodeUint16(pkt.ID)...)
+	ret = append(ret, codec.EncodeUint16(pkt.ID)...)
 	if pkt.ReasonCode != nil {
-		bytes = append(bytes, *pkt.ReasonCode)
+		ret = append(ret, *pkt.ReasonCode)
 	}
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
 		proplen := codec.EncodeVBI(l)
-		bytes = append(bytes, proplen...)
+		ret = append(ret, proplen...)
 		if l > 0 {
-			bytes = append(bytes, props...)
+			ret = append(ret, props...)
 		}
 	}
-	_, err := w.Write(bytes)
 
+	return ret
+}
+
+func (pkt *PubAck) Pack(w io.Writer) error {
+	_, err := w.Write(pkt.Encode())
 	return err
 }
 
