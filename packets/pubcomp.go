@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -68,7 +69,12 @@ func (pkt *PubComp) Unpack(r io.Reader, v byte) error {
 		if length == 0 {
 			return nil
 		}
-		if err := p.Unpack(r); err != nil {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
+			return err
+		}
+		props := bytes.NewReader(buf)
+		if err := p.Unpack(props); err != nil {
 			return err
 		}
 		pkt.Properties = &p

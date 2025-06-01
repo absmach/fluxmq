@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -66,13 +67,18 @@ func (pkt *SubAck) Unpack(r io.Reader, v byte) error {
 		}
 		pkt.Reason = &r
 	case V5:
-		p := BasicProperties{}
 		length, err := codec.DecodeVBI(r)
 		if err != nil {
 			return err
 		}
 		if length != 0 {
-			if err := p.Unpack(r); err != nil {
+			buf := make([]byte, length)
+			if _, err := r.Read(buf); err != nil {
+				return err
+			}
+			p := BasicProperties{}
+			props := bytes.NewReader(buf)
+			if err := p.Unpack(props); err != nil {
 				return err
 			}
 			pkt.Properties = &p

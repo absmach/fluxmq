@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -420,8 +421,13 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 			return err
 		}
 		if length != 0 {
+			buf := make([]byte, length)
+			if _, err := r.Read(buf); err != nil {
+				return err
+			}
+			props := bytes.NewReader(buf)
 			p := ConnectProperties{}
-			if err := p.Unpack(r); err != nil {
+			if err := p.Unpack(props); err != nil {
 				return err
 			}
 			pkt.Properties = &p
@@ -438,8 +444,13 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 				return err
 			}
 			if length != 0 {
+				buf := make([]byte, length)
+				if _, err := r.Read(buf); err != nil {
+					return err
+				}
+				props := bytes.NewReader(buf)
 				p := WillProperties{}
-				if err := p.Unpack(r); err != nil {
+				if err := p.Unpack(props); err != nil {
 					return err
 				}
 				pkt.WillProperties = &p
