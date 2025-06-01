@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -197,54 +198,70 @@ func (p *ConnAckProperties) Unpack(r io.Reader) error {
 func (p *ConnAckProperties) Encode() []byte {
 	var ret []byte
 	if p.SessionExpiryInterval != nil {
+		ret = append(ret, SessionExpiryIntervalProp)
 		ret = append(ret, codec.EncodeUint32(*p.SessionExpiryInterval)...)
 	}
 	if p.ReceiveMax != nil {
+		ret = append(ret, ReceiveMaximumProp)
 		ret = append(ret, codec.EncodeUint16(*p.ReceiveMax)...)
 	}
 	if p.MaxQoS != nil {
+		ret = append(ret, MaximumQOSProp)
 		ret = append(ret, *p.MaxQoS)
 	}
 	if p.RetainAvailable != nil {
+		ret = append(ret, RetainAvailableProp)
 		ret = append(ret, *p.RetainAvailable)
 	}
 	if p.MaximumPacketSize != nil {
+		ret = append(ret, MaximumPacketSizeProp)
 		ret = append(ret, codec.EncodeUint32(*p.MaximumPacketSize)...)
 	}
 	if p.AssignedClientID != "" {
+		ret = append(ret, AssignedClientIDProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.AssignedClientID))...)
 	}
 	if p.TopicAliasMax != nil {
+		ret = append(ret, TopicAliasMaximumProp)
 		ret = append(ret, codec.EncodeUint16(*p.TopicAliasMax)...)
 	}
 	if p.ReasonString != "" {
+		ret = append(ret, ReasonStringProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
 	if len(p.User) > 0 {
+		ret = append(ret, UserProp)
 		for _, u := range p.User {
 			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
 			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.WildcardSubAvailable != nil {
+		ret = append(ret, WildcardSubAvailableProp)
 		ret = append(ret, *p.WildcardSubAvailable)
 	}
 	if p.SubIDAvailable != nil {
+		ret = append(ret, SubIDAvailableProp)
 		ret = append(ret, *p.SubIDAvailable)
 	}
 	if p.ServerKeepAlive != nil {
+		ret = append(ret, ServerKeepAliveProp)
 		ret = append(ret, codec.EncodeUint16(*p.ServerKeepAlive)...)
 	}
 	if p.ResponseInfo != "" {
+		ret = append(ret, ResponseInfoProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseInfo))...)
 	}
 	if p.ServerReference != "" {
+		ret = append(ret, ServerReferenceProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ServerReference))...)
 	}
 	if p.AuthMethod != "" {
+		ret = append(ret, AuthMethodProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.AuthMethod))...)
 	}
 	if len(p.AuthData) > 0 {
+		ret = append(ret, AuthDataProp)
 		ret = append(ret, p.AuthData...)
 	}
 
@@ -290,11 +307,16 @@ func (pkt *ConnAck) Unpack(r io.Reader, v byte) error {
 			return err
 		}
 		if length != 0 {
-			prop := ConnAckProperties{}
-			if err := prop.Unpack(r); err != nil {
+			buf := make([]byte, length)
+			if _, err := r.Read(buf); err != nil {
 				return err
 			}
-			pkt.Properties = &prop
+			p := ConnAckProperties{}
+			props := bytes.NewBuffer(buf)
+			if err := p.Unpack(props); err != nil {
+				return err
+			}
+			pkt.Properties = &p
 		}
 	}
 

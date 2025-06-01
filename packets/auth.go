@@ -1,6 +1,7 @@
 package packets
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -93,11 +94,16 @@ func (pkt *Auth) Unpack(r io.Reader, v byte) error {
 			return err
 		}
 		if length != 0 {
-			prop := AuthProperties{}
-			if err := prop.Unpack(r); err != nil {
+			buf := make([]byte, length)
+			if _, err := r.Read(buf); err != nil {
 				return err
 			}
-			pkt.Properties = &prop
+			props := bytes.NewBuffer(buf)
+			p := AuthProperties{}
+			if err := p.Unpack(props); err != nil {
+				return err
+			}
+			pkt.Properties = &p
 		}
 	}
 

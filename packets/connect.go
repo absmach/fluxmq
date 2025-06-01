@@ -163,33 +163,42 @@ func (p *ConnectProperties) Encode() []byte {
 	var ret []byte
 
 	if p.SessionExpiryInterval != nil {
+		ret = append(ret, SessionExpiryIntervalProp)
 		ret = append(ret, codec.EncodeUint32(*p.SessionExpiryInterval)...)
 	}
 	if p.ReceiveMaximum != nil {
+		ret = append(ret, ReceiveMaximumProp)
 		ret = append(ret, codec.EncodeUint16(*p.ReceiveMaximum)...)
 	}
 	if p.MaximumPacketSize != nil {
+		ret = append(ret, MaximumPacketSizeProp)
 		ret = append(ret, codec.EncodeUint16(uint16(*p.MaximumPacketSize))...)
 	}
 	if p.TopicAliasMaximum != nil {
+		ret = append(ret, TopicAliasMaximumProp)
 		ret = append(ret, codec.EncodeUint16(*p.TopicAliasMaximum)...)
 	}
 	if p.RequestResponseInfo != nil {
+		ret = append(ret, RequestProblemInfoProp)
 		ret = append(ret, *p.RequestResponseInfo)
 	}
 	if p.RequestProblemInfo != nil {
+		ret = append(ret, RequestProblemInfoProp)
 		ret = append(ret, *p.RequestProblemInfo)
 	}
 	if len(p.User) > 0 {
+		ret = append(ret, UserProp)
 		for _, u := range p.User {
 			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
 			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 		}
 	}
 	if p.AuthMethod != "" {
+		ret = append(ret, AuthMethodProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.AuthMethod))...)
 	}
 	if len(p.AuthData) > 0 {
+		ret = append(ret, AuthDataProp)
 		ret = append(ret, p.AuthData...)
 	}
 
@@ -425,8 +434,8 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 			if _, err := r.Read(buf); err != nil {
 				return err
 			}
-			props := bytes.NewReader(buf)
 			p := ConnectProperties{}
+			props := bytes.NewReader(buf)
 			if err := p.Unpack(props); err != nil {
 				return err
 			}
@@ -448,8 +457,8 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 				if _, err := r.Read(buf); err != nil {
 					return err
 				}
-				props := bytes.NewReader(buf)
 				p := WillProperties{}
+				props := bytes.NewReader(buf)
 				if err := p.Unpack(props); err != nil {
 					return err
 				}

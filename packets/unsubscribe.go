@@ -105,8 +105,8 @@ func (pkt *Unsubscribe) Unpack(r io.Reader, v byte) error {
 			if _, err := r.Read(buf); err != nil {
 				return err
 			}
-			props := bytes.NewReader(buf)
 			p := UnsubscribeProperties{}
+			props := bytes.NewReader(buf)
 			if err := p.Unpack(props); err != nil {
 				return err
 			}

@@ -61,7 +61,6 @@ func (pkt *PubComp) Unpack(r io.Reader, v byte) error {
 			return err
 		}
 		pkt.ReasonCode = &rc
-		p := BasicProperties{}
 		length, err := codec.DecodeVBI(r)
 		if err != nil {
 			return err
@@ -73,6 +72,7 @@ func (pkt *PubComp) Unpack(r io.Reader, v byte) error {
 		if _, err := r.Read(buf); err != nil {
 			return err
 		}
+		p := BasicProperties{}
 		props := bytes.NewReader(buf)
 		if err := p.Unpack(props); err != nil {
 			return err

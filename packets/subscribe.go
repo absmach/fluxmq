@@ -183,8 +183,8 @@ func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {
 			if _, err := r.Read(buf); err != nil {
 				return err
 			}
-			props := bytes.NewReader(buf)
 			p := SubscribeProperties{}
+			props := bytes.NewReader(buf)
 			if err := p.Unpack(props); err != nil {
 				return err
 			}
