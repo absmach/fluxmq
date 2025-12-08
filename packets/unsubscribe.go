@@ -63,8 +63,14 @@ func (pkt *Unsubscribe) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
+// Type returns the packet type.
+func (pkt *Unsubscribe) Type() byte {
+	return UnsubscribeType
+}
+
 func (pkt *Unsubscribe) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -73,6 +79,8 @@ func (pkt *Unsubscribe) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	for _, t := range pkt.Topics {
 		ret = append(ret, codec.EncodeBytes([]byte(t))...)
@@ -89,29 +97,28 @@ func (pkt *Unsubscribe) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Unsubscribe) Unpack(r io.Reader, v byte) error {
+func (pkt *Unsubscribe) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	if v == V5 {
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
+	// Properties (MQTT 5.0)
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
 			return err
 		}
-		if length != 0 {
-			buf := make([]byte, length)
-			if _, err := r.Read(buf); err != nil {
-				return err
-			}
-			p := UnsubscribeProperties{}
-			props := bytes.NewReader(buf)
-			if err := p.Unpack(props); err != nil {
-				return err
-			}
-			pkt.Properties = &p
+		p := UnsubscribeProperties{}
+		props := bytes.NewReader(buf)
+		if err := p.Unpack(props); err != nil {
+			return err
 		}
+		pkt.Properties = &p
 	}
 	for {
 		t, err := codec.DecodeBytes(r)
@@ -126,5 +133,5 @@ func (pkt *Unsubscribe) Unpack(r io.Reader, v byte) error {
 }
 
 func (pkt *Unsubscribe) Details() Details {
-	return Details{Type: UnsubscribeType, ID: pkt.ID, Qos: 1}
+	return Details{Type: UnsubscribeType, ID: pkt.ID, QoS: 1}
 }

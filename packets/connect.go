@@ -172,26 +172,24 @@ func (p *ConnectProperties) Encode() []byte {
 	}
 	if p.MaximumPacketSize != nil {
 		ret = append(ret, MaximumPacketSizeProp)
-		ret = append(ret, codec.EncodeUint16(uint16(*p.MaximumPacketSize))...)
+		ret = append(ret, codec.EncodeUint32(*p.MaximumPacketSize)...)
 	}
 	if p.TopicAliasMaximum != nil {
 		ret = append(ret, TopicAliasMaximumProp)
 		ret = append(ret, codec.EncodeUint16(*p.TopicAliasMaximum)...)
 	}
 	if p.RequestResponseInfo != nil {
-		ret = append(ret, RequestProblemInfoProp)
+		ret = append(ret, RequestResponseInfoProp)
 		ret = append(ret, *p.RequestResponseInfo)
 	}
 	if p.RequestProblemInfo != nil {
 		ret = append(ret, RequestProblemInfoProp)
 		ret = append(ret, *p.RequestProblemInfo)
 	}
-	if len(p.User) > 0 {
+	for _, u := range p.User {
 		ret = append(ret, UserProp)
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 	if p.AuthMethod != "" {
 		ret = append(ret, AuthMethodProp)
@@ -199,7 +197,7 @@ func (p *ConnectProperties) Encode() []byte {
 	}
 	if len(p.AuthData) > 0 {
 		ret = append(ret, AuthDataProp)
-		ret = append(ret, p.AuthData...)
+		ret = append(ret, codec.EncodeBytes(p.AuthData)...)
 	}
 
 	return ret
@@ -313,14 +311,12 @@ func (p *WillProperties) Encode() []byte {
 	}
 	if len(p.CorrelationData) > 0 {
 		ret = append(ret, CorrelationDataProp)
-		ret = append(ret, p.CorrelationData...)
+		ret = append(ret, codec.EncodeBytes(p.CorrelationData)...)
 	}
-	if len(p.User) > 0 {
+	for _, u := range p.User {
 		ret = append(ret, UserProp)
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 
 	return ret
@@ -330,6 +326,11 @@ func (pkt *Connect) String() string {
 	return fmt.Sprintf(stringFormat, pkt.FixedHeader, pkt.ProtocolVersion, pkt.ProtocolName, pkt.CleanStart,
 		pkt.WillFlag, pkt.WillQoS, pkt.WillRetain, pkt.UsernameFlag, pkt.PasswordFlag, pkt.KeepAlive,
 		pkt.ClientID, pkt.WillTopic, pkt.WillPayload, pkt.Username, pkt.Password)
+}
+
+// Type returns the packet type.
+func (pkt *Connect) Type() byte {
+	return ConnectType
 }
 
 func (pkt *Connect) PackFlags() byte {
@@ -359,6 +360,7 @@ func (pkt *Connect) Encode() []byte {
 	ret = append(ret, pkt.ProtocolVersion)
 	ret = append(ret, pkt.PackFlags())
 	ret = append(ret, codec.EncodeUint16(pkt.KeepAlive)...)
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -367,19 +369,25 @@ func (pkt *Connect) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	// Payload
 	ret = append(ret, codec.EncodeBytes([]byte(pkt.ClientID))...)
 	if pkt.WillFlag {
-		if pkt.Properties != nil {
-			props := pkt.Properties.Encode()
+		if pkt.WillProperties != nil {
+			props := pkt.WillProperties.Encode()
 			l := len(props)
 			proplen := codec.EncodeVBI(l)
 			ret = append(ret, proplen...)
 			if l > 0 {
 				ret = append(ret, props...)
 			}
+		} else {
+			ret = append(ret, 0) // Zero-length properties
 		}
+		ret = append(ret, codec.EncodeBytes([]byte(pkt.WillTopic))...)
+		ret = append(ret, codec.EncodeBytes(pkt.WillPayload)...)
 	}
 	if pkt.UsernameFlag {
 		ret = append(ret, codec.EncodeBytes([]byte(pkt.Username))...)
@@ -399,7 +407,7 @@ func (pkt *Connect) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Connect) Unpack(r io.Reader, v byte) error {
+func (pkt *Connect) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ProtocolName, err = codec.DecodeString(r)
 	if err != nil {
@@ -424,7 +432,29 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 	if err != nil {
 		return err
 	}
-	if v == V5 {
+	// Properties (MQTT 5.0)
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
+			return err
+		}
+		p := ConnectProperties{}
+		props := bytes.NewReader(buf)
+		if err := p.Unpack(props); err != nil {
+			return err
+		}
+		pkt.Properties = &p
+	}
+	pkt.ClientID, err = codec.DecodeString(r)
+	if err != nil {
+		return err
+	}
+	if pkt.WillFlag {
+		// Will Properties (MQTT 5.0)
 		length, err := codec.DecodeVBI(r)
 		if err != nil {
 			return err
@@ -434,36 +464,12 @@ func (pkt *Connect) Unpack(r io.Reader, v byte) error {
 			if _, err := r.Read(buf); err != nil {
 				return err
 			}
-			p := ConnectProperties{}
+			p := WillProperties{}
 			props := bytes.NewReader(buf)
 			if err := p.Unpack(props); err != nil {
 				return err
 			}
-			pkt.Properties = &p
-		}
-	}
-	pkt.ClientID, err = codec.DecodeString(r)
-	if err != nil {
-		return err
-	}
-	if pkt.WillFlag {
-		if v == V5 {
-			length, err := codec.DecodeVBI(r)
-			if err != nil {
-				return err
-			}
-			if length != 0 {
-				buf := make([]byte, length)
-				if _, err := r.Read(buf); err != nil {
-					return err
-				}
-				p := WillProperties{}
-				props := bytes.NewReader(buf)
-				if err := p.Unpack(props); err != nil {
-					return err
-				}
-				pkt.WillProperties = &p
-			}
+			pkt.WillProperties = &p
 		}
 		pkt.WillTopic, err = codec.DecodeString(r)
 		if err != nil {
@@ -518,5 +524,5 @@ func (pkt *Connect) Validate() byte {
 }
 
 func (pkt *Connect) Details() Details {
-	return Details{Type: ConnectType, ID: 0, Qos: 0}
+	return Details{Type: ConnectType, ID: 0, QoS: 0}
 }

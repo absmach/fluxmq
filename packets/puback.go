@@ -21,13 +21,21 @@ func (pkt *PubAck) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\nreason_code: %b", pkt.FixedHeader, pkt.ID, *pkt.ReasonCode)
 }
 
+// Type returns the packet type.
+func (pkt *PubAck) Type() byte {
+	return PubAckType
+}
+
 func (pkt *PubAck) Encode() []byte {
-	ret := pkt.FixedHeader.Encode()
+	var ret []byte
 	// Variable Header
 	ret = append(ret, codec.EncodeUint16(pkt.ID)...)
 	if pkt.ReasonCode != nil {
 		ret = append(ret, *pkt.ReasonCode)
+	} else {
+		ret = append(ret, 0) // Success
 	}
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -36,8 +44,12 @@ func (pkt *PubAck) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 
+	pkt.FixedHeader.RemainingLength = len(ret)
+	ret = append(pkt.FixedHeader.Encode(), ret...)
 	return ret
 }
 
@@ -46,40 +58,39 @@ func (pkt *PubAck) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *PubAck) Unpack(r io.Reader, v byte) error {
+func (pkt *PubAck) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	if v == V5 {
-		rc, err := codec.DecodeByte(r)
-		if err != nil {
-			return err
-		}
-		pkt.ReasonCode = &rc
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
-			return err
-		}
-		if length == 0 {
-			return nil
-		}
-		buf := make([]byte, length)
-		if _, err := r.Read(buf); err != nil {
-			return err
-		}
-		p := BasicProperties{}
-		props := bytes.NewBuffer(buf)
-		if err := p.Unpack(props); err != nil {
-			return err
-		}
-		pkt.Properties = &p
+	// MQTT 5.0 reason code and properties
+	rc, err := codec.DecodeByte(r)
+	if err != nil {
+		return err
 	}
+	pkt.ReasonCode = &rc
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	buf := make([]byte, length)
+	if _, err := r.Read(buf); err != nil {
+		return err
+	}
+	p := BasicProperties{}
+	props := bytes.NewBuffer(buf)
+	if err := p.Unpack(props); err != nil {
+		return err
+	}
+	pkt.Properties = &p
 
 	return nil
 }
 
 func (pkt *PubAck) Details() Details {
-	return Details{Type: PubAckType, Qos: pkt.QoS}
+	return Details{Type: PubAckType, QoS: pkt.QoS}
 }

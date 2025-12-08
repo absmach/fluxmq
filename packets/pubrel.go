@@ -21,6 +21,11 @@ func (pkt *PubRel) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\nreason_code: %b", pkt.FixedHeader, pkt.ID, *pkt.ReasonCode)
 }
 
+// Type returns the packet type.
+func (pkt *PubRel) Type() byte {
+	return PubRelType
+}
+
 func (pkt *PubRel) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
 	if pkt.ReasonCode != nil {
@@ -47,40 +52,39 @@ func (pkt *PubRel) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *PubRel) Unpack(r io.Reader, v byte) error {
+func (pkt *PubRel) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	if v == V5 {
-		rc, err := codec.DecodeByte(r)
-		if err != nil {
-			return err
-		}
-		pkt.ReasonCode = &rc
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
-			return err
-		}
-		if length == 0 {
-			return nil
-		}
-		buf := make([]byte, length)
-		if _, err := r.Read(buf); err != nil {
-			return err
-		}
-		p := BasicProperties{}
-		props := bytes.NewReader(buf)
-		if err := p.Unpack(props); err != nil {
-			return err
-		}
-		pkt.Properties = &p
+	// MQTT 5.0 reason code and properties
+	rc, err := codec.DecodeByte(r)
+	if err != nil {
+		return err
 	}
+	pkt.ReasonCode = &rc
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	buf := make([]byte, length)
+	if _, err := r.Read(buf); err != nil {
+		return err
+	}
+	p := BasicProperties{}
+	props := bytes.NewReader(buf)
+	if err := p.Unpack(props); err != nil {
+		return err
+	}
+	pkt.Properties = &p
 
 	return nil
 }
 
 func (pkt *PubRel) Details() Details {
-	return Details{Type: PubAckType, Qos: pkt.QoS}
+	return Details{Type: PubAckType, QoS: pkt.QoS}
 }

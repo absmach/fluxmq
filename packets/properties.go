@@ -39,10 +39,6 @@ const (
 	SharedSubAvailableProp     byte = 42
 )
 
-type User struct {
-	Key, Value string
-}
-
 type BasicProperties struct {
 	// ReasonString is a UTF8 string representing the reason associated with
 	// this response, intended to be human readable for diagnostic purposes.
@@ -95,12 +91,10 @@ func (p *BasicProperties) Encode() []byte {
 		ret = append(ret, ReasonStringProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
-	if len(p.User) > 0 {
+	for _, u := range p.User {
 		ret = append(ret, UserProp)
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 
 	return ret

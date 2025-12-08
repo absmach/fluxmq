@@ -23,8 +23,14 @@ func (pkt *SubAck) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
+// Type returns the packet type.
+func (pkt *SubAck) Type() byte {
+	return SubAckType
+}
+
 func (pkt *SubAck) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -33,12 +39,12 @@ func (pkt *SubAck) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
+	// Reason codes (one byte per topic)
 	if pkt.ReasonCodes != nil {
-		ret = append(ret, codec.EncodeBytes(*pkt.ReasonCodes)...)
-	}
-	if pkt.Reason != nil {
-		ret = append(ret, *pkt.Reason)
+		ret = append(ret, *pkt.ReasonCodes...)
 	}
 
 	// Take care size is calculated properly if someone tempered with the packet.
@@ -53,45 +59,38 @@ func (pkt *SubAck) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *SubAck) Unpack(r io.Reader, v byte) error {
+func (pkt *SubAck) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	switch v {
-	case V311, V31:
-		r, err := codec.DecodeByte(r)
-		if err != nil {
-			return err
-		}
-		pkt.Reason = &r
-	case V5:
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
-			return err
-		}
-		if length != 0 {
-			buf := make([]byte, length)
-			if _, err := r.Read(buf); err != nil {
-				return err
-			}
-			p := BasicProperties{}
-			props := bytes.NewReader(buf)
-			if err := p.Unpack(props); err != nil {
-				return err
-			}
-			pkt.Properties = &p
-		}
-		rcs, err := codec.DecodeBytes(r)
-		if err != nil {
-			return err
-		}
-		pkt.ReasonCodes = &rcs
+	// Properties (MQTT 5.0)
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
 	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
+			return err
+		}
+		p := BasicProperties{}
+		props := bytes.NewReader(buf)
+		if err := p.Unpack(props); err != nil {
+			return err
+		}
+		pkt.Properties = &p
+	}
+	// Reason codes (one byte per topic, no length prefix)
+	rcs, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	pkt.ReasonCodes = &rcs
 	return nil
 }
 
 func (pkt *SubAck) Details() Details {
-	return Details{Type: SubAckType, ID: pkt.ID, Qos: 0}
+	return Details{Type: SubAckType, ID: pkt.ID, QoS: 0}
 }

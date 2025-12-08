@@ -1,3 +1,5 @@
+// Package packets provides shared constants and interfaces for MQTT packet handling.
+// Version-specific implementations are in the v3 and v5 subpackages.
 package packets
 
 import (
@@ -7,16 +9,17 @@ import (
 	"io"
 )
 
-const (
-	V31  byte = 0x3
-	V311 byte = 0x4
-	V5   byte = 0x05
-)
-
 // ErrFailRemaining indicates remaining data does not match the size of sent data.
 var ErrFailRemaining = errors.New("remaining data length does not match data size")
 
-// Constants assigned to each of the MQTT packet types
+// Protocol version constants.
+const (
+	V31  byte = 0x03 // MQTT 3.1
+	V311 byte = 0x04 // MQTT 3.1.1
+	V5   byte = 0x05 // MQTT 5.0
+)
+
+// Packet type constants.
 const (
 	ConnectType = iota + 1 // 0 value is forbidden
 	ConnAckType
@@ -32,12 +35,11 @@ const (
 	PingReqType
 	PingRespType
 	DisconnectType
-	AuthType
+	AuthType // MQTT 5.0 only
 )
 
-// PacketNames maps the constants for each of the MQTT packet types
-// to a string representation of their name.
-var PacketNames = map[uint8]string{
+// PacketNames maps packet type constants to string names.
+var PacketNames = map[byte]string{
 	ConnectType:     "CONNECT",
 	ConnAckType:     "CONNACK",
 	PublishType:     "PUBLISH",
@@ -55,75 +57,64 @@ var PacketNames = map[uint8]string{
 	AuthType:        "AUTH",
 }
 
-// ControlPacket defines the interface for structures intended to hold
-// decoded MQTT packets, either from being read or before being written.
+// ControlPacket is the interface for all MQTT control packets.
+// Both v3 and v5 implementations satisfy this interface.
 type ControlPacket interface {
+	// Encode serializes the packet to bytes.
 	Encode() []byte
+
+	// Pack writes the encoded packet to the writer.
 	Pack(w io.Writer) error
-	// Unpack receives an IO reader and a protocol version so
-	// the same packet can be reaused for multiple protocol version.
-	// In the server implmentation, protocvol version will be bound
-	// to the underlying connection (mixing versions is not allowed),
-	// but we're trying to keep parsers decoupled from the broker and
-	// client implemention.
+
+	// Unpack deserializes the packet from the reader.
+	// The version parameter indicates the MQTT protocol version.
 	Unpack(r io.Reader, v byte) error
+
+	// Type returns the packet type constant.
+	Type() byte
+
+	// String returns a human-readable representation.
 	String() string
-	Details() Details
 }
 
-// Details struct returned by the Details() function called on
-// ControlPackets to present details of the Qos and ID
-// of the ControlPacket
+// FixedHeader represents the MQTT fixed header present in all packets.
+type FixedHeader struct {
+	PacketType      byte
+	Dup             bool
+	QoS             byte
+	Retain          bool
+	RemainingLength int
+}
+
+// Details contains packet metadata useful for QoS handling.
 type Details struct {
 	Type byte
 	ID   uint16
-	Qos  byte
+	QoS  byte
 }
 
-// ReadPacket takes an instance of an io.Reader (such as net.Conn) and attempts
-// to read an MQTT packet from the stream. It returns a ControlPacket
-// representing the decoded MQTT packet and an error.
-func ReadPacket(r io.Reader, v byte) (ControlPacket, []byte, error) {
-	var fh FixedHeader
-	b := make([]byte, 1)
-
-	_, err := io.ReadFull(r, b)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	err = fh.Decode(b[0], r)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cp, err := NewControlPacketWithHeader(fh)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	packetBytes := make([]byte, fh.RemainingLength)
-	n, err := io.ReadFull(r, packetBytes)
-	if err != nil {
-		return nil, nil, err
-	}
-	if n != fh.RemainingLength {
-		return nil, nil, ErrFailRemaining
-	}
-
-	err = cp.Unpack(bytes.NewReader(packetBytes), v)
-	return cp, append(fh.Encode(), packetBytes...), err
+// Detailer is an optional interface for packets that provide QoS details.
+type Detailer interface {
+	Details() Details
 }
 
-// NewControlPacket is used to create a new ControlPacket of the specified type.
+// Resetter is an optional interface for packets that support pooling.
+type Resetter interface {
+	Reset()
+}
+
+// User represents a user property key-value pair (MQTT 5.0).
+type User struct {
+	Key, Value string
+}
+
+// NewControlPacket creates a new packet of the specified type.
 func NewControlPacket(packetType byte) ControlPacket {
 	switch packetType {
 	case ConnectType:
 		return &Connect{FixedHeader: FixedHeader{PacketType: ConnectType}}
 	case ConnAckType:
 		return &ConnAck{FixedHeader: FixedHeader{PacketType: ConnAckType}}
-	case DisconnectType:
-		return &Disconnect{FixedHeader: FixedHeader{PacketType: DisconnectType}}
 	case PublishType:
 		return &Publish{FixedHeader: FixedHeader{PacketType: PublishType}}
 	case PubAckType:
@@ -146,22 +137,21 @@ func NewControlPacket(packetType byte) ControlPacket {
 		return &PingReq{FixedHeader: FixedHeader{PacketType: PingReqType}}
 	case PingRespType:
 		return &PingResp{FixedHeader: FixedHeader{PacketType: PingRespType}}
+	case DisconnectType:
+		return &Disconnect{FixedHeader: FixedHeader{PacketType: DisconnectType}}
 	case AuthType:
 		return &Auth{FixedHeader: FixedHeader{PacketType: AuthType}}
 	}
 	return nil
 }
 
-// NewControlPacketWithHeader is used to create a new ControlPacket with the
-// header and type specified by the provided header.
+// NewControlPacketWithHeader creates a new packet with the given fixed header.
 func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 	switch fh.PacketType {
 	case ConnectType:
 		return &Connect{FixedHeader: fh}, nil
 	case ConnAckType:
 		return &ConnAck{FixedHeader: fh}, nil
-	case DisconnectType:
-		return &Disconnect{FixedHeader: fh}, nil
 	case PublishType:
 		return &Publish{FixedHeader: fh}, nil
 	case PubAckType:
@@ -184,6 +174,44 @@ func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 		return &PingReq{FixedHeader: fh}, nil
 	case PingRespType:
 		return &PingResp{FixedHeader: fh}, nil
+	case DisconnectType:
+		return &Disconnect{FixedHeader: fh}, nil
+	case AuthType:
+		return &Auth{FixedHeader: fh}, nil
 	}
 	return nil, fmt.Errorf("unsupported packet type 0x%x", fh.PacketType)
+}
+
+// ReadPacket reads an MQTT packet from the reader.
+// Returns the packet, encoded fixed header, packet body bytes, and any error.
+func ReadPacket(r io.Reader, version byte) (ControlPacket, []byte, []byte, error) {
+	var fh FixedHeader
+	b := make([]byte, 1)
+
+	_, err := io.ReadFull(r, b)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	err = fh.Decode(b[0], r)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	cp, err := NewControlPacketWithHeader(fh)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	packetBytes := make([]byte, fh.RemainingLength)
+	n, err := io.ReadFull(r, packetBytes)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if n != fh.RemainingLength {
+		return nil, nil, nil, ErrFailRemaining
+	}
+
+	err = cp.Unpack(bytes.NewReader(packetBytes), version)
+	return cp, fh.Encode(), packetBytes, err
 }

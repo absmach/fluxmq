@@ -21,6 +21,11 @@ func (pkt *PubComp) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\nreason_code %b", pkt.FixedHeader, pkt.ID, *pkt.ReasonCode)
 }
 
+// Type returns the packet type.
+func (pkt *PubComp) Type() byte {
+	return PubCompType
+}
+
 func (pkt *PubComp) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
 	if pkt.ReasonCode != nil {
@@ -49,36 +54,35 @@ func (pkt *PubComp) Pack(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (pkt *PubComp) Unpack(r io.Reader, v byte) error {
+func (pkt *PubComp) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-	if v == V5 {
-		rc, err := codec.DecodeByte(r)
-		if err != nil {
-			return err
-		}
-		pkt.ReasonCode = &rc
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
-			return err
-		}
-		if length == 0 {
-			return nil
-		}
-		buf := make([]byte, length)
-		if _, err := r.Read(buf); err != nil {
-			return err
-		}
-		p := BasicProperties{}
-		props := bytes.NewReader(buf)
-		if err := p.Unpack(props); err != nil {
-			return err
-		}
-		pkt.Properties = &p
+	// MQTT 5.0 reason code and properties
+	rc, err := codec.DecodeByte(r)
+	if err != nil {
+		return err
 	}
+	pkt.ReasonCode = &rc
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	buf := make([]byte, length)
+	if _, err := r.Read(buf); err != nil {
+		return err
+	}
+	p := BasicProperties{}
+	props := bytes.NewReader(buf)
+	if err := p.Unpack(props); err != nil {
+		return err
+	}
+	pkt.Properties = &p
 
 	return nil
 }
@@ -86,5 +90,5 @@ func (pkt *PubComp) Unpack(r io.Reader, v byte) error {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *PubComp) Details() Details {
-	return Details{Type: PubCompType, ID: pkt.ID, Qos: pkt.QoS}
+	return Details{Type: PubCompType, ID: pkt.ID, QoS: pkt.QoS}
 }

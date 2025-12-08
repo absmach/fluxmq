@@ -29,6 +29,28 @@ type AuthProperties struct {
 	User []User
 }
 
+func (p *AuthProperties) Encode() []byte {
+	var ret []byte
+	if p.AuthMethod != "" {
+		ret = append(ret, AuthMethodProp)
+		ret = append(ret, codec.EncodeBytes([]byte(p.AuthMethod))...)
+	}
+	if len(p.AuthData) > 0 {
+		ret = append(ret, AuthDataProp)
+		ret = append(ret, codec.EncodeBytes(p.AuthData)...)
+	}
+	if p.ReasonString != "" {
+		ret = append(ret, ReasonStringProp)
+		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
+	}
+	for _, u := range p.User {
+		ret = append(ret, UserProp)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
+	}
+	return ret
+}
+
 func (p *AuthProperties) Unpack(r io.Reader) error {
 	for {
 		prop, err := codec.DecodeByte(r)
@@ -74,42 +96,61 @@ func (pkt *Auth) String() string {
 	return fmt.Sprintf("%s\nreason_code %d\n", pkt.FixedHeader, pkt.ReasonCode)
 }
 
-func (pkt *Auth) Pack(w io.Writer) error {
-	ret := pkt.FixedHeader.Encode()
-	ret = append(ret, byte(pkt.ReasonCode))
-	if pkt.Properties != nil {
-		ret = append(ret, pkt.Encode()...)
-	}
-	_, err := w.Write(ret)
+// Type returns the packet type.
+func (pkt *Auth) Type() byte {
+	return AuthType
+}
 
+func (pkt *Auth) Encode() []byte {
+	var ret []byte
+	ret = append(ret, pkt.ReasonCode)
+	if pkt.Properties != nil {
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		ret = append(ret, proplen...)
+		if l > 0 {
+			ret = append(ret, props...)
+		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
+	}
+	pkt.FixedHeader.RemainingLength = len(ret)
+	ret = append(pkt.FixedHeader.Encode(), ret...)
+	return ret
+}
+
+func (pkt *Auth) Pack(w io.Writer) error {
+	_, err := w.Write(pkt.Encode())
 	return err
 }
 
-func (pkt *Auth) Unpack(r io.Reader, v byte) error {
+func (pkt *Auth) Unpack(r io.Reader, _ byte) error {
 	var err error
 	pkt.ReasonCode, err = codec.DecodeByte(r)
-	if v == V5 {
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
+	if err != nil {
+		return err
+	}
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
 			return err
 		}
-		if length != 0 {
-			buf := make([]byte, length)
-			if _, err := r.Read(buf); err != nil {
-				return err
-			}
-			props := bytes.NewBuffer(buf)
-			p := AuthProperties{}
-			if err := p.Unpack(props); err != nil {
-				return err
-			}
-			pkt.Properties = &p
+		props := bytes.NewBuffer(buf)
+		p := AuthProperties{}
+		if err := p.Unpack(props); err != nil {
+			return err
 		}
+		pkt.Properties = &p
 	}
 
-	return err
+	return nil
 }
 
 func (pkt *Auth) Details() Details {
-	return Details{Type: AuthType, ID: 0, Qos: 0}
+	return Details{Type: AuthType, ID: 0, QoS: 0}
 }

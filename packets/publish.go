@@ -74,7 +74,7 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-		case TopicAliasMaximumProp:
+		case TopicAliasProp:
 			ta, err := codec.DecodeUint16(r)
 			if err != nil {
 				return err
@@ -131,7 +131,7 @@ func (p *PublishProperties) Encode() []byte {
 	}
 	if len(p.CorrelationData) > 0 {
 		ret = append(ret, CorrelationDataProp)
-		ret = append(ret, p.CorrelationData...)
+		ret = append(ret, codec.EncodeBytes(p.CorrelationData)...)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
@@ -156,11 +156,17 @@ func (pkt *Publish) String() string {
 	return fmt.Sprintf("%s\ntopic_name: %s\npacket_id: %d\npayload: %s\n", pkt.FixedHeader, pkt.TopicName, pkt.ID, pkt.Payload)
 }
 
+// Type returns the packet type.
+func (pkt *Publish) Type() byte {
+	return PublishType
+}
+
 func (pkt *Publish) Encode() []byte {
 	ret := codec.EncodeBytes([]byte(pkt.TopicName))
 	if pkt.QoS > 0 {
 		ret = append(ret, codec.EncodeUint16(pkt.ID)...)
 	}
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -169,6 +175,8 @@ func (pkt *Publish) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(ret) + len(pkt.Payload)
@@ -183,7 +191,7 @@ func (pkt *Publish) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Publish) Unpack(r io.Reader, v byte) error {
+func (pkt *Publish) Unpack(r io.Reader, _ byte) error {
 	var err error
 	if pkt.TopicName, err = codec.DecodeString(r); err != nil {
 		return err
@@ -193,23 +201,21 @@ func (pkt *Publish) Unpack(r io.Reader, v byte) error {
 			return err
 		}
 	}
-	if v == V5 {
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
 			return err
 		}
-		if length != 0 {
-			buf := make([]byte, length)
-			if _, err := r.Read(buf); err != nil {
-				return err
-			}
-			props := bytes.NewReader(buf)
-			p := PublishProperties{}
-			if err := p.Unpack(props); err != nil {
-				return err
-			}
-			pkt.Properties = &p
+		props := bytes.NewReader(buf)
+		p := PublishProperties{}
+		if err := p.Unpack(props); err != nil {
+			return err
 		}
+		pkt.Properties = &p
 	}
 	pkt.Payload, err = io.ReadAll(r)
 
@@ -229,5 +235,5 @@ func (pkt *Publish) Copy() *Publish {
 }
 
 func (pkt *Publish) Details() Details {
-	return Details{Type: PublishType, ID: pkt.ID, Qos: pkt.QoS}
+	return Details{Type: PublishType, ID: pkt.ID, QoS: pkt.QoS}
 }

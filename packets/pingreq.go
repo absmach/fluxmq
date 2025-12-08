@@ -13,6 +13,11 @@ func (pkt *PingReq) String() string {
 	return pkt.FixedHeader.String()
 }
 
+// Type returns the packet type.
+func (pkt *PingReq) Type() byte {
+	return PingReqType
+}
+
 func (pkt *PingReq) Encode() []byte {
 	return pkt.FixedHeader.Encode()
 }
@@ -30,5 +35,5 @@ func (pkt *PingReq) Unpack(r io.Reader, v byte) error {
 }
 
 func (pkt *PingReq) Details() Details {
-	return Details{Type: PingReqType, ID: 0, Qos: 0}
+	return Details{Type: PingReqType, ID: 0, QoS: 0}
 }

@@ -229,12 +229,10 @@ func (p *ConnAckProperties) Encode() []byte {
 		ret = append(ret, ReasonStringProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
-	if len(p.User) > 0 {
+	for _, u := range p.User {
 		ret = append(ret, UserProp)
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 	if p.WildcardSubAvailable != nil {
 		ret = append(ret, WildcardSubAvailableProp)
@@ -272,6 +270,11 @@ func (pkt *ConnAck) String() string {
 	return fmt.Sprintf("%s SessionPresent: %t ReturnCode %d", pkt.FixedHeader, pkt.SessionPresent, pkt.ReasonCode)
 }
 
+// Type returns the packet type.
+func (pkt *ConnAck) Type() byte {
+	return ConnAckType
+}
+
 func (pkt *ConnAck) Encode() []byte {
 	ret := []byte{codec.EncodeBool(pkt.SessionPresent), pkt.ReasonCode}
 	if pkt.Properties != nil {
@@ -294,35 +297,36 @@ func (pkt *ConnAck) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *ConnAck) Unpack(r io.Reader, v byte) error {
+func (pkt *ConnAck) Unpack(r io.Reader, _ byte) error {
 	flags, err := codec.DecodeByte(r)
 	if err != nil {
 		return err
 	}
 	pkt.SessionPresent = 1&flags > 0
 	pkt.ReasonCode, err = codec.DecodeByte(r)
-	if v == V5 {
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
+	if err != nil {
+		return err
+	}
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
 			return err
 		}
-		if length != 0 {
-			buf := make([]byte, length)
-			if _, err := r.Read(buf); err != nil {
-				return err
-			}
-			p := ConnAckProperties{}
-			props := bytes.NewBuffer(buf)
-			if err := p.Unpack(props); err != nil {
-				return err
-			}
-			pkt.Properties = &p
+		p := ConnAckProperties{}
+		props := bytes.NewBuffer(buf)
+		if err := p.Unpack(props); err != nil {
+			return err
 		}
+		pkt.Properties = &p
 	}
 
-	return err
+	return nil
 }
 
 func (pkt *ConnAck) Details() Details {
-	return Details{Type: ConnAckType, ID: 0, Qos: 0}
+	return Details{Type: ConnAckType, ID: 0, QoS: 0}
 }

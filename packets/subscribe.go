@@ -17,9 +17,9 @@ type Subscribe struct {
 	Opts       []SubOption
 }
 
-// SubOption represent a subscription optins. For more information, check spec:
+// SubOption represent a subscription options. For more information, check spec:
 // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901169
-// Fields in the struct are reordered for memory alignment.
+// Fields in the struct are ordered for memory alignment.
 //
 //	Topic
 //	MaxQoS
@@ -61,14 +61,13 @@ func (s *SubOption) Unpack(r io.Reader, v byte) error {
 	s.Topic = topic
 	flags := b[0]
 	s.MaxQoS = flags & 0x03
-	if v == V5 {
-		noLocal := (flags & (1 << 2)) != 0
-		retainAsPublished := (flags & (1 << 3)) != 0
-		rh := (flags >> 4) & 0x03
-		s.NoLocal = &noLocal
-		s.RetainAsPublished = &retainAsPublished
-		s.RetainHandling = &rh
-	}
+	// MQTT 5.0 subscription options
+	noLocal := (flags & (1 << 2)) != 0
+	retainAsPublished := (flags & (1 << 3)) != 0
+	rh := (flags >> 4) & 0x03
+	s.NoLocal = &noLocal
+	s.RetainAsPublished = &retainAsPublished
+	s.RetainHandling = &rh
 
 	return nil
 }
@@ -126,12 +125,10 @@ func (p *SubscribeProperties) Encode() []byte {
 		ret = append(ret, SubscriptionIdentifierProp)
 		ret = append(ret, codec.EncodeVBI(*p.SubscriptionIdentifier)...)
 	}
-	if len(p.User) > 0 {
+	for _, u := range p.User {
 		ret = append(ret, UserProp)
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 	return ret
 }
@@ -140,8 +137,14 @@ func (pkt *Subscribe) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
+// Type returns the packet type.
+func (pkt *Subscribe) Type() byte {
+	return SubscribeType
+}
+
 func (pkt *Subscribe) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -150,6 +153,8 @@ func (pkt *Subscribe) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	// Payload
 	for _, opt := range pkt.Opts {
@@ -173,23 +178,22 @@ func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {
 	if err != nil {
 		return err
 	}
-	if v == V5 {
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
+	// Properties (MQTT 5.0)
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length != 0 {
+		buf := make([]byte, length)
+		if _, err := r.Read(buf); err != nil {
 			return err
 		}
-		if length != 0 {
-			buf := make([]byte, length)
-			if _, err := r.Read(buf); err != nil {
-				return err
-			}
-			p := SubscribeProperties{}
-			props := bytes.NewReader(buf)
-			if err := p.Unpack(props); err != nil {
-				return err
-			}
-			pkt.Properties = &p
+		p := SubscribeProperties{}
+		props := bytes.NewReader(buf)
+		if err := p.Unpack(props); err != nil {
+			return err
 		}
+		pkt.Properties = &p
 	}
 	// Read subscription options.
 	for {
@@ -208,5 +212,5 @@ func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {
 // Details returns a Details struct containing the Qos and
 // ID of this ControlPacket
 func (pkt *Subscribe) Details() Details {
-	return Details{Type: SubscribeType, ID: pkt.ID, Qos: 1}
+	return Details{Type: SubscribeType, ID: pkt.ID, QoS: 1}
 }

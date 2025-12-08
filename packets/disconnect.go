@@ -12,6 +12,7 @@ import (
 type Disconnect struct {
 	FixedHeader
 	// Variable Header
+	ReasonCode byte
 	Properties *DisconnectProperties
 }
 
@@ -30,13 +31,6 @@ type DisconnectProperties struct {
 }
 
 func (p *DisconnectProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
@@ -81,18 +75,20 @@ func (p *DisconnectProperties) Unpack(r io.Reader) error {
 func (p *DisconnectProperties) Encode() []byte {
 	var ret []byte
 	if p.SessionExpiryInterval != nil {
+		ret = append(ret, SessionExpiryIntervalProp)
 		ret = append(ret, codec.EncodeUint32(*p.SessionExpiryInterval)...)
 	}
 	if p.ReasonString != "" {
+		ret = append(ret, ReasonStringProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ReasonString))...)
 	}
-	if len(p.User) > 0 {
-		for _, u := range p.User {
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
-		}
+	for _, u := range p.User {
+		ret = append(ret, UserProp)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
+		ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
 	}
 	if p.ServerReference != "" {
+		ret = append(ret, ServerReferenceProp)
 		ret = append(ret, codec.EncodeBytes([]byte(p.ServerReference))...)
 	}
 
@@ -103,18 +99,26 @@ func (pkt *Disconnect) String() string {
 	return pkt.FixedHeader.String()
 }
 
+// Type returns the packet type.
+func (pkt *Disconnect) Type() byte {
+	return DisconnectType
+}
+
 func (pkt *Disconnect) Encode() []byte {
-	ret := []byte{}
+	var ret []byte
+	// Reason code (MQTT 5.0)
+	ret = append(ret, pkt.ReasonCode)
+	// Properties (MQTT 5.0)
 	if pkt.Properties != nil {
-		if pkt.Properties != nil {
-			props := pkt.Properties.Encode()
-			l := len(props)
-			proplen := codec.EncodeVBI(l)
-			ret = append(ret, proplen...)
-			if l > 0 {
-				ret = append(ret, props...)
-			}
+		props := pkt.Properties.Encode()
+		l := len(props)
+		proplen := codec.EncodeVBI(l)
+		ret = append(ret, proplen...)
+		if l > 0 {
+			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(ret)
@@ -128,29 +132,38 @@ func (pkt *Disconnect) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Disconnect) Unpack(r io.Reader, v byte) error {
-	if v == V5 {
-		length, err := codec.DecodeVBI(r)
-		if err != nil {
-			return err
-		}
-		if length == 0 {
+func (pkt *Disconnect) Unpack(r io.Reader, _ byte) error {
+	// MQTT 5.0 reason code
+	rc, err := codec.DecodeByte(r)
+	if err != nil {
+		// Empty disconnect packet is valid
+		if err == io.EOF {
 			return nil
 		}
-		buf := make([]byte, length)
-		if _, err := r.Read(buf); err != nil {
-			return err
-		}
-		p := DisconnectProperties{}
-		props := bytes.NewReader(buf)
-		if err := p.Unpack(props); err != nil {
-			return err
-		}
-		pkt.Properties = &p
+		return err
 	}
+	pkt.ReasonCode = rc
+	// Properties
+	length, err := codec.DecodeVBI(r)
+	if err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	buf := make([]byte, length)
+	if _, err := r.Read(buf); err != nil {
+		return err
+	}
+	p := DisconnectProperties{}
+	props := bytes.NewReader(buf)
+	if err := p.Unpack(props); err != nil {
+		return err
+	}
+	pkt.Properties = &p
 	return nil
 }
 
 func (pkt *Disconnect) Details() Details {
-	return Details{Type: DisconnectType, ID: 0, Qos: 0}
+	return Details{Type: DisconnectType, ID: 0, QoS: 0}
 }
