@@ -1,12 +1,11 @@
-package v5_test
+package v3_test
 
 import (
 	"bytes"
 	"testing"
 
 	"github.com/dborovcanin/mqtt/packets"
-	. "github.com/dborovcanin/mqtt/packets/v5"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
+	. "github.com/dborovcanin/mqtt/packets/v3"
 )
 
 func TestPublishUnpackBytes(t *testing.T) {
@@ -33,7 +32,7 @@ func TestPublishUnpackBytes(t *testing.T) {
 	}
 
 	// Create a new packet and unpack using zero-copy
-	pkt := &v5.Publish{FixedHeader: fh}
+	pkt := &Publish{FixedHeader: fh}
 	err := pkt.UnpackBytes(encoded[headerLen:])
 	if err != nil {
 		t.Fatalf("UnpackBytes failed: %v", err)
@@ -48,60 +47,6 @@ func TestPublishUnpackBytes(t *testing.T) {
 	}
 	if !bytes.Equal(pkt.Payload, original.Payload) {
 		t.Errorf("Payload: got %v, want %v", pkt.Payload, original.Payload)
-	}
-}
-
-func TestPublishUnpackBytesWithProperties(t *testing.T) {
-	payloadFormat := byte(1)
-	messageExpiry := uint32(3600)
-
-	original := &Publish{
-		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-		TopicName:   "props/topic",
-		ID:          100,
-		Payload:     []byte("message with props"),
-		Properties: &PublishProperties{
-			PayloadFormat:   &payloadFormat,
-			MessageExpiry:   &messageExpiry,
-			ResponseTopic:   "response/topic",
-			CorrelationData: []byte("corr-123"),
-			ContentType:     "text/plain",
-			User:            []User{{Key: "key1", Value: "value1"}},
-		},
-	}
-
-	encoded := original.Encode()
-
-	// Parse header
-	var fh FixedHeader
-	fh.PacketType = encoded[0] >> 4
-	fh.QoS = (encoded[0] >> 1) & 0x03
-
-	headerLen := 2 // Simplified - assumes remaining length fits in 1 byte
-	if encoded[1]&0x80 != 0 {
-		headerLen = 3
-	}
-
-	pkt := &Publish{FixedHeader: fh}
-	err := pkt.UnpackBytes(encoded[headerLen:])
-	if err != nil {
-		t.Fatalf("UnpackBytes failed: %v", err)
-	}
-
-	if pkt.TopicName != original.TopicName {
-		t.Errorf("TopicName: got %q, want %q", pkt.TopicName, original.TopicName)
-	}
-	if pkt.Properties == nil {
-		t.Fatal("Properties is nil")
-	}
-	if pkt.Properties.PayloadFormat == nil || *pkt.Properties.PayloadFormat != payloadFormat {
-		t.Errorf("PayloadFormat mismatch")
-	}
-	if pkt.Properties.MessageExpiry == nil || *pkt.Properties.MessageExpiry != messageExpiry {
-		t.Errorf("MessageExpiry mismatch")
-	}
-	if pkt.Properties.ResponseTopic != original.Properties.ResponseTopic {
-		t.Errorf("ResponseTopic: got %q, want %q", pkt.Properties.ResponseTopic, original.Properties.ResponseTopic)
 	}
 }
 
@@ -141,8 +86,8 @@ func TestReadPacketBytesConnect(t *testing.T) {
 	original := &Connect{
 		FixedHeader:     FixedHeader{PacketType: ConnectType},
 		ProtocolName:    "MQTT",
-		ProtocolVersion: V5,
-		CleanStart:      true,
+		ProtocolVersion: 4,
+		CleanSession:    true,
 		KeepAlive:       60,
 		ClientID:        "test-client",
 	}
@@ -174,9 +119,9 @@ func TestReadPacketBytesSubscribe(t *testing.T) {
 	original := &Subscribe{
 		FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 		ID:          1,
-		Opts: []SubOption{
-			{Topic: "topic/one", MaxQoS: 1},
-			{Topic: "topic/two", MaxQoS: 2},
+		Topics: []Topic{
+			{Name: "topic/one", QoS: 1},
+			{Name: "topic/two", QoS: 2},
 		},
 	}
 	encoded := original.Encode()
@@ -198,20 +143,13 @@ func TestReadPacketBytesSubscribe(t *testing.T) {
 	if sub.ID != original.ID {
 		t.Errorf("ID: got %d, want %d", sub.ID, original.ID)
 	}
-	if len(sub.Opts) != len(original.Opts) {
-		t.Fatalf("Opts length: got %d, want %d", len(sub.Opts), len(original.Opts))
+	if len(sub.Topics) != len(original.Topics) {
+		t.Fatalf("Topics length: got %d, want %d", len(sub.Topics), len(original.Topics))
 	}
-	for i, opt := range sub.Opts {
-		if opt.Topic != original.Opts[i].Topic {
-			t.Errorf("Opts[%d].Topic: got %q, want %q", i, opt.Topic, original.Opts[i].Topic)
+	for i, topic := range sub.Topics {
+		if topic.Name != original.Topics[i].Name {
+			t.Errorf("Topics[%d].Name: got %q, want %q", i, topic.Name, original.Topics[i].Name)
 		}
-	}
-}
-
-func TestReadPacketBytesTooShort(t *testing.T) {
-	_, _, err := ReadPacketBytes([]byte{0x30}) // Just one byte
-	if err == nil {
-		t.Error("Expected error for too short buffer")
 	}
 }
 
@@ -231,28 +169,10 @@ func BenchmarkPublishUnpackBytes(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		pkt := &Publish{FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1}}
-		_ = pkt.UnpackBytes(encoded[headerLen:])
-	}
-}
-
-func BenchmarkPublishUnpackReader(b *testing.B) {
-	original := &Publish{
-		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-		TopicName:   "test/topic/with/multiple/levels",
-		ID:          12345,
-		Payload:     make([]byte, 1024),
-	}
-	encoded := original.Encode()
-
-	b.ReportAllocs()
 
 	for b.Loop() {
-		reader := bytes.NewReader(encoded)
-		_, _, _, _ = ReadPacket(reader)
+		pkt := &Publish{FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1}}
+		_ = pkt.UnpackBytes(encoded[headerLen:])
 	}
 }
 
@@ -269,22 +189,5 @@ func BenchmarkReadPacketBytes(b *testing.B) {
 
 	for b.Loop() {
 		_, _, _ = ReadPacketBytes(encoded)
-	}
-}
-
-func BenchmarkReadPacketReader(b *testing.B) {
-	original := &Publish{
-		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-		TopicName:   "test/topic",
-		ID:          123,
-		Payload:     make([]byte, 256),
-	}
-	encoded := original.Encode()
-
-	b.ReportAllocs()
-
-	for b.Loop() {
-		reader := bytes.NewReader(encoded)
-		_, _, _, _ = ReadPacket(reader)
 	}
 }
