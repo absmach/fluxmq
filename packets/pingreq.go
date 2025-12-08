@@ -30,7 +30,7 @@ func (pkt *PingReq) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *PingReq) Unpack(r io.Reader, v byte) error {
+func (pkt *PingReq) Unpack(r io.Reader) error {
 	return nil
 }
 

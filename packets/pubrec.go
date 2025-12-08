@@ -52,7 +52,7 @@ func (pkt *PubRec) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *PubRec) Unpack(r io.Reader, _ byte) error {
+func (pkt *PubRec) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {

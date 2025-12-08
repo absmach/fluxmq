@@ -54,7 +54,7 @@ func (pkt *PubComp) Pack(w io.Writer) error {
 
 // Unpack decodes the details of a ControlPacket after the fixed
 // header has been read
-func (pkt *PubComp) Unpack(r io.Reader, _ byte) error {
+func (pkt *PubComp) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {

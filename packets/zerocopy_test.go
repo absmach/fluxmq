@@ -249,7 +249,7 @@ func BenchmarkPublishUnpackReader(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		reader := bytes.NewReader(encoded)
-		_, _, _, _ = ReadPacket(reader, V5)
+		_, _, _, _ = ReadPacket(reader)
 	}
 }
 
@@ -284,6 +284,6 @@ func BenchmarkReadPacketReader(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		reader := bytes.NewReader(encoded)
-		_, _, _, _ = ReadPacket(reader, V5)
+		_, _, _, _ = ReadPacket(reader)
 	}
 }

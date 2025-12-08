@@ -297,7 +297,7 @@ func (pkt *ConnAck) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *ConnAck) Unpack(r io.Reader, _ byte) error {
+func (pkt *ConnAck) Unpack(r io.Reader) error {
 	flags, err := codec.DecodeByte(r)
 	if err != nil {
 		return err

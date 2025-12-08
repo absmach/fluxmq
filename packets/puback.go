@@ -58,7 +58,7 @@ func (pkt *PubAck) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *PubAck) Unpack(r io.Reader, _ byte) error {
+func (pkt *PubAck) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {

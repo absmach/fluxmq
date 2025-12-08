@@ -125,7 +125,7 @@ func (pkt *Auth) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Auth) Unpack(r io.Reader, _ byte) error {
+func (pkt *Auth) Unpack(r io.Reader) error {
 	var err error
 	pkt.ReasonCode, err = codec.DecodeByte(r)
 	if err != nil {

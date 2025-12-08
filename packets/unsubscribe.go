@@ -97,7 +97,7 @@ func (pkt *Unsubscribe) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Unsubscribe) Unpack(r io.Reader, _ byte) error {
+func (pkt *Unsubscribe) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {

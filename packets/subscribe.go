@@ -49,7 +49,7 @@ func (s *SubOption) Encode() []byte {
 	return append(codec.EncodeBytes([]byte(s.Topic)), flag)
 }
 
-func (s *SubOption) Unpack(r io.Reader, v byte) error {
+func (s *SubOption) Unpack(r io.Reader) error {
 	topic, err := codec.DecodeString(r)
 	if err != nil {
 		return err
@@ -172,7 +172,7 @@ func (pkt *Subscribe) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {
+func (pkt *Subscribe) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
@@ -198,7 +198,7 @@ func (pkt *Subscribe) Unpack(r io.Reader, v byte) error {
 	// Read subscription options.
 	for {
 		opt := SubOption{}
-		err := opt.Unpack(r, v)
+		err := opt.Unpack(r)
 		if err == io.EOF {
 			return nil
 		}

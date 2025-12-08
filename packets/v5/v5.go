@@ -43,7 +43,7 @@ func ReadPacket(r io.Reader) (packets.ControlPacket, []byte, []byte, error) {
 		return nil, nil, nil, ErrFailRemaining
 	}
 
-	err = cp.Unpack(bytes.NewReader(packetBytes), packets.V5)
+	err = cp.Unpack(bytes.NewReader(packetBytes))
 	return cp, fh.Encode(), packetBytes, err
 }
 
@@ -77,7 +77,7 @@ func ReadPacketBytes(data []byte) (packets.ControlPacket, int, error) {
 	case *packets.Subscribe:
 		err = pkt.UnpackBytes(packetData)
 	default:
-		err = cp.Unpack(bytes.NewReader(packetData), packets.V5)
+		err = cp.Unpack(bytes.NewReader(packetData))
 	}
 
 	if err != nil {

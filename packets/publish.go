@@ -191,7 +191,7 @@ func (pkt *Publish) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Publish) Unpack(r io.Reader, _ byte) error {
+func (pkt *Publish) Unpack(r io.Reader) error {
 	var err error
 	if pkt.TopicName, err = codec.DecodeString(r); err != nil {
 		return err

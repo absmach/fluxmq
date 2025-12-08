@@ -132,7 +132,7 @@ func (pkt *Disconnect) Pack(w io.Writer) error {
 	return err
 }
 
-func (pkt *Disconnect) Unpack(r io.Reader, _ byte) error {
+func (pkt *Disconnect) Unpack(r io.Reader) error {
 	// MQTT 5.0 reason code
 	rc, err := codec.DecodeByte(r)
 	if err != nil {

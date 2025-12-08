@@ -67,8 +67,7 @@ type ControlPacket interface {
 	Pack(w io.Writer) error
 
 	// Unpack deserializes the packet from the reader.
-	// The version parameter indicates the MQTT protocol version.
-	Unpack(r io.Reader, v byte) error
+	Unpack(r io.Reader) error
 
 	// Type returns the packet type constant.
 	Type() byte
@@ -184,7 +183,7 @@ func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 
 // ReadPacket reads an MQTT packet from the reader.
 // Returns the packet, encoded fixed header, packet body bytes, and any error.
-func ReadPacket(r io.Reader, version byte) (ControlPacket, []byte, []byte, error) {
+func ReadPacket(r io.Reader) (ControlPacket, []byte, []byte, error) {
 	var fh FixedHeader
 	b := make([]byte, 1)
 
@@ -212,6 +211,6 @@ func ReadPacket(r io.Reader, version byte) (ControlPacket, []byte, []byte, error
 		return nil, nil, nil, ErrFailRemaining
 	}
 
-	err = cp.Unpack(bytes.NewReader(packetBytes), version)
+	err = cp.Unpack(bytes.NewReader(packetBytes))
 	return cp, fh.Encode(), packetBytes, err
 }

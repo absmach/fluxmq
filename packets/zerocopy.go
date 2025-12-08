@@ -490,7 +490,7 @@ func ReadPacketBytes(data []byte) (ControlPacket, int, error) {
 		err = pkt.UnpackBytes(packetData)
 	default:
 		// Fall back to standard Unpack for other packet types
-		err = cp.Unpack(codec.NewZeroCopyReader(packetData), V5)
+		err = cp.Unpack(codec.NewZeroCopyReader(packetData))
 	}
 
 	if err != nil {
