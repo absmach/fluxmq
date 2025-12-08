@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // ErrFailRemaining indicates remaining data does not match the size of sent data.
@@ -122,7 +124,7 @@ func (fh FixedHeader) Encode() []byte {
 		retain = 1
 	}
 	ret := []byte{fh.PacketType<<4 | dup<<3 | fh.QoS<<1 | retain}
-	return append(ret, encodeVBI(fh.RemainingLength)...)
+	return append(ret, codec.EncodeVBI(fh.RemainingLength)...)
 }
 
 // Decode parses the fixed header from the type/flags byte and reader.
@@ -133,7 +135,7 @@ func (fh *FixedHeader) Decode(typeAndFlags byte, r io.Reader) error {
 	fh.Retain = typeAndFlags&0x01 > 0
 
 	var err error
-	fh.RemainingLength, err = decodeVBI(r)
+	fh.RemainingLength, err = codec.DecodeVBI(r)
 	return err
 }
 
@@ -141,7 +143,7 @@ func (fh *FixedHeader) Decode(typeAndFlags byte, r io.Reader) error {
 // Returns the number of bytes consumed.
 func (fh *FixedHeader) DecodeFromBytes(data []byte) (int, error) {
 	if len(data) < 2 {
-		return 0, errors.New("buffer too short")
+		return 0, codec.ErrBufferTooShort
 	}
 
 	fh.PacketType = data[0] >> 4
@@ -155,7 +157,7 @@ func (fh *FixedHeader) DecodeFromBytes(data []byte) (int, error) {
 	offset := 1
 	for i := 0; i < 4; i++ {
 		if offset >= len(data) {
-			return 0, errors.New("buffer too short")
+			return 0, codec.ErrBufferTooShort
 		}
 		b := data[offset]
 		offset++
@@ -166,41 +168,5 @@ func (fh *FixedHeader) DecodeFromBytes(data []byte) (int, error) {
 		}
 		multiplier += 7
 	}
-	return 0, errors.New("malformed VBI")
-}
-
-// encodeVBI encodes an integer as a Variable Byte Integer.
-func encodeVBI(value int) []byte {
-	var ret []byte
-	for {
-		digit := byte(value % 128)
-		value /= 128
-		if value > 0 {
-			digit |= 0x80
-		}
-		ret = append(ret, digit)
-		if value == 0 {
-			break
-		}
-	}
-	return ret
-}
-
-// decodeVBI decodes a Variable Byte Integer from the reader.
-func decodeVBI(r io.Reader) (int, error) {
-	var vbi uint32
-	var multiplier uint32
-	b := make([]byte, 1)
-	for i := 0; i < 4; i++ {
-		_, err := io.ReadFull(r, b)
-		if err != nil {
-			return 0, err
-		}
-		vbi |= uint32(b[0]&0x7F) << multiplier
-		if (b[0] & 0x80) == 0 {
-			return int(vbi), nil
-		}
-		multiplier += 7
-	}
-	return 0, errors.New("malformed VBI")
+	return 0, codec.ErrMalformedVBI
 }
