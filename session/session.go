@@ -1,195 +1,425 @@
 package session
 
 import (
-	"fmt"
-	"io"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
-	packets "github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
+	"github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/store"
 )
 
-// BrokerInterface defines the methods Session needs from the Broker
-type BrokerInterface interface {
-	Distribute(topic string, payload []byte)
-	Subscribe(topic string, sessionID string, qos byte)
+// State represents the session state.
+type State int
+
+const (
+	StateNew State = iota
+	StateConnecting
+	StateConnected
+	StateDisconnecting
+	StateDisconnected
+)
+
+func (s State) String() string {
+	switch s {
+	case StateNew:
+		return "new"
+	case StateConnecting:
+		return "connecting"
+	case StateConnected:
+		return "connected"
+	case StateDisconnecting:
+		return "disconnecting"
+	case StateDisconnected:
+		return "disconnected"
+	default:
+		return "unknown"
+	}
 }
 
-// Connection interface duplicated here or imported?
-// Ideally we import duplicate interface or extract it to a `common` package.
-// Or we just accept io.ReadWriteCloser + PacketReader capability.
-// Let's redefine minimal interface or use `broker.Connection` if we extract transport?
-// User said "separate session package".
-// Let's assume for now we use a simple interface local here and map it.
-
+// Connection represents a network connection that can read/write MQTT packets.
 type Connection interface {
 	ReadPacket() (packets.ControlPacket, error)
 	WritePacket(p packets.ControlPacket) error
 	Close() error
 	RemoteAddr() net.Addr
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
 }
 
-// Session represents an active client session.
+// Session represents an MQTT client session with full state management.
 type Session struct {
-	Broker  BrokerInterface
-	Conn    Connection
-	ID      string
-	Version int
+	mu sync.RWMutex
 
-	// Outbox?
-	mu sync.Mutex
+	// Identity
+	ID      string // Client ID
+	Version byte   // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
+
+	// Connection (nil when disconnected)
+	conn Connection
+
+	// State
+	state          State
+	connectedAt    time.Time
+	disconnectedAt time.Time
+
+	// MQTT options from CONNECT
+	CleanStart     bool
+	ExpiryInterval uint32 // Session expiry in seconds (v5)
+	ReceiveMaximum uint16 // Max inflight (v5), default 65535
+	MaxPacketSize  uint32 // Max packet size (v5), default unlimited
+	TopicAliasMax  uint16 // Max topic aliases (v5)
+	KeepAlive      uint16 // Keep-alive in seconds
+
+	// Will message (set on CONNECT, cleared on clean disconnect)
+	Will *store.WillMessage
+
+	// QoS tracking
+	Inflight     *InflightTracker // Outgoing QoS 1/2 messages
+	OfflineQueue *MessageQueue    // Messages for disconnected client
+
+	// Packet ID generator
+	nextPacketID uint32
+
+	// Subscriptions (cached from store for fast lookup)
+	subscriptions map[string]store.SubscribeOptions
+
+	// Keep-alive timer
+	keepAliveTimer  *time.Timer
+	lastActivity    time.Time
+	keepAliveExpiry time.Duration
+
+	// Topic aliases (v5) - bidirectional mapping
+	outboundAliases map[string]uint16 // topic -> alias (for sending)
+	inboundAliases  map[uint16]string // alias -> topic (for receiving)
+
+	// Callbacks
+	onDisconnect func(s *Session, graceful bool)
 }
 
-func New(broker BrokerInterface, conn Connection, id string, version int) *Session {
-	return &Session{
-		Broker:  broker,
-		Conn:    conn,
-		ID:      id,
-		Version: version,
+// Options holds options for creating a new session.
+type Options struct {
+	CleanStart     bool
+	ExpiryInterval uint32
+	ReceiveMaximum uint16
+	MaxPacketSize  uint32
+	TopicAliasMax  uint16
+	KeepAlive      uint16
+	Will           *store.WillMessage
+}
+
+// DefaultOptions returns default session options.
+func DefaultOptions() Options {
+	return Options{
+		CleanStart:     true,
+		ExpiryInterval: 0,
+		ReceiveMaximum: 65535,
+		MaxPacketSize:  0, // Unlimited
+		TopicAliasMax:  0,
+		KeepAlive:      60,
 	}
 }
 
-func (s *Session) Close() error {
-	return s.Conn.Close()
-}
-
-func (s *Session) Start() {
-	defer s.Close()
-
-	for {
-		pkt, err := s.Conn.ReadPacket()
-		if err != nil {
-			if err != io.EOF {
-				// Log error?
-			}
-			return
-		}
-
-		if err := s.handlePacket(pkt); err != nil {
-			return
-		}
-	}
-}
-
-func (s *Session) handlePacket(pkt packets.ControlPacket) error {
-	switch pkt.Type() {
-	case packets.PublishType:
-		return s.handlePublish(pkt)
-	case packets.SubscribeType:
-		return s.handleSubscribe(pkt)
-	case packets.PingReqType:
-		return s.handlePingReq()
-	case packets.DisconnectType:
-		return io.EOF // Clean exit
-	default:
-		return fmt.Errorf("unhandled packet type: %d", pkt.Type())
-	}
-}
-
-func (s *Session) handlePublish(pkt packets.ControlPacket) error {
-	var topic string
-	var payload []byte
-
-	if s.Version == 5 {
-		p := pkt.(*v5.Publish)
-		topic = p.TopicName
-		payload = p.Payload
-	} else {
-		p := pkt.(*v3.Publish)
-		topic = p.TopicName
-		payload = p.Payload
+// New creates a new session.
+func New(clientID string, version byte, opts Options) *Session {
+	receiveMax := opts.ReceiveMaximum
+	if receiveMax == 0 {
+		receiveMax = 65535
 	}
 
-	s.Broker.Distribute(topic, payload)
+	s := &Session{
+		ID:              clientID,
+		Version:         version,
+		state:           StateNew,
+		CleanStart:      opts.CleanStart,
+		ExpiryInterval:  opts.ExpiryInterval,
+		ReceiveMaximum:  receiveMax,
+		MaxPacketSize:   opts.MaxPacketSize,
+		TopicAliasMax:   opts.TopicAliasMax,
+		KeepAlive:       opts.KeepAlive,
+		Will:            opts.Will,
+		Inflight:        NewInflightTracker(int(receiveMax)),
+		OfflineQueue:    NewMessageQueue(1000), // Default max queue size
+		subscriptions:   make(map[string]store.SubscribeOptions),
+		outboundAliases: make(map[string]uint16),
+		inboundAliases:  make(map[uint16]string),
+		lastActivity:    time.Now(),
+	}
+
+	if opts.KeepAlive > 0 {
+		s.keepAliveExpiry = time.Duration(opts.KeepAlive) * time.Second * 3 / 2 // 1.5x per spec
+	}
+
+	return s
+}
+
+// Connect attaches a connection to the session.
+func (s *Session) Connect(conn Connection) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.conn = conn
+	s.state = StateConnected
+	s.connectedAt = time.Now()
+	s.lastActivity = time.Now()
+
+	// Start keep-alive timer if enabled
+	if s.keepAliveExpiry > 0 {
+		s.startKeepAliveTimer()
+	}
+
 	return nil
 }
 
-func (s *Session) handleSubscribe(pkt packets.ControlPacket) error {
-	var subs []struct {
-		Topic string
-		QoS   byte
-	}
-	var packetID uint16
+// Disconnect disconnects the session.
+func (s *Session) Disconnect(graceful bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if s.Version == 5 {
-		p := pkt.(*v5.Subscribe)
-		packetID = p.ID
-		for _, opt := range p.Opts {
-			subs = append(subs, struct {
-				Topic string
-				QoS   byte
-			}{opt.Topic, opt.MaxQoS})
-			s.Broker.Subscribe(opt.Topic, s.ID, opt.MaxQoS)
-		}
-	} else {
-		p := pkt.(*v3.Subscribe)
-		packetID = p.ID
-		for _, t := range p.Topics {
-			subs = append(subs, struct {
-				Topic string
-				QoS   byte
-			}{t.Name, t.QoS})
-			s.Broker.Subscribe(t.Name, s.ID, t.QoS)
-		}
+	if s.state != StateConnected {
+		return nil
 	}
 
-	return s.sendSubAck(packetID, len(subs))
+	s.state = StateDisconnecting
+
+	// Stop keep-alive timer
+	if s.keepAliveTimer != nil {
+		s.keepAliveTimer.Stop()
+		s.keepAliveTimer = nil
+	}
+
+	// Close connection
+	if s.conn != nil {
+		s.conn.Close()
+		s.conn = nil
+	}
+
+	s.state = StateDisconnected
+	s.disconnectedAt = time.Now()
+
+	// Clear will on graceful disconnect
+	if graceful {
+		s.Will = nil
+	}
+
+	// Clear topic aliases
+	s.outboundAliases = make(map[string]uint16)
+	s.inboundAliases = make(map[uint16]string)
+
+	// Notify callback
+	if s.onDisconnect != nil {
+		go s.onDisconnect(s, graceful)
+	}
+
+	return nil
 }
 
-func (s *Session) sendSubAck(packetID uint16, count int) error {
-	var ack packets.ControlPacket
-	if s.Version == 5 {
-		sa := &v5.SubAck{
-			ID: packetID,
-		}
-		codes := make([]byte, count)
-		for i := 0; i < count; i++ {
-			codes[i] = 0
-		}
-		sa.ReasonCodes = &codes
-		sa.FixedHeader.PacketType = packets.SubAckType
-		ack = sa
-	} else {
-		sa := &v3.SubAck{
-			ID:          packetID,
-			ReturnCodes: make([]byte, count),
-		}
-		for i := 0; i < count; i++ {
-			sa.ReturnCodes[i] = 0 // Success
-		}
-		sa.FixedHeader.PacketType = packets.SubAckType
-		ack = sa
-	}
-	return s.Conn.WritePacket(ack)
+// State returns the current session state.
+func (s *Session) State() State {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state
 }
 
-func (s *Session) handlePingReq() error {
-	var resp packets.ControlPacket
-	if s.Version == 5 {
-		resp = &v5.PingResp{FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType}}
-	} else {
-		resp = &v3.PingResp{FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType}}
-	}
-	return s.Conn.WritePacket(resp)
+// IsConnected returns true if the session has an active connection.
+func (s *Session) IsConnected() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state == StateConnected && s.conn != nil
 }
 
-// Deliver sends a message to this session.
-func (s *Session) Deliver(topic string, payload []byte) {
-	var pkt packets.ControlPacket
-	if s.Version == 5 {
-		pkt = &v5.Publish{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
-			TopicName:   topic,
-			Payload:     payload,
+// Conn returns the current connection (may be nil).
+func (s *Session) Conn() Connection {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.conn
+}
+
+// NextPacketID generates the next packet ID.
+func (s *Session) NextPacketID() uint16 {
+	for {
+		id := atomic.AddUint32(&s.nextPacketID, 1)
+		id16 := uint16(id & 0xFFFF)
+		if id16 == 0 {
+			continue // Packet ID 0 is reserved
 		}
-	} else {
-		pkt = &v3.Publish{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
-			TopicName:   topic,
-			Payload:     payload,
+		// Check if ID is already in use
+		if !s.Inflight.Has(id16) {
+			return id16
 		}
 	}
-	_ = s.Conn.WritePacket(pkt)
+}
+
+// WritePacket writes a packet to the connection.
+func (s *Session) WritePacket(pkt packets.ControlPacket) error {
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return ErrNotConnected
+	}
+
+	return conn.WritePacket(pkt)
+}
+
+// ReadPacket reads a packet from the connection.
+func (s *Session) ReadPacket() (packets.ControlPacket, error) {
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return nil, ErrNotConnected
+	}
+
+	return conn.ReadPacket()
+}
+
+// TouchActivity updates the last activity timestamp.
+func (s *Session) TouchActivity() {
+	s.mu.Lock()
+	s.lastActivity = time.Now()
+	s.mu.Unlock()
+}
+
+// startKeepAliveTimer starts the keep-alive timer.
+// Must be called with mu held.
+func (s *Session) startKeepAliveTimer() {
+	if s.keepAliveTimer != nil {
+		s.keepAliveTimer.Stop()
+	}
+
+	s.keepAliveTimer = time.AfterFunc(s.keepAliveExpiry, func() {
+		s.checkKeepAlive()
+	})
+}
+
+// checkKeepAlive checks if keep-alive has expired.
+func (s *Session) checkKeepAlive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.state != StateConnected {
+		return
+	}
+
+	elapsed := time.Since(s.lastActivity)
+	if elapsed >= s.keepAliveExpiry {
+		// Keep-alive expired, disconnect
+		s.state = StateDisconnecting
+		if s.conn != nil {
+			s.conn.Close()
+			s.conn = nil
+		}
+		s.state = StateDisconnected
+		s.disconnectedAt = time.Now()
+
+		if s.onDisconnect != nil {
+			go s.onDisconnect(s, false)
+		}
+		return
+	}
+
+	// Reschedule timer
+	remaining := s.keepAliveExpiry - elapsed
+	s.keepAliveTimer = time.AfterFunc(remaining, func() {
+		s.checkKeepAlive()
+	})
+}
+
+// SetOnDisconnect sets the disconnect callback.
+func (s *Session) SetOnDisconnect(fn func(*Session, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onDisconnect = fn
+}
+
+// AddSubscription adds a subscription to the cache.
+func (s *Session) AddSubscription(filter string, opts store.SubscribeOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[filter] = opts
+}
+
+// RemoveSubscription removes a subscription from the cache.
+func (s *Session) RemoveSubscription(filter string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, filter)
+}
+
+// GetSubscriptions returns all subscriptions.
+func (s *Session) GetSubscriptions() map[string]store.SubscribeOptions {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]store.SubscribeOptions, len(s.subscriptions))
+	for k, v := range s.subscriptions {
+		result[k] = v
+	}
+	return result
+}
+
+// SetTopicAlias sets a topic alias for outbound use.
+func (s *Session) SetTopicAlias(topic string, alias uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.outboundAliases[topic] = alias
+}
+
+// GetTopicAlias returns the alias for a topic (outbound).
+func (s *Session) GetTopicAlias(topic string) (uint16, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	alias, ok := s.outboundAliases[topic]
+	return alias, ok
+}
+
+// SetInboundAlias sets an inbound topic alias.
+func (s *Session) SetInboundAlias(alias uint16, topic string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inboundAliases[alias] = topic
+}
+
+// ResolveInboundAlias resolves an inbound alias to a topic.
+func (s *Session) ResolveInboundAlias(alias uint16) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	topic, ok := s.inboundAliases[alias]
+	return topic, ok
+}
+
+// Info returns session info for persistence.
+func (s *Session) Info() *store.Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return &store.Session{
+		ClientID:        s.ID,
+		Version:         s.Version,
+		CleanStart:      s.CleanStart,
+		ExpiryInterval:  s.ExpiryInterval,
+		ConnectedAt:     s.connectedAt,
+		DisconnectedAt:  s.disconnectedAt,
+		Connected:       s.state == StateConnected,
+		ReceiveMaximum:  s.ReceiveMaximum,
+		MaxPacketSize:   s.MaxPacketSize,
+		TopicAliasMax:   s.TopicAliasMax,
+		RequestResponse: false, // TODO: from CONNECT
+		RequestProblem:  true,  // Default
+	}
+}
+
+// RestoreFrom restores session state from persistence.
+func (s *Session) RestoreFrom(stored *store.Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.ExpiryInterval = stored.ExpiryInterval
+	s.ReceiveMaximum = stored.ReceiveMaximum
+	s.MaxPacketSize = stored.MaxPacketSize
+	s.TopicAliasMax = stored.TopicAliasMax
 }

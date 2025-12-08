@@ -2,63 +2,184 @@ package store
 
 import (
 	"errors"
-	"sync"
+	"time"
 )
 
-var ErrNotFound = errors.New("message not found")
+// Common errors.
+var (
+	ErrNotFound      = errors.New("not found")
+	ErrAlreadyExists = errors.New("already exists")
+	ErrLocked        = errors.New("resource is locked")
+)
 
-// MessageStore defines the interface for persisting MQTT messages.
-// This is used for Retained messages and QoS 1/2 offline buffering.
+// Store is the composite storage interface providing access to all storage backends.
+type Store interface {
+	// Messages returns the message store for QoS offline queue.
+	Messages() MessageStore
+
+	// Sessions returns the session store.
+	Sessions() SessionStore
+
+	// Subscriptions returns the subscription store.
+	Subscriptions() SubscriptionStore
+
+	// Retained returns the retained message store.
+	Retained() RetainedStore
+
+	// Wills returns the will message store.
+	Wills() WillStore
+
+	// Close closes all storage backends.
+	Close() error
+}
+
+// Message represents a stored MQTT message.
+type Message struct {
+	Topic      string
+	Payload    []byte
+	QoS        byte
+	Retain     bool
+	PacketID   uint16
+	Expiry     time.Time // Zero means no expiry
+	Properties map[string]string
+}
+
+// Session represents persisted session state.
+type Session struct {
+	ClientID       string
+	Version        byte // MQTT version (3, 4, or 5)
+	CleanStart     bool
+	ExpiryInterval uint32 // Session expiry in seconds (0 = no expiry when disconnected)
+	ConnectedAt    time.Time
+	DisconnectedAt time.Time
+	Connected      bool
+
+	// MQTT 5 options
+	ReceiveMaximum  uint16
+	MaxPacketSize   uint32
+	TopicAliasMax   uint16
+	RequestResponse bool
+	RequestProblem  bool
+}
+
+// Subscription represents a stored subscription.
+type Subscription struct {
+	ClientID string
+	Filter   string
+	QoS      byte
+	Options  SubscribeOptions
+}
+
+// SubscribeOptions holds MQTT 5.0 subscription options.
+type SubscribeOptions struct {
+	NoLocal           bool // Don't receive own messages
+	RetainAsPublished bool // Keep original retain flag
+	RetainHandling    byte // 0=send, 1=new only, 2=none
+}
+
+// WillMessage represents a stored will message.
+type WillMessage struct {
+	ClientID   string
+	Topic      string
+	Payload    []byte
+	QoS        byte
+	Retain     bool
+	Delay      uint32 // Will delay interval in seconds
+	Expiry     uint32 // Message expiry interval
+	Properties map[string]string
+}
+
+// MessageStore handles message persistence for QoS offline queue.
 type MessageStore interface {
-	// StorePersist persists a message for a given client (offline queue) or topic (retained).
-	// key is either ClientID or Topic.
-	Store(key string, payload []byte) error
+	// Store stores a message with optional TTL.
+	// key format: "{clientID}/{packetID}" for inflight, "{clientID}/queue/{seq}" for offline queue
+	Store(key string, msg *Message) error
 
-	// Retrieve gets the message.
-	Retrieve(key string) ([]byte, error)
+	// Get retrieves a message by key.
+	Get(key string) (*Message, error)
 
-	// Delete removes the message.
+	// Delete removes a message.
 	Delete(key string) error
+
+	// List returns all messages matching a key prefix.
+	List(prefix string) ([]*Message, error)
+
+	// DeleteByPrefix removes all messages matching a prefix.
+	DeleteByPrefix(prefix string) error
 }
 
-// MemoryStore is a simple in-memory implementation.
-type MemoryStore struct {
-	mu   sync.RWMutex
-	data map[string][]byte
+// SessionStore handles session persistence.
+type SessionStore interface {
+	// Get retrieves a session by client ID.
+	Get(clientID string) (*Session, error)
+
+	// Save persists a session.
+	Save(session *Session) error
+
+	// Delete removes a session.
+	Delete(clientID string) error
+
+	// Lock acquires an exclusive lock for session takeover.
+	// Returns unlock function and error.
+	Lock(clientID string) (unlock func(), err error)
+
+	// GetExpired returns client IDs of sessions that have expired.
+	GetExpired(before time.Time) ([]string, error)
+
+	// List returns all sessions (for debugging/metrics).
+	List() ([]*Session, error)
 }
 
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{
-		data: make(map[string][]byte),
-	}
+// SubscriptionStore handles subscription persistence.
+type SubscriptionStore interface {
+	// Add adds or updates a subscription.
+	Add(sub *Subscription) error
+
+	// Remove removes a subscription.
+	Remove(clientID, filter string) error
+
+	// RemoveAll removes all subscriptions for a client.
+	RemoveAll(clientID string) error
+
+	// GetForClient returns all subscriptions for a client.
+	GetForClient(clientID string) ([]*Subscription, error)
+
+	// Match returns all subscriptions matching a topic.
+	// This is the core routing operation.
+	Match(topic string) ([]*Subscription, error)
+
+	// Count returns total subscription count.
+	Count() int
 }
 
-func (s *MemoryStore) Store(key string, payload []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Deep copy payload to avoid mutation races
-	c := make([]byte, len(payload))
-	copy(c, payload)
-	s.data[key] = c
-	return nil
+// RetainedStore handles retained message persistence.
+type RetainedStore interface {
+	// Set stores or updates a retained message.
+	// Empty payload deletes the retained message.
+	Set(topic string, msg *Message) error
+
+	// Get retrieves a retained message by exact topic.
+	Get(topic string) (*Message, error)
+
+	// Delete removes a retained message.
+	Delete(topic string) error
+
+	// Match returns all retained messages matching a filter (supports wildcards).
+	Match(filter string) ([]*Message, error)
 }
 
-func (s *MemoryStore) Retrieve(key string) ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	val, ok := s.data[key]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	// Return copy?
-	c := make([]byte, len(val))
-	copy(c, val)
-	return c, nil
-}
+// WillStore handles will message persistence.
+type WillStore interface {
+	// Set stores a will message for a client.
+	Set(clientID string, will *WillMessage) error
 
-func (s *MemoryStore) Delete(key string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.data, key)
-	return nil
+	// Get retrieves the will message for a client.
+	Get(clientID string) (*WillMessage, error)
+
+	// Delete removes the will message for a client.
+	Delete(clientID string) error
+
+	// GetPending returns will messages that should be triggered.
+	// (will delay elapsed and client still disconnected)
+	GetPending(before time.Time) ([]*WillMessage, error)
 }
