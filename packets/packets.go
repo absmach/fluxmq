@@ -1,4 +1,4 @@
-// package v5 provides shared constants and interfaces for MQTT packet handling.
+// package packets provides shared constants and interfaces for MQTT packet handling.
 // Version-specific implementations are in the v3 and v5 packages.
 package packets
 
