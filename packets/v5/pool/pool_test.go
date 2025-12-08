@@ -3,7 +3,7 @@ package pool
 import (
 	"testing"
 
-	"github.com/dborovcanin/mqtt/packets"
+	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
 
 func TestPublishPoolAcquireRelease(t *testing.T) {
@@ -12,8 +12,8 @@ func TestPublishPoolAcquireRelease(t *testing.T) {
 	if pkt == nil {
 		t.Fatal("AcquirePublish returned nil")
 	}
-	if pkt.FixedHeader.PacketType != packets.PublishType {
-		t.Errorf("PacketType: got %d, want %d", pkt.FixedHeader.PacketType, packets.PublishType)
+	if pkt.FixedHeader.PacketType != v5.PublishType {
+		t.Errorf("PacketType: got %d, want %d", pkt.FixedHeader.PacketType, v5.PublishType)
 	}
 
 	// Modify
@@ -74,7 +74,7 @@ func TestSubscribePoolAcquireRelease(t *testing.T) {
 	}
 
 	pkt.ID = 1
-	pkt.Opts = append(pkt.Opts, packets.SubOption{Topic: "test", MaxQoS: 1})
+	pkt.Opts = append(pkt.Opts, v5.SubOption{Topic: "test", MaxQoS: 1})
 
 	ReleaseSubscribe(pkt)
 
@@ -93,21 +93,21 @@ func TestAcquireByType(t *testing.T) {
 		packetType byte
 		wantNil    bool
 	}{
-		{packets.ConnectType, false},
-		{packets.ConnAckType, false},
-		{packets.PublishType, false},
-		{packets.PubAckType, false},
-		{packets.PubRecType, false},
-		{packets.PubRelType, false},
-		{packets.PubCompType, false},
-		{packets.SubscribeType, false},
-		{packets.SubAckType, false},
-		{packets.UnsubscribeType, false},
-		{packets.UnsubAckType, false},
-		{packets.PingReqType, false},
-		{packets.PingRespType, false},
-		{packets.DisconnectType, false},
-		{packets.AuthType, false},
+		{v5.ConnectType, false},
+		{v5.ConnAckType, false},
+		{v5.PublishType, false},
+		{v5.PubAckType, false},
+		{v5.PubRecType, false},
+		{v5.PubRelType, false},
+		{v5.PubCompType, false},
+		{v5.SubscribeType, false},
+		{v5.SubAckType, false},
+		{v5.UnsubscribeType, false},
+		{v5.UnsubAckType, false},
+		{v5.PingReqType, false},
+		{v5.PingRespType, false},
+		{v5.DisconnectType, false},
+		{v5.AuthType, false},
 		{99, true}, // Unknown type
 	}
 
@@ -127,7 +127,7 @@ func TestAcquireByType(t *testing.T) {
 
 func TestRelease(t *testing.T) {
 	// Test that Release correctly routes to the right pool
-	pkts := []packets.ControlPacket{
+	pkts := []v5.ControlPacket{
 		AcquireConnect(),
 		AcquireConnAck(),
 		AcquirePublish(),
@@ -155,8 +155,8 @@ func BenchmarkPublishPoolAcquireRelease(b *testing.B) {
 func BenchmarkPublishNewAlloc(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		pkt := &packets.Publish{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
+		pkt := &v5.Publish{
+			FixedHeader: v5.FixedHeader{PacketType: v5.PublishType},
 			TopicName:   "test/topic",
 			Payload:     []byte("hello world"),
 		}

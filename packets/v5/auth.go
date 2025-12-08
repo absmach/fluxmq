@@ -1,16 +1,17 @@
-package packets
+package v5
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/dborovcanin/mqtt/packets"
 	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // Auth is an internal representation of the fields of Auth MQTT packet.
 type Auth struct {
-	FixedHeader
+	packets.FixedHeader
 	// Variable Header
 	ReasonCode byte
 	Properties *AuthProperties

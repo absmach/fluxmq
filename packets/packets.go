@@ -1,9 +1,8 @@
-// Package packets provides shared constants and interfaces for MQTT packet handling.
-// Version-specific implementations are in the v3 and v5 subpackages.
+// package v5 provides shared constants and interfaces for MQTT packet handling.
+// Version-specific implementations are in the v3 and v5 packages.
 package packets
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -107,110 +106,101 @@ type User struct {
 	Key, Value string
 }
 
-// NewControlPacket creates a new packet of the specified type.
-func NewControlPacket(packetType byte) ControlPacket {
-	switch packetType {
-	case ConnectType:
-		return &Connect{FixedHeader: FixedHeader{PacketType: ConnectType}}
-	case ConnAckType:
-		return &ConnAck{FixedHeader: FixedHeader{PacketType: ConnAckType}}
-	case PublishType:
-		return &Publish{FixedHeader: FixedHeader{PacketType: PublishType}}
-	case PubAckType:
-		return &PubAck{FixedHeader: FixedHeader{PacketType: PubAckType}}
-	case PubRecType:
-		return &PubRec{FixedHeader: FixedHeader{PacketType: PubRecType}}
-	case PubRelType:
-		return &PubRel{FixedHeader: FixedHeader{PacketType: PubRelType, QoS: 1}}
-	case PubCompType:
-		return &PubComp{FixedHeader: FixedHeader{PacketType: PubCompType}}
-	case SubscribeType:
-		return &Subscribe{FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1}}
-	case SubAckType:
-		return &SubAck{FixedHeader: FixedHeader{PacketType: SubAckType}}
-	case UnsubscribeType:
-		return &Unsubscribe{FixedHeader: FixedHeader{PacketType: UnsubscribeType, QoS: 1}}
-	case UnsubAckType:
-		return &UnSubAck{FixedHeader: FixedHeader{PacketType: UnsubAckType}}
-	case PingReqType:
-		return &PingReq{FixedHeader: FixedHeader{PacketType: PingReqType}}
-	case PingRespType:
-		return &PingResp{FixedHeader: FixedHeader{PacketType: PingRespType}}
-	case DisconnectType:
-		return &Disconnect{FixedHeader: FixedHeader{PacketType: DisconnectType}}
-	case AuthType:
-		return &Auth{FixedHeader: FixedHeader{PacketType: AuthType}}
-	}
-	return nil
+// String returns a human-readable representation of the fixed header.
+func (fh FixedHeader) String() string {
+	return fmt.Sprintf("type: %s dup: %t qos: %d retain: %t remaining_length: %d",
+		PacketNames[fh.PacketType], fh.Dup, fh.QoS, fh.Retain, fh.RemainingLength)
 }
 
-// NewControlPacketWithHeader creates a new packet with the given fixed header.
-func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
-	switch fh.PacketType {
-	case ConnectType:
-		return &Connect{FixedHeader: fh}, nil
-	case ConnAckType:
-		return &ConnAck{FixedHeader: fh}, nil
-	case PublishType:
-		return &Publish{FixedHeader: fh}, nil
-	case PubAckType:
-		return &PubAck{FixedHeader: fh}, nil
-	case PubRecType:
-		return &PubRec{FixedHeader: fh}, nil
-	case PubRelType:
-		return &PubRel{FixedHeader: fh}, nil
-	case PubCompType:
-		return &PubComp{FixedHeader: fh}, nil
-	case SubscribeType:
-		return &Subscribe{FixedHeader: fh}, nil
-	case SubAckType:
-		return &SubAck{FixedHeader: fh}, nil
-	case UnsubscribeType:
-		return &Unsubscribe{FixedHeader: fh}, nil
-	case UnsubAckType:
-		return &UnSubAck{FixedHeader: fh}, nil
-	case PingReqType:
-		return &PingReq{FixedHeader: fh}, nil
-	case PingRespType:
-		return &PingResp{FixedHeader: fh}, nil
-	case DisconnectType:
-		return &Disconnect{FixedHeader: fh}, nil
-	case AuthType:
-		return &Auth{FixedHeader: fh}, nil
+// Encode serializes the fixed header to bytes.
+func (fh FixedHeader) Encode() []byte {
+	var dup, retain byte
+	if fh.Dup {
+		dup = 1
 	}
-	return nil, fmt.Errorf("unsupported packet type 0x%x", fh.PacketType)
+	if fh.Retain {
+		retain = 1
+	}
+	ret := []byte{fh.PacketType<<4 | dup<<3 | fh.QoS<<1 | retain}
+	return append(ret, encodeVBI(fh.RemainingLength)...)
 }
 
-// ReadPacket reads an MQTT packet from the reader.
-// Returns the packet, encoded fixed header, packet body bytes, and any error.
-func ReadPacket(r io.Reader) (ControlPacket, []byte, []byte, error) {
-	var fh FixedHeader
+// Decode parses the fixed header from the type/flags byte and reader.
+func (fh *FixedHeader) Decode(typeAndFlags byte, r io.Reader) error {
+	fh.PacketType = typeAndFlags >> 4
+	fh.Dup = (typeAndFlags>>3)&0x01 > 0
+	fh.QoS = (typeAndFlags >> 1) & 0x03
+	fh.Retain = typeAndFlags&0x01 > 0
+
+	var err error
+	fh.RemainingLength, err = decodeVBI(r)
+	return err
+}
+
+// DecodeFromBytes parses the fixed header from a byte slice.
+// Returns the number of bytes consumed.
+func (fh *FixedHeader) DecodeFromBytes(data []byte) (int, error) {
+	if len(data) < 2 {
+		return 0, errors.New("buffer too short")
+	}
+
+	fh.PacketType = data[0] >> 4
+	fh.Dup = (data[0]>>3)&0x01 > 0
+	fh.QoS = (data[0] >> 1) & 0x03
+	fh.Retain = data[0]&0x01 > 0
+
+	// Decode remaining length (VBI)
+	var vbi uint32
+	var multiplier uint32
+	offset := 1
+	for i := 0; i < 4; i++ {
+		if offset >= len(data) {
+			return 0, errors.New("buffer too short")
+		}
+		b := data[offset]
+		offset++
+		vbi |= uint32(b&0x7F) << multiplier
+		if (b & 0x80) == 0 {
+			fh.RemainingLength = int(vbi)
+			return offset, nil
+		}
+		multiplier += 7
+	}
+	return 0, errors.New("malformed VBI")
+}
+
+// encodeVBI encodes an integer as a Variable Byte Integer.
+func encodeVBI(value int) []byte {
+	var ret []byte
+	for {
+		digit := byte(value % 128)
+		value /= 128
+		if value > 0 {
+			digit |= 0x80
+		}
+		ret = append(ret, digit)
+		if value == 0 {
+			break
+		}
+	}
+	return ret
+}
+
+// decodeVBI decodes a Variable Byte Integer from the reader.
+func decodeVBI(r io.Reader) (int, error) {
+	var vbi uint32
+	var multiplier uint32
 	b := make([]byte, 1)
-
-	_, err := io.ReadFull(r, b)
-	if err != nil {
-		return nil, nil, nil, err
+	for i := 0; i < 4; i++ {
+		_, err := io.ReadFull(r, b)
+		if err != nil {
+			return 0, err
+		}
+		vbi |= uint32(b[0]&0x7F) << multiplier
+		if (b[0] & 0x80) == 0 {
+			return int(vbi), nil
+		}
+		multiplier += 7
 	}
-
-	err = fh.Decode(b[0], r)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	cp, err := NewControlPacketWithHeader(fh)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	packetBytes := make([]byte, fh.RemainingLength)
-	n, err := io.ReadFull(r, packetBytes)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if n != fh.RemainingLength {
-		return nil, nil, nil, ErrFailRemaining
-	}
-
-	err = cp.Unpack(bytes.NewReader(packetBytes))
-	return cp, fh.Encode(), packetBytes, err
+	return 0, errors.New("malformed VBI")
 }

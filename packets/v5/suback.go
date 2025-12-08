@@ -1,16 +1,17 @@
-package packets
+package v5
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/dborovcanin/mqtt/packets"
 	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // SubAck is an internal representation of the fields of the SUBACK MQTT packet.
 type SubAck struct {
-	FixedHeader
+	packets.FixedHeader
 	// Variable Header
 	ID         uint16
 	Properties *BasicProperties

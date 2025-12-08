@@ -1,12 +1,14 @@
-package packets
+package v5
 
 import (
 	"io"
+
+	"github.com/dborovcanin/mqtt/packets"
 )
 
 // PingReq is an internal representation of the fields of the PINGREQ MQTT packet
 type PingReq struct {
-	FixedHeader
+	packets.FixedHeader
 }
 
 func (pkt *PingReq) String() string {

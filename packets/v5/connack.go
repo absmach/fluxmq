@@ -1,10 +1,11 @@
-package packets
+package v5
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/dborovcanin/mqtt/packets"
 	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
@@ -23,7 +24,7 @@ var ConnackReturnCodes = map[uint8]string{
 
 // ConnAck is an internal representation of the fields of the ConnAck MQTT packet.
 type ConnAck struct {
-	FixedHeader
+	packets.FixedHeader
 	// Variable Header
 	SessionPresent bool
 	ReasonCode     byte

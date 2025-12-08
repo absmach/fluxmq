@@ -1,16 +1,17 @@
-package packets
+package v5
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/dborovcanin/mqtt/packets"
 	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet
 type Subscribe struct {
-	FixedHeader
+	packets.FixedHeader
 	// Variable Header
 	ID         uint16
 	Properties *SubscribeProperties

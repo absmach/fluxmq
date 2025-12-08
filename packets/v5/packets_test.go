@@ -1,9 +1,11 @@
-package packets
+package v5_test
 
 import (
 	"bytes"
 	"reflect"
 	"testing"
+
+	. "github.com/dborovcanin/mqtt/packets/v5"
 )
 
 // Helper to create pointer to value

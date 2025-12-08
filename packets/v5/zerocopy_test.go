@@ -1,14 +1,18 @@
-package packets
+package v5_test
 
 import (
 	"bytes"
 	"testing"
+
+	"github.com/dborovcanin/mqtt/packets"
+	. "github.com/dborovcanin/mqtt/packets/v5"
+	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
 
 func TestPublishUnpackBytes(t *testing.T) {
 	// Create a Publish packet
 	original := &Publish{
-		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
 		TopicName:   "test/topic",
 		ID:          12345,
 		Payload:     []byte("hello world"),
@@ -18,7 +22,7 @@ func TestPublishUnpackBytes(t *testing.T) {
 	encoded := original.Encode()
 
 	// Parse the header to get the fixed header
-	var fh FixedHeader
+	var fh packets.FixedHeader
 	fh.PacketType = encoded[0] >> 4
 	fh.QoS = (encoded[0] >> 1) & 0x03
 
@@ -29,7 +33,7 @@ func TestPublishUnpackBytes(t *testing.T) {
 	}
 
 	// Create a new packet and unpack using zero-copy
-	pkt := &Publish{FixedHeader: fh}
+	pkt := &v5.Publish{FixedHeader: fh}
 	err := pkt.UnpackBytes(encoded[headerLen:])
 	if err != nil {
 		t.Fatalf("UnpackBytes failed: %v", err)

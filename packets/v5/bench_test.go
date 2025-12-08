@@ -1,4 +1,4 @@
-package packets
+package v5_test
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dborovcanin/mqtt/packets/codec"
+	. "github.com/dborovcanin/mqtt/packets/v5"
 )
 
 func BenchmarkReadInline(b *testing.B) {

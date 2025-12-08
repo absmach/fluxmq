@@ -1,17 +1,18 @@
-package packets
+package v5
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/dborovcanin/mqtt/packets"
 	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // UnSubAck is an internal representation of the fields of the UNSUBACK MQTT packet.
 
 type UnSubAck struct {
-	FixedHeader
+	packets.FixedHeader
 	// Variable Header
 	ID         uint16
 	Properties *BasicProperties
@@ -25,7 +26,7 @@ func (pkt *UnSubAck) String() string {
 
 // Type returns the packet type.
 func (pkt *UnSubAck) Type() byte {
-	return UnsubAckType
+	return packets.UnsubAckType
 }
 
 func (pkt *UnSubAck) Encode() []byte {
@@ -88,5 +89,5 @@ func (pkt *UnSubAck) Unpack(r io.Reader) error {
 }
 
 func (pkt *UnSubAck) Details() Details {
-	return Details{Type: SubAckType, ID: pkt.ID, QoS: 0}
+	return Details{Type: UnsubAckType, ID: pkt.ID, QoS: 0}
 }

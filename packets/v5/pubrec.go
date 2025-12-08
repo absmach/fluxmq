@@ -1,16 +1,17 @@
-package packets
+package v5
 
 import (
 	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/dborovcanin/mqtt/packets"
 	codec "github.com/dborovcanin/mqtt/packets/codec"
 )
 
 // PubRec is an internal representation of the fields of the PUBREC MQTT packet.
 type PubRec struct {
-	FixedHeader
+	packets.FixedHeader
 	// Variable Header
 	ID         uint16
 	ReasonCode *byte

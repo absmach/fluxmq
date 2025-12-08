@@ -13,330 +13,330 @@ package pool
 import (
 	"sync"
 
-	"github.com/dborovcanin/mqtt/packets"
+	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
 
 var (
 	connectPool = sync.Pool{
 		New: func() any {
-			return &packets.Connect{
-				FixedHeader: packets.FixedHeader{PacketType: packets.ConnectType},
+			return &v5.Connect{
+				FixedHeader: v5.FixedHeader{PacketType: v5.ConnectType},
 			}
 		},
 	}
 
 	connAckPool = sync.Pool{
 		New: func() any {
-			return &packets.ConnAck{
-				FixedHeader: packets.FixedHeader{PacketType: packets.ConnAckType},
+			return &v5.ConnAck{
+				FixedHeader: v5.FixedHeader{PacketType: v5.ConnAckType},
 			}
 		},
 	}
 
 	publishPool = sync.Pool{
 		New: func() any {
-			return &packets.Publish{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
+			return &v5.Publish{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PublishType},
 			}
 		},
 	}
 
 	pubAckPool = sync.Pool{
 		New: func() any {
-			return &packets.PubAck{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
+			return &v5.PubAck{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PubAckType},
 			}
 		},
 	}
 
 	pubRecPool = sync.Pool{
 		New: func() any {
-			return &packets.PubRec{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
+			return &v5.PubRec{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PubRecType},
 			}
 		},
 	}
 
 	pubRelPool = sync.Pool{
 		New: func() any {
-			return &packets.PubRel{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+			return &v5.PubRel{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PubRelType, QoS: 1},
 			}
 		},
 	}
 
 	pubCompPool = sync.Pool{
 		New: func() any {
-			return &packets.PubComp{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
+			return &v5.PubComp{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PubCompType},
 			}
 		},
 	}
 
 	subscribePool = sync.Pool{
 		New: func() any {
-			return &packets.Subscribe{
-				FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
+			return &v5.Subscribe{
+				FixedHeader: v5.FixedHeader{PacketType: v5.SubscribeType, QoS: 1},
 			}
 		},
 	}
 
 	subAckPool = sync.Pool{
 		New: func() any {
-			return &packets.SubAck{
-				FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
+			return &v5.SubAck{
+				FixedHeader: v5.FixedHeader{PacketType: v5.SubAckType},
 			}
 		},
 	}
 
 	unsubscribePool = sync.Pool{
 		New: func() any {
-			return &packets.Unsubscribe{
-				FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType, QoS: 1},
+			return &v5.Unsubscribe{
+				FixedHeader: v5.FixedHeader{PacketType: v5.UnsubscribeType, QoS: 1},
 			}
 		},
 	}
 
 	unsubAckPool = sync.Pool{
 		New: func() any {
-			return &packets.UnSubAck{
-				FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
+			return &v5.UnSubAck{
+				FixedHeader: v5.FixedHeader{PacketType: v5.UnsubAckType},
 			}
 		},
 	}
 
 	pingReqPool = sync.Pool{
 		New: func() any {
-			return &packets.PingReq{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
+			return &v5.PingReq{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PingReqType},
 			}
 		},
 	}
 
 	pingRespPool = sync.Pool{
 		New: func() any {
-			return &packets.PingResp{
-				FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
+			return &v5.PingResp{
+				FixedHeader: v5.FixedHeader{PacketType: v5.PingRespType},
 			}
 		},
 	}
 
 	disconnectPool = sync.Pool{
 		New: func() any {
-			return &packets.Disconnect{
-				FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
+			return &v5.Disconnect{
+				FixedHeader: v5.FixedHeader{PacketType: v5.DisconnectType},
 			}
 		},
 	}
 
 	authPool = sync.Pool{
 		New: func() any {
-			return &packets.Auth{
-				FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+			return &v5.Auth{
+				FixedHeader: v5.FixedHeader{PacketType: v5.AuthType},
 			}
 		},
 	}
 )
 
 // AcquireConnect gets a Connect packet from the pool.
-func AcquireConnect() *packets.Connect {
-	return connectPool.Get().(*packets.Connect)
+func AcquireConnect() *v5.Connect {
+	return connectPool.Get().(*v5.Connect)
 }
 
 // ReleaseConnect returns a Connect packet to the pool.
 // The packet must not be used after calling this function.
-func ReleaseConnect(pkt *packets.Connect) {
+func ReleaseConnect(pkt *v5.Connect) {
 	pkt.Reset()
 	connectPool.Put(pkt)
 }
 
 // AcquireConnAck gets a ConnAck packet from the pool.
-func AcquireConnAck() *packets.ConnAck {
-	return connAckPool.Get().(*packets.ConnAck)
+func AcquireConnAck() *v5.ConnAck {
+	return connAckPool.Get().(*v5.ConnAck)
 }
 
 // ReleaseConnAck returns a ConnAck packet to the pool.
-func ReleaseConnAck(pkt *packets.ConnAck) {
+func ReleaseConnAck(pkt *v5.ConnAck) {
 	pkt.Reset()
 	connAckPool.Put(pkt)
 }
 
 // AcquirePublish gets a Publish packet from the pool.
-func AcquirePublish() *packets.Publish {
-	return publishPool.Get().(*packets.Publish)
+func AcquirePublish() *v5.Publish {
+	return publishPool.Get().(*v5.Publish)
 }
 
 // ReleasePublish returns a Publish packet to the pool.
-func ReleasePublish(pkt *packets.Publish) {
+func ReleasePublish(pkt *v5.Publish) {
 	pkt.Reset()
 	publishPool.Put(pkt)
 }
 
 // AcquirePubAck gets a PubAck packet from the pool.
-func AcquirePubAck() *packets.PubAck {
-	return pubAckPool.Get().(*packets.PubAck)
+func AcquirePubAck() *v5.PubAck {
+	return pubAckPool.Get().(*v5.PubAck)
 }
 
 // ReleasePubAck returns a PubAck packet to the pool.
-func ReleasePubAck(pkt *packets.PubAck) {
+func ReleasePubAck(pkt *v5.PubAck) {
 	pkt.Reset()
 	pubAckPool.Put(pkt)
 }
 
 // AcquirePubRec gets a PubRec packet from the pool.
-func AcquirePubRec() *packets.PubRec {
-	return pubRecPool.Get().(*packets.PubRec)
+func AcquirePubRec() *v5.PubRec {
+	return pubRecPool.Get().(*v5.PubRec)
 }
 
 // ReleasePubRec returns a PubRec packet to the pool.
-func ReleasePubRec(pkt *packets.PubRec) {
+func ReleasePubRec(pkt *v5.PubRec) {
 	pkt.Reset()
 	pubRecPool.Put(pkt)
 }
 
 // AcquirePubRel gets a PubRel packet from the pool.
-func AcquirePubRel() *packets.PubRel {
-	return pubRelPool.Get().(*packets.PubRel)
+func AcquirePubRel() *v5.PubRel {
+	return pubRelPool.Get().(*v5.PubRel)
 }
 
 // ReleasePubRel returns a PubRel packet to the pool.
-func ReleasePubRel(pkt *packets.PubRel) {
+func ReleasePubRel(pkt *v5.PubRel) {
 	pkt.Reset()
 	pubRelPool.Put(pkt)
 }
 
 // AcquirePubComp gets a PubComp packet from the pool.
-func AcquirePubComp() *packets.PubComp {
-	return pubCompPool.Get().(*packets.PubComp)
+func AcquirePubComp() *v5.PubComp {
+	return pubCompPool.Get().(*v5.PubComp)
 }
 
 // ReleasePubComp returns a PubComp packet to the pool.
-func ReleasePubComp(pkt *packets.PubComp) {
+func ReleasePubComp(pkt *v5.PubComp) {
 	pkt.Reset()
 	pubCompPool.Put(pkt)
 }
 
 // AcquireSubscribe gets a Subscribe packet from the pool.
-func AcquireSubscribe() *packets.Subscribe {
-	return subscribePool.Get().(*packets.Subscribe)
+func AcquireSubscribe() *v5.Subscribe {
+	return subscribePool.Get().(*v5.Subscribe)
 }
 
 // ReleaseSubscribe returns a Subscribe packet to the pool.
-func ReleaseSubscribe(pkt *packets.Subscribe) {
+func ReleaseSubscribe(pkt *v5.Subscribe) {
 	pkt.Reset()
 	subscribePool.Put(pkt)
 }
 
 // AcquireSubAck gets a SubAck packet from the pool.
-func AcquireSubAck() *packets.SubAck {
-	return subAckPool.Get().(*packets.SubAck)
+func AcquireSubAck() *v5.SubAck {
+	return subAckPool.Get().(*v5.SubAck)
 }
 
 // ReleaseSubAck returns a SubAck packet to the pool.
-func ReleaseSubAck(pkt *packets.SubAck) {
+func ReleaseSubAck(pkt *v5.SubAck) {
 	pkt.Reset()
 	subAckPool.Put(pkt)
 }
 
 // AcquireUnsubscribe gets an Unsubscribe packet from the pool.
-func AcquireUnsubscribe() *packets.Unsubscribe {
-	return unsubscribePool.Get().(*packets.Unsubscribe)
+func AcquireUnsubscribe() *v5.Unsubscribe {
+	return unsubscribePool.Get().(*v5.Unsubscribe)
 }
 
 // ReleaseUnsubscribe returns an Unsubscribe packet to the pool.
-func ReleaseUnsubscribe(pkt *packets.Unsubscribe) {
+func ReleaseUnsubscribe(pkt *v5.Unsubscribe) {
 	pkt.Reset()
 	unsubscribePool.Put(pkt)
 }
 
 // AcquireUnsubAck gets an UnsubAck packet from the pool.
-func AcquireUnsubAck() *packets.UnSubAck {
-	return unsubAckPool.Get().(*packets.UnSubAck)
+func AcquireUnsubAck() *v5.UnSubAck {
+	return unsubAckPool.Get().(*v5.UnSubAck)
 }
 
 // ReleaseUnsubAck returns an UnsubAck packet to the pool.
-func ReleaseUnsubAck(pkt *packets.UnSubAck) {
+func ReleaseUnsubAck(pkt *v5.UnSubAck) {
 	pkt.Reset()
 	unsubAckPool.Put(pkt)
 }
 
 // AcquirePingReq gets a PingReq packet from the pool.
-func AcquirePingReq() *packets.PingReq {
-	return pingReqPool.Get().(*packets.PingReq)
+func AcquirePingReq() *v5.PingReq {
+	return pingReqPool.Get().(*v5.PingReq)
 }
 
 // ReleasePingReq returns a PingReq packet to the pool.
-func ReleasePingReq(pkt *packets.PingReq) {
+func ReleasePingReq(pkt *v5.PingReq) {
 	pkt.Reset()
 	pingReqPool.Put(pkt)
 }
 
 // AcquirePingResp gets a PingResp packet from the pool.
-func AcquirePingResp() *packets.PingResp {
-	return pingRespPool.Get().(*packets.PingResp)
+func AcquirePingResp() *v5.PingResp {
+	return pingRespPool.Get().(*v5.PingResp)
 }
 
 // ReleasePingResp returns a PingResp packet to the pool.
-func ReleasePingResp(pkt *packets.PingResp) {
+func ReleasePingResp(pkt *v5.PingResp) {
 	pkt.Reset()
 	pingRespPool.Put(pkt)
 }
 
 // AcquireDisconnect gets a Disconnect packet from the pool.
-func AcquireDisconnect() *packets.Disconnect {
-	return disconnectPool.Get().(*packets.Disconnect)
+func AcquireDisconnect() *v5.Disconnect {
+	return disconnectPool.Get().(*v5.Disconnect)
 }
 
 // ReleaseDisconnect returns a Disconnect packet to the pool.
-func ReleaseDisconnect(pkt *packets.Disconnect) {
+func ReleaseDisconnect(pkt *v5.Disconnect) {
 	pkt.Reset()
 	disconnectPool.Put(pkt)
 }
 
 // AcquireAuth gets an Auth packet from the pool.
-func AcquireAuth() *packets.Auth {
-	return authPool.Get().(*packets.Auth)
+func AcquireAuth() *v5.Auth {
+	return authPool.Get().(*v5.Auth)
 }
 
 // ReleaseAuth returns an Auth packet to the pool.
-func ReleaseAuth(pkt *packets.Auth) {
+func ReleaseAuth(pkt *v5.Auth) {
 	pkt.Reset()
 	authPool.Put(pkt)
 }
 
 // AcquireByType gets a packet of the specified type from the appropriate pool.
 // Returns nil for unknown packet types.
-func AcquireByType(packetType byte) packets.ControlPacket {
+func AcquireByType(packetType byte) v5.ControlPacket {
 	switch packetType {
-	case packets.ConnectType:
+	case v5.ConnectType:
 		return AcquireConnect()
-	case packets.ConnAckType:
+	case v5.ConnAckType:
 		return AcquireConnAck()
-	case packets.PublishType:
+	case v5.PublishType:
 		return AcquirePublish()
-	case packets.PubAckType:
+	case v5.PubAckType:
 		return AcquirePubAck()
-	case packets.PubRecType:
+	case v5.PubRecType:
 		return AcquirePubRec()
-	case packets.PubRelType:
+	case v5.PubRelType:
 		return AcquirePubRel()
-	case packets.PubCompType:
+	case v5.PubCompType:
 		return AcquirePubComp()
-	case packets.SubscribeType:
+	case v5.SubscribeType:
 		return AcquireSubscribe()
-	case packets.SubAckType:
+	case v5.SubAckType:
 		return AcquireSubAck()
-	case packets.UnsubscribeType:
+	case v5.UnsubscribeType:
 		return AcquireUnsubscribe()
-	case packets.UnsubAckType:
+	case v5.UnsubAckType:
 		return AcquireUnsubAck()
-	case packets.PingReqType:
+	case v5.PingReqType:
 		return AcquirePingReq()
-	case packets.PingRespType:
+	case v5.PingRespType:
 		return AcquirePingResp()
-	case packets.DisconnectType:
+	case v5.DisconnectType:
 		return AcquireDisconnect()
-	case packets.AuthType:
+	case v5.AuthType:
 		return AcquireAuth()
 	}
 	return nil
@@ -344,37 +344,37 @@ func AcquireByType(packetType byte) packets.ControlPacket {
 
 // Release returns a packet to its appropriate pool based on type.
 // This is useful when you have a ControlPacket interface and need to release it.
-func Release(pkt packets.ControlPacket) {
+func Release(pkt v5.ControlPacket) {
 	switch p := pkt.(type) {
-	case *packets.Connect:
+	case *v5.Connect:
 		ReleaseConnect(p)
-	case *packets.ConnAck:
+	case *v5.ConnAck:
 		ReleaseConnAck(p)
-	case *packets.Publish:
+	case *v5.Publish:
 		ReleasePublish(p)
-	case *packets.PubAck:
+	case *v5.PubAck:
 		ReleasePubAck(p)
-	case *packets.PubRec:
+	case *v5.PubRec:
 		ReleasePubRec(p)
-	case *packets.PubRel:
+	case *v5.PubRel:
 		ReleasePubRel(p)
-	case *packets.PubComp:
+	case *v5.PubComp:
 		ReleasePubComp(p)
-	case *packets.Subscribe:
+	case *v5.Subscribe:
 		ReleaseSubscribe(p)
-	case *packets.SubAck:
+	case *v5.SubAck:
 		ReleaseSubAck(p)
-	case *packets.Unsubscribe:
+	case *v5.Unsubscribe:
 		ReleaseUnsubscribe(p)
-	case *packets.UnSubAck:
+	case *v5.UnSubAck:
 		ReleaseUnsubAck(p)
-	case *packets.PingReq:
+	case *v5.PingReq:
 		ReleasePingReq(p)
-	case *packets.PingResp:
+	case *v5.PingResp:
 		ReleasePingResp(p)
-	case *packets.Disconnect:
+	case *v5.Disconnect:
 		ReleaseDisconnect(p)
-	case *packets.Auth:
+	case *v5.Auth:
 		ReleaseAuth(p)
 	}
 }

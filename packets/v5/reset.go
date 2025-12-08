@@ -1,4 +1,4 @@
-package packets
+package v5
 
 // Reset clears all fields in the Connect packet for reuse.
 func (pkt *Connect) Reset() {
