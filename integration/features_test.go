@@ -7,7 +7,7 @@ import (
 
 	"github.com/dborovcanin/mqtt/broker"
 	"github.com/dborovcanin/mqtt/client"
-	"github.com/dborovcanin/mqtt/pkg/server/tcp"
+	"github.com/dborovcanin/mqtt/server/tcp"
 	"github.com/dborovcanin/mqtt/store"
 )
 

@@ -8,28 +8,26 @@ import (
 
 	"github.com/dborovcanin/mqtt/broker"
 	"github.com/dborovcanin/mqtt/client"
-	"github.com/dborovcanin/mqtt/pkg/server/tcp"
+	"github.com/dborovcanin/mqtt/server/tcp"
 )
 
 func TestBasicPubSub(t *testing.T) {
-	// Create broker
+	// Setup broker and server
 	b := broker.NewBroker()
 	defer b.Close()
 
-	// Create TCP server
 	serverCfg := tcp.Config{
 		Address:         "localhost:0",
 		ShutdownTimeout: 1 * time.Second,
 	}
 	server := tcp.New(serverCfg, b)
 
-	// Start server
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // Ensure context is cancelled when test exits
+	defer cancel()
 
 	go server.Listen(ctx)
+	time.Sleep(100 * time.Millisecond)
 
-	// Get actual port
 	addr := server.Addr().String()
 
 	// 2. Start Client (using v3.1.1 = version 4)
