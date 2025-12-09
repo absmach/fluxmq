@@ -63,77 +63,87 @@ func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 		existing = nil
 	}
 
-	// Return existing session if not clean start
+	// Handle existing session (takeover scenario)
 	if existing != nil {
-		// Session takeover: disconnect existing connection
-		if existing.IsConnected() {
-			existing.Disconnect(false) // Not graceful (takeover)
-		}
-
-		// Update session options for new connection (mutex-protected)
-		existing.UpdateConnectionOptions(version, opts.KeepAlive, opts.Will)
-
+		m.handleExistingSession(existing, version, opts)
 		return existing, false, nil
 	}
 
-	// Create new session
+	// Create and initialize new session
 	session := New(clientID, version, opts)
 
-	// Try to restore from storage
-	if !opts.CleanStart && m.store != nil {
-		stored, err := m.store.Sessions().Get(clientID)
-		if err != nil && err != store.ErrNotFound {
-			return nil, false, fmt.Errorf("failed to get session from storage: %w", err)
-		}
-		if stored != nil {
-			session.RestoreFrom(stored)
-		}
-
-		// Restore subscriptions
-		subs, err := m.store.Subscriptions().GetForClient(clientID)
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to get subscriptions from storage: %w", err)
-		}
-		for _, sub := range subs {
-			session.AddSubscription(sub.Filter, sub.Options)
-		}
-
-		// Restore offline messages
-		msgs, err := m.store.Messages().List(clientID + "/queue/")
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to list offline messages from storage: %w", err)
-		}
-		for _, msg := range msgs {
-			if err := session.OfflineQueue.Enqueue(msg); err != nil {
-				return nil, false, fmt.Errorf("failed to enqueue offline message: %w", err)
-			}
-		}
-		// Clear from storage after loading
-		if err := m.store.Messages().DeleteByPrefix(clientID + "/queue/"); err != nil {
-			return nil, false, fmt.Errorf("failed to clear offline messages from storage: %w", err)
-		}
+	if err := m.restoreSessionFromStorage(session, clientID, opts); err != nil {
+		return nil, false, err
 	}
 
-	// Set disconnect callback
 	session.SetOnDisconnect(func(s *Session, graceful bool) {
 		m.handleDisconnect(s, graceful)
 	})
 
 	m.sessions[clientID] = session
 
-	// Persist session
 	if m.store != nil {
 		if err := m.store.Sessions().Save(session.Info()); err != nil {
 			return nil, false, fmt.Errorf("failed to save session to storage: %w", err)
 		}
 	}
 
-	// Callback
 	if m.onSessionCreate != nil {
 		go m.onSessionCreate(session)
 	}
 
 	return session, true, nil
+}
+
+// handleExistingSession handles session takeover when a client reconnects.
+func (m *Manager) handleExistingSession(session *Session, version byte, opts Options) {
+	if session.IsConnected() {
+		session.Disconnect(false) // Not graceful (takeover)
+	}
+	session.UpdateConnectionOptions(version, opts.KeepAlive, opts.Will)
+}
+
+// restoreSessionFromStorage restores session state from persistent storage.
+func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, opts Options) error {
+	if opts.CleanStart || m.store == nil {
+		return nil
+	}
+
+	// Restore session metadata
+	stored, err := m.store.Sessions().Get(clientID)
+	if err != nil && err != store.ErrNotFound {
+		return fmt.Errorf("failed to get session from storage: %w", err)
+	}
+	if stored != nil {
+		session.RestoreFrom(stored)
+	}
+
+	// Restore subscriptions
+	subs, err := m.store.Subscriptions().GetForClient(clientID)
+	if err != nil {
+		return fmt.Errorf("failed to get subscriptions from storage: %w", err)
+	}
+	for _, sub := range subs {
+		session.AddSubscription(sub.Filter, sub.Options)
+	}
+
+	// Restore offline messages
+	msgs, err := m.store.Messages().List(clientID + "/queue/")
+	if err != nil {
+		return fmt.Errorf("failed to list offline messages from storage: %w", err)
+	}
+	for _, msg := range msgs {
+		if err := session.OfflineQueue.Enqueue(msg); err != nil {
+			return fmt.Errorf("failed to enqueue offline message: %w", err)
+		}
+	}
+
+	// Clear from storage after loading
+	if err := m.store.Messages().DeleteByPrefix(clientID + "/queue/"); err != nil {
+		return fmt.Errorf("failed to clear offline messages from storage: %w", err)
+	}
+
+	return nil
 }
 
 // Destroy removes a session completely.

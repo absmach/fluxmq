@@ -23,12 +23,3 @@ type Connection interface {
 	// RemoteAddr returns the address of the connected client.
 	RemoteAddr() net.Addr
 }
-
-// Session represents the state of a connected client.
-type Session interface {
-	// ID returns the ClientID.
-	ID() string
-
-	// Close terminates the session and the underlying connection.
-	Close() error
-}

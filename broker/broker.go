@@ -318,13 +318,6 @@ func (b *Broker) Publish(ctx context.Context, clientID string, topic string, pay
 	return b.Distribute(topic, payload, qos, retain, nil)
 }
 
-// SubscribeToTopic implements OperationHandler.SubscribeToTopic.
-// Note: This requires a mechanism to pump messages to a channel.
-// We can use a special internal session type or a channel-based adapter.
-func (b *Broker) SubscribeToTopic(ctx context.Context, clientID string, topicFilter string) (<-chan *store.Message, error) {
-	return nil, fmt.Errorf("stateless subscribe not implemented yet")
-}
-
 // deliverToSession sends a message to a connected session.
 func (b *Broker) deliverToSession(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
 	pub := &v3.Publish{
@@ -377,10 +370,14 @@ func (c *sessionConnection) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }
 
+// SetReadDeadline is a no-op since the underlying Connection doesn't support deadlines.
+// Deadline management is handled by the TCP server and keep-alive mechanism.
 func (c *sessionConnection) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
+// SetWriteDeadline is a no-op since the underlying Connection doesn't support deadlines.
+// Deadline management is handled by the TCP server and keep-alive mechanism.
 func (c *sessionConnection) SetWriteDeadline(t time.Time) error {
 	return nil
 }

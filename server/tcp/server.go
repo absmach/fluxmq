@@ -132,30 +132,42 @@ func New(cfg Config, h Handler) *Server {
 // Listen starts the TCP server and blocks until the context is cancelled.
 // It implements graceful shutdown with connection draining.
 func (s *Server) Listen(ctx context.Context) error {
-	listener, err := net.Listen("tcp", s.config.Address)
+	listener, err := s.createListener()
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", s.config.Address, err)
+		return err
 	}
 
-	// Store listener for Addr() method
+	connCtx, connCancel := context.WithCancel(context.Background())
+	defer connCancel()
+
+	acceptDone := s.runAcceptLoop(ctx, connCtx, listener)
+
+	<-ctx.Done()
+	return s.gracefulShutdown(listener, acceptDone, connCancel)
+}
+
+// createListener creates and configures the TCP listener.
+func (s *Server) createListener() (net.Listener, error) {
+	listener, err := net.Listen("tcp", s.config.Address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %s: %w", s.config.Address, err)
+	}
+
 	s.mu.Lock()
 	s.listener = listener
 	s.mu.Unlock()
 
-	// Wrap with TLS if configured
 	if s.config.TLSConfig != nil {
 		listener = tls.NewListener(listener, s.config.TLSConfig)
 		s.config.Logger.Info("TLS enabled", slog.String("address", s.config.Address))
 	}
 
 	s.config.Logger.Info("TCP server started", slog.String("address", s.config.Address))
+	return listener, nil
+}
 
-	// Create a separate context for active connections
-	// This allows us to control when to forcefully close connections
-	connCtx, connCancel := context.WithCancel(context.Background())
-	defer connCancel()
-
-	// Accept loop in separate goroutine
+// runAcceptLoop runs the connection accept loop in a separate goroutine.
+func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listener) <-chan struct{} {
 	acceptDone := make(chan struct{})
 	go func() {
 		defer close(acceptDone)
@@ -168,77 +180,83 @@ func (s *Server) Listen(ctx context.Context) error {
 
 			conn, err := listener.Accept()
 			if err != nil {
-				select {
-				case <-ctx.Done():
-					// Expected error during shutdown
+				if ctx.Err() != nil {
 					return
-				default:
-					s.config.Logger.Error("failed to accept connection", slog.String("error", err.Error()))
-					continue
 				}
+				s.config.Logger.Error("failed to accept connection", slog.String("error", err.Error()))
+				continue
 			}
 
-			// Apply connection limit if configured
-			if s.connSem != nil {
-				select {
-				case s.connSem <- struct{}{}:
-					// Acquired semaphore slot
-				case <-ctx.Done():
-					conn.Close()
-					return
-				default:
-					// Connection limit reached, reject connection
-					s.config.Logger.Warn("connection limit reached, rejecting connection",
-						slog.String("remote", conn.RemoteAddr().String()))
-					conn.Close()
-					continue
-				}
+			if !s.tryAcquireConnectionSlot(ctx, conn) {
+				continue
 			}
 
-			// Configure TCP connection options for performance
 			if tcpConn, ok := conn.(*net.TCPConn); ok {
 				if err := s.configureTCPConn(tcpConn); err != nil {
 					s.config.Logger.Error("failed to configure TCP connection",
 						slog.String("error", err.Error()))
-					if s.connSem != nil {
-						<-s.connSem
-					}
+					s.releaseConnectionSlot()
 					conn.Close()
 					continue
 				}
 			}
 
 			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				defer func() {
-					if s.connSem != nil {
-						<-s.connSem // Release semaphore slot
-					}
-				}()
-
-				if err := s.handleConn(connCtx, conn); err != nil && !errors.Is(err, io.EOF) {
-					s.config.Logger.Debug("connection handler error",
-						slog.String("remote", conn.RemoteAddr().String()),
-						slog.String("error", err.Error()))
-				}
-			}()
+			go s.handleConnection(connCtx, conn)
 		}
 	}()
+	return acceptDone
+}
 
-	// Wait for shutdown signal
-	<-ctx.Done()
+// tryAcquireConnectionSlot attempts to acquire a connection slot within the configured limit.
+func (s *Server) tryAcquireConnectionSlot(ctx context.Context, conn net.Conn) bool {
+	if s.connSem == nil {
+		return true
+	}
+
+	select {
+	case s.connSem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		conn.Close()
+		return false
+	default:
+		s.config.Logger.Warn("connection limit reached, rejecting connection",
+			slog.String("remote", conn.RemoteAddr().String()))
+		conn.Close()
+		return false
+	}
+}
+
+// releaseConnectionSlot releases a connection slot.
+func (s *Server) releaseConnectionSlot() {
+	if s.connSem != nil {
+		<-s.connSem
+	}
+}
+
+// handleConnection handles a single connection in a goroutine.
+func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
+	defer s.wg.Done()
+	defer s.releaseConnectionSlot()
+
+	if err := s.handleConn(connCtx, conn); err != nil && !errors.Is(err, io.EOF) {
+		s.config.Logger.Debug("connection handler error",
+			slog.String("remote", conn.RemoteAddr().String()),
+			slog.String("error", err.Error()))
+	}
+}
+
+// gracefulShutdown performs graceful shutdown with connection draining.
+func (s *Server) gracefulShutdown(listener net.Listener, acceptDone <-chan struct{}, connCancel context.CancelFunc) error {
 	s.config.Logger.Info("shutdown signal received, closing listener")
 
-	// Close the listener to stop accepting new connections
 	if err := listener.Close(); err != nil {
 		s.config.Logger.Error("error closing listener", slog.String("error", err.Error()))
 	}
 
-	// Wait for accept loop to finish
 	<-acceptDone
 
-	// Wait for active connections to drain with timeout
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -251,9 +269,8 @@ func (s *Server) Listen(ctx context.Context) error {
 		return nil
 	case <-time.After(s.config.ShutdownTimeout):
 		s.config.Logger.Warn("shutdown timeout exceeded, forcing connection closure")
-		// Cancel context to force close remaining connections
 		connCancel()
-		// Give a little more time for forced closure
+
 		select {
 		case <-done:
 			return ErrShutdownTimeout

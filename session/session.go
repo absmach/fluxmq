@@ -192,14 +192,34 @@ func (s *Session) Disconnect(graceful bool) error {
 	}
 
 	s.state = StateDisconnecting
+	s.cleanupConnectionResources(graceful)
+	callback := s.onDisconnect
 
-	// Stop keep-alive timer
+	s.mu.Unlock()
+
+	// Wait for background tasks without holding lock to avoid deadlock
+	s.wg.Wait()
+
+	// Reset stopCh for potential reconnection
+	s.mu.Lock()
+	s.stopCh = make(chan struct{})
+	s.mu.Unlock()
+
+	if callback != nil {
+		go callback(s, graceful)
+	}
+
+	return nil
+}
+
+// cleanupConnectionResources cleans up resources when disconnecting.
+// Must be called with s.mu held.
+func (s *Session) cleanupConnectionResources(graceful bool) {
 	if s.keepAliveTimer != nil {
 		s.keepAliveTimer.Stop()
 		s.keepAliveTimer = nil
 	}
 
-	// Close connection
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
@@ -208,38 +228,14 @@ func (s *Session) Disconnect(graceful bool) error {
 	s.state = StateDisconnected
 	s.disconnectedAt = time.Now()
 
-	// Clear will on graceful disconnect
 	if graceful {
 		s.Will = nil
 	}
 
-	// Clear topic aliases
 	s.outboundAliases = make(map[string]uint16)
 	s.inboundAliases = make(map[uint16]string)
 
-	// Stop background tasks (before releasing lock)
 	close(s.stopCh)
-
-	// Capture callback before releasing lock
-	callback := s.onDisconnect
-
-	// Release lock before waiting and calling callback
-	s.mu.Unlock()
-
-	// Wait for background tasks to complete (without holding lock)
-	s.wg.Wait()
-
-	// Reset stopCh for next connection (requires lock)
-	s.mu.Lock()
-	s.stopCh = make(chan struct{})
-	s.mu.Unlock()
-
-	// Call callback after all state is stable and lock is released
-	if callback != nil {
-		go callback(s, graceful)
-	}
-
-	return nil
 }
 
 // State returns the current session state.
