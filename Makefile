@@ -21,15 +21,20 @@ $(BUILD_DIR)/$(BINARY): cmd/broker/main.go $(shell find . -name '*.go' -not -pat
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd/broker
 
-# Run the broker
+# Run the broker (uses default configuration)
 .PHONY: run
 run: build
-	$(BUILD_DIR)/$(BINARY) --log=info
+	$(BUILD_DIR)/$(BINARY)
 
-# Run with debug logging
+# Run with custom config file
+.PHONY: run-config
+run-config: build
+	$(BUILD_DIR)/$(BINARY) -config config.yaml
+
+# Run with debug logging (uses default config with debug level override via env)
 .PHONY: run-debug
 run-debug: build
-	$(BUILD_DIR)/$(BINARY) --log=debug
+	MQTT_LOG_LEVEL=debug $(BUILD_DIR)/$(BINARY)
 
 # Run tests
 .PHONY: test
@@ -70,13 +75,14 @@ help:
 	@echo "MQTT Broker Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build       Build the broker binary to $(BUILD_DIR)/$(BINARY)"
-	@echo "  run         Build and run the broker"
-	@echo "  run-debug   Build and run with debug logging"
-	@echo "  test        Run all tests"
-	@echo "  test-cover  Run tests with coverage report"
-	@echo "  lint        Run golangci-lint"
-	@echo "  fmt         Format code"
-	@echo "  clean       Remove build artifacts"
-	@echo "  deps        Download and tidy dependencies"
-	@echo "  help        Show this help message"
+	@echo "  build        Build the broker binary to $(BUILD_DIR)/$(BINARY)"
+	@echo "  run          Build and run the broker with default config"
+	@echo "  run-config   Build and run with config.yaml"
+	@echo "  run-debug    Build and run with debug logging"
+	@echo "  test         Run all tests"
+	@echo "  test-cover   Run tests with coverage report"
+	@echo "  lint         Run golangci-lint"
+	@echo "  fmt          Format code"
+	@echo "  clean        Remove build artifacts"
+	@echo "  deps         Download and tidy dependencies"
+	@echo "  help         Show this help message"
