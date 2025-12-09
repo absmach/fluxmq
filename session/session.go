@@ -185,9 +185,9 @@ func (s *Session) Connect(conn Connection) error {
 // Disconnect disconnects the session.
 func (s *Session) Disconnect(graceful bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.state != StateConnected {
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -217,15 +217,27 @@ func (s *Session) Disconnect(graceful bool) error {
 	s.outboundAliases = make(map[string]uint16)
 	s.inboundAliases = make(map[uint16]string)
 
-	// Notify callback
-	if s.onDisconnect != nil {
-		go s.onDisconnect(s, graceful)
-	}
-
-	// Stop background tasks
+	// Stop background tasks (before releasing lock)
 	close(s.stopCh)
+
+	// Capture callback before releasing lock
+	callback := s.onDisconnect
+
+	// Release lock before waiting and calling callback
+	s.mu.Unlock()
+
+	// Wait for background tasks to complete (without holding lock)
 	s.wg.Wait()
-	s.stopCh = make(chan struct{}) // Reset for next connection
+
+	// Reset stopCh for next connection (requires lock)
+	s.mu.Lock()
+	s.stopCh = make(chan struct{})
+	s.mu.Unlock()
+
+	// Call callback after all state is stable and lock is released
+	if callback != nil {
+		go callback(s, graceful)
+	}
 
 	return nil
 }
@@ -405,6 +417,30 @@ func (s *Session) ResolveInboundAlias(alias uint16) (string, bool) {
 	defer s.mu.RUnlock()
 	topic, ok := s.inboundAliases[alias]
 	return topic, ok
+}
+
+// UpdateConnectionOptions updates session options during reconnection.
+// Must be called before Connect.
+func (s *Session) UpdateConnectionOptions(version byte, keepAlive uint16, will *store.WillMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Version = version
+	s.KeepAlive = keepAlive
+	s.Will = will
+
+	if keepAlive > 0 {
+		s.keepAliveExpiry = time.Duration(keepAlive) * time.Second * 3 / 2
+	} else {
+		s.keepAliveExpiry = 0
+	}
+}
+
+// GetWill returns a copy of the will message.
+func (s *Session) GetWill() *store.WillMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Will
 }
 
 // Info returns session info for persistence.

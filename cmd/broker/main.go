@@ -52,7 +52,7 @@ func main() {
 		"log_level", cfg.Log.Level)
 
 	// Create broker
-	b := broker.NewBroker()
+	b := broker.NewBroker(logger)
 	defer b.Close()
 
 	// Create TCP server with config
@@ -94,17 +94,4 @@ func main() {
 	}
 
 	slog.Info("MQTT broker stopped")
-}
-
-func parseLogLevel(level string) slog.Level {
-	switch level {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
 }

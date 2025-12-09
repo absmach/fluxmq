@@ -13,7 +13,7 @@ import (
 
 func TestBasicPubSub(t *testing.T) {
 	// Setup broker and server
-	b := broker.NewBroker()
+	b := broker.NewBroker(nil) // Use default logger
 	defer b.Close()
 
 	serverCfg := tcp.Config{

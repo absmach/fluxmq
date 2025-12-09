@@ -13,7 +13,7 @@ import (
 
 func TestRetainedMessages(t *testing.T) {
 	// Setup broker and server
-	b := broker.NewBroker()
+	b := broker.NewBroker(nil)
 	defer b.Close()
 
 	serverCfg := tcp.Config{
@@ -111,7 +111,7 @@ func TestRetainedMessages(t *testing.T) {
 
 func TestWillMessage(t *testing.T) {
 	// Setup broker and server
-	b := broker.NewBroker()
+	b := broker.NewBroker(nil)
 	defer b.Close()
 
 	serverCfg := tcp.Config{

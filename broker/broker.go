@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"time"
 
@@ -29,10 +30,17 @@ type Broker struct {
 	// Handlers
 	handler    handlers.Handler
 	dispatcher *handlers.Dispatcher
+
+	// Logger
+	logger *slog.Logger
 }
 
 // NewBroker creates a new broker instance.
-func NewBroker() *Broker {
+func NewBroker(logger *slog.Logger) *Broker {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	st := memory.New()
 	sessionMgr := session.NewManager(st)
 	router := NewRouter()
@@ -41,6 +49,7 @@ func NewBroker() *Broker {
 		sessionMgr: sessionMgr,
 		router:     router,
 		store:      st,
+		logger:     logger,
 	}
 
 	// Create handler with dependencies
@@ -68,14 +77,18 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
 	if err != nil {
-		fmt.Printf("Broker ReadPacket error: %v\n", err)
+		b.logger.Error("Failed to read CONNECT packet",
+			slog.String("remote_addr", netConn.RemoteAddr().String()),
+			slog.String("error", err.Error()))
 		conn.Close()
 		return
 	}
 
 	// 2. Validate it is CONNECT
 	if pkt.Type() != packets.ConnectType {
-		fmt.Printf("Expected CONNECT, got %s\n", pkt.String())
+		b.logger.Warn("Expected CONNECT packet, received different packet type",
+			slog.String("remote_addr", netConn.RemoteAddr().String()),
+			slog.String("packet_type", pkt.String()))
 		conn.Close()
 		return
 	}
@@ -83,7 +96,8 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 	// Extract connection parameters from CONNECT packet
 	p, ok := pkt.(*v3.Connect)
 	if !ok {
-		fmt.Printf("Expected v3 CONNECT packet\n")
+		b.logger.Error("Failed to parse CONNECT packet as v3",
+			slog.String("remote_addr", netConn.RemoteAddr().String()))
 		conn.Close()
 		return
 	}
@@ -113,7 +127,9 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 
 	sess, _, err := b.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
 	if err != nil {
-		fmt.Printf("Session creation error: %v\n", err)
+		b.logger.Error("Failed to create session",
+			slog.String("client_id", clientID),
+			slog.String("error", err.Error()))
 		conn.Close()
 		return
 	}
@@ -121,19 +137,27 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 	// 4. Attach connection to session
 	sessConn := &sessionConnection{conn: conn}
 	if err := sess.Connect(sessConn); err != nil {
-		fmt.Printf("Session connect error: %v\n", err)
+		b.logger.Error("Failed to attach connection to session",
+			slog.String("client_id", clientID),
+			slog.String("error", err.Error()))
 		conn.Close()
 		return
 	}
 
 	// 5. Send CONNACK
 	if err := b.sendConnAck(conn); err != nil {
-		fmt.Printf("CONNACK error: %v\n", err)
+		b.logger.Error("Failed to send CONNACK",
+			slog.String("client_id", clientID),
+			slog.String("error", err.Error()))
 		sess.Disconnect(false)
 		return
 	}
 
-	fmt.Printf("Starting session for %s\n", clientID)
+	b.logger.Info("Client connected",
+		slog.String("client_id", clientID),
+		slog.String("remote_addr", netConn.RemoteAddr().String()),
+		slog.Bool("clean_start", cleanStart),
+		slog.Uint64("keep_alive", uint64(keepAlive)))
 
 	// 6. Deliver any queued offline messages
 	b.deliverOfflineMessages(sess)
@@ -148,7 +172,9 @@ func (b *Broker) runSession(sess *session.Session) {
 		pkt, err := sess.ReadPacket()
 		if err != nil {
 			if err != io.EOF && err != session.ErrNotConnected {
-				fmt.Printf("Read error for %s: %v\n", sess.ID, err)
+				b.logger.Error("Failed to read packet from client",
+					slog.String("client_id", sess.ID),
+					slog.String("error", err.Error()))
 			}
 			sess.Disconnect(false)
 			return
@@ -158,7 +184,9 @@ func (b *Broker) runSession(sess *session.Session) {
 			if err == io.EOF {
 				return // Clean disconnect
 			}
-			fmt.Printf("Handler error for %s: %v\n", sess.ID, err)
+			b.logger.Error("Packet handler error",
+				slog.String("client_id", sess.ID),
+				slog.String("error", err.Error()))
 			sess.Disconnect(false)
 			return
 		}

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -107,7 +108,7 @@ func (t *InflightTracker) UpdateState(packetID uint16, state InflightState) erro
 
 	msg, ok := t.messages[packetID]
 	if !ok {
-		return ErrPacketNotFound
+		return fmt.Errorf("update state for packet ID %d: %w", packetID, ErrPacketNotFound)
 	}
 	msg.State = state
 	return nil
@@ -120,7 +121,7 @@ func (t *InflightTracker) Ack(packetID uint16) (*store.Message, error) {
 
 	msg, ok := t.messages[packetID]
 	if !ok {
-		return nil, ErrPacketNotFound
+		return nil, fmt.Errorf("ack packet ID %d: %w", packetID, ErrPacketNotFound)
 	}
 
 	delete(t.messages, packetID)
@@ -158,7 +159,7 @@ func (t *InflightTracker) MarkRetry(packetID uint16) error {
 
 	msg, ok := t.messages[packetID]
 	if !ok {
-		return ErrPacketNotFound
+		return fmt.Errorf("mark retry for packet ID %d: %w", packetID, ErrPacketNotFound)
 	}
 
 	msg.SentAt = time.Now()

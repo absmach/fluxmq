@@ -69,10 +69,8 @@ func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 			existing.Disconnect(false) // Not graceful (takeover)
 		}
 
-		// Update session options for new connection
-		existing.Version = version
-		existing.KeepAlive = opts.KeepAlive
-		existing.Will = opts.Will
+		// Update session options for new connection (mutex-protected)
+		existing.UpdateConnectionOptions(version, opts.KeepAlive, opts.Will)
 
 		return existing, false, nil
 	}
@@ -167,9 +165,10 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 	if m.store != nil {
 		m.store.Sessions().Save(session.Info())
 
-		// Handle will message
-		if !graceful && session.Will != nil {
-			m.store.Wills().Set(session.ID, session.Will)
+		// Handle will message (mutex-protected access)
+		will := session.GetWill()
+		if !graceful && will != nil {
+			m.store.Wills().Set(session.ID, will)
 			// Note: Will triggering is handled by the will processor
 		} else if graceful {
 			// Clear will on graceful disconnect

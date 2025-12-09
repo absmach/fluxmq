@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -320,7 +321,7 @@ func TestMessageQueue(t *testing.T) {
 	}
 
 	// Queue full
-	if err := q.Enqueue(&store.Message{}); err != ErrQueueFull {
+	if err := q.Enqueue(&store.Message{}); !errors.Is(err, ErrQueueFull) {
 		t.Errorf("Expected ErrQueueFull, got %v", err)
 	}
 

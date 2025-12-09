@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/dborovcanin/mqtt/store"
@@ -31,7 +32,8 @@ func (q *MessageQueue) Enqueue(msg *store.Message) error {
 	defer q.mu.Unlock()
 
 	if len(q.messages) >= q.maxSize {
-		return ErrQueueFull
+		return fmt.Errorf("enqueue message for topic %s (current: %d, max: %d): %w",
+			msg.Topic, len(q.messages), q.maxSize, ErrQueueFull)
 	}
 
 	// Deep copy the message

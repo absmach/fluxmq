@@ -109,7 +109,7 @@ func New(cfg Config, h Handler) *Server {
 
 	// Create buffer pool for efficient memory reuse
 	bufferPool := &sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			buf := make([]byte, cfg.BufferSize)
 			return &buf
 		},

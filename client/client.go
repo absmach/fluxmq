@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -21,8 +22,9 @@ type Options struct {
 
 // Client implements an MQTT client.
 type Client struct {
-	opts Options
-	conn net.Conn
+	opts   Options
+	conn   net.Conn
+	logger *slog.Logger
 
 	// Message handling
 	// msgCh chan *packets.Publish // Removed
@@ -40,7 +42,10 @@ func NewClient(opts Options) *Client {
 	if opts.Version == 0 {
 		opts.Version = 5
 	}
-	return &Client{opts: opts}
+	return &Client{
+		opts:   opts,
+		logger: slog.Default(),
+	}
 }
 
 // SetMessageHandler sets the callback for received messages.
@@ -157,7 +162,9 @@ func (c *Client) readLoop() {
 
 		if err != nil {
 			// Log and exit (reconnect logic omitted for brevity)
-			fmt.Printf("Client read error: %v\n", err)
+			c.logger.Debug("Client read error",
+				slog.String("client_id", c.opts.ClientID),
+				slog.String("error", err.Error()))
 			return
 		}
 
