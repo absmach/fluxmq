@@ -1,630 +1,576 @@
-# Current Architecture
-
-This document describes the current state of the MQTT broker implementation.
+# MQTT Broker Architecture
 
 ## Overview
 
-The broker is a multi-protocol MQTT 3.1.1/5.0 broker written in Go. It features automatic protocol version detection, multiple transport support (TCP, WebSocket, HTTP adapter), object pooling for high throughput, and zero-copy packet parsing.
+This document describes the architecture of a multi-protocol MQTT broker with pluggable adapters. The broker accepts connections over various transports and protocols, converts them to MQTT messages internally, and routes them to subscribers.
 
-**Current Status**: Single-node broker with partial feature completion (~60% of MQTT spec).
+**Design Philosophy:**
+1. **TCP Server First** - All network I/O goes through a unified TCP server layer
+2. **Pluggable Adapters** - Protocol-specific adapters convert incoming data to MQTT
+3. **Core Packets** - Pure MQTT packet encoding/decoding (the essential MQTT implementation)
+4. **Separation of Concerns** - Client and Broker are distinct components
+5. **Extensibility** - Storage, authentication, and routing are pluggable
 
-## Package Structure
+## Architecture Diagram
 
 ```
-mqtt/
-├── packets/              # Protocol layer - packet encoding/decoding
-│   ├── packets.go        # Common interfaces, constants, factory
-│   ├── codec/            # Low-level binary encoding/decoding
-│   │   ├── encode.go     # VBI, string, int encoding
-│   │   ├── decode.go     # VBI, string, int decoding
-│   │   └── zerocopy.go   # Zero-copy parsing utilities
-│   ├── sniffer.go        # Protocol version detection
-│   ├── validate.go       # Packet validation
-│   ├── v3/               # MQTT 3.1.1 implementation
-│   │   ├── types.go      # Packet types, constants
-│   │   ├── connect.go    # CONNECT packet
-│   │   ├── connack.go    # CONNACK packet
-│   │   ├── publish.go    # PUBLISH packet
-│   │   ├── puback.go     # PUBACK packet
-│   │   ├── pubrec.go     # PUBREC packet
-│   │   ├── pubrel.go     # PUBREL packet
-│   │   ├── pubcomp.go    # PUBCOMP packet
-│   │   ├── subscribe.go  # SUBSCRIBE packet
-│   │   ├── suback.go     # SUBACK packet
-│   │   ├── unsubscribe.go# UNSUBSCRIBE packet
-│   │   ├── unsuback.go   # UNSUBACK packet
-│   │   ├── pingreq.go    # PINGREQ packet
-│   │   ├── pingresp.go   # PINGRESP packet
-│   │   ├── disconnect.go # DISCONNECT packet
-│   │   ├── zerocopy.go   # Zero-copy parsing for v3
-│   │   └── pool/         # Object pooling
-│   │       ├── pool.go   # sync.Pool for all packet types
-│   │       └── buffer.go # Buffer pooling
-│   └── v5/               # MQTT 5.0 implementation
-│       ├── types.go      # Packet types, constants
-│       ├── properties.go # MQTT 5.0 properties
-│       ├── connect.go    # CONNECT with properties
-│       ├── connack.go    # CONNACK with properties
-│       ├── publish.go    # PUBLISH with properties
-│       ├── puback.go     # PUBACK with reason codes
-│       ├── pubrec.go     # PUBREC with reason codes
-│       ├── pubrel.go     # PUBREL with reason codes
-│       ├── pubcomp.go    # PUBCOMP with reason codes
-│       ├── subscribe.go  # SUBSCRIBE with options
-│       ├── suback.go     # SUBACK with reason codes
-│       ├── unsubscribe.go# UNSUBSCRIBE
-│       ├── unsuback.go   # UNSUBACK with reason codes
-│       ├── auth.go       # AUTH packet (v5 only)
-│       ├── pingreq.go    # PINGREQ
-│       ├── pingresp.go   # PINGRESP
-│       ├── disconnect.go # DISCONNECT with reason codes
-│       ├── zerocopy.go   # Zero-copy parsing for v5
-│       └── pool/         # Object pooling for v5
-│
-├── broker/               # Orchestration layer
-│   ├── server.go         # Main Server, connection lifecycle
-│   ├── router.go         # Topic-based message routing (trie)
-│   └── interfaces.go     # Frontend, Connection interfaces
-│
-├── session/              # Session management
-│   └── session.go        # Session struct, packet handlers
-│
-├── store/                # Storage abstraction
-│   └── store.go          # MessageStore interface, MemoryStore
-│
-├── topics/               # Topic handling
-│   ├── validate.go       # Topic name validation
-│   └── match.go          # MQTT wildcard matching
-│
-├── transport/            # Network layer
-│   ├── tcp.go            # TCP listener and connection
-│   └── ws.go             # WebSocket support
-│
-├── adapter/              # Protocol adapters
-│   ├── http.go           # HTTP-to-MQTT gateway
-│   └── virtual.go        # Virtual connections (testing)
-│
-├── client/               # MQTT client (for testing)
-│   └── client.go         # Basic client implementation
-│
-├── handlers/             # Packet handlers (empty, planned)
-│
-└── integration/          # Integration tests
-    ├── broker_test.go    # Full PubSub flow tests
-    └── http_test.go      # HTTP adapter tests
+              ┌─────────────────────────────────────────────────────────────┐
+              │                         TCP Server                          │
+              │  (accepts TCP connections on multiple ports/addresses)      │
+              └────────────────────────────┬────────────────────────────────┘
+                                           │
+           ┌───────────────┬───────────────┼───────────────┬───────────────┐
+           │               │               │               │               │
+           ▼               ▼               ▼               ▼               ▼
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │    MQTT     │ │    HTTP     │ │  WebSocket  │ │  CoAP/TCP   │ │  CoAP/UDP   │
+    │   Adapter   │ │   Adapter   │ │   Adapter   │ │   Adapter   │ │   Adapter   │
+    │  (packets/) │ │             │ │             │ │             │ │  (future)   │
+    └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+           │               │               │               │               │
+           │   ┌───────────┴───────────────┴───────────────┴───────────────┘
+           │   │
+           ▼   ▼
+    ┌─────────────────────────────────────────────────────────────────────────────┐
+    │                            MQTT Message Bus                                 │
+    │                    (unified internal representation)                        │
+    └───────────────────────────────────┬─────────────────────────────────────────┘
+                                        │
+                 ┌──────────────────────┼──────────────────────┐
+                 │                      │                      │
+                 ▼                      ▼                      ▼
+          ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+          │   Handlers  │       │   Session   │       │   Topic     │
+          │  (dispatch) │◄─────►│   Manager   │◄─────►│   Router    │
+          └──────┬──────┘       └──────┬──────┘       └──────┬──────┘
+                 │                     │                     │
+                 └──────────────┬──────┴─────────────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │        Store          │
+                    │  (sessions, retained, │
+                    │   subscriptions)      │
+                    └───────────────────────┘
 ```
 
-## Core Components
+## Component Layers
 
-### 1. Packets Package (Protocol Layer)
+### Layer 1: Network I/O (TCP Server)
 
-The protocol layer handles all MQTT packet encoding, decoding, and validation.
-
-#### Core Interfaces
+The TCP Server is the foundation. It:
+- Listens on configured addresses/ports
+- Accepts raw TCP connections
+- Routes connections to the appropriate adapter based on port or protocol detection
+- Handles TLS termination (optional)
 
 ```go
-// ControlPacket is implemented by all MQTT packet types
-type ControlPacket interface {
-    Encode() []byte           // Serialize to bytes
-    Pack(io.Writer) error     // Write to stream
-    Unpack(io.Reader) error   // Parse from stream
-    Type() byte               // Return packet type constant
-    String() string           // Human-readable representation
-}
+type TCPServer interface {
+    // Listen starts listening on the given address
+    Listen(addr string, config ListenerConfig) error
 
-// Detailer provides packet metadata for QoS tracking
-type Detailer interface {
-    Details() Details  // Returns {Type, ID, QoS}
-}
-
-// Resetter supports object pooling
-type Resetter interface {
-    Reset()  // Clear all fields for reuse
-}
-```
-
-#### Packet Types
-
-| Type | Value | Description |
-|------|-------|-------------|
-| CONNECT | 1 | Client connection request |
-| CONNACK | 2 | Connection acknowledgment |
-| PUBLISH | 3 | Publish message |
-| PUBACK | 4 | QoS 1 acknowledgment |
-| PUBREC | 5 | QoS 2 received |
-| PUBREL | 6 | QoS 2 release |
-| PUBCOMP | 7 | QoS 2 complete |
-| SUBSCRIBE | 8 | Subscribe request |
-| SUBACK | 9 | Subscribe acknowledgment |
-| UNSUBSCRIBE | 10 | Unsubscribe request |
-| UNSUBACK | 11 | Unsubscribe acknowledgment |
-| PINGREQ | 12 | Keep-alive ping |
-| PINGRESP | 13 | Ping response |
-| DISCONNECT | 14 | Disconnect notification |
-| AUTH | 15 | Authentication (v5 only) |
-
-#### Protocol Version Support
-
-| Version | Constant | Status |
-|---------|----------|--------|
-| MQTT 3.1 | V31 (0x03) | Partial |
-| MQTT 3.1.1 | V311 (0x04) | Full |
-| MQTT 5.0 | V5 (0x05) | Full |
-
-#### Codec Package
-
-Low-level binary encoding/decoding operations:
-
-```go
-// Variable Byte Integer (for lengths)
-func EncodeVBI(length int) []byte
-func DecodeVBI(r io.Reader) (int, error)
-
-// UTF-8 Strings (2-byte length prefix)
-func EncodeString(s string) []byte
-func DecodeString(r io.Reader) (string, error)
-
-// Integers (big-endian)
-func EncodeUint16(v uint16) []byte
-func DecodeUint16(r io.Reader) (uint16, error)
-func EncodeUint32(v uint32) []byte
-func DecodeUint32(r io.Reader) (uint32, error)
-```
-
-#### Protocol Sniffer
-
-Automatic version detection without consuming bytes:
-
-```go
-func DetectProtocolVersion(r io.Reader) (byte, io.Reader, error)
-func DetectPacketType(r io.Reader) (byte, error)
-```
-
-#### Zero-Copy Parsing
-
-High-performance parsing that avoids allocations:
-
-```go
-// ZeroCopyReader allows parsing without payload copy
-type ZeroCopyReader interface {
-    UnpackBytes(data []byte) error
-}
-
-// Example: Publish.UnpackBytes parses directly from byte slice
-// - Topic: string allocated (Go strings immutable)
-// - Payload: slice points into original buffer (no copy)
-```
-
-#### Object Pooling
-
-sync.Pool-based reuse of packet structs:
-
-```go
-// Acquire a packet from pool
-pkt := pool.AcquirePublish()
-defer pool.ReleasePublish(pkt)
-
-// Pools exist for all packet types
-pool.AcquireByType(packets.PUBLISH) // Generic acquisition
-```
-
-### 2. Broker Package (Orchestration Layer)
-
-The broker orchestrates connections, sessions, and message routing.
-
-#### Server Structure
-
-```go
-type Server struct {
-    listeners  []Frontend              // Active listeners
-    sessions   map[string]*session.Session  // ClientID -> Session
-    sessionsMu sync.RWMutex            // Protects sessions map
-    router     *Router                 // Topic subscription routing
-}
-```
-
-#### Key Responsibilities
-
-1. **Connection Lifecycle**
-   - Accept connections from frontends
-   - Detect MQTT version
-   - Create and manage sessions
-   - Clean up on disconnect
-
-2. **Message Distribution**
-   - Receive PUBLISH from clients
-   - Query router for matching subscriptions
-   - Deliver to each subscriber's session
-
-3. **Subscription Management**
-   - Register subscriptions in router
-   - Handle wildcard filters
-
-#### Frontend Interface
-
-```go
-type Frontend interface {
-    Serve(handler ConnectionHandler) error
+    // Close shuts down all listeners
     Close() error
-    Addr() net.Addr
+}
+
+type ListenerConfig struct {
+    Protocol    string      // "mqtt", "http", "ws", "coap"
+    TLS         *tls.Config // Optional TLS
+    MaxConns    int         // Connection limit
+    ReadTimeout time.Duration
 }
 ```
 
-#### Connection Interface
+### Layer 2: Protocol Adapters
 
-```go
-type Connection interface {
-    ReadPacket() (packets.ControlPacket, error)
-    WritePacket(p packets.ControlPacket) error
-    Close() error
-    RemoteAddr() net.Addr
-}
+Adapters convert protocol-specific messages to/from MQTT. Each adapter:
+- Receives raw bytes from TCP connections
+- Parses the protocol (HTTP, CoAP, WebSocket frames, raw MQTT)
+- Converts to MQTT Control Packets
+- Sends responses in the original protocol format
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Adapter Interface                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  type Adapter interface {                                                   │
+│      // Name returns the adapter identifier                                 │
+│      Name() string                                                          │
+│                                                                             │
+│      // HandleConnection processes an incoming connection                   │
+│      // Converts protocol messages to MQTT and vice versa                   │
+│      HandleConnection(conn net.Conn) error                                  │
+│                                                                             │
+│      // SetBroker injects the broker for message routing                    │
+│      SetBroker(broker Broker)                                               │
+│  }                                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. Router (Topic Matching)
+#### MQTT Adapter (Core)
 
-Trie-based data structure for efficient topic matching.
+The `packets/` package IS the MQTT adapter. It's the essential MQTT implementation:
+- Reads raw TCP bytes
+- Parses MQTT Control Packets (CONNECT, PUBLISH, SUBSCRIBE, etc.)
+- Returns MQTT Control Packets
+- Supports MQTT 3.1.1 and 5.0
 
-#### Structure
-
-```go
-type Router struct {
-    mu   sync.RWMutex
-    root *node
-}
-
-type node struct {
-    children map[string]*node  // Level -> child node
-    subs     []Subscription    // Subscriptions at this level
-}
-
-type Subscription struct {
-    SessionID string
-    QoS       byte
-}
 ```
-
-#### Wildcard Support
-
-| Pattern | Matches | Description |
-|---------|---------|-------------|
-| `home/bedroom/temp` | Exact match only | Literal topic |
-| `home/+/temp` | `home/*/temp` | Single-level wildcard |
-| `home/#` | `home`, `home/a`, `home/a/b` | Multi-level wildcard |
-| `#` | Everything | Root wildcard |
-
-### 4. Session Package
-
-Manages per-client connection state.
-
-#### Session Structure
-
-```go
-type Session struct {
-    Broker  BrokerInterface  // Reference to broker
-    Conn    Connection       // Network connection
-    ID      string           // Client ID
-    Version int              // MQTT version (3 or 5)
-}
+TCP bytes ──► packets.Reader ──► ControlPacket ──► Broker
+Broker ──► ControlPacket ──► packets.Writer ──► TCP bytes
 ```
-
-#### Packet Handlers
-
-| Packet | Handler | Action |
-|--------|---------|--------|
-| PUBLISH | `handlePublish()` | Extract topic/payload, call broker.Distribute() |
-| SUBSCRIBE | `handleSubscribe()` | Register with broker, send SUBACK |
-| PINGREQ | `handlePingReq()` | Send PINGRESP |
-| DISCONNECT | Exit read loop | Clean disconnect |
-
-### 5. Store Package
-
-Storage abstraction for message persistence.
-
-#### Interface
-
-```go
-type MessageStore interface {
-    Store(key string, payload []byte) error
-    Retrieve(key string) ([]byte, error)
-    Delete(key string) error
-}
-```
-
-#### Implementation
-
-**MemoryStore**: Simple in-memory map with sync.RWMutex protection.
-
-```go
-type MemoryStore struct {
-    mu   sync.RWMutex
-    data map[string][]byte
-}
-```
-
-### 6. Topics Package
-
-Topic validation and wildcard matching.
-
-#### Validation
-
-```go
-func ValidateTopic(topic string) error
-// - Must not be empty
-// - Cannot contain wildcards (+, #)
-// - Must be valid UTF-8
-// - Cannot contain null characters
-```
-
-#### Matching
-
-```go
-func TopicMatch(filter, topic string) bool
-// Implements MQTT wildcard matching:
-// - + matches single level
-// - # matches all remaining levels
-// - $ prefix handled specially (system topics)
-```
-
-### 7. Transport Package
-
-Network transport implementations.
-
-#### TCP Transport
-
-```go
-type TCPFrontend struct {
-    listener net.Listener
-}
-
-type TCPConnection struct {
-    net.Conn
-    reader  io.Reader
-    version int  // Detected MQTT version
-}
-```
-
-#### WebSocket Transport
-
-```go
-type WSFrontend struct {
-    addr    string
-    server  *http.Server
-    handler ConnectionHandler
-}
-
-type WSConnection struct {
-    *websocket.Conn
-    reader  io.Reader
-    version int
-}
-```
-
-### 8. Adapter Package
-
-Protocol adapters for non-MQTT traffic.
 
 #### HTTP Adapter
 
-```go
-type HTTPAdapter struct {
-    broker BrokerInterface
-}
+Converts HTTP requests to MQTT operations:
 
-// POST /publish?topic=... with payload in body
-// Creates virtual session, publishes message, disconnects
-```
+| HTTP | MQTT |
+|------|------|
+| `POST /publish?topic=X` | PUBLISH to topic X |
+| `POST /subscribe?topic=X` | SUBSCRIBE + long-poll or SSE |
+| `GET /retained?topic=X` | Get retained message |
+| `DELETE /session?client=X` | Disconnect client |
 
-## Data Flow
+#### WebSocket Adapter
 
-### Connection Flow
+WebSocket with MQTT binary subprotocol:
+- Upgrades HTTP to WebSocket
+- Each WebSocket message = one MQTT packet
+- Binary frames, "mqtt" subprotocol
 
-```
-1. Frontend.Accept()
-   ↓
-2. Server.HandleConnection(conn)
-   ↓
-3. DetectProtocolVersion() → version
-   ↓
-4. ReadPacket() → CONNECT
-   ↓
-5. Create Session(broker, conn, clientID, version)
-   ↓
-6. sessions[clientID] = session
-   ↓
-7. WritePacket(CONNACK)
-   ↓
-8. session.Start() → blocking read loop
-   ↓
-9. On disconnect: delete(sessions, clientID)
-```
+#### CoAP Adapter (TCP)
 
-### Publish Flow
+CoAP-to-MQTT mapping (RFC 7252 over TCP):
 
-```
-1. Session reads PUBLISH packet
-   ↓
-2. handlePublish() extracts topic, payload
-   ↓
-3. broker.Distribute(topic, payload)
-   ↓
-4. router.Match(topic) → []Subscription
-   ↓
-5. For each subscription:
-   ↓
-6. sessions[sessionID].Deliver(topic, payload)
-   ↓
-7. Create version-specific PUBLISH packet
-   ↓
-8. WritePacket(PUBLISH) to subscriber
-```
+| CoAP | MQTT |
+|------|------|
+| POST | PUBLISH |
+| GET (Observe) | SUBSCRIBE |
+| DELETE | UNSUBSCRIBE |
 
-### Subscribe Flow
+#### CoAP/UDP Adapter (Future)
+
+Same as TCP CoAP but over UDP with:
+- Message deduplication
+- Reliability via CON/ACK
+- Block-wise transfers for large payloads
+
+### Layer 3: Core Packets (packets/)
+
+The essential MQTT implementation. Pure packet encoding/decoding with no I/O:
 
 ```
-1. Session reads SUBSCRIBE packet
-   ↓
-2. handleSubscribe() extracts filters
-   ↓
-3. For each filter:
-   ↓
-4. broker.Subscribe(filter, sessionID, qos)
-   ↓
-5. router.Subscribe(filter, sessionID, qos)
-   ↓
-6. Create SUBACK with reason codes
-   ↓
-7. WritePacket(SUBACK)
+packets/
+├── packets.go        # Interfaces: ControlPacket, Encoder, Decoder
+├── codec/            # Binary encoding primitives
+│   ├── encode.go     # VBI, string, uint16/32 encoding
+│   ├── decode.go     # VBI, string, uint16/32 decoding
+│   └── zerocopy.go   # Zero-allocation parsing
+├── sniffer.go        # Protocol version detection
+├── validate.go       # Packet validation
+├── v3/               # MQTT 3.1.1 packets
+│   ├── connect.go
+│   ├── publish.go
+│   ├── subscribe.go
+│   └── pool/         # Object pooling
+└── v5/               # MQTT 5.0 packets (with properties)
+    ├── connect.go
+    ├── publish.go
+    ├── properties.go
+    └── pool/
 ```
 
-## Concurrency Model
-
-### Per-Connection Goroutine
-
-- Each client connection runs in its own goroutine
-- `Session.Start()` blocks on `ReadPacket()`
-- Sequential packet processing within session
-- No goroutine-per-packet overhead
-
-### Shared State Protection
-
-| Resource | Protection | Access Pattern |
-|----------|------------|----------------|
-| `sessions` map | sync.RWMutex | Read-heavy (distribution) |
-| `router` | sync.RWMutex | Read-heavy (matching) |
-| `MemoryStore` | sync.RWMutex | Balanced |
-
-### Lock Contention Minimization
-
-- Per-connection read loop (no lock during packet processing)
-- RLock for subscription lookup during message distribution
-- WLock only for subscribe/unsubscribe operations
-
-## Performance Optimizations
-
-### 1. Object Pooling
-
-All packet types use sync.Pool to reduce GC pressure:
+**Key Interfaces:**
 
 ```go
-var publishPool = sync.Pool{
-    New: func() any { return &Publish{} },
+// ControlPacket is implemented by all MQTT packets
+type ControlPacket interface {
+    Encode() []byte
+    Pack(io.Writer) error
+    Unpack(io.Reader) error
+    Type() byte
 }
 
-func AcquirePublish() *Publish {
-    return publishPool.Get().(*Publish)
-}
-
-func ReleasePublish(p *Publish) {
-    p.Reset()
-    publishPool.Put(p)
+// Detailer provides packet metadata
+type Detailer interface {
+    Details() Details // {Type, PacketID, QoS}
 }
 ```
 
-### 2. Zero-Copy Parsing
+### Layer 4: Broker Core
 
-- PUBLISH payload points directly into input buffer
-- No intermediate allocations for binary primitives
-- Topic string must be copied (Go string immutability)
+The broker orchestrates sessions, routing, and storage:
 
-### 3. Efficient VBI Encoding
-
-Variable Byte Integer encoding inline:
+```
+broker/
+├── server.go         # Main broker, lifecycle management
+├── interfaces.go     # Adapter, Connection interfaces
+└── router.go         # Topic subscription trie
+```
 
 ```go
-func EncodeVBI(length int) []byte {
-    var buf []byte
-    for {
-        b := byte(length & 0x7F)
-        length >>= 7
-        if length > 0 {
-            b |= 0x80
-        }
-        buf = append(buf, b)
-        if length == 0 {
-            break
-        }
-    }
-    return buf
+type Broker interface {
+    // HandleConnection processes a new client (from any adapter)
+    HandleConnection(conn Connection)
+
+    // Publish distributes a message to subscribers
+    Publish(topic string, payload []byte, qos byte, retain bool) error
+
+    // Subscribe registers a subscription
+    Subscribe(clientID, filter string, qos byte) error
+
+    // Unsubscribe removes a subscription
+    Unsubscribe(clientID, filter string) error
+
+    // Close shuts down the broker
+    Close() error
 }
 ```
 
-## Current Limitations
+### Layer 5: Handlers
 
-### Protocol Features
+Packet handlers implement MQTT protocol logic:
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| QoS 0 | Implemented | Fire and forget |
-| QoS 1 | Partial | No PUBACK handling/retry |
-| QoS 2 | Partial | No state machine |
-| Retained messages | Interface only | Not implemented |
-| Will messages | Parsed | Not triggered |
-| Keep-alive | Parsed | Not enforced |
-| Authentication | Parsed | Not validated |
-| Topic aliases (v5) | Parsed | Not used |
-| Shared subscriptions | Not implemented | |
-| Session expiry | Not implemented | |
+```
+handlers/
+├── handler.go        # Handler interface
+├── broker.go         # BrokerHandler implementation
+├── dispatcher.go     # Routes packets to handlers
+└── handlers_test.go
+```
 
-### Production Features
+```go
+type Handler interface {
+    HandlePublish(sess *Session, pkt ControlPacket) error
+    HandleSubscribe(sess *Session, pkt ControlPacket) error
+    HandleUnsubscribe(sess *Session, pkt ControlPacket) error
+    HandlePingReq(sess *Session) error
+    HandleDisconnect(sess *Session, pkt ControlPacket) error
+    // QoS handlers
+    HandlePubAck(sess *Session, pkt ControlPacket) error
+    HandlePubRec(sess *Session, pkt ControlPacket) error
+    HandlePubRel(sess *Session, pkt ControlPacket) error
+    HandlePubComp(sess *Session, pkt ControlPacket) error
+}
+```
 
-| Feature | Status |
-|---------|--------|
-| TLS/SSL | Not implemented |
-| Configuration file | Not implemented |
-| Graceful shutdown | Not implemented |
-| Metrics/observability | Not implemented |
-| Logging framework | Not implemented |
-| Rate limiting | Not implemented |
-| Connection limits | Not implemented |
+### Layer 6: Session Management
 
-### Distributed Features
+Sessions track client state independent of connection:
 
-| Feature | Status |
-|---------|--------|
-| Clustering | Not implemented |
-| Session persistence | In-memory only |
-| etcd backend | Not implemented |
-| Cross-node routing | Not implemented |
+```
+session/
+├── session.go        # Session struct with full state
+├── manager.go        # SessionManager for lifecycle
+├── inflight.go       # QoS 1/2 message tracking
+├── queue.go          # Offline message queue
+└── errors.go
+```
 
-## Test Coverage
+**Session Lifecycle:**
 
-### Unit Tests
+```
+                    ┌──────────────┐
+         CONNECT    │              │    DISCONNECT
+    ─────────────►  │  Connected   │  ◄─────────────
+                    │              │
+                    └───────┬──────┘
+                            │
+                            │ connection lost
+                            ▼
+                    ┌──────────────┐
+                    │ Disconnected │──────► Expired (after ExpiryInterval)
+                    │  (session    │
+                    │   persists)  │
+                    └──────────────┘
+                            │
+                            │ CONNECT (same ClientID)
+                            ▼
+                    ┌──────────────┐
+                    │  Connected   │  (session resumed)
+                    └──────────────┘
+```
 
-| Package | Coverage |
-|---------|----------|
-| `packets/v3` | All packet types |
-| `packets/v5` | All packet types |
-| `topics` | Validation, matching |
-| `broker/router` | Trie operations |
-| `packets/pool` | Pool operations |
-| `packets/codec` | Encoding/decoding |
-| `packets/sniffer` | Version detection |
+### Layer 7: Topic Router
 
-### Integration Tests
+Subscription matching using a topic trie:
 
-| Test | Description |
-|------|-------------|
-| `broker_test.go` | Full PubSub flow (v5) |
-| `http_test.go` | HTTP adapter |
+```
+topics/
+├── trie.go           # Subscription trie
+├── match.go          # Wildcard matching
+├── validate.go       # Topic validation
+└── shared.go         # Shared subscriptions (future)
+```
 
-### Missing Coverage
+**Wildcard Support:**
 
-- QoS 1/2 acknowledgment flows
-- Keep-alive/ping handling
-- Session persistence
-- Will message triggering
-- WebSocket transport
-- Concurrent client stress tests
-- Error handling edge cases
+| Pattern | Matches |
+|---------|---------|
+| `sensor/+/temp` | `sensor/room1/temp`, `sensor/room2/temp` |
+| `sensor/#` | `sensor`, `sensor/a`, `sensor/a/b/c` |
+| `+/+/temp` | `home/room/temp`, `office/floor1/temp` |
 
-## Code Statistics
+### Layer 8: Storage
 
-| Metric | Value |
-|--------|-------|
-| Total Go files | ~76 |
-| Total lines | ~10,000 |
-| Main packages | 10 |
-| Test files | 11 |
-| Packet types v3.1.1 | 14 |
-| Packet types v5 | 15 |
+Pluggable storage backends:
+
+```
+store/
+├── store.go          # Interfaces
+├── memory/           # In-memory (default)
+│   ├── store.go
+│   ├── session.go
+│   ├── retained.go
+│   └── subscription.go
+├── etcd/             # etcd backend (distributed)
+└── redis/            # Redis backend (future)
+```
+
+```go
+type Store interface {
+    Sessions() SessionStore
+    Retained() RetainedStore
+    Subscriptions() SubscriptionStore
+    Close() error
+}
+
+type SessionStore interface {
+    Get(clientID string) (*Session, error)
+    Save(session *Session) error
+    Delete(clientID string) error
+    // For distributed session takeover
+    Lock(clientID string) (unlock func(), err error)
+}
+
+type RetainedStore interface {
+    Set(topic string, msg *Message) error
+    Get(topic string) (*Message, error)
+    Delete(topic string) error
+    Match(filter string) ([]*Message, error)
+}
+```
+
+### Layer 9: Client (Separate from Broker)
+
+The client package provides an MQTT client for testing and embedding:
+
+```
+client/
+├── client.go         # Client struct
+├── options.go        # Connection options
+└── handlers.go       # Message callbacks
+```
+
+```go
+type Client interface {
+    Connect(ctx context.Context) error
+    Disconnect() error
+    Publish(topic string, payload []byte, qos byte) error
+    Subscribe(filter string, qos byte, handler MessageHandler) error
+    Unsubscribe(filter string) error
+}
+```
+
+## Data Flow Examples
+
+### MQTT Client Publishing
+
+```
+1. TCP Server accepts connection on :1883
+2. MQTT Adapter reads CONNECT packet
+3. Broker creates/resumes Session
+4. MQTT Adapter reads PUBLISH packet
+5. Handler.HandlePublish() called
+6. Router.Match() finds subscribers
+7. For each subscriber:
+   - If connected: write PUBLISH to their Session
+   - If disconnected + QoS > 0: queue in OfflineQueue
+8. If retain flag: Store.Retained().Set()
+```
+
+### HTTP Client Publishing
+
+```
+1. TCP Server accepts connection on :8080
+2. HTTP Adapter reads HTTP request
+3. POST /publish?topic=sensor/temp&qos=0
+4. HTTP Adapter creates virtual MQTT session
+5. HTTP Adapter converts to PUBLISH packet
+6. Same flow as MQTT from step 5
+7. HTTP Adapter returns 200 OK
+```
+
+### WebSocket Client Subscribing
+
+```
+1. TCP Server accepts connection on :8080
+2. HTTP upgrade to WebSocket (subprotocol: mqtt)
+3. WebSocket Adapter reads CONNECT (binary frame)
+4. Broker creates Session
+5. WebSocket Adapter reads SUBSCRIBE
+6. Handler.HandleSubscribe() called
+7. Router.Subscribe() adds to trie
+8. Send retained messages matching filter
+9. Return SUBACK
+```
+
+## Configuration
+
+```yaml
+# Server configuration
+server:
+  listeners:
+    - address: ":1883"
+      protocol: mqtt
+    - address: ":8883"
+      protocol: mqtt
+      tls:
+        cert: /etc/mqtt/server.crt
+        key: /etc/mqtt/server.key
+    - address: ":8080"
+      protocol: http
+    - address: ":8081"
+      protocol: ws
+    - address: ":5683"
+      protocol: coap
+
+# Session configuration
+session:
+  max_expiry: 86400        # Maximum session expiry (seconds)
+  max_offline_queue: 1000  # Max queued messages per session
+
+# Storage configuration
+storage:
+  type: memory  # memory, etcd, redis
+
+# Limits
+limits:
+  max_connections: 100000
+  max_packet_size: 268435456  # 256MB
+  max_subscriptions_per_client: 100
+```
+
+## Package Dependencies
+
+```
+                    ┌─────────────┐
+                    │   packets   │  (no dependencies)
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+              ▼            ▼            ▼
+        ┌─────────┐  ┌─────────┐  ┌─────────┐
+        │  store  │  │ topics  │  │ session │
+        └────┬────┘  └────┬────┘  └────┬────┘
+             │            │            │
+             └────────────┼────────────┘
+                          │
+                          ▼
+                   ┌─────────────┐
+                   │  handlers   │
+                   └──────┬──────┘
+                          │
+                          ▼
+                   ┌─────────────┐
+                   │   broker    │
+                   └──────┬──────┘
+                          │
+           ┌──────────────┼──────────────┐
+           │              │              │
+           ▼              ▼              ▼
+     ┌──────────┐   ┌──────────┐   ┌──────────┐
+     │  adapter │   │ transport│   │  client  │
+     │  (http)  │   │  (tcp)   │   │          │
+     └──────────┘   └──────────┘   └──────────┘
+```
+
+## Current Package Structure
+
+```
+mqtt/
+├── packets/              # Core MQTT packet encoding (Layer 3)
+│   ├── codec/            # Binary primitives
+│   ├── v3/               # MQTT 3.1.1
+│   │   └── pool/
+│   └── v5/               # MQTT 5.0
+│       └── pool/
+│
+├── broker/               # Broker core (Layer 4)
+│   ├── server.go
+│   ├── router.go
+│   └── interfaces.go
+│
+├── handlers/             # Packet handlers (Layer 5)
+│   ├── handler.go
+│   ├── broker.go
+│   └── dispatcher.go
+│
+├── session/              # Session management (Layer 6)
+│   ├── session.go
+│   ├── manager.go
+│   ├── inflight.go
+│   └── queue.go
+│
+├── topics/               # Topic routing (Layer 7)
+│   ├── match.go
+│   └── validate.go
+│
+├── store/                # Storage (Layer 8)
+│   ├── store.go
+│   └── memory/
+│
+├── adapter/              # Protocol adapters (Layer 2)
+│   ├── http.go
+│   └── virtual.go
+│
+├── transport/            # Network (Layer 1)
+│   ├── tcp.go
+│   └── ws.go
+│
+├── client/               # MQTT Client (Layer 9)
+│   └── client.go
+│
+└── integration/          # Integration tests
+```
+
+## Implementation Phases
+
+### Phase 1: Core Architecture (Current)
+- [x] Packet encoding/decoding (v3, v5)
+- [x] Basic broker with session map
+- [x] Topic router (trie-based)
+- [x] TCP transport
+- [x] HTTP adapter
+- [x] Session management
+- [x] Handlers package
+- [x] Memory store
+
+### Phase 2: Protocol Completeness
+- [ ] Full QoS 1/2 flows with retry
+- [ ] Retained message delivery on subscribe
+- [ ] Will message triggering
+- [ ] Keep-alive enforcement
+- [ ] Session expiry
+- [ ] Topic aliases (v5)
+
+### Phase 3: Additional Adapters
+- [ ] WebSocket adapter (with subprotocol)
+- [ ] CoAP/TCP adapter
+- [ ] TLS support
+
+### Phase 4: Production Hardening
+- [ ] Configuration file (YAML)
+- [ ] Structured logging
+- [ ] Prometheus metrics
+- [ ] Graceful shutdown
+- [ ] Connection limits
+- [ ] Rate limiting
+
+### Phase 5: Distributed (Future)
+- [ ] etcd storage backend
+- [ ] Raft consensus for metadata
+- [ ] Cross-node message routing
+- [ ] Session takeover across nodes
+- [ ] In-memory caching layer

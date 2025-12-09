@@ -1,872 +1,534 @@
-# Architecture Gap Analysis & Implementation Plan
+# Implementation Status & Roadmap
 
-This document compares the current architecture with the desired architecture and provides a detailed plan to bridge the gap.
+This document tracks what exists, what's missing, and the path forward.
 
-## High-Level Comparison
+## Current State Summary
 
-| Component | Current | Desired | Gap |
-|-----------|---------|---------|-----|
-| Core/Packets | `packets/` with v3, v5, codec, pool | `core/` with same structure | Rename and reorganize |
-| Store | Simple `MessageStore` interface | Composite `Store` with 5 interfaces | Major expansion |
-| Session | Basic struct in `session/` | Full lifecycle, inflight, queue | Major expansion |
-| Topic | `topics/` with match, validate | `topic/` with trie, router, alias | Moderate expansion |
-| Client | Testing client in `client/` | Full client management | New component |
-| Server/Broker | `broker/` with Server, Router | `server/` with adapters pattern | Restructure |
-| Adapters | `adapter/`, `transport/` separate | Unified under `server/adapter/` | Consolidate and expand |
-| Handlers | Empty `handlers/` package | `server/handlers/` with all handlers | New implementation |
-| Metrics | None | `metrics/` with Prometheus | New component |
-
-## Detailed Gap Analysis
-
-### 1. Core Package (Packets → Core)
-
-**Current State:**
-- `packets/` package with comprehensive v3/v5 implementation
-- `codec/` subpackage for binary encoding
-- `pool/` subpackages for object pooling
-- `sniffer.go` for version detection
-- `validate.go` for validation
-
-**Desired State:**
-- `core/` package (rename)
-- Same structure internally
-- Additional validation methods
-
-**Gap: MINIMAL** - Mostly a rename
-
-**Changes Required:**
-1. Rename `packets/` → `core/`
-2. Update all imports across codebase
-3. Add `ValidateFilter()` method to validator
-4. Ensure all validation is in `validate.go`
-
-### 2. Store Package
-
-**Current State:**
-```go
-type MessageStore interface {
-    Store(key string, payload []byte) error
-    Retrieve(key string) ([]byte, error)
-    Delete(key string) error
-}
-
-// Only MemoryStore implementation
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            IMPLEMENTATION STATUS                             │
+├──────────────────────┬──────────────┬───────────────────────────────────────┤
+│ Component            │ Status       │ Notes                                 │
+├──────────────────────┼──────────────┼───────────────────────────────────────┤
+│ packets/ (core)      │ ✅ Complete  │ v3 + v5, pooling, zero-copy           │
+│ broker/server        │ ✅ Complete  │ Basic lifecycle, routing              │
+│ broker/router        │ ✅ Complete  │ Trie-based, wildcards                 │
+│ handlers/            │ ✅ Complete  │ All packet types, dispatcher          │
+│ session/             │ ✅ Complete  │ Manager, inflight, queue              │
+│ store/memory         │ ✅ Complete  │ Sessions, retained, subscriptions     │
+│ topics/              │ ✅ Complete  │ Validation, matching                  │
+│ transport/tcp        │ ✅ Complete  │ TCP frontend                          │
+│ transport/ws         │ ⚠️ Partial   │ Needs subprotocol handling            │
+│ adapter/http         │ ✅ Complete  │ POST /publish                         │
+│ client/              │ ⚠️ Partial   │ Basic test client                     │
+├──────────────────────┼──────────────┼───────────────────────────────────────┤
+│ QoS 1/2 retry        │ ❌ Missing   │ Needs timer-based retry               │
+│ Retained on sub      │ ❌ Missing   │ Deliver retained on SUBSCRIBE         │
+│ Will messages        │ ❌ Missing   │ Trigger on unclean disconnect         │
+│ Session expiry       │ ❌ Missing   │ Expire after ExpiryInterval           │
+│ Topic aliases        │ ❌ Missing   │ v5 feature                            │
+│ Shared subscriptions │ ❌ Missing   │ $share/{group}/{filter}               │
+│ CoAP adapter         │ ❌ Missing   │ TCP first, UDP later                  │
+│ TLS support          │ ❌ Missing   │ Certificate handling                  │
+│ Configuration        │ ❌ Missing   │ YAML config file                      │
+│ Metrics              │ ❌ Missing   │ Prometheus                            │
+│ Distributed          │ ❌ Missing   │ etcd, raft, clustering                │
+└──────────────────────┴──────────────┴───────────────────────────────────────┘
 ```
 
-**Desired State:**
-```go
-type Store interface {
-    Messages() MessageStore
-    Sessions() SessionStore
-    Subscriptions() SubscriptionStore
-    Retained() RetainedStore
-    Wills() WillStore
-    Close() error
-}
+## What's Working Now
 
-// Memory and etcd implementations
-```
+### 1. Core Packets (`packets/`)
+- Full MQTT 3.1.1 packet set (14 types)
+- Full MQTT 5.0 packet set (15 types including AUTH)
+- Properties support for v5
+- Object pooling (`sync.Pool`) for all packet types
+- Zero-copy parsing for PUBLISH payload
+- Protocol version detection (sniffer)
+- VBI encoding/decoding
 
-**Gap: MAJOR** - 5 new interfaces, 2 implementations
+### 2. Broker (`broker/`)
+- Server with session management
+- Connection lifecycle (CONNECT → session → loop → cleanup)
+- Topic router (trie-based subscription matching)
+- Message distribution to subscribers
+- QoS downgrade based on subscription
+- Offline message queuing for QoS > 0
 
-**Changes Required:**
-1. Define 5 storage interfaces (message, session, subscription, retained, will)
-2. Create composite `Store` interface
-3. Implement `memory/` backend for all interfaces
-4. Implement `etcd/` backend for all interfaces
-5. Add interface compliance tests
-6. Add TTL support to message store
-7. Add locking for session takeover
+### 3. Handlers (`handlers/`)
+- PUBLISH handler (QoS 0/1/2)
+- SUBSCRIBE handler with SUBACK
+- UNSUBSCRIBE handler with UNSUBACK
+- PINGREQ handler
+- DISCONNECT handler
+- QoS acknowledgment handlers (PUBACK, PUBREC, PUBREL, PUBCOMP)
+- Dispatcher routing packets to handlers
 
-### 3. Session Package
+### 4. Session (`session/`)
+- Full session state (connected, disconnected, expiry)
+- InflightTracker for QoS 1/2 messages
+- MessageQueue for offline delivery
+- Keep-alive timer
+- Topic alias management
+- Packet ID generation
+- Session persistence support
 
-**Current State:**
-```go
-type Session struct {
-    Broker  BrokerInterface
-    Conn    Connection
-    ID      string
-    Version int
-}
+### 5. Store (`store/memory/`)
+- SessionStore (get, save, delete)
+- RetainedStore (set, get, delete, match)
+- SubscriptionStore
+- WillStore
+- Composite Store interface
 
-// Methods: New(), Start(), Close(), Deliver(), handlePublish/Subscribe/PingReq
-```
+### 6. Transport (`transport/`)
+- TCP frontend with version detection
+- WebSocket frontend (basic)
 
-**Desired State:**
-```go
-type Session struct {
-    ID              string
-    Version         Version
-    Connected       bool
-    CleanStart      bool
-    ExpiryInterval  uint32
-    ReceiveMaximum  uint16
-    MaxPacketSize   uint32
-    Inflight        *InflightTracker
-    OfflineQueue    *MessageQueue
-    NextPacketID    uint16
-    Will            *WillMessage
-    Subscriptions   map[string]SubscribeOptions
-}
-
-// SessionManager, InflightTracker, MessageQueue
-```
-
-**Gap: MAJOR** - Complete rewrite
-
-**Changes Required:**
-1. Redesign `Session` struct with all MQTT options
-2. Implement `SessionManager` for lifecycle management
-3. Implement `InflightTracker` for QoS 1/2
-4. Implement `MessageQueue` for offline messages
-5. Add session state machine (connected, disconnected, expired)
-6. Implement keep-alive timer management
-7. Implement will message handling
-8. Implement session takeover logic
-9. Add packet ID generation
-
-### 4. Topic Package (topics → topic)
-
-**Current State:**
-```go
-// topics/validate.go
-func ValidateTopic(topic string) error
-
-// topics/match.go
-func TopicMatch(filter, topic string) bool
-
-// broker/router.go
-type Router struct {
-    root *node
-}
-```
-
-**Desired State:**
-```go
-// topic/topic.go - Topic type
-// topic/filter.go - Filter type
-// topic/validate.go - Validation
-// topic/match.go - Matching
-// topic/trie.go - Subscription trie
-// topic/router.go - Message router
-// topic/alias.go - Topic aliases
-// topic/shared.go - Shared subscriptions
-```
-
-**Gap: MODERATE** - Move router, add aliases and shared subs
-
-**Changes Required:**
-1. Rename `topics/` → `topic/`
-2. Add `Topic` and `Filter` types
-3. Move `Router` from `broker/` to `topic/`
-4. Add `Trie` interface (separate from Router)
-5. Implement topic alias management
-6. Implement shared subscription support
-7. Add `SubscribeOptions` type
-
-### 5. Client Package
-
-**Current State:**
-```go
-// client/client.go - Basic testing client
-```
-
-**Desired State:**
-```go
-type Client struct {
-    Conn        Connection
-    Session     *Session
-    Connected   bool
-    RateLimiter *RateLimiter
-}
-
-type ClientManager interface { ... }
-type Authenticator interface { ... }
-type Authorizer interface { ... }
-```
-
-**Gap: MAJOR** - Complete rewrite
-
-**Changes Required:**
-1. Design `Client` struct (connection + session)
-2. Implement `ClientManager` for tracking
-3. Design `Authenticator` interface
-4. Design `Authorizer` interface
-5. Implement session takeover coordination
-6. Add rate limiting
-7. Add connection limits
-
-### 6. Server Package (broker → server)
-
-**Current State:**
-```go
-// broker/server.go
-type Server struct {
-    listeners  []Frontend
-    sessions   map[string]*session.Session
-    router     *Router
-}
-
-// broker/interfaces.go
-type Frontend interface { ... }
-type Connection interface { ... }
-```
-
-**Desired State:**
-```go
-// server/server.go
-type Server struct {
-    adapters []Adapter
-    clients  ClientManager
-    sessions SessionManager
-    router   Router
-    store    Store
-    metrics  Metrics
-}
-
-// server/adapter/adapter.go
-type Adapter interface { ... }
-```
-
-**Gap: MAJOR** - Restructure around adapters
-
-**Changes Required:**
-1. Rename `broker/` → `server/`
-2. Replace `Frontend` with `Adapter` interface
-3. Move connection handling to adapters
-4. Integrate `ClientManager`, `SessionManager`
-5. Integrate `Store` and `Metrics`
-6. Add configuration management
-7. Implement graceful shutdown
-
-### 7. Adapter Package
-
-**Current State:**
-```go
-// adapter/http.go - HTTP adapter
-// adapter/virtual.go - Virtual connections
-// transport/tcp.go - TCP transport
-// transport/ws.go - WebSocket transport
-```
-
-**Desired State:**
-```go
-// server/adapter/adapter.go - Interface
-// server/adapter/tcp.go - TCP adapter
-// server/adapter/tls.go - TLS adapter
-// server/adapter/websocket.go - WebSocket adapter
-// server/adapter/http.go - HTTP adapter
-// server/adapter/coap.go - CoAP adapter
-// server/adapter/opcua.go - OPC-UA adapter
-```
-
-**Gap: MODERATE** - Consolidate and add new adapters
-
-**Changes Required:**
-1. Move `transport/` into `server/adapter/`
-2. Move `adapter/` into `server/adapter/`
-3. Unify under `Adapter` interface
-4. Add TLS adapter
-5. Add CoAP adapter
-6. Add OPC-UA adapter
-7. Update adapter tests
-
-### 8. Handlers Package
-
-**Current State:**
-```go
-// handlers/ - Empty package
-```
-
-**Desired State:**
-```go
-// server/handlers/connect.go
-// server/handlers/publish.go
-// server/handlers/subscribe.go
-// server/handlers/unsubscribe.go
-// server/handlers/ping.go
-// server/handlers/disconnect.go
-// server/handlers/auth.go
-```
-
-**Gap: MAJOR** - New implementation
-
-**Changes Required:**
-1. Move from `server/` to `server/handlers/`
-2. Design `PacketHandler` interface
-3. Implement `ConnectHandler` with auth
-4. Implement `PublishHandler` with QoS
-5. Implement `SubscribeHandler`
-6. Implement `UnsubscribeHandler`
-7. Implement `PingHandler`
-8. Implement `DisconnectHandler`
-9. Implement `AuthHandler` (v5)
-
-### 9. Metrics Package
-
-**Current State:**
-None
-
-**Desired State:**
-```go
-// metrics/metrics.go - Interface
-// metrics/prometheus.go - Prometheus exporter
-// metrics/noop.go - No-op implementation
-```
-
-**Gap: NEW** - Complete implementation
-
-**Changes Required:**
-1. Design metrics interface
-2. Implement Prometheus exporter
-3. Implement no-op for testing
-4. Add metrics to all components
-5. Add HTTP endpoint for scraping
+### 7. Adapters (`adapter/`)
+- HTTP adapter (POST /publish)
+- Virtual connection for testing
 
 ---
 
-## Implementation Plan
-
-### Phase 1: Package Reorganization (Foundation)
-
-Reorganize packages to match desired structure without changing functionality.
-
-**Tasks:**
-
-1.1. **Rename `packets/` → `core/`**
-   - Move all files
-   - Update all imports
-   - Verify tests pass
-
-1.2. **Rename `topics/` → `topic/`**
-   - Move all files
-   - Update all imports
-   - Add `Topic` and `Filter` types
-
-1.3. **Rename `broker/` → `server/`**
-   - Move all files
-   - Update all imports
-
-1.4. **Consolidate transports and adapters**
-   - Move `transport/` → `server/adapter/`
-   - Move `adapter/` → `server/adapter/`
-   - Unify under `Adapter` interface
-
-1.5. **Move router to topic package**
-   - Move `server/router.go` → `topic/router.go`
-   - Update dependencies
-
-**Deliverables:**
-- Clean package structure
-- All existing tests passing
-- No functional changes
-
-### Phase 2: Store Package Expansion
-
-Build comprehensive storage abstraction.
-
-**Tasks:**
-
-2.1. **Design storage interfaces**
-   - `MessageStore` interface
-   - `SessionStore` interface
-   - `SubscriptionStore` interface
-   - `RetainedStore` interface
-   - `WillStore` interface
-   - Composite `Store` interface
-
-2.2. **Implement memory backend**
-   - `store/memory/store.go` - Composite
-   - `store/memory/message.go`
-   - `store/memory/session.go`
-   - `store/memory/subscription.go`
-   - `store/memory/retained.go`
-   - `store/memory/will.go`
-
-2.3. **Add storage tests**
-   - Interface compliance tests
-   - Unit tests for memory backend
-   - Concurrency tests
-
-2.4. **Implement etcd backend (optional, can defer)**
-   - `store/etcd/store.go`
-   - Individual store implementations
-   - Integration tests with etcd
-
-**Deliverables:**
-- Complete storage interfaces
-- Memory backend implementation
-- Comprehensive test suite
-
-### Phase 3: Session Management
-
-Build complete session lifecycle management.
-
-**Tasks:**
-
-3.1. **Redesign Session struct**
-   - Add all MQTT options
-   - Add state fields
-   - Add QoS tracking fields
-
-3.2. **Implement InflightTracker**
-   - Track QoS 1/2 messages
-   - Handle retries
-   - Handle acknowledgments
-
-3.3. **Implement MessageQueue**
-   - Queue messages for offline clients
-   - Handle queue limits
-   - Drain on reconnect
-
-3.4. **Implement SessionManager**
-   - Session creation
-   - Session lookup
-   - Session destruction
-   - Session takeover
-   - Expiry handling
-
-3.5. **Add keep-alive management**
-   - Timer per session
-   - Timeout detection
-   - Disconnect on timeout
-
-3.6. **Add will message handling**
-   - Store will on connect
-   - Trigger on unclean disconnect
-   - Clear on clean disconnect
-
-3.7. **Session tests**
-   - Lifecycle tests
-   - QoS flow tests
-   - Takeover tests
-   - Expiry tests
-
-**Deliverables:**
-- Complete session management
-- QoS 1/2 support
-- Keep-alive enforcement
-- Will message support
-
-### Phase 4: Topic Management Enhancement
-
-Enhance topic handling with missing features.
-
-**Tasks:**
-
-4.1. **Add topic alias support**
-   - `topic/alias.go`
-   - Per-connection alias mapping
-   - Alias negotiation in CONNECT
-
-4.2. **Add shared subscription support**
-   - `topic/shared.go`
-   - Parse `$share/{group}/{filter}` format
-   - Load balancing within group
-
-4.3. **Enhance trie with options**
-   - `SubscribeOptions` type
-   - NoLocal, RetainAsPublished, RetainHandling
-   - Store options with subscription
-
-4.4. **Topic tests**
-   - Alias tests
-   - Shared subscription tests
-   - Options tests
-
-**Deliverables:**
-- Topic alias support (v5)
-- Shared subscriptions (v5)
-- Subscription options (v5)
-
-### Phase 5: Client Management
-
-Build client tracking and authentication.
-
-**Tasks:**
-
-5.1. **Design Client struct**
-   - Connection wrapper
-   - Session reference
-   - State tracking
-
-5.2. **Implement ClientManager**
-   - Client registration
-   - Client lookup
-   - Client counting
-   - Connection limits
-
-5.3. **Design auth interfaces**
-   - `Authenticator` interface
-   - `Authorizer` interface
-   - Default implementations
-
-5.4. **Implement auth backends**
-   - Password file auth
-   - JWT auth (optional)
-   - ACL file authorization
-
-5.5. **Add rate limiting**
-   - Per-client rate limits
-   - Configurable limits
-   - Rate limit responses
-
-5.6. **Client tests**
-   - Manager tests
-   - Auth tests
-   - Rate limit tests
-
-**Deliverables:**
-- Client management
-- Authentication framework
-- Authorization framework
-- Rate limiting
-
-### Phase 6: Packet Handlers
-
-Implement modular packet handlers.
-
-**Tasks:**
-
-6.1. **Design PacketHandler interface**
-   - Method per packet type
-   - Error handling
-   - Context passing
-
-6.2. **Implement ConnectHandler**
-   - Version detection
-   - Auth validation
-   - Session creation/takeover
-   - CONNACK response
-
-6.3. **Implement PublishHandler**
-   - Topic validation
-   - Authorization check
-   - QoS handling
-   - Message routing
-   - Retained message storage
-
-6.4. **Implement SubscribeHandler**
-   - Filter validation
-   - Authorization check
-   - Subscription registration
-   - Retained message delivery
-   - SUBACK response
-
-6.5. **Implement UnsubscribeHandler**
-   - Subscription removal
-   - UNSUBACK response
-
-6.6. **Implement PingHandler**
-   - PINGRESP response
-   - Keep-alive refresh
-
-6.7. **Implement DisconnectHandler**
-   - Clean disconnect
-   - Session cleanup
-   - Will handling
-
-6.8. **Implement AuthHandler (v5)**
-   - Multi-step auth
-   - Challenge/response
-
-6.9. **Handler tests**
-   - Unit tests per handler
-   - Integration tests for flows
-
-**Deliverables:**
-- All packet handlers
-- Complete QoS flows
-- Full MQTT compliance
-
-### Phase 7: Adapter Expansion
-
-Add new protocol adapters.
-
-**Tasks:**
-
-7.1. **Implement TLS adapter**
-   - Certificate loading
-   - TLS configuration
-   - mTLS support (optional)
-
-7.2. **Implement CoAP adapter**
-   - CoAP server
-   - MQTT mapping
-   - Observe support
-
-7.3. **Implement OPC-UA adapter**
-   - OPC-UA server
-   - Node-to-topic mapping
-   - Monitored items
-
-7.4. **Adapter tests**
-   - Unit tests per adapter
-   - Integration tests
-
-**Deliverables:**
-- TLS support
-- CoAP bridge
-- OPC-UA bridge
-
-### Phase 8: Metrics & Observability
-
-Add comprehensive metrics.
-
-**Tasks:**
-
-8.1. **Design metrics interface**
-   - Counter, gauge, histogram types
-   - Label support
-   - Registration API
-
-8.2. **Implement Prometheus exporter**
-   - All broker metrics
-   - HTTP endpoint
-   - Metric naming conventions
-
-8.3. **Add metrics throughout codebase**
-   - Connection metrics
-   - Message metrics
-   - QoS metrics
-   - Subscription metrics
-   - Session metrics
-   - Performance metrics
-
-8.4. **Metrics tests**
-   - Exporter tests
-   - Value verification
-
-**Deliverables:**
-- Complete metrics coverage
-- Prometheus endpoint
-- Grafana dashboard (optional)
-
-### Phase 9: Configuration & Production Hardening
-
-Add production features.
-
-**Tasks:**
-
-9.1. **Implement configuration**
-   - YAML config file
-   - Environment variable override
-   - Validation
-
-9.2. **Implement graceful shutdown**
-   - Signal handling
-   - Ordered shutdown
-   - Connection draining
-
-9.3. **Add logging framework**
-   - Structured logging (slog)
-   - Log levels
-   - Configurable output
-
-9.4. **Add error handling**
-   - Error types
-   - Error wrapping
-   - User-friendly messages
-
-9.5. **Production tests**
-   - Config tests
-   - Shutdown tests
-   - Error handling tests
-
-**Deliverables:**
-- Configuration file support
-- Graceful shutdown
-- Structured logging
-- Robust error handling
-
-### Phase 10: Integration & Stress Testing
-
-Comprehensive testing for production readiness.
-
-**Tasks:**
-
-10.1. **Integration test suite**
-   - Full PubSub flows
-   - QoS 0/1/2 tests
-   - Session persistence tests
-   - Will message tests
-   - Retained message tests
-   - All adapter tests
-
-10.2. **Conformance tests**
-   - Eclipse Paho compatibility
-   - mosquitto compatibility
-   - MQTT.fx compatibility
-
-10.3. **Stress tests**
-   - 10K+ concurrent connections
-   - 100K+ messages/second
-   - Memory usage under load
-   - CPU usage under load
-
-10.4. **Chaos tests**
-   - Network partitions
-   - Client disconnections
-   - Server restarts
-
-**Deliverables:**
-- Complete test coverage
-- Performance benchmarks
-- Conformance certification
+## What's Missing
+
+### Priority 1: Protocol Completeness
+
+These are needed for MQTT spec compliance:
+
+#### 1.1 QoS 1/2 Retry Mechanism
+**Current:** Messages tracked in inflight but no retry on timeout.
+**Needed:**
+- Timer per inflight message
+- Retry with DUP flag after timeout
+- Configurable retry interval and max retries
+- Clear on acknowledgment
+
+```go
+// In session/inflight.go, add:
+type InflightMessage struct {
+    Message   *store.Message
+    Direction Direction
+    SentAt    time.Time
+    Retries   int
+    Timer     *time.Timer
+}
+
+func (t *InflightTracker) StartRetryTimer(id uint16, onRetry func()) {
+    // Start timer, call onRetry on expiry
+}
+```
+
+#### 1.2 Retained Message Delivery on Subscribe
+**Current:** Retained messages stored but not delivered on SUBSCRIBE.
+**Needed:**
+```go
+// In handlers/broker.go HandleSubscribe:
+func (h *BrokerHandler) HandleSubscribe(...) error {
+    // ... existing subscribe logic ...
+
+    // After adding subscription, deliver retained
+    for _, filter := range topics {
+        retained, _ := h.retained.Match(filter.Topic)
+        for _, msg := range retained {
+            // Apply RetainHandling option (v5)
+            sess.WritePacket(createPublish(msg, retain=true))
+        }
+    }
+}
+```
+
+#### 1.3 Will Message Triggering
+**Current:** Will parsed and stored in session but never triggered.
+**Needed:**
+```go
+// In session/session.go Disconnect:
+func (s *Session) Disconnect(graceful bool) error {
+    // ... existing logic ...
+
+    if !graceful && s.Will != nil {
+        // Trigger will message publication
+        // This should go through the broker's Publish
+        if s.onWillTrigger != nil {
+            s.onWillTrigger(s.Will)
+        }
+    }
+}
+```
+
+#### 1.4 Session Expiry
+**Current:** ExpiryInterval stored but sessions never expire.
+**Needed:**
+- Background goroutine in SessionManager
+- Check disconnected sessions periodically
+- Delete expired sessions and their subscriptions
+
+```go
+// In session/manager.go:
+func (m *Manager) startExpiryChecker() {
+    ticker := time.NewTicker(time.Minute)
+    for range ticker.C {
+        m.expireDisconnectedSessions()
+    }
+}
+```
+
+### Priority 2: Additional Adapters
+
+#### 2.1 WebSocket Subprotocol
+**Current:** Basic WebSocket that wraps raw MQTT.
+**Needed:**
+- Proper "mqtt" subprotocol negotiation
+- Binary message framing
+- Ping/pong handling
+
+#### 2.2 CoAP/TCP Adapter
+**Location:** `adapter/coap.go`
+**Mapping:**
+```
+CoAP Method → MQTT
+───────────────────
+POST        → PUBLISH
+GET         → (subscribe + single response)
+GET+Observe → SUBSCRIBE (streaming)
+DELETE      → UNSUBSCRIBE
+```
+
+**Implementation steps:**
+1. Add go-coap dependency
+2. Create CoAP server listening on :5683
+3. Map CoAP resources to MQTT topics
+4. Handle Observe for subscriptions
+5. Map CoAP response codes to MQTT reason codes
+
+#### 2.3 TLS Support
+**Location:** `transport/tls.go`
+**Needed:**
+- Certificate loading
+- TLS config options
+- mTLS support (client certs)
+- Cipher suite configuration
+
+```go
+type TLSFrontend struct {
+    TCPFrontend
+    tlsConfig *tls.Config
+}
+
+func NewTLSFrontend(addr string, certFile, keyFile string) (*TLSFrontend, error) {
+    cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+    // ...
+}
+```
+
+### Priority 3: Production Features
+
+#### 3.1 Configuration File
+**Location:** `config/config.go`
+**Format:** YAML
+
+```go
+type Config struct {
+    Server   ServerConfig   `yaml:"server"`
+    Session  SessionConfig  `yaml:"session"`
+    Storage  StorageConfig  `yaml:"storage"`
+    Limits   LimitsConfig   `yaml:"limits"`
+    Logging  LoggingConfig  `yaml:"logging"`
+    Metrics  MetricsConfig  `yaml:"metrics"`
+}
+
+func LoadConfig(path string) (*Config, error)
+```
+
+#### 3.2 Structured Logging
+**Location:** `internal/log/log.go`
+**Implementation:** Use `log/slog` (Go 1.21+)
+
+```go
+var logger *slog.Logger
+
+func Init(cfg LoggingConfig) {
+    var handler slog.Handler
+    if cfg.Format == "json" {
+        handler = slog.NewJSONHandler(os.Stdout, nil)
+    } else {
+        handler = slog.NewTextHandler(os.Stdout, nil)
+    }
+    logger = slog.New(handler)
+}
+
+func Info(msg string, args ...any) { logger.Info(msg, args...) }
+func Error(msg string, args ...any) { logger.Error(msg, args...) }
+```
+
+#### 3.3 Prometheus Metrics
+**Location:** `metrics/prometheus.go`
+
+```go
+var (
+    ConnectionsTotal = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name: "mqtt_connections_total",
+            Help: "Current number of connections",
+        },
+        []string{"protocol"}, // mqtt, ws, http
+    )
+
+    MessagesPublished = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "mqtt_messages_published_total",
+            Help: "Total messages published",
+        },
+        []string{"qos"},
+    )
+
+    // ... more metrics
+)
+```
+
+#### 3.4 Graceful Shutdown
+**Location:** `broker/server.go`
+
+```go
+func (s *Server) Shutdown(ctx context.Context) error {
+    // 1. Stop accepting new connections
+    for _, l := range s.listeners {
+        l.Close()
+    }
+
+    // 2. Send DISCONNECT to all clients (v5)
+    // 3. Wait for inflight messages to complete (with timeout)
+    // 4. Close all sessions
+    // 5. Close storage
+}
+```
+
+### Priority 4: MQTT v5 Features
+
+#### 4.1 Topic Aliases
+**Current:** Fields exist in session but not used.
+**Needed:**
+- Track aliases per connection direction
+- Apply aliases when sending PUBLISH
+- Resolve aliases when receiving PUBLISH
+
+#### 4.2 Shared Subscriptions
+**Format:** `$share/{ShareName}/{TopicFilter}`
+**Needed:**
+- Parse shared subscription format
+- Group subscriptions by share name
+- Load balance delivery within group (round-robin)
+
+```go
+// In topics/shared.go:
+func ParseSharedSubscription(filter string) (shareName, topicFilter string, isShared bool) {
+    if strings.HasPrefix(filter, "$share/") {
+        parts := strings.SplitN(filter[7:], "/", 2)
+        return parts[0], parts[1], true
+    }
+    return "", filter, false
+}
+```
+
+### Priority 5: Distributed (Future)
+
+#### 5.1 etcd Storage Backend
+**Location:** `store/etcd/`
+**Key Schema:**
+```
+/mqtt/sessions/{clientID}         → Session JSON
+/mqtt/retained/{topic}            → Message
+/mqtt/subscriptions/{filter_hash} → []Subscription
+/mqtt/locks/{clientID}            → Lease (for takeover)
+```
+
+#### 5.2 Cluster Membership
+- SWIM protocol for failure detection
+- Gossip for subscription propagation
+- Consistent hashing for topic ownership
+
+#### 5.3 Cross-Node Routing
+- Forward PUBLISH to nodes with matching subscribers
+- Session takeover coordination
+- Subscription sync
 
 ---
 
-## Migration Path
+## Implementation Roadmap
 
-### Backward Compatibility
-
-During migration, maintain backward compatibility:
-
-1. **Import aliases**: Use aliases when renaming packages
-2. **Interface compatibility**: Existing interfaces stay compatible
-3. **Feature flags**: Enable new features via config
-
-### Step-by-Step Migration
+### Phase 2: Protocol Completeness
 
 ```
-v0.1 (current) → v0.2 (Phase 1-2) → v0.3 (Phase 3-4) → v0.4 (Phase 5-6) → v0.5 (Phase 7-8) → v1.0 (Phase 9-10)
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Modify/Create      │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.1 QoS retry mechanism            │ session/inflight.go         │
+│                                    │ broker/server.go            │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.2 Retained on subscribe          │ handlers/broker.go          │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.3 Will message trigger           │ session/session.go          │
+│                                    │ broker/server.go            │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.4 Session expiry                 │ session/manager.go          │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.5 Integration tests              │ integration/qos_test.go     │
+│                                    │ integration/will_test.go    │
+│                                    │ integration/retained_test.go│
+└────────────────────────────────────┴─────────────────────────────┘
 ```
 
-### Breaking Changes
+### Phase 3: Additional Adapters
 
-| Phase | Breaking Change | Migration |
-|-------|-----------------|-----------|
-| 1 | Package renames | Update imports |
-| 2 | Store interface | Implement new interfaces |
-| 3 | Session struct | Update session creation |
-| 5 | Client management | Use ClientManager |
-| 6 | Handler dispatch | Use new handler system |
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Create             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.1 WebSocket subprotocol          │ transport/ws.go (update)    │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.2 CoAP/TCP adapter               │ adapter/coap.go             │
+│                                    │ adapter/coap_test.go        │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.3 TLS support                    │ transport/tls.go            │
+│                                    │ transport/tls_test.go       │
+└────────────────────────────────────┴─────────────────────────────┘
+```
+
+### Phase 4: Production Hardening
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Create             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.1 Configuration                  │ config/config.go            │
+│                                    │ config/config_test.go       │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.2 Logging                        │ internal/log/log.go         │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.3 Metrics                        │ metrics/metrics.go          │
+│                                    │ metrics/prometheus.go       │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.4 Graceful shutdown              │ broker/server.go (update)   │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.5 Connection limits              │ broker/server.go (update)   │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.6 Main binary                    │ cmd/mqttd/main.go           │
+└────────────────────────────────────┴─────────────────────────────┘
+```
+
+### Phase 5: Distributed
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Create             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 5.1 etcd store                     │ store/etcd/store.go         │
+│                                    │ store/etcd/session.go       │
+│                                    │ store/etcd/retained.go      │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 5.2 Cluster membership             │ cluster/membership.go       │
+│                                    │ cluster/swim.go             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 5.3 Cross-node routing             │ cluster/router.go           │
+│                                    │ cluster/forward.go          │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 5.4 In-memory cache                │ store/cache/cache.go        │
+│                                    │ store/cache/lru.go          │
+└────────────────────────────────────┴─────────────────────────────┘
+```
 
 ---
 
-## Timeline Estimation
+## Recommended Next Steps
 
-Each phase can be worked on independently once Phase 1 is complete.
+### Immediate (This Week)
 
-| Phase | Description | Complexity |
-|-------|-------------|------------|
-| 1 | Package Reorganization | Low |
-| 2 | Store Expansion | Medium |
-| 3 | Session Management | High |
-| 4 | Topic Enhancement | Medium |
-| 5 | Client Management | Medium |
-| 6 | Packet Handlers | High |
-| 7 | Adapter Expansion | Medium |
-| 8 | Metrics | Low |
-| 9 | Production Hardening | Medium |
-| 10 | Testing | Medium |
+1. **Retained message delivery on SUBSCRIBE**
+   - Modify `handlers/broker.go` HandleSubscribe
+   - Query retained store for matching messages
+   - Send with retain flag set
+   - Add integration test
 
-**Critical Path**: Phase 1 → Phase 2 → Phase 3 → Phase 6
+2. **Will message triggering**
+   - Add callback in session for will trigger
+   - Wire up in broker to call Publish
+   - Add integration test for unclean disconnect
 
-**Parallelizable**:
-- Phase 4 (after Phase 1)
-- Phase 5 (after Phase 2)
-- Phase 7 (after Phase 1)
-- Phase 8 (after Phase 1)
+### Short Term
+
+3. **QoS 1/2 retry mechanism**
+   - Add timer to InflightTracker
+   - Implement retry with DUP flag
+   - Add integration test for retry scenarios
+
+4. **Session expiry**
+   - Add background checker to SessionManager
+   - Clean up subscriptions on expiry
+   - Add integration test
+
+### Medium Term
+
+5. **CoAP/TCP adapter**
+   - Start with POST → PUBLISH mapping
+   - Add Observe for subscriptions
+   - Integration test with CoAP client
+
+6. **Configuration file**
+   - Define YAML schema
+   - Load and validate config
+   - Wire up to server startup
 
 ---
 
-## Summary of Changes
+## Test Coverage Gaps
 
-### Files to Create
+| Area | Current | Needed |
+|------|---------|--------|
+| QoS 1 flow | Basic | Retry, timeout, duplicate |
+| QoS 2 flow | Basic | Full state machine |
+| Retained | Store only | Delivery on subscribe |
+| Will messages | Parsed | Trigger test |
+| Session expiry | None | Expiry after interval |
+| WebSocket | Basic | Subprotocol, binary frames |
+| Stress | None | 10K connections, 100K msg/s |
 
-```
-# Core (rename only)
-core/ (from packets/)
+---
 
-# Store (new)
-store/store.go
-store/message.go
-store/session.go
-store/subscription.go
-store/retained.go
-store/will.go
-store/memory/store.go
-store/memory/message.go
-store/memory/session.go
-store/memory/subscription.go
-store/memory/retained.go
-store/memory/will.go
-store/etcd/ (optional)
-
-# Session (expand)
-session/manager.go
-session/state.go
-session/inflight.go
-session/queue.go
-session/keepalive.go
-session/will.go
-
-# Topic (expand)
-topic/topic.go
-topic/filter.go
-topic/trie.go
-topic/alias.go
-topic/shared.go
-
-# Client (new)
-client/client.go
-client/manager.go
-client/takeover.go
-client/auth.go
-client/acl.go
-
-# Server (reorganize)
-server/server.go
-server/config.go
-server/handler.go
-server/adapter/adapter.go
-server/adapter/tcp.go
-server/adapter/tls.go
-server/adapter/websocket.go
-server/adapter/http.go
-server/adapter/coap.go
-server/adapter/opcua.go
-server/handlers/connect.go
-server/handlers/publish.go
-server/handlers/subscribe.go
-server/handlers/unsubscribe.go
-server/handlers/ping.go
-server/handlers/disconnect.go
-server/handlers/auth.go
-
-# Metrics (new)
-metrics/metrics.go
-metrics/prometheus.go
-metrics/noop.go
-
-# Integration tests (expand)
-integration/qos_test.go
-integration/session_test.go
-integration/will_test.go
-integration/retained_test.go
-integration/adapter_test.go
-integration/stress_test.go
-```
-
-### Files to Delete/Move
+## Dependencies to Add
 
 ```
-# Move
-packets/ → core/
-topics/ → topic/
-broker/ → server/
-transport/ → server/adapter/
-adapter/ → server/adapter/
+# For CoAP adapter
+go get github.com/plgd-dev/go-coap/v3
 
-# Delete (after migration)
-handlers/ (empty)
+# For metrics
+go get github.com/prometheus/client_golang
+
+# For config (already in stdlib for YAML via encoding)
+go get gopkg.in/yaml.v3
+
+# For etcd (future)
+go get go.etcd.io/etcd/client/v3
 ```
 
-### Test Coverage Requirements
+---
 
-Every new component requires:
-1. Unit tests with >80% coverage
-2. Integration tests for cross-component flows
-3. Benchmarks for performance-critical paths
-4. Example usage in `examples/`
+## Architecture Decisions Still Needed
+
+1. **Adapter registration** - How do adapters register with the server?
+   - Option A: Compile-time (import side effects)
+   - Option B: Runtime via config
+   - Recommendation: Runtime via config
+
+2. **Topic alias scope** - Per-connection or per-session?
+   - MQTT spec: Per-connection
+   - Our implementation: Already per-connection (cleared on disconnect)
+
+3. **Shared subscription load balancing** - Round-robin or random?
+   - Option A: Round-robin (predictable)
+   - Option B: Random (simpler)
+   - Option C: Configurable
+   - Recommendation: Round-robin as default
+
+4. **etcd key prefix** - What namespace?
+   - Current thinking: `/mqtt/{cluster_name}/`
+   - This allows multiple clusters in same etcd
