@@ -464,8 +464,6 @@ func (s *Session) retryLoop() {
 	}
 }
 
-// resendMessage resends an inflight message.
-// resendMessage resends an inflight message.
 func (s *Session) resendMessage(inflight *InflightMessage) error {
 	msg := inflight.Message
 

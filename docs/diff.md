@@ -6,7 +6,7 @@ This document tracks what exists, what's missing, and the path forward.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            IMPLEMENTATION STATUS                             │
+│                            IMPLEMENTATION STATUS                            │
 ├──────────────────────┬──────────────┬───────────────────────────────────────┤
 │ Component            │ Status       │ Notes                                 │
 ├──────────────────────┼──────────────┼───────────────────────────────────────┤
