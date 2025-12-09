@@ -462,3 +462,297 @@ func TestSessionManagerForEach(t *testing.T) {
 		t.Errorf("ForEach count: got %d, want 3", count)
 	}
 }
+
+func TestSessionManagerOfflineQueue(t *testing.T) {
+	st := memory.New()
+	mgr := NewManager(st)
+	defer mgr.Close()
+
+	// Create session
+	s, _, _ := mgr.GetOrCreate("client1", 5, DefaultOptions())
+
+	// Queue some messages
+	msg1 := &store.Message{Topic: "test/1", Payload: []byte("msg1"), QoS: 1}
+	msg2 := &store.Message{Topic: "test/2", Payload: []byte("msg2"), QoS: 1}
+
+	if err := mgr.QueueMessage("client1", msg1); err != nil {
+		t.Fatalf("QueueMessage failed: %v", err)
+	}
+	if err := mgr.QueueMessage("client1", msg2); err != nil {
+		t.Fatalf("QueueMessage failed: %v", err)
+	}
+
+	// Verify queue length
+	if s.OfflineQueue.Len() != 2 {
+		t.Errorf("Queue length: got %d, want 2", s.OfflineQueue.Len())
+	}
+
+	// Drain queue
+	drained := mgr.DrainOfflineQueue("client1")
+	if len(drained) != 2 {
+		t.Errorf("Drained count: got %d, want 2", len(drained))
+	}
+
+	if s.OfflineQueue.Len() != 0 {
+		t.Errorf("Queue should be empty after drain, got %d", s.OfflineQueue.Len())
+	}
+}
+
+func TestSessionManagerQueueMessageNonExistentSession(t *testing.T) {
+	st := memory.New()
+	mgr := NewManager(st)
+	defer mgr.Close()
+
+	msg := &store.Message{Topic: "test", Payload: []byte("msg"), QoS: 1}
+
+	// Queue to non-existent session should return nil (message is dropped)
+	err := mgr.QueueMessage("nonexistent", msg)
+	if err != nil {
+		t.Errorf("QueueMessage to non-existent session should return nil, got %v", err)
+	}
+}
+
+func TestSessionManagerDrainNonExistentSession(t *testing.T) {
+	st := memory.New()
+	mgr := NewManager(st)
+	defer mgr.Close()
+
+	// Drain non-existent session should return empty
+	drained := mgr.DrainOfflineQueue("nonexistent")
+	if len(drained) != 0 {
+		t.Errorf("Expected empty drain for non-existent session, got %d", len(drained))
+	}
+}
+
+func TestSessionManagerRestoreFromStorage(t *testing.T) {
+	st := memory.New()
+
+	// First manager instance
+	mgr1 := NewManager(st)
+
+	// Create session with subscriptions
+	s1, _, _ := mgr1.GetOrCreate("client1", 5, Options{CleanStart: false})
+
+	// Save subscriptions to storage directly (as broker.Subscribe would do)
+	sub1 := &store.Subscription{
+		ClientID: "client1",
+		Filter:   "home/#",
+		QoS:      1,
+		Options:  store.SubscribeOptions{NoLocal: true},
+	}
+	sub2 := &store.Subscription{
+		ClientID: "client1",
+		Filter:   "sensors/+",
+		QoS:      0,
+		Options:  store.SubscribeOptions{},
+	}
+	st.Subscriptions().Add(sub1)
+	st.Subscriptions().Add(sub2)
+	s1.AddSubscription("home/#", store.SubscribeOptions{NoLocal: true})
+	s1.AddSubscription("sensors/+", store.SubscribeOptions{})
+
+	// Disconnect session
+	s1.Disconnect(true)
+
+	// Close manager (simulates broker shutdown)
+	mgr1.Close()
+
+	// Create new manager with same storage (simulates broker restart)
+	mgr2 := NewManager(st)
+	defer mgr2.Close()
+
+	// Recreate session without clean start - should restore from storage
+	s2, created, _ := mgr2.GetOrCreate("client1", 5, Options{CleanStart: false})
+	if !created {
+		t.Error("Expected new session to be created after manager restart")
+	}
+
+	// Subscriptions should be restored
+	subs := s2.GetSubscriptions()
+	if len(subs) != 2 {
+		t.Errorf("Expected 2 restored subscriptions, got %d", len(subs))
+	}
+
+	if _, ok := subs["home/#"]; !ok {
+		t.Error("Subscription home/# not restored")
+	}
+	if _, ok := subs["sensors/+"]; !ok {
+		t.Error("Subscription sensors/+ not restored")
+	}
+}
+
+func TestSessionManagerConnectedCount(t *testing.T) {
+	st := memory.New()
+	mgr := NewManager(st)
+	defer mgr.Close()
+
+	// Create sessions
+	s1, _, _ := mgr.GetOrCreate("client1", 5, DefaultOptions())
+	s2, _, _ := mgr.GetOrCreate("client2", 5, DefaultOptions())
+	mgr.GetOrCreate("client3", 5, DefaultOptions())
+
+	// Connect two of them
+	conn1 := newMockConnection()
+	conn2 := newMockConnection()
+	s1.Connect(conn1)
+	s2.Connect(conn2)
+
+	if mgr.ConnectedCount() != 2 {
+		t.Errorf("ConnectedCount: got %d, want 2", mgr.ConnectedCount())
+	}
+
+	// Disconnect one
+	s1.Disconnect(true)
+
+	if mgr.ConnectedCount() != 1 {
+		t.Errorf("ConnectedCount after disconnect: got %d, want 1", mgr.ConnectedCount())
+	}
+}
+
+func TestSessionManagerCallbacks(t *testing.T) {
+	st := memory.New()
+	mgr := NewManager(st)
+	defer mgr.Close()
+
+	createCalled := false
+	destroyCalled := false
+
+	mgr.SetOnSessionCreate(func(s *Session) {
+		createCalled = true
+	})
+
+	mgr.SetOnSessionDestroy(func(s *Session) {
+		destroyCalled = true
+	})
+
+	// Create session - should trigger callback
+	s, _, _ := mgr.GetOrCreate("client1", 5, DefaultOptions())
+
+	// Give callback time to run (it's in a goroutine)
+	time.Sleep(10 * time.Millisecond)
+
+	if !createCalled {
+		t.Error("OnSessionCreate callback not called")
+	}
+
+	// Destroy session - should trigger callback
+	mgr.Destroy(s.ID)
+
+	// Give callback time to run
+	time.Sleep(10 * time.Millisecond)
+
+	if !destroyCalled {
+		t.Error("OnSessionDestroy callback not called")
+	}
+}
+
+func TestSessionUpdateConnectionOptions(t *testing.T) {
+	s := New("client1", 4, DefaultOptions())
+
+	// Set initial will
+	will1 := &store.WillMessage{Topic: "will1", Payload: []byte("offline1")}
+	s.Will = will1
+
+	// Update connection options
+	will2 := &store.WillMessage{Topic: "will2", Payload: []byte("offline2")}
+	s.UpdateConnectionOptions(5, 120, will2)
+
+	// Check version and keep alive updated
+	if s.Version != 5 {
+		t.Errorf("Version: got %d, want 5", s.Version)
+	}
+	if s.KeepAlive != 120 {
+		t.Errorf("KeepAlive: got %d, want 120", s.KeepAlive)
+	}
+
+	// Check will updated
+	if s.Will == nil {
+		t.Fatal("Will should not be nil")
+	}
+	if s.Will.Topic != "will2" {
+		t.Errorf("Will topic: got %s, want will2", s.Will.Topic)
+	}
+}
+
+func TestSessionGetWill(t *testing.T) {
+	s := New("client1", 5, DefaultOptions())
+
+	// No will set
+	if s.GetWill() != nil {
+		t.Error("GetWill should return nil when no will set")
+	}
+
+	// Set will
+	will := &store.WillMessage{Topic: "test/will", Payload: []byte("goodbye")}
+	s.Will = will
+
+	// Get will (should be thread-safe)
+	gotWill := s.GetWill()
+	if gotWill == nil {
+		t.Fatal("GetWill returned nil")
+	}
+	if gotWill.Topic != "test/will" {
+		t.Errorf("Will topic: got %s, want test/will", gotWill.Topic)
+	}
+}
+
+func TestSessionInfo(t *testing.T) {
+	opts := Options{
+		CleanStart:     false,
+		ExpiryInterval: 3600,
+		ReceiveMaximum: 100,
+		KeepAlive:      60,
+	}
+	s := New("client1", 5, opts)
+
+	info := s.Info()
+
+	if info.ClientID != "client1" {
+		t.Errorf("ClientID: got %s, want client1", info.ClientID)
+	}
+	if info.Version != 5 {
+		t.Errorf("Version: got %d, want 5", info.Version)
+	}
+	if info.CleanStart != false {
+		t.Errorf("CleanStart: got %v, want false", info.CleanStart)
+	}
+	if info.ExpiryInterval != 3600 {
+		t.Errorf("ExpiryInterval: got %d, want 3600", info.ExpiryInterval)
+	}
+	if info.ReceiveMaximum != 100 {
+		t.Errorf("ReceiveMaximum: got %d, want 100", info.ReceiveMaximum)
+	}
+}
+
+func TestSessionRestoreFrom(t *testing.T) {
+	s := New("client1", 4, DefaultOptions())
+
+	storedSession := &store.Session{
+		ClientID:       "client1",
+		Version:        5,
+		ExpiryInterval: 7200,
+		ReceiveMaximum: 200,
+		MaxPacketSize:  1024,
+		TopicAliasMax:  10,
+	}
+
+	s.RestoreFrom(storedSession)
+
+	// Version is NOT restored (it's set at creation and updated via UpdateConnectionOptions)
+	if s.Version != 4 {
+		t.Errorf("Version: got %d, want 4 (should not change)", s.Version)
+	}
+	// These fields ARE restored
+	if s.ExpiryInterval != 7200 {
+		t.Errorf("ExpiryInterval: got %d, want 7200", s.ExpiryInterval)
+	}
+	if s.ReceiveMaximum != 200 {
+		t.Errorf("ReceiveMaximum: got %d, want 200", s.ReceiveMaximum)
+	}
+	if s.MaxPacketSize != 1024 {
+		t.Errorf("MaxPacketSize: got %d, want 1024", s.MaxPacketSize)
+	}
+	if s.TopicAliasMax != 10 {
+		t.Errorf("TopicAliasMax: got %d, want 10", s.TopicAliasMax)
+	}
+}
