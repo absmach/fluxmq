@@ -1,36 +1,35 @@
 package main
 
 import (
-	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/dborovcanin/mqtt/broker"
+	"github.com/dborovcanin/mqtt/config"
 	"github.com/dborovcanin/mqtt/packets"
 	"github.com/dborovcanin/mqtt/transport"
 )
 
 func main() {
-	addr := flag.String("addr", ":1883", "MQTT broker listen address")
-	logLevel := flag.String("log", "info", "Log level (debug, info, warn, error)")
-	flag.Parse()
+	// Load configuration
+	cfg := config.Load()
 
 	// Setup structured logging
-	level := parseLogLevel(*logLevel)
+	level := parseLogLevel(cfg.Log.Level)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: level,
 	}))
 	slog.SetDefault(logger)
 
-	slog.Info("starting MQTT broker", "addr", *addr)
+	slog.Info("starting MQTT broker", "addr", cfg.Server.TCPAddr)
 
 	// Create broker server
 	server := broker.NewServer()
 
 	// Create TCP frontend
-	tcp, err := transport.NewTCPFrontend(*addr)
+	tcp, err := transport.NewTCPFrontend(cfg.Server.TCPAddr)
 	if err != nil {
 		slog.Error("failed to create TCP frontend", "error", err)
 		os.Exit(1)
