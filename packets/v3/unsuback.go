@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets"
-	"github.com/dborovcanin/mqtt/packets/codec"
+	"github.com/dborovcanin/mqtt/codec"
 )
 
 // UnSubAck represents the MQTT V3.1.1 UNSUBACK packet.

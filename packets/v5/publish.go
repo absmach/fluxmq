@@ -7,7 +7,7 @@ import (
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets"
-	codec "github.com/dborovcanin/mqtt/packets/codec"
+	codec "github.com/dborovcanin/mqtt/codec"
 )
 
 // ErrPublishInvalidLength represents invalid length of PUBLISH packet.

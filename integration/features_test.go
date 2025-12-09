@@ -1,32 +1,34 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/dborovcanin/mqtt/broker"
 	"github.com/dborovcanin/mqtt/client"
+	"github.com/dborovcanin/mqtt/pkg/server/tcp"
 	"github.com/dborovcanin/mqtt/store"
-	"github.com/dborovcanin/mqtt/transport"
 )
 
-func HelperStartBroker(t *testing.T) (*broker.Broker, string) {
-	srv := broker.NewBroker()
-	fe, err := transport.NewTCPFrontend("localhost:0")
-	if err != nil {
-		t.Fatalf("Failed to create frontend: %v", err)
-	}
-	addr := fe.Addr().String()
-	// Start frontend
-	go func() {
-		fe.Serve(srv)
-	}()
-	return srv, addr
-}
-
 func TestRetainedMessages(t *testing.T) {
-	srv, addr := HelperStartBroker(t)
-	defer srv.Close()
+	// Setup broker and server
+	b := broker.NewBroker()
+	defer b.Close()
+
+	serverCfg := tcp.Config{
+		Address:         "localhost:0",
+		ShutdownTimeout: 1 * time.Second,
+	}
+	server := tcp.New(serverCfg, b)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go server.Listen(ctx)
+	time.Sleep(100 * time.Millisecond)
+
+	addr := server.Addr().String()
 
 	// 1. Publisher publishes retained message
 	pub := client.NewClient(client.Options{
@@ -43,7 +45,6 @@ func TestRetainedMessages(t *testing.T) {
 	if err := pub.Publish(topic, payload, 1, true); err != nil {
 		t.Fatalf("Pub publish failed: %v", err)
 	}
-	// Give time to process
 	time.Sleep(100 * time.Millisecond)
 
 	// 2. Subscriber connects and subscribes
@@ -109,8 +110,23 @@ func TestRetainedMessages(t *testing.T) {
 }
 
 func TestWillMessage(t *testing.T) {
-	srv, addr := HelperStartBroker(t)
-	defer srv.Close()
+	// Setup broker and server
+	b := broker.NewBroker()
+	defer b.Close()
+
+	serverCfg := tcp.Config{
+		Address:         "localhost:0",
+		ShutdownTimeout: 1 * time.Second,
+	}
+	server := tcp.New(serverCfg, b)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go server.Listen(ctx)
+	time.Sleep(100 * time.Millisecond)
+
+	addr := server.Addr().String()
 
 	topic := "test/will"
 	willPayload := []byte("I died")
@@ -146,22 +162,6 @@ func TestWillMessage(t *testing.T) {
 			Retain:  false,
 		},
 	})
-
-	// Manually connect to access conn and close it
-	// But NewClient Connect stores conn in private field.
-	// However, we can use Connect() then we need a way to close it forcefully.
-	// The client helper doesn't expose Close() either.
-	// But if we let the variable go out of scope / garbage collected... no that's not prompt.
-	// We need to close the underlying connection.
-	// Or we can modify client to expose Close() or Conn().
-	// Wait, verification plan said "close connection without DISCONNECT packet".
-	// If I modify client to have Close(), it might send DISCONNECT if implemented politely.
-	// But client.go doesn't implement Disconnect packet sending in any method currently.
-	// The `readLoop` handles errors and exits.
-	// So if I just close the TCP connection, it's an ungraceful disconnect from Broker's perspective (Read error).
-
-	// I'll add Close() to client which simply closes the net.Conn.
-	// Since client helper doesn't have Disconnect packet logic yet, this is perfect for Will testing.
 
 	if err := victim.Connect(); err != nil {
 		t.Fatal(err)

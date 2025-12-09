@@ -1,32 +1,36 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/dborovcanin/mqtt/broker"
 	"github.com/dborovcanin/mqtt/client"
-	"github.com/dborovcanin/mqtt/transport"
+	"github.com/dborovcanin/mqtt/pkg/server/tcp"
 )
 
-func TestPubSub_V5(t *testing.T) {
-	// 1. Start Broker
-	srv := broker.NewBroker()
-	// Use a random port
-	fe, err := transport.NewTCPFrontend("localhost:0")
-	if err != nil {
-		t.Fatalf("Failed to create frontend: %v", err)
+func TestBasicPubSub(t *testing.T) {
+	// Create broker
+	b := broker.NewBroker()
+	defer b.Close()
+
+	// Create TCP server
+	serverCfg := tcp.Config{
+		Address:         "localhost:0",
+		ShutdownTimeout: 1 * time.Second,
 	}
+	server := tcp.New(serverCfg, b)
+
+	// Start server
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled when test exits
+
+	go server.Listen(ctx)
 
 	// Get actual port
-	addr := fe.Addr().String()
-
-	// Start frontend
-	go func() {
-		fe.Serve(srv)
-	}()
-	defer fe.Close()
+	addr := server.Addr().String()
 
 	// 2. Start Client (using v3.1.1 = version 4)
 	opts := client.Options{
@@ -52,7 +56,7 @@ func TestPubSub_V5(t *testing.T) {
 	}
 
 	// Allow time for subscription propagation
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) // Wait for server to start
 
 	// 4. Publish
 	if err := c.Publish("test/topic", []byte("hello world"), 0, false); err != nil {

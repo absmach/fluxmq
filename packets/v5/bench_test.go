@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/dborovcanin/mqtt/packets/codec"
+	"github.com/dborovcanin/mqtt/codec"
 	. "github.com/dborovcanin/mqtt/packets/v5"
 )
 

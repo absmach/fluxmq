@@ -1,6 +1,6 @@
 package v5
 
-import "github.com/dborovcanin/mqtt/packets/codec"
+import "github.com/dborovcanin/mqtt/codec"
 
 // UnpackBytes parses a Publish packet from a byte slice using zero-copy semantics.
 // The TopicName will be allocated (Go strings are immutable), but Payload

@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets"
-	"github.com/dborovcanin/mqtt/packets/codec"
+	"github.com/dborovcanin/mqtt/codec"
 )
 
 // Topic represents a topic subscription.

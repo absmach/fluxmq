@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package broker
 
 import (
@@ -5,30 +8,31 @@ import (
 	"io"
 	"net"
 
-	packets "github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
 
-// StreamConnection wraps a net.Conn to provide packet-level reading/writing.
-// It handles protocol version detection (sniffing) on the first packet.
-type StreamConnection struct {
-	net.Conn
+// mqttCodec wraps a net.Conn and provides MQTT packet-level I/O.
+// It auto-detects protocol version on the first packet (CONNECT).
+type mqttCodec struct {
+	conn    net.Conn
 	reader  io.Reader
-	version int // 0 = unknown, 4=v3.1.1, 5=v5
+	version int // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
 }
 
-// NewStreamConnection creates a new StreamConnection wrapping a net.Conn.
-func NewStreamConnection(conn net.Conn) *StreamConnection {
-	return &StreamConnection{
-		Conn:   conn,
+// newMQTTCodec creates a new MQTT codec wrapping a network connection.
+// Returns unexported implementation for better encapsulation.
+func newMQTTCodec(conn net.Conn) *mqttCodec {
+	return &mqttCodec{
+		conn:   conn,
 		reader: conn,
 	}
 }
 
-// ReadPacket reads a packet from the stream.
-// It automatically detects the protocol version if not yet known.
-func (c *StreamConnection) ReadPacket() (packets.ControlPacket, error) {
+// ReadPacket reads the next MQTT packet from the connection.
+// It automatically detects the protocol version on the first packet.
+func (c *mqttCodec) ReadPacket() (packets.ControlPacket, error) {
 	if c.version == 0 {
 		// Detect protocol version from the first packet (CONNECT)
 		ver, restored, err := packets.DetectProtocolVersion(c.reader)
@@ -40,19 +44,40 @@ func (c *StreamConnection) ReadPacket() (packets.ControlPacket, error) {
 	}
 
 	// Dispatch based on version
-	if c.version == 5 {
+	switch c.version {
+	case 5:
 		pkt, _, _, err := v5.ReadPacket(c.reader)
 		return pkt, err
-	} else if c.version == 4 || c.version == 3 {
-		// v4 is 3.1.1, v3 is 3.1
+	case 3, 4:
+		// v4 is MQTT 3.1.1, v3 is MQTT 3.1
 		pkt, _, _, err := v3.ReadPacket(c.reader)
 		return pkt, err
+	default:
+		return nil, errors.New("unsupported MQTT protocol version")
 	}
-
-	return nil, errors.New("unsupported protocol version")
 }
 
 // WritePacket writes an MQTT packet to the connection.
-func (c *StreamConnection) WritePacket(p packets.ControlPacket) error {
-	return p.Pack(c.Conn)
+func (c *mqttCodec) WritePacket(pkt packets.ControlPacket) error {
+	if pkt == nil {
+		return errors.New("cannot encode nil packet")
+	}
+	return pkt.Pack(c.conn)
+}
+
+// Close closes the underlying connection.
+func (c *mqttCodec) Close() error {
+	return c.conn.Close()
+}
+
+// RemoteAddr returns the remote network address.
+func (c *mqttCodec) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}
+
+// NewConnection creates a broker.Connection from a net.Conn.
+// This wraps the connection with an MQTT codec for packet-level I/O.
+// Returns the Connection interface with unexported implementation.
+func NewConnection(conn net.Conn) Connection {
+	return newMQTTCodec(conn)
 }

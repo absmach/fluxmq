@@ -59,8 +59,12 @@ func NewBroker() *Broker {
 	return b
 }
 
-// HandleConnection handles a new incoming connection from a Frontend.
-func (b *Broker) HandleConnection(conn Connection) {
+// HandleConnection handles a new incoming connection from the TCP server.
+// This implements the broker.Handler interface.
+func (b *Broker) HandleConnection(netConn net.Conn) {
+	// Wrap net.Conn with MQTT codec to get broker.Connection
+	conn := NewConnection(netConn)
+
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
 	if err != nil {

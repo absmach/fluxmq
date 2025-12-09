@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets"
-	codec "github.com/dborovcanin/mqtt/packets/codec"
+	codec "github.com/dborovcanin/mqtt/codec"
 )
 
 // Auth is an internal representation of the fields of Auth MQTT packet.

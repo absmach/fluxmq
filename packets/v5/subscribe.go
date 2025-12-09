@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets"
-	codec "github.com/dborovcanin/mqtt/packets/codec"
+	codec "github.com/dborovcanin/mqtt/codec"
 )
 
 // Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet

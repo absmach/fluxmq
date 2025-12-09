@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/dborovcanin/mqtt/packets"
-	codec "github.com/dborovcanin/mqtt/packets/codec"
+	codec "github.com/dborovcanin/mqtt/codec"
 )
 
 // ConnackReturnCodes is a map of the error codes constants for Connect()
