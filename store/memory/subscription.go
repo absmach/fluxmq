@@ -63,7 +63,7 @@ func (s *SubscriptionStore) Add(sub *store.Subscription) error {
 	}
 
 	// Store subscription in trie
-	subCopy := copySubscription(sub)
+	subCopy := store.CopySubscription(sub)
 	node.subs[sub.ClientID] = subCopy
 
 	// Store in client index
@@ -157,7 +157,7 @@ func (s *SubscriptionStore) GetForClient(clientID string) ([]*store.Subscription
 
 	result := make([]*store.Subscription, 0, len(clientSubs))
 	for _, sub := range clientSubs {
-		result = append(result, copySubscription(sub))
+		result = append(result, store.CopySubscription(sub))
 	}
 	return result, nil
 }
@@ -179,12 +179,12 @@ func (s *SubscriptionStore) matchLevel(node *trieNode, levels []string, index in
 	if index == len(levels) {
 		// Exact match reached
 		for _, sub := range node.subs {
-			*matched = append(*matched, copySubscription(sub))
+			*matched = append(*matched, store.CopySubscription(sub))
 		}
 		// Check for '#' wildcard at this level
 		if wild, ok := node.children["#"]; ok {
 			for _, sub := range wild.subs {
-				*matched = append(*matched, copySubscription(sub))
+				*matched = append(*matched, store.CopySubscription(sub))
 			}
 		}
 		return
@@ -205,7 +205,7 @@ func (s *SubscriptionStore) matchLevel(node *trieNode, levels []string, index in
 	// Multi-level wildcard '#'
 	if child, ok := node.children["#"]; ok {
 		for _, sub := range child.subs {
-			*matched = append(*matched, copySubscription(sub))
+			*matched = append(*matched, store.CopySubscription(sub))
 		}
 	}
 }
@@ -235,19 +235,6 @@ func (s *SubscriptionStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.count
-}
-
-// copySubscription creates a deep copy of a subscription.
-func copySubscription(sub *store.Subscription) *store.Subscription {
-	if sub == nil {
-		return nil
-	}
-	return &store.Subscription{
-		ClientID: sub.ClientID,
-		Filter:   sub.Filter,
-		QoS:      sub.QoS,
-		Options:  sub.Options,
-	}
 }
 
 // Ensure SubscriptionStore implements store.SubscriptionStore.

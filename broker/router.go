@@ -53,6 +53,32 @@ func (r *Router) Subscribe(filter string, sub Subscription) {
 	n.subs = append(n.subs, sub)
 }
 
+// Unsubscribe removes a subscription from the topic filter for a specific session.
+func (r *Router) Unsubscribe(filter string, sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	levels := strings.Split(filter, "/")
+	n := r.root
+	for _, level := range levels {
+		child, ok := n.children[level]
+		if !ok {
+			// Filter not found, nothing to unsubscribe
+			return
+		}
+		n = child
+	}
+
+	// Remove subscription for this session from the node
+	filtered := n.subs[:0]
+	for _, sub := range n.subs {
+		if sub.SessionID != sessionID {
+			filtered = append(filtered, sub)
+		}
+	}
+	n.subs = filtered
+}
+
 // Match returns all subscriptions that match the topic name.
 func (r *Router) Match(topic string) []Subscription {
 	r.mu.RLock()
@@ -65,16 +91,9 @@ func (r *Router) Match(topic string) []Subscription {
 }
 
 func matchLevel(n *node, levels []string, index int, matched *[]Subscription) {
-	// 1. Check exact match
 	if index == len(levels) {
+		// Reached end of topic - include exact matches and # wildcards
 		*matched = append(*matched, n.subs...)
-		// Also check for '#' wildcard at this level (e.g. topic "a/b", filter "a/#")
-		// But '#' is a child of 'a'. The node 'a' is where we are.
-		// If 'a' has child '#', it matches "a/b"??
-		// No, '#' matches parent and children.
-		// If filter is "a/#", we have root->a->#
-		// When processing "a/b", we consume "a", reach node 'a'.
-		// We see child '#'. It matches.
 		if wild, ok := n.children["#"]; ok {
 			*matched = append(*matched, wild.subs...)
 		}
@@ -83,17 +102,17 @@ func matchLevel(n *node, levels []string, index int, matched *[]Subscription) {
 
 	level := levels[index]
 
-	// 2. Exact match traversal
+	// Check exact match
 	if child, ok := n.children[level]; ok {
 		matchLevel(child, levels, index+1, matched)
 	}
 
-	// 3. Single level wildcard '+'
+	// Check single-level wildcard '+'
 	if child, ok := n.children["+"]; ok {
 		matchLevel(child, levels, index+1, matched)
 	}
 
-	// 4. Multi-level wildcard '#'
+	// Check multi-level wildcard '#'
 	if child, ok := n.children["#"]; ok {
 		*matched = append(*matched, child.subs...)
 	}

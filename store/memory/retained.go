@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/dborovcanin/mqtt/store"
+	"github.com/dborovcanin/mqtt/topics"
 )
 
 // RetainedStore is an in-memory implementation of store.RetainedStore.
@@ -32,7 +33,7 @@ func (s *RetainedStore) Set(topic string, msg *store.Message) error {
 		return nil
 	}
 
-	s.data[topic] = copyMessage(msg)
+	s.data[topic] = store.CopyMessage(msg)
 	return nil
 }
 
@@ -45,7 +46,7 @@ func (s *RetainedStore) Get(topic string) (*store.Message, error) {
 	if !ok {
 		return nil, store.ErrNotFound
 	}
-	return copyMessage(msg), nil
+	return store.CopyMessage(msg), nil
 }
 
 // Delete removes a retained message.
@@ -64,74 +65,23 @@ func (s *RetainedStore) Match(filter string) ([]*store.Message, error) {
 
 	var result []*store.Message
 
-	// Handle special cases
+	// Special case: "#" matches all non-system topics
 	if filter == "#" {
-		// Match all non-system topics
 		for topic, msg := range s.data {
 			if !strings.HasPrefix(topic, "$") {
-				result = append(result, copyMessage(msg))
+				result = append(result, store.CopyMessage(msg))
 			}
 		}
 		return result, nil
 	}
 
-	filterLevels := strings.Split(filter, "/")
-
 	for topic, msg := range s.data {
-		if s.topicMatches(filterLevels, topic) {
-			result = append(result, copyMessage(msg))
+		if topics.TopicMatch(filter, topic) {
+			result = append(result, store.CopyMessage(msg))
 		}
 	}
 
 	return result, nil
-}
-
-// topicMatches checks if a topic matches a filter.
-func (s *RetainedStore) topicMatches(filterLevels []string, topic string) bool {
-	topicLevels := strings.Split(topic, "/")
-
-	// Handle $-prefix topics: only match if filter also starts with $
-	if strings.HasPrefix(topic, "$") {
-		if len(filterLevels) == 0 || !strings.HasPrefix(filterLevels[0], "$") {
-			// Filter with + or # as first level doesn't match $ topics
-			if filterLevels[0] == "+" || filterLevels[0] == "#" {
-				return false
-			}
-		}
-	}
-
-	fi := 0
-	ti := 0
-
-	for fi < len(filterLevels) && ti < len(topicLevels) {
-		if filterLevels[fi] == "#" {
-			// Multi-level wildcard matches rest
-			return true
-		}
-		if filterLevels[fi] == "+" {
-			// Single-level wildcard matches current level
-			fi++
-			ti++
-			continue
-		}
-		if filterLevels[fi] != topicLevels[ti] {
-			return false
-		}
-		fi++
-		ti++
-	}
-
-	// Check if we consumed both entirely
-	if fi == len(filterLevels) && ti == len(topicLevels) {
-		return true
-	}
-
-	// Check for trailing # in filter
-	if fi == len(filterLevels)-1 && filterLevels[fi] == "#" {
-		return true
-	}
-
-	return false
 }
 
 // Ensure RetainedStore implements store.RetainedStore.

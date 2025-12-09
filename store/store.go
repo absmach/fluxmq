@@ -44,6 +44,35 @@ type Message struct {
 	Properties map[string]string
 }
 
+// CopyMessage creates a deep copy of a message.
+func CopyMessage(msg *Message) *Message {
+	if msg == nil {
+		return nil
+	}
+
+	cp := &Message{
+		Topic:    msg.Topic,
+		QoS:      msg.QoS,
+		Retain:   msg.Retain,
+		PacketID: msg.PacketID,
+		Expiry:   msg.Expiry,
+	}
+
+	if len(msg.Payload) > 0 {
+		cp.Payload = make([]byte, len(msg.Payload))
+		copy(cp.Payload, msg.Payload)
+	}
+
+	if len(msg.Properties) > 0 {
+		cp.Properties = make(map[string]string, len(msg.Properties))
+		for k, v := range msg.Properties {
+			cp.Properties[k] = v
+		}
+	}
+
+	return cp
+}
+
 // Session represents persisted session state.
 type Session struct {
 	ClientID       string
@@ -68,6 +97,19 @@ type Subscription struct {
 	Filter   string
 	QoS      byte
 	Options  SubscribeOptions
+}
+
+// CopySubscription creates a copy of a subscription.
+func CopySubscription(sub *Subscription) *Subscription {
+	if sub == nil {
+		return nil
+	}
+	return &Subscription{
+		ClientID: sub.ClientID,
+		Filter:   sub.Filter,
+		QoS:      sub.QoS,
+		Options:  sub.Options,
+	}
 }
 
 // SubscribeOptions holds MQTT 5.0 subscription options.

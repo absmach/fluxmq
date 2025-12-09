@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -80,24 +81,36 @@ func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 
 	// Try to restore from storage
 	if !opts.CleanStart && m.store != nil {
-		if stored, err := m.store.Sessions().Get(clientID); err == nil {
+		stored, err := m.store.Sessions().Get(clientID)
+		if err != nil && err != store.ErrNotFound {
+			return nil, false, fmt.Errorf("failed to get session from storage: %w", err)
+		}
+		if stored != nil {
 			session.RestoreFrom(stored)
+		}
 
-			// Restore subscriptions
-			if subs, err := m.store.Subscriptions().GetForClient(clientID); err == nil {
-				for _, sub := range subs {
-					session.AddSubscription(sub.Filter, sub.Options)
-				}
-			}
+		// Restore subscriptions
+		subs, err := m.store.Subscriptions().GetForClient(clientID)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to get subscriptions from storage: %w", err)
+		}
+		for _, sub := range subs {
+			session.AddSubscription(sub.Filter, sub.Options)
+		}
 
-			// Restore offline messages
-			if msgs, err := m.store.Messages().List(clientID + "/queue/"); err == nil {
-				for _, msg := range msgs {
-					session.OfflineQueue.Enqueue(msg)
-				}
-				// Clear from storage after loading
-				m.store.Messages().DeleteByPrefix(clientID + "/queue/")
+		// Restore offline messages
+		msgs, err := m.store.Messages().List(clientID + "/queue/")
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to list offline messages from storage: %w", err)
+		}
+		for _, msg := range msgs {
+			if err := session.OfflineQueue.Enqueue(msg); err != nil {
+				return nil, false, fmt.Errorf("failed to enqueue offline message: %w", err)
 			}
+		}
+		// Clear from storage after loading
+		if err := m.store.Messages().DeleteByPrefix(clientID + "/queue/"); err != nil {
+			return nil, false, fmt.Errorf("failed to clear offline messages from storage: %w", err)
 		}
 	}
 
@@ -110,7 +123,9 @@ func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 
 	// Persist session
 	if m.store != nil {
-		m.store.Sessions().Save(session.Info())
+		if err := m.store.Sessions().Save(session.Info()); err != nil {
+			return nil, false, fmt.Errorf("failed to save session to storage: %w", err)
+		}
 	}
 
 	// Callback
@@ -143,10 +158,18 @@ func (m *Manager) destroySessionLocked(session *Session) error {
 
 	// Clear from storage
 	if m.store != nil {
-		m.store.Sessions().Delete(session.ID)
-		m.store.Subscriptions().RemoveAll(session.ID)
-		m.store.Messages().DeleteByPrefix(session.ID + "/")
-		m.store.Wills().Delete(session.ID)
+		if err := m.store.Sessions().Delete(session.ID); err != nil {
+			return fmt.Errorf("failed to delete session from storage: %w", err)
+		}
+		if err := m.store.Subscriptions().RemoveAll(session.ID); err != nil {
+			return fmt.Errorf("failed to remove subscriptions from storage: %w", err)
+		}
+		if err := m.store.Messages().DeleteByPrefix(session.ID + "/"); err != nil {
+			return fmt.Errorf("failed to delete messages from storage: %w", err)
+		}
+		if err := m.store.Wills().Delete(session.ID); err != nil {
+			return fmt.Errorf("failed to delete will from storage: %w", err)
+		}
 	}
 
 	delete(m.sessions, session.ID)
@@ -163,36 +186,49 @@ func (m *Manager) destroySessionLocked(session *Session) error {
 func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 	// Update storage
 	if m.store != nil {
-		m.store.Sessions().Save(session.Info())
+		// Note: Errors during disconnect are not propagated as this is a cleanup operation
+		// that runs in a callback context. In a production system, these should be logged.
+		if err := m.store.Sessions().Save(session.Info()); err != nil {
+			// Error saving session state during disconnect
+			_ = err // Explicitly mark as intentionally ignored in callback context
+		}
 
 		// Handle will message (mutex-protected access)
 		will := session.GetWill()
 		if !graceful && will != nil {
-			m.store.Wills().Set(session.ID, will)
-			// Note: Will triggering is handled by the will processor
+			if err := m.store.Wills().Set(session.ID, will); err != nil {
+				_ = err
+			}
 		} else if graceful {
 			// Clear will on graceful disconnect
-			m.store.Wills().Delete(session.ID)
+			if err := m.store.Wills().Delete(session.ID); err != nil {
+				_ = err
+			}
 		}
 
 		// Save offline queue to storage
 		msgs := session.OfflineQueue.Drain()
 		for i, msg := range msgs {
 			key := session.ID + "/queue/" + string(rune(i))
-			m.store.Messages().Store(key, msg)
+			if err := m.store.Messages().Store(key, msg); err != nil {
+				_ = err
+			}
 		}
 
 		// Save inflight messages
 		for _, inf := range session.Inflight.GetAll() {
 			key := session.ID + "/inflight/" + string(rune(inf.PacketID))
-			m.store.Messages().Store(key, inf.Message)
+			if err := m.store.Messages().Store(key, inf.Message); err != nil {
+				_ = err
+			}
 		}
 	}
 
 	// Check if session should be destroyed (clean start with 0 expiry)
 	if session.CleanStart && session.ExpiryInterval == 0 {
 		m.mu.Lock()
-		m.destroySessionLocked(session)
+		// Ignore error from destroy during disconnect cleanup
+		_ = m.destroySessionLocked(session)
 		m.mu.Unlock()
 	}
 }

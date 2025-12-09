@@ -18,32 +18,24 @@ func TopicMatch(filter, topic string) bool {
 	filterLevels := strings.Split(filter, "/")
 	topicLevels := strings.Split(topic, "/")
 
-	// Special check for '$' topics
+	// Special check for '$' topics - wildcards cannot match $ topics unless filter also starts with $
 	if strings.HasPrefix(topic, "$") {
 		if len(filter) == 0 || filter[0] != '$' {
-			return false // Must explicitly match starting '$'
+			return false
 		}
-		// Even if filter starts with $, wildcards cannot match the first level if it starts with $?
-		// Spec says: "Wildcard characters can be used in Topic Filters, but they MUST NOT be used as the first character of a Topic Filter when the Topic Name starts with a $ character."
-		// Wait, actually "The Server MUST NOT match a subscription filter ... to a Topic Name starting with a $ character ... unless the filter also starts with a $ character and the first wildcard is later".
 		if filterLevels[0] == "+" || filterLevels[0] == "#" {
 			return false
 		}
 	}
 
 	for i, fLevel := range filterLevels {
-		// Multi-level wildcard MUST be the last level
 		if fLevel == "#" {
-			// # matches parent and all children
+			// Multi-level wildcard matches everything from this point
 			return true
 		}
 
 		if i >= len(topicLevels) {
-			// Filter is longer than topic
-			// E.g. filter "a/+" matches "a" -> No, "a/+" matches "a/b".
-			// But "a/#" matches "a".
-			// If we are here, fLevel is not # (handled above)
-			// So mismatch
+			// Filter has more levels than topic (and it's not #)
 			return false
 		}
 

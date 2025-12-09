@@ -217,16 +217,18 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.
 
 	// Check for retained messages
 	retained, err := b.store.Retained().Match(filter)
-	if err == nil {
-		sess := b.sessionMgr.Get(clientID)
-		if sess != nil && sess.IsConnected() {
-			for _, msg := range retained {
-				deliverQoS := qos
-				if msg.QoS < deliverQoS {
-					deliverQoS = msg.QoS
-				}
-				b.deliverToSession(sess, msg.Topic, msg.Payload, deliverQoS, true)
+	if err != nil {
+		return fmt.Errorf("failed to match retained messages for filter %s: %w", filter, err)
+	}
+
+	sess := b.sessionMgr.Get(clientID)
+	if sess != nil && sess.IsConnected() {
+		for _, msg := range retained {
+			deliverQoS := qos
+			if msg.QoS < deliverQoS {
+				deliverQoS = msg.QoS
 			}
+			b.deliverToSession(sess, msg.Topic, msg.Payload, deliverQoS, true)
 		}
 	}
 
@@ -235,8 +237,7 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.
 
 // Unsubscribe removes a subscription.
 func (b *Broker) Unsubscribe(clientID string, filter string) error {
-	// Router doesn't track by client, so this is a no-op for now
-	// In a full implementation, we'd track subscriptions per client
+	b.router.Unsubscribe(filter, clientID)
 	return nil
 }
 
@@ -262,16 +263,20 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 	if retain {
 		if len(payload) == 0 {
 			// Empty payload means remove retained message
-			b.store.Retained().Delete(topic)
+			if err := b.store.Retained().Delete(topic); err != nil {
+				return fmt.Errorf("failed to delete retained message for topic %s: %w", topic, err)
+			}
 		} else {
 			// Update retained message
-			b.store.Retained().Set(topic, &store.Message{
+			if err := b.store.Retained().Set(topic, &store.Message{
 				Topic:      topic,
 				Payload:    payload,
 				QoS:        qos,
 				Retain:     true,
 				Properties: props,
-			})
+			}); err != nil {
+				return fmt.Errorf("failed to set retained message for topic %s: %w", topic, err)
+			}
 		}
 	}
 

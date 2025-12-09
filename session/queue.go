@@ -36,8 +36,7 @@ func (q *MessageQueue) Enqueue(msg *store.Message) error {
 			msg.Topic, len(q.messages), q.maxSize, ErrQueueFull)
 	}
 
-	// Deep copy the message
-	cp := copyMessage(msg)
+	cp := store.CopyMessage(msg)
 	q.messages = append(q.messages, cp)
 	return nil
 }
@@ -116,33 +115,4 @@ func (q *MessageQueue) SetMaxSize(size int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.maxSize = size
-}
-
-// copyMessage creates a deep copy of a message.
-func copyMessage(msg *store.Message) *store.Message {
-	if msg == nil {
-		return nil
-	}
-
-	cp := &store.Message{
-		Topic:    msg.Topic,
-		QoS:      msg.QoS,
-		Retain:   msg.Retain,
-		PacketID: msg.PacketID,
-		Expiry:   msg.Expiry,
-	}
-
-	if len(msg.Payload) > 0 {
-		cp.Payload = make([]byte, len(msg.Payload))
-		copy(cp.Payload, msg.Payload)
-	}
-
-	if len(msg.Properties) > 0 {
-		cp.Properties = make(map[string]string, len(msg.Properties))
-		for k, v := range msg.Properties {
-			cp.Properties[k] = v
-		}
-	}
-
-	return cp
 }
