@@ -59,14 +59,14 @@ func NewBrokerHandler(cfg BrokerHandlerConfig) *BrokerHandler {
 // HandleConnect handles CONNECT packets.
 // Note: CONNECT is typically handled at the server level before creating a session.
 // This method is provided for completeness.
-func (h *BrokerHandler) HandleConnect(sess *session.Session, pkt packets.ControlPacket) error {
+func (h *BrokerHandler) HandleConnect(s *session.Session, pkt packets.ControlPacket) error {
 	// CONNECT is handled at server level
 	return nil
 }
 
 // HandlePublish handles PUBLISH packets.
-func (h *BrokerHandler) HandlePublish(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.Publish)
 	topic := p.TopicName
@@ -77,7 +77,7 @@ func (h *BrokerHandler) HandlePublish(sess *session.Session, pkt packets.Control
 	dup := p.FixedHeader.Dup
 
 	// Authorization check
-	if h.authz != nil && !h.authz.CanPublish(sess.ID, topic) {
+	if h.authz != nil && !h.authz.CanPublish(s.ID, topic) {
 		return ErrNotAuthorized
 	}
 
@@ -85,25 +85,25 @@ func (h *BrokerHandler) HandlePublish(sess *session.Session, pkt packets.Control
 	switch qos {
 	case 0:
 		// QoS 0: Fire and forget
-		return h.publishMessage(sess, topic, payload, qos, retain)
+		return h.publishMessage(s, topic, payload, qos, retain)
 
 	case 1:
 		// QoS 1: Publish and acknowledge
-		if err := h.publishMessage(sess, topic, payload, qos, retain); err != nil {
+		if err := h.publishMessage(s, topic, payload, qos, retain); err != nil {
 			return err
 		}
-		return h.sendPubAck(sess, packetID)
+		return h.sendPubAck(s, packetID)
 
 	case 2:
 		// QoS 2: Exactly once
 		// Check if this is a duplicate
-		if dup && sess.Inflight.WasReceived(packetID) {
+		if dup && s.Inflight.WasReceived(packetID) {
 			// Already received, just send PUBREC again
-			return h.sendPubRec(sess, packetID)
+			return h.sendPubRec(s, packetID)
 		}
 
 		// Mark as received
-		sess.Inflight.MarkReceived(packetID)
+		s.Inflight.MarkReceived(packetID)
 
 		// Store for later publication (after PUBREL)
 		msg := &store.Message{
@@ -113,16 +113,16 @@ func (h *BrokerHandler) HandlePublish(sess *session.Session, pkt packets.Control
 			Retain:   retain,
 			PacketID: packetID,
 		}
-		sess.Inflight.Add(packetID, msg, session.Inbound)
+		s.Inflight.Add(packetID, msg, session.Inbound)
 
-		return h.sendPubRec(sess, packetID)
+		return h.sendPubRec(s, packetID)
 	}
 
 	return nil
 }
 
 // publishMessage publishes a message to subscribers.
-func (h *BrokerHandler) publishMessage(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
+func (h *BrokerHandler) publishMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
 	// Handle retained message
 	if retain && h.retained != nil {
 		msg := &store.Message{
@@ -148,49 +148,49 @@ func (h *BrokerHandler) publishMessage(sess *session.Session, topic string, payl
 }
 
 // HandlePubAck handles PUBACK packets (QoS 1 acknowledgment from client).
-func (h *BrokerHandler) HandlePubAck(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.PubAck)
-	sess.Inflight.Ack(p.ID)
+	s.Inflight.Ack(p.ID)
 	return nil
 }
 
 // HandlePubRec handles PUBREC packets (QoS 2 step 1 from client).
-func (h *BrokerHandler) HandlePubRec(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.PubRec)
-	sess.Inflight.UpdateState(p.ID, session.StatePubRecReceived)
-	return h.sendPubRel(sess, p.ID)
+	s.Inflight.UpdateState(p.ID, session.StatePubRecReceived)
+	return h.sendPubRel(s, p.ID)
 }
 
 // HandlePubRel handles PUBREL packets (QoS 2 step 2 from client).
-func (h *BrokerHandler) HandlePubRel(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.PubRel)
 	packetID := p.ID
 
 	// Get the stored message and publish it
-	inf, ok := sess.Inflight.Get(packetID)
+	inf, ok := s.Inflight.Get(packetID)
 	if ok && inf.Message != nil {
-		h.publishMessage(sess, inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
+		h.publishMessage(s, inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
 	}
 
 	// Remove from inflight and received tracking
-	sess.Inflight.Ack(packetID)
-	sess.Inflight.ClearReceived(packetID)
+	s.Inflight.Ack(packetID)
+	s.Inflight.ClearReceived(packetID)
 
-	return h.sendPubComp(sess, packetID)
+	return h.sendPubComp(s, packetID)
 }
 
 // HandlePubComp handles PUBCOMP packets (QoS 2 step 3 from client).
-func (h *BrokerHandler) HandlePubComp(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.PubComp)
-	sess.Inflight.Ack(p.ID)
+	s.Inflight.Ack(p.ID)
 	return nil
 }
 
@@ -235,7 +235,7 @@ func (h *BrokerHandler) HandleSubscribe(sess *session.Session, pkt packets.Contr
 }
 
 // sendRetainedMessages sends retained messages matching a filter.
-func (h *BrokerHandler) sendRetainedMessages(sess *session.Session, filter string, maxQoS byte) {
+func (h *BrokerHandler) sendRetainedMessages(s *session.Session, filter string, maxQoS byte) {
 	msgs, err := h.retained.Match(filter)
 	if err != nil {
 		return
@@ -247,49 +247,49 @@ func (h *BrokerHandler) sendRetainedMessages(sess *session.Session, filter strin
 			qos = maxQoS
 		}
 
-		h.deliverMessage(sess, msg.Topic, msg.Payload, qos, true)
+		h.deliverMessage(s, msg.Topic, msg.Payload, qos, true)
 	}
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
-func (h *BrokerHandler) HandleUnsubscribe(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.Unsubscribe)
 
 	// Process unsubscriptions
 	for _, filter := range p.Topics {
 		if h.router != nil {
-			h.router.Unsubscribe(sess.ID, filter)
+			h.router.Unsubscribe(s.ID, filter)
 		}
-		sess.RemoveSubscription(filter)
+		s.RemoveSubscription(filter)
 	}
 
-	return h.sendUnsubAck(sess, p.ID)
+	return h.sendUnsubAck(s, p.ID)
 }
 
 // HandlePingReq handles PINGREQ packets.
-func (h *BrokerHandler) HandlePingReq(sess *session.Session) error {
-	sess.TouchActivity()
-	return h.sendPingResp(sess)
+func (h *BrokerHandler) HandlePingReq(s *session.Session) error {
+	s.TouchActivity()
+	return h.sendPingResp(s)
 }
 
 // HandleDisconnect handles DISCONNECT packets.
-func (h *BrokerHandler) HandleDisconnect(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.Disconnect(true)
+func (h *BrokerHandler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+	s.Disconnect(true)
 	return nil
 }
 
 // deliverMessage delivers a message to a session.
-func (h *BrokerHandler) deliverMessage(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
-	if !sess.IsConnected() {
+func (h *BrokerHandler) deliverMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
+	if !s.IsConnected() {
 		msg := &store.Message{
 			Topic:   topic,
 			Payload: payload,
 			QoS:     qos,
 			Retain:  retain,
 		}
-		return sess.OfflineQueue.Enqueue(msg)
+		return s.OfflineQueue.Enqueue(msg)
 	}
 
 	pub := &v3.Publish{
@@ -303,75 +303,75 @@ func (h *BrokerHandler) deliverMessage(sess *session.Session, topic string, payl
 	}
 
 	if qos > 0 {
-		pub.ID = sess.NextPacketID()
+		pub.ID = s.NextPacketID()
 		msg := &store.Message{
 			Topic:    topic,
 			Payload:  payload,
 			QoS:      qos,
 			PacketID: pub.ID,
 		}
-		sess.Inflight.Add(pub.ID, msg, session.Outbound)
+		s.Inflight.Add(pub.ID, msg, session.Outbound)
 	}
 
-	return sess.WritePacket(pub)
+	return s.WritePacket(pub)
 }
 
 // --- Response packet senders ---
 
-func (h *BrokerHandler) sendPubAck(sess *session.Session, packetID uint16) error {
+func (h *BrokerHandler) sendPubAck(s *session.Session, packetID uint16) error {
 	ack := &v3.PubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
 		ID:          packetID,
 	}
-	return sess.WritePacket(ack)
+	return s.WritePacket(ack)
 }
 
-func (h *BrokerHandler) sendPubRec(sess *session.Session, packetID uint16) error {
+func (h *BrokerHandler) sendPubRec(a *session.Session, packetID uint16) error {
 	rec := &v3.PubRec{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 		ID:          packetID,
 	}
-	return sess.WritePacket(rec)
+	return a.WritePacket(rec)
 }
 
-func (h *BrokerHandler) sendPubRel(sess *session.Session, packetID uint16) error {
+func (h *BrokerHandler) sendPubRel(s *session.Session, packetID uint16) error {
 	rel := &v3.PubRel{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 		ID:          packetID,
 	}
-	return sess.WritePacket(rel)
+	return s.WritePacket(rel)
 }
 
-func (h *BrokerHandler) sendPubComp(sess *session.Session, packetID uint16) error {
+func (h *BrokerHandler) sendPubComp(s *session.Session, packetID uint16) error {
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 		ID:          packetID,
 	}
-	return sess.WritePacket(comp)
+	return s.WritePacket(comp)
 }
 
-func (h *BrokerHandler) sendSubAck(sess *session.Session, packetID uint16, returnCodes []byte) error {
+func (h *BrokerHandler) sendSubAck(s *session.Session, packetID uint16, returnCodes []byte) error {
 	ack := &v3.SubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
 		ID:          packetID,
 		ReturnCodes: returnCodes,
 	}
-	return sess.WritePacket(ack)
+	return s.WritePacket(ack)
 }
 
-func (h *BrokerHandler) sendUnsubAck(sess *session.Session, packetID uint16) error {
+func (h *BrokerHandler) sendUnsubAck(s *session.Session, packetID uint16) error {
 	ack := &v3.UnSubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
 		ID:          packetID,
 	}
-	return sess.WritePacket(ack)
+	return s.WritePacket(ack)
 }
 
-func (h *BrokerHandler) sendPingResp(sess *session.Session) error {
+func (h *BrokerHandler) sendPingResp(s *session.Session) error {
 	resp := &v3.PingResp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
 	}
-	return sess.WritePacket(resp)
+	return s.WritePacket(resp)
 }
 
 // Ensure BrokerHandler implements Handler.

@@ -250,8 +250,8 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 	matched := b.router.Match(topic)
 
 	for _, sub := range matched {
-		sess := b.sessionMgr.Get(sub.SessionID)
-		if sess == nil {
+		s := b.sessionMgr.Get(sub.SessionID)
+		if s == nil {
 			continue
 		}
 
@@ -261,8 +261,8 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 			deliverQoS = sub.QoS
 		}
 
-		if sess.IsConnected() {
-			b.deliverToSession(sess, topic, payload, deliverQoS, false)
+		if s.IsConnected() {
+			b.deliverToSession(s, topic, payload, deliverQoS, false)
 		} else if deliverQoS > 0 {
 			// Queue for offline delivery
 			msg := &store.Message{
@@ -271,7 +271,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 				QoS:     deliverQoS,
 				Retain:  false,
 			}
-			sess.OfflineQueue.Enqueue(msg)
+			s.OfflineQueue.Enqueue(msg)
 		}
 	}
 
@@ -293,7 +293,7 @@ func (b *Broker) SubscribeToTopic(ctx context.Context, clientID string, topicFil
 }
 
 // deliverToSession sends a message to a connected session.
-func (b *Broker) deliverToSession(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
+func (b *Broker) deliverToSession(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
 	pub := &v3.Publish{
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.PublishType,
@@ -304,16 +304,16 @@ func (b *Broker) deliverToSession(sess *session.Session, topic string, payload [
 		Payload:   payload,
 	}
 	if qos > 0 {
-		pub.ID = sess.NextPacketID()
+		pub.ID = s.NextPacketID()
 		msg := &store.Message{
 			Topic:    topic,
 			Payload:  payload,
 			QoS:      qos,
 			PacketID: pub.ID,
 		}
-		sess.Inflight.Add(pub.ID, msg, session.Outbound)
+		s.Inflight.Add(pub.ID, msg, session.Outbound)
 	}
-	return sess.WritePacket(pub)
+	return s.WritePacket(pub)
 }
 
 // Close shuts down the broker.
