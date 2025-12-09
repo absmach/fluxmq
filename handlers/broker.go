@@ -5,7 +5,6 @@ import (
 
 	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 )
@@ -69,53 +68,16 @@ func (h *BrokerHandler) HandleConnect(sess *session.Session, pkt packets.Control
 func (h *BrokerHandler) HandlePublish(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var topic string
-	var payload []byte
-	var qos byte
-	var retain bool
-	var packetID uint16
-	var dup bool
-
-	// Extract fields based on version
-	if sess.Version == 5 {
-		p := pkt.(*v5.Publish)
-		topic = p.TopicName
-		payload = p.Payload
-		qos = p.FixedHeader.QoS
-		retain = p.FixedHeader.Retain
-		packetID = p.ID
-		dup = p.FixedHeader.Dup
-
-		// Handle topic alias
-		if p.Properties != nil && p.Properties.TopicAlias != nil {
-			alias := *p.Properties.TopicAlias
-			if topic == "" {
-				// Resolve alias
-				resolved, ok := sess.ResolveInboundAlias(alias)
-				if !ok {
-					return ErrProtocolViolation
-				}
-				topic = resolved
-			} else {
-				// Set alias
-				sess.SetInboundAlias(alias, topic)
-			}
-		}
-	} else {
-		p := pkt.(*v3.Publish)
-		topic = p.TopicName
-		payload = p.Payload
-		qos = p.FixedHeader.QoS
-		retain = p.FixedHeader.Retain
-		packetID = p.ID
-		dup = p.FixedHeader.Dup
-	}
+	p := pkt.(*v3.Publish)
+	topic := p.TopicName
+	payload := p.Payload
+	qos := p.FixedHeader.QoS
+	retain := p.FixedHeader.Retain
+	packetID := p.ID
+	dup := p.FixedHeader.Dup
 
 	// Authorization check
 	if h.authz != nil && !h.authz.CanPublish(sess.ID, topic) {
-		if sess.Version == 5 {
-			return h.sendPubAckV5(sess, packetID, 0x87) // Not authorized
-		}
 		return ErrNotAuthorized
 	}
 
@@ -189,17 +151,8 @@ func (h *BrokerHandler) publishMessage(sess *session.Session, topic string, payl
 func (h *BrokerHandler) HandlePubAck(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var packetID uint16
-	if sess.Version == 5 {
-		p := pkt.(*v5.PubAck)
-		packetID = p.ID
-	} else {
-		p := pkt.(*v3.PubAck)
-		packetID = p.ID
-	}
-
-	// Remove from inflight
-	sess.Inflight.Ack(packetID)
+	p := pkt.(*v3.PubAck)
+	sess.Inflight.Ack(p.ID)
 	return nil
 }
 
@@ -207,34 +160,17 @@ func (h *BrokerHandler) HandlePubAck(sess *session.Session, pkt packets.ControlP
 func (h *BrokerHandler) HandlePubRec(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var packetID uint16
-	if sess.Version == 5 {
-		p := pkt.(*v5.PubRec)
-		packetID = p.ID
-	} else {
-		p := pkt.(*v3.PubRec)
-		packetID = p.ID
-	}
-
-	// Update inflight state
-	sess.Inflight.UpdateState(packetID, session.StatePubRecReceived)
-
-	// Send PUBREL
-	return h.sendPubRel(sess, packetID)
+	p := pkt.(*v3.PubRec)
+	sess.Inflight.UpdateState(p.ID, session.StatePubRecReceived)
+	return h.sendPubRel(sess, p.ID)
 }
 
 // HandlePubRel handles PUBREL packets (QoS 2 step 2 from client).
 func (h *BrokerHandler) HandlePubRel(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var packetID uint16
-	if sess.Version == 5 {
-		p := pkt.(*v5.PubRel)
-		packetID = p.ID
-	} else {
-		p := pkt.(*v3.PubRel)
-		packetID = p.ID
-	}
+	p := pkt.(*v3.PubRel)
+	packetID := p.ID
 
 	// Get the stored message and publish it
 	inf, ok := sess.Inflight.Get(packetID)
@@ -246,7 +182,6 @@ func (h *BrokerHandler) HandlePubRel(sess *session.Session, pkt packets.ControlP
 	sess.Inflight.Ack(packetID)
 	sess.Inflight.ClearReceived(packetID)
 
-	// Send PUBCOMP
 	return h.sendPubComp(sess, packetID)
 }
 
@@ -254,17 +189,8 @@ func (h *BrokerHandler) HandlePubRel(sess *session.Session, pkt packets.ControlP
 func (h *BrokerHandler) HandlePubComp(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var packetID uint16
-	if sess.Version == 5 {
-		p := pkt.(*v5.PubComp)
-		packetID = p.ID
-	} else {
-		p := pkt.(*v3.PubComp)
-		packetID = p.ID
-	}
-
-	// Remove from inflight - QoS 2 complete
-	sess.Inflight.Ack(packetID)
+	p := pkt.(*v3.PubComp)
+	sess.Inflight.Ack(p.ID)
 	return nil
 }
 
@@ -272,83 +198,36 @@ func (h *BrokerHandler) HandlePubComp(sess *session.Session, pkt packets.Control
 func (h *BrokerHandler) HandleSubscribe(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var packetID uint16
-	var subscriptions []struct {
-		Filter string
-		QoS    byte
-		Opts   store.SubscribeOptions
-	}
-
-	if sess.Version == 5 {
-		p := pkt.(*v5.Subscribe)
-		packetID = p.ID
-		for _, opt := range p.Opts {
-			subOpts := store.SubscribeOptions{}
-			if opt.NoLocal != nil {
-				subOpts.NoLocal = *opt.NoLocal
-			}
-			if opt.RetainAsPublished != nil {
-				subOpts.RetainAsPublished = *opt.RetainAsPublished
-			}
-			if opt.RetainHandling != nil {
-				subOpts.RetainHandling = *opt.RetainHandling
-			}
-			subscriptions = append(subscriptions, struct {
-				Filter string
-				QoS    byte
-				Opts   store.SubscribeOptions
-			}{
-				Filter: opt.Topic,
-				QoS:    opt.MaxQoS,
-				Opts:   subOpts,
-			})
-		}
-	} else {
-		p := pkt.(*v3.Subscribe)
-		packetID = p.ID
-		for _, t := range p.Topics {
-			subscriptions = append(subscriptions, struct {
-				Filter string
-				QoS    byte
-				Opts   store.SubscribeOptions
-			}{
-				Filter: t.Name,
-				QoS:    t.QoS,
-				Opts:   store.SubscribeOptions{},
-			})
-		}
-	}
+	p := pkt.(*v3.Subscribe)
+	packetID := p.ID
 
 	// Process subscriptions
-	reasonCodes := make([]byte, len(subscriptions))
-	for i, sub := range subscriptions {
+	reasonCodes := make([]byte, len(p.Topics))
+	for i, t := range p.Topics {
 		// Authorization check
-		if h.authz != nil && !h.authz.CanSubscribe(sess.ID, sub.Filter) {
-			if sess.Version == 5 {
-				reasonCodes[i] = 0x87 // Not authorized
-			} else {
-				reasonCodes[i] = 0x80 // Failure
-			}
+		if h.authz != nil && !h.authz.CanSubscribe(sess.ID, t.Name) {
+			reasonCodes[i] = 0x80 // Failure
 			continue
 		}
 
 		// Add to router
+		opts := store.SubscribeOptions{}
 		if h.router != nil {
-			if err := h.router.Subscribe(sess.ID, sub.Filter, sub.QoS, sub.Opts); err != nil {
+			if err := h.router.Subscribe(sess.ID, t.Name, t.QoS, opts); err != nil {
 				reasonCodes[i] = 0x80 // Failure
 				continue
 			}
 		}
 
 		// Cache in session
-		sess.AddSubscription(sub.Filter, sub.Opts)
+		sess.AddSubscription(t.Name, opts)
 
 		// Success - return granted QoS
-		reasonCodes[i] = sub.QoS
+		reasonCodes[i] = t.QoS
 
 		// Send retained messages
-		if h.retained != nil && sub.Opts.RetainHandling != 2 {
-			h.sendRetainedMessages(sess, sub.Filter, sub.QoS)
+		if h.retained != nil {
+			h.sendRetainedMessages(sess, t.Name, t.QoS)
 		}
 	}
 
@@ -376,34 +255,17 @@ func (h *BrokerHandler) sendRetainedMessages(sess *session.Session, filter strin
 func (h *BrokerHandler) HandleUnsubscribe(sess *session.Session, pkt packets.ControlPacket) error {
 	sess.TouchActivity()
 
-	var packetID uint16
-	var filters []string
-
-	if sess.Version == 5 {
-		p := pkt.(*v5.Unsubscribe)
-		packetID = p.ID
-		filters = p.Topics
-	} else {
-		p := pkt.(*v3.Unsubscribe)
-		packetID = p.ID
-		filters = p.Topics
-	}
+	p := pkt.(*v3.Unsubscribe)
 
 	// Process unsubscriptions
-	reasonCodes := make([]byte, len(filters))
-	for i, filter := range filters {
-		// Remove from router
+	for _, filter := range p.Topics {
 		if h.router != nil {
 			h.router.Unsubscribe(sess.ID, filter)
 		}
-
-		// Remove from session cache
 		sess.RemoveSubscription(filter)
-
-		reasonCodes[i] = 0 // Success
 	}
 
-	return h.sendUnsubAck(sess, packetID, reasonCodes)
+	return h.sendUnsubAck(sess, p.ID)
 }
 
 // HandlePingReq handles PINGREQ packets.
@@ -414,19 +276,6 @@ func (h *BrokerHandler) HandlePingReq(sess *session.Session) error {
 
 // HandleDisconnect handles DISCONNECT packets.
 func (h *BrokerHandler) HandleDisconnect(sess *session.Session, pkt packets.ControlPacket) error {
-	// MQTT 5.0 can have reason code and session expiry in DISCONNECT
-	if sess.Version == 5 && pkt != nil {
-		p := pkt.(*v5.Disconnect)
-		if p.Properties != nil && p.Properties.SessionExpiryInterval != nil {
-			// Can't change from 0 to non-zero (protocol error)
-			if sess.ExpiryInterval == 0 && *p.Properties.SessionExpiryInterval > 0 {
-				return ErrProtocolViolation
-			}
-			sess.ExpiryInterval = *p.Properties.SessionExpiryInterval
-		}
-	}
-
-	// Graceful disconnect
 	sess.Disconnect(true)
 	return nil
 }
@@ -434,7 +283,6 @@ func (h *BrokerHandler) HandleDisconnect(sess *session.Session, pkt packets.Cont
 // deliverMessage delivers a message to a session.
 func (h *BrokerHandler) deliverMessage(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
 	if !sess.IsConnected() {
-		// Queue for offline delivery
 		msg := &store.Message{
 			Topic:   topic,
 			Payload: payload,
@@ -444,34 +292,6 @@ func (h *BrokerHandler) deliverMessage(sess *session.Session, topic string, payl
 		return sess.OfflineQueue.Enqueue(msg)
 	}
 
-	// Build PUBLISH packet
-	if sess.Version == 5 {
-		pub := &v5.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        qos,
-				Retain:     retain,
-			},
-			TopicName: topic,
-			Payload:   payload,
-		}
-
-		if qos > 0 {
-			pub.ID = sess.NextPacketID()
-			// Add to inflight for acknowledgment tracking
-			msg := &store.Message{
-				Topic:    topic,
-				Payload:  payload,
-				QoS:      qos,
-				PacketID: pub.ID,
-			}
-			sess.Inflight.Add(pub.ID, msg, session.Outbound)
-		}
-
-		return sess.WritePacket(pub)
-	}
-
-	// MQTT 3.1.1
 	pub := &v3.Publish{
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.PublishType,
@@ -499,10 +319,6 @@ func (h *BrokerHandler) deliverMessage(sess *session.Session, topic string, payl
 // --- Response packet senders ---
 
 func (h *BrokerHandler) sendPubAck(sess *session.Session, packetID uint16) error {
-	if sess.Version == 5 {
-		return h.sendPubAckV5(sess, packetID, 0)
-	}
-
 	ack := &v3.PubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
 		ID:          packetID,
@@ -510,26 +326,7 @@ func (h *BrokerHandler) sendPubAck(sess *session.Session, packetID uint16) error
 	return sess.WritePacket(ack)
 }
 
-func (h *BrokerHandler) sendPubAckV5(sess *session.Session, packetID uint16, reasonCode byte) error {
-	ack := &v5.PubAck{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
-		ID:          packetID,
-		ReasonCode:  &reasonCode,
-	}
-	return sess.WritePacket(ack)
-}
-
 func (h *BrokerHandler) sendPubRec(sess *session.Session, packetID uint16) error {
-	if sess.Version == 5 {
-		zero := byte(0)
-		rec := &v5.PubRec{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
-			ID:          packetID,
-			ReasonCode:  &zero,
-		}
-		return sess.WritePacket(rec)
-	}
-
 	rec := &v3.PubRec{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 		ID:          packetID,
@@ -538,16 +335,6 @@ func (h *BrokerHandler) sendPubRec(sess *session.Session, packetID uint16) error
 }
 
 func (h *BrokerHandler) sendPubRel(sess *session.Session, packetID uint16) error {
-	if sess.Version == 5 {
-		zero := byte(0)
-		rel := &v5.PubRel{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
-			ID:          packetID,
-			ReasonCode:  &zero,
-		}
-		return sess.WritePacket(rel)
-	}
-
 	rel := &v3.PubRel{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 		ID:          packetID,
@@ -556,16 +343,6 @@ func (h *BrokerHandler) sendPubRel(sess *session.Session, packetID uint16) error
 }
 
 func (h *BrokerHandler) sendPubComp(sess *session.Session, packetID uint16) error {
-	if sess.Version == 5 {
-		zero := byte(0)
-		comp := &v5.PubComp{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
-			ID:          packetID,
-			ReasonCode:  &zero,
-		}
-		return sess.WritePacket(comp)
-	}
-
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 		ID:          packetID,
@@ -573,34 +350,16 @@ func (h *BrokerHandler) sendPubComp(sess *session.Session, packetID uint16) erro
 	return sess.WritePacket(comp)
 }
 
-func (h *BrokerHandler) sendSubAck(sess *session.Session, packetID uint16, reasonCodes []byte) error {
-	if sess.Version == 5 {
-		ack := &v5.SubAck{
-			FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
-			ID:          packetID,
-			ReasonCodes: &reasonCodes,
-		}
-		return sess.WritePacket(ack)
-	}
-
+func (h *BrokerHandler) sendSubAck(sess *session.Session, packetID uint16, returnCodes []byte) error {
 	ack := &v3.SubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
 		ID:          packetID,
-		ReturnCodes: reasonCodes,
+		ReturnCodes: returnCodes,
 	}
 	return sess.WritePacket(ack)
 }
 
-func (h *BrokerHandler) sendUnsubAck(sess *session.Session, packetID uint16, reasonCodes []byte) error {
-	if sess.Version == 5 {
-		ack := &v5.UnSubAck{
-			FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
-			ID:          packetID,
-			ReasonCodes: &reasonCodes,
-		}
-		return sess.WritePacket(ack)
-	}
-
+func (h *BrokerHandler) sendUnsubAck(sess *session.Session, packetID uint16) error {
 	ack := &v3.UnSubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
 		ID:          packetID,
@@ -609,13 +368,6 @@ func (h *BrokerHandler) sendUnsubAck(sess *session.Session, packetID uint16, rea
 }
 
 func (h *BrokerHandler) sendPingResp(sess *session.Session) error {
-	if sess.Version == 5 {
-		resp := &v5.PingResp{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
-		}
-		return sess.WritePacket(resp)
-	}
-
 	resp := &v3.PingResp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
 	}

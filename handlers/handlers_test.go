@@ -7,7 +7,6 @@ import (
 
 	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
@@ -139,9 +138,9 @@ func TestHandlePublishQoS0(t *testing.T) {
 		Publisher: pub,
 	})
 
-	sess, _ := createTestSession(5)
+	sess, _ := createTestSession(4)
 
-	pkt := &v5.Publish{
+	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
 		TopicName:   "test/topic",
 		Payload:     []byte("hello"),
@@ -167,9 +166,9 @@ func TestHandlePublishQoS1(t *testing.T) {
 		Publisher: pub,
 	})
 
-	sess, conn := createTestSession(5)
+	sess, conn := createTestSession(4)
 
-	pkt := &v5.Publish{
+	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
 		TopicName:   "test/topic",
 		Payload:     []byte("hello"),
@@ -190,7 +189,7 @@ func TestHandlePublishQoS1(t *testing.T) {
 		t.Fatalf("Expected 1 packet written, got %d", len(conn.written))
 	}
 
-	ack, ok := conn.written[0].(*v5.PubAck)
+	ack, ok := conn.written[0].(*v3.PubAck)
 	if !ok {
 		t.Fatalf("Expected PubAck, got %T", conn.written[0])
 	}
@@ -205,10 +204,10 @@ func TestHandlePublishQoS2(t *testing.T) {
 		Publisher: pub,
 	})
 
-	sess, conn := createTestSession(5)
+	sess, conn := createTestSession(4)
 
 	// Step 1: PUBLISH
-	pkt := &v5.Publish{
+	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
 		TopicName:   "test/topic",
 		Payload:     []byte("hello"),
@@ -229,7 +228,7 @@ func TestHandlePublishQoS2(t *testing.T) {
 		t.Fatalf("Expected 1 packet written, got %d", len(conn.written))
 	}
 
-	rec, ok := conn.written[0].(*v5.PubRec)
+	rec, ok := conn.written[0].(*v3.PubRec)
 	if !ok {
 		t.Fatalf("Expected PubRec, got %T", conn.written[0])
 	}
@@ -238,7 +237,7 @@ func TestHandlePublishQoS2(t *testing.T) {
 	}
 
 	// Step 2: PUBREL
-	pubrel := &v5.PubRel{
+	pubrel := &v3.PubRel{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 		ID:          456,
 	}
@@ -258,7 +257,7 @@ func TestHandlePublishQoS2(t *testing.T) {
 		t.Fatalf("Expected 2 packets written, got %d", len(conn.written))
 	}
 
-	comp, ok := conn.written[1].(*v5.PubComp)
+	comp, ok := conn.written[1].(*v3.PubComp)
 	if !ok {
 		t.Fatalf("Expected PubComp, got %T", conn.written[1])
 	}
@@ -273,15 +272,14 @@ func TestHandleSubscribe(t *testing.T) {
 		Router: router,
 	})
 
-	sess, conn := createTestSession(5)
+	sess, conn := createTestSession(4)
 
-	noLocal := true
-	pkt := &v5.Subscribe{
+	pkt := &v3.Subscribe{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
 		ID:          789,
-		Opts: []v5.SubOption{
-			{Topic: "home/+/temp", MaxQoS: 1, NoLocal: &noLocal},
-			{Topic: "sensors/#", MaxQoS: 2},
+		Topics: []v3.Topic{
+			{Name: "home/+/temp", QoS: 1},
+			{Name: "sensors/#", QoS: 2},
 		},
 	}
 
@@ -300,15 +298,15 @@ func TestHandleSubscribe(t *testing.T) {
 		t.Fatalf("Expected 1 packet written, got %d", len(conn.written))
 	}
 
-	ack, ok := conn.written[0].(*v5.SubAck)
+	ack, ok := conn.written[0].(*v3.SubAck)
 	if !ok {
 		t.Fatalf("Expected SubAck, got %T", conn.written[0])
 	}
 	if ack.ID != 789 {
 		t.Errorf("SubAck ID: got %d, want 789", ack.ID)
 	}
-	if ack.ReasonCodes == nil || len(*ack.ReasonCodes) != 2 {
-		t.Errorf("Expected 2 reason codes")
+	if len(ack.ReturnCodes) != 2 {
+		t.Errorf("Expected 2 return codes")
 	}
 
 	// Check session subscriptions cached
@@ -324,14 +322,14 @@ func TestHandleUnsubscribe(t *testing.T) {
 		Router: router,
 	})
 
-	sess, conn := createTestSession(5)
+	sess, conn := createTestSession(4)
 
 	// First subscribe
 	router.Subscribe(sess.ID, "home/#", 1, store.SubscribeOptions{})
 	sess.AddSubscription("home/#", store.SubscribeOptions{})
 
 	// Then unsubscribe
-	pkt := &v5.Unsubscribe{
+	pkt := &v3.Unsubscribe{
 		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType},
 		ID:          101,
 		Topics:      []string{"home/#"},
@@ -352,7 +350,7 @@ func TestHandleUnsubscribe(t *testing.T) {
 		t.Fatalf("Expected 1 packet written, got %d", len(conn.written))
 	}
 
-	ack, ok := conn.written[0].(*v5.UnSubAck)
+	ack, ok := conn.written[0].(*v3.UnSubAck)
 	if !ok {
 		t.Fatalf("Expected UnsubAck, got %T", conn.written[0])
 	}
@@ -370,7 +368,7 @@ func TestHandleUnsubscribe(t *testing.T) {
 func TestHandlePingReq(t *testing.T) {
 	h := NewBrokerHandler(BrokerHandlerConfig{})
 
-	sess, conn := createTestSession(5)
+	sess, conn := createTestSession(4)
 
 	err := h.HandlePingReq(sess)
 	if err != nil {
@@ -381,7 +379,7 @@ func TestHandlePingReq(t *testing.T) {
 		t.Fatalf("Expected 1 packet written, got %d", len(conn.written))
 	}
 
-	_, ok := conn.written[0].(*v5.PingResp)
+	_, ok := conn.written[0].(*v3.PingResp)
 	if !ok {
 		t.Fatalf("Expected PingResp, got %T", conn.written[0])
 	}
@@ -390,11 +388,10 @@ func TestHandlePingReq(t *testing.T) {
 func TestHandleDisconnect(t *testing.T) {
 	h := NewBrokerHandler(BrokerHandlerConfig{})
 
-	sess, _ := createTestSession(5)
+	sess, _ := createTestSession(4)
 
-	pkt := &v5.Disconnect{
+	pkt := &v3.Disconnect{
 		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
-		ReasonCode:  0,
 	}
 
 	err := h.HandleDisconnect(sess, pkt)
@@ -413,9 +410,9 @@ func TestHandlePublishWithRetain(t *testing.T) {
 		Retained: st.Retained(),
 	})
 
-	sess, _ := createTestSession(5)
+	sess, _ := createTestSession(4)
 
-	pkt := &v5.Publish{
+	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0, Retain: true},
 		TopicName:   "status/online",
 		Payload:     []byte("true"),
@@ -436,7 +433,7 @@ func TestHandlePublishWithRetain(t *testing.T) {
 	}
 
 	// Clear retained with empty payload
-	pkt2 := &v5.Publish{
+	pkt2 := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0, Retain: true},
 		TopicName:   "status/online",
 		Payload:     []byte{},
@@ -450,40 +447,6 @@ func TestHandlePublishWithRetain(t *testing.T) {
 	}
 }
 
-func TestHandlePublishV3(t *testing.T) {
-	pub := &mockPublisher{}
-	h := NewBrokerHandler(BrokerHandlerConfig{
-		Publisher: pub,
-	})
-
-	sess, conn := createTestSession(4) // MQTT 3.1.1
-
-	pkt := &v3.Publish{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
-		TopicName:   "test/topic",
-		Payload:     []byte("hello v3"),
-		ID:          111,
-	}
-
-	err := h.HandlePublish(sess, pkt)
-	if err != nil {
-		t.Fatalf("HandlePublish failed: %v", err)
-	}
-
-	if len(pub.published) != 1 {
-		t.Errorf("Expected 1 publish, got %d", len(pub.published))
-	}
-
-	// Check PUBACK (v3)
-	ack, ok := conn.written[0].(*v3.PubAck)
-	if !ok {
-		t.Fatalf("Expected v3.PubAck, got %T", conn.written[0])
-	}
-	if ack.ID != 111 {
-		t.Errorf("PubAck ID: got %d, want 111", ack.ID)
-	}
-}
-
 func TestDispatcher(t *testing.T) {
 	pub := &mockPublisher{}
 	h := NewBrokerHandler(BrokerHandlerConfig{
@@ -491,10 +454,10 @@ func TestDispatcher(t *testing.T) {
 	})
 	d := NewDispatcher(h)
 
-	sess, conn := createTestSession(5)
+	sess, conn := createTestSession(4)
 
 	// Test PUBLISH dispatch
-	pubPkt := &v5.Publish{
+	pubPkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
 		TopicName:   "test",
 		Payload:     []byte("data"),
@@ -506,7 +469,7 @@ func TestDispatcher(t *testing.T) {
 	}
 
 	// Test PINGREQ dispatch
-	pingPkt := &v5.PingReq{
+	pingPkt := &v3.PingReq{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
 	}
 

@@ -1,14 +1,12 @@
 package transport
 
 import (
-	"errors"
 	"io"
 	"net"
 
 	"github.com/dborovcanin/mqtt/broker"
-	packets "github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
 
 // TCPFrontend implements the Frontend interface for TCP connections.
@@ -60,33 +58,12 @@ func (f *TCPFrontend) Addr() net.Addr {
 type TCPConnection struct {
 	net.Conn
 	reader io.Reader
-	// version stores the MQTT version (3 or 5) once negotiated/detected.
-	version int
 }
 
 // ReadPacket reads a packet from the connection.
-// It uses the sniffer for the first packet if version is unknown.
 func (c *TCPConnection) ReadPacket() (packets.ControlPacket, error) {
-	if c.version == 0 {
-		// Detect protocol version from the first packet (CONNECT)
-		ver, restored, err := packets.DetectProtocolVersion(c.reader)
-		if err != nil {
-			return nil, err
-		}
-		c.version = ver
-		c.reader = restored
-	}
-
-	// Dispatch based on version
-	if c.version == 5 {
-		pkt, _, _, err := v5.ReadPacket(c.reader)
-		return pkt, err
-	} else if c.version == 4 || c.version == 3 {
-		pkt, _, _, err := v3.ReadPacket(c.reader)
-		return pkt, err
-	}
-
-	return nil, errors.New("unsupported protocol version")
+	pkt, _, _, err := v3.ReadPacket(c.reader)
+	return pkt, err
 }
 
 // WritePacket writes an MQTT packet to the connection.

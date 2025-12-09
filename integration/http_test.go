@@ -38,11 +38,11 @@ func TestHTTPAdapter_Publish(t *testing.T) {
 	// Allow server to start
 	time.Sleep(100 * time.Millisecond)
 
-	// 4. Create a subscriber client
+	// 4. Create a subscriber client (using v3.1.1 = version 4)
 	subOpts := client.Options{
 		ClientID:   "http-subscriber",
 		BrokerAddr: tcpFe.Addr().String(),
-		Version:    5,
+		Version:    4,
 	}
 	subClient := client.NewClient(subOpts)
 

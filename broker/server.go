@@ -10,7 +10,6 @@ import (
 	"github.com/dborovcanin/mqtt/handlers"
 	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
@@ -91,27 +90,17 @@ func (s *Server) HandleConnection(conn Connection) {
 		return
 	}
 
-	var clientID string
-	var version byte
-	var cleanStart bool
-	var keepAlive uint16
-
-	// Determine version and ClientID
-	if p, ok := pkt.(*v5.Connect); ok {
-		clientID = p.ClientID
-		version = 5
-		cleanStart = p.CleanStart
-		keepAlive = p.KeepAlive
-	} else if p, ok := pkt.(*v3.Connect); ok {
-		clientID = p.ClientID
-		version = 4
-		cleanStart = p.CleanSession
-		keepAlive = p.KeepAlive
-	} else {
-		fmt.Printf("Unknown CONNECT packet type\n")
+	// Extract connection parameters from CONNECT packet
+	p, ok := pkt.(*v3.Connect)
+	if !ok {
+		fmt.Printf("Expected v3 CONNECT packet\n")
 		conn.Close()
 		return
 	}
+
+	clientID := p.ClientID
+	cleanStart := p.CleanSession
+	keepAlive := p.KeepAlive
 
 	// 3. Get or create session
 	opts := session.Options{
@@ -120,7 +109,7 @@ func (s *Server) HandleConnection(conn Connection) {
 		KeepAlive:      keepAlive,
 	}
 
-	sess, _, err := s.sessionMgr.GetOrCreate(clientID, version, opts)
+	sess, _, err := s.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
 	if err != nil {
 		fmt.Printf("Session creation error: %v\n", err)
 		conn.Close()
@@ -136,7 +125,7 @@ func (s *Server) HandleConnection(conn Connection) {
 	}
 
 	// 5. Send CONNACK
-	if err := s.sendConnAck(conn, int(version)); err != nil {
+	if err := s.sendConnAck(conn); err != nil {
 		fmt.Printf("CONNACK error: %v\n", err)
 		sess.Disconnect(false)
 		return
@@ -182,14 +171,7 @@ func (s *Server) deliverOfflineMessages(sess *session.Session) {
 	}
 }
 
-func (s *Server) sendConnAck(conn Connection, version int) error {
-	if version == 5 {
-		ack := &v5.ConnAck{
-			FixedHeader: packets.FixedHeader{PacketType: packets.ConnAckType},
-			ReasonCode:  0,
-		}
-		return conn.WritePacket(ack)
-	}
+func (s *Server) sendConnAck(conn Connection) error {
 	ack := &v3.ConnAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.ConnAckType},
 		ReturnCode:  0,
@@ -263,29 +245,6 @@ func (s *Server) Publish(topic string, payload []byte, qos byte, retain bool, pr
 
 // deliverToSession sends a message to a connected session.
 func (s *Server) deliverToSession(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
-	if sess.Version == 5 {
-		pub := &v5.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        qos,
-				Retain:     retain,
-			},
-			TopicName: topic,
-			Payload:   payload,
-		}
-		if qos > 0 {
-			pub.ID = sess.NextPacketID()
-			msg := &store.Message{
-				Topic:    topic,
-				Payload:  payload,
-				QoS:      qos,
-				PacketID: pub.ID,
-			}
-			sess.Inflight.Add(pub.ID, msg, session.Outbound)
-		}
-		return sess.WritePacket(pub)
-	}
-
 	pub := &v3.Publish{
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.PublishType,

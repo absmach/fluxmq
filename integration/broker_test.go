@@ -27,11 +27,11 @@ func TestPubSub_V5(t *testing.T) {
 	}
 	defer fe.Close()
 
-	// 2. Start Client
+	// 2. Start Client (using v3.1.1 = version 4)
 	opts := client.Options{
-		ClientID:   "client-v5",
+		ClientID:   "client-v3",
 		BrokerAddr: addr,
-		Version:    5,
+		Version:    4,
 	}
 	c := client.NewClient(opts)
 

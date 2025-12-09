@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/dborovcanin/mqtt/broker"
-	packets "github.com/dborovcanin/mqtt/packets"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
+	"github.com/dborovcanin/mqtt/packets"
+	v3 "github.com/dborovcanin/mqtt/packets/v3"
 )
 
 // HTTPAdapter listens for HTTP POST requests and converts them to MQTT messages.
@@ -75,11 +75,13 @@ func (h *HTTPAdapter) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 	// Simulate Client Flow
 	// 1. CONNECT
-	connectPkt := &v5.Connect{
-		FixedHeader: packets.FixedHeader{PacketType: packets.ConnectType},
-		ClientID:    "http-" + fmt.Sprintf("%d", time.Now().UnixNano()),
-		CleanStart:  true,
-		KeepAlive:   60,
+	connectPkt := &v3.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 4, // MQTT 3.1.1
+		ClientID:        "http-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		CleanSession:    true,
+		KeepAlive:       60,
 	}
 	vc.Inject(connectPkt)
 
@@ -92,7 +94,7 @@ func (h *HTTPAdapter) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. PUBLISH
-	pubPkt := &v5.Publish{
+	pubPkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
 		TopicName:   topic,
 		Payload:     payload,
@@ -100,7 +102,7 @@ func (h *HTTPAdapter) handlePublish(w http.ResponseWriter, r *http.Request) {
 	vc.Inject(pubPkt)
 
 	// 4. DISCONNECT
-	discPkt := &v5.Disconnect{
+	discPkt := &v3.Disconnect{
 		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
 	}
 	vc.Inject(discPkt)
