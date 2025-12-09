@@ -11,26 +11,40 @@ This document tracks what exists, what's missing, and the path forward.
 │ Component            │ Status       │ Notes                                 │
 ├──────────────────────┼──────────────┼───────────────────────────────────────┤
 │ packets/ (core)      │ ✅ Complete  │ v3 + v5, pooling, zero-copy           │
-│ broker/server        │ ✅ Complete  │ Basic lifecycle, routing              │
+│ broker/broker        │ ✅ Complete  │ Clean architecture, routing           │
+│ broker/connection    │ ✅ Complete  │ MQTT codec with version detection     │
 │ broker/router        │ ✅ Complete  │ Trie-based, wildcards                 │
 │ handlers/            │ ✅ Complete  │ All packet types, dispatcher          │
 │ session/             │ ✅ Complete  │ Manager, inflight, queue              │
 │ store/memory         │ ✅ Complete  │ Sessions, retained, subscriptions     │
 │ topics/              │ ✅ Complete  │ Validation, matching                  │
-│ transport/tcp        │ ✅ Complete  │ TCP frontend                          │
-│ transport/ws         │ ⚠️ Partial   │ Needs subprotocol handling            │
-│ adapter/http         │ ✅ Complete  │ POST /publish                         │
+│ server/tcp           │ ✅ Complete  │ Robust TCP server w/ graceful shutdown│
+│ codec/               │ ✅ Complete  │ Encode/decode/zerocopy utilities      │
 │ client/              │ ⚠️ Partial   │ Basic test client                     │
+├──────────────────────┴──────────────┴───────────────────────────────────────┤
+│ ✅ RECENTLY COMPLETED (Architecture Refactoring)                            │
+├──────────────────────┬──────────────┬───────────────────────────────────────┤
+│ TCP Server (Phase 1) │ ✅ Done      │ server/tcp with graceful shutdown     │
+│ Codec separation     │ ✅ Done      │ broker/connection.go MQTT codec       │
+│ Remove Frontend      │ ✅ Done      │ Removed broker.Frontend abstraction   │
+│ Remove adapters      │ ✅ Done      │ Deleted adapter/http, adapter/virtual │
+│ Context shutdown     │ ✅ Done      │ main.go uses context for lifecycle    │
+│ Documentation        │ ✅ Done      │ Updated architecture.md, walkthrough  │
+├──────────────────────┴──────────────┴───────────────────────────────────────┤
+│ ✅ PHASE 2 COMPLETE (Protocol Completeness)                                 │
+├──────────────────────┬──────────────┬───────────────────────────────────────┤
+│ QoS 1/2 retry        │ ✅ Complete  │ 20s timeout, DUP flag, session.go     │
+│ Retained on sub      │ ✅ Complete  │ handlers/broker.go sendRetained       │
+│ Will messages        │ ✅ Complete  │ Background trigger, manager.go        │
+│ Session expiry       │ ✅ Complete  │ Background expiry, manager.go         │
 ├──────────────────────┼──────────────┼───────────────────────────────────────┤
-│ QoS 1/2 retry        │ ❌ Missing   │ Needs timer-based retry               │
-│ Retained on sub      │ ❌ Missing   │ Deliver retained on SUBSCRIBE         │
-│ Will messages        │ ❌ Missing   │ Trigger on unclean disconnect         │
-│ Session expiry       │ ❌ Missing   │ Expire after ExpiryInterval           │
+│ WebSocket server     │ ❌ Missing   │ Needs new server/ws implementation    │
+│ HTTP server          │ ❌ Missing   │ Needs new server/http for REST API    │
 │ Topic aliases        │ ❌ Missing   │ v5 feature                            │
 │ Shared subscriptions │ ❌ Missing   │ $share/{group}/{filter}               │
 │ CoAP adapter         │ ❌ Missing   │ TCP first, UDP later                  │
-│ TLS support          │ ❌ Missing   │ Certificate handling                  │
-│ Configuration        │ ❌ Missing   │ YAML config file                      │
+│ TLS support          │ ❌ Missing   │ TLS config for server/tcp             │
+│ Configuration        │ ⚠️ Partial   │ Basic config exists, needs expansion  │
 │ Metrics              │ ❌ Missing   │ Prometheus                            │
 │ Distributed          │ ❌ Missing   │ etcd, raft, clustering                │
 └──────────────────────┴──────────────┴───────────────────────────────────────┘
@@ -92,86 +106,45 @@ This document tracks what exists, what's missing, and the path forward.
 
 ## What's Missing
 
-### Priority 1: Protocol Completeness
+### Priority 1: Protocol Completeness ✅ COMPLETE
 
-These are needed for MQTT spec compliance:
+All MQTT spec compliance features are now implemented:
 
-#### 1.1 QoS 1/2 Retry Mechanism
-**Current:** Messages tracked in inflight but no retry on timeout.
-**Needed:**
-- Timer per inflight message
-- Retry with DUP flag after timeout
-- Configurable retry interval and max retries
-- Clear on acknowledgment
+#### 1.1 QoS 1/2 Retry Mechanism ✅
+**Status:** Implemented in `session/session.go`
+**Implementation:**
+- `retryLoop()` runs every second checking for expired messages
+- 20 second retry timeout
+- DUP flag set on retransmitted PUBLISH packets
+- Infinite retries until acknowledged
+- See `resendMessage()` method
 
-```go
-// In session/inflight.go, add:
-type InflightMessage struct {
-    Message   *store.Message
-    Direction Direction
-    SentAt    time.Time
-    Retries   int
-    Timer     *time.Timer
-}
+#### 1.2 Retained Message Delivery on Subscribe ✅
+**Status:** Implemented in `handlers/broker.go`
+**Implementation:**
+- `HandleSubscribe()` calls `sendRetainedMessages()` for each subscription
+- Queries `retained.Match(filter)` for matching messages
+- QoS downgrade: min(publish_qos, subscribe_qos)
+- Retain flag preserved on delivery
+- Integration test: `TestRetainedMessages`
 
-func (t *InflightTracker) StartRetryTimer(id uint16, onRetry func()) {
-    // Start timer, call onRetry on expiry
-}
-```
+#### 1.3 Will Message Triggering ✅
+**Status:** Implemented in `session/manager.go`
+**Implementation:**
+- Background `triggerWills()` runs every second
+- Will stored on unclean disconnect
+- Delay interval support via `GetPending()`
+- Callback wired in `broker.NewBroker()`
+- Integration test: `TestWillMessage`
 
-#### 1.2 Retained Message Delivery on Subscribe
-**Current:** Retained messages stored but not delivered on SUBSCRIBE.
-**Needed:**
-```go
-// In handlers/broker.go HandleSubscribe:
-func (h *BrokerHandler) HandleSubscribe(...) error {
-    // ... existing subscribe logic ...
-
-    // After adding subscription, deliver retained
-    for _, filter := range topics {
-        retained, _ := h.retained.Match(filter.Topic)
-        for _, msg := range retained {
-            // Apply RetainHandling option (v5)
-            sess.WritePacket(createPublish(msg, retain=true))
-        }
-    }
-}
-```
-
-#### 1.3 Will Message Triggering
-**Current:** Will parsed and stored in session but never triggered.
-**Needed:**
-```go
-// In session/session.go Disconnect:
-func (s *Session) Disconnect(graceful bool) error {
-    // ... existing logic ...
-
-    if !graceful && s.Will != nil {
-        // Trigger will message publication
-        // This should go through the broker's Publish
-        if s.onWillTrigger != nil {
-            s.onWillTrigger(s.Will)
-        }
-    }
-}
-```
-
-#### 1.4 Session Expiry
-**Current:** ExpiryInterval stored but sessions never expire.
-**Needed:**
-- Background goroutine in SessionManager
-- Check disconnected sessions periodically
-- Delete expired sessions and their subscriptions
-
-```go
-// In session/manager.go:
-func (m *Manager) startExpiryChecker() {
-    ticker := time.NewTicker(time.Minute)
-    for range ticker.C {
-        m.expireDisconnectedSessions()
-    }
-}
-```
+#### 1.4 Session Expiry ✅
+**Status:** Implemented in `session/manager.go`
+**Implementation:**
+- Background `expireSessions()` runs every second
+- Checks disconnected sessions for expiry
+- `ExpiryInterval` from CONNECT packet
+- Complete cleanup: subscriptions, messages, storage
+- CleanStart sessions with expiry=0 destroyed immediately
 
 ### Priority 2: Additional Adapters
 
@@ -356,7 +329,108 @@ func ParseSharedSubscription(filter string) (shareName, topicFilter string, isSh
 
 ## Implementation Roadmap
 
+### Phase 1: Architecture Refactoring ✅ COMPLETED
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Status     │ Files Modified  │
+├────────────────────────────────────┼────────────┼─────────────────┤
+│ 1.1 Robust TCP server              │ ✅ Done    │ server/tcp/     │
+│     - Graceful shutdown            │            │   server.go     │
+│     - Connection limiting          │            │   server_test.go│
+│     - TCP optimizations            │            │                 │
+├────────────────────────────────────┼────────────┼─────────────────┤
+│ 1.2 MQTT codec separation          │ ✅ Done    │ broker/         │
+│     - Protocol detection           │            │   connection.go │
+│     - Version auto-detect          │            │                 │
+├────────────────────────────────────┼────────────┼─────────────────┤
+│ 1.3 Remove Frontend abstraction    │ ✅ Done    │ broker/         │
+│     - Direct HandleConnection      │            │   interfaces.go │
+│     - Broker implements Handler    │            │   broker.go     │
+├────────────────────────────────────┼────────────┼─────────────────┤
+│ 1.4 Remove old transport/adapter   │ ✅ Done    │ Deleted:        │
+│                                    │            │   transport/    │
+│                                    │            │   adapter/      │
+├────────────────────────────────────┼────────────┼─────────────────┤
+│ 1.5 Update main.go                 │ ✅ Done    │ cmd/broker/     │
+│     - Context-based shutdown       │            │   main.go       │
+│     - slog logging                 │            │                 │
+├────────────────────────────────────┼────────────┼─────────────────┤
+│ 1.6 Update documentation           │ ✅ Done    │ docs/           │
+│                                    │            │   architecture  │
+│                                    │            │   walkthrough   │
+└────────────────────────────────────┴────────────┴─────────────────┘
+```
+
 ### Phase 2: Protocol Completeness
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Modify/Create      │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.1 QoS retry mechanism            │ session/inflight.go         │
+│                                    │ session/session.go          │
+│                                    │ broker/broker.go            │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.2 Retained on subscribe          │ handlers/broker.go          │
+│                                    │ broker/broker.go            │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.3 Will message trigger           │ session/session.go          │
+│                                    │ broker/broker.go            │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.4 Session expiry                 │ session/manager.go          │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 2.5 Integration tests              │ integration/qos_test.go     │
+│                                    │ integration/will_test.go    │
+│                                    │ integration/retained_test.go│
+└────────────────────────────────────┴─────────────────────────────┘
+```
+
+### Phase 3: Additional Protocol Servers
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Create             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.1 WebSocket server               │ server/ws/server.go         │
+│     - MQTT subprotocol negotiation │ server/ws/server_test.go    │
+│     - Binary framing               │                             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.2 HTTP/REST server               │ server/http/server.go       │
+│     - POST /publish endpoint       │ server/http/publish.go      │
+│     - GET /subscribe (SSE)         │ server/http/subscribe.go    │
+│                                    │ server/http/server_test.go  │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.3 CoAP server                    │ server/coap/server.go       │
+│     - POST → PUBLISH mapping       │ server/coap/observe.go      │
+│     - Observe for subscriptions    │ server/coap/server_test.go  │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 3.4 TLS support                    │ server/tcp/tls.go           │
+│     - TLS config in server/tcp     │ Updated: server/tcp/server.go│
+│     - Certificate loading          │                             │
+└────────────────────────────────────┴─────────────────────────────┘
+```
+
+### Phase 4: Production Hardening
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Task                              │ Files to Create             │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.1 Configuration expansion        │ config/config.go (update)   │
+│                                    │ config/config_test.go       │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.2 Metrics                        │ metrics/metrics.go          │
+│                                    │ metrics/prometheus.go       │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.3 Connection limits              │ broker/broker.go (update)   │
+├────────────────────────────────────┼─────────────────────────────┤
+│ 4.4 Auth/ACL hooks                 │ auth/auth.go                │
+│                                    │ auth/acl.go                 │
+└────────────────────────────────────┴─────────────────────────────┘
+```
+
+### Phase 5: Distributed (Future)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
