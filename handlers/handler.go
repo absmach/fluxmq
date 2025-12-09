@@ -24,34 +24,34 @@ var (
 // Handler is the interface for packet handlers.
 type Handler interface {
 	// HandleConnect handles CONNECT packets.
-	HandleConnect(sess *session.Session, pkt packets.ControlPacket) error
+	HandleConnect(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePublish handles PUBLISH packets.
-	HandlePublish(sess *session.Session, pkt packets.ControlPacket) error
+	HandlePublish(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePubAck handles PUBACK packets (QoS 1 acknowledgment).
-	HandlePubAck(sess *session.Session, pkt packets.ControlPacket) error
+	HandlePubAck(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePubRec handles PUBREC packets (QoS 2 step 1).
-	HandlePubRec(sess *session.Session, pkt packets.ControlPacket) error
+	HandlePubRec(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePubRel handles PUBREL packets (QoS 2 step 2).
-	HandlePubRel(sess *session.Session, pkt packets.ControlPacket) error
+	HandlePubRel(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePubComp handles PUBCOMP packets (QoS 2 step 3).
-	HandlePubComp(sess *session.Session, pkt packets.ControlPacket) error
+	HandlePubComp(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandleSubscribe handles SUBSCRIBE packets.
-	HandleSubscribe(sess *session.Session, pkt packets.ControlPacket) error
+	HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandleUnsubscribe handles UNSUBSCRIBE packets.
-	HandleUnsubscribe(sess *session.Session, pkt packets.ControlPacket) error
+	HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePingReq handles PINGREQ packets.
-	HandlePingReq(sess *session.Session) error
+	HandlePingReq(s *session.Session) error
 
 	// HandleDisconnect handles DISCONNECT packets.
-	HandleDisconnect(sess *session.Session, pkt packets.ControlPacket) error
+	HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error
 }
 
 // Router is the message routing interface.
