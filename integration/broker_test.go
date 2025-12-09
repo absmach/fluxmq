@@ -12,7 +12,7 @@ import (
 
 func TestPubSub_V5(t *testing.T) {
 	// 1. Start Broker
-	srv := broker.NewServer()
+	srv := broker.NewBroker()
 	// Use a random port
 	fe, err := transport.NewTCPFrontend("localhost:0")
 	if err != nil {
@@ -22,9 +22,10 @@ func TestPubSub_V5(t *testing.T) {
 	// Get actual port
 	addr := fe.Addr().String()
 
-	if err := srv.AddFrontend(fe); err != nil {
-		t.Fatalf("Failed to add frontend: %v", err)
-	}
+	// Start frontend
+	go func() {
+		fe.Serve(srv)
+	}()
 	defer fe.Close()
 
 	// 2. Start Client (using v3.1.1 = version 4)

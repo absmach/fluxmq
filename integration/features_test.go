@@ -10,16 +10,17 @@ import (
 	"github.com/dborovcanin/mqtt/transport"
 )
 
-func HelperStartBroker(t *testing.T) (*broker.Server, string) {
-	srv := broker.NewServer()
+func HelperStartBroker(t *testing.T) (*broker.Broker, string) {
+	srv := broker.NewBroker()
 	fe, err := transport.NewTCPFrontend("localhost:0")
 	if err != nil {
 		t.Fatalf("Failed to create frontend: %v", err)
 	}
 	addr := fe.Addr().String()
-	if err := srv.AddFrontend(fe); err != nil {
-		t.Fatalf("Failed to add frontend: %v", err)
-	}
+	// Start frontend
+	go func() {
+		fe.Serve(srv)
+	}()
 	return srv, addr
 }
 

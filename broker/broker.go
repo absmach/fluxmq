@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/dborovcanin/mqtt/handlers"
@@ -16,12 +15,8 @@ import (
 	"github.com/dborovcanin/mqtt/store/memory"
 )
 
-// Server is the core MQTT broker.
-type Server struct {
-	// listeners tracks active Frontends
-	listeners []Frontend
-	mu        sync.Mutex
-
+// Broker is the core MQTT broker.
+type Broker struct {
 	// Session management
 	sessionMgr *session.Manager
 
@@ -36,54 +31,40 @@ type Server struct {
 	dispatcher *handlers.Dispatcher
 }
 
-// NewServer creates a new broker instance.
-func NewServer() *Server {
+// NewBroker creates a new broker instance.
+func NewBroker() *Broker {
 	st := memory.New()
 	sessionMgr := session.NewManager(st)
 	router := NewRouter()
 
-	s := &Server{
+	b := &Broker{
 		sessionMgr: sessionMgr,
 		router:     router,
 		store:      st,
 	}
 
 	// Create handler with dependencies
-	s.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
+	b.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
 		SessionManager: sessionMgr,
-		Router:         s, // Server implements handlers.Router
-		Publisher:      s, // Server implements handlers.Publisher
+		Router:         b, // Broker implements handlers.Router
+		Publisher:      b, // Broker implements handlers.Publisher
 		Retained:       st.Retained(),
 	})
-	s.dispatcher = handlers.NewDispatcher(s.handler)
+	b.dispatcher = handlers.NewDispatcher(b.handler)
 
 	sessionMgr.SetOnWillTrigger(func(will *store.WillMessage) {
-		s.Distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
+		b.Distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
 	})
 
-	return s
-}
-
-// AddFrontend registers and starts a new frontend.
-func (s *Server) AddFrontend(f Frontend) error {
-	s.mu.Lock()
-	s.listeners = append(s.listeners, f)
-	s.mu.Unlock()
-
-	go func() {
-		if err := f.Serve(s); err != nil {
-			fmt.Printf("Frontend error: %v\n", err)
-		}
-	}()
-	return nil
+	return b
 }
 
 // HandleConnection handles a new incoming connection from a Frontend.
-func (s *Server) HandleConnection(conn Connection) {
+func (b *Broker) HandleConnection(conn Connection) {
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
 	if err != nil {
-		fmt.Printf("Server ReadPacket error: %v\n", err)
+		fmt.Printf("Broker ReadPacket error: %v\n", err)
 		conn.Close()
 		return
 	}
@@ -126,7 +107,7 @@ func (s *Server) HandleConnection(conn Connection) {
 		Will:           will,
 	}
 
-	sess, _, err := s.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
+	sess, _, err := b.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
 	if err != nil {
 		fmt.Printf("Session creation error: %v\n", err)
 		conn.Close()
@@ -142,7 +123,7 @@ func (s *Server) HandleConnection(conn Connection) {
 	}
 
 	// 5. Send CONNACK
-	if err := s.sendConnAck(conn); err != nil {
+	if err := b.sendConnAck(conn); err != nil {
 		fmt.Printf("CONNACK error: %v\n", err)
 		sess.Disconnect(false)
 		return
@@ -151,14 +132,14 @@ func (s *Server) HandleConnection(conn Connection) {
 	fmt.Printf("Starting session for %s\n", clientID)
 
 	// 6. Deliver any queued offline messages
-	s.deliverOfflineMessages(sess)
+	b.deliverOfflineMessages(sess)
 
 	// 7. Run packet loop
-	s.runSession(sess)
+	b.runSession(sess)
 }
 
 // runSession runs the main packet loop for a session.
-func (s *Server) runSession(sess *session.Session) {
+func (b *Broker) runSession(sess *session.Session) {
 	for {
 		pkt, err := sess.ReadPacket()
 		if err != nil {
@@ -169,7 +150,7 @@ func (s *Server) runSession(sess *session.Session) {
 			return
 		}
 
-		if err := s.dispatcher.Dispatch(sess, pkt); err != nil {
+		if err := b.dispatcher.Dispatch(sess, pkt); err != nil {
 			if err == io.EOF {
 				return // Clean disconnect
 			}
@@ -181,14 +162,14 @@ func (s *Server) runSession(sess *session.Session) {
 }
 
 // deliverOfflineMessages sends queued messages to reconnected client.
-func (s *Server) deliverOfflineMessages(sess *session.Session) {
-	msgs := s.sessionMgr.DrainOfflineQueue(sess.ID)
+func (b *Broker) deliverOfflineMessages(sess *session.Session) {
+	msgs := b.sessionMgr.DrainOfflineQueue(sess.ID)
 	for _, msg := range msgs {
-		s.deliverToSession(sess, msg.Topic, msg.Payload, msg.QoS, msg.Retain)
+		b.deliverToSession(sess, msg.Topic, msg.Payload, msg.QoS, msg.Retain)
 	}
 }
 
-func (s *Server) sendConnAck(conn Connection) error {
+func (b *Broker) sendConnAck(conn Connection) error {
 	ack := &v3.ConnAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.ConnAckType},
 		ReturnCode:  0,
@@ -199,21 +180,20 @@ func (s *Server) sendConnAck(conn Connection) error {
 // --- handlers.Router implementation ---
 
 // Subscribe adds a subscription.
-// Subscribe adds a subscription.
-func (s *Server) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
-	s.router.Subscribe(filter, Subscription{SessionID: clientID, QoS: qos})
+func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
+	b.router.Subscribe(filter, Subscription{SessionID: clientID, QoS: qos})
 
 	// Check for retained messages
-	retained, err := s.store.Retained().Match(filter)
+	retained, err := b.store.Retained().Match(filter)
 	if err == nil {
-		sess := s.sessionMgr.Get(clientID)
+		sess := b.sessionMgr.Get(clientID)
 		if sess != nil && sess.IsConnected() {
 			for _, msg := range retained {
 				deliverQoS := qos
 				if msg.QoS < deliverQoS {
 					deliverQoS = msg.QoS
 				}
-				s.deliverToSession(sess, msg.Topic, msg.Payload, deliverQoS, true)
+				b.deliverToSession(sess, msg.Topic, msg.Payload, deliverQoS, true)
 			}
 		}
 	}
@@ -222,15 +202,15 @@ func (s *Server) Subscribe(clientID string, filter string, qos byte, opts store.
 }
 
 // Unsubscribe removes a subscription.
-func (s *Server) Unsubscribe(clientID string, filter string) error {
+func (b *Broker) Unsubscribe(clientID string, filter string) error {
 	// Router doesn't track by client, so this is a no-op for now
 	// In a full implementation, we'd track subscriptions per client
 	return nil
 }
 
 // Match returns all subscriptions matching a topic.
-func (s *Server) Match(topic string) ([]*store.Subscription, error) {
-	matched := s.router.Match(topic)
+func (b *Broker) Match(topic string) ([]*store.Subscription, error) {
+	matched := b.router.Match(topic)
 	result := make([]*store.Subscription, len(matched))
 	for i, sub := range matched {
 		result[i] = &store.Subscription{
@@ -245,15 +225,15 @@ func (s *Server) Match(topic string) ([]*store.Subscription, error) {
 // --- handlers.Publisher implementation ---
 
 // Distribute distributes a message to all matching subscribers.
-func (s *Server) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
+func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
 	// Handle retained message
 	if retain {
 		if len(payload) == 0 {
 			// Empty payload means remove retained message
-			s.store.Retained().Delete(topic)
+			b.store.Retained().Delete(topic)
 		} else {
 			// Update retained message
-			s.store.Retained().Set(topic, &store.Message{
+			b.store.Retained().Set(topic, &store.Message{
 				Topic:      topic,
 				Payload:    payload,
 				QoS:        qos,
@@ -263,10 +243,10 @@ func (s *Server) Distribute(topic string, payload []byte, qos byte, retain bool,
 		}
 	}
 
-	matched := s.router.Match(topic)
+	matched := b.router.Match(topic)
 
 	for _, sub := range matched {
-		sess := s.sessionMgr.Get(sub.SessionID)
+		sess := b.sessionMgr.Get(sub.SessionID)
 		if sess == nil {
 			continue
 		}
@@ -278,7 +258,7 @@ func (s *Server) Distribute(topic string, payload []byte, qos byte, retain bool,
 		}
 
 		if sess.IsConnected() {
-			s.deliverToSession(sess, topic, payload, deliverQoS, false)
+			b.deliverToSession(sess, topic, payload, deliverQoS, false)
 		} else if deliverQoS > 0 {
 			// Queue for offline delivery
 			msg := &store.Message{
@@ -297,19 +277,19 @@ func (s *Server) Distribute(topic string, payload []byte, qos byte, retain bool,
 // --- OperationHandler implementation ---
 
 // Publish implements OperationHandler.Publish for stateless injection.
-func (s *Server) Publish(ctx context.Context, clientID string, topic string, payload []byte, qos byte, retain bool) error {
-	return s.Distribute(topic, payload, qos, retain, nil)
+func (b *Broker) Publish(ctx context.Context, clientID string, topic string, payload []byte, qos byte, retain bool) error {
+	return b.Distribute(topic, payload, qos, retain, nil)
 }
 
 // SubscribeToTopic implements OperationHandler.SubscribeToTopic.
 // Note: This requires a mechanism to pump messages to a channel.
 // We can use a special internal session type or a channel-based adapter.
-func (s *Server) SubscribeToTopic(ctx context.Context, clientID string, topicFilter string) (<-chan *store.Message, error) {
+func (b *Broker) SubscribeToTopic(ctx context.Context, clientID string, topicFilter string) (<-chan *store.Message, error) {
 	return nil, fmt.Errorf("stateless subscribe not implemented yet")
 }
 
 // deliverToSession sends a message to a connected session.
-func (s *Server) deliverToSession(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
+func (b *Broker) deliverToSession(sess *session.Session, topic string, payload []byte, qos byte, retain bool) error {
 	pub := &v3.Publish{
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.PublishType,
@@ -332,18 +312,10 @@ func (s *Server) deliverToSession(sess *session.Session, topic string, payload [
 	return sess.WritePacket(pub)
 }
 
-// Close shuts down the server.
-func (s *Server) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, l := range s.listeners {
-		l.Close()
-	}
-
-	s.sessionMgr.Close()
-	s.store.Close()
-
+// Close shuts down the broker.
+func (b *Broker) Close() error {
+	b.sessionMgr.Close()
+	b.store.Close()
 	return nil
 }
 

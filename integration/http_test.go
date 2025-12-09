@@ -14,7 +14,7 @@ import (
 
 func TestHTTPAdapter_Publish(t *testing.T) {
 	// 1. Start Broker
-	srv := broker.NewServer()
+	srv := broker.NewBroker()
 
 	// 2. Start TCP Frontend for subscriber
 	tcpFe, err := transport.NewTCPFrontend("localhost:0")
@@ -22,18 +22,16 @@ func TestHTTPAdapter_Publish(t *testing.T) {
 		t.Fatalf("Failed to create TCP frontend: %v", err)
 	}
 	defer tcpFe.Close()
-	if err := srv.AddFrontend(tcpFe); err != nil {
-		t.Fatalf("Failed to add TCP frontend: %v", err)
-	}
+	go func() {
+		tcpFe.Serve(srv)
+	}()
 
 	// 3. Start HTTP Adapter
 	httpFe := adapter.NewHTTPAdapter("localhost:8889")
 	defer httpFe.Close()
-	// Start in background (srv.AddFrontend does this, but Serve is blocking, wrapper handles it?)
-	// srv.AddFrontend calls Serve in goroutine.
-	if err := srv.AddFrontend(httpFe); err != nil {
-		t.Fatalf("Failed to add HTTP frontend: %v", err)
-	}
+	go func() {
+		httpFe.Serve(srv)
+	}()
 
 	// Allow server to start
 	time.Sleep(100 * time.Millisecond)

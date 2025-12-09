@@ -25,8 +25,8 @@ func main() {
 
 	slog.Info("starting MQTT broker", "addr", cfg.Server.TCPAddr)
 
-	// Create broker server
-	server := broker.NewServer()
+	// Create broker
+	server := broker.NewBroker()
 
 	// Create TCP frontend
 	tcp, err := transport.NewTCPFrontend(cfg.Server.TCPAddr)
@@ -41,11 +41,12 @@ func main() {
 		frontend = &loggingFrontend{Frontend: tcp, logger: logger}
 	}
 
-	// Add frontend to server
-	if err := server.AddFrontend(frontend); err != nil {
-		slog.Error("failed to add frontend", "error", err)
-		os.Exit(1)
-	}
+	// Start frontend serving the broker
+	go func() {
+		if err := frontend.Serve(server); err != nil {
+			slog.Error("frontend error", "error", err)
+		}
+	}()
 
 	slog.Info("MQTT broker started", "addr", tcp.Addr().String())
 
@@ -56,6 +57,12 @@ func main() {
 
 	slog.Info("shutting down", "signal", sig.String())
 
+	// Stop accepting connections
+	if err := frontend.Close(); err != nil {
+		slog.Error("error closing frontend", "error", err)
+	}
+
+	// Shutdown broker
 	if err := server.Close(); err != nil {
 		slog.Error("error during shutdown", "error", err)
 	}
