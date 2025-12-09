@@ -1,55 +1,221 @@
 package config
 
 import (
-	"flag"
+	"fmt"
 	"os"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-// Config holds all configuration for the broker.
+// Config holds all configuration for the MQTT broker.
 type Config struct {
-	Server ServerConfig
-	Log    LogConfig
+	Server  ServerConfig  `yaml:"server"`
+	Broker  BrokerConfig  `yaml:"broker"`
+	Session SessionConfig `yaml:"session"`
+	Log     LogConfig     `yaml:"log"`
+	Storage StorageConfig `yaml:"storage"`
 }
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
-	TCPAddr  string
-	HTTPAddr string
+	// TCP server settings
+	TCPAddr         string        `yaml:"tcp_addr"`
+	TCPMaxConn      int           `yaml:"tcp_max_connections"`
+	TCPReadTimeout  time.Duration `yaml:"tcp_read_timeout"`
+	TCPWriteTimeout time.Duration `yaml:"tcp_write_timeout"`
+
+	// TLS settings
+	TLSEnabled  bool   `yaml:"tls_enabled"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
+
+	// HTTP adapter settings (future)
+	HTTPAddr    string `yaml:"http_addr"`
+	HTTPEnabled bool   `yaml:"http_enabled"`
+
+	// WebSocket settings (future)
+	WSAddr    string `yaml:"ws_addr"`
+	WSEnabled bool   `yaml:"ws_enabled"`
+
+	// Graceful shutdown timeout
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+}
+
+// BrokerConfig holds broker-specific settings.
+type BrokerConfig struct {
+	// Maximum message size in bytes
+	MaxMessageSize int `yaml:"max_message_size"`
+
+	// Retained message limits
+	MaxRetainedMessages int `yaml:"max_retained_messages"`
+
+	// QoS retry settings
+	RetryInterval time.Duration `yaml:"retry_interval"`
+	MaxRetries    int           `yaml:"max_retries"`
+}
+
+// SessionConfig holds session management settings.
+type SessionConfig struct {
+	// Maximum sessions allowed
+	MaxSessions int `yaml:"max_sessions"`
+
+	// Default expiry interval (seconds) if client doesn't specify
+	DefaultExpiryInterval uint32 `yaml:"default_expiry_interval"`
+
+	// Maximum queued messages per offline client
+	MaxOfflineQueueSize int `yaml:"max_offline_queue_size"`
+
+	// Maximum inflight messages per session
+	MaxInflightMessages int `yaml:"max_inflight_messages"`
 }
 
 // LogConfig holds logging configuration.
 type LogConfig struct {
-	Level  string
-	Format string
+	Level  string `yaml:"level"`  // debug, info, warn, error
+	Format string `yaml:"format"` // text, json
 }
 
-// Load loads configuration from environment variables and flags.
-// Flags take precedence over environment variables.
-func Load() *Config {
-	cfg := &Config{}
+// StorageConfig holds storage backend configuration.
+type StorageConfig struct {
+	Type string `yaml:"type"` // memory, etcd (future)
 
-	// Defaults / Environment Variables
-	defaultTCPAddr := getEnv("MQTT_TCP_ADDR", ":1883")
-	defaultHTTPAddr := getEnv("MQTT_HTTP_ADDR", ":8080")
-	defaultLogLevel := getEnv("MQTT_LOG_LEVEL", "info")
-	defaultLogFormat := getEnv("MQTT_LOG_FORMAT", "text")
-
-	// Flags
-	flag.StringVar(&cfg.Server.TCPAddr, "addr", defaultTCPAddr, "MQTT broker TCP listen address")
-	flag.StringVar(&cfg.Server.HTTPAddr, "http-addr", defaultHTTPAddr, "HTTP adapter listen address")
-	flag.StringVar(&cfg.Log.Level, "log", defaultLogLevel, "Log level (debug, info, warn, error)")
-	flag.StringVar(&cfg.Log.Format, "log-format", defaultLogFormat, "Log format (text, json)")
-
-	flag.Parse()
-
-	return cfg
+	// etcd settings (future)
+	EtcdEndpoints []string `yaml:"etcd_endpoints"`
+	EtcdPrefix    string   `yaml:"etcd_prefix"`
 }
 
-// getEnv retrieves the value of the environment variable named by the key.
-// It returns the value, which will be the default if the variable is not present.
-func getEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
+// Default returns a configuration with sensible defaults.
+func Default() *Config {
+	return &Config{
+		Server: ServerConfig{
+			TCPAddr:         ":1883",
+			TCPMaxConn:      10000,
+			TCPReadTimeout:  60 * time.Second,
+			TCPWriteTimeout: 60 * time.Second,
+			TLSEnabled:      false,
+			HTTPAddr:        ":8080",
+			HTTPEnabled:     false,
+			WSAddr:          ":8083",
+			WSEnabled:       false,
+			ShutdownTimeout: 30 * time.Second,
+		},
+		Broker: BrokerConfig{
+			MaxMessageSize:      1024 * 1024, // 1MB
+			MaxRetainedMessages: 10000,
+			RetryInterval:       20 * time.Second,
+			MaxRetries:          0, // Infinite retries
+		},
+		Session: SessionConfig{
+			MaxSessions:           10000,
+			DefaultExpiryInterval: 300, // 5 minutes
+			MaxOfflineQueueSize:   1000,
+			MaxInflightMessages:   100,
+		},
+		Log: LogConfig{
+			Level:  "info",
+			Format: "text",
+		},
+		Storage: StorageConfig{
+			Type: "memory",
+		},
 	}
-	return defaultValue
+}
+
+// Load loads configuration from a YAML file.
+// If the file doesn't exist, returns default configuration.
+func Load(filename string) (*Config, error) {
+	// If no file specified, use defaults
+	if filename == "" {
+		return Default(), nil
+	}
+
+	// Check if file exists
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Default(), nil
+		}
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse YAML
+	cfg := Default() // Start with defaults
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Validate
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// Validate checks if the configuration is valid.
+func (c *Config) Validate() error {
+	// Server validation
+	if c.Server.TCPAddr == "" {
+		return fmt.Errorf("server.tcp_addr cannot be empty")
+	}
+	if c.Server.TCPMaxConn < 0 {
+		return fmt.Errorf("server.tcp_max_connections cannot be negative")
+	}
+	if c.Server.TLSEnabled {
+		if c.Server.TLSCertFile == "" {
+			return fmt.Errorf("server.tls_cert_file required when TLS is enabled")
+		}
+		if c.Server.TLSKeyFile == "" {
+			return fmt.Errorf("server.tls_key_file required when TLS is enabled")
+		}
+	}
+
+	// Broker validation
+	if c.Broker.MaxMessageSize < 1024 {
+		return fmt.Errorf("broker.max_message_size must be at least 1KB")
+	}
+	if c.Broker.RetryInterval < time.Second {
+		return fmt.Errorf("broker.retry_interval must be at least 1 second")
+	}
+
+	// Session validation
+	if c.Session.MaxSessions < 1 {
+		return fmt.Errorf("session.max_sessions must be at least 1")
+	}
+	if c.Session.MaxOfflineQueueSize < 10 {
+		return fmt.Errorf("session.max_offline_queue_size must be at least 10")
+	}
+
+	// Log validation
+	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if !validLevels[c.Log.Level] {
+		return fmt.Errorf("log.level must be one of: debug, info, warn, error")
+	}
+	validFormats := map[string]bool{"text": true, "json": true}
+	if !validFormats[c.Log.Format] {
+		return fmt.Errorf("log.format must be one of: text, json")
+	}
+
+	// Storage validation
+	validStorage := map[string]bool{"memory": true}
+	if !validStorage[c.Storage.Type] {
+		return fmt.Errorf("storage.type must be: memory")
+	}
+
+	return nil
+}
+
+// Save writes the configuration to a YAML file.
+func (c *Config) Save(filename string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
 }

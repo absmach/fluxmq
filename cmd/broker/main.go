@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/dborovcanin/mqtt/broker"
 	"github.com/dborovcanin/mqtt/config"
@@ -14,58 +14,86 @@ import (
 )
 
 func main() {
-	// Load configuration
-	cfg := config.Load()
+	// Parse command-line flags
+	configFile := flag.String("config", "", "Path to configuration file")
+	flag.Parse()
 
-	// Setup structured logging
-	level := parseLogLevel(cfg.Log.Level)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: level,
-	}))
+	// Load configuration
+	cfg, err := config.Load(*configFile)
+	if err != nil {
+		slog.Error("Failed to load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	// Setup logging
+	logLevel := slog.LevelInfo
+	switch cfg.Log.Level {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	}
+
+	var handler slog.Handler
+	if cfg.Log.Format == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	}
+	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	slog.Info("starting MQTT broker", "addr", cfg.Server.TCPAddr)
+	slog.Info("Starting MQTT broker", "version", "0.1.0")
+	slog.Info("Configuration loaded",
+		"tcp_addr", cfg.Server.TCPAddr,
+		"max_connections", cfg.Server.TCPMaxConn,
+		"log_level", cfg.Log.Level)
 
 	// Create broker
-	mqttBroker := broker.NewBroker()
+	b := broker.NewBroker()
+	defer b.Close()
 
-	// Create TCP server configuration
+	// Create TCP server with config
 	serverCfg := tcp.Config{
 		Address:         cfg.Server.TCPAddr,
-		ShutdownTimeout: 30 * time.Second,
-		MaxConnections:  0, // unlimited for now
-		ReadTimeout:     60 * time.Second,
-		WriteTimeout:    60 * time.Second,
-		TCPKeepAlive:    15 * time.Second,
+		ShutdownTimeout: cfg.Server.ShutdownTimeout,
+		MaxConnections:  cfg.Server.TCPMaxConn,
+		ReadTimeout:     cfg.Server.TCPReadTimeout,
+		WriteTimeout:    cfg.Server.TCPWriteTimeout,
 		Logger:          logger,
 	}
+	server := tcp.New(serverCfg, b)
 
-	// Create TCP server with broker as handler
-	server := tcp.New(serverCfg, mqttBroker)
-
-	// Setup graceful shutdown with context
-	ctx, cancel := signal.NotifyContext(context.Background(),
-		os.Interrupt, syscall.SIGTERM)
+	// Context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	slog.Info("MQTT broker started", "addr", cfg.Server.TCPAddr)
-
-	// Start server (blocks until shutdown)
-	if err := server.Listen(ctx); err != nil {
-		if err == tcp.ErrShutdownTimeout {
-			slog.Warn("shutdown timeout exceeded, some connections may have been forced closed")
-		} else {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
+	// Start server in background
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := server.Listen(ctx); err != nil {
+			serverErr <- err
 		}
+	}()
+
+	slog.Info("MQTT broker started successfully", "address", server.Addr())
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigChan:
+		slog.Info("Received shutdown signal", "signal", sig)
+		cancel()
+	case err := <-serverErr:
+		slog.Error("Server error", "error", err)
+		cancel()
 	}
 
-	// Shutdown broker
-	if err := mqttBroker.Close(); err != nil {
-		slog.Error("error during broker shutdown", "error", err)
-	}
-
-	slog.Info("broker stopped gracefully")
+	slog.Info("MQTT broker stopped")
 }
 
 func parseLogLevel(level string) slog.Level {

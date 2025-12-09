@@ -44,7 +44,7 @@ This document tracks what exists, what's missing, and the path forward.
 │ Shared subscriptions │ ❌ Missing   │ $share/{group}/{filter}               │
 │ CoAP adapter         │ ❌ Missing   │ TCP first, UDP later                  │
 │ TLS support          │ ❌ Missing   │ TLS config for server/tcp             │
-│ Configuration        │ ⚠️ Partial   │ Basic config exists, needs expansion  │
+│ Configuration        │ ✅ Complete  │ YAML config, validation, defaults     │
 │ Metrics              │ ❌ Missing   │ Prometheus                            │
 │ Distributed          │ ❌ Missing   │ etcd, raft, clustering                │
 └──────────────────────┴──────────────┴───────────────────────────────────────┘
