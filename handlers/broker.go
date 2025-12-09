@@ -141,7 +141,7 @@ func (h *BrokerHandler) publishMessage(sess *session.Session, topic string, payl
 
 	// Publish to subscribers
 	if h.publisher != nil {
-		return h.publisher.Publish(topic, payload, qos, retain, nil)
+		return h.publisher.Distribute(topic, payload, qos, retain, nil)
 	}
 
 	return nil

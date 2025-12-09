@@ -8,6 +8,7 @@ import (
 	packets "github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	v5 "github.com/dborovcanin/mqtt/packets/v5"
+	"github.com/dborovcanin/mqtt/store"
 )
 
 // Options defines client configuration.
@@ -15,6 +16,7 @@ type Options struct {
 	ClientID   string
 	BrokerAddr string
 	Version    int // 3 or 5, defaults to 5
+	Will       *store.WillMessage
 }
 
 // Client implements an MQTT client.
@@ -46,6 +48,14 @@ func (c *Client) SetMessageHandler(handler func(topic string, payload []byte)) {
 	c.onMessage = handler
 }
 
+// Close closes the connection (ungraceful disconnect).
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
 // Connect establishes connection to the broker.
 func (c *Client) Connect() error {
 	conn, err := net.Dial("tcp", c.opts.BrokerAddr)
@@ -63,6 +73,14 @@ func (c *Client) Connect() error {
 			ProtocolName:    "MQTT",
 			ProtocolVersion: 5,
 		}
+		if c.opts.Will != nil {
+			pkt.WillFlag = true
+			pkt.WillQoS = c.opts.Will.QoS
+			pkt.WillRetain = c.opts.Will.Retain
+			pkt.WillTopic = c.opts.Will.Topic
+			pkt.WillPayload = c.opts.Will.Payload
+			// V5 properties not fully supported in helper yet
+		}
 		if err := pkt.Pack(conn); err != nil {
 			conn.Close()
 			return err
@@ -74,6 +92,13 @@ func (c *Client) Connect() error {
 			KeepAlive:       60,
 			ProtocolName:    "MQTT",
 			ProtocolVersion: 4,
+		}
+		if c.opts.Will != nil {
+			pkt.WillFlag = true
+			pkt.WillQoS = c.opts.Will.QoS
+			pkt.WillRetain = c.opts.Will.Retain
+			pkt.WillTopic = c.opts.Will.Topic
+			pkt.WillMessage = c.opts.Will.Payload
 		}
 		if err := pkt.Pack(conn); err != nil {
 			conn.Close()
@@ -161,13 +186,14 @@ func (c *Client) readLoop() {
 }
 
 // Publish sends a text message.
-func (c *Client) Publish(topic string, payload []byte) error {
+func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) error {
 	// TODO: Qos 1/2 need packet ID tracking
 	if c.opts.Version == 5 {
 		pkt := &v5.Publish{
 			FixedHeader: packets.FixedHeader{
 				PacketType: packets.PublishType,
-				QoS:        0,
+				QoS:        qos,
+				Retain:     retain,
 			},
 			TopicName: topic,
 			Payload:   payload,
@@ -177,7 +203,8 @@ func (c *Client) Publish(topic string, payload []byte) error {
 		pkt := &v3.Publish{
 			FixedHeader: packets.FixedHeader{
 				PacketType: packets.PublishType,
-				QoS:        0,
+				QoS:        qos,
+				Retain:     retain,
 			},
 			TopicName: topic,
 			Payload:   payload,

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dborovcanin/mqtt/packets"
+	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	"github.com/dborovcanin/mqtt/store"
 )
 
@@ -96,6 +97,10 @@ type Session struct {
 
 	// Callbacks
 	onDisconnect func(s *Session, graceful bool)
+
+	// Background tasks
+	stopCh chan struct{}
+	wg     sync.WaitGroup
 }
 
 // Options holds options for creating a new session.
@@ -145,6 +150,7 @@ func New(clientID string, version byte, opts Options) *Session {
 		outboundAliases: make(map[string]uint16),
 		inboundAliases:  make(map[uint16]string),
 		lastActivity:    time.Now(),
+		stopCh:          make(chan struct{}),
 	}
 
 	if opts.KeepAlive > 0 {
@@ -168,6 +174,10 @@ func (s *Session) Connect(conn Connection) error {
 	if s.keepAliveExpiry > 0 {
 		s.startKeepAliveTimer()
 	}
+
+	// Start retry loop
+	s.wg.Add(1)
+	go s.retryLoop()
 
 	return nil
 }
@@ -211,6 +221,11 @@ func (s *Session) Disconnect(graceful bool) error {
 	if s.onDisconnect != nil {
 		go s.onDisconnect(s, graceful)
 	}
+
+	// Stop background tasks
+	close(s.stopCh)
+	s.wg.Wait()
+	s.stopCh = make(chan struct{}) // Reset for next connection
 
 	return nil
 }
@@ -422,4 +437,49 @@ func (s *Session) RestoreFrom(stored *store.Session) {
 	s.ReceiveMaximum = stored.ReceiveMaximum
 	s.MaxPacketSize = stored.MaxPacketSize
 	s.TopicAliasMax = stored.TopicAliasMax
+}
+
+// retryLoop periodically checks for expired inflight messages and resends them.
+func (s *Session) retryLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(1 * time.Second) // Check every second
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Get expired messages (20s timeout)
+			expired := s.Inflight.GetExpired(20 * time.Second)
+			for _, inflight := range expired {
+				if err := s.resendMessage(inflight); err != nil {
+					// If write fails, we'll try again next tick
+					continue
+				}
+				s.Inflight.MarkRetry(inflight.PacketID)
+			}
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+// resendMessage resends an inflight message.
+// resendMessage resends an inflight message.
+func (s *Session) resendMessage(inflight *InflightMessage) error {
+	msg := inflight.Message
+
+	pub := &v3.Publish{
+		FixedHeader: packets.FixedHeader{
+			PacketType: packets.PublishType,
+			QoS:        msg.QoS,
+			Retain:     msg.Retain,
+			Dup:        true,
+		},
+		TopicName: msg.Topic,
+		Payload:   msg.Payload,
+		ID:        inflight.PacketID,
+	}
+
+	return s.WritePacket(pub)
 }

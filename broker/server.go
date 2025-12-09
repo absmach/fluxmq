@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -50,11 +51,15 @@ func NewServer() *Server {
 	// Create handler with dependencies
 	s.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
 		SessionManager: sessionMgr,
-		Router:         s,     // Server implements handlers.Router
-		Publisher:      s,     // Server implements handlers.Publisher
+		Router:         s, // Server implements handlers.Router
+		Publisher:      s, // Server implements handlers.Publisher
 		Retained:       st.Retained(),
 	})
 	s.dispatcher = handlers.NewDispatcher(s.handler)
+
+	sessionMgr.SetOnWillTrigger(func(will *store.WillMessage) {
+		s.Distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
+	})
 
 	return s
 }
@@ -102,11 +107,23 @@ func (s *Server) HandleConnection(conn Connection) {
 	cleanStart := p.CleanSession
 	keepAlive := p.KeepAlive
 
+	var will *store.WillMessage
+	if p.WillFlag {
+		will = &store.WillMessage{
+			ClientID: clientID,
+			Topic:    p.WillTopic,
+			Payload:  p.WillMessage,
+			QoS:      p.WillQoS,
+			Retain:   p.WillRetain,
+		}
+	}
+
 	// 3. Get or create session
 	opts := session.Options{
 		CleanStart:     cleanStart,
 		ReceiveMaximum: 65535,
 		KeepAlive:      keepAlive,
+		Will:           will,
 	}
 
 	sess, _, err := s.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
@@ -182,8 +199,25 @@ func (s *Server) sendConnAck(conn Connection) error {
 // --- handlers.Router implementation ---
 
 // Subscribe adds a subscription.
+// Subscribe adds a subscription.
 func (s *Server) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
 	s.router.Subscribe(filter, Subscription{SessionID: clientID, QoS: qos})
+
+	// Check for retained messages
+	retained, err := s.store.Retained().Match(filter)
+	if err == nil {
+		sess := s.sessionMgr.Get(clientID)
+		if sess != nil && sess.IsConnected() {
+			for _, msg := range retained {
+				deliverQoS := qos
+				if msg.QoS < deliverQoS {
+					deliverQoS = msg.QoS
+				}
+				s.deliverToSession(sess, msg.Topic, msg.Payload, deliverQoS, true)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -210,8 +244,25 @@ func (s *Server) Match(topic string) ([]*store.Subscription, error) {
 
 // --- handlers.Publisher implementation ---
 
-// Publish distributes a message to all matching subscribers.
-func (s *Server) Publish(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
+// Distribute distributes a message to all matching subscribers.
+func (s *Server) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
+	// Handle retained message
+	if retain {
+		if len(payload) == 0 {
+			// Empty payload means remove retained message
+			s.store.Retained().Delete(topic)
+		} else {
+			// Update retained message
+			s.store.Retained().Set(topic, &store.Message{
+				Topic:      topic,
+				Payload:    payload,
+				QoS:        qos,
+				Retain:     true,
+				Properties: props,
+			})
+		}
+	}
+
 	matched := s.router.Match(topic)
 
 	for _, sub := range matched {
@@ -241,6 +292,20 @@ func (s *Server) Publish(topic string, payload []byte, qos byte, retain bool, pr
 	}
 
 	return nil
+}
+
+// --- OperationHandler implementation ---
+
+// Publish implements OperationHandler.Publish for stateless injection.
+func (s *Server) Publish(ctx context.Context, clientID string, topic string, payload []byte, qos byte, retain bool) error {
+	return s.Distribute(topic, payload, qos, retain, nil)
+}
+
+// SubscribeToTopic implements OperationHandler.SubscribeToTopic.
+// Note: This requires a mechanism to pump messages to a channel.
+// We can use a special internal session type or a channel-based adapter.
+func (s *Server) SubscribeToTopic(ctx context.Context, clientID string, topicFilter string) (<-chan *store.Message, error) {
+	return nil, fmt.Errorf("stateless subscribe not implemented yet")
 }
 
 // deliverToSession sends a message to a connected session.

@@ -248,7 +248,7 @@ func (m *Manager) SetOnWillTrigger(fn func(*store.WillMessage)) {
 func (m *Manager) expiryLoop() {
 	defer m.wg.Done()
 
-	ticker := time.NewTicker(60 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {

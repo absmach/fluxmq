@@ -32,7 +32,7 @@ func (s *WillStore) Set(clientID string, will *store.WillMessage) error {
 
 	s.data[clientID] = &willEntry{
 		will:        copyWill(will),
-		disconnedAt: time.Time{}, // Not disconnected yet
+		disconnedAt: time.Now(), // Disconnected now
 	}
 	return nil
 }

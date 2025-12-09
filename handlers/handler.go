@@ -82,10 +82,10 @@ type Authorizer interface {
 	CanSubscribe(clientID string, filter string) bool
 }
 
-// Publisher publishes messages to subscribers.
+// Publisher distributes messages to subscribers.
 type Publisher interface {
-	// Publish distributes a message to all matching subscribers.
-	Publish(topic string, payload []byte, qos byte, retain bool, props map[string]string) error
+	// Distribute distributes a message to all matching subscribers.
+	Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error
 }
 
 // RetainedStore provides access to retained messages.

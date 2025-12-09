@@ -14,12 +14,12 @@ import (
 
 // mockConnection implements session.Connection for testing.
 type mockConnection struct {
-	closed      bool
-	written     []packets.ControlPacket
-	readCh      chan packets.ControlPacket
-	errOnWrite  error
-	errOnRead   error
-	writeDelay  time.Duration
+	closed     bool
+	written    []packets.ControlPacket
+	readCh     chan packets.ControlPacket
+	errOnWrite error
+	errOnRead  error
+	writeDelay time.Duration
 }
 
 func newMockConnection() *mockConnection {
@@ -108,10 +108,16 @@ type mockPublisher struct {
 		qos     byte
 		retain  bool
 	}
+	err   error
+	calls int
 }
 
-func (p *mockPublisher) Publish(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
-	p.published = append(p.published, struct {
+func (m *mockPublisher) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.calls++
+	m.published = append(m.published, struct {
 		topic   string
 		payload []byte
 		qos     byte

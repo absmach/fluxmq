@@ -54,7 +54,7 @@ func TestPubSub_V5(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 4. Publish
-	if err := c.Publish("test/topic", []byte("hello world")); err != nil {
+	if err := c.Publish("test/topic", []byte("hello world"), 0, false); err != nil {
 		t.Fatalf("Publish error: %v", err)
 	}
 

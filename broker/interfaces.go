@@ -1,9 +1,11 @@
 package broker
 
 import (
+	"context"
 	"net"
 
 	packets "github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/store"
 )
 
 // Frontend abstracts away the underlying transport protocol.
@@ -20,12 +22,20 @@ type Frontend interface {
 	Addr() net.Addr
 }
 
-// ConnectionHandler is the interface that the Broker Core exposes to Frontends.
-// Frontends call HandleConnection when a new connection is established.
+// ConnectionHandler is the interface for stateful, connection-oriented protocols (TCP, WebSocket).
 type ConnectionHandler interface {
-	// HandleConnection registers a new connection with the broker.
-	// The broker takes ownership of the connection.
+	// HandleConnection handles a new connection.
+	// It blocks until the connection is closed.
 	HandleConnection(conn Connection)
+}
+
+// OperationHandler is the interface for stateless, request-response protocols (HTTP, basic CoAP).
+type OperationHandler interface {
+	// Publish injects a message directly into the broker.
+	Publish(ctx context.Context, clientID string, topic string, payload []byte, qos byte, retain bool) error
+
+	// SubscribeToTopic allows a stateless client to listen for messages.
+	SubscribeToTopic(ctx context.Context, clientID string, topicFilter string) (<-chan *store.Message, error)
 }
 
 // Connection abstracts a single client connection.
