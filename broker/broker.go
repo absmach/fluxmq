@@ -18,21 +18,12 @@ import (
 
 // Broker is the core MQTT broker.
 type Broker struct {
-	// Session management
 	sessionMgr *session.Manager
-
-	// Routing
-	router *Router
-
-	// Storage
-	store store.Store
-
-	// Handlers
+	router     *Router
+	store      store.Store
 	handler    handlers.Handler
 	dispatcher *handlers.Dispatcher
-
-	// Logger
-	logger *slog.Logger
+	logger     *slog.Logger
 }
 
 // NewBroker creates a new broker instance.

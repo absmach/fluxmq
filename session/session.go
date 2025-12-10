@@ -330,7 +330,6 @@ func (s *Session) checkKeepAlive() {
 
 	elapsed := time.Since(s.lastActivity)
 	if elapsed >= s.keepAliveExpiry {
-		// Keep-alive expired, disconnect
 		s.state = StateDisconnecting
 		if s.conn != nil {
 			s.conn.Close()
@@ -345,7 +344,6 @@ func (s *Session) checkKeepAlive() {
 		return
 	}
 
-	// Reschedule timer
 	remaining := s.keepAliveExpiry - elapsed
 	s.keepAliveTimer = time.AfterFunc(remaining, func() {
 		s.checkKeepAlive()
