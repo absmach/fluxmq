@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -614,34 +615,31 @@ func TestSessionManagerCallbacks(t *testing.T) {
 	mgr := NewManager(st)
 	defer mgr.Close()
 
-	createCalled := false
-	destroyCalled := false
+	var createCalled atomic.Bool
+	var destroyCalled atomic.Bool
 
 	mgr.SetOnSessionCreate(func(s *Session) {
-		createCalled = true
+		createCalled.Store(true)
 	})
 
 	mgr.SetOnSessionDestroy(func(s *Session) {
-		destroyCalled = true
+		destroyCalled.Store(true)
 	})
 
-	// Create session - should trigger callback
 	s, _, _ := mgr.GetOrCreate("client1", 5, DefaultOptions())
 
 	// Give callback time to run (it's in a goroutine)
 	time.Sleep(10 * time.Millisecond)
 
-	if !createCalled {
+	if !createCalled.Load() {
 		t.Error("OnSessionCreate callback not called")
 	}
 
-	// Destroy session - should trigger callback
 	mgr.Destroy(s.ID)
 
-	// Give callback time to run
 	time.Sleep(10 * time.Millisecond)
 
-	if !destroyCalled {
+	if !destroyCalled.Load() {
 		t.Error("OnSessionDestroy callback not called")
 	}
 }
@@ -649,15 +647,12 @@ func TestSessionManagerCallbacks(t *testing.T) {
 func TestSessionUpdateConnectionOptions(t *testing.T) {
 	s := New("client1", 4, DefaultOptions())
 
-	// Set initial will
 	will1 := &store.WillMessage{Topic: "will1", Payload: []byte("offline1")}
 	s.Will = will1
 
-	// Update connection options
 	will2 := &store.WillMessage{Topic: "will2", Payload: []byte("offline2")}
 	s.UpdateConnectionOptions(5, 120, will2)
 
-	// Check version and keep alive updated
 	if s.Version != 5 {
 		t.Errorf("Version: got %d, want 5", s.Version)
 	}
@@ -665,7 +660,6 @@ func TestSessionUpdateConnectionOptions(t *testing.T) {
 		t.Errorf("KeepAlive: got %d, want 120", s.KeepAlive)
 	}
 
-	// Check will updated
 	if s.Will == nil {
 		t.Fatal("Will should not be nil")
 	}
@@ -677,16 +671,13 @@ func TestSessionUpdateConnectionOptions(t *testing.T) {
 func TestSessionGetWill(t *testing.T) {
 	s := New("client1", 5, DefaultOptions())
 
-	// No will set
 	if s.GetWill() != nil {
 		t.Error("GetWill should return nil when no will set")
 	}
 
-	// Set will
 	will := &store.WillMessage{Topic: "test/will", Payload: []byte("goodbye")}
 	s.Will = will
 
-	// Get will (should be thread-safe)
 	gotWill := s.GetWill()
 	if gotWill == nil {
 		t.Fatal("GetWill returned nil")
@@ -738,11 +729,9 @@ func TestSessionRestoreFrom(t *testing.T) {
 
 	s.RestoreFrom(storedSession)
 
-	// Version is NOT restored (it's set at creation and updated via UpdateConnectionOptions)
 	if s.Version != 4 {
 		t.Errorf("Version: got %d, want 4 (should not change)", s.Version)
 	}
-	// These fields ARE restored
 	if s.ExpiryInterval != 7200 {
 		t.Errorf("ExpiryInterval: got %d, want 7200", s.ExpiryInterval)
 	}
