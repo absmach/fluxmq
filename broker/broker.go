@@ -24,7 +24,13 @@ var (
 type Broker struct {
 	sessionMgr *session.Manager
 	router     *Router
-	store      store.Store
+
+	messages      store.MessageStore
+	sessions      store.SessionStore
+	subscriptions store.SubscriptionStore
+	retained      store.RetainedStore
+	wills         store.WillStore
+
 	handler    handlers.Handler
 	dispatcher *handlers.Dispatcher
 	logger     *slog.Logger
@@ -41,10 +47,14 @@ func NewBroker(logger *slog.Logger) *Broker {
 	router := NewRouter()
 
 	b := &Broker{
-		sessionMgr: sessionMgr,
-		router:     router,
-		store:      st,
-		logger:     logger,
+		sessionMgr:    sessionMgr,
+		router:        router,
+		messages:      st.Messages(),
+		sessions:      st.Sessions(),
+		subscriptions: st.Subscriptions(),
+		retained:      st.Retained(),
+		wills:         st.Wills(),
+		logger:        logger,
 	}
 
 	b.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
@@ -57,6 +67,13 @@ func NewBroker(logger *slog.Logger) *Broker {
 
 	sessionMgr.SetOnWillTrigger(func(will *store.WillMessage) {
 		b.Distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
+	})
+
+	sessionMgr.SetOnSessionDestroy(func(s *session.Session) {
+		subs := s.GetSubscriptions()
+		for filter := range subs {
+			b.router.Unsubscribe(filter, s.ID)
+		}
 	})
 
 	return b
@@ -110,7 +127,6 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		}
 	}
 
-	// 3. Get or create session
 	opts := session.Options{
 		CleanStart:     cleanStart,
 		ReceiveMaximum: 65535,
@@ -127,7 +143,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		return
 	}
 
-	// 4. Attach connection to session
+	// 3. Attach connection to session
 	if err := s.Connect(conn); err != nil {
 		b.logger.Error("Failed to attach connection to session",
 			slog.String("client_id", clientID),
@@ -136,7 +152,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		return
 	}
 
-	// 5. Send CONNACK
+	// 4. Send CONNACK
 	if err := b.sendConnAck(conn); err != nil {
 		b.logger.Error("Failed to send CONNACK",
 			slog.String("client_id", clientID),
@@ -151,10 +167,8 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		slog.Bool("clean_start", cleanStart),
 		slog.Uint64("keep_alive", uint64(keepAlive)))
 
-	// 6. Deliver any queued offline messages
 	b.deliverOfflineMessages(s)
 
-	// 7. Run packet loop
 	b.runSession(s)
 }
 
@@ -201,25 +215,36 @@ func (b *Broker) sendConnAck(conn session.Connection) error {
 	return conn.WritePacket(ack)
 }
 
-// --- handlers.Router implementation ---
-
-// Subscribe adds a subscription.
 func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
 	b.router.Subscribe(filter, Subscription{SessionID: clientID, QoS: qos})
 
-	retained, err := b.store.Retained().Match(filter)
-	if err != nil {
-		return fmt.Errorf("failed to match retained messages for filter %s: %w", filter, err)
+	sub := &store.Subscription{
+		ClientID: clientID,
+		Filter:   filter,
+		QoS:      qos,
+		Options:  opts,
+	}
+	if err := b.subscriptions.Add(sub); err != nil {
+		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
 	s := b.sessionMgr.Get(clientID)
-	if s != nil && s.IsConnected() {
-		for _, msg := range retained {
-			deliverQoS := qos
-			if msg.QoS < deliverQoS {
-				deliverQoS = msg.QoS
+	if s != nil {
+		s.AddSubscription(filter, opts)
+
+		if s.IsConnected() {
+			retained, err := b.retained.Match(filter)
+			if err != nil {
+				return fmt.Errorf("failed to match retained messages: %w", err)
 			}
-			b.deliverToSession(s, msg.Topic, msg.Payload, deliverQoS, true)
+
+			for _, msg := range retained {
+				deliverQoS := qos
+				if msg.QoS < deliverQoS {
+					deliverQoS = msg.QoS
+				}
+				b.deliverToSession(s, msg.Topic, msg.Payload, deliverQoS, true)
+			}
 		}
 	}
 
@@ -229,6 +254,16 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.
 // Unsubscribe removes a subscription.
 func (b *Broker) Unsubscribe(clientID string, filter string) error {
 	b.router.Unsubscribe(filter, clientID)
+
+	if err := b.subscriptions.Remove(clientID, filter); err != nil {
+		return fmt.Errorf("failed to remove subscription from storage: %w", err)
+	}
+
+	s := b.sessionMgr.Get(clientID)
+	if s != nil {
+		s.RemoveSubscription(filter)
+	}
+
 	return nil
 }
 
@@ -252,11 +287,11 @@ func (b *Broker) Match(topic string) ([]*store.Subscription, error) {
 func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
 	if retain {
 		if len(payload) == 0 {
-			if err := b.store.Retained().Delete(topic); err != nil {
+			if err := b.retained.Delete(topic); err != nil {
 				return fmt.Errorf("failed to delete retained message for topic %s: %w", topic, err)
 			}
 		} else {
-			if err := b.store.Retained().Set(topic, &store.Message{
+			if err := b.retained.Set(topic, &store.Message{
 				Topic:      topic,
 				Payload:    payload,
 				QoS:        qos,
@@ -331,7 +366,5 @@ func (b *Broker) deliverToSession(s *session.Session, topic string, payload []by
 
 // Close shuts down the broker.
 func (b *Broker) Close() error {
-	b.sessionMgr.Close()
-	b.store.Close()
-	return nil
+	return b.sessionMgr.Close()
 }

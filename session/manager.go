@@ -291,6 +291,8 @@ func (m *Manager) SetOnSessionDestroy(fn func(*Session)) {
 
 // SetOnWillTrigger sets the will trigger callback.
 func (m *Manager) SetOnWillTrigger(fn func(*store.WillMessage)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.onWillTrigger = fn
 }
 

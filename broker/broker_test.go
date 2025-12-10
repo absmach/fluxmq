@@ -26,9 +26,6 @@ func TestNewBroker(t *testing.T) {
 	if b.sessionMgr == nil {
 		t.Error("sessionMgr should not be nil")
 	}
-	if b.store == nil {
-		t.Error("store should not be nil")
-	}
 
 	// Test with custom logger
 	logger := slog.Default()
@@ -129,7 +126,7 @@ func TestBrokerRetainedMessages(t *testing.T) {
 	}
 
 	// Verify retained message is stored
-	retained, err := b.store.Retained().Get("sensors/temp")
+	retained, err := b.retained.Get("sensors/temp")
 	if err != nil {
 		t.Fatalf("Failed to get retained message: %v", err)
 	}
@@ -147,7 +144,7 @@ func TestBrokerRetainedMessages(t *testing.T) {
 	}
 
 	// Verify retained message is deleted
-	_, err = b.store.Retained().Get("sensors/temp")
+	_, err = b.retained.Get("sensors/temp")
 	if err != store.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete, got %v", err)
 	}
@@ -370,6 +367,55 @@ func TestBrokerClose(t *testing.T) {
 	// Verify no sessions are connected after close
 	if b.sessionMgr.ConnectedCount() != 0 {
 		t.Errorf("Expected 0 connected sessions after Close, got %d", b.sessionMgr.ConnectedCount())
+	}
+}
+
+func TestBrokerSessionDestroyCleansSubscriptions(t *testing.T) {
+	b := NewBroker(nil)
+	defer b.Close()
+
+	clientID := "client-destroy-test"
+	topic := "test/destroy"
+
+	// 1. Create and connect session
+	sess, _, err := b.sessionMgr.GetOrCreate(clientID, 4, testSessionOptions())
+	if err != nil {
+		t.Fatalf("GetOrCreate failed: %v", err)
+	}
+	conn := newMockBrokerConnection()
+	sess.Connect(conn)
+
+	// 2. Subscribe
+	err = b.Subscribe(clientID, topic, 1, store.SubscribeOptions{})
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// 3. Verify subscription exists in router
+	subs := b.router.Match(topic)
+	found := false
+	for _, s := range subs {
+		if s.SessionID == clientID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Subscription not found in router before destroy")
+	}
+
+	// 4. Destroy session
+	b.sessionMgr.Destroy(clientID)
+
+	// Wait a bit for callback (if it existed/worked)
+	time.Sleep(50 * time.Millisecond)
+
+	// 5. Verify subscription is gone from router
+	subs = b.router.Match(topic)
+	for _, s := range subs {
+		if s.SessionID == clientID {
+			t.Fatal("Subscription still exists in router after session destroy")
+		}
 	}
 }
 
