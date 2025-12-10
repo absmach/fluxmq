@@ -8,8 +8,30 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
-// Manager manages all sessions in the broker.
-type Manager struct {
+var _ Manager = (*manager)(nil)
+
+// Manager is used for session management.
+type Manager interface {
+	Get(clientID string) *Session
+	GetOrCreate(clientID string, version byte, opts Options) (*Session, bool, error)
+	Destroy(clientID string) error
+	Count() int
+	ConnectedCount() int
+	ForEach(fn func(*Session))
+	Close() error
+
+	// Lifecycle hooks
+	SetOnSessionCreate(fn func(*Session))
+	SetOnSessionDestroy(fn func(*Session))
+	SetOnWillTrigger(fn func(*store.WillMessage))
+
+	// Message operations
+	DrainOfflineQueue(clientID string) []*store.Message
+	QueueMessage(clientID string, msg *store.Message) error
+}
+
+// manager manages all sessions in the broker.
+type manager struct {
 	mu    sync.RWMutex
 	cache Cache
 
@@ -28,8 +50,8 @@ type Manager struct {
 }
 
 // NewManager creates a new session manager.
-func NewManager(st store.Store) *Manager {
-	m := &Manager{
+func NewManager(st store.Store) Manager {
+	m := &manager{
 		cache:         NewMapCache(),
 		messages:      st.Messages(),
 		sessions:      st.Sessions(),
@@ -47,14 +69,14 @@ func NewManager(st store.Store) *Manager {
 }
 
 // Get returns a session by client ID, or nil if not found.
-func (m *Manager) Get(clientID string) *Session {
+func (m *manager) Get(clientID string) *Session {
 	return m.cache.Get(clientID)
 }
 
 // GetOrCreate gets an existing session or creates a new one.
 // If cleanStart is true and an existing session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
-func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Session, bool, error) {
+func (m *manager) GetOrCreate(clientID string, version byte, opts Options) (*Session, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing := m.cache.Get(clientID)
@@ -94,7 +116,7 @@ func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 }
 
 // handleExistingSession handles session takeover when a client reconnects.
-func (m *Manager) handleExistingSession(session *Session, version byte, opts Options) {
+func (m *manager) handleExistingSession(session *Session, version byte, opts Options) {
 	if session.IsConnected() {
 		session.Disconnect(false) // Not graceful (takeover)
 	}
@@ -102,7 +124,7 @@ func (m *Manager) handleExistingSession(session *Session, version byte, opts Opt
 }
 
 // restoreSessionFromStorage restores session state from persistent storage.
-func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, opts Options) error {
+func (m *manager) restoreSessionFromStorage(session *Session, clientID string, opts Options) error {
 	if opts.CleanStart || m.sessions == nil {
 		return nil
 	}
@@ -157,7 +179,7 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 }
 
 // Destroy removes a session completely.
-func (m *Manager) Destroy(clientID string) error {
+func (m *manager) Destroy(clientID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -170,7 +192,7 @@ func (m *Manager) Destroy(clientID string) error {
 }
 
 // destroySessionLocked destroys a session. Must be called with mu held.
-func (m *Manager) destroySessionLocked(session *Session) error {
+func (m *manager) destroySessionLocked(session *Session) error {
 	if session.IsConnected() {
 		session.Disconnect(false)
 	}
@@ -206,7 +228,7 @@ func (m *Manager) destroySessionLocked(session *Session) error {
 }
 
 // handleDisconnect handles session disconnect.
-func (m *Manager) handleDisconnect(session *Session, graceful bool) {
+func (m *manager) handleDisconnect(session *Session, graceful bool) {
 	if m.sessions != nil {
 		if err := m.sessions.Save(session.Info()); err != nil {
 			_ = err
@@ -249,14 +271,14 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 }
 
 // Count returns the number of sessions.
-func (m *Manager) Count() int {
+func (m *manager) Count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cache.Count()
 }
 
 // ConnectedCount returns the number of connected sessions.
-func (m *Manager) ConnectedCount() int {
+func (m *manager) ConnectedCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -270,7 +292,7 @@ func (m *Manager) ConnectedCount() int {
 }
 
 // ForEach iterates over all sessions.
-func (m *Manager) ForEach(fn func(*Session)) {
+func (m *manager) ForEach(fn func(*Session)) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -280,24 +302,24 @@ func (m *Manager) ForEach(fn func(*Session)) {
 }
 
 // SetOnSessionCreate sets the session create callback.
-func (m *Manager) SetOnSessionCreate(fn func(*Session)) {
+func (m *manager) SetOnSessionCreate(fn func(*Session)) {
 	m.onSessionCreate = fn
 }
 
 // SetOnSessionDestroy sets the session destroy callback.
-func (m *Manager) SetOnSessionDestroy(fn func(*Session)) {
+func (m *manager) SetOnSessionDestroy(fn func(*Session)) {
 	m.onSessionDestroy = fn
 }
 
 // SetOnWillTrigger sets the will trigger callback.
-func (m *Manager) SetOnWillTrigger(fn func(*store.WillMessage)) {
+func (m *manager) SetOnWillTrigger(fn func(*store.WillMessage)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onWillTrigger = fn
 }
 
 // expiryLoop periodically checks for expired sessions.
-func (m *Manager) expiryLoop() {
+func (m *manager) expiryLoop() {
 	defer m.wg.Done()
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -315,7 +337,7 @@ func (m *Manager) expiryLoop() {
 }
 
 // expireSessions removes expired sessions.
-func (m *Manager) expireSessions() {
+func (m *manager) expireSessions() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -343,7 +365,7 @@ func (m *Manager) expireSessions() {
 }
 
 // triggerWills processes pending will messages.
-func (m *Manager) triggerWills() {
+func (m *manager) triggerWills() {
 	if m.wills == nil || m.onWillTrigger == nil {
 		return
 	}
@@ -366,7 +388,7 @@ func (m *Manager) triggerWills() {
 }
 
 // Close stops the manager and cleans up.
-func (m *Manager) Close() error {
+func (m *manager) Close() error {
 	close(m.stopCh)
 	m.wg.Wait()
 
@@ -383,7 +405,7 @@ func (m *Manager) Close() error {
 }
 
 // DrainOfflineQueue drains a session's offline queue and returns messages.
-func (m *Manager) DrainOfflineQueue(clientID string) []*store.Message {
+func (m *manager) DrainOfflineQueue(clientID string) []*store.Message {
 	session := m.Get(clientID)
 	if session == nil {
 		return nil
@@ -392,7 +414,7 @@ func (m *Manager) DrainOfflineQueue(clientID string) []*store.Message {
 }
 
 // QueueMessage adds a message to a session's offline queue.
-func (m *Manager) QueueMessage(clientID string, msg *store.Message) error {
+func (m *manager) QueueMessage(clientID string, msg *store.Message) error {
 	session := m.Get(clientID)
 	if session == nil {
 		return nil

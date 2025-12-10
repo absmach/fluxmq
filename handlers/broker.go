@@ -12,7 +12,7 @@ import (
 
 // BrokerHandler implements the Handler interface for the broker.
 type BrokerHandler struct {
-	sessionMgr *session.Manager
+	sessionMgr session.Manager
 	pubsub     *core.PubSubEngine
 	auth       *core.AuthEngine
 
@@ -23,7 +23,7 @@ type BrokerHandler struct {
 
 // BrokerHandlerConfig holds configuration for the broker handler.
 type BrokerHandlerConfig struct {
-	SessionManager *session.Manager
+	SessionManager session.Manager
 	Router         Router
 	Publisher      Publisher
 	Retained       RetainedStore

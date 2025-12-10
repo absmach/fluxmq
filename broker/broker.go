@@ -22,7 +22,7 @@ var (
 
 // Broker is the core MQTT broker.
 type Broker struct {
-	sessionMgr *session.Manager
+	sessionMgr session.Manager
 	router     *Router
 
 	messages      store.MessageStore
