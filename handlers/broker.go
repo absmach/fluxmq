@@ -89,7 +89,7 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 	case 2:
 		// QoS 2: Exactly once
 		// Check if this is a duplicate
-		if dup && s.Inflight.WasReceived(packetID) {
+		if dup && s.WasReceivedInflight(packetID) {
 			// Already received, just send PUBREC again
 			return h.sendPubRec(s, packetID)
 		}
@@ -109,7 +109,7 @@ func (h *BrokerHandler) HandlePubAck(s *session.Session, pkt packets.ControlPack
 	s.TouchActivity()
 
 	p := pkt.(*v3.PubAck)
-	s.Inflight.Ack(p.ID)
+	s.AckInflight(p.ID)
 	return nil
 }
 
@@ -118,7 +118,7 @@ func (h *BrokerHandler) HandlePubRec(s *session.Session, pkt packets.ControlPack
 	s.TouchActivity()
 
 	p := pkt.(*v3.PubRec)
-	s.Inflight.UpdateState(p.ID, session.StatePubRecReceived)
+	s.UpdateInflightState(p.ID, session.StatePubRecReceived)
 	return h.sendPubRel(s, p.ID)
 }
 
@@ -129,13 +129,13 @@ func (h *BrokerHandler) HandlePubRel(s *session.Session, pkt packets.ControlPack
 	p := pkt.(*v3.PubRel)
 	packetID := p.ID
 
-	inf, ok := s.Inflight.Get(packetID)
+	inf, ok := s.GetInflight(packetID)
 	if ok && inf.Message != nil {
 		h.pubsub.PublishQoS2Message(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
 	}
 
-	s.Inflight.Ack(packetID)
-	s.Inflight.ClearReceived(packetID)
+	s.AckInflight(packetID)
+	s.ClearReceivedInflight(packetID)
 
 	return h.sendPubComp(s, packetID)
 }
@@ -145,7 +145,7 @@ func (h *BrokerHandler) HandlePubComp(s *session.Session, pkt packets.ControlPac
 	s.TouchActivity()
 
 	p := pkt.(*v3.PubComp)
-	s.Inflight.Ack(p.ID)
+	s.AckInflight(p.ID)
 	return nil
 }
 
@@ -214,7 +214,7 @@ func (h *BrokerHandler) deliverMessage(s *session.Session, topic string, payload
 			QoS:     qos,
 			Retain:  retain,
 		}
-		return s.OfflineQueue.Enqueue(msg)
+		return s.EnqueueOffline(msg)
 	}
 
 	pub := &v3.Publish{
@@ -235,7 +235,7 @@ func (h *BrokerHandler) deliverMessage(s *session.Session, topic string, payload
 			QoS:      qos,
 			PacketID: pub.ID,
 		}
-		s.Inflight.Add(pub.ID, msg, session.Outbound)
+		s.AddInflight(pub.ID, msg, session.Outbound)
 	}
 
 	return s.WritePacket(pub)

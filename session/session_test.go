@@ -484,8 +484,8 @@ func TestSessionManagerOfflineQueue(t *testing.T) {
 	}
 
 	// Verify queue length
-	if s.OfflineQueue.Len() != 2 {
-		t.Errorf("Queue length: got %d, want 2", s.OfflineQueue.Len())
+	if s.OfflineQueueLen() != 2 {
+		t.Errorf("Queue length: got %d, want 2", s.OfflineQueueLen())
 	}
 
 	// Drain queue
@@ -494,8 +494,8 @@ func TestSessionManagerOfflineQueue(t *testing.T) {
 		t.Errorf("Drained count: got %d, want 2", len(drained))
 	}
 
-	if s.OfflineQueue.Len() != 0 {
-		t.Errorf("Queue should be empty after drain, got %d", s.OfflineQueue.Len())
+	if s.OfflineQueueLen() != 0 {
+		t.Errorf("Queue should be empty after drain, got %d", s.OfflineQueueLen())
 	}
 }
 

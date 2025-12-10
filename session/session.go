@@ -60,8 +60,8 @@ type Session struct {
 
 	Will *store.WillMessage // set on CONNECT, cleared on clean disconnect
 
-	Inflight     *InflightTracker // Outgoing QoS 1/2 messages
-	OfflineQueue *MessageQueue    // Messages for disconnected client
+	inflight     *InflightTracker // Outgoing QoS 1/2 messages
+	offlineQueue *MessageQueue    // Messages for disconnected client
 
 	nextPacketID uint32
 
@@ -121,8 +121,8 @@ func New(clientID string, version byte, opts Options) *Session {
 		TopicAliasMax:   opts.TopicAliasMax,
 		KeepAlive:       opts.KeepAlive,
 		Will:            opts.Will,
-		Inflight:        NewInflightTracker(int(receiveMax)),
-		OfflineQueue:    NewMessageQueue(1000), // Default max queue size
+		inflight:        NewInflightTracker(int(receiveMax)),
+		offlineQueue:    NewMessageQueue(1000), // Default max queue size
 		subscriptions:   make(map[string]store.SubscribeOptions),
 		outboundAliases: make(map[string]uint16),
 		inboundAliases:  make(map[uint16]string),
@@ -242,7 +242,7 @@ func (s *Session) NextPacketID() uint16 {
 		if id16 == 0 {
 			continue // Packet ID 0 is reserved
 		}
-		if !s.Inflight.Has(id16) {
+		if !s.HasInflight(id16) {
 			return id16
 		}
 	}
@@ -453,12 +453,12 @@ func (s *Session) retryLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			expired := s.Inflight.GetExpired(20 * time.Second)
+			expired := s.inflight.GetExpired(20 * time.Second)
 			for _, inflight := range expired {
 				if err := s.resendMessage(inflight); err != nil {
 					continue
 				}
-				s.Inflight.MarkRetry(inflight.PacketID)
+				s.inflight.MarkRetry(inflight.PacketID)
 			}
 		case <-s.stopCh:
 			return

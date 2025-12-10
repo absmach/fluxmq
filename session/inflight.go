@@ -238,3 +238,65 @@ func (t *InflightTracker) CleanupExpiredReceived(olderThan time.Duration) {
 		}
 	}
 }
+
+// Inflight message operations
+func (s *Session) AddInflight(packetID uint16, msg *store.Message, direction Direction) error {
+	return s.inflight.Add(packetID, msg, direction)
+}
+
+func (s *Session) AckInflight(packetID uint16) {
+	s.inflight.Ack(packetID)
+}
+
+func (s *Session) GetInflight(packetID uint16) (*InflightMessage, bool) {
+	return s.inflight.Get(packetID)
+}
+
+func (s *Session) GetAllInflight() []*InflightMessage {
+	return s.inflight.GetAll()
+}
+
+func (s *Session) HasInflight(packetID uint16) bool {
+	return s.inflight.Has(packetID)
+}
+
+func (s *Session) WasReceivedInflight(packetID uint16) bool {
+	return s.inflight.WasReceived(packetID)
+}
+
+func (s *Session) MarkReceivedInflight(packetID uint16) {
+	s.inflight.MarkReceived(packetID)
+}
+
+func (s *Session) UpdateInflightState(packetID uint16, state InflightState) {
+	s.inflight.UpdateState(packetID, state)
+}
+
+func (s *Session) ClearReceivedInflight(packetID uint16) {
+	s.inflight.ClearReceived(packetID)
+}
+
+func (s *Session) GetExpiredInflight(expiry time.Duration) []*InflightMessage {
+	return s.inflight.GetExpired(expiry)
+}
+
+func (s *Session) MarkRetryInflight(packetID uint16) {
+	s.inflight.MarkRetry(packetID)
+}
+
+// Offline queue operations
+func (s *Session) EnqueueOffline(msg *store.Message) error {
+	return s.offlineQueue.Enqueue(msg)
+}
+
+func (s *Session) DrainOfflineQueue() []*store.Message {
+	return s.offlineQueue.Drain()
+}
+
+func (s *Session) OfflineQueueLen() int {
+	return s.offlineQueue.Len()
+}
+
+func (s *Session) OfflineQueuePeek() *store.Message {
+	return s.offlineQueue.Peek()
+}
