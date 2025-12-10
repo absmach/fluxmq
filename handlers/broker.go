@@ -118,7 +118,7 @@ func (h *BrokerHandler) HandlePubRec(s *session.Session, pkt packets.ControlPack
 	s.TouchActivity()
 
 	p := pkt.(*v3.PubRec)
-	s.UpdateInflightState(p.ID, session.StatePubRecReceived)
+	s.UpdateStateInflight(p.ID, session.StatePubRecReceived)
 	return h.sendPubRel(s, p.ID)
 }
 

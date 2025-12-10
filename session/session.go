@@ -60,8 +60,8 @@ type Session struct {
 
 	Will *store.WillMessage // set on CONNECT, cleared on clean disconnect
 
-	inflight     *InflightTracker // Outgoing QoS 1/2 messages
-	offlineQueue *MessageQueue    // Messages for disconnected client
+	inflight     *inflightTracker // Outgoing QoS 1/2 messages
+	offlineQueue *messageQueue    // Messages for disconnected client
 
 	nextPacketID uint32
 
@@ -453,12 +453,12 @@ func (s *Session) retryLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			expired := s.inflight.GetExpired(20 * time.Second)
+			expired := s.inflight.getExpired(20 * time.Second)
 			for _, inflight := range expired {
 				if err := s.resendMessage(inflight); err != nil {
 					continue
 				}
-				s.inflight.MarkRetry(inflight.PacketID)
+				s.inflight.markRetry(inflight.PacketID)
 			}
 		case <-s.stopCh:
 			return
