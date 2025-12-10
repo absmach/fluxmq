@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+const separator = "/"
+
 // Subscription represents a single client subscription.
 type Subscription struct {
 	SessionID string
@@ -40,7 +42,7 @@ func (r *Router) Subscribe(filter string, sub Subscription) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	levels := strings.Split(filter, "/")
+	levels := strings.Split(filter, separator)
 	n := r.root
 	for _, level := range levels {
 		child, ok := n.children[level]
@@ -58,7 +60,7 @@ func (r *Router) Unsubscribe(filter string, sessionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	levels := strings.Split(filter, "/")
+	levels := strings.Split(filter, separator)
 	n := r.root
 	for _, level := range levels {
 		child, ok := n.children[level]
@@ -82,7 +84,7 @@ func (r *Router) Match(topic string) []Subscription {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	levels := strings.Split(topic, "/")
+	levels := strings.Split(topic, separator)
 	var matched []Subscription
 	matchLevel(r.root, levels, 0, &matched)
 	return matched

@@ -18,34 +18,34 @@ func NewDispatcher(h Handler) *Dispatcher {
 }
 
 // Dispatch routes a packet to the appropriate handler method.
-func (d *Dispatcher) Dispatch(sess *session.Session, pkt packets.ControlPacket) error {
+func (d *Dispatcher) Dispatch(s *session.Session, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
 	case packets.PublishType:
-		return d.handler.HandlePublish(sess, pkt)
+		return d.handler.HandlePublish(s, pkt)
 
 	case packets.PubAckType:
-		return d.handler.HandlePubAck(sess, pkt)
+		return d.handler.HandlePubAck(s, pkt)
 
 	case packets.PubRecType:
-		return d.handler.HandlePubRec(sess, pkt)
+		return d.handler.HandlePubRec(s, pkt)
 
 	case packets.PubRelType:
-		return d.handler.HandlePubRel(sess, pkt)
+		return d.handler.HandlePubRel(s, pkt)
 
 	case packets.PubCompType:
-		return d.handler.HandlePubComp(sess, pkt)
+		return d.handler.HandlePubComp(s, pkt)
 
 	case packets.SubscribeType:
-		return d.handler.HandleSubscribe(sess, pkt)
+		return d.handler.HandleSubscribe(s, pkt)
 
 	case packets.UnsubscribeType:
-		return d.handler.HandleUnsubscribe(sess, pkt)
+		return d.handler.HandleUnsubscribe(s, pkt)
 
 	case packets.PingReqType:
-		return d.handler.HandlePingReq(sess)
+		return d.handler.HandlePingReq(s)
 
 	case packets.DisconnectType:
-		return d.handler.HandleDisconnect(sess, pkt)
+		return d.handler.HandleDisconnect(s, pkt)
 
 	case packets.ConnectType:
 		// CONNECT should be handled at server level
@@ -57,9 +57,9 @@ func (d *Dispatcher) Dispatch(sess *session.Session, pkt packets.ControlPacket) 
 }
 
 // RunSession runs the main packet processing loop for a session.
-func (d *Dispatcher) RunSession(sess *session.Session) error {
+func (d *Dispatcher) RunSession(s *session.Session) error {
 	for {
-		pkt, err := sess.ReadPacket()
+		pkt, err := s.ReadPacket()
 		if err != nil {
 			if err == io.EOF || err == session.ErrNotConnected {
 				return nil // Clean disconnect
@@ -67,7 +67,7 @@ func (d *Dispatcher) RunSession(sess *session.Session) error {
 			return err
 		}
 
-		if err := d.Dispatch(sess, pkt); err != nil {
+		if err := d.Dispatch(s, pkt); err != nil {
 			if err == io.EOF {
 				return nil // Clean disconnect from handler
 			}

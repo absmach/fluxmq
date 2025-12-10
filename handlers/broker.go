@@ -150,33 +150,33 @@ func (h *BrokerHandler) HandlePubComp(s *session.Session, pkt packets.ControlPac
 }
 
 // HandleSubscribe handles SUBSCRIBE packets.
-func (h *BrokerHandler) HandleSubscribe(sess *session.Session, pkt packets.ControlPacket) error {
-	sess.TouchActivity()
+func (h *BrokerHandler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	s.TouchActivity()
 
 	p := pkt.(*v3.Subscribe)
 	packetID := p.ID
 
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, t := range p.Topics {
-		if !h.auth.CanSubscribe(sess.ID, t.Name) {
+		if !h.auth.CanSubscribe(s.ID, t.Name) {
 			reasonCodes[i] = 0x80
 			continue
 		}
 
-		reasonCodes[i] = h.pubsub.ProcessSubscription(sess.ID, t.Name, t.QoS)
+		reasonCodes[i] = h.pubsub.ProcessSubscription(s.ID, t.Name, t.QoS)
 		if reasonCodes[i] == 0x80 {
 			continue
 		}
 
 		opts := store.SubscribeOptions{}
-		sess.AddSubscription(t.Name, opts)
+		s.AddSubscription(t.Name, opts)
 
 		h.pubsub.SendRetainedMessages(t.Name, t.QoS, func(msg *store.Message) error {
-			return h.deliverMessage(sess, msg.Topic, msg.Payload, msg.QoS, true)
+			return h.deliverMessage(s, msg.Topic, msg.Payload, msg.QoS, true)
 		})
 	}
 
-	return h.sendSubAck(sess, packetID, reasonCodes)
+	return h.sendSubAck(s, packetID, reasonCodes)
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
@@ -251,12 +251,12 @@ func (h *BrokerHandler) sendPubAck(s *session.Session, packetID uint16) error {
 	return s.WritePacket(ack)
 }
 
-func (h *BrokerHandler) sendPubRec(a *session.Session, packetID uint16) error {
+func (h *BrokerHandler) sendPubRec(s *session.Session, packetID uint16) error {
 	rec := &v3.PubRec{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 		ID:          packetID,
 	}
-	return a.WritePacket(rec)
+	return s.WritePacket(rec)
 }
 
 func (h *BrokerHandler) sendPubRel(s *session.Session, packetID uint16) error {

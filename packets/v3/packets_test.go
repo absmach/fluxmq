@@ -65,7 +65,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			}
 
 			reader := bytes.NewReader(encoded)
-			decoded, _, _, err := ReadPacket(reader)
+			decoded, err := ReadPacket(reader)
 			if err != nil {
 				t.Fatalf("ReadPacket failed: %v", err)
 			}
@@ -137,7 +137,7 @@ func TestConnAckEncodeDecode(t *testing.T) {
 			}
 
 			reader := bytes.NewReader(encoded)
-			decoded, _, _, err := ReadPacket(reader)
+			decoded, err := ReadPacket(reader)
 			if err != nil {
 				t.Fatalf("ReadPacket failed: %v", err)
 			}
@@ -198,7 +198,7 @@ func TestPublishEncodeDecode(t *testing.T) {
 			}
 
 			reader := bytes.NewReader(encoded)
-			decoded, _, _, err := ReadPacket(reader)
+			decoded, err := ReadPacket(reader)
 			if err != nil {
 				t.Fatalf("ReadPacket failed: %v", err)
 			}
@@ -264,7 +264,7 @@ func TestSubscribeEncodeDecode(t *testing.T) {
 			}
 
 			reader := bytes.NewReader(encoded)
-			decoded, _, _, err := ReadPacket(reader)
+			decoded, err := ReadPacket(reader)
 			if err != nil {
 				t.Fatalf("ReadPacket failed: %v", err)
 			}
@@ -305,7 +305,7 @@ func TestSubAckEncodeDecode(t *testing.T) {
 	}
 
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestUnsubscribeEncodeDecode(t *testing.T) {
 	}
 
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestPubAckEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestPubRecEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestPubRelEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestPubCompEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestPingReqEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestPingRespEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestDisconnectEncodeDecode(t *testing.T) {
 
 	encoded := pkt.Encode()
 	reader := bytes.NewReader(encoded)
-	decoded, _, _, err := ReadPacket(reader)
+	decoded, err := ReadPacket(reader)
 	if err != nil {
 		t.Fatalf("ReadPacket failed: %v", err)
 	}

@@ -115,7 +115,7 @@ func TestSessionDisconnect(t *testing.T) {
 
 	// Set up disconnect callback
 	callbackCalled := make(chan bool, 1)
-	s.SetOnDisconnect(func(sess *Session, graceful bool) {
+	s.SetOnDisconnect(func(s *Session, graceful bool) {
 		callbackCalled <- graceful
 	})
 

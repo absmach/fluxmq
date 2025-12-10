@@ -161,13 +161,13 @@ func TestBrokerRetainedMessagesOnSubscribe(t *testing.T) {
 	b.Distribute("home/kitchen/temp", []byte("21.0"), 1, true, nil)
 
 	// Create and connect a session
-	sess, _, err := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
+	s, _, err := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
 	if err != nil {
 		t.Fatalf("GetOrCreate failed: %v", err)
 	}
 
 	conn := newMockBrokerConnection()
-	sess.Connect(conn)
+	s.Connect(conn)
 
 	// Subscribe - should receive retained message
 	err = b.Subscribe("client1", "home/kitchen/temp", 1, store.SubscribeOptions{})
@@ -221,13 +221,13 @@ func TestBrokerDistribute(t *testing.T) {
 	defer b.Close()
 
 	// Create two sessions
-	sess1, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
-	sess2, _, _ := b.sessionMgr.GetOrCreate("client2", 4, testSessionOptions())
+	s1, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
+	s2, _, _ := b.sessionMgr.GetOrCreate("client2", 4, testSessionOptions())
 
 	conn1 := newMockBrokerConnection()
 	conn2 := newMockBrokerConnection()
-	sess1.Connect(conn1)
-	sess2.Connect(conn2)
+	s1.Connect(conn1)
+	s2.Connect(conn2)
 
 	// Subscribe both to the topic
 	b.Subscribe("client1", "test/topic", 1, store.SubscribeOptions{})
@@ -252,9 +252,9 @@ func TestBrokerDistributeQoSDowngrade(t *testing.T) {
 	b := NewBroker(nil)
 	defer b.Close()
 
-	sess, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
+	s, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
 	conn := newMockBrokerConnection()
-	sess.Connect(conn)
+	s.Connect(conn)
 
 	// Subscribe with QoS 0
 	b.Subscribe("client1", "test/topic", 0, store.SubscribeOptions{})
@@ -281,23 +281,23 @@ func TestBrokerOfflineMessageQueue(t *testing.T) {
 	defer b.Close()
 
 	// Create session but don't connect
-	sess, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
+	s1, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
 	b.Subscribe("client1", "test/topic", 1, store.SubscribeOptions{})
 
 	// Ensure session is not connected
-	if sess.IsConnected() {
-		sess.Disconnect(true)
+	if s1.IsConnected() {
+		s1.Disconnect(true)
 	}
 
 	// Distribute message - should be queued
 	b.Distribute("test/topic", []byte("offline msg"), 1, false, nil)
 
 	// Check offline queue
-	if sess.OfflineQueue.Len() != 1 {
-		t.Errorf("Expected 1 message in offline queue, got %d", sess.OfflineQueue.Len())
+	if s1.OfflineQueue.Len() != 1 {
+		t.Errorf("Expected 1 message in offline queue, got %d", s1.OfflineQueue.Len())
 	}
 
-	msg := sess.OfflineQueue.Peek()
+	msg := s1.OfflineQueue.Peek()
 	if string(msg.Payload) != "offline msg" {
 		t.Errorf("Offline message payload: got %s, want 'offline msg'", string(msg.Payload))
 	}
@@ -307,20 +307,20 @@ func TestBrokerOfflineQueueQoS0Skip(t *testing.T) {
 	b := NewBroker(nil)
 	defer b.Close()
 
-	sess, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
+	s, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
 	b.Subscribe("client1", "test/topic", 0, store.SubscribeOptions{})
 
 	// Ensure session is not connected
-	if sess.IsConnected() {
-		sess.Disconnect(true)
+	if s.IsConnected() {
+		s.Disconnect(true)
 	}
 
 	// Distribute QoS 0 message - should NOT be queued
 	b.Distribute("test/topic", []byte("qos0 msg"), 0, false, nil)
 
 	// Offline queue should be empty (QoS 0 not queued)
-	if sess.OfflineQueue.Len() != 0 {
-		t.Errorf("Expected 0 messages in offline queue for QoS 0, got %d", sess.OfflineQueue.Len())
+	if s.OfflineQueue.Len() != 0 {
+		t.Errorf("Expected 0 messages in offline queue for QoS 0, got %d", s.OfflineQueue.Len())
 	}
 }
 
@@ -328,9 +328,9 @@ func TestBrokerPublish(t *testing.T) {
 	b := NewBroker(nil)
 	defer b.Close()
 
-	sess, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
+	s, _, _ := b.sessionMgr.GetOrCreate("client1", 4, testSessionOptions())
 	conn := newMockBrokerConnection()
-	sess.Connect(conn)
+	s.Connect(conn)
 
 	b.Subscribe("client1", "test/topic", 1, store.SubscribeOptions{})
 

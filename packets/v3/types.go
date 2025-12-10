@@ -108,34 +108,34 @@ func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 }
 
 // ReadPacket reads an MQTT V3.1.1 packet from the reader.
-func ReadPacket(r io.Reader) (ControlPacket, []byte, []byte, error) {
+func ReadPacket(r io.Reader) (ControlPacket, error) {
 	var fh FixedHeader
 	b := make([]byte, 1)
 
 	_, err := io.ReadFull(r, b)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	err = fh.Decode(b[0], r)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	cp, err := NewControlPacketWithHeader(fh)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	packetBytes := make([]byte, fh.RemainingLength)
 	n, err := io.ReadFull(r, packetBytes)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if n != fh.RemainingLength {
-		return nil, nil, nil, packets.ErrFailRemaining
+		return nil, packets.ErrFailRemaining
 	}
 
 	err = cp.Unpack(bytes.NewReader(packetBytes))
-	return cp, fh.Encode(), packetBytes, err
+	return cp, err
 }

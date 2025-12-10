@@ -1,7 +1,6 @@
 package session
 
 import (
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,16 +36,6 @@ func (s State) String() string {
 	default:
 		return "unknown"
 	}
-}
-
-// Connection represents a network connection that can read/write MQTT packets.
-type Connection interface {
-	ReadPacket() (packets.ControlPacket, error)
-	WritePacket(p packets.ControlPacket) error
-	Close() error
-	RemoteAddr() net.Addr
-	SetReadDeadline(t time.Time) error
-	SetWriteDeadline(t time.Time) error
 }
 
 // Session represents an MQTT client session with full state management.

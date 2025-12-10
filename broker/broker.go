@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"time"
 
 	"github.com/dborovcanin/mqtt/handlers"
 	"github.com/dborovcanin/mqtt/packets"
@@ -16,8 +15,10 @@ import (
 	"github.com/dborovcanin/mqtt/store/memory"
 )
 
-var _ handlers.Router = (*Broker)(nil)
-var _ handlers.Publisher = (*Broker)(nil)
+var (
+	_ handlers.Router    = (*Broker)(nil)
+	_ handlers.Publisher = (*Broker)(nil)
+)
 
 // Broker is the core MQTT broker.
 type Broker struct {
@@ -65,7 +66,7 @@ func NewBroker(logger *slog.Logger) *Broker {
 // This implements the broker.Handler interface.
 func (b *Broker) HandleConnection(netConn net.Conn) {
 	// Wrap net.Conn with MQTT codec to get broker.Connection
-	conn := NewConnection(netConn)
+	conn := session.NewConnection(netConn)
 
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
@@ -117,7 +118,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		Will:           will,
 	}
 
-	sess, _, err := b.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
+	s, _, err := b.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
 	if err != nil {
 		b.logger.Error("Failed to create session",
 			slog.String("client_id", clientID),
@@ -127,8 +128,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 	}
 
 	// 4. Attach connection to session
-	sessConn := &sessionConnection{conn: conn}
-	if err := sess.Connect(sessConn); err != nil {
+	if err := s.Connect(conn); err != nil {
 		b.logger.Error("Failed to attach connection to session",
 			slog.String("client_id", clientID),
 			slog.String("error", err.Error()))
@@ -141,7 +141,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		b.logger.Error("Failed to send CONNACK",
 			slog.String("client_id", clientID),
 			slog.String("error", err.Error()))
-		sess.Disconnect(false)
+		s.Disconnect(false)
 		return
 	}
 
@@ -152,48 +152,48 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		slog.Uint64("keep_alive", uint64(keepAlive)))
 
 	// 6. Deliver any queued offline messages
-	b.deliverOfflineMessages(sess)
+	b.deliverOfflineMessages(s)
 
 	// 7. Run packet loop
-	b.runSession(sess)
+	b.runSession(s)
 }
 
 // runSession runs the main packet loop for a session.
-func (b *Broker) runSession(sess *session.Session) {
+func (b *Broker) runSession(s *session.Session) {
 	for {
-		pkt, err := sess.ReadPacket()
+		pkt, err := s.ReadPacket()
 		if err != nil {
 			if err != io.EOF && err != session.ErrNotConnected {
 				b.logger.Error("Failed to read packet from client",
-					slog.String("client_id", sess.ID),
+					slog.String("client_id", s.ID),
 					slog.String("error", err.Error()))
 			}
-			sess.Disconnect(false)
+			s.Disconnect(false)
 			return
 		}
 
-		if err := b.dispatcher.Dispatch(sess, pkt); err != nil {
+		if err := b.dispatcher.Dispatch(s, pkt); err != nil {
 			if err == io.EOF {
 				return // Clean disconnect
 			}
 			b.logger.Error("Packet handler error",
-				slog.String("client_id", sess.ID),
+				slog.String("client_id", s.ID),
 				slog.String("error", err.Error()))
-			sess.Disconnect(false)
+			s.Disconnect(false)
 			return
 		}
 	}
 }
 
 // deliverOfflineMessages sends queued messages to reconnected client.
-func (b *Broker) deliverOfflineMessages(sess *session.Session) {
-	msgs := b.sessionMgr.DrainOfflineQueue(sess.ID)
+func (b *Broker) deliverOfflineMessages(s *session.Session) {
+	msgs := b.sessionMgr.DrainOfflineQueue(s.ID)
 	for _, msg := range msgs {
-		b.deliverToSession(sess, msg.Topic, msg.Payload, msg.QoS, msg.Retain)
+		b.deliverToSession(s, msg.Topic, msg.Payload, msg.QoS, msg.Retain)
 	}
 }
 
-func (b *Broker) sendConnAck(conn Connection) error {
+func (b *Broker) sendConnAck(conn session.Connection) error {
 	ack := &v3.ConnAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.ConnAckType},
 		ReturnCode:  0,
@@ -212,14 +212,14 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.
 		return fmt.Errorf("failed to match retained messages for filter %s: %w", filter, err)
 	}
 
-	sess := b.sessionMgr.Get(clientID)
-	if sess != nil && sess.IsConnected() {
+	s := b.sessionMgr.Get(clientID)
+	if s != nil && s.IsConnected() {
 		for _, msg := range retained {
 			deliverQoS := qos
 			if msg.QoS < deliverQoS {
 				deliverQoS = msg.QoS
 			}
-			b.deliverToSession(sess, msg.Topic, msg.Payload, deliverQoS, true)
+			b.deliverToSession(s, msg.Topic, msg.Payload, deliverQoS, true)
 		}
 	}
 
@@ -335,39 +335,3 @@ func (b *Broker) Close() error {
 	b.store.Close()
 	return nil
 }
-
-// sessionConnection wraps a Connection to implement session.Connection.
-type sessionConnection struct {
-	conn Connection
-}
-
-func (c *sessionConnection) ReadPacket() (packets.ControlPacket, error) {
-	return c.conn.ReadPacket()
-}
-
-func (c *sessionConnection) WritePacket(p packets.ControlPacket) error {
-	return c.conn.WritePacket(p)
-}
-
-func (c *sessionConnection) Close() error {
-	return c.conn.Close()
-}
-
-func (c *sessionConnection) RemoteAddr() net.Addr {
-	return c.conn.RemoteAddr()
-}
-
-// SetReadDeadline is a no-op since the underlying Connection doesn't support deadlines.
-// Deadline management is handled by the TCP server and keep-alive mechanism.
-func (c *sessionConnection) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-// SetWriteDeadline is a no-op since the underlying Connection doesn't support deadlines.
-// Deadline management is handled by the TCP server and keep-alive mechanism.
-func (c *sessionConnection) SetWriteDeadline(t time.Time) error {
-	return nil
-}
-
-// Ensure sessionConnection implements session.Connection.
-var _ session.Connection = (*sessionConnection)(nil)

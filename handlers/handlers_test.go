@@ -133,9 +133,9 @@ func createTestSession(version byte) (*session.Session, *mockConnection) {
 		ReceiveMaximum: 100,
 		KeepAlive:      60,
 	}
-	sess := session.New("test-client", version, opts)
-	sess.Connect(conn)
-	return sess, conn
+	s := session.New("test-client", version, opts)
+	s.Connect(conn)
+	return s, conn
 }
 
 func TestHandlePublishQoS0(t *testing.T) {
@@ -144,7 +144,7 @@ func TestHandlePublishQoS0(t *testing.T) {
 		Publisher: pub,
 	})
 
-	sess, _ := createTestSession(4)
+	s, _ := createTestSession(4)
 
 	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
@@ -152,7 +152,7 @@ func TestHandlePublishQoS0(t *testing.T) {
 		Payload:     []byte("hello"),
 	}
 
-	err := h.HandlePublish(sess, pkt)
+	err := h.HandlePublish(s, pkt)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestHandlePublishQoS1(t *testing.T) {
 		Publisher: pub,
 	})
 
-	sess, conn := createTestSession(4)
+	s, conn := createTestSession(4)
 
 	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
@@ -181,7 +181,7 @@ func TestHandlePublishQoS1(t *testing.T) {
 		ID:          123,
 	}
 
-	err := h.HandlePublish(sess, pkt)
+	err := h.HandlePublish(s, pkt)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestHandlePublishQoS2(t *testing.T) {
 		Publisher: pub,
 	})
 
-	sess, conn := createTestSession(4)
+	s, conn := createTestSession(4)
 
 	// Step 1: PUBLISH
 	pkt := &v3.Publish{
@@ -220,7 +220,7 @@ func TestHandlePublishQoS2(t *testing.T) {
 		ID:          456,
 	}
 
-	err := h.HandlePublish(sess, pkt)
+	err := h.HandlePublish(s, pkt)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestHandlePublishQoS2(t *testing.T) {
 		ID:          456,
 	}
 
-	err = h.HandlePubRel(sess, pubrel)
+	err = h.HandlePubRel(s, pubrel)
 	if err != nil {
 		t.Fatalf("HandlePubRel failed: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestHandleSubscribe(t *testing.T) {
 		Router: router,
 	})
 
-	sess, conn := createTestSession(4)
+	s, conn := createTestSession(4)
 
 	pkt := &v3.Subscribe{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
@@ -289,7 +289,7 @@ func TestHandleSubscribe(t *testing.T) {
 		},
 	}
 
-	err := h.HandleSubscribe(sess, pkt)
+	err := h.HandleSubscribe(s, pkt)
 	if err != nil {
 		t.Fatalf("HandleSubscribe failed: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestHandleSubscribe(t *testing.T) {
 	}
 
 	// Check session subscriptions cached
-	subs := sess.GetSubscriptions()
+	subs := s.GetSubscriptions()
 	if len(subs) != 2 {
 		t.Errorf("Expected 2 cached subscriptions, got %d", len(subs))
 	}
@@ -328,11 +328,11 @@ func TestHandleUnsubscribe(t *testing.T) {
 		Router: router,
 	})
 
-	sess, conn := createTestSession(4)
+	s, conn := createTestSession(4)
 
 	// First subscribe
-	router.Subscribe(sess.ID, "home/#", 1, store.SubscribeOptions{})
-	sess.AddSubscription("home/#", store.SubscribeOptions{})
+	router.Subscribe(s.ID, "home/#", 1, store.SubscribeOptions{})
+	s.AddSubscription("home/#", store.SubscribeOptions{})
 
 	// Then unsubscribe
 	pkt := &v3.Unsubscribe{
@@ -341,7 +341,7 @@ func TestHandleUnsubscribe(t *testing.T) {
 		Topics:      []string{"home/#"},
 	}
 
-	err := h.HandleUnsubscribe(sess, pkt)
+	err := h.HandleUnsubscribe(s, pkt)
 	if err != nil {
 		t.Fatalf("HandleUnsubscribe failed: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestHandleUnsubscribe(t *testing.T) {
 	}
 
 	// Check session
-	subs := sess.GetSubscriptions()
+	subs := s.GetSubscriptions()
 	if len(subs) != 0 {
 		t.Errorf("Expected 0 cached subscriptions, got %d", len(subs))
 	}
@@ -374,9 +374,9 @@ func TestHandleUnsubscribe(t *testing.T) {
 func TestHandlePingReq(t *testing.T) {
 	h := NewBrokerHandler(BrokerHandlerConfig{})
 
-	sess, conn := createTestSession(4)
+	s, conn := createTestSession(4)
 
-	err := h.HandlePingReq(sess)
+	err := h.HandlePingReq(s)
 	if err != nil {
 		t.Fatalf("HandlePingReq failed: %v", err)
 	}
@@ -394,18 +394,18 @@ func TestHandlePingReq(t *testing.T) {
 func TestHandleDisconnect(t *testing.T) {
 	h := NewBrokerHandler(BrokerHandlerConfig{})
 
-	sess, _ := createTestSession(4)
+	s, _ := createTestSession(4)
 
 	pkt := &v3.Disconnect{
 		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
 	}
 
-	err := h.HandleDisconnect(sess, pkt)
+	err := h.HandleDisconnect(s, pkt)
 	if err != nil {
 		t.Fatalf("HandleDisconnect failed: %v", err)
 	}
 
-	if sess.IsConnected() {
+	if s.IsConnected() {
 		t.Error("Session should be disconnected")
 	}
 }
@@ -416,7 +416,7 @@ func TestHandlePublishWithRetain(t *testing.T) {
 		Retained: st.Retained(),
 	})
 
-	sess, _ := createTestSession(4)
+	s, _ := createTestSession(4)
 
 	pkt := &v3.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0, Retain: true},
@@ -424,7 +424,7 @@ func TestHandlePublishWithRetain(t *testing.T) {
 		Payload:     []byte("true"),
 	}
 
-	err := h.HandlePublish(sess, pkt)
+	err := h.HandlePublish(s, pkt)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestHandlePublishWithRetain(t *testing.T) {
 		Payload:     []byte{},
 	}
 
-	h.HandlePublish(sess, pkt2)
+	h.HandlePublish(s, pkt2)
 
 	_, err = st.Retained().Get("status/online")
 	if err != store.ErrNotFound {
@@ -460,7 +460,7 @@ func TestDispatcher(t *testing.T) {
 	})
 	d := NewDispatcher(h)
 
-	sess, conn := createTestSession(4)
+	s, conn := createTestSession(4)
 
 	// Test PUBLISH dispatch
 	pubPkt := &v3.Publish{
@@ -469,7 +469,7 @@ func TestDispatcher(t *testing.T) {
 		Payload:     []byte("data"),
 	}
 
-	err := d.Dispatch(sess, pubPkt)
+	err := d.Dispatch(s, pubPkt)
 	if err != nil {
 		t.Fatalf("Dispatch PUBLISH failed: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestDispatcher(t *testing.T) {
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
 	}
 
-	err = d.Dispatch(sess, pingPkt)
+	err = d.Dispatch(s, pingPkt)
 	if err != nil {
 		t.Fatalf("Dispatch PINGREQ failed: %v", err)
 	}

@@ -1,17 +1,37 @@
-// Copyright (c) Abstract Machines
-// SPDX-License-Identifier: Apache-2.0
-
-package broker
+package session
 
 import (
 	"errors"
 	"io"
 	"net"
+	"time"
 
 	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
+
+// Connection represents a network connection that can read/write MQTT packets.
+type Connection interface {
+	// ReadPacket reads the next MQTT packet from the connection.
+	// It returns the packet or an error.
+	ReadPacket() (packets.ControlPacket, error)
+
+	// WritePacket writes an MQTT packet to the connection.
+	WritePacket(p packets.ControlPacket) error
+
+	// Close terminates the connection.
+	Close() error
+
+	// RemoteAddr returns the address of the connected client.
+	RemoteAddr() net.Addr
+
+	// SetReadDeadline sets the connection read deadline.
+	SetReadDeadline(t time.Time) error
+
+	// SetWriteDeadline sets the connection write deadline.
+	SetWriteDeadline(t time.Time) error
+}
 
 var _ Connection = (*mqttCodec)(nil)
 
@@ -25,7 +45,7 @@ type mqttCodec struct {
 
 // newMQTTCodec creates a new MQTT codec wrapping a network connection.
 // Returns unexported implementation for better encapsulation.
-func newMQTTCodec(conn net.Conn) *mqttCodec {
+func NewConnection(conn net.Conn) Connection {
 	return &mqttCodec{
 		conn:   conn,
 		reader: conn,
@@ -52,14 +72,13 @@ func (c *mqttCodec) ReadPacket() (packets.ControlPacket, error) {
 		return pkt, err
 	case 3, 4:
 		// v4 is MQTT 3.1.1, v3 is MQTT 3.1
-		pkt, _, _, err := v3.ReadPacket(c.reader)
+		pkt, err := v3.ReadPacket(c.reader)
 		return pkt, err
 	default:
 		return nil, errors.New("unsupported MQTT protocol version")
 	}
 }
 
-// WritePacket writes an MQTT packet to the connection.
 func (c *mqttCodec) WritePacket(pkt packets.ControlPacket) error {
 	if pkt == nil {
 		return errors.New("cannot encode nil packet")
@@ -67,19 +86,18 @@ func (c *mqttCodec) WritePacket(pkt packets.ControlPacket) error {
 	return pkt.Pack(c.conn)
 }
 
-// Close closes the underlying connection.
 func (c *mqttCodec) Close() error {
 	return c.conn.Close()
 }
 
-// RemoteAddr returns the remote network address.
 func (c *mqttCodec) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }
 
-// NewConnection creates a broker.Connection from a net.Conn.
-// This wraps the connection with an MQTT codec for packet-level I/O.
-// Returns the Connection interface with unexported implementation.
-func NewConnection(conn net.Conn) Connection {
-	return newMQTTCodec(conn)
+func (c *mqttCodec) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+
+func (c *mqttCodec) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
 }

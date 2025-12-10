@@ -133,7 +133,7 @@ func (c *Client) Connect() error {
 		}
 		// Check ReasonCode...
 	} else {
-		pkt, _, _, err := v3.ReadPacket(conn)
+		pkt, err := v3.ReadPacket(conn)
 		if err != nil {
 			conn.Close()
 			return err
@@ -157,7 +157,7 @@ func (c *Client) readLoop() {
 		if c.opts.Version == 5 {
 			pkt, _, _, err = v5.ReadPacket(c.conn)
 		} else {
-			pkt, _, _, err = v3.ReadPacket(c.conn)
+			pkt, err = v3.ReadPacket(c.conn)
 		}
 
 		if err != nil {
