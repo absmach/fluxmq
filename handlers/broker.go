@@ -3,6 +3,7 @@ package handlers
 import (
 	"time"
 
+	"github.com/dborovcanin/mqtt/handlers/core"
 	"github.com/dborovcanin/mqtt/packets"
 	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	"github.com/dborovcanin/mqtt/session"
@@ -12,11 +13,8 @@ import (
 // BrokerHandler implements the Handler interface for the broker.
 type BrokerHandler struct {
 	sessionMgr *session.Manager
-	router     Router
-	publisher  Publisher
-	retained   RetainedStore
-	auth       Authenticator
-	authz      Authorizer
+	pubsub     *core.PubSubEngine
+	auth       *core.AuthEngine
 
 	// Retry settings for QoS 1/2
 	retryInterval time.Duration
@@ -46,11 +44,8 @@ func NewBrokerHandler(cfg BrokerHandlerConfig) *BrokerHandler {
 
 	return &BrokerHandler{
 		sessionMgr:    cfg.SessionManager,
-		router:        cfg.Router,
-		publisher:     cfg.Publisher,
-		retained:      cfg.Retained,
-		auth:          cfg.Authenticator,
-		authz:         cfg.Authorizer,
+		pubsub:        core.NewPubSubEngine(cfg.Router, cfg.Publisher, cfg.Retained),
+		auth:          core.NewAuthEngine(cfg.Authenticator, cfg.Authorizer),
 		retryInterval: cfg.RetryInterval,
 		maxRetries:    cfg.MaxRetries,
 	}
@@ -75,18 +70,18 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
 
-	if h.authz != nil && !h.authz.CanPublish(s.ID, topic) {
+	if !h.auth.CanPublish(s.ID, topic) {
 		return ErrNotAuthorized
 	}
 
 	switch qos {
 	case 0:
 		// QoS 0: Fire and forget
-		return h.publishMessage(s, topic, payload, qos, retain)
+		return h.pubsub.HandleQoS0Publish(topic, payload, retain)
 
 	case 1:
 		// QoS 1: Publish and acknowledge
-		if err := h.publishMessage(s, topic, payload, qos, retain); err != nil {
+		if err := h.pubsub.HandleQoS1Publish(topic, payload, retain); err != nil {
 			return err
 		}
 		return h.sendPubAck(s, packetID)
@@ -99,43 +94,11 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 			return h.sendPubRec(s, packetID)
 		}
 
-		s.Inflight.MarkReceived(packetID)
-
-		// Store for later publication (after PUBREL)
-		msg := &store.Message{
-			Topic:    topic,
-			Payload:  payload,
-			QoS:      qos,
-			Retain:   retain,
-			PacketID: packetID,
+		if err := h.pubsub.HandleQoS2Publish(s, topic, payload, retain, packetID, dup); err != nil {
+			return err
 		}
-		s.Inflight.Add(packetID, msg, session.Inbound)
 
 		return h.sendPubRec(s, packetID)
-	}
-
-	return nil
-}
-
-// publishMessage publishes a message to subscribers.
-func (h *BrokerHandler) publishMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
-	if retain && h.retained != nil {
-		msg := &store.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  true,
-		}
-		if len(payload) == 0 {
-			// Empty payload clears retained message
-			h.retained.Set(topic, nil)
-		} else {
-			h.retained.Set(topic, msg)
-		}
-	}
-
-	if h.publisher != nil {
-		return h.publisher.Distribute(topic, payload, qos, retain, nil)
 	}
 
 	return nil
@@ -168,7 +131,7 @@ func (h *BrokerHandler) HandlePubRel(s *session.Session, pkt packets.ControlPack
 
 	inf, ok := s.Inflight.Get(packetID)
 	if ok && inf.Message != nil {
-		h.publishMessage(s, inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
+		h.pubsub.PublishQoS2Message(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
 	}
 
 	s.Inflight.Ack(packetID)
@@ -195,46 +158,25 @@ func (h *BrokerHandler) HandleSubscribe(sess *session.Session, pkt packets.Contr
 
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, t := range p.Topics {
-		if h.authz != nil && !h.authz.CanSubscribe(sess.ID, t.Name) {
-			reasonCodes[i] = 0x80 // Failure
+		if !h.auth.CanSubscribe(sess.ID, t.Name) {
+			reasonCodes[i] = 0x80
+			continue
+		}
+
+		reasonCodes[i] = h.pubsub.ProcessSubscription(sess.ID, t.Name, t.QoS)
+		if reasonCodes[i] == 0x80 {
 			continue
 		}
 
 		opts := store.SubscribeOptions{}
-		if h.router != nil {
-			if err := h.router.Subscribe(sess.ID, t.Name, t.QoS, opts); err != nil {
-				reasonCodes[i] = 0x80 // Failure
-				continue
-			}
-		}
-
 		sess.AddSubscription(t.Name, opts)
 
-		reasonCodes[i] = t.QoS
-
-		if h.retained != nil {
-			h.sendRetainedMessages(sess, t.Name, t.QoS)
-		}
+		h.pubsub.SendRetainedMessages(t.Name, t.QoS, func(msg *store.Message) error {
+			return h.deliverMessage(sess, msg.Topic, msg.Payload, msg.QoS, true)
+		})
 	}
 
 	return h.sendSubAck(sess, packetID, reasonCodes)
-}
-
-// sendRetainedMessages sends retained messages matching a filter.
-func (h *BrokerHandler) sendRetainedMessages(s *session.Session, filter string, maxQoS byte) {
-	msgs, err := h.retained.Match(filter)
-	if err != nil {
-		return
-	}
-
-	for _, msg := range msgs {
-		qos := msg.QoS
-		if qos > maxQoS {
-			qos = maxQoS
-		}
-
-		h.deliverMessage(s, msg.Topic, msg.Payload, qos, true)
-	}
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
@@ -244,9 +186,7 @@ func (h *BrokerHandler) HandleUnsubscribe(s *session.Session, pkt packets.Contro
 	p := pkt.(*v3.Unsubscribe)
 
 	for _, filter := range p.Topics {
-		if h.router != nil {
-			h.router.Unsubscribe(s.ID, filter)
-		}
+		h.pubsub.ProcessUnsubscription(s.ID, filter)
 		s.RemoveSubscription(filter)
 	}
 
