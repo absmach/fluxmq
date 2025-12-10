@@ -2,11 +2,8 @@ package session
 
 import (
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	"github.com/dborovcanin/mqtt/store"
 )
 
@@ -45,11 +42,8 @@ type Session struct {
 	ID      string
 	Version byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
 
-	conn Connection // nil when disconnected
-
-	state          State
-	connectedAt    time.Time
-	disconnectedAt time.Time
+	connHandler *ConnectionHandler
+	msgHandler  *MessageHandler
 
 	CleanStart     bool
 	ExpiryInterval uint32 // Session expiry in seconds (v5)
@@ -60,24 +54,9 @@ type Session struct {
 
 	Will *store.WillMessage // set on CONNECT, cleared on clean disconnect
 
-	inflight     *inflightTracker // Outgoing QoS 1/2 messages
-	offlineQueue *messageQueue    // Messages for disconnected client
-
-	nextPacketID uint32
-
 	subscriptions map[string]store.SubscribeOptions // cached from store for fast lookup
 
-	keepAliveTimer  *time.Timer
-	lastActivity    time.Time
-	keepAliveExpiry time.Duration
-
-	outboundAliases map[string]uint16 // topic -> alias (for sending)
-	inboundAliases  map[uint16]string // alias -> topic (for receiving)
-
 	onDisconnect func(s *Session, graceful bool)
-
-	stopCh chan struct{}
-	wg     sync.WaitGroup
 }
 
 // Options holds options for creating a new session.
@@ -111,29 +90,28 @@ func New(clientID string, version byte, opts Options, inflight *inflightTracker,
 		receiveMax = 65535
 	}
 
+	connHandler := NewConnectionHandler(clientID, opts.KeepAlive)
+	msgHandler := NewMessageHandler(inflight, offlineQueue)
+
 	s := &Session{
-		ID:              clientID,
-		Version:         version,
-		state:           StateNew,
-		CleanStart:      opts.CleanStart,
-		ExpiryInterval:  opts.ExpiryInterval,
-		ReceiveMaximum:  receiveMax,
-		MaxPacketSize:   opts.MaxPacketSize,
-		TopicAliasMax:   opts.TopicAliasMax,
-		KeepAlive:       opts.KeepAlive,
-		Will:            opts.Will,
-		inflight:        inflight,
-		offlineQueue:    offlineQueue,
-		subscriptions:   make(map[string]store.SubscribeOptions),
-		outboundAliases: make(map[string]uint16),
-		inboundAliases:  make(map[uint16]string),
-		lastActivity:    time.Now(),
-		stopCh:          make(chan struct{}),
+		ID:             clientID,
+		Version:        version,
+		connHandler:    connHandler,
+		msgHandler:     msgHandler,
+		CleanStart:     opts.CleanStart,
+		ExpiryInterval: opts.ExpiryInterval,
+		ReceiveMaximum: receiveMax,
+		MaxPacketSize:  opts.MaxPacketSize,
+		TopicAliasMax:  opts.TopicAliasMax,
+		KeepAlive:      opts.KeepAlive,
+		Will:           opts.Will,
+		subscriptions:  make(map[string]store.SubscribeOptions),
 	}
 
-	if opts.KeepAlive > 0 {
-		s.keepAliveExpiry = time.Duration(opts.KeepAlive) * time.Second * 3 / 2 // 1.5x per spec
-	}
+	connHandler.SetOnDisconnect(func(graceful bool) {
+		// Use internal disconnect to ensure coordination
+		s.Disconnect(graceful)
+	})
 
 	return s
 }
@@ -143,17 +121,12 @@ func (s *Session) Connect(conn Connection) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.conn = conn
-	s.state = StateConnected
-	s.connectedAt = time.Now()
-	s.lastActivity = time.Now()
-
-	if s.keepAliveExpiry > 0 {
-		s.startKeepAliveTimer()
+	if err := s.connHandler.Connect(conn); err != nil {
+		return err
 	}
 
-	s.wg.Add(1)
-	go s.retryLoop()
+	// Start retry loop using the connection handler as the packet writer
+	s.msgHandler.StartRetryLoop(s.connHandler)
 
 	return nil
 }
@@ -161,188 +134,92 @@ func (s *Session) Connect(conn Connection) error {
 // Disconnect disconnects the session.
 func (s *Session) Disconnect(graceful bool) error {
 	s.mu.Lock()
+	defer s.mu.Unlock() // Use defer for safety effectively
 
-	if s.state != StateConnected {
-		s.mu.Unlock()
-		return nil
+	// Delegated disconnect logic
+	// ConnectionHandler disconnects first
+	s.connHandler.Disconnect(graceful)
+
+	// MessageHandler stops background tasks
+	s.msgHandler.Stop()
+
+	if graceful {
+		s.Will = nil
+	} else {
+		// If not graceful (e.g. keepalive timeout), we might keep Will if we support Will Delay (v5),
+		// but for now strict v3 behavior implies we publish Will if connection lost unexpectedly?
+		// Actually Broker handles Will publication if disconnect comes from network error (ReadPacket returns error).
+		// But here, if we call Disconnect(false), it means we are forcing disconnect.
+
+		// If graceful=false, the caller (Broker) usually handles Will.
+		// If internal keepalive triggers Disconnect(false), we might need to notify Broker.
+		// That's what onDisconnect callback is for.
 	}
 
-	s.state = StateDisconnecting
-	s.cleanupConnectionResources(graceful)
+	s.msgHandler.ClearAliases()
+
 	callback := s.onDisconnect
-
-	s.mu.Unlock()
-
-	// Wait for background tasks without holding lock to avoid deadlock
-	s.wg.Wait()
-
-	// Reset stopCh for potential reconnection
-	s.mu.Lock()
-	s.stopCh = make(chan struct{})
-	s.mu.Unlock()
-
 	if callback != nil {
+		// Execute callback in new goroutine to avoid creating deadlocks or blocking
 		go callback(s, graceful)
 	}
 
 	return nil
 }
 
-// cleanupConnectionResources cleans up resources when disconnecting.
-// Must be called with s.mu held.
-func (s *Session) cleanupConnectionResources(graceful bool) {
-	if s.keepAliveTimer != nil {
-		s.keepAliveTimer.Stop()
-		s.keepAliveTimer = nil
-	}
-
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
-
-	s.state = StateDisconnected
-	s.disconnectedAt = time.Now()
-
-	if graceful {
-		s.Will = nil
-	}
-
-	s.outboundAliases = make(map[string]uint16)
-	s.inboundAliases = make(map[uint16]string)
-
-	close(s.stopCh)
-}
-
 // State returns the current session state.
 func (s *Session) State() State {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state
+	return s.connHandler.State()
 }
 
 // IsConnected returns true if the session has an active connection.
 func (s *Session) IsConnected() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state == StateConnected && s.conn != nil
+	return s.connHandler.IsConnected()
 }
 
 // Conn returns the current connection (may be nil).
 func (s *Session) Conn() Connection {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.conn
+	return s.connHandler.Conn()
 }
 
 // Inflight returns the inflight message tracker for operations.
 func (s *Session) Inflight() InflightOps {
-	return s.inflight
+	return s.msgHandler.Inflight()
 }
 
 // OfflineQueue returns the offline message queue for operations.
 func (s *Session) OfflineQueue() QueueOps {
-	return s.offlineQueue
+	return s.msgHandler.OfflineQueue()
 }
 
 // InflightSnapshot returns the inflight tracker for persistence/inspection.
 func (s *Session) InflightSnapshot() InflightSnapshot {
-	return s.inflight
+	return s.msgHandler.Inflight()
 }
 
 // QueueSnapshot returns the queue for persistence operations.
 func (s *Session) QueueSnapshot() QueueSnapshot {
-	return s.offlineQueue
+	return s.msgHandler.OfflineQueue()
 }
 
 // NextPacketID generates the next packet ID.
 func (s *Session) NextPacketID() uint16 {
-	for {
-		id := atomic.AddUint32(&s.nextPacketID, 1)
-		id16 := uint16(id & 0xFFFF)
-		if id16 == 0 {
-			continue // Packet ID 0 is reserved
-		}
-		if !s.inflight.Has(id16) {
-			return id16
-		}
-	}
+	return s.msgHandler.NextPacketID()
 }
 
 // WritePacket writes a packet to the connection.
 func (s *Session) WritePacket(pkt packets.ControlPacket) error {
-	s.mu.RLock()
-	conn := s.conn
-	s.mu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	return conn.WritePacket(pkt)
+	return s.connHandler.WritePacket(pkt)
 }
 
 // ReadPacket reads a packet from the connection.
 func (s *Session) ReadPacket() (packets.ControlPacket, error) {
-	s.mu.RLock()
-	conn := s.conn
-	s.mu.RUnlock()
-
-	if conn == nil {
-		return nil, ErrNotConnected
-	}
-
-	return conn.ReadPacket()
+	return s.connHandler.ReadPacket()
 }
 
 // TouchActivity updates the last activity timestamp.
 func (s *Session) TouchActivity() {
-	s.mu.Lock()
-	s.lastActivity = time.Now()
-	s.mu.Unlock()
-}
-
-// startKeepAliveTimer starts the keep-alive timer.
-// Must be called with mu held.
-func (s *Session) startKeepAliveTimer() {
-	if s.keepAliveTimer != nil {
-		s.keepAliveTimer.Stop()
-	}
-
-	s.keepAliveTimer = time.AfterFunc(s.keepAliveExpiry, func() {
-		s.checkKeepAlive()
-	})
-}
-
-// checkKeepAlive checks if keep-alive has expired.
-func (s *Session) checkKeepAlive() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.state != StateConnected {
-		return
-	}
-
-	elapsed := time.Since(s.lastActivity)
-	if elapsed >= s.keepAliveExpiry {
-		s.state = StateDisconnecting
-		if s.conn != nil {
-			s.conn.Close()
-			s.conn = nil
-		}
-		s.state = StateDisconnected
-		s.disconnectedAt = time.Now()
-
-		if s.onDisconnect != nil {
-			go s.onDisconnect(s, false)
-		}
-		return
-	}
-
-	remaining := s.keepAliveExpiry - elapsed
-	s.keepAliveTimer = time.AfterFunc(remaining, func() {
-		s.checkKeepAlive()
-	})
+	s.connHandler.TouchActivity()
 }
 
 // SetOnDisconnect sets the disconnect callback.
@@ -380,32 +257,22 @@ func (s *Session) GetSubscriptions() map[string]store.SubscribeOptions {
 
 // SetTopicAlias sets a topic alias for outbound use.
 func (s *Session) SetTopicAlias(topic string, alias uint16) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.outboundAliases[topic] = alias
+	s.msgHandler.SetTopicAlias(topic, alias)
 }
 
 // GetTopicAlias returns the alias for a topic (outbound).
 func (s *Session) GetTopicAlias(topic string) (uint16, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	alias, ok := s.outboundAliases[topic]
-	return alias, ok
+	return s.msgHandler.GetTopicAlias(topic)
 }
 
 // SetInboundAlias sets an inbound topic alias.
 func (s *Session) SetInboundAlias(alias uint16, topic string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.inboundAliases[alias] = topic
+	s.msgHandler.SetInboundAlias(alias, topic)
 }
 
 // ResolveInboundAlias resolves an inbound alias to a topic.
 func (s *Session) ResolveInboundAlias(alias uint16) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	topic, ok := s.inboundAliases[alias]
-	return topic, ok
+	return s.msgHandler.ResolveInboundAlias(alias)
 }
 
 // UpdateConnectionOptions updates session options during reconnection.
@@ -418,11 +285,7 @@ func (s *Session) UpdateConnectionOptions(version byte, keepAlive uint16, will *
 	s.KeepAlive = keepAlive
 	s.Will = will
 
-	if keepAlive > 0 {
-		s.keepAliveExpiry = time.Duration(keepAlive) * time.Second * 3 / 2
-	} else {
-		s.keepAliveExpiry = 0
-	}
+	s.connHandler.SetKeepAlive(keepAlive)
 }
 
 // GetWill returns a copy of the will message.
@@ -442,14 +305,14 @@ func (s *Session) Info() *store.Session {
 		Version:         s.Version,
 		CleanStart:      s.CleanStart,
 		ExpiryInterval:  s.ExpiryInterval,
-		ConnectedAt:     s.connectedAt,
-		DisconnectedAt:  s.disconnectedAt,
-		Connected:       s.state == StateConnected,
+		ConnectedAt:     s.connHandler.ConnectedAt(),
+		DisconnectedAt:  s.connHandler.DisconnectedAt(),
+		Connected:       s.connHandler.State() == StateConnected,
 		ReceiveMaximum:  s.ReceiveMaximum,
 		MaxPacketSize:   s.MaxPacketSize,
 		TopicAliasMax:   s.TopicAliasMax,
-		RequestResponse: false, // TODO: from CONNECT
-		RequestProblem:  true,  // Default
+		RequestResponse: false,
+		RequestProblem:  true,
 	}
 }
 
@@ -462,45 +325,4 @@ func (s *Session) RestoreFrom(stored *store.Session) {
 	s.ReceiveMaximum = stored.ReceiveMaximum
 	s.MaxPacketSize = stored.MaxPacketSize
 	s.TopicAliasMax = stored.TopicAliasMax
-}
-
-// retryLoop periodically checks for expired inflight messages and resends them.
-func (s *Session) retryLoop() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			expired := s.inflight.GetExpired(20 * time.Second)
-			for _, inflight := range expired {
-				if err := s.resendMessage(inflight); err != nil {
-					continue
-				}
-				s.inflight.MarkRetry(inflight.PacketID)
-			}
-		case <-s.stopCh:
-			return
-		}
-	}
-}
-
-func (s *Session) resendMessage(inflight *InflightMessage) error {
-	msg := inflight.Message
-
-	pub := &v3.Publish{
-		FixedHeader: packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-			Dup:        true,
-		},
-		TopicName: msg.Topic,
-		Payload:   msg.Payload,
-		ID:        inflight.PacketID,
-	}
-
-	return s.WritePacket(pub)
 }
