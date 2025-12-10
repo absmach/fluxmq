@@ -143,6 +143,27 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 		return fmt.Errorf("failed to clear offline messages from storage: %w", err)
 	}
 
+	// Restore inflight messages
+	inflightMsgs, err := m.store.Messages().List(clientID + "/inflight/")
+	if err != nil {
+		return fmt.Errorf("failed to list inflight messages from storage: %w", err)
+	}
+	for _, msg := range inflightMsgs {
+		// Extract packet ID from message (stored during persistence)
+		if msg.PacketID != 0 {
+			// Restore with default state (will be retried if needed)
+			if err := session.Inflight.Add(msg.PacketID, msg, Outbound); err != nil {
+				// Log error but continue with other messages
+				continue
+			}
+		}
+	}
+
+	// Clear inflight messages from storage after loading
+	if err := m.store.Messages().DeleteByPrefix(clientID + "/inflight/"); err != nil {
+		return fmt.Errorf("failed to clear inflight messages from storage: %w", err)
+	}
+
 	return nil
 }
 
