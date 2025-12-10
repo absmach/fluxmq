@@ -7,6 +7,8 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
+var _ store.MessageStore = (*MessageStore)(nil)
+
 // MessageStore is an in-memory implementation of store.MessageStore.
 type MessageStore struct {
 	mu   sync.RWMutex
@@ -76,6 +78,3 @@ func (s *MessageStore) DeleteByPrefix(prefix string) error {
 	}
 	return nil
 }
-
-// Ensure MessageStore implements store.MessageStore.
-var _ store.MessageStore = (*MessageStore)(nil)

@@ -7,6 +7,8 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
+var _ store.WillStore = (*WillStore)(nil)
+
 // WillStore is an in-memory implementation of store.WillStore.
 type WillStore struct {
 	mu   sync.RWMutex
@@ -122,6 +124,3 @@ func copyWill(will *store.WillMessage) *store.WillMessage {
 
 	return cp
 }
-
-// Ensure WillStore implements store.WillStore.
-var _ store.WillStore = (*WillStore)(nil)

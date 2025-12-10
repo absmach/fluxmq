@@ -13,6 +13,8 @@ import (
 	v5 "github.com/dborovcanin/mqtt/packets/v5"
 )
 
+var _ Connection = (*mqttCodec)(nil)
+
 // mqttCodec wraps a net.Conn and provides MQTT packet-level I/O.
 // It auto-detects protocol version on the first packet (CONNECT).
 type mqttCodec struct {

@@ -7,6 +7,8 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
+var _ store.SubscriptionStore = (*SubscriptionStore)(nil)
+
 // SubscriptionStore is an in-memory implementation of store.SubscriptionStore.
 // It uses a trie for efficient topic matching.
 type SubscriptionStore struct {
@@ -236,6 +238,3 @@ func (s *SubscriptionStore) Count() int {
 	defer s.mu.RUnlock()
 	return s.count
 }
-
-// Ensure SubscriptionStore implements store.SubscriptionStore.
-var _ store.SubscriptionStore = (*SubscriptionStore)(nil)

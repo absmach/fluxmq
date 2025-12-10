@@ -10,11 +10,15 @@ import (
 
 // Manager manages all sessions in the broker.
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session // clientID -> session
+	mu    sync.RWMutex
+	cache Cache // Active session cache
 
 	// Storage backend
-	store store.Store
+	messages      store.MessageStore
+	sessions      store.SessionStore
+	subscriptions store.SubscriptionStore
+	retained      store.RetainedStore
+	wills         store.WillStore
 
 	// Callbacks
 	onSessionCreate  func(*Session)
@@ -29,9 +33,14 @@ type Manager struct {
 // NewManager creates a new session manager.
 func NewManager(st store.Store) *Manager {
 	m := &Manager{
-		sessions: make(map[string]*Session),
-		store:    st,
-		stopCh:   make(chan struct{}),
+		cache:         NewMapCache(),
+		messages:      st.Messages(),
+		sessions:      st.Sessions(),
+		subscriptions: st.Subscriptions(),
+		retained:      st.Retained(),
+		wills:         st.Wills(),
+
+		stopCh: make(chan struct{}),
 	}
 
 	// Start background tasks
@@ -43,9 +52,7 @@ func NewManager(st store.Store) *Manager {
 
 // Get returns a session by client ID, or nil if not found.
 func (m *Manager) Get(clientID string) *Session {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.sessions[clientID]
+	return m.cache.Get(clientID)
 }
 
 // GetOrCreate gets an existing session or creates a new one.
@@ -54,22 +61,17 @@ func (m *Manager) Get(clientID string) *Session {
 func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Session, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	existing := m.sessions[clientID]
-
-	// Clean start: destroy existing session
+	existing := m.cache.Get(clientID)
 	if opts.CleanStart && existing != nil {
 		m.destroySessionLocked(existing)
 		existing = nil
 	}
 
-	// Handle existing session (takeover scenario)
 	if existing != nil {
 		m.handleExistingSession(existing, version, opts)
 		return existing, false, nil
 	}
 
-	// Create and initialize new session
 	session := New(clientID, version, opts)
 
 	if err := m.restoreSessionFromStorage(session, clientID, opts); err != nil {
@@ -80,10 +82,10 @@ func (m *Manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 		m.handleDisconnect(s, graceful)
 	})
 
-	m.sessions[clientID] = session
+	m.cache.Set(clientID, session)
 
-	if m.store != nil {
-		if err := m.store.Sessions().Save(session.Info()); err != nil {
+	if m.sessions != nil {
+		if err := m.sessions.Save(session.Info()); err != nil {
 			return nil, false, fmt.Errorf("failed to save session to storage: %w", err)
 		}
 	}
@@ -105,12 +107,12 @@ func (m *Manager) handleExistingSession(session *Session, version byte, opts Opt
 
 // restoreSessionFromStorage restores session state from persistent storage.
 func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, opts Options) error {
-	if opts.CleanStart || m.store == nil {
+	if opts.CleanStart || m.sessions == nil {
 		return nil
 	}
 
 	// Restore session metadata
-	stored, err := m.store.Sessions().Get(clientID)
+	stored, err := m.sessions.Get(clientID)
 	if err != nil && err != store.ErrNotFound {
 		return fmt.Errorf("failed to get session from storage: %w", err)
 	}
@@ -119,7 +121,7 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 	}
 
 	// Restore subscriptions
-	subs, err := m.store.Subscriptions().GetForClient(clientID)
+	subs, err := m.subscriptions.GetForClient(clientID)
 	if err != nil {
 		return fmt.Errorf("failed to get subscriptions from storage: %w", err)
 	}
@@ -128,7 +130,7 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 	}
 
 	// Restore offline messages
-	msgs, err := m.store.Messages().List(clientID + "/queue/")
+	msgs, err := m.messages.List(clientID + "/queue/")
 	if err != nil {
 		return fmt.Errorf("failed to list offline messages from storage: %w", err)
 	}
@@ -139,12 +141,12 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 	}
 
 	// Clear from storage after loading
-	if err := m.store.Messages().DeleteByPrefix(clientID + "/queue/"); err != nil {
+	if err := m.messages.DeleteByPrefix(clientID + "/queue/"); err != nil {
 		return fmt.Errorf("failed to clear offline messages from storage: %w", err)
 	}
 
 	// Restore inflight messages
-	inflightMsgs, err := m.store.Messages().List(clientID + "/inflight/")
+	inflightMsgs, err := m.messages.List(clientID + "/inflight/")
 	if err != nil {
 		return fmt.Errorf("failed to list inflight messages from storage: %w", err)
 	}
@@ -160,7 +162,7 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 	}
 
 	// Clear inflight messages from storage after loading
-	if err := m.store.Messages().DeleteByPrefix(clientID + "/inflight/"); err != nil {
+	if err := m.messages.DeleteByPrefix(clientID + "/inflight/"); err != nil {
 		return fmt.Errorf("failed to clear inflight messages from storage: %w", err)
 	}
 
@@ -172,7 +174,7 @@ func (m *Manager) Destroy(clientID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	session := m.sessions[clientID]
+	session := m.cache.Get(clientID)
 	if session == nil {
 		return nil
 	}
@@ -182,30 +184,33 @@ func (m *Manager) Destroy(clientID string) error {
 
 // destroySessionLocked destroys a session. Must be called with mu held.
 func (m *Manager) destroySessionLocked(session *Session) error {
-	// Disconnect if connected
 	if session.IsConnected() {
 		session.Disconnect(false)
 	}
 
-	// Clear from storage
-	if m.store != nil {
-		if err := m.store.Sessions().Delete(session.ID); err != nil {
+	if m.sessions != nil {
+		if err := m.sessions.Delete(session.ID); err != nil {
 			return fmt.Errorf("failed to delete session from storage: %w", err)
 		}
-		if err := m.store.Subscriptions().RemoveAll(session.ID); err != nil {
+	}
+	if m.subscriptions != nil {
+		if err := m.subscriptions.RemoveAll(session.ID); err != nil {
 			return fmt.Errorf("failed to remove subscriptions from storage: %w", err)
 		}
-		if err := m.store.Messages().DeleteByPrefix(session.ID + "/"); err != nil {
+	}
+	if m.messages != nil {
+		if err := m.messages.DeleteByPrefix(session.ID + "/"); err != nil {
 			return fmt.Errorf("failed to delete messages from storage: %w", err)
 		}
-		if err := m.store.Wills().Delete(session.ID); err != nil {
+	}
+	if m.wills != nil {
+		if err := m.wills.Delete(session.ID); err != nil {
 			return fmt.Errorf("failed to delete will from storage: %w", err)
 		}
 	}
 
-	delete(m.sessions, session.ID)
+	m.cache.Delete(session.ID)
 
-	// Callback
 	if m.onSessionDestroy != nil {
 		go m.onSessionDestroy(session)
 	}
@@ -215,33 +220,35 @@ func (m *Manager) destroySessionLocked(session *Session) error {
 
 // handleDisconnect handles session disconnect.
 func (m *Manager) handleDisconnect(session *Session, graceful bool) {
-	// Update storage
-	if m.store != nil {
+	if m.sessions != nil {
 		// Note: Errors during disconnect are not propagated as this is a cleanup operation
 		// that runs in a callback context. In a production system, these should be logged.
-		if err := m.store.Sessions().Save(session.Info()); err != nil {
+		if err := m.sessions.Save(session.Info()); err != nil {
 			// Error saving session state during disconnect
 			_ = err // Explicitly mark as intentionally ignored in callback context
 		}
+	}
+	if m.wills != nil {
 
 		// Handle will message (mutex-protected access)
 		will := session.GetWill()
 		if !graceful && will != nil {
-			if err := m.store.Wills().Set(session.ID, will); err != nil {
+			if err := m.wills.Set(session.ID, will); err != nil {
 				_ = err
 			}
 		} else if graceful {
 			// Clear will on graceful disconnect
-			if err := m.store.Wills().Delete(session.ID); err != nil {
+			if err := m.wills.Delete(session.ID); err != nil {
 				_ = err
 			}
 		}
-
+	}
+	if m.messages != nil {
 		// Save offline queue to storage
 		msgs := session.OfflineQueue.Drain()
 		for i, msg := range msgs {
 			key := session.ID + "/queue/" + string(rune(i))
-			if err := m.store.Messages().Store(key, msg); err != nil {
+			if err := m.messages.Store(key, msg); err != nil {
 				_ = err
 			}
 		}
@@ -249,7 +256,7 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 		// Save inflight messages
 		for _, inf := range session.Inflight.GetAll() {
 			key := session.ID + "/inflight/" + string(rune(inf.PacketID))
-			if err := m.store.Messages().Store(key, inf.Message); err != nil {
+			if err := m.messages.Store(key, inf.Message); err != nil {
 				_ = err
 			}
 		}
@@ -258,7 +265,7 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 	// Check if session should be destroyed (clean start with 0 expiry)
 	if session.CleanStart && session.ExpiryInterval == 0 {
 		m.mu.Lock()
-		// Ignore error from destroy during disconnect cleanup
+		// Ignore error from destroy during disconnect cleanup; this should be logged.
 		_ = m.destroySessionLocked(session)
 		m.mu.Unlock()
 	}
@@ -268,7 +275,7 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 func (m *Manager) Count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.sessions)
+	return m.cache.Count()
 }
 
 // ConnectedCount returns the number of connected sessions.
@@ -277,11 +284,11 @@ func (m *Manager) ConnectedCount() int {
 	defer m.mu.RUnlock()
 
 	count := 0
-	for _, s := range m.sessions {
+	m.cache.ForEach(func(s *Session) {
 		if s.IsConnected() {
 			count++
 		}
-	}
+	})
 	return count
 }
 
@@ -290,9 +297,9 @@ func (m *Manager) ForEach(fn func(*Session)) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, s := range m.sessions {
+	m.cache.ForEach(func(s *Session) {
 		fn(s)
-	}
+	})
 }
 
 // SetOnSessionCreate sets the session create callback.
@@ -336,10 +343,10 @@ func (m *Manager) expireSessions() {
 	now := time.Now()
 	var toDelete []string
 
-	for clientID, session := range m.sessions {
+	m.cache.ForEach(func(session *Session) {
 		// Only check disconnected sessions
 		if session.IsConnected() {
-			continue
+			return // Skip connected sessions
 		}
 
 		// Check expiry
@@ -347,24 +354,24 @@ func (m *Manager) expireSessions() {
 			info := session.Info()
 			expiryTime := info.DisconnectedAt.Add(time.Duration(session.ExpiryInterval) * time.Second)
 			if now.After(expiryTime) {
-				toDelete = append(toDelete, clientID)
+				toDelete = append(toDelete, session.ID)
 			}
 		}
-	}
+	})
 
 	for _, clientID := range toDelete {
-		session := m.sessions[clientID]
+		session := m.cache.Get(clientID)
 		m.destroySessionLocked(session)
 	}
 }
 
 // triggerWills processes pending will messages.
 func (m *Manager) triggerWills() {
-	if m.store == nil || m.onWillTrigger == nil {
+	if m.wills == nil || m.onWillTrigger == nil {
 		return
 	}
 
-	pending, err := m.store.Wills().GetPending(time.Now())
+	pending, err := m.wills.GetPending(time.Now())
 	if err != nil {
 		return
 	}
@@ -374,13 +381,13 @@ func (m *Manager) triggerWills() {
 		session := m.Get(will.ClientID)
 		if session != nil && session.IsConnected() {
 			// Client reconnected, don't trigger will
-			m.store.Wills().Delete(will.ClientID)
+			m.wills.Delete(will.ClientID)
 			continue
 		}
 
 		// Trigger will
 		m.onWillTrigger(will)
-		m.store.Wills().Delete(will.ClientID)
+		m.wills.Delete(will.ClientID)
 	}
 }
 
@@ -393,11 +400,11 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 
 	// Disconnect all sessions
-	for _, session := range m.sessions {
+	m.cache.ForEach(func(session *Session) {
 		if session.IsConnected() {
 			session.Disconnect(false)
 		}
-	}
+	})
 
 	return nil
 }

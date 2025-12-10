@@ -7,6 +7,8 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
+var _ store.SessionStore = (*SessionStore)(nil)
+
 // SessionStore is an in-memory implementation of store.SessionStore.
 type SessionStore struct {
 	mu    sync.RWMutex
@@ -118,6 +120,3 @@ func copySession(session *store.Session) *store.Session {
 		RequestProblem:  session.RequestProblem,
 	}
 }
-
-// Ensure SessionStore implements store.SessionStore.
-var _ store.SessionStore = (*SessionStore)(nil)

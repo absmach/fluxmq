@@ -5,6 +5,8 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
+var _ store.Store = (*Store)(nil)
+
 // Store is the composite in-memory store.
 type Store struct {
 	messages      *MessageStore
@@ -54,6 +56,3 @@ func (s *Store) Wills() store.WillStore {
 func (s *Store) Close() error {
 	return nil
 }
-
-// Ensure Store implements store.Store.
-var _ store.Store = (*Store)(nil)

@@ -16,6 +16,9 @@ import (
 	"github.com/dborovcanin/mqtt/store/memory"
 )
 
+var _ handlers.Router = (*Broker)(nil)
+var _ handlers.Publisher = (*Broker)(nil)
+
 // Broker is the core MQTT broker.
 type Broker struct {
 	sessionMgr *session.Manager

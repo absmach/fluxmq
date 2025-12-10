@@ -8,6 +8,8 @@ import (
 	"github.com/dborovcanin/mqtt/topics"
 )
 
+var _ store.RetainedStore = (*RetainedStore)(nil)
+
 // RetainedStore is an in-memory implementation of store.RetainedStore.
 type RetainedStore struct {
 	mu   sync.RWMutex
@@ -83,6 +85,3 @@ func (s *RetainedStore) Match(filter string) ([]*store.Message, error) {
 
 	return result, nil
 }
-
-// Ensure RetainedStore implements store.RetainedStore.
-var _ store.RetainedStore = (*RetainedStore)(nil)
