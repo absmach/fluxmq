@@ -53,19 +53,15 @@ type Connection interface {
 type Session struct {
 	mu sync.RWMutex
 
-	// Identity
-	ID      string // Client ID
-	Version byte   // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
+	ID      string
+	Version byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
 
-	// Connection (nil when disconnected)
-	conn Connection
+	conn Connection // nil when disconnected
 
-	// State
 	state          State
 	connectedAt    time.Time
 	disconnectedAt time.Time
 
-	// MQTT options from CONNECT
 	CleanStart     bool
 	ExpiryInterval uint32 // Session expiry in seconds (v5)
 	ReceiveMaximum uint16 // Max inflight (v5), default 65535
@@ -73,32 +69,24 @@ type Session struct {
 	TopicAliasMax  uint16 // Max topic aliases (v5)
 	KeepAlive      uint16 // Keep-alive in seconds
 
-	// Will message (set on CONNECT, cleared on clean disconnect)
-	Will *store.WillMessage
+	Will *store.WillMessage // set on CONNECT, cleared on clean disconnect
 
-	// QoS tracking
 	Inflight     *InflightTracker // Outgoing QoS 1/2 messages
 	OfflineQueue *MessageQueue    // Messages for disconnected client
 
-	// Packet ID generator
 	nextPacketID uint32
 
-	// Subscriptions (cached from store for fast lookup)
-	subscriptions map[string]store.SubscribeOptions
+	subscriptions map[string]store.SubscribeOptions // cached from store for fast lookup
 
-	// Keep-alive timer
 	keepAliveTimer  *time.Timer
 	lastActivity    time.Time
 	keepAliveExpiry time.Duration
 
-	// Topic aliases (v5) - bidirectional mapping
 	outboundAliases map[string]uint16 // topic -> alias (for sending)
 	inboundAliases  map[uint16]string // alias -> topic (for receiving)
 
-	// Callbacks
 	onDisconnect func(s *Session, graceful bool)
 
-	// Background tasks
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
@@ -170,12 +158,10 @@ func (s *Session) Connect(conn Connection) error {
 	s.connectedAt = time.Now()
 	s.lastActivity = time.Now()
 
-	// Start keep-alive timer if enabled
 	if s.keepAliveExpiry > 0 {
 		s.startKeepAliveTimer()
 	}
 
-	// Start retry loop
 	s.wg.Add(1)
 	go s.retryLoop()
 
@@ -267,7 +253,6 @@ func (s *Session) NextPacketID() uint16 {
 		if id16 == 0 {
 			continue // Packet ID 0 is reserved
 		}
-		// Check if ID is already in use
 		if !s.Inflight.Has(id16) {
 			return id16
 		}
@@ -473,17 +458,15 @@ func (s *Session) RestoreFrom(stored *store.Session) {
 func (s *Session) retryLoop() {
 	defer s.wg.Done()
 
-	ticker := time.NewTicker(1 * time.Second) // Check every second
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			// Get expired messages (20s timeout)
 			expired := s.Inflight.GetExpired(20 * time.Second)
 			for _, inflight := range expired {
 				if err := s.resendMessage(inflight); err != nil {
-					// If write fails, we'll try again next tick
 					continue
 				}
 				s.Inflight.MarkRetry(inflight.PacketID)

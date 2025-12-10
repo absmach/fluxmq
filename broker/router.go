@@ -63,13 +63,11 @@ func (r *Router) Unsubscribe(filter string, sessionID string) {
 	for _, level := range levels {
 		child, ok := n.children[level]
 		if !ok {
-			// Filter not found, nothing to unsubscribe
 			return
 		}
 		n = child
 	}
 
-	// Remove subscription for this session from the node
 	filtered := n.subs[:0]
 	for _, sub := range n.subs {
 		if sub.SessionID != sessionID {
@@ -102,7 +100,6 @@ func matchLevel(n *node, levels []string, index int, matched *[]Subscription) {
 
 	level := levels[index]
 
-	// Check exact match
 	if child, ok := n.children[level]; ok {
 		matchLevel(child, levels, index+1, matched)
 	}

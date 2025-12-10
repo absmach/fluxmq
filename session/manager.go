@@ -11,21 +11,18 @@ import (
 // Manager manages all sessions in the broker.
 type Manager struct {
 	mu    sync.RWMutex
-	cache Cache // Active session cache
+	cache Cache
 
-	// Storage backend
 	messages      store.MessageStore
 	sessions      store.SessionStore
 	subscriptions store.SubscriptionStore
 	retained      store.RetainedStore
 	wills         store.WillStore
 
-	// Callbacks
 	onSessionCreate  func(*Session)
 	onSessionDestroy func(*Session)
 	onWillTrigger    func(*store.WillMessage)
 
-	// Background tasks
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
@@ -43,7 +40,6 @@ func NewManager(st store.Store) *Manager {
 		stopCh: make(chan struct{}),
 	}
 
-	// Start background tasks
 	m.wg.Add(1)
 	go m.expiryLoop()
 
@@ -111,7 +107,6 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 		return nil
 	}
 
-	// Restore session metadata
 	stored, err := m.sessions.Get(clientID)
 	if err != nil && err != store.ErrNotFound {
 		return fmt.Errorf("failed to get session from storage: %w", err)
@@ -120,7 +115,6 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 		session.RestoreFrom(stored)
 	}
 
-	// Restore subscriptions
 	subs, err := m.subscriptions.GetForClient(clientID)
 	if err != nil {
 		return fmt.Errorf("failed to get subscriptions from storage: %w", err)
@@ -129,7 +123,6 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 		session.AddSubscription(sub.Filter, sub.Options)
 	}
 
-	// Restore offline messages
 	msgs, err := m.messages.List(clientID + "/queue/")
 	if err != nil {
 		return fmt.Errorf("failed to list offline messages from storage: %w", err)
@@ -140,28 +133,22 @@ func (m *Manager) restoreSessionFromStorage(session *Session, clientID string, o
 		}
 	}
 
-	// Clear from storage after loading
 	if err := m.messages.DeleteByPrefix(clientID + "/queue/"); err != nil {
 		return fmt.Errorf("failed to clear offline messages from storage: %w", err)
 	}
 
-	// Restore inflight messages
 	inflightMsgs, err := m.messages.List(clientID + "/inflight/")
 	if err != nil {
 		return fmt.Errorf("failed to list inflight messages from storage: %w", err)
 	}
 	for _, msg := range inflightMsgs {
-		// Extract packet ID from message (stored during persistence)
 		if msg.PacketID != 0 {
-			// Restore with default state (will be retried if needed)
 			if err := session.Inflight.Add(msg.PacketID, msg, Outbound); err != nil {
-				// Log error but continue with other messages
 				continue
 			}
 		}
 	}
 
-	// Clear inflight messages from storage after loading
 	if err := m.messages.DeleteByPrefix(clientID + "/inflight/"); err != nil {
 		return fmt.Errorf("failed to clear inflight messages from storage: %w", err)
 	}
@@ -221,30 +208,23 @@ func (m *Manager) destroySessionLocked(session *Session) error {
 // handleDisconnect handles session disconnect.
 func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 	if m.sessions != nil {
-		// Note: Errors during disconnect are not propagated as this is a cleanup operation
-		// that runs in a callback context. In a production system, these should be logged.
 		if err := m.sessions.Save(session.Info()); err != nil {
-			// Error saving session state during disconnect
-			_ = err // Explicitly mark as intentionally ignored in callback context
+			_ = err
 		}
 	}
 	if m.wills != nil {
-
-		// Handle will message (mutex-protected access)
 		will := session.GetWill()
 		if !graceful && will != nil {
 			if err := m.wills.Set(session.ID, will); err != nil {
 				_ = err
 			}
 		} else if graceful {
-			// Clear will on graceful disconnect
 			if err := m.wills.Delete(session.ID); err != nil {
 				_ = err
 			}
 		}
 	}
 	if m.messages != nil {
-		// Save offline queue to storage
 		msgs := session.OfflineQueue.Drain()
 		for i, msg := range msgs {
 			key := session.ID + "/queue/" + string(rune(i))
@@ -253,7 +233,6 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 			}
 		}
 
-		// Save inflight messages
 		for _, inf := range session.Inflight.GetAll() {
 			key := session.ID + "/inflight/" + string(rune(inf.PacketID))
 			if err := m.messages.Store(key, inf.Message); err != nil {
@@ -262,10 +241,8 @@ func (m *Manager) handleDisconnect(session *Session, graceful bool) {
 		}
 	}
 
-	// Check if session should be destroyed (clean start with 0 expiry)
 	if session.CleanStart && session.ExpiryInterval == 0 {
 		m.mu.Lock()
-		// Ignore error from destroy during disconnect cleanup; this should be logged.
 		_ = m.destroySessionLocked(session)
 		m.mu.Unlock()
 	}
@@ -344,12 +321,10 @@ func (m *Manager) expireSessions() {
 	var toDelete []string
 
 	m.cache.ForEach(func(session *Session) {
-		// Only check disconnected sessions
 		if session.IsConnected() {
-			return // Skip connected sessions
+			return
 		}
 
-		// Check expiry
 		if session.ExpiryInterval > 0 {
 			info := session.Info()
 			expiryTime := info.DisconnectedAt.Add(time.Duration(session.ExpiryInterval) * time.Second)
@@ -377,15 +352,12 @@ func (m *Manager) triggerWills() {
 	}
 
 	for _, will := range pending {
-		// Check if client has reconnected
 		session := m.Get(will.ClientID)
 		if session != nil && session.IsConnected() {
-			// Client reconnected, don't trigger will
 			m.wills.Delete(will.ClientID)
 			continue
 		}
 
-		// Trigger will
 		m.onWillTrigger(will)
 		m.wills.Delete(will.ClientID)
 	}
@@ -399,7 +371,6 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Disconnect all sessions
 	m.cache.ForEach(func(session *Session) {
 		if session.IsConnected() {
 			session.Disconnect(false)
@@ -422,11 +393,11 @@ func (m *Manager) DrainOfflineQueue(clientID string) []*store.Message {
 func (m *Manager) QueueMessage(clientID string, msg *store.Message) error {
 	session := m.Get(clientID)
 	if session == nil {
-		return nil // Session doesn't exist, drop message
+		return nil
 	}
 
 	if session.IsConnected() {
-		return nil // Session is connected, don't queue
+		return nil
 	}
 
 	return session.OfflineQueue.Enqueue(msg)

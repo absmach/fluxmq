@@ -60,7 +60,6 @@ func NewBrokerHandler(cfg BrokerHandlerConfig) *BrokerHandler {
 // Note: CONNECT is typically handled at the server level before creating a session.
 // This method is provided for completeness.
 func (h *BrokerHandler) HandleConnect(s *session.Session, pkt packets.ControlPacket) error {
-	// CONNECT is handled at server level
 	return nil
 }
 
@@ -76,12 +75,10 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
 
-	// Authorization check
 	if h.authz != nil && !h.authz.CanPublish(s.ID, topic) {
 		return ErrNotAuthorized
 	}
 
-	// Handle based on QoS
 	switch qos {
 	case 0:
 		// QoS 0: Fire and forget
@@ -102,7 +99,6 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 			return h.sendPubRec(s, packetID)
 		}
 
-		// Mark as received
 		s.Inflight.MarkReceived(packetID)
 
 		// Store for later publication (after PUBREL)
@@ -123,7 +119,6 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 
 // publishMessage publishes a message to subscribers.
 func (h *BrokerHandler) publishMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
-	// Handle retained message
 	if retain && h.retained != nil {
 		msg := &store.Message{
 			Topic:   topic,
@@ -139,7 +134,6 @@ func (h *BrokerHandler) publishMessage(s *session.Session, topic string, payload
 		}
 	}
 
-	// Publish to subscribers
 	if h.publisher != nil {
 		return h.publisher.Distribute(topic, payload, qos, retain, nil)
 	}
@@ -172,13 +166,11 @@ func (h *BrokerHandler) HandlePubRel(s *session.Session, pkt packets.ControlPack
 	p := pkt.(*v3.PubRel)
 	packetID := p.ID
 
-	// Get the stored message and publish it
 	inf, ok := s.Inflight.Get(packetID)
 	if ok && inf.Message != nil {
 		h.publishMessage(s, inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
 	}
 
-	// Remove from inflight and received tracking
 	s.Inflight.Ack(packetID)
 	s.Inflight.ClearReceived(packetID)
 
@@ -201,16 +193,13 @@ func (h *BrokerHandler) HandleSubscribe(sess *session.Session, pkt packets.Contr
 	p := pkt.(*v3.Subscribe)
 	packetID := p.ID
 
-	// Process subscriptions
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, t := range p.Topics {
-		// Authorization check
 		if h.authz != nil && !h.authz.CanSubscribe(sess.ID, t.Name) {
 			reasonCodes[i] = 0x80 // Failure
 			continue
 		}
 
-		// Add to router
 		opts := store.SubscribeOptions{}
 		if h.router != nil {
 			if err := h.router.Subscribe(sess.ID, t.Name, t.QoS, opts); err != nil {
@@ -219,13 +208,10 @@ func (h *BrokerHandler) HandleSubscribe(sess *session.Session, pkt packets.Contr
 			}
 		}
 
-		// Cache in session
 		sess.AddSubscription(t.Name, opts)
 
-		// Success - return granted QoS
 		reasonCodes[i] = t.QoS
 
-		// Send retained messages
 		if h.retained != nil {
 			h.sendRetainedMessages(sess, t.Name, t.QoS)
 		}
@@ -257,7 +243,6 @@ func (h *BrokerHandler) HandleUnsubscribe(s *session.Session, pkt packets.Contro
 
 	p := pkt.(*v3.Unsubscribe)
 
-	// Process unsubscriptions
 	for _, filter := range p.Topics {
 		if h.router != nil {
 			h.router.Unsubscribe(s.ID, filter)

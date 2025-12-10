@@ -46,7 +46,6 @@ func NewBroker(logger *slog.Logger) *Broker {
 		logger:     logger,
 	}
 
-	// Create handler with dependencies
 	b.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
 		SessionManager: sessionMgr,
 		Router:         b, // Broker implements handlers.Router
@@ -87,7 +86,6 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 		return
 	}
 
-	// Extract connection parameters from CONNECT packet
 	p, ok := pkt.(*v3.Connect)
 	if !ok {
 		b.logger.Error("Failed to parse CONNECT packet as v3",
@@ -209,7 +207,6 @@ func (b *Broker) sendConnAck(conn Connection) error {
 func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
 	b.router.Subscribe(filter, Subscription{SessionID: clientID, QoS: qos})
 
-	// Check for retained messages
 	retained, err := b.store.Retained().Match(filter)
 	if err != nil {
 		return fmt.Errorf("failed to match retained messages for filter %s: %w", filter, err)
@@ -253,15 +250,12 @@ func (b *Broker) Match(topic string) ([]*store.Subscription, error) {
 
 // Distribute distributes a message to all matching subscribers.
 func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
-	// Handle retained message
 	if retain {
 		if len(payload) == 0 {
-			// Empty payload means remove retained message
 			if err := b.store.Retained().Delete(topic); err != nil {
 				return fmt.Errorf("failed to delete retained message for topic %s: %w", topic, err)
 			}
 		} else {
-			// Update retained message
 			if err := b.store.Retained().Set(topic, &store.Message{
 				Topic:      topic,
 				Payload:    payload,
@@ -291,7 +285,6 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 		if s.IsConnected() {
 			b.deliverToSession(s, topic, payload, deliverQoS, false)
 		} else if deliverQoS > 0 {
-			// Queue for offline delivery
 			msg := &store.Message{
 				Topic:   topic,
 				Payload: payload,

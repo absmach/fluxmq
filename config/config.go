@@ -125,12 +125,10 @@ func Default() *Config {
 // Load loads configuration from a YAML file.
 // If the file doesn't exist, returns default configuration.
 func Load(filename string) (*Config, error) {
-	// If no file specified, use defaults
 	if filename == "" {
 		return Default(), nil
 	}
 
-	// Check if file exists
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -139,13 +137,11 @@ func Load(filename string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Parse YAML
-	cfg := Default() // Start with defaults
+	cfg := Default()
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Validate
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -155,7 +151,6 @@ func Load(filename string) (*Config, error) {
 
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
-	// Server validation
 	if c.Server.TCPAddr == "" {
 		return fmt.Errorf("server.tcp_addr cannot be empty")
 	}
@@ -171,7 +166,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Broker validation
 	if c.Broker.MaxMessageSize < 1024 {
 		return fmt.Errorf("broker.max_message_size must be at least 1KB")
 	}
@@ -179,7 +173,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("broker.retry_interval must be at least 1 second")
 	}
 
-	// Session validation
 	if c.Session.MaxSessions < 1 {
 		return fmt.Errorf("session.max_sessions must be at least 1")
 	}
@@ -187,7 +180,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("session.max_offline_queue_size must be at least 10")
 	}
 
-	// Log validation
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLevels[c.Log.Level] {
 		return fmt.Errorf("log.level must be one of: debug, info, warn, error")
@@ -197,7 +189,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("log.format must be one of: text, json")
 	}
 
-	// Storage validation
 	validStorage := map[string]bool{"memory": true}
 	if !validStorage[c.Storage.Type] {
 		return fmt.Errorf("storage.type must be: memory")

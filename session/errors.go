@@ -2,7 +2,6 @@ package session
 
 import "errors"
 
-// Session errors.
 var (
 	ErrNotConnected     = errors.New("session not connected")
 	ErrAlreadyConnected = errors.New("session already connected")
