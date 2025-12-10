@@ -54,11 +54,11 @@ func (e *PubSubEngine) HandleQoS1Publish(topic string, payload []byte, retain bo
 // For QoS 2, the actual publication happens after PUBREL is received.
 // This stores the message in the session's inflight tracker.
 func (e *PubSubEngine) HandleQoS2Publish(s *session.Session, topic string, payload []byte, retain bool, packetID uint16, dup bool) error {
-	if dup && s.WasReceivedInflight(packetID) {
+	if dup && s.Inflight().WasReceived(packetID) {
 		return nil
 	}
 
-	s.MarkReceivedInflight(packetID)
+	s.Inflight().MarkReceived(packetID)
 
 	msg := &store.Message{
 		Topic:    topic,
@@ -67,7 +67,7 @@ func (e *PubSubEngine) HandleQoS2Publish(s *session.Session, topic string, paylo
 		Retain:   retain,
 		PacketID: packetID,
 	}
-	return s.AddInflight(packetID, msg, session.Inbound)
+	return s.Inflight().Add(packetID, msg, session.Inbound)
 }
 
 // PublishQoS2Message publishes a QoS 2 message after PUBREL is received.

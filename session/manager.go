@@ -150,7 +150,7 @@ func (m *manager) restoreSessionFromStorage(session *Session, clientID string, o
 		return fmt.Errorf("failed to list offline messages from storage: %w", err)
 	}
 	for _, msg := range msgs {
-		if err := session.EnqueueOffline(msg); err != nil {
+		if err := session.OfflineQueue().Enqueue(msg); err != nil {
 			return fmt.Errorf("failed to enqueue offline message: %w", err)
 		}
 	}
@@ -165,7 +165,7 @@ func (m *manager) restoreSessionFromStorage(session *Session, clientID string, o
 	}
 	for _, msg := range inflightMsgs {
 		if msg.PacketID != 0 {
-			if err := session.AddInflight(msg.PacketID, msg, Outbound); err != nil {
+			if err := session.Inflight().Add(msg.PacketID, msg, Outbound); err != nil {
 				continue
 			}
 		}
@@ -247,7 +247,7 @@ func (m *manager) handleDisconnect(session *Session, graceful bool) {
 		}
 	}
 	if m.messages != nil {
-		msgs := session.DrainOfflineQueue()
+		msgs := session.QueueSnapshot().Drain()
 		for i, msg := range msgs {
 			key := session.ID + "/queue/" + string(rune(i))
 			if err := m.messages.Store(key, msg); err != nil {
@@ -255,7 +255,7 @@ func (m *manager) handleDisconnect(session *Session, graceful bool) {
 			}
 		}
 
-		for _, inf := range session.GetAllInflight() {
+		for _, inf := range session.InflightSnapshot().GetAll() {
 			key := session.ID + "/inflight/" + string(rune(inf.PacketID))
 			if err := m.messages.Store(key, inf.Message); err != nil {
 				_ = err
@@ -410,7 +410,7 @@ func (m *manager) DrainOfflineQueue(clientID string) []*store.Message {
 	if session == nil {
 		return nil
 	}
-	return session.DrainOfflineQueue()
+	return session.QueueSnapshot().Drain()
 }
 
 // QueueMessage adds a message to a session's offline queue.
@@ -424,5 +424,5 @@ func (m *manager) QueueMessage(clientID string, msg *store.Message) error {
 		return nil
 	}
 
-	return session.EnqueueOffline(msg)
+	return session.OfflineQueue().Enqueue(msg)
 }

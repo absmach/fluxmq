@@ -234,6 +234,26 @@ func (s *Session) Conn() Connection {
 	return s.conn
 }
 
+// Inflight returns the inflight message tracker for operations.
+func (s *Session) Inflight() InflightOps {
+	return s.inflight
+}
+
+// OfflineQueue returns the offline message queue for operations.
+func (s *Session) OfflineQueue() QueueOps {
+	return s.offlineQueue
+}
+
+// InflightSnapshot returns the inflight tracker for persistence/inspection.
+func (s *Session) InflightSnapshot() InflightSnapshot {
+	return s.inflight
+}
+
+// QueueSnapshot returns the queue for persistence operations.
+func (s *Session) QueueSnapshot() QueueSnapshot {
+	return s.offlineQueue
+}
+
 // NextPacketID generates the next packet ID.
 func (s *Session) NextPacketID() uint16 {
 	for {
@@ -242,7 +262,7 @@ func (s *Session) NextPacketID() uint16 {
 		if id16 == 0 {
 			continue // Packet ID 0 is reserved
 		}
-		if !s.HasInflight(id16) {
+		if !s.inflight.Has(id16) {
 			return id16
 		}
 	}
@@ -453,12 +473,12 @@ func (s *Session) retryLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			expired := s.inflight.getExpired(20 * time.Second)
+			expired := s.inflight.GetExpired(20 * time.Second)
 			for _, inflight := range expired {
 				if err := s.resendMessage(inflight); err != nil {
 					continue
 				}
-				s.inflight.markRetry(inflight.PacketID)
+				s.inflight.MarkRetry(inflight.PacketID)
 			}
 		case <-s.stopCh:
 			return

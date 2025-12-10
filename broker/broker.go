@@ -326,7 +326,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 				QoS:     deliverQoS,
 				Retain:  false,
 			}
-			s.EnqueueOffline(msg)
+			s.OfflineQueue().Enqueue(msg)
 		}
 	}
 
@@ -359,7 +359,7 @@ func (b *Broker) deliverToSession(s *session.Session, topic string, payload []by
 			QoS:      qos,
 			PacketID: pub.ID,
 		}
-		s.AddInflight(pub.ID, msg, session.Outbound)
+		s.Inflight().Add(pub.ID, msg, session.Outbound)
 	}
 	return s.WritePacket(pub)
 }

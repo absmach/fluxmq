@@ -290,11 +290,11 @@ func TestBrokerOfflineMessageQueue(t *testing.T) {
 	b.Distribute("test/topic", []byte("offline msg"), 1, false, nil)
 
 	// Check offline queue
-	if s1.OfflineQueueLen() != 1 {
-		t.Errorf("Expected 1 message in offline queue, got %d", s1.OfflineQueueLen())
+	if s1.OfflineQueue().Len() != 1 {
+		t.Errorf("Expected 1 message in offline queue, got %d", s1.OfflineQueue().Len())
 	}
 
-	msg := s1.OfflineQueuePeek()
+	msg := s1.OfflineQueue().Peek()
 	if string(msg.Payload) != "offline msg" {
 		t.Errorf("Offline message payload: got %s, want 'offline msg'", string(msg.Payload))
 	}
@@ -316,8 +316,8 @@ func TestBrokerOfflineQueueQoS0Skip(t *testing.T) {
 	b.Distribute("test/topic", []byte("qos0 msg"), 0, false, nil)
 
 	// Offline queue should be empty (QoS 0 not queued)
-	if s.OfflineQueueLen() != 0 {
-		t.Errorf("Expected 0 messages in offline queue for QoS 0, got %d", s.OfflineQueueLen())
+	if s.OfflineQueue().Len() != 0 {
+		t.Errorf("Expected 0 messages in offline queue for QoS 0, got %d", s.OfflineQueue().Len())
 	}
 }
 

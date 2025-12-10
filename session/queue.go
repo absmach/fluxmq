@@ -7,6 +7,21 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
+// QueueOps defines operations on offline message queue.
+type QueueOps interface {
+	Enqueue(msg *store.Message) error
+	Len() int
+	IsEmpty() bool
+	IsFull() bool
+	Peek() *store.Message
+}
+
+// QueueSnapshot provides snapshot operations for persistence.
+type QueueSnapshot interface {
+	Drain() []*store.Message
+	Clear()
+}
+
 // messageQueue is a queue for offline messages (QoS > 0).
 type messageQueue struct {
 	mu       sync.Mutex
@@ -25,9 +40,9 @@ func NewMessageQueue(maxSize int) *messageQueue {
 	}
 }
 
-// enqueue adds a message to the queue.
+// Enqueue adds a message to the queue.
 // Returns ErrQueueFull if the queue is at capacity.
-func (q *messageQueue) enqueue(msg *store.Message) error {
+func (q *messageQueue) Enqueue(msg *store.Message) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -41,9 +56,9 @@ func (q *messageQueue) enqueue(msg *store.Message) error {
 	return nil
 }
 
-// dequeue removes and returns the first message from the queue.
+// Dequeue removes and returns the first message from the queue.
 // Returns nil if the queue is empty.
-func (q *messageQueue) dequeue() *store.Message {
+func (q *messageQueue) Dequeue() *store.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -56,8 +71,8 @@ func (q *messageQueue) dequeue() *store.Message {
 	return msg
 }
 
-// peek returns the first message without removing it.
-func (q *messageQueue) peek() *store.Message {
+// Peek returns the first message without removing it.
+func (q *messageQueue) Peek() *store.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -67,8 +82,8 @@ func (q *messageQueue) peek() *store.Message {
 	return q.messages[0]
 }
 
-// len returns the number of messages in the queue.
-func (q *messageQueue) len() int {
+// Len returns the number of messages in the queue.
+func (q *messageQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.messages)
@@ -81,8 +96,15 @@ func (q *messageQueue) IsEmpty() bool {
 	return len(q.messages) == 0
 }
 
-// drain removes and returns all messages from the queue.
-func (q *messageQueue) drain() []*store.Message {
+// IsFull returns true if the queue is at capacity.
+func (q *messageQueue) IsFull() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.messages) >= q.maxSize
+}
+
+// Drain removes and returns all messages from the queue.
+func (q *messageQueue) Drain() []*store.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -91,23 +113,10 @@ func (q *messageQueue) drain() []*store.Message {
 	return msgs
 }
 
-// Offline queue operations
-func (s *Session) EnqueueOffline(msg *store.Message) error {
-	return s.offlineQueue.enqueue(msg)
+// Clear removes all messages from the queue without returning them.
+func (q *messageQueue) Clear() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.messages = make([]*store.Message, 0)
 }
 
-func (s *Session) DequeueOffline() *store.Message {
-	return s.offlineQueue.dequeue()
-}
-
-func (s *Session) DrainOfflineQueue() []*store.Message {
-	return s.offlineQueue.drain()
-}
-
-func (s *Session) OfflineQueueLen() int {
-	return s.offlineQueue.len()
-}
-
-func (s *Session) OfflineQueuePeek() *store.Message {
-	return s.offlineQueue.peek()
-}

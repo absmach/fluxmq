@@ -212,17 +212,17 @@ func TestInflightTracker(t *testing.T) {
 	}
 
 	// Add message
-	if err := tracker.add(1, msg, Outbound); err != nil {
+	if err := tracker.Add(1, msg, Outbound); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
 	// Check has
-	if !tracker.has(1) {
+	if !tracker.Has(1) {
 		t.Error("Has should return true")
 	}
 
 	// Get message
-	inf, ok := tracker.get(1)
+	inf, ok := tracker.Get(1)
 	if !ok {
 		t.Fatal("Get should return message")
 	}
@@ -234,16 +234,16 @@ func TestInflightTracker(t *testing.T) {
 	}
 
 	// Update state
-	if err := tracker.updateState(1, StatePubRecReceived); err != nil {
+	if err := tracker.UpdateState(1, StatePubRecReceived); err != nil {
 		t.Fatalf("UpdateState failed: %v", err)
 	}
-	inf, _ = tracker.get(1)
+	inf, _ = tracker.Get(1)
 	if inf.State != StatePubRecReceived {
 		t.Errorf("State after update: got %v, want StatePubRecReceived", inf.State)
 	}
 
 	// Ack message
-	acked, err := tracker.ack(1)
+	acked, err := tracker.Ack(1)
 	if err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestInflightTracker(t *testing.T) {
 	}
 
 	// Should be gone
-	if tracker.has(1) {
+	if tracker.Has(1) {
 		t.Error("Has should return false after ack")
 	}
 }
@@ -261,12 +261,12 @@ func TestInflightTrackerCapacity(t *testing.T) {
 	tracker := NewInflightTracker(3)
 
 	for i := uint16(1); i <= 3; i++ {
-		if err := tracker.add(i, &store.Message{}, Outbound); err != nil {
+		if err := tracker.Add(i, &store.Message{}, Outbound); err != nil {
 			t.Fatalf("Add %d failed: %v", i, err)
 		}
 	}
 
-	if err := tracker.add(4, &store.Message{}, Outbound); err != ErrInflightFull {
+	if err := tracker.Add(4, &store.Message{}, Outbound); err != ErrInflightFull {
 		t.Errorf("Expected ErrInflightFull, got %v", err)
 	}
 
@@ -278,11 +278,11 @@ func TestInflightTrackerCapacity(t *testing.T) {
 func TestInflightTrackerExpired(t *testing.T) {
 	tracker := NewInflightTracker(10)
 
-	tracker.add(1, &store.Message{Topic: "t1"}, Outbound)
+	tracker.Add(1, &store.Message{Topic: "t1"}, Outbound)
 	time.Sleep(50 * time.Millisecond)
-	tracker.add(2, &store.Message{Topic: "t2"}, Outbound)
+	tracker.Add(2, &store.Message{Topic: "t2"}, Outbound)
 
-	expired := tracker.getExpired(40 * time.Millisecond)
+	expired := tracker.GetExpired(40 * time.Millisecond)
 	if len(expired) != 1 {
 		t.Errorf("Expected 1 expired, got %d", len(expired))
 	}
@@ -292,16 +292,16 @@ func TestInflightTrackerQoS2Received(t *testing.T) {
 	tracker := NewInflightTracker(10)
 
 	// Mark as received
-	tracker.markReceived(123)
+	tracker.MarkReceived(123)
 
-	if !tracker.wasReceived(123) {
+	if !tracker.WasReceived(123) {
 		t.Error("WasReceived should return true")
 	}
 
 	// Clear
-	tracker.clearReceived(123)
+	tracker.ClearReceived(123)
 
-	if tracker.wasReceived(123) {
+	if tracker.WasReceived(123) {
 		t.Error("WasReceived should return false after clear")
 	}
 }
@@ -312,37 +312,37 @@ func TestMessageQueue(t *testing.T) {
 	// Enqueue
 	for i := 0; i < 3; i++ {
 		msg := &store.Message{Topic: "t" + string(rune('0'+i))}
-		if err := q.enqueue(msg); err != nil {
+		if err := q.Enqueue(msg); err != nil {
 			t.Fatalf("Enqueue %d failed: %v", i, err)
 		}
 	}
 
-	if q.len() != 3 {
-		t.Errorf("Len: got %d, want 3", q.len())
+	if q.Len() != 3 {
+		t.Errorf("Len: got %d, want 3", q.Len())
 	}
 
 	// Queue full
-	if err := q.enqueue(&store.Message{}); !errors.Is(err, ErrQueueFull) {
+	if err := q.Enqueue(&store.Message{}); !errors.Is(err, ErrQueueFull) {
 		t.Errorf("Expected ErrQueueFull, got %v", err)
 	}
 
 	// Peek
-	msg := q.peek()
+	msg := q.Peek()
 	if msg.Topic != "t0" {
 		t.Errorf("Peek: got %s, want t0", msg.Topic)
 	}
 
 	// Dequeue
-	msg = q.dequeue()
+	msg = q.Dequeue()
 	if msg.Topic != "t0" {
 		t.Errorf("Dequeue: got %s, want t0", msg.Topic)
 	}
-	if q.len() != 2 {
-		t.Errorf("Len after dequeue: got %d, want 2", q.len())
+	if q.Len() != 2 {
+		t.Errorf("Len after dequeue: got %d, want 2", q.Len())
 	}
 
 	// Drain
-	msgs := q.drain()
+	msgs := q.Drain()
 	if len(msgs) != 2 {
 		t.Errorf("Drain: got %d, want 2", len(msgs))
 	}
@@ -351,7 +351,7 @@ func TestMessageQueue(t *testing.T) {
 	}
 
 	// Dequeue empty
-	if q.dequeue() != nil {
+	if q.Dequeue() != nil {
 		t.Error("Dequeue on empty should return nil")
 	}
 }
@@ -484,8 +484,8 @@ func TestSessionManagerOfflineQueue(t *testing.T) {
 	}
 
 	// Verify queue length
-	if s.OfflineQueueLen() != 2 {
-		t.Errorf("Queue length: got %d, want 2", s.OfflineQueueLen())
+	if s.OfflineQueue().Len() != 2 {
+		t.Errorf("Queue length: got %d, want 2", s.OfflineQueue().Len())
 	}
 
 	// Drain queue
@@ -494,8 +494,8 @@ func TestSessionManagerOfflineQueue(t *testing.T) {
 		t.Errorf("Drained count: got %d, want 2", len(drained))
 	}
 
-	if s.OfflineQueueLen() != 0 {
-		t.Errorf("Queue should be empty after drain, got %d", s.OfflineQueueLen())
+	if s.OfflineQueue().Len() != 0 {
+		t.Errorf("Queue should be empty after drain, got %d", s.OfflineQueue().Len())
 	}
 }
 
