@@ -133,7 +133,9 @@ func createTestSession(version byte) (*session.Session, *mockConnection) {
 		ReceiveMaximum: 100,
 		KeepAlive:      60,
 	}
-	s := session.New("test-client", version, opts)
+	inflight := session.NewInflightTracker(100)
+	queue := session.NewMessageQueue(1000)
+	s := session.New("test-client", version, opts, inflight, queue)
 	s.Connect(conn)
 	return s, conn
 }

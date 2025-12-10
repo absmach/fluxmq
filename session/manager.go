@@ -90,8 +90,28 @@ func (m *manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 		return existing, false, nil
 	}
 
-	session := New(clientID, version, opts)
+	receiveMax := opts.ReceiveMaximum
+	if receiveMax == 0 {
+		receiveMax = 65535
+	}
+	inflight := NewInflightTracker(int(receiveMax))
 
+	offlineQueue := NewMessageQueue(1000)
+
+	// Restore from storage if not clean start
+	if !opts.CleanStart {
+		if err := m.restoreInflightFromStorage(clientID, inflight); err != nil {
+			return nil, false, err
+		}
+		if err := m.restoreQueueFromStorage(clientID, offlineQueue); err != nil {
+			return nil, false, err
+		}
+	}
+
+	// Create session with pre-configured dependencies
+	session := New(clientID, version, opts, inflight, offlineQueue)
+
+	// Restore session metadata and subscriptions
 	if err := m.restoreSessionFromStorage(session, clientID, opts); err != nil {
 		return nil, false, err
 	}
@@ -123,7 +143,57 @@ func (m *manager) handleExistingSession(session *Session, version byte, opts Opt
 	session.UpdateConnectionOptions(version, opts.KeepAlive, opts.Will)
 }
 
-// restoreSessionFromStorage restores session state from persistent storage.
+// restoreInflightFromStorage restores inflight messages from storage into the tracker.
+func (m *manager) restoreInflightFromStorage(clientID string, tracker *inflightTracker) error {
+	if m.messages == nil {
+		return nil
+	}
+
+	inflightMsgs, err := m.messages.List(clientID + "/inflight/")
+	if err != nil {
+		return fmt.Errorf("failed to list inflight messages from storage: %w", err)
+	}
+
+	for _, msg := range inflightMsgs {
+		if msg.PacketID != 0 {
+			if err := tracker.Add(msg.PacketID, msg, Outbound); err != nil {
+				continue
+			}
+		}
+	}
+
+	if err := m.messages.DeleteByPrefix(clientID + "/inflight/"); err != nil {
+		return fmt.Errorf("failed to clear inflight messages from storage: %w", err)
+	}
+
+	return nil
+}
+
+// restoreQueueFromStorage restores offline messages from storage into the queue.
+func (m *manager) restoreQueueFromStorage(clientID string, queue *messageQueue) error {
+	if m.messages == nil {
+		return nil
+	}
+
+	msgs, err := m.messages.List(clientID + "/queue/")
+	if err != nil {
+		return fmt.Errorf("failed to list offline messages from storage: %w", err)
+	}
+
+	for _, msg := range msgs {
+		if err := queue.Enqueue(msg); err != nil {
+			return fmt.Errorf("failed to enqueue offline message: %w", err)
+		}
+	}
+
+	if err := m.messages.DeleteByPrefix(clientID + "/queue/"); err != nil {
+		return fmt.Errorf("failed to clear offline messages from storage: %w", err)
+	}
+
+	return nil
+}
+
+// restoreSessionFromStorage restores session metadata and subscriptions from persistent storage.
 func (m *manager) restoreSessionFromStorage(session *Session, clientID string, opts Options) error {
 	if opts.CleanStart || m.sessions == nil {
 		return nil
@@ -143,36 +213,6 @@ func (m *manager) restoreSessionFromStorage(session *Session, clientID string, o
 	}
 	for _, sub := range subs {
 		session.AddSubscription(sub.Filter, sub.Options)
-	}
-
-	msgs, err := m.messages.List(clientID + "/queue/")
-	if err != nil {
-		return fmt.Errorf("failed to list offline messages from storage: %w", err)
-	}
-	for _, msg := range msgs {
-		if err := session.OfflineQueue().Enqueue(msg); err != nil {
-			return fmt.Errorf("failed to enqueue offline message: %w", err)
-		}
-	}
-
-	if err := m.messages.DeleteByPrefix(clientID + "/queue/"); err != nil {
-		return fmt.Errorf("failed to clear offline messages from storage: %w", err)
-	}
-
-	inflightMsgs, err := m.messages.List(clientID + "/inflight/")
-	if err != nil {
-		return fmt.Errorf("failed to list inflight messages from storage: %w", err)
-	}
-	for _, msg := range inflightMsgs {
-		if msg.PacketID != 0 {
-			if err := session.Inflight().Add(msg.PacketID, msg, Outbound); err != nil {
-				continue
-			}
-		}
-	}
-
-	if err := m.messages.DeleteByPrefix(clientID + "/inflight/"); err != nil {
-		return fmt.Errorf("failed to clear inflight messages from storage: %w", err)
 	}
 
 	return nil

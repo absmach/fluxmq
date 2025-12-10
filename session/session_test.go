@@ -62,6 +62,17 @@ func (c *mockConnection) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// newTestSession creates a new session with default dependencies for testing.
+func newTestSession(clientID string, version byte, opts Options) *Session {
+	receiveMax := opts.ReceiveMaximum
+	if receiveMax == 0 {
+		receiveMax = 65535
+	}
+	inflight := NewInflightTracker(int(receiveMax))
+	queue := NewMessageQueue(1000)
+	return New(clientID, version, opts, inflight, queue)
+}
+
 func TestSessionNew(t *testing.T) {
 	opts := Options{
 		CleanStart:     true,
@@ -70,7 +81,7 @@ func TestSessionNew(t *testing.T) {
 		KeepAlive:      60,
 	}
 
-	s := New("client1", 5, opts)
+	s := newTestSession("client1", 5, opts)
 
 	if s.ID != "client1" {
 		t.Errorf("ID: got %s, want client1", s.ID)
@@ -90,7 +101,7 @@ func TestSessionNew(t *testing.T) {
 }
 
 func TestSessionConnect(t *testing.T) {
-	s := New("client1", 5, DefaultOptions())
+	s := newTestSession("client1", 5, DefaultOptions())
 	conn := newMockConnection()
 
 	if err := s.Connect(conn); err != nil {
@@ -109,7 +120,7 @@ func TestSessionConnect(t *testing.T) {
 }
 
 func TestSessionDisconnect(t *testing.T) {
-	s := New("client1", 5, DefaultOptions())
+	s := newTestSession("client1", 5, DefaultOptions())
 	conn := newMockConnection()
 	s.Connect(conn)
 
@@ -140,7 +151,7 @@ func TestSessionDisconnect(t *testing.T) {
 }
 
 func TestSessionPacketID(t *testing.T) {
-	s := New("client1", 5, DefaultOptions())
+	s := newTestSession("client1", 5, DefaultOptions())
 
 	ids := make(map[uint16]bool)
 	for i := 0; i < 100; i++ {
@@ -156,7 +167,7 @@ func TestSessionPacketID(t *testing.T) {
 }
 
 func TestSessionSubscriptions(t *testing.T) {
-	s := New("client1", 5, DefaultOptions())
+	s := newTestSession("client1", 5, DefaultOptions())
 
 	opts := store.SubscribeOptions{NoLocal: true, RetainAsPublished: true}
 	s.AddSubscription("home/+/temp", opts)
@@ -185,7 +196,7 @@ func TestSessionSubscriptions(t *testing.T) {
 }
 
 func TestSessionTopicAliases(t *testing.T) {
-	s := New("client1", 5, DefaultOptions())
+	s := newTestSession("client1", 5, DefaultOptions())
 
 	// Outbound alias
 	s.SetTopicAlias("home/temp", 1)
@@ -645,7 +656,7 @@ func TestSessionManagerCallbacks(t *testing.T) {
 }
 
 func TestSessionUpdateConnectionOptions(t *testing.T) {
-	s := New("client1", 4, DefaultOptions())
+	s := newTestSession("client1", 4, DefaultOptions())
 
 	will1 := &store.WillMessage{Topic: "will1", Payload: []byte("offline1")}
 	s.Will = will1
@@ -669,7 +680,7 @@ func TestSessionUpdateConnectionOptions(t *testing.T) {
 }
 
 func TestSessionGetWill(t *testing.T) {
-	s := New("client1", 5, DefaultOptions())
+	s := newTestSession("client1", 5, DefaultOptions())
 
 	if s.GetWill() != nil {
 		t.Error("GetWill should return nil when no will set")
@@ -694,7 +705,7 @@ func TestSessionInfo(t *testing.T) {
 		ReceiveMaximum: 100,
 		KeepAlive:      60,
 	}
-	s := New("client1", 5, opts)
+	s := newTestSession("client1", 5, opts)
 
 	info := s.Info()
 
@@ -716,7 +727,7 @@ func TestSessionInfo(t *testing.T) {
 }
 
 func TestSessionRestoreFrom(t *testing.T) {
-	s := New("client1", 4, DefaultOptions())
+	s := newTestSession("client1", 4, DefaultOptions())
 
 	storedSession := &store.Session{
 		ClientID:       "client1",

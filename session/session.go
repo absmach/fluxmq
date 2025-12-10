@@ -103,8 +103,9 @@ func DefaultOptions() Options {
 	}
 }
 
-// New creates a new session.
-func New(clientID string, version byte, opts Options) *Session {
+// New creates a new session with injected dependencies.
+// The inflight tracker and offline queue should be created and restored by the Manager.
+func New(clientID string, version byte, opts Options, inflight *inflightTracker, offlineQueue *messageQueue) *Session {
 	receiveMax := opts.ReceiveMaximum
 	if receiveMax == 0 {
 		receiveMax = 65535
@@ -121,8 +122,8 @@ func New(clientID string, version byte, opts Options) *Session {
 		TopicAliasMax:   opts.TopicAliasMax,
 		KeepAlive:       opts.KeepAlive,
 		Will:            opts.Will,
-		inflight:        NewInflightTracker(int(receiveMax)),
-		offlineQueue:    NewMessageQueue(1000), // Default max queue size
+		inflight:        inflight,
+		offlineQueue:    offlineQueue,
 		subscriptions:   make(map[string]store.SubscribeOptions),
 		outboundAliases: make(map[string]uint16),
 		inboundAliases:  make(map[uint16]string),
