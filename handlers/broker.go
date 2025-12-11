@@ -3,9 +3,9 @@ package handlers
 import (
 	"time"
 
+	"github.com/dborovcanin/mqtt/core/packets"
+	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
 	"github.com/dborovcanin/mqtt/handlers/core"
-	"github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 )

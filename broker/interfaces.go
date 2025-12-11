@@ -4,7 +4,7 @@ package broker
 // 	"net"
 // 	"time"
 
-// 	packets "github.com/dborovcanin/mqtt/packets"
+// 	packets "github.com/dborovcanin/mqtt/core/packets"
 // )
 
 // // Connection abstracts a single client connection.

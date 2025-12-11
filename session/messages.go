@@ -6,14 +6,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
+	core "github.com/dborovcanin/mqtt/core"
+	"github.com/dborovcanin/mqtt/core/packets"
+	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
 )
-
-// PacketWriter is an interface for writing packets.
-type PacketWriter interface {
-	WritePacket(pkt packets.ControlPacket) error
-}
 
 // MessageHandler manages message tracking, inflight operations, and aliases.
 type MessageHandler struct {
@@ -43,7 +39,7 @@ func NewMessageHandler(inflight *inflightTracker, offlineQueue *messageQueue) *M
 }
 
 // StartRetryLoop starts the retry loop for inflight messages.
-func (h *MessageHandler) StartRetryLoop(writer PacketWriter) {
+func (h *MessageHandler) StartRetryLoop(writer core.PacketWriter) {
 	h.wg.Add(1)
 	go h.retryLoop(writer)
 }
@@ -117,7 +113,7 @@ func (h *MessageHandler) ClearAliases() {
 	h.inboundAliases = make(map[uint16]string)
 }
 
-func (h *MessageHandler) retryLoop(writer PacketWriter) {
+func (h *MessageHandler) retryLoop(writer core.PacketWriter) {
 	defer h.wg.Done()
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -140,7 +136,7 @@ func (h *MessageHandler) retryLoop(writer PacketWriter) {
 	}
 }
 
-func (h *MessageHandler) resendMessage(writer PacketWriter, inflight *InflightMessage) error {
+func (h *MessageHandler) resendMessage(writer core.PacketWriter, inflight *InflightMessage) error {
 	msg := inflight.Message
 
 	pub := &v3.Publish{

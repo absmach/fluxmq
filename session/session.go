@@ -4,7 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/core"
+	"github.com/dborovcanin/mqtt/core/packets"
 	"github.com/dborovcanin/mqtt/store"
 )
 
@@ -43,7 +44,7 @@ type Session struct {
 	ID      string
 	Version byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
 
-	conn       Connection
+	conn       core.Connection
 	msgHandler *MessageHandler
 
 	state          State
@@ -116,23 +117,23 @@ func New(clientID string, version byte, opts Options, inflight *inflightTracker,
 }
 
 // Connect attaches a connection to the session.
-func (s *Session) Connect(conn Connection) error {
+func (s *Session) Connect(c core.Connection) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.conn = conn
+	s.conn = c
 	s.state = StateConnected
 	s.connectedAt = time.Now()
 
-	conn.SetKeepAlive(s.KeepAlive)
+	c.SetKeepAlive(s.KeepAlive)
 
 	// Set callback to handle connection loss/keepalive expiry
-	conn.SetOnDisconnect(func(graceful bool) {
+	c.SetOnDisconnect(func(graceful bool) {
 		s.Disconnect(graceful)
 	})
 
 	// Start retry loop using the connection as the packet writer
-	s.msgHandler.StartRetryLoop(conn)
+	s.msgHandler.StartRetryLoop(c)
 
 	return nil
 }
@@ -191,7 +192,7 @@ func (s *Session) IsConnected() bool {
 }
 
 // Conn returns the current connection (may be nil).
-func (s *Session) Conn() Connection {
+func (s *Session) Conn() core.Connection {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.conn

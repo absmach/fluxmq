@@ -6,9 +6,9 @@ import (
 	"net"
 	"sync"
 
-	packets "github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
+	packets "github.com/dborovcanin/mqtt/core/packets"
+	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
+	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
 	"github.com/dborovcanin/mqtt/store"
 )
 

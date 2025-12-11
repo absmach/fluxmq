@@ -7,9 +7,10 @@ import (
 	"log/slog"
 	"net"
 
+	"github.com/dborovcanin/mqtt/core"
+	"github.com/dborovcanin/mqtt/core/packets"
+	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
 	"github.com/dborovcanin/mqtt/handlers"
-	"github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
@@ -83,7 +84,7 @@ func NewBroker(logger *slog.Logger) *Broker {
 // This implements the broker.Handler interface.
 func (b *Broker) HandleConnection(netConn net.Conn) {
 	// Wrap net.Conn with MQTT codec to get broker.Connection
-	conn := session.NewConnection(netConn)
+	conn := core.NewConnection(netConn)
 
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
@@ -207,7 +208,7 @@ func (b *Broker) deliverOfflineMessages(s *session.Session) {
 	}
 }
 
-func (b *Broker) sendConnAck(conn session.Connection) error {
+func (b *Broker) sendConnAck(conn core.Connection) error {
 	ack := &v3.ConnAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.ConnAckType},
 		ReturnCode:  0,

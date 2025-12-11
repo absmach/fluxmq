@@ -3,7 +3,7 @@ package handlers
 import (
 	"io"
 
-	"github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/core/packets"
 	"github.com/dborovcanin/mqtt/session"
 )
 
