@@ -2,6 +2,7 @@ package session
 
 import (
 	"sync"
+	"time"
 
 	"github.com/dborovcanin/mqtt/packets"
 	"github.com/dborovcanin/mqtt/store"
@@ -42,8 +43,12 @@ type Session struct {
 	ID      string
 	Version byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
 
-	connHandler *ConnectionHandler
-	msgHandler  *MessageHandler
+	conn       Connection
+	msgHandler *MessageHandler
+
+	state          State
+	connectedAt    time.Time
+	disconnectedAt time.Time
 
 	CleanStart     bool
 	ExpiryInterval uint32 // Session expiry in seconds (v5)
@@ -90,13 +95,12 @@ func New(clientID string, version byte, opts Options, inflight *inflightTracker,
 		receiveMax = 65535
 	}
 
-	connHandler := NewConnectionHandler(clientID, opts.KeepAlive)
 	msgHandler := NewMessageHandler(inflight, offlineQueue)
 
 	s := &Session{
 		ID:             clientID,
 		Version:        version,
-		connHandler:    connHandler,
+		state:          StateNew,
 		msgHandler:     msgHandler,
 		CleanStart:     opts.CleanStart,
 		ExpiryInterval: opts.ExpiryInterval,
@@ -108,11 +112,6 @@ func New(clientID string, version byte, opts Options, inflight *inflightTracker,
 		subscriptions:  make(map[string]store.SubscribeOptions),
 	}
 
-	connHandler.SetOnDisconnect(func(graceful bool) {
-		// Use internal disconnect to ensure coordination
-		s.Disconnect(graceful)
-	})
-
 	return s
 }
 
@@ -121,12 +120,19 @@ func (s *Session) Connect(conn Connection) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.connHandler.Connect(conn); err != nil {
-		return err
-	}
+	s.conn = conn
+	s.state = StateConnected
+	s.connectedAt = time.Now()
 
-	// Start retry loop using the connection handler as the packet writer
-	s.msgHandler.StartRetryLoop(s.connHandler)
+	conn.SetKeepAlive(s.KeepAlive)
+
+	// Set callback to handle connection loss/keepalive expiry
+	conn.SetOnDisconnect(func(graceful bool) {
+		s.Disconnect(graceful)
+	})
+
+	// Start retry loop using the connection as the packet writer
+	s.msgHandler.StartRetryLoop(conn)
 
 	return nil
 }
@@ -134,33 +140,36 @@ func (s *Session) Connect(conn Connection) error {
 // Disconnect disconnects the session.
 func (s *Session) Disconnect(graceful bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock() // Use defer for safety effectively
+	defer s.mu.Unlock()
 
-	// Delegated disconnect logic
-	// ConnectionHandler disconnects first
-	s.connHandler.Disconnect(graceful)
+	if s.state != StateConnected {
+		return nil
+	}
+
+	s.state = StateDisconnecting
+
+	if s.conn != nil {
+		// Cache info before closing
+		s.disconnectedAt = time.Now()
+		// If connection tracks its own timestamps, we might want to sync,
+		// but since we are closing it here, "now" is correct.
+
+		s.conn.Close()
+		s.conn = nil
+	}
+	s.state = StateDisconnected
 
 	// MessageHandler stops background tasks
 	s.msgHandler.Stop()
 
 	if graceful {
 		s.Will = nil
-	} else {
-		// If not graceful (e.g. keepalive timeout), we might keep Will if we support Will Delay (v5),
-		// but for now strict v3 behavior implies we publish Will if connection lost unexpectedly?
-		// Actually Broker handles Will publication if disconnect comes from network error (ReadPacket returns error).
-		// But here, if we call Disconnect(false), it means we are forcing disconnect.
-
-		// If graceful=false, the caller (Broker) usually handles Will.
-		// If internal keepalive triggers Disconnect(false), we might need to notify Broker.
-		// That's what onDisconnect callback is for.
 	}
 
 	s.msgHandler.ClearAliases()
 
 	callback := s.onDisconnect
 	if callback != nil {
-		// Execute callback in new goroutine to avoid creating deadlocks or blocking
 		go callback(s, graceful)
 	}
 
@@ -169,17 +178,23 @@ func (s *Session) Disconnect(graceful bool) error {
 
 // State returns the current session state.
 func (s *Session) State() State {
-	return s.connHandler.State()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state
 }
 
 // IsConnected returns true if the session has an active connection.
 func (s *Session) IsConnected() bool {
-	return s.connHandler.IsConnected()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state == StateConnected && s.conn != nil
 }
 
 // Conn returns the current connection (may be nil).
 func (s *Session) Conn() Connection {
-	return s.connHandler.Conn()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.conn
 }
 
 // Inflight returns the inflight message tracker for operations.
@@ -209,17 +224,37 @@ func (s *Session) NextPacketID() uint16 {
 
 // WritePacket writes a packet to the connection.
 func (s *Session) WritePacket(pkt packets.ControlPacket) error {
-	return s.connHandler.WritePacket(pkt)
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return ErrNotConnected
+	}
+	return conn.WritePacket(pkt)
 }
 
 // ReadPacket reads a packet from the connection.
 func (s *Session) ReadPacket() (packets.ControlPacket, error) {
-	return s.connHandler.ReadPacket()
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return nil, ErrNotConnected
+	}
+	return conn.ReadPacket()
 }
 
 // TouchActivity updates the last activity timestamp.
 func (s *Session) TouchActivity() {
-	s.connHandler.TouchActivity()
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn != nil {
+		conn.TouchActivity()
+	}
 }
 
 // SetOnDisconnect sets the disconnect callback.
@@ -285,7 +320,9 @@ func (s *Session) UpdateConnectionOptions(version byte, keepAlive uint16, will *
 	s.KeepAlive = keepAlive
 	s.Will = will
 
-	s.connHandler.SetKeepAlive(keepAlive)
+	if s.conn != nil {
+		s.conn.SetKeepAlive(keepAlive)
+	}
 }
 
 // GetWill returns a copy of the will message.
@@ -305,9 +342,9 @@ func (s *Session) Info() *store.Session {
 		Version:         s.Version,
 		CleanStart:      s.CleanStart,
 		ExpiryInterval:  s.ExpiryInterval,
-		ConnectedAt:     s.connHandler.ConnectedAt(),
-		DisconnectedAt:  s.connHandler.DisconnectedAt(),
-		Connected:       s.connHandler.State() == StateConnected,
+		ConnectedAt:     s.connectedAt,
+		DisconnectedAt:  s.disconnectedAt,
+		Connected:       s.state == StateConnected,
 		ReceiveMaximum:  s.ReceiveMaximum,
 		MaxPacketSize:   s.MaxPacketSize,
 		TopicAliasMax:   s.TopicAliasMax,

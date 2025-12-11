@@ -18,11 +18,21 @@ type mockConnection struct {
 	packets  []packets.ControlPacket
 	readCh   chan packets.ControlPacket
 	deadline time.Time
+
+	// Added fields for new interface
+	keepAlive    uint16
+	onDisconnect func(bool)
+	state        State
+	connectedAt  time.Time
+	stopCh       chan struct{}
 }
 
 func newMockConnection() *mockConnection {
 	return &mockConnection{
-		readCh: make(chan packets.ControlPacket, 10),
+		readCh:      make(chan packets.ControlPacket, 10),
+		state:       StateConnected,
+		connectedAt: time.Now(),
+		stopCh:      make(chan struct{}),
 	}
 }
 
@@ -44,7 +54,12 @@ func (c *mockConnection) WritePacket(p packets.ControlPacket) error {
 
 func (c *mockConnection) Close() error {
 	c.closed = true
+	c.state = StateDisconnected
 	close(c.readCh)
+	close(c.stopCh)
+	if c.onDisconnect != nil {
+		go c.onDisconnect(true)
+	}
 	return nil
 }
 
@@ -61,6 +76,32 @@ func (c *mockConnection) SetWriteDeadline(t time.Time) error {
 	c.deadline = t
 	return nil
 }
+
+func (c *mockConnection) SetKeepAlive(seconds uint16) {
+	c.keepAlive = seconds
+}
+
+func (c *mockConnection) SetOnDisconnect(fn func(bool)) {
+	c.onDisconnect = fn
+}
+
+func (c *mockConnection) State() State {
+	return c.state
+}
+
+func (c *mockConnection) ConnectedAt() time.Time {
+	return c.connectedAt
+}
+
+func (c *mockConnection) DisconnectedAt() time.Time {
+	return time.Time{}
+}
+
+func (c *mockConnection) StopChan() <-chan struct{} {
+	return c.stopCh
+}
+
+func (c *mockConnection) TouchActivity() {}
 
 // newTestSession creates a new session with default dependencies for testing.
 func newTestSession(clientID string, version byte, opts Options) *Session {
