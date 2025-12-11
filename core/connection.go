@@ -42,9 +42,6 @@ type Connection interface {
 	// SetOnDisconnect sets a callback to be called when the connection is closed or lost.
 	SetOnDisconnect(fn func(graceful bool))
 
-	// State returns the current connection state.
-	State() State
-
 	// ConnectedAt returns the time when the connection was established.
 	ConnectedAt() time.Time
 
@@ -72,7 +69,7 @@ type connection struct {
 	mu sync.RWMutex
 
 	// clientID string // Optional, for logging
-	state State
+	closed bool
 
 	connectedAt    time.Time
 	disconnectedAt time.Time
@@ -91,7 +88,7 @@ func NewConnection(conn net.Conn) Connection {
 	return &connection{
 		conn:        conn,
 		reader:      conn,
-		state:       StateConnected,
+		closed:      false,
 		connectedAt: time.Now(),
 		stopCh:      make(chan struct{}),
 	}
@@ -142,7 +139,7 @@ func (c *connection) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.state == StateDisconnected {
+	if c.closed {
 		return nil
 	}
 
@@ -158,7 +155,7 @@ func (c *connection) cleanup(graceful bool) {
 	}
 
 	c.conn.Close()
-	c.state = StateDisconnected
+	c.closed = true
 	c.disconnectedAt = time.Now()
 
 	select {
@@ -209,12 +206,6 @@ func (c *connection) SetOnDisconnect(fn func(graceful bool)) {
 	c.onDisconnect = fn
 }
 
-func (c *connection) State() State {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.state
-}
-
 func (c *connection) ConnectedAt() time.Time {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -260,7 +251,7 @@ func (c *connection) checkKeepAlive() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.state != StateConnected {
+	if c.closed {
 		return
 	}
 

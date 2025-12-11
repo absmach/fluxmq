@@ -22,7 +22,6 @@ type mockConnection struct {
 	// Added fields for new interface
 	keepAlive    uint16
 	onDisconnect func(bool)
-	state        State
 	connectedAt  time.Time
 	stopCh       chan struct{}
 }
@@ -30,7 +29,6 @@ type mockConnection struct {
 func newMockConnection() *mockConnection {
 	return &mockConnection{
 		readCh:      make(chan packets.ControlPacket, 10),
-		state:       StateConnected,
 		connectedAt: time.Now(),
 		stopCh:      make(chan struct{}),
 	}
@@ -54,7 +52,6 @@ func (c *mockConnection) WritePacket(p packets.ControlPacket) error {
 
 func (c *mockConnection) Close() error {
 	c.closed = true
-	c.state = StateDisconnected
 	close(c.readCh)
 	close(c.stopCh)
 	if c.onDisconnect != nil {
@@ -83,10 +80,6 @@ func (c *mockConnection) SetKeepAlive(seconds uint16) {
 
 func (c *mockConnection) SetOnDisconnect(fn func(bool)) {
 	c.onDisconnect = fn
-}
-
-func (c *mockConnection) State() State {
-	return c.state
 }
 
 func (c *mockConnection) ConnectedAt() time.Time {
