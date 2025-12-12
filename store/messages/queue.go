@@ -18,19 +18,19 @@ type Queue interface {
 	Drain() []*store.Message
 }
 
-// messageQueue is a queue for offline messages (QoS > 0).
-type messageQueue struct {
+// queue is a queue for offline messages (QoS > 0).
+type queue struct {
 	mu       sync.Mutex
 	messages []*store.Message
 	maxSize  int
 }
 
 // NewMessageQueue creates a new message queue.
-func NewMessageQueue(maxSize int) *messageQueue {
+func NewMessageQueue(maxSize int) *queue {
 	if maxSize <= 0 {
 		maxSize = 1000
 	}
-	return &messageQueue{
+	return &queue{
 		messages: make([]*store.Message, 0),
 		maxSize:  maxSize,
 	}
@@ -38,7 +38,7 @@ func NewMessageQueue(maxSize int) *messageQueue {
 
 // Enqueue adds a message to the queue.
 // Returns ErrQueueFull if the queue is at capacity.
-func (q *messageQueue) Enqueue(msg *store.Message) error {
+func (q *queue) Enqueue(msg *store.Message) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -54,7 +54,7 @@ func (q *messageQueue) Enqueue(msg *store.Message) error {
 
 // Dequeue removes and returns the first message from the queue.
 // Returns nil if the queue is empty.
-func (q *messageQueue) Dequeue() *store.Message {
+func (q *queue) Dequeue() *store.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -68,7 +68,7 @@ func (q *messageQueue) Dequeue() *store.Message {
 }
 
 // Peek returns the first message without removing it.
-func (q *messageQueue) Peek() *store.Message {
+func (q *queue) Peek() *store.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -79,28 +79,28 @@ func (q *messageQueue) Peek() *store.Message {
 }
 
 // Len returns the number of messages in the queue.
-func (q *messageQueue) Len() int {
+func (q *queue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.messages)
 }
 
 // IsEmpty returns true if the queue is empty.
-func (q *messageQueue) IsEmpty() bool {
+func (q *queue) IsEmpty() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.messages) == 0
 }
 
 // IsFull returns true if the queue is at capacity.
-func (q *messageQueue) IsFull() bool {
+func (q *queue) IsFull() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.messages) >= q.maxSize
 }
 
 // Drain removes and returns all messages from the queue.
-func (q *messageQueue) Drain() []*store.Message {
+func (q *queue) Drain() []*store.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 

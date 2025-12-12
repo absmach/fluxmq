@@ -51,8 +51,8 @@ type Inflight interface {
 	GetAll() []*InflightMessage
 }
 
-// inflightTracker tracks QoS 1 and QoS 2 messages in flight.
-type inflightTracker struct {
+// inflight tracks QoS 1 and QoS 2 messages in flight.
+type inflight struct {
 	mu       sync.RWMutex
 	messages map[uint16]*InflightMessage
 	maxSize  int
@@ -62,11 +62,11 @@ type inflightTracker struct {
 }
 
 // NewInflightTracker creates a new inflight tracker.
-func NewInflightTracker(maxSize int) *inflightTracker {
+func NewInflightTracker(maxSize int) *inflight {
 	if maxSize <= 0 {
 		maxSize = 65535
 	}
-	return &inflightTracker{
+	return &inflight{
 		messages:    make(map[uint16]*InflightMessage),
 		maxSize:     maxSize,
 		receivedIDs: make(map[uint16]time.Time),
@@ -74,7 +74,7 @@ func NewInflightTracker(maxSize int) *inflightTracker {
 }
 
 // Add adds a message to the inflight tracker.
-func (t *inflightTracker) Add(packetID uint16, msg *store.Message, direction Direction) error {
+func (t *inflight) Add(packetID uint16, msg *store.Message, direction Direction) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -94,7 +94,7 @@ func (t *inflightTracker) Add(packetID uint16, msg *store.Message, direction Dir
 }
 
 // Get retrieves an inflight message by packet ID.
-func (t *inflightTracker) Get(packetID uint16) (*InflightMessage, bool) {
+func (t *inflight) Get(packetID uint16) (*InflightMessage, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -109,7 +109,7 @@ func (t *inflightTracker) Get(packetID uint16) (*InflightMessage, bool) {
 }
 
 // Has returns true if the packet ID is in the tracker.
-func (t *inflightTracker) Has(packetID uint16) bool {
+func (t *inflight) Has(packetID uint16) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	_, ok := t.messages[packetID]
@@ -117,7 +117,7 @@ func (t *inflightTracker) Has(packetID uint16) bool {
 }
 
 // UpdateState updates the state of an inflight message.
-func (t *inflightTracker) UpdateState(packetID uint16, state InflightState) error {
+func (t *inflight) UpdateState(packetID uint16, state InflightState) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -130,7 +130,7 @@ func (t *inflightTracker) UpdateState(packetID uint16, state InflightState) erro
 }
 
 // Ack acknowledges and removes a message (for QoS 1 PUBACK or QoS 2 PUBCOMP).
-func (t *inflightTracker) Ack(packetID uint16) (*store.Message, error) {
+func (t *inflight) Ack(packetID uint16) (*store.Message, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -144,14 +144,14 @@ func (t *inflightTracker) Ack(packetID uint16) (*store.Message, error) {
 }
 
 // Remove removes an inflight message.
-func (t *inflightTracker) Remove(packetID uint16) {
+func (t *inflight) Remove(packetID uint16) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.messages, packetID)
 }
 
 // GetExpired returns messages that have exceeded the retry timeout.
-func (t *inflightTracker) GetExpired(timeout time.Duration) []*InflightMessage {
+func (t *inflight) GetExpired(timeout time.Duration) []*InflightMessage {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -168,7 +168,7 @@ func (t *inflightTracker) GetExpired(timeout time.Duration) []*InflightMessage {
 }
 
 // MarkRetry marks a message as retried and updates sent time.
-func (t *inflightTracker) MarkRetry(packetID uint16) error {
+func (t *inflight) MarkRetry(packetID uint16) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -183,21 +183,21 @@ func (t *inflightTracker) MarkRetry(packetID uint16) error {
 }
 
 // Count returns the number of inflight messages.
-func (t *inflightTracker) Count() int {
+func (t *inflight) Count() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.messages)
 }
 
 // IsFull returns true if the tracker is at capacity.
-func (t *inflightTracker) IsFull() bool {
+func (t *inflight) IsFull() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.messages) >= t.maxSize
 }
 
 // GetAll returns all inflight messages.
-func (t *inflightTracker) GetAll() []*InflightMessage {
+func (t *inflight) GetAll() []*InflightMessage {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -210,7 +210,7 @@ func (t *inflightTracker) GetAll() []*InflightMessage {
 }
 
 // Clear removes all inflight messages.
-func (t *inflightTracker) Clear() {
+func (t *inflight) Clear() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.messages = make(map[uint16]*InflightMessage)
@@ -220,14 +220,14 @@ func (t *inflightTracker) Clear() {
 // --- QoS 2 inbound tracking ---
 
 // MarkReceived marks a packet ID as received (for QoS 2 duplicate detection).
-func (t *inflightTracker) MarkReceived(packetID uint16) {
+func (t *inflight) MarkReceived(packetID uint16) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.receivedIDs[packetID] = time.Now()
 }
 
 // WasReceived returns true if the packet ID was previously received.
-func (t *inflightTracker) WasReceived(packetID uint16) bool {
+func (t *inflight) WasReceived(packetID uint16) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	_, ok := t.receivedIDs[packetID]
@@ -235,14 +235,14 @@ func (t *inflightTracker) WasReceived(packetID uint16) bool {
 }
 
 // ClearReceived clears a received packet ID (after PUBCOMP sent).
-func (t *inflightTracker) ClearReceived(packetID uint16) {
+func (t *inflight) ClearReceived(packetID uint16) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.receivedIDs, packetID)
 }
 
 // CleanupExpiredReceived removes old received IDs.
-func (t *inflightTracker) CleanupExpiredReceived(olderThan time.Duration) {
+func (t *inflight) CleanupExpiredReceived(olderThan time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
