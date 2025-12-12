@@ -14,10 +14,6 @@ type QueueOps interface {
 	IsEmpty() bool
 	IsFull() bool
 	Peek() *store.Message
-}
-
-// QueueSnapshot provides snapshot operations for persistence.
-type QueueSnapshot interface {
 	Drain() []*store.Message
 	Clear()
 }
@@ -119,4 +115,3 @@ func (q *messageQueue) Clear() {
 	defer q.mu.Unlock()
 	q.messages = make([]*store.Message, 0)
 }
-

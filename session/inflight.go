@@ -48,10 +48,6 @@ type InflightOps interface {
 	ClearReceived(packetID uint16)
 	GetExpired(expiry time.Duration) []*InflightMessage
 	MarkRetry(packetID uint16) error
-}
-
-// InflightSnapshot provides read-only access for persistence/inspection.
-type InflightSnapshot interface {
 	GetAll() []*InflightMessage
 }
 
@@ -257,4 +253,3 @@ func (t *inflightTracker) CleanupExpiredReceived(olderThan time.Duration) {
 		}
 	}
 }
-

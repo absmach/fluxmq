@@ -287,7 +287,7 @@ func (m *manager) handleDisconnect(session *Session, graceful bool) {
 		}
 	}
 	if m.messages != nil {
-		msgs := session.QueueSnapshot().Drain()
+		msgs := session.OfflineQueue().Drain()
 		for i, msg := range msgs {
 			key := session.ID + "/queue/" + string(rune(i))
 			if err := m.messages.Store(key, msg); err != nil {
@@ -295,7 +295,7 @@ func (m *manager) handleDisconnect(session *Session, graceful bool) {
 			}
 		}
 
-		for _, inf := range session.InflightSnapshot().GetAll() {
+		for _, inf := range session.Inflight().GetAll() {
 			key := session.ID + "/inflight/" + string(rune(inf.PacketID))
 			if err := m.messages.Store(key, inf.Message); err != nil {
 				_ = err
@@ -450,7 +450,7 @@ func (m *manager) DrainOfflineQueue(clientID string) []*store.Message {
 	if session == nil {
 		return nil
 	}
-	return session.QueueSnapshot().Drain()
+	return session.OfflineQueue().Drain()
 }
 
 // QueueMessage adds a message to a session's offline queue.

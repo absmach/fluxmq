@@ -208,16 +208,6 @@ func (s *Session) OfflineQueue() QueueOps {
 	return s.msgHandler.OfflineQueue()
 }
 
-// InflightSnapshot returns the inflight tracker for persistence/inspection.
-func (s *Session) InflightSnapshot() InflightSnapshot {
-	return s.msgHandler.Inflight()
-}
-
-// QueueSnapshot returns the queue for persistence operations.
-func (s *Session) QueueSnapshot() QueueSnapshot {
-	return s.msgHandler.OfflineQueue()
-}
-
 // NextPacketID generates the next packet ID.
 func (s *Session) NextPacketID() uint16 {
 	return s.msgHandler.NextPacketID()
