@@ -14,10 +14,10 @@ func (b *Broker) Get(clientID string) *session.Session {
 	return b.sessionsMap.Get(clientID)
 }
 
-// GetOrCreate gets an existing session or creates a new one.
+// getOrCreate gets an existing session or creates a new one.
 // If cleanStart is true and an existing session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
-func (b *Broker) GetOrCreate(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
+func (b *Broker) getOrCreate(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	existing := b.sessionsMap.Get(clientID)
@@ -250,37 +250,6 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		_ = b.destroySessionLocked(s)
 		b.mu.Unlock()
 	}
-}
-
-// Count returns the number of sessions.
-func (b *Broker) Count() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.sessionsMap.Count()
-}
-
-// ConnectedCount returns the number of connected sessions.
-func (b *Broker) ConnectedCount() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	count := 0
-	b.sessionsMap.ForEach(func(s *session.Session) {
-		if s.IsConnected() {
-			count++
-		}
-	})
-	return count
-}
-
-// ForEach iterates over all sessions.
-func (b *Broker) ForEach(fn func(*session.Session)) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	b.sessionsMap.ForEach(func(s *session.Session) {
-		fn(s)
-	})
 }
 
 // expiryLoop periodically checks for expired sessions.

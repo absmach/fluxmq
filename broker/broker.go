@@ -125,7 +125,7 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 		Will:           will,
 	}
 
-	s, _, err := b.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
+	s, _, err := b.getOrCreate(clientID, 4, opts) // v3.1.1 = version 4
 	if err != nil {
 		b.logger.Error("Failed to create session",
 			slog.String("client_id", clientID),
