@@ -13,6 +13,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/dborovcanin/mqtt/core"
 )
 
 // ErrShutdownTimeout is returned when graceful shutdown exceeds the configured timeout.
@@ -22,7 +24,7 @@ var ErrShutdownTimeout = errors.New("shutdown timeout exceeded")
 type Handler interface {
 	// HandleConnection handles a new client connection.
 	// The handler owns the connection and must close it when done.
-	HandleConnection(conn net.Conn)
+	HandleConnection(conn core.Connection)
 }
 
 // Config holds the TCP server configuration.
@@ -287,8 +289,14 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) error {
 	s.config.Logger.Debug("connection established",
 		slog.String("remote", conn.RemoteAddr().String()))
 
+	// Wrap net.Conn with MQTT codec to get broker.Connection
+	c, ok := conn.(*net.TCPConn)
+	if !ok {
+		return errors.New("not a TCP connection")
+	}
+	hc := core.NewConnection(c)
 	// Delegate to handler
-	s.handler.HandleConnection(conn)
+	s.handler.HandleConnection(hc)
 
 	s.config.Logger.Debug("connection closed",
 		slog.String("remote", conn.RemoteAddr().String()))

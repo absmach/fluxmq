@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"time"
 
 	"github.com/dborovcanin/mqtt/core"
@@ -83,19 +82,12 @@ func NewBroker(logger *slog.Logger) *Broker {
 
 // HandleConnection handles a new incoming connection from the TCP server.
 // This implements the broker.Handler interface.
-func (b *Broker) HandleConnection(netConn net.Conn) {
-	// Wrap net.Conn with MQTT codec to get broker.Connection
-	c, ok := netConn.(*net.TCPConn)
-	if !ok {
-		return
-	}
-	conn := core.NewConnection(c)
-
+func (b *Broker) HandleConnection(conn core.Connection) {
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
 	if err != nil {
 		b.logger.Error("Failed to read CONNECT packet",
-			slog.String("remote_addr", netConn.RemoteAddr().String()),
+			slog.String("remote_addr", conn.RemoteAddr().String()),
 			slog.String("error", err.Error()))
 		conn.Close()
 		return
@@ -104,7 +96,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 	// 2. Validate it is CONNECT
 	if pkt.Type() != packets.ConnectType {
 		b.logger.Warn("Expected CONNECT packet, received different packet type",
-			slog.String("remote_addr", netConn.RemoteAddr().String()),
+			slog.String("remote_addr", conn.RemoteAddr().String()),
 			slog.String("packet_type", pkt.String()))
 		conn.Close()
 		return
@@ -113,7 +105,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 	p, ok := pkt.(*v3.Connect)
 	if !ok {
 		b.logger.Error("Failed to parse CONNECT packet as v3",
-			slog.String("remote_addr", netConn.RemoteAddr().String()))
+			slog.String("remote_addr", conn.RemoteAddr().String()))
 		conn.Close()
 		return
 	}
@@ -169,7 +161,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 
 	b.logger.Info("Client connected",
 		slog.String("client_id", clientID),
-		slog.String("remote_addr", netConn.RemoteAddr().String()),
+		slog.String("remote_addr", conn.RemoteAddr().String()),
 		slog.Bool("clean_start", cleanStart),
 		slog.Uint64("keep_alive", uint64(keepAlive)))
 
