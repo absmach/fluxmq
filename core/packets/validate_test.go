@@ -3,7 +3,7 @@ package packets_test
 import (
 	"testing"
 
-	"github.com/dborovcanin/mqtt/packets"
+	"github.com/dborovcanin/mqtt/core/packets"
 )
 
 func TestValidateClientID(t *testing.T) {

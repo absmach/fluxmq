@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	. "github.com/dborovcanin/mqtt/packets/v5"
+	. "github.com/dborovcanin/mqtt/core/packets/v5"
 )
 
 // Helper to create pointer to value

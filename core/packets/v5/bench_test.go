@@ -5,8 +5,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/dborovcanin/mqtt/codec"
-	. "github.com/dborovcanin/mqtt/packets/v5"
+	"github.com/dborovcanin/mqtt/core/codec"
+	. "github.com/dborovcanin/mqtt/core/packets/v5"
 )
 
 func BenchmarkReadInline(b *testing.B) {

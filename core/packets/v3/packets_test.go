@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	. "github.com/dborovcanin/mqtt/packets/v3"
+	. "github.com/dborovcanin/mqtt/core/packets/v3"
 )
 
 func TestConnectEncodeDecode(t *testing.T) {

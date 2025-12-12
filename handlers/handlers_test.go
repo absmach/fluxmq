@@ -11,6 +11,7 @@ import (
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
+	"github.com/dborovcanin/mqtt/store/messages"
 )
 
 var _ core.Connection = (*mockConnection)(nil)
@@ -161,8 +162,8 @@ func createTestSession(version byte) (*session.Session, *mockConnection) {
 		ReceiveMaximum: 100,
 		KeepAlive:      60,
 	}
-	inflight := session.NewInflightTracker(100)
-	queue := session.NewMessageQueue(1000)
+	inflight := messages.NewInflightTracker(100)
+	queue := messages.NewMessageQueue(1000)
 	s := session.New("test-client", version, opts, inflight, queue)
 	s.Connect(conn)
 	return s, conn

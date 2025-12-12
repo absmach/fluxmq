@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/dborovcanin/mqtt/packets"
-	. "github.com/dborovcanin/mqtt/packets/v3"
+	"github.com/dborovcanin/mqtt/core/packets"
+	. "github.com/dborovcanin/mqtt/core/packets/v3"
 )
 
 func TestPublishUnpackBytes(t *testing.T) {
