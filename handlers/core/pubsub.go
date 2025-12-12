@@ -3,6 +3,7 @@ package core
 import (
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
+	"github.com/dborovcanin/mqtt/store/messages"
 )
 
 // Router handles topic matching and subscriptions.
@@ -67,7 +68,7 @@ func (e *PubSubEngine) HandleQoS2Publish(s *session.Session, topic string, paylo
 		Retain:   retain,
 		PacketID: packetID,
 	}
-	return s.Inflight().Add(packetID, msg, session.Inbound)
+	return s.Inflight().Add(packetID, msg, messages.Inbound)
 }
 
 // PublishQoS2Message publishes a QoS 2 message after PUBREL is received.

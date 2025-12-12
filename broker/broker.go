@@ -14,6 +14,7 @@ import (
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
+	"github.com/dborovcanin/mqtt/store/messages"
 )
 
 var (
@@ -357,7 +358,7 @@ func (b *Broker) deliverToSession(s *session.Session, topic string, payload []by
 			QoS:      qos,
 			PacketID: pub.ID,
 		}
-		s.Inflight().Add(pub.ID, msg, session.Outbound)
+		s.Inflight().Add(pub.ID, msg, messages.Outbound)
 	}
 	return s.WritePacket(pub)
 }

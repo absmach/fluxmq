@@ -1,4 +1,4 @@
-package session
+package messages
 
 import (
 	"fmt"
@@ -36,8 +36,8 @@ const (
 	Inbound                   // Received from client
 )
 
-// InflightOps defines operations on inflight messages.
-type InflightOps interface {
+// Inflight defines operations on inflight messages.
+type Inflight interface {
 	Add(packetID uint16, msg *store.Message, direction Direction) error
 	Ack(packetID uint16) (*store.Message, error)
 	Get(packetID uint16) (*InflightMessage, bool)

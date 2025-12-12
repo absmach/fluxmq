@@ -5,12 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dborovcanin/mqtt/packets"
-	v3 "github.com/dborovcanin/mqtt/packets/v3"
+	"github.com/dborovcanin/mqtt/core"
+	"github.com/dborovcanin/mqtt/core/packets"
+	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
 )
+
+var _ core.Connection = (*mockConnection)(nil)
 
 // mockConnection implements session.Connection for testing.
 type mockConnection struct {
@@ -27,6 +30,31 @@ func newMockConnection() *mockConnection {
 		readCh: make(chan packets.ControlPacket, 10),
 	}
 }
+
+func (c *mockConnection) LocalAddr() net.Addr {
+	return nil
+}
+
+func (c *mockConnection) Read(b []byte) (int, error) {
+	return 0, nil
+}
+
+func (c *mockConnection) Write(b []byte) (int, error) {
+	return 0, nil
+}
+
+func (c *mockConnection) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *mockConnection) SetKeepAlive(d time.Duration) error {
+	return nil
+}
+
+func (c *mockConnection) SetOnDisconnect(func(graceful bool)) {
+}
+
+func (c *mockConnection) Touch() {}
 
 func (c *mockConnection) ReadPacket() (packets.ControlPacket, error) {
 	if c.errOnRead != nil {

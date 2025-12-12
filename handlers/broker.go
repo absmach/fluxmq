@@ -8,6 +8,7 @@ import (
 	"github.com/dborovcanin/mqtt/handlers/core"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
+	"github.com/dborovcanin/mqtt/store/messages"
 )
 
 // BrokerHandler implements the Handler interface for the broker.
@@ -118,7 +119,7 @@ func (h *BrokerHandler) HandlePubRec(s *session.Session, pkt packets.ControlPack
 	s.Touch()
 
 	p := pkt.(*v3.PubRec)
-	s.Inflight().UpdateState(p.ID, session.StatePubRecReceived)
+	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
 	return h.sendPubRel(s, p.ID)
 }
 
@@ -235,7 +236,7 @@ func (h *BrokerHandler) deliverMessage(s *session.Session, topic string, payload
 			QoS:      qos,
 			PacketID: pub.ID,
 		}
-		s.Inflight().Add(pub.ID, msg, session.Outbound)
+		s.Inflight().Add(pub.ID, msg, messages.Outbound)
 	}
 
 	return s.WritePacket(pub)

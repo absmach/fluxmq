@@ -7,6 +7,7 @@ import (
 	"github.com/dborovcanin/mqtt/core"
 	"github.com/dborovcanin/mqtt/core/packets"
 	"github.com/dborovcanin/mqtt/store"
+	"github.com/dborovcanin/mqtt/store/messages"
 )
 
 // State represents the session state.
@@ -45,7 +46,7 @@ type Session struct {
 	Version byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
 
 	conn       core.Connection
-	msgHandler *MessageHandler
+	msgHandler *messages.MessageHandler
 
 	state          State
 	connectedAt    time.Time
@@ -90,13 +91,13 @@ func DefaultOptions() Options {
 
 // New creates a new session with injected dependencies.
 // The inflight tracker and offline queue should be created and restored by the Manager.
-func New(clientID string, version byte, opts Options, inflight *inflightTracker, offlineQueue *messageQueue) *Session {
+func New(clientID string, version byte, opts Options, inflight messages.Inflight, offlineQueue messages.Queue) *Session {
 	receiveMax := opts.ReceiveMaximum
 	if receiveMax == 0 {
 		receiveMax = 65535
 	}
 
-	msgHandler := NewMessageHandler(inflight, offlineQueue)
+	msgHandler := messages.NewMessageHandler(inflight, offlineQueue)
 
 	s := &Session{
 		ID:             clientID,
@@ -199,12 +200,12 @@ func (s *Session) Conn() core.Connection {
 }
 
 // Inflight returns the inflight message tracker for operations.
-func (s *Session) Inflight() InflightOps {
+func (s *Session) Inflight() messages.Inflight {
 	return s.msgHandler.Inflight()
 }
 
 // OfflineQueue returns the offline message queue for operations.
-func (s *Session) OfflineQueue() QueueOps {
+func (s *Session) OfflineQueue() messages.Queue {
 	return s.msgHandler.OfflineQueue()
 }
 

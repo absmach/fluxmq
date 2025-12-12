@@ -1,4 +1,4 @@
-package session
+package messages
 
 import (
 	"log/slog"
@@ -15,8 +15,8 @@ import (
 type MessageHandler struct {
 	mu sync.RWMutex
 
-	inflight     *inflightTracker
-	offlineQueue *messageQueue
+	inflight     Inflight
+	offlineQueue Queue
 
 	nextPacketID uint32
 
@@ -28,7 +28,7 @@ type MessageHandler struct {
 }
 
 // NewMessageHandler creates a new message handler.
-func NewMessageHandler(inflight *inflightTracker, offlineQueue *messageQueue) *MessageHandler {
+func NewMessageHandler(inflight Inflight, offlineQueue Queue) *MessageHandler {
 	return &MessageHandler{
 		inflight:        inflight,
 		offlineQueue:    offlineQueue,
@@ -52,12 +52,12 @@ func (h *MessageHandler) Stop() {
 }
 
 // Inflight returns the inflight tracker.
-func (h *MessageHandler) Inflight() *inflightTracker {
+func (h *MessageHandler) Inflight() Inflight {
 	return h.inflight
 }
 
 // OfflineQueue returns the offline queue.
-func (h *MessageHandler) OfflineQueue() *messageQueue {
+func (h *MessageHandler) OfflineQueue() Queue {
 	return h.offlineQueue
 }
 

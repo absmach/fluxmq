@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dborovcanin/mqtt/store"
+	"github.com/dborovcanin/mqtt/store/messages"
 )
 
 var _ Manager = (*manager)(nil)
@@ -94,9 +95,9 @@ func (m *manager) GetOrCreate(clientID string, version byte, opts Options) (*Ses
 	if receiveMax == 0 {
 		receiveMax = 65535
 	}
-	inflight := NewInflightTracker(int(receiveMax))
+	inflight := messages.NewInflightTracker(int(receiveMax))
 
-	offlineQueue := NewMessageQueue(1000)
+	offlineQueue := messages.NewMessageQueue(1000)
 
 	// Restore from storage if not clean start
 	if !opts.CleanStart {
@@ -144,7 +145,7 @@ func (m *manager) handleExistingSession(session *Session, version byte, opts Opt
 }
 
 // restoreInflightFromStorage restores inflight messages from storage into the tracker.
-func (m *manager) restoreInflightFromStorage(clientID string, tracker *inflightTracker) error {
+func (m *manager) restoreInflightFromStorage(clientID string, tracker messages.Inflight) error {
 	if m.messages == nil {
 		return nil
 	}
@@ -156,7 +157,7 @@ func (m *manager) restoreInflightFromStorage(clientID string, tracker *inflightT
 
 	for _, msg := range inflightMsgs {
 		if msg.PacketID != 0 {
-			if err := tracker.Add(msg.PacketID, msg, Outbound); err != nil {
+			if err := tracker.Add(msg.PacketID, msg, messages.Outbound); err != nil {
 				continue
 			}
 		}
@@ -170,7 +171,7 @@ func (m *manager) restoreInflightFromStorage(clientID string, tracker *inflightT
 }
 
 // restoreQueueFromStorage restores offline messages from storage into the queue.
-func (m *manager) restoreQueueFromStorage(clientID string, queue *messageQueue) error {
+func (m *manager) restoreQueueFromStorage(clientID string, queue messages.Queue) error {
 	if m.messages == nil {
 		return nil
 	}

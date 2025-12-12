@@ -1,4 +1,4 @@
-package session
+package messages
 
 import (
 	"fmt"
@@ -7,15 +7,15 @@ import (
 	"github.com/dborovcanin/mqtt/store"
 )
 
-// QueueOps defines operations on offline message queue.
-type QueueOps interface {
+// Queue defines operations on offline message queue.
+type Queue interface {
 	Enqueue(msg *store.Message) error
+	Dequeue() *store.Message
 	Len() int
 	IsEmpty() bool
 	IsFull() bool
 	Peek() *store.Message
 	Drain() []*store.Message
-	Clear()
 }
 
 // messageQueue is a queue for offline messages (QoS > 0).
@@ -107,11 +107,4 @@ func (q *messageQueue) Drain() []*store.Message {
 	msgs := q.messages
 	q.messages = make([]*store.Message, 0)
 	return msgs
-}
-
-// Clear removes all messages from the queue without returning them.
-func (q *messageQueue) Clear() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.messages = make([]*store.Message, 0)
 }
