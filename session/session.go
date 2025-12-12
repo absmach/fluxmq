@@ -42,39 +42,38 @@ func (s State) String() string {
 type Session struct {
 	mu sync.RWMutex
 
-	ID      string
-	Version byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
-
-	conn       core.Connection
-	msgHandler *messages.MessageHandler
-
-	state          State
 	connectedAt    time.Time
 	disconnectedAt time.Time
 
-	CleanStart     bool
-	ExpiryInterval uint32        // Session expiry in seconds (v5)
-	ReceiveMaximum uint16        // Max inflight (v5), default 65535
-	MaxPacketSize  uint32        // Max packet size (v5), default unlimited
-	TopicAliasMax  uint16        // Max topic aliases (v5)
-	KeepAlive      time.Duration // Keep-alive duration
+	ID   string
+	conn core.Connection
 
-	Will *store.WillMessage // set on CONNECT, cleared on clean disconnect
-
+	state         State
+	KeepAlive     time.Duration // Keep-alive duration
+	msgHandler    *messages.MessageHandler
+	Will          *store.WillMessage                // set on CONNECT, cleared on clean disconnect
 	subscriptions map[string]store.SubscribeOptions // cached from store for fast lookup
+	onDisconnect  func(s *Session, graceful bool)
 
-	onDisconnect func(s *Session, graceful bool)
+	ExpiryInterval uint32 // Session expiry in seconds (v5)
+	MaxPacketSize  uint32 // Max packet size (v5), default unlimited
+
+	ReceiveMaximum uint16 // Max inflight (v5), default 65535
+	TopicAliasMax  uint16 // Max topic aliases (v5)
+
+	Version    byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
+	CleanStart bool
 }
 
 // Options holds options for creating a new session.
 type Options struct {
-	CleanStart     bool
-	ExpiryInterval uint32
-	ReceiveMaximum uint16
-	MaxPacketSize  uint32
-	TopicAliasMax  uint16
 	KeepAlive      time.Duration
 	Will           *store.WillMessage
+	ExpiryInterval uint32
+	MaxPacketSize  uint32
+	ReceiveMaximum uint16
+	TopicAliasMax  uint16
+	CleanStart     bool
 }
 
 // DefaultOptions returns default session options.

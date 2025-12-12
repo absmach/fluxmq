@@ -35,13 +35,13 @@ type Store interface {
 
 // Message represents a stored MQTT message.
 type Message struct {
-	Topic      string
 	Payload    []byte
+	Expiry     time.Time // Zero means no expiry
+	Topic      string
+	Properties map[string]string
+	PacketID   uint16
 	QoS        byte
 	Retain     bool
-	PacketID   uint16
-	Expiry     time.Time // Zero means no expiry
-	Properties map[string]string
 }
 
 // CopyMessage creates a deep copy of a message.
@@ -75,18 +75,16 @@ func CopyMessage(msg *Message) *Message {
 
 // Session represents persisted session state.
 type Session struct {
-	ClientID       string
-	Version        byte // MQTT version (3, 4, or 5)
-	CleanStart     bool
-	ExpiryInterval uint32 // Session expiry in seconds (0 = no expiry when disconnected)
-	ConnectedAt    time.Time
-	DisconnectedAt time.Time
-	Connected      bool
-
-	// MQTT 5 options
-	ReceiveMaximum  uint16
+	ConnectedAt     time.Time
+	DisconnectedAt  time.Time
+	ClientID        string
+	ExpiryInterval  uint32 // Session expiry in seconds (0 = no expiry when disconnected)
 	MaxPacketSize   uint32
+	ReceiveMaximum  uint16
 	TopicAliasMax   uint16
+	Version         byte // MQTT version (3, 4, or 5)
+	CleanStart      bool
+	Connected       bool
 	RequestResponse bool
 	RequestProblem  bool
 }
@@ -121,14 +119,14 @@ type SubscribeOptions struct {
 
 // WillMessage represents a stored will message.
 type WillMessage struct {
+	Payload    []byte
 	ClientID   string
 	Topic      string
-	Payload    []byte
-	QoS        byte
-	Retain     bool
+	Properties map[string]string
 	Delay      uint32 // Will delay interval in seconds
 	Expiry     uint32 // Message expiry interval
-	Properties map[string]string
+	QoS        byte
+	Retain     bool
 }
 
 // MessageStore handles message persistence for QoS offline queue.
