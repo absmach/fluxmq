@@ -1,15 +1,4 @@
-package core
-
-// Authenticator validates client credentials.
-type Authenticator interface {
-	Authenticate(clientID, username, password string) (bool, error)
-}
-
-// Authorizer checks topic-level permissions.
-type Authorizer interface {
-	CanPublish(clientID, topic string) bool
-	CanSubscribe(clientID, topic string) bool
-}
+package broker
 
 // AuthEngine handles authentication and authorization checks.
 type AuthEngine struct {

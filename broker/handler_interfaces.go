@@ -1,5 +1,4 @@
-// Package handlers provides MQTT packet handlers.
-package handlers
+package broker
 
 import (
 	"errors"
@@ -21,7 +20,7 @@ var (
 	ErrQuotaExceeded     = errors.New("quota exceeded")
 )
 
-// Handler is the interface for packet handlers.
+// Handler is the interface for packet handlers (V3, V5, etc).
 type Handler interface {
 	// HandleConnect handles CONNECT packets.
 	HandleConnect(s *session.Session, pkt packets.ControlPacket) error
@@ -29,16 +28,16 @@ type Handler interface {
 	// HandlePublish handles PUBLISH packets.
 	HandlePublish(s *session.Session, pkt packets.ControlPacket) error
 
-	// HandlePubAck handles PUBACK packets (QoS 1 acknowledgment).
+	// HandlePubAck handles PUBACK packets.
 	HandlePubAck(s *session.Session, pkt packets.ControlPacket) error
 
-	// HandlePubRec handles PUBREC packets (QoS 2 step 1).
+	// HandlePubRec handles PUBREC packets.
 	HandlePubRec(s *session.Session, pkt packets.ControlPacket) error
 
-	// HandlePubRel handles PUBREL packets (QoS 2 step 2).
+	// HandlePubRel handles PUBREL packets.
 	HandlePubRel(s *session.Session, pkt packets.ControlPacket) error
 
-	// HandlePubComp handles PUBCOMP packets (QoS 2 step 3).
+	// HandlePubComp handles PUBCOMP packets.
 	HandlePubComp(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandleSubscribe handles SUBSCRIBE packets.
@@ -56,46 +55,30 @@ type Handler interface {
 
 // Router is the message routing interface.
 type Router interface {
-	// Subscribe adds a subscription.
 	Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error
-
-	// Unsubscribe removes a subscription.
 	Unsubscribe(clientID string, filter string) error
-
-	// Match returns all subscriptions matching a topic.
 	Match(topic string) ([]*store.Subscription, error)
 }
 
 // Authenticator validates client credentials.
 type Authenticator interface {
-	// Authenticate validates username and password.
-	// Returns true if authenticated.
 	Authenticate(clientID, username, password string) (bool, error)
 }
 
 // Authorizer checks topic permissions.
 type Authorizer interface {
-	// CanPublish checks if client can publish to topic.
 	CanPublish(clientID string, topic string) bool
-
-	// CanSubscribe checks if client can subscribe to filter.
 	CanSubscribe(clientID string, filter string) bool
 }
 
 // Publisher distributes messages to subscribers.
 type Publisher interface {
-	// Distribute distributes a message to all matching subscribers.
 	Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error
 }
 
 // RetainedStore provides access to retained messages.
 type RetainedStore interface {
-	// Set stores a retained message.
 	Set(topic string, msg *store.Message) error
-
-	// Get retrieves a retained message.
 	Get(topic string) (*store.Message, error)
-
-	// Match returns retained messages matching a filter.
 	Match(filter string) ([]*store.Message, error)
 }

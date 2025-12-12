@@ -11,7 +11,6 @@ import (
 	"github.com/dborovcanin/mqtt/core"
 	"github.com/dborovcanin/mqtt/core/packets"
 	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
-	"github.com/dborovcanin/mqtt/handlers"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
 	"github.com/dborovcanin/mqtt/store/memory"
@@ -19,15 +18,15 @@ import (
 )
 
 var (
-	_ handlers.Router    = (*Broker)(nil)
-	_ handlers.Publisher = (*Broker)(nil)
+	_ Router    = (*Broker)(nil)
+	_ Publisher = (*Broker)(nil)
 )
 
 // Broker is the core MQTT broker.
 type Broker struct {
 	mu          sync.RWMutex
 	sessionsMap session.Cache
-	router      *Router
+	router      Router
 
 	messages      store.MessageStore
 	sessions      store.SessionStore
@@ -35,8 +34,8 @@ type Broker struct {
 	retained      store.RetainedStore
 	wills         store.WillStore
 
-	handler    handlers.Handler
-	dispatcher *handlers.Dispatcher
+	handler    Handler
+	dispatcher *Dispatcher
 	logger     *slog.Logger
 
 	stopCh chan struct{}
@@ -64,13 +63,10 @@ func NewBroker(logger *slog.Logger) *Broker {
 		stopCh:        make(chan struct{}),
 	}
 
-	b.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
-		Router: b, // Broker implements handlers.Router
-		// Publisher: b, // Broker implements handlers.Publisher
-		Retained: st.Retained(),
+	b.handler = NewV3Handler(V3HandlerConfig{
+		Broker: b,
 	})
-	b.dispatcher = handlers.NewDispatcher(b.handler)
-
+	b.dispatcher = NewDispatcher(b.handler)
 	b.wg.Add(1)
 	go b.expiryLoop()
 
@@ -211,7 +207,7 @@ func (b *Broker) sendConnAck(conn core.Connection) error {
 }
 
 func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
-	b.router.Subscribe(filter, Subscription{SessionID: clientID, QoS: qos})
+	b.router.Subscribe(clientID, filter, qos, opts)
 
 	sub := &store.Subscription{
 		ClientID: clientID,
@@ -248,7 +244,7 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.
 
 // Unsubscribe removes a subscription.
 func (b *Broker) Unsubscribe(clientID string, filter string) error {
-	b.router.Unsubscribe(filter, clientID)
+	b.router.Unsubscribe(clientID, filter)
 
 	if err := b.subscriptions.Remove(clientID, filter); err != nil {
 		return fmt.Errorf("failed to remove subscription from storage: %w", err)
@@ -264,16 +260,7 @@ func (b *Broker) Unsubscribe(clientID string, filter string) error {
 
 // Match returns all subscriptions matching a topic.
 func (b *Broker) Match(topic string) ([]*store.Subscription, error) {
-	matched := b.router.Match(topic)
-	result := make([]*store.Subscription, len(matched))
-	for i, sub := range matched {
-		result[i] = &store.Subscription{
-			ClientID: sub.SessionID,
-			Filter:   topic,
-			QoS:      sub.QoS,
-		}
-	}
-	return result, nil
+	return b.router.Match(topic)
 }
 
 // --- handlers.Publisher implementation ---
@@ -298,10 +285,13 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 		}
 	}
 
-	matched := b.router.Match(topic)
+	matched, err := b.router.Match(topic)
+	if err != nil {
+		return err
+	}
 
 	for _, sub := range matched {
-		s := b.Get(sub.SessionID)
+		s := b.Get(sub.ClientID)
 		if s == nil {
 			continue
 		}

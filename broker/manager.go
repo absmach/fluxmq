@@ -203,7 +203,7 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 	// Direct integration: Unsubscribe directly instead of using callback
 	subs := s.GetSubscriptions()
 	for filter := range subs {
-		b.router.Unsubscribe(filter, s.ID)
+		b.router.Unsubscribe(s.ID, filter)
 	}
 
 	return nil

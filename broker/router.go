@@ -3,30 +3,24 @@ package broker
 import (
 	"strings"
 	"sync"
+
+	"github.com/dborovcanin/mqtt/store"
 )
 
-const separator = "/"
-
-// Subscription represents a single client subscription.
-type Subscription struct {
-	SessionID string
-	QoS       byte
-}
-
-// Router handles topic matching and subscription storage.
-type Router struct {
+const separator = "/" // TrieRouter handles topic matching and subscription storage.
+type TrieRouter struct {
 	mu   sync.RWMutex
 	root *node
 }
 
 type node struct {
 	children map[string]*node
-	subs     []Subscription // Subscriptions at this exact level
+	subs     []*store.Subscription // Subscriptions at this exact level
 }
 
 // NewRouter returns a new instance.
-func NewRouter() *Router {
-	return &Router{
+func NewRouter() *TrieRouter {
+	return &TrieRouter{
 		root: newNode(),
 	}
 }
@@ -38,9 +32,16 @@ func newNode() *node {
 }
 
 // Subscribe adds a subscription to the topic filter.
-func (r *Router) Subscribe(filter string, sub Subscription) {
+func (r *TrieRouter) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	sub := &store.Subscription{
+		ClientID: clientID,
+		Filter:   filter,
+		QoS:      qos,
+		Options:  opts,
+	}
 
 	levels := strings.Split(filter, separator)
 	n := r.root
@@ -53,10 +54,11 @@ func (r *Router) Subscribe(filter string, sub Subscription) {
 		n = child
 	}
 	n.subs = append(n.subs, sub)
+	return nil
 }
 
 // Unsubscribe removes a subscription from the topic filter for a specific session.
-func (r *Router) Unsubscribe(filter, sessionID string) {
+func (r *TrieRouter) Unsubscribe(clientID string, filter string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -65,32 +67,33 @@ func (r *Router) Unsubscribe(filter, sessionID string) {
 	for _, level := range levels {
 		child, ok := n.children[level]
 		if !ok {
-			return
+			return nil
 		}
 		n = child
 	}
 
 	filtered := n.subs[:0]
 	for _, sub := range n.subs {
-		if sub.SessionID != sessionID {
+		if sub.ClientID != clientID {
 			filtered = append(filtered, sub)
 		}
 	}
 	n.subs = filtered
+	return nil
 }
 
 // Match returns all subscriptions that match the topic name.
-func (r *Router) Match(topic string) []Subscription {
+func (r *TrieRouter) Match(topic string) ([]*store.Subscription, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	levels := strings.Split(topic, separator)
-	var matched []Subscription
+	var matched []*store.Subscription
 	matchLevel(r.root, levels, 0, &matched)
-	return matched
+	return matched, nil
 }
 
-func matchLevel(n *node, levels []string, index int, matched *[]Subscription) {
+func matchLevel(n *node, levels []string, index int, matched *[]*store.Subscription) {
 	if index == len(levels) {
 		// Reached end of topic - include exact matches and # wildcards
 		*matched = append(*matched, n.subs...)
