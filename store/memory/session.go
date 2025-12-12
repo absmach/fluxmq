@@ -11,16 +11,14 @@ var _ store.SessionStore = (*SessionStore)(nil)
 
 // SessionStore is an in-memory implementation of store.SessionStore.
 type SessionStore struct {
-	mu    sync.RWMutex
-	data  map[string]*store.Session
-	locks map[string]*sync.Mutex
+	mu   sync.RWMutex
+	data map[string]*store.Session
 }
 
 // NewSessionStore creates a new in-memory session store.
 func NewSessionStore() *SessionStore {
 	return &SessionStore{
-		data:  make(map[string]*store.Session),
-		locks: make(map[string]*sync.Mutex),
+		data: make(map[string]*store.Session),
 	}
 }
 
@@ -51,22 +49,7 @@ func (s *SessionStore) Delete(clientID string) error {
 	defer s.mu.Unlock()
 
 	delete(s.data, clientID)
-	delete(s.locks, clientID)
 	return nil
-}
-
-// Lock acquires an exclusive lock for session takeover.
-func (s *SessionStore) Lock(clientID string) (unlock func(), err error) {
-	s.mu.Lock()
-	lock, ok := s.locks[clientID]
-	if !ok {
-		lock = &sync.Mutex{}
-		s.locks[clientID] = lock
-	}
-	s.mu.Unlock()
-
-	lock.Lock()
-	return func() { lock.Unlock() }, nil
 }
 
 // GetExpired returns client IDs of sessions that have expired.

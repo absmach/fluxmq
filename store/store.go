@@ -161,10 +161,6 @@ type SessionStore interface {
 	// Delete removes a session.
 	Delete(clientID string) error
 
-	// Lock acquires an exclusive lock for session takeover.
-	// Returns unlock function and error.
-	Lock(clientID string) (unlock func(), err error)
-
 	// GetExpired returns client IDs of sessions that have expired.
 	GetExpired(before time.Time) ([]string, error)
 
