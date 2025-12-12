@@ -56,7 +56,7 @@ func (r *Router) Subscribe(filter string, sub Subscription) {
 }
 
 // Unsubscribe removes a subscription from the topic filter for a specific session.
-func (r *Router) Unsubscribe(filter string, sessionID string) {
+func (r *Router) Unsubscribe(filter, sessionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

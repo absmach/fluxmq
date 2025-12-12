@@ -60,7 +60,7 @@ func (h *BrokerHandler) HandleConnect(s *session.Session, pkt packets.ControlPac
 
 // HandlePublish handles PUBLISH packets.
 func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.Publish)
 	topic := p.TopicName
@@ -106,7 +106,7 @@ func (h *BrokerHandler) HandlePublish(s *session.Session, pkt packets.ControlPac
 
 // HandlePubAck handles PUBACK packets (QoS 1 acknowledgment from client).
 func (h *BrokerHandler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.PubAck)
 	s.Inflight().Ack(p.ID)
@@ -115,7 +115,7 @@ func (h *BrokerHandler) HandlePubAck(s *session.Session, pkt packets.ControlPack
 
 // HandlePubRec handles PUBREC packets (QoS 2 step 1 from client).
 func (h *BrokerHandler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.PubRec)
 	s.Inflight().UpdateState(p.ID, session.StatePubRecReceived)
@@ -124,7 +124,7 @@ func (h *BrokerHandler) HandlePubRec(s *session.Session, pkt packets.ControlPack
 
 // HandlePubRel handles PUBREL packets (QoS 2 step 2 from client).
 func (h *BrokerHandler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.PubRel)
 	packetID := p.ID
@@ -142,7 +142,7 @@ func (h *BrokerHandler) HandlePubRel(s *session.Session, pkt packets.ControlPack
 
 // HandlePubComp handles PUBCOMP packets (QoS 2 step 3 from client).
 func (h *BrokerHandler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.PubComp)
 	s.Inflight().Ack(p.ID)
@@ -151,7 +151,7 @@ func (h *BrokerHandler) HandlePubComp(s *session.Session, pkt packets.ControlPac
 
 // HandleSubscribe handles SUBSCRIBE packets.
 func (h *BrokerHandler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.Subscribe)
 	packetID := p.ID
@@ -181,7 +181,7 @@ func (h *BrokerHandler) HandleSubscribe(s *session.Session, pkt packets.ControlP
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
 func (h *BrokerHandler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	s.TouchActivity()
+	s.Touch()
 
 	p := pkt.(*v3.Unsubscribe)
 
@@ -195,7 +195,7 @@ func (h *BrokerHandler) HandleUnsubscribe(s *session.Session, pkt packets.Contro
 
 // HandlePingReq handles PINGREQ packets.
 func (h *BrokerHandler) HandlePingReq(s *session.Session) error {
-	s.TouchActivity()
+	s.Touch()
 	return h.sendPingResp(s)
 }
 

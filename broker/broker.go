@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/dborovcanin/mqtt/core"
 	"github.com/dborovcanin/mqtt/core/packets"
@@ -84,7 +85,11 @@ func NewBroker(logger *slog.Logger) *Broker {
 // This implements the broker.Handler interface.
 func (b *Broker) HandleConnection(netConn net.Conn) {
 	// Wrap net.Conn with MQTT codec to get broker.Connection
-	conn := core.NewConnection(netConn)
+	c, ok := netConn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	conn := core.NewConnection(c)
 
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
@@ -115,7 +120,7 @@ func (b *Broker) HandleConnection(netConn net.Conn) {
 
 	clientID := p.ClientID
 	cleanStart := p.CleanSession
-	keepAlive := p.KeepAlive
+	keepAlive := time.Second * time.Duration(p.KeepAlive)
 
 	var will *store.WillMessage
 	if p.WillFlag {

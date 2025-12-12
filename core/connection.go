@@ -3,7 +3,6 @@ package core
 import (
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -18,41 +17,12 @@ var _ Connection = (*connection)(nil)
 // Connection represents a network connection that can read/write MQTT packets.
 // It also manages connection state and keep-alive.
 type Connection interface {
-	// ReadPacket reads the next MQTT packet from the connection.
-	ReadPacket() (packets.ControlPacket, error)
-
-	// WritePacket writes an MQTT packet to the connection.
-	WritePacket(p packets.ControlPacket) error
-
-	// Close terminates the connection.
-	Close() error
-
-	// RemoteAddr returns the address of the connected client.
-	RemoteAddr() net.Addr
-
-	// SetReadDeadline sets the connection read deadline.
-	SetReadDeadline(t time.Time) error
-
-	// SetWriteDeadline sets the connection write deadline.
-	SetWriteDeadline(t time.Time) error
-
-	// SetKeepAlive sets the keep-alive interval in seconds.
-	SetKeepAlive(seconds uint16)
-
-	// SetOnDisconnect sets a callback to be called when the connection is closed or lost.
+	net.Conn
+	PacketReader
+	PacketWriter
+	SetKeepAlive(t time.Duration) error
 	SetOnDisconnect(fn func(graceful bool))
-
-	// ConnectedAt returns the time when the connection was established.
-	ConnectedAt() time.Time
-
-	// DisconnectedAt returns the time when the connection was closed.
-	DisconnectedAt() time.Time
-
-	// StopChan returns a channel that is closed when the connection is terminated.
-	StopChan() <-chan struct{}
-
-	// TouchActivity updates the last activity timestamp (used by external components if needed).
-	TouchActivity()
+	Touch()
 }
 
 // PacketWriter is an interface for writing packets.
@@ -60,9 +30,13 @@ type PacketWriter interface {
 	WritePacket(pkt packets.ControlPacket) error
 }
 
+type PacketReader interface {
+	ReadPacket() (packets.ControlPacket, error)
+}
+
 // connection wraps a net.Conn and provides MQTT packet-level I/O with state management.
 type connection struct {
-	conn    net.Conn
+	conn    *net.TCPConn
 	reader  io.Reader
 	version int // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
 
@@ -75,28 +49,22 @@ type connection struct {
 	disconnectedAt time.Time
 	lastActivity   time.Time
 
-	keepAlive       uint16
-	keepAliveExpiry time.Duration
-	keepAliveTimer  *time.Timer
-
 	onDisconnect func(graceful bool)
-	stopCh       chan struct{}
 }
 
 // NewConnection creates a new MQTT connection wrapping a network connection.
-func NewConnection(conn net.Conn) Connection {
+func NewConnection(conn *net.TCPConn) Connection {
 	return &connection{
 		conn:        conn,
 		reader:      conn,
 		closed:      false,
 		connectedAt: time.Now(),
-		stopCh:      make(chan struct{}),
 	}
 }
 
 // ReadPacket reads the next MQTT packet from the connection.
 func (c *connection) ReadPacket() (packets.ControlPacket, error) {
-	c.TouchActivity()
+	c.Touch()
 
 	if c.version == 0 {
 		// Detect protocol version from the first packet (CONNECT)
@@ -135,40 +103,20 @@ func (c *connection) WritePacket(pkt packets.ControlPacket) error {
 	return pkt.Pack(c.conn)
 }
 
-func (c *connection) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed {
-		return nil
-	}
-
-	c.cleanup(true)
-	return nil
+func (c *connection) Read(b []byte) (n int, err error) {
+	return c.conn.Read(b)
 }
 
-// cleanup releases resources. Must be called with lock held.
-func (c *connection) cleanup(graceful bool) {
-	if c.keepAliveTimer != nil {
-		c.keepAliveTimer.Stop()
-		c.keepAliveTimer = nil
-	}
+func (c *connection) Write(b []byte) (n int, err error) {
+	return c.conn.Write(b)
+}
 
-	c.conn.Close()
-	c.closed = true
-	c.disconnectedAt = time.Now()
+func (c *connection) Close() error {
+	return c.conn.Close()
+}
 
-	select {
-	case <-c.stopCh:
-	default:
-		close(c.stopCh)
-	}
-
-	if c.onDisconnect != nil {
-		// execute callback in background to avoid holding lock
-		cb := c.onDisconnect
-		go cb(graceful)
-	}
+func (c *connection) LocalAddr() net.Addr {
+	return c.conn.LocalAddr()
 }
 
 func (c *connection) RemoteAddr() net.Addr {
@@ -183,21 +131,17 @@ func (c *connection) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
-func (c *connection) SetKeepAlive(seconds uint16) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *connection) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
 
-	c.keepAlive = seconds
-	if seconds > 0 {
-		c.keepAliveExpiry = time.Duration(seconds) * time.Second * 3 / 2
-		c.startKeepAliveTimer()
-	} else {
-		c.keepAliveExpiry = 0
-		if c.keepAliveTimer != nil {
-			c.keepAliveTimer.Stop()
-			c.keepAliveTimer = nil
-		}
+func (c *connection) SetKeepAlive(d time.Duration) error {
+	cfg := net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     d,
+		Interval: d,
 	}
+	return c.conn.SetKeepAliveConfig(cfg)
 }
 
 func (c *connection) SetOnDisconnect(fn func(graceful bool)) {
@@ -218,52 +162,8 @@ func (c *connection) DisconnectedAt() time.Time {
 	return c.disconnectedAt
 }
 
-func (c *connection) StopChan() <-chan struct{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.stopCh
-}
-
-func (c *connection) TouchActivity() {
+func (c *connection) Touch() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastActivity = time.Now()
-}
-
-// Internal keep-alive logic
-
-func (c *connection) startKeepAliveTimer() {
-	if c.keepAliveTimer != nil {
-		c.keepAliveTimer.Stop()
-	}
-
-	// Make sure we have lastActivity set, otherwise use now
-	if c.lastActivity.IsZero() {
-		c.lastActivity = time.Now()
-	}
-
-	c.keepAliveTimer = time.AfterFunc(c.keepAliveExpiry, func() {
-		c.checkKeepAlive()
-	})
-}
-
-func (c *connection) checkKeepAlive() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed {
-		return
-	}
-
-	elapsed := time.Since(c.lastActivity)
-	if elapsed >= c.keepAliveExpiry {
-		slog.Info("Keepalive expired, closing connection")
-		c.cleanup(false)
-		return
-	}
-
-	remaining := c.keepAliveExpiry - elapsed
-	c.keepAliveTimer = time.AfterFunc(remaining, func() {
-		c.checkKeepAlive()
-	})
 }

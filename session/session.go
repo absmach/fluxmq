@@ -52,11 +52,11 @@ type Session struct {
 	disconnectedAt time.Time
 
 	CleanStart     bool
-	ExpiryInterval uint32 // Session expiry in seconds (v5)
-	ReceiveMaximum uint16 // Max inflight (v5), default 65535
-	MaxPacketSize  uint32 // Max packet size (v5), default unlimited
-	TopicAliasMax  uint16 // Max topic aliases (v5)
-	KeepAlive      uint16 // Keep-alive in seconds
+	ExpiryInterval uint32        // Session expiry in seconds (v5)
+	ReceiveMaximum uint16        // Max inflight (v5), default 65535
+	MaxPacketSize  uint32        // Max packet size (v5), default unlimited
+	TopicAliasMax  uint16        // Max topic aliases (v5)
+	KeepAlive      time.Duration // Keep-alive duration
 
 	Will *store.WillMessage // set on CONNECT, cleared on clean disconnect
 
@@ -72,7 +72,7 @@ type Options struct {
 	ReceiveMaximum uint16
 	MaxPacketSize  uint32
 	TopicAliasMax  uint16
-	KeepAlive      uint16
+	KeepAlive      time.Duration
 	Will           *store.WillMessage
 }
 
@@ -247,14 +247,14 @@ func (s *Session) ReadPacket() (packets.ControlPacket, error) {
 	return conn.ReadPacket()
 }
 
-// TouchActivity updates the last activity timestamp.
-func (s *Session) TouchActivity() {
+// Touch updates the last activity timestamp.
+func (s *Session) Touch() {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn != nil {
-		conn.TouchActivity()
+		conn.Touch()
 	}
 }
 
@@ -313,7 +313,7 @@ func (s *Session) ResolveInboundAlias(alias uint16) (string, bool) {
 
 // UpdateConnectionOptions updates session options during reconnection.
 // Must be called before Connect.
-func (s *Session) UpdateConnectionOptions(version byte, keepAlive uint16, will *store.WillMessage) {
+func (s *Session) UpdateConnectionOptions(version byte, keepAlive time.Duration, will *store.WillMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
