@@ -65,8 +65,12 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	dup := p.FixedHeader.Dup
 
 	if !h.auth.CanPublish(s.ID, topic) {
+		h.broker.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
+
+	h.broker.stats.IncrementPublishReceived()
+	h.broker.stats.AddBytesReceived(uint64(len(payload)))
 
 	switch qos {
 	case 0:
@@ -153,6 +157,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, t := range p.Topics {
 		if !h.auth.CanSubscribe(s.ID, t.Name) {
+			h.broker.stats.IncrementAuthzErrors()
 			reasonCodes[i] = 0x80
 			continue
 		}
