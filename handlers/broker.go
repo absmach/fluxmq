@@ -13,9 +13,8 @@ import (
 
 // BrokerHandler implements the Handler interface for the broker.
 type BrokerHandler struct {
-	sessionMgr session.Manager
-	pubsub     *core.PubSubEngine
-	auth       *core.AuthEngine
+	pubsub *core.PubSubEngine
+	auth   *core.AuthEngine
 
 	// Retry settings for QoS 1/2
 	retryInterval time.Duration
@@ -24,14 +23,13 @@ type BrokerHandler struct {
 
 // BrokerHandlerConfig holds configuration for the broker handler.
 type BrokerHandlerConfig struct {
-	SessionManager session.Manager
-	Router         Router
-	Publisher      Publisher
-	Retained       RetainedStore
-	Authenticator  Authenticator
-	Authorizer     Authorizer
-	RetryInterval  time.Duration
-	MaxRetries     int
+	Router        Router
+	Publisher     Publisher
+	Retained      RetainedStore
+	Authenticator Authenticator
+	Authorizer    Authorizer
+	RetryInterval time.Duration
+	MaxRetries    int
 }
 
 // NewBrokerHandler creates a new broker handler.
@@ -44,7 +42,6 @@ func NewBrokerHandler(cfg BrokerHandlerConfig) *BrokerHandler {
 	}
 
 	return &BrokerHandler{
-		sessionMgr:    cfg.SessionManager,
 		pubsub:        core.NewPubSubEngine(cfg.Router, cfg.Publisher, cfg.Retained),
 		auth:          core.NewAuthEngine(cfg.Authenticator, cfg.Authorizer),
 		retryInterval: cfg.RetryInterval,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/dborovcanin/mqtt/core"
@@ -24,8 +25,9 @@ var (
 
 // Broker is the core MQTT broker.
 type Broker struct {
-	sessionMgr session.Manager
-	router     *Router
+	mu          sync.RWMutex
+	sessionsMap session.Cache
+	router      *Router
 
 	messages      store.MessageStore
 	sessions      store.SessionStore
@@ -36,6 +38,9 @@ type Broker struct {
 	handler    handlers.Handler
 	dispatcher *handlers.Dispatcher
 	logger     *slog.Logger
+
+	stopCh chan struct{}
+	wg     sync.WaitGroup
 }
 
 // NewBroker creates a new broker instance.
@@ -45,11 +50,10 @@ func NewBroker(logger *slog.Logger) *Broker {
 	}
 
 	st := memory.New()
-	sessionMgr := session.NewManager(st)
 	router := NewRouter()
 
 	b := &Broker{
-		sessionMgr:    sessionMgr,
+		sessionsMap:   session.NewMapCache(),
 		router:        router,
 		messages:      st.Messages(),
 		sessions:      st.Sessions(),
@@ -57,26 +61,18 @@ func NewBroker(logger *slog.Logger) *Broker {
 		retained:      st.Retained(),
 		wills:         st.Wills(),
 		logger:        logger,
+		stopCh:        make(chan struct{}),
 	}
 
 	b.handler = handlers.NewBrokerHandler(handlers.BrokerHandlerConfig{
-		SessionManager: sessionMgr,
-		Router:         b, // Broker implements handlers.Router
-		Publisher:      b, // Broker implements handlers.Publisher
-		Retained:       st.Retained(),
+		Router: b, // Broker implements handlers.Router
+		// Publisher: b, // Broker implements handlers.Publisher
+		Retained: st.Retained(),
 	})
 	b.dispatcher = handlers.NewDispatcher(b.handler)
 
-	sessionMgr.SetOnWillTrigger(func(will *store.WillMessage) {
-		b.Distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
-	})
-
-	sessionMgr.SetOnSessionDestroy(func(s *session.Session) {
-		subs := s.GetSubscriptions()
-		for filter := range subs {
-			b.router.Unsubscribe(filter, s.ID)
-		}
-	})
+	b.wg.Add(1)
+	go b.expiryLoop()
 
 	return b
 }
@@ -133,7 +129,7 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 		Will:           will,
 	}
 
-	s, _, err := b.sessionMgr.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
+	s, _, err := b.GetOrCreate(clientID, 4, opts) // v3.1.1 = version 4
 	if err != nil {
 		b.logger.Error("Failed to create session",
 			slog.String("client_id", clientID),
@@ -200,7 +196,7 @@ func (b *Broker) runSession(s *session.Session) {
 
 // deliverOfflineMessages sends queued messages to reconnected client.
 func (b *Broker) deliverOfflineMessages(s *session.Session) {
-	msgs := b.sessionMgr.DrainOfflineQueue(s.ID)
+	msgs := b.DrainOfflineQueue(s.ID)
 	for _, msg := range msgs {
 		b.deliverToSession(s, msg.Topic, msg.Payload, msg.QoS, msg.Retain)
 	}
@@ -227,7 +223,7 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.
 		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
-	s := b.sessionMgr.Get(clientID)
+	s := b.Get(clientID)
 	if s != nil {
 		s.AddSubscription(filter, opts)
 
@@ -258,7 +254,7 @@ func (b *Broker) Unsubscribe(clientID string, filter string) error {
 		return fmt.Errorf("failed to remove subscription from storage: %w", err)
 	}
 
-	s := b.sessionMgr.Get(clientID)
+	s := b.Get(clientID)
 	if s != nil {
 		s.RemoveSubscription(filter)
 	}
@@ -305,7 +301,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 	matched := b.router.Match(topic)
 
 	for _, sub := range matched {
-		s := b.sessionMgr.Get(sub.SessionID)
+		s := b.Get(sub.SessionID)
 		if s == nil {
 			continue
 		}
@@ -365,5 +361,16 @@ func (b *Broker) deliverToSession(s *session.Session, topic string, payload []by
 
 // Close shuts down the broker.
 func (b *Broker) Close() error {
-	return b.sessionMgr.Close()
+	close(b.stopCh)
+	b.wg.Wait()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.sessionsMap.ForEach(func(session *session.Session) {
+		if session.IsConnected() {
+			session.Disconnect(false)
+		}
+	})
+	return nil
 }

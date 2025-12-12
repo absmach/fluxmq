@@ -308,10 +308,10 @@ func NewConnection(conn net.Conn) Connection
 ```go
 // broker/broker.go
 type Broker struct {
-    mu         sync.RWMutex
-    sessionMgr *session.Manager
-    router     *topics.Router
-    store      *store.Store
+    mu          sync.RWMutex
+    sessionsMap session.Cache
+    router      *topics.Router
+    store       *store.Store
 }
 
 func NewBroker() *Broker
@@ -415,10 +415,11 @@ type Session struct {
     // ... other state
 }
 
-// session/manager.go
-type Manager struct {
-    sessions map[string]*Session
-    mu       sync.RWMutex
+// session/cache.go
+type Cache interface {
+    Get(clientID string) *Session
+    Set(clientID string, session *Session)
+    // ...
 }
 ```
 
@@ -532,7 +533,7 @@ mqtt/
 │   └── broker.go             # Handler implementations
 ├── session/
 │   ├── session.go            # Session state
-│   ├── manager.go            # Session lifecycle
+│   ├── cache.go              # Session cache
 │   ├── inflight.go           # QoS tracking
 │   └── queue.go              # Offline queue
 ├── topics/
