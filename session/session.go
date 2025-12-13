@@ -63,6 +63,18 @@ type Session struct {
 
 	Version    byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
 	CleanStart bool
+
+	subscriptionIDs map[string][]uint32 // V5: filter -> subscription IDs
+	authMethod      string               // V5: Enhanced auth method
+	authState       interface{}          // V5: Enhanced auth state
+
+	requestResponseInfo bool // V5: Client requested response info
+	requestProblemInfo  bool // V5: Client requested problem info
+
+	maxQoS               byte // V5: Server can restrict QoS
+	retainAvailable      bool // V5: Server allows retain
+	wildcardSubAvailable bool // V5: Server allows wildcards
+	sharedSubAvailable   bool // V5: Server allows shared subs
 }
 
 // Options holds options for creating a new session.
@@ -111,6 +123,12 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		KeepAlive:      opts.KeepAlive,
 		Will:           opts.Will,
 		subscriptions:  make(map[string]store.SubscribeOptions),
+		subscriptionIDs: make(map[string][]uint32),
+		retainAvailable:      true,
+		wildcardSubAvailable: true,
+		sharedSubAvailable:   true,
+		maxQoS:               2,
+		requestProblemInfo:   true,
 	}
 
 	return s
@@ -353,4 +371,99 @@ func (s *Session) RestoreFrom(stored *store.Session) {
 	s.ReceiveMaximum = stored.ReceiveMaximum
 	s.MaxPacketSize = stored.MaxPacketSize
 	s.TopicAliasMax = stored.TopicAliasMax
+	s.requestResponseInfo = stored.RequestResponse
+	s.requestProblemInfo = stored.RequestProblem
+}
+
+// AddSubscriptionID adds a subscription ID for a filter.
+func (s *Session) AddSubscriptionID(filter string, id uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := s.subscriptionIDs[filter]
+	for _, existing := range ids {
+		if existing == id {
+			return
+		}
+	}
+	s.subscriptionIDs[filter] = append(ids, id)
+}
+
+// GetSubscriptionIDs returns subscription IDs for a filter.
+func (s *Session) GetSubscriptionIDs(filter string) []uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ids := s.subscriptionIDs[filter]
+	if len(ids) == 0 {
+		return nil
+	}
+
+	result := make([]uint32, len(ids))
+	copy(result, ids)
+	return result
+}
+
+// RemoveSubscriptionID removes subscription IDs for a filter.
+func (s *Session) RemoveSubscriptionID(filter string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptionIDs, filter)
+}
+
+// UpdateSessionExpiry updates the session expiry interval.
+func (s *Session) UpdateSessionExpiry(interval uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ExpiryInterval = interval
+}
+
+// SetAuthState sets enhanced auth state.
+func (s *Session) SetAuthState(method string, state interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authMethod = method
+	s.authState = state
+}
+
+// GetAuthState returns the enhanced auth state.
+func (s *Session) GetAuthState() (string, interface{}) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.authMethod, s.authState
+}
+
+// SetRequestResponseInfo sets whether client requested response info.
+func (s *Session) SetRequestResponseInfo(requested bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestResponseInfo = requested
+}
+
+// RequestsResponseInfo returns whether client requested response info.
+func (s *Session) RequestsResponseInfo() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.requestResponseInfo
+}
+
+// SetRequestProblemInfo sets whether client wants detailed errors.
+func (s *Session) SetRequestProblemInfo(requested bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestProblemInfo = requested
+}
+
+// RequestsProblemInfo returns whether client wants detailed errors.
+func (s *Session) RequestsProblemInfo() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.requestProblemInfo
+}
+
+// ServerCapabilities returns server capability flags.
+func (s *Session) ServerCapabilities() (maxQoS byte, retainAvailable, wildcardSubAvailable, sharedSubAvailable bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxQoS, s.retainAvailable, s.wildcardSubAvailable, s.sharedSubAvailable
 }

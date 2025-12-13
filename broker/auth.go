@@ -40,3 +40,57 @@ func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, er
 	}
 	return e.auth.Authenticate(clientID, username, password)
 }
+
+// AuthContinuation represents the state of an ongoing enhanced authentication.
+// This is used in V5.
+type AuthContinuation struct {
+	State        interface{}
+	ResponseData []byte
+	ReasonCode   byte
+	ReasonString string
+	Complete     bool
+}
+
+// AuthenticatorV5 extends Authenticator with MQTT v5 enhanced authentication.
+type AuthenticatorV5 interface {
+	Authenticator
+
+	StartAuth(clientID, authMethod string, authData []byte) (*AuthContinuation, error)
+
+	ContinueAuth(clientID string, authData []byte, state *AuthContinuation) (*AuthContinuation, error)
+
+	CompleteAuth(clientID string, state *AuthContinuation) (bool, error)
+}
+
+// DefaultAuthenticatorV5 wraps a basic Authenticator to provide v5 interface.
+type DefaultAuthenticatorV5 struct {
+	basic Authenticator
+}
+
+// NewDefaultAuthenticatorV5 wraps a basic authenticator.
+func NewDefaultAuthenticatorV5(basic Authenticator) *DefaultAuthenticatorV5 {
+	if basic == nil {
+		return nil
+	}
+	return &DefaultAuthenticatorV5{basic: basic}
+}
+
+// Authenticate delegates to the basic authenticator.
+func (a *DefaultAuthenticatorV5) Authenticate(clientID, username, password string) (bool, error) {
+	return a.basic.Authenticate(clientID, username, password)
+}
+
+// StartAuth returns error for unsupported enhanced auth.
+func (a *DefaultAuthenticatorV5) StartAuth(clientID, authMethod string, authData []byte) (*AuthContinuation, error) {
+	return nil, ErrNotAuthorized
+}
+
+// ContinueAuth returns error for unsupported enhanced auth.
+func (a *DefaultAuthenticatorV5) ContinueAuth(clientID string, authData []byte, state *AuthContinuation) (*AuthContinuation, error) {
+	return nil, ErrNotAuthorized
+}
+
+// CompleteAuth returns error for unsupported enhanced auth.
+func (a *DefaultAuthenticatorV5) CompleteAuth(clientID string, state *AuthContinuation) (bool, error) {
+	return false, ErrNotAuthorized
+}

@@ -17,6 +17,72 @@ func NewDispatcher(h Handler) *Dispatcher {
 	return &Dispatcher{handler: h}
 }
 
+// VersionAwareDispatcher routes packets to v3 or v5 handler based on session version.
+type VersionAwareDispatcher struct {
+	handlerV3 Handler
+	handlerV5 Handler
+}
+
+// NewVersionAwareDispatcher creates a new version-aware dispatcher.
+func NewVersionAwareDispatcher(v3 Handler, v5 Handler) *Dispatcher {
+	return &Dispatcher{
+		handler: &versionRouter{v3: v3, v5: v5},
+	}
+}
+
+// versionRouter implements Handler interface and routes to v3 or v5 handler.
+type versionRouter struct {
+	v3 Handler
+	v5 Handler
+}
+
+func (r *versionRouter) selectHandler(s *session.Session) Handler {
+	if s.Version == 5 {
+		return r.v5
+	}
+	return r.v3
+}
+
+func (r *versionRouter) HandleConnect(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandleConnect(s, pkt)
+}
+
+func (r *versionRouter) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandlePublish(s, pkt)
+}
+
+func (r *versionRouter) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandlePubAck(s, pkt)
+}
+
+func (r *versionRouter) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandlePubRec(s, pkt)
+}
+
+func (r *versionRouter) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandlePubRel(s, pkt)
+}
+
+func (r *versionRouter) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandlePubComp(s, pkt)
+}
+
+func (r *versionRouter) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandleSubscribe(s, pkt)
+}
+
+func (r *versionRouter) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandleUnsubscribe(s, pkt)
+}
+
+func (r *versionRouter) HandlePingReq(s *session.Session) error {
+	return r.selectHandler(s).HandlePingReq(s)
+}
+
+func (r *versionRouter) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+	return r.selectHandler(s).HandleDisconnect(s, pkt)
+}
+
 // Dispatch routes a packet to the appropriate handler method.
 func (d *Dispatcher) Dispatch(s *session.Session, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
