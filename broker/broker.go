@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -38,18 +37,13 @@ type Broker struct {
 	dispatcher *Dispatcher
 	auth       *AuthEngine
 	stats      *Stats
-	logger     *slog.Logger
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
 
 // NewBroker creates a new broker instance.
-func NewBroker(logger *slog.Logger) *Broker {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
+func NewBroker() *Broker {
 	st := memory.New()
 	router := NewRouter()
 
@@ -62,7 +56,6 @@ func NewBroker(logger *slog.Logger) *Broker {
 		retained:      st.Retained(),
 		wills:         st.Wills(),
 		stats:         NewStats(),
-		logger:        logger,
 		stopCh:        make(chan struct{}),
 	}
 
@@ -86,9 +79,6 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 	// 1. Read CONNECT packet
 	pkt, err := conn.ReadPacket()
 	if err != nil {
-		b.logger.Error("Failed to read CONNECT packet",
-			slog.String("remote_addr", conn.RemoteAddr().String()),
-			slog.String("error", err.Error()))
 		b.stats.IncrementPacketErrors()
 		conn.Close()
 		return
@@ -96,9 +86,6 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 
 	// 2. Validate it is CONNECT
 	if pkt.Type() != packets.ConnectType {
-		b.logger.Warn("Expected CONNECT packet, received different packet type",
-			slog.String("remote_addr", conn.RemoteAddr().String()),
-			slog.String("packet_type", pkt.String()))
 		b.stats.IncrementProtocolErrors()
 		conn.Close()
 		return
@@ -107,9 +94,6 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 	p3, ok := pkt.(*v3.Connect)
 	if ok {
 		if p3.ProtocolVersion != 3 && p3.ProtocolVersion != 4 {
-			b.logger.Warn("Unsupported v3 protocol version",
-				slog.String("remote_addr", conn.RemoteAddr().String()),
-				slog.Int("version", int(p3.ProtocolVersion)))
 			b.stats.IncrementProtocolErrors()
 			b.sendConnAck(conn, false, 0x01)
 			conn.Close()
@@ -122,9 +106,6 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 	p5, ok := pkt.(*v5.Connect)
 	if ok {
 		if p5.ProtocolVersion != 5 {
-			b.logger.Warn("Invalid v5 protocol version",
-				slog.String("remote_addr", conn.RemoteAddr().String()),
-				slog.Int("version", int(p5.ProtocolVersion)))
 			b.stats.IncrementProtocolErrors()
 			b.sendV5ConnAck(conn, false, 0x84)
 			conn.Close()
@@ -134,8 +115,6 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 		return
 	}
 
-	b.logger.Error("Failed to parse CONNECT packet",
-		slog.String("remote_addr", conn.RemoteAddr().String()))
 	b.stats.IncrementProtocolErrors()
 	conn.Close()
 }
@@ -149,21 +128,13 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) {
 		if cleanStart {
 			generated, err := GenerateClientID()
 			if err != nil {
-				b.logger.Error("Failed to generate client ID",
-					slog.String("remote_addr", conn.RemoteAddr().String()),
-					slog.String("error", err.Error()))
 				b.stats.IncrementProtocolErrors()
 				b.sendConnAck(conn, false, 0x02)
 				conn.Close()
 				return
 			}
 			clientID = generated
-			b.logger.Debug("Generated client ID",
-				slog.String("client_id", clientID),
-				slog.String("remote_addr", conn.RemoteAddr().String()))
 		} else {
-			b.logger.Warn("Empty client ID with clean session false",
-				slog.String("remote_addr", conn.RemoteAddr().String()))
 			b.stats.IncrementProtocolErrors()
 			b.sendConnAck(conn, false, 0x02)
 			conn.Close()
@@ -177,10 +148,6 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) {
 
 		authenticated, err := b.auth.Authenticate(clientID, username, password)
 		if err != nil {
-			b.logger.Error("Authentication error",
-				slog.String("client_id", clientID),
-				slog.String("remote_addr", conn.RemoteAddr().String()),
-				slog.String("error", err.Error()))
 			b.stats.IncrementAuthErrors()
 			b.sendConnAck(conn, false, 0x04)
 			conn.Close()
@@ -188,10 +155,6 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) {
 		}
 
 		if !authenticated {
-			b.logger.Warn("Authentication failed",
-				slog.String("client_id", clientID),
-				slog.String("username", username),
-				slog.String("remote_addr", conn.RemoteAddr().String()))
 			b.stats.IncrementAuthErrors()
 			b.sendConnAck(conn, false, 0x04)
 			conn.Close()
@@ -221,9 +184,6 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) {
 
 	s, isNew, err := b.getOrCreate(clientID, p.ProtocolVersion, opts)
 	if err != nil {
-		b.logger.Error("Failed to create session",
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
 		b.stats.IncrementProtocolErrors()
 		b.sendConnAck(conn, false, 0x03)
 		conn.Close()
@@ -231,9 +191,6 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) {
 	}
 
 	if err := s.Connect(conn); err != nil {
-		b.logger.Error("Failed to attach connection to session",
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
 		b.stats.IncrementProtocolErrors()
 		conn.Close()
 		return
@@ -241,21 +198,11 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) {
 
 	sessionPresent := !isNew && !cleanStart
 	if err := b.sendConnAck(conn, sessionPresent, 0x00); err != nil {
-		b.logger.Error("Failed to send CONNACK",
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
 		s.Disconnect(false)
 		return
 	}
 
 	b.stats.IncrementConnections()
-
-	b.logger.Info("Client connected",
-		slog.String("client_id", clientID),
-		slog.String("remote_addr", conn.RemoteAddr().String()),
-		slog.Bool("clean_start", cleanStart),
-		slog.Bool("session_present", sessionPresent),
-		slog.Uint64("keep_alive", uint64(keepAlive)))
 
 	b.deliverOfflineMessages(s)
 
@@ -271,21 +218,13 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) {
 		if cleanStart {
 			generated, err := GenerateClientID()
 			if err != nil {
-				b.logger.Error("Failed to generate client ID",
-					slog.String("remote_addr", conn.RemoteAddr().String()),
-					slog.String("error", err.Error()))
 				b.stats.IncrementProtocolErrors()
 				b.sendV5ConnAck(conn, false, 0x85)
 				conn.Close()
 				return
 			}
 			clientID = generated
-			b.logger.Debug("Generated client ID",
-				slog.String("client_id", clientID),
-				slog.String("remote_addr", conn.RemoteAddr().String()))
 		} else {
-			b.logger.Warn("Empty client ID with clean start false",
-				slog.String("remote_addr", conn.RemoteAddr().String()))
 			b.stats.IncrementProtocolErrors()
 			b.sendV5ConnAck(conn, false, 0x85)
 			conn.Close()
@@ -299,10 +238,6 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) {
 
 		authenticated, err := b.auth.Authenticate(clientID, username, password)
 		if err != nil {
-			b.logger.Error("Authentication error",
-				slog.String("client_id", clientID),
-				slog.String("remote_addr", conn.RemoteAddr().String()),
-				slog.String("error", err.Error()))
 			b.stats.IncrementAuthErrors()
 			b.sendV5ConnAck(conn, false, 0x86)
 			conn.Close()
@@ -310,10 +245,6 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) {
 		}
 
 		if !authenticated {
-			b.logger.Warn("Authentication failed",
-				slog.String("client_id", clientID),
-				slog.String("username", username),
-				slog.String("remote_addr", conn.RemoteAddr().String()))
 			b.stats.IncrementAuthErrors()
 			b.sendV5ConnAck(conn, false, 0x86)
 			conn.Close()
@@ -359,9 +290,6 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) {
 
 	s, isNew, err := b.getOrCreate(clientID, p.ProtocolVersion, opts)
 	if err != nil {
-		b.logger.Error("Failed to create session",
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
 		b.stats.IncrementProtocolErrors()
 		b.sendV5ConnAck(conn, false, 0x80)
 		conn.Close()
@@ -378,9 +306,6 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) {
 	}
 
 	if err := s.Connect(conn); err != nil {
-		b.logger.Error("Failed to attach connection to session",
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
 		b.stats.IncrementProtocolErrors()
 		conn.Close()
 		return
@@ -388,22 +313,11 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) {
 
 	sessionPresent := !isNew && !cleanStart
 	if err := b.sendV5ConnAckWithProperties(conn, s, sessionPresent, 0x00); err != nil {
-		b.logger.Error("Failed to send CONNACK",
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
 		s.Disconnect(false)
 		return
 	}
 
 	b.stats.IncrementConnections()
-
-	b.logger.Info("Client connected",
-		slog.String("client_id", clientID),
-		slog.String("remote_addr", conn.RemoteAddr().String()),
-		slog.String("version", "5.0"),
-		slog.Bool("clean_start", cleanStart),
-		slog.Bool("session_present", sessionPresent),
-		slog.Uint64("keep_alive", uint64(keepAlive)))
 
 	b.deliverOfflineMessages(s)
 
@@ -421,9 +335,6 @@ func (b *Broker) runSession(s *session.Session) {
 	if s.KeepAlive > 0 {
 		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2) // 1.5x keep-alive
 		if err := conn.SetReadDeadline(deadline); err != nil {
-			b.logger.Error("Failed to set read deadline",
-				slog.String("client_id", s.ID),
-				slog.String("error", err.Error()))
 		}
 	}
 
@@ -431,9 +342,6 @@ func (b *Broker) runSession(s *session.Session) {
 		pkt, err := s.ReadPacket()
 		if err != nil {
 			if err != io.EOF && err != session.ErrNotConnected {
-				b.logger.Error("Failed to read packet from client",
-					slog.String("client_id", s.ID),
-					slog.String("error", err.Error()))
 				b.stats.IncrementPacketErrors()
 			}
 			b.stats.DecrementConnections()
@@ -449,9 +357,6 @@ func (b *Broker) runSession(s *session.Session) {
 		if s.KeepAlive > 0 {
 			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2) // 1.5x keep-alive
 			if err := conn.SetReadDeadline(deadline); err != nil {
-				b.logger.Error("Failed to update read deadline",
-					slog.String("client_id", s.ID),
-					slog.String("error", err.Error()))
 			}
 		}
 
@@ -462,9 +367,6 @@ func (b *Broker) runSession(s *session.Session) {
 				b.stats.DecrementConnections()
 				return // Clean disconnect
 			}
-			b.logger.Error("Packet handler error",
-				slog.String("client_id", s.ID),
-				slog.String("error", err.Error()))
 			b.stats.IncrementProtocolErrors()
 			b.stats.DecrementConnections()
 			s.Disconnect(false)
