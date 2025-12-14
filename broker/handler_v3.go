@@ -75,11 +75,11 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	switch qos {
 	case 0:
 		// QoS 0: Fire and forget
-		return h.broker.HandleQoS0Publish(topic, payload, retain)
+		return h.broker.publishMessage(topic, payload, 0, retain)
 
 	case 1:
 		// QoS 1: Publish and acknowledge
-		if err := h.broker.HandleQoS1Publish(topic, payload, retain); err != nil {
+		if err := h.broker.publishMessage(topic, payload, 1, retain); err != nil {
 			return err
 		}
 		return h.sendPubAck(s, packetID)
@@ -129,7 +129,7 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	inf, ok := s.Inflight().Get(packetID)
 	if ok && inf.Message != nil {
-		h.broker.PublishQoS2Message(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
+		h.broker.publishMessage(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
 	}
 
 	s.Inflight().Ack(packetID)
@@ -182,7 +182,7 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 	p := pkt.(*v3.Unsubscribe)
 
 	for _, filter := range p.Topics {
-		h.broker.ProcessUnsubscription(s.ID, filter)
+		h.broker.Unsubscribe(s.ID, filter)
 	}
 
 	return h.sendUnsubAck(s, p.ID)

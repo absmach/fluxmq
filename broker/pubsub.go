@@ -6,16 +6,6 @@ import (
 	"github.com/dborovcanin/mqtt/store/messages"
 )
 
-// HandleQoS0Publish handles QoS 0 publish (fire and forget).
-func (b *Broker) HandleQoS0Publish(topic string, payload []byte, retain bool) error {
-	return b.publishMessage(topic, payload, 0, retain)
-}
-
-// HandleQoS1Publish handles QoS 1 publish (publish with ack).
-func (b *Broker) HandleQoS1Publish(topic string, payload []byte, retain bool) error {
-	return b.publishMessage(topic, payload, 1, retain)
-}
-
 // HandleQoS2Publish handles QoS 2 publish (exactly once).
 // For QoS 2, the actual publication happens after PUBREL is received.
 // This stores the message in the session's inflight tracker.
@@ -36,11 +26,6 @@ func (b *Broker) HandleQoS2Publish(s *session.Session, topic string, payload []b
 	return s.Inflight().Add(packetID, msg, messages.Inbound)
 }
 
-// PublishQoS2Message publishes a QoS 2 message after PUBREL is received.
-func (b *Broker) PublishQoS2Message(topic string, payload []byte, qos byte, retain bool) error {
-	return b.publishMessage(topic, payload, qos, retain)
-}
-
 // publishMessage publishes a message to all matching subscribers.
 func (b *Broker) publishMessage(topic string, payload []byte, qos byte, retain bool) error {
 	if retain {
@@ -52,11 +37,11 @@ func (b *Broker) publishMessage(topic string, payload []byte, qos byte, retain b
 		}
 		if len(payload) == 0 {
 			if err := b.retained.Delete(topic); err != nil {
-				// b.logger.Error("Failed to delete retained message", "topic", topic, "error", err)
+				return err
 			}
 		} else {
 			if err := b.retained.Set(topic, msg); err != nil {
-				// b.logger.Error("Failed to set retained message", "topic", topic, "error", err)
+				return err
 			}
 		}
 	}
@@ -102,8 +87,4 @@ func (b *Broker) SendRetainedMessages(filter string, maxQoS byte, deliver func(m
 	}
 
 	return nil
-}
-
-func (b *Broker) ProcessUnsubscription(clientID string, filter string) error {
-	return b.Unsubscribe(clientID, filter)
 }

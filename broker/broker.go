@@ -35,8 +35,6 @@ type Broker struct {
 	retained      store.RetainedStore
 	wills         store.WillStore
 
-	handlerV3  Handler
-	handlerV5  Handler
 	dispatcher *Dispatcher
 	auth       *AuthEngine
 	stats      *Stats
@@ -68,13 +66,13 @@ func NewBroker(logger *slog.Logger) *Broker {
 		stopCh:        make(chan struct{}),
 	}
 
-	b.handlerV3 = NewV3Handler(V3HandlerConfig{
+	handlerV3 := NewV3Handler(V3HandlerConfig{
 		Broker: b,
 	})
-	b.handlerV5 = NewV5Handler(V5HandlerConfig{
+	handlerV5 := NewV5Handler(V5HandlerConfig{
 		Broker: b,
 	})
-	b.dispatcher = NewVersionAwareDispatcher(b.handlerV3, b.handlerV5)
+	b.dispatcher = NewVersionAwareDispatcher(handlerV3, handlerV5)
 	b.wg.Add(2)
 	go b.expiryLoop()
 	go b.statsLoop()

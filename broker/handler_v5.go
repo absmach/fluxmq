@@ -93,10 +93,10 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
-		return h.broker.HandleQoS0Publish(topic, payload, retain)
+		return h.broker.publishMessage(topic, payload, 0, retain)
 
 	case 1:
-		if err := h.broker.HandleQoS1Publish(topic, payload, retain); err != nil {
+		if err := h.broker.publishMessage(topic, payload, 1, retain); err != nil {
 			return h.sendPubAck(s, packetID, 0x80, "Unspecified error")
 		}
 		return h.sendPubAck(s, packetID, 0x00, "")
@@ -143,7 +143,7 @@ func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	inf, ok := s.Inflight().Get(packetID)
 	if ok && inf.Message != nil {
-		h.broker.PublishQoS2Message(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
+		h.broker.publishMessage(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
 	}
 
 	s.Inflight().Ack(packetID)
@@ -207,14 +207,12 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			s.AddSubscriptionID(topic, *subscriptionID)
 		}
 
-		shouldSendRetained := true
-		if opt.RetainHandling != nil {
-			if *opt.RetainHandling == 2 {
-				shouldSendRetained = false
-			}
+		sendRetained := true
+		if opt.RetainHandling != nil && *opt.RetainHandling == 2 {
+			sendRetained = false
 		}
 
-		if shouldSendRetained {
+		if sendRetained {
 			h.broker.SendRetainedMessages(topic, qos, func(msg *store.Message) error {
 				return h.deliverMessage(s, msg.Topic, msg.Payload, msg.QoS, true, nil, nil)
 			})
@@ -232,7 +230,7 @@ func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, filter := range p.Topics {
-		h.broker.ProcessUnsubscription(s.ID, filter)
+		h.broker.Unsubscribe(s.ID, filter)
 		s.RemoveSubscriptionID(filter)
 		reasonCodes[i] = 0x00
 	}
@@ -260,9 +258,7 @@ func (h *V5Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 }
 
 // deliverMessage delivers a message to a session.
-func (h *V5Handler) deliverMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool,
-	props *v5.PublishProperties, subscriptionIDs []uint32) error {
-
+func (h *V5Handler) deliverMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool, props *v5.PublishProperties, subscriptionIDs []uint32) error {
 	if !s.IsConnected() {
 		msg := &store.Message{
 			Topic:   topic,
@@ -308,23 +304,6 @@ func (h *V5Handler) deliverMessage(s *session.Session, topic string, payload []b
 	}
 
 	return s.WritePacket(pub)
-}
-
-// buildMessage builds a store.Message from v5 publish properties.
-func (h *V5Handler) buildMessage(topic string, payload []byte, qos byte, retain bool, props *v5.PublishProperties) *store.Message {
-	msg := &store.Message{
-		Topic:       topic,
-		Payload:     payload,
-		QoS:         qos,
-		Retain:      retain,
-		PublishTime: time.Now(),
-	}
-
-	if props != nil {
-		h.populateMessageProperties(msg, props)
-	}
-
-	return msg
 }
 
 // populateMessageProperties populates store.Message from v5.PublishProperties.
