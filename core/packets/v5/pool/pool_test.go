@@ -3,7 +3,7 @@ package pool
 import (
 	"testing"
 
-	v5 "github.com/dborovcanin/mqtt/packets/v5"
+	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
 )
 
 func TestPublishPoolAcquireRelease(t *testing.T) {
