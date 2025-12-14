@@ -505,7 +505,6 @@ func (b *Broker) sendV5ConnAck(conn core.Connection, sessionPresent bool, reason
 func (b *Broker) sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte) error {
 	receiveMax := uint16(65535)
 	topicAliasMax := s.TopicAliasMax
-	maxQoS := byte(2)
 	retainAvailable := byte(1)
 	wildcardSubAvailable := byte(1)
 	subIDAvailable := byte(1)
@@ -517,7 +516,6 @@ func (b *Broker) sendV5ConnAckWithProperties(conn core.Connection, s *session.Se
 		Properties: &v5.ConnAckProperties{
 			ReceiveMax:           &receiveMax,
 			TopicAliasMax:        &topicAliasMax,
-			MaxQoS:               &maxQoS,
 			RetainAvailable:      &retainAvailable,
 			WildcardSubAvailable: &wildcardSubAvailable,
 			SubIDAvailable:       &subIDAvailable,

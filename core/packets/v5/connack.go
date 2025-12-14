@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mqtt/codec"
+	codec "github.com/dborovcanin/mqtt/core/codec"
 	"github.com/dborovcanin/mqtt/core/packets"
 )
 
@@ -261,7 +261,7 @@ func (p *ConnAckProperties) Encode() []byte {
 	}
 	if len(p.AuthData) > 0 {
 		ret = append(ret, AuthDataProp)
-		ret = append(ret, p.AuthData...)
+		ret = append(ret, codec.EncodeBytes(p.AuthData)...)
 	}
 
 	return ret

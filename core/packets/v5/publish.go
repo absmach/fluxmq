@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mqtt/codec"
+	codec "github.com/dborovcanin/mqtt/core/codec"
 	"github.com/dborovcanin/mqtt/core/packets"
 )
 

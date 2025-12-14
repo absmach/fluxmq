@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dborovcanin/mqtt/codec"
+	"github.com/dborovcanin/mqtt/core/codec"
 )
 
 // ErrFailRemaining indicates remaining data does not match the size of sent data.

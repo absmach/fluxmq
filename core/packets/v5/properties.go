@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dborovcanin/mqtt/codec"
+	"github.com/dborovcanin/mqtt/core/codec"
 )
 
 // PropPayloadFormat, etc are the list of property codes for the
