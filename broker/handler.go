@@ -3,6 +3,7 @@ package broker
 import (
 	"errors"
 
+	"github.com/dborovcanin/mqtt/core"
 	"github.com/dborovcanin/mqtt/core/packets"
 	"github.com/dborovcanin/mqtt/session"
 	"github.com/dborovcanin/mqtt/store"
@@ -14,16 +15,19 @@ var (
 	ErrNotAuthorized     = errors.New("not authorized")
 	ErrBadUserOrPassword = errors.New("bad username or password")
 	ErrClientIDRejected  = errors.New("client identifier rejected")
+	ErrClientIDRequired  = errors.New("client identifier required")
 	ErrServerUnavailable = errors.New("server unavailable")
 	ErrTopicInvalid      = errors.New("topic name invalid")
 	ErrPacketTooLarge    = errors.New("packet too large")
 	ErrQuotaExceeded     = errors.New("quota exceeded")
+	ErrInvalidPacketType = errors.New("invalid packet type")
+	ErrSessionNotFound   = errors.New("session not found")
 )
 
 // Handler is the interface for packet handlers (V3, V5, etc).
 type Handler interface {
 	// HandleConnect handles CONNECT packets.
-	HandleConnect(s *session.Session, pkt packets.ControlPacket) error
+	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
 
 	// HandlePublish handles PUBLISH packets.
 	HandlePublish(s *session.Session, pkt packets.ControlPacket) error
@@ -81,4 +85,14 @@ type RetainedStore interface {
 	Set(topic string, msg *store.Message) error
 	Get(topic string) (*store.Message, error)
 	Match(filter string) ([]*store.Message, error)
+}
+
+// Service defines the broker service interface for middleware wrapping.
+type Service interface {
+	HandleConnection(conn core.Connection)
+	Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error
+	Unsubscribe(clientID string, filter string) error
+	Match(topic string) ([]*store.Subscription, error)
+	Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error
+	Close() error
 }

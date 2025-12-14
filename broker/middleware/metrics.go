@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"time"
 
 	"github.com/dborovcanin/mqtt/broker"
@@ -68,24 +67,9 @@ func (mm *metricsMiddleware) Distribute(topic string, payload []byte, qos byte, 
 	return mm.svc.Distribute(topic, payload, qos, retain, props)
 }
 
-// Publish wraps the call with publish metrics.
-func (mm *metricsMiddleware) Publish(ctx context.Context, clientID string, topic string, payload []byte, qos byte, retain bool) error {
-	defer func(begin time.Time) {
-		mm.stats.IncrementPublishReceived()
-		mm.stats.AddBytesReceived(uint64(len(payload)))
-	}(time.Now())
-
-	return mm.svc.Publish(ctx, clientID, topic, payload, qos, retain)
-}
-
 // Stats returns the broker statistics.
 func (mm *metricsMiddleware) Stats() *broker.Stats {
 	return mm.stats
-}
-
-// SetAuth sets the authentication and authorization engine.
-func (mm *metricsMiddleware) SetAuth(auth *broker.AuthEngine) {
-	mm.svc.SetAuth(auth)
 }
 
 // Close shuts down the broker.

@@ -1,8 +1,10 @@
 package broker
 
 import (
+	"io"
 	"time"
 
+	"github.com/dborovcanin/mqtt/core"
 	"github.com/dborovcanin/mqtt/core/packets"
 	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
 	"github.com/dborovcanin/mqtt/session"
@@ -14,76 +16,216 @@ import (
 type V5Handler struct {
 	broker *Broker
 	auth   *AuthEngine
-
-	retryInterval time.Duration
-	maxRetries    int
-}
-
-// V5HandlerConfig holds configuration for the v5 handler.
-type V5HandlerConfig struct {
-	Broker        *Broker
-	Authenticator Authenticator
-	Authorizer    Authorizer
-	RetryInterval time.Duration
-	MaxRetries    int
 }
 
 // NewV5Handler creates a new v5 handler.
-func NewV5Handler(cfg V5HandlerConfig) *V5Handler {
-	if cfg.RetryInterval == 0 {
-		cfg.RetryInterval = 20 * time.Second
-	}
-	if cfg.MaxRetries == 0 {
-		cfg.MaxRetries = 3
-	}
-
+func NewV5Handler(broker *Broker, auth *AuthEngine) *V5Handler {
 	return &V5Handler{
-		broker:        cfg.Broker,
-		auth:          NewAuthEngine(cfg.Authenticator, cfg.Authorizer),
-		retryInterval: cfg.RetryInterval,
-		maxRetries:    cfg.MaxRetries,
+		broker: broker,
+		auth:   auth,
 	}
 }
 
-// HandleConnect handles CONNECT packets for v5.
-func (h *V5Handler) HandleConnect(s *session.Session, pkt packets.ControlPacket) error {
-	return nil
+// HandleConnect handles CONNECT packets and sets up the session.
+func (h *V5Handler) HandleConnect(conn core.Connection, p *v5.Connect) error {
+	clientID := p.ClientID
+	cleanStart := p.CleanStart
+
+	if clientID == "" {
+		if cleanStart {
+			generated, err := GenerateClientID()
+			if err != nil {
+				h.broker.stats.IncrementProtocolErrors()
+				h.sendConnAck(conn, false, 0x85, nil)
+				conn.Close()
+				return err
+			}
+			clientID = generated
+		} else {
+			h.broker.stats.IncrementProtocolErrors()
+			h.sendConnAck(conn, false, 0x85, nil)
+			conn.Close()
+			return ErrClientIDRequired
+		}
+	}
+
+	if h.auth != nil {
+		username := p.Username
+		password := string(p.Password)
+
+		authenticated, err := h.auth.Authenticate(clientID, username, password)
+		if err != nil || !authenticated {
+			h.broker.stats.IncrementAuthErrors()
+			h.sendConnAck(conn, false, 0x86, nil)
+			conn.Close()
+			return ErrNotAuthorized
+		}
+	}
+
+	var willMsg *Message
+	if p.WillFlag {
+		willMsg = &Message{
+			Topic:   p.WillTopic,
+			Payload: p.WillPayload,
+			QoS:     p.WillQoS,
+			Retain:  p.WillRetain,
+		}
+	}
+
+	receiveMax := uint16(65535)
+	topicAliasMax := uint16(10)
+	sessionExpiry := uint32(0)
+
+	if p.Properties != nil {
+		if p.Properties.ReceiveMaximum != nil {
+			receiveMax = *p.Properties.ReceiveMaximum
+		}
+		if p.Properties.TopicAliasMaximum != nil {
+			topicAliasMax = *p.Properties.TopicAliasMaximum
+		}
+		if p.Properties.SessionExpiryInterval != nil {
+			sessionExpiry = *p.Properties.SessionExpiryInterval
+		}
+	}
+
+	opts := SessionOptions{
+		CleanStart:     cleanStart,
+		KeepAlive:      p.KeepAlive,
+		ReceiveMaximum: receiveMax,
+		SessionExpiry:  sessionExpiry,
+		WillMessage:    willMsg,
+	}
+
+	sess, isNew, err := h.broker.CreateSession(clientID, opts)
+	if err != nil {
+		h.broker.stats.IncrementProtocolErrors()
+		h.sendConnAck(conn, false, 0x80, nil)
+		conn.Close()
+		return err
+	}
+
+	sess.Version = p.ProtocolVersion
+	sess.KeepAlive = time.Duration(p.KeepAlive) * time.Second
+	sess.TopicAliasMax = topicAliasMax
+
+	if err := sess.Connect(conn); err != nil {
+		h.broker.stats.IncrementProtocolErrors()
+		conn.Close()
+		return err
+	}
+
+	sessionPresent := !isNew && !cleanStart
+	if err := h.sendConnAckWithProperties(conn, sess, sessionPresent, 0x00); err != nil {
+		sess.Disconnect(false)
+		return err
+	}
+
+	h.broker.stats.IncrementConnections()
+
+	h.deliverOfflineMessages(sess)
+
+	return h.runSession(sess)
 }
 
-// HandlePublish handles PUBLISH packets for v5.
-func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+// runSession runs the main packet loop for a session.
+func (h *V5Handler) runSession(s *session.Session) error {
+	conn := s.Conn()
+	if conn == nil {
+		return nil
+	}
+
+	if s.KeepAlive > 0 {
+		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
+		conn.SetReadDeadline(deadline)
+	}
+
+	for {
+		pkt, err := s.ReadPacket()
+		if err != nil {
+			if err != io.EOF && err != session.ErrNotConnected {
+				h.broker.stats.IncrementPacketErrors()
+			}
+			h.broker.stats.DecrementConnections()
+			s.Disconnect(false)
+			return err
+		}
+
+		if s.KeepAlive > 0 {
+			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
+			conn.SetReadDeadline(deadline)
+		}
+
+		h.broker.stats.IncrementMessagesReceived()
+
+		if err := h.handlePacket(s, pkt); err != nil {
+			if err == io.EOF {
+				h.broker.stats.DecrementConnections()
+				return nil
+			}
+			h.broker.stats.IncrementProtocolErrors()
+			h.broker.stats.DecrementConnections()
+			s.Disconnect(false)
+			return err
+		}
+	}
+}
+
+// handlePacket dispatches a packet to the appropriate handler.
+func (h *V5Handler) handlePacket(s *session.Session, pkt packets.ControlPacket) error {
 	s.Touch()
 
-	p := pkt.(*v5.Publish)
+	switch p := pkt.(type) {
+	case *v5.Publish:
+		return h.handlePublish(s, p)
+	case *v5.PubAck:
+		return h.handlePubAck(s, p)
+	case *v5.PubRec:
+		return h.handlePubRec(s, p)
+	case *v5.PubRel:
+		return h.handlePubRel(s, p)
+	case *v5.PubComp:
+		return h.handlePubComp(s, p)
+	case *v5.Subscribe:
+		return h.handleSubscribe(s, p)
+	case *v5.Unsubscribe:
+		return h.handleUnsubscribe(s, p)
+	case *v5.PingReq:
+		return h.handlePingReq(s)
+	case *v5.Disconnect:
+		return h.handleDisconnect(s, p)
+	case *v5.Auth:
+		return h.handleAuth(s, p)
+	default:
+		return ErrInvalidPacketType
+	}
+}
+
+// handlePublish handles PUBLISH packets.
+func (h *V5Handler) handlePublish(s *session.Session, p *v5.Publish) error {
 	topic := p.TopicName
 	payload := p.Payload
 	qos := p.FixedHeader.QoS
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
-	props := p.Properties
 
-	if props != nil && props.TopicAlias != nil {
-		alias := *props.TopicAlias
-
+	if p.Properties != nil && p.Properties.TopicAlias != nil {
+		alias := *p.Properties.TopicAlias
 		if alias > s.TopicAliasMax {
 			return h.sendPubAck(s, packetID, 0x94, "Topic alias invalid")
 		}
-
 		if topic == "" {
 			resolvedTopic, ok := s.ResolveInboundAlias(alias)
 			if !ok {
-				return h.sendPubAck(s, packetID, 0x82, "Protocol error: topic alias not established")
+				return h.sendPubAck(s, packetID, 0x82, "Topic alias not established")
 			}
 			topic = resolvedTopic
 		} else {
 			s.SetInboundAlias(alias, topic)
 		}
-	} else if topic == "" {
-		return h.sendPubAck(s, packetID, 0x82, "Protocol error: empty topic without alias")
 	}
 
-	if !h.auth.CanPublish(s.ID, topic) {
+	if h.auth != nil && !h.auth.CanPublish(s.ID, topic) {
 		h.broker.stats.IncrementAuthzErrors()
 		return h.sendPubAck(s, packetID, 0x87, "Not authorized")
 	}
@@ -93,10 +235,22 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
-		return h.broker.publishMessage(topic, payload, 0, retain)
+		msg := Message{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     qos,
+			Retain:  retain,
+		}
+		return h.broker.Publish(s, msg)
 
 	case 1:
-		if err := h.broker.publishMessage(topic, payload, 1, retain); err != nil {
+		msg := Message{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     qos,
+			Retain:  retain,
+		}
+		if err := h.broker.Publish(s, msg); err != nil {
 			return h.sendPubAck(s, packetID, 0x80, "Unspecified error")
 		}
 		return h.sendPubAck(s, packetID, 0x00, "")
@@ -106,8 +260,17 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			return h.sendPubRec(s, packetID, 0x00, "")
 		}
 
-		if err := h.broker.HandleQoS2Publish(s, topic, payload, retain, packetID, dup); err != nil {
-			return h.sendPubRec(s, packetID, 0x80, "Unspecified error")
+		s.Inflight().MarkReceived(packetID)
+
+		storeMsg := &store.Message{
+			Topic:    topic,
+			Payload:  payload,
+			QoS:      2,
+			Retain:   retain,
+			PacketID: packetID,
+		}
+		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
+			return err
 		}
 
 		return h.sendPubRec(s, packetID, 0x00, "")
@@ -116,250 +279,292 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	return nil
 }
 
-// HandlePubAck handles PUBACK packets (QoS 1 acknowledgment from client).
-func (h *V5Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v5.PubAck)
-	s.Inflight().Ack(p.ID)
-	return nil
+// handlePubAck handles PUBACK packets.
+func (h *V5Handler) handlePubAck(s *session.Session, p *v5.PubAck) error {
+	return h.broker.AckMessage(s, p.ID)
 }
 
-// HandlePubRec handles PUBREC packets (QoS 2 step 1 from client).
-func (h *V5Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v5.PubRec)
+// handlePubRec handles PUBREC packets.
+func (h *V5Handler) handlePubRec(s *session.Session, p *v5.PubRec) error {
 	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
 	return h.sendPubRel(s, p.ID, 0x00, "")
 }
 
-// HandlePubRel handles PUBREL packets (QoS 2 step 2 from client).
-func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v5.PubRel)
+// handlePubRel handles PUBREL packets.
+func (h *V5Handler) handlePubRel(s *session.Session, p *v5.PubRel) error {
 	packetID := p.ID
 
 	inf, ok := s.Inflight().Get(packetID)
 	if ok && inf.Message != nil {
-		h.broker.publishMessage(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
+		msg := Message{
+			Topic:   inf.Message.Topic,
+			Payload: inf.Message.Payload,
+			QoS:     inf.Message.QoS,
+			Retain:  inf.Message.Retain,
+		}
+		h.broker.Publish(s, msg)
 	}
 
-	s.Inflight().Ack(packetID)
+	h.broker.AckMessage(s, packetID)
 	s.Inflight().ClearReceived(packetID)
 
 	return h.sendPubComp(s, packetID, 0x00, "")
 }
 
-// HandlePubComp handles PUBCOMP packets (QoS 2 step 3 from client).
-func (h *V5Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v5.PubComp)
-	s.Inflight().Ack(p.ID)
-	return nil
+// handlePubComp handles PUBCOMP packets.
+func (h *V5Handler) handlePubComp(s *session.Session, p *v5.PubComp) error {
+	return h.broker.AckMessage(s, p.ID)
 }
 
-// HandleSubscribe handles SUBSCRIBE packets for v5.
-func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v5.Subscribe)
+// handleSubscribe handles SUBSCRIBE packets.
+func (h *V5Handler) handleSubscribe(s *session.Session, p *v5.Subscribe) error {
 	packetID := p.ID
 
-	var subscriptionID *uint32
-	if p.Properties != nil && p.Properties.SubscriptionIdentifier != nil {
-		id := uint32(*p.Properties.SubscriptionIdentifier)
-		subscriptionID = &id
-	}
-
 	reasonCodes := make([]byte, len(p.Opts))
-	for i, opt := range p.Opts {
-		topic := opt.Topic
-		qos := opt.MaxQoS
-
-		if !h.auth.CanSubscribe(s.ID, topic) {
+	for i, t := range p.Opts {
+		if h.auth != nil && !h.auth.CanSubscribe(s.ID, t.Topic) {
 			h.broker.stats.IncrementAuthzErrors()
 			reasonCodes[i] = 0x87
 			continue
 		}
 
-		opts := store.SubscribeOptions{}
-		if opt.NoLocal != nil {
-			opts.NoLocal = *opt.NoLocal
+		noLocal := false
+		retainAsPublished := false
+		retainHandling := byte(0)
+
+		if t.NoLocal != nil {
+			noLocal = *t.NoLocal
 		}
-		if opt.RetainAsPublished != nil {
-			opts.RetainAsPublished = *opt.RetainAsPublished
+		if t.RetainAsPublished != nil {
+			retainAsPublished = *t.RetainAsPublished
 		}
-		if opt.RetainHandling != nil {
-			opts.RetainHandling = *opt.RetainHandling
+		if t.RetainHandling != nil {
+			retainHandling = *t.RetainHandling
 		}
 
-		reasonCodes[i] = h.broker.ProcessSubscription(s.ID, topic, qos)
-		if reasonCodes[i] == 0x80 {
+		opts := SubscriptionOptions{
+			QoS:               t.MaxQoS,
+			NoLocal:           noLocal,
+			RetainAsPublished: retainAsPublished,
+			RetainHandling:    retainHandling,
+		}
+
+		if err := h.broker.subscribeInternal(s, t.Topic, opts); err != nil {
+			reasonCodes[i] = 0x80
 			continue
 		}
 
-		s.AddSubscription(topic, opts)
+		reasonCodes[i] = t.MaxQoS
+		h.broker.stats.IncrementSubscriptions()
 
-		if subscriptionID != nil {
-			s.AddSubscriptionID(topic, *subscriptionID)
-		}
-
-		sendRetained := true
-		if opt.RetainHandling != nil && *opt.RetainHandling == 2 {
-			sendRetained = false
-		}
-
-		if sendRetained {
-			h.broker.SendRetainedMessages(topic, qos, func(msg *store.Message) error {
-				return h.deliverMessage(s, msg.Topic, msg.Payload, msg.QoS, true, nil, nil)
-			})
+		retained, err := h.broker.retained.Match(t.Topic)
+		if err == nil {
+			for _, msg := range retained {
+				deliverQoS := msg.QoS
+				if t.MaxQoS < deliverQoS {
+					deliverQoS = t.MaxQoS
+				}
+				deliverMsg := Message{
+					Topic:   msg.Topic,
+					Payload: msg.Payload,
+					QoS:     deliverQoS,
+					Retain:  true,
+				}
+				h.broker.DeliverToSession(s, deliverMsg)
+			}
 		}
 	}
 
 	return h.sendSubAck(s, packetID, reasonCodes)
 }
 
-// HandleUnsubscribe handles UNSUBSCRIBE packets for v5.
-func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v5.Unsubscribe)
-
+// handleUnsubscribe handles UNSUBSCRIBE packets.
+func (h *V5Handler) handleUnsubscribe(s *session.Session, p *v5.Unsubscribe) error {
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, filter := range p.Topics {
-		h.broker.Unsubscribe(s.ID, filter)
-		s.RemoveSubscriptionID(filter)
-		reasonCodes[i] = 0x00
+		if err := h.broker.unsubscribeInternal(s, filter); err != nil {
+			reasonCodes[i] = 0x80
+		} else {
+			reasonCodes[i] = 0x00
+			h.broker.stats.DecrementSubscriptions()
+		}
 	}
 
 	return h.sendUnsubAck(s, p.ID, reasonCodes)
 }
 
-// HandlePingReq handles PINGREQ packets for v5.
-func (h *V5Handler) HandlePingReq(s *session.Session) error {
-	s.Touch()
+// handlePingReq handles PINGREQ packets.
+func (h *V5Handler) handlePingReq(s *session.Session) error {
 	return h.sendPingResp(s)
 }
 
-// HandleDisconnect handles DISCONNECT packets for v5.
-func (h *V5Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
-	p := pkt.(*v5.Disconnect)
+// handleDisconnect handles DISCONNECT packets.
+func (h *V5Handler) handleDisconnect(s *session.Session, p *v5.Disconnect) error {
+	s.Disconnect(true)
+	return io.EOF
+}
 
-	if p.Properties != nil && p.Properties.SessionExpiryInterval != nil {
-		s.UpdateSessionExpiry(*p.Properties.SessionExpiryInterval)
-	}
-
-	graceful := p.ReasonCode == 0x00
-	s.Disconnect(graceful)
+// handleAuth handles AUTH packets.
+func (h *V5Handler) handleAuth(s *session.Session, p *v5.Auth) error {
 	return nil
 }
 
-// deliverMessage delivers a message to a session.
-func (h *V5Handler) deliverMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool, props *v5.PublishProperties, subscriptionIDs []uint32) error {
-	if !s.IsConnected() {
-		msg := &store.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
-		}
-		if props != nil {
-			h.populateMessageProperties(msg, props)
-		}
-		return s.OfflineQueue().Enqueue(msg)
-	}
-
+// DeliverMessage implements MessageDeliverer for V5 protocol.
+func (h *V5Handler) DeliverMessage(sess *session.Session, msg Message) error {
 	pub := &v5.Publish{
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.PublishType,
-			QoS:        qos,
-			Retain:     retain,
+			QoS:        msg.QoS,
+			Retain:     msg.Retain,
 		},
-		TopicName:  topic,
-		Payload:    payload,
+		TopicName:  msg.Topic,
+		Payload:    msg.Payload,
+		ID:         msg.PacketID,
 		Properties: &v5.PublishProperties{},
 	}
 
-	if props != nil {
-		pub.Properties = h.copyPublishProperties(props)
+	if err := sess.WritePacket(pub); err != nil {
+		return err
 	}
 
-	if len(subscriptionIDs) > 0 {
-		id := int(subscriptionIDs[0])
-		pub.Properties.SubscriptionID = &id
-	}
+	h.broker.stats.IncrementPublishSent()
+	h.broker.stats.AddBytesSent(uint64(len(msg.Payload)))
 
-	if qos > 0 {
-		pub.ID = s.NextPacketID()
-		msg := &store.Message{
-			Topic:    topic,
-			Payload:  payload,
-			QoS:      qos,
-			PacketID: pub.ID,
+	return nil
+}
+
+// --- Handler Interface Implementations ---
+
+// HandlePublish implements Handler.HandlePublish.
+func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.Publish)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePublish(s, p)
+}
+
+// HandlePubAck implements Handler.HandlePubAck.
+func (h *V5Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.PubAck)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubAck(s, p)
+}
+
+// HandlePubRec implements Handler.HandlePubRec.
+func (h *V5Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.PubRec)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubRec(s, p)
+}
+
+// HandlePubRel implements Handler.HandlePubRel.
+func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.PubRel)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubRel(s, p)
+}
+
+// HandlePubComp implements Handler.HandlePubComp.
+func (h *V5Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.PubComp)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubComp(s, p)
+}
+
+// HandleSubscribe implements Handler.HandleSubscribe.
+func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.Subscribe)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handleSubscribe(s, p)
+}
+
+// HandleUnsubscribe implements Handler.HandleUnsubscribe.
+func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.Unsubscribe)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handleUnsubscribe(s, p)
+}
+
+// HandlePingReq implements Handler.HandlePingReq.
+func (h *V5Handler) HandlePingReq(s *session.Session) error {
+	return h.handlePingReq(s)
+}
+
+// HandleDisconnect implements Handler.HandleDisconnect.
+func (h *V5Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v5.Disconnect)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handleDisconnect(s, p)
+}
+
+// deliverOfflineMessages sends queued messages to reconnected client.
+func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
+	msgs := s.OfflineQueue().Drain()
+	for _, msg := range msgs {
+		deliverMsg := Message{
+			Topic:   msg.Topic,
+			Payload: msg.Payload,
+			QoS:     msg.QoS,
+			Retain:  msg.Retain,
 		}
-		s.Inflight().Add(pub.ID, msg, messages.Outbound)
-	}
-
-	return s.WritePacket(pub)
-}
-
-// populateMessageProperties populates store.Message from v5.PublishProperties.
-func (h *V5Handler) populateMessageProperties(msg *store.Message, props *v5.PublishProperties) {
-	if props.MessageExpiry != nil {
-		msg.MessageExpiry = props.MessageExpiry
-	}
-	if props.PayloadFormat != nil {
-		msg.PayloadFormat = props.PayloadFormat
-	}
-	if props.ContentType != "" {
-		msg.ContentType = props.ContentType
-	}
-	if props.ResponseTopic != "" {
-		msg.ResponseTopic = props.ResponseTopic
-	}
-	if len(props.CorrelationData) > 0 {
-		msg.CorrelationData = make([]byte, len(props.CorrelationData))
-		copy(msg.CorrelationData, props.CorrelationData)
-	}
-	if len(props.User) > 0 {
-		msg.UserProperties = make(map[string]string, len(props.User))
-		for _, u := range props.User {
-			msg.UserProperties[u.Key] = u.Value
-		}
+		h.broker.DeliverToSession(s, deliverMsg)
 	}
 }
 
-// copyPublishProperties creates a copy of v5.PublishProperties.
-func (h *V5Handler) copyPublishProperties(props *v5.PublishProperties) *v5.PublishProperties {
-	cp := &v5.PublishProperties{
-		ContentType:   props.ContentType,
-		ResponseTopic: props.ResponseTopic,
-	}
+// --- Response packet senders ---
 
-	if props.PayloadFormat != nil {
-		pf := *props.PayloadFormat
-		cp.PayloadFormat = &pf
+func (h *V5Handler) sendConnAck(conn core.Connection, sessionPresent bool, reasonCode byte, props *v5.ConnAckProperties) error {
+	if props == nil {
+		props = &v5.ConnAckProperties{}
 	}
-	if props.MessageExpiry != nil {
-		me := *props.MessageExpiry
-		cp.MessageExpiry = &me
+	ack := &v5.ConnAck{
+		FixedHeader:    packets.FixedHeader{PacketType: packets.ConnAckType},
+		SessionPresent: sessionPresent,
+		ReasonCode:     reasonCode,
+		Properties:     props,
 	}
-	if len(props.CorrelationData) > 0 {
-		cp.CorrelationData = make([]byte, len(props.CorrelationData))
-		copy(cp.CorrelationData, props.CorrelationData)
-	}
-	if len(props.User) > 0 {
-		cp.User = make([]v5.User, len(props.User))
-		copy(cp.User, props.User)
-	}
-
-	return cp
+	return conn.WritePacket(ack)
 }
 
-// Response packet senders
+func (h *V5Handler) sendConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte) error {
+	receiveMax := uint16(65535)
+	topicAliasMax := s.TopicAliasMax
+	retainAvailable := byte(1)
+	wildcardSubAvailable := byte(1)
+	subIDAvailable := byte(1)
+
+	props := &v5.ConnAckProperties{
+		ReceiveMax:           &receiveMax,
+		TopicAliasMax:        &topicAliasMax,
+		RetainAvailable:      &retainAvailable,
+		WildcardSubAvailable: &wildcardSubAvailable,
+		SubIDAvailable:       &subIDAvailable,
+	}
+
+	ack := &v5.ConnAck{
+		FixedHeader:    packets.FixedHeader{PacketType: packets.ConnAckType},
+		SessionPresent: sessionPresent,
+		ReasonCode:     reasonCode,
+		Properties:     props,
+	}
+
+	return conn.WritePacket(ack)
+}
 
 func (h *V5Handler) sendPubAck(s *session.Session, packetID uint16, reasonCode byte, reasonString string) error {
 	rc := reasonCode
@@ -369,11 +574,6 @@ func (h *V5Handler) sendPubAck(s *session.Session, packetID uint16, reasonCode b
 		ReasonCode:  &rc,
 		Properties:  &v5.BasicProperties{},
 	}
-
-	if reasonCode != 0x00 && s.RequestsProblemInfo() && reasonString != "" {
-		ack.Properties.ReasonString = reasonString
-	}
-
 	return s.WritePacket(ack)
 }
 
@@ -385,11 +585,6 @@ func (h *V5Handler) sendPubRec(s *session.Session, packetID uint16, reasonCode b
 		ReasonCode:  &rc,
 		Properties:  &v5.BasicProperties{},
 	}
-
-	if reasonCode != 0x00 && s.RequestsProblemInfo() && reasonString != "" {
-		rec.Properties.ReasonString = reasonString
-	}
-
 	return s.WritePacket(rec)
 }
 
@@ -401,11 +596,6 @@ func (h *V5Handler) sendPubRel(s *session.Session, packetID uint16, reasonCode b
 		ReasonCode:  &rc,
 		Properties:  &v5.BasicProperties{},
 	}
-
-	if reasonCode != 0x00 && s.RequestsProblemInfo() && reasonString != "" {
-		rel.Properties.ReasonString = reasonString
-	}
-
 	return s.WritePacket(rel)
 }
 
@@ -417,19 +607,14 @@ func (h *V5Handler) sendPubComp(s *session.Session, packetID uint16, reasonCode 
 		ReasonCode:  &rc,
 		Properties:  &v5.BasicProperties{},
 	}
-
-	if reasonCode != 0x00 && s.RequestsProblemInfo() && reasonString != "" {
-		comp.Properties.ReasonString = reasonString
-	}
-
 	return s.WritePacket(comp)
 }
 
-func (h *V5Handler) sendSubAck(s *session.Session, packetID uint16, returnCodes []byte) error {
+func (h *V5Handler) sendSubAck(s *session.Session, packetID uint16, reasonCodes []byte) error {
 	ack := &v5.SubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
 		ID:          packetID,
-		ReasonCodes: &returnCodes,
+		ReasonCodes: &reasonCodes,
 		Properties:  &v5.BasicProperties{},
 	}
 	return s.WritePacket(ack)
@@ -451,5 +636,3 @@ func (h *V5Handler) sendPingResp(s *session.Session) error {
 	}
 	return s.WritePacket(resp)
 }
-
-var _ Handler = (*V5Handler)(nil)

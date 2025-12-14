@@ -10,16 +10,18 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dborovcanin/mqtt/core"
 )
 
 // mockHandler is a simple handler for testing.
 type mockHandler struct {
 	mu          sync.Mutex
 	connections int
-	onHandle    func(conn net.Conn)
+	onHandle    func(conn core.Connection)
 }
 
-func (h *mockHandler) HandleConnection(conn net.Conn) {
+func (h *mockHandler) HandleConnection(conn core.Connection) {
 	h.mu.Lock()
 	h.connections++
 	h.mu.Unlock()
@@ -78,7 +80,7 @@ func TestServerStartStop(t *testing.T) {
 func TestGracefulShutdown(t *testing.T) {
 	closed := make(chan struct{})
 	handler := &mockHandler{
-		onHandle: func(conn net.Conn) {
+		onHandle: func(conn core.Connection) {
 			defer conn.Close()
 			// Simulate work
 			buf := make([]byte, 1024)
@@ -143,7 +145,7 @@ func TestGracefulShutdown(t *testing.T) {
 func TestConnectionLimit(t *testing.T) {
 	maxConns := 2
 	handler := &mockHandler{
-		onHandle: func(conn net.Conn) {
+		onHandle: func(conn core.Connection) {
 			defer conn.Close()
 			// Keep connection open
 			io.Copy(io.Discard, conn)
@@ -201,7 +203,7 @@ func TestConcurrentConnections(t *testing.T) {
 	var mu sync.Mutex
 	handled := 0
 	handler := &mockHandler{
-		onHandle: func(conn net.Conn) {
+		onHandle: func(conn core.Connection) {
 			defer conn.Close()
 			mu.Lock()
 			handled++
@@ -256,13 +258,9 @@ func TestConcurrentConnections(t *testing.T) {
 
 func TestTCPOptimizations(t *testing.T) {
 	handler := &mockHandler{
-		onHandle: func(conn net.Conn) {
+		onHandle: func(conn core.Connection) {
 			defer conn.Close()
-			// Verify TCP options were set
-			if tcpConn, ok := conn.(*net.TCPConn); ok {
-				// We can't easily check if options were set, but we can verify it's a TCP conn
-				_ = tcpConn
-			}
+			// Connection is wrapped in core.Connection, TCP options are set by the server
 		},
 	}
 

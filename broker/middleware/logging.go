@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"log/slog"
 	"time"
 
@@ -92,39 +91,6 @@ func (lm *loggingMiddleware) Distribute(topic string, payload []byte, qos byte, 
 	}(time.Now())
 
 	return lm.svc.Distribute(topic, payload, qos, retain, props)
-}
-
-// Publish wraps the call with logging.
-func (lm *loggingMiddleware) Publish(ctx context.Context, clientID string, topic string, payload []byte, qos byte, retain bool) (err error) {
-	defer func(begin time.Time) {
-		args := []any{
-			slog.String("duration", time.Since(begin).String()),
-			slog.String("client_id", clientID),
-			slog.String("topic", topic),
-			slog.Int("qos", int(qos)),
-			slog.Int("payload_size", len(payload)),
-			slog.Bool("retain", retain),
-		}
-		if err != nil {
-			args = append(args, slog.String("error", err.Error()))
-			lm.logger.Warn("Publish failed", args...)
-			return
-		}
-		lm.logger.Debug("Message published", args...)
-	}(time.Now())
-
-	return lm.svc.Publish(ctx, clientID, topic, payload, qos, retain)
-}
-
-// Stats returns the broker statistics.
-func (lm *loggingMiddleware) Stats() *broker.Stats {
-	return lm.svc.Stats()
-}
-
-// SetAuth sets the authentication and authorization engine.
-func (lm *loggingMiddleware) SetAuth(auth *broker.AuthEngine) {
-	lm.logger.Info("Authentication engine configured")
-	lm.svc.SetAuth(auth)
 }
 
 // Close shuts down the broker.

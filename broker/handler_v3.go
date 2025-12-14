@@ -1,8 +1,10 @@
 package broker
 
 import (
+	"io"
 	"time"
 
+	"github.com/dborovcanin/mqtt/core"
 	"github.com/dborovcanin/mqtt/core/packets"
 	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
 	"github.com/dborovcanin/mqtt/session"
@@ -11,52 +13,175 @@ import (
 )
 
 // V3Handler implements the Handler interface for MQTT v3.1.1.
-// It directly interacts with the Broker struct.
 type V3Handler struct {
 	broker *Broker
 	auth   *AuthEngine
-
-	// Retry settings for QoS 1/2
-	retryInterval time.Duration
-	maxRetries    int
-}
-
-// V3HandlerConfig holds configuration for the handler.
-type V3HandlerConfig struct {
-	Broker        *Broker
-	Authenticator Authenticator
-	Authorizer    Authorizer
-	RetryInterval time.Duration
-	MaxRetries    int
 }
 
 // NewV3Handler creates a new v3 handler.
-func NewV3Handler(cfg V3HandlerConfig) *V3Handler {
-	if cfg.RetryInterval == 0 {
-		cfg.RetryInterval = 20 * time.Second
-	}
-	if cfg.MaxRetries == 0 {
-		cfg.MaxRetries = 3
-	}
-
+func NewV3Handler(broker *Broker, auth *AuthEngine) *V3Handler {
 	return &V3Handler{
-		broker:        cfg.Broker,
-		auth:          NewAuthEngine(cfg.Authenticator, cfg.Authorizer),
-		retryInterval: cfg.RetryInterval,
-		maxRetries:    cfg.MaxRetries,
+		broker: broker,
+		auth:   auth,
 	}
 }
 
-// HandleConnect handles CONNECT packets.
-func (h *V3Handler) HandleConnect(s *session.Session, pkt packets.ControlPacket) error {
-	return nil
+// HandleConnect handles CONNECT packets and sets up the session.
+func (h *V3Handler) HandleConnect(conn core.Connection, p *v3.Connect) error {
+	clientID := p.ClientID
+	cleanStart := p.CleanSession
+
+	if clientID == "" {
+		if cleanStart {
+			generated, err := GenerateClientID()
+			if err != nil {
+				h.broker.stats.IncrementProtocolErrors()
+				h.sendConnAck(conn, false, 0x02)
+				conn.Close()
+				return err
+			}
+			clientID = generated
+		} else {
+			h.broker.stats.IncrementProtocolErrors()
+			h.sendConnAck(conn, false, 0x02)
+			conn.Close()
+			return ErrClientIDRequired
+		}
+	}
+
+	if h.auth != nil {
+		username := p.Username
+		password := string(p.Password)
+
+		authenticated, err := h.auth.Authenticate(clientID, username, password)
+		if err != nil || !authenticated {
+			h.broker.stats.IncrementAuthErrors()
+			h.sendConnAck(conn, false, 0x04)
+			conn.Close()
+			return ErrNotAuthorized
+		}
+	}
+
+	var willMsg *Message
+	if p.WillFlag {
+		willMsg = &Message{
+			Topic:   p.WillTopic,
+			Payload: p.WillMessage,
+			QoS:     p.WillQoS,
+			Retain:  p.WillRetain,
+		}
+	}
+
+	opts := SessionOptions{
+		CleanStart:     cleanStart,
+		KeepAlive:      p.KeepAlive,
+		ReceiveMaximum: 65535,
+		WillMessage:    willMsg,
+	}
+
+	sess, isNew, err := h.broker.CreateSession(clientID, opts)
+	if err != nil {
+		h.broker.stats.IncrementProtocolErrors()
+		h.sendConnAck(conn, false, 0x03)
+		conn.Close()
+		return err
+	}
+
+	sess.Version = p.ProtocolVersion
+	sess.KeepAlive = time.Duration(p.KeepAlive) * time.Second
+
+	if err := sess.Connect(conn); err != nil {
+		h.broker.stats.IncrementProtocolErrors()
+		conn.Close()
+		return err
+	}
+
+	sessionPresent := !isNew && !cleanStart
+	if err := h.sendConnAck(conn, sessionPresent, 0x00); err != nil {
+		sess.Disconnect(false)
+		return err
+	}
+
+	h.broker.stats.IncrementConnections()
+
+	h.deliverOfflineMessages(sess)
+
+	return h.runSession(sess)
 }
 
-// HandlePublish handles PUBLISH packets.
-func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+// runSession runs the main packet loop for a session.
+func (h *V3Handler) runSession(s *session.Session) error {
+	conn := s.Conn()
+	if conn == nil {
+		return nil
+	}
+
+	if s.KeepAlive > 0 {
+		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
+		conn.SetReadDeadline(deadline)
+	}
+
+	for {
+		pkt, err := s.ReadPacket()
+		if err != nil {
+			if err != io.EOF && err != session.ErrNotConnected {
+				h.broker.stats.IncrementPacketErrors()
+			}
+			h.broker.stats.DecrementConnections()
+			s.Disconnect(false)
+			return err
+		}
+
+		if s.KeepAlive > 0 {
+			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
+			conn.SetReadDeadline(deadline)
+		}
+
+		h.broker.stats.IncrementMessagesReceived()
+
+		if err := h.handlePacket(s, pkt); err != nil {
+			if err == io.EOF {
+				h.broker.stats.DecrementConnections()
+				return nil
+			}
+			h.broker.stats.IncrementProtocolErrors()
+			h.broker.stats.DecrementConnections()
+			s.Disconnect(false)
+			return err
+		}
+	}
+}
+
+// handlePacket dispatches a packet to the appropriate handler.
+func (h *V3Handler) handlePacket(s *session.Session, pkt packets.ControlPacket) error {
 	s.Touch()
 
-	p := pkt.(*v3.Publish)
+	switch p := pkt.(type) {
+	case *v3.Publish:
+		return h.handlePublish(s, p)
+	case *v3.PubAck:
+		return h.handlePubAck(s, p)
+	case *v3.PubRec:
+		return h.handlePubRec(s, p)
+	case *v3.PubRel:
+		return h.handlePubRel(s, p)
+	case *v3.PubComp:
+		return h.handlePubComp(s, p)
+	case *v3.Subscribe:
+		return h.handleSubscribe(s, p)
+	case *v3.Unsubscribe:
+		return h.handleUnsubscribe(s, p)
+	case *v3.PingReq:
+		return h.handlePingReq(s)
+	case *v3.Disconnect:
+		return h.handleDisconnect(s)
+	default:
+		return ErrInvalidPacketType
+	}
+}
+
+// handlePublish handles PUBLISH packets.
+func (h *V3Handler) handlePublish(s *session.Session, p *v3.Publish) error {
 	topic := p.TopicName
 	payload := p.Payload
 	qos := p.FixedHeader.QoS
@@ -64,7 +189,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
 
-	if !h.auth.CanPublish(s.ID, topic) {
+	if h.auth != nil && !h.auth.CanPublish(s.ID, topic) {
 		h.broker.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
@@ -74,25 +199,41 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
-		// QoS 0: Fire and forget
-		return h.broker.publishMessage(topic, payload, 0, retain)
+		msg := Message{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     qos,
+			Retain:  retain,
+		}
+		return h.broker.Publish(s, msg)
 
 	case 1:
-		// QoS 1: Publish and acknowledge
-		if err := h.broker.publishMessage(topic, payload, 1, retain); err != nil {
+		msg := Message{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     qos,
+			Retain:  retain,
+		}
+		if err := h.broker.Publish(s, msg); err != nil {
 			return err
 		}
 		return h.sendPubAck(s, packetID)
 
 	case 2:
-		// QoS 2: Exactly once
-		// Check if this is a duplicate
 		if dup && s.Inflight().WasReceived(packetID) {
-			// Already received, just send PUBREC again
 			return h.sendPubRec(s, packetID)
 		}
 
-		if err := h.broker.HandleQoS2Publish(s, topic, payload, retain, packetID, dup); err != nil {
+		s.Inflight().MarkReceived(packetID)
+
+		storeMsg := &store.Message{
+			Topic:    topic,
+			Payload:  payload,
+			QoS:      2,
+			Retain:   retain,
+			PacketID: packetID,
+		}
+		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			return err
 		}
 
@@ -102,141 +243,231 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	return nil
 }
 
-// HandlePubAck handles PUBACK packets (QoS 1 acknowledgment from client).
-func (h *V3Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v3.PubAck)
-	s.Inflight().Ack(p.ID)
-	return nil
+// handlePubAck handles PUBACK packets (QoS 1 acknowledgment from client).
+func (h *V3Handler) handlePubAck(s *session.Session, p *v3.PubAck) error {
+	return h.broker.AckMessage(s, p.ID)
 }
 
-// HandlePubRec handles PUBREC packets (QoS 2 step 1 from client).
-func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v3.PubRec)
+// handlePubRec handles PUBREC packets (QoS 2 step 1 from client).
+func (h *V3Handler) handlePubRec(s *session.Session, p *v3.PubRec) error {
 	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
 	return h.sendPubRel(s, p.ID)
 }
 
-// HandlePubRel handles PUBREL packets (QoS 2 step 2 from client).
-func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v3.PubRel)
+// handlePubRel handles PUBREL packets (QoS 2 step 2 from client).
+func (h *V3Handler) handlePubRel(s *session.Session, p *v3.PubRel) error {
 	packetID := p.ID
 
 	inf, ok := s.Inflight().Get(packetID)
 	if ok && inf.Message != nil {
-		h.broker.publishMessage(inf.Message.Topic, inf.Message.Payload, inf.Message.QoS, inf.Message.Retain)
+		msg := Message{
+			Topic:   inf.Message.Topic,
+			Payload: inf.Message.Payload,
+			QoS:     inf.Message.QoS,
+			Retain:  inf.Message.Retain,
+		}
+		h.broker.Publish(s, msg)
 	}
 
-	s.Inflight().Ack(packetID)
+	h.broker.AckMessage(s, packetID)
 	s.Inflight().ClearReceived(packetID)
 
 	return h.sendPubComp(s, packetID)
 }
 
-// HandlePubComp handles PUBCOMP packets (QoS 2 step 3 from client).
-func (h *V3Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v3.PubComp)
-	s.Inflight().Ack(p.ID)
-	return nil
+// handlePubComp handles PUBCOMP packets (QoS 2 step 3 from client).
+func (h *V3Handler) handlePubComp(s *session.Session, p *v3.PubComp) error {
+	return h.broker.AckMessage(s, p.ID)
 }
 
-// HandleSubscribe handles SUBSCRIBE packets.
-func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v3.Subscribe)
+// handleSubscribe handles SUBSCRIBE packets.
+func (h *V3Handler) handleSubscribe(s *session.Session, p *v3.Subscribe) error {
 	packetID := p.ID
 
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, t := range p.Topics {
-		if !h.auth.CanSubscribe(s.ID, t.Name) {
+		if h.auth != nil && !h.auth.CanSubscribe(s.ID, t.Name) {
 			h.broker.stats.IncrementAuthzErrors()
 			reasonCodes[i] = 0x80
 			continue
 		}
 
-		reasonCodes[i] = h.broker.ProcessSubscription(s.ID, t.Name, t.QoS)
-		if reasonCodes[i] == 0x80 {
+		opts := SubscriptionOptions{
+			QoS: t.QoS,
+		}
+
+		if err := h.broker.subscribeInternal(s, t.Name, opts); err != nil {
+			reasonCodes[i] = 0x80
 			continue
 		}
 
-		h.broker.SendRetainedMessages(t.Name, t.QoS, func(msg *store.Message) error {
-			return h.deliverMessage(s, msg.Topic, msg.Payload, msg.QoS, true)
-		})
+		reasonCodes[i] = t.QoS
+		h.broker.stats.IncrementSubscriptions()
+
+		retained, err := h.broker.retained.Match(t.Name)
+		if err == nil {
+			for _, msg := range retained {
+				deliverQoS := msg.QoS
+				if t.QoS < deliverQoS {
+					deliverQoS = t.QoS
+				}
+				deliverMsg := Message{
+					Topic:   msg.Topic,
+					Payload: msg.Payload,
+					QoS:     deliverQoS,
+					Retain:  true,
+				}
+				h.broker.DeliverToSession(s, deliverMsg)
+			}
+		}
 	}
 
 	return h.sendSubAck(s, packetID, reasonCodes)
 }
 
-// HandleUnsubscribe handles UNSUBSCRIBE packets.
-func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
-	p := pkt.(*v3.Unsubscribe)
-
+// handleUnsubscribe handles UNSUBSCRIBE packets.
+func (h *V3Handler) handleUnsubscribe(s *session.Session, p *v3.Unsubscribe) error {
 	for _, filter := range p.Topics {
-		h.broker.Unsubscribe(s.ID, filter)
+		h.broker.unsubscribeInternal(s, filter)
+		h.broker.stats.DecrementSubscriptions()
 	}
 
 	return h.sendUnsubAck(s, p.ID)
 }
 
-// HandlePingReq handles PINGREQ packets.
-func (h *V3Handler) HandlePingReq(s *session.Session) error {
-	s.Touch()
+// handlePingReq handles PINGREQ packets.
+func (h *V3Handler) handlePingReq(s *session.Session) error {
 	return h.sendPingResp(s)
 }
 
-// HandleDisconnect handles DISCONNECT packets.
-func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+// handleDisconnect handles DISCONNECT packets.
+func (h *V3Handler) handleDisconnect(s *session.Session) error {
 	s.Disconnect(true)
-	return nil
+	return io.EOF
 }
 
-// deliverMessage delivers a message to a session.
-func (h *V3Handler) deliverMessage(s *session.Session, topic string, payload []byte, qos byte, retain bool) error {
-	if !s.IsConnected() {
-		msg := &store.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
-		}
-		return s.OfflineQueue().Enqueue(msg)
-	}
-
+// DeliverMessage implements MessageDeliverer for V3 protocol.
+func (h *V3Handler) DeliverMessage(sess *session.Session, msg Message) error {
 	pub := &v3.Publish{
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.PublishType,
-			QoS:        qos,
-			Retain:     retain,
+			QoS:        msg.QoS,
+			Retain:     msg.Retain,
 		},
-		TopicName: topic,
-		Payload:   payload,
+		TopicName: msg.Topic,
+		Payload:   msg.Payload,
+		ID:        msg.PacketID,
 	}
 
-	if qos > 0 {
-		pub.ID = s.NextPacketID()
-		msg := &store.Message{
-			Topic:    topic,
-			Payload:  payload,
-			QoS:      qos,
-			PacketID: pub.ID,
+	if err := sess.WritePacket(pub); err != nil {
+		return err
+	}
+
+	h.broker.stats.IncrementPublishSent()
+	h.broker.stats.AddBytesSent(uint64(len(msg.Payload)))
+
+	return nil
+}
+
+// --- Handler Interface Implementations ---
+
+// HandlePublish implements Handler.HandlePublish.
+func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.Publish)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePublish(s, p)
+}
+
+// HandlePubAck implements Handler.HandlePubAck.
+func (h *V3Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.PubAck)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubAck(s, p)
+}
+
+// HandlePubRec implements Handler.HandlePubRec.
+func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.PubRec)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubRec(s, p)
+}
+
+// HandlePubRel implements Handler.HandlePubRel.
+func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.PubRel)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubRel(s, p)
+}
+
+// HandlePubComp implements Handler.HandlePubComp.
+func (h *V3Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.PubComp)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handlePubComp(s, p)
+}
+
+// HandleSubscribe implements Handler.HandleSubscribe.
+func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.Subscribe)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handleSubscribe(s, p)
+}
+
+// HandleUnsubscribe implements Handler.HandleUnsubscribe.
+func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
+	p, ok := pkt.(*v3.Unsubscribe)
+	if !ok {
+		return ErrInvalidPacketType
+	}
+	return h.handleUnsubscribe(s, p)
+}
+
+// HandlePingReq implements Handler.HandlePingReq.
+func (h *V3Handler) HandlePingReq(s *session.Session) error {
+	return h.handlePingReq(s)
+}
+
+// HandleDisconnect implements Handler.HandleDisconnect.
+func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+	return h.handleDisconnect(s)
+}
+
+// deliverOfflineMessages sends queued messages to reconnected client.
+func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
+	msgs := s.OfflineQueue().Drain()
+	for _, msg := range msgs {
+		deliverMsg := Message{
+			Topic:   msg.Topic,
+			Payload: msg.Payload,
+			QoS:     msg.QoS,
+			Retain:  msg.Retain,
 		}
-		s.Inflight().Add(pub.ID, msg, messages.Outbound)
+		h.broker.DeliverToSession(s, deliverMsg)
 	}
-
-	return s.WritePacket(pub)
 }
 
 // --- Response packet senders ---
+
+func (h *V3Handler) sendConnAck(conn core.Connection, sessionPresent bool, returnCode byte) error {
+	ack := &v3.ConnAck{
+		FixedHeader:    packets.FixedHeader{PacketType: packets.ConnAckType},
+		SessionPresent: sessionPresent,
+		ReturnCode:     returnCode,
+	}
+	return conn.WritePacket(ack)
+}
 
 func (h *V3Handler) sendPubAck(s *session.Session, packetID uint16) error {
 	ack := &v3.PubAck{
@@ -293,6 +524,3 @@ func (h *V3Handler) sendPingResp(s *session.Session) error {
 	}
 	return s.WritePacket(resp)
 }
-
-// Ensure V3Handler implements Handler (which needs to be moved/defined).
-var _ Handler = (*V3Handler)(nil)
