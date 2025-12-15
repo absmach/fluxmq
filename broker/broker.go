@@ -33,9 +33,8 @@ type Broker struct {
 	retained      store.RetainedStore
 	wills         store.WillStore
 
-	deliverer MessageDeliverer
-	auth      *AuthEngine
-	stats     *Stats
+	auth  *AuthEngine
+	stats *Stats
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -58,20 +57,11 @@ func NewBroker() *Broker {
 		stopCh:        make(chan struct{}),
 	}
 
-	b.SetDeliverer(&multiVersionDeliverer{
-		broker: b,
-	})
-
 	b.wg.Add(2)
 	go b.expiryLoop()
 	go b.statsLoop()
 
 	return b
-}
-
-// SetDeliverer sets the message deliverer for protocol-specific packet creation.
-func (b *Broker) SetDeliverer(d MessageDeliverer) {
-	b.deliverer = d
 }
 
 // SetAuth sets the authentication and authorization engine.
@@ -295,10 +285,7 @@ func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, e
 	}
 
 	if msg.QoS == 0 {
-		if b.deliverer != nil {
-			return 0, b.deliverer.DeliverMessage(sess, msg)
-		}
-		return 0, nil
+		return 0, b.DeliverMessage(sess, msg)
 	}
 
 	packetID := sess.NextPacketID()
@@ -313,12 +300,10 @@ func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, e
 		return 0, err
 	}
 
-	if b.deliverer != nil {
-		deliverMsg := msg
-		deliverMsg.PacketID = packetID
-		if err := b.deliverer.DeliverMessage(sess, deliverMsg); err != nil {
-			return packetID, err
-		}
+	deliverMsg := msg
+	deliverMsg.PacketID = packetID
+	if err := b.DeliverMessage(sess, deliverMsg); err != nil {
+		return packetID, err
 	}
 
 	return packetID, nil
@@ -665,17 +650,12 @@ func (b *Broker) publishStats() {
 	}
 }
 
-// multiVersionDeliverer routes messages to the correct protocol handler based on session version.
-type multiVersionDeliverer struct {
-	broker *Broker
-}
-
-func (d *multiVersionDeliverer) DeliverMessage(sess *session.Session, msg Message) error {
-	switch sess.Version {
+func (b *Broker) DeliverMessage(s *session.Session, msg Message) error {
+	switch s.Version {
 	case 5:
-		return d.broker.DeliverV5Message(sess, msg)
+		return b.DeliverV5Message(s, msg)
 	default:
-		return d.broker.DeliverV3Message(sess, msg)
+		return b.DeliverV3Message(s, msg)
 	}
 }
 
