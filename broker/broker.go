@@ -6,14 +6,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/core/packets"
-	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
-	"github.com/dborovcanin/mqtt/session"
-	"github.com/dborovcanin/mqtt/store"
-	"github.com/dborovcanin/mqtt/store/memory"
-	"github.com/dborovcanin/mqtt/store/messages"
+	"github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/core/packets"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/mqtt/session"
+	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/store/memory"
+	"github.com/absmach/mqtt/store/messages"
 )
 
 // Broker is the core MQTT broker with clean domain methods.

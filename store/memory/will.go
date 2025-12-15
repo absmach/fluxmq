@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/store"
 )
 
 var _ store.WillStore = (*WillStore)(nil)

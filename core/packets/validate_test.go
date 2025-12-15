@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dborovcanin/mqtt/core/packets"
+	"github.com/absmach/mqtt/core/packets"
 	"github.com/stretchr/testify/assert"
 )
 

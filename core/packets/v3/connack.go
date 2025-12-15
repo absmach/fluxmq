@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dborovcanin/mqtt/core/codec"
-	"github.com/dborovcanin/mqtt/core/packets"
+	"github.com/absmach/mqtt/core/codec"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // ConnAck represents the MQTT V3.1.1 CONNACK packet.

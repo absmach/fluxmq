@@ -6,10 +6,10 @@ import (
 	"net"
 	"sync"
 
-	packets "github.com/dborovcanin/mqtt/core/packets"
-	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
-	"github.com/dborovcanin/mqtt/store"
+	packets "github.com/absmach/mqtt/core/packets"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/mqtt/store"
 )
 
 // Options defines client configuration.

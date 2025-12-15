@@ -4,12 +4,12 @@ import (
 	"io"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/core/packets"
-	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
-	"github.com/dborovcanin/mqtt/session"
-	"github.com/dborovcanin/mqtt/store"
-	"github.com/dborovcanin/mqtt/store/messages"
+	"github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/core/packets"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
+	"github.com/absmach/mqtt/session"
+	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/store/messages"
 )
 
 // HandleV3Connect handles CONNECT packets and sets up the session.

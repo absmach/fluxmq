@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/dborovcanin/mqtt/broker"
-	"github.com/dborovcanin/mqtt/broker/middleware"
-	"github.com/dborovcanin/mqtt/config"
-	"github.com/dborovcanin/mqtt/server/tcp"
+	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/mqtt/broker/middleware"
+	"github.com/absmach/mqtt/config"
+	"github.com/absmach/mqtt/server/tcp"
 )
 
 func main() {

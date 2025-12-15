@@ -4,10 +4,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/core/packets"
-	"github.com/dborovcanin/mqtt/store"
-	"github.com/dborovcanin/mqtt/store/messages"
+	"github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/store/messages"
 )
 
 // State represents the session state.

@@ -1,6 +1,6 @@
 package v3
 
-import "github.com/dborovcanin/mqtt/core/packets"
+import "github.com/absmach/mqtt/core/packets"
 
 func (c *Connect) Reset() {
 	c.FixedHeader = packets.FixedHeader{PacketType: packets.ConnectType}

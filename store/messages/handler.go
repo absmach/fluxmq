@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/core/packets"
-	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
+	core "github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/core/packets"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
 )
 
 // MessageHandler manages message tracking, inflight operations, and aliases.

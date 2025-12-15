@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core/packets"
-	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
+	"github.com/absmach/mqtt/core/packets"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
 var _ Connection = (*connection)(nil)

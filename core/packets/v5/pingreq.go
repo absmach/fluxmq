@@ -3,7 +3,7 @@ package v5
 import (
 	"io"
 
-	"github.com/dborovcanin/mqtt/core/packets"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // PingReq is an internal representation of the fields of the PINGREQ MQTT packet

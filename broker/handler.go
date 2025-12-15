@@ -3,10 +3,10 @@ package broker
 import (
 	"errors"
 
-	"github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/core/packets"
-	"github.com/dborovcanin/mqtt/session"
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/mqtt/session"
+	"github.com/absmach/mqtt/store"
 )
 
 // Common handler errors.

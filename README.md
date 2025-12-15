@@ -39,7 +39,7 @@ A high-performance, multi-protocol MQTT broker written in Go. Supports MQTT 3.1.
 
 ```bash
 # Clone the repository
-git clone https://github.com/dborovcanin/mqtt.git
+git clone https://github.com/absmach/mqtt.git
 cd mqtt
 
 # Build the broker

@@ -1,4 +1,4 @@
-module github.com/dborovcanin/mqtt
+module github.com/absmach/mqtt
 
 go 1.24.3
 

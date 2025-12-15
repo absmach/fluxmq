@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/store"
 )
 
 // Queue defines operations on offline message queue.

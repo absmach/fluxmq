@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/store"
 )
 
 func TestMessageStore(t *testing.T) {

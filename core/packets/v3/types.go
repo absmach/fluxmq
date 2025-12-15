@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dborovcanin/mqtt/core/packets"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // Re-export common types

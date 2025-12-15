@@ -3,7 +3,7 @@ package topics_test
 import (
 	"testing"
 
-	"github.com/dborovcanin/mqtt/topics"
+	"github.com/absmach/mqtt/topics"
 )
 
 func TestTopicMatch(t *testing.T) {

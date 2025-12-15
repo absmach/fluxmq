@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/store"
 )
 
 // InflightState represents the state of an inflight message.

@@ -3,9 +3,9 @@ package middleware
 import (
 	"time"
 
-	"github.com/dborovcanin/mqtt/broker"
-	"github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/store"
 )
 
 var _ broker.Service = (*metricsMiddleware)(nil)

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mqtt/core/codec"
-	"github.com/dborovcanin/mqtt/core/packets"
+	codec "github.com/absmach/mqtt/core/codec"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // Error codes returned by Connect()

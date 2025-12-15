@@ -2,7 +2,7 @@
 package memory
 
 import (
-	"github.com/dborovcanin/mqtt/store"
+	"github.com/absmach/mqtt/store"
 )
 
 var _ store.Store = (*Store)(nil)

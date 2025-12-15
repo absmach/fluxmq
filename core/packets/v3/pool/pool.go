@@ -13,7 +13,7 @@ package pool
 import (
 	"sync"
 
-	v3 "github.com/dborovcanin/mqtt/core/packets/v3"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
 )
 
 var (

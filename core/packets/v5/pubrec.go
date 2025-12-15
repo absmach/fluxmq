@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/dborovcanin/mqtt/core/codec"
-	"github.com/dborovcanin/mqtt/core/packets"
+	codec "github.com/absmach/mqtt/core/codec"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // PubRec is an internal representation of the fields of the PUBREC MQTT packet.

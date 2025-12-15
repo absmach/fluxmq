@@ -4,8 +4,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dborovcanin/mqtt/store"
-	"github.com/dborovcanin/mqtt/topics"
+	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/topics"
 )
 
 var _ store.RetainedStore = (*RetainedStore)(nil)

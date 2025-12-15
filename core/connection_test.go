@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core"
-	"github.com/dborovcanin/mqtt/core/packets/v3"
-	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
+	"github.com/absmach/mqtt/core"
+	"github.com/absmach/mqtt/core/packets/v3"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

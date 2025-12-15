@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core"
+	"github.com/absmach/mqtt/core"
 )
 
 // ErrShutdownTimeout is returned when graceful shutdown exceeds the configured timeout.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dborovcanin/mqtt/core/packets"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // FixedHeader represents the MQTT fixed header for v5 packets.

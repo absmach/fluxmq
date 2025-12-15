@@ -3,7 +3,7 @@ package v5
 import (
 	"io"
 
-	"github.com/dborovcanin/mqtt/core/packets"
+	"github.com/absmach/mqtt/core/packets"
 )
 
 // PingResp is an internal representation of the fields of the PINGRESP MQTT packet.

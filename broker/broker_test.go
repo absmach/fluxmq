@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core/packets"
-	v5 "github.com/dborovcanin/mqtt/core/packets/v5"
+	"github.com/absmach/mqtt/core/packets"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
 // mockConnection implements core.Connection for testing

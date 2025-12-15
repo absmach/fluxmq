@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dborovcanin/mqtt/core"
+	"github.com/absmach/mqtt/core"
 )
 
 // mockHandler is a simple handler for testing.
