@@ -55,6 +55,8 @@ type Handler interface {
 
 	// HandleDisconnect handles DISCONNECT packets.
 	HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error
+
+	MessageDeliverer
 }
 
 // Router is the message routing interface.

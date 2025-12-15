@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -242,11 +241,23 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer s.releaseConnectionSlot()
 
-	if err := s.handleConn(connCtx, conn); err != nil && !errors.Is(err, io.EOF) {
-		s.config.Logger.Debug("connection handler error",
-			slog.String("remote", conn.RemoteAddr().String()),
-			slog.String("error", err.Error()))
+	defer conn.Close()
+
+	s.config.Logger.Debug("connection established",
+		slog.String("remote", conn.RemoteAddr().String()))
+
+	// Wrap net.Conn with MQTT codec to get broker.Connection
+	c, ok := conn.(*net.TCPConn)
+	if !ok {
+		slog.Error("not a TCP connection")
+		return
 	}
+	hc := core.NewConnection(c)
+	// Delegate to handler
+	s.handler.HandleConnection(hc)
+
+	s.config.Logger.Debug("connection closed",
+		slog.String("remote", conn.RemoteAddr().String()))
 }
 
 // gracefulShutdown performs graceful shutdown with connection draining.
@@ -280,28 +291,6 @@ func (s *Server) gracefulShutdown(listener net.Listener, acceptDone <-chan struc
 			return ErrShutdownTimeout
 		}
 	}
-}
-
-// handleConn processes a single client connection.
-func (s *Server) handleConn(ctx context.Context, conn net.Conn) error {
-	defer conn.Close()
-
-	s.config.Logger.Debug("connection established",
-		slog.String("remote", conn.RemoteAddr().String()))
-
-	// Wrap net.Conn with MQTT codec to get broker.Connection
-	c, ok := conn.(*net.TCPConn)
-	if !ok {
-		return errors.New("not a TCP connection")
-	}
-	hc := core.NewConnection(c)
-	// Delegate to handler
-	s.handler.HandleConnection(hc)
-
-	s.config.Logger.Debug("connection closed",
-		slog.String("remote", conn.RemoteAddr().String()))
-
-	return nil
 }
 
 // configureTCPConn sets TCP socket options for optimal performance and resilience.

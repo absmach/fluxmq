@@ -17,7 +17,7 @@ import (
 
 // MessageDeliverer handles protocol-specific message delivery.
 type MessageDeliverer interface {
-	DeliverMessage(sess *session.Session, msg Message) error
+	DeliverMessage(s *session.Session, msg Message) error
 }
 
 // Broker is the core MQTT broker with clean domain methods.
@@ -33,8 +33,6 @@ type Broker struct {
 	wills         store.WillStore
 
 	deliverer MessageDeliverer
-	v3Handler *V3Handler
-	v5Handler *V5Handler
 	auth      *AuthEngine
 	stats     *Stats
 
@@ -59,13 +57,8 @@ func NewBroker() *Broker {
 		stopCh:        make(chan struct{}),
 	}
 
-	b.v3Handler = NewV3Handler(b, nil)
-	b.v5Handler = NewV5Handler(b, nil)
-
 	b.SetDeliverer(&multiVersionDeliverer{
-		broker:    b,
-		v3Handler: b.v3Handler,
-		v5Handler: b.v5Handler,
+		broker: b,
 	})
 
 	b.wg.Add(2)
@@ -83,12 +76,6 @@ func (b *Broker) SetDeliverer(d MessageDeliverer) {
 // SetAuth sets the authentication and authorization engine.
 func (b *Broker) SetAuth(auth *AuthEngine) {
 	b.auth = auth
-	if b.v3Handler != nil {
-		b.v3Handler.auth = auth
-	}
-	if b.v5Handler != nil {
-		b.v5Handler.auth = auth
-	}
 }
 
 // Stats returns the broker statistics.
@@ -679,24 +666,16 @@ func (b *Broker) publishStats() {
 
 // multiVersionDeliverer routes messages to the correct protocol handler based on session version.
 type multiVersionDeliverer struct {
-	broker    *Broker
-	v3Handler *V3Handler
-	v5Handler *V5Handler
+	broker *Broker
 }
 
 func (d *multiVersionDeliverer) DeliverMessage(sess *session.Session, msg Message) error {
 	switch sess.Version {
 	case 5:
-		return d.v5Handler.DeliverMessage(sess, msg)
+		return d.broker.DeliverV5Message(sess, msg)
 	default:
-		return d.v3Handler.DeliverMessage(sess, msg)
+		return d.broker.DeliverV3Message(sess, msg)
 	}
-}
-
-// HandleConnection handles incoming connections (entry point from TCP server).
-func (b *Broker) HandleConnection(conn core.Connection) {
-	connHandler := NewConnectionHandler(b, b.auth)
-	connHandler.HandleConnection(conn)
 }
 
 // --- Handler Interface Implementation ---
@@ -704,81 +683,95 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 // HandleConnect implements Handler.HandleConnect by dispatching based on packet type.
 func (b *Broker) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
 	if p3, ok := pkt.(*v3.Connect); ok {
-		return b.v3Handler.HandleConnect(conn, p3)
+		return b.HandleV3Connect(conn, p3)
 	}
 	if p5, ok := pkt.(*v5.Connect); ok {
-		return b.v5Handler.HandleConnect(conn, p5)
+		return b.HandleV5Connect(conn, p5)
 	}
 	return ErrInvalidPacketType
 }
 
 // HandlePublish implements Handler.HandlePublish by dispatching based on session version.
 func (b *Broker) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandlePublish(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.Publish:
+		return b.handleV5Publish(s, p)
+	case *v3.Publish:
+		return b.handleV3Publish(s, p)
 	default:
-		return b.v3Handler.HandlePublish(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
 // HandlePubAck implements Handler.HandlePubAck by dispatching based on session version.
 func (b *Broker) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandlePubAck(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.PubAck:
+		return b.handleV5PubAck(s, p)
+	case *v3.PubAck:
+		return b.handleV3PubAck(s, p)
 	default:
-		return b.v3Handler.HandlePubAck(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
 // HandlePubRec implements Handler.HandlePubRec by dispatching based on session version.
 func (b *Broker) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandlePubRec(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.PubRec:
+		return b.handleV5PubRec(s, p)
+	case *v3.PubRec:
+		return b.handleV3PubRec(s, p)
 	default:
-		return b.v3Handler.HandlePubRec(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
 // HandlePubRel implements Handler.HandlePubRel by dispatching based on session version.
 func (b *Broker) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandlePubRel(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.PubRel:
+		return b.handleV5PubRel(s, p)
+	case *v3.PubRel:
+		return b.handleV3PubRel(s, p)
 	default:
-		return b.v3Handler.HandlePubRel(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
 // HandlePubComp implements Handler.HandlePubComp by dispatching based on session version.
 func (b *Broker) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandlePubComp(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.PubComp:
+		return b.handleV5PubComp(s, p)
+	case *v3.PubComp:
+		return b.handleV3PubComp(s, p)
 	default:
-		return b.v3Handler.HandlePubComp(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
 // HandleSubscribe implements Handler.HandleSubscribe by dispatching based on session version.
 func (b *Broker) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandleSubscribe(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.Subscribe:
+		return b.handleV5Subscribe(s, p)
+	case *v3.Subscribe:
+		return b.handleV3Subscribe(s, p)
 	default:
-		return b.v3Handler.HandleSubscribe(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
 // HandleUnsubscribe implements Handler.HandleUnsubscribe by dispatching based on session version.
 func (b *Broker) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandleUnsubscribe(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.Unsubscribe:
+		return b.handleV5Unsubscribe(s, p)
+	case *v3.Unsubscribe:
+		return b.handleV3Unsubscribe(s, p)
 	default:
-		return b.v3Handler.HandleUnsubscribe(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
@@ -786,19 +779,24 @@ func (b *Broker) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket
 func (b *Broker) HandlePingReq(s *session.Session) error {
 	switch s.Version {
 	case 5:
-		return b.v5Handler.HandlePingReq(s)
+		return b.handleV5PingReq(s)
+	case 3:
+		return b.handleV3PingReq(s)
 	default:
-		return b.v3Handler.HandlePingReq(s)
+
+		return ErrInvalidPacketType
 	}
 }
 
 // HandleDisconnect implements Handler.HandleDisconnect by dispatching based on session version.
 func (b *Broker) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
-	switch s.Version {
-	case 5:
-		return b.v5Handler.HandleDisconnect(s, pkt)
+	switch p := pkt.(type) {
+	case *v5.Disconnect:
+		return b.handleV5Disconnect(s, p)
+	case *v3.Disconnect:
+		return b.handleV3Disconnect(s, p)
 	default:
-		return b.v3Handler.HandleDisconnect(s, pkt)
+		return ErrInvalidPacketType
 	}
 }
 
