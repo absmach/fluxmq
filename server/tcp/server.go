@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/mqtt/broker"
 	"github.com/absmach/mqtt/core"
 )
 
@@ -20,11 +21,11 @@ import (
 var ErrShutdownTimeout = errors.New("shutdown timeout exceeded")
 
 // Handler processes new connections.
-type Handler interface {
-	// HandleConnection handles a new client connection.
-	// The handler owns the connection and must close it when done.
-	HandleConnection(conn core.Connection)
-}
+// type Handler interface {
+// 	// HandleConnection handles a new client connection.
+// 	// The handler owns the connection and must close it when done.
+// 	HandleConnection(conn core.Connection)
+// }
 
 // Config holds the TCP server configuration.
 type Config struct {
@@ -75,7 +76,7 @@ type Config struct {
 // It provides robust connection handling, graceful shutdown, and production-ready features.
 type Server struct {
 	config     Config
-	handler    Handler
+	handler    broker.Handler
 	wg         sync.WaitGroup
 	mu         sync.Mutex
 	listener   net.Listener
@@ -84,7 +85,7 @@ type Server struct {
 }
 
 // New creates a new TCP server with the given configuration and handler.
-func New(cfg Config, h Handler) *Server {
+func New(cfg Config, h broker.Handler) *Server {
 	// Apply defaults
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -254,7 +255,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	}
 	hc := core.NewConnection(c)
 	// Delegate to handler
-	s.handler.HandleConnection(hc)
+	broker.HandleConnection(s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",
 		slog.String("remote", conn.RemoteAddr().String()))

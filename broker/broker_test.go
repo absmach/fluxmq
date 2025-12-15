@@ -64,7 +64,7 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 	}
 
 	t.Log("Calling HandleV5Connect")
-	err := b.HandleV5Connect(conn, connect)
+	err := b.handleV5Connect(conn, connect)
 	t.Logf("HandleV5Connect returned: %v", err)
 
 	// Expect nil or io.EOF (because runV5Session exits on EOF)

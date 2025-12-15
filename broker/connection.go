@@ -8,16 +8,16 @@ import (
 )
 
 // HandleConnection handles a new incoming connection from the TCP server.
-func (b *Broker) HandleConnection(conn core.Connection) {
+func HandleConnection(b Handler, conn core.Connection) {
 	pkt, err := conn.ReadPacket()
 	if err != nil {
-		b.stats.IncrementPacketErrors()
+		// b.stats.IncrementPacketErrors()
 		conn.Close()
 		return
 	}
 
 	if pkt.Type() != packets.ConnectType {
-		b.stats.IncrementProtocolErrors()
+		// b.stats.IncrementProtocolErrors()
 		conn.Close()
 		return
 	}
@@ -25,7 +25,7 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 	p3, ok := pkt.(*v3.Connect)
 	if ok {
 		if p3.ProtocolVersion != 3 && p3.ProtocolVersion != 4 {
-			b.stats.IncrementProtocolErrors()
+			// b.stats.IncrementProtocolErrors()
 			sendV3ConnAck(conn, false, 0x01)
 			conn.Close()
 			return
@@ -37,7 +37,7 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 	p5, ok := pkt.(*v5.Connect)
 	if ok {
 		if p5.ProtocolVersion != 5 {
-			b.stats.IncrementProtocolErrors()
+			// b.stats.IncrementProtocolErrors()
 			sendV5ConnAck(conn, false, 0x84)
 			conn.Close()
 			return
@@ -46,7 +46,7 @@ func (b *Broker) HandleConnection(conn core.Connection) {
 		return
 	}
 
-	b.stats.IncrementProtocolErrors()
+	// b.stats.IncrementProtocolErrors()
 	conn.Close()
 }
 

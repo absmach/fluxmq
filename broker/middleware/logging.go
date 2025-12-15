@@ -6,101 +6,153 @@ import (
 
 	"github.com/absmach/mqtt/broker"
 	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/mqtt/session"
 )
 
-var _ broker.Service = (*loggingMiddleware)(nil)
+var _ broker.Handler = (*loggingMiddleware)(nil)
 
 type loggingMiddleware struct {
 	logger *slog.Logger
-	svc    broker.Service
+	next   broker.Handler
 }
 
-// NewLogging creates logging middleware that wraps a broker service.
-func NewLogging(svc broker.Service, logger *slog.Logger) broker.Service {
-	return &loggingMiddleware{logger, svc}
+// NewLogging creates logging middleware that wraps a broker handler.
+func NewLogging(handler broker.Handler, logger *slog.Logger) broker.Handler {
+	return &loggingMiddleware{logger, handler}
 }
 
-// HandleConnection wraps the call with logging.
-func (lm *loggingMiddleware) HandleConnection(conn core.Connection) {
+// HandleConnect logs CONNECT packet details.
+// func (lm *loggingMiddleware) HandleConnection(conn core.Connection) {
+// 	lm.next.HandleConnection(conn)
+// }
+
+// HandleConnect logs CONNECT packet details.
+func (lm *loggingMiddleware) HandleConnect(conn core.Connection, pkt packets.ControlPacket) (err error) {
 	defer func(begin time.Time) {
-		lm.logger.Debug("Connection handled",
+		lm.logger.Info("HandleConnect",
 			slog.String("remote_addr", conn.RemoteAddr().String()),
-			slog.String("duration", time.Since(begin).String()))
-	}(time.Now())
-
-	lm.svc.HandleConnection(conn)
-}
-
-// Subscribe wraps the call with logging.
-func (lm *loggingMiddleware) Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) (err error) {
-	defer func(begin time.Time) {
-		args := []any{
 			slog.String("duration", time.Since(begin).String()),
-			slog.String("client_id", clientID),
-			slog.String("filter", filter),
-			slog.Int("qos", int(qos)),
-		}
-		if err != nil {
-			args = append(args, slog.String("error", err.Error()))
-			lm.logger.Warn("Subscribe failed", args...)
-			return
-		}
-		lm.logger.Info("Client subscribed", args...)
+			slog.Any("error", err),
+		)
 	}(time.Now())
-
-	return lm.svc.Subscribe(clientID, filter, qos, opts)
+	// fmt.Println("handle conn")
+	return lm.next.HandleConnect(conn, pkt)
 }
 
-// Unsubscribe wraps the call with logging.
-func (lm *loggingMiddleware) Unsubscribe(clientID string, filter string) (err error) {
+// HandlePublish logs PUBLISH packet details.
+func (lm *loggingMiddleware) HandlePublish(s *session.Session, pkt packets.ControlPacket) (err error) {
 	defer func(begin time.Time) {
-		args := []any{
+		lm.logger.Info("HandlePublish",
+			slog.String("client_id", s.ID),
 			slog.String("duration", time.Since(begin).String()),
-			slog.String("client_id", clientID),
-			slog.String("filter", filter),
-		}
-		if err != nil {
-			args = append(args, slog.String("error", err.Error()))
-			lm.logger.Warn("Unsubscribe failed", args...)
-			return
-		}
-		lm.logger.Info("Client unsubscribed", args...)
+			slog.Any("error", err),
+		)
 	}(time.Now())
 
-	return lm.svc.Unsubscribe(clientID, filter)
+	return lm.next.HandlePublish(s, pkt)
 }
 
-// Match wraps the call with logging (debug level only).
-func (lm *loggingMiddleware) Match(topic string) ([]*storage.Subscription, error) {
-	return lm.svc.Match(topic)
-}
-
-// Distribute wraps the call with logging.
-func (lm *loggingMiddleware) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) (err error) {
+// HandlePubAck logs PUBACK packet details.
+func (lm *loggingMiddleware) HandlePubAck(s *session.Session, pkt packets.ControlPacket) (err error) {
 	defer func(begin time.Time) {
-		if err != nil {
-			lm.logger.Warn("Message distribution failed",
-				slog.String("topic", topic),
-				slog.Int("qos", int(qos)),
-				slog.Int("payload_size", len(payload)),
-				slog.Bool("retain", retain),
-				slog.String("error", err.Error()),
-				slog.String("duration", time.Since(begin).String()))
-		}
+		lm.logger.Info("HandlePubAck",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
 	}(time.Now())
 
-	return lm.svc.Distribute(topic, payload, qos, retain, props)
+	return lm.next.HandlePubAck(s, pkt)
 }
 
-// Close shuts down the broker.
-func (lm *loggingMiddleware) Close() error {
-	lm.logger.Info("Shutting down broker")
-	err := lm.svc.Close()
-	if err != nil {
-		lm.logger.Error("Broker shutdown failed", slog.String("error", err.Error()))
-	} else {
-		lm.logger.Info("Broker shutdown complete")
-	}
-	return err
+// HandlePubRec logs PUBREC packet details.
+func (lm *loggingMiddleware) HandlePubRec(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandlePubRec",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandlePubRec(s, pkt)
+}
+
+// HandlePubRel logs PUBREL packet details.
+func (lm *loggingMiddleware) HandlePubRel(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandlePubRel",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandlePubRel(s, pkt)
+}
+
+// HandlePubComp logs PUBCOMP packet details.
+func (lm *loggingMiddleware) HandlePubComp(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandlePubComp",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandlePubComp(s, pkt)
+}
+
+// HandleSubscribe logs SUBSCRIBE packet details.
+func (lm *loggingMiddleware) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandleSubscribe",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandleSubscribe(s, pkt)
+}
+
+// HandleUnsubscribe logs UNSUBSCRIBE packet details.
+func (lm *loggingMiddleware) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandleUnsubscribe",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandleUnsubscribe(s, pkt)
+}
+
+// HandlePingReq logs PINGREQ details.
+func (lm *loggingMiddleware) HandlePingReq(s *session.Session) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Debug("HandlePingReq",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandlePingReq(s)
+}
+
+// HandleDisconnect logs DISCONNECT packet details.
+func (lm *loggingMiddleware) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandleDisconnect",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandleDisconnect(s, pkt)
 }

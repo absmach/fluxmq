@@ -12,8 +12,8 @@ import (
 	"github.com/absmach/mqtt/storage/messages"
 )
 
-// HandleV3Connect handles CONNECT packets and sets up the session.
-func (b *Broker) HandleV3Connect(conn core.Connection, p *v3.Connect) error {
+// handleV3Connect handles CONNECT packets and sets up the session.
+func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) error {
 	clientID := p.ClientID
 	cleanStart := p.CleanSession
 
@@ -148,7 +148,7 @@ func (b *Broker) handleV3Publish(s *session.Session, p *v3.Publish) error {
 			QoS:     qos,
 			Retain:  retain,
 		}
-		return b.Publish(s, msg)
+		return b.Publish(msg)
 
 	case 1:
 		msg := Message{
@@ -157,7 +157,7 @@ func (b *Broker) handleV3Publish(s *session.Session, p *v3.Publish) error {
 			QoS:     qos,
 			Retain:  retain,
 		}
-		if err := b.Publish(s, msg); err != nil {
+		if err := b.Publish(msg); err != nil {
 			return err
 		}
 		return sendV3PubAck(s, packetID)
@@ -209,7 +209,7 @@ func (b *Broker) handleV3PubRel(s *session.Session, p *v3.PubRel) error {
 			QoS:     inf.Message.QoS,
 			Retain:  inf.Message.Retain,
 		}
-		b.Publish(s, msg)
+		b.Publish(msg)
 	}
 
 	b.AckMessage(s, packetID)

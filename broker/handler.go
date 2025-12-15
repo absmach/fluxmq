@@ -26,6 +26,9 @@ var (
 
 // Handler is the interface for packet handlers (V3, V5, etc).
 type Handler interface {
+	// Use by non-specific packet type when establishing connection.
+	// HandleConnection(conn core.Connection)
+
 	// HandleConnect handles CONNECT packets.
 	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
 

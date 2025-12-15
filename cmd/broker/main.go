@@ -56,8 +56,8 @@ func main() {
 	b := broker.NewBroker()
 	defer b.Close()
 
-	svc := middleware.NewMetrics(b, broker.NewStats()) // Wrap with metrics tracking
-	svc = middleware.NewLogging(svc, logger)           // Wrap with logging
+	// svc := middleware.NewMetrics(b, broker.NewStats()) // Wrap with metrics tracking
+	svc := middleware.NewLogging(b, logger) // Wrap with logging
 
 	// Create TCP server with config
 	serverCfg := tcp.Config{

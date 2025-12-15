@@ -16,6 +16,8 @@ import (
 	"github.com/absmach/mqtt/storage/messages"
 )
 
+var _ Handler = (*Broker)(nil)
+
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	mu          sync.RWMutex
@@ -75,8 +77,8 @@ func (b *Broker) Stats() *Stats {
 
 // SubscribeService adapts the Service.Subscribe signature to the domain Subscribe method.
 func (b *Broker) SubscribeService(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
-	sess := b.Get(clientID)
-	if sess == nil {
+	s := b.Get(clientID)
+	if s == nil {
 		return ErrSessionNotFound
 	}
 
@@ -87,17 +89,17 @@ func (b *Broker) SubscribeService(clientID string, filter string, qos byte, opts
 		RetainHandling:    opts.RetainHandling,
 	}
 
-	return b.subscribeInternal(sess, filter, subOpts)
+	return b.subscribeInternal(s, filter, subOpts)
 }
 
 // UnsubscribeService adapts the Service.Unsubscribe signature to the domain Unsubscribe method.
 func (b *Broker) UnsubscribeService(clientID string, filter string) error {
-	sess := b.Get(clientID)
-	if sess == nil {
+	s := b.Get(clientID)
+	if s == nil {
 		return ErrSessionNotFound
 	}
 
-	return b.unsubscribeInternal(sess, filter)
+	return b.unsubscribeInternal(s, filter)
 }
 
 // --- Core Domain Methods ---
@@ -157,25 +159,25 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		Will:           will,
 	}
 
-	sess := session.New(clientID, 0, sessionOpts, inflight, offlineQueue)
+	s := session.New(clientID, 0, sessionOpts, inflight, offlineQueue)
 
-	if err := b.restoreSessionFromStorage(sess, clientID, sessionOpts); err != nil {
+	if err := b.restoreSessionFromStorage(s, clientID, sessionOpts); err != nil {
 		return nil, false, err
 	}
 
-	sess.SetOnDisconnect(func(s *session.Session, graceful bool) {
+	s.SetOnDisconnect(func(s *session.Session, graceful bool) {
 		b.handleDisconnect(s, graceful)
 	})
 
-	b.sessionsMap.Set(clientID, sess)
+	b.sessionsMap.Set(clientID, s)
 
 	if b.sessions != nil {
-		if err := b.sessions.Save(sess.Info()); err != nil {
+		if err := b.sessions.Save(s.Info()); err != nil {
 			return nil, false, fmt.Errorf("failed to save session: %w", err)
 		}
 	}
 
-	return sess, true, nil
+	return s, true, nil
 }
 
 // DestroySession removes a session completely.
@@ -192,7 +194,7 @@ func (b *Broker) DestroySession(clientID string) error {
 }
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.
-func (b *Broker) Publish(sess *session.Session, msg Message) error {
+func (b *Broker) Publish(msg Message) error {
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
 			if err := b.retained.Delete(msg.Topic); err != nil {
@@ -216,17 +218,17 @@ func (b *Broker) Publish(sess *session.Session, msg Message) error {
 }
 
 // subscribeInternal adds a subscription for a session (internal domain method).
-func (b *Broker) subscribeInternal(sess *session.Session, filter string, opts SubscriptionOptions) error {
+func (b *Broker) subscribeInternal(s *session.Session, filter string, opts SubscriptionOptions) error {
 	storeOpts := storage.SubscribeOptions{
 		NoLocal:           opts.NoLocal,
 		RetainAsPublished: opts.RetainAsPublished,
 		RetainHandling:    opts.RetainHandling,
 	}
 
-	b.router.Subscribe(sess.ID, filter, opts.QoS, storeOpts)
+	b.router.Subscribe(s.ID, filter, opts.QoS, storeOpts)
 
 	sub := &storage.Subscription{
-		ClientID: sess.ID,
+		ClientID: s.ID,
 		Filter:   filter,
 		QoS:      opts.QoS,
 		Options:  storeOpts,
@@ -235,20 +237,20 @@ func (b *Broker) subscribeInternal(sess *session.Session, filter string, opts Su
 		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
-	sess.AddSubscription(filter, storeOpts)
+	s.AddSubscription(filter, storeOpts)
 
 	return nil
 }
 
 // unsubscribeInternal removes a subscription for a session (internal domain method).
-func (b *Broker) unsubscribeInternal(sess *session.Session, filter string) error {
-	b.router.Unsubscribe(sess.ID, filter)
+func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
+	b.router.Unsubscribe(s.ID, filter)
 
-	if err := b.subscriptions.Remove(sess.ID, filter); err != nil {
+	if err := b.subscriptions.Remove(s.ID, filter); err != nil {
 		return fmt.Errorf("failed to remove subscription: %w", err)
 	}
 
-	sess.RemoveSubscription(filter)
+	s.RemoveSubscription(filter)
 
 	return nil
 }
@@ -265,8 +267,8 @@ func (b *Broker) Unsubscribe(clientID string, filter string) error {
 
 // DeliverToSession queues a message for delivery to a session.
 // Returns packet ID (>0) if session is connected and QoS>0, otherwise 0.
-func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, error) {
-	if !sess.IsConnected() {
+func (b *Broker) DeliverToSession(s *session.Session, msg Message) (uint16, error) {
+	if !s.IsConnected() {
 		if msg.QoS > 0 {
 			storeMsg := &storage.Message{
 				Topic:      msg.Topic,
@@ -274,16 +276,16 @@ func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, e
 				QoS:        msg.QoS,
 				Properties: msg.Properties,
 			}
-			return 0, sess.OfflineQueue().Enqueue(storeMsg)
+			return 0, s.OfflineQueue().Enqueue(storeMsg)
 		}
 		return 0, nil
 	}
 
 	if msg.QoS == 0 {
-		return 0, b.DeliverMessage(sess, msg)
+		return 0, b.DeliverMessage(s, msg)
 	}
 
-	packetID := sess.NextPacketID()
+	packetID := s.NextPacketID()
 	storeMsg := &storage.Message{
 		Topic:      msg.Topic,
 		Payload:    msg.Payload,
@@ -291,13 +293,13 @@ func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, e
 		PacketID:   packetID,
 		Properties: msg.Properties,
 	}
-	if err := sess.Inflight().Add(packetID, storeMsg, messages.Outbound); err != nil {
+	if err := s.Inflight().Add(packetID, storeMsg, messages.Outbound); err != nil {
 		return 0, err
 	}
 
 	deliverMsg := msg
 	deliverMsg.PacketID = packetID
-	if err := b.DeliverMessage(sess, deliverMsg); err != nil {
+	if err := b.DeliverMessage(s, deliverMsg); err != nil {
 		return packetID, err
 	}
 
@@ -305,8 +307,8 @@ func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, e
 }
 
 // AckMessage acknowledges a message by packet ID.
-func (b *Broker) AckMessage(sess *session.Session, packetID uint16) error {
-	sess.Inflight().Ack(packetID)
+func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
+	s.Inflight().Ack(packetID)
 	return nil
 }
 
@@ -707,10 +709,10 @@ func (b *Broker) runSession(s *session.Session) error {
 // HandleConnect implements Handler.HandleConnect by dispatching based on packet type.
 func (b *Broker) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
 	if p3, ok := pkt.(*v3.Connect); ok {
-		return b.HandleV3Connect(conn, p3)
+		return b.handleV3Connect(conn, p3)
 	}
 	if p5, ok := pkt.(*v5.Connect); ok {
-		return b.HandleV5Connect(conn, p5)
+		return b.handleV5Connect(conn, p5)
 	}
 	return ErrInvalidPacketType
 }

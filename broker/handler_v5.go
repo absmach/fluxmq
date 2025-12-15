@@ -12,8 +12,8 @@ import (
 	"github.com/absmach/mqtt/storage/messages"
 )
 
-// HandleV5Connect handles CONNECT packets and sets up the session.
-func (b *Broker) HandleV5Connect(conn core.Connection, p *v5.Connect) error {
+// handleV5Connect handles CONNECT packets and sets up the session.
+func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) error {
 	clientID := p.ClientID
 	cleanStart := p.CleanStart
 
@@ -184,7 +184,7 @@ func (b *Broker) handleV5Publish(s *session.Session, p *v5.Publish) error {
 			QoS:     qos,
 			Retain:  retain,
 		}
-		return b.Publish(s, msg)
+		return b.Publish(msg)
 
 	case 1:
 		msg := Message{
@@ -193,7 +193,7 @@ func (b *Broker) handleV5Publish(s *session.Session, p *v5.Publish) error {
 			QoS:     qos,
 			Retain:  retain,
 		}
-		if err := b.Publish(s, msg); err != nil {
+		if err := b.Publish(msg); err != nil {
 			return b.sendV5PubAck(s, packetID, 0x80, "Unspecified error")
 		}
 		return b.sendV5PubAck(s, packetID, 0x00, "")
@@ -245,7 +245,7 @@ func (b *Broker) handleV5PubRel(s *session.Session, p *v5.PubRel) error {
 			QoS:     inf.Message.QoS,
 			Retain:  inf.Message.Retain,
 		}
-		b.Publish(s, msg)
+		b.Publish(msg)
 	}
 
 	b.AckMessage(s, packetID)
