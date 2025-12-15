@@ -4,24 +4,24 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 // Queue defines operations on offline message queue.
 type Queue interface {
-	Enqueue(msg *store.Message) error
-	Dequeue() *store.Message
+	Enqueue(msg *storage.Message) error
+	Dequeue() *storage.Message
 	Len() int
 	IsEmpty() bool
 	IsFull() bool
-	Peek() *store.Message
-	Drain() []*store.Message
+	Peek() *storage.Message
+	Drain() []*storage.Message
 }
 
 // queue is a queue for offline messages (QoS > 0).
 type queue struct {
 	mu       sync.Mutex
-	messages []*store.Message
+	messages []*storage.Message
 	maxSize  int
 }
 
@@ -31,14 +31,14 @@ func NewMessageQueue(maxSize int) *queue {
 		maxSize = 1000
 	}
 	return &queue{
-		messages: make([]*store.Message, 0),
+		messages: make([]*storage.Message, 0),
 		maxSize:  maxSize,
 	}
 }
 
 // Enqueue adds a message to the queue.
 // Returns ErrQueueFull if the queue is at capacity.
-func (q *queue) Enqueue(msg *store.Message) error {
+func (q *queue) Enqueue(msg *storage.Message) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -47,14 +47,14 @@ func (q *queue) Enqueue(msg *store.Message) error {
 			msg.Topic, len(q.messages), q.maxSize, ErrQueueFull)
 	}
 
-	cp := store.CopyMessage(msg)
+	cp := storage.CopyMessage(msg)
 	q.messages = append(q.messages, cp)
 	return nil
 }
 
 // Dequeue removes and returns the first message from the queue.
 // Returns nil if the queue is empty.
-func (q *queue) Dequeue() *store.Message {
+func (q *queue) Dequeue() *storage.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -68,7 +68,7 @@ func (q *queue) Dequeue() *store.Message {
 }
 
 // Peek returns the first message without removing it.
-func (q *queue) Peek() *store.Message {
+func (q *queue) Peek() *storage.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -100,11 +100,11 @@ func (q *queue) IsFull() bool {
 }
 
 // Drain removes and returns all messages from the queue.
-func (q *queue) Drain() []*store.Message {
+func (q *queue) Drain() []*storage.Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	msgs := q.messages
-	q.messages = make([]*store.Message, 0)
+	q.messages = make([]*storage.Message, 0)
 	return msgs
 }

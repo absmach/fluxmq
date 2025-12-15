@@ -6,7 +6,7 @@ import (
 
 	"github.com/absmach/mqtt/broker"
 	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 var _ broker.Service = (*loggingMiddleware)(nil)
@@ -33,7 +33,7 @@ func (lm *loggingMiddleware) HandleConnection(conn core.Connection) {
 }
 
 // Subscribe wraps the call with logging.
-func (lm *loggingMiddleware) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) (err error) {
+func (lm *loggingMiddleware) Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) (err error) {
 	defer func(begin time.Time) {
 		args := []any{
 			slog.String("duration", time.Since(begin).String()),
@@ -72,7 +72,7 @@ func (lm *loggingMiddleware) Unsubscribe(clientID string, filter string) (err er
 }
 
 // Match wraps the call with logging (debug level only).
-func (lm *loggingMiddleware) Match(topic string) ([]*store.Subscription, error) {
+func (lm *loggingMiddleware) Match(topic string) ([]*storage.Subscription, error) {
 	return lm.svc.Match(topic)
 }
 

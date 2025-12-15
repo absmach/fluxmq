@@ -9,7 +9,7 @@ import (
 	packets "github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 // Options defines client configuration.
@@ -17,7 +17,7 @@ type Options struct {
 	ClientID   string
 	BrokerAddr string
 	Version    int // 3 or 5, defaults to 5
-	Will       *store.WillMessage
+	Will       *storage.WillMessage
 }
 
 // Client implements an MQTT client.

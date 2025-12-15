@@ -4,10 +4,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
-var _ store.WillStore = (*WillStore)(nil)
+var _ storage.WillStore = (*WillStore)(nil)
 
 // WillStore is an in-memory implementation of store.WillStore.
 type WillStore struct {
@@ -16,7 +16,7 @@ type WillStore struct {
 }
 
 type willEntry struct {
-	will        *store.WillMessage
+	will        *storage.WillMessage
 	disconnedAt time.Time // When client disconnected (for delay calculation)
 }
 
@@ -28,7 +28,7 @@ func NewWillStore() *WillStore {
 }
 
 // Set stores a will message for a client.
-func (s *WillStore) Set(clientID string, will *store.WillMessage) error {
+func (s *WillStore) Set(clientID string, will *storage.WillMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -40,13 +40,13 @@ func (s *WillStore) Set(clientID string, will *store.WillMessage) error {
 }
 
 // Get retrieves the will message for a client.
-func (s *WillStore) Get(clientID string) (*store.WillMessage, error) {
+func (s *WillStore) Get(clientID string) (*storage.WillMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	entry, ok := s.data[clientID]
 	if !ok {
-		return nil, store.ErrNotFound
+		return nil, storage.ErrNotFound
 	}
 	return copyWill(entry.will), nil
 }
@@ -67,7 +67,7 @@ func (s *WillStore) MarkDisconnected(clientID string) error {
 
 	entry, ok := s.data[clientID]
 	if !ok {
-		return store.ErrNotFound
+		return storage.ErrNotFound
 	}
 	entry.disconnedAt = time.Now()
 	return nil
@@ -75,11 +75,11 @@ func (s *WillStore) MarkDisconnected(clientID string) error {
 
 // GetPending returns will messages that should be triggered.
 // (will delay elapsed and client still disconnected)
-func (s *WillStore) GetPending(before time.Time) ([]*store.WillMessage, error) {
+func (s *WillStore) GetPending(before time.Time) ([]*storage.WillMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*store.WillMessage
+	var result []*storage.WillMessage
 	for _, entry := range s.data {
 		// Only check entries where client has disconnected
 		if entry.disconnedAt.IsZero() {
@@ -96,12 +96,12 @@ func (s *WillStore) GetPending(before time.Time) ([]*store.WillMessage, error) {
 }
 
 // copyWill creates a deep copy of a will message.
-func copyWill(will *store.WillMessage) *store.WillMessage {
+func copyWill(will *storage.WillMessage) *storage.WillMessage {
 	if will == nil {
 		return nil
 	}
 
-	cp := &store.WillMessage{
+	cp := &storage.WillMessage{
 		ClientID: will.ClientID,
 		Topic:    will.Topic,
 		QoS:      will.QoS,

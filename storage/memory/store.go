@@ -2,10 +2,10 @@
 package memory
 
 import (
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
-var _ store.Store = (*Store)(nil)
+var _ storage.Store = (*Store)(nil)
 
 // Store is the composite in-memory store.
 type Store struct {
@@ -28,27 +28,27 @@ func New() *Store {
 }
 
 // Messages returns the message store.
-func (s *Store) Messages() store.MessageStore {
+func (s *Store) Messages() storage.MessageStore {
 	return s.messages
 }
 
 // Sessions returns the session store.
-func (s *Store) Sessions() store.SessionStore {
+func (s *Store) Sessions() storage.SessionStore {
 	return s.sessions
 }
 
 // Subscriptions returns the subscription store.
-func (s *Store) Subscriptions() store.SubscriptionStore {
+func (s *Store) Subscriptions() storage.SubscriptionStore {
 	return s.subscriptions
 }
 
 // Retained returns the retained message store.
-func (s *Store) Retained() store.RetainedStore {
+func (s *Store) Retained() storage.RetainedStore {
 	return s.retained
 }
 
 // Wills returns the will message store.
-func (s *Store) Wills() store.WillStore {
+func (s *Store) Wills() storage.WillStore {
 	return s.wills
 }
 

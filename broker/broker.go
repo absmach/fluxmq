@@ -11,9 +11,9 @@ import (
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
 	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/store"
-	"github.com/absmach/mqtt/store/memory"
-	"github.com/absmach/mqtt/store/messages"
+	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/storage/memory"
+	"github.com/absmach/mqtt/storage/messages"
 )
 
 // Broker is the core MQTT broker with clean domain methods.
@@ -22,11 +22,11 @@ type Broker struct {
 	sessionsMap session.Cache
 	router      Router
 
-	messages      store.MessageStore
-	sessions      store.SessionStore
-	subscriptions store.SubscriptionStore
-	retained      store.RetainedStore
-	wills         store.WillStore
+	messages      storage.MessageStore
+	sessions      storage.SessionStore
+	subscriptions storage.SubscriptionStore
+	retained      storage.RetainedStore
+	wills         storage.WillStore
 
 	auth  *AuthEngine
 	stats *Stats
@@ -74,7 +74,7 @@ func (b *Broker) Stats() *Stats {
 // These methods adapt between the Service interface (for middleware) and the domain methods.
 
 // SubscribeService adapts the Service.Subscribe signature to the domain Subscribe method.
-func (b *Broker) SubscribeService(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
+func (b *Broker) SubscribeService(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
 	sess := b.Get(clientID)
 	if sess == nil {
 		return ErrSessionNotFound
@@ -137,9 +137,9 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		}
 	}
 
-	var will *store.WillMessage
+	var will *storage.WillMessage
 	if opts.WillMessage != nil {
-		will = &store.WillMessage{
+		will = &storage.WillMessage{
 			ClientID:   clientID,
 			Topic:      opts.WillMessage.Topic,
 			Payload:    opts.WillMessage.Payload,
@@ -199,7 +199,7 @@ func (b *Broker) Publish(sess *session.Session, msg Message) error {
 				return err
 			}
 		} else {
-			storeMsg := &store.Message{
+			storeMsg := &storage.Message{
 				Topic:      msg.Topic,
 				Payload:    msg.Payload,
 				QoS:        msg.QoS,
@@ -217,7 +217,7 @@ func (b *Broker) Publish(sess *session.Session, msg Message) error {
 
 // subscribeInternal adds a subscription for a session (internal domain method).
 func (b *Broker) subscribeInternal(sess *session.Session, filter string, opts SubscriptionOptions) error {
-	storeOpts := store.SubscribeOptions{
+	storeOpts := storage.SubscribeOptions{
 		NoLocal:           opts.NoLocal,
 		RetainAsPublished: opts.RetainAsPublished,
 		RetainHandling:    opts.RetainHandling,
@@ -225,7 +225,7 @@ func (b *Broker) subscribeInternal(sess *session.Session, filter string, opts Su
 
 	b.router.Subscribe(sess.ID, filter, opts.QoS, storeOpts)
 
-	sub := &store.Subscription{
+	sub := &storage.Subscription{
 		ClientID: sess.ID,
 		Filter:   filter,
 		QoS:      opts.QoS,
@@ -254,7 +254,7 @@ func (b *Broker) unsubscribeInternal(sess *session.Session, filter string) error
 }
 
 // Subscribe adds a subscription (implements Service interface).
-func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
+func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
 	return b.SubscribeService(clientID, filter, qos, opts)
 }
 
@@ -268,7 +268,7 @@ func (b *Broker) Unsubscribe(clientID string, filter string) error {
 func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, error) {
 	if !sess.IsConnected() {
 		if msg.QoS > 0 {
-			storeMsg := &store.Message{
+			storeMsg := &storage.Message{
 				Topic:      msg.Topic,
 				Payload:    msg.Payload,
 				QoS:        msg.QoS,
@@ -284,7 +284,7 @@ func (b *Broker) DeliverToSession(sess *session.Session, msg Message) (uint16, e
 	}
 
 	packetID := sess.NextPacketID()
-	storeMsg := &store.Message{
+	storeMsg := &storage.Message{
 		Topic:      msg.Topic,
 		Payload:    msg.Payload,
 		QoS:        msg.QoS,
@@ -318,7 +318,7 @@ func (b *Broker) PublishWill(clientID string) error {
 
 	will, err := b.wills.Get(clientID)
 	if err != nil {
-		if err == store.ErrNotFound {
+		if err == storage.ErrNotFound {
 			return nil
 		}
 		return err
@@ -339,7 +339,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 }
 
 // Match returns all subscriptions matching a topic (implements Service interface).
-func (b *Broker) Match(topic string) ([]*store.Subscription, error) {
+func (b *Broker) Match(topic string) ([]*storage.Subscription, error) {
 	return b.router.Match(topic)
 }
 
@@ -474,7 +474,7 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 	}
 
 	stored, err := b.sessions.Get(clientID)
-	if err != nil && err != store.ErrNotFound {
+	if err != nil && err != storage.ErrNotFound {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 	if stored != nil {

@@ -8,8 +8,8 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
 	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/store"
-	"github.com/absmach/mqtt/store/messages"
+	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/storage/messages"
 )
 
 // HandleV5Connect handles CONNECT packets and sets up the session.
@@ -205,7 +205,7 @@ func (b *Broker) handleV5Publish(s *session.Session, p *v5.Publish) error {
 
 		s.Inflight().MarkReceived(packetID)
 
-		storeMsg := &store.Message{
+		storeMsg := &storage.Message{
 			Topic:    topic,
 			Payload:  payload,
 			QoS:      2,

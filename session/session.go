@@ -6,8 +6,8 @@ import (
 
 	"github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/core/packets"
-	"github.com/absmach/mqtt/store"
-	"github.com/absmach/mqtt/store/messages"
+	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/storage/messages"
 )
 
 // State represents the session state.
@@ -51,8 +51,8 @@ type Session struct {
 	state         State
 	KeepAlive     time.Duration // Keep-alive duration
 	msgHandler    *messages.MessageHandler
-	Will          *store.WillMessage                // set on CONNECT, cleared on clean disconnect
-	subscriptions map[string]store.SubscribeOptions // cached from store for fast lookup
+	Will          *storage.WillMessage                // set on CONNECT, cleared on clean disconnect
+	subscriptions map[string]storage.SubscribeOptions // cached from store for fast lookup
 	onDisconnect  func(s *Session, graceful bool)
 
 	ExpiryInterval uint32 // Session expiry in seconds (v5)
@@ -80,7 +80,7 @@ type Session struct {
 // Options holds options for creating a new session.
 type Options struct {
 	KeepAlive      time.Duration
-	Will           *store.WillMessage
+	Will           *storage.WillMessage
 	ExpiryInterval uint32
 	MaxPacketSize  uint32
 	ReceiveMaximum uint16
@@ -122,7 +122,7 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		TopicAliasMax:        opts.TopicAliasMax,
 		KeepAlive:            opts.KeepAlive,
 		Will:                 opts.Will,
-		subscriptions:        make(map[string]store.SubscribeOptions),
+		subscriptions:        make(map[string]storage.SubscribeOptions),
 		subscriptionIDs:      make(map[string][]uint32),
 		retainAvailable:      true,
 		wildcardSubAvailable: true,
@@ -274,7 +274,7 @@ func (s *Session) SetOnDisconnect(fn func(*Session, bool)) {
 }
 
 // AddSubscription adds a subscription to the cache.
-func (s *Session) AddSubscription(filter string, opts store.SubscribeOptions) {
+func (s *Session) AddSubscription(filter string, opts storage.SubscribeOptions) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions[filter] = opts
@@ -288,11 +288,11 @@ func (s *Session) RemoveSubscription(filter string) {
 }
 
 // GetSubscriptions returns all subscriptions.
-func (s *Session) GetSubscriptions() map[string]store.SubscribeOptions {
+func (s *Session) GetSubscriptions() map[string]storage.SubscribeOptions {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make(map[string]store.SubscribeOptions, len(s.subscriptions))
+	result := make(map[string]storage.SubscribeOptions, len(s.subscriptions))
 	for k, v := range s.subscriptions {
 		result[k] = v
 	}
@@ -321,7 +321,7 @@ func (s *Session) ResolveInboundAlias(alias uint16) (string, bool) {
 
 // UpdateConnectionOptions updates session options during reconnection.
 // Must be called before Connect.
-func (s *Session) UpdateConnectionOptions(version byte, keepAlive time.Duration, will *store.WillMessage) {
+func (s *Session) UpdateConnectionOptions(version byte, keepAlive time.Duration, will *storage.WillMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -335,18 +335,18 @@ func (s *Session) UpdateConnectionOptions(version byte, keepAlive time.Duration,
 }
 
 // GetWill returns a copy of the will message.
-func (s *Session) GetWill() *store.WillMessage {
+func (s *Session) GetWill() *storage.WillMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Will
 }
 
 // Info returns session info for persistence.
-func (s *Session) Info() *store.Session {
+func (s *Session) Info() *storage.Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return &store.Session{
+	return &storage.Session{
 		ClientID:        s.ID,
 		Version:         s.Version,
 		CleanStart:      s.CleanStart,
@@ -363,7 +363,7 @@ func (s *Session) Info() *store.Session {
 }
 
 // RestoreFrom restores session state from persistence.
-func (s *Session) RestoreFrom(stored *store.Session) {
+func (s *Session) RestoreFrom(stored *storage.Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

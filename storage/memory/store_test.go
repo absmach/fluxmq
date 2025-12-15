@@ -4,14 +4,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 func TestMessageStore(t *testing.T) {
 	s := NewMessageStore()
 
 	// Test Store and Get
-	msg := &store.Message{
+	msg := &storage.Message{
 		Topic:    "test/topic",
 		Payload:  []byte("hello"),
 		QoS:      1,
@@ -42,8 +42,8 @@ func TestMessageStore(t *testing.T) {
 	}
 
 	// Test List with prefix
-	s.Store("client1/456", &store.Message{Topic: "t2"})
-	s.Store("client2/789", &store.Message{Topic: "t3"})
+	s.Store("client1/456", &storage.Message{Topic: "t2"})
+	s.Store("client2/789", &storage.Message{Topic: "t3"})
 
 	list, err := s.List("client1/")
 	if err != nil {
@@ -58,7 +58,7 @@ func TestMessageStore(t *testing.T) {
 		t.Fatalf("Delete failed: %v", err)
 	}
 	_, err = s.Get("client1/123")
-	if err != store.ErrNotFound {
+	if err != storage.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestSubscriptionStore(t *testing.T) {
 	s := NewSubscriptionStore()
 
 	// Test Add
-	sub1 := &store.Subscription{
+	sub1 := &storage.Subscription{
 		ClientID: "client1",
 		Filter:   "home/+/temp",
 		QoS:      1,
@@ -85,7 +85,7 @@ func TestSubscriptionStore(t *testing.T) {
 		t.Fatalf("Add failed: %v", err)
 	}
 
-	sub2 := &store.Subscription{
+	sub2 := &storage.Subscription{
 		ClientID: "client2",
 		Filter:   "home/#",
 		QoS:      2,
@@ -135,7 +135,7 @@ func TestSubscriptionStore(t *testing.T) {
 	}
 
 	// Test RemoveAll
-	s.Add(&store.Subscription{ClientID: "client2", Filter: "other/topic", QoS: 0})
+	s.Add(&storage.Subscription{ClientID: "client2", Filter: "other/topic", QoS: 0})
 	if err := s.RemoveAll("client2"); err != nil {
 		t.Fatalf("RemoveAll failed: %v", err)
 	}
@@ -148,8 +148,8 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 	s := NewSubscriptionStore()
 
 	// Add overlapping subscriptions for same client
-	s.Add(&store.Subscription{ClientID: "client1", Filter: "home/#", QoS: 1})
-	s.Add(&store.Subscription{ClientID: "client1", Filter: "home/+/temp", QoS: 2})
+	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/#", QoS: 1})
+	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/+/temp", QoS: 2})
 
 	matched, err := s.Match("home/bedroom/temp")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestRetainedStore(t *testing.T) {
 	s := NewRetainedStore()
 
 	// Test Set and Get
-	msg := &store.Message{
+	msg := &storage.Message{
 		Topic:   "sensors/temp",
 		Payload: []byte("23.5"),
 		QoS:     1,
@@ -189,8 +189,8 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Match with exact filter
-	s.Set("sensors/humidity", &store.Message{Payload: []byte("60")})
-	s.Set("sensors/pressure", &store.Message{Payload: []byte("1013")})
+	s.Set("sensors/humidity", &storage.Message{Payload: []byte("60")})
+	s.Set("sensors/pressure", &storage.Message{Payload: []byte("1013")})
 
 	matched, err := s.Match("sensors/+")
 	if err != nil {
@@ -210,11 +210,11 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Delete via empty payload
-	if err := s.Set("sensors/temp", &store.Message{Payload: nil}); err != nil {
+	if err := s.Set("sensors/temp", &storage.Message{Payload: nil}); err != nil {
 		t.Fatalf("Set with empty payload failed: %v", err)
 	}
 	_, err = s.Get("sensors/temp")
-	if err != store.ErrNotFound {
+	if err != storage.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -231,8 +231,8 @@ func TestRetainedStore(t *testing.T) {
 func TestRetainedStoreSystemTopics(t *testing.T) {
 	s := NewRetainedStore()
 
-	s.Set("$SYS/broker/clients", &store.Message{Payload: []byte("10")})
-	s.Set("normal/topic", &store.Message{Payload: []byte("data")})
+	s.Set("$SYS/broker/clients", &storage.Message{Payload: []byte("10")})
+	s.Set("normal/topic", &storage.Message{Payload: []byte("data")})
 
 	// # should not match $SYS topics
 	matched, _ := s.Match("#")
@@ -257,7 +257,7 @@ func TestWillStore(t *testing.T) {
 	s := NewWillStore()
 
 	// Test Set and Get
-	will := &store.WillMessage{
+	will := &storage.WillMessage{
 		ClientID: "client1",
 		Topic:    "clients/client1/status",
 		Payload:  []byte("offline"),
@@ -310,7 +310,7 @@ func TestWillStore(t *testing.T) {
 		t.Fatalf("Delete failed: %v", err)
 	}
 	_, err = s.Get("client1")
-	if err != store.ErrNotFound {
+	if err != storage.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete")
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/core/packets"
 	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 // Common handler errors.
@@ -59,9 +59,9 @@ type Handler interface {
 
 // Router is the message routing interface.
 type Router interface {
-	Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error
+	Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error
 	Unsubscribe(clientID string, filter string) error
-	Match(topic string) ([]*store.Subscription, error)
+	Match(topic string) ([]*storage.Subscription, error)
 }
 
 // Authenticator validates client credentials.
@@ -82,17 +82,17 @@ type Publisher interface {
 
 // RetainedStore provides access to retained messages.
 type RetainedStore interface {
-	Set(topic string, msg *store.Message) error
-	Get(topic string) (*store.Message, error)
-	Match(filter string) ([]*store.Message, error)
+	Set(topic string, msg *storage.Message) error
+	Get(topic string) (*storage.Message, error)
+	Match(filter string) ([]*storage.Message, error)
 }
 
 // Service defines the broker service interface for middleware wrapping.
 type Service interface {
 	HandleConnection(conn core.Connection)
-	Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error
+	Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error
 	Unsubscribe(clientID string, filter string) error
-	Match(topic string) ([]*store.Subscription, error)
+	Match(topic string) ([]*storage.Subscription, error)
 	Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error
 	Close() error
 }

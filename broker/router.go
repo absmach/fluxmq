@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 const separator = "/" // TrieRouter handles topic matching and subscription storage.
@@ -15,7 +15,7 @@ type TrieRouter struct {
 
 type node struct {
 	children map[string]*node
-	subs     []*store.Subscription // Subscriptions at this exact level
+	subs     []*storage.Subscription // Subscriptions at this exact level
 }
 
 // NewRouter returns a new instance.
@@ -32,11 +32,11 @@ func newNode() *node {
 }
 
 // Subscribe adds a subscription to the topic filter.
-func (r *TrieRouter) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
+func (r *TrieRouter) Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	sub := &store.Subscription{
+	sub := &storage.Subscription{
 		ClientID: clientID,
 		Filter:   filter,
 		QoS:      qos,
@@ -83,17 +83,17 @@ func (r *TrieRouter) Unsubscribe(clientID string, filter string) error {
 }
 
 // Match returns all subscriptions that match the topic name.
-func (r *TrieRouter) Match(topic string) ([]*store.Subscription, error) {
+func (r *TrieRouter) Match(topic string) ([]*storage.Subscription, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	levels := strings.Split(topic, separator)
-	var matched []*store.Subscription
+	var matched []*storage.Subscription
 	matchLevel(r.root, levels, 0, &matched)
 	return matched, nil
 }
 
-func matchLevel(n *node, levels []string, index int, matched *[]*store.Subscription) {
+func matchLevel(n *node, levels []string, index int, matched *[]*storage.Subscription) {
 	if index == len(levels) {
 		// Reached end of topic - include exact matches and # wildcards
 		*matched = append(*matched, n.subs...)

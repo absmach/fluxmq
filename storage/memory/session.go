@@ -4,38 +4,38 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
-var _ store.SessionStore = (*SessionStore)(nil)
+var _ storage.SessionStore = (*SessionStore)(nil)
 
 // SessionStore is an in-memory implementation of store.SessionStore.
 type SessionStore struct {
 	mu   sync.RWMutex
-	data map[string]*store.Session
+	data map[string]*storage.Session
 }
 
 // NewSessionStore creates a new in-memory session store.
 func NewSessionStore() *SessionStore {
 	return &SessionStore{
-		data: make(map[string]*store.Session),
+		data: make(map[string]*storage.Session),
 	}
 }
 
 // Get retrieves a session by client ID.
-func (s *SessionStore) Get(clientID string) (*store.Session, error) {
+func (s *SessionStore) Get(clientID string) (*storage.Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	session, ok := s.data[clientID]
 	if !ok {
-		return nil, store.ErrNotFound
+		return nil, storage.ErrNotFound
 	}
 	return copySession(session), nil
 }
 
 // Save persists a session.
-func (s *SessionStore) Save(session *store.Session) error {
+func (s *SessionStore) Save(session *storage.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -71,11 +71,11 @@ func (s *SessionStore) GetExpired(before time.Time) ([]string, error) {
 }
 
 // List returns all sessions.
-func (s *SessionStore) List() ([]*store.Session, error) {
+func (s *SessionStore) List() ([]*storage.Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]*store.Session, 0, len(s.data))
+	result := make([]*storage.Session, 0, len(s.data))
 	for _, session := range s.data {
 		result = append(result, copySession(session))
 	}
@@ -83,12 +83,12 @@ func (s *SessionStore) List() ([]*store.Session, error) {
 }
 
 // copySession creates a deep copy of a session.
-func copySession(session *store.Session) *store.Session {
+func copySession(session *storage.Session) *storage.Session {
 	if session == nil {
 		return nil
 	}
 
-	return &store.Session{
+	return &storage.Session{
 		ClientID:        session.ClientID,
 		Version:         session.Version,
 		CleanStart:      session.CleanStart,

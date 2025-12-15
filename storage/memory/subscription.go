@@ -4,10 +4,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
-var _ store.SubscriptionStore = (*SubscriptionStore)(nil)
+var _ storage.SubscriptionStore = (*SubscriptionStore)(nil)
 
 // SubscriptionStore is an in-memory implementation of store.SubscriptionStore.
 // It uses a trie for efficient topic matching.
@@ -16,18 +16,18 @@ type SubscriptionStore struct {
 	root  *trieNode
 	count int
 	// byClient provides O(1) lookup for client's subscriptions
-	byClient map[string]map[string]*store.Subscription // clientID -> filter -> subscription
+	byClient map[string]map[string]*storage.Subscription // clientID -> filter -> subscription
 }
 
 type trieNode struct {
 	children map[string]*trieNode
-	subs     map[string]*store.Subscription // clientID -> subscription at this level
+	subs     map[string]*storage.Subscription // clientID -> subscription at this level
 }
 
 func newTrieNode() *trieNode {
 	return &trieNode{
 		children: make(map[string]*trieNode),
-		subs:     make(map[string]*store.Subscription),
+		subs:     make(map[string]*storage.Subscription),
 	}
 }
 
@@ -35,12 +35,12 @@ func newTrieNode() *trieNode {
 func NewSubscriptionStore() *SubscriptionStore {
 	return &SubscriptionStore{
 		root:     newTrieNode(),
-		byClient: make(map[string]map[string]*store.Subscription),
+		byClient: make(map[string]map[string]*storage.Subscription),
 	}
 }
 
 // Add adds or updates a subscription.
-func (s *SubscriptionStore) Add(sub *store.Subscription) error {
+func (s *SubscriptionStore) Add(sub *storage.Subscription) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -65,12 +65,12 @@ func (s *SubscriptionStore) Add(sub *store.Subscription) error {
 	}
 
 	// Store subscription in trie
-	subCopy := store.CopySubscription(sub)
+	subCopy := storage.CopySubscription(sub)
 	node.subs[sub.ClientID] = subCopy
 
 	// Store in client index
 	if s.byClient[sub.ClientID] == nil {
-		s.byClient[sub.ClientID] = make(map[string]*store.Subscription)
+		s.byClient[sub.ClientID] = make(map[string]*storage.Subscription)
 	}
 	s.byClient[sub.ClientID][sub.Filter] = subCopy
 
@@ -148,7 +148,7 @@ func (s *SubscriptionStore) RemoveAll(clientID string) error {
 }
 
 // GetForClient returns all subscriptions for a client.
-func (s *SubscriptionStore) GetForClient(clientID string) ([]*store.Subscription, error) {
+func (s *SubscriptionStore) GetForClient(clientID string) ([]*storage.Subscription, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -157,36 +157,36 @@ func (s *SubscriptionStore) GetForClient(clientID string) ([]*store.Subscription
 		return nil, nil
 	}
 
-	result := make([]*store.Subscription, 0, len(clientSubs))
+	result := make([]*storage.Subscription, 0, len(clientSubs))
 	for _, sub := range clientSubs {
-		result = append(result, store.CopySubscription(sub))
+		result = append(result, storage.CopySubscription(sub))
 	}
 	return result, nil
 }
 
 // Match returns all subscriptions matching a topic.
-func (s *SubscriptionStore) Match(topic string) ([]*store.Subscription, error) {
+func (s *SubscriptionStore) Match(topic string) ([]*storage.Subscription, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	levels := strings.Split(topic, "/")
-	var matched []*store.Subscription
+	var matched []*storage.Subscription
 	s.matchLevel(s.root, levels, 0, &matched)
 
 	// Deduplicate by clientID (keep highest QoS)
 	return s.deduplicate(matched), nil
 }
 
-func (s *SubscriptionStore) matchLevel(node *trieNode, levels []string, index int, matched *[]*store.Subscription) {
+func (s *SubscriptionStore) matchLevel(node *trieNode, levels []string, index int, matched *[]*storage.Subscription) {
 	if index == len(levels) {
 		// Exact match reached
 		for _, sub := range node.subs {
-			*matched = append(*matched, store.CopySubscription(sub))
+			*matched = append(*matched, storage.CopySubscription(sub))
 		}
 		// Check for '#' wildcard at this level
 		if wild, ok := node.children["#"]; ok {
 			for _, sub := range wild.subs {
-				*matched = append(*matched, store.CopySubscription(sub))
+				*matched = append(*matched, storage.CopySubscription(sub))
 			}
 		}
 		return
@@ -207,14 +207,14 @@ func (s *SubscriptionStore) matchLevel(node *trieNode, levels []string, index in
 	// Multi-level wildcard '#'
 	if child, ok := node.children["#"]; ok {
 		for _, sub := range child.subs {
-			*matched = append(*matched, store.CopySubscription(sub))
+			*matched = append(*matched, storage.CopySubscription(sub))
 		}
 	}
 }
 
 // deduplicate removes duplicate subscriptions for the same client, keeping highest QoS.
-func (s *SubscriptionStore) deduplicate(subs []*store.Subscription) []*store.Subscription {
-	seen := make(map[string]*store.Subscription)
+func (s *SubscriptionStore) deduplicate(subs []*storage.Subscription) []*storage.Subscription {
+	seen := make(map[string]*storage.Subscription)
 	for _, sub := range subs {
 		if existing, ok := seen[sub.ClientID]; ok {
 			if sub.QoS > existing.QoS {
@@ -225,7 +225,7 @@ func (s *SubscriptionStore) deduplicate(subs []*store.Subscription) []*store.Sub
 		}
 	}
 
-	result := make([]*store.Subscription, 0, len(seen))
+	result := make([]*storage.Subscription, 0, len(seen))
 	for _, sub := range seen {
 		result = append(result, sub)
 	}

@@ -5,7 +5,7 @@ import (
 
 	"github.com/absmach/mqtt/broker"
 	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 var _ broker.Service = (*metricsMiddleware)(nil)
@@ -31,7 +31,7 @@ func (mm *metricsMiddleware) HandleConnection(conn core.Connection) {
 }
 
 // Subscribe wraps the call with subscription metrics.
-func (mm *metricsMiddleware) Subscribe(clientID string, filter string, qos byte, opts store.SubscribeOptions) error {
+func (mm *metricsMiddleware) Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
 	err := mm.svc.Subscribe(clientID, filter, qos, opts)
 
 	if err == nil {
@@ -53,7 +53,7 @@ func (mm *metricsMiddleware) Unsubscribe(clientID string, filter string) error {
 }
 
 // Match returns all subscriptions matching a topic.
-func (mm *metricsMiddleware) Match(topic string) ([]*store.Subscription, error) {
+func (mm *metricsMiddleware) Match(topic string) ([]*storage.Subscription, error) {
 	return mm.svc.Match(topic)
 }
 

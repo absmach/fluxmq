@@ -4,28 +4,28 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 	"github.com/absmach/mqtt/topics"
 )
 
-var _ store.RetainedStore = (*RetainedStore)(nil)
+var _ storage.RetainedStore = (*RetainedStore)(nil)
 
 // RetainedStore is an in-memory implementation of store.RetainedStore.
 type RetainedStore struct {
 	mu   sync.RWMutex
-	data map[string]*store.Message // topic -> message
+	data map[string]*storage.Message // topic -> message
 }
 
 // NewRetainedStore creates a new in-memory retained message store.
 func NewRetainedStore() *RetainedStore {
 	return &RetainedStore{
-		data: make(map[string]*store.Message),
+		data: make(map[string]*storage.Message),
 	}
 }
 
 // Set stores or updates a retained message.
 // Empty payload deletes the retained message.
-func (s *RetainedStore) Set(topic string, msg *store.Message) error {
+func (s *RetainedStore) Set(topic string, msg *storage.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -35,20 +35,20 @@ func (s *RetainedStore) Set(topic string, msg *store.Message) error {
 		return nil
 	}
 
-	s.data[topic] = store.CopyMessage(msg)
+	s.data[topic] = storage.CopyMessage(msg)
 	return nil
 }
 
 // Get retrieves a retained message by exact topic.
-func (s *RetainedStore) Get(topic string) (*store.Message, error) {
+func (s *RetainedStore) Get(topic string) (*storage.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	msg, ok := s.data[topic]
 	if !ok {
-		return nil, store.ErrNotFound
+		return nil, storage.ErrNotFound
 	}
-	return store.CopyMessage(msg), nil
+	return storage.CopyMessage(msg), nil
 }
 
 // Delete removes a retained message.
@@ -61,17 +61,17 @@ func (s *RetainedStore) Delete(topic string) error {
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (s *RetainedStore) Match(filter string) ([]*store.Message, error) {
+func (s *RetainedStore) Match(filter string) ([]*storage.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*store.Message
+	var result []*storage.Message
 
 	// Special case: "#" matches all non-system topics
 	if filter == "#" {
 		for topic, msg := range s.data {
 			if !strings.HasPrefix(topic, "$") {
-				result = append(result, store.CopyMessage(msg))
+				result = append(result, storage.CopyMessage(msg))
 			}
 		}
 		return result, nil
@@ -79,7 +79,7 @@ func (s *RetainedStore) Match(filter string) ([]*store.Message, error) {
 
 	for topic, msg := range s.data {
 		if topics.TopicMatch(filter, topic) {
-			result = append(result, store.CopyMessage(msg))
+			result = append(result, storage.CopyMessage(msg))
 		}
 	}
 

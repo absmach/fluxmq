@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/store"
+	"github.com/absmach/mqtt/storage"
 )
 
 // InflightState represents the state of an inflight message.
@@ -21,7 +21,7 @@ const (
 // InflightMessage represents a message in flight (waiting for acknowledgment).
 type InflightMessage struct {
 	PacketID  uint16
-	Message   *store.Message
+	Message   *storage.Message
 	State     InflightState
 	SentAt    time.Time
 	Retries   int
@@ -38,8 +38,8 @@ const (
 
 // Inflight defines operations on inflight messages.
 type Inflight interface {
-	Add(packetID uint16, msg *store.Message, direction Direction) error
-	Ack(packetID uint16) (*store.Message, error)
+	Add(packetID uint16, msg *storage.Message, direction Direction) error
+	Ack(packetID uint16) (*storage.Message, error)
 	Get(packetID uint16) (*InflightMessage, bool)
 	Has(packetID uint16) bool
 	WasReceived(packetID uint16) bool
@@ -74,7 +74,7 @@ func NewInflightTracker(maxSize int) *inflight {
 }
 
 // Add adds a message to the inflight tracker.
-func (t *inflight) Add(packetID uint16, msg *store.Message, direction Direction) error {
+func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Direction) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -130,7 +130,7 @@ func (t *inflight) UpdateState(packetID uint16, state InflightState) error {
 }
 
 // Ack acknowledges and removes a message (for QoS 1 PUBACK or QoS 2 PUBCOMP).
-func (t *inflight) Ack(packetID uint16) (*store.Message, error) {
+func (t *inflight) Ack(packetID uint16) (*storage.Message, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

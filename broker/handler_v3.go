@@ -8,8 +8,8 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/store"
-	"github.com/absmach/mqtt/store/messages"
+	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/storage/messages"
 )
 
 // HandleV3Connect handles CONNECT packets and sets up the session.
@@ -169,7 +169,7 @@ func (b *Broker) handleV3Publish(s *session.Session, p *v3.Publish) error {
 
 		s.Inflight().MarkReceived(packetID)
 
-		storeMsg := &store.Message{
+		storeMsg := &storage.Message{
 			Topic:    topic,
 			Payload:  payload,
 			QoS:      2,

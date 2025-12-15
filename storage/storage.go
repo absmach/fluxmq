@@ -1,4 +1,4 @@
-package store
+package storage
 
 import (
 	"errors"
@@ -43,14 +43,14 @@ type Message struct {
 	QoS        byte
 	Retain     bool
 
-	MessageExpiry    *uint32
-	PayloadFormat    *byte
-	ContentType      string
-	ResponseTopic    string
-	CorrelationData  []byte
-	UserProperties   map[string]string
-	SubscriptionIDs  []uint32
-	PublishTime      time.Time
+	MessageExpiry   *uint32
+	PayloadFormat   *byte
+	ContentType     string
+	ResponseTopic   string
+	CorrelationData []byte
+	UserProperties  map[string]string
+	SubscriptionIDs []uint32
+	PublishTime     time.Time
 }
 
 // CopyMessage creates a deep copy of a message.
