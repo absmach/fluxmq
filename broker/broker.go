@@ -71,10 +71,6 @@ func (b *Broker) Stats() *Stats {
 	return b.stats
 }
 
-// --- Public Service interface adapters ---
-
-// These methods adapt between the Service interface (for middleware) and the domain methods.
-
 // SubscribeService adapts the Service.Subscribe signature to the domain Subscribe method.
 func (b *Broker) SubscribeService(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
 	s := b.Get(clientID)
@@ -685,13 +681,8 @@ func (b *Broker) runSession(s *session.Session) error {
 		}
 
 		b.stats.IncrementMessagesReceived()
-		switch s.Version {
-		case 3, 4:
-			err = b.handleV3Packet(s, pkt)
-		case 5:
-			err = b.handleV5Packet(s, pkt)
-		}
-		if err != nil {
+		if err := b.HandlePacket(s, pkt); err != nil {
+			fmt.Println("handling pkt", packets.PacketNames[pkt.Type()])
 			if err == io.EOF {
 				b.stats.DecrementConnections()
 				return nil
@@ -701,6 +692,33 @@ func (b *Broker) runSession(s *session.Session) error {
 			s.Disconnect(false)
 			return err
 		}
+	}
+}
+
+func (b *Broker) HandlePacket(s *session.Session, pkt packets.ControlPacket) error {
+	s.Touch()
+
+	switch pkt.Type() {
+	case packets.PublishType:
+		return b.HandlePublish(s, pkt)
+	case packets.PubAckType:
+		return b.HandlePubAck(s, pkt)
+	case packets.PubRecType:
+		return b.HandlePubRec(s, pkt)
+	case packets.PubRelType:
+		return b.HandlePubRel(s, pkt)
+	case packets.PubCompType:
+		return b.HandlePubComp(s, pkt)
+	case packets.SubscribeType:
+		return b.HandleSubscribe(s, pkt)
+	case packets.UnsubscribeType:
+		return b.HandleUnsubscribe(s, pkt)
+	case packets.PingReqType:
+		return b.HandlePingReq(s)
+	case packets.DisconnectType:
+		return b.HandleDisconnect(s, pkt)
+	default:
+		return ErrInvalidPacketType
 	}
 }
 
@@ -824,6 +842,29 @@ func (b *Broker) HandleDisconnect(s *session.Session, pkt packets.ControlPacket)
 	default:
 		return ErrInvalidPacketType
 	}
+}
+
+// HandleConnAck implements Handler.HandleConnAck (CONNACK is sent by broker, not typically received).
+func (b *Broker) HandleConnAck(s *session.Session, pkt packets.ControlPacket) error {
+	return ErrProtocolViolation
+}
+
+// HandleUnsubAck implements Handler.HandleUnsubAck (UNSUBACK is sent by broker, not typically received).
+func (b *Broker) HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) error {
+	return ErrProtocolViolation
+}
+
+// HandlePingResp implements Handler.HandlePingResp (PINGRESP is sent by broker, not typically received).
+func (b *Broker) HandlePingResp(s *session.Session) error {
+	return ErrProtocolViolation
+}
+
+// HandleAuth implements Handler.HandleAuth by dispatching based on session version.
+func (b *Broker) HandleAuth(s *session.Session, pkt packets.ControlPacket) error {
+	if p5, ok := pkt.(*v5.Auth); ok {
+		return b.handleV5Auth(s, p5)
+	}
+	return ErrInvalidPacketType
 }
 
 // Close shuts down the broker.

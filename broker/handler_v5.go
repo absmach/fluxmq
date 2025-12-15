@@ -82,7 +82,7 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) error {
 		WillMessage:    willMsg,
 	}
 
-	sess, isNew, err := b.CreateSession(clientID, opts)
+	s, isNew, err := b.CreateSession(clientID, opts)
 	if err != nil {
 		b.stats.IncrementProtocolErrors()
 		b.sendV5ConnAck(conn, false, 0x80, nil)
@@ -90,58 +90,58 @@ func (b *Broker) handleV5Connect(conn core.Connection, p *v5.Connect) error {
 		return err
 	}
 
-	sess.Version = p.ProtocolVersion
-	sess.KeepAlive = time.Duration(p.KeepAlive) * time.Second
-	sess.TopicAliasMax = topicAliasMax
+	s.Version = p.ProtocolVersion
+	s.KeepAlive = time.Duration(p.KeepAlive) * time.Second
+	s.TopicAliasMax = topicAliasMax
 
-	if err := sess.Connect(conn); err != nil {
+	if err := s.Connect(conn); err != nil {
 		b.stats.IncrementProtocolErrors()
 		conn.Close()
 		return err
 	}
 
 	sessionPresent := !isNew && !cleanStart
-	if err := b.sendV5ConnAckWithProperties(conn, sess, sessionPresent, 0x00); err != nil {
-		sess.Disconnect(false)
+	if err := b.sendV5ConnAckWithProperties(conn, s, sessionPresent, 0x00); err != nil {
+		s.Disconnect(false)
 		return err
 	}
 
 	b.stats.IncrementConnections()
 
-	b.deliverV5OfflineMessages(sess)
+	b.deliverV5OfflineMessages(s)
 
-	return b.runSession(sess)
+	return b.runSession(s)
 }
 
 // handleV5Packet dispatches a packet to the appropriate handler.
-func (b *Broker) handleV5Packet(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
+// func (b *Broker) handleV5Packet(s *session.Session, pkt packets.ControlPacket) error {
+// 	s.Touch()
 
-	switch p := pkt.(type) {
-	case *v5.Publish:
-		return b.handleV5Publish(s, p)
-	case *v5.PubAck:
-		return b.handleV5PubAck(s, p)
-	case *v5.PubRec:
-		return b.handleV5PubRec(s, p)
-	case *v5.PubRel:
-		return b.handleV5PubRel(s, p)
-	case *v5.PubComp:
-		return b.handleV5PubComp(s, p)
-	case *v5.Subscribe:
-		return b.handleV5Subscribe(s, p)
-	case *v5.Unsubscribe:
-		return b.handleV5Unsubscribe(s, p)
-	case *v5.PingReq:
-		return b.handleV5PingReq(s)
-	case *v5.Disconnect:
-		return b.handleV5Disconnect(s, p)
-	case *v5.Auth:
-		return b.handleV5Auth(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
+// 	switch p := pkt.(type) {
+// 	case *v5.Publish:
+// 		return b.handleV5Publish(s, p)
+// 	case *v5.PubAck:
+// 		return b.handleV5PubAck(s, p)
+// 	case *v5.PubRec:
+// 		return b.handleV5PubRec(s, p)
+// 	case *v5.PubRel:
+// 		return b.handleV5PubRel(s, p)
+// 	case *v5.PubComp:
+// 		return b.handleV5PubComp(s, p)
+// 	case *v5.Subscribe:
+// 		return b.handleV5Subscribe(s, p)
+// 	case *v5.Unsubscribe:
+// 		return b.handleV5Unsubscribe(s, p)
+// 	case *v5.PingReq:
+// 		return b.handleV5PingReq(s)
+// 	case *v5.Disconnect:
+// 		return b.handleV5Disconnect(s, p)
+// 	case *v5.Auth:
+// 		return b.handleV5Auth(s, p)
+// 	default:
+// 		return ErrInvalidPacketType
+// 	}
+// }
 
 // handleV5Publish handles PUBLISH packets.
 func (b *Broker) handleV5Publish(s *session.Session, p *v5.Publish) error {

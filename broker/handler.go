@@ -26,11 +26,11 @@ var (
 
 // Handler is the interface for packet handlers (V3, V5, etc).
 type Handler interface {
-	// Use by non-specific packet type when establishing connection.
-	// HandleConnection(conn core.Connection)
-
 	// HandleConnect handles CONNECT packets.
 	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
+
+	// HandleConnAck handles CONNECT packets.
+	HandleConnAck(s *session.Session, pkt packets.ControlPacket) error
 
 	// HandlePublish handles PUBLISH packets.
 	HandlePublish(s *session.Session, pkt packets.ControlPacket) error
@@ -53,11 +53,20 @@ type Handler interface {
 	// HandleUnsubscribe handles UNSUBSCRIBE packets.
 	HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error
 
+	// HandleUnsubAck handles UNSUBSACK packets.
+	HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) error
+
 	// HandlePingReq handles PINGREQ packets.
 	HandlePingReq(s *session.Session) error
 
+	// HandlePingResp handles PINGRESP packets.
+	HandlePingResp(s *session.Session) error
+
 	// HandleDisconnect handles DISCONNECT packets.
 	HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error
+
+	// HandleAuth handles AUTH packets.
+	HandleAuth(s *session.Session, pkt packets.ControlPacket) error
 }
 
 // Router is the message routing interface.
@@ -76,18 +85,6 @@ type Authenticator interface {
 type Authorizer interface {
 	CanPublish(clientID string, topic string) bool
 	CanSubscribe(clientID string, filter string) bool
-}
-
-// Publisher distributes messages to subscribers.
-type Publisher interface {
-	Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error
-}
-
-// RetainedStore provides access to retained messages.
-type RetainedStore interface {
-	Set(topic string, msg *storage.Message) error
-	Get(topic string) (*storage.Message, error)
-	Match(filter string) ([]*storage.Message, error)
 }
 
 // Service defines the broker service interface for middleware wrapping.

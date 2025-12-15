@@ -96,32 +96,32 @@ func (b *Broker) handleV3Connect(conn core.Connection, p *v3.Connect) error {
 }
 
 // handlePacket dispatches a packet to the appropriate handler.
-func (b *Broker) handleV3Packet(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
+// func (b *Broker) handleV3Packet(s *session.Session, pkt packets.ControlPacket) error {
+// 	s.Touch()
 
-	switch p := pkt.(type) {
-	case *v3.Publish:
-		return b.handleV3Publish(s, p)
-	case *v3.PubAck:
-		return b.handleV3PubAck(s, p)
-	case *v3.PubRec:
-		return b.handleV3PubRec(s, p)
-	case *v3.PubRel:
-		return b.handleV3PubRel(s, p)
-	case *v3.PubComp:
-		return b.handleV3PubComp(s, p)
-	case *v3.Subscribe:
-		return b.handleV3Subscribe(s, p)
-	case *v3.Unsubscribe:
-		return b.handleV3Unsubscribe(s, p)
-	case *v3.PingReq:
-		return b.handleV3PingReq(s)
-	case *v3.Disconnect:
-		return b.handleV3Disconnect(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
+// 	switch p := pkt.(type) {
+// 	case *v3.Publish:
+// 		return b.handleV3Publish(s, p)
+// 	case *v3.PubAck:
+// 		return b.handleV3PubAck(s, p)
+// 	case *v3.PubRec:
+// 		return b.handleV3PubRec(s, p)
+// 	case *v3.PubRel:
+// 		return b.handleV3PubRel(s, p)
+// 	case *v3.PubComp:
+// 		return b.handleV3PubComp(s, p)
+// 	case *v3.Subscribe:
+// 		return b.handleV3Subscribe(s, p)
+// 	case *v3.Unsubscribe:
+// 		return b.handleV3Unsubscribe(s, p)
+// 	case *v3.PingReq:
+// 		return b.handleV3PingReq(s)
+// 	case *v3.Disconnect:
+// 		return b.handleV3Disconnect(s, p)
+// 	default:
+// 		return ErrInvalidPacketType
+// 	}
+// }
 
 // handleV3Publish handles PUBLISH packets.
 func (b *Broker) handleV3Publish(s *session.Session, p *v3.Publish) error {

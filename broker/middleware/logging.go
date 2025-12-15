@@ -62,7 +62,6 @@ func (lm *loggingMiddleware) HandlePubAck(s *session.Session, pkt packets.Contro
 			slog.Any("error", err),
 		)
 	}(time.Now())
-
 	return lm.next.HandlePubAck(s, pkt)
 }
 
@@ -155,4 +154,56 @@ func (lm *loggingMiddleware) HandleDisconnect(s *session.Session, pkt packets.Co
 	}(time.Now())
 
 	return lm.next.HandleDisconnect(s, pkt)
+}
+
+// HandleConnAck logs CONNACK packet details.
+func (lm *loggingMiddleware) HandleConnAck(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandleConnAck",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandleConnAck(s, pkt)
+}
+
+// HandleUnsubAck logs UNSUBACK packet details.
+func (lm *loggingMiddleware) HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandleUnsubAck",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandleUnsubAck(s, pkt)
+}
+
+// HandlePingResp logs PINGRESP details.
+func (lm *loggingMiddleware) HandlePingResp(s *session.Session) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Debug("HandlePingResp",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandlePingResp(s)
+}
+
+// HandleAuth logs AUTH packet details.
+func (lm *loggingMiddleware) HandleAuth(s *session.Session, pkt packets.ControlPacket) (err error) {
+	defer func(begin time.Time) {
+		lm.logger.Info("HandleAuth",
+			slog.String("client_id", s.ID),
+			slog.String("duration", time.Since(begin).String()),
+			slog.Any("error", err),
+		)
+	}(time.Now())
+
+	return lm.next.HandleAuth(s, pkt)
 }
