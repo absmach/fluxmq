@@ -110,50 +110,7 @@ func (b *Broker) HandleV5Connect(conn core.Connection, p *v5.Connect) error {
 
 	b.deliverV5OfflineMessages(sess)
 
-	return b.runV5Session(sess)
-}
-
-// runV5Session runs the main packet loop for a V5 session.
-func (b *Broker) runV5Session(s *session.Session) error {
-	conn := s.Conn()
-	if conn == nil {
-		return nil
-	}
-
-	if s.KeepAlive > 0 {
-		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
-		conn.SetReadDeadline(deadline)
-	}
-
-	for {
-		pkt, err := s.ReadPacket()
-		if err != nil {
-			if err != io.EOF && err != session.ErrNotConnected {
-				b.stats.IncrementPacketErrors()
-			}
-			b.stats.DecrementConnections()
-			s.Disconnect(false)
-			return err
-		}
-
-		if s.KeepAlive > 0 {
-			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
-			conn.SetReadDeadline(deadline)
-		}
-
-		b.stats.IncrementMessagesReceived()
-
-		if err := b.handleV5Packet(s, pkt); err != nil {
-			if err == io.EOF {
-				b.stats.DecrementConnections()
-				return nil
-			}
-			b.stats.IncrementProtocolErrors()
-			b.stats.DecrementConnections()
-			s.Disconnect(false)
-			return err
-		}
-	}
+	return b.runSession(sess)
 }
 
 // handleV5Packet dispatches a packet to the appropriate handler.

@@ -92,50 +92,7 @@ func (b *Broker) HandleV3Connect(conn core.Connection, p *v3.Connect) error {
 
 	b.deliverOfflineV3Messages(s)
 
-	return b.runV3Session(s)
-}
-
-// runSession runs the main packet loop for a session.
-func (b *Broker) runV3Session(s *session.Session) error {
-	conn := s.Conn()
-	if conn == nil {
-		return nil
-	}
-
-	if s.KeepAlive > 0 {
-		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
-		conn.SetReadDeadline(deadline)
-	}
-
-	for {
-		pkt, err := s.ReadPacket()
-		if err != nil {
-			if err != io.EOF && err != session.ErrNotConnected {
-				b.stats.IncrementPacketErrors()
-			}
-			b.stats.DecrementConnections()
-			s.Disconnect(false)
-			return err
-		}
-
-		if s.KeepAlive > 0 {
-			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
-			conn.SetReadDeadline(deadline)
-		}
-
-		b.stats.IncrementMessagesReceived()
-
-		if err := b.handleV3Packet(s, pkt); err != nil {
-			if err == io.EOF {
-				b.stats.DecrementConnections()
-				return nil
-			}
-			b.stats.IncrementProtocolErrors()
-			b.stats.DecrementConnections()
-			s.Disconnect(false)
-			return err
-		}
-	}
+	return b.runSession(s)
 }
 
 // handlePacket dispatches a packet to the appropriate handler.

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -675,6 +676,54 @@ func (d *multiVersionDeliverer) DeliverMessage(sess *session.Session, msg Messag
 		return d.broker.DeliverV5Message(sess, msg)
 	default:
 		return d.broker.DeliverV3Message(sess, msg)
+	}
+}
+
+// runSession runs the main packet loop for a session.
+func (b *Broker) runSession(s *session.Session) error {
+	conn := s.Conn()
+	if conn == nil {
+		return nil
+	}
+
+	if s.KeepAlive > 0 {
+		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
+		conn.SetReadDeadline(deadline)
+	}
+
+	for {
+		pkt, err := s.ReadPacket()
+		if err != nil {
+			if err != io.EOF && err != session.ErrNotConnected {
+				b.stats.IncrementPacketErrors()
+			}
+			b.stats.DecrementConnections()
+			s.Disconnect(false)
+			return err
+		}
+
+		if s.KeepAlive > 0 {
+			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
+			conn.SetReadDeadline(deadline)
+		}
+
+		b.stats.IncrementMessagesReceived()
+		switch s.Version {
+		case 3:
+			err = b.handleV3Packet(s, pkt)
+		case 5:
+			err = b.handleV5Packet(s, pkt)
+		}
+		if err != nil {
+			if err == io.EOF {
+				b.stats.DecrementConnections()
+				return nil
+			}
+			b.stats.IncrementProtocolErrors()
+			b.stats.DecrementConnections()
+			s.Disconnect(false)
+			return err
+		}
 	}
 }
 
