@@ -684,7 +684,7 @@ func (b *Broker) runSession(s *session.Session) error {
 
 		b.stats.IncrementMessagesReceived()
 		switch s.Version {
-		case 3:
+		case 3, 4:
 			err = b.handleV3Packet(s, pkt)
 		case 5:
 			err = b.handleV5Packet(s, pkt)
@@ -802,10 +802,10 @@ func (b *Broker) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket
 // HandlePingReq implements Handler.HandlePingReq by dispatching based on session version.
 func (b *Broker) HandlePingReq(s *session.Session) error {
 	switch s.Version {
+	case 3, 4:
+		return b.handleV3PingReq(s)
 	case 5:
 		return b.handleV5PingReq(s)
-	case 3:
-		return b.handleV3PingReq(s)
 	default:
 
 		return ErrInvalidPacketType
