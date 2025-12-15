@@ -65,8 +65,8 @@ type Session struct {
 	CleanStart bool
 
 	subscriptionIDs map[string][]uint32 // V5: filter -> subscription IDs
-	authMethod      string               // V5: Enhanced auth method
-	authState       interface{}          // V5: Enhanced auth state
+	authMethod      string              // V5: Enhanced auth method
+	authState       any                 // V5: Enhanced auth state
 
 	requestResponseInfo bool // V5: Client requested response info
 	requestProblemInfo  bool // V5: Client requested problem info
@@ -111,19 +111,19 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 	msgHandler := messages.NewMessageHandler(inflight, offlineQueue)
 
 	s := &Session{
-		ID:             clientID,
-		Version:        version,
-		state:          StateNew,
-		msgHandler:     msgHandler,
-		CleanStart:     opts.CleanStart,
-		ExpiryInterval: opts.ExpiryInterval,
-		ReceiveMaximum: receiveMax,
-		MaxPacketSize:  opts.MaxPacketSize,
-		TopicAliasMax:  opts.TopicAliasMax,
-		KeepAlive:      opts.KeepAlive,
-		Will:           opts.Will,
-		subscriptions:  make(map[string]store.SubscribeOptions),
-		subscriptionIDs: make(map[string][]uint32),
+		ID:                   clientID,
+		Version:              version,
+		state:                StateNew,
+		msgHandler:           msgHandler,
+		CleanStart:           opts.CleanStart,
+		ExpiryInterval:       opts.ExpiryInterval,
+		ReceiveMaximum:       receiveMax,
+		MaxPacketSize:        opts.MaxPacketSize,
+		TopicAliasMax:        opts.TopicAliasMax,
+		KeepAlive:            opts.KeepAlive,
+		Will:                 opts.Will,
+		subscriptions:        make(map[string]store.SubscribeOptions),
+		subscriptionIDs:      make(map[string][]uint32),
 		retainAvailable:      true,
 		wildcardSubAvailable: true,
 		sharedSubAvailable:   true,

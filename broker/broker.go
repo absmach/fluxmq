@@ -16,11 +16,6 @@ import (
 	"github.com/dborovcanin/mqtt/store/messages"
 )
 
-// MessageDeliverer handles protocol-specific message delivery.
-type MessageDeliverer interface {
-	DeliverMessage(s *session.Session, msg Message) error
-}
-
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	mu          sync.RWMutex
