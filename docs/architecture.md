@@ -6,105 +6,183 @@ This document describes the detailed architecture of the MQTT broker, which impl
 
 **Design Philosophy:**
 1. **Domain-Driven Design** - Pure business logic isolated from protocol concerns
-2. **Protocol Adapters** - Stateless handlers translate MQTT packets to domain operations
-3. **Direct Instrumentation** - Logging and metrics embedded at the domain layer
-4. **Zero Indirection** - No middleware chains, decorators, or hidden control flow
-5. **Testability First** - Each layer independently testable
+2. **Protocol Adapters** - Stateless handlers translate packets/requests to domain operations
+3. **Multi-Protocol Support** - All protocols share the same broker core
+4. **Direct Instrumentation** - Logging and metrics embedded at the domain layer
+5. **Zero Indirection** - No middleware chains, decorators, or hidden control flow
+6. **Testability First** - Each layer independently testable
 
 ## Architecture Diagram
 
 ### High-Level Component View
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    cmd/broker/main.go                       │
-│  • Creates Broker with logger & metrics                     │
-│  • Creates TCP server                                       │
-│  • Manages graceful shutdown                                │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           │ creates
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│              server/tcp/Server                              │
-│  • Listens on TCP port                                      │
-│  • Accepts connections                                      │
-│  • Applies TCP optimizations (keepalive, nodelay)           │
-│  • Connection limiting via semaphore                        │
-│  • Graceful shutdown with timeout                           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ net.Conn
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│         broker/HandleConnection(broker, conn)               │
-│  • Reads first CONNECT packet                               │
-│  • Detects protocol version (v3.1.1 or v5.0)                │
-│  • Creates appropriate handler                              │
-│  • Delegates to handler.HandleConnect()                     │
-└────────────┬──────────────────────────┬─────────────────────┘
-             │                          │
-      ┌──────▼──────┐            ┌──────▼──────┐
-      │ V3Handler   │            │ V5Handler   │
-      │             │            │             │
-      │ Stateless   │            │ Stateless   │
-      │ Adapter     │            │ Adapter     │
-      └──────┬──────┘            └──────┬──────┘
-             │                          │
-             │ Domain Operations        │
-             └──────────┬───────────────┘
-                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Broker (Domain)                         │
-│                                                             │
-│  Core domain methods (protocol-agnostic):                   │
-│  • CreateSession(clientID, opts)                            │
-│  • Publish(msg)                                             │
-│  • Subscribe(session, filter, opts)                         │
-│  • Unsubscribe(session, filter)                             │
-│  • DeliverToSession(session, msg)                           │
-│  • AckMessage(session, packetID)                            │
-│                                                             │
-│  Embedded instrumentation:                                  │
-│  • logger *slog.Logger - operation tracing                  │
-│  • stats  *Stats       - metrics collection                 │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           │ uses
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Infrastructure                            │
-│                                                             │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐           │
-│  │   Router   │  │  Sessions  │  │  Storage   │           │
-│  │   (Trie)   │  │  (Cache)   │  │  (Memory)  │           │
-│  │            │  │            │  │            │           │
-│  │ • Match()  │  │ • Get()    │  │ • Messages │           │
-│  │ • Subscribe│  │ • Set()    │  │ • Retained │           │
-│  └────────────┘  └────────────┘  │ • Wills    │           │
-│                                  └────────────┘           │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     cmd/broker/main.go                       │
+│  • Creates single Broker instance with logger & metrics      │
+│  • Starts multiple servers (all share the same Broker)       │
+│  • Coordinates graceful shutdown across all servers          │
+└─────┬─────────┬─────────┬──────────┬─────────────────────────┘
+      │         │         │          │
+      │         │         │          │ creates & passes Broker
+      │         │         │          │
+      ▼         ▼         ▼          ▼
+┌──────────┐ ┌─────────┐ ┌───────────┐ ┌───────────┐
+│TCP Server│ │WebSocket│ │HTTP Bridge│ │CoAP Bridge│
+│  :1883   │ │ :8083   │ │  :8080    │ │  :5683    │
+└─────┬────┘ └────┬────┘ └────┬──────┘ └────┬──────┘
+      │           │           │             │
+      │ net.Conn  │ ws.Conn   │             │
+      └─────┬─────┴───────────┘             │
+            │ core.Connection               │
+            ▼                               ▼
+  ┌──────────────────────┐         ┌─────────────────┐
+  │ Protocol Detection   │         │ Direct Domain   │
+  │ (connection.go)      │         │ Calls           │
+  └──────────┬───────────┘         └────────┬────────┘
+             │                              │
+      ┌──────┴──────┐                       │
+      │             │                       │
+┌─────▼─────┐ ┌─────▼─────┐                 │
+│V3Handler  │ │V5Handler  │                 │
+│(Stateless)│ │(Stateless)│                 │
+└─────┬─────┘ └─────┬─────┘                 │
+      │             │                       │
+      │ broker.Publish(), Subscribe()...    │
+      └──────┬──────┴───────────────────────┘
+             ▼
+┌──────────────────────────────────────────────────────────┐
+│              Broker (Domain Layer)                       │
+│                                                          │
+│  Protocol-agnostic domain operations:                    │
+│  • CreateSession(clientID, opts)                         │
+│  • Publish(msg) ← Called from ALL protocols              │
+│  • Subscribe(session, filter, opts)                      │
+│  • Unsubscribe(session, filter)                          │
+│  • DeliverToSession(session, msg)                        │
+│  • AckMessage(session, packetID)                         │
+│                                                          │
+│  Embedded instrumentation:                               │
+│  • logger *slog.Logger                                   │
+│  • stats  *Stats                                         │
+└─────────────────────┬────────────────────────────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────────────────┐
+│                Infrastructure Layer                      │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │
+│   │  Router  │ │ Sessions │ │ Storage  │ │  Stats   │    │
+│   │  (Trie)  │ │ (Cache)  │ │ (Memory) │ │(Metrics) │    │
+│   └──────────┘ └──────────┘ └──────────┘ └──────────┘    │
+└──────────────────────────────────────────────────────────┘
+
+Key Architecture Insight:
+- All protocols (MQTT/TCP, MQTT/WebSocket, HTTP, CoAP) share ONE Broker
+- Message published via HTTP → visible to all MQTT subscriptions
+- Message published via MQTT → can trigger HTTP webhooks (future)
+- Clean separation: Transport → Protocol → Domain
 ```
 
 ## Layered Architecture Deep Dive
 
-### Layer 1: TCP Server (server/tcp)
+### Layer 1: Transport & Protocol Bridges
 
-**Responsibility**: Network transport and connection management
+This layer contains all network-facing servers and protocol bridges. Each implements its own transport but delegates to the shared Broker domain layer.
 
-**Key Files**:
-- `server/tcp/server.go` - TCP listener and connection acceptance
+#### 1.1 TCP Server (server/tcp)
+
+**Responsibility**: MQTT over TCP transport
+
+**Key Files**: `server/tcp/server.go`
 
 **What it does**:
-1. Listens on configured TCP address
+1. Listens on configured TCP address (default: `:1883`)
 2. Accepts incoming connections
 3. Applies TCP optimizations:
    - `SetKeepAlive(15s)` - Detects dead connections
    - `SetNoDelay(true)` - Disables Nagle's algorithm for low latency
 4. Enforces connection limits via semaphore
-5. Handles graceful shutdown with configurable timeout
-6. Delegates each connection to `broker.HandleConnection(broker, conn)`
+5. Wraps `net.Conn` in MQTT codec (`core.NewConnection`)
+6. Delegates to `broker.HandleConnection(broker, conn)`
+7. Handles graceful shutdown with configurable timeout
 
-**Dependencies**: Only standard library (`net`, `context`)
+**Dependencies**: Standard library (`net`, `context`)
+
+---
+
+#### 1.2 WebSocket Server (server/websocket)
+
+**Responsibility**: MQTT over WebSocket transport
+
+**Key Files**: `server/websocket/server.go`
+
+**What it does**:
+1. HTTP server listening on configured address (default: `:8083`)
+2. Upgrades HTTP connections to WebSocket at `/mqtt` path
+3. Implements `core.Connection` interface wrapping WebSocket:
+   - `ReadPacket()` - Reads WebSocket binary frames, decodes MQTT packets
+   - `WritePacket()` - Encodes MQTT packets, sends as WebSocket frames
+4. Delegates to `broker.HandleConnection(broker, wsConn)`
+5. **Reuses all MQTT protocol logic** - V3Handler/V5Handler work unchanged
+
+**Key Innovation**: WebSocket is just a transport wrapper. The same MQTT protocol detection and handling code works identically for TCP and WebSocket.
+
+**Dependencies**: `github.com/gorilla/websocket`
+
+---
+
+#### 1.3 HTTP-MQTT Bridge (server/http)
+
+**Responsibility**: RESTful API for publishing messages
+
+**Key Files**: `server/http/server.go`
+
+**What it does**:
+1. HTTP server listening on configured address (default: `:8080`)
+2. Exposes endpoints:
+   - `POST /publish` - Publish message to broker
+   - `GET /health` - Health check
+3. Parses JSON request:
+   ```json
+   {"topic": "sensor/temp", "payload": "...", "qos": 1, "retain": false}
+   ```
+4. **Directly calls domain layer**: `broker.Publish(msg)`
+5. Returns JSON response
+
+**Key Difference**: HTTP bridge bypasses MQTT protocol layer entirely - it translates HTTP requests directly to domain operations.
+
+**Use Cases**:
+- Publish from web applications without MQTT client library
+- Serverless functions (AWS Lambda, Cloud Functions)
+- REST API integrations
+
+**Dependencies**: Standard library (`net/http`, `encoding/json`)
+
+---
+
+#### 1.4 CoAP Bridge (server/coap)
+
+**Responsibility**: CoAP-to-MQTT protocol bridge for IoT devices
+
+**Key Files**: `server/coap/server.go`
+
+**What it does** (when fully implemented):
+1. CoAP server listening on UDP (default: `:5683`)
+2. Handles CoAP requests:
+   - `POST /mqtt/publish/<topic>` - Publish to topic
+   - `GET /health` - Health check
+3. Extracts topic from URL path, payload from CoAP body
+4. **Directly calls domain layer**: `broker.Publish(msg)`
+5. Returns CoAP response code
+
+**Current Status**: Stub implementation - handlers defined, awaits UDP server setup
+
+**Use Cases**:
+- Constrained IoT devices (low power, limited bandwidth)
+- Sensor networks
+- Embedded systems without full MQTT stack
+
+**Dependencies**: `github.com/plgd-dev/go-coap/v3`
 
 ---
 
@@ -471,6 +549,107 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
    └─> Send SUBACK
 ```
 
+### HTTP Bridge PUBLISH Flow
+
+```
+1. HTTP POST /publish
+   └─> JSON: {"topic": "sensor/temp", "payload": "...", "qos": 1}
+
+2. http.Server.handlePublish()
+   ├─> Parse JSON request
+   ├─> Validate topic, QoS
+   ├─> Create domain Message
+   └─> broker.Publish(msg)  ← DIRECT DOMAIN CALL
+       ├─> broker.logger.Debug("publish", topic, qos)
+       ├─> broker.stats.IncrementPublishReceived()
+       ├─> broker.distribute(topic, payload, qos)
+       │   ├─> router.Match(topic) → MQTT subscribers
+       │   └─> For each subscriber:
+       │       └─> broker.DeliverToSession()
+       │           └─> Send MQTT PUBLISH packet
+       └─> Return
+
+3. Return HTTP 200 OK
+   └─> JSON: {"status": "ok"}
+
+KEY: HTTP request → Directly calls broker.Publish() →
+     Delivered to all MQTT subscriptions!
+```
+
+### WebSocket CONNECT Flow
+
+```
+1. Browser connects to ws://localhost:8083/mqtt
+   └─> WebSocket upgrade
+
+2. websocket.Server.handleWebSocket()
+   ├─> Upgrade HTTP → WebSocket
+   ├─> Create wsConnection (implements core.Connection)
+   └─> broker.HandleConnection(broker, wsConnection)
+
+3. Protocol Detection
+   ├─> wsConnection.ReadPacket()
+   │   ├─> ws.ReadMessage() → binary frame
+   │   └─> Decode MQTT packet
+   ├─> Type assert to v3.Connect or v5.Connect
+   └─> Create V3Handler or V5Handler
+
+4. Handler.HandleConnect()
+   ├─> broker.CreateSession(...)
+   ├─> session.Connect(wsConnection)
+   └─> Send CONNACK via wsConnection.WritePacket()
+       ├─> Encode MQTT packet
+       └─> ws.WriteMessage(binary)
+
+5. broker.runSession(handler, session)
+   └─> Packet loop (reads from WebSocket, processes MQTT)
+
+KEY: WebSocket is just transport wrapper!
+     Same protocol detection, same handlers, same domain logic.
+```
+
+### Cross-Protocol Message Flow
+
+**Scenario**: HTTP client publishes, MQTT clients subscribed
+
+```
+┌─────────────┐
+│ HTTP Client │ POST /publish {"topic": "sensor/temp", ...}
+└──────┬──────┘
+       │
+       ▼
+┌──────────────┐
+│ HTTP Server  │ broker.Publish(msg)
+└──────┬───────┘
+       │
+       ▼
+┌────────────────────────────────────────┐
+│ Broker.Publish()                       │
+│ • Logs publish event                   │
+│ • Increments metrics                   │
+│ • broker.distribute()                  │
+│   └─> router.Match("sensor/temp")      │
+│       └─> [TCP-Client-1, WS-Client-2]  │
+└────────┬────────────────┬──────────────┘
+         │                │
+         ▼                ▼
+┌────────────────┐  ┌──────────────────┐
+│ TCP Session    │  │ WebSocket Session│
+│ DeliverMessage │  │ DeliverMessage   │
+│ → PUBLISH pkt  │  │ → PUBLISH pkt    │
+│ → via TCP      │  │ → via WebSocket  │
+└────────────────┘  └──────────────────┘
+         │                │
+         ▼                ▼
+┌─────────────┐    ┌──────────────┐
+│MQTT Client  │    │Browser Client│
+│(TCP :1883)  │    │(WS :8083)    │
+└─────────────┘    └──────────────┘
+
+Result: ONE message published via HTTP → delivered to ALL
+        subscribers regardless of their connection type!
+```
+
 ## Key Design Decisions
 
 ### 1. Why No Middleware/Decorators?
@@ -633,22 +812,64 @@ if v6Connect, ok := pkt.(*v6.Connect); ok {
 }
 ```
 
-### New Protocol (CoAP, HTTP)
+### New Protocol Bridge (HTTP, CoAP, etc.)
 
-1. Create adapter in `coap/adapter.go`:
+**Real Example: HTTP-MQTT Bridge** (see `server/http/server.go`)
+
 ```go
-type CoAPAdapter struct {
+type Server struct {
     broker *broker.Broker
+    logger *slog.Logger
+    server *http.Server
 }
 
-func (a *CoAPAdapter) HandleCoAPMessage(msg CoAPMessage) {
-    // Translate CoAP → MQTT Message
-    mqttMsg := Message{Topic: msg.URI, Payload: msg.Payload}
-    a.broker.Publish(mqttMsg)
+func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+    var req publishRequest
+    json.NewDecoder(r.Body).Decode(&req)
+
+    // Direct domain call - no protocol adapter needed!
+    msg := broker.Message{
+        Topic:   req.Topic,
+        Payload: req.Payload,
+        QoS:     req.QoS,
+        Retain:  req.Retain,
+    }
+
+    s.broker.Publish(msg)  // ← Core broker unchanged!
+
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 ```
 
-2. Core broker unchanged - operates on domain `Message` type
+**Real Example: WebSocket Transport** (see `server/websocket/server.go`)
+
+```go
+type wsConnection struct {
+    ws *websocket.Conn
+}
+
+// Implement core.Connection interface
+func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
+    _, data, err := c.ws.ReadMessage()
+    // Decode MQTT packet from WebSocket frame
+    return codec.Decode(data), err
+}
+
+func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
+    data := codec.Encode(pkt)
+    return c.ws.WriteMessage(websocket.BinaryMessage, data)
+}
+
+// Reuse existing protocol detection & handlers!
+broker.HandleConnection(broker, wsConnection)
+```
+
+**Key Points**:
+- HTTP bridge: Direct domain calls, bypasses protocol layer
+- WebSocket: Implements `core.Connection`, reuses all MQTT logic
+- CoAP: Similar to HTTP, direct `broker.Publish()` calls
+- Core broker unchanged - operates on domain `Message` type
 
 ### Custom Storage Backend
 
@@ -708,9 +929,17 @@ b := broker.NewBroker(logger, stats)
 
 This architecture achieves:
 - ✅ **Clean separation** between transport, protocol, and domain
-- ✅ **High performance** through direct instrumentation
-- ✅ **Testability** via dependency injection
-- ✅ **Extensibility** through adapters and interfaces
+- ✅ **Multi-protocol support** - MQTT (TCP/WebSocket), HTTP, CoAP all share one broker
+- ✅ **High performance** through direct instrumentation (no middleware overhead)
+- ✅ **Testability** via dependency injection and stateless adapters
+- ✅ **Extensibility** - new protocols require ~100 lines of adapter code
 - ✅ **Maintainability** with clear, single-responsibility components
 
-The key insight: **Separate what changes (protocols) from what stays stable (domain logic)**. Protocol handlers are adapters that translate between the MQTT wire format and the domain model, allowing the core broker to remain simple and focused.
+The key insights:
+1. **Separate what changes (protocols) from what stays stable (domain logic)**
+2. **Protocol handlers are adapters** that translate between wire formats and domain models
+3. **All protocols share one broker** - messages flow seamlessly across protocols
+4. **Transport abstraction** - TCP and WebSocket use same MQTT handling via `core.Connection`
+5. **Direct domain access** - HTTP/CoAP bridges call `broker.Publish()` directly
+
+This design makes adding new protocols trivial while keeping the core broker simple, focused, and protocol-agnostic.

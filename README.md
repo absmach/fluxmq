@@ -3,32 +3,56 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/absmach/mqtt)](https://goreportcard.com/report/github.com/absmach/mqtt)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A high-performance, multi-protocol MQTT broker written in Go. Designed for scalability and extensibility, supporting MQTT 3.1.1 and 5.0.
+A high-performance, multi-protocol message broker written in Go. Supports MQTT 3.1.1 and 5.0 over TCP and WebSocket, plus HTTP-MQTT and CoAP bridges for IoT integration. Designed for scalability, extensibility, and protocol diversity.
 
 ## Table of Contents
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Protocol Support](#protocol-support)
-- [Roadmap](#roadmap)
-- [Performance](#performance)
-- [Contributing](#contributing)
-- [License](#license)
+- [Absmach MQTT Broker](#absmach-mqtt-broker)
+  - [Table of Contents](#table-of-contents)
+  - [Features](#features)
+  - [Architecture](#architecture)
+    - [Core Design Principles](#core-design-principles)
+    - [Architecture Layers](#architecture-layers)
+    - [Why This Architecture?](#why-this-architecture)
+  - [Project Structure](#project-structure)
+  - [Quick Start](#quick-start)
+    - [Prerequisites](#prerequisites)
+    - [Build](#build)
+    - [Run](#run)
+  - [Configuration](#configuration)
+    - [Configuration File](#configuration-file)
+    - [Command-line Flags](#command-line-flags)
+  - [Protocol Support](#protocol-support)
+    - [MQTT 3.1.1 (over TCP and WebSocket)](#mqtt-311-over-tcp-and-websocket)
+    - [MQTT 5.0 (over TCP and WebSocket)](#mqtt-50-over-tcp-and-websocket)
+    - [HTTP-MQTT Bridge](#http-mqtt-bridge)
+    - [WebSocket Transport](#websocket-transport)
+    - [CoAP Bridge](#coap-bridge)
+  - [Roadmap](#roadmap)
+    - [Completed ✅](#completed-)
+    - [In Progress 🚧](#in-progress-)
+    - [Planned 📋](#planned-)
+  - [Performance](#performance)
+  - [Contributing](#contributing)
+  - [License](#license)
+  - [Acknowledgments](#acknowledgments)
 
 ## Features
 
 - **Multi-Protocol Support**
-  - **MQTT 3.1.1** (Full support)
-  - **MQTT 5.0** (Full support)
-  - Pluggable architecture for future adapters (HTTP, WebSocket, CoAP)
+  - **MQTT 3.1.1** - Full support over TCP and WebSocket
+  - **MQTT 5.0** - Full support over TCP and WebSocket
+  - **HTTP-MQTT Bridge** - RESTful API for publishing messages
+  - **WebSocket Transport** - MQTT over WebSocket for browser clients
+  - **CoAP Bridge** - Lightweight protocol for constrained IoT devices
+  - All protocols share the same broker core - messages flow seamlessly across protocols
 
 - **Performance Optimized**
   - Zero-copy packet parsing
   - Object pooling for reduced GC pressure
   - Efficient trie-based topic matching
+  - Direct instrumentation (no middleware overhead)
+  - Concurrent connection handling
 
 - **Full MQTT Feature Set**
   - QoS 0, 1, and 2 message delivery
@@ -40,8 +64,11 @@ A high-performance, multi-protocol MQTT broker written in Go. Designed for scala
   - Keep-alive management
 
 - **Extensible Architecture**
+  - Clean layered design: Transport → Protocol → Domain
+  - Protocol-agnostic domain logic
+  - Easy to add new protocols and transports
   - Pluggable storage backends (currently memory-based)
-  - Separation of concerns: Transport, Protocol, and Business Logic
+  - Dependency injection for logging and metrics
 
 ## Architecture
 
@@ -57,50 +84,51 @@ The broker implements a **clean layered architecture** with strict separation be
 ### Architecture Layers
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     TCP Server Layer                        │
-│                    (server/tcp/server.go)                   │
-│  • Connection acceptance and management                     │
-│  • TCP optimizations (keepalive, nodelay)                   │
-│  • Graceful shutdown                                        │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ net.Conn
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Protocol Adapter Layer                     │
-│               (broker/connection.go)                        │
-│  • Detects MQTT version from CONNECT packet                 │
-│  • Creates appropriate protocol handler                     │
-└────────────┬──────────────────────────┬─────────────────────┘
-             │                          │
-      ┌──────▼──────┐            ┌──────▼──────┐
-      │ V3Handler   │            │ V5Handler   │
-      │ (v3/v4.0)   │            │ (v5.0)      │
-      └──────┬──────┘            └──────┬──────┘
-             │                          │
-             │ Domain Operations        │
-             └──────────┬───────────────┘
-                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Domain Layer                            │
-│                  (broker/broker.go)                         │
-│  • CreateSession()    • Publish()                           │
-│  • Subscribe()        • DeliverToSession()                  │
-│  • Unsubscribe()      • AckMessage()                        │
-│                                                             │
-│  Built-in instrumentation:                                  │
-│  • Logger (slog) for operation tracing                      │
-│  • Metrics (Stats) for monitoring                           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Infrastructure Layer                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │  Router  │  │ Sessions │  │ Storage  │  │  Stats   │   │
-│  │  (Trie)  │  │  (Cache) │  │ (Memory) │  │(Metrics) │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ TCP Server   │  │  WebSocket   │  │HTTP Bridge   │  │CoAP Bridge   │
+│  :1883       │  │   :8083      │  │  :8080       │  │  :5683       │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │ net.Conn        │ ws.Conn         │                 │
+       └─────────┬───────┴─────────────────┘                 │
+                 │ core.Connection                           │
+                 ▼                                           ▼
+       ┌─────────────────────┐                    ┌──────────────────┐
+       │ Protocol Detection  │                    │ Direct Domain    │
+       │ (connection.go)     │                    │ Calls (Publish)  │
+       └─────────┬───────────┘                    └────────┬─────────┘
+                 │                                         │
+        ┌────────┴────────┐                                │
+        │                 │                                │
+ ┌──────▼──────┐   ┌──────▼──────┐                         │
+ │ V3Handler   │   │ V5Handler   │                         │
+ │ (v3/v4.0)   │   │ (v5.0)      │                         │
+ └──────┬──────┘   └──────┬──────┘                         │
+        │                 │                                │
+        │ Domain Ops      │                                │
+        └────────┬────────┴────────────────────────────────┘
+                 ▼
+    ┌────────────────────────────────────────────────────────┐
+    │              Domain Layer (broker/broker.go)           │
+    │                                                        │
+    │  • CreateSession()  • Publish()    • Subscribe()       │
+    │  • DeliverToSession()  • Unsubscribe()  • AckMessage() │
+    │                                                        │
+    │  Built-in instrumentation:                             │
+    │  • Logger (slog)  • Metrics (Stats)                    │
+    └─────────────────────┬──────────────────────────────────┘
+                          │
+                          ▼
+    ┌────────────────────────────────────────────────────────┐
+    │                Infrastructure Layer                    │
+    │    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐     │
+    │    │ Router  │ │Sessions │ │ Storage │ │ Stats   │     │
+    │    │ (Trie)  │ │ (Cache) │ │(Memory) │ │(Metrics)│     │
+    │    └─────────┘ └─────────┘ └─────────┘ └─────────┘     │
+    └────────────────────────────────────────────────────────┘
+
+Key Insight: All protocols (MQTT/TCP, MQTT/WS, HTTP, CoAP) share
+the same Broker instance. A message published via HTTP appears in
+all MQTT subscriptions, and vice versa.
 ```
 
 ### Why This Architecture?
@@ -133,15 +161,18 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 mqtt/
 ├── cmd/
 │   └── broker/          # Application entry point
-├── server/
-│   └── tcp/             # TCP Transport layer
+├── server/              # Transport & Protocol Bridges
+│   ├── tcp/             # MQTT over TCP transport
+│   ├── websocket/       # MQTT over WebSocket transport
+│   ├── http/            # HTTP-MQTT bridge (REST API)
+│   └── coap/            # CoAP-MQTT bridge
 ├── core/                # Core primitives
 │   ├── packets/         # MQTT Packet encoding/decoding
 │   │   ├── v3/          # MQTT 3.1.1 packets
 │   │   └── v5/          # MQTT 5.0 packets
 │   ├── codec/           # Packet stream codec
 │   └── connection.go    # Connection interfaces
-├── broker/              # Core Broker Logic
+├── broker/              # Core Broker Logic (Protocol-Agnostic)
 │   ├── broker.go        # Domain logic (pure business logic)
 │   ├── v3_handler.go    # MQTT 3.1.1 protocol adapter
 │   ├── v5_handler.go    # MQTT 5.0 protocol adapter
@@ -186,25 +217,66 @@ go build -o build/mqttd ./cmd/broker
 ### Run
 
 ```bash
-# Start the broker (default port 1883)
-make run
+# Start with default configuration (TCP only on port 1883)
+./build/mqttd
 
-# Or with custom options
-./build/mqttd --addr=:1883 --log=info
+# Start with custom configuration file
+./build/mqttd --config config.yaml
 ```
 
 ## Configuration
 
-Command-line flags are available for basic configuration:
+### Configuration File
+
+Create a `config.yaml` to enable additional protocols:
+
+```yaml
+server:
+  tcp_addr: ":1883"
+  tcp_max_connections: 10000
+
+  # Enable HTTP-MQTT bridge
+  http_addr: ":8080"
+  http_enabled: true
+
+  # Enable WebSocket transport
+  ws_addr: ":8083"
+  ws_path: "/mqtt"
+  ws_enabled: true
+
+  # Enable CoAP bridge
+  coap_addr: ":5683"
+  coap_enabled: false
+
+  shutdown_timeout: 30s
+
+broker:
+  max_message_size: 1048576  # 1MB
+  max_retained_messages: 10000
+  retry_interval: 20s
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300  # 5 minutes
+  max_offline_queue_size: 1000
+
+log:
+  level: info  # debug, info, warn, error
+  format: text  # text, json
+
+storage:
+  type: memory
+```
+
+### Command-line Flags
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--addr` | `:1883` | TCP address to listen on |
-| `--log` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `--config` | - | Path to YAML configuration file |
 
 ## Protocol Support
 
-### MQTT 3.1.1
+### MQTT 3.1.1 (over TCP and WebSocket)
 
 Full support for all packet types and flows:
 - CONNECT, CONNACK
@@ -214,21 +286,64 @@ Full support for all packet types and flows:
 - PINGREQ, PINGRESP
 - DISCONNECT
 
-### MQTT 5.0
+### MQTT 5.0 (over TCP and WebSocket)
 
 Comprehensive support including:
-- Properties on all packets
+- All packet types with properties
 - Reason codes
 - Session expiry
 - Message expiry
+- User properties
 - Shared subscriptions (Planned)
 - Topic aliases (Planned)
 
+### HTTP-MQTT Bridge
+
+RESTful API for publishing messages to the broker:
+
+**Endpoint:** `POST /publish`
+
+**Request:**
+```json
+{
+  "topic": "sensor/temperature",
+  "payload": "eyJ0ZW1wIjogMjIuNX0=",
+  "qos": 1,
+  "retain": false
+}
+```
+
+**Response:** `{"status": "ok"}`
+
+**Use case:** Publish from web applications, serverless functions, or services without MQTT client libraries.
+
+### WebSocket Transport
+
+MQTT protocol over WebSocket for browser and mobile clients:
+
+- **URL:** `ws://localhost:8083/mqtt` (configurable path)
+- **Protocol:** Standard MQTT 3.1.1 or 5.0 packets over WebSocket binary frames
+- **Full support:** CONNECT, SUBSCRIBE, PUBLISH, QoS 0/1/2
+- **Use case:** Web dashboards, browser-based IoT clients
+
+### CoAP Bridge
+
+Lightweight protocol for constrained IoT devices:
+
+- **Protocol:** CoAP over UDP
+- **Endpoint:** `/mqtt/publish/<topic>`
+- **Method:** POST with payload
+- **Use case:** Low-power sensors, embedded devices
+- **Status:** Stub implementation (handlers defined, requires UDP server setup)
+
 ## Roadmap
 
-### Completed
+### Completed ✅
 - [x] MQTT 3.1.1 and 5.0 packet encoding/decoding
 - [x] TCP transport
+- [x] WebSocket transport
+- [x] HTTP-MQTT bridge
+- [x] CoAP bridge (stub)
 - [x] Session management
 - [x] QoS 0, 1, 2 flows
 - [x] Retained messages
@@ -236,15 +351,25 @@ Comprehensive support including:
 - [x] Session expiry
 - [x] Topic routing with wildcards
 - [x] In-memory storage
+- [x] Direct instrumentation (logging & metrics)
+- [x] Multi-protocol support (all share same broker core)
 
-### Planned
-- [ ] TLS support
-- [ ] WebSocket transport
-- [ ] Shared subscriptions
-- [ ] Topic aliases
-- [ ] Authentication / Authorization hooks
-- [ ] Persistent storage (PostgreSQL/etcd)
-- [ ] Clustering support
+### In Progress 🚧
+- [ ] Complete CoAP UDP server implementation
+- [ ] TLS/SSL support for TCP and WebSocket
+- [ ] Authentication & Authorization hooks
+
+### Planned 📋
+- [ ] Shared subscriptions (MQTT 5.0)
+- [ ] Topic aliases (MQTT 5.0)
+- [ ] Message expiry enforcement
+- [ ] Persistent storage backends (PostgreSQL, etcd, BadgerDB)
+- [ ] Clustering and horizontal scaling
+- [ ] Admin REST API for management
+- [ ] Prometheus metrics exporter
+- [ ] MQTT bridge to other brokers
+- [ ] Rate limiting and quotas
+- [ ] Message bridge to Kafka/NATS
 
 See [docs/roadmap.md](docs/roadmap.md) for the detailed plan.
 

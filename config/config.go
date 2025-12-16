@@ -30,13 +30,18 @@ type ServerConfig struct {
 	TLSCertFile string `yaml:"tls_cert_file"`
 	TLSKeyFile  string `yaml:"tls_key_file"`
 
-	// HTTP adapter settings (future)
+	// HTTP-MQTT bridge settings
 	HTTPAddr    string `yaml:"http_addr"`
 	HTTPEnabled bool   `yaml:"http_enabled"`
 
-	// WebSocket settings (future)
+	// WebSocket settings
 	WSAddr    string `yaml:"ws_addr"`
+	WSPath    string `yaml:"ws_path"`
 	WSEnabled bool   `yaml:"ws_enabled"`
+
+	// CoAP settings
+	CoAPAddr    string `yaml:"coap_addr"`
+	CoAPEnabled bool   `yaml:"coap_enabled"`
 
 	// Graceful shutdown timeout
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
@@ -95,9 +100,12 @@ func Default() *Config {
 			TCPWriteTimeout: 60 * time.Second,
 			TLSEnabled:      false,
 			HTTPAddr:        ":8080",
-			HTTPEnabled:     false,
+			HTTPEnabled:     true,
 			WSAddr:          ":8083",
-			WSEnabled:       false,
+			WSPath:          "/mqtt",
+			WSEnabled:       true,
+			CoAPAddr:        ":5683",
+			CoAPEnabled:     true,
 			ShutdownTimeout: 30 * time.Second,
 		},
 		Broker: BrokerConfig{

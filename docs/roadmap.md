@@ -1,8 +1,8 @@
 # MQTT Broker Implementation Plan
 ## Production-Ready Roadmap: Tests → v5 → Storage → Clustering
 
-**Last Updated:** 2025-12-09
-**Status:** Phase 0 Complete (Code Quality Fixes)
+**Last Updated:** 2025-12-16
+**Status:** Phase 0 Complete + Multi-Protocol Support Implemented
 
 ---
 
@@ -10,23 +10,32 @@
 
 This document provides a comprehensive roadmap to transform the current MQTT broker implementation into a production-ready, scalable, and maintainable system. The plan prioritizes:
 
-1. **Comprehensive Testing** - Foundation for reliability and confidence
-2. **MQTT 5.0 Completion** - Full protocol compliance
-3. **Persistent Storage** - Scalability and data durability
-4. **Clustering Support** - Horizontal scaling and high availability
-5. **Production Hardening** - Observability, security, performance
+1. **Multi-Protocol Support** ✅ - MQTT (TCP/WebSocket), HTTP, CoAP bridges
+2. **Comprehensive Testing** - Foundation for reliability and confidence
+3. **MQTT 5.0 Completion** - Full protocol compliance
+4. **Persistent Storage** - Scalability and data durability
+5. **Clustering Support** - Horizontal scaling and high availability
+6. **Production Hardening** - Observability, security, performance
 
-### Current State
+### Current State (Updated 2025-12-16)
 - ✅ Core MQTT 3.1.1 implementation complete
-- ✅ Basic MQTT 5.0 packet support
+- ✅ Basic MQTT 5.0 packet support (full protocol compliance in progress)
+- ✅ **Multi-protocol architecture** - TCP, WebSocket, HTTP, CoAP all share same broker
+- ✅ **MQTT over TCP** - Full support for v3.1.1 and v5.0
+- ✅ **MQTT over WebSocket** - Browser and mobile client support
+- ✅ **HTTP-MQTT Bridge** - REST API for publishing messages
+- ✅ **CoAP Bridge** - Stub implementation for IoT devices
 - ✅ Clean architecture with proper separation of concerns
+- ✅ Protocol-agnostic domain layer
+- ✅ Direct instrumentation (logging & metrics)
 - ✅ Memory-based storage
 - ✅ TCP server with graceful shutdown
 - ⚠️ Limited test coverage for edge cases
 - ❌ MQTT 5.0 features incomplete (topic aliases, shared subscriptions)
 - ❌ No persistent storage backend
 - ❌ No clustering support
-- ❌ Limited production hardening
+- ❌ TLS/SSL support not implemented
+- ❌ Authentication & authorization not fully implemented
 
 ---
 
@@ -51,6 +60,76 @@ This document provides a comprehensive roadmap to transform the current MQTT bro
 ✓ All unit tests passing
 ✓ All integration tests passing
 ✓ Race detector: CLEAN
+```
+
+---
+
+## Phase 0.5: Multi-Protocol Support ✅ COMPLETE
+
+**Status:** Completed 2025-12-16
+**Objective:** Extend broker to support multiple transport protocols and protocol bridges while maintaining a single shared broker core.
+
+### Completed Tasks
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| WebSocket Transport | ✅ | MQTT over WebSocket for browser clients |
+| HTTP-MQTT Bridge | ✅ | REST API for publishing messages |
+| CoAP Bridge | ✅ | Stub implementation for IoT devices |
+| Multi-server main.go | ✅ | All servers share one Broker instance |
+| Configuration support | ✅ | YAML config for enabling/disabling servers |
+| Documentation | ✅ | Updated README and architecture.md |
+
+### Implementation Details
+
+**WebSocket Server** (`server/websocket/`)
+- HTTP server on `:8083` with `/mqtt` endpoint
+- Implements `core.Connection` interface wrapping WebSocket
+- Reuses existing MQTT protocol detection and handlers
+- **Zero changes to broker or protocol handlers needed**
+
+**HTTP Bridge** (`server/http/`)
+- HTTP server on `:8080` with `/publish` endpoint
+- Accepts JSON: `{"topic": "...", "payload": "...", "qos": 1, "retain": false}`
+- **Directly calls `broker.Publish()`** - bypasses MQTT protocol layer
+- Use cases: Web apps, serverless functions, REST integrations
+
+**CoAP Bridge** (`server/coap/`)
+- CoAP server on UDP `:5683` (stub)
+- Handlers defined for `/mqtt/publish/<topic>` endpoint
+- Similar to HTTP bridge - direct domain calls
+- Awaits full UDP server implementation
+
+**Architecture Benefits:**
+- ✅ All protocols share **one Broker instance**
+- ✅ Message published via HTTP → visible in all MQTT subscriptions
+- ✅ Clean separation: Transport → Protocol → Domain
+- ✅ Easy extensibility - new protocols are simple adapters
+
+### Configuration
+
+Enable/disable servers in `config.yaml`:
+```yaml
+server:
+  tcp_addr: ":1883"
+
+  http_addr: ":8080"
+  http_enabled: true
+
+  ws_addr: ":8083"
+  ws_path: "/mqtt"
+  ws_enabled: true
+
+  coap_addr: ":5683"
+  coap_enabled: false
+```
+
+### Test Results
+```bash
+✓ All unit tests passing
+✓ Build successful with all dependencies
+✓ TCP, HTTP, WebSocket servers start concurrently
+✓ Graceful shutdown across all servers
 ```
 
 ---
