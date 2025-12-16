@@ -357,8 +357,8 @@ func (s *Session) Info() *storage.Session {
 		ReceiveMaximum:  s.ReceiveMaximum,
 		MaxPacketSize:   s.MaxPacketSize,
 		TopicAliasMax:   s.TopicAliasMax,
-		RequestResponse: false,
-		RequestProblem:  true,
+		RequestResponse: s.requestResponseInfo,
+		RequestProblem:  s.requestProblemInfo,
 	}
 }
 

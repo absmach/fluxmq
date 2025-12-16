@@ -365,21 +365,6 @@ func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 	return io.EOF
 }
 
-// HandleConnAck - not used by broker (sent by broker, not received).
-func (h *V3Handler) HandleConnAck(s *session.Session, pkt packets.ControlPacket) error {
-	return ErrProtocolViolation
-}
-
-// HandleUnsubAck - not used by broker.
-func (h *V3Handler) HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) error {
-	return ErrProtocolViolation
-}
-
-// HandlePingResp - not used by broker.
-func (h *V3Handler) HandlePingResp(s *session.Session) error {
-	return ErrProtocolViolation
-}
-
 // HandleAuth - not supported in V3.
 func (h *V3Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) error {
 	return ErrInvalidPacketType

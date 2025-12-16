@@ -29,9 +29,6 @@ type Handler interface {
 	// HandleConnect handles CONNECT packets.
 	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
 
-	// HandleConnAck handles CONNECT packets.
-	HandleConnAck(s *session.Session, pkt packets.ControlPacket) error
-
 	// HandlePublish handles PUBLISH packets.
 	HandlePublish(s *session.Session, pkt packets.ControlPacket) error
 
@@ -53,14 +50,8 @@ type Handler interface {
 	// HandleUnsubscribe handles UNSUBSCRIBE packets.
 	HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error
 
-	// HandleUnsubAck handles UNSUBSACK packets.
-	HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) error
-
 	// HandlePingReq handles PINGREQ packets.
 	HandlePingReq(s *session.Session) error
-
-	// HandlePingResp handles PINGRESP packets.
-	HandlePingResp(s *session.Session) error
 
 	// HandleDisconnect handles DISCONNECT packets.
 	HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error

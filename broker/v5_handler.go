@@ -432,21 +432,6 @@ func (h *V5Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) er
 	return nil
 }
 
-// HandleConnAck - not used by broker.
-func (h *V5Handler) HandleConnAck(s *session.Session, pkt packets.ControlPacket) error {
-	return ErrProtocolViolation
-}
-
-// HandleUnsubAck - not used by broker.
-func (h *V5Handler) HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) error {
-	return ErrProtocolViolation
-}
-
-// HandlePingResp - not used by broker.
-func (h *V5Handler) HandlePingResp(s *session.Session) error {
-	return ErrProtocolViolation
-}
-
 // deliverOfflineMessages sends queued messages to reconnected client.
 func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
