@@ -61,43 +61,6 @@ func NewBroker() *Broker {
 	return b
 }
 
-// SetAuth sets the authentication and authorization engine.
-func (b *Broker) SetAuth(auth *AuthEngine) {
-	b.auth = auth
-}
-
-// Stats returns the broker statistics.
-func (b *Broker) Stats() *Stats {
-	return b.stats
-}
-
-// SubscribeService adapts the Service.Subscribe signature to the domain Subscribe method.
-func (b *Broker) SubscribeService(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
-	s := b.Get(clientID)
-	if s == nil {
-		return ErrSessionNotFound
-	}
-
-	subOpts := SubscriptionOptions{
-		QoS:               qos,
-		NoLocal:           opts.NoLocal,
-		RetainAsPublished: opts.RetainAsPublished,
-		RetainHandling:    opts.RetainHandling,
-	}
-
-	return b.subscribeInternal(s, filter, subOpts)
-}
-
-// UnsubscribeService adapts the Service.Unsubscribe signature to the domain Unsubscribe method.
-func (b *Broker) UnsubscribeService(clientID string, filter string) error {
-	s := b.Get(clientID)
-	if s == nil {
-		return ErrSessionNotFound
-	}
-
-	return b.unsubscribeInternal(s, filter)
-}
-
 // --- Core Domain Methods ---
 
 // CreateSession creates a new session or returns an existing one.
@@ -253,12 +216,29 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 
 // Subscribe adds a subscription (implements Service interface).
 func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error {
-	return b.SubscribeService(clientID, filter, qos, opts)
+	s := b.Get(clientID)
+	if s == nil {
+		return ErrSessionNotFound
+	}
+
+	subOpts := SubscriptionOptions{
+		QoS:               qos,
+		NoLocal:           opts.NoLocal,
+		RetainAsPublished: opts.RetainAsPublished,
+		RetainHandling:    opts.RetainHandling,
+	}
+
+	return b.subscribeInternal(s, filter, subOpts)
 }
 
 // Unsubscribe removes a subscription (implements Service interface).
 func (b *Broker) Unsubscribe(clientID string, filter string) error {
-	return b.UnsubscribeService(clientID, filter)
+	s := b.Get(clientID)
+	if s == nil {
+		return ErrSessionNotFound
+	}
+
+	return b.unsubscribeInternal(s, filter)
 }
 
 // DeliverToSession queues a message for delivery to a session.
