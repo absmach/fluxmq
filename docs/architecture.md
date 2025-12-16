@@ -2,603 +2,715 @@
 
 ## Overview
 
-This document describes the architecture of the MQTT broker with a **clean separation of concerns** between networking, protocol handling, and business logic.
+This document describes the detailed architecture of the MQTT broker, which implements a **clean layered architecture** with strict separation between transport, protocol handling, and domain logic.
 
 **Design Philosophy:**
-1. **Layered Architecture** - Clear separation: TCP Server → MQTT Codec → Broker Logic
-2. **Protocol Agnostic Core** - Broker deals only with MQTT semantics; transport is handled separately
-3. **Simple Interfaces** - Minimal, focused interfaces at component boundaries
-4. **Unexported Implementations** - Return interfaces from constructors, keep internals hidden
-5. **Extensibility** - Storage, authentication, and routing are pluggable
+1. **Domain-Driven Design** - Pure business logic isolated from protocol concerns
+2. **Protocol Adapters** - Stateless handlers translate MQTT packets to domain operations
+3. **Direct Instrumentation** - Logging and metrics embedded at the domain layer
+4. **Zero Indirection** - No middleware chains, decorators, or hidden control flow
+5. **Testability First** - Each layer independently testable
 
 ## Architecture Diagram
 
 ### High-Level Component View
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    cmd/broker/main.go                   │
-│   - Load config                                         │
-│   - Create broker                                       │
-│   - Create TCP server                                   │
-│   - Context-based graceful shutdown                     │
-└────────────┬────────────────────────────────────────────┘
-             │
-             │ creates & starts
-             │
-             ▼
-┌─────────────────────────────────────────────────────────┐
-│              server/tcp/server.go                       │
-│   - Listen on TCP port                                  │
-│   - Accept connections                                  │
-│   - Connection limiting (semaphore)                     │
-│   - TCP optimizations (keepalive, nodelay)              │
-│   - Graceful shutdown with timeout                      │
-│   - Calls Handler.HandleConnection(net.Conn)            │
-└────────────┬────────────────────────────────────────────┘
-             │
-             │ net.Conn
-             │
-             ▼
-┌─────────────────────────────────────────────────────────┐
-│                broker/broker.go                         │
-│   - HandleConnection(net.Conn)                          │
-│   - Wraps conn with MQTT codec                          │
-│   - Session management                                  │
-│   - Pub/sub routing                                     │
-│   - Storage (retained, will messages)                   │
-└────────────┬────────────────────────────────────────────┘
-             │
-             │ uses
-             │
-             ▼
-┌─────────────────────────────────────────────────────────┐
-│            broker/connection.go (MQTT Codec)            │
-│   - mqttCodec wraps net.Conn                            │
-│   - Protocol version detection (v3.1/v3.1.1/v5)         │
-│   - ReadPacket() / WritePacket()                        │
-│   - Delegates to packets/v3 or packets/v5               │
-└─────────────────────────────────────────────────────────┘
-             │
-             │ uses
-             │
-    ┌────────┴────────┐
-    ▼                 ▼
-┌──────────┐    ┌──────────┐
-│packets/v3│    │packets/v5│
-│          │    │          │
-│MQTT 3.1.1│    │ MQTT 5.0 │
-└──────────┘    └──────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    cmd/broker/main.go                       │
+│  • Creates Broker with logger & metrics                     │
+│  • Creates TCP server                                       │
+│  • Manages graceful shutdown                                │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           │ creates
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              server/tcp/Server                              │
+│  • Listens on TCP port                                      │
+│  • Accepts connections                                      │
+│  • Applies TCP optimizations (keepalive, nodelay)           │
+│  • Connection limiting via semaphore                        │
+│  • Graceful shutdown with timeout                           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ net.Conn
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│         broker/HandleConnection(broker, conn)               │
+│  • Reads first CONNECT packet                               │
+│  • Detects protocol version (v3.1.1 or v5.0)                │
+│  • Creates appropriate handler                              │
+│  • Delegates to handler.HandleConnect()                     │
+└────────────┬──────────────────────────┬─────────────────────┘
+             │                          │
+      ┌──────▼──────┐            ┌──────▼──────┐
+      │ V3Handler   │            │ V5Handler   │
+      │             │            │             │
+      │ Stateless   │            │ Stateless   │
+      │ Adapter     │            │ Adapter     │
+      └──────┬──────┘            └──────┬──────┘
+             │                          │
+             │ Domain Operations        │
+             └──────────┬───────────────┘
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     Broker (Domain)                         │
+│                                                             │
+│  Core domain methods (protocol-agnostic):                   │
+│  • CreateSession(clientID, opts)                            │
+│  • Publish(msg)                                             │
+│  • Subscribe(session, filter, opts)                         │
+│  • Unsubscribe(session, filter)                             │
+│  • DeliverToSession(session, msg)                           │
+│  • AckMessage(session, packetID)                            │
+│                                                             │
+│  Embedded instrumentation:                                  │
+│  • logger *slog.Logger - operation tracing                  │
+│  • stats  *Stats       - metrics collection                 │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           │ uses
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Infrastructure                            │
+│                                                             │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐           │
+│  │   Router   │  │  Sessions  │  │  Storage   │           │
+│  │   (Trie)   │  │  (Cache)   │  │  (Memory)  │           │
+│  │            │  │            │  │            │           │
+│  │ • Match()  │  │ • Get()    │  │ • Messages │           │
+│  │ • Subscribe│  │ • Set()    │  │ • Retained │           │
+│  └────────────┘  └────────────┘  │ • Wills    │           │
+│                                  └────────────┘           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Detailed Packet Flow Diagram
+## Layered Architecture Deep Dive
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         TCP Client                               │
-│                    (mosquitto, paho, etc.)                       │
-└────────────┬─────────────────────────────────────────────────────┘
-             │
-             │ TCP Connection
-             │
-             ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                     server/tcp/Server                              │
-│                                                                    │
-│  1. Accept()  ──────►  2. configureTCPConn()                       │
-│                         - SetKeepAlive(15s)                        │
-│                         - SetNoDelay(true)                         │
-│                                                                    │
-│  3. Go handleConn() ──►  4. handler.HandleConnection(net.Conn)     │
-└────────────┬───────────────────────────────────────────────────────┘
-             │
-             │ Delegates to Broker
-             │
-             ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                      broker.Broker                                 │
-│                  HandleConnection(net.Conn)                        │
-│                                                                    │
-│  1. Wrap with codec  ─────►  conn := NewConnection(netConn)        │
-│                               - Auto-detect version on CONNECT     │
-│                                                                    │
-│  2. Read CONNECT ─────────►  pkt, err := conn.ReadPacket()         │
-│                               │                                    │
-│                               ▼                                    │
-│                          ┌─────────────────┐                       │
-│                          │ packets/v3 or   │                       │
-│                          │ packets/v5      │                       │
-│                          │ ReadPacket()    │                       │
-│                          └─────────────────┘                       │
-│                                                                    │
-│  3. Create/Get Session ──►  sessionMgr.GetOrCreate(clientID)       │
-│                               - Check clean session flag           │
-│                               - Resume or create new               │
-│                                                                    │
-│  4. Send CONNACK ────────►  conn.WritePacket(connack)              │
-│                                                                    │
-│  5. Packet Loop ─────────►  for { pkt := conn.ReadPacket() }       │
-│         │                                                          │
-│         └──────────────►  dispatcher.Dispatch(pkt, session)        │
-│                                                                    │
-└────────────┬───────────────────────────────────────────────────────┘
-             │
-             │ Dispatch to Handlers
-             │
-             ▼
-┌───────────────────────────────────────────────────────────────────┐
-│                   handlers/Dispatcher                             │
-│                                                                   │
-│  Switch packet.Type():                                            │
-│                                                                   │
-│  ┌─ PUBLISH ──►  HandlePublish() ─────────────────────┐           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           Validate topic/payload                   │           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           If retain: store.SetRetained()           │           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           router.Match(topic) ──► Get subscribers  │           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           For each subscriber:                     │           │
-│  │             - Get session                          │           │
-│  │             - Determine delivery QoS               │           │
-│  │             - If online: deliverToSession()        │           │
-│  │             - If offline: session.OfflineQueue     │           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           Send PUBACK (if QoS 1)                   │           │
-│  │                                                    │           │
-│  ├─ SUBSCRIBE ──►  HandleSubscribe() ─────────────────┤           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           For each topic filter:                   │           │
-│  │             - router.Subscribe(clientID, filter)   │           │
-│  │             - Get retained messages                │           │
-│  │             - Send retained to client              │           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           Send SUBACK                              │           │
-│  │                                                    │           │
-│  ├─ UNSUBSCRIBE ──►  HandleUnsubscribe() ─────────────┤           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           router.Unsubscribe(clientID, filters)    │           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           Send UNSUBACK                            │           │
-│  │                                                    │           │
-│  ├─ PINGREQ ──►  HandlePing() ────────────────────────┤           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           Send PINGRESP                            │           │
-│  │                                                    │           │
-│  ├─ DISCONNECT ──►  HandleDisconnect() ───────────────┤           │
-│  │                │                                   │           │
-│  │                ▼                                   │           │
-│  │           Clear will message                       │           │
-│  │           Close connection                         │           │
-│  │                                                    │           │
-│  └─ PUBACK/PUBREC/PUBREL/PUBCOMP ─────────────────────┘           │
-│                   │                                               │
-│                   ▼                                               │
-│              session.Inflight operations                          │
-│              - Remove from tracking                               │
-│              - Trigger next QoS flow step                         │
-│                                                                   │
-└────────────┬──────────────────────────────────────────────────────┘
-             │
-             │ Uses
-             │
-    ┌────────┴────────────────┬──────────────────┐
-    ▼                         ▼                  ▼
-┌─────────────┐      ┌─────────────┐    ┌─────────────┐
-│  session/   │      │  topics/    │    │   store/    │
-│  Manager    │      │  Router     │    │   Store     │
-│             │      │             │    │             │
-│ Sessions    │      │ Trie for    │    │ Retained    │
-│ State       │◄────►│ wildcard    │◄──►│ messages    │
-│ Inflight    │      │ matching    │    │             │
-│ Offline     │      │             │    │ Will msgs   │
-│ Queue       │      │             │    │             │
-└─────────────┘      └─────────────┘    └─────────────┘
-```
+### Layer 1: TCP Server (server/tcp)
 
-### Message Distribution Flow
+**Responsibility**: Network transport and connection management
 
-```
-PUBLISH from Client A to topic "sensors/temp"
-│
-├─► 1. TCP Server receives packet
-│
-├─► 2. Broker reads packet via codec
-│
-├─► 3. Dispatcher.HandlePublish()
-│     │
-│     ├─► Check if retained
-│     │    └─► If yes: store.SetRetained("sensors/temp", msg)
-│     │
-│     ├─► Router.Match("sensors/temp")
-│     │    └─► Returns: [
-│     │          {sessionID: "client-b", filter: "sensors/#", qos: 1},
-│     │          {sessionID: "client-c", filter: "sensors/+", qos: 0}
-│     │        ]
-│     │
-│     └─► For each subscriber:
-│           │
-│           ├─► Get session from SessionManager
-│           │
-│           ├─► Determine delivery QoS = min(pub_qos, sub_qos)
-│           │
-│           ├─► If session.IsConnected():
-│           │    └─► deliverToSession()
-│           │         ├─► Create PUBLISH packet
-│           │         ├─► If QoS > 0: assign PacketID
-│           │         ├─► Add to session.Inflight
-│           │         └─► session.WritePacket(publish)
-│           │
-│           └─► Else (offline):
-│                └─► session.OfflineQueue.Enqueue(msg)
-│                     └─► Delivered when client reconnects
-│
-└─► 4. Send PUBACK to Client A (if QoS 1)
-```
+**Key Files**:
+- `server/tcp/server.go` - TCP listener and connection acceptance
 
+**What it does**:
+1. Listens on configured TCP address
+2. Accepts incoming connections
+3. Applies TCP optimizations:
+   - `SetKeepAlive(15s)` - Detects dead connections
+   - `SetNoDelay(true)` - Disables Nagle's algorithm for low latency
+4. Enforces connection limits via semaphore
+5. Handles graceful shutdown with configurable timeout
+6. Delegates each connection to `broker.HandleConnection(broker, conn)`
 
-## Component Layers
+**Dependencies**: Only standard library (`net`, `context`)
 
-### Layer 1: TCP Server (`server/tcp/`)
+---
 
-**Purpose:** Robust TCP connection handling with production-ready features.
+### Layer 2: Protocol Detection & Adapter Creation (broker/connection.go)
 
+**Responsibility**: Detect MQTT protocol version and create appropriate handler
+
+**Key Files**:
+- `broker/connection.go` - `HandleConnection()` function
+
+**What it does**:
+1. Wraps `net.Conn` in MQTT codec (`core.NewConnection`)
+2. Reads first packet (must be CONNECT)
+3. Inspects `ProtocolVersion` field:
+   - `3` or `4` → Creates `V3Handler`
+   - `5` → Creates `V5Handler`
+4. Validates protocol version matches packet type
+5. Delegates to `handler.HandleConnect(conn, connectPacket)`
+
+**Code Flow**:
 ```go
-// server/tcp/server.go
+func HandleConnection(broker *Broker, conn core.Connection) {
+    pkt := conn.ReadPacket()
+
+    if v3Connect, ok := pkt.(*v3.Connect); ok {
+        handler := NewV3Handler(broker)
+        handler.HandleConnect(conn, v3Connect)
+        return
+    }
+
+    if v5Connect, ok := pkt.(*v5.Connect); ok {
+        handler := NewV5Handler(broker)
+        handler.HandleConnect(conn, v5Connect)
+        return
+    }
+}
+```
+
+---
+
+### Layer 3: Protocol Adapters (broker/v3_handler.go, broker/v5_handler.go)
+
+**Responsibility**: Translate MQTT packets into domain operations
+
+**Key Characteristics**:
+- **Stateless** - No internal state, operates on session passed as parameter
+- **One per protocol version** - `V3Handler` for MQTT 3.1.1/4.0, `V5Handler` for MQTT 5.0
+- **Implements Handler interface** - Common interface for all protocol versions
+
+**Handler Interface**:
+```go
 type Handler interface {
-    HandleConnection(conn net.Conn)
+    HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
+    HandlePublish(s *session.Session, pkt packets.ControlPacket) error
+    HandlePubAck(s *session.Session, pkt packets.ControlPacket) error
+    HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error
+    // ... other packet types
 }
-
-type Server struct { /* unexported fields */ }
-
-func New(cfg Config, h Handler) *Server
 ```
 
-**Features:**
-- Graceful shutdown with configurable timeout
-- Connection limiting via semaphore
-- TCP optimizations (keepalive, TCP_NODELAY)
-- Context-based lifecycle management
-- Structured logging with slog
-- Buffer pooling
+**What handlers do**:
 
-**Config Options:**
-- `Address`, `TLSConfig`
-- `ShutdownTimeout`, `MaxConnections`
-- `ReadTimeout`, `WriteTimeout`, `IdleTimeout`
-- `TCPKeepAlive`, `DisableNoDelay`
-- `Logger`
+1. **Type assertion** - Cast `packets.ControlPacket` to specific packet type
+2. **Extract packet fields** - Topic, payload, QoS, flags, properties
+3. **Protocol-specific validation** - Topic aliases (v5), QoS levels, etc.
+4. **Authorization checks** - If auth engine configured
+5. **Translate to domain operation** - Call `broker.Publish()`, `broker.Subscribe()`, etc.
+6. **Send response packet** - CONNACK, PUBACK, SUBACK, etc.
+7. **Log operation** - Protocol-specific logging (e.g., "v5_publish")
+8. **Run session loop** - After CONNECT, enter packet read loop
 
-### Layer 2: MQTT Codec (`broker/connection.go`)
+**Example: V5Handler.HandlePublish**:
+```go
+func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+    start := time.Now()
+    p := pkt.(*v5.Publish) // Type assertion
 
-**Purpose:** Protocol version detection and packet-level I/O.
+    // Extract fields
+    topic := p.TopicName
+    payload := p.Payload
+    qos := p.FixedHeader.QoS
+
+    // Handle v5-specific topic aliases
+    if p.Properties.TopicAlias != nil {
+        topic = resolveAlias(...)
+    }
+
+    // Authorization
+    if !h.broker.auth.CanPublish(s.ID, topic) {
+        return sendV5PubAck(s, packetID, 0x87, "Not authorized")
+    }
+
+    // Domain operation
+    msg := Message{Topic: topic, Payload: payload, QoS: qos}
+    if err := h.broker.Publish(msg); err != nil {
+        return err
+    }
+
+    // Response
+    h.broker.logger.Debug("v5_publish_complete",
+        slog.String("client_id", s.ID),
+        slog.Duration("duration", time.Since(start)))
+
+    return sendV5PubAck(s, packetID, 0x00, "")
+}
+```
+
+**Packet Loop**:
+
+After successful CONNECT, handlers start a packet read loop managed by `broker.runSession()`:
 
 ```go
-// broker/connection.go
-type mqttCodec struct {
-    conn    net.Conn
-    reader  io.Reader
-    version int // 0=unknown, 3/4=v3.1/v3.1.1, 5=v5
-}
+func (b *Broker) runSession(handler Handler, s *session.Session) error {
+    for {
+        pkt := s.ReadPacket()
+        s.Touch() // Update last activity
 
-func NewConnection(conn net.Conn) Connection
+        // Dispatch to appropriate handler method
+        err := dispatchPacket(handler, s, pkt)
+        if err == io.EOF { // Clean disconnect
+            return nil
+        }
+    }
+}
 ```
 
-**Features:**
-- Auto-detects MQTT protocol version on first packet (CONNECT)
-- Wraps `net.Conn` for packet-level I/O
-- Delegates to `packets/v3` or `packets/v5` readers
-- Implements `Connection` interface (internal to broker)
+---
 
-### Layer 3: Broker Core (`broker/`)
+### Layer 4: Domain Layer (broker/broker.go)
 
-**Purpose:** MQTT business logic - sessions, routing, pub/sub.
+**Responsibility**: Core MQTT business logic, completely protocol-agnostic
+
+**Key Characteristics**:
+- **Pure domain methods** - No knowledge of packets or protocols
+- **Direct instrumentation** - Logger and metrics injected via constructor
+- **Single Responsibility** - Each method does one thing
+- **Infrastructure-agnostic** - Uses interfaces for storage, routing
+
+**Constructor**:
+```go
+func NewBroker(logger *slog.Logger, stats *Stats) *Broker {
+    if logger == nil {
+        logger = slog.Default()
+    }
+    if stats == nil {
+        stats = NewStats()
+    }
+
+    return &Broker{
+        sessionsMap: session.NewMapCache(),
+        router:      NewRouter(),
+        messages:    storage.Messages(),
+        retained:    storage.Retained(),
+        logger:      logger,
+        stats:       stats,
+    }
+}
+```
+
+**Domain Methods**:
+
+#### CreateSession
+Creates or retrieves a session, handles clean start logic.
 
 ```go
-// broker/broker.go
-type Broker struct {
-    mu          sync.RWMutex
-    sessionsMap session.Cache
-    router      *topics.Router
-    store       *store.Store
+func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.Session, bool, error) {
+    b.mu.Lock()
+    defer b.mu.Unlock()
+
+    // Clean start: destroy existing session
+    if opts.CleanStart && existing := b.sessionsMap.Get(clientID); existing != nil {
+        b.destroySessionLocked(existing)
+    }
+
+    // Return existing or create new
+    if existing := b.sessionsMap.Get(clientID); existing != nil {
+        return existing, false, nil
+    }
+
+    s := session.New(clientID, opts)
+    b.sessionsMap.Set(clientID, s)
+    b.sessions.Save(s.Info())
+
+    return s, true, nil
 }
-
-func NewBroker() *Broker
-
-// Implements tcp.Handler
-func (b *Broker) HandleConnection(conn net.Conn)
-func (b *Broker) Close() error
 ```
 
-**Responsibilities:**
-- Session lifecycle management
-- Topic subscription routing
-- Message distribution to subscribers
-- Retained message storage
-- Will message handling
-- QoS flow management
-
-**Key Interfaces:**
+#### Publish
+Handles retained messages and distributes to subscribers.
 
 ```go
-// broker/interfaces.go
-type Connection interface {
-    ReadPacket() (packets.ControlPacket, error)
-    WritePacket(p packets.ControlPacket) error
-    Close() error
-    RemoteAddr() net.Addr
+func (b *Broker) Publish(msg Message) error {
+    b.logOp("publish",
+        slog.String("topic", msg.Topic),
+        slog.Int("qos", int(msg.QoS)))
+    b.stats.IncrementPublishReceived()
+    b.stats.AddBytesReceived(uint64(len(msg.Payload)))
+
+    // Handle retained
+    if msg.Retain {
+        if len(msg.Payload) == 0 {
+            b.retained.Delete(msg.Topic)
+        } else {
+            b.retained.Set(msg.Topic, &storage.Message{...})
+        }
+    }
+
+    // Distribute to subscribers
+    return b.distribute(msg.Topic, msg.Payload, msg.QoS, false, msg.Properties)
 }
-
-type Session interface {
-    IsConnected() bool
-    NextPacketID() uint16
-    WritePacket(p packets.ControlPacket) error
-    // ... other session methods
-}
 ```
 
-### Layer 4: Core Packets (`packets/`)
-
-Pure MQTT packet encoding/decoding with no I/O dependencies.
-
-```
-packets/
-├── packets.go        # ControlPacket interface, version detection
-├── v3/               # MQTT 3.1.1 packet implementations
-│   ├── connect.go
-│   ├── publish.go
-│   ├── subscribe.go
-│   └── ...
-└── v5/               # MQTT 5.0 packet implementations (with properties)
-    ├── connect.go
-    ├── publish.go
-    ├── properties.go
-    └── ...
-```
-
-**Codec Utilities (`codec/`):**
-
-Low-level encoding/decoding primitives used by packet implementations:
-
-```
-codec/
-├── encode.go        # VBI, string, uint16/32 encoding
-├── decode.go        # VBI, string, uint16/32 decoding
-└── zerocopy.go      # Zero-allocation parsing helpers
-```
-
-### Layer 5: Handlers (`handlers/`)
-
-Packet-specific MQTT protocol logic.
+#### Subscribe
+Adds subscription and delivers retained messages.
 
 ```go
-// handlers/dispatcher.go
-type Dispatcher struct {
-    broker  BrokerHandler
-    session SessionHandler
-}
+func (b *Broker) subscribeInternal(s *session.Session, filter string, opts SubscriptionOptions) error {
+    b.logOp("subscribe",
+        slog.String("client_id", s.ID),
+        slog.String("filter", filter))
+    b.stats.IncrementSubscriptions()
 
-func (d *Dispatcher) Dispatch(pkt packets.ControlPacket) error
+    // Add to router
+    b.router.Subscribe(s.ID, filter, opts.QoS, opts)
+
+    // Persist
+    b.subscriptions.Add(&storage.Subscription{...})
+
+    // Update session
+    s.AddSubscription(filter, opts)
+
+    return nil
+}
 ```
 
-Handles:
-- CONNECT → session creation
-- PUBLISH → message routing
-- SUBSCRIBE → subscription registration
-- DISCONNECT → cleanup
-- PINGREQ/PINGRESP → keepalive
-- PUBACK/PUBREC/PUBREL/PUBCOMP → QoS flows
-
-### Layer 6: Session Management (`session/`)
-
-Tracks client state independent of connection.
+**Instrumentation Helpers**:
 
 ```go
-// session/session.go
-type Session struct {
-    ClientID     string
-    Version      int
-    Connection   Connection
-    Inflight     *Inflight      // QoS 1/2 tracking
-    OfflineQueue *Queue         // Messages for offline clients
-    // ... other state
+func (b *Broker) logOp(op string, attrs ...any) {
+    b.logger.Debug(op, attrs...)
 }
 
-// session/cache.go
-type Cache interface {
-    Get(clientID string) *Session
-    Set(clientID string, session *Session)
-    // ...
+func (b *Broker) logError(op string, err error, attrs ...any) {
+    if err != nil {
+        allAttrs := append([]any{slog.String("error", err.Error())}, attrs...)
+        b.logger.Error(op, allAttrs...)
+    }
 }
 ```
 
-Features:
-- Session persistence (clean/persistent sessions)
-- QoS 1/2 message retry
-- Offline message queuing
-- Packet ID allocation
+**Benefits of Direct Instrumentation**:
+1. **Visibility** - See exactly what's logged in the source code
+2. **Performance** - No function call overhead, compiler can inline
+3. **Flexibility** - Can add context-specific attributes easily
+4. **No Bypass** - Can't accidentally skip logging by calling internal methods
 
-### Layer 7: Topic Router (`topics/`)
+---
 
-Subscription matching using a trie data structure.
+### Layer 5: Infrastructure (storage/, session/, broker/router.go)
 
+**Responsibility**: Data structures and persistence
+
+**Components**:
+
+#### Router (broker/router.go)
+- **Trie-based topic matching** for efficient wildcard subscriptions
+- `Subscribe(clientID, filter, qos)` - Add subscription
+- `Unsubscribe(clientID, filter)` - Remove subscription
+- `Match(topic)` - Find all subscriptions matching a topic
+
+#### Session Cache (session/cache.go)
+- **In-memory map** of active sessions
+- `Get(clientID)` - Retrieve session
+- `Set(clientID, session)` - Store session
+- `Delete(clientID)` - Remove session
+
+#### Storage (storage/)
+- **Interfaces** for persistence
+- **Memory implementation** for messages, retained, wills, subscriptions
+- **Pluggable** - Can swap for Redis, PostgreSQL, etc.
+
+---
+
+## Data Flow Examples
+
+### CONNECT Flow (MQTT v5)
+
+```
+1. TCP Server accepts connection
+   └─> net.Conn
+
+2. HandleConnection(broker, conn)
+   ├─> Wrap in MQTT codec
+   ├─> ReadPacket() → v5.Connect
+   └─> Detect version = 5
+
+3. NewV5Handler(broker)
+   └─> handler.HandleConnect(conn, v5.Connect)
+
+4. V5Handler.HandleConnect()
+   ├─> Extract clientID, cleanStart, keepAlive
+   ├─> broker.CreateSession(clientID, opts)
+   │   ├─> broker.logger.Debug("create_session")
+   │   ├─> broker.stats.IncrementConnections()
+   │   ├─> Check clean start
+   │   ├─> Create/retrieve session
+   │   └─> Return session
+   ├─> session.Connect(conn)
+   ├─> Send CONNACK
+   ├─> broker.logger.Info("v5_connect_success")
+   └─> broker.runSession(handler, session)
+       └─> Packet loop
+```
+
+### PUBLISH Flow (QoS 1)
+
+```
+1. Session reads PUBLISH packet
+   └─> v3.Publish or v5.Publish
+
+2. dispatchPacket()
+   └─> handler.HandlePublish(session, packet)
+
+3. V3Handler.HandlePublish()
+   ├─> Extract topic, payload, qos, packetID
+   ├─> Check authorization
+   │   └─> broker.auth.CanPublish(clientID, topic)
+   ├─> Create domain Message
+   └─> broker.Publish(msg)
+       ├─> broker.logger.Debug("publish", topic, qos)
+       ├─> broker.stats.IncrementPublishReceived()
+       ├─> Handle retained (if msg.Retain)
+       └─> broker.distribute(topic, payload, qos, ...)
+           ├─> router.Match(topic) → subscribers
+           ├─> For each subscriber:
+           │   ├─> Get session
+           │   ├─> Determine delivery QoS
+           │   └─> broker.DeliverToSession(session, msg)
+           │       ├─> If online: Write PUBLISH packet
+           │       └─> If offline: Enqueue to session.OfflineQueue
+           └─> Return
+
+4. Send PUBACK
+   └─> handler sends v3.PubAck or v5.PubAck
+```
+
+### SUBSCRIBE Flow
+
+```
+1. handler.HandleSubscribe(session, packet)
+   ├─> Extract topics and QoS levels
+   ├─> For each topic:
+   │   ├─> Check authorization
+   │   │   └─> broker.auth.CanSubscribe(clientID, filter)
+   │   ├─> broker.subscribeInternal(session, filter, opts)
+   │   │   ├─> broker.logger.Debug("subscribe", filter)
+   │   │   ├─> broker.stats.IncrementSubscriptions()
+   │   │   ├─> router.Subscribe(clientID, filter, qos)
+   │   │   ├─> storage.Add(subscription)
+   │   │   └─> session.AddSubscription(filter)
+   │   └─> Deliver retained messages
+   │       ├─> retained.Match(filter)
+   │       └─> broker.DeliverToSession() for each
+   └─> Send SUBACK
+```
+
+## Key Design Decisions
+
+### 1. Why No Middleware/Decorators?
+
+**Problem with middleware**:
+- Internal method calls bypass middleware chain
+- Performance overhead from function wrapping
+- Hidden control flow
+- Complex debugging (stack traces through wrappers)
+
+**Our solution**:
+- Direct instrumentation at domain layer
+- Explicit logging/metrics calls
+- Clear, linear control flow
+- Zero overhead (compiler can inline)
+
+### 2. Why Stateless Protocol Handlers?
+
+**Benefits**:
+- No state to manage or synchronize
+- Can create new handler per connection (cheap)
+- Easy to test (just translation logic)
+- No shared mutable state
+
+**Trade-off**:
+- Session is passed as parameter to each method
+- Handler needs reference to broker
+
+### 3. Why Separate V3Handler and V5Handler?
+
+**Alternatives considered**:
+1. Single handler with version checks → Complex, hard to read
+2. Handler per packet type → Too granular, code duplication
+
+**Our choice**: One handler per protocol version
+- Each handler focuses on one protocol's quirks
+- Easy to understand and maintain
+- Clear separation of v3 vs v5 logic
+- Future protocols add new handler without touching existing code
+
+### 4. Why Logger and Metrics in Broker Constructor?
+
+**Benefits**:
+- Dependency injection principle
+- Testable (can inject mock logger/metrics)
+- Explicit dependencies
+- No global state
+
+**Usage**:
 ```go
-// topics/trie.go
-type Router struct {
-    root *node
-    mu   sync.RWMutex
-}
+// Production
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+stats := broker.NewStats()
+b := broker.NewBroker(logger, stats)
 
-func (r *Router) Subscribe(clientID, sessionID, topicFilter string, qos byte) error
-func (r *Router) Match(topic string) []Subscription
+// Testing
+b := broker.NewBroker(nil, nil) // Uses defaults
 ```
-
-Supports:
-- Wildcard matching (`+`, `#`)
-- Efficient subscription lookups
-- Per-session subscription tracking
-
-### Layer 8: Storage (`store/`)
-
-Pluggable storage backends for retained messages, will messages, and session state.
-
-```go
-// store/store.go
-type Store struct {
-    retained map[string]*Message
-    wills    map[string]*WillMessage
-    mu       sync.RWMutex
-}
-```
-
-Currently in-memory; designed for future persistence (Redis, database, etc.)
-
-## Data Flow: MQTT Client Publishing
-
-1. **TCP Accept**: `server/tcp` accepts new connection
-2. **Delegate**: Calls `broker.HandleConnection(net.Conn)`
-3. **Wrap**: Broker wraps `net.Conn` with MQTT codec via `NewConnection()`
-4. **Version Detection**: Codec reads CONNECT packet, detects protocol version
-5. **Session Setup**: Broker creates or retrieves session
-6. **Packet Loop**: Broker enters read loop via `conn.ReadPacket()`
-7. **Dispatch**: Each packet routed to appropriate handler
-8. **PUBLISH Handling**:
-   - `handlers.HandlePublish` validates packet
-   - Stores retained message if retain flag set
-   - `topics.Router.Match(topic)` finds subscribers
-   - `broker.Distribute()` sends to matching sessions
-9. **QoS Flow**: For QoS > 0, track in `session.Inflight` and wait for ACK
-10. **Response**: Send PUBACK/PUBREC/PUBREL/PUBCOMP as needed
-
-## Key Design Patterns
-
-### 1. Accept Interfaces, Return Structs
-- `NewBroker()` returns `*Broker` (concrete type)
-- Broker implements `tcp.Handler` interface (consumed by server)
-
-### 2. Unexported Implementations
-- `mqttCodec` is unexported, returned via `Connection` interface
-- Encapsulates protocol details, exposes only necessary methods
-
-### 3. Context-Based Lifecycle
-```go
-ctx, cancel := signal.NotifyContext(context.Background(), 
-    os.Interrupt, syscall.SIGTERM)
-defer cancel()
-
-server.Listen(ctx) // Blocks until context cancelled
-```
-
-### 4. Graceful Shutdown
-- TCP server waits for connections to finish (with timeout)
-- Broker cleanly closes sessions
-- Flush in-flight messages
-
-## Package Structure
-
-```
-mqtt/
-├── cmd/
-│   └── broker/
-│       └── main.go           # Application entry point
-├── server/
-│   └── tcp/
-│       ├── server.go         # TCP server implementation
-│       └── server_test.go    # Server tests
-├── broker/
-│   ├── broker.go             # Broker core
-│   ├── connection.go         # MQTT codec wrapper
-│   └── interfaces.go         # Core interfaces
-├── packets/
-│   ├── packets.go            # Packet interface, version detection
-│   ├── v3/                   # MQTT 3.1.1 packets
-│   └── v5/                   # MQTT 5.0 packets
-├── codec/
-│   ├── encode.go             # Encoding primitives
-│   ├── decode.go             # Decoding primitives
-│   └── zerocopy.go           # Zero-copy helpers
-├── handlers/
-│   ├── dispatcher.go         # Packet routing
-│   └── broker.go             # Handler implementations
-├── session/
-│   ├── session.go            # Session state
-│   ├── cache.go              # Session cache
-│   ├── inflight.go           # QoS tracking
-│   └── queue.go              # Offline queue
-├── topics/
-│   ├── trie.go               # Subscription trie
-│   └── match.go              # Wildcard matching
-├── store/
-│   └── store.go              # Message storage
-└── integration/
-    ├── broker_test.go        # Integration tests
-    └── features_test.go      # Feature tests
-```
-
-## Future Extensibility
-
-### Adding HTTP/CoAP/WebSocket Support
-
-The architecture is designed for easy protocol extension:
-
-1. **Create new server package** (e.g., `server/http`, `server/ws`, `server/coap`)
-2. **Implement protocol-specific logic** in the server
-3. **Call broker methods** directly or via `HandleConnection(net.Conn)`
-
-**Example for HTTP:**
-```go
-// server/http/server.go
-type HTTPServer struct {
-    broker *broker.Broker
-}
-
-func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    // Parse HTTP request
-    topic := r.URL.Query().Get("topic")
-    payload, _ := io.ReadAll(r.Body)
-    
-    // Inject into broker
-    s.broker.Distribute(topic, payload, 0, false, nil)
-    w.WriteHeader(http.StatusOK)
-}
-```
-
-**Example for WebSocket:**
-```go
-// server/ws/server.go
-func (s *WSServer) handleConnection(wsConn *websocket.Conn) {
-    // Wrap websocket as net.Conn-like interface
-    conn := NewWSConnection(wsConn)
-    
-    // Delegate to broker
-    s.broker.HandleConnection(conn)
-}
-```
-
-No changes to broker core required - it's protocol-agnostic!
-
-## Performance Considerations
-
-1. **Connection Pooling**: TCP server uses buffer pool for reads/writes
-2. **Zero-Copy Parsing**: `zerocopy.go` parses packets without allocations where possible
-3. **Concurrent Access**: All shared state protected by `sync.RWMutex`
-4. **Lock Granularity**: Fine-grained locks (per-session, per-topic node)
-5. **TCP Optimizations**: NoDelay for low latency, keepalive for connection health
 
 ## Testing Strategy
 
-1. **Unit Tests**: Each package has comprehensive unit tests
-2. **Integration Tests**: Full pub/sub flows in `integration/`
-3. **TCP Server Tests**: Lifecycle, graceful shutdown, connection limiting
-4. **Feature Tests**: Retained messages, will messages, QoS flows
+### Unit Tests
+
+**Domain Layer** (broker/broker.go):
+```go
+func TestBroker_Publish(t *testing.T) {
+    b := NewBroker(nil, nil) // Default logger/metrics
+
+    msg := Message{Topic: "test/topic", Payload: []byte("data")}
+    err := b.Publish(msg)
+
+    assert.NoError(t, err)
+}
+```
+
+**Protocol Handlers** (broker/v3_handler_test.go):
+```go
+func TestV3Handler_HandlePublish(t *testing.T) {
+    b := NewBroker(nil, nil)
+    handler := NewV3Handler(b)
+    session := createTestSession()
+
+    pkt := &v3.Publish{
+        TopicName: "test/topic",
+        Payload:   []byte("data"),
+    }
+
+    err := handler.HandlePublish(session, pkt)
+
+    assert.NoError(t, err)
+}
+```
+
+### Integration Tests
+
+Test full flow from TCP connection to domain operation:
+
+```go
+func TestE2E_PublishSubscribe(t *testing.T) {
+    // Start broker
+    b := NewBroker(nil, nil)
+    server := tcp.New(cfg, b)
+    go server.Listen(ctx)
+
+    // Connect subscriber
+    sub := connectClient(t, "subscriber")
+    sub.Subscribe("test/#")
+
+    // Connect publisher
+    pub := connectClient(t, "publisher")
+    pub.Publish("test/topic", "message")
+
+    // Verify delivery
+    msg := sub.ReceiveMessage()
+    assert.Equal(t, "message", string(msg.Payload))
+}
+```
+
+## Performance Characteristics
+
+### Zero Indirection
+- Direct function calls, no decorators
+- Compiler can inline logging checks
+- No allocations for middleware chains
+
+### Efficient Data Structures
+- **Trie-based router**: O(m) topic matching, where m = topic depth
+- **Session cache**: O(1) lookup by client ID
+- **Object pools**: Packet and buffer reuse
+
+### Concurrency
+- **Fine-grained locking**: Only lock session map, not entire broker
+- **Non-blocking I/O**: Each connection runs in own goroutine
+- **No global locks**: Router and storage use internal synchronization
+
+### Memory Efficiency
+- **Zero-copy packet parsing** where possible
+- **Shared topic strings** in subscriptions
+- **Bounded message queues** prevent memory exhaustion
+
+## Extensibility Points
+
+### New MQTT Version (e.g., v6)
+
+1. Create `broker/v6_handler.go`:
+```go
+type V6Handler struct {
+    broker *Broker
+}
+
+func (h *V6Handler) HandleConnect(...) { ... }
+// Implement Handler interface
+```
+
+2. Update `broker/connection.go`:
+```go
+if v6Connect, ok := pkt.(*v6.Connect); ok {
+    handler := NewV6Handler(broker)
+    handler.HandleConnect(conn, v6Connect)
+}
+```
+
+### New Protocol (CoAP, HTTP)
+
+1. Create adapter in `coap/adapter.go`:
+```go
+type CoAPAdapter struct {
+    broker *broker.Broker
+}
+
+func (a *CoAPAdapter) HandleCoAPMessage(msg CoAPMessage) {
+    // Translate CoAP → MQTT Message
+    mqttMsg := Message{Topic: msg.URI, Payload: msg.Payload}
+    a.broker.Publish(mqttMsg)
+}
+```
+
+2. Core broker unchanged - operates on domain `Message` type
+
+### Custom Storage Backend
+
+Implement storage interfaces:
+
+```go
+type RedisStore struct {
+    client *redis.Client
+}
+
+func (r *RedisStore) Save(msg *storage.Message) error {
+    return r.client.Set(ctx, msg.Key(), msg, 0).Err()
+}
+
+// Pass to broker
+b := NewBroker(logger, stats)
+b.messages = NewRedisStore(redisClient)
+```
+
+## Deployment Considerations
+
+### Logging Levels
+
+**Production**: `info` level
+- Connection events
+- Errors
+- Performance metrics
+
+**Debug**: `debug` level
+- Every packet
+- Domain operations
+- Performance timings
+
+### Metrics Collection
+
+The `Stats` type exposes:
+- Connection counts (current, total, disconnects)
+- Message rates (received, sent, publish)
+- Byte counts (received, sent)
+- Error counts (protocol, auth, packet)
+
+Export via Prometheus, StatsD, or custom exporter.
+
+### Configuration
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelInfo,
+}))
+
+stats := broker.NewStats()
+
+b := broker.NewBroker(logger, stats)
+```
+
+## Conclusion
+
+This architecture achieves:
+- ✅ **Clean separation** between transport, protocol, and domain
+- ✅ **High performance** through direct instrumentation
+- ✅ **Testability** via dependency injection
+- ✅ **Extensibility** through adapters and interfaces
+- ✅ **Maintainability** with clear, single-responsibility components
+
+The key insight: **Separate what changes (protocols) from what stays stable (domain logic)**. Protocol handlers are adapters that translate between the MQTT wire format and the domain model, allowing the core broker to remain simple and focused.

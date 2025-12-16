@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/broker/middleware"
 	"github.com/absmach/mqtt/config"
 	"github.com/absmach/mqtt/server/tcp"
 )
@@ -52,12 +51,10 @@ func main() {
 		"max_connections", cfg.Server.TCPMaxConn,
 		"log_level", cfg.Log.Level)
 
-	// Create core broker
-	b := broker.NewBroker()
+	// Create core broker with logger and metrics
+	stats := broker.NewStats()
+	b := broker.NewBroker(logger, stats)
 	defer b.Close()
-
-	// svc := middleware.NewMetrics(b, broker.NewStats()) // Wrap with metrics tracking
-	svc := middleware.NewLogging(b, logger) // Wrap with logging
 
 	// Create TCP server with config
 	serverCfg := tcp.Config{
@@ -68,8 +65,7 @@ func main() {
 		WriteTimeout:    cfg.Server.TCPWriteTimeout,
 		Logger:          logger,
 	}
-	// For now, use broker directly (change to svc when middleware is active)
-	server := tcp.New(serverCfg, svc)
+	server := tcp.New(serverCfg, b)
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

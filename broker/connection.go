@@ -8,16 +8,17 @@ import (
 )
 
 // HandleConnection handles a new incoming connection from the TCP server.
-func HandleConnection(b Handler, conn core.Connection) {
+// It detects the MQTT protocol version and creates the appropriate handler.
+func HandleConnection(broker *Broker, conn core.Connection) {
 	pkt, err := conn.ReadPacket()
 	if err != nil {
-		// b.stats.IncrementPacketErrors()
+		broker.stats.IncrementPacketErrors()
 		conn.Close()
 		return
 	}
 
 	if pkt.Type() != packets.ConnectType {
-		// b.stats.IncrementProtocolErrors()
+		broker.stats.IncrementProtocolErrors()
 		conn.Close()
 		return
 	}
@@ -25,46 +26,51 @@ func HandleConnection(b Handler, conn core.Connection) {
 	p3, ok := pkt.(*v3.Connect)
 	if ok {
 		if p3.ProtocolVersion != 3 && p3.ProtocolVersion != 4 {
-			// b.stats.IncrementProtocolErrors()
+			broker.stats.IncrementProtocolErrors()
 			sendV3ConnAck(conn, false, 0x01)
 			conn.Close()
 			return
 		}
-		b.HandleConnect(conn, p3)
+		handler := NewV3Handler(broker)
+		handler.HandleConnect(conn, p3)
 		return
 	}
 
 	p5, ok := pkt.(*v5.Connect)
 	if ok {
 		if p5.ProtocolVersion != 5 {
-			// b.stats.IncrementProtocolErrors()
-			sendV5ConnAck(conn, false, 0x84)
+			broker.stats.IncrementProtocolErrors()
+			sendV5ConnAck(conn, false, 0x84, nil)
 			conn.Close()
 			return
 		}
-		b.HandleConnect(conn, p5)
+		handler := NewV5Handler(broker)
+		handler.HandleConnect(conn, p5)
 		return
 	}
 
-	// b.stats.IncrementProtocolErrors()
+	broker.stats.IncrementProtocolErrors()
 	conn.Close()
 }
 
-// func sendV3ConnAck(conn core.Connection, sessionPresent bool, returnCode byte) error {
-// 	ack := &v3.ConnAck{
-// 		FixedHeader:    packets.FixedHeader{PacketType: packets.ConnAckType},
-// 		SessionPresent: sessionPresent,
-// 		ReturnCode:     returnCode,
-// 	}
-// 	return conn.WritePacket(ack)
-// }
+func sendV3ConnAck(conn core.Connection, sessionPresent bool, returnCode byte) error {
+	ack := &v3.ConnAck{
+		FixedHeader:    packets.FixedHeader{PacketType: packets.ConnAckType},
+		SessionPresent: sessionPresent,
+		ReturnCode:     returnCode,
+	}
+	return conn.WritePacket(ack)
+}
 
-func sendV5ConnAck(conn core.Connection, sessionPresent bool, reasonCode byte) error {
+func sendV5ConnAck(conn core.Connection, sessionPresent bool, reasonCode byte, props *v5.ConnAckProperties) error {
+	if props == nil {
+		props = &v5.ConnAckProperties{}
+	}
 	ack := &v5.ConnAck{
 		FixedHeader:    packets.FixedHeader{PacketType: packets.ConnAckType},
 		SessionPresent: sessionPresent,
 		ReasonCode:     reasonCode,
-		Properties:     &v5.ConnAckProperties{},
+		Properties:     props,
 	}
 	return conn.WritePacket(ack)
 }

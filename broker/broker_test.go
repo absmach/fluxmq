@@ -10,6 +10,12 @@ import (
 	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
+// mockAddr implements net.Addr for testing
+type mockAddr struct{}
+
+func (m *mockAddr) Network() string { return "tcp" }
+func (m *mockAddr) String() string  { return "127.0.0.1:1883" }
+
 // mockConnection implements core.Connection for testing
 type mockConnection struct {
 	net.Conn
@@ -45,9 +51,17 @@ func (m *mockConnection) Touch() {
 	// no-op
 }
 
+func (m *mockConnection) RemoteAddr() net.Addr {
+	return &mockAddr{}
+}
+
+func (m *mockConnection) LocalAddr() net.Addr {
+	return &mockAddr{}
+}
+
 func TestBroker_HandleV5Connect(t *testing.T) {
 	t.Log("Creating broker")
-	b := NewBroker()
+	b := NewBroker(nil, nil)
 	defer b.Close()
 
 	conn := &mockConnection{}
@@ -63,13 +77,14 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 		KeepAlive:       60,
 	}
 
-	t.Log("Calling HandleV5Connect")
-	err := b.handleV5Connect(conn, connect)
-	t.Logf("HandleV5Connect returned: %v", err)
+	t.Log("Calling HandleConnect via V5Handler")
+	handler := NewV5Handler(b)
+	err := handler.HandleConnect(conn, connect)
+	t.Logf("HandleConnect returned: %v", err)
 
-	// Expect nil or io.EOF (because runV5Session exits on EOF)
+	// Expect nil or io.EOF (because runSession exits on EOF)
 	if err != nil && err != io.EOF {
-		t.Fatalf("HandleV5Connect failed: %v", err)
+		t.Fatalf("HandleConnect failed: %v", err)
 	}
 
 	// Verify ConnAck was sent

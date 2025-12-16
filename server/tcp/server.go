@@ -72,11 +72,11 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Server is a TCP server that accepts connections and delegates them to a handler.
+// Server is a TCP server that accepts connections and delegates them to a broker.
 // It provides robust connection handling, graceful shutdown, and production-ready features.
 type Server struct {
 	config     Config
-	handler    broker.Handler
+	handler    *broker.Broker
 	wg         sync.WaitGroup
 	mu         sync.Mutex
 	listener   net.Listener
@@ -84,8 +84,8 @@ type Server struct {
 	bufferPool *sync.Pool
 }
 
-// New creates a new TCP server with the given configuration and handler.
-func New(cfg Config, h broker.Handler) *Server {
+// New creates a new TCP server with the given configuration and broker.
+func New(cfg Config, h *broker.Broker) *Server {
 	// Apply defaults
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()

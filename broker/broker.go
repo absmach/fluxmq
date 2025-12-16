@@ -3,10 +3,10 @@ package broker
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
@@ -15,8 +15,6 @@ import (
 	"github.com/absmach/mqtt/storage/memory"
 	"github.com/absmach/mqtt/storage/messages"
 )
-
-var _ Handler = (*Broker)(nil)
 
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
@@ -30,17 +28,25 @@ type Broker struct {
 	retained      storage.RetainedStore
 	wills         storage.WillStore
 
-	auth  *AuthEngine
-	stats *Stats
+	auth   *AuthEngine
+	logger *slog.Logger
+	stats  *Stats
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
 
 // NewBroker creates a new broker instance.
-func NewBroker() *Broker {
+func NewBroker(logger *slog.Logger, stats *Stats) *Broker {
 	st := memory.New()
 	router := NewRouter()
+
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if stats == nil {
+		stats = NewStats()
+	}
 
 	b := &Broker{
 		sessionsMap:   session.NewMapCache(),
@@ -50,7 +56,8 @@ func NewBroker() *Broker {
 		subscriptions: st.Subscriptions(),
 		retained:      st.Retained(),
 		wills:         st.Wills(),
-		stats:         NewStats(),
+		logger:        logger,
+		stats:         stats,
 		stopCh:        make(chan struct{}),
 	}
 
@@ -59,6 +66,19 @@ func NewBroker() *Broker {
 	go b.statsLoop()
 
 	return b
+}
+
+// --- Instrumentation Helpers ---
+
+func (b *Broker) logOp(op string, attrs ...any) {
+	b.logger.Debug(op, attrs...)
+}
+
+func (b *Broker) logError(op string, err error, attrs ...any) {
+	if err != nil {
+		allAttrs := append([]any{slog.String("error", err.Error())}, attrs...)
+		b.logger.Error(op, allAttrs...)
+	}
 }
 
 // --- Core Domain Methods ---
@@ -154,6 +174,10 @@ func (b *Broker) DestroySession(clientID string) error {
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.
 func (b *Broker) Publish(msg Message) error {
+	b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
+	b.stats.IncrementPublishReceived()
+	b.stats.AddBytesReceived(uint64(len(msg.Payload)))
+
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
 			if err := b.retained.Delete(msg.Topic); err != nil {
@@ -178,6 +202,9 @@ func (b *Broker) Publish(msg Message) error {
 
 // subscribeInternal adds a subscription for a session (internal domain method).
 func (b *Broker) subscribeInternal(s *session.Session, filter string, opts SubscriptionOptions) error {
+	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(opts.QoS)))
+	b.stats.IncrementSubscriptions()
+
 	storeOpts := storage.SubscribeOptions{
 		NoLocal:           opts.NoLocal,
 		RetainAsPublished: opts.RetainAsPublished,
@@ -203,6 +230,9 @@ func (b *Broker) subscribeInternal(s *session.Session, filter string, opts Subsc
 
 // unsubscribeInternal removes a subscription for a session (internal domain method).
 func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
+	b.logOp("unsubscribe", slog.String("client_id", s.ID), slog.String("filter", filter))
+	b.stats.DecrementSubscriptions()
+
 	b.router.Unsubscribe(s.ID, filter)
 
 	if err := b.subscriptions.Remove(s.ID, filter); err != nil {
@@ -624,16 +654,42 @@ func (b *Broker) publishStats() {
 }
 
 func (b *Broker) DeliverMessage(s *session.Session, msg Message) error {
+	b.stats.IncrementPublishSent()
+	b.stats.AddBytesSent(uint64(len(msg.Payload)))
+
+	var pub packets.ControlPacket
+
 	switch s.Version {
 	case 5:
-		return b.DeliverV5Message(s, msg)
+		pub = &v5.Publish{
+			FixedHeader: packets.FixedHeader{
+				PacketType: packets.PublishType,
+				QoS:        msg.QoS,
+				Retain:     msg.Retain,
+			},
+			TopicName:  msg.Topic,
+			Payload:    msg.Payload,
+			ID:         msg.PacketID,
+			Properties: &v5.PublishProperties{},
+		}
 	default:
-		return b.DeliverV3Message(s, msg)
+		pub = &v3.Publish{
+			FixedHeader: packets.FixedHeader{
+				PacketType: packets.PublishType,
+				QoS:        msg.QoS,
+				Retain:     msg.Retain,
+			},
+			TopicName: msg.Topic,
+			Payload:   msg.Payload,
+			ID:        msg.PacketID,
+		}
 	}
+
+	return s.WritePacket(pub)
 }
 
-// runSession runs the main packet loop for a session.
-func (b *Broker) runSession(s *session.Session) error {
+// runSession runs the main packet loop for a session using a Handler.
+func (b *Broker) runSession(handler Handler, s *session.Session) error {
 	conn := s.Conn()
 	if conn == nil {
 		return nil
@@ -661,8 +717,9 @@ func (b *Broker) runSession(s *session.Session) error {
 		}
 
 		b.stats.IncrementMessagesReceived()
-		if err := b.HandlePacket(s, pkt); err != nil {
-			fmt.Println("handling pkt", packets.PacketNames[pkt.Type()])
+		s.Touch()
+
+		if err := dispatchPacket(handler, s, pkt); err != nil {
 			if err == io.EOF {
 				b.stats.DecrementConnections()
 				return nil
@@ -675,177 +732,34 @@ func (b *Broker) runSession(s *session.Session) error {
 	}
 }
 
-func (b *Broker) HandlePacket(s *session.Session, pkt packets.ControlPacket) error {
-	s.Touch()
-
+// dispatchPacket dispatches a packet to the appropriate handler method.
+func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
 	case packets.PublishType:
-		return b.HandlePublish(s, pkt)
+		return handler.HandlePublish(s, pkt)
 	case packets.PubAckType:
-		return b.HandlePubAck(s, pkt)
+		return handler.HandlePubAck(s, pkt)
 	case packets.PubRecType:
-		return b.HandlePubRec(s, pkt)
+		return handler.HandlePubRec(s, pkt)
 	case packets.PubRelType:
-		return b.HandlePubRel(s, pkt)
+		return handler.HandlePubRel(s, pkt)
 	case packets.PubCompType:
-		return b.HandlePubComp(s, pkt)
+		return handler.HandlePubComp(s, pkt)
 	case packets.SubscribeType:
-		return b.HandleSubscribe(s, pkt)
+		return handler.HandleSubscribe(s, pkt)
 	case packets.UnsubscribeType:
-		return b.HandleUnsubscribe(s, pkt)
+		return handler.HandleUnsubscribe(s, pkt)
 	case packets.PingReqType:
-		return b.HandlePingReq(s)
+		return handler.HandlePingReq(s)
 	case packets.DisconnectType:
-		return b.HandleDisconnect(s, pkt)
+		return handler.HandleDisconnect(s, pkt)
+	case packets.AuthType:
+		return handler.HandleAuth(s, pkt)
 	default:
 		return ErrInvalidPacketType
 	}
 }
 
-// --- Handler Interface Implementation ---
-
-// HandleConnect implements Handler.HandleConnect by dispatching based on packet type.
-func (b *Broker) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
-	if p3, ok := pkt.(*v3.Connect); ok {
-		return b.handleV3Connect(conn, p3)
-	}
-	if p5, ok := pkt.(*v5.Connect); ok {
-		return b.handleV5Connect(conn, p5)
-	}
-	return ErrInvalidPacketType
-}
-
-// HandlePublish implements Handler.HandlePublish by dispatching based on session version.
-func (b *Broker) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.Publish:
-		return b.handleV5Publish(s, p)
-	case *v3.Publish:
-		return b.handleV3Publish(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandlePubAck implements Handler.HandlePubAck by dispatching based on session version.
-func (b *Broker) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.PubAck:
-		return b.handleV5PubAck(s, p)
-	case *v3.PubAck:
-		return b.handleV3PubAck(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandlePubRec implements Handler.HandlePubRec by dispatching based on session version.
-func (b *Broker) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.PubRec:
-		return b.handleV5PubRec(s, p)
-	case *v3.PubRec:
-		return b.handleV3PubRec(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandlePubRel implements Handler.HandlePubRel by dispatching based on session version.
-func (b *Broker) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.PubRel:
-		return b.handleV5PubRel(s, p)
-	case *v3.PubRel:
-		return b.handleV3PubRel(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandlePubComp implements Handler.HandlePubComp by dispatching based on session version.
-func (b *Broker) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.PubComp:
-		return b.handleV5PubComp(s, p)
-	case *v3.PubComp:
-		return b.handleV3PubComp(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandleSubscribe implements Handler.HandleSubscribe by dispatching based on session version.
-func (b *Broker) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.Subscribe:
-		return b.handleV5Subscribe(s, p)
-	case *v3.Subscribe:
-		return b.handleV3Subscribe(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandleUnsubscribe implements Handler.HandleUnsubscribe by dispatching based on session version.
-func (b *Broker) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.Unsubscribe:
-		return b.handleV5Unsubscribe(s, p)
-	case *v3.Unsubscribe:
-		return b.handleV3Unsubscribe(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandlePingReq implements Handler.HandlePingReq by dispatching based on session version.
-func (b *Broker) HandlePingReq(s *session.Session) error {
-	switch s.Version {
-	case 3, 4:
-		return b.handleV3PingReq(s)
-	case 5:
-		return b.handleV5PingReq(s)
-	default:
-
-		return ErrInvalidPacketType
-	}
-}
-
-// HandleDisconnect implements Handler.HandleDisconnect by dispatching based on session version.
-func (b *Broker) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
-	switch p := pkt.(type) {
-	case *v5.Disconnect:
-		return b.handleV5Disconnect(s, p)
-	case *v3.Disconnect:
-		return b.handleV3Disconnect(s, p)
-	default:
-		return ErrInvalidPacketType
-	}
-}
-
-// HandleConnAck implements Handler.HandleConnAck (CONNACK is sent by broker, not typically received).
-func (b *Broker) HandleConnAck(s *session.Session, pkt packets.ControlPacket) error {
-	return ErrProtocolViolation
-}
-
-// HandleUnsubAck implements Handler.HandleUnsubAck (UNSUBACK is sent by broker, not typically received).
-func (b *Broker) HandleUnsubAck(s *session.Session, pkt packets.ControlPacket) error {
-	return ErrProtocolViolation
-}
-
-// HandlePingResp implements Handler.HandlePingResp (PINGRESP is sent by broker, not typically received).
-func (b *Broker) HandlePingResp(s *session.Session) error {
-	return ErrProtocolViolation
-}
-
-// HandleAuth implements Handler.HandleAuth by dispatching based on session version.
-func (b *Broker) HandleAuth(s *session.Session, pkt packets.ControlPacket) error {
-	if p5, ok := pkt.(*v5.Auth); ok {
-		return b.handleV5Auth(s, p5)
-	}
-	return ErrInvalidPacketType
-}
 
 // Close shuts down the broker.
 func (b *Broker) Close() error {

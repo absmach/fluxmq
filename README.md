@@ -45,35 +45,85 @@ A high-performance, multi-protocol MQTT broker written in Go. Designed for scala
 
 ## Architecture
 
-The broker follows a clean architecture pattern, separating transport layers from the core broker logic.
+The broker implements a **clean layered architecture** with strict separation between transport, protocol, and domain concerns. This design enables high performance, testability, and extensibility.
+
+### Core Design Principles
+
+1. **Domain-Driven Design** - Core `Broker` contains pure business logic (sessions, routing, pub/sub)
+2. **Protocol Adapters** - Stateless handlers (`V3Handler`, `V5Handler`) translate MQTT packets to domain operations
+3. **Direct Instrumentation** - Logging and metrics embedded at the domain layer, no middleware overhead
+4. **Zero Dependencies** - Domain layer has no knowledge of packets or protocols
+
+### Architecture Layers
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       TCP Server                            │
-│                      (server/tcp)                           │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-                    ┌─────────▼──────────┐
-                    │     Connection     │
-                    │       (core)       │
-                    └─────────┬──────────┘
-                              │
-                              ▼
-                 ┌───────────────────────┐
-                 │        Broker         │
-                 │       (broker/)       │
-                 │  ┌──────┐ ┌─────────┐ │
-                 │  │Router│ │Handlers │ │
-                 │  │      │ │ (v3/v5) │ │
-                 │  └──────┘ └─────────┘ │
-                 └───────────┬───────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │     Storage     │
-                    │    (storage/)   │
-                    └─────────────────┘
+│                     TCP Server Layer                        │
+│                    (server/tcp/server.go)                   │
+│  • Connection acceptance and management                     │
+│  • TCP optimizations (keepalive, nodelay)                   │
+│  • Graceful shutdown                                        │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ net.Conn
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Protocol Adapter Layer                     │
+│               (broker/connection.go)                        │
+│  • Detects MQTT version from CONNECT packet                 │
+│  • Creates appropriate protocol handler                     │
+└────────────┬──────────────────────────┬─────────────────────┘
+             │                          │
+      ┌──────▼──────┐            ┌──────▼──────┐
+      │ V3Handler   │            │ V5Handler   │
+      │ (v3/v4.0)   │            │ (v5.0)      │
+      └──────┬──────┘            └──────┬──────┘
+             │                          │
+             │ Domain Operations        │
+             └──────────┬───────────────┘
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     Domain Layer                            │
+│                  (broker/broker.go)                         │
+│  • CreateSession()    • Publish()                           │
+│  • Subscribe()        • DeliverToSession()                  │
+│  • Unsubscribe()      • AckMessage()                        │
+│                                                             │
+│  Built-in instrumentation:                                  │
+│  • Logger (slog) for operation tracing                      │
+│  • Metrics (Stats) for monitoring                           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Infrastructure Layer                      │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │  Router  │  │ Sessions │  │ Storage  │  │  Stats   │   │
+│  │  (Trie)  │  │  (Cache) │  │ (Memory) │  │(Metrics) │   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### Why This Architecture?
+
+**Performance**
+- No decorator/middleware overhead - direct function calls
+- Zero allocations for instrumentation
+- Compiler can inline logging checks
+
+**Clarity**
+- See exactly where operations are logged
+- No hidden control flow through middleware chains
+- Stack traces are straightforward
+
+**Testability**
+- Domain logic completely independent of protocols
+- Mock logger/metrics for unit tests
+- Protocol handlers test packet translation only
+
+**Extensibility**
+- New MQTT versions → new handler (e.g., `V6Handler`)
+- New protocols (CoAP, HTTP) → new adapters
+- Core domain logic unchanged
 
 For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
 
@@ -87,18 +137,22 @@ mqtt/
 │   └── tcp/             # TCP Transport layer
 ├── core/                # Core primitives
 │   ├── packets/         # MQTT Packet encoding/decoding
+│   │   ├── v3/          # MQTT 3.1.1 packets
+│   │   └── v5/          # MQTT 5.0 packets
 │   ├── codec/           # Packet stream codec
 │   └── connection.go    # Connection interfaces
 ├── broker/              # Core Broker Logic
-│   ├── broker.go        # Main broker controller
+│   ├── broker.go        # Domain logic (pure business logic)
+│   ├── v3_handler.go    # MQTT 3.1.1 protocol adapter
+│   ├── v5_handler.go    # MQTT 5.0 protocol adapter
+│   ├── connection.go    # Protocol detection & handler creation
+│   ├── handler.go       # Handler interface
 │   ├── router.go        # Topic matching (Trie)
-│   ├── handler.go       # Packet handler interfaces
-│   ├── handler_v3.go    # MQTT 3.1.1 handlers
-│   └── handler_v5.go    # MQTT 5.0 handlers
+│   └── stats.go         # Metrics collection
 ├── session/             # Session Management
 │   ├── session.go       # Session state
-│   └── manager.go       # Session lifecycle
-├── store/               # Storage Interfaces & Backends
+│   └── cache.go         # Session cache
+├── storage/             # Storage Interfaces & Backends
 │   ├── memory/          # In-memory implementation
 │   └── messages/        # Message storage types
 ├── topics/              # Topic validation & utilities
