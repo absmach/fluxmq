@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -169,6 +170,16 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		}
 	}
 
+	// Register session ownership in cluster
+	if b.cluster != nil {
+		ctx := context.Background()
+		nodeID := b.cluster.NodeID()
+		if err := b.cluster.AcquireSession(ctx, clientID, nodeID); err != nil {
+			b.logError("cluster_acquire_session", err, slog.String("client_id", clientID))
+			// Don't fail the connection if cluster registration fails
+		}
+	}
+
 	return s, true, nil
 }
 
@@ -236,6 +247,14 @@ func (b *Broker) subscribeInternal(s *session.Session, filter string, opts Subsc
 		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
+	// Add subscription to cluster so other nodes can route messages
+	if b.cluster != nil {
+		ctx := context.Background()
+		if err := b.cluster.AddSubscription(ctx, s.ID, filter, opts.QoS, storeOpts); err != nil {
+			b.logError("cluster_add_subscription", err, slog.String("client_id", s.ID), slog.String("filter", filter))
+		}
+	}
+
 	s.AddSubscription(filter, storeOpts)
 
 	return nil
@@ -250,6 +269,14 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 
 	if err := b.subscriptions.Remove(s.ID, filter); err != nil {
 		return fmt.Errorf("failed to remove subscription: %w", err)
+	}
+
+	// Remove subscription from cluster
+	if b.cluster != nil {
+		ctx := context.Background()
+		if err := b.cluster.RemoveSubscription(ctx, s.ID, filter); err != nil {
+			b.logError("cluster_remove_subscription", err, slog.String("client_id", s.ID), slog.String("filter", filter))
+		}
 	}
 
 	s.RemoveSubscription(filter)
@@ -366,8 +393,9 @@ func (b *Broker) Match(topic string) ([]*storage.Subscription, error) {
 
 // --- Internal helper methods ---
 
-// distribute distributes a message to all matching subscribers.
+// distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
+	// Deliver to local subscribers
 	matched, err := b.router.Match(topic)
 	if err != nil {
 		return err
@@ -394,6 +422,14 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 
 		if _, err := b.DeliverToSession(s, msg); err != nil {
 			continue
+		}
+	}
+
+	// Route to remote subscribers in cluster
+	if b.cluster != nil {
+		ctx := context.Background()
+		if err := b.cluster.RoutePublish(ctx, topic, payload, qos, retain, props); err != nil {
+			b.logError("cluster_route_publish", err, slog.String("topic", topic))
 		}
 	}
 
@@ -437,6 +473,22 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 	subs := s.GetSubscriptions()
 	for filter := range subs {
 		b.router.Unsubscribe(s.ID, filter)
+
+		// Remove subscription from cluster
+		if b.cluster != nil {
+			ctx := context.Background()
+			if err := b.cluster.RemoveSubscription(ctx, s.ID, filter); err != nil {
+				b.logError("cluster_remove_subscription", err, slog.String("client_id", s.ID), slog.String("filter", filter))
+			}
+		}
+	}
+
+	// Release session ownership in cluster
+	if b.cluster != nil {
+		ctx := context.Background()
+		if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
+			b.logError("cluster_release_session", err, slog.String("client_id", s.ID))
+		}
 	}
 
 	return nil
@@ -543,6 +595,14 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		b.mu.Lock()
 		b.destroySessionLocked(s)
 		b.mu.Unlock()
+	} else {
+		// For persistent sessions, release ownership so another node can acquire it on reconnect
+		if b.cluster != nil {
+			ctx := context.Background()
+			if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
+				b.logError("cluster_release_session", err, slog.String("client_id", s.ID))
+			}
+		}
 	}
 }
 
@@ -788,4 +848,26 @@ func (b *Broker) Close() error {
 		}
 	})
 	return nil
+}
+
+// --- MessageHandler Implementation for Cluster ---
+
+// DeliverToClient implements cluster.MessageHandler.DeliverToClient.
+// This is called by the cluster transport when a message is routed from another broker.
+func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error {
+	s := b.Get(clientID)
+	if s == nil {
+		return fmt.Errorf("session not found: %s", clientID)
+	}
+
+	msg := Message{
+		Topic:      topic,
+		Payload:    payload,
+		QoS:        qos,
+		Retain:     retain,
+		Properties: properties,
+	}
+
+	_, err := b.DeliverToSession(s, msg)
+	return err
 }

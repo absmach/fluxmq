@@ -36,13 +36,16 @@ cluster:
 
   etcd:
     data_dir: "/tmp/mqtt/node3/etcd"
-    bind_addr: "127.0.0.1:2382"
-    client_addr: "127.0.0.1:2381"
-    initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2381,node3=http://127.0.0.1:2382"
-    bootstrap: false  # Join existing cluster
+    bind_addr: "127.0.0.1:2580"
+    client_addr: "127.0.0.1:2579"
+    initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
+    bootstrap: true  # Part of initial cluster formation
 
   transport:
     bind_addr: "127.0.0.1:7950"
+    peers:
+      node1: "127.0.0.1:7948"
+      node2: "127.0.0.1:7949"
 
 log:
   level: "debug"

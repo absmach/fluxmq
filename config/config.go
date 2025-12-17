@@ -113,7 +113,8 @@ type EtcdConfig struct {
 
 // TransportConfig holds inter-broker transport configuration.
 type TransportConfig struct {
-	BindAddr string `yaml:"bind_addr"` // gRPC address (e.g., "0.0.0.0:7948")
+	BindAddr string            `yaml:"bind_addr"` // gRPC address (e.g., "0.0.0.0:7948")
+	Peers    map[string]string `yaml:"peers"`     // Map of nodeID -> transport address for peers
 }
 
 // Default returns a configuration with sensible defaults.

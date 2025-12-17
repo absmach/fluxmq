@@ -16,6 +16,12 @@ import (
 
 var _ Cluster = (*EtcdCluster)(nil)
 
+// MessageHandler handles messages routed from other brokers.
+type MessageHandler interface {
+	// DeliverToClient delivers a message to a local MQTT client.
+	DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error
+}
+
 // EtcdCluster implements the Cluster interface using embedded etcd.
 type EtcdCluster struct {
 	nodeID string
@@ -32,19 +38,26 @@ type EtcdCluster struct {
 	// Lease for session ownership (with auto-renewal)
 	sessionLease clientv3.LeaseID
 
+	// gRPC transport for inter-broker communication
+	transport *Transport
+
+	// Handler for incoming routed messages
+	msgHandler MessageHandler
+
 	stopCh chan struct{}
 }
 
 // EtcdConfig holds embedded etcd configuration.
 type EtcdConfig struct {
-	NodeID         string   // Unique node identifier
-	DataDir        string   // Directory for etcd data
-	BindAddr       string   // Address for peer communication (e.g., "0.0.0.0:2380")
-	ClientAddr     string   // Address for client API (e.g., "0.0.0.0:2379")
-	AdvertiseAddr  string   // Address to advertise to peers (e.g., "192.168.1.10:2380")
-	InitialCluster string   // Initial cluster configuration (e.g., "node1=http://host1:2380")
-	Bootstrap      bool     // true for first node, false for joining nodes
-	Peers          []string // List of peer addresses for direct RPC
+	NodeID         string            // Unique node identifier
+	DataDir        string            // Directory for etcd data
+	BindAddr       string            // Address for peer communication (e.g., "0.0.0.0:2380")
+	ClientAddr     string            // Address for client API (e.g., "0.0.0.0:2379")
+	AdvertiseAddr  string            // Address to advertise to peers (e.g., "192.168.1.10:2380")
+	InitialCluster string            // Initial cluster configuration (e.g., "node1=http://host1:2380")
+	Bootstrap      bool              // true for first node, false for joining nodes
+	TransportAddr  string            // Address for gRPC transport (e.g., "0.0.0.0:7948")
+	PeerTransports map[string]string // Map of nodeID -> transport address for peers
 }
 
 // NewEtcdCluster creates a new embedded etcd cluster.
@@ -158,11 +171,41 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 		}
 	}()
 
+	// Initialize gRPC transport if configured
+	if cfg.TransportAddr != "" {
+		transport, err := NewTransport(cfg.NodeID, cfg.TransportAddr, c)
+		if err != nil {
+			client.Close()
+			sess.Close()
+			e.Close()
+			return nil, fmt.Errorf("failed to create transport: %w", err)
+		}
+		c.transport = transport
+	}
+
 	return c, nil
 }
 
 // Start begins cluster participation (campaigns for leadership).
 func (c *EtcdCluster) Start() error {
+	// Start gRPC transport if configured
+	if c.transport != nil {
+		if err := c.transport.Start(); err != nil {
+			return fmt.Errorf("failed to start transport: %w", err)
+		}
+
+		// Connect to peer nodes
+		if c.config.PeerTransports != nil {
+			for nodeID, addr := range c.config.PeerTransports {
+				if nodeID != c.nodeID {
+					if err := c.transport.ConnectPeer(nodeID, addr); err != nil {
+						log.Printf("Warning: failed to connect to peer %s: %v", nodeID, err)
+					}
+				}
+			}
+		}
+	}
+
 	// Campaign for leadership in background
 	go c.campaignLeader()
 	return nil
@@ -171,6 +214,11 @@ func (c *EtcdCluster) Start() error {
 // Stop gracefully shuts down the cluster.
 func (c *EtcdCluster) Stop() error {
 	close(c.stopCh)
+
+	// Stop gRPC transport
+	if c.transport != nil {
+		c.transport.Stop()
+	}
 
 	// Revoke session (releases leadership)
 	if c.session != nil {
@@ -564,20 +612,96 @@ func (c *EtcdCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessa
 	return pending, nil
 }
 
-// --- Inter-Broker Communication (Placeholders for now) ---
+// --- Inter-Broker Communication ---
 
-// RoutePublish routes a publish to interested nodes.
-// TODO: Implement gRPC transport for actual routing.
+// SetMessageHandler sets the handler for incoming routed messages.
+func (c *EtcdCluster) SetMessageHandler(handler MessageHandler) {
+	c.msgHandler = handler
+}
+
+// RoutePublish routes a publish to interested nodes with matching subscriptions.
 func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
-	// For now, this is a no-op. Messages only delivered locally.
-	// Will be implemented when gRPC transport is added.
+	if c.transport == nil {
+		// No transport configured, messages only delivered locally
+		return nil
+	}
+
+	// Get all subscriptions matching this topic
+	subs, err := c.GetSubscribersForTopic(ctx, topic)
+	if err != nil {
+		return fmt.Errorf("failed to get subscribers: %w", err)
+	}
+
+	// Group subscriptions by node to avoid duplicate sends
+	nodeClients := make(map[string][]string) // nodeID -> []clientIDs
+	for _, sub := range subs {
+		// Get the node that owns this session
+		nodeID, exists, err := c.GetSessionOwner(ctx, sub.ClientID)
+		if err != nil {
+			log.Printf("Failed to get session owner for %s: %v", sub.ClientID, err)
+			continue
+		}
+		if !exists {
+			// Client not connected, skip
+			continue
+		}
+
+		// Skip if it's on this node (will be delivered locally)
+		if nodeID == c.nodeID {
+			continue
+		}
+
+		nodeClients[nodeID] = append(nodeClients[nodeID], sub.ClientID)
+	}
+
+	// Send to each remote node
+	for nodeID, clientIDs := range nodeClients {
+		// Send to each client on that node
+		for _, clientID := range clientIDs {
+			err := c.transport.SendPublish(ctx, nodeID, clientID, topic, payload, qos, retain, false, properties)
+			if err != nil {
+				log.Printf("Failed to route publish to %s on node %s: %v", clientID, nodeID, err)
+			}
+		}
+	}
+
 	return nil
 }
 
 // TakeoverSession initiates session takeover from one node to another.
-// TODO: Implement gRPC RPC call to old node.
 func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) error {
-	// For now, just update ownership in etcd.
-	// Full implementation will require RPC to old node to save state.
+	if c.transport == nil || fromNode == toNode {
+		// No transport or same node, just update ownership
+		return c.AcquireSession(ctx, clientID, toNode)
+	}
+
+	// TODO: Implement full session state transfer
+	// For now, just update ownership
+	// Full implementation needs to:
+	// 1. Call RPC to fromNode to get session state
+	// 2. Disconnect client on fromNode
+	// 3. Transfer state to toNode
+	// 4. Update ownership in etcd
+
 	return c.AcquireSession(ctx, clientID, toNode)
+}
+
+// --- TransportHandler Implementation ---
+
+// HandlePublish implements TransportHandler.HandlePublish.
+// Called when another broker routes a PUBLISH message to this node.
+func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error {
+	if c.msgHandler == nil {
+		return fmt.Errorf("no message handler configured")
+	}
+
+	return c.msgHandler.DeliverToClient(ctx, clientID, topic, payload, qos, retain, dup, properties)
+}
+
+// HandleTakeover implements TransportHandler.HandleTakeover.
+// Called when another broker requests to take over a session from this node.
+func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *SessionState) error {
+	// TODO: Implement session takeover logic
+	// For now, just acknowledge
+	return nil
 }

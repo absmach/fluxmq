@@ -67,8 +67,16 @@ A high-performance, multi-protocol message broker written in Go. Supports MQTT 3
   - Clean layered design: Transport → Protocol → Domain
   - Protocol-agnostic domain logic
   - Easy to add new protocols and transports
-  - Pluggable storage backends (currently memory-based)
+  - Pluggable storage backends (memory, BadgerDB)
   - Dependency injection for logging and metrics
+
+- **Clustering & High Availability**
+  - Embedded etcd for distributed coordination
+  - gRPC-based inter-broker communication
+  - Automatic session ownership management
+  - Cross-node message routing
+  - Persistent storage with BadgerDB
+  - No external dependencies - all embedded in single binary
 
 ## Architecture
 
@@ -153,7 +161,11 @@ all MQTT subscriptions, and vice versa.
 - New protocols (CoAP, HTTP) → new adapters
 - Core domain logic unchanged
 
-For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
+For detailed architecture documentation, see:
+- [Clustering Architecture](docs/clustering-architecture.md) - Distributed broker design
+- [Clustering Infrastructure](docs/clustering-infrastructure.md) - etcd, gRPC, BadgerDB deep dive
+- [Broker & Routing](docs/broker-routing.md) - Message routing and session management
+- [Configuration Guide](docs/configuration.md) - Complete configuration reference
 
 ## Project Structure
 
@@ -184,13 +196,30 @@ mqtt/
 │   ├── session.go       # Session state
 │   └── cache.go         # Session cache
 ├── storage/             # Storage Interfaces & Backends
+│   ├── storage.go       # Storage interfaces
 │   ├── memory/          # In-memory implementation
+│   ├── badger/          # BadgerDB persistent storage
 │   └── messages/        # Message storage types
+├── cluster/             # Clustering & Distribution
+│   ├── cluster.go       # Cluster interface
+│   ├── noop.go          # Single-node implementation
+│   ├── etcd_cluster.go  # Embedded etcd cluster
+│   ├── transport.go     # gRPC inter-broker transport
+│   ├── broker.proto     # gRPC service definition
+│   └── *.pb.go          # Generated protobuf code
 ├── topics/              # Topic validation & utilities
 ├── config/              # Configuration loading
+├── examples/            # Example configurations
+│   ├── no-cluster.yaml         # Single node
+│   ├── single-node-cluster.yaml # Testing cluster features
+│   ├── node1.yaml              # 3-node cluster: node 1
+│   ├── node2.yaml              # 3-node cluster: node 2
+│   └── node3.yaml              # 3-node cluster: node 3
 └── docs/                # Documentation
-    ├── architecture.md  # Detailed architecture
-    └── roadmap.md       # Implementation roadmap
+    ├── clustering-architecture.md     # Clustering overview
+    ├── clustering-infrastructure.md   # etcd, gRPC, BadgerDB
+    ├── broker-routing.md              # Routing & sessions
+    └── configuration.md               # Configuration guide
 ```
 
 ## Quick Start
@@ -222,6 +251,15 @@ go build -o build/mqttd ./cmd/broker
 
 # Start with custom configuration file
 ./build/mqttd --config config.yaml
+
+# Run a 3-node cluster (in separate terminals)
+make run-node1  # Terminal 1
+make run-node2  # Terminal 2
+make run-node3  # Terminal 3
+
+# Test cross-node messaging
+mosquitto_sub -p 1884 -t "test/#" -v  # Subscribe on node2
+mosquitto_pub -p 1885 -t "test/hello" -m "Cross-node message"  # Publish on node3
 ```
 
 ## Configuration
@@ -351,10 +389,16 @@ Lightweight protocol for constrained IoT devices:
 - [x] Session expiry
 - [x] Topic routing with wildcards
 - [x] In-memory storage
+- [x] BadgerDB persistent storage
 - [x] Direct instrumentation (logging & metrics)
 - [x] Multi-protocol support (all share same broker core)
+- [x] **Clustering with embedded etcd**
+- [x] **gRPC inter-broker communication**
+- [x] **Cross-node message routing**
+- [x] **Distributed session ownership**
 
 ### In Progress 🚧
+- [ ] Session state migration (full takeover)
 - [ ] Complete CoAP UDP server implementation
 - [ ] TLS/SSL support for TCP and WebSocket
 - [ ] Authentication & Authorization hooks
@@ -363,8 +407,7 @@ Lightweight protocol for constrained IoT devices:
 - [ ] Shared subscriptions (MQTT 5.0)
 - [ ] Topic aliases (MQTT 5.0)
 - [ ] Message expiry enforcement
-- [ ] Persistent storage backends (PostgreSQL, etcd, BadgerDB)
-- [ ] Clustering and horizontal scaling
+- [ ] Cluster auto-discovery
 - [ ] Admin REST API for management
 - [ ] Prometheus metrics exporter
 - [ ] MQTT bridge to other brokers

@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package cluster;
+
+option go_package = "github.com/absmach/mqtt/cluster";
+
+// BrokerService defines RPC methods for inter-broker communication in the cluster.
+service BrokerService {
+  // RoutePublish forwards a PUBLISH packet to the broker that owns the target session.
+  rpc RoutePublish(PublishRequest) returns (PublishResponse);
+
+  // TakeoverSession migrates a session from one broker to another.
+  rpc TakeoverSession(TakeoverRequest) returns (TakeoverResponse);
+}
+
+// PublishRequest contains a serialized PUBLISH packet to route to a client.
+message PublishRequest {
+  string client_id = 1;           // Target client ID
+  string topic = 2;               // MQTT topic
+  bytes payload = 3;              // Message payload
+  uint32 qos = 4;                 // QoS level (0, 1, 2)
+  bool retain = 5;                // Retain flag
+  bool dup = 6;                   // Duplicate flag
+  map<string, string> properties = 7; // MQTT v5 properties (if any)
+}
+
+// PublishResponse indicates whether the publish was delivered.
+message PublishResponse {
+  bool success = 1;
+  string error = 2;  // Error message if success=false
+}
+
+// TakeoverRequest requests session migration with all session state.
+message TakeoverRequest {
+  string client_id = 1;
+  string from_node = 2;  // Node requesting takeover
+  string to_node = 3;    // Node taking over the session
+
+  // Session state to transfer
+  SessionState session_state = 4;
+}
+
+// SessionState contains the full state of an MQTT session.
+message SessionState {
+  uint32 expiry_interval = 1;
+  bool clean_start = 2;
+
+  // In-flight messages (QoS 1/2 not yet acknowledged)
+  repeated InflightMessage inflight_messages = 3;
+
+  // Offline queue (messages waiting for delivery)
+  repeated QueuedMessage queued_messages = 4;
+
+  // Subscriptions
+  repeated Subscription subscriptions = 5;
+
+  // Will message
+  WillMessage will = 6;
+}
+
+// InflightMessage represents a message awaiting acknowledgment.
+message InflightMessage {
+  uint32 packet_id = 1;
+  string topic = 2;
+  bytes payload = 3;
+  uint32 qos = 4;
+  bool retain = 5;
+  int64 timestamp = 6;
+}
+
+// QueuedMessage represents a message in the offline queue.
+message QueuedMessage {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  int64 timestamp = 5;
+}
+
+// Subscription represents a topic subscription.
+message Subscription {
+  string filter = 1;
+  uint32 qos = 2;
+}
+
+// WillMessage represents a last will and testament.
+message WillMessage {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  uint32 delay = 5;
+  int64 disconnect_time = 6;
+}
+
+// TakeoverResponse indicates whether the takeover succeeded.
+message TakeoverResponse {
+  bool success = 1;
+  string error = 2;
+}

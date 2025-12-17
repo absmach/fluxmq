@@ -1,0 +1,850 @@
+# Configuration Guide
+
+This document provides a comprehensive guide to configuring the MQTT broker for single-node and clustered deployments.
+
+## Table of Contents
+
+- [Configuration File Structure](#configuration-file-structure)
+- [Server Configuration](#server-configuration)
+- [Broker Configuration](#broker-configuration)
+- [Session Configuration](#session-configuration)
+- [Storage Configuration](#storage-configuration)
+- [Cluster Configuration](#cluster-configuration)
+- [Logging Configuration](#logging-configuration)
+- [Example Configurations](#example-configurations)
+- [Best Practices](#best-practices)
+
+## Configuration File Structure
+
+The broker uses YAML configuration files:
+
+```yaml
+server:
+  # Server transport settings
+  tcp_addr: ":1883"
+  # ...
+
+broker:
+  # Broker behavior settings
+  max_message_size: 1048576
+  # ...
+
+session:
+  # Session management settings
+  max_sessions: 10000
+  # ...
+
+storage:
+  # Storage backend settings
+  type: "badger"
+  # ...
+
+cluster:
+  # Clustering settings
+  enabled: true
+  # ...
+
+log:
+  # Logging settings
+  level: "info"
+  # ...
+```
+
+**Loading Configuration**:
+
+```bash
+# Use default configuration
+./build/mqttd
+
+# Load from file
+./build/mqttd --config /path/to/config.yaml
+```
+
+## Server Configuration
+
+Controls the transport layer (TCP, WebSocket, HTTP, CoAP).
+
+```yaml
+server:
+  # TCP Transport (MQTT over TCP)
+  tcp_addr: ":1883"                    # Listen address (default: 1883)
+  tcp_max_connections: 10000           # Max concurrent connections
+  tcp_read_timeout: "60s"              # Read timeout
+  tcp_write_timeout: "60s"             # Write timeout
+
+  # TLS/SSL (not yet implemented)
+  tls_enabled: false
+  tls_cert_file: ""
+  tls_key_file: ""
+
+  # HTTP-MQTT Bridge
+  http_enabled: false                  # Enable HTTP bridge
+  http_addr: ":8080"                   # HTTP listen address
+
+  # WebSocket Transport
+  ws_enabled: false                    # Enable WebSocket
+  ws_addr: ":8083"                     # WebSocket listen address
+  ws_path: "/mqtt"                     # WebSocket path
+
+  # CoAP Bridge
+  coap_enabled: false                  # Enable CoAP bridge
+  coap_addr: ":5683"                   # CoAP listen address
+
+  # Shutdown
+  shutdown_timeout: "30s"              # Graceful shutdown timeout
+```
+
+### TCP Configuration
+
+**tcp_addr**:
+- Format: `"host:port"` or `":port"`
+- Examples:
+  - `":1883"` - Listen on all interfaces, port 1883
+  - `"127.0.0.1:1883"` - Listen only on localhost
+  - `"192.168.1.10:1883"` - Listen on specific IP
+
+**tcp_max_connections**:
+- Maximum concurrent TCP connections
+- Default: 10000
+- Adjust based on available file descriptors (`ulimit -n`)
+
+**tcp_read_timeout / tcp_write_timeout**:
+- Duration format: `"60s"`, `"5m"`, `"1h"`
+- Prevents hung connections
+- Should be longer than maximum expected keep-alive
+
+### WebSocket Configuration
+
+```yaml
+server:
+  ws_enabled: true
+  ws_addr: ":8083"
+  ws_path: "/mqtt"
+```
+
+**Client Connection**:
+```javascript
+// Browser client
+const client = mqtt.connect('ws://localhost:8083/mqtt');
+```
+
+### HTTP Bridge Configuration
+
+```yaml
+server:
+  http_enabled: true
+  http_addr: ":8080"
+```
+
+**Publishing via HTTP**:
+```bash
+curl -X POST http://localhost:8080/publish \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "sensor/temperature",
+    "payload": "eyJ0ZW1wIjogMjIuNX0=",
+    "qos": 1,
+    "retain": false
+  }'
+```
+
+## Broker Configuration
+
+Controls broker behavior and message handling.
+
+```yaml
+broker:
+  max_message_size: 1048576            # 1MB max payload size
+  max_retained_messages: 10000         # Max retained messages
+  retry_interval: "20s"                # QoS retry interval
+  max_retries: 0                       # 0 = infinite retries
+```
+
+### max_message_size
+
+Maximum MQTT payload size in bytes.
+
+**Considerations**:
+- Larger values use more memory
+- MQTT default is unlimited, but this protects against abuse
+- Should match client expectations
+
+**Examples**:
+- `1048576` (1MB) - IoT sensors
+- `10485760` (10MB) - File transfers
+- `104857600` (100MB) - Large data transfers
+
+### max_retained_messages
+
+Maximum number of retained messages stored.
+
+**Behavior**:
+- When limit reached, oldest retained messages evicted
+- 0 = unlimited (not recommended)
+- Applies per-node in clustered mode
+
+**Recommendations**:
+- Small deployments: 1000-10000
+- Large deployments: 100000+
+
+### retry_interval
+
+How often to retry unacknowledged QoS 1/2 messages.
+
+**Considerations**:
+- Too short: Network congestion
+- Too long: Delayed delivery
+- Typical: 10-30 seconds
+
+### max_retries
+
+Maximum retry attempts before giving up.
+
+**Values**:
+- `0`: Infinite retries (recommended for reliability)
+- `N`: Give up after N attempts
+
+## Session Configuration
+
+Controls session lifecycle and queuing.
+
+```yaml
+session:
+  max_sessions: 10000                  # Max concurrent sessions
+  default_expiry_interval: 300         # 5 minutes default expiry
+  max_offline_queue_size: 1000         # Max queued messages per session
+  max_inflight_messages: 100           # Max inflight QoS 1/2 per session
+```
+
+### max_sessions
+
+Maximum concurrent sessions the broker will manage.
+
+**Calculation**:
+```
+Memory per session ≈ 1-10KB (depending on activity)
+Max sessions = Available Memory / Memory per session
+```
+
+**Examples**:
+- 1GB RAM → ~100,000 - 1,000,000 sessions
+- 4GB RAM → ~500,000 - 4,000,000 sessions
+
+### default_expiry_interval
+
+Default session expiry for clients that don't specify.
+
+**Values** (in seconds):
+- `0`: Session expires immediately on disconnect
+- `300`: 5 minutes (good default)
+- `3600`: 1 hour
+- `86400`: 24 hours
+
+**MQTT 5.0**: Clients can override with Session Expiry Interval property.
+
+### max_offline_queue_size
+
+Maximum messages queued for disconnected client.
+
+**Behavior**:
+- When limit reached, oldest messages discarded (FIFO)
+- Prevents memory exhaustion from offline clients
+- Only applies to QoS > 0 messages
+
+**Recommendations**:
+- IoT sensors: 100-1000
+- Mobile apps: 1000-10000
+- Critical systems: 10000+
+
+### max_inflight_messages
+
+Maximum unacknowledged QoS 1/2 messages per session.
+
+**MQTT Spec**:
+- MQTT 3.1.1: Fixed at 65535
+- MQTT 5.0: Client specifies "Receive Maximum"
+
+**Typical Values**:
+- Conservative: 100
+- Standard: 1000
+- Aggressive: 10000
+
+## Storage Configuration
+
+Selects the storage backend for persistence.
+
+```yaml
+storage:
+  type: "badger"                       # "memory" or "badger"
+  badger_dir: "/tmp/mqtt/data"         # BadgerDB directory
+```
+
+### Memory Storage
+
+```yaml
+storage:
+  type: "memory"
+```
+
+**Characteristics**:
+- All data in RAM
+- Fastest performance
+- No persistence
+- Lost on restart
+
+**Use Cases**:
+- Development/testing
+- Ephemeral deployments
+- Cache-only scenarios
+
+### BadgerDB Storage
+
+```yaml
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/mqtt/data"
+```
+
+**Characteristics**:
+- LSM tree embedded database
+- Persists to disk
+- Fast writes, good reads
+- Automatic compaction
+
+**Directory Structure**:
+```
+/var/lib/mqtt/data/
+├── 000000.vlog    # Value log
+├── 000001.sst     # SSTables
+├── MANIFEST       # Metadata
+└── ...
+```
+
+**Disk Space**:
+- Compaction ratio: ~1.5-3x raw data
+- Reserve 2-5x expected data size
+
+**Permissions**:
+```bash
+mkdir -p /var/lib/mqtt/data
+chown mqtt:mqtt /var/lib/mqtt/data
+chmod 700 /var/lib/mqtt/data
+```
+
+## Cluster Configuration
+
+Enables distributed broker clustering.
+
+```yaml
+cluster:
+  enabled: true                        # Enable clustering
+  node_id: "node1"                     # Unique node identifier
+
+  etcd:
+    data_dir: "/tmp/mqtt/node1/etcd"   # etcd data directory
+    bind_addr: "127.0.0.1:2380"        # etcd peer address
+    client_addr: "127.0.0.1:2379"      # etcd client address
+    initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
+    bootstrap: true                    # Bootstrap new cluster
+
+  transport:
+    bind_addr: "127.0.0.1:7948"        # gRPC listen address
+    peers:                             # Peer node addresses
+      node2: "127.0.0.1:7949"
+      node3: "127.0.0.1:7950"
+```
+
+### enabled
+
+Enable or disable clustering.
+
+**Values**:
+- `false`: Single-node mode (default)
+- `true`: Cluster mode
+
+### node_id
+
+Unique identifier for this broker node.
+
+**Requirements**:
+- Must be unique across all nodes
+- Used in etcd cluster configuration
+- Cannot be changed after initialization
+
+**Naming Convention**:
+- `node1`, `node2`, `node3`, ...
+- `broker-us-east-1a`, `broker-us-east-1b`, ...
+- `mqtt-01`, `mqtt-02`, ...
+
+### etcd Configuration
+
+#### data_dir
+
+Directory for etcd's persistent data.
+
+**Requirements**:
+- Must be writable
+- Should be on fast disk (SSD recommended)
+- Backed up regularly
+
+**Size Estimation**:
+```
+Subscriptions: ~100 bytes each
+Sessions: ~200 bytes each
+Retained: ~1KB each (including payload)
+
+For 10,000 sessions, 50,000 subscriptions:
+~10MB + growth for retained messages
+```
+
+#### bind_addr / client_addr
+
+**bind_addr**: Raft peer-to-peer communication
+**client_addr**: etcd API for local broker
+
+**Port Allocation**:
+| Node | bind_addr | client_addr |
+|------|-----------|-------------|
+| node1 | 127.0.0.1:2380 | 127.0.0.1:2379 |
+| node2 | 127.0.0.1:2480 | 127.0.0.1:2479 |
+| node3 | 127.0.0.1:2580 | 127.0.0.1:2579 |
+
+**Production** (different hosts):
+```yaml
+# node1 (192.168.1.10)
+bind_addr: "192.168.1.10:2380"
+client_addr: "127.0.0.1:2379"  # Local only
+
+# node2 (192.168.1.11)
+bind_addr: "192.168.1.11:2380"
+client_addr: "127.0.0.1:2379"
+```
+
+#### initial_cluster
+
+Comma-separated list of all nodes in initial cluster.
+
+**Format**: `name=peer_url,name=peer_url,...`
+
+**Example**:
+```yaml
+initial_cluster: "node1=http://192.168.1.10:2380,node2=http://192.168.1.11:2380,node3=http://192.168.1.12:2380"
+```
+
+**Important**:
+- All nodes must have identical `initial_cluster` value
+- Use HTTP (HTTPS not yet supported)
+- URLs must match `bind_addr` values
+
+#### bootstrap
+
+Whether this node is part of initial cluster formation.
+
+**Values**:
+- `true`: Node participates in new cluster formation
+- `false`: Node joins existing cluster (dynamic membership)
+
+**Initial Cluster** (all nodes start together):
+```yaml
+# All nodes set bootstrap: true
+node1: bootstrap: true
+node2: bootstrap: true
+node3: bootstrap: true
+```
+
+**Add Node to Running Cluster** (advanced):
+```yaml
+# Existing nodes: bootstrap: true
+# New node: bootstrap: false
+
+# 1. Add member to existing cluster (via etcdctl)
+# 2. Start new node with bootstrap: false
+```
+
+### transport Configuration
+
+#### bind_addr
+
+gRPC server listen address for inter-broker communication.
+
+**Format**: `"host:port"`
+
+**Examples**:
+```yaml
+# Local testing
+bind_addr: "127.0.0.1:7948"
+
+# Production
+bind_addr: "0.0.0.0:7948"        # Listen on all interfaces
+bind_addr: "192.168.1.10:7948"   # Listen on specific IP
+```
+
+#### peers
+
+Map of peer node IDs to their transport addresses.
+
+**Format**:
+```yaml
+peers:
+  nodeID: "host:port"
+  ...
+```
+
+**Example**:
+```yaml
+# node1 configuration
+transport:
+  bind_addr: "127.0.0.1:7948"
+  peers:
+    node2: "127.0.0.1:7949"
+    node3: "127.0.0.1:7950"
+
+# node2 configuration
+transport:
+  bind_addr: "127.0.0.1:7949"
+  peers:
+    node1: "127.0.0.1:7948"
+    node3: "127.0.0.1:7950"
+```
+
+**Production** (different hosts):
+```yaml
+# node1 (192.168.1.10)
+transport:
+  bind_addr: "0.0.0.0:7948"
+  peers:
+    node2: "192.168.1.11:7948"
+    node3: "192.168.1.12:7948"
+```
+
+## Logging Configuration
+
+Controls logging output.
+
+```yaml
+log:
+  level: "info"                        # debug, info, warn, error
+  format: "text"                       # text, json
+```
+
+### level
+
+Log verbosity.
+
+**Levels** (from most to least verbose):
+- `debug`: Everything (connection details, packet traces)
+- `info`: Normal operations (connects, subscribes, publishes)
+- `warn`: Warnings (retries, non-critical errors)
+- `error`: Errors only
+
+**Recommendations**:
+- Development: `debug`
+- Production: `info` or `warn`
+- High-volume: `error`
+
+### format
+
+Log output format.
+
+**Options**:
+- `text`: Human-readable
+  ```
+  time=2025-12-17T18:00:00Z level=INFO msg=v5_connect client_id=client1
+  ```
+
+- `json`: Machine-parseable
+  ```json
+  {"time":"2025-12-17T18:00:00Z","level":"INFO","msg":"v5_connect","client_id":"client1"}
+  ```
+
+**Recommendations**:
+- Development: `text`
+- Production with log aggregation: `json`
+
+## Example Configurations
+
+### Single Node (No Clustering)
+
+```yaml
+# examples/no-cluster.yaml
+server:
+  tcp_addr: ":1883"
+  tcp_max_connections: 10000
+  tcp_read_timeout: "60s"
+  tcp_write_timeout: "60s"
+
+  http_enabled: false
+  ws_enabled: false
+  coap_enabled: false
+
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576
+  max_retained_messages: 10000
+  retry_interval: "20s"
+  max_retries: 0
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300
+  max_offline_queue_size: 1000
+  max_inflight_messages: 100
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/mqtt/data"
+
+cluster:
+  enabled: false
+  node_id: "broker-1"
+
+log:
+  level: "info"
+  format: "text"
+```
+
+### Single Node Cluster (Testing)
+
+```yaml
+# examples/single-node-cluster.yaml
+server:
+  tcp_addr: ":1883"
+  tcp_max_connections: 10000
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/mqtt/cluster-data"
+
+cluster:
+  enabled: true
+  node_id: "node1"
+
+  etcd:
+    data_dir: "/tmp/mqtt/cluster-etcd"
+    bind_addr: "127.0.0.1:2380"
+    client_addr: "127.0.0.1:2379"
+    initial_cluster: "node1=http://127.0.0.1:2380"
+    bootstrap: true
+
+  transport:
+    bind_addr: "127.0.0.1:7948"
+
+log:
+  level: "info"
+  format: "text"
+```
+
+### 3-Node Cluster (Local)
+
+**Node 1**:
+```yaml
+# examples/node1.yaml
+server:
+  tcp_addr: ":1883"
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/mqtt/node1/data"
+
+cluster:
+  enabled: true
+  node_id: "node1"
+
+  etcd:
+    data_dir: "/tmp/mqtt/node1/etcd"
+    bind_addr: "127.0.0.1:2380"
+    client_addr: "127.0.0.1:2379"
+    initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
+    bootstrap: true
+
+  transport:
+    bind_addr: "127.0.0.1:7948"
+    peers:
+      node2: "127.0.0.1:7949"
+      node3: "127.0.0.1:7950"
+
+log:
+  level: "debug"
+```
+
+**Node 2**: Same as Node 1, with:
+- `tcp_addr: ":1884"`
+- `node_id: "node2"`
+- `badger_dir: "/tmp/mqtt/node2/data"`
+- `etcd.data_dir: "/tmp/mqtt/node2/etcd"`
+- `etcd.bind_addr: "127.0.0.1:2480"`
+- `etcd.client_addr: "127.0.0.1:2479"`
+- `transport.bind_addr: "127.0.0.1:7949"`
+- Update peers accordingly
+
+**Node 3**: Same pattern, ports 1885, 2580, 2579, 7950
+
+### Production 3-Node Cluster
+
+**Node 1** (192.168.1.10):
+```yaml
+server:
+  tcp_addr: "0.0.0.0:1883"
+
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/mqtt/data"
+
+cluster:
+  enabled: true
+  node_id: "node1"
+
+  etcd:
+    data_dir: "/var/lib/mqtt/etcd"
+    bind_addr: "192.168.1.10:2380"
+    client_addr: "127.0.0.1:2379"
+    initial_cluster: "node1=http://192.168.1.10:2380,node2=http://192.168.1.11:2380,node3=http://192.168.1.12:2380"
+    bootstrap: true
+
+  transport:
+    bind_addr: "0.0.0.0:7948"
+    peers:
+      node2: "192.168.1.11:7948"
+      node3: "192.168.1.12:7948"
+
+log:
+  level: "warn"
+  format: "json"
+```
+
+## Best Practices
+
+### Security
+
+1. **Bind addresses**:
+   ```yaml
+   # Development: localhost only
+   tcp_addr: "127.0.0.1:1883"
+
+   # Production: specific interface
+   tcp_addr: "0.0.0.0:1883"  # With firewall
+
+   # Don't expose etcd client port externally
+   client_addr: "127.0.0.1:2379"
+   ```
+
+2. **File permissions**:
+   ```bash
+   chmod 600 config.yaml
+   chmod 700 /var/lib/mqtt/data
+   chmod 700 /var/lib/mqtt/etcd
+   ```
+
+### Performance
+
+1. **Connection limits**:
+   ```yaml
+   server:
+     tcp_max_connections: 50000  # Based on ulimit
+
+   session:
+     max_sessions: 50000
+   ```
+
+   System:
+   ```bash
+   # Increase file descriptor limit
+   ulimit -n 100000
+
+   # /etc/security/limits.conf
+   mqtt soft nofile 100000
+   mqtt hard nofile 100000
+   ```
+
+2. **Timeouts**:
+   ```yaml
+   server:
+     tcp_read_timeout: "120s"   # 2x max keep-alive
+     tcp_write_timeout: "120s"
+   ```
+
+3. **Storage**:
+   ```yaml
+   storage:
+     type: "badger"
+     badger_dir: "/mnt/ssd/mqtt/data"  # SSD for best performance
+   ```
+
+### High Availability
+
+1. **Cluster size**: Use odd numbers (3, 5, 7) for proper quorum
+   - 3 nodes: Tolerates 1 failure
+   - 5 nodes: Tolerates 2 failures
+   - 7 nodes: Tolerates 3 failures
+
+2. **Data directories**: Use separate disks for etcd and BadgerDB
+   ```yaml
+   storage:
+     badger_dir: "/mnt/data/mqtt/badger"
+
+   cluster:
+     etcd:
+       data_dir: "/mnt/ssd/mqtt/etcd"  # SSD for etcd
+   ```
+
+3. **Backups**: Backup etcd data and BadgerDB regularly
+   ```bash
+   # etcd backup (via etcdctl)
+   etcdctl snapshot save /backup/mqtt-etcd-$(date +%Y%m%d).db
+
+   # BadgerDB backup
+   tar czf /backup/mqtt-badger-$(date +%Y%m%d).tar.gz /var/lib/mqtt/data
+   ```
+
+### Monitoring
+
+1. **Logging**:
+   ```yaml
+   log:
+     level: "info"
+     format: "json"  # For log aggregation
+   ```
+
+2. **Metrics** (future):
+   - Prometheus exporter
+   - Connection count
+   - Message throughput
+   - QoS retry count
+
+### Resource Planning
+
+**CPU**:
+- Single node: 2-4 cores
+- Cluster node: 4-8 cores (etcd + broker + gRPC)
+
+**Memory**:
+- Base: 512MB - 1GB
+- Per 1000 sessions: ~10-100MB
+- Per 10000 retained: ~10-100MB
+
+**Disk**:
+- etcd: 10-100GB (slow growth)
+- BadgerDB: Based on message volume
+- I/O: SSD recommended for production
+
+**Network**:
+- Client connections: Based on concurrent clients
+- Cluster: Low latency preferred (<10ms)
+- Bandwidth: Based on message throughput
+
+## Summary
+
+Key configuration areas:
+
+**Server**: Transport layer (TCP, WS, HTTP, CoAP)
+**Broker**: Message handling behavior
+**Session**: Session lifecycle and queuing
+**Storage**: Persistence backend (memory, BadgerDB)
+**Cluster**: Distributed coordination (etcd, gRPC)
+**Log**: Logging output
+
+For more details, see:
+- [Clustering Architecture](clustering-architecture.md) - Overall design
+- [Clustering Infrastructure](clustering-infrastructure.md) - etcd, gRPC, BadgerDB
+- [Broker & Routing](broker-routing.md) - Message routing internals

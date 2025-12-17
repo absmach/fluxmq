@@ -86,6 +86,7 @@ func main() {
 
 	// Initialize cluster coordination
 	var clust cluster.Cluster
+	var etcdCluster *cluster.EtcdCluster
 	if cfg.Cluster.Enabled {
 		// Create embedded etcd cluster
 		etcdCfg := &cluster.EtcdConfig{
@@ -96,13 +97,16 @@ func main() {
 			AdvertiseAddr:  cfg.Cluster.Etcd.BindAddr, // Use bind addr as advertise for now
 			InitialCluster: cfg.Cluster.Etcd.InitialCluster,
 			Bootstrap:      cfg.Cluster.Etcd.Bootstrap,
+			TransportAddr:  cfg.Cluster.Transport.BindAddr,
+			PeerTransports: cfg.Cluster.Transport.Peers,
 		}
 
-		etcdCluster, err := cluster.NewEtcdCluster(etcdCfg)
+		ec, err := cluster.NewEtcdCluster(etcdCfg)
 		if err != nil {
 			slog.Error("Failed to initialize etcd cluster", "error", err)
 			os.Exit(1)
 		}
+		etcdCluster = ec
 		clust = etcdCluster
 		defer clust.Stop()
 
@@ -126,6 +130,11 @@ func main() {
 	stats := broker.NewStats()
 	b := broker.NewBroker(store, clust, logger, stats)
 	defer b.Close()
+
+	// Set message handler on cluster if it's an etcd cluster
+	if etcdCluster != nil {
+		etcdCluster.SetMessageHandler(b)
+	}
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
