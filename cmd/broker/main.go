@@ -10,11 +10,15 @@ import (
 	"syscall"
 
 	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/config"
 	"github.com/absmach/mqtt/server/coap"
 	"github.com/absmach/mqtt/server/http"
 	"github.com/absmach/mqtt/server/tcp"
 	"github.com/absmach/mqtt/server/websocket"
+	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/storage/badger"
+	"github.com/absmach/mqtt/storage/memory"
 )
 
 func main() {
@@ -55,11 +59,46 @@ func main() {
 		"http_enabled", cfg.Server.HTTPEnabled,
 		"ws_enabled", cfg.Server.WSEnabled,
 		"coap_enabled", cfg.Server.CoAPEnabled,
+		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
 
-	// Create core broker with logger and metrics
+	// Initialize storage backend
+	var store storage.Store
+	switch cfg.Storage.Type {
+	case "memory":
+		store = memory.New()
+		slog.Info("Using in-memory storage")
+	case "badger":
+		badgerStore, err := badger.New(badger.Config{
+			Dir: cfg.Storage.BadgerDir,
+		})
+		if err != nil {
+			slog.Error("Failed to initialize BadgerDB storage", "error", err)
+			os.Exit(1)
+		}
+		store = badgerStore
+		defer store.Close()
+		slog.Info("Using BadgerDB persistent storage", "dir", cfg.Storage.BadgerDir)
+	default:
+		slog.Error("Unknown storage type", "type", cfg.Storage.Type)
+		os.Exit(1)
+	}
+
+	// Initialize cluster coordination
+	var clust cluster.Cluster
+	if cfg.Cluster.Enabled {
+		// TODO: Implement embedded etcd cluster in Phase 2
+		slog.Error("Clustering not yet implemented")
+		os.Exit(1)
+	} else {
+		// Single-node mode with noop cluster
+		clust = cluster.NewNoopCluster(cfg.Cluster.NodeID)
+		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
+	}
+
+	// Create core broker with storage, cluster, logger, and metrics
 	stats := broker.NewStats()
-	b := broker.NewBroker(logger, stats)
+	b := broker.NewBroker(store, clust, logger, stats)
 	defer b.Close()
 
 	// Context for graceful shutdown

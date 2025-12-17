@@ -15,6 +15,7 @@ type Config struct {
 	Session SessionConfig `yaml:"session"`
 	Log     LogConfig     `yaml:"log"`
 	Storage StorageConfig `yaml:"storage"`
+	Cluster ClusterConfig `yaml:"cluster"`
 }
 
 // ServerConfig holds server-related configuration.
@@ -83,11 +84,36 @@ type LogConfig struct {
 
 // StorageConfig holds storage backend configuration.
 type StorageConfig struct {
-	Type string `yaml:"type"` // memory, etcd (future)
+	Type string `yaml:"type"` // memory, badger
 
-	// etcd settings (future)
-	EtcdEndpoints []string `yaml:"etcd_endpoints"`
-	EtcdPrefix    string   `yaml:"etcd_prefix"`
+	// BadgerDB settings
+	BadgerDir string `yaml:"badger_dir"`
+}
+
+// ClusterConfig holds clustering configuration.
+type ClusterConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	NodeID  string `yaml:"node_id"`
+
+	// Embedded etcd settings
+	Etcd EtcdConfig `yaml:"etcd"`
+
+	// Inter-broker transport
+	Transport TransportConfig `yaml:"transport"`
+}
+
+// EtcdConfig holds embedded etcd configuration.
+type EtcdConfig struct {
+	DataDir        string `yaml:"data_dir"`
+	BindAddr       string `yaml:"bind_addr"`       // Peer address (e.g., "0.0.0.0:2380")
+	ClientAddr     string `yaml:"client_addr"`     // Client address (e.g., "0.0.0.0:2379")
+	InitialCluster string `yaml:"initial_cluster"` // "node1=http://host1:2380,node2=http://host2:2380"
+	Bootstrap      bool   `yaml:"bootstrap"`       // true only for first node
+}
+
+// TransportConfig holds inter-broker transport configuration.
+type TransportConfig struct {
+	BindAddr string `yaml:"bind_addr"` // gRPC address (e.g., "0.0.0.0:7948")
 }
 
 // Default returns a configuration with sensible defaults.
@@ -100,12 +126,12 @@ func Default() *Config {
 			TCPWriteTimeout: 60 * time.Second,
 			TLSEnabled:      false,
 			HTTPAddr:        ":8080",
-			HTTPEnabled:     true,
+			HTTPEnabled:     false,
 			WSAddr:          ":8083",
 			WSPath:          "/mqtt",
 			WSEnabled:       true,
 			CoAPAddr:        ":5683",
-			CoAPEnabled:     true,
+			CoAPEnabled:     false,
 			ShutdownTimeout: 30 * time.Second,
 		},
 		Broker: BrokerConfig{
@@ -121,11 +147,26 @@ func Default() *Config {
 			MaxInflightMessages:   100,
 		},
 		Log: LogConfig{
-			Level:  "debug",
+			Level:  "info",
 			Format: "text",
 		},
 		Storage: StorageConfig{
-			Type: "memory",
+			Type:      "badger",
+			BadgerDir: "/tmp/mqtt/data",
+		},
+		Cluster: ClusterConfig{
+			Enabled: false,
+			NodeID:  "broker-1",
+			Etcd: EtcdConfig{
+				DataDir:        "/var/lib/mqtt/etcd",
+				BindAddr:       "0.0.0.0:2380",
+				ClientAddr:     "0.0.0.0:2379",
+				InitialCluster: "broker-1=http://localhost:2380",
+				Bootstrap:      true,
+			},
+			Transport: TransportConfig{
+				BindAddr: "0.0.0.0:7948",
+			},
 		},
 	}
 }
@@ -197,9 +238,32 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("log.format must be one of: text, json")
 	}
 
-	validStorage := map[string]bool{"memory": true}
+	validStorage := map[string]bool{"memory": true, "badger": true}
 	if !validStorage[c.Storage.Type] {
-		return fmt.Errorf("storage.type must be: memory")
+		return fmt.Errorf("storage.type must be one of: memory, badger")
+	}
+
+	if c.Storage.Type == "badger" && c.Storage.BadgerDir == "" {
+		return fmt.Errorf("storage.badger_dir required when type is badger")
+	}
+
+	// Cluster validation (only if enabled)
+	if c.Cluster.Enabled {
+		if c.Cluster.NodeID == "" {
+			return fmt.Errorf("cluster.node_id required when clustering is enabled")
+		}
+		if c.Cluster.Etcd.DataDir == "" {
+			return fmt.Errorf("cluster.etcd.data_dir required when clustering is enabled")
+		}
+		if c.Cluster.Etcd.BindAddr == "" {
+			return fmt.Errorf("cluster.etcd.bind_addr required when clustering is enabled")
+		}
+		if c.Cluster.Etcd.ClientAddr == "" {
+			return fmt.Errorf("cluster.etcd.client_addr required when clustering is enabled")
+		}
+		if c.Cluster.Transport.BindAddr == "" {
+			return fmt.Errorf("cluster.transport.bind_addr required when clustering is enabled")
+		}
 	}
 
 	return nil

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
@@ -28,6 +29,8 @@ type Broker struct {
 	retained      storage.RetainedStore
 	wills         storage.WillStore
 
+	cluster cluster.Cluster // nil for single-node mode
+
 	auth   *AuthEngine
 	logger *slog.Logger
 	stats  *Stats
@@ -37,8 +40,17 @@ type Broker struct {
 }
 
 // NewBroker creates a new broker instance.
-func NewBroker(logger *slog.Logger, stats *Stats) *Broker {
-	st := memory.New()
+// Parameters:
+//   - store: Storage backend for messages, sessions, subscriptions, retained, and wills (nil uses memory)
+//   - clust: Cluster coordination interface (nil for single-node mode)
+//   - logger: Logger instance (nil uses default)
+//   - stats: Stats collector (nil creates new one)
+func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, stats *Stats) *Broker {
+	if store == nil {
+		// Fallback to memory storage if none provided
+		store = memory.New()
+	}
+
 	router := NewRouter()
 
 	if logger == nil {
@@ -51,11 +63,12 @@ func NewBroker(logger *slog.Logger, stats *Stats) *Broker {
 	b := &Broker{
 		sessionsMap:   session.NewMapCache(),
 		router:        router,
-		messages:      st.Messages(),
-		sessions:      st.Sessions(),
-		subscriptions: st.Subscriptions(),
-		retained:      st.Retained(),
-		wills:         st.Wills(),
+		messages:      store.Messages(),
+		sessions:      store.Sessions(),
+		subscriptions: store.Subscriptions(),
+		retained:      store.Retained(),
+		wills:         store.Wills(),
+		cluster:       clust,
 		logger:        logger,
 		stats:         stats,
 		stopCh:        make(chan struct{}),
