@@ -155,13 +155,13 @@ func Default() *Config {
 			BadgerDir: "/tmp/mqtt/data",
 		},
 		Cluster: ClusterConfig{
-			Enabled: false,
+			Enabled: true,
 			NodeID:  "broker-1",
 			Etcd: EtcdConfig{
-				DataDir:        "/var/lib/mqtt/etcd",
+				DataDir:        "/tmp/mqtt/etcd",
 				BindAddr:       "0.0.0.0:2380",
 				ClientAddr:     "0.0.0.0:2379",
-				InitialCluster: "broker-1=http://localhost:2380",
+				InitialCluster: "broker-1=http://0.0.0.0:2380",
 				Bootstrap:      true,
 			},
 			Transport: TransportConfig{

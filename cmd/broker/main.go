@@ -87,9 +87,35 @@ func main() {
 	// Initialize cluster coordination
 	var clust cluster.Cluster
 	if cfg.Cluster.Enabled {
-		// TODO: Implement embedded etcd cluster in Phase 2
-		slog.Error("Clustering not yet implemented")
-		os.Exit(1)
+		// Create embedded etcd cluster
+		etcdCfg := &cluster.EtcdConfig{
+			NodeID:         cfg.Cluster.NodeID,
+			DataDir:        cfg.Cluster.Etcd.DataDir,
+			BindAddr:       cfg.Cluster.Etcd.BindAddr,
+			ClientAddr:     cfg.Cluster.Etcd.ClientAddr,
+			AdvertiseAddr:  cfg.Cluster.Etcd.BindAddr, // Use bind addr as advertise for now
+			InitialCluster: cfg.Cluster.Etcd.InitialCluster,
+			Bootstrap:      cfg.Cluster.Etcd.Bootstrap,
+		}
+
+		etcdCluster, err := cluster.NewEtcdCluster(etcdCfg)
+		if err != nil {
+			slog.Error("Failed to initialize etcd cluster", "error", err)
+			os.Exit(1)
+		}
+		clust = etcdCluster
+		defer clust.Stop()
+
+		// Start cluster (campaign for leadership)
+		if err := clust.Start(); err != nil {
+			slog.Error("Failed to start cluster", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("Running in cluster mode",
+			"node_id", cfg.Cluster.NodeID,
+			"etcd_data_dir", cfg.Cluster.Etcd.DataDir,
+			"etcd_bind", cfg.Cluster.Etcd.BindAddr)
 	} else {
 		// Single-node mode with noop cluster
 		clust = cluster.NewNoopCluster(cfg.Cluster.NodeID)
