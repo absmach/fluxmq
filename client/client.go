@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"sync"
 
 	packets "github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
@@ -25,19 +24,10 @@ type Options struct {
 
 // Client implements an MQTT client.
 type Client struct {
-	opts   Options
-	conn   net.Conn
-	logger *slog.Logger
-
-	// Message handling
-	// msgCh chan *packets.Publish // Removed
-	// Let's use callback for now for simplicity or expose a Consume method.
-	// For this demonstration, we'll just log or use a callback interface.
-	// Actually, user requested "implement Client". Standard is callbacks or channel.
+	opts      Options
+	conn      net.Conn
+	logger    *slog.Logger
 	onMessage func(topic string, payload []byte)
-
-	// Internal
-	mu sync.Mutex
 }
 
 // NewClient creates a new client.
@@ -115,15 +105,6 @@ func (c *Client) Connect() error {
 	}
 
 	// Read CONNACK
-	// We should probably use our packets.ReadPacket helper, but it's in broker/tcp loop logic.
-	// We can use v5.ReadPacket or v3.ReadPacket directly.
-	// Wait, the client needs to listen for packets in a loop AFTER connect.
-	// CONNECT/CONNACK is synchronous.
-
-	// Basic synchronous Read
-	// We need to use version specific reader?
-	// Let's assume server replies with correct version.
-
 	if c.opts.Version == 5 {
 		pkt, _, _, err := v5.ReadPacket(conn)
 		if err != nil {

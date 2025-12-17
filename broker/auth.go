@@ -9,14 +9,6 @@ type AuthEngine struct {
 	authz Authorizer
 }
 
-// NewAuthEngine creates a new auth engine with the given authenticator and authorizer.
-func NewAuthEngine(auth Authenticator, authz Authorizer) *AuthEngine {
-	return &AuthEngine{
-		auth:  auth,
-		authz: authz,
-	}
-}
-
 // CanPublish checks if a client is authorized to publish to a topic.
 // Returns true if authorized or if no authorizer is configured.
 func (e *AuthEngine) CanPublish(clientID, topic string) bool {
@@ -63,37 +55,4 @@ type AuthenticatorV5 interface {
 	ContinueAuth(clientID string, authData []byte, state *AuthContinuation) (*AuthContinuation, error)
 
 	CompleteAuth(clientID string, state *AuthContinuation) (bool, error)
-}
-
-// DefaultAuthenticatorV5 wraps a basic Authenticator to provide v5 interface.
-type DefaultAuthenticatorV5 struct {
-	basic Authenticator
-}
-
-// NewDefaultAuthenticatorV5 wraps a basic authenticator.
-func NewDefaultAuthenticatorV5(basic Authenticator) *DefaultAuthenticatorV5 {
-	if basic == nil {
-		return nil
-	}
-	return &DefaultAuthenticatorV5{basic: basic}
-}
-
-// Authenticate delegates to the basic authenticator.
-func (a *DefaultAuthenticatorV5) Authenticate(clientID, username, password string) (bool, error) {
-	return a.basic.Authenticate(clientID, username, password)
-}
-
-// StartAuth returns error for unsupported enhanced auth.
-func (a *DefaultAuthenticatorV5) StartAuth(clientID, authMethod string, authData []byte) (*AuthContinuation, error) {
-	return nil, ErrNotAuthorized
-}
-
-// ContinueAuth returns error for unsupported enhanced auth.
-func (a *DefaultAuthenticatorV5) ContinueAuth(clientID string, authData []byte, state *AuthContinuation) (*AuthContinuation, error) {
-	return nil, ErrNotAuthorized
-}
-
-// CompleteAuth returns error for unsupported enhanced auth.
-func (a *DefaultAuthenticatorV5) CompleteAuth(clientID string, state *AuthContinuation) (bool, error) {
-	return false, ErrNotAuthorized
 }

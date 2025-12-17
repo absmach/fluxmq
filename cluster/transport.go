@@ -10,7 +10,6 @@ import (
 	"net"
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -245,59 +244,4 @@ func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode
 	}
 
 	return nil
-}
-
-// convertStorageToProtoSession converts storage session state to protobuf.
-func convertStorageToProtoSession(
-	inflightMsgs []*storage.Message,
-	queuedMsgs []*storage.Message,
-	subs []*storage.Subscription,
-	will *storage.WillMessage,
-) *SessionState {
-	state := &SessionState{}
-
-	// Convert inflight messages
-	for _, msg := range inflightMsgs {
-		state.InflightMessages = append(state.InflightMessages, &InflightMessage{
-			PacketId:  uint32(msg.PacketID),
-			Topic:     msg.Topic,
-			Payload:   msg.Payload,
-			Qos:       uint32(msg.QoS),
-			Retain:    msg.Retain,
-			Timestamp: 0, // TODO: Add timestamp field to storage.Message
-		})
-	}
-
-	// Convert queued messages
-	for _, msg := range queuedMsgs {
-		state.QueuedMessages = append(state.QueuedMessages, &QueuedMessage{
-			Topic:     msg.Topic,
-			Payload:   msg.Payload,
-			Qos:       uint32(msg.QoS),
-			Retain:    msg.Retain,
-			Timestamp: 0, // TODO: Add timestamp field to storage.Message
-		})
-	}
-
-	// Convert subscriptions
-	for _, sub := range subs {
-		state.Subscriptions = append(state.Subscriptions, &Subscription{
-			Filter: sub.Filter,
-			Qos:    uint32(sub.QoS),
-		})
-	}
-
-	// Convert will message
-	if will != nil {
-		state.Will = &WillMessage{
-			Topic:          will.Topic,
-			Payload:        will.Payload,
-			Qos:            uint32(will.QoS),
-			Retain:         will.Retain,
-			Delay:          will.Delay,
-			DisconnectTime: 0, // TODO: Track disconnect time for will messages
-		}
-	}
-
-	return state
 }
