@@ -15,20 +15,14 @@ import (
 // Transport handles inter-broker gRPC communication.
 type Transport struct {
 	UnimplementedBrokerServiceServer
-
-	nodeID     string
-	bindAddr   string
-	grpcServer *grpc.Server
-	listener   net.Listener
-
-	// Peer connections
 	mu          sync.RWMutex
-	peerClients map[string]BrokerServiceClient // nodeID -> gRPC client
-
-	// Handler for incoming messages
-	handler TransportHandler
-
-	stopCh chan struct{}
+	nodeID      string
+	bindAddr    string
+	grpcServer  *grpc.Server
+	listener    net.Listener
+	peerClients map[string]BrokerServiceClient
+	handler     TransportHandler
+	stopCh      chan struct{}
 }
 
 // TransportHandler handles incoming messages from other brokers.

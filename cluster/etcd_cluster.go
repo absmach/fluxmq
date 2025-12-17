@@ -49,15 +49,15 @@ type EtcdCluster struct {
 
 // EtcdConfig holds embedded etcd configuration.
 type EtcdConfig struct {
-	NodeID         string            // Unique node identifier
-	DataDir        string            // Directory for etcd data
-	BindAddr       string            // Address for peer communication (e.g., "0.0.0.0:2380")
-	ClientAddr     string            // Address for client API (e.g., "0.0.0.0:2379")
-	AdvertiseAddr  string            // Address to advertise to peers (e.g., "192.168.1.10:2380")
-	InitialCluster string            // Initial cluster configuration (e.g., "node1=http://host1:2380")
-	Bootstrap      bool              // true for first node, false for joining nodes
-	TransportAddr  string            // Address for gRPC transport (e.g., "0.0.0.0:7948")
-	PeerTransports map[string]string // Map of nodeID -> transport address for peers
+	NodeID         string
+	DataDir        string
+	BindAddr       string
+	ClientAddr     string
+	AdvertiseAddr  string
+	InitialCluster string
+	TransportAddr  string
+	PeerTransports map[string]string
+	Bootstrap      bool
 }
 
 // NewEtcdCluster creates a new embedded etcd cluster.

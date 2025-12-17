@@ -13,18 +13,14 @@ import (
 
 // MessageHandler manages message tracking, inflight operations, and aliases.
 type MessageHandler struct {
-	mu sync.RWMutex
-
-	inflight     Inflight
-	offlineQueue Queue
-
-	nextPacketID uint32
-
+	mu              sync.RWMutex
+	wg              sync.WaitGroup
+	inflight        Inflight
+	offlineQueue    Queue
 	outboundAliases map[string]uint16
 	inboundAliases  map[uint16]string
-
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh          chan struct{}
+	nextPacketID    uint32
 }
 
 // NewMessageHandler creates a new message handler.

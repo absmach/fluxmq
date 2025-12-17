@@ -35,22 +35,21 @@ type Store interface {
 
 // Message represents a stored MQTT message.
 type Message struct {
-	Payload    []byte
-	Expiry     time.Time // Zero means no expiry
-	Topic      string
-	Properties map[string]string
-	PacketID   uint16
-	QoS        byte
-	Retain     bool
-
-	MessageExpiry   *uint32
-	PayloadFormat   *byte
+	Expiry          time.Time
+	PublishTime     time.Time
+	Payload         []byte
+	CorrelationData []byte
+	SubscriptionIDs []uint32
+	Topic           string
 	ContentType     string
 	ResponseTopic   string
-	CorrelationData []byte
+	Properties      map[string]string
 	UserProperties  map[string]string
-	SubscriptionIDs []uint32
-	PublishTime     time.Time
+	MessageExpiry   *uint32
+	PayloadFormat   *byte
+	PacketID        uint16
+	QoS             byte
+	Retain          bool
 }
 
 // CopyMessage creates a deep copy of a message.
@@ -132,9 +131,9 @@ type Session struct {
 type Subscription struct {
 	ClientID       string
 	Filter         string
-	QoS            byte
-	Options        SubscribeOptions
 	SubscriptionID *uint32
+	Options        SubscribeOptions
+	QoS            byte
 }
 
 // CopySubscription creates a copy of a subscription.
@@ -168,8 +167,8 @@ type WillMessage struct {
 	ClientID   string
 	Topic      string
 	Properties map[string]string
-	Delay      uint32 // Will delay interval in seconds
-	Expiry     uint32 // Message expiry interval
+	Delay      uint32
+	Expiry     uint32
 	QoS        byte
 	Retain     bool
 }

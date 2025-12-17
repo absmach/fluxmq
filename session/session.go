@@ -40,41 +40,33 @@ func (s State) String() string {
 
 // Session represents an MQTT client session with full state management.
 type Session struct {
-	mu sync.RWMutex
-
+	mu             sync.RWMutex
 	connectedAt    time.Time
 	disconnectedAt time.Time
 
-	ID   string
-	conn core.Connection
-
-	state         State
-	KeepAlive     time.Duration // Keep-alive duration
-	msgHandler    *messages.MessageHandler
-	Will          *storage.WillMessage                // set on CONNECT, cleared on clean disconnect
-	subscriptions map[string]storage.SubscribeOptions // cached from store for fast lookup
-	onDisconnect  func(s *Session, graceful bool)
-
-	ExpiryInterval uint32 // Session expiry in seconds (v5)
-	MaxPacketSize  uint32 // Max packet size (v5), default unlimited
-
-	ReceiveMaximum uint16 // Max inflight (v5), default 65535
-	TopicAliasMax  uint16 // Max topic aliases (v5)
-
-	Version    byte // MQTT version (3=3.1, 4=3.1.1, 5=5.0)
-	CleanStart bool
-
-	subscriptionIDs map[string][]uint32 // V5: filter -> subscription IDs
-	authMethod      string              // V5: Enhanced auth method
-	authState       any                 // V5: Enhanced auth state
-
-	requestResponseInfo bool // V5: Client requested response info
-	requestProblemInfo  bool // V5: Client requested problem info
-
-	maxQoS               byte // V5: Server can restrict QoS
-	retainAvailable      bool // V5: Server allows retain
-	wildcardSubAvailable bool // V5: Server allows wildcards
-	sharedSubAvailable   bool // V5: Server allows shared subs
+	ID                   string
+	authMethod           string
+	authState            any
+	conn                 core.Connection
+	msgHandler           *messages.MessageHandler
+	Will                 *storage.WillMessage
+	subscriptions        map[string]storage.SubscribeOptions
+	subscriptionIDs      map[string][]uint32
+	onDisconnect         func(s *Session, graceful bool)
+	KeepAlive            time.Duration
+	state                State
+	ExpiryInterval       uint32
+	MaxPacketSize        uint32
+	ReceiveMaximum       uint16
+	TopicAliasMax        uint16
+	Version              byte
+	maxQoS               byte
+	CleanStart           bool
+	requestResponseInfo  bool
+	requestProblemInfo   bool
+	retainAvailable      bool
+	wildcardSubAvailable bool
+	sharedSubAvailable   bool
 }
 
 // Options holds options for creating a new session.
@@ -419,7 +411,7 @@ func (s *Session) UpdateSessionExpiry(interval uint32) {
 }
 
 // SetAuthState sets enhanced auth state.
-func (s *Session) SetAuthState(method string, state interface{}) {
+func (s *Session) SetAuthState(method string, state any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.authMethod = method
@@ -427,7 +419,7 @@ func (s *Session) SetAuthState(method string, state interface{}) {
 }
 
 // GetAuthState returns the enhanced auth state.
-func (s *Session) GetAuthState() (string, interface{}) {
+func (s *Session) GetAuthState() (string, any) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.authMethod, s.authState

@@ -44,10 +44,10 @@ func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, er
 // AuthContinuation represents the state of an ongoing enhanced authentication.
 // This is used in V5.
 type AuthContinuation struct {
-	State        interface{}
 	ResponseData []byte
-	ReasonCode   byte
+	State        any
 	ReasonString string
+	ReasonCode   byte
 	Complete     bool
 }
 

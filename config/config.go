@@ -20,32 +20,21 @@ type Config struct {
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
-	// TCP server settings
 	TCPAddr         string        `yaml:"tcp_addr"`
+	TLSCertFile     string        `yaml:"tls_cert_file"`
+	TLSKeyFile      string        `yaml:"tls_key_file"`
+	HTTPAddr        string        `yaml:"http_addr"`
+	WSAddr          string        `yaml:"ws_addr"`
+	WSPath          string        `yaml:"ws_path"`
+	CoAPAddr        string        `yaml:"coap_addr"`
 	TCPMaxConn      int           `yaml:"tcp_max_connections"`
 	TCPReadTimeout  time.Duration `yaml:"tcp_read_timeout"`
 	TCPWriteTimeout time.Duration `yaml:"tcp_write_timeout"`
-
-	// TLS settings
-	TLSEnabled  bool   `yaml:"tls_enabled"`
-	TLSCertFile string `yaml:"tls_cert_file"`
-	TLSKeyFile  string `yaml:"tls_key_file"`
-
-	// HTTP-MQTT bridge settings
-	HTTPAddr    string `yaml:"http_addr"`
-	HTTPEnabled bool   `yaml:"http_enabled"`
-
-	// WebSocket settings
-	WSAddr    string `yaml:"ws_addr"`
-	WSPath    string `yaml:"ws_path"`
-	WSEnabled bool   `yaml:"ws_enabled"`
-
-	// CoAP settings
-	CoAPAddr    string `yaml:"coap_addr"`
-	CoAPEnabled bool   `yaml:"coap_enabled"`
-
-	// Graceful shutdown timeout
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	TLSEnabled      bool          `yaml:"tls_enabled"`
+	HTTPEnabled     bool          `yaml:"http_enabled"`
+	WSEnabled       bool          `yaml:"ws_enabled"`
+	CoAPEnabled     bool          `yaml:"coap_enabled"`
 }
 
 // BrokerConfig holds broker-specific settings.

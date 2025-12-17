@@ -20,24 +20,20 @@ import (
 
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
-	mu          sync.RWMutex
-	sessionsMap session.Cache
-	router      Router
-
+	mu            sync.RWMutex
+	wg            sync.WaitGroup
+	sessionsMap   session.Cache
+	router        Router
 	messages      storage.MessageStore
 	sessions      storage.SessionStore
 	subscriptions storage.SubscriptionStore
 	retained      storage.RetainedStore
 	wills         storage.WillStore
-
-	cluster cluster.Cluster // nil for single-node mode
-
-	auth   *AuthEngine
-	logger *slog.Logger
-	stats  *Stats
-
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	cluster       cluster.Cluster // nil for single-node mode
+	auth          *AuthEngine
+	logger        *slog.Logger
+	stats         *Stats
+	stopCh        chan struct{}
 }
 
 // NewBroker creates a new broker instance.

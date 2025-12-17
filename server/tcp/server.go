@@ -22,59 +22,28 @@ var ErrShutdownTimeout = errors.New("shutdown timeout exceeded")
 
 // Config holds the TCP server configuration.
 type Config struct {
-	// Address is the listen address (host:port)
-	Address string
-
-	// TLSConfig is optional TLS configuration for the listener
-	TLSConfig *tls.Config
-
-	// ShutdownTimeout is the maximum time to wait for active connections to drain
-	// during graceful shutdown. After this timeout, remaining connections are
-	// forcefully closed. Default: 30 seconds.
+	Address         string
+	TLSConfig       *tls.Config
+	Logger          *slog.Logger
 	ShutdownTimeout time.Duration
-
-	// MaxConnections is the maximum number of concurrent connections allowed.
-	// If 0, no limit is enforced. Default: 0 (unlimited).
-	MaxConnections int
-
-	// ReadTimeout is the maximum duration for reading from a connection.
-	// If 0, no read timeout is set. Default: 60 seconds.
-	ReadTimeout time.Duration
-
-	// WriteTimeout is the maximum duration for writing to a connection.
-	// If 0, no write timeout is set. Default: 60 seconds.
-	WriteTimeout time.Duration
-
-	// IdleTimeout is the maximum duration a connection can be idle.
-	// If 0, connections never timeout due to idleness. Default: 300 seconds (5 min).
-	IdleTimeout time.Duration
-
-	// BufferSize is the size of read/write buffers in bytes.
-	// If 0, uses default size of 8KB.
-	BufferSize int
-
-	// TCPKeepAlive enables TCP keepalive if > 0. The value specifies the keepalive period.
-	// Default: 15 seconds.
-	TCPKeepAlive time.Duration
-
-	// DisableNoDelay controls TCP_NODELAY socket option.
-	// If false (default), Nagle's algorithm is disabled for lower latency.
-	DisableNoDelay bool
-
-	// Logger for server events. If nil, uses slog.Default().
-	Logger *slog.Logger
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
+	TCPKeepAlive    time.Duration
+	MaxConnections  int
+	BufferSize      int
+	DisableNoDelay  bool
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
 // It provides robust connection handling, graceful shutdown, and production-ready features.
 type Server struct {
+	mu       sync.Mutex
+	wg       sync.WaitGroup
 	config   Config
 	handler  *broker.Broker
-	wg       sync.WaitGroup
-	mu       sync.Mutex
 	listener net.Listener
-	connSem  chan struct{} // semaphore for connection limiting
-
+	connSem  chan struct{}
 }
 
 // New creates a new TCP server with the given configuration and broker.

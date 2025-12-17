@@ -20,12 +20,12 @@ const (
 
 // InflightMessage represents a message in flight (waiting for acknowledgment).
 type InflightMessage struct {
-	PacketID  uint16
+	SentAt    time.Time
 	Message   *storage.Message
 	State     InflightState
-	SentAt    time.Time
 	Retries   int
-	Direction Direction // Inbound or outbound
+	Direction Direction
+	PacketID  uint16
 }
 
 // Direction indicates message direction.
