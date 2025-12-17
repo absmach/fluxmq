@@ -1,0 +1,49 @@
+# MQTT Broker - 3-Node Cluster: Node 2
+# Second node joining the cluster
+# Run all three nodes simultaneously to form the cluster
+
+server:
+  tcp_addr: ":1884"
+  tcp_max_connections: 10000
+  tcp_read_timeout: "60s"
+  tcp_write_timeout: "60s"
+
+  http_enabled: false
+  ws_enabled: false
+  coap_enabled: false
+
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576
+  max_retained_messages: 10000
+  retry_interval: "20s"
+  max_retries: 0
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300
+  max_offline_queue_size: 1000
+  max_inflight_messages: 100
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/mqtt/node2/data"
+
+cluster:
+  enabled: true
+  node_id: "node2"
+
+  etcd:
+    data_dir: "/tmp/mqtt/node2/etcd"
+    bind_addr: "127.0.0.1:2381"
+    client_addr: "127.0.0.1:2380"
+    initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2381,node3=http://127.0.0.1:2382"
+    bootstrap: false  # Join existing cluster
+
+  transport:
+    bind_addr: "127.0.0.1:7949"
+
+log:
+  level: "debug"
+  format: "text"

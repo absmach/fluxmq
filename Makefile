@@ -69,20 +69,60 @@ deps:
 	$(GO) mod tidy
 	$(GO) mod download
 
+# Run examples
+.PHONY: run-no-cluster
+run-no-cluster: build
+	$(BUILD_DIR)/$(BINARY) -config examples/no-cluster.yaml
+
+.PHONY: run-single-cluster
+run-single-cluster: build
+	$(BUILD_DIR)/$(BINARY) -config examples/single-node-cluster.yaml
+
+.PHONY: run-node1
+run-node1: build
+	$(BUILD_DIR)/$(BINARY) -config examples/node1.yaml
+
+.PHONY: run-node2
+run-node2: build
+	$(BUILD_DIR)/$(BINARY) -config examples/node2.yaml
+
+.PHONY: run-node3
+run-node3: build
+	$(BUILD_DIR)/$(BINARY) -config examples/node3.yaml
+
+# Clean all temporary data directories
+.PHONY: clean-data
+clean-data:
+	rm -rf /tmp/mqtt
+
 # Show help
 .PHONY: help
 help:
 	@echo "MQTT Broker Makefile"
 	@echo ""
-	@echo "Targets:"
-	@echo "  build        Build the broker binary to $(BUILD_DIR)/$(BINARY)"
-	@echo "  run          Build and run the broker with default config"
-	@echo "  run-config   Build and run with config.yaml"
-	@echo "  run-debug    Build and run with debug logging"
-	@echo "  test         Run all tests"
-	@echo "  test-cover   Run tests with coverage report"
-	@echo "  lint         Run golangci-lint"
-	@echo "  fmt          Format code"
-	@echo "  clean        Remove build artifacts"
-	@echo "  deps         Download and tidy dependencies"
-	@echo "  help         Show this help message"
+	@echo "Build Targets:"
+	@echo "  build              Build the broker binary to $(BUILD_DIR)/$(BINARY)"
+	@echo "  run                Build and run the broker with default config"
+	@echo "  run-config         Build and run with config.yaml"
+	@echo "  run-debug          Build and run with debug logging"
+	@echo ""
+	@echo "Example Configurations:"
+	@echo "  run-no-cluster     Run single node without clustering"
+	@echo "  run-single-cluster Run single node with clustering enabled"
+	@echo "  run-node1          Run first node of 3-node cluster (bootstrap)"
+	@echo "  run-node2          Run second node of 3-node cluster"
+	@echo "  run-node3          Run third node of 3-node cluster"
+	@echo ""
+	@echo "  NOTE: For 3-node cluster, run node1, node2, and node3 in separate terminals"
+	@echo ""
+	@echo "Testing Targets:"
+	@echo "  test               Run all tests"
+	@echo "  test-cover         Run tests with coverage report"
+	@echo "  lint               Run golangci-lint"
+	@echo ""
+	@echo "Utility Targets:"
+	@echo "  fmt                Format code"
+	@echo "  clean              Remove build artifacts"
+	@echo "  clean-data         Remove all /tmp/mqtt data directories"
+	@echo "  deps               Download and tidy dependencies"
+	@echo "  help               Show this help message"

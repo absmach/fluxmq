@@ -1,0 +1,46 @@
+# MQTT Broker - No Clustering Configuration
+# Simple single-node broker without clustering enabled
+# Data persists to disk using BadgerDB
+
+server:
+  tcp_addr: ":1883"
+  tcp_max_connections: 10000
+  tcp_read_timeout: "60s"
+  tcp_write_timeout: "60s"
+
+  # Optional services (disabled by default)
+  http_enabled: false
+  http_addr: ":8080"
+
+  ws_enabled: false
+  ws_addr: ":8083"
+  ws_path: "/mqtt"
+
+  coap_enabled: false
+  coap_addr: ":5683"
+
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576  # 1MB
+  max_retained_messages: 10000
+  retry_interval: "20s"
+  max_retries: 0  # Infinite retries
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300  # 5 minutes
+  max_offline_queue_size: 1000
+  max_inflight_messages: 100
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/mqtt/data"
+
+cluster:
+  enabled: false
+  node_id: "broker-1"
+
+log:
+  level: "debug"
+  format: "text"

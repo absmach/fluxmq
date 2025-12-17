@@ -1,0 +1,49 @@
+# MQTT Broker - Single Node Cluster Configuration
+# Single node with clustering enabled for testing cluster features
+# Uses embedded etcd for metadata storage
+
+server:
+  tcp_addr: ":1883"
+  tcp_max_connections: 10000
+  tcp_read_timeout: "60s"
+  tcp_write_timeout: "60s"
+
+  http_enabled: false
+  ws_enabled: false
+  coap_enabled: false
+
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576  # 1MB
+  max_retained_messages: 10000
+  retry_interval: "20s"
+  max_retries: 0
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300
+  max_offline_queue_size: 1000
+  max_inflight_messages: 100
+
+storage:
+  type: "badger"
+  badger_dir: "/tmp/mqtt/cluster-data"
+
+cluster:
+  enabled: true
+  node_id: "node1"
+
+  etcd:
+    data_dir: "/tmp/mqtt/cluster-etcd"
+    bind_addr: "127.0.0.1:2380"
+    client_addr: "127.0.0.1:2379"
+    initial_cluster: "node1=http://127.0.0.1:2380"
+    bootstrap: true
+
+  transport:
+    bind_addr: "127.0.0.1:7948"
+
+log:
+  level: "debug"
+  format: "text"
