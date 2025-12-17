@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -100,7 +103,7 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		case SubscriptionIdentifierProp:
 			si, err := codec.DecodeVBI(r)
 			if err != nil {
@@ -226,7 +229,7 @@ func (pkt *Publish) Unpack(r io.Reader) error {
 // Copy creates a new PublishPacket with the same topic and payload
 // but an empty fixed header, useful for when you want to deliver
 // a message with different properties such as Qos but the same
-// content
+// content.
 func (pkt *Publish) Copy() *Publish {
 	newP := NewControlPacket(PublishType).(*Publish)
 	newP.TopicName = pkt.TopicName

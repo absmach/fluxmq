@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -9,7 +12,7 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
-// Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet
+// Subscribe is an internal representation of the fields of the SUBSCRIBE MQTT packet.
 type Subscribe struct {
 	packets.FixedHeader
 	// Variable Header
@@ -113,7 +116,7 @@ func (p *SubscribeProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		default:
 			return fmt.Errorf("invalid property type %d for subscribe packet", prop)
 		}
@@ -211,7 +214,7 @@ func (pkt *Subscribe) Unpack(r io.Reader) error {
 }
 
 // Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
+// ID of this ControlPacket.
 func (pkt *Subscribe) Details() Details {
 	return Details{Type: SubscribeType, ID: pkt.ID, QoS: 1}
 }

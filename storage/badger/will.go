@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package badger
 
 import (
@@ -13,14 +16,14 @@ var _ storage.WillStore = (*WillStore)(nil)
 
 // WillStore implements storage.WillStore using BadgerDB.
 //
-// Key format: will:{clientID}
+// Key format: will:{clientID}.
 type WillStore struct {
 	db *badger.DB
 }
 
 // willEntry wraps a will message with disconnect timestamp for delay calculation.
 type willEntry struct {
-	Will          *storage.WillMessage `json:"will"`
+	Will           *storage.WillMessage `json:"will"`
 	DisconnectedAt time.Time            `json:"disconnected_at"`
 }
 
@@ -34,7 +37,7 @@ func (w *WillStore) Set(clientID string, will *storage.WillMessage) error {
 	key := []byte("will:" + clientID)
 
 	entry := &willEntry{
-		Will:          will,
+		Will:           will,
 		DisconnectedAt: time.Now(), // Mark as disconnected now
 	}
 
@@ -67,7 +70,6 @@ func (w *WillStore) Get(clientID string) (*storage.WillMessage, error) {
 			return json.Unmarshal(val, entry)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +87,7 @@ func (w *WillStore) Delete(clientID string) error {
 }
 
 // GetPending returns will messages that should be triggered.
-// (will delay elapsed and client still disconnected)
+// (will delay elapsed and client still disconnected).
 func (w *WillStore) GetPending(before time.Time) ([]*storage.WillMessage, error) {
 	var pending []*storage.WillMessage
 
@@ -117,7 +119,6 @@ func (w *WillStore) GetPending(before time.Time) ([]*storage.WillMessage, error)
 
 				return nil
 			})
-
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal will entry: %w", err)
 			}

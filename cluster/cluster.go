@@ -1,4 +1,6 @@
-// Package cluster provides distributed coordination for MQTT broker clustering.
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package cluster
 
 import (

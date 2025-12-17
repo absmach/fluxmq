@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -9,7 +12,7 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
-// Error codes returned by Connect()
+// Error codes returned by Connect().
 const (
 	Accepted                        = 0x00
 	ErrRefusedBadProtocolVersion    = 0x01
@@ -143,7 +146,7 @@ func (p *ConnectProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		case AuthMethodProp:
 			p.AuthMethod, err = codec.DecodeString(r)
 			if err != nil {
@@ -282,7 +285,7 @@ func (p *WillProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		default:
 			return fmt.Errorf("invalid will property type %d", prop)
 		}

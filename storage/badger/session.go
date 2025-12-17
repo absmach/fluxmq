@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package badger
 
 import (
@@ -40,7 +43,6 @@ func (s *SessionStore) Get(clientID string) (*storage.Session, error) {
 			return json.Unmarshal(val, session)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +112,6 @@ func (s *SessionStore) GetExpired(before time.Time) ([]string, error) {
 
 				return nil
 			})
-
 			if err != nil {
 				return err
 			}
@@ -143,7 +144,6 @@ func (s *SessionStore) List() ([]*storage.Session, error) {
 				sessions = append(sessions, &session)
 				return nil
 			})
-
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal session: %w", err)
 			}

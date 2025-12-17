@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -12,7 +15,7 @@ import (
 // It embeds packets.FixedHeader to allow v5-specific methods.
 type FixedHeader = packets.FixedHeader
 
-// Re-export other types from parent package for convenience
+// Re-export other types from parent package for convenience.
 type (
 	Details       = packets.Details
 	ControlPacket = packets.ControlPacket
@@ -21,7 +24,7 @@ type (
 	Resetter      = packets.Resetter
 )
 
-// Re-export packet type constants
+// Re-export packet type constants.
 const (
 	ConnectType     = packets.ConnectType
 	ConnAckType     = packets.ConnAckType
@@ -40,14 +43,14 @@ const (
 	AuthType        = packets.AuthType
 )
 
-// Re-export protocol version constants
+// Re-export protocol version constants.
 const (
 	V31  = packets.V31  // MQTT 3.1
 	V311 = packets.V311 // MQTT 3.1.1
 	V5   = packets.V5   // MQTT 5.0
 )
 
-// PacketNames maps packet type constants to string names
+// PacketNames maps packet type constants to string names.
 var PacketNames = packets.PacketNames
 
 // NewControlPacket creates a new MQTT 5.0 packet of the specified type.

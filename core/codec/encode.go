@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package codec
 
 // Encode methods rewrite some of bigEndian methods

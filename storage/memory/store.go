@@ -1,4 +1,6 @@
-// Package memory provides an in-memory implementation of the store interfaces.
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package memory
 
 import (

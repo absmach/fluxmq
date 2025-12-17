@@ -246,7 +246,6 @@ func (s *Server) gracefulShutdown(listener net.Listener, acceptDone <-chan struc
 
 // configureTCPConn sets TCP socket options for optimal performance and resilience.
 func (s *Server) configureTCPConn(conn *net.TCPConn) error {
-
 	if s.config.TCPKeepAlive > 0 {
 		if err := conn.SetKeepAlive(true); err != nil {
 			return fmt.Errorf("failed to enable keepalive: %w", err)

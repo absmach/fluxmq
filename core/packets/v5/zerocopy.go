@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import "github.com/absmach/mqtt/core/codec"
@@ -103,7 +106,7 @@ func (p *PublishProperties) unpackBytes(data []byte) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		case SubscriptionIdentifierProp:
 			si, err := r.ReadVBI()
 			if err != nil {
@@ -279,7 +282,7 @@ func (p *ConnectProperties) unpackBytes(data []byte) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		case AuthMethodProp:
 			p.AuthMethod, err = r.ReadString()
 			if err != nil {
@@ -351,7 +354,7 @@ func (p *WillProperties) unpackBytes(data []byte) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		}
 	}
 	return nil
@@ -435,7 +438,7 @@ func (p *SubscribeProperties) unpackBytes(data []byte) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		}
 	}
 	return nil

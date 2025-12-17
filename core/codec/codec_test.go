@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package codec_test
 
 import (
@@ -11,16 +14,16 @@ import (
 )
 
 var (
-	testString      = "test string"
-	testBytes       = []byte("test bytes")
-	maxUint16       = uint16(65535)
-	maxUint32       = uint32(4294967295)
-	maxVBI          = 268435455 // Maximum VBI value per MQTT spec
-	emptyString     = ""
-	emptyBytes      = []byte{}
-	longString      = string(make([]byte, 65535))
-	utf8String      = "Hello 世界 🌍"
-	utf8Bytes       = []byte(utf8String)
+	testString  = "test string"
+	testBytes   = []byte("test bytes")
+	maxUint16   = uint16(65535)
+	maxUint32   = uint32(4294967295)
+	maxVBI      = 268435455 // Maximum VBI value per MQTT spec
+	emptyString = ""
+	emptyBytes  = []byte{}
+	longString  = string(make([]byte, 65535))
+	utf8String  = "Hello 世界 🌍"
+	utf8Bytes   = []byte(utf8String)
 )
 
 func TestEncodeDecodeBytes(t *testing.T) {
@@ -228,10 +231,10 @@ func TestEncodeDecodeUint32(t *testing.T) {
 
 func TestEncodeDecodeVBI(t *testing.T) {
 	cases := []struct {
-		desc         string
-		input        int
-		expectedLen  int
-		err          error
+		desc        string
+		input       int
+		expectedLen int
+		err         error
 	}{
 		{
 			desc:        "encode and decode zero",
@@ -530,7 +533,7 @@ func TestEncodeDecodeBinaryData(t *testing.T) {
 		input []byte
 	}{
 		{
-			desc:  "encode and decode all byte values",
+			desc: "encode and decode all byte values",
 			input: func() []byte {
 				data := make([]byte, 256)
 				for i := 0; i < 256; i++ {

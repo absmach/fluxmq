@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package cluster
 
 import (
@@ -7,10 +10,8 @@ import (
 	"github.com/absmach/mqtt/storage"
 )
 
-var (
-	// ErrClusterNotEnabled is returned when cluster operations are called on a non-clustered broker.
-	ErrClusterNotEnabled = errors.New("clustering is not enabled")
-)
+// ErrClusterNotEnabled is returned when cluster operations are called on a non-clustered broker.
+var ErrClusterNotEnabled = errors.New("clustering is not enabled")
 
 // NoopCluster is a no-op cluster implementation for single-node mode.
 // It satisfies the Cluster interface but returns appropriate errors

@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package cluster
 
 import (
@@ -148,7 +151,6 @@ func (t *Transport) RoutePublish(ctx context.Context, req *PublishRequest) (*Pub
 		req.Dup,
 		req.Properties,
 	)
-
 	if err != nil {
 		return &PublishResponse{
 			Success: false,
@@ -178,7 +180,6 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverRequest) (
 		req.ToNode,
 		req.SessionState,
 	)
-
 	if err != nil {
 		return &TakeoverResponse{
 			Success: false,

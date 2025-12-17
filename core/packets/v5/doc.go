@@ -1,2 +1,4 @@
-// package v5 contains MQTT packets definitions.
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5

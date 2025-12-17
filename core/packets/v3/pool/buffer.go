@@ -1,8 +1,11 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package pool
 
 import "sync"
 
-// Buffer size classes for different packet sizes
+// Buffer size classes for different packet sizes.
 const (
 	SmallBufferSize  = 256   // Small packets (PINGREQ, PUBACK, etc.)
 	MediumBufferSize = 4096  // Medium packets (typical PUBLISH)

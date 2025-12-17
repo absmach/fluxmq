@@ -1,4 +1,6 @@
-// Package badger provides a BadgerDB-backed implementation of the storage interfaces.
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package badger
 
 import (

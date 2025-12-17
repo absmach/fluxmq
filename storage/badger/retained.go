@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package badger
 
 import (
@@ -12,7 +15,7 @@ var _ storage.RetainedStore = (*RetainedStore)(nil)
 
 // RetainedStore implements storage.RetainedStore using BadgerDB.
 //
-// Key format: retained:{topic}
+// Key format: retained:{topic}.
 type RetainedStore struct {
 	db *badger.DB
 }
@@ -60,7 +63,6 @@ func (r *RetainedStore) Get(topic string) (*storage.Message, error) {
 			return json.Unmarshal(val, msg)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +106,6 @@ func (r *RetainedStore) Match(filter string) ([]*storage.Message, error) {
 					matched = append(matched, &msg)
 					return nil
 				})
-
 				if err != nil {
 					return fmt.Errorf("failed to unmarshal retained message: %w", err)
 				}

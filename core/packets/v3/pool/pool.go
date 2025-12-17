@@ -1,13 +1,6 @@
-// Package pool provides sync.Pool-based allocators for MQTT packets.
-// Use this package in high-throughput scenarios (brokers) to reduce GC pressure.
-//
-// Usage:
-//
-//	pkt := pool.AcquirePublish()
-//	defer pool.ReleasePublish(pkt)
-//	// use pkt...
-//
-// Important: Never use a packet after releasing it back to the pool.
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package pool
 
 import (

@@ -1,2 +1,4 @@
-// package v3 contains MQTT v3.1.1 packet definitions.
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v3

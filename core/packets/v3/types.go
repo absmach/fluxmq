@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v3
 
 import (
@@ -8,7 +11,7 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
-// Re-export common types
+// Re-export common types.
 type (
 	FixedHeader   = packets.FixedHeader
 	Details       = packets.Details
@@ -17,7 +20,7 @@ type (
 	Resetter      = packets.Resetter
 )
 
-// Re-export packet constants
+// Re-export packet constants.
 const (
 	ConnectType     = packets.ConnectType
 	ConnAckType     = packets.ConnAckType

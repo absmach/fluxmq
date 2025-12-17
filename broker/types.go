@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package broker
 
 // Message represents a protocol-agnostic MQTT message.

@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package broker
 
 import (
@@ -45,7 +48,7 @@ func NewStats() *Stats {
 	}
 }
 
-// Connection tracking
+// Connection tracking.
 func (s *Stats) IncrementConnections() {
 	s.totalConnections.Add(1)
 	s.currentConnections.Add(1)
@@ -68,7 +71,7 @@ func (s *Stats) GetDisconnections() uint64 {
 	return s.disconnections.Load()
 }
 
-// Message tracking
+// Message tracking.
 func (s *Stats) IncrementMessagesReceived() {
 	s.messagesReceived.Add(1)
 }
@@ -103,7 +106,7 @@ func (s *Stats) GetPublishSent() uint64 {
 	return s.publishSent.Load()
 }
 
-// Byte tracking
+// Byte tracking.
 func (s *Stats) AddBytesReceived(n uint64) {
 	s.bytesReceived.Add(n)
 }
@@ -120,7 +123,7 @@ func (s *Stats) GetBytesSent() uint64 {
 	return s.bytesSent.Load()
 }
 
-// Subscription tracking
+// Subscription tracking.
 func (s *Stats) IncrementSubscriptions() {
 	s.subscriptions.Add(1)
 }
@@ -140,7 +143,7 @@ func (s *Stats) GetRetainedMessages() uint64 {
 	return s.retainedMessages.Load()
 }
 
-// Error tracking
+// Error tracking.
 func (s *Stats) IncrementProtocolErrors() {
 	s.protocolErrors.Add(1)
 }
@@ -173,7 +176,7 @@ func (s *Stats) GetPacketErrors() uint64 {
 	return s.packetErrors.Load()
 }
 
-// Uptime
+// Uptime.
 func (s *Stats) GetUptime() time.Duration {
 	return time.Since(s.startTime)
 }

@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package codec
 
 import (
@@ -5,11 +8,11 @@ import (
 	"errors"
 )
 
-// Errors for zero-copy decoding
+// Errors for zero-copy decoding.
 var (
-	ErrBufferTooShort    = errors.New("buffer too short")
-	ErrMalformedVBI      = errors.New("malformed variable byte integer")
-	ErrStringTooLong     = errors.New("string exceeds buffer")
+	ErrBufferTooShort = errors.New("buffer too short")
+	ErrMalformedVBI   = errors.New("malformed variable byte integer")
+	ErrStringTooLong  = errors.New("string exceeds buffer")
 )
 
 // ZeroCopyReader provides zero-copy reading from a byte slice.

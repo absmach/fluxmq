@@ -110,7 +110,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	broker.HandleConnection(s.broker, conn)
 }
 
-// wsConnection implements core.Connection for WebSocket transport
+// wsConnection implements core.Connection for WebSocket transport.
 type wsConnection struct {
 	ws           *websocket.Conn
 	remoteAddr   string
@@ -249,7 +249,7 @@ func (c *wsConnection) Touch() {
 	c.lastActivity = time.Now()
 }
 
-// wsAddr implements net.Addr for WebSocket connections
+// wsAddr implements net.Addr for WebSocket connections.
 type wsAddr struct {
 	addr string
 }

@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package broker
 
 import (
@@ -10,13 +13,13 @@ import (
 	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
-// mockAddr implements net.Addr for testing
+// mockAddr implements net.Addr for testing.
 type mockAddr struct{}
 
 func (m *mockAddr) Network() string { return "tcp" }
 func (m *mockAddr) String() string  { return "127.0.0.1:1883" }
 
-// mockConnection implements core.Connection for testing
+// mockConnection implements core.Connection for testing.
 type mockConnection struct {
 	net.Conn
 	packets []packets.ControlPacket

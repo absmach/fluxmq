@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -6,7 +9,7 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
-// PingReq is an internal representation of the fields of the PINGREQ MQTT packet
+// PingReq is an internal representation of the fields of the PINGREQ MQTT packet.
 type PingReq struct {
 	packets.FixedHeader
 }

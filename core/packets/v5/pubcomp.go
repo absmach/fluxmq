@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -54,7 +57,7 @@ func (pkt *PubComp) Pack(w io.Writer) error {
 }
 
 // Unpack decodes the details of a ControlPacket after the fixed
-// header has been read
+// header has been read.
 func (pkt *PubComp) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
@@ -89,7 +92,7 @@ func (pkt *PubComp) Unpack(r io.Reader) error {
 }
 
 // Details returns a Details struct containing the Qos and
-// ID of this ControlPacket
+// ID of this ControlPacket.
 func (pkt *PubComp) Details() Details {
 	return Details{Type: PubCompType, ID: pkt.ID, QoS: pkt.QoS}
 }

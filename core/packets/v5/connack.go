@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -10,7 +13,7 @@ import (
 )
 
 // ConnackReturnCodes is a map of the error codes constants for Connect()
-// to a string representation of the error
+// to a string representation of the error.
 var ConnackReturnCodes = map[uint8]string{
 	0:   "Connection Accepted",
 	1:   "Connection Refused: Bad Protocol Version",
@@ -151,7 +154,7 @@ func (p *ConnAckProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		case WildcardSubAvailableProp:
 			wsa, err := codec.DecodeByte(r)
 			if err != nil {

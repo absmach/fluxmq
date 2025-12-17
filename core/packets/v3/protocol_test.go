@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v3_test
 
 import (
@@ -12,14 +15,14 @@ import (
 )
 
 var (
-	validClientID   = "test-client-123"
-	longClientID    = strings.Repeat("a", 65535)
-	maxPacketID     = uint16(65535)
-	testTopic       = "test/topic"
-	validPayload    = []byte("test payload")
-	maxPayload      = make([]byte, 65535)
-	emptyPayload    = []byte{}
-	wildcardTopics  = []string{"test/+/topic", "test/#", "+/+/+", "#"}
+	validClientID  = "test-client-123"
+	longClientID   = strings.Repeat("a", 65535)
+	maxPacketID    = uint16(65535)
+	testTopic      = "test/topic"
+	validPayload   = []byte("test payload")
+	maxPayload     = make([]byte, 65535)
+	emptyPayload   = []byte{}
+	wildcardTopics = []string{"test/+/topic", "test/#", "+/+/+", "#"}
 )
 
 func TestConnectProtocolCompliance(t *testing.T) {

@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package memory
 
 import (
@@ -74,7 +77,7 @@ func (s *WillStore) MarkDisconnected(clientID string) error {
 }
 
 // GetPending returns will messages that should be triggered.
-// (will delay elapsed and client still disconnected)
+// (will delay elapsed and client still disconnected).
 func (s *WillStore) GetPending(before time.Time) ([]*storage.WillMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

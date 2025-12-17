@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package badger
 
 import (
@@ -14,7 +17,7 @@ var _ storage.SubscriptionStore = (*SubscriptionStore)(nil)
 
 // SubscriptionStore implements storage.SubscriptionStore using BadgerDB.
 //
-// Key format: sub:{clientID}:{filter}
+// Key format: sub:{clientID}:{filter}.
 type SubscriptionStore struct {
 	db    *badger.DB
 	count atomic.Int64 // Cached subscription count
@@ -125,7 +128,6 @@ func (s *SubscriptionStore) GetForClient(clientID string) ([]*storage.Subscripti
 				subs = append(subs, &sub)
 				return nil
 			})
-
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal subscription: %w", err)
 			}
@@ -164,7 +166,6 @@ func (s *SubscriptionStore) Match(topic string) ([]*storage.Subscription, error)
 
 				return nil
 			})
-
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal subscription: %w", err)
 			}

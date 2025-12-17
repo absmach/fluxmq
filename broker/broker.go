@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package broker
 
 import (
@@ -167,7 +170,6 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		nodeID := b.cluster.NodeID()
 		if err := b.cluster.AcquireSession(ctx, clientID, nodeID); err != nil {
 			b.logError("cluster_acquire_session", err, slog.String("client_id", clientID))
-
 		}
 	}
 

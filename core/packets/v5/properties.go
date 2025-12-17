@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5
 
 import (
@@ -8,7 +11,7 @@ import (
 )
 
 // PropPayloadFormat, etc are the list of property codes for the
-// MQTT packet properties
+// MQTT packet properties.
 const (
 	PayloadFormatProp          byte = 1
 	MessageExpiryProp          byte = 2
@@ -78,7 +81,7 @@ func (p *BasicProperties) Unpack(r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			p.User = append(p.User, User{k, v})
+			p.User = append(p.User, User{Key: k, Value: v})
 		default:
 			return fmt.Errorf("invalid property type %d", prop)
 		}

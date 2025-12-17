@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package v5_test
 
 import (
@@ -8,7 +11,7 @@ import (
 	. "github.com/absmach/mqtt/core/packets/v5"
 )
 
-// Helper to create pointer to value
+// Helper to create pointer to value.
 func ptr[T any](v T) *T {
 	return &v
 }

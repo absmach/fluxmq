@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package core_test
 
 import (
@@ -8,7 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets/v3"
+	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

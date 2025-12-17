@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package badger
 
 import (
@@ -55,7 +58,6 @@ func (m *MessageStore) Get(key string) (*storage.Message, error) {
 			return json.Unmarshal(val, msg)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +93,6 @@ func (m *MessageStore) List(prefix string) ([]*storage.Message, error) {
 				messages = append(messages, &msg)
 				return nil
 			})
-
 			if err != nil {
 				return fmt.Errorf("failed to unmarshal message: %w", err)
 			}
