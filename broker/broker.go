@@ -82,8 +82,6 @@ func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, 
 	return b
 }
 
-// --- Instrumentation Helpers ---
-
 func (b *Broker) logOp(op string, attrs ...any) {
 	b.logger.Debug(op, attrs...)
 }
@@ -94,8 +92,6 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 		b.logger.Error(op, allAttrs...)
 	}
 }
-
-// --- Core Domain Methods ---
 
 // CreateSession creates a new session or returns an existing one.
 // If opts.CleanStart is true and a session exists, it is destroyed first.
@@ -170,13 +166,12 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		}
 	}
 
-	// Register session ownership in cluster
 	if b.cluster != nil {
 		ctx := context.Background()
 		nodeID := b.cluster.NodeID()
 		if err := b.cluster.AcquireSession(ctx, clientID, nodeID); err != nil {
 			b.logError("cluster_acquire_session", err, slog.String("client_id", clientID))
-			// Don't fail the connection if cluster registration fails
+
 		}
 	}
 
@@ -247,7 +242,7 @@ func (b *Broker) subscribeInternal(s *session.Session, filter string, opts Subsc
 		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
-	// Add subscription to cluster so other nodes can route messages
+	// Add subscription to cluster
 	if b.cluster != nil {
 		ctx := context.Background()
 		if err := b.cluster.AddSubscription(ctx, s.ID, filter, opts.QoS, storeOpts); err != nil {
@@ -379,8 +374,6 @@ func (b *Broker) PublishWill(clientID string) error {
 	return b.wills.Delete(clientID)
 }
 
-// --- Public Service interface methods ---
-
 // Distribute distributes a message to all matching subscribers (implements Service interface).
 func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
 	return b.distribute(topic, payload, qos, retain, props)
@@ -390,8 +383,6 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 func (b *Broker) Match(topic string) ([]*storage.Subscription, error) {
 	return b.router.Match(topic)
 }
-
-// --- Internal helper methods ---
 
 // distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
@@ -805,7 +796,6 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 	}
 }
 
-// dispatchPacket dispatches a packet to the appropriate handler method.
 func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
 	case packets.PublishType:
@@ -833,7 +823,6 @@ func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPack
 	}
 }
 
-
 // Close shuts down the broker.
 func (b *Broker) Close() error {
 	close(b.stopCh)
@@ -850,10 +839,8 @@ func (b *Broker) Close() error {
 	return nil
 }
 
-// --- MessageHandler Implementation for Cluster ---
-
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.
-// This is called by the cluster transport when a message is routed from another broker.
+
 func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error {
 	s := b.Get(clientID)
 	if s == nil {

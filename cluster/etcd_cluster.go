@@ -530,10 +530,10 @@ func (c *EtcdCluster) SetWill(ctx context.Context, clientID string, will *storag
 	key := "/mqtt/wills/" + clientID
 
 	willEntry := struct {
-		Will          *storage.WillMessage `json:"will"`
+		Will           *storage.WillMessage `json:"will"`
 		DisconnectedAt time.Time            `json:"disconnected_at"`
 	}{
-		Will:          will,
+		Will:           will,
 		DisconnectedAt: time.Now(),
 	}
 
@@ -560,7 +560,7 @@ func (c *EtcdCluster) GetWill(ctx context.Context, clientID string) (*storage.Wi
 	}
 
 	var willEntry struct {
-		Will          *storage.WillMessage `json:"will"`
+		Will           *storage.WillMessage `json:"will"`
 		DisconnectedAt time.Time            `json:"disconnected_at"`
 	}
 
@@ -591,7 +591,7 @@ func (c *EtcdCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessa
 
 	for _, kv := range resp.Kvs {
 		var willEntry struct {
-			Will          *storage.WillMessage `json:"will"`
+			Will           *storage.WillMessage `json:"will"`
 			DisconnectedAt time.Time            `json:"disconnected_at"`
 		}
 
@@ -632,10 +632,8 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		return fmt.Errorf("failed to get subscribers: %w", err)
 	}
 
-	// Group subscriptions by node to avoid duplicate sends
 	nodeClients := make(map[string][]string) // nodeID -> []clientIDs
 	for _, sub := range subs {
-		// Get the node that owns this session
 		nodeID, exists, err := c.GetSessionOwner(ctx, sub.ClientID)
 		if err != nil {
 			log.Printf("Failed to get session owner for %s: %v", sub.ClientID, err)
@@ -646,7 +644,6 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 			continue
 		}
 
-		// Skip if it's on this node (will be delivered locally)
 		if nodeID == c.nodeID {
 			continue
 		}
@@ -654,9 +651,7 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		nodeClients[nodeID] = append(nodeClients[nodeID], sub.ClientID)
 	}
 
-	// Send to each remote node
 	for nodeID, clientIDs := range nodeClients {
-		// Send to each client on that node
 		for _, clientID := range clientIDs {
 			err := c.transport.SendPublish(ctx, nodeID, clientID, topic, payload, qos, retain, false, properties)
 			if err != nil {

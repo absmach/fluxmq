@@ -3,7 +3,6 @@ package v5_test
 import (
 	"bytes"
 	"io"
-	"strings"
 	"testing"
 
 	. "github.com/absmach/mqtt/core/packets/v5"
@@ -12,14 +11,10 @@ import (
 )
 
 var (
-	validClientID  = "test-client-123"
-	longClientID   = strings.Repeat("a", 65535)
-	maxPacketID    = uint16(65535)
-	testTopic      = "test/topic"
-	validPayload   = []byte("test payload")
-	maxPayload     = make([]byte, 65535)
-	emptyPayload   = []byte{}
-	wildcardTopics = []string{"test/+/topic", "test/#", "+/+/+", "#"}
+	validClientID = "test-client-123"
+	maxPacketID   = uint16(65535)
+	testTopic     = "test/topic"
+	validPayload  = []byte("test payload")
 )
 
 func TestConnectV5ProtocolCompliance(t *testing.T) {
@@ -87,13 +82,13 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 				WillTopic:       "will/topic",
 				WillPayload:     []byte("gone"),
 				WillProperties: &WillProperties{
-					WillDelayInterval:  ptr(uint32(30)),
-					PayloadFormat:      ptr(byte(1)),
-					MessageExpiry:      ptr(uint32(7200)),
-					ContentType:        "application/json",
-					ResponseTopic:      "response",
-					CorrelationData:    []byte("correlation"),
-					User:               []User{{Key: "will-key", Value: "will-value"}},
+					WillDelayInterval: ptr(uint32(30)),
+					PayloadFormat:     ptr(byte(1)),
+					MessageExpiry:     ptr(uint32(7200)),
+					ContentType:       "application/json",
+					ResponseTopic:     "response",
+					CorrelationData:   []byte("correlation"),
+					User:              []User{{Key: "will-key", Value: "will-value"}},
 				},
 			},
 			wantErr: false,
@@ -256,14 +251,14 @@ func TestPublishV5ProtocolCompliance(t *testing.T) {
 				ID:          1,
 				Payload:     validPayload,
 				Properties: &PublishProperties{
-					PayloadFormat:        ptr(byte(1)),
-					MessageExpiry:        ptr(uint32(3600)),
-					TopicAlias:           ptr(uint16(5)),
-					ResponseTopic:        "response/topic",
-					CorrelationData:      []byte("correlation-123"),
-					User:                 []User{{Key: "custom", Value: "header"}},
-					SubscriptionID:       ptr(1),
-					ContentType:          "application/json",
+					PayloadFormat:   ptr(byte(1)),
+					MessageExpiry:   ptr(uint32(3600)),
+					TopicAlias:      ptr(uint16(5)),
+					ResponseTopic:   "response/topic",
+					CorrelationData: []byte("correlation-123"),
+					User:            []User{{Key: "custom", Value: "header"}},
+					SubscriptionID:  ptr(1),
+					ContentType:     "application/json",
 				},
 			},
 			wantErr: false,

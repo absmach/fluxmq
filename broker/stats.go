@@ -10,32 +10,32 @@ type Stats struct {
 	startTime time.Time
 
 	// Connection stats
-	totalConnections    atomic.Uint64
-	currentConnections  atomic.Uint64
-	disconnections      atomic.Uint64
+	totalConnections   atomic.Uint64
+	currentConnections atomic.Uint64
+	disconnections     atomic.Uint64
 
 	// Message stats
-	messagesReceived    atomic.Uint64
-	messagesSent        atomic.Uint64
-	publishReceived     atomic.Uint64
-	publishSent         atomic.Uint64
+	messagesReceived atomic.Uint64
+	messagesSent     atomic.Uint64
+	publishReceived  atomic.Uint64
+	publishSent      atomic.Uint64
 
 	// Byte stats
-	bytesReceived       atomic.Uint64
-	bytesSent           atomic.Uint64
+	bytesReceived atomic.Uint64
+	bytesSent     atomic.Uint64
 
 	// Subscription stats
-	subscriptions       atomic.Uint64
-	unsubscriptions     atomic.Uint64
+	subscriptions   atomic.Uint64
+	unsubscriptions atomic.Uint64
 
 	// Retained message stats
-	retainedMessages    atomic.Uint64
+	retainedMessages atomic.Uint64
 
 	// Error stats
-	protocolErrors      atomic.Uint64
-	authErrors          atomic.Uint64
-	authzErrors         atomic.Uint64
-	packetErrors        atomic.Uint64
+	protocolErrors atomic.Uint64
+	authErrors     atomic.Uint64
+	authzErrors    atomic.Uint64
+	packetErrors   atomic.Uint64
 }
 
 // NewStats creates a new Stats instance.
@@ -134,22 +134,7 @@ func (s *Stats) GetSubscriptions() uint64 {
 	return s.subscriptions.Load()
 }
 
-func (s *Stats) GetUnsubscriptions() uint64 {
-	return s.unsubscriptions.Load()
-}
-
 // Retained message tracking
-func (s *Stats) SetRetainedMessages(count uint64) {
-	s.retainedMessages.Store(count)
-}
-
-func (s *Stats) IncrementRetainedMessages() {
-	s.retainedMessages.Add(1)
-}
-
-func (s *Stats) DecrementRetainedMessages() {
-	s.retainedMessages.Add(^uint64(0))
-}
 
 func (s *Stats) GetRetainedMessages() uint64 {
 	return s.retainedMessages.Load()

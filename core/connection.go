@@ -42,12 +42,7 @@ type connection struct {
 
 	mu sync.RWMutex
 
-	// clientID string // Optional, for logging
-	closed bool
-
-	connectedAt    time.Time
-	disconnectedAt time.Time
-	lastActivity   time.Time
+	lastActivity time.Time
 
 	onDisconnect func(graceful bool)
 }
@@ -55,10 +50,8 @@ type connection struct {
 // NewConnection creates a new MQTT connection wrapping a network connection.
 func NewConnection(conn *net.TCPConn) Connection {
 	return &connection{
-		conn:        conn,
-		reader:      conn,
-		closed:      false,
-		connectedAt: time.Now(),
+		conn:   conn,
+		reader: conn,
 	}
 }
 
@@ -148,18 +141,6 @@ func (c *connection) SetOnDisconnect(fn func(graceful bool)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onDisconnect = fn
-}
-
-func (c *connection) ConnectedAt() time.Time {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.connectedAt
-}
-
-func (c *connection) DisconnectedAt() time.Time {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.disconnectedAt
 }
 
 func (c *connection) Touch() {

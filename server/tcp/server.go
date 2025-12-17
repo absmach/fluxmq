@@ -20,13 +20,6 @@ import (
 // ErrShutdownTimeout is returned when graceful shutdown exceeds the configured timeout.
 var ErrShutdownTimeout = errors.New("shutdown timeout exceeded")
 
-// Handler processes new connections.
-// type Handler interface {
-// 	// HandleConnection handles a new client connection.
-// 	// The handler owns the connection and must close it when done.
-// 	HandleConnection(conn core.Connection)
-// }
-
 // Config holds the TCP server configuration.
 type Config struct {
 	// Address is the listen address (host:port)
@@ -75,18 +68,17 @@ type Config struct {
 // Server is a TCP server that accepts connections and delegates them to a broker.
 // It provides robust connection handling, graceful shutdown, and production-ready features.
 type Server struct {
-	config     Config
-	handler    *broker.Broker
-	wg         sync.WaitGroup
-	mu         sync.Mutex
-	listener   net.Listener
-	connSem    chan struct{} // semaphore for connection limiting
-	bufferPool *sync.Pool
+	config   Config
+	handler  *broker.Broker
+	wg       sync.WaitGroup
+	mu       sync.Mutex
+	listener net.Listener
+	connSem  chan struct{} // semaphore for connection limiting
+
 }
 
 // New creates a new TCP server with the given configuration and broker.
 func New(cfg Config, h *broker.Broker) *Server {
-	// Apply defaults
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -109,25 +101,15 @@ func New(cfg Config, h *broker.Broker) *Server {
 		cfg.TCPKeepAlive = 15 * time.Second
 	}
 
-	// Create buffer pool for efficient memory reuse
-	bufferPool := &sync.Pool{
-		New: func() any {
-			buf := make([]byte, cfg.BufferSize)
-			return &buf
-		},
-	}
-
-	// Create connection semaphore if limit is set
 	var connSem chan struct{}
 	if cfg.MaxConnections > 0 {
 		connSem = make(chan struct{}, cfg.MaxConnections)
 	}
 
 	return &Server{
-		config:     cfg,
-		handler:    h,
-		connSem:    connSem,
-		bufferPool: bufferPool,
+		config:  cfg,
+		handler: h,
+		connSem: connSem,
 	}
 }
 
@@ -247,14 +229,13 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	s.config.Logger.Debug("connection established",
 		slog.String("remote", conn.RemoteAddr().String()))
 
-	// Wrap net.Conn with MQTT codec to get broker.Connection
 	c, ok := conn.(*net.TCPConn)
 	if !ok {
 		slog.Error("not a TCP connection")
 		return
 	}
 	hc := core.NewConnection(c)
-	// Delegate to handler
+
 	broker.HandleConnection(s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",
@@ -296,7 +277,7 @@ func (s *Server) gracefulShutdown(listener net.Listener, acceptDone <-chan struc
 
 // configureTCPConn sets TCP socket options for optimal performance and resilience.
 func (s *Server) configureTCPConn(conn *net.TCPConn) error {
-	// Enable TCP keepalive to detect dead connections
+
 	if s.config.TCPKeepAlive > 0 {
 		if err := conn.SetKeepAlive(true); err != nil {
 			return fmt.Errorf("failed to enable keepalive: %w", err)
@@ -306,7 +287,6 @@ func (s *Server) configureTCPConn(conn *net.TCPConn) error {
 		}
 	}
 
-	// Disable Nagle's algorithm for lower latency unless explicitly disabled
 	if !s.config.DisableNoDelay {
 		if err := conn.SetNoDelay(true); err != nil {
 			return fmt.Errorf("failed to set TCP_NODELAY: %w", err)
@@ -317,7 +297,7 @@ func (s *Server) configureTCPConn(conn *net.TCPConn) error {
 }
 
 // Addr returns the listener's network address.
-// Returns nil if server is not yet started.
+
 func (s *Server) Addr() net.Addr {
 	s.mu.Lock()
 	defer s.mu.Unlock()
