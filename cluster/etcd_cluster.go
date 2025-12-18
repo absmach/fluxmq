@@ -266,16 +266,24 @@ func (c *EtcdCluster) NodeID() string {
 
 // Nodes returns information about all cluster nodes.
 func (c *EtcdCluster) Nodes() []NodeInfo {
-	// TODO: Query etcd for member list
-	// For now, return just this node
-	return []NodeInfo{
-		{
-			ID:      c.nodeID,
-			Address: c.config.BindAddr,
-			Healthy: true,
-			Leader:  c.IsLeader(),
-		},
+	// Query etcd for member list
+	members := c.etcd.Server.Cluster().Members()
+
+	nodes := make([]NodeInfo, 0, len(members))
+	for _, member := range members {
+		peerURL := ""
+		if len(member.PeerURLs) > 0 {
+			peerURL = member.PeerURLs[0]
+		}
+		nodes = append(nodes, NodeInfo{
+			ID:      member.Name,
+			Address: peerURL,
+			Healthy: true, // TODO: Add actual health check
+			Leader:  member.Name == c.nodeID && c.IsLeader(),
+		})
 	}
+
+	return nodes
 }
 
 // IsLeader checks if this node is the cluster leader.

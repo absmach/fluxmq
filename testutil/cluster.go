@@ -59,10 +59,11 @@ func NewTestCluster(t *testing.T, nodeCount int) *TestCluster {
 	}
 
 	// Base ports for allocation
-	baseTCPPort := 10883
-	baseGRPCPort := 19000
-	baseEtcdPort := 12379
-	basePeerPort := 12380
+	// Make sure etcd client and peer port ranges don't overlap!
+	baseTCPPort := 10883   // MQTT TCP: 10883, 10884, 10885, ...
+	baseGRPCPort := 19000  // gRPC: 19000, 19001, 19002, ...
+	baseEtcdPort := 12379  // etcd client: 12379, 12380, 12381, ...
+	basePeerPort := 12390  // etcd peer: 12390, 12391, 12392, ...
 
 	// Build initial cluster string for etcd
 	initialCluster := make([]string, nodeCount)
@@ -130,18 +131,17 @@ func (tc *TestCluster) Start() error {
 		peerTransports[node.ID] = node.GRPCAddr
 	}
 
-	// Start all nodes sequentially with delays
-	// For a new cluster, ALL nodes need Bootstrap=true so they all use ClusterState="new"
-	for i, node := range tc.Nodes {
-		if err := tc.startNode(node, true, peerTransports); err != nil {
-			tc.stopAllNodes()
-			return fmt.Errorf("failed to start node %s: %w", node.ID, err)
-		}
-		// Give each node time to start before starting the next
-		// This helps etcd cluster formation
-		if i < len(tc.Nodes)-1 {
-			time.Sleep(2 * time.Second)
-		}
+	// Start all nodes quickly in sequence
+	// For a new cluster, ALL nodes need Bootstrap=true (ClusterState="new")
+	// Nodes must start within ~60s to form quorum before first node times out
+	for _, node := range tc.Nodes {
+		go func(n *TestNode) {
+			if err := tc.startNode(n, true, peerTransports); err != nil {
+				tc.t.Logf("Failed to start %s: %v", n.ID, err)
+			}
+		}(node)
+		// Tiny delay to avoid port binding races
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	// Wait for cluster to stabilize
@@ -162,6 +162,9 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		}
 		initialCluster += fmt.Sprintf("%s=http://%s", n.ID, n.PeerAddr)
 	}
+
+	tc.t.Logf("Node %s initialCluster: %s", node.ID, initialCluster)
+	tc.t.Logf("Node %s will bind to peer: %s, client: %s", node.ID, node.PeerAddr, node.EtcdAddr)
 
 	// Create BadgerDB storage
 	store, err := badger.New(badger.Config{Dir: storageDir})
