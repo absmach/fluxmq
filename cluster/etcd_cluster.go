@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/absmach/mqtt/storage"
@@ -49,6 +51,10 @@ type EtcdCluster struct {
 
 	// Manager for session state operations
 	sessionManager SessionManager
+
+	// Local subscription cache for fast topic matching
+	subCache   map[string]*storage.Subscription // key: clientID|filter
+	subCacheMu sync.RWMutex
 
 	stopCh chan struct{}
 }
@@ -154,6 +160,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 		client:   client,
 		election: election,
 		session:  sess,
+		subCache: make(map[string]*storage.Subscription),
 		stopCh:   make(chan struct{}),
 	}
 
@@ -194,6 +201,14 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 
 // Start begins cluster participation (campaigns for leadership).
 func (c *EtcdCluster) Start() error {
+	// Load existing subscriptions into cache
+	if err := c.loadSubscriptionCache(); err != nil {
+		log.Printf("Warning: failed to load subscription cache: %v", err)
+	}
+
+	// Start watching for subscription changes
+	go c.watchSubscriptions()
+
 	// Start gRPC transport if configured
 	if c.transport != nil {
 		if err := c.transport.Start(); err != nil {
@@ -429,25 +444,16 @@ func (c *EtcdCluster) GetSubscriptionsForClient(ctx context.Context, clientID st
 }
 
 // GetSubscribersForTopic returns all subscriptions matching a topic.
-// Simple implementation: scans all subscriptions and matches locally.
+// Optimized: uses local cache for fast lookup.
 func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error) {
-	// Get all subscriptions
-	resp, err := c.client.Get(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
-	if err != nil {
-		return nil, err
-	}
+	c.subCacheMu.RLock()
+	defer c.subCacheMu.RUnlock()
 
 	var matched []*storage.Subscription
-	for _, kv := range resp.Kvs {
-		var sub storage.Subscription
-		if err := json.Unmarshal(kv.Value, &sub); err != nil {
-			log.Printf("Failed to unmarshal subscription: %v", err)
-			continue
-		}
-
+	for _, sub := range c.subCache {
 		// Check if topic matches the subscription filter
 		if topicMatchesFilter(topic, sub.Filter) {
-			matched = append(matched, &sub)
+			matched = append(matched, sub)
 		}
 	}
 
@@ -738,4 +744,74 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 
 	log.Printf("Session %s handed over from %s to %s", clientID, fromNode, toNode)
 	return sessionState, nil
+}
+
+// loadSubscriptionCache loads all subscriptions from etcd into the local cache.
+func (c *EtcdCluster) loadSubscriptionCache() error {
+	ctx := context.Background()
+	resp, err := c.client.Get(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	c.subCacheMu.Lock()
+	defer c.subCacheMu.Unlock()
+
+	for _, kv := range resp.Kvs {
+		var sub storage.Subscription
+		if err := json.Unmarshal(kv.Value, &sub); err != nil {
+			log.Printf("Failed to unmarshal subscription during cache load: %v", err)
+			continue
+		}
+
+		cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
+		c.subCache[cacheKey] = &sub
+	}
+
+	log.Printf("Loaded %d subscriptions into cache", len(c.subCache))
+	return nil
+}
+
+// watchSubscriptions watches etcd for subscription changes and updates the local cache.
+func (c *EtcdCluster) watchSubscriptions() {
+	watchCh := c.client.Watch(context.Background(), "/mqtt/subscriptions/", clientv3.WithPrefix())
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case watchResp := <-watchCh:
+			if watchResp.Err() != nil {
+				log.Printf("Subscription watch error: %v", watchResp.Err())
+				continue
+			}
+
+			c.subCacheMu.Lock()
+			for _, event := range watchResp.Events {
+				switch event.Type {
+				case clientv3.EventTypePut:
+					// Subscription added or updated
+					var sub storage.Subscription
+					if err := json.Unmarshal(event.Kv.Value, &sub); err != nil {
+						log.Printf("Failed to unmarshal subscription in watch: %v", err)
+						continue
+					}
+
+					cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
+					c.subCache[cacheKey] = &sub
+
+				case clientv3.EventTypeDelete:
+					// Subscription removed
+					// Parse key to extract clientID and filter
+					key := string(event.Kv.Key)
+					parts := strings.Split(strings.TrimPrefix(key, "/mqtt/subscriptions/"), "/")
+					if len(parts) >= 2 {
+						cacheKey := fmt.Sprintf("%s|%s", parts[0], parts[1])
+						delete(c.subCache, cacheKey)
+					}
+				}
+			}
+			c.subCacheMu.Unlock()
+		}
+	}
 }

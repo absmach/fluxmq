@@ -4,7 +4,7 @@
 
 This document consolidates the clustering implementation plan, tracking completed work and remaining tasks.
 
-**Current Status:** ✅ Session takeover protocol implemented and working
+**Current Status:** ✅ Session takeover, BadgerDB storage, and message routing fully implemented
 
 ---
 
@@ -29,12 +29,12 @@ This document consolidates the clustering implementation plan, tracking complete
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Broker Core (minimal changes)                        │  │
 │  │  ✅ Check cluster for session ownership               │  │
-│  │  ⏳ Route publishes to cluster                        │  │
+│  │  ✅ Route publishes to cluster                        │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  ┌────────────────┬──────────────────┬──────────────────┐  │
 │  │ Cluster        │ Metadata Store   │ Local Storage    │  │
 │  │ Membership     │ (Embedded etcd)  │ (BadgerDB)       │  │
-│  │ ⏳ memberlist  │ ✅ Implemented   │ ⏳ Not impl      │  │
+│  │ ⏳ memberlist  │ ✅ Implemented   │ ✅ Implemented   │  │
 │  │                │ - Session owner  │ - Inflight msgs  │  │
 │  │ - Discovery    │ - Subscriptions  │ - Offline queue  │  │
 │  │ - Failure      │ - Retained msgs  │ - Session data   │  │
@@ -87,133 +87,72 @@ This document consolidates the clustering implementation plan, tracking complete
 - ✅ Cluster ownership tracking on connect/disconnect
 - ✅ Session expiry only runs on leader
 
+### Phase 4: BadgerDB Persistent Storage (DONE)
+- ✅ All 6 BadgerDB store implementations complete
+  - ✅ `storage/badger/store.go` - Main store with GC
+  - ✅ `storage/badger/session.go` - Session persistence
+  - ✅ `storage/badger/message.go` - Inflight/offline messages
+  - ✅ `storage/badger/subscription.go` - Subscription storage
+  - ✅ `storage/badger/retained.go` - Retained messages
+  - ✅ `storage/badger/will.go` - Will messages
+- ✅ Wired up in `cmd/broker/main.go` with config-based dispatch
+- ✅ Storage factory pattern (memory vs badger based on config)
+
+### Phase 5: Message Routing Optimization (DONE)
+- ✅ Local subscription cache in EtcdCluster with sync.RWMutex
+- ✅ etcd watch for real-time subscription updates
+- ✅ GetSubscribersForTopic() optimized to use local cache
+- ✅ broker.distribute() routes messages to cluster
+- ✅ Cluster.RoutePublish() with efficient node grouping
+
 ---
 
 ## What Needs to Be Done ⏳
 
-### Phase 4: BadgerDB Persistent Storage (CRITICAL - BLOCKING)
+### Phase 6: Testing & Validation (HIGH PRIORITY)
 
-**Priority:** CRITICAL - Required for production deployment
+**Priority:** HIGH - Core functionality complete, needs validation
 
-**Why Critical:** Session takeover currently has no persistent fallback. If both nodes lose memory state, session data is lost.
+#### Unit Tests
+- [ ] BadgerDB store implementations
+  - [ ] Session persistence and retrieval
+  - [ ] Inflight message storage
+  - [ ] Offline queue operations
+  - [ ] Subscription CRUD
+  - [ ] Retained message matching
+  - [ ] Will message storage
 
-#### Tasks:
-- [ ] Implement `storage/badger/store.go`
-  - [ ] BadgerDB initialization with proper options
-  - [ ] Graceful shutdown and cleanup
-  - [ ] Value log GC routine
+- [ ] Cluster subscription cache
+  - [ ] Cache loading on startup
+  - [ ] etcd watch updates cache correctly
+  - [ ] GetSubscribersForTopic performance
 
-- [ ] Implement `storage/badger/session.go` (SessionStore)
-  - [ ] Save(session) - persist session metadata
-  - [ ] Get(clientID) - retrieve session
-  - [ ] Delete(clientID) - remove session
-  - [ ] List() - enumerate all sessions (for recovery)
+#### Integration Tests
+- [ ] 3-node cluster formation
+  - [ ] All nodes join cluster successfully
+  - [ ] Leader elected
+  - [ ] etcd replication working
 
-- [ ] Implement `storage/badger/message.go` (MessageStore)
-  - [ ] Store(key, message) - save inflight/offline messages
-  - [ ] Get(key) - retrieve message
-  - [ ] List(prefix) - get all messages for client
-  - [ ] DeleteByPrefix(prefix) - cleanup on session destroy
+- [ ] Session persistence
+  - [ ] Session survives broker restart with BadgerDB
+  - [ ] Inflight messages restored
+  - [ ] Offline queue preserved
+  - [ ] Subscriptions restored on reconnect
 
-- [ ] Implement `storage/badger/subscription.go` (SubscriptionStore)
-  - [ ] Add(subscription) - persist subscription
-  - [ ] Remove(clientID, filter) - delete subscription
-  - [ ] GetForClient(clientID) - get client's subscriptions
-  - [ ] RemoveAll(clientID) - cleanup on session destroy
+- [ ] Session takeover scenarios
+  - [ ] Client moves Node1→Node2, session state transfers
+  - [ ] QoS 1/2 messages preserved across takeover
+  - [ ] Subscriptions active on new node
 
-- [ ] Implement `storage/badger/retained.go` (RetainedStore)
-  - [ ] Set(topic, message) - store retained message
-  - [ ] Get(topic) - retrieve retained message
-  - [ ] Delete(topic) - remove retained message
-  - [ ] GetMatching(filter) - wildcard lookup (needs efficient index)
-
-- [ ] Implement `storage/badger/will.go` (WillStore)
-  - [ ] Set(clientID, will) - store will message
-  - [ ] Get(clientID) - retrieve will
-  - [ ] Delete(clientID) - remove will
-  - [ ] GetPending(cutoffTime) - find wills to trigger
-
-- [ ] Update `cmd/broker/main.go`
-  - [ ] Storage factory to dispatch memory vs badger
-  - [ ] Configuration for BadgerDB path
-
-**Key Decisions:**
-```go
-// Key structure in BadgerDB
-/session/{clientID}              → Session metadata (JSON)
-/inflight/{clientID}/{packetID}  → Inflight message (msgpack)
-/queue/{clientID}/{seq}          → Offline queue message (msgpack)
-/subscription/{clientID}/{filter} → Subscription (JSON)
-/retained/{topic}                → Retained message (msgpack)
-/will/{clientID}                 → Will message (msgpack)
-/received/{clientID}/{packetID}  → QoS2 dedup tracker (timestamp)
-```
-
-**Testing:**
-- [ ] Session survives broker restart
-- [ ] Inflight messages restored correctly
-- [ ] Offline queue preserved
-- [ ] Subscriptions restored on reconnect
-- [ ] Performance benchmarks (write/read throughput)
+- [ ] Cross-node messaging
+  - [ ] Publish on Node1, receive on Node2
+  - [ ] QoS 0, 1, 2 work across nodes
+  - [ ] Subscription changes propagate via etcd watch
+  - [ ] Message routing latency <50ms
 
 ---
 
-### Phase 5: Message Routing Across Cluster (HIGH PRIORITY)
-
-**Priority:** HIGH - Required for cross-node pub/sub
-
-**Current State:** RoutePublish queries all subscriptions in etcd on every publish (inefficient)
-
-#### Tasks:
-- [ ] Implement efficient subscription routing
-  - [ ] GetSubscribersForTopic() - currently scans ALL subscriptions in etcd
-  - [ ] Add local subscription cache with etcd watch for updates
-  - [ ] Group subscribers by node before routing
-
-- [ ] Optimize RoutePublish implementation
-  - [ ] Cache subscription-to-node mapping locally
-  - [ ] Batch messages to same node
-  - [ ] Handle node address lookup (etcd or memberlist)
-
-- [ ] Update broker.Publish() to use cluster routing
-  - [ ] Currently only routes to local subscribers
-  - [ ] Should call cluster.RoutePublish() for remote delivery
-
-- [ ] Add message deduplication
-  - [ ] Prevent duplicate delivery if message routes through multiple paths
-  - [ ] Use message ID or timestamp-based dedup
-
-**Optimization Options:**
-```go
-// Option A: Cache subscriptions locally with watch (RECOMMENDED)
-type EtcdCluster struct {
-    localSubCache map[string][]*storage.Subscription
-    subCacheMu    sync.RWMutex
-}
-
-// Watch etcd for subscription changes, update local cache
-func (c *EtcdCluster) watchSubscriptions() {
-    watchCh := c.client.Watch(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
-    for resp := range watchCh {
-        // Update localSubCache
-    }
-}
-
-// Option B: Interest-based routing (FUTURE)
-// Nodes advertise "interested in sensor/#" instead of listing all subs
-// Reduces memory, increases false positives (acceptable trade-off)
-```
-
-**Testing:**
-- [ ] Publish on Node1, receive on Node2
-- [ ] Cross-node QoS 1 flow
-- [ ] Cross-node QoS 2 flow
-- [ ] Subscription changes propagate to all nodes
-- [ ] Performance: message routing latency
-
----
-
-### Phase 6: Retained & Will Messages (MEDIUM PRIORITY)
+### Phase 7: Retained & Will Messages (MEDIUM PRIORITY)
 
 **Priority:** MEDIUM - Needed for complete MQTT compliance
 
@@ -557,7 +496,35 @@ require (
 
 ## Summary
 
-**Completed:** Session takeover protocol, etcd integration, gRPC transport
-**Next:** BadgerDB storage implementation (CRITICAL)
-**Timeline:** 8 weeks to production-ready cluster
-**Risk:** No persistent fallback until BadgerDB is implemented
+### ✅ Completed (Phases 0-5)
+- **Session Takeover:** Full protocol with state transfer
+- **etcd Integration:** Embedded etcd with leadership and leases
+- **gRPC Transport:** Inter-broker communication
+- **BadgerDB Storage:** All 6 store implementations complete
+- **Message Routing:** Optimized with local subscription cache and etcd watch
+- **Broker Integration:** Cluster-aware session and publish handling
+
+### ⏳ Remaining Work
+1. **Testing & Validation** (Phase 6) - HIGH PRIORITY
+   - Unit tests for BadgerDB and subscription cache
+   - Integration tests for 3-node cluster scenarios
+   - Cross-node messaging validation
+
+2. **Retained & Will Messages** (Phase 7) - MEDIUM
+   - Optimize GetRetainedMatching() queries
+   - Leader-only will processing validation
+
+3. **Background Task Coordination** (Phase 8) - MEDIUM
+   - Verify leader-only execution
+   - Leader failover testing
+
+4. **Production Readiness** (Phase 9) - HIGH
+   - Error handling and retries
+   - Monitoring and metrics
+   - Chaos testing
+
+### 📊 Progress Estimate
+- **Core Implementation:** ~85% complete
+- **Testing:** ~10% complete
+- **Production Hardening:** ~5% complete
+- **Estimated Time to Production:** 3-4 weeks (testing + hardening)

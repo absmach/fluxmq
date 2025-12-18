@@ -474,7 +474,9 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 
 	// Route to remote subscribers in cluster
 	if b.cluster != nil {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
 		if err := b.cluster.RoutePublish(ctx, topic, payload, qos, retain, props); err != nil {
 			b.logError("cluster_route_publish", err, slog.String("topic", topic))
 		}
