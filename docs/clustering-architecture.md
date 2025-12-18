@@ -129,6 +129,22 @@ Unlike traditional message brokers that use a shared database or message queue, 
 - Registers session ownership on connect
 - Adds subscriptions to cluster on subscribe
 - Routes publishes to remote nodes
+- Implements `SessionManager` interface for session takeover callbacks
+
+**SessionManager Interface**:
+```go
+type SessionManager interface {
+    // GetSessionStateAndClose captures session state and closes it
+    // Called by remote node during takeover
+    GetSessionStateAndClose(ctx context.Context, clientID string) (*SessionState, error)
+
+    // RestoreSessionState applies captured state when creating session
+    // Called after taking over a session from another node
+    RestoreSessionState(ctx context.Context, clientID string, state *SessionState) error
+}
+```
+
+The broker implements this interface, allowing the cluster layer to request session state transfer during takeover operations.
 
 #### 2. etcd (Embedded)
 - **Raft consensus** for strong consistency
@@ -148,8 +164,16 @@ Unlike traditional message brokers that use a shared database or message queue, 
 - **Request/response** semantics for routing
 
 **RPC Methods**:
-- `RoutePublish`: Forward PUBLISH to remote subscriber
-- `TakeoverSession`: Migrate session between nodes
+- `RoutePublish(clientID, topic, payload, qos, ...)`: Forward PUBLISH to remote subscriber
+- `TakeoverSession(clientID, fromNode, toNode)`: Migrate session between nodes with full state transfer
+
+**Session State Transfer**:
+The `TakeoverSession` RPC returns a complete `SessionState` protobuf containing:
+- Inflight messages (QoS 1/2 pending acknowledgments)
+- Offline queue (messages queued while disconnected)
+- Subscriptions with QoS levels
+- Will message configuration
+- Session expiry interval
 
 #### 4. BadgerDB (Local)
 - **LSM tree storage** for high write throughput
@@ -266,12 +290,14 @@ Only the **elected leader** processes pending wills to avoid duplicates.
    ├─ cluster.RoutePublish(ctx, "sensor/living/temp", ...)
    │
    ├─ cluster.GetSubscribersForTopic(ctx, "sensor/living/temp")
-   │  ├─ Query etcd: /mqtt/subscriptions/*
+   │  ├─ Check local subscription cache (loaded from etcd on startup)
+   │  ├─ O(N) scan of cached subscriptions (fast - in memory)
    │  ├─ Filter matches: "sensor/#", "sensor/+/temp"
    │  └─ Returns: [
    │      {clientID: "clientA", filter: "sensor/#"},
    │      {clientID: "clientB", filter: "sensor/+/temp"}
    │    ]
+   │  Note: Cache updated in real-time via etcd watch
    │
    ├─ For each subscriber, get session owner:
    │  ├─ GetSessionOwner(ctx, "clientA") → "node1"
@@ -297,9 +323,10 @@ Only the **elected leader** processes pending wills to avoid duplicates.
 ```
 
 **Key Points**:
-- Message never touches etcd (only queries for routing)
+- Message never touches etcd (subscriptions cached locally)
 - No broadcast - targeted delivery only
 - Each node independently delivers to its local clients
+- Subscription cache updated via etcd watch (real-time)
 
 ### Scenario: Session Takeover
 
@@ -315,41 +342,57 @@ Only the **elected leader** processes pending wills to avoid duplicates.
    ├─ broker.handleDisconnect()
    │  ├─ Save session state to BadgerDB
    │  ├─ Save offline queue
-   │  └─ cluster.ReleaseSession(ctx, "clientD")
-   │      └─ Delete /mqtt/sessions/clientD from etcd
+   │  └─ Session ownership lease expires after 30s
    └─ Connection closed
 
 2. Client D connects to Node2
    ├─ CONNECT(clientId="clientD", clean_start=false)
    ├─ broker.CreateSession("clientD", opts{clean_start: false})
    │
-   ├─ Check local cache: not found
-   │
    ├─ cluster.GetSessionOwner(ctx, "clientD")
-   │  └─ Not found (was released)
+   │  └─ Returns "node1" (if within 30s) or not found (if lease expired)
    │
-   ├─ cluster.AcquireSession(ctx, "clientD", "node2")
-   │  └─ Put /mqtt/sessions/clientD = {node_id: "node2"}
+   ├─ IF session owned by Node1:
+   │  ├─ cluster.TakeoverSession(ctx, "clientD", "node1", "node2")
+   │  │  ├─ gRPC call: transport.SendTakeover("node1", "clientD", ...)
+   │  │  ├─ Node1.HandleTakeover()
+   │  │  │  ├─ broker.GetSessionStateAndClose("clientD")
+   │  │  │  ├─ Disconnect client (TCP close)
+   │  │  │  ├─ Capture session state:
+   │  │  │  │  ├─ Inflight messages (QoS 1/2)
+   │  │  │  │  ├─ Offline queue
+   │  │  │  │  ├─ Subscriptions with QoS
+   │  │  │  │  └─ Will message
+   │  │  │  └─ Return SessionState
+   │  │  └─ Node2 receives SessionState
+   │  │
+   │  └─ cluster.AcquireSession(ctx, "clientD", "node2")
+   │      └─ Update /mqtt/sessions/clientD = {node_id: "node2"}
    │
-   ├─ Load session state from local BadgerDB
-   │  └─ Not found (session was on Node1)
+   ├─ IF takeover state received:
+   │  ├─ Restore inflight messages
+   │  ├─ Restore offline queue
+   │  ├─ Restore subscriptions (add to local router + etcd)
+   │  └─ Restore will message
    │
-   └─ Create new session (state not transferred yet)
+   └─ CONNACK(session_present=1)
 
-3. Node2: Session active
-   ├─ Subscriptions need to be re-established
-   └─ Offline messages lost (not transferred)
-
-4. TODO: Full session takeover
-   ├─ Node2 detects previous owner was Node1
-   ├─ gRPC call: transport.SendTakeover("node1", "clientD", ...)
-   ├─ Node1 sends session state
-   └─ Node2 restores state (subscriptions, offline queue, inflight)
+3. Client D on Node2
+   ├─ All subscriptions active (restored from Node1)
+   ├─ Inflight messages redelivered
+   ├─ Offline queue preserved
+   └─ Full session continuity maintained
 ```
 
-**Current Limitation**: Session state not transferred between nodes. Client must resubscribe.
+**Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
-**Future Enhancement**: Full session migration via gRPC `TakeoverSession` RPC.
+The session takeover protocol is complete:
+- ✅ gRPC `TakeoverSession` RPC with `SessionState` transfer
+- ✅ `broker.GetSessionStateAndClose()` captures full session state
+- ✅ State includes inflight, queue, subscriptions, will message
+- ✅ `broker.CreateSession()` detects remote ownership and triggers takeover
+- ✅ Session state restoration on new node
+- ✅ Client experiences seamless handoff with session continuity
 
 ## Failure Scenarios
 

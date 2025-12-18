@@ -17,7 +17,7 @@ This document provides a comprehensive roadmap to transform the current MQTT bro
 5. **Clustering Support** - Horizontal scaling and high availability
 6. **Production Hardening** - Observability, security, performance
 
-### Current State (Updated 2025-12-16)
+### Current State (Updated 2025-12-18)
 - ✅ Core MQTT 3.1.1 implementation complete
 - ✅ Basic MQTT 5.0 packet support (full protocol compliance in progress)
 - ✅ **Multi-protocol architecture** - TCP, WebSocket, HTTP, CoAP all share same broker
@@ -25,15 +25,17 @@ This document provides a comprehensive roadmap to transform the current MQTT bro
 - ✅ **MQTT over WebSocket** - Browser and mobile client support
 - ✅ **HTTP-MQTT Bridge** - REST API for publishing messages
 - ✅ **CoAP Bridge** - Stub implementation for IoT devices
+- ✅ **BadgerDB persistent storage** - All 6 store implementations complete
+- ✅ **Clustering support** - Session takeover, message routing, subscription caching
+- ✅ **Embedded etcd** - Distributed coordination without external dependencies
+- ✅ **gRPC transport** - Inter-broker communication
 - ✅ Clean architecture with proper separation of concerns
 - ✅ Protocol-agnostic domain layer
 - ✅ Direct instrumentation (logging & metrics)
-- ✅ Memory-based storage
 - ✅ TCP server with graceful shutdown
 - ⚠️ Limited test coverage for edge cases
+- ⚠️ Clustering needs integration testing
 - ❌ MQTT 5.0 features incomplete (topic aliases, shared subscriptions)
-- ❌ No persistent storage backend
-- ❌ No clustering support
 - ❌ TLS/SSL support not implemented
 - ❌ Authentication & authorization not fully implemented
 
@@ -1141,10 +1143,23 @@ func BenchmarkRedis_GetRetained(b *testing.B)
 
 ---
 
-## Phase 4: Clustering & High Availability (Priority 4)
+## Phase 4: Clustering & High Availability ⚠️ IN PROGRESS
 
-**Timeline:** 5-6 weeks
+**Timeline:** 5-6 weeks (Core: ✅ Complete, Testing: ⏳ Pending)
 **Objective:** Enable horizontal scaling with multiple broker instances sharing state.
+
+**Current Status (2025-12-18):**
+- ✅ **Core implementation complete (~85%)**
+- ✅ Embedded etcd for distributed coordination
+- ✅ gRPC transport for inter-broker communication
+- ✅ Session takeover with full state transfer
+- ✅ BadgerDB persistent storage (all 6 stores)
+- ✅ Subscription caching with etcd watch
+- ✅ Cross-node message routing
+- ⏳ **Needs comprehensive testing (~10%)**
+- ⏳ **Production hardening pending (~5%)**
+
+**See:** `CLUSTERING_PLAN.md` for detailed implementation status and remaining work.
 
 ### 4.1 Clustering Architecture
 

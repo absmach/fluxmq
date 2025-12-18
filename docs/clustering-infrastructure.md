@@ -699,7 +699,7 @@ for range ticker.C {
 - Deleted/updated values leave garbage
 - GC compacts and reclaims space
 
-**Currently**: Not implemented - TODO for production use.
+**Implementation**: The `storage/badger/store.go` includes a `runGC()` method for periodic garbage collection. Currently commented out but ready for production use.
 
 ### Performance Characteristics
 
@@ -805,25 +805,76 @@ func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID strin
 }
 ```
 
-**Subscription Query**:
+**Subscription Query** (Optimized with Local Cache):
 ```go
 func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error) {
-    // Get all subscriptions
-    resp, _ := c.client.Get(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
+    // Use local cache (fast - no etcd query)
+    c.subCacheMu.RLock()
+    defer c.subCacheMu.RUnlock()
 
     var subs []*storage.Subscription
-    for _, kv := range resp.Kvs {
-        var sub storage.Subscription
-        json.Unmarshal(kv.Value, &sub)
-
+    for _, sub := range c.subCache {
         // Check if topic matches filter
         if topicMatchesFilter(topic, sub.Filter) {
-            subs = append(subs, &sub)
+            subs = append(subs, sub)
         }
     }
 
     return subs, nil
 }
+```
+
+**Cache Loading** (on startup):
+```go
+func (c *EtcdCluster) loadSubscriptionCache() error {
+    resp, _ := c.client.Get(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
+
+    c.subCacheMu.Lock()
+    defer c.subCacheMu.Unlock()
+
+    for _, kv := range resp.Kvs {
+        var sub storage.Subscription
+        json.Unmarshal(kv.Value, &sub)
+        cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
+        c.subCache[cacheKey] = &sub
+    }
+
+    return nil
+}
+```
+
+**Cache Updates** (via etcd watch):
+```go
+func (c *EtcdCluster) watchSubscriptions() {
+    watchCh := c.client.Watch(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
+
+    for watchResp := range watchCh {
+        c.subCacheMu.Lock()
+        for _, event := range watchResp.Events {
+            switch event.Type {
+            case clientv3.EventTypePut:
+                // Add/update subscription in cache
+                var sub storage.Subscription
+                json.Unmarshal(event.Kv.Value, &sub)
+                cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
+                c.subCache[cacheKey] = &sub
+
+            case clientv3.EventTypeDelete:
+                // Remove subscription from cache
+                // Parse key to extract clientID and filter
+                cacheKey := parseKeyToCacheKey(string(event.Kv.Key))
+                delete(c.subCache, cacheKey)
+            }
+        }
+        c.subCacheMu.Unlock()
+    }
+}
+```
+
+**Performance Impact**:
+- **Before**: Query etcd on every publish (~1-5ms)
+- **After**: Memory lookup (~microseconds)
+- **Trade-off**: Memory usage for N subscriptions vs. etcd query latency
 ```
 
 ### Cluster ↔ gRPC

@@ -20,16 +20,16 @@ This document consolidates the clustering implementation plan, tracking complete
 ### Component Stack
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     MQTT Broker Node                         │
-│                                                              │
+┌────────────────────────────────────────────────────────────┐
+│                     MQTT Broker Node                       │
+│                                                            │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  MQTT Protocol Layer (unchanged)                      │  │
+│  │  MQTT Protocol Layer (unchanged)                     │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  Broker Core (minimal changes)                        │  │
-│  │  ✅ Check cluster for session ownership               │  │
-│  │  ✅ Route publishes to cluster                        │  │
+│  │  Broker Core (minimal changes)                       │  │
+│  │  ✅ Check cluster for session ownership              │  │
+│  │  ✅ Route publishes to cluster                       │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  ┌────────────────┬──────────────────┬──────────────────┐  │
 │  │ Cluster        │ Metadata Store   │ Local Storage    │  │
@@ -41,11 +41,11 @@ This document consolidates the clustering implementation plan, tracking complete
 │  │   detection    │ - Will messages  │                  │  │
 │  └────────────────┴──────────────────┴──────────────────┘  │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  Inter-Broker Transport (gRPC)                        │  │
+│  │  Inter-Broker Transport (gRPC)                       │  │
 │  │  ✅ RoutePublish(clientID, topic, payload)           │  │
 │  │  ✅ TakeoverSession(clientID) → SessionState         │  │
 │  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
