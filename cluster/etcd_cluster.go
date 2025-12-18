@@ -47,6 +47,9 @@ type EtcdCluster struct {
 	// Handler for incoming routed messages
 	msgHandler MessageHandler
 
+	// Manager for session state operations
+	sessionManager SessionManager
+
 	stopCh chan struct{}
 }
 
@@ -622,6 +625,11 @@ func (c *EtcdCluster) SetMessageHandler(handler MessageHandler) {
 	c.msgHandler = handler
 }
 
+// SetSessionManager sets the handler for session state operations.
+func (c *EtcdCluster) SetSessionManager(manager SessionManager) {
+	c.sessionManager = manager
+}
+
 // RoutePublish routes a publish to interested nodes with matching subscriptions.
 func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
 	if c.transport == nil {
@@ -667,21 +675,34 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 }
 
 // TakeoverSession initiates session takeover from one node to another.
-func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) error {
-	if c.transport == nil || fromNode == toNode {
-		// No transport or same node, just update ownership
-		return c.AcquireSession(ctx, clientID, toNode)
+func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*SessionState, error) {
+	if fromNode == toNode {
+		// Same node, no takeover needed
+		return nil, nil
 	}
 
-	// TODO: Implement full session state transfer
-	// For now, just update ownership
-	// Full implementation needs to:
-	// 1. Call RPC to fromNode to get session state
-	// 2. Disconnect client on fromNode
-	// 3. Transfer state to toNode
-	// 4. Update ownership in etcd
+	if c.transport == nil {
+		// No transport, can't do remote takeover
+		// Just update ownership
+		if err := c.AcquireSession(ctx, clientID, toNode); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
 
-	return c.AcquireSession(ctx, clientID, toNode)
+	// Call gRPC to fromNode to get session state
+	state, err := c.transport.SendTakeover(ctx, fromNode, clientID, fromNode, toNode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to request takeover from %s: %w", fromNode, err)
+	}
+
+	// Update ownership in etcd to new node
+	if err := c.AcquireSession(ctx, clientID, toNode); err != nil {
+		return nil, fmt.Errorf("failed to acquire session ownership: %w", err)
+	}
+
+	log.Printf("Session %s taken over from %s to %s", clientID, fromNode, toNode)
+	return state, nil
 }
 
 // --- TransportHandler Implementation ---
@@ -698,8 +719,23 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 
 // HandleTakeover implements TransportHandler.HandleTakeover.
 // Called when another broker requests to take over a session from this node.
-func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *SessionState) error {
-	// TODO: Implement session takeover logic
-	// For now, just acknowledge
-	return nil
+func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *SessionState) (*SessionState, error) {
+	// Verify this is the node being asked to give up the session
+	if fromNode != c.nodeID {
+		return nil, fmt.Errorf("takeover request for wrong node: expected %s, got %s", c.nodeID, fromNode)
+	}
+
+	// Check if we have a session manager
+	if c.sessionManager == nil {
+		return nil, fmt.Errorf("no session manager configured")
+	}
+
+	// Get session state and close the session
+	sessionState, err := c.sessionManager.GetSessionStateAndClose(ctx, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session state: %w", err)
+	}
+
+	log.Printf("Session %s handed over from %s to %s", clientID, fromNode, toNode)
+	return sessionState, nil
 }

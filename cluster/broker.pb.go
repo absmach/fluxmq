@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v6.33.0
-// source: cluster/broker.proto
+// source: broker.proto
 
 package cluster
 
@@ -37,7 +37,7 @@ type PublishRequest struct {
 
 func (x *PublishRequest) Reset() {
 	*x = PublishRequest{}
-	mi := &file_cluster_broker_proto_msgTypes[0]
+	mi := &file_broker_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -49,7 +49,7 @@ func (x *PublishRequest) String() string {
 func (*PublishRequest) ProtoMessage() {}
 
 func (x *PublishRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[0]
+	mi := &file_broker_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -62,7 +62,7 @@ func (x *PublishRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishRequest.ProtoReflect.Descriptor instead.
 func (*PublishRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{0}
+	return file_broker_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PublishRequest) GetClientId() string {
@@ -125,7 +125,7 @@ type PublishResponse struct {
 
 func (x *PublishResponse) Reset() {
 	*x = PublishResponse{}
-	mi := &file_cluster_broker_proto_msgTypes[1]
+	mi := &file_broker_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -137,7 +137,7 @@ func (x *PublishResponse) String() string {
 func (*PublishResponse) ProtoMessage() {}
 
 func (x *PublishResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[1]
+	mi := &file_broker_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -150,7 +150,7 @@ func (x *PublishResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishResponse.ProtoReflect.Descriptor instead.
 func (*PublishResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{1}
+	return file_broker_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *PublishResponse) GetSuccess() bool {
@@ -167,21 +167,19 @@ func (x *PublishResponse) GetError() string {
 	return ""
 }
 
-// TakeoverRequest requests session migration with all session state.
+// TakeoverRequest requests session migration from one node to another.
 type TakeoverRequest struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	ClientId string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	FromNode string                 `protobuf:"bytes,2,opt,name=from_node,json=fromNode,proto3" json:"from_node,omitempty"` // Node requesting takeover
-	ToNode   string                 `protobuf:"bytes,3,opt,name=to_node,json=toNode,proto3" json:"to_node,omitempty"`       // Node taking over the session
-	// Session state to transfer
-	SessionState  *SessionState `protobuf:"bytes,4,opt,name=session_state,json=sessionState,proto3" json:"session_state,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	FromNode      string                 `protobuf:"bytes,2,opt,name=from_node,json=fromNode,proto3" json:"from_node,omitempty"` // Node currently owning the session
+	ToNode        string                 `protobuf:"bytes,3,opt,name=to_node,json=toNode,proto3" json:"to_node,omitempty"`       // Node taking over the session
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TakeoverRequest) Reset() {
 	*x = TakeoverRequest{}
-	mi := &file_cluster_broker_proto_msgTypes[2]
+	mi := &file_broker_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -193,7 +191,7 @@ func (x *TakeoverRequest) String() string {
 func (*TakeoverRequest) ProtoMessage() {}
 
 func (x *TakeoverRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[2]
+	mi := &file_broker_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -206,7 +204,7 @@ func (x *TakeoverRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TakeoverRequest.ProtoReflect.Descriptor instead.
 func (*TakeoverRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{2}
+	return file_broker_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TakeoverRequest) GetClientId() string {
@@ -230,13 +228,6 @@ func (x *TakeoverRequest) GetToNode() string {
 	return ""
 }
 
-func (x *TakeoverRequest) GetSessionState() *SessionState {
-	if x != nil {
-		return x.SessionState
-	}
-	return nil
-}
-
 // SessionState contains the full state of an MQTT session.
 type SessionState struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -256,7 +247,7 @@ type SessionState struct {
 
 func (x *SessionState) Reset() {
 	*x = SessionState{}
-	mi := &file_cluster_broker_proto_msgTypes[3]
+	mi := &file_broker_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -268,7 +259,7 @@ func (x *SessionState) String() string {
 func (*SessionState) ProtoMessage() {}
 
 func (x *SessionState) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[3]
+	mi := &file_broker_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -281,7 +272,7 @@ func (x *SessionState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionState.ProtoReflect.Descriptor instead.
 func (*SessionState) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{3}
+	return file_broker_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SessionState) GetExpiryInterval() uint32 {
@@ -341,7 +332,7 @@ type InflightMessage struct {
 
 func (x *InflightMessage) Reset() {
 	*x = InflightMessage{}
-	mi := &file_cluster_broker_proto_msgTypes[4]
+	mi := &file_broker_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -353,7 +344,7 @@ func (x *InflightMessage) String() string {
 func (*InflightMessage) ProtoMessage() {}
 
 func (x *InflightMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[4]
+	mi := &file_broker_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -366,7 +357,7 @@ func (x *InflightMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InflightMessage.ProtoReflect.Descriptor instead.
 func (*InflightMessage) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{4}
+	return file_broker_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *InflightMessage) GetPacketId() uint32 {
@@ -425,7 +416,7 @@ type QueuedMessage struct {
 
 func (x *QueuedMessage) Reset() {
 	*x = QueuedMessage{}
-	mi := &file_cluster_broker_proto_msgTypes[5]
+	mi := &file_broker_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -437,7 +428,7 @@ func (x *QueuedMessage) String() string {
 func (*QueuedMessage) ProtoMessage() {}
 
 func (x *QueuedMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[5]
+	mi := &file_broker_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -450,7 +441,7 @@ func (x *QueuedMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueuedMessage.ProtoReflect.Descriptor instead.
 func (*QueuedMessage) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{5}
+	return file_broker_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *QueuedMessage) GetTopic() string {
@@ -499,7 +490,7 @@ type Subscription struct {
 
 func (x *Subscription) Reset() {
 	*x = Subscription{}
-	mi := &file_cluster_broker_proto_msgTypes[6]
+	mi := &file_broker_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -511,7 +502,7 @@ func (x *Subscription) String() string {
 func (*Subscription) ProtoMessage() {}
 
 func (x *Subscription) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[6]
+	mi := &file_broker_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -524,7 +515,7 @@ func (x *Subscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscription.ProtoReflect.Descriptor instead.
 func (*Subscription) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{6}
+	return file_broker_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Subscription) GetFilter() string {
@@ -556,7 +547,7 @@ type WillMessage struct {
 
 func (x *WillMessage) Reset() {
 	*x = WillMessage{}
-	mi := &file_cluster_broker_proto_msgTypes[7]
+	mi := &file_broker_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -568,7 +559,7 @@ func (x *WillMessage) String() string {
 func (*WillMessage) ProtoMessage() {}
 
 func (x *WillMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[7]
+	mi := &file_broker_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -581,7 +572,7 @@ func (x *WillMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WillMessage.ProtoReflect.Descriptor instead.
 func (*WillMessage) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{7}
+	return file_broker_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *WillMessage) GetTopic() string {
@@ -626,18 +617,20 @@ func (x *WillMessage) GetDisconnectTime() int64 {
 	return 0
 }
 
-// TakeoverResponse indicates whether the takeover succeeded.
+// TakeoverResponse indicates whether the takeover succeeded and returns session state.
 type TakeoverResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error   string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// Session state transferred from the old node
+	SessionState  *SessionState `protobuf:"bytes,3,opt,name=session_state,json=sessionState,proto3" json:"session_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TakeoverResponse) Reset() {
 	*x = TakeoverResponse{}
-	mi := &file_cluster_broker_proto_msgTypes[8]
+	mi := &file_broker_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -649,7 +642,7 @@ func (x *TakeoverResponse) String() string {
 func (*TakeoverResponse) ProtoMessage() {}
 
 func (x *TakeoverResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_broker_proto_msgTypes[8]
+	mi := &file_broker_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -662,7 +655,7 @@ func (x *TakeoverResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TakeoverResponse.ProtoReflect.Descriptor instead.
 func (*TakeoverResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_broker_proto_rawDescGZIP(), []int{8}
+	return file_broker_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TakeoverResponse) GetSuccess() bool {
@@ -679,11 +672,18 @@ func (x *TakeoverResponse) GetError() string {
 	return ""
 }
 
-var File_cluster_broker_proto protoreflect.FileDescriptor
+func (x *TakeoverResponse) GetSessionState() *SessionState {
+	if x != nil {
+		return x.SessionState
+	}
+	return nil
+}
 
-const file_cluster_broker_proto_rawDesc = "" +
+var File_broker_proto protoreflect.FileDescriptor
+
+const file_broker_proto_rawDesc = "" +
 	"\n" +
-	"\x14cluster/broker.proto\x12\acluster\"\xa1\x02\n" +
+	"\fbroker.proto\x12\acluster\"\xa1\x02\n" +
 	"\x0ePublishRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x18\n" +
@@ -699,12 +699,11 @@ const file_cluster_broker_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"A\n" +
 	"\x0fPublishResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xa0\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"d\n" +
 	"\x0fTakeoverRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1b\n" +
 	"\tfrom_node\x18\x02 \x01(\tR\bfromNode\x12\x17\n" +
-	"\ato_node\x18\x03 \x01(\tR\x06toNode\x12:\n" +
-	"\rsession_state\x18\x04 \x01(\v2\x15.cluster.SessionStateR\fsessionState\"\xc7\x02\n" +
+	"\ato_node\x18\x03 \x01(\tR\x06toNode\"\xc7\x02\n" +
 	"\fSessionState\x12'\n" +
 	"\x0fexpiry_interval\x18\x01 \x01(\rR\x0eexpiryInterval\x12\x1f\n" +
 	"\vclean_start\x18\x02 \x01(\bR\n" +
@@ -735,28 +734,29 @@ const file_cluster_broker_proto_rawDesc = "" +
 	"\x03qos\x18\x03 \x01(\rR\x03qos\x12\x16\n" +
 	"\x06retain\x18\x04 \x01(\bR\x06retain\x12\x14\n" +
 	"\x05delay\x18\x05 \x01(\rR\x05delay\x12'\n" +
-	"\x0fdisconnect_time\x18\x06 \x01(\x03R\x0edisconnectTime\"B\n" +
+	"\x0fdisconnect_time\x18\x06 \x01(\x03R\x0edisconnectTime\"~\n" +
 	"\x10TakeoverResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\x9a\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12:\n" +
+	"\rsession_state\x18\x03 \x01(\v2\x15.cluster.SessionStateR\fsessionState2\x9a\x01\n" +
 	"\rBrokerService\x12A\n" +
 	"\fRoutePublish\x12\x17.cluster.PublishRequest\x1a\x18.cluster.PublishResponse\x12F\n" +
 	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponseB!Z\x1fgithub.com/absmach/mqtt/clusterb\x06proto3"
 
 var (
-	file_cluster_broker_proto_rawDescOnce sync.Once
-	file_cluster_broker_proto_rawDescData []byte
+	file_broker_proto_rawDescOnce sync.Once
+	file_broker_proto_rawDescData []byte
 )
 
-func file_cluster_broker_proto_rawDescGZIP() []byte {
-	file_cluster_broker_proto_rawDescOnce.Do(func() {
-		file_cluster_broker_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_cluster_broker_proto_rawDesc), len(file_cluster_broker_proto_rawDesc)))
+func file_broker_proto_rawDescGZIP() []byte {
+	file_broker_proto_rawDescOnce.Do(func() {
+		file_broker_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_broker_proto_rawDesc), len(file_broker_proto_rawDesc)))
 	})
-	return file_cluster_broker_proto_rawDescData
+	return file_broker_proto_rawDescData
 }
 
-var file_cluster_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
-var file_cluster_broker_proto_goTypes = []any{
+var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_broker_proto_goTypes = []any{
 	(*PublishRequest)(nil),   // 0: cluster.PublishRequest
 	(*PublishResponse)(nil),  // 1: cluster.PublishResponse
 	(*TakeoverRequest)(nil),  // 2: cluster.TakeoverRequest
@@ -768,13 +768,13 @@ var file_cluster_broker_proto_goTypes = []any{
 	(*TakeoverResponse)(nil), // 8: cluster.TakeoverResponse
 	nil,                      // 9: cluster.PublishRequest.PropertiesEntry
 }
-var file_cluster_broker_proto_depIdxs = []int32{
+var file_broker_proto_depIdxs = []int32{
 	9, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
-	3, // 1: cluster.TakeoverRequest.session_state:type_name -> cluster.SessionState
-	4, // 2: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage
-	5, // 3: cluster.SessionState.queued_messages:type_name -> cluster.QueuedMessage
-	6, // 4: cluster.SessionState.subscriptions:type_name -> cluster.Subscription
-	7, // 5: cluster.SessionState.will:type_name -> cluster.WillMessage
+	4, // 1: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage
+	5, // 2: cluster.SessionState.queued_messages:type_name -> cluster.QueuedMessage
+	6, // 3: cluster.SessionState.subscriptions:type_name -> cluster.Subscription
+	7, // 4: cluster.SessionState.will:type_name -> cluster.WillMessage
+	3, // 5: cluster.TakeoverResponse.session_state:type_name -> cluster.SessionState
 	0, // 6: cluster.BrokerService.RoutePublish:input_type -> cluster.PublishRequest
 	2, // 7: cluster.BrokerService.TakeoverSession:input_type -> cluster.TakeoverRequest
 	1, // 8: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
@@ -786,26 +786,26 @@ var file_cluster_broker_proto_depIdxs = []int32{
 	0, // [0:6] is the sub-list for field type_name
 }
 
-func init() { file_cluster_broker_proto_init() }
-func file_cluster_broker_proto_init() {
-	if File_cluster_broker_proto != nil {
+func init() { file_broker_proto_init() }
+func file_broker_proto_init() {
+	if File_broker_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cluster_broker_proto_rawDesc), len(file_cluster_broker_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_broker_proto_rawDesc), len(file_broker_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_cluster_broker_proto_goTypes,
-		DependencyIndexes: file_cluster_broker_proto_depIdxs,
-		MessageInfos:      file_cluster_broker_proto_msgTypes,
+		GoTypes:           file_broker_proto_goTypes,
+		DependencyIndexes: file_broker_proto_depIdxs,
+		MessageInfos:      file_broker_proto_msgTypes,
 	}.Build()
-	File_cluster_broker_proto = out.File
-	file_cluster_broker_proto_goTypes = nil
-	file_cluster_broker_proto_depIdxs = nil
+	File_broker_proto = out.File
+	file_broker_proto_goTypes = nil
+	file_broker_proto_depIdxs = nil
 }

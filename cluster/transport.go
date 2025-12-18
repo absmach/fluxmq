@@ -33,7 +33,8 @@ type TransportHandler interface {
 	HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error
 
 	// HandleTakeover handles a session takeover request from another broker.
-	HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *SessionState) error
+	// Returns the session state from the old node.
+	HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *SessionState) (*SessionState, error)
 }
 
 // NewTransport creates a new gRPC transport.
@@ -172,12 +173,13 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverRequest) (
 		}, nil
 	}
 
-	err := t.handler.HandleTakeover(
+	// Get session state from the handler (which will disconnect the client)
+	sessionState, err := t.handler.HandleTakeover(
 		ctx,
 		req.ClientId,
 		req.FromNode,
 		req.ToNode,
-		req.SessionState,
+		nil,
 	)
 	if err != nil {
 		return &TakeoverResponse{
@@ -187,7 +189,8 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverRequest) (
 	}
 
 	return &TakeoverResponse{
-		Success: true,
+		Success:      true,
+		SessionState: sessionState,
 	}, nil
 }
 
@@ -220,28 +223,27 @@ func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic str
 	return nil
 }
 
-// SendTakeover sends a session takeover request to a peer node.
-func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string, state *SessionState) error {
+// SendTakeover sends a session takeover request to a peer node and returns the session state.
+func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*SessionState, error) {
 	client, err := t.GetPeerClient(nodeID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req := &TakeoverRequest{
-		ClientId:     clientID,
-		FromNode:     fromNode,
-		ToNode:       toNode,
-		SessionState: state,
+		ClientId: clientID,
+		FromNode: fromNode,
+		ToNode:   toNode,
 	}
 
 	resp, err := client.TakeoverSession(ctx, req)
 	if err != nil {
-		return fmt.Errorf("grpc call failed: %w", err)
+		return nil, fmt.Errorf("grpc call failed: %w", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("takeover failed: %s", resp.Error)
+		return nil, fmt.Errorf("takeover failed: %s", resp.Error)
 	}
 
-	return nil
+	return resp.SessionState, nil
 }

@@ -99,6 +99,35 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// Check if session is owned by another node in the cluster
+	var takeoverState *cluster.SessionState
+	if b.cluster != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		ownerNode, exists, err := b.cluster.GetSessionOwner(ctx, clientID)
+		if err != nil {
+			b.logError("get_session_owner", err, slog.String("client_id", clientID))
+			return nil, false, fmt.Errorf("failed to check session ownership: %w", err)
+		}
+
+		if exists && ownerNode != b.cluster.NodeID() {
+			// Session exists on different node - trigger takeover
+			b.logger.Info("taking over session from remote node",
+				slog.String("client_id", clientID),
+				slog.String("from_node", ownerNode),
+				slog.String("to_node", b.cluster.NodeID()))
+
+			takeoverState, err = b.cluster.TakeoverSession(ctx, clientID, ownerNode, b.cluster.NodeID())
+			if err != nil {
+				b.logError("takeover_session", err, slog.String("client_id", clientID))
+				return nil, false, fmt.Errorf("session takeover failed: %w", err)
+			}
+
+			b.logger.Info("session takeover completed", slog.String("client_id", clientID))
+		}
+	}
+
 	existing := b.sessionsMap.Get(clientID)
 	if opts.CleanStart && existing != nil {
 		if err := b.destroySessionLocked(existing); err != nil {
@@ -118,7 +147,15 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 	inflight := messages.NewInflightTracker(int(receiveMax))
 	offlineQueue := messages.NewMessageQueue(1000)
 
-	if !opts.CleanStart {
+	// Restore from takeover state if present
+	if takeoverState != nil {
+		if err := b.restoreInflightFromTakeover(takeoverState, inflight); err != nil {
+			return nil, false, fmt.Errorf("failed to restore inflight from takeover: %w", err)
+		}
+		if err := b.restoreQueueFromTakeover(takeoverState, offlineQueue); err != nil {
+			return nil, false, fmt.Errorf("failed to restore queue from takeover: %w", err)
+		}
+	} else if !opts.CleanStart {
 		if err := b.restoreInflightFromStorage(clientID, inflight); err != nil {
 			return nil, false, err
 		}
@@ -128,7 +165,18 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 	}
 
 	var will *storage.WillMessage
-	if opts.WillMessage != nil {
+	if takeoverState != nil && takeoverState.Will != nil {
+		// Restore will from takeover state
+		will = &storage.WillMessage{
+			ClientID:   clientID,
+			Topic:      takeoverState.Will.Topic,
+			Payload:    takeoverState.Will.Payload,
+			QoS:        byte(takeoverState.Will.Qos),
+			Retain:     takeoverState.Will.Retain,
+			Delay:      takeoverState.Will.Delay,
+			Properties: nil,
+		}
+	} else if opts.WillMessage != nil {
 		will = &storage.WillMessage{
 			ClientID:   clientID,
 			Topic:      opts.WillMessage.Topic,
@@ -147,9 +195,19 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		Will:           will,
 	}
 
+	// Override session expiry from takeover state if available
+	if takeoverState != nil && takeoverState.ExpiryInterval > 0 {
+		sessionOpts.ExpiryInterval = takeoverState.ExpiryInterval
+	}
+
 	s := session.New(clientID, 0, sessionOpts, inflight, offlineQueue)
 
-	if err := b.restoreSessionFromStorage(s, clientID, sessionOpts); err != nil {
+	// Restore subscriptions from takeover state or storage
+	if takeoverState != nil {
+		if err := b.restoreSubscriptionsFromTakeover(s, takeoverState); err != nil {
+			return nil, false, fmt.Errorf("failed to restore subscriptions from takeover: %w", err)
+		}
+	} else if err := b.restoreSessionFromStorage(s, clientID, sessionOpts); err != nil {
 		return nil, false, err
 	}
 
@@ -837,8 +895,79 @@ func (b *Broker) Close() error {
 	return nil
 }
 
-// DeliverToClient implements cluster.MessageHandler.DeliverToClient.
+// GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.
+// This is used during session takeover.
+func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*cluster.SessionState, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
+	s := b.sessionsMap.Get(clientID)
+	if s == nil {
+		return nil, nil // Session not found
+	}
+
+	// Capture state before destroying
+	state := &cluster.SessionState{
+		ExpiryInterval: uint32(s.ExpiryInterval),
+		CleanStart:     s.CleanStart,
+	}
+
+	// Capture subscriptions from storage (includes QoS)
+	if b.subscriptions != nil {
+		subs, err := b.subscriptions.GetForClient(s.ID)
+		if err == nil {
+			for _, sub := range subs {
+				state.Subscriptions = append(state.Subscriptions, &cluster.Subscription{
+					Filter: sub.Filter,
+					Qos:    uint32(sub.QoS),
+				})
+			}
+		}
+	}
+
+	// Capture inflight messages
+	for _, msg := range s.Inflight().GetAll() {
+		state.InflightMessages = append(state.InflightMessages, &cluster.InflightMessage{
+			PacketId:  uint32(msg.PacketID),
+			Topic:     msg.Message.Topic,
+			Payload:   msg.Message.Payload,
+			Qos:       uint32(msg.Message.QoS),
+			Retain:    msg.Message.Retain,
+			Timestamp: time.Now().Unix(),
+		})
+	}
+
+	// Capture queued messages
+	for _, msg := range s.OfflineQueue().Drain() {
+		state.QueuedMessages = append(state.QueuedMessages, &cluster.QueuedMessage{
+			Topic:     msg.Topic,
+			Payload:   msg.Payload,
+			Qos:       uint32(msg.QoS),
+			Retain:    msg.Retain,
+			Timestamp: time.Now().Unix(),
+		})
+	}
+
+	// Capture will message
+	if will := s.GetWill(); will != nil {
+		state.Will = &cluster.WillMessage{
+			Topic:   will.Topic,
+			Payload: will.Payload,
+			Qos:     uint32(will.QoS),
+			Retain:  will.Retain,
+			Delay:   will.Delay,
+		}
+	}
+
+	// Forcefully disconnect and remove
+	if err := b.destroySessionLocked(s); err != nil {
+		return nil, fmt.Errorf("failed to destroy session: %w", err)
+	}
+
+	return state, nil
+}
+
+// DeliverToClient implements cluster.MessageHandler.DeliverToClient.
 func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error {
 	s := b.Get(clientID)
 	if s == nil {
@@ -855,4 +984,94 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, pa
 
 	_, err := b.DeliverToSession(s, msg)
 	return err
+}
+
+// RestoreSessionState implements cluster.SessionManager.RestoreSessionState.
+// This is called after takeover to apply session state from another node.
+func (b *Broker) RestoreSessionState(ctx context.Context, clientID string, state *cluster.SessionState) error {
+	// This method is not actually used since we apply state directly in CreateSession
+	// But we implement it to satisfy the SessionManager interface
+	return nil
+}
+
+// restoreInflightFromTakeover restores inflight messages from takeover state.
+func (b *Broker) restoreInflightFromTakeover(state *cluster.SessionState, tracker messages.Inflight) error {
+	if state == nil || state.InflightMessages == nil {
+		return nil
+	}
+
+	for _, msg := range state.InflightMessages {
+		storeMsg := &storage.Message{
+			Topic:    msg.Topic,
+			Payload:  msg.Payload,
+			QoS:      byte(msg.Qos),
+			Retain:   msg.Retain,
+			PacketID: uint16(msg.PacketId),
+		}
+		if err := tracker.Add(uint16(msg.PacketId), storeMsg, messages.Outbound); err != nil {
+			b.logError("restore_inflight", err, slog.Uint64("packet_id", uint64(msg.PacketId)))
+			continue
+		}
+	}
+
+	return nil
+}
+
+// restoreQueueFromTakeover restores offline queue from takeover state.
+func (b *Broker) restoreQueueFromTakeover(state *cluster.SessionState, queue messages.Queue) error {
+	if state == nil || state.QueuedMessages == nil {
+		return nil
+	}
+
+	for _, msg := range state.QueuedMessages {
+		storeMsg := &storage.Message{
+			Topic:   msg.Topic,
+			Payload: msg.Payload,
+			QoS:     byte(msg.Qos),
+			Retain:  msg.Retain,
+		}
+		if err := queue.Enqueue(storeMsg); err != nil {
+			b.logError("restore_queue", err, slog.String("topic", msg.Topic))
+			continue
+		}
+	}
+
+	return nil
+}
+
+// restoreSubscriptionsFromTakeover restores subscriptions from takeover state.
+func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *cluster.SessionState) error {
+	if state == nil || state.Subscriptions == nil {
+		return nil
+	}
+
+	for _, sub := range state.Subscriptions {
+		opts := storage.SubscribeOptions{
+			NoLocal:           false,
+			RetainAsPublished: false,
+			RetainHandling:    0,
+		}
+
+		// Add to local router
+		b.router.Subscribe(s.ID, sub.Filter, byte(sub.Qos), opts)
+
+		// Add to session
+		s.AddSubscription(sub.Filter, opts)
+
+		// Add to local subscription storage
+		if err := b.subscriptions.Add(&storage.Subscription{
+			ClientID: s.ID,
+			Filter:   sub.Filter,
+			QoS:      byte(sub.Qos),
+			Options:  opts,
+		}); err != nil {
+			b.logError("restore_subscription", err, slog.String("filter", sub.Filter))
+			continue
+		}
+
+		// Note: No need to add to cluster since it was already there
+		// The subscription exists in etcd from the previous node
+	}
+
+	return nil
 }

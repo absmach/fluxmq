@@ -30,14 +30,11 @@ message PublishResponse {
   string error = 2;  // Error message if success=false
 }
 
-// TakeoverRequest requests session migration with all session state.
+// TakeoverRequest requests session migration from one node to another.
 message TakeoverRequest {
   string client_id = 1;
-  string from_node = 2;  // Node requesting takeover
+  string from_node = 2;  // Node currently owning the session
   string to_node = 3;    // Node taking over the session
-
-  // Session state to transfer
-  SessionState session_state = 4;
 }
 
 // SessionState contains the full state of an MQTT session.
@@ -93,8 +90,11 @@ message WillMessage {
   int64 disconnect_time = 6;
 }
 
-// TakeoverResponse indicates whether the takeover succeeded.
+// TakeoverResponse indicates whether the takeover succeeded and returns session state.
 message TakeoverResponse {
   bool success = 1;
   string error = 2;
+
+  // Session state transferred from the old node
+  SessionState session_state = 3;
 }

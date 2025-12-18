@@ -118,9 +118,9 @@ func (n *NoopCluster) RoutePublish(ctx context.Context, topic string, payload []
 
 // Session takeover - not applicable in single-node
 
-func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) error {
+func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*SessionState, error) {
 	// Single-node: no remote nodes to take over from
-	return nil
+	return nil, nil
 }
 
 // Leadership - always leader in single-node

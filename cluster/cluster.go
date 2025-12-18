@@ -89,8 +89,9 @@ type Cluster interface {
 
 	// TakeoverSession initiates session takeover from one node to another.
 	// This is called when a client reconnects to a different node.
-	// The old node should save state and disconnect the client.
-	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) error
+	// The old node disconnects the client and returns its full state.
+	// Returns the session state to be restored, or nil if no state exists.
+	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*SessionState, error)
 
 	// Leadership - for coordinating background tasks
 
@@ -141,4 +142,17 @@ type Message struct {
 	QoS        byte
 	Retain     bool
 	Properties map[string]string
+}
+
+// SessionManager provides callbacks for the cluster to manage sessions on the broker.
+// The cluster calls these methods during session takeover operations.
+type SessionManager interface {
+	// GetSessionStateAndClose captures the full state of a session and closes it.
+	// This is called when another node is taking over the session.
+	// Returns nil if the session doesn't exist on this node.
+	GetSessionStateAndClose(ctx context.Context, clientID string) (*SessionState, error)
+
+	// RestoreSessionState applies previously captured session state when creating a session.
+	// This is called after taking over a session from another node.
+	RestoreSessionState(ctx context.Context, clientID string, state *SessionState) error
 }

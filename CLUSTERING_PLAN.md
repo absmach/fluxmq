@@ -1,0 +1,563 @@
+# MQTT Broker Clustering Implementation Plan
+
+## Status Overview
+
+This document consolidates the clustering implementation plan, tracking completed work and remaining tasks.
+
+**Current Status:** ✅ Session takeover protocol implemented and working
+
+---
+
+## Architecture: Simple Embedded Design
+
+### Design Philosophy
+
+1. **Start Simple** - Full replication, no sharding, no compression optimizations
+2. **Embedded Only** - No external services, single binary deployment
+3. **Interface-Based** - Easy to swap implementations for future optimizations
+4. **Proven Components** - Use battle-tested libraries (etcd, memberlist)
+
+### Component Stack
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     MQTT Broker Node                         │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  MQTT Protocol Layer (unchanged)                      │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Broker Core (minimal changes)                        │  │
+│  │  ✅ Check cluster for session ownership               │  │
+│  │  ⏳ Route publishes to cluster                        │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌────────────────┬──────────────────┬──────────────────┐  │
+│  │ Cluster        │ Metadata Store   │ Local Storage    │  │
+│  │ Membership     │ (Embedded etcd)  │ (BadgerDB)       │  │
+│  │ ⏳ memberlist  │ ✅ Implemented   │ ⏳ Not impl      │  │
+│  │                │ - Session owner  │ - Inflight msgs  │  │
+│  │ - Discovery    │ - Subscriptions  │ - Offline queue  │  │
+│  │ - Failure      │ - Retained msgs  │ - Session data   │  │
+│  │   detection    │ - Will messages  │                  │  │
+│  └────────────────┴──────────────────┴──────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Inter-Broker Transport (gRPC)                        │  │
+│  │  ✅ RoutePublish(clientID, topic, payload)           │  │
+│  │  ✅ TakeoverSession(clientID) → SessionState         │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## What's Been Completed ✅
+
+### Phase 0: Foundation (DONE)
+- ✅ Cluster interface defined (`cluster/cluster.go`)
+- ✅ Cluster configuration added to config
+- ✅ Broker accepts cluster parameter
+- ✅ NoopCluster for single-node mode
+
+### Phase 1: Embedded etcd Setup (DONE)
+- ✅ EtcdCluster implementation with embedded etcd
+- ✅ Session ownership tracking (AcquireSession, ReleaseSession, GetSessionOwner)
+- ✅ Leadership election via etcd
+- ✅ Subscription storage in etcd
+- ✅ Retained message storage in etcd
+- ✅ Will message storage in etcd
+
+### Phase 2: Inter-Broker Communication (DONE)
+- ✅ gRPC transport layer (`cluster/transport.go`)
+- ✅ Protobuf definitions (`cluster/broker.proto`)
+- ✅ RoutePublish RPC for message forwarding
+- ✅ TakeoverSession RPC with full session state transfer
+
+### Phase 3: Session Takeover (DONE)
+- ✅ SessionManager interface for broker callbacks
+- ✅ Full session takeover protocol implementation
+- ✅ Session state capture (inflight, queue, subscriptions, will)
+- ✅ Session state restoration on new node
+- ✅ Broker.CreateSession() checks cluster ownership
+- ✅ Broker.GetSessionStateAndClose() captures and transfers state
+- ✅ Cluster handles remote takeover requests
+
+### Broker Integration (DONE)
+- ✅ Broker.CreateSession() triggers takeover when needed
+- ✅ Broker wired as SessionManager to cluster
+- ✅ Cluster ownership tracking on connect/disconnect
+- ✅ Session expiry only runs on leader
+
+---
+
+## What Needs to Be Done ⏳
+
+### Phase 4: BadgerDB Persistent Storage (CRITICAL - BLOCKING)
+
+**Priority:** CRITICAL - Required for production deployment
+
+**Why Critical:** Session takeover currently has no persistent fallback. If both nodes lose memory state, session data is lost.
+
+#### Tasks:
+- [ ] Implement `storage/badger/store.go`
+  - [ ] BadgerDB initialization with proper options
+  - [ ] Graceful shutdown and cleanup
+  - [ ] Value log GC routine
+
+- [ ] Implement `storage/badger/session.go` (SessionStore)
+  - [ ] Save(session) - persist session metadata
+  - [ ] Get(clientID) - retrieve session
+  - [ ] Delete(clientID) - remove session
+  - [ ] List() - enumerate all sessions (for recovery)
+
+- [ ] Implement `storage/badger/message.go` (MessageStore)
+  - [ ] Store(key, message) - save inflight/offline messages
+  - [ ] Get(key) - retrieve message
+  - [ ] List(prefix) - get all messages for client
+  - [ ] DeleteByPrefix(prefix) - cleanup on session destroy
+
+- [ ] Implement `storage/badger/subscription.go` (SubscriptionStore)
+  - [ ] Add(subscription) - persist subscription
+  - [ ] Remove(clientID, filter) - delete subscription
+  - [ ] GetForClient(clientID) - get client's subscriptions
+  - [ ] RemoveAll(clientID) - cleanup on session destroy
+
+- [ ] Implement `storage/badger/retained.go` (RetainedStore)
+  - [ ] Set(topic, message) - store retained message
+  - [ ] Get(topic) - retrieve retained message
+  - [ ] Delete(topic) - remove retained message
+  - [ ] GetMatching(filter) - wildcard lookup (needs efficient index)
+
+- [ ] Implement `storage/badger/will.go` (WillStore)
+  - [ ] Set(clientID, will) - store will message
+  - [ ] Get(clientID) - retrieve will
+  - [ ] Delete(clientID) - remove will
+  - [ ] GetPending(cutoffTime) - find wills to trigger
+
+- [ ] Update `cmd/broker/main.go`
+  - [ ] Storage factory to dispatch memory vs badger
+  - [ ] Configuration for BadgerDB path
+
+**Key Decisions:**
+```go
+// Key structure in BadgerDB
+/session/{clientID}              → Session metadata (JSON)
+/inflight/{clientID}/{packetID}  → Inflight message (msgpack)
+/queue/{clientID}/{seq}          → Offline queue message (msgpack)
+/subscription/{clientID}/{filter} → Subscription (JSON)
+/retained/{topic}                → Retained message (msgpack)
+/will/{clientID}                 → Will message (msgpack)
+/received/{clientID}/{packetID}  → QoS2 dedup tracker (timestamp)
+```
+
+**Testing:**
+- [ ] Session survives broker restart
+- [ ] Inflight messages restored correctly
+- [ ] Offline queue preserved
+- [ ] Subscriptions restored on reconnect
+- [ ] Performance benchmarks (write/read throughput)
+
+---
+
+### Phase 5: Message Routing Across Cluster (HIGH PRIORITY)
+
+**Priority:** HIGH - Required for cross-node pub/sub
+
+**Current State:** RoutePublish queries all subscriptions in etcd on every publish (inefficient)
+
+#### Tasks:
+- [ ] Implement efficient subscription routing
+  - [ ] GetSubscribersForTopic() - currently scans ALL subscriptions in etcd
+  - [ ] Add local subscription cache with etcd watch for updates
+  - [ ] Group subscribers by node before routing
+
+- [ ] Optimize RoutePublish implementation
+  - [ ] Cache subscription-to-node mapping locally
+  - [ ] Batch messages to same node
+  - [ ] Handle node address lookup (etcd or memberlist)
+
+- [ ] Update broker.Publish() to use cluster routing
+  - [ ] Currently only routes to local subscribers
+  - [ ] Should call cluster.RoutePublish() for remote delivery
+
+- [ ] Add message deduplication
+  - [ ] Prevent duplicate delivery if message routes through multiple paths
+  - [ ] Use message ID or timestamp-based dedup
+
+**Optimization Options:**
+```go
+// Option A: Cache subscriptions locally with watch (RECOMMENDED)
+type EtcdCluster struct {
+    localSubCache map[string][]*storage.Subscription
+    subCacheMu    sync.RWMutex
+}
+
+// Watch etcd for subscription changes, update local cache
+func (c *EtcdCluster) watchSubscriptions() {
+    watchCh := c.client.Watch(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
+    for resp := range watchCh {
+        // Update localSubCache
+    }
+}
+
+// Option B: Interest-based routing (FUTURE)
+// Nodes advertise "interested in sensor/#" instead of listing all subs
+// Reduces memory, increases false positives (acceptable trade-off)
+```
+
+**Testing:**
+- [ ] Publish on Node1, receive on Node2
+- [ ] Cross-node QoS 1 flow
+- [ ] Cross-node QoS 2 flow
+- [ ] Subscription changes propagate to all nodes
+- [ ] Performance: message routing latency
+
+---
+
+### Phase 6: Retained & Will Messages (MEDIUM PRIORITY)
+
+**Priority:** MEDIUM - Needed for complete MQTT compliance
+
+#### Retained Messages
+**Current State:** Stored in etcd but not efficiently queried
+
+- [ ] Optimize GetRetainedMatching()
+  - [ ] Currently scans ALL retained messages in etcd
+  - [ ] Add topic index or trie structure in etcd
+  - [ ] Or cache retained messages locally with watch
+
+- [ ] Test retained message delivery
+  - [ ] New subscriber receives matching retained messages
+  - [ ] Retained messages visible across all nodes
+  - [ ] Retained message updates propagate
+
+#### Will Messages
+**Current State:** Stored in etcd but not triggered cluster-wide
+
+- [ ] Implement leader-only will processing
+  - [ ] Currently broker.triggerWills() runs on all nodes
+  - [ ] Should only run on leader (already has IsLeader check, needs testing)
+
+- [ ] Add will message delay support
+  - [ ] Store disconnectedAt timestamp with will
+  - [ ] GetPendingWills() checks delay interval
+
+- [ ] Test will message scenarios
+  - [ ] Client disconnects ungracefully, will fires
+  - [ ] Client disconnects gracefully, will cleared
+  - [ ] Will fires exactly once (not on every node)
+  - [ ] Will fires after takeover
+
+---
+
+### Phase 7: Background Task Coordination (MEDIUM PRIORITY)
+
+**Priority:** MEDIUM - Prevents duplicate processing
+
+**Current State:** Session expiry and will triggering have leader checks but need comprehensive testing
+
+#### Tasks:
+- [ ] Verify leader-only execution
+  - [ ] Session expiry loop (broker.expireSessions)
+  - [ ] Will trigger loop (broker.triggerWills)
+  - [ ] Stats publishing loop (broker.publishStats)
+
+- [ ] Add leader failover testing
+  - [ ] Kill leader node
+  - [ ] Verify new leader elected
+  - [ ] Verify background tasks continue
+
+- [ ] Add leader campaign monitoring
+  - [ ] Log leadership changes
+  - [ ] Metrics for leadership duration
+
+**Implementation:**
+```go
+// Already implemented in broker.expiryLoop():
+if b.cluster == nil || b.cluster.IsLeader() {
+    b.expireSessions()
+    b.triggerWills()
+}
+
+// Need to test:
+// 1. Only one node processes expiry at a time
+// 2. After leader fails, new leader takes over immediately
+```
+
+---
+
+### Phase 8: Memberlist Integration (OPTIONAL)
+
+**Priority:** LOW - etcd provides member discovery, memberlist is optional
+
+**Why Memberlist:**
+- Faster failure detection than etcd
+- Gossip-based metadata propagation
+- No single point of coordination
+
+**Tasks:**
+- [ ] Integrate `hashicorp/memberlist`
+- [ ] Node discovery via gossip
+- [ ] Failure detection (alternative to etcd watches)
+- [ ] Gossip node metadata (address, load, version)
+
+**Decision:** Defer until etcd-based coordination proves insufficient
+
+---
+
+### Phase 9: Production Readiness (HIGH PRIORITY)
+
+#### Error Handling & Resilience
+- [ ] Graceful shutdown
+  - [ ] Stop accepting new connections
+  - [ ] Drain existing connections
+  - [ ] Transfer sessions to other nodes before shutdown
+
+- [ ] Connection retry logic
+  - [ ] Retry failed gRPC calls to peers
+  - [ ] Circuit breaker for failing nodes
+  - [ ] Backoff and timeout configuration
+
+- [ ] Split-brain protection
+  - [ ] Verify etcd quorum requirements prevent split-brain
+  - [ ] Add fencing tokens for session ownership
+
+#### Monitoring & Observability
+- [ ] Cluster metrics
+  - [ ] Per-node message rate
+  - [ ] Cross-node message latency
+  - [ ] Session takeover count and latency
+  - [ ] Leader election events
+
+- [ ] Health checks
+  - [ ] Liveness: Node responding
+  - [ ] Readiness: Node ready to accept traffic
+  - [ ] Cluster health: Quorum status
+
+- [ ] Logging enhancements
+  - [ ] Structured logging for cluster events
+  - [ ] Distributed tracing for cross-node messages
+  - [ ] Correlation IDs for session takeover
+
+#### Configuration
+- [ ] Validate cluster configuration
+  - [ ] Ensure node IDs are unique
+  - [ ] Validate initial cluster string
+  - [ ] Check port conflicts
+
+- [ ] Add timeouts and tuning parameters
+  - [ ] Session takeover timeout
+  - [ ] RPC timeout
+  - [ ] Leader election timeout
+  - [ ] Lease TTL
+
+---
+
+### Phase 10: Testing Strategy
+
+#### Unit Tests
+- [ ] Storage implementations (BadgerDB)
+- [ ] Subscription matching in etcd
+- [ ] Session takeover protocol
+- [ ] Message routing logic
+
+#### Integration Tests
+- [ ] 3-node cluster formation
+- [ ] Session takeover preserves state
+- [ ] Cross-node publish/subscribe
+- [ ] QoS 1/2 flows across takeover
+- [ ] Retained messages cluster-wide
+- [ ] Will messages fire exactly once
+- [ ] Leader election and background tasks
+
+#### Chaos Tests
+- [ ] Random node failures
+- [ ] Network partitions (split-brain scenarios)
+- [ ] etcd cluster failures
+- [ ] Slow network conditions
+- [ ] High load during takeover
+
+#### Performance Tests
+- [ ] Message throughput (single node vs cluster)
+- [ ] Session takeover latency
+- [ ] Subscription matching performance
+- [ ] Memory usage with 1M subscriptions
+- [ ] Leader election time
+
+---
+
+## Implementation Phases with Timeline
+
+### Immediate Next Steps (Weeks 1-2)
+**Goal:** Production-ready persistent storage
+
+1. Implement BadgerDB storage backend
+2. Test session persistence across restarts
+3. Verify takeover works with persistent state
+
+**Deliverable:** Broker can restart without losing session state
+
+---
+
+### Short Term (Weeks 3-4)
+**Goal:** Complete message routing
+
+1. Optimize subscription routing with local cache
+2. Update broker.Publish() to route to cluster
+3. Test cross-node pub/sub
+4. Add message deduplication
+
+**Deliverable:** Messages route correctly across cluster
+
+---
+
+### Medium Term (Weeks 5-6)
+**Goal:** Full MQTT compliance
+
+1. Optimize retained message delivery
+2. Test will message triggering
+3. Comprehensive integration testing
+4. Performance benchmarking
+
+**Deliverable:** All MQTT features work in cluster mode
+
+---
+
+### Long Term (Weeks 7-8)
+**Goal:** Production hardening
+
+1. Error handling and resilience
+2. Monitoring and metrics
+3. Chaos testing
+4. Documentation
+
+**Deliverable:** Production-ready cluster deployment
+
+---
+
+## Configuration Reference
+
+### Complete Cluster Config
+
+```yaml
+# config.yaml
+server:
+  tcp_addr: ":1883"
+  tcp_max_connections: 100000
+
+cluster:
+  enabled: true
+  node_id: "broker-1"
+
+  # Embedded etcd configuration
+  etcd:
+    data_dir: "/var/lib/mqtt/etcd"
+    bind_addr: "0.0.0.0:2380"         # Raft peer communication
+    client_addr: "0.0.0.0:2379"       # Local etcd client
+    advertise_addr: "192.168.1.10:2380"  # External address for peers
+    initial_cluster: "broker-1=http://192.168.1.10:2380,broker-2=http://192.168.1.11:2380,broker-3=http://192.168.1.12:2380"
+    bootstrap: false  # true only on first node
+
+  # Inter-broker gRPC transport
+  transport:
+    bind_addr: "0.0.0.0:7948"
+    peers:  # Optional: pre-configure peer addresses
+      broker-2: "192.168.1.11:7948"
+      broker-3: "192.168.1.12:7948"
+
+  # Timeouts and tuning
+  takeover_timeout: 5s
+  rpc_timeout: 3s
+  lease_ttl: 30s
+
+storage:
+  type: "badger"  # or "memory"
+  badger:
+    dir: "/var/lib/mqtt/data"
+    value_log_file_size: 1073741824  # 1GB
+    num_versions_to_keep: 1
+
+log:
+  level: "info"
+  format: "json"
+```
+
+### Bootstrap Cluster
+
+```bash
+# Node 1 (bootstrap)
+./mqtt-broker --config node1.yaml --cluster.etcd.bootstrap=true
+
+# Node 2
+./mqtt-broker --config node2.yaml
+
+# Node 3
+./mqtt-broker --config node3.yaml
+```
+
+---
+
+## Dependencies
+
+```go
+// Already in go.mod
+require (
+    go.etcd.io/etcd/server/v3 v3.5.12
+    go.etcd.io/etcd/client/v3 v3.5.12
+    google.golang.org/grpc v1.62.0
+    google.golang.org/protobuf v1.33.0
+)
+
+// Need to add
+require (
+    github.com/dgraph-io/badger/v4 v4.2.0
+    // Optional: github.com/hashicorp/memberlist v0.5.0
+)
+```
+
+---
+
+## Current Architecture State
+
+### What Works Today ✅
+1. **Session Takeover:** Client can move from Node1 to Node2, session state transfers
+2. **Ownership Tracking:** etcd tracks which node owns each session
+3. **Leadership Election:** Only leader runs background tasks
+4. **Subscription Storage:** Subscriptions stored in etcd (accessible cluster-wide)
+5. **Retained Storage:** Retained messages stored in etcd
+6. **Will Storage:** Will messages stored in etcd
+
+### What's Missing ⏳
+1. **Persistent Storage:** No BadgerDB implementation (session state lost on restart)
+2. **Message Routing:** Publishes don't route to remote subscribers yet
+3. **Routing Efficiency:** Subscription lookups scan all of etcd (slow)
+4. **Testing:** No integration tests for cluster scenarios
+5. **Production Readiness:** Missing monitoring, error handling, chaos testing
+
+---
+
+## Success Criteria
+
+### Milestone 1: Persistent Storage ✅
+- [ ] Session survives broker restart with BadgerDB
+- [ ] 1000 sessions restored in <1 second
+- [ ] No data loss on clean shutdown
+
+### Milestone 2: Cross-Node Messaging ✅
+- [ ] Publish on Node1, receive on Node2
+- [ ] QoS 1/2 work across nodes
+- [ ] <50ms added latency for cross-node delivery
+
+### Milestone 3: Production Ready ✅
+- [ ] 3-node cluster runs stably for 7 days
+- [ ] Session takeover <200ms p99
+- [ ] Zero message loss during node failure
+- [ ] Comprehensive monitoring and alerting
+
+---
+
+## Summary
+
+**Completed:** Session takeover protocol, etcd integration, gRPC transport
+**Next:** BadgerDB storage implementation (CRITICAL)
+**Timeline:** 8 weeks to production-ready cluster
+**Risk:** No persistent fallback until BadgerDB is implemented

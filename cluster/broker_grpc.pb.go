@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.0
 // - protoc             v6.33.0
-// source: cluster/broker.proto
+// source: broker.proto
 
 package cluster
 
@@ -163,5 +163,5 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "cluster/broker.proto",
+	Metadata: "broker.proto",
 }
