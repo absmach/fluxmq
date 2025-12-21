@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/storage"
 )
 
@@ -118,7 +119,7 @@ func (n *NoopCluster) RoutePublish(ctx context.Context, topic string, payload []
 
 // Session takeover - not applicable in single-node
 
-func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*SessionState, error) {
+func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
 	// Single-node: no remote nodes to take over from
 	return nil, nil
 }

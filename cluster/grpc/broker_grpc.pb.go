@@ -4,7 +4,7 @@
 // - protoc             v6.33.0
 // source: broker.proto
 
-package cluster
+package grpc
 
 import (
 	context "context"

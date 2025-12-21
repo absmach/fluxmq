@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/storage"
 )
 
@@ -91,7 +92,7 @@ type Cluster interface {
 	// This is called when a client reconnects to a different node.
 	// The old node disconnects the client and returns its full state.
 	// Returns the session state to be restored, or nil if no state exists.
-	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*SessionState, error)
+	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error)
 
 	// Leadership - for coordinating background tasks
 
@@ -150,9 +151,9 @@ type SessionManager interface {
 	// GetSessionStateAndClose captures the full state of a session and closes it.
 	// This is called when another node is taking over the session.
 	// Returns nil if the session doesn't exist on this node.
-	GetSessionStateAndClose(ctx context.Context, clientID string) (*SessionState, error)
+	GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error)
 
 	// RestoreSessionState applies previously captured session state when creating a session.
 	// This is called after taking over a session from another node.
-	RestoreSessionState(ctx context.Context, clientID string, state *SessionState) error
+	RestoreSessionState(ctx context.Context, clientID string, state *grpc.SessionState) error
 }

@@ -9,6 +9,11 @@ GO := go
 LDFLAGS := -s -w
 GOFLAGS := -trimpath
 
+
+PKG_PROTO_GEN_OUT_DIR=cluster/grpc
+INTERNAL_PROTO_DIR=internal
+INTERNAL_PROTO_FILES := $(shell find $(INTERNAL_PROTO_DIR) -name "*.proto" | sed 's|$(INTERNAL_PROTO_DIR)/||')
+
 # Default target
 .PHONY: all
 all: build
@@ -94,6 +99,11 @@ run-node3: build
 .PHONY: clean-data
 clean-data:
 	rm -rf /tmp/mqtt
+
+.PHONY: proto
+proto:
+	mkdir -p $(PKG_PROTO_GEN_OUT_DIR)
+	protoc -I $(INTERNAL_PROTO_DIR) --go_out=$(PKG_PROTO_GEN_OUT_DIR) --go_opt=paths=source_relative --go-grpc_out=$(PKG_PROTO_GEN_OUT_DIR) --go-grpc_opt=paths=source_relative $(INTERNAL_PROTO_FILES)
 
 # Show help
 .PHONY: help

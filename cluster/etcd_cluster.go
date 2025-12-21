@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	clustergrpc "github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -689,7 +690,7 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 }
 
 // TakeoverSession initiates session takeover from one node to another.
-func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*SessionState, error) {
+func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clustergrpc.SessionState, error) {
 	if fromNode == toNode {
 		// Same node, no takeover needed
 		return nil, nil
@@ -733,7 +734,7 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 
 // HandleTakeover implements TransportHandler.HandleTakeover.
 // Called when another broker requests to take over a session from this node.
-func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *SessionState) (*SessionState, error) {
+func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *clustergrpc.SessionState) (*clustergrpc.SessionState, error) {
 	// Verify this is the node being asked to give up the session
 	if fromNode != c.nodeID {
 		return nil, fmt.Errorf("takeover request for wrong node: expected %s, got %s", c.nodeID, fromNode)

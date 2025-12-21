@@ -4,7 +4,7 @@
 // 	protoc        v6.33.0
 // source: broker.proto
 
-package cluster
+package grpc
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -741,7 +741,7 @@ const file_broker_proto_rawDesc = "" +
 	"\rsession_state\x18\x03 \x01(\v2\x15.cluster.SessionStateR\fsessionState2\x9a\x01\n" +
 	"\rBrokerService\x12A\n" +
 	"\fRoutePublish\x12\x17.cluster.PublishRequest\x1a\x18.cluster.PublishResponse\x12F\n" +
-	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponseB!Z\x1fgithub.com/absmach/mqtt/clusterb\x06proto3"
+	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
 
 var (
 	file_broker_proto_rawDescOnce sync.Once
