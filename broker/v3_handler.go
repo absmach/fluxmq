@@ -75,33 +75,31 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		}
 	}
 
-	var willMsg *Message
+	var will *storage.WillMessage
 	if p.WillFlag {
-		willMsg = &Message{
-			Topic:   p.WillTopic,
-			Payload: p.WillMessage,
-			QoS:     p.WillQoS,
-			Retain:  p.WillRetain,
+		will = &storage.WillMessage{
+			ClientID: clientID,
+			Topic:    p.WillTopic,
+			Payload:  p.WillMessage,
+			QoS:      p.WillQoS,
+			Retain:   p.WillRetain,
 		}
 	}
 
-	opts := SessionOptions{
+	opts := session.Options{
 		CleanStart:     cleanStart,
-		KeepAlive:      p.KeepAlive,
+		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		ReceiveMaximum: 65535,
-		WillMessage:    willMsg,
+		Will:           will,
 	}
 
-	s, isNew, err := h.broker.CreateSession(clientID, opts)
+	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
 		h.broker.stats.IncrementProtocolErrors()
 		sendV3ConnAck(conn, false, 0x03)
 		conn.Close()
 		return err
 	}
-
-	s.Version = p.ProtocolVersion
-	s.KeepAlive = time.Duration(p.KeepAlive) * time.Second
 
 	if err := s.Connect(conn); err != nil {
 		h.broker.stats.IncrementProtocolErrors()
@@ -155,7 +153,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
-		msg := Message{
+		msg := &storage.Message{
 			Topic:   topic,
 			Payload: payload,
 			QoS:     qos,
@@ -170,7 +168,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return err
 
 	case 1:
-		msg := Message{
+		msg := &storage.Message{
 			Topic:   topic,
 			Payload: payload,
 			QoS:     qos,
@@ -245,13 +243,7 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	inf, ok := s.Inflight().Get(packetID)
 	if ok && inf.Message != nil {
-		msg := Message{
-			Topic:   inf.Message.Topic,
-			Payload: inf.Message.Payload,
-			QoS:     inf.Message.QoS,
-			Retain:  inf.Message.Retain,
-		}
-		h.broker.Publish(msg)
+		h.broker.Publish(inf.Message)
 	}
 
 	h.broker.AckMessage(s, packetID)
@@ -291,11 +283,9 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			continue
 		}
 
-		opts := SubscriptionOptions{
-			QoS: t.QoS,
-		}
+		opts := storage.SubscribeOptions{}
 
-		if err := h.broker.subscribeInternal(s, t.Name, opts); err != nil {
+		if err := h.broker.subscribe(s, t.Name, t.QoS, opts); err != nil {
 			reasonCodes[i] = 0x80
 			continue
 		}
@@ -309,7 +299,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 				if t.QoS < deliverQoS {
 					deliverQoS = t.QoS
 				}
-				deliverMsg := Message{
+				deliverMsg := &storage.Message{
 					Topic:   msg.Topic,
 					Payload: msg.Payload,
 					QoS:     deliverQoS,
@@ -377,13 +367,7 @@ func (h *V3Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) er
 func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
-		deliverMsg := Message{
-			Topic:   msg.Topic,
-			Payload: msg.Payload,
-			QoS:     msg.QoS,
-			Retain:  msg.Retain,
-		}
-		h.broker.DeliverToSession(s, deliverMsg)
+		h.broker.DeliverToSession(s, msg)
 	}
 }
 

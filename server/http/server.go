@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/mqtt/storage"
 )
 
 type Config struct {
@@ -107,7 +108,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := broker.Message{
+	msg := &storage.Message{
 		Topic:   req.Topic,
 		Payload: req.Payload,
 		QoS:     req.QoS,

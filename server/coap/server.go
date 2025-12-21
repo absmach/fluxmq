@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/mqtt/storage"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
 )
@@ -91,7 +92,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 
-	msg := broker.Message{
+	msg := &storage.Message{
 		Topic:   topic,
 		Payload: payload,
 		QoS:     0,

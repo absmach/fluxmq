@@ -101,7 +101,7 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 // CreateSession creates a new session or returns an existing one.
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
-func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.Session, bool, error) {
+func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -170,10 +170,10 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 		}
 	}
 
-	var will *storage.WillMessage
+	// Handle will message from takeover or from opts
 	if takeoverState != nil && takeoverState.Will != nil {
 		// Restore will from takeover state
-		will = &storage.WillMessage{
+		opts.Will = &storage.WillMessage{
 			ClientID:   clientID,
 			Topic:      takeoverState.Will.Topic,
 			Payload:    takeoverState.Will.Payload,
@@ -182,38 +182,27 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 			Delay:      takeoverState.Will.Delay,
 			Properties: nil,
 		}
-	} else if opts.WillMessage != nil {
-		will = &storage.WillMessage{
-			ClientID:   clientID,
-			Topic:      opts.WillMessage.Topic,
-			Payload:    opts.WillMessage.Payload,
-			QoS:        opts.WillMessage.QoS,
-			Retain:     opts.WillMessage.Retain,
-			Properties: opts.WillMessage.Properties,
-		}
-	}
-
-	sessionOpts := session.Options{
-		CleanStart:     opts.CleanStart,
-		ReceiveMaximum: receiveMax,
-		KeepAlive:      time.Duration(opts.KeepAlive) * time.Second,
-		ExpiryInterval: opts.SessionExpiry,
-		Will:           will,
+	} else if opts.Will != nil {
+		// Ensure ClientID is set
+		opts.Will.ClientID = clientID
 	}
 
 	// Override session expiry from takeover state if available
 	if takeoverState != nil && takeoverState.ExpiryInterval > 0 {
-		sessionOpts.ExpiryInterval = takeoverState.ExpiryInterval
+		opts.ExpiryInterval = takeoverState.ExpiryInterval
 	}
 
-	s := session.New(clientID, 0, sessionOpts, inflight, offlineQueue)
+	// Override receive maximum with normalized value
+	opts.ReceiveMaximum = receiveMax
+
+	s := session.New(clientID, version, opts, inflight, offlineQueue)
 
 	// Restore subscriptions from takeover state or storage
 	if takeoverState != nil {
 		if err := b.restoreSubscriptionsFromTakeover(s, takeoverState); err != nil {
 			return nil, false, fmt.Errorf("failed to restore subscriptions from takeover: %w", err)
 		}
-	} else if err := b.restoreSessionFromStorage(s, clientID, sessionOpts); err != nil {
+	} else if err := b.restoreSessionFromStorage(s, clientID, opts); err != nil {
 		return nil, false, err
 	}
 
@@ -254,7 +243,7 @@ func (b *Broker) DestroySession(clientID string) error {
 }
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.
-func (b *Broker) Publish(msg Message) error {
+func (b *Broker) Publish(msg *storage.Message) error {
 	b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
 	b.stats.IncrementPublishReceived()
 	b.stats.AddBytesReceived(uint64(len(msg.Payload)))
@@ -265,14 +254,8 @@ func (b *Broker) Publish(msg Message) error {
 				return err
 			}
 		} else {
-			storeMsg := &storage.Message{
-				Topic:      msg.Topic,
-				Payload:    msg.Payload,
-				QoS:        msg.QoS,
-				Retain:     true,
-				Properties: msg.Properties,
-			}
-			if err := b.retained.Set(msg.Topic, storeMsg); err != nil {
+			msg.Retain = true
+			if err := b.retained.Set(msg.Topic, msg); err != nil {
 				return err
 			}
 		}
@@ -281,24 +264,18 @@ func (b *Broker) Publish(msg Message) error {
 	return b.distribute(msg.Topic, msg.Payload, msg.QoS, false, msg.Properties)
 }
 
-// subscribeInternal adds a subscription for a session (internal domain method).
-func (b *Broker) subscribeInternal(s *session.Session, filter string, opts SubscriptionOptions) error {
-	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(opts.QoS)))
+// subscribe adds a subscription for a session (internal domain method).
+func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts storage.SubscribeOptions) error {
+	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(qos)))
 	b.stats.IncrementSubscriptions()
 
-	storeOpts := storage.SubscribeOptions{
-		NoLocal:           opts.NoLocal,
-		RetainAsPublished: opts.RetainAsPublished,
-		RetainHandling:    opts.RetainHandling,
-	}
-
-	b.router.Subscribe(s.ID, filter, opts.QoS, storeOpts)
+	b.router.Subscribe(s.ID, filter, qos, opts)
 
 	sub := &storage.Subscription{
 		ClientID: s.ID,
 		Filter:   filter,
-		QoS:      opts.QoS,
-		Options:  storeOpts,
+		QoS:      qos,
+		Options:  opts,
 	}
 	if err := b.subscriptions.Add(sub); err != nil {
 		return fmt.Errorf("failed to persist subscription: %w", err)
@@ -307,12 +284,12 @@ func (b *Broker) subscribeInternal(s *session.Session, filter string, opts Subsc
 	// Add subscription to cluster
 	if b.cluster != nil {
 		ctx := context.Background()
-		if err := b.cluster.AddSubscription(ctx, s.ID, filter, opts.QoS, storeOpts); err != nil {
+		if err := b.cluster.AddSubscription(ctx, s.ID, filter, qos, opts); err != nil {
 			b.logError("cluster_add_subscription", err, slog.String("client_id", s.ID), slog.String("filter", filter))
 		}
 	}
 
-	s.AddSubscription(filter, storeOpts)
+	s.AddSubscription(filter, opts)
 
 	return nil
 }
@@ -348,14 +325,7 @@ func (b *Broker) Subscribe(clientID string, filter string, qos byte, opts storag
 		return ErrSessionNotFound
 	}
 
-	subOpts := SubscriptionOptions{
-		QoS:               qos,
-		NoLocal:           opts.NoLocal,
-		RetainAsPublished: opts.RetainAsPublished,
-		RetainHandling:    opts.RetainHandling,
-	}
-
-	return b.subscribeInternal(s, filter, subOpts)
+	return b.subscribe(s, filter, qos, opts)
 }
 
 // Unsubscribe removes a subscription (implements Service interface).
@@ -370,16 +340,10 @@ func (b *Broker) Unsubscribe(clientID string, filter string) error {
 
 // DeliverToSession queues a message for delivery to a session.
 // Returns packet ID (>0) if session is connected and QoS>0, otherwise 0.
-func (b *Broker) DeliverToSession(s *session.Session, msg Message) (uint16, error) {
+func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uint16, error) {
 	if !s.IsConnected() {
 		if msg.QoS > 0 {
-			storeMsg := &storage.Message{
-				Topic:      msg.Topic,
-				Payload:    msg.Payload,
-				QoS:        msg.QoS,
-				Properties: msg.Properties,
-			}
-			return 0, s.OfflineQueue().Enqueue(storeMsg)
+			return 0, s.OfflineQueue().Enqueue(msg)
 		}
 		return 0, nil
 	}
@@ -389,20 +353,12 @@ func (b *Broker) DeliverToSession(s *session.Session, msg Message) (uint16, erro
 	}
 
 	packetID := s.NextPacketID()
-	storeMsg := &storage.Message{
-		Topic:      msg.Topic,
-		Payload:    msg.Payload,
-		QoS:        msg.QoS,
-		PacketID:   packetID,
-		Properties: msg.Properties,
-	}
-	if err := s.Inflight().Add(packetID, storeMsg, messages.Outbound); err != nil {
+	msg.PacketID = packetID
+	if err := s.Inflight().Add(packetID, msg, messages.Outbound); err != nil {
 		return 0, err
 	}
 
-	deliverMsg := msg
-	deliverMsg.PacketID = packetID
-	if err := b.DeliverMessage(s, deliverMsg); err != nil {
+	if err := b.DeliverMessage(s, msg); err != nil {
 		return packetID, err
 	}
 
@@ -465,7 +421,7 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 			deliverQoS = sub.QoS
 		}
 
-		msg := Message{
+		msg := &storage.Message{
 			Topic:      topic,
 			Payload:    payload,
 			QoS:        deliverQoS,
@@ -805,7 +761,7 @@ func (b *Broker) publishStats() {
 	}
 }
 
-func (b *Broker) DeliverMessage(s *session.Session, msg Message) error {
+func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error {
 	b.stats.IncrementPublishSent()
 	b.stats.AddBytesSent(uint64(len(msg.Payload)))
 
@@ -1006,7 +962,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, pa
 		return fmt.Errorf("session not found: %s", clientID)
 	}
 
-	msg := Message{
+	msg := &storage.Message{
 		Topic:      topic,
 		Payload:    payload,
 		QoS:        qos,
