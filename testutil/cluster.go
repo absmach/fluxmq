@@ -60,10 +60,10 @@ func NewTestCluster(t *testing.T, nodeCount int) *TestCluster {
 
 	// Base ports for allocation
 	// Make sure etcd client and peer port ranges don't overlap!
-	baseTCPPort := 10883   // MQTT TCP: 10883, 10884, 10885, ...
-	baseGRPCPort := 19000  // gRPC: 19000, 19001, 19002, ...
-	baseEtcdPort := 12379  // etcd client: 12379, 12380, 12381, ...
-	basePeerPort := 12390  // etcd peer: 12390, 12391, 12392, ...
+	baseTCPPort := 10883  // MQTT TCP: 10883, 10884, 10885, ...
+	baseGRPCPort := 19000 // gRPC: 19000, 19001, 19002, ...
+	baseEtcdPort := 12379 // etcd client: 12379, 12380, 12381, ...
+	basePeerPort := 12390 // etcd peer: 12390, 12391, 12392, ...
 
 	// Build initial cluster string for etcd
 	initialCluster := make([]string, nodeCount)
@@ -145,7 +145,7 @@ func (tc *TestCluster) Start() error {
 	}
 
 	// Wait for cluster to stabilize
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	return nil
 }
@@ -198,6 +198,11 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 	// Wire broker as session manager
 	clust.SetSessionManager(b)
 	clust.SetMessageHandler(b)
+
+	// Start cluster (begins leader election, subscription cache, etc.)
+	if err := clust.Start(); err != nil {
+		return fmt.Errorf("failed to start cluster: %w", err)
+	}
 
 	// Create and start TCP server
 	tcpCfg := tcp.Config{
@@ -330,8 +335,10 @@ func (tc *TestCluster) WaitForClusterReady(timeout time.Duration) error {
 			if node.Cluster != nil {
 				nodes := node.Cluster.Nodes()
 				if len(nodes) == len(tc.Nodes) {
-					tc.t.Logf("Cluster ready: %d nodes", len(nodes))
-					return nil
+					if leader := tc.GetLeader(); leader != nil {
+						tc.t.Logf("Cluster ready: %d nodes, leader: %s", len(nodes), leader.ID)
+						return nil
+					}
 				}
 			}
 		}

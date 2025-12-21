@@ -241,12 +241,23 @@ func (c *TestMQTTClient) WaitForMessage(timeout time.Duration) (*Message, error)
 func (c *TestMQTTClient) Reconnect(newNode *TestNode) error {
 	c.mu.Lock()
 	oldConn := c.Conn
+	oldStopCh := c.stopCh
 	c.Conn = nil
 	c.mu.Unlock()
+
+	// Stop old read loop
+	if oldStopCh != nil {
+		close(oldStopCh)
+	}
 
 	if oldConn != nil {
 		oldConn.Close()
 	}
+
+	// Create new stop channel for new connection
+	c.mu.Lock()
+	c.stopCh = make(chan struct{})
+	c.mu.Unlock()
 
 	c.Node = newNode
 	return c.Connect(c.cleanSession)

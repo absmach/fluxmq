@@ -603,12 +603,33 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 		s.RestoreFrom(stored)
 	}
 
-	subs, err := b.subscriptions.GetForClient(clientID)
-	if err != nil {
-		return fmt.Errorf("failed to get subscriptions: %w", err)
+	// Restore subscriptions from cluster if available, otherwise from local storage
+	var subs []*storage.Subscription
+	if b.cluster != nil {
+		ctx := context.Background()
+		subs, err = b.cluster.GetSubscriptionsForClient(ctx, clientID)
+		if err != nil {
+			return fmt.Errorf("failed to get subscriptions from cluster: %w", err)
+		}
+	} else {
+		subs, err = b.subscriptions.GetForClient(clientID)
+		if err != nil {
+			return fmt.Errorf("failed to get subscriptions: %w", err)
+		}
 	}
+
 	for _, sub := range subs {
+		// Add to local router (critical for message routing!)
+		b.router.Subscribe(s.ID, sub.Filter, sub.QoS, sub.Options)
+
+		// Add to session
 		s.AddSubscription(sub.Filter, sub.Options)
+
+		// Add to local subscription storage
+		if err := b.subscriptions.Add(sub); err != nil {
+			b.logError("restore_subscription", err, slog.String("filter", sub.Filter))
+			continue
+		}
 	}
 
 	return nil
@@ -644,8 +665,8 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		b.mu.Lock()
 		b.destroySessionLocked(s)
 		b.mu.Unlock()
-	} else {
-		// For persistent sessions, release ownership so another node can acquire it on reconnect
+
+		// Release ownership for clean sessions
 		if b.cluster != nil {
 			ctx := context.Background()
 			if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
@@ -653,6 +674,9 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 			}
 		}
 	}
+	// For persistent sessions, DON'T release ownership immediately
+	// Keep ownership so messages can still be routed to this node
+	// Ownership will expire naturally after TTL (30s)
 }
 
 // expiryLoop periodically checks for expired sessions.
