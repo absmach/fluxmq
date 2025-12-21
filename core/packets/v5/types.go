@@ -77,7 +77,7 @@ func NewControlPacket(packetType byte) ControlPacket {
 	case UnsubscribeType:
 		return &Unsubscribe{FixedHeader: FixedHeader{PacketType: UnsubscribeType, QoS: 1}}
 	case UnsubAckType:
-		return &UnSubAck{FixedHeader: FixedHeader{PacketType: UnsubAckType}}
+		return &UnsubAck{FixedHeader: FixedHeader{PacketType: UnsubAckType}}
 	case PingReqType:
 		return &PingReq{FixedHeader: FixedHeader{PacketType: PingReqType}}
 	case PingRespType:
@@ -114,7 +114,7 @@ func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 	case UnsubscribeType:
 		return &Unsubscribe{FixedHeader: fh}, nil
 	case UnsubAckType:
-		return &UnSubAck{FixedHeader: fh}, nil
+		return &UnsubAck{FixedHeader: fh}, nil
 	case PingReqType:
 		return &PingReq{FixedHeader: fh}, nil
 	case PingRespType:

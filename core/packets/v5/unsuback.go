@@ -12,9 +12,19 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
-// UnSubAck is an internal representation of the fields of the UNSUBACK MQTT packet.
+// The list of valid UnsSubAck reason codes.
+const (
+	UnsubAckSuccess                     = 0x00
+	UnsubAckNoSubscriptionFound         = 0x11
+	UnsubAckUnspecifiedError            = 0x80
+	UnsubAckImplementationSpecificError = 0x83
+	UnsubAckNotAuthorized               = 0x87
+	UnsubAckTopicFilterInvalid          = 0x8F
+	UnsubAckPacketIdentifierInUse       = 0x91
+)
 
-type UnSubAck struct {
+// UnsubAck is an internal representation of the fields of the UNSUBACK MQTT packet.
+type UnsubAck struct {
 	packets.FixedHeader
 	// Variable Header
 	ID         uint16
@@ -23,16 +33,16 @@ type UnSubAck struct {
 	ReasonCodes *[]byte
 }
 
-func (pkt *UnSubAck) String() string {
+func (pkt *UnsubAck) String() string {
 	return fmt.Sprintf("%s\npacket_id: %d\n", pkt.FixedHeader, pkt.ID)
 }
 
 // Type returns the packet type.
-func (pkt *UnSubAck) Type() byte {
+func (pkt *UnsubAck) Type() byte {
 	return packets.UnsubAckType
 }
 
-func (pkt *UnSubAck) Encode() []byte {
+func (pkt *UnsubAck) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
@@ -53,12 +63,12 @@ func (pkt *UnSubAck) Encode() []byte {
 	return ret
 }
 
-func (pkt *UnSubAck) Pack(w io.Writer) error {
+func (pkt *UnsubAck) Pack(w io.Writer) error {
 	_, err := w.Write(pkt.Encode())
 	return err
 }
 
-func (pkt *UnSubAck) Unpack(r io.Reader) error {
+func (pkt *UnsubAck) Unpack(r io.Reader) error {
 	var err error
 	pkt.ID, err = codec.DecodeUint16(r)
 	if err != nil {
@@ -91,6 +101,29 @@ func (pkt *UnSubAck) Unpack(r io.Reader) error {
 	return nil
 }
 
-func (pkt *UnSubAck) Details() Details {
+func (pkt *UnsubAck) Details() Details {
 	return Details{Type: UnsubAckType, ID: pkt.ID, QoS: 0}
+}
+
+// Reason returns a string representation of the meaning of the ReasonCode
+func (u *UnsubAck) Reason(index int) string {
+	if index >= 0 && index < len(*u.ReasonCodes) {
+		switch (*u.ReasonCodes)[index] {
+		case 0x00:
+			return "Success - The subscription is deleted"
+		case 0x11:
+			return "No subscription found - No matching Topic Filter is being used by the Client."
+		case 0x80:
+			return "Unspecified error - The unsubscribe could not be completed and the Server either does not wish to reveal the reason or none of the other Reason Codes apply."
+		case 0x83:
+			return "Implementation specific error - The UNSUBSCRIBE is valid but the Server does not accept it."
+		case 0x87:
+			return "Not authorized - The Client is not authorized to unsubscribe."
+		case 0x8F:
+			return "Topic Filter invalid - The Topic Filter is correctly formed but is not allowed for this Client."
+		case 0x91:
+			return "Packet Identifier in use - The specified Packet Identifier is already in use."
+		}
+	}
+	return "Invalid Reason index"
 }

@@ -88,7 +88,6 @@ func (pkt *SubAck) Reset() {
 	pkt.ID = 0
 	pkt.Properties = nil
 	pkt.ReasonCodes = nil
-	pkt.Reason = nil
 }
 
 // Reset clears all fields in the Unsubscribe packet for reuse.
@@ -100,7 +99,7 @@ func (pkt *Unsubscribe) Reset() {
 }
 
 // Reset clears all fields in the UnSubAck packet for reuse.
-func (pkt *UnSubAck) Reset() {
+func (pkt *UnsubAck) Reset() {
 	pkt.FixedHeader = FixedHeader{PacketType: UnsubAckType}
 	pkt.ID = 0
 	pkt.Properties = nil

@@ -43,7 +43,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 	if ok {
 		if p5.ProtocolVersion != 5 {
 			broker.stats.IncrementProtocolErrors()
-			sendV5ConnAck(conn, false, 0x84, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckUnsupportedProtocolVersion, nil)
 			conn.Close()
 			return
 		}

@@ -181,7 +181,11 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
-		return sendV3PubAck(s, packetID)
+		ack := &v3.PubAck{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
+			ID:          packetID,
+		}
+		return s.WritePacket(ack)
 
 	case 2:
 		if dup && s.Inflight().WasReceived(packetID) {
@@ -227,7 +231,11 @@ func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 
 	h.broker.logger.Debug("v3_pubrec", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
-	return sendV3PubRel(s, p.ID)
+	rel := &v3.PubRel{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+		ID:          p.ID,
+	}
+	return s.WritePacket(rel)
 }
 
 // HandlePubRel handles PUBREL packets.
@@ -248,8 +256,11 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	h.broker.AckMessage(s, packetID)
 	s.Inflight().ClearReceived(packetID)
-
-	return sendV3PubComp(s, packetID)
+	comp := &v3.PubComp{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
+		ID:          packetID,
+	}
+	return s.WritePacket(comp)
 }
 
 // HandlePubComp handles PUBCOMP packets.
@@ -314,8 +325,12 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
-
-	return sendV3SubAck(s, packetID, reasonCodes)
+	ack := &v3.SubAck{
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
+		ID:          packetID,
+		ReturnCodes: reasonCodes,
+	}
+	return s.WritePacket(ack)
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
@@ -337,13 +352,20 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 		slog.Duration("duration", time.Since(start)),
 	)
 
-	return sendV3UnsubAck(s, p.ID)
+	ack := &v3.UnSubAck{
+		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
+		ID:          p.ID,
+	}
+	return s.WritePacket(ack)
 }
 
 // HandlePingReq handles PINGREQ packets.
 func (h *V3Handler) HandlePingReq(s *session.Session) error {
 	h.broker.logger.Debug("v3_pingreq", slog.String("client_id", s.ID))
-	return sendV3PingResp(s)
+	resp := &v3.PingResp{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
+	}
+	return s.WritePacket(resp)
 }
 
 // HandleDisconnect handles DISCONNECT packets.
@@ -371,60 +393,10 @@ func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
 	}
 }
 
-// --- Response packet senders ---
-
-func sendV3PubAck(s *session.Session, packetID uint16) error {
-	ack := &v3.PubAck{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
-		ID:          packetID,
-	}
-	return s.WritePacket(ack)
-}
-
 func sendV3PubRec(s *session.Session, packetID uint16) error {
 	rec := &v3.PubRec{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 		ID:          packetID,
 	}
 	return s.WritePacket(rec)
-}
-
-func sendV3PubRel(s *session.Session, packetID uint16) error {
-	rel := &v3.PubRel{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
-		ID:          packetID,
-	}
-	return s.WritePacket(rel)
-}
-
-func sendV3PubComp(s *session.Session, packetID uint16) error {
-	comp := &v3.PubComp{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
-		ID:          packetID,
-	}
-	return s.WritePacket(comp)
-}
-
-func sendV3SubAck(s *session.Session, packetID uint16, returnCodes []byte) error {
-	ack := &v3.SubAck{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
-		ID:          packetID,
-		ReturnCodes: returnCodes,
-	}
-	return s.WritePacket(ack)
-}
-
-func sendV3UnsubAck(s *session.Session, packetID uint16) error {
-	ack := &v3.UnSubAck{
-		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
-		ID:          packetID,
-	}
-	return s.WritePacket(ack)
-}
-
-func sendV3PingResp(s *session.Session) error {
-	resp := &v3.PingResp{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
-	}
-	return s.WritePacket(resp)
 }

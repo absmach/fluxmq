@@ -16,6 +16,8 @@ import (
 	"github.com/absmach/mqtt/storage/messages"
 )
 
+const maxReceived = 65535
+
 var _ Handler = (*V5Handler)(nil)
 
 // V5Handler is a stateless adapter that translates MQTT v5 packets to broker domain operations.
@@ -49,14 +51,14 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			generated, err := GenerateClientID()
 			if err != nil {
 				h.broker.stats.IncrementProtocolErrors()
-				sendV5ConnAck(conn, false, 0x85, nil)
+				sendV5ConnAck(conn, false, v5.ConnAckInvalidClientID, nil)
 				conn.Close()
 				return err
 			}
 			clientID = generated
 		} else {
 			h.broker.stats.IncrementProtocolErrors()
-			sendV5ConnAck(conn, false, 0x85, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckInvalidClientID, nil)
 			conn.Close()
 			return ErrClientIDRequired
 		}
@@ -69,7 +71,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.stats.IncrementAuthErrors()
-			sendV5ConnAck(conn, false, 0x86, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckBadUsernameOrPassword, nil)
 			conn.Close()
 			return ErrNotAuthorized
 		}
@@ -113,7 +115,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
 		h.broker.stats.IncrementProtocolErrors()
-		sendV5ConnAck(conn, false, 0x80, nil)
+		sendV5ConnAck(conn, false, v5.ConnAckUnspecifiedError, nil)
 		conn.Close()
 		return err
 	}
@@ -127,7 +129,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	}
 
 	sessionPresent := !isNew && !cleanStart
-	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, 0x00); err != nil {
+	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess); err != nil {
 		s.Disconnect(false)
 		return err
 	}
@@ -168,12 +170,12 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	if p.Properties != nil && p.Properties.TopicAlias != nil {
 		alias := *p.Properties.TopicAlias
 		if alias > s.TopicAliasMax {
-			return sendV5PubAck(s, packetID, 0x94, "Topic alias invalid")
+			return sendV5PubAck(s, packetID, v5.PubAckTopicNameInvalid, "Topic alias invalid")
 		}
 		if topic == "" {
 			resolvedTopic, ok := s.ResolveInboundAlias(alias)
 			if !ok {
-				return sendV5PubAck(s, packetID, 0x82, "Topic alias not established")
+				return sendV5PubAck(s, packetID, v5.PubAckTopicNameInvalid, "Topic alias not established")
 			}
 			topic = resolvedTopic
 		} else {
@@ -183,7 +185,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	if h.broker.auth != nil && !h.broker.auth.CanPublish(s.ID, topic) {
 		h.broker.stats.IncrementAuthzErrors()
-		return sendV5PubAck(s, packetID, 0x87, "Not authorized")
+		return sendV5PubAck(s, packetID, v5.PubAckNotAuthorized, "Not authorized")
 	}
 
 	switch qos {
@@ -210,17 +212,17 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			Retain:  retain,
 		}
 		if err := h.broker.Publish(msg); err != nil {
-			return sendV5PubAck(s, packetID, 0x80, "Unspecified error")
+			return sendV5PubAck(s, packetID, v5.PubAckUnspecifiedError, "Unspecified error")
 		}
 		h.broker.logger.Debug("v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
-		return sendV5PubAck(s, packetID, 0x00, "")
+		return sendV5PubAck(s, packetID, v5.PubAckSuccess, "")
 
 	case 2:
 		if dup && s.Inflight().WasReceived(packetID) {
-			return sendV5PubRec(s, packetID, 0x00, "")
+			return sendV5PubRec(s, packetID, v5.PubRecSuccess, "")
 		}
 
 		s.Inflight().MarkReceived(packetID)
@@ -236,7 +238,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			return err
 		}
 
-		return sendV5PubRec(s, packetID, 0x00, "")
+		return sendV5PubRec(s, packetID, v5.PubRecSuccess, "")
 	}
 
 	return nil
@@ -262,7 +264,14 @@ func (h *V5Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 
 	h.broker.logger.Debug("v5_pubrec", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
-	return sendV5PubRel(s, p.ID, 0x00, "")
+	rc := byte(0x00)
+	rel := &v5.PubRel{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+		ID:          p.ID,
+		ReasonCode:  &rc,
+		Properties:  &v5.BasicProperties{},
+	}
+	return s.WritePacket(rel)
 }
 
 // HandlePubRel handles PUBREL packets.
@@ -284,7 +293,14 @@ func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 	h.broker.AckMessage(s, packetID)
 	s.Inflight().ClearReceived(packetID)
 
-	return sendV5PubComp(s, packetID, 0x00, "")
+	rc := byte(0x00)
+	comp := &v5.PubComp{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
+		ID:          packetID,
+		ReasonCode:  &rc,
+		Properties:  &v5.BasicProperties{},
+	}
+	return s.WritePacket(comp)
 }
 
 // HandlePubComp handles PUBCOMP packets.
@@ -314,7 +330,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 	for i, t := range p.Opts {
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Topic) {
 			h.broker.stats.IncrementAuthzErrors()
-			reasonCodes[i] = 0x87
+			reasonCodes[i] = v5.SubAckNotAuthorized
 			continue
 		}
 
@@ -339,7 +355,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		}
 
 		if err := h.broker.subscribe(s, t.Topic, t.MaxQoS, opts); err != nil {
-			reasonCodes[i] = 0x80
+			reasonCodes[i] = v5.SubAckImplementationSpecificError
 			continue
 		}
 
@@ -367,8 +383,13 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
-
-	return sendV5SubAck(s, packetID, reasonCodes)
+	ack := &v5.SubAck{
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
+		ID:          packetID,
+		ReasonCodes: &reasonCodes,
+		Properties:  &v5.BasicProperties{},
+	}
+	return s.WritePacket(ack)
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
@@ -384,9 +405,9 @@ func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, filter := range p.Topics {
 		if err := h.broker.unsubscribeInternal(s, filter); err != nil {
-			reasonCodes[i] = 0x80
+			reasonCodes[i] = v5.ConnAckUnspecifiedError
 		} else {
-			reasonCodes[i] = 0x00
+			reasonCodes[i] = v5.ConnAckSuccess
 		}
 	}
 
@@ -394,14 +415,22 @@ func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
-
-	return sendV5UnsubAck(s, p.ID, reasonCodes)
+	ack := &v5.UnsubAck{
+		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
+		ID:          p.ID,
+		ReasonCodes: &reasonCodes,
+		Properties:  &v5.BasicProperties{},
+	}
+	return s.WritePacket(ack)
 }
 
 // HandlePingReq handles PINGREQ packets.
 func (h *V5Handler) HandlePingReq(s *session.Session) error {
 	h.broker.logger.Debug("v5_pingreq", slog.String("client_id", s.ID))
-	return sendV5PingResp(s)
+	resp := &v5.PingResp{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
+	}
+	return s.WritePacket(resp)
 }
 
 // HandleDisconnect handles DISCONNECT packets.
@@ -438,7 +467,7 @@ func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
 // --- Response packet senders ---
 
 func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte) error {
-	receiveMax := uint16(65535)
+	receiveMax := uint16(maxReceived)
 	topicAliasMax := s.TopicAliasMax
 	retainAvailable := byte(1)
 	wildcardSubAvailable := byte(1)
@@ -482,53 +511,4 @@ func sendV5PubRec(s *session.Session, packetID uint16, reasonCode byte, reasonSt
 		Properties:  &v5.BasicProperties{},
 	}
 	return s.WritePacket(rec)
-}
-
-func sendV5PubRel(s *session.Session, packetID uint16, reasonCode byte, reasonString string) error {
-	rc := reasonCode
-	rel := &v5.PubRel{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
-		ID:          packetID,
-		ReasonCode:  &rc,
-		Properties:  &v5.BasicProperties{},
-	}
-	return s.WritePacket(rel)
-}
-
-func sendV5PubComp(s *session.Session, packetID uint16, reasonCode byte, reasonString string) error {
-	rc := reasonCode
-	comp := &v5.PubComp{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
-		ID:          packetID,
-		ReasonCode:  &rc,
-		Properties:  &v5.BasicProperties{},
-	}
-	return s.WritePacket(comp)
-}
-
-func sendV5SubAck(s *session.Session, packetID uint16, reasonCodes []byte) error {
-	ack := &v5.SubAck{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubAckType},
-		ID:          packetID,
-		ReasonCodes: &reasonCodes,
-		Properties:  &v5.BasicProperties{},
-	}
-	return s.WritePacket(ack)
-}
-
-func sendV5UnsubAck(s *session.Session, packetID uint16, reasonCodes []byte) error {
-	ack := &v5.UnSubAck{
-		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubAckType},
-		ID:          packetID,
-		ReasonCodes: &reasonCodes,
-		Properties:  &v5.BasicProperties{},
-	}
-	return s.WritePacket(ack)
-}
-
-func sendV5PingResp(s *session.Session) error {
-	resp := &v5.PingResp{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
-	}
-	return s.WritePacket(resp)
 }

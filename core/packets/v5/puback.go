@@ -12,6 +12,19 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
+// The List of valid PubAck reason codes.
+const (
+	PubAckSuccess                     = 0x00
+	PubAckNoMatchingSubscribers       = 0x10
+	PubAckUnspecifiedError            = 0x80
+	PubAckImplementationSpecificError = 0x83
+	PubAckNotAuthorized               = 0x87
+	PubAckTopicNameInvalid            = 0x90
+	PubAckPacketIdentifierInUse       = 0x91
+	PubAckQuotaExceeded               = 0x97
+	PubAckPayloadFormatInvalid        = 0x99
+)
+
 // PubAck is an internal representation of the fields of the PUBACK MQTT packet.
 type PubAck struct {
 	packets.FixedHeader
@@ -93,6 +106,32 @@ func (pkt *PubAck) Unpack(r io.Reader) error {
 	pkt.Properties = &p
 
 	return nil
+}
+
+// Reason returns a string representation of the meaning of the ReasonCode
+func (p *PubAck) Reason() string {
+	switch *p.ReasonCode {
+	case 0:
+		return "The message is accepted. Publication of the QoS 1 message proceeds."
+	case 16:
+		return "The message is accepted but there are no subscribers. This is sent only by the Server. If the Server knows that there are no matching subscribers, it MAY use this Reason Code instead of 0x00 (Success)."
+	case 128:
+		return "The receiver does not accept the publish but either does not want to reveal the reason, or it does not match one of the other values."
+	case 131:
+		return "The PUBLISH is valid but the receiver is not willing to accept it."
+	case 135:
+		return "The PUBLISH is not authorized."
+	case 144:
+		return "The Topic Name is not malformed, but is not accepted by this Client or Server."
+	case 145:
+		return "The Packet Identifier is already in use. This might indicate a mismatch in the Session State between the Client and Server."
+	case 151:
+		return "An implementation or administrative imposed limit has been exceeded."
+	case 153:
+		return "The payload format does not match the specified Payload Format Indicator."
+	}
+
+	return ""
 }
 
 func (pkt *PubAck) Details() Details {

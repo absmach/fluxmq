@@ -92,7 +92,7 @@ var (
 
 	unsubAckPool = sync.Pool{
 		New: func() any {
-			return &v5.UnSubAck{
+			return &v5.UnsubAck{
 				FixedHeader: v5.FixedHeader{PacketType: v5.UnsubAckType},
 			}
 		},
@@ -243,12 +243,12 @@ func ReleaseUnsubscribe(pkt *v5.Unsubscribe) {
 }
 
 // AcquireUnsubAck gets an UnsubAck packet from the pool.
-func AcquireUnsubAck() *v5.UnSubAck {
-	return unsubAckPool.Get().(*v5.UnSubAck)
+func AcquireUnsubAck() *v5.UnsubAck {
+	return unsubAckPool.Get().(*v5.UnsubAck)
 }
 
 // ReleaseUnsubAck returns an UnsubAck packet to the pool.
-func ReleaseUnsubAck(pkt *v5.UnSubAck) {
+func ReleaseUnsubAck(pkt *v5.UnsubAck) {
 	pkt.Reset()
 	unsubAckPool.Put(pkt)
 }
@@ -359,7 +359,7 @@ func Release(pkt v5.ControlPacket) {
 		ReleaseSubAck(p)
 	case *v5.Unsubscribe:
 		ReleaseUnsubscribe(p)
-	case *v5.UnSubAck:
+	case *v5.UnsubAck:
 		ReleaseUnsubAck(p)
 	case *v5.PingReq:
 		ReleasePingReq(p)

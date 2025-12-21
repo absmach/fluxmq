@@ -12,18 +12,31 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
-// ConnackReturnCodes is a map of the error codes constants for Connect()
-// to a string representation of the error.
-var ConnackReturnCodes = map[uint8]string{
-	0:   "Connection Accepted",
-	1:   "Connection Refused: Bad Protocol Version",
-	2:   "Connection Refused: Client Identifier Rejected",
-	3:   "Connection Refused: Server Unavailable",
-	4:   "Connection Refused: Username or Password in unknown format",
-	5:   "Connection Refused: Not Authorised",
-	254: "Connection Error",
-	255: "Connection Refused: Protocol Violation",
-}
+// The list of valid ConnAck reason codes.
+const (
+	ConnAckSuccess                     = 0x00
+	ConnAckUnspecifiedError            = 0x80
+	ConnAckMalformedPacket             = 0x81
+	ConnAckProtocolError               = 0x82
+	ConnAckImplementationSpecificError = 0x83
+	ConnAckUnsupportedProtocolVersion  = 0x84
+	ConnAckInvalidClientID             = 0x85
+	ConnAckBadUsernameOrPassword       = 0x86
+	ConnAckNotAuthorized               = 0x87
+	ConnAckServerUnavailable           = 0x88
+	ConnAckServerBusy                  = 0x89
+	ConnAckBanned                      = 0x8A
+	ConnAckBadAuthenticationMethod     = 0x8C
+	ConnAckTopicNameInvalid            = 0x90
+	ConnAckPacketTooLarge              = 0x95
+	ConnAckQuotaExceeded               = 0x97
+	ConnAckPayloadFormatInvalid        = 0x99
+	ConnAckRetainNotSupported          = 0x9A
+	ConnAckQoSNotSupported             = 0x9B
+	ConnAckUseAnotherServer            = 0x9C
+	ConnAckServerMoved                 = 0x9D
+	ConnAckConnectionRateExceeded      = 0x9F
+)
 
 // ConnAck is an internal representation of the fields of the ConnAck MQTT packet.
 type ConnAck struct {
@@ -51,7 +64,7 @@ type ConnAckProperties struct {
 	MaximumPacketSize *uint32
 	// AssignedClientID is the server assigned client identifier in the case
 	// that a client connected without specifying a clientID the server
-	// generates one and returns it in the Connack.
+	// generates one and returns it in the ConnAck.
 	AssignedClientID string
 	// TopicAliasMax is the highest value permitted as a Topic Alias.
 	TopicAliasMax *uint16
@@ -64,11 +77,11 @@ type ConnAckProperties struct {
 	WildcardSubAvailable *byte
 	// SubIDAvailable indicates whether subscription identifiers are supported.
 	SubIDAvailable *byte
-	// ServerKeepAlive allows the server to specify in the Connack packet
+	// ServerKeepAlive allows the server to specify in the ConnAck packet
 	// the time in seconds to be used as the keep alive value.
 	ServerKeepAlive *uint16
 	// ResponseInfo is a UTF8 encoded string that can be used as the basis for
-	// createing a Response Topic. The way in which the Client creates a
+	// creating a Response Topic. The way in which the Client creates a
 	// Response Topic from the Response Information is not defined. A common
 	// use of this is to pass a globally unique portion of the topic tree which
 	// is reserved for this Client for at least the lifetime of its Session. This
@@ -329,6 +342,56 @@ func (pkt *ConnAck) Unpack(r io.Reader) error {
 	}
 
 	return nil
+}
+
+// Reason returns a string representation of the meaning of the ReasonCode
+func (c *ConnAck) Reason() string {
+	switch c.ReasonCode {
+	case 0:
+		return "Success - The Connection is accepted."
+	case 128:
+		return "Unspecified error - The Server does not wish to reveal the reason for the failure, or none of the other Reason Codes apply."
+	case 129:
+		return "Malformed Packet - Data within the CONNECT packet could not be correctly parsed."
+	case 130:
+		return "Protocol Error - Data in the CONNECT packet does not conform to this specification."
+	case 131:
+		return "Implementation specific error - The CONNECT is valid but is not accepted by this Server."
+	case 132:
+		return "Unsupported Protocol Version - The Server does not support the version of the MQTT protocol requested by the Client."
+	case 133:
+		return "Client Identifier not valid - The Client Identifier is a valid string but is not allowed by the Server."
+	case 134:
+		return "Bad User Name or Password - The Server does not accept the User Name or Password specified by the Client"
+	case 135:
+		return "Not authorized - The Client is not authorized to connect."
+	case 136:
+		return "Server unavailable - The MQTT Server is not available."
+	case 137:
+		return "Server busy - The Server is busy. Try again later."
+	case 138:
+		return "Banned - This Client has been banned by administrative action. Contact the server administrator."
+	case 140:
+		return "Bad authentication method - The authentication method is not supported or does not match the authentication method currently in use."
+	case 144:
+		return "Topic Name invalid - The Will Topic Name is not malformed, but is not accepted by this Server."
+	case 149:
+		return "Packet too large - The CONNECT packet exceeded the maximum permissible size."
+	case 151:
+		return "Quota exceeded - An implementation or administrative imposed limit has been exceeded."
+	case 154:
+		return "Retain not supported - The Server does not support retained messages, and Will Retain was set to 1."
+	case 155:
+		return "QoS not supported - The Server does not support the QoS set in Will QoS."
+	case 156:
+		return "Use another server - The Client should temporarily use another server."
+	case 157:
+		return "Server moved - The Client should permanently use another server."
+	case 159:
+		return "Connection rate exceeded - The connection rate limit has been exceeded."
+	}
+
+	return ""
 }
 
 func (pkt *ConnAck) Details() Details {

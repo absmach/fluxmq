@@ -12,6 +12,22 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
+// The list of valid SubAck reason codes.
+const (
+	SubAckGrantedQoS0                         = 0x00
+	SubAckGrantedQoS1                         = 0x01
+	SubAckGrantedQoS2                         = 0x02
+	SubAckUnspecifiedError                    = 0x80
+	SubAckImplementationSpecificError         = 0x83
+	SubAckNotAuthorized                       = 0x87
+	SubAckTopicFilterInvalid                  = 0x8F
+	SubAckPacketIdentifierInUse               = 0x91
+	SubAckQuotaExceeded                       = 0x97
+	SubAckSharedSubscriptionNotSupported      = 0x9E
+	SubAckSubscriptionIdentifiersNotSupported = 0xA1
+	SubAckWildcardSubscriptionsNotSupported   = 0xA2
+)
+
 // SubAck is an internal representation of the fields of the SUBACK MQTT packet.
 type SubAck struct {
 	packets.FixedHeader
@@ -20,7 +36,6 @@ type SubAck struct {
 	Properties *BasicProperties
 	// Payload
 	ReasonCodes *[]byte // MQTT 5
-	Reason      *byte   // MQTT 3
 }
 
 func (pkt *SubAck) String() string {
@@ -93,6 +108,39 @@ func (pkt *SubAck) Unpack(r io.Reader) error {
 	}
 	pkt.ReasonCodes = &rcs
 	return nil
+}
+
+// Reason returns a string representation of the meaning of the ReasonCode
+func (s *SubAck) Reason(index int) string {
+	if index >= 0 && index < len(*s.ReasonCodes) {
+		switch (*s.ReasonCodes)[index] {
+		case SubAckGrantedQoS0:
+			return "Granted QoS 0 - The subscription is accepted and the maximum QoS sent will be QoS 0. This might be a lower QoS than was requested."
+		case SubAckGrantedQoS1:
+			return "Granted QoS 1 - The subscription is accepted and the maximum QoS sent will be QoS 1. This might be a lower QoS than was requested."
+		case SubAckGrantedQoS2:
+			return "Granted QoS 2 - The subscription is accepted and any received QoS will be sent to this subscription."
+		case SubAckUnspecifiedError:
+			return "Unspecified error - The subscription is not accepted and the Server either does not wish to reveal the reason or none of the other Reason Codes apply."
+		case SubAckImplementationSpecificError:
+			return "Implementation specific error - The SUBSCRIBE is valid but the Server does not accept it."
+		case SubAckNotAuthorized:
+			return "Not authorized - The Client is not authorized to make this subscription."
+		case SubAckTopicFilterInvalid:
+			return "Topic Filter invalid - The Topic Filter is correctly formed but is not allowed for this Client."
+		case SubAckPacketIdentifierInUse:
+			return "Packet Identifier in use - The specified Packet Identifier is already in use."
+		case SubAckQuotaExceeded:
+			return "Quota exceeded - An implementation or administrative imposed limit has been exceeded."
+		case SubAckSharedSubscriptionNotSupported:
+			return "Shared Subscription not supported - The Server does not support Shared Subscriptions for this Client."
+		case SubAckSubscriptionIdentifiersNotSupported:
+			return "Subscription Identifiers not supported - The Server does not support Subscription Identifiers; the subscription is not accepted."
+		case SubAckWildcardSubscriptionsNotSupported:
+			return "Wildcard subscriptions not supported - The Server does not support Wildcard subscription; the subscription is not accepted."
+		}
+	}
+	return "Invalid Reason index"
 }
 
 func (pkt *SubAck) Details() Details {

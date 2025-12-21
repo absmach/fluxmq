@@ -12,6 +12,19 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
+// The List of valid PubRec reason codes
+const (
+	PubRecSuccess                     = 0x00
+	PubRecNoMatchingSubscribers       = 0x10
+	PubRecUnspecifiedError            = 0x80
+	PubRecImplementationSpecificError = 0x83
+	PubRecNotAuthorized               = 0x87
+	PubRecTopicNameInvalid            = 0x90
+	PubRecPacketIdentifierInUse       = 0x91
+	PubRecQuotaExceeded               = 0x97
+	PubRecPayloadFormatInvalid        = 0x99
+)
+
 // PubRec is an internal representation of the fields of the PUBREC MQTT packet.
 type PubRec struct {
 	packets.FixedHeader
