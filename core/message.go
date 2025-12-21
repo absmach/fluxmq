@@ -3,19 +3,18 @@
 
 package core
 
-// Message represents an MQTT PUBLISH message for delivery and routing.
-// This is a lightweight representation used across broker, cluster, and storage layers.
-// It contains the essential fields needed for message delivery, routing, and will messages.
+// Message represents an MQTT PUBLISH message for routing between brokers.
+// This is a lightweight wire format used for inter-broker communication in the cluster.
+//
+// It is used for routing messages between broker nodes in a cluster.
+// Contains only the essential MQTT PUBLISH fields needed for delivery.
+// Does NOT include persistence-related fields (timestamps, packet IDs, etc.).
+
 type Message struct {
 	Topic      string
 	Payload    []byte
 	QoS        byte
 	Retain     bool
-	Dup        bool // Duplicate delivery flag
+	Dup        bool
 	Properties map[string]string
-
-	// Optional fields for specific use cases
-	ClientID string // Used for will messages to identify the client
-	Delay    uint32 // Used for will messages (delay before publishing)
-	Expiry   uint32 // Used for will messages (message expiry interval)
 }

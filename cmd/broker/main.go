@@ -134,10 +134,10 @@ func main() {
 	b := broker.NewBroker(store, cl, logger, stats)
 	defer b.Close()
 
-	// Set message handler and session manager on cluster if it's an etcd cluster
+	// Set message handler on cluster if it's an etcd cluster
+	// MessageHandler interface now includes both message routing and session management
 	if etcdCluster != nil {
 		etcdCluster.SetMessageHandler(b)
-		// etcdCluster.SetSessionManager(b)
 	}
 
 	// Context for graceful shutdown
