@@ -11,6 +11,14 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
+// SubAck return codes for MQTT v3.1.1.
+const (
+	SubAckGrantedQoS0 = 0x00
+	SubAckGrantedQoS1 = 0x01
+	SubAckGrantedQoS2 = 0x02
+	SubAckFailure     = 0x80
+)
+
 // SubAck represents the MQTT V3.1.1 SUBACK packet.
 type SubAck struct {
 	packets.FixedHeader

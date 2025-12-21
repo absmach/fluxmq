@@ -11,6 +11,16 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 )
 
+// ConnAck return codes for MQTT v3.1.1.
+const (
+	ConnAckAccepted              = 0x00
+	ConnAckUnacceptableProtocol  = 0x01
+	ConnAckIdentifierRejected    = 0x02
+	ConnAckServerUnavailable     = 0x03
+	ConnAckBadUsernameOrPassword = 0x04
+	ConnAckNotAuthorized         = 0x05
+)
+
 // ConnAck represents the MQTT V3.1.1 CONNACK packet.
 type ConnAck struct {
 	packets.FixedHeader

@@ -49,14 +49,14 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			generated, err := GenerateClientID()
 			if err != nil {
 				h.broker.stats.IncrementProtocolErrors()
-				sendV3ConnAck(conn, false, 0x02)
+				sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
 				conn.Close()
 				return err
 			}
 			clientID = generated
 		} else {
 			h.broker.stats.IncrementProtocolErrors()
-			sendV3ConnAck(conn, false, 0x02)
+			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
 			conn.Close()
 			return ErrClientIDRequired
 		}
@@ -69,7 +69,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.stats.IncrementAuthErrors()
-			sendV3ConnAck(conn, false, 0x04)
+			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword)
 			conn.Close()
 			return ErrNotAuthorized
 		}
@@ -96,7 +96,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
 		h.broker.stats.IncrementProtocolErrors()
-		sendV3ConnAck(conn, false, 0x03)
+		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable)
 		conn.Close()
 		return err
 	}
@@ -108,7 +108,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	}
 
 	sessionPresent := !isNew && !cleanStart
-	if err := sendV3ConnAck(conn, sessionPresent, 0x00); err != nil {
+	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {
 		s.Disconnect(false)
 		return err
 	}
@@ -290,14 +290,14 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 	for i, t := range p.Topics {
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Name) {
 			h.broker.stats.IncrementAuthzErrors()
-			reasonCodes[i] = 0x80
+			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
 
 		opts := storage.SubscribeOptions{}
 
 		if err := h.broker.subscribe(s, t.Name, t.QoS, opts); err != nil {
-			reasonCodes[i] = 0x80
+			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
 

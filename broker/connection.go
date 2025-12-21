@@ -30,7 +30,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 	if ok {
 		if p3.ProtocolVersion != 3 && p3.ProtocolVersion != 4 {
 			broker.stats.IncrementProtocolErrors()
-			sendV3ConnAck(conn, false, 0x01)
+			sendV3ConnAck(conn, false, v3.ConnAckUnacceptableProtocol)
 			conn.Close()
 			return
 		}
