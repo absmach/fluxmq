@@ -10,20 +10,20 @@ import (
 	"net"
 	"sync"
 
-	cluster "github.com/absmach/mqtt/cluster/grpc"
-	"google.golang.org/grpc"
+	"github.com/absmach/mqtt/cluster/grpc"
+	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Transport handles inter-broker gRPC communication.
 type Transport struct {
-	cluster.UnimplementedBrokerServiceServer
+	grpc.UnimplementedBrokerServiceServer
 	mu          sync.RWMutex
 	nodeID      string
 	bindAddr    string
-	grpcServer  *grpc.Server
+	grpcServer  *gogrpc.Server
 	listener    net.Listener
-	peerClients map[string]cluster.BrokerServiceClient
+	peerClients map[string]grpc.BrokerServiceClient
 	handler     TransportHandler
 	stopCh      chan struct{}
 }
@@ -35,7 +35,7 @@ type TransportHandler interface {
 
 	// HandleTakeover handles a session takeover request from another broker.
 	// Returns the session state from the old node.
-	HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *cluster.SessionState) (*cluster.SessionState, error)
+	HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *grpc.SessionState) (*grpc.SessionState, error)
 }
 
 // NewTransport creates a new gRPC transport.
@@ -45,20 +45,20 @@ func NewTransport(nodeID, bindAddr string, handler TransportHandler) (*Transport
 		return nil, fmt.Errorf("failed to listen on %s: %w", bindAddr, err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := gogrpc.NewServer()
 
 	t := &Transport{
 		nodeID:      nodeID,
 		bindAddr:    bindAddr,
 		grpcServer:  grpcServer,
 		listener:    listener,
-		peerClients: make(map[string]cluster.BrokerServiceClient),
+		peerClients: make(map[string]grpc.BrokerServiceClient),
 		handler:     handler,
 		stopCh:      make(chan struct{}),
 	}
 
 	// Register gRPC service
-	cluster.RegisterBrokerServiceServer(grpcServer, t)
+	grpc.RegisterBrokerServiceServer(grpcServer, t)
 
 	return t, nil
 }
@@ -107,12 +107,12 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 	}
 
 	// Create gRPC connection
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer %s at %s: %w", nodeID, addr, err)
 	}
 
-	client := cluster.NewBrokerServiceClient(conn)
+	client := grpc.NewBrokerServiceClient(conn)
 	t.peerClients[nodeID] = client
 
 	log.Printf("Connected to peer %s at %s", nodeID, addr)
@@ -120,7 +120,7 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 }
 
 // GetPeerClient returns the gRPC client for a peer node.
-func (t *Transport) GetPeerClient(nodeID string) (cluster.BrokerServiceClient, error) {
+func (t *Transport) GetPeerClient(nodeID string) (grpc.BrokerServiceClient, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -134,9 +134,9 @@ func (t *Transport) GetPeerClient(nodeID string) (cluster.BrokerServiceClient, e
 
 // RoutePublish implements BrokerServiceServer.RoutePublish.
 // This is called by peer brokers to deliver a message to a local client.
-func (t *Transport) RoutePublish(ctx context.Context, req *cluster.PublishRequest) (*cluster.PublishResponse, error) {
+func (t *Transport) RoutePublish(ctx context.Context, req *grpc.PublishRequest) (*grpc.PublishResponse, error) {
 	if t.handler == nil {
-		return &cluster.PublishResponse{
+		return &grpc.PublishResponse{
 			Success: false,
 			Error:   "no handler configured",
 		}, nil
@@ -153,22 +153,22 @@ func (t *Transport) RoutePublish(ctx context.Context, req *cluster.PublishReques
 		req.Properties,
 	)
 	if err != nil {
-		return &cluster.PublishResponse{
+		return &grpc.PublishResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
 
-	return &cluster.PublishResponse{
+	return &grpc.PublishResponse{
 		Success: true,
 	}, nil
 }
 
 // TakeoverSession implements BrokerServiceServer.TakeoverSession.
 // This is called by peer brokers to take over a session.
-func (t *Transport) TakeoverSession(ctx context.Context, req *cluster.TakeoverRequest) (*cluster.TakeoverResponse, error) {
+func (t *Transport) TakeoverSession(ctx context.Context, req *grpc.TakeoverRequest) (*grpc.TakeoverResponse, error) {
 	if t.handler == nil {
-		return &cluster.TakeoverResponse{
+		return &grpc.TakeoverResponse{
 			Success: false,
 			Error:   "no handler configured",
 		}, nil
@@ -183,13 +183,13 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *cluster.TakeoverRe
 		nil,
 	)
 	if err != nil {
-		return &cluster.TakeoverResponse{
+		return &grpc.TakeoverResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
 
-	return &cluster.TakeoverResponse{
+	return &grpc.TakeoverResponse{
 		Success:      true,
 		SessionState: sessionState,
 	}, nil
@@ -202,7 +202,7 @@ func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic str
 		return err
 	}
 
-	req := &cluster.PublishRequest{
+	req := &grpc.PublishRequest{
 		ClientId:   clientID,
 		Topic:      topic,
 		Payload:    payload,
@@ -225,13 +225,13 @@ func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic str
 }
 
 // SendTakeover sends a session takeover request to a peer node and returns the session state.
-func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*cluster.SessionState, error) {
+func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
 	client, err := t.GetPeerClient(nodeID)
 	if err != nil {
 		return nil, err
 	}
 
-	req := &cluster.TakeoverRequest{
+	req := &grpc.TakeoverRequest{
 		ClientId: clientID,
 		FromNode: fromNode,
 		ToNode:   toNode,

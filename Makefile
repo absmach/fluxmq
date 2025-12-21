@@ -11,7 +11,7 @@ GOFLAGS := -trimpath
 
 
 PKG_PROTO_GEN_OUT_DIR=cluster/grpc
-INTERNAL_PROTO_DIR=internal
+INTERNAL_PROTO_DIR=proto
 INTERNAL_PROTO_FILES := $(shell find $(INTERNAL_PROTO_DIR) -name "*.proto" | sed 's|$(INTERNAL_PROTO_DIR)/||')
 
 # Default target
