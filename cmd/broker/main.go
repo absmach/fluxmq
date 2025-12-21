@@ -88,7 +88,7 @@ func main() {
 	}
 
 	// Initialize cluster coordination
-	var clust cluster.Cluster
+	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
 	if cfg.Cluster.Enabled {
 		// Create embedded etcd cluster
@@ -110,11 +110,11 @@ func main() {
 			os.Exit(1)
 		}
 		etcdCluster = ec
-		clust = etcdCluster
-		defer clust.Stop()
+		cl = etcdCluster
+		defer cl.Stop()
 
 		// Start cluster (campaign for leadership)
-		if err := clust.Start(); err != nil {
+		if err := cl.Start(); err != nil {
 			slog.Error("Failed to start cluster", "error", err)
 			os.Exit(1)
 		}
@@ -125,13 +125,13 @@ func main() {
 			"etcd_bind", cfg.Cluster.Etcd.BindAddr)
 	} else {
 		// Single-node mode with noop cluster
-		clust = cluster.NewNoopCluster(cfg.Cluster.NodeID)
+		cl = cluster.NewNoopCluster(cfg.Cluster.NodeID)
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
 	// Create core broker with storage, cluster, logger, and metrics
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, clust, logger, stats)
+	b := broker.NewBroker(store, cl, logger, stats)
 	defer b.Close()
 
 	// Set message handler and session manager on cluster if it's an etcd cluster

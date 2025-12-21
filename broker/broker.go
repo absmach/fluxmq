@@ -43,10 +43,10 @@ type Broker struct {
 // NewBroker creates a new broker instance.
 // Parameters:
 //   - store: Storage backend for messages, sessions, subscriptions, retained, and wills (nil uses memory)
-//   - clust: Cluster coordination interface (nil for single-node mode)
+//   - cl: Cluster coordination interface (nil for single-node mode)
 //   - logger: Logger instance (nil uses default)
 //   - stats: Stats collector (nil creates new one)
-func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, stats *Stats) *Broker {
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -69,7 +69,7 @@ func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, 
 		subscriptions: store.Subscriptions(),
 		retained:      store.Retained(),
 		wills:         store.Wills(),
-		cluster:       clust,
+		cluster:       cl,
 		logger:        logger,
 		stats:         stats,
 		stopCh:        make(chan struct{}),

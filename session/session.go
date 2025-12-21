@@ -51,7 +51,7 @@ type Session struct {
 	authMethod           string
 	authState            any
 	conn                 core.Connection
-	msgHandler           *messages.MessageHandler
+	msgHandler           *msgHandler
 	Will                 *storage.WillMessage
 	subscriptions        map[string]storage.SubscribeOptions
 	subscriptionIDs      map[string][]uint32
@@ -103,7 +103,7 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		receiveMax = 65535
 	}
 
-	msgHandler := messages.NewMessageHandler(inflight, offlineQueue)
+	msgHandler := newMessageHandler(inflight, offlineQueue)
 
 	s := &Session{
 		ID:                   clientID,

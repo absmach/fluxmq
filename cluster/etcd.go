@@ -20,6 +20,13 @@ import (
 	"go.etcd.io/etcd/server/v3/embed"
 )
 
+const (
+	willPrefix          = "/mqtt/wills/"
+	retainedPrefix      = "/mqtt/retained/"
+	subscriptionsPrefix = "/mqtt/subscriptions/"
+	sessionsPrefix      = "/mqtt/sessions/"
+)
+
 var _ Cluster = (*EtcdCluster)(nil)
 
 // MessageHandler handles messages routed from other brokers.
@@ -144,7 +151,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 	}
 
 	// Create session for leadership and leases
-	sess, err := concurrency.NewSession(client, concurrency.WithTTL(10))
+	s, err := concurrency.NewSession(client, concurrency.WithTTL(10))
 	if err != nil {
 		client.Close()
 		e.Close()
@@ -152,7 +159,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 	}
 
 	// Create election for leadership
-	election := concurrency.NewElection(sess, "/mqtt/leader")
+	election := concurrency.NewElection(s, "/mqtt/leader")
 
 	c := &EtcdCluster{
 		nodeID:   cfg.NodeID,
@@ -160,7 +167,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 		etcd:     e,
 		client:   client,
 		election: election,
-		session:  sess,
+		session:  s,
 		subCache: make(map[string]*storage.Subscription),
 		stopCh:   make(chan struct{}),
 	}
@@ -190,7 +197,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 		transport, err := NewTransport(cfg.NodeID, cfg.TransportAddr, c)
 		if err != nil {
 			client.Close()
-			sess.Close()
+			s.Close()
 			e.Close()
 			return nil, fmt.Errorf("failed to create transport: %w", err)
 		}
@@ -336,7 +343,7 @@ func (c *EtcdCluster) campaignLeader() {
 
 // AcquireSession registers this node as the owner of a session.
 func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
-	key := "/mqtt/sessions/" + clientID + "/owner"
+	key := sessionsPrefix + clientID + "/owner"
 
 	// Try to acquire with our lease (auto-expires if node dies)
 	_, err := c.client.Put(ctx, key, nodeID, clientv3.WithLease(c.sessionLease))
@@ -345,14 +352,14 @@ func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID strin
 
 // ReleaseSession releases ownership of a session.
 func (c *EtcdCluster) ReleaseSession(ctx context.Context, clientID string) error {
-	key := "/mqtt/sessions/" + clientID + "/owner"
+	key := sessionsPrefix + clientID + "/owner"
 	_, err := c.client.Delete(ctx, key)
 	return err
 }
 
 // GetSessionOwner returns the node ID that owns the session.
 func (c *EtcdCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
-	key := "/mqtt/sessions/" + clientID + "/owner"
+	key := sessionsPrefix + clientID + "/owner"
 
 	resp, err := c.client.Get(ctx, key)
 	if err != nil {
@@ -368,7 +375,7 @@ func (c *EtcdCluster) GetSessionOwner(ctx context.Context, clientID string) (str
 
 // WatchSessionOwner watches for ownership changes of a specific session.
 func (c *EtcdCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan OwnershipChange {
-	key := "/mqtt/sessions/" + clientID + "/owner"
+	key := sessionsPrefix + clientID + "/owner"
 	ch := make(chan OwnershipChange, 1)
 
 	watchCh := c.client.Watch(ctx, key)
@@ -405,7 +412,7 @@ func (c *EtcdCluster) WatchSessionOwner(ctx context.Context, clientID string) <-
 
 // AddSubscription adds a subscription to the cluster store.
 func (c *EtcdCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error {
-	key := fmt.Sprintf("/mqtt/subscriptions/%s/%s", clientID, filter)
+	key := fmt.Sprintf("%s%s/%s", subscriptionsPrefix, clientID, filter)
 
 	sub := &storage.Subscription{
 		ClientID: clientID,
@@ -425,14 +432,14 @@ func (c *EtcdCluster) AddSubscription(ctx context.Context, clientID, filter stri
 
 // RemoveSubscription removes a subscription from the cluster store.
 func (c *EtcdCluster) RemoveSubscription(ctx context.Context, clientID, filter string) error {
-	key := fmt.Sprintf("/mqtt/subscriptions/%s/%s", clientID, filter)
+	key := fmt.Sprintf("%s%s/%s", subscriptionsPrefix, clientID, filter)
 	_, err := c.client.Delete(ctx, key)
 	return err
 }
 
 // GetSubscriptionsForClient returns all subscriptions for a client.
 func (c *EtcdCluster) GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*storage.Subscription, error) {
-	prefix := "/mqtt/subscriptions/" + clientID + "/"
+	prefix := subscriptionsPrefix + clientID + "/"
 
 	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
@@ -473,7 +480,7 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 
 // SetRetained stores a retained message in etcd.
 func (c *EtcdCluster) SetRetained(ctx context.Context, topic string, msg *storage.Message) error {
-	key := "/mqtt/retained/" + topic
+	key := retainedPrefix + topic
 
 	// Empty payload means delete
 	if len(msg.Payload) == 0 {
@@ -491,7 +498,7 @@ func (c *EtcdCluster) SetRetained(ctx context.Context, topic string, msg *storag
 
 // GetRetained retrieves a retained message by exact topic.
 func (c *EtcdCluster) GetRetained(ctx context.Context, topic string) (*storage.Message, error) {
-	key := "/mqtt/retained/" + topic
+	key := retainedPrefix + topic
 
 	resp, err := c.client.Get(ctx, key)
 	if err != nil {
@@ -512,7 +519,7 @@ func (c *EtcdCluster) GetRetained(ctx context.Context, topic string) (*storage.M
 
 // DeleteRetained removes a retained message.
 func (c *EtcdCluster) DeleteRetained(ctx context.Context, topic string) error {
-	key := "/mqtt/retained/" + topic
+	key := retainedPrefix + topic
 	_, err := c.client.Delete(ctx, key)
 	return err
 }
@@ -520,7 +527,7 @@ func (c *EtcdCluster) DeleteRetained(ctx context.Context, topic string) error {
 // GetRetainedMatching returns all retained messages matching a filter.
 func (c *EtcdCluster) GetRetainedMatching(ctx context.Context, filter string) ([]*storage.Message, error) {
 	// Get all retained messages
-	resp, err := c.client.Get(ctx, "/mqtt/retained/", clientv3.WithPrefix())
+	resp, err := c.client.Get(ctx, retainedPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +535,7 @@ func (c *EtcdCluster) GetRetainedMatching(ctx context.Context, filter string) ([
 	var matched []*storage.Message
 	for _, kv := range resp.Kvs {
 		// Extract topic from key (remove "/mqtt/retained/" prefix)
-		topic := string(kv.Key)[len("/mqtt/retained/"):]
+		topic := string(kv.Key)[len(retainedPrefix):]
 
 		// Check if topic matches the filter
 		if topicMatchesFilter(topic, filter) {
@@ -548,7 +555,7 @@ func (c *EtcdCluster) GetRetainedMatching(ctx context.Context, filter string) ([
 
 // SetWill stores a will message in etcd.
 func (c *EtcdCluster) SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error {
-	key := "/mqtt/wills/" + clientID
+	key := willPrefix + clientID
 
 	willEntry := struct {
 		Will           *storage.WillMessage `json:"will"`
@@ -569,7 +576,7 @@ func (c *EtcdCluster) SetWill(ctx context.Context, clientID string, will *storag
 
 // GetWill retrieves the will message for a client.
 func (c *EtcdCluster) GetWill(ctx context.Context, clientID string) (*storage.WillMessage, error) {
-	key := "/mqtt/wills/" + clientID
+	key := willPrefix + clientID
 
 	resp, err := c.client.Get(ctx, key)
 	if err != nil {
@@ -594,7 +601,7 @@ func (c *EtcdCluster) GetWill(ctx context.Context, clientID string) (*storage.Wi
 
 // DeleteWill removes the will message for a client.
 func (c *EtcdCluster) DeleteWill(ctx context.Context, clientID string) error {
-	key := "/mqtt/wills/" + clientID
+	key := willPrefix + clientID
 	_, err := c.client.Delete(ctx, key)
 	return err
 }
@@ -602,7 +609,7 @@ func (c *EtcdCluster) DeleteWill(ctx context.Context, clientID string) error {
 // GetPendingWills returns will messages that should be triggered.
 func (c *EtcdCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessage, error) {
 	// Get all will messages
-	resp, err := c.client.Get(ctx, "/mqtt/wills/", clientv3.WithPrefix())
+	resp, err := c.client.Get(ctx, willPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
@@ -758,7 +765,7 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 // loadSubscriptionCache loads all subscriptions from etcd into the local cache.
 func (c *EtcdCluster) loadSubscriptionCache() error {
 	ctx := context.Background()
-	resp, err := c.client.Get(ctx, "/mqtt/subscriptions/", clientv3.WithPrefix())
+	resp, err := c.client.Get(ctx, subscriptionsPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return fmt.Errorf("failed to load subscriptions: %w", err)
 	}
@@ -783,7 +790,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 
 // watchSubscriptions watches etcd for subscription changes and updates the local cache.
 func (c *EtcdCluster) watchSubscriptions() {
-	watchCh := c.client.Watch(context.Background(), "/mqtt/subscriptions/", clientv3.WithPrefix())
+	watchCh := c.client.Watch(context.Background(), subscriptionsPrefix, clientv3.WithPrefix())
 
 	for {
 		select {
@@ -813,7 +820,7 @@ func (c *EtcdCluster) watchSubscriptions() {
 					// Subscription removed
 					// Parse key to extract clientID and filter
 					key := string(event.Kv.Key)
-					parts := strings.Split(strings.TrimPrefix(key, "/mqtt/subscriptions/"), "/")
+					parts := strings.Split(strings.TrimPrefix(key, subscriptionsPrefix), "/")
 					if len(parts) >= 2 {
 						cacheKey := fmt.Sprintf("%s|%s", parts[0], parts[1])
 						delete(c.subCache, cacheKey)

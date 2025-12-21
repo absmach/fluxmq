@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package messages
+package session
 
 import (
 	"log/slog"
@@ -12,23 +12,24 @@ import (
 	core "github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
+	"github.com/absmach/mqtt/storage/messages"
 )
 
-// MessageHandler manages message tracking, inflight operations, and aliases.
-type MessageHandler struct {
+// msgHandler manages message tracking, inflight operations, and aliases.
+type msgHandler struct {
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
-	inflight        Inflight
-	offlineQueue    Queue
+	inflight        messages.Inflight
+	offlineQueue    messages.Queue
 	outboundAliases map[string]uint16
 	inboundAliases  map[uint16]string
 	stopCh          chan struct{}
 	nextPacketID    uint32
 }
 
-// NewMessageHandler creates a new message handler.
-func NewMessageHandler(inflight Inflight, offlineQueue Queue) *MessageHandler {
-	return &MessageHandler{
+// newMessageHandler creates a new message handler.
+func newMessageHandler(inflight messages.Inflight, offlineQueue messages.Queue) *msgHandler {
+	return &msgHandler{
 		inflight:        inflight,
 		offlineQueue:    offlineQueue,
 		outboundAliases: make(map[string]uint16),
@@ -38,30 +39,30 @@ func NewMessageHandler(inflight Inflight, offlineQueue Queue) *MessageHandler {
 }
 
 // StartRetryLoop starts the retry loop for inflight messages.
-func (h *MessageHandler) StartRetryLoop(writer core.PacketWriter) {
+func (h *msgHandler) StartRetryLoop(writer core.PacketWriter) {
 	h.wg.Add(1)
 	go h.retryLoop(writer)
 }
 
 // Stop stops the message handler background tasks.
-func (h *MessageHandler) Stop() {
+func (h *msgHandler) Stop() {
 	close(h.stopCh)
 	h.wg.Wait()
 	h.stopCh = make(chan struct{}) // Reset for reuse if needed, though usually new session
 }
 
 // Inflight returns the inflight tracker.
-func (h *MessageHandler) Inflight() Inflight {
+func (h *msgHandler) Inflight() messages.Inflight {
 	return h.inflight
 }
 
 // OfflineQueue returns the offline queue.
-func (h *MessageHandler) OfflineQueue() Queue {
+func (h *msgHandler) OfflineQueue() messages.Queue {
 	return h.offlineQueue
 }
 
 // NextPacketID generates the next packet ID.
-func (h *MessageHandler) NextPacketID() uint16 {
+func (h *msgHandler) NextPacketID() uint16 {
 	for {
 		id := atomic.AddUint32(&h.nextPacketID, 1)
 		id16 := uint16(id & 0xFFFF)
@@ -75,14 +76,14 @@ func (h *MessageHandler) NextPacketID() uint16 {
 }
 
 // SetTopicAlias sets a topic alias for outbound use.
-func (h *MessageHandler) SetTopicAlias(topic string, alias uint16) {
+func (h *msgHandler) SetTopicAlias(topic string, alias uint16) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.outboundAliases[topic] = alias
 }
 
 // GetTopicAlias returns the alias for a topic (outbound).
-func (h *MessageHandler) GetTopicAlias(topic string) (uint16, bool) {
+func (h *msgHandler) GetTopicAlias(topic string) (uint16, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	alias, ok := h.outboundAliases[topic]
@@ -90,14 +91,14 @@ func (h *MessageHandler) GetTopicAlias(topic string) (uint16, bool) {
 }
 
 // SetInboundAlias sets an inbound topic alias.
-func (h *MessageHandler) SetInboundAlias(alias uint16, topic string) {
+func (h *msgHandler) SetInboundAlias(alias uint16, topic string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.inboundAliases[alias] = topic
 }
 
 // ResolveInboundAlias resolves an inbound alias to a topic.
-func (h *MessageHandler) ResolveInboundAlias(alias uint16) (string, bool) {
+func (h *msgHandler) ResolveInboundAlias(alias uint16) (string, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	topic, ok := h.inboundAliases[alias]
@@ -105,14 +106,14 @@ func (h *MessageHandler) ResolveInboundAlias(alias uint16) (string, bool) {
 }
 
 // ClearAliases clears all aliases (e.g. on disconnect).
-func (h *MessageHandler) ClearAliases() {
+func (h *msgHandler) ClearAliases() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.outboundAliases = make(map[string]uint16)
 	h.inboundAliases = make(map[uint16]string)
 }
 
-func (h *MessageHandler) retryLoop(writer core.PacketWriter) {
+func (h *msgHandler) retryLoop(writer core.PacketWriter) {
 	defer h.wg.Done()
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -135,7 +136,7 @@ func (h *MessageHandler) retryLoop(writer core.PacketWriter) {
 	}
 }
 
-func (h *MessageHandler) resendMessage(writer core.PacketWriter, inflight *InflightMessage) error {
+func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage) error {
 	msg := inflight.Message
 
 	pub := &v3.Publish{
