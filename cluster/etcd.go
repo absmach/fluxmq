@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/cluster/grpc"
+	"github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -28,12 +29,6 @@ const (
 )
 
 var _ Cluster = (*EtcdCluster)(nil)
-
-// MessageHandler handles messages routed from other brokers.
-type MessageHandler interface {
-	// DeliverToClient delivers a message to a local MQTT client.
-	DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error
-}
 
 // EtcdCluster implements the Cluster interface using embedded etcd.
 type EtcdCluster struct {
@@ -54,11 +49,8 @@ type EtcdCluster struct {
 	// gRPC transport for inter-broker communication
 	transport *Transport
 
-	// Handler for incoming routed messages
+	// Handler for incoming routed messages and session management
 	msgHandler MessageHandler
-
-	// Manager for session state operations
-	sessionManager SessionManager
 
 	// Local subscription cache for fast topic matching
 	subCache   map[string]*storage.Subscription // key: clientID|filter
@@ -642,14 +634,9 @@ func (c *EtcdCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessa
 
 // --- Inter-Broker Communication ---
 
-// SetMessageHandler sets the handler for incoming routed messages.
+// SetMessageHandler sets the handler for incoming routed messages and session management.
 func (c *EtcdCluster) SetMessageHandler(handler MessageHandler) {
 	c.msgHandler = handler
-}
-
-// SetSessionManager sets the handler for session state operations.
-func (c *EtcdCluster) SetSessionManager(manager SessionManager) {
-	c.sessionManager = manager
 }
 
 // RoutePublish routes a publish to interested nodes with matching subscriptions.
@@ -727,6 +714,28 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return state, nil
 }
 
+// --- MessageHandler Implementation ---
+// These methods allow EtcdCluster to implement the MessageHandler interface
+// by delegating to the broker's handler.
+
+// DeliverToClient implements MessageHandler.DeliverToClient.
+// Delegates to the broker to deliver a message to a local client.
+func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error {
+	if c.msgHandler == nil {
+		return fmt.Errorf("no message handler configured")
+	}
+	return c.msgHandler.DeliverToClient(ctx, clientID, msg)
+}
+
+// GetSessionStateAndClose implements MessageHandler.GetSessionStateAndClose.
+// Delegates to the broker to capture session state and close the session.
+func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error) {
+	if c.msgHandler == nil {
+		return nil, fmt.Errorf("no message handler configured")
+	}
+	return c.msgHandler.GetSessionStateAndClose(ctx, clientID)
+}
+
 // --- TransportHandler Implementation ---
 
 // HandlePublish implements TransportHandler.HandlePublish.
@@ -736,7 +745,16 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 		return fmt.Errorf("no message handler configured")
 	}
 
-	return c.msgHandler.DeliverToClient(ctx, clientID, topic, payload, qos, retain, dup, properties)
+	msg := &core.Message{
+		Topic:      topic,
+		Payload:    payload,
+		QoS:        qos,
+		Retain:     retain,
+		Dup:        dup,
+		Properties: properties,
+	}
+
+	return c.msgHandler.DeliverToClient(ctx, clientID, msg)
 }
 
 // HandleTakeover implements TransportHandler.HandleTakeover.
@@ -747,13 +765,13 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 		return nil, fmt.Errorf("takeover request for wrong node: expected %s, got %s", c.nodeID, fromNode)
 	}
 
-	// Check if we have a session manager
-	if c.sessionManager == nil {
-		return nil, fmt.Errorf("no session manager configured")
+	// Check if we have a message handler
+	if c.msgHandler == nil {
+		return nil, fmt.Errorf("no message handler configured")
 	}
 
 	// Get session state and close the session
-	sessionState, err := c.sessionManager.GetSessionStateAndClose(ctx, clientID)
+	sessionState, err := c.msgHandler.GetSessionStateAndClose(ctx, clientID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session state: %w", err)
 	}

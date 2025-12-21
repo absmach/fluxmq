@@ -13,6 +13,7 @@ import (
 
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/cluster/grpc"
+	"github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
@@ -956,30 +957,22 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 }
 
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.
-func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error {
+func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error {
 	s := b.Get(clientID)
 	if s == nil {
 		return fmt.Errorf("session not found: %s", clientID)
 	}
 
-	msg := &storage.Message{
-		Topic:      topic,
-		Payload:    payload,
-		QoS:        qos,
-		Retain:     retain,
-		Properties: properties,
+	storeMsg := &storage.Message{
+		Topic:      msg.Topic,
+		Payload:    msg.Payload,
+		QoS:        msg.QoS,
+		Retain:     msg.Retain,
+		Properties: msg.Properties,
 	}
 
-	_, err := b.DeliverToSession(s, msg)
+	_, err := b.DeliverToSession(s, storeMsg)
 	return err
-}
-
-// RestoreSessionState implements cluster.SessionManager.RestoreSessionState.
-// This is called after takeover to apply session state from another node.
-func (b *Broker) RestoreSessionState(ctx context.Context, clientID string, state *grpc.SessionState) error {
-	// This method is not actually used since we apply state directly in CreateSession
-	// But we implement it to satisfy the SessionManager interface
-	return nil
 }
 
 // restoreInflightFromTakeover restores inflight messages from takeover state.

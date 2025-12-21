@@ -137,7 +137,7 @@ func main() {
 	// Set message handler and session manager on cluster if it's an etcd cluster
 	if etcdCluster != nil {
 		etcdCluster.SetMessageHandler(b)
-		etcdCluster.SetSessionManager(b)
+		// etcdCluster.SetSessionManager(b)
 	}
 
 	// Context for graceful shutdown

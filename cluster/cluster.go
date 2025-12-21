@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/cluster/grpc"
+	"github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/storage"
 )
 
@@ -136,24 +137,17 @@ type NodeInfo struct {
 	Uptime  time.Duration
 }
 
-// Message represents a routed message between brokers.
-type Message struct {
-	Topic      string
-	Payload    []byte
-	QoS        byte
-	Retain     bool
-	Properties map[string]string
-}
+// MessageHandler handles message delivery and session management for the cluster.
+// This interface is implemented by the broker to handle cluster operations:
+// - Delivering messages routed from other nodes
+// - Providing session state during takeover
+type MessageHandler interface {
+	// DeliverToClient delivers a message to a local MQTT client.
+	// This is called when a message is routed from another broker node.
+	DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error
 
-// SessionManager provides callbacks for the cluster to manage sessions on the broker.
-// The cluster calls these methods during session takeover operations.
-type SessionManager interface {
 	// GetSessionStateAndClose captures the full state of a session and closes it.
 	// This is called when another node is taking over the session.
 	// Returns nil if the session doesn't exist on this node.
 	GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error)
-
-	// RestoreSessionState applies previously captured session state when creating a session.
-	// This is called after taking over a session from another node.
-	RestoreSessionState(ctx context.Context, clientID string, state *grpc.SessionState) error
 }

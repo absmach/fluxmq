@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/absmach/mqtt/cluster/grpc"
+	"github.com/absmach/mqtt/core"
 	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -24,22 +25,12 @@ type Transport struct {
 	grpcServer  *gogrpc.Server
 	listener    net.Listener
 	peerClients map[string]grpc.BrokerServiceClient
-	handler     TransportHandler
+	handler     MessageHandler
 	stopCh      chan struct{}
 }
 
-// TransportHandler handles incoming messages from other brokers.
-type TransportHandler interface {
-	// HandlePublish handles a PUBLISH message routed from another broker.
-	HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error
-
-	// HandleTakeover handles a session takeover request from another broker.
-	// Returns the session state from the old node.
-	HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *grpc.SessionState) (*grpc.SessionState, error)
-}
-
 // NewTransport creates a new gRPC transport.
-func NewTransport(nodeID, bindAddr string, handler TransportHandler) (*Transport, error) {
+func NewTransport(nodeID, bindAddr string, handler MessageHandler) (*Transport, error) {
 	listener, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", bindAddr, err)
@@ -142,16 +133,16 @@ func (t *Transport) RoutePublish(ctx context.Context, req *grpc.PublishRequest) 
 		}, nil
 	}
 
-	err := t.handler.HandlePublish(
-		ctx,
-		req.ClientId,
-		req.Topic,
-		req.Payload,
-		byte(req.Qos),
-		req.Retain,
-		req.Dup,
-		req.Properties,
-	)
+	msg := &core.Message{
+		Topic:      req.Topic,
+		Payload:    req.Payload,
+		QoS:        byte(req.Qos),
+		Retain:     req.Retain,
+		Dup:        req.Dup,
+		Properties: req.Properties,
+	}
+
+	err := t.handler.DeliverToClient(ctx, req.ClientId, msg)
 	if err != nil {
 		return &grpc.PublishResponse{
 			Success: false,
@@ -175,13 +166,7 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *grpc.TakeoverReque
 	}
 
 	// Get session state from the handler (which will disconnect the client)
-	sessionState, err := t.handler.HandleTakeover(
-		ctx,
-		req.ClientId,
-		req.FromNode,
-		req.ToNode,
-		nil,
-	)
+	sessionState, err := t.handler.GetSessionStateAndClose(ctx, req.ClientId)
 	if err != nil {
 		return &grpc.TakeoverResponse{
 			Success: false,
