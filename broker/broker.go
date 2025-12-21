@@ -22,6 +22,11 @@ import (
 	"github.com/absmach/mqtt/storage/messages"
 )
 
+const (
+	inflightPrefix = "/inflight/"
+	queuePrefix    = "/queue/"
+)
+
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	mu            sync.RWMutex
@@ -550,7 +555,7 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 		return nil
 	}
 
-	inflightMsgs, err := b.messages.List(clientID + "/inflight/")
+	inflightMsgs, err := b.messages.List(clientID + inflightPrefix)
 	if err != nil {
 		return fmt.Errorf("failed to list inflight messages: %w", err)
 	}
@@ -561,7 +566,7 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 		}
 	}
 
-	if err := b.messages.DeleteByPrefix(clientID + "/inflight/"); err != nil {
+	if err := b.messages.DeleteByPrefix(clientID + inflightPrefix); err != nil {
 		return fmt.Errorf("failed to clear inflight messages: %w", err)
 	}
 
@@ -574,7 +579,7 @@ func (b *Broker) restoreQueueFromStorage(clientID string, queue messages.Queue) 
 		return nil
 	}
 
-	msgs, err := b.messages.List(clientID + "/queue/")
+	msgs, err := b.messages.List(clientID + queuePrefix)
 	if err != nil {
 		return fmt.Errorf("failed to list offline messages: %w", err)
 	}
@@ -583,7 +588,7 @@ func (b *Broker) restoreQueueFromStorage(clientID string, queue messages.Queue) 
 		queue.Enqueue(msg)
 	}
 
-	if err := b.messages.DeleteByPrefix(clientID + "/queue/"); err != nil {
+	if err := b.messages.DeleteByPrefix(clientID + queuePrefix); err != nil {
 		return fmt.Errorf("failed to clear offline messages: %w", err)
 	}
 
@@ -652,12 +657,12 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	if b.messages != nil {
 		msgs := s.OfflineQueue().Drain()
 		for i, msg := range msgs {
-			key := fmt.Sprintf("%s/queue/%d", s.ID, i)
+			key := fmt.Sprintf("%s%s%d", queuePrefix, s.ID, i)
 			b.messages.Store(key, msg)
 		}
 
 		for _, inf := range s.Inflight().GetAll() {
-			key := fmt.Sprintf("%s/inflight/%d", s.ID, inf.PacketID)
+			key := fmt.Sprintf("%s%s%d", inflightPrefix, s.ID, inf.PacketID)
 			b.messages.Store(key, inf.Message)
 		}
 	}
