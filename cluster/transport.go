@@ -31,7 +31,7 @@ type Transport struct {
 // TransportHandler handles incoming messages from other brokers.
 type TransportHandler interface {
 	// HandlePublish handles a PUBLISH message routed from another broker.
-	HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error
+	HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error
 
 	// HandleTakeover handles a session takeover request from another broker.
 	// Returns the session state from the old node.

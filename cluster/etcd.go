@@ -32,7 +32,7 @@ var _ Cluster = (*EtcdCluster)(nil)
 // MessageHandler handles messages routed from other brokers.
 type MessageHandler interface {
 	// DeliverToClient delivers a message to a local MQTT client.
-	DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error
+	DeliverToClient(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error
 }
 
 // EtcdCluster implements the Cluster interface using embedded etcd.
@@ -731,7 +731,7 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 
 // HandlePublish implements TransportHandler.HandlePublish.
 // Called when another broker routes a PUBLISH message to this node.
-func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain bool, dup bool, properties map[string]string) error {
+func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
 	if c.msgHandler == nil {
 		return fmt.Errorf("no message handler configured")
 	}
