@@ -24,10 +24,10 @@ type Options struct {
 
 // Client implements an MQTT client.
 type Client struct {
-	opts       Options
-	conn       net.Conn
-	logger     *slog.Logger
-	onMessage  func(topic string, payload []byte)
+	opts         Options
+	conn         net.Conn
+	logger       *slog.Logger
+	onMessage    func(topic string, payload []byte)
 	nextPacketID uint16
 }
 

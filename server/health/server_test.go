@@ -344,13 +344,13 @@ func TestReadyEndpoint(t *testing.T) {
 
 func TestClusterStatusEndpoint(t *testing.T) {
 	tests := []struct {
-		name              string
-		cluster           cluster.Cluster
-		method            string
-		expectedStatus    int
-		expectedCluster   bool
-		expectedNodeID    string
-		expectedIsLeader  bool
+		name                  string
+		cluster               cluster.Cluster
+		method                string
+		expectedStatus        int
+		expectedCluster       bool
+		expectedNodeID        string
+		expectedIsLeader      bool
 		checkMethodNotAllowed bool
 	}{
 		{

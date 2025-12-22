@@ -7,7 +7,14 @@ This document consolidates the clustering implementation plan, tracking complete
 **Current Status:** ✅ Session takeover, BadgerDB storage, and message routing fully implemented
 
 ### 🎉 Latest Update (Dec 22, 2024)
-**Quick Wins Complete - Health Endpoints Fully Functional!**
+**Code Cleanup Complete - Codebase Clean and Well-Documented!**
+
+**Code Cleanup Completed (30 minutes total):**
+- ✅ Fixed imports with goimports (client.go, server_test.go, mqtt_client.go)
+- ✅ Verified no dead code with staticcheck
+- ✅ Updated all TODOs in cross_node_test.go with clear context and task references
+- ✅ Removed vague TODOs, replaced with descriptive skip messages
+- ✅ Build and tests passing after cleanup
 
 **Quick Wins Completed (45 minutes total):**
 - ✅ Added `Broker.Stats()` getter method for metrics access
@@ -769,25 +776,38 @@ response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 
 ### 🎨 Code Cleanup (30 min - 1 hour)
 
-#### 9. Remove Dead Code & Unused Imports **[30 min]**
-**Task:**
-- Run `golangci-lint run --enable=unused,deadcode`
-- Remove any unused functions, variables, imports
-- Check for commented-out code blocks to remove
+#### 9. Remove Dead Code & Unused Imports **[30 min]** ✅ COMPLETED
+**Actions Performed:**
+- Ran `golangci-lint run --enable=unused` (deadcode linter deprecated)
+- Ran `staticcheck ./...` - no unused code found
+- Fixed imports with `goimports -w` on 3 files:
+  - `client/client.go`
+  - `server/health/server_test.go`
+  - `testutil/mqtt_client.go`
+- Verified build: `go build -o /tmp/mqtt-broker ./cmd/broker` ✅
+- No dead code or commented-out blocks found
+
+**Impact:** ✅ Clean codebase with proper imports
 
 ---
 
-#### 10. Update All TODOs **[20 min]**
-**Files:** Search `grep -r "TODO" --include="*.go"`
+#### 10. Update All TODOs **[20 min]** ✅ COMPLETED
+**Files Updated:** `cluster/cross_node_test.go`
 
-**Current TODOs:**
-- ~~`client/client.go`: QoS 1/2 packet ID tracking~~ ✅ FIXED
-- ~~`client/client.go`: Packet ID for Subscribe~~ ✅ FIXED
-- `cluster/cross_node_test.go`: QoS 2 cross-node routing (see task #4)
-- `cluster/cross_node_test.go`: Retained message cross-node test
-- `cluster/etcd.go`: Add actual health check (see task #3)
+**TODO Updates:**
+- ~~`client/client.go`: QoS 1/2 packet ID tracking~~ ✅ FIXED (removed)
+- ~~`client/client.go`: Packet ID for Subscribe~~ ✅ FIXED (removed)
+- ~~`cluster/etcd.go`: Add actual health check~~ ✅ FIXED (removed)
+- `cluster/cross_node_test.go:282` - Updated to reference routing investigation (not QoS 2 specific)
+- `cluster/cross_node_test.go:330` - Updated to reference plan.md Task #7 (Unsubscribe)
+- `cluster/cross_node_test.go:373` - Updated to reference plan.md Task #8 (Retained messages)
 
-**Action:** Update or remove each TODO with current status
+**All TODOs now:**
+- Have clear, descriptive context
+- Reference relevant plan.md tasks
+- Explain what needs to be done and why
+
+**Impact:** ✅ Well-documented test skips, easy to understand remaining work
 
 ---
 
@@ -825,10 +845,10 @@ response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 
 ## 📊 Recommended Execution Order
 
-**Week 1: Quick Wins + QoS 2**
-1. Tasks #1-3 (Stats getter, health endpoints, node health) - **1 hour total**
-2. Task #4 (QoS 2 routing investigation) - **3 hours**
-3. Task #9-10 (Code cleanup, TODOs) - **1 hour**
+**Week 1: Quick Wins + QoS 2** ✅ PARTIALLY COMPLETE
+1. ~~Tasks #1-3 (Stats getter, health endpoints, node health)~~ ✅ COMPLETED - **1 hour total**
+2. Task #4 (QoS 2 routing investigation) - **3 hours** ⬅️ NEXT
+3. ~~Task #9-10 (Code cleanup, TODOs)~~ ✅ COMPLETED - **1 hour**
 
 **Week 2: Testing + Optimization**
 4. Task #7 (3-node cluster test) - **4 hours**
@@ -838,3 +858,5 @@ response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 **Week 3: Production Hardening**
 7. Task #6 (Prometheus metrics) - **3 hours**
 8. Tasks #11-12 (Shared subscriptions, message expiry) - **Optional**
+
+**Status:** Quick wins and code cleanup complete! Next recommended task is QoS 2 routing investigation.

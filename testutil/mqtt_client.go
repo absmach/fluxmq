@@ -16,13 +16,13 @@ import (
 
 // TestMQTTClient is a minimal MQTT client for integration testing.
 type TestMQTTClient struct {
-	t        *testing.T
-	ClientID string
-	Conn     net.Conn
-	Node     *TestNode
-	messages chan *Message
-	mu       sync.Mutex
-	stopCh   chan struct{}
+	t            *testing.T
+	ClientID     string
+	Conn         net.Conn
+	Node         *TestNode
+	messages     chan *Message
+	mu           sync.Mutex
+	stopCh       chan struct{}
 	cleanSession bool
 }
 

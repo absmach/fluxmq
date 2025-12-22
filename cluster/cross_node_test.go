@@ -276,9 +276,10 @@ func TestCrossNode_WildcardSubscriptions(t *testing.T) {
 }
 
 // TestCrossNode_SubscriptionPropagation verifies subscriptions propagate across all nodes.
-// NOTE: Test times out - needs investigation
+// NOTE: Test times out when publishing from node-1/node-2 to subscriber on node-0.
+// Works fine when publisher and subscriber are on same node. May be related to routing or timing.
 func TestCrossNode_SubscriptionPropagation(t *testing.T) {
-	t.Skip("TODO: Test times out when publishing from different nodes - needs investigation")
+	t.Skip("Subscription propagation test times out - needs routing investigation")
 
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -324,9 +325,9 @@ func TestCrossNode_SubscriptionPropagation(t *testing.T) {
 }
 
 // TestCrossNode_UnsubscribePropagation verifies unsubscribe propagates and stops delivery.
-// NOTE: Requires Unsubscribe() method in testutil.TestMQTTClient
+// NOTE: Requires Unsubscribe() method in testutil.TestMQTTClient (see plan.md Task #7)
 func TestCrossNode_UnsubscribePropagation(t *testing.T) {
-	t.Skip("TODO: Requires Unsubscribe() implementation in test client")
+	t.Skip("Requires Unsubscribe() implementation in test client (plan.md Task #7)")
 
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -360,14 +361,16 @@ func TestCrossNode_UnsubscribePropagation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("before unsub"), msg.Payload)
 
-	// TODO: Implement Unsubscribe() in testutil client
-	// Then test that unsubscribe propagates and stops message delivery
+	// After implementing Unsubscribe() in testutil client, test that:
+	// 1. Unsubscribe propagates across cluster
+	// 2. Message delivery stops after unsubscribe
 }
 
 // TestCrossNode_RetainedMessages verifies retained messages work across nodes.
-// NOTE: Requires retained message optimization (Phase 7 in plan)
+// NOTE: Retained messages currently only work within single node (local storage).
+// Cross-node delivery requires centralized storage (plan.md Task #8)
 func TestCrossNode_RetainedMessages(t *testing.T) {
-	t.Skip("TODO: Retained message cross-node delivery needs optimization")
+	t.Skip("Retained message cross-node delivery requires centralized storage (plan.md Task #8)")
 
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
