@@ -231,11 +231,21 @@ func main() {
 	select {
 	case sig := <-sigChan:
 		slog.Info("Received shutdown signal", "signal", sig)
-		cancel()
 	case err := <-serverErr:
 		slog.Error("Server error", "error", err)
-		cancel()
 	}
+
+	// Perform shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer shutdownCancel()
+
+	// Shutdown broker (drain connections, transfer sessions)
+	if err := b.Shutdown(shutdownCtx, cfg.Server.ShutdownTimeout); err != nil {
+		slog.Error("Error during shutdown", "error", err)
+	}
+
+	// Cancel server contexts to stop accepting new connections
+	cancel()
 
 	// Wait for all servers to stop
 	wg.Wait()

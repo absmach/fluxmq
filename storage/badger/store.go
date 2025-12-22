@@ -4,6 +4,9 @@
 package badger
 
 import (
+	"sync"
+	"time"
+
 	"github.com/absmach/mqtt/storage"
 	"github.com/dgraph-io/badger/v4"
 )
@@ -19,6 +22,11 @@ type Store struct {
 	subscriptions *SubscriptionStore
 	retained      *RetainedStore
 	wills         *WillStore
+
+	gcStopCh chan struct{}
+	gcDone   chan struct{}
+	closed   bool
+	mu       sync.Mutex
 }
 
 // Config holds BadgerDB configuration.
@@ -43,6 +51,8 @@ func New(cfg Config) (*Store, error) {
 		subscriptions: NewSubscriptionStore(db),
 		retained:      NewRetainedStore(db),
 		wills:         NewWillStore(db),
+		gcStopCh:      make(chan struct{}),
+		gcDone:        make(chan struct{}),
 	}
 
 	// Start background value log GC
@@ -76,19 +86,43 @@ func (s *Store) Wills() storage.WillStore {
 	return s.wills
 }
 
-// Close closes the BadgerDB database.
+// Close gracefully closes the BadgerDB database.
 func (s *Store) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
+
+	// Signal GC goroutine to stop
+	close(s.gcStopCh)
+
+	// Wait for GC to finish
+	<-s.gcDone
+
+	// Close the database
 	return s.db.Close()
 }
 
 // runGC runs BadgerDB's value log garbage collection periodically.
 func (s *Store) runGC() {
-	// TODO: Add proper shutdown signal handling
-	// For now, this will run until the process exits
-	// ticker := time.NewTicker(5 * time.Minute)
-	// defer ticker.Stop()
-	//
-	// for range ticker.C {
-	// 	s.db.RunValueLogGC(0.5)
-	// }
+	defer close(s.gcDone)
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Run GC with 0.5 discard ratio (reclaim if 50%+ of file is garbage)
+			// This may return an error if no GC was needed, which is fine
+			_ = s.db.RunValueLogGC(0.5)
+		case <-s.gcStopCh:
+			// Graceful shutdown: run final GC before exiting
+			_ = s.db.RunValueLogGC(0.5)
+			return
+		}
+	}
 }

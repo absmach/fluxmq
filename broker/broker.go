@@ -44,6 +44,8 @@ type Broker struct {
 	logger        *slog.Logger
 	stats         *Stats
 	stopCh        chan struct{}
+	shuttingDown  bool
+	closed        bool
 }
 
 // NewBroker creates a new broker instance.
@@ -868,8 +870,85 @@ func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPack
 	}
 }
 
-// Close shuts down the broker.
+// Shutdown performs a graceful shutdown of the broker.
+// It waits for active sessions to disconnect or transfers them to other nodes.
+func (b *Broker) Shutdown(ctx context.Context, drainTimeout time.Duration) error {
+	b.mu.Lock()
+	b.shuttingDown = true
+	b.mu.Unlock()
+
+	b.logger.Info("Starting shutdown", "drain_timeout", drainTimeout)
+
+	// Wait for drain timeout or until all sessions disconnect
+	drainDeadline := time.Now().Add(drainTimeout)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Warn("Shutdown cancelled by context")
+			return b.Close()
+		case <-ticker.C:
+			count := b.sessionsMap.Count()
+			if count == 0 {
+				b.logger.Info("All sessions disconnected")
+				return b.Close()
+			}
+			if time.Now().After(drainDeadline) {
+				b.logger.Info("Drain timeout reached", "remaining_sessions", count)
+				// Transfer remaining sessions to other nodes (if clustered)
+				if b.cluster != nil {
+					b.transferActiveSessions(ctx)
+				}
+				return b.Close()
+			}
+			b.logger.Info("Waiting for sessions to drain", "remaining", count)
+		}
+	}
+}
+
+// transferActiveSessions transfers active sessions to other cluster nodes.
+func (b *Broker) transferActiveSessions(ctx context.Context) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	transferred := 0
+	b.sessionsMap.ForEach(func(s *session.Session) {
+		if !s.IsConnected() {
+			return
+		}
+
+		// Release session ownership so another node can take it
+		if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
+			b.logger.Error("Failed to release session during shutdown",
+				"client_id", s.ID,
+				"error", err)
+			return
+		}
+
+		transferred++
+		b.logger.Info("Released session for takeover",
+			"client_id", s.ID)
+	})
+
+	if transferred > 0 {
+		b.logger.Info("Released sessions for cluster takeover", "count", transferred)
+		// Give clients brief moment to reconnect to other nodes
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// Close shuts down the broker immediately.
 func (b *Broker) Close() error {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil
+	}
+	b.closed = true
+	b.mu.Unlock()
+
 	close(b.stopCh)
 	b.wg.Wait()
 

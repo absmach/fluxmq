@@ -55,7 +55,7 @@ func TestServerStartStop(t *testing.T) {
 	}
 }
 
-func TestGracefulShutdown(t *testing.T) {
+func TestShutdown(t *testing.T) {
 	b := broker.NewBroker(nil, nil, nil, nil)
 	defer b.Close()
 
