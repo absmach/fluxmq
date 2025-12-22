@@ -331,8 +331,6 @@ func (c *EtcdCluster) campaignLeader() {
 	log.Printf("Node %s became cluster leader", c.nodeID)
 }
 
-// --- Session Ownership Operations ---
-
 // AcquireSession registers this node as the owner of a session.
 func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
 	key := sessionsPrefix + clientID + "/owner"
@@ -400,8 +398,6 @@ func (c *EtcdCluster) WatchSessionOwner(ctx context.Context, clientID string) <-
 	return ch
 }
 
-// --- Subscription Operations ---
-
 // AddSubscription adds a subscription to the cluster store.
 func (c *EtcdCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error {
 	key := fmt.Sprintf("%s%s/%s", subscriptionsPrefix, clientID, filter)
@@ -467,8 +463,6 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 
 	return matched, nil
 }
-
-// --- Retained Message Operations ---
 
 // SetRetained stores a retained message in etcd.
 func (c *EtcdCluster) SetRetained(ctx context.Context, topic string, msg *storage.Message) error {
@@ -542,8 +536,6 @@ func (c *EtcdCluster) GetRetainedMatching(ctx context.Context, filter string) ([
 
 	return matched, nil
 }
-
-// --- Will Message Operations ---
 
 // SetWill stores a will message in etcd.
 func (c *EtcdCluster) SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error {
@@ -632,8 +624,6 @@ func (c *EtcdCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessa
 	return pending, nil
 }
 
-// --- Inter-Broker Communication ---
-
 // SetMessageHandler sets the handler for incoming routed messages and session management.
 func (c *EtcdCluster) SetMessageHandler(handler MessageHandler) {
 	c.msgHandler = handler
@@ -714,7 +704,6 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return state, nil
 }
 
-// --- MessageHandler Implementation ---
 // These methods allow EtcdCluster to implement the MessageHandler interface
 // by delegating to the broker's handler.
 
@@ -735,8 +724,6 @@ func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID stri
 	}
 	return c.msgHandler.GetSessionStateAndClose(ctx, clientID)
 }
-
-// --- TransportHandler Implementation ---
 
 // HandlePublish implements TransportHandler.HandlePublish.
 // Called when another broker routes a PUBLISH message to this node.

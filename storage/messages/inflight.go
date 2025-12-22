@@ -220,8 +220,6 @@ func (t *inflight) Clear() {
 	t.receivedIDs = make(map[uint16]time.Time)
 }
 
-// --- QoS 2 inbound tracking ---
-
 // MarkReceived marks a packet ID as received (for QoS 2 duplicate detection).
 func (t *inflight) MarkReceived(packetID uint16) {
 	t.mu.Lock()

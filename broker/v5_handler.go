@@ -464,8 +464,6 @@ func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
 	}
 }
 
-// --- Response packet senders ---
-
 func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte) error {
 	receiveMax := uint16(maxReceived)
 	topicAliasMax := s.TopicAliasMax
