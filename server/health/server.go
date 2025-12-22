@@ -194,7 +194,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	// Single-node mode
 	if s.cluster == nil {
 		response.NodeID = "single-node"
-		// response.Sessions = s.broker.Stats().ActiveSessions
+		response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 		return
@@ -204,7 +204,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	response.ClusterMode = true
 	response.NodeID = s.cluster.NodeID()
 	response.IsLeader = s.cluster.IsLeader()
-	// response.Sessions = s.broker.Stats().ActiveSessions
+	response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 
 	// Get node count if available (would need to add GetNodeCount to cluster interface)
 	// For now, just return what we have

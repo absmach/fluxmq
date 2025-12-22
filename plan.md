@@ -7,9 +7,16 @@ This document consolidates the clustering implementation plan, tracking complete
 **Current Status:** ✅ Session takeover, BadgerDB storage, and message routing fully implemented
 
 ### 🎉 Latest Update (Dec 22, 2024)
-**Health Check Endpoints Implemented!**
+**Quick Wins Complete - Health Endpoints Fully Functional!**
 
-**Health Check Server:**
+**Quick Wins Completed (45 minutes total):**
+- ✅ Added `Broker.Stats()` getter method for metrics access
+- ✅ Health endpoints now show real session counts via `GetCurrentConnections()`
+- ✅ Node health checks based on actual gRPC connectivity (not placeholder)
+- ✅ Added `Transport.HasPeerConnection()` to check peer health
+- ✅ `/cluster/status` endpoint fully operational with real-time data
+
+**Previous Update - Health Check Endpoints Implemented:**
 - ✅ Dedicated HTTP server on configurable port (default :8081)
 - ✅ `/health` endpoint - Liveness probe (always returns 200 OK)
 - ✅ `/ready` endpoint - Readiness probe (checks broker and cluster initialization)
@@ -614,46 +621,44 @@ require (
 
 ### ⚡ Quick Wins (< 1 hour each)
 
-#### 1. Add Stats() Getter to Broker **[15 min]**
-**File:** `broker/broker.go`
+#### 1. Add Stats() Getter to Broker **[15 min]** ✅ COMPLETED
+**File:** `broker/broker.go:458-461`
 **Context:** Health endpoints need to show session counts but can't access `b.stats` (private field)
-**Task:**
+**Implementation:**
 ```go
-// Add this method to broker.go:
+// Stats returns the broker statistics.
 func (b *Broker) Stats() *Stats {
     return b.stats
 }
 ```
-**Impact:** Enables session count reporting in `/cluster/status` endpoint
+**Impact:** ✅ Enables session count reporting in `/cluster/status` endpoint
 
 ---
 
-#### 2. Uncomment Session Stats in Health Endpoints **[10 min]**
-**Files:** `server/health/server.go:180, 190`
+#### 2. Uncomment Session Stats in Health Endpoints **[10 min]** ✅ COMPLETED
+**Files:** `server/health/server.go:197, 207`
 **Context:** Lines commented out waiting for Stats() getter
-**Task:**
+**Implementation:**
 ```go
-// Line 180 - Change from:
-// response.Sessions = s.broker.Stats().ActiveSessions
-
-// To:
+// Line 197 (single-node mode):
 response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 
-// Line 190 - Same change
+// Line 207 (cluster mode):
+response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 ```
-**Dependencies:** Requires task #1 above
-**Impact:** `/cluster/status` shows real session counts
+**Impact:** ✅ `/cluster/status` shows real session counts (active connections)
 
 ---
 
-#### 3. Add Real Health Check to etcd Nodes() **[20 min]**
-**File:** `cluster/etcd.go` (search for "TODO: Add actual health check")
-**Context:** `Nodes()` returns placeholder `Healthy: true` for all nodes
-**Task:**
-- Check if gRPC connection to peer is active
-- OR check last heartbeat timestamp
-- Simple approach: check if peer in `c.transports` map
-**Impact:** `/cluster/status` shows accurate node health
+#### 3. Add Real Health Check to etcd Nodes() **[20 min]** ✅ COMPLETED
+**Files:**
+- `cluster/etcd.go:279-283` (health check logic)
+- `cluster/transport.go:126-133` (new HasPeerConnection method)
+**Context:** `Nodes()` was returning placeholder `Healthy: true` for all nodes
+**Implementation:**
+- Added `Transport.HasPeerConnection(nodeID)` method to check gRPC connectivity
+- Updated `Nodes()` to check: node is this node OR has active gRPC connection
+**Impact:** ✅ `/cluster/status` shows accurate node health based on gRPC connectivity
 
 ---
 

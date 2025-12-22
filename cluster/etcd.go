@@ -275,10 +275,17 @@ func (c *EtcdCluster) Nodes() []NodeInfo {
 		if len(member.PeerURLs) > 0 {
 			peerURL = member.PeerURLs[0]
 		}
+
+		// Check if node is healthy: either it's this node, or we have a gRPC connection to it
+		healthy := member.Name == c.nodeID
+		if !healthy && c.transport != nil {
+			healthy = c.transport.HasPeerConnection(member.Name)
+		}
+
 		nodes = append(nodes, NodeInfo{
 			ID:      member.Name,
 			Address: peerURL,
-			Healthy: true, // TODO: Add actual health check
+			Healthy: healthy,
 			Leader:  member.Name == c.nodeID && c.IsLeader(),
 		})
 	}

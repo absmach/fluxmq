@@ -455,6 +455,11 @@ func (b *Broker) Get(clientID string) *session.Session {
 	return b.sessionsMap.Get(clientID)
 }
 
+// Stats returns the broker statistics.
+func (b *Broker) Stats() *Stats {
+	return b.stats
+}
+
 // destroySessionLocked destroys a session. Must be called with mu held.
 func (b *Broker) destroySessionLocked(s *session.Session) error {
 	if s.IsConnected() {

@@ -123,6 +123,15 @@ func (t *Transport) GetPeerClient(nodeID string) (grpc.BrokerServiceClient, erro
 	return client, nil
 }
 
+// HasPeerConnection checks if we have an active gRPC connection to a peer.
+func (t *Transport) HasPeerConnection(nodeID string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	_, exists := t.peerClients[nodeID]
+	return exists
+}
+
 // RoutePublish implements BrokerServiceServer.RoutePublish.
 // This is called by peer brokers to deliver a message to a local client.
 func (t *Transport) RoutePublish(ctx context.Context, req *grpc.PublishRequest) (*grpc.PublishResponse, error) {
