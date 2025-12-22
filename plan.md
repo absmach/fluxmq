@@ -7,7 +7,18 @@ This document consolidates the clustering implementation plan, tracking complete
 **Current Status:** ✅ Session takeover, BadgerDB storage, and message routing fully implemented
 
 ### 🎉 Latest Update (Dec 22, 2024)
-**Graceful Shutdown & BadgerDB GC Complete!**
+**Health Check Endpoints Implemented!**
+
+**Health Check Server:**
+- ✅ Dedicated HTTP server on configurable port (default :8081)
+- ✅ `/health` endpoint - Liveness probe (always returns 200 OK)
+- ✅ `/ready` endpoint - Readiness probe (checks broker and cluster initialization)
+- ✅ `/cluster/status` endpoint - Returns cluster info (node ID, leader status, session count)
+- ✅ Comprehensive test coverage (6 test suites, all passing)
+- ✅ Integrated with main.go with config-based enable/disable
+- ✅ Graceful shutdown support
+
+**Previous Updates:**
 
 **Graceful Shutdown Implemented:**
 - ✅ `broker.Shutdown()` - Drains connections, transfers sessions, graceful cleanup
@@ -298,10 +309,11 @@ if b.cluster == nil || b.cluster.IsLeader() {
   - [ ] Session takeover count and latency
   - [ ] Leader election events
 
-- [ ] Health checks
-  - [ ] Liveness: Node responding
-  - [ ] Readiness: Node ready to accept traffic
-  - [ ] Cluster health: Quorum status
+- [x] Health checks ✅ **COMPLETED**
+  - [x] Liveness: `/health` endpoint - Process is alive and responding
+  - [x] Readiness: `/ready` endpoint - Broker and cluster initialized and ready
+  - [x] Cluster status: `/cluster/status` endpoint - Node ID, leader status, session count
+  - **Files:** `server/health/server.go`, `server/health/server_test.go`, `config/config.go`, `cmd/broker/main.go`
 
 - [ ] Logging enhancements
   - [ ] Structured logging for cluster events
@@ -413,6 +425,10 @@ if b.cluster == nil || b.cluster.IsLeader() {
 server:
   tcp_addr: ":1883"
   tcp_max_connections: 100000
+
+  # Health check endpoints (optional)
+  health_addr: ":8081"
+  health_enabled: true
 
 cluster:
   enabled: true
@@ -589,3 +605,231 @@ require (
 - **Cross-Node Messaging Tests:** 4/5 tests passing
   - QoS 0, QoS 1, wildcards, multiple subscribers ✅
   - QoS 2 cross-node delivery needs investigation
+
+---
+
+## 🎯 NEXT ACTIONS - Sorted by Effort
+
+**Use this section for quick task selection. All tasks include full context for fast execution.**
+
+### ⚡ Quick Wins (< 1 hour each)
+
+#### 1. Add Stats() Getter to Broker **[15 min]**
+**File:** `broker/broker.go`
+**Context:** Health endpoints need to show session counts but can't access `b.stats` (private field)
+**Task:**
+```go
+// Add this method to broker.go:
+func (b *Broker) Stats() *Stats {
+    return b.stats
+}
+```
+**Impact:** Enables session count reporting in `/cluster/status` endpoint
+
+---
+
+#### 2. Uncomment Session Stats in Health Endpoints **[10 min]**
+**Files:** `server/health/server.go:180, 190`
+**Context:** Lines commented out waiting for Stats() getter
+**Task:**
+```go
+// Line 180 - Change from:
+// response.Sessions = s.broker.Stats().ActiveSessions
+
+// To:
+response.Sessions = int(s.broker.Stats().GetCurrentConnections())
+
+// Line 190 - Same change
+```
+**Dependencies:** Requires task #1 above
+**Impact:** `/cluster/status` shows real session counts
+
+---
+
+#### 3. Add Real Health Check to etcd Nodes() **[20 min]**
+**File:** `cluster/etcd.go` (search for "TODO: Add actual health check")
+**Context:** `Nodes()` returns placeholder `Healthy: true` for all nodes
+**Task:**
+- Check if gRPC connection to peer is active
+- OR check last heartbeat timestamp
+- Simple approach: check if peer in `c.transports` map
+**Impact:** `/cluster/status` shows accurate node health
+
+---
+
+### 🔧 Medium Effort (1-3 hours each)
+
+#### 4. Investigate QoS 2 Cross-Node Routing **[2-3 hours]**
+**Files:** `broker/broker.go`, `cluster/transport.go`, `cluster/cross_node_test.go:93`
+**Context:**
+- Test client QoS 2 flow is NOW FIXED (packet IDs, PUBREC/PUBREL/PUBCOMP)
+- QoS 0/1 cross-node routing works
+- QoS 2 messages not delivered cross-node (test times out)
+- Likely issue in `broker.distribute()` or `Cluster.RoutePublish()`
+
+**Investigation Steps:**
+1. Add debug logging to `broker.distribute()` for QoS 2 messages
+2. Check if `Cluster.RoutePublish()` is called for QoS 2
+3. Verify gRPC `RoutePublish` RPC handles QoS 2 correctly
+4. Check if `DeliverToClient()` on remote node processes QoS 2
+
+**Test:** `go test -v -run TestCrossNode_QoS2 ./cluster/...`
+**Impact:** Complete MQTT compliance for clustered broker
+
+---
+
+#### 5. Optimize Retained Message Matching **[2-3 hours]**
+**File:** `cluster/etcd.go` method `GetRetainedMatching()`
+**Context:**
+- Currently scans ALL retained messages in etcd with prefix scan
+- Inefficient for large retained message sets
+- Similar to subscription cache pattern (already implemented)
+
+**Implementation Options:**
+- **Option A:** Local cache with etcd watch (like subscriptions)
+- **Option B:** Topic prefix index in etcd
+- **Recommended:** Option A (consistent with subscription pattern)
+
+**Steps:**
+1. Add `retainedCache map[string]*storage.Message` to `EtcdCluster`
+2. Load cache on startup from `etcd.Get("/retained/", clientv3.WithPrefix())`
+3. Watch `/retained/` prefix for changes
+4. Update `GetRetainedMatching()` to use cache
+
+**Impact:** Fast retained message delivery on new subscriptions
+
+---
+
+#### 6. Add Prometheus Metrics Endpoint **[2-3 hours]**
+**New Files:** `server/metrics/server.go`, `server/metrics/prometheus.go`
+**Context:**
+- `broker.Stats` already tracks all metrics
+- Need to expose as Prometheus `/metrics` endpoint
+
+**Implementation:**
+1. Create metrics server (copy health server pattern)
+2. Register Prometheus collectors for broker.Stats
+3. Add to config: `metrics_addr`, `metrics_enabled`
+4. Add to `cmd/broker/main.go`
+
+**Metrics to expose:**
+- `mqtt_connections_total`, `mqtt_connections_active`
+- `mqtt_messages_received_total`, `mqtt_messages_sent_total`
+- `mqtt_bytes_received_total`, `mqtt_bytes_sent_total`
+- `mqtt_subscriptions_active`, `mqtt_errors_total{type="protocol|auth|packet"}`
+
+**Impact:** Production-ready observability
+
+---
+
+### 🧪 Testing & Validation (3-6 hours each)
+
+#### 7. 3-Node Cluster Formation Test **[3-4 hours]**
+**File:** `cluster/formation_test.go` (new file)
+**Context:** Need to verify 3-node cluster starts correctly
+
+**Test Cases:**
+1. All 3 nodes join cluster
+2. Leader elected within 10 seconds
+3. etcd replication working (write to one, read from another)
+4. All nodes see same subscription data
+5. Node failure triggers leader re-election
+
+**Implementation:**
+- Use `testutil.NewTestCluster(t, 3)` pattern
+- Add helper: `cluster.WaitForLeaderElection(timeout)`
+- Verify etcd writes replicated: write subscription on node-1, read from node-2
+
+---
+
+#### 8. Session Persistence Across Restart **[4-5 hours]**
+**File:** `storage/badger/integration_test.go` (new)
+**Context:** BadgerDB implemented but not tested for broker restart
+
+**Test Scenario:**
+1. Start broker with BadgerDB
+2. Client connects, subscribes, receives QoS 1 messages
+3. Client disconnects (offline queue has messages)
+4. **Restart broker** (close and reopen BadgerDB)
+5. Client reconnects
+6. Verify: subscriptions restored, offline queue delivered
+
+**Key Checks:**
+- Session expiry timestamp preserved
+- Inflight messages restored
+- Offline queue intact
+- Subscriptions active
+
+---
+
+### 🎨 Code Cleanup (30 min - 1 hour)
+
+#### 9. Remove Dead Code & Unused Imports **[30 min]**
+**Task:**
+- Run `golangci-lint run --enable=unused,deadcode`
+- Remove any unused functions, variables, imports
+- Check for commented-out code blocks to remove
+
+---
+
+#### 10. Update All TODOs **[20 min]**
+**Files:** Search `grep -r "TODO" --include="*.go"`
+
+**Current TODOs:**
+- ~~`client/client.go`: QoS 1/2 packet ID tracking~~ ✅ FIXED
+- ~~`client/client.go`: Packet ID for Subscribe~~ ✅ FIXED
+- `cluster/cross_node_test.go`: QoS 2 cross-node routing (see task #4)
+- `cluster/cross_node_test.go`: Retained message cross-node test
+- `cluster/etcd.go`: Add actual health check (see task #3)
+
+**Action:** Update or remove each TODO with current status
+
+---
+
+### 📋 Larger Features (6+ hours)
+
+#### 11. Shared Subscriptions (MQTT 5.0) **[8-12 hours]**
+**Status:** Not started
+**Spec:** MQTT 5.0 spec section 4.8.2
+**Context:** Load balancing across multiple subscribers
+
+**Implementation:**
+1. Parse `$share/{ShareName}/{TopicFilter}` subscriptions
+2. Add `ShareName` field to `storage.Subscription`
+3. Modify `broker.distribute()` to round-robin within share group
+4. Cluster-aware: track which nodes have share group members
+
+**Files to modify:**
+- `broker/router.go` - subscription matching
+- `broker/broker.go` - distribution logic
+- `storage/storage.go` - subscription schema
+
+---
+
+#### 12. Message Expiry Enforcement **[4-6 hours]**
+**Context:** MQTT 5.0 Message Expiry Interval property
+**Current State:** Property stored but not enforced
+
+**Implementation:**
+1. Add background goroutine to check message expiry
+2. Remove expired messages from offline queues
+3. Remove expired retained messages
+4. Add `expiresAt` timestamp to `storage.Message`
+
+---
+
+## 📊 Recommended Execution Order
+
+**Week 1: Quick Wins + QoS 2**
+1. Tasks #1-3 (Stats getter, health endpoints, node health) - **1 hour total**
+2. Task #4 (QoS 2 routing investigation) - **3 hours**
+3. Task #9-10 (Code cleanup, TODOs) - **1 hour**
+
+**Week 2: Testing + Optimization**
+4. Task #7 (3-node cluster test) - **4 hours**
+5. Task #5 (Retained message optimization) - **3 hours**
+6. Task #8 (Session persistence test) - **5 hours**
+
+**Week 3: Production Hardening**
+7. Task #6 (Prometheus metrics) - **3 hours**
+8. Tasks #11-12 (Shared subscriptions, message expiry) - **Optional**

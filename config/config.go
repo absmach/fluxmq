@@ -30,6 +30,7 @@ type ServerConfig struct {
 	WSAddr          string        `yaml:"ws_addr"`
 	WSPath          string        `yaml:"ws_path"`
 	CoAPAddr        string        `yaml:"coap_addr"`
+	HealthAddr      string        `yaml:"health_addr"`
 	TCPMaxConn      int           `yaml:"tcp_max_connections"`
 	TCPReadTimeout  time.Duration `yaml:"tcp_read_timeout"`
 	TCPWriteTimeout time.Duration `yaml:"tcp_write_timeout"`
@@ -38,6 +39,7 @@ type ServerConfig struct {
 	HTTPEnabled     bool          `yaml:"http_enabled"`
 	WSEnabled       bool          `yaml:"ws_enabled"`
 	CoAPEnabled     bool          `yaml:"coap_enabled"`
+	HealthEnabled   bool          `yaml:"health_enabled"`
 }
 
 // BrokerConfig holds broker-specific settings.
@@ -125,6 +127,8 @@ func Default() *Config {
 			WSEnabled:       true,
 			CoAPAddr:        ":5683",
 			CoAPEnabled:     false,
+			HealthAddr:      ":8081",
+			HealthEnabled:   true,
 			ShutdownTimeout: 30 * time.Second,
 		},
 		Broker: BrokerConfig{

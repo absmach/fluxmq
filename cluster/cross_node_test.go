@@ -91,9 +91,9 @@ func TestCrossNode_QoS1_PublishSubscribe(t *testing.T) {
 }
 
 // TestCrossNode_QoS2_PublishSubscribe verifies QoS 2 message delivery across nodes.
-// TODO: Currently failing - QoS 2 cross-node delivery needs investigation
+// NOTE: Test client QoS 2 flow is now implemented, but cross-node QoS 2 routing needs investigation
 func TestCrossNode_QoS2_PublishSubscribe(t *testing.T) {
-	t.Skip("TODO: QoS 2 cross-node delivery not yet fully working")
+	t.Skip("Test client fixed, but cross-node QoS 2 routing needs investigation")
 
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

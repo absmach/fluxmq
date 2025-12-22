@@ -24,10 +24,11 @@ type Options struct {
 
 // Client implements an MQTT client.
 type Client struct {
-	opts      Options
-	conn      net.Conn
-	logger    *slog.Logger
-	onMessage func(topic string, payload []byte)
+	opts       Options
+	conn       net.Conn
+	logger     *slog.Logger
+	onMessage  func(topic string, payload []byte)
+	nextPacketID uint16
 }
 
 // NewClient creates a new client.
@@ -36,9 +37,20 @@ func NewClient(opts Options) *Client {
 		opts.Version = 5
 	}
 	return &Client{
-		opts:   opts,
-		logger: slog.Default(),
+		opts:         opts,
+		logger:       slog.Default(),
+		nextPacketID: 1,
 	}
+}
+
+// getNextPacketID returns the next packet ID and increments the counter.
+func (c *Client) getNextPacketID() uint16 {
+	id := c.nextPacketID
+	c.nextPacketID++
+	if c.nextPacketID == 0 {
+		c.nextPacketID = 1
+	}
+	return id
 }
 
 // SetMessageHandler sets the callback for received messages.
@@ -152,33 +164,153 @@ func (c *Client) readLoop() {
 			return
 		}
 
-		// Handle PUBLISH
-		if pkt.Type() == packets.PublishType {
-			var topic string
-			var payload []byte
+		switch pkt.Type() {
+		case packets.PublishType:
+			c.handlePublish(pkt)
 
-			if c.opts.Version == 5 {
-				p := pkt.(*v5.Publish)
-				topic = p.TopicName
-				payload = p.Payload
-			} else {
-				p := pkt.(*v3.Publish)
-				topic = p.TopicName
-				payload = p.Payload
-			}
+		case packets.PubAckType:
+			// QoS 1 flow complete
+			c.logger.Debug("Received PUBACK", slog.String("client_id", c.opts.ClientID))
 
-			if c.onMessage != nil {
-				c.onMessage(topic, payload)
-			}
+		case packets.PubRecType:
+			// QoS 2: Received PUBREC, send PUBREL
+			c.handlePubRec(pkt)
+
+		case packets.PubRelType:
+			// QoS 2: Received PUBREL, send PUBCOMP
+			c.handlePubRel(pkt)
+
+		case packets.PubCompType:
+			// QoS 2 flow complete
+			c.logger.Debug("Received PUBCOMP", slog.String("client_id", c.opts.ClientID))
+
+		case packets.SubAckType:
+			// Subscription acknowledged
+			c.logger.Debug("Received SUBACK", slog.String("client_id", c.opts.ClientID))
 		}
+	}
+}
 
-		// Handle SUBACK (log)
+func (c *Client) handlePublish(pkt packets.ControlPacket) {
+	var topic string
+	var payload []byte
+	var qos byte
+	var packetID uint16
+
+	if c.opts.Version == 5 {
+		p := pkt.(*v5.Publish)
+		topic = p.TopicName
+		payload = p.Payload
+		qos = p.QoS
+		packetID = p.ID
+	} else {
+		p := pkt.(*v3.Publish)
+		topic = p.TopicName
+		payload = p.Payload
+		qos = p.QoS
+		packetID = p.ID
+	}
+
+	// Deliver message to handler
+	if c.onMessage != nil {
+		c.onMessage(topic, payload)
+	}
+
+	// Send acknowledgment based on QoS
+	if qos == 1 {
+		// Send PUBACK
+		if c.opts.Version == 5 {
+			ack := &v5.PubAck{
+				FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
+				ID:          packetID,
+			}
+			ack.Pack(c.conn)
+		} else {
+			ack := &v3.PubAck{
+				FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
+				ID:          packetID,
+			}
+			ack.Pack(c.conn)
+		}
+	} else if qos == 2 {
+		// Send PUBREC
+		if c.opts.Version == 5 {
+			rec := &v5.PubRec{
+				FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
+				ID:          packetID,
+			}
+			rec.Pack(c.conn)
+		} else {
+			rec := &v3.PubRec{
+				FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
+				ID:          packetID,
+			}
+			rec.Pack(c.conn)
+		}
+	}
+}
+
+func (c *Client) handlePubRec(pkt packets.ControlPacket) {
+	var packetID uint16
+
+	if c.opts.Version == 5 {
+		p := pkt.(*v5.PubRec)
+		packetID = p.ID
+	} else {
+		p := pkt.(*v3.PubRec)
+		packetID = p.ID
+	}
+
+	// Send PUBREL
+	if c.opts.Version == 5 {
+		rel := &v5.PubRel{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType},
+			ID:          packetID,
+		}
+		rel.Pack(c.conn)
+	} else {
+		rel := &v3.PubRel{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType},
+			ID:          packetID,
+		}
+		rel.Pack(c.conn)
+	}
+}
+
+func (c *Client) handlePubRel(pkt packets.ControlPacket) {
+	var packetID uint16
+
+	if c.opts.Version == 5 {
+		p := pkt.(*v5.PubRel)
+		packetID = p.ID
+	} else {
+		p := pkt.(*v3.PubRel)
+		packetID = p.ID
+	}
+
+	// Send PUBCOMP
+	if c.opts.Version == 5 {
+		comp := &v5.PubComp{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
+			ID:          packetID,
+		}
+		comp.Pack(c.conn)
+	} else {
+		comp := &v3.PubComp{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
+			ID:          packetID,
+		}
+		comp.Pack(c.conn)
 	}
 }
 
 // Publish sends a text message.
 func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) error {
-	// TODO: Qos 1/2 need packet ID tracking
+	var packetID uint16
+	if qos > 0 {
+		packetID = c.getNextPacketID()
+	}
+
 	if c.opts.Version == 5 {
 		pkt := &v5.Publish{
 			FixedHeader: packets.FixedHeader{
@@ -188,6 +320,7 @@ func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) er
 			},
 			TopicName: topic,
 			Payload:   payload,
+			ID:        packetID,
 		}
 		return pkt.Pack(c.conn)
 	} else {
@@ -199,6 +332,7 @@ func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) er
 			},
 			TopicName: topic,
 			Payload:   payload,
+			ID:        packetID,
 		}
 		return pkt.Pack(c.conn)
 	}
@@ -206,22 +340,23 @@ func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) er
 
 // Subscribe subscribes to a topic.
 func (c *Client) Subscribe(topic string) error {
-	// TODO: Packet ID
+	packetID := c.getNextPacketID()
+
 	if c.opts.Version == 5 {
 		pkt := &v5.Subscribe{
 			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
-			ID:          10, // Random ID
+			ID:          packetID,
 			Opts: []v5.SubOption{
-				{Topic: topic, MaxQoS: 0},
+				{Topic: topic, MaxQoS: 2},
 			},
 		}
 		return pkt.Pack(c.conn)
 	} else {
 		pkt := &v3.Subscribe{
 			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
-			ID:          10,
+			ID:          packetID,
 			Topics: []v3.Topic{
-				{Name: topic, QoS: 0},
+				{Name: topic, QoS: 2},
 			},
 		}
 		return pkt.Pack(c.conn)

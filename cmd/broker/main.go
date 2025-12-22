@@ -16,6 +16,7 @@ import (
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/config"
 	"github.com/absmach/mqtt/server/coap"
+	"github.com/absmach/mqtt/server/health"
 	"github.com/absmach/mqtt/server/http"
 	"github.com/absmach/mqtt/server/tcp"
 	"github.com/absmach/mqtt/server/websocket"
@@ -62,6 +63,7 @@ func main() {
 		"http_enabled", cfg.Server.HTTPEnabled,
 		"ws_enabled", cfg.Server.WSEnabled,
 		"coap_enabled", cfg.Server.CoAPEnabled,
+		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
 
@@ -217,6 +219,24 @@ func main() {
 			defer wg.Done()
 			slog.Info("Starting CoAP server", "address", cfg.Server.CoAPAddr)
 			if err := coapServer.Listen(ctx); err != nil {
+				serverErr <- err
+			}
+		}()
+	}
+
+	// Start health check server if enabled
+	if cfg.Server.HealthEnabled {
+		healthCfg := health.Config{
+			Address:         cfg.Server.HealthAddr,
+			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+		}
+		healthServer := health.New(healthCfg, b, cl, logger)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slog.Info("Starting health check server", "address", cfg.Server.HealthAddr)
+			if err := healthServer.Listen(ctx); err != nil {
 				serverErr <- err
 			}
 		}()
