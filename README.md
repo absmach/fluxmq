@@ -76,6 +76,7 @@ A high-performance, multi-protocol message broker written in Go. Supports MQTT 3
   - Automatic session ownership management
   - Cross-node message routing
   - Persistent storage with BadgerDB
+  - Graceful shutdown with session transfer
   - No external dependencies - all embedded in single binary
 
 ## Architecture
@@ -396,6 +397,8 @@ Lightweight protocol for constrained IoT devices:
 - [x] **gRPC inter-broker communication**
 - [x] **Cross-node message routing**
 - [x] **Distributed session ownership**
+- [x] **Graceful shutdown with session transfer**
+- [x] **BadgerDB persistent storage with background GC**
 
 ### In Progress 🚧
 - [ ] Session state migration (full takeover)

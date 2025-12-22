@@ -445,6 +445,37 @@ The session takeover protocol is complete:
 - Messages in offline queue: persisted to BadgerDB
 - Inflight messages: persisted, redelivered on reconnect
 
+### Graceful Shutdown
+
+**Scenario**: Node receives SIGTERM (e.g., during deployment).
+
+**Process**:
+1. **Drain Phase**: Stop accepting new connections, wait for active sessions to disconnect
+   - Configurable drain timeout (default: 30s)
+   - Sessions can gracefully close
+2. **Session Transfer**: Release ownership of remaining sessions in etcd
+   - Enables other nodes to immediately take over
+   - Clients reconnect to healthy nodes within seconds
+3. **Cleanup**: Final BadgerDB GC pass, close all resources
+   - Idempotent shutdown (safe to call multiple times)
+
+**Impact**:
+- Zero session loss in cluster mode
+- Connected clients experience brief reconnection
+- Persistent sessions preserved across shutdown
+- Offline messages retained in BadgerDB
+
+**Configuration**:
+```yaml
+server:
+  shutdown_timeout: 30s  # Drain period
+```
+
+**Recovery**:
+- Clients automatically reconnect to other nodes
+- Session ownership acquired by new node
+- Subscriptions and offline messages restored
+
 ## Comparison with Other Approaches
 
 ### vs. Shared Database

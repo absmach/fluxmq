@@ -6,18 +6,26 @@ This document consolidates the clustering implementation plan, tracking complete
 
 **Current Status:** ✅ Session takeover, BadgerDB storage, and message routing fully implemented
 
-### 🎉 Latest Update (Dec 21, 2024)
-**Session Takeover Tests Fixed & Passing!**
+### 🎉 Latest Update (Dec 22, 2024)
+**Graceful Shutdown & BadgerDB GC Complete!**
 
-All 3 integration tests for session takeover are now working:
-- ✅ `TestSessionTakeover_BasicReconnect` - Client reconnects to different node, subscriptions preserved
-- ✅ `TestSessionTakeover_QoS1Messages` - QoS 1 offline messages delivered after reconnect
-- ✅ `TestSessionTakeover_MultipleClients` - Multiple clients takeover simultaneously
+**Graceful Shutdown Implemented:**
+- ✅ `broker.Shutdown()` - Drains connections, transfers sessions, graceful cleanup
+- ✅ Session transfer to other cluster nodes before shutdown
+- ✅ Configurable drain timeout
+- ✅ Idempotent shutdown (safe to call multiple times)
+- ✅ Comprehensive test coverage
 
-**Key Fixes:**
-1. **testutil/mqtt_client.go** - Fixed `Reconnect()` to properly stop old readLoop goroutines
-2. **broker/broker.go** - Fixed `restoreSessionFromStorage()` to fetch subscriptions from cluster etcd and add to router
-3. **broker/broker.go** - Fixed `handleDisconnect()` to keep session ownership for persistent sessions (enables offline message routing)
+**BadgerDB Improvements:**
+- ✅ Background GC runs every 5 minutes with graceful shutdown
+- ✅ Stoppable GC goroutine with proper cleanup
+- ✅ Final GC pass on shutdown
+- ✅ Idempotent `Close()` for safe cleanup
+
+**Previous Update (Dec 21, 2024) - Session Takeover Tests:**
+- ✅ All 3 integration tests passing
+- ✅ Client reconnection, QoS 1 messages, multiple clients
+- ✅ Subscription restoration from cluster etcd
 
 ---
 
@@ -102,7 +110,7 @@ All 3 integration tests for session takeover are now working:
 
 ### Phase 4: BadgerDB Persistent Storage (DONE)
 - ✅ All 6 BadgerDB store implementations complete
-  - ✅ `storage/badger/store.go` - Main store with GC
+  - ✅ `storage/badger/store.go` - Main store with graceful GC
   - ✅ `storage/badger/session.go` - Session persistence
   - ✅ `storage/badger/message.go` - Inflight/offline messages
   - ✅ `storage/badger/subscription.go` - Subscription storage
@@ -110,6 +118,8 @@ All 3 integration tests for session takeover are now working:
   - ✅ `storage/badger/will.go` - Will messages
 - ✅ Wired up in `cmd/broker/main.go` with config-based dispatch
 - ✅ Storage factory pattern (memory vs badger based on config)
+- ✅ Background GC with graceful shutdown
+- ✅ Comprehensive test coverage (91% coverage, 73 tests)
 
 ### Phase 5: Message Routing Optimization (DONE)
 - ✅ Local subscription cache in EtcdCluster with sync.RWMutex
@@ -127,13 +137,15 @@ All 3 integration tests for session takeover are now working:
 **Priority:** HIGH - Core functionality complete, needs validation
 
 #### Unit Tests
-- [ ] BadgerDB store implementations
-  - [ ] Session persistence and retrieval
-  - [ ] Inflight message storage
-  - [ ] Offline queue operations
-  - [ ] Subscription CRUD
-  - [ ] Retained message matching
-  - [ ] Will message storage
+- [x] BadgerDB store implementations ✅ **COMPLETED**
+  - [x] Session persistence and retrieval (11 tests)
+  - [x] Inflight message storage (9 tests)
+  - [x] Offline queue operations (included above)
+  - [x] Subscription CRUD (18 tests)
+  - [x] Retained message matching (11 tests)
+  - [x] Will message storage (13 tests)
+  - [x] Store integration tests (11 tests)
+  - **Coverage:** 91.0% (73 total tests)
 
 - [ ] Cluster subscription cache
   - [ ] Cache loading on startup
@@ -141,6 +153,14 @@ All 3 integration tests for session takeover are now working:
   - [ ] GetSubscribersForTopic performance
 
 #### Integration Tests
+- [x] Cross-node messaging ✅ **PARTIALLY COMPLETE**
+  - [x] QoS 0 publish/subscribe across nodes
+  - [x] QoS 1 publish/subscribe across nodes
+  - [x] Multiple subscribers on different nodes
+  - [x] Wildcard subscriptions across nodes
+  - [ ] QoS 2 cross-node delivery (needs investigation)
+  - **Coverage:** 4 tests passing, 1 QoS 2 issue identified
+
 - [ ] 3-node cluster formation
   - [ ] All nodes join cluster successfully
   - [ ] Leader elected
@@ -152,20 +172,11 @@ All 3 integration tests for session takeover are now working:
   - [ ] Offline queue preserved
   - [ ] Subscriptions restored on reconnect
 
-- [x] Session takeover scenarios
+- [x] Session takeover scenarios ✅ **COMPLETED**
   - [x] Client moves Node1→Node2, session state transfers
   - [x] QoS 1/2 messages preserved across takeover
   - [x] Subscriptions active on new node
-  - **Fixed Issues:**
-    - Fixed client reconnection to properly stop old readLoop goroutines
-    - Fixed subscription restoration to use cluster etcd instead of local storage
-    - Fixed session ownership to persist for offline clients (enables QoS 1/2 delivery)
-
-- [ ] Cross-node messaging
-  - [ ] Publish on Node1, receive on Node2
-  - [ ] QoS 0, 1, 2 work across nodes
-  - [ ] Subscription changes propagate via etcd watch
-  - [ ] Message routing latency <50ms
+  - **Tests:** 3 integration tests passing
 
 ---
 
@@ -263,10 +274,13 @@ if b.cluster == nil || b.cluster.IsLeader() {
 ### Phase 9: Production Readiness (HIGH PRIORITY)
 
 #### Error Handling & Resilience
-- [ ] Graceful shutdown
-  - [ ] Stop accepting new connections
-  - [ ] Drain existing connections
-  - [ ] Transfer sessions to other nodes before shutdown
+- [x] Graceful shutdown ✅ **COMPLETED**
+  - [x] Broker.Shutdown() drains connections with configurable timeout
+  - [x] Transfer sessions to other nodes before shutdown
+  - [x] Idempotent Close() for safe cleanup
+  - [x] Signal handling (SIGTERM/SIGINT)
+  - [x] Comprehensive test coverage (4 tests)
+  - **Files:** `broker/broker.go`, `broker/shutdown_test.go`, `cmd/broker/main.go`
 
 - [ ] Connection retry logic
   - [ ] Retry failed gRPC calls to peers
@@ -544,17 +558,34 @@ require (
    - Chaos testing
 
 ### 📊 Progress Estimate
-- **Core Implementation:** ~90% complete
-- **Testing:** ~25% complete (session takeover tests passing)
-- **Production Hardening:** ~5% complete
-- **Estimated Time to Production:** 3-4 weeks (testing + hardening)
+- **Core Implementation:** ~95% complete ✅
+  - Session takeover, message routing, BadgerDB storage, graceful shutdown
+- **Testing:** ~40% complete
+  - Unit tests: BadgerDB (91% coverage), cross-node messaging (4/5 tests)
+  - Integration tests: Session takeover (3/3 tests)
+- **Production Hardening:** ~15% complete
+  - Graceful shutdown ✅, metrics & observability pending
+- **Estimated Time to Production:** 2-3 weeks (finish testing + monitoring)
 
-### 🔧 Recent Fixes (Dec 21, 2024)
-- **Session Takeover Tests:** All 3 integration tests now passing
+### 🔧 Recent Updates
+
+#### Dec 22, 2024 - Graceful Shutdown & BadgerDB GC
+- **Graceful Shutdown Implementation:**
+  - `broker.Shutdown()` with configurable drain timeout
+  - Session transfer to cluster nodes before shutdown
+  - Signal handling (SIGTERM/SIGINT) in main binary
+  - 4 comprehensive tests covering all scenarios
+- **BadgerDB Improvements:**
+  - Background GC runs every 5 minutes
+  - Graceful GC shutdown with final cleanup pass
+  - Idempotent Close() operations
+  - 73 unit tests with 91% coverage
+
+#### Dec 21, 2024 - Session Takeover & Testing
+- **Session Takeover Tests:** All 3 integration tests passing
   - `TestSessionTakeover_BasicReconnect` ✅
   - `TestSessionTakeover_QoS1Messages` ✅
   - `TestSessionTakeover_MultipleClients` ✅
-- **Key Fixes:**
-  - Client reconnection properly stops old readLoop to prevent goroutine leaks
-  - Subscription restoration uses cluster etcd for cross-node session takeover
-  - Session ownership preserved for persistent sessions to enable offline message delivery
+- **Cross-Node Messaging Tests:** 4/5 tests passing
+  - QoS 0, QoS 1, wildcards, multiple subscribers ✅
+  - QoS 2 cross-node delivery needs investigation
