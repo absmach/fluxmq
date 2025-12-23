@@ -19,6 +19,7 @@ type Config struct {
 	Log     LogConfig     `yaml:"log"`
 	Storage StorageConfig `yaml:"storage"`
 	Cluster ClusterConfig `yaml:"cluster"`
+	Webhook WebhookConfig `yaml:"webhook"`
 }
 
 // ServerConfig holds server-related configuration.
@@ -111,6 +112,51 @@ type TransportConfig struct {
 	Peers    map[string]string `yaml:"peers"`     // Map of nodeID -> transport address for peers
 }
 
+// WebhookConfig holds webhook notification configuration.
+type WebhookConfig struct {
+	Enabled        bool              `yaml:"enabled"`
+	QueueSize      int               `yaml:"queue_size"`
+	DropPolicy     string            `yaml:"drop_policy"`      // "oldest" or "newest"
+	Workers        int               `yaml:"workers"`          // Number of worker goroutines
+	IncludePayload bool              `yaml:"include_payload"`  // Include message payload in events
+	ShutdownTimeout time.Duration    `yaml:"shutdown_timeout"` // Graceful shutdown timeout
+	Defaults       WebhookDefaults   `yaml:"defaults"`
+	Endpoints      []WebhookEndpoint `yaml:"endpoints"`
+}
+
+// WebhookDefaults holds default settings for webhook endpoints.
+type WebhookDefaults struct {
+	Timeout        time.Duration        `yaml:"timeout"`
+	Retry          RetryConfig          `yaml:"retry"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+}
+
+// RetryConfig holds retry configuration for webhook delivery.
+type RetryConfig struct {
+	MaxAttempts     int           `yaml:"max_attempts"`
+	InitialInterval time.Duration `yaml:"initial_interval"`
+	MaxInterval     time.Duration `yaml:"max_interval"`
+	Multiplier      float64       `yaml:"multiplier"`
+}
+
+// CircuitBreakerConfig holds circuit breaker configuration.
+type CircuitBreakerConfig struct {
+	FailureThreshold int           `yaml:"failure_threshold"`
+	ResetTimeout     time.Duration `yaml:"reset_timeout"`
+}
+
+// WebhookEndpoint defines a single webhook endpoint configuration.
+type WebhookEndpoint struct {
+	Name         string            `yaml:"name"`
+	Type         string            `yaml:"type"` // "http" (future: "grpc")
+	URL          string            `yaml:"url"`
+	Events       []string          `yaml:"events"`        // Event type filter (empty = all)
+	TopicFilters []string          `yaml:"topic_filters"` // Topic pattern filter (empty = all)
+	Headers      map[string]string `yaml:"headers"`
+	Timeout      time.Duration     `yaml:"timeout,omitempty"`      // Override default
+	Retry        *RetryConfig      `yaml:"retry,omitempty"`        // Override default
+}
+
 // Default returns a configuration with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -164,6 +210,28 @@ func Default() *Config {
 			Transport: TransportConfig{
 				BindAddr: "0.0.0.0:7948",
 			},
+		},
+		Webhook: WebhookConfig{
+			Enabled:         false,
+			QueueSize:       10000,
+			DropPolicy:      "oldest",
+			Workers:         5,
+			IncludePayload:  false,
+			ShutdownTimeout: 30 * time.Second,
+			Defaults: WebhookDefaults{
+				Timeout: 5 * time.Second,
+				Retry: RetryConfig{
+					MaxAttempts:     3,
+					InitialInterval: 1 * time.Second,
+					MaxInterval:     30 * time.Second,
+					Multiplier:      2.0,
+				},
+				CircuitBreaker: CircuitBreakerConfig{
+					FailureThreshold: 5,
+					ResetTimeout:     60 * time.Second,
+				},
+			},
+			Endpoints: []WebhookEndpoint{},
 		},
 	}
 }
@@ -260,6 +328,47 @@ func (c *Config) Validate() error {
 		}
 		if c.Cluster.Transport.BindAddr == "" {
 			return fmt.Errorf("cluster.transport.bind_addr required when clustering is enabled")
+		}
+	}
+
+	// Webhook validation (only if enabled)
+	if c.Webhook.Enabled {
+		if c.Webhook.QueueSize < 100 {
+			return fmt.Errorf("webhook.queue_size must be at least 100")
+		}
+		if c.Webhook.DropPolicy != "oldest" && c.Webhook.DropPolicy != "newest" {
+			return fmt.Errorf("webhook.drop_policy must be 'oldest' or 'newest'")
+		}
+		if c.Webhook.Workers < 1 {
+			return fmt.Errorf("webhook.workers must be at least 1")
+		}
+		if c.Webhook.ShutdownTimeout < time.Second {
+			return fmt.Errorf("webhook.shutdown_timeout must be at least 1 second")
+		}
+		if c.Webhook.Defaults.Timeout < time.Second {
+			return fmt.Errorf("webhook.defaults.timeout must be at least 1 second")
+		}
+		if c.Webhook.Defaults.Retry.MaxAttempts < 1 {
+			return fmt.Errorf("webhook.defaults.retry.max_attempts must be at least 1")
+		}
+		if c.Webhook.Defaults.Retry.Multiplier < 1.0 {
+			return fmt.Errorf("webhook.defaults.retry.multiplier must be at least 1.0")
+		}
+		if c.Webhook.Defaults.CircuitBreaker.FailureThreshold < 1 {
+			return fmt.Errorf("webhook.defaults.circuit_breaker.failure_threshold must be at least 1")
+		}
+
+		// Validate each endpoint
+		for i, endpoint := range c.Webhook.Endpoints {
+			if endpoint.Name == "" {
+				return fmt.Errorf("webhook.endpoints[%d].name cannot be empty", i)
+			}
+			if endpoint.Type != "http" {
+				return fmt.Errorf("webhook.endpoints[%d].type must be 'http' (grpc not yet supported)", i)
+			}
+			if endpoint.URL == "" {
+				return fmt.Errorf("webhook.endpoints[%d].url cannot be empty", i)
+			}
 		}
 	}
 

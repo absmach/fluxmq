@@ -1,0 +1,176 @@
+# Absmach MQTT Broker Configuration Example
+
+# Server Configuration
+server:
+  # TCP listener (MQTT over TCP)
+  tcp_addr: ":1883"
+  tcp_max_connections: 10000
+  tcp_read_timeout: 60s
+  tcp_write_timeout: 60s
+
+  # TLS Configuration (optional)
+  tls_enabled: false
+  tls_cert_file: ""
+  tls_key_file: ""
+
+  # HTTP-MQTT Bridge (optional)
+  http_enabled: false
+  http_addr: ":8080"
+
+  # WebSocket Server (optional)
+  ws_enabled: true
+  ws_addr: ":8083"
+  ws_path: "/mqtt"
+
+  # CoAP Server (optional)
+  coap_enabled: false
+  coap_addr: ":5683"
+
+  # Health Check Server
+  health_enabled: true
+  health_addr: ":8081"
+
+  # Graceful shutdown timeout
+  shutdown_timeout: 30s
+
+# Broker Configuration
+broker:
+  # Maximum message size in bytes
+  max_message_size: 1048576  # 1MB
+
+  # Maximum retained messages
+  max_retained_messages: 10000
+
+  # QoS retry settings
+  retry_interval: 20s
+  max_retries: 0  # 0 = infinite retries
+
+# Session Configuration
+session:
+  # Maximum concurrent sessions
+  max_sessions: 10000
+
+  # Default session expiry (seconds) if client doesn't specify
+  default_expiry_interval: 300  # 5 minutes
+
+  # Maximum queued messages per offline client
+  max_offline_queue_size: 1000
+
+  # Maximum inflight messages per session (QoS 1/2)
+  max_inflight_messages: 100
+
+# Logging Configuration
+log:
+  level: "info"   # debug, info, warn, error
+  format: "text"  # text, json
+
+# Storage Configuration
+storage:
+  type: "badger"  # memory, badger
+
+  # BadgerDB settings (only if type=badger)
+  badger_dir: "/tmp/mqtt/data"
+
+# Cluster Configuration
+cluster:
+  enabled: false
+  node_id: "broker-1"
+
+  # Embedded etcd configuration
+  etcd:
+    data_dir: "/tmp/mqtt/etcd"
+    bind_addr: "0.0.0.0:2380"
+    client_addr: "0.0.0.0:2379"
+    initial_cluster: "broker-1=http://0.0.0.0:2380"
+    bootstrap: true
+
+  # Inter-broker transport
+  transport:
+    bind_addr: "0.0.0.0:7948"
+    peers: {}  # Map of nodeID -> address for other nodes
+
+# Webhook Configuration
+webhook:
+  # Enable/disable webhooks
+  enabled: false
+
+  # Event queue settings
+  queue_size: 10000
+  drop_policy: "oldest"  # "oldest" or "newest" when queue is full
+  workers: 5            # Number of concurrent webhook workers
+
+  # Include message payload in webhook events (base64 encoded)
+  include_payload: false
+
+  # Graceful shutdown timeout for draining queue
+  shutdown_timeout: 30s
+
+  # Default settings for all endpoints
+  defaults:
+    timeout: 5s
+
+    retry:
+      max_attempts: 3
+      initial_interval: 1s
+      max_interval: 30s
+      multiplier: 2.0
+
+    circuit_breaker:
+      failure_threshold: 5
+      reset_timeout: 60s
+
+  # Webhook endpoints
+  endpoints:
+    # Example: Analytics service
+    - name: "analytics-service"
+      type: "http"
+      url: "https://analytics.example.com/mqtt/events"
+
+      # Filter by event type (empty = all events)
+      events:
+        - "message.published"
+        - "client.connected"
+        - "client.disconnected"
+
+      # Filter by topic pattern for message events (empty = all topics)
+      topic_filters:
+        - "sensors/#"
+        - "devices/+/telemetry"
+
+      # Custom headers (e.g., authentication)
+      headers:
+        Authorization: "Bearer your-secret-token"
+        X-Service-Name: "mqtt-broker"
+
+      # Override default settings (optional)
+      timeout: 10s
+      retry:
+        max_attempts: 5
+
+    # Example: Audit system for security events
+    - name: "audit-system"
+      type: "http"
+      url: "https://audit.example.com/events"
+
+      # Only security-related events
+      events:
+        - "auth.failure"
+        - "authz.publish_denied"
+        - "authz.subscribe_denied"
+
+      headers:
+        Authorization: "Bearer audit-token"
+
+# Event Types Reference:
+# - client.connected          : Client successfully connected
+# - client.disconnected       : Client disconnected
+# - client.session_takeover   : Session migrated between cluster nodes
+# - message.published         : Message published to broker
+# - message.delivered         : Message delivered to subscriber
+# - message.retained          : Retained message set or cleared
+# - subscription.created      : Client subscribed to topic
+# - subscription.removed      : Client unsubscribed from topic
+# - auth.success              : Authentication succeeded
+# - auth.failure              : Authentication failed
+# - authz.publish_denied      : Publish authorization denied
+# - authz.subscribe_denied    : Subscribe authorization denied

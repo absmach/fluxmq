@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/mqtt/broker/events"
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/core"
@@ -28,6 +29,12 @@ const (
 	queuePrefix    = "/queue/"
 )
 
+// Notifier defines the interface for webhook notifications.
+type Notifier interface {
+	Notify(ctx context.Context, event interface{}) error
+	Close() error
+}
+
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	mu            sync.RWMutex
@@ -43,6 +50,7 @@ type Broker struct {
 	auth          *AuthEngine
 	logger        *slog.Logger
 	stats         *Stats
+	webhooks      Notifier // nil if webhooks disabled
 	stopCh        chan struct{}
 	shuttingDown  bool
 	closed        bool
@@ -54,7 +62,8 @@ type Broker struct {
 //   - cl: Cluster coordination interface (nil for single-node mode)
 //   - logger: Logger instance (nil uses default)
 //   - stats: Stats collector (nil creates new one)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats) *Broker {
+//   - webhooks: Webhook notifier (nil if webhooks disabled)
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -80,6 +89,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		cluster:       cl,
 		logger:        logger,
 		stats:         stats,
+		webhooks:      webhooks,
 		stopCh:        make(chan struct{}),
 	}
 
@@ -98,6 +108,18 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 	if err != nil {
 		allAttrs := append([]any{slog.String("error", err.Error())}, attrs...)
 		b.logger.Error(op, allAttrs...)
+	}
+}
+
+// versionToProtocol converts MQTT version byte to protocol string.
+func versionToProtocol(version byte) string {
+	switch version {
+	case 3, 4:
+		return "mqtt3"
+	case 5:
+		return "mqtt5"
+	default:
+		return "unknown"
 	}
 }
 
@@ -134,6 +156,15 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 			}
 
 			b.logger.Info("session takeover completed", slog.String("client_id", clientID))
+
+			// Webhook: session takeover
+			if b.webhooks != nil {
+				b.webhooks.Notify(ctx, events.SessionTakeover{
+					ClientID: clientID,
+					FromNode: ownerNode,
+					ToNode:   b.cluster.NodeID(),
+				})
+			}
 		}
 	}
 
@@ -251,15 +282,46 @@ func (b *Broker) Publish(msg *storage.Message) error {
 	b.stats.IncrementPublishReceived()
 	b.stats.AddBytesReceived(uint64(len(msg.Payload)))
 
+	// Webhook: message published
+	if b.webhooks != nil {
+		payload := ""
+		// Note: Payload encoding should be done by caller if needed
+		// ClientID not available at broker level, will be set by handler
+		b.webhooks.Notify(context.Background(), events.MessagePublished{
+			ClientID:     "", // Set by handler
+			MessageTopic: msg.Topic,
+			QoS:          msg.QoS,
+			Retained:     msg.Retain,
+			PayloadSize:  len(msg.Payload),
+			Payload:      payload, // Will be set if includePayload is true
+		})
+	}
+
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
 			if err := b.retained.Delete(msg.Topic); err != nil {
 				return err
 			}
+			// Webhook: retained message cleared
+			if b.webhooks != nil {
+				b.webhooks.Notify(context.Background(), events.RetainedMessageSet{
+					MessageTopic: msg.Topic,
+					PayloadSize:  0,
+					Cleared:      true,
+				})
+			}
 		} else {
 			msg.Retain = true
 			if err := b.retained.Set(msg.Topic, msg); err != nil {
 				return err
+			}
+			// Webhook: retained message set
+			if b.webhooks != nil {
+				b.webhooks.Notify(context.Background(), events.RetainedMessageSet{
+					MessageTopic: msg.Topic,
+					PayloadSize:  len(msg.Payload),
+					Cleared:      false,
+				})
 			}
 		}
 	}
@@ -294,6 +356,16 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 
 	s.AddSubscription(filter, opts)
 
+	// Webhook: subscription created
+	if b.webhooks != nil {
+		b.webhooks.Notify(context.Background(), events.SubscriptionCreated{
+			ClientID:       s.ID,
+			TopicFilter:    filter,
+			QoS:            qos,
+			SubscriptionID: 0, // MQTT 5.0 subscription ID not available at broker level
+		})
+	}
+
 	return nil
 }
 
@@ -317,6 +389,14 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	}
 
 	s.RemoveSubscription(filter)
+
+	// Webhook: subscription removed
+	if b.webhooks != nil {
+		b.webhooks.Notify(context.Background(), events.SubscriptionRemoved{
+			ClientID:    s.ID,
+			TopicFilter: filter,
+		})
+	}
 
 	return nil
 }
@@ -352,7 +432,19 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 	}
 
 	if msg.QoS == 0 {
-		return 0, b.DeliverMessage(s, msg)
+		err := b.DeliverMessage(s, msg)
+		if err == nil {
+			// Webhook: message delivered (QoS 0)
+			if b.webhooks != nil {
+				b.webhooks.Notify(context.Background(), events.MessageDelivered{
+					ClientID:     s.ID,
+					MessageTopic: msg.Topic,
+					QoS:          msg.QoS,
+					PayloadSize:  len(msg.Payload),
+				})
+			}
+		}
+		return 0, err
 	}
 
 	packetID := s.NextPacketID()
@@ -363,6 +455,16 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 
 	if err := b.DeliverMessage(s, msg); err != nil {
 		return packetID, err
+	}
+
+	// Webhook: message delivered (QoS 1/2)
+	if b.webhooks != nil {
+		b.webhooks.Notify(context.Background(), events.MessageDelivered{
+			ClientID:     s.ID,
+			MessageTopic: msg.Topic,
+			QoS:          msg.QoS,
+			PayloadSize:  len(msg.Payload),
+		})
 	}
 
 	return packetID, nil
@@ -607,6 +709,19 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 
 // handleDisconnect handles session disconnect.
 func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
+	// Webhook: client disconnected
+	if b.webhooks != nil {
+		reason := "normal"
+		if !graceful {
+			reason = "error"
+		}
+		b.webhooks.Notify(context.Background(), events.ClientDisconnected{
+			ClientID:   s.ID,
+			Reason:     reason,
+			RemoteAddr: "", // Not available at broker level
+		})
+	}
+
 	if b.sessions != nil {
 		b.sessions.Save(s.Info())
 	}
@@ -956,6 +1071,13 @@ func (b *Broker) Close() error {
 
 	close(b.stopCh)
 	b.wg.Wait()
+
+	// Close webhook notifier if enabled
+	if b.webhooks != nil {
+		if err := b.webhooks.Close(); err != nil {
+			b.logError("close_webhooks", err)
+		}
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()

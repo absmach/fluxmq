@@ -193,7 +193,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 
 	// Create broker with null logger to reduce test noise
 	nullLogger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := broker.NewBroker(store, clust, nullLogger, nil)
+	b := broker.NewBroker(store, clust, nullLogger, nil, nil)
 
 	// Wire broker as message handler (includes session management)
 	clust.SetMessageHandler(b)

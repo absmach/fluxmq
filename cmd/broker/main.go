@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/mqtt/broker/webhook"
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/config"
 	"github.com/absmach/mqtt/server/coap"
@@ -131,9 +132,31 @@ func main() {
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
-	// Create core broker with storage, cluster, logger, and metrics
+	// Initialize webhooks if enabled
+	var webhooks broker.Notifier
+	if cfg.Webhook.Enabled {
+		// Create HTTP sender
+		sender := webhook.NewHTTPSender()
+
+		// Create notifier with HTTP sender
+		wh, err := webhook.NewNotifier(cfg.Webhook, cfg.Cluster.NodeID, sender, logger)
+		if err != nil {
+			slog.Error("Failed to initialize webhooks", "error", err)
+			os.Exit(1)
+		}
+		webhooks = wh
+		slog.Info("Webhooks enabled",
+			"type", "http",
+			"endpoints", len(cfg.Webhook.Endpoints),
+			"workers", cfg.Webhook.Workers,
+			"queue_size", cfg.Webhook.QueueSize)
+	} else {
+		slog.Info("Webhooks disabled")
+	}
+
+	// Create core broker with storage, cluster, logger, metrics, and webhooks
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, logger, stats)
+	b := broker.NewBroker(store, cl, logger, stats, webhooks)
 	defer b.Close()
 
 	// Set message handler on cluster if it's an etcd cluster
