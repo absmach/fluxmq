@@ -123,7 +123,7 @@ func (m *mockCluster) Nodes() []cluster.NodeInfo {
 }
 
 func TestServerStartStop(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{
@@ -156,7 +156,7 @@ func TestServerStartStop(t *testing.T) {
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{
@@ -251,7 +251,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "single node mode - ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
 			cluster:        nil,
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
@@ -259,7 +259,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "cluster not initialized - not ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
 			cluster:        &mockCluster{nodeID: ""},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusServiceUnavailable,
@@ -268,7 +268,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "cluster initialized - ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
 			cluster:        &mockCluster{nodeID: "node-1", isLeader: true},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
@@ -276,7 +276,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "POST request not allowed",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
 			cluster:        nil,
 			method:         http.MethodPost,
 			expectedStatus: http.StatusMethodNotAllowed,
@@ -390,7 +390,7 @@ func TestClusterStatusEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := broker.NewBroker(nil, nil, nil, nil, nil)
+			b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 			defer b.Close()
 
 			cfg := Config{
@@ -456,7 +456,7 @@ func TestClusterStatusEndpoint(t *testing.T) {
 }
 
 func TestContentTypeHeaders(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{
@@ -504,7 +504,7 @@ func TestContentTypeHeaders(t *testing.T) {
 }
 
 func TestGracefulShutdown(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{

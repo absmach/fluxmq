@@ -15,7 +15,7 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - ✅ **Clustering (100%)** - Session takeover, QoS 2 routing, retained messages, etcd coordination
 - ✅ **Multi-Protocol (100%)** - TCP, WebSocket, HTTP bridge, CoAP stub
 - ⏳ **Testing (65%)** - QoS 2 fixed, cluster formation validated, failover needs tuning
-- ⏳ **Production Hardening (25%)** - Health checks done, metrics/TLS/auth pending
+- ⏳ **Production Hardening (50%)** - Health checks done, observability with OTel complete, TLS/auth pending
 - ❌ **MQTT 5.0 Advanced (0%)** - Topic aliases, shared subscriptions, message expiry
 
 ---
@@ -72,11 +72,15 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - **QoS 2 Cross-Node Routing** - Fixed missing `Publish()` call in QoS 2 PUBLISH handler (both V3 and V5)
 - **Retained Message Cross-Node Delivery** - Added cluster storage/retrieval for retained messages
 - **Cluster Formation Tests** - 3-node cluster formation, leader election, data replication validated
+- **OpenTelemetry Migration** - Replaced Prometheus with OpenTelemetry SDK for metrics and distributed tracing
+  - OTLP gRPC exporter for metrics and traces
+  - Configurable trace sampling (disabled by default for zero overhead)
+  - Webhook pattern for ultra-lightweight conditional instrumentation
+  - Metrics: connections, messages, bytes, errors, subscriptions, histograms
 
 ### ⏳ In Progress
 
 - Leader failover tuning (basic election works, failover timing needs optimization)
-- Prometheus metrics endpoint
 - TLS/SSL support
 
 ### ❌ Not Started
@@ -213,190 +217,49 @@ func TestBadgerDB_SessionPersistence(t *testing.T) {
 
 ---
 
-### Task 1.4: Prometheus Metrics Endpoint
-**Priority:** HIGH | **Effort:** 2-3 hours | **Blocking:** Production observability
+### ✅ Task 1.4: Observability with OpenTelemetry (COMPLETED)
+**Priority:** HIGH | **Effort:** 3 hours | **Status:** ✅ COMPLETED
 
-**Context:**
-- `broker.Stats` already tracks all metrics
-- Need to expose as Prometheus `/metrics` endpoint
-- Copy health server pattern
-
-**New Files:**
-- `server/metrics/server.go` - HTTP server for `/metrics`
-- `server/metrics/prometheus.go` - Prometheus collectors
+**Completed:** 2025-12-24
 
 **Implementation:**
-```go
-// server/metrics/prometheus.go
-package metrics
+- Migrated from Prometheus to OpenTelemetry SDK
+- Created `server/otel/otel.go` - SDK initialization with OTLP exporters
+- Created `server/otel/metrics.go` - Metrics instrumentation (counters, gauges, histograms)
+- Integrated into `broker/broker.go` following webhook pattern (`if b.metrics != nil`)
+- Added distributed tracing support (optional, disabled by default)
 
-import (
-    "github.com/prometheus/client_golang/prometheus"
-    "github.com/absmach/mqtt/broker"
-)
-
-var (
-    ConnectionsTotal = prometheus.NewGaugeVec(
-        prometheus.GaugeOpts{
-            Name: "mqtt_connections_total",
-            Help: "Current number of MQTT connections",
-        },
-        []string{"protocol", "version"},
-    )
-
-    MessagesReceived = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "mqtt_messages_received_total",
-            Help: "Total messages received from clients",
-        },
-        []string{"qos"},
-    )
-
-    MessagesSent = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "mqtt_messages_sent_total",
-            Help: "Total messages sent to clients",
-        },
-        []string{"qos"},
-    )
-
-    BytesReceived = prometheus.NewCounter(
-        prometheus.CounterOpts{
-            Name: "mqtt_bytes_received_total",
-            Help: "Total bytes received",
-        },
-    )
-
-    BytesSent = prometheus.NewCounter(
-        prometheus.CounterOpts{
-            Name: "mqtt_bytes_sent_total",
-            Help: "Total bytes sent",
-        },
-    )
-
-    SubscriptionsActive = prometheus.NewGauge(
-        prometheus.GaugeOpts{
-            Name: "mqtt_subscriptions_active",
-            Help: "Number of active subscriptions",
-        },
-    )
-
-    ErrorsTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "mqtt_errors_total",
-            Help: "Total errors by type",
-        },
-        []string{"type"},  // protocol, auth, packet
-    )
-)
-
-func init() {
-    prometheus.MustRegister(ConnectionsTotal)
-    prometheus.MustRegister(MessagesReceived)
-    prometheus.MustRegister(MessagesSent)
-    prometheus.MustRegister(BytesReceived)
-    prometheus.MustRegister(BytesSent)
-    prometheus.MustRegister(SubscriptionsActive)
-    prometheus.MustRegister(ErrorsTotal)
-}
-
-type Collector struct {
-    broker *broker.Broker
-}
-
-func NewCollector(b *broker.Broker) *Collector {
-    return &Collector{broker: b}
-}
-
-func (c *Collector) Update() {
-    stats := c.broker.Stats()
-
-    ConnectionsTotal.WithLabelValues("tcp", "3.1.1").Set(float64(stats.GetCurrentConnections()))
-    MessagesReceived.WithLabelValues("0").Add(float64(stats.MessagesReceived))
-    MessagesSent.WithLabelValues("0").Add(float64(stats.MessagesSent))
-    BytesReceived.Add(float64(stats.BytesReceived))
-    BytesSent.Add(float64(stats.BytesSent))
-    SubscriptionsActive.Set(float64(stats.SubscriptionsActive))
-    ErrorsTotal.WithLabelValues("protocol").Add(float64(stats.ProtocolErrors))
-    ErrorsTotal.WithLabelValues("auth").Add(float64(stats.AuthErrors))
-    ErrorsTotal.WithLabelValues("packet").Add(float64(stats.PacketErrors))
-}
-
-// server/metrics/server.go
-package metrics
-
-import (
-    "context"
-    "net/http"
-    "github.com/prometheus/client_golang/prometheus/promhttp"
-    "github.com/absmach/mqtt/broker"
-)
-
-type Server struct {
-    addr      string
-    server    *http.Server
-    collector *Collector
-}
-
-func NewServer(addr string, broker *broker.Broker) *Server {
-    collector := NewCollector(broker)
-
-    mux := http.NewServeMux()
-    mux.Handle("/metrics", promhttp.Handler())
-
-    return &Server{
-        addr:      addr,
-        collector: collector,
-        server: &http.Server{
-            Addr:    addr,
-            Handler: mux,
-        },
-    }
-}
-
-func (s *Server) Start() error {
-    // Update metrics every 10 seconds
-    go func() {
-        ticker := time.NewTicker(10 * time.Second)
-        defer ticker.Stop()
-
-        for range ticker.C {
-            s.collector.Update()
-        }
-    }()
-
-    return s.server.ListenAndServe()
-}
-
-func (s *Server) Shutdown(ctx context.Context) error {
-    return s.server.Shutdown(ctx)
-}
-```
-
-**Config Addition:**
+**Configuration:**
 ```yaml
 server:
-  metrics_addr: ":9090"
+  metrics_addr: "localhost:4317"  # OTLP gRPC endpoint
   metrics_enabled: true
+
+  # OpenTelemetry configuration
+  otel_service_name: "mqtt-broker"
+  otel_service_version: "1.0.0"
+  otel_metrics_enabled: true        # Low overhead, always recommended
+  otel_traces_enabled: false        # Disabled by default for zero overhead
+  otel_trace_sample_rate: 0.1       # 10% sampling when enabled
 ```
 
-**Integration in `cmd/broker/main.go`:**
-```go
-if cfg.Server.MetricsEnabled {
-    metricsServer := metrics.NewServer(cfg.Server.MetricsAddr, broker)
-    go func() {
-        if err := metricsServer.Start(); err != nil {
-            logger.Error("metrics server failed", slog.String("error", err.Error()))
-        }
-    }()
-}
-```
+**Metrics Exported:**
+- Counters: `mqtt.connections.total`, `mqtt.messages.received/sent.total`, `mqtt.bytes.received/sent.total`, `mqtt.errors.total`
+- Gauges: `mqtt.connections.current`, `mqtt.subscriptions.active`, `mqtt.retained.messages`
+- Histograms: `mqtt.message.size.bytes`, `mqtt.publish.duration.ms`, `mqtt.delivery.duration.ms`
+
+**Tracing Features:**
+- Optional distributed tracing (disabled by default)
+- Configurable sampling rate (0.0 to 1.0)
+- Webhook pattern for zero overhead when disabled: `if b.tracer != nil { ... }`
+- Parent-based sampler for consistent distributed trace sampling
 
 **Success Criteria:**
-- `/metrics` endpoint accessible on port 9090
-- All key metrics exposed
-- Metrics update every 10 seconds
-- Prometheus scraping works
+- ✅ OTel SDK initializes correctly
+- ✅ Metrics exported to OTLP collector (Grafana, Jaeger)
+- ✅ Tracing can be enabled/disabled without code changes
+- ✅ Zero overhead when tracing disabled
+- ✅ All tests passing
 
 ---
 
@@ -1034,9 +897,14 @@ server:
   health_addr: ":8081"
   health_enabled: true
 
-  # Metrics
-  metrics_addr: ":9090"
+  # OpenTelemetry Metrics & Tracing
+  metrics_addr: "localhost:4317"  # OTLP gRPC endpoint
   metrics_enabled: true
+  otel_service_name: "mqtt-broker"
+  otel_service_version: "1.0.0"
+  otel_metrics_enabled: true
+  otel_traces_enabled: false      # Enable only when troubleshooting
+  otel_trace_sample_rate: 0.1     # 10% sampling when enabled
 
 cluster:
   enabled: true
@@ -1102,19 +970,20 @@ webhooks:
 
 1. ✅ ~~**QoS 2 Investigation** (Task 1.1)~~ - COMPLETED
 2. ✅ ~~**3-Node Cluster Test** (Task 1.2)~~ - COMPLETED
-3. **Prometheus Metrics** (Task 1.4) - Enable production monitoring
+3. ✅ ~~**OpenTelemetry Observability** (Task 1.4)~~ - COMPLETED
 4. **TLS Support** (Task 1.5) - Enable secure deployment
 5. **Session Persistence Test** (Task 1.3) - Prove durability
 
-**Recommended Order:** ~~1.1~~ → ~~1.2~~ → 1.4 → 1.5 → 1.3 → 2.1 → 2.2
+**Recommended Order:** ~~1.1~~ → ~~1.2~~ → ~~1.4~~ → 1.5 → 1.3 → 2.1 → 2.2
 
 **Completed Today (2025-12-24):**
 - ✅ Task 1.1: QoS 2 Cross-Node Routing (2.5 hours)
 - ✅ Task 1.2: 3-Node Cluster Formation Tests (4 hours)
-- **Total:** 6.5 hours of high-priority work completed
+- ✅ Task 1.4: OpenTelemetry Migration (3 hours)
+- **Total:** 9.5 hours of high-priority work completed
 
 ---
 
-**Document Version:** 2.1
-**Last Updated:** 2025-12-24 18:00
-**Next Review:** After Task 1.4 (Prometheus Metrics) completion
+**Document Version:** 2.2
+**Last Updated:** 2025-12-24 19:00
+**Next Review:** After Task 1.5 (TLS Support) completion

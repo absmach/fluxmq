@@ -14,7 +14,7 @@ import (
 )
 
 func TestServerStartStop(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{
@@ -56,7 +56,7 @@ func TestServerStartStop(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{
@@ -100,7 +100,7 @@ func TestShutdown(t *testing.T) {
 }
 
 func TestConnectionLimit(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	maxConns := 2
@@ -152,7 +152,7 @@ func TestConnectionLimit(t *testing.T) {
 }
 
 func TestConcurrentConnections(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{
@@ -192,7 +192,7 @@ func TestConcurrentConnections(t *testing.T) {
 }
 
 func TestTCPOptimizations(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
 	defer b.Close()
 
 	cfg := Config{

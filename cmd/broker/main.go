@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/absmach/mqtt/broker"
 	"github.com/absmach/mqtt/broker/webhook"
@@ -19,11 +20,14 @@ import (
 	"github.com/absmach/mqtt/server/coap"
 	"github.com/absmach/mqtt/server/health"
 	"github.com/absmach/mqtt/server/http"
+	"github.com/absmach/mqtt/server/otel"
 	"github.com/absmach/mqtt/server/tcp"
 	"github.com/absmach/mqtt/server/websocket"
 	"github.com/absmach/mqtt/storage"
 	"github.com/absmach/mqtt/storage/badger"
 	"github.com/absmach/mqtt/storage/memory"
+	oteltrace "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
@@ -154,9 +158,46 @@ func main() {
 		slog.Info("Webhooks disabled")
 	}
 
+	// Initialize OpenTelemetry if metrics enabled
+	var otelShutdown func(context.Context) error
+	var metrics *otel.Metrics
+	var tracer trace.Tracer
+
+	if cfg.Server.MetricsEnabled {
+		// Initialize OTel SDK (traces and metrics)
+		shutdown, err := otel.InitProvider(cfg.Server, cfg.Cluster.NodeID)
+		if err != nil {
+			slog.Error("Failed to initialize OpenTelemetry", "error", err)
+			os.Exit(1)
+		}
+		otelShutdown = shutdown
+		slog.Info("OpenTelemetry initialized", "endpoint", cfg.Server.MetricsAddr)
+
+		// Create metrics instance
+		if cfg.Server.OtelMetricsEnabled {
+			m, err := otel.NewMetrics()
+			if err != nil {
+				slog.Error("Failed to create metrics", "error", err)
+				os.Exit(1)
+			}
+			metrics = m
+			slog.Info("OTel metrics enabled")
+		}
+
+		// Get tracer if tracing is enabled
+		if cfg.Server.OtelTracesEnabled {
+			tracer = oteltrace.Tracer("mqtt-broker")
+			slog.Info("Distributed tracing enabled", "sample_rate", cfg.Server.OtelTraceSampleRate)
+		} else {
+			slog.Info("Distributed tracing disabled (zero overhead)")
+		}
+	} else {
+		slog.Info("OpenTelemetry disabled")
+	}
+
 	// Create core broker with storage, cluster, logger, metrics, and webhooks
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, logger, stats, webhooks)
+	b := broker.NewBroker(store, cl, logger, stats, webhooks, metrics, tracer)
 	defer b.Close()
 
 	// Set message handler on cluster if it's an etcd cluster
@@ -285,6 +326,17 @@ func main() {
 	// Shutdown broker (drain connections, transfer sessions)
 	if err := b.Shutdown(shutdownCtx, cfg.Server.ShutdownTimeout); err != nil {
 		slog.Error("Error during shutdown", "error", err)
+	}
+
+	// Shutdown OpenTelemetry
+	if otelShutdown != nil {
+		otelShutdownCtx, otelCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer otelCancel()
+		if err := otelShutdown(otelShutdownCtx); err != nil {
+			slog.Error("Failed to shutdown OpenTelemetry", "error", err)
+		} else {
+			slog.Info("OpenTelemetry shutdown complete")
+		}
 	}
 
 	// Cancel server contexts to stop accepting new connections

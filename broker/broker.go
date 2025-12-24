@@ -18,10 +18,12 @@ import (
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
 	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/mqtt/server/otel"
 	"github.com/absmach/mqtt/session"
 	"github.com/absmach/mqtt/storage"
 	"github.com/absmach/mqtt/storage/memory"
 	"github.com/absmach/mqtt/storage/messages"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -50,7 +52,9 @@ type Broker struct {
 	auth          *AuthEngine
 	logger        *slog.Logger
 	stats         *Stats
-	webhooks      Notifier // nil if webhooks disabled
+	webhooks      Notifier     // nil if webhooks disabled
+	metrics       *otel.Metrics // nil if metrics disabled
+	tracer        trace.Tracer  // nil if tracing disabled
 	stopCh        chan struct{}
 	shuttingDown  bool
 	closed        bool
@@ -63,7 +67,9 @@ type Broker struct {
 //   - logger: Logger instance (nil uses default)
 //   - stats: Stats collector (nil creates new one)
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier) *Broker {
+//   - metrics: OTel metrics instance (nil if metrics disabled)
+//   - tracer: OTel tracer (nil if tracing disabled)
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier, metrics *otel.Metrics, tracer trace.Tracer) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -90,6 +96,8 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		logger:        logger,
 		stats:         stats,
 		webhooks:      webhooks,
+		metrics:       metrics,
+		tracer:        tracer,
 		stopCh:        make(chan struct{}),
 	}
 
@@ -282,6 +290,11 @@ func (b *Broker) Publish(msg *storage.Message) error {
 	b.stats.IncrementPublishReceived()
 	b.stats.AddBytesReceived(uint64(len(msg.Payload)))
 
+	// Record metrics
+	if b.metrics != nil {
+		b.metrics.RecordMessageReceived(msg.QoS, int64(len(msg.Payload)))
+	}
+
 	// Webhook: message published
 	if b.webhooks != nil {
 		payload := ""
@@ -350,6 +363,11 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(qos)))
 	b.stats.IncrementSubscriptions()
 
+	// Record metrics
+	if b.metrics != nil {
+		b.metrics.RecordSubscriptionAdded()
+	}
+
 	b.router.Subscribe(s.ID, filter, qos, opts)
 
 	sub := &storage.Subscription{
@@ -389,6 +407,11 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	b.logOp("unsubscribe", slog.String("client_id", s.ID), slog.String("filter", filter))
 	b.stats.DecrementSubscriptions()
+
+	// Record metrics
+	if b.metrics != nil {
+		b.metrics.RecordSubscriptionRemoved()
+	}
 
 	b.router.Unsubscribe(s.ID, filter)
 

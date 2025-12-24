@@ -32,6 +32,7 @@ type ServerConfig struct {
 	WSPath          string        `yaml:"ws_path"`
 	CoAPAddr        string        `yaml:"coap_addr"`
 	HealthAddr      string        `yaml:"health_addr"`
+	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
 	TCPMaxConn      int           `yaml:"tcp_max_connections"`
 	TCPReadTimeout  time.Duration `yaml:"tcp_read_timeout"`
 	TCPWriteTimeout time.Duration `yaml:"tcp_write_timeout"`
@@ -41,6 +42,14 @@ type ServerConfig struct {
 	WSEnabled       bool          `yaml:"ws_enabled"`
 	CoAPEnabled     bool          `yaml:"coap_enabled"`
 	HealthEnabled   bool          `yaml:"health_enabled"`
+	MetricsEnabled  bool          `yaml:"metrics_enabled"` // Now enables OTel
+
+	// OpenTelemetry configuration
+	OtelServiceName     string  `yaml:"otel_service_name"`
+	OtelServiceVersion  string  `yaml:"otel_service_version"`
+	OtelTracesEnabled   bool    `yaml:"otel_traces_enabled"`
+	OtelMetricsEnabled  bool    `yaml:"otel_metrics_enabled"`
+	OtelTraceSampleRate float64 `yaml:"otel_trace_sample_rate"` // 0.0 to 1.0
 }
 
 // BrokerConfig holds broker-specific settings.
@@ -175,7 +184,16 @@ func Default() *Config {
 			CoAPEnabled:     false,
 			HealthAddr:      ":8081",
 			HealthEnabled:   true,
+			MetricsAddr:     "localhost:4317",
+			MetricsEnabled:  false,
 			ShutdownTimeout: 30 * time.Second,
+
+			// OpenTelemetry defaults
+			OtelServiceName:     "mqtt-broker",
+			OtelServiceVersion:  "1.0.0",
+			OtelMetricsEnabled:  true,
+			OtelTracesEnabled:   false, // Disabled by default for performance
+			OtelTraceSampleRate: 0.1,   // 10% sampling when enabled
 		},
 		Broker: BrokerConfig{
 			MaxMessageSize:      1024 * 1024, // 1MB
@@ -310,6 +328,16 @@ func (c *Config) Validate() error {
 
 	if c.Storage.Type == "badger" && c.Storage.BadgerDir == "" {
 		return fmt.Errorf("storage.badger_dir required when type is badger")
+	}
+
+	// OpenTelemetry validation (only if metrics enabled)
+	if c.Server.MetricsEnabled {
+		if c.Server.OtelServiceName == "" {
+			return fmt.Errorf("server.otel_service_name cannot be empty when metrics enabled")
+		}
+		if c.Server.OtelTraceSampleRate < 0.0 || c.Server.OtelTraceSampleRate > 1.0 {
+			return fmt.Errorf("server.otel_trace_sample_rate must be between 0.0 and 1.0")
+		}
 	}
 
 	// Cluster validation (only if enabled)
