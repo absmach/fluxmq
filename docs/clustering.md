@@ -1,12 +1,16 @@
-# Clustering Architecture
+# Clustering
 
-This document provides a comprehensive overview of the MQTT broker's clustering architecture, explaining how multiple broker nodes work together to provide a distributed, highly available message broker.
+This document provides a comprehensive overview of the MQTT broker's clustering capabilities, explaining how multiple broker nodes work together to provide a distributed, highly available message broker.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Design Goals](#design-goals)
 - [Architecture Components](#architecture-components)
+- [Infrastructure Deep Dive](#infrastructure-deep-dive)
+  - [Embedded etcd](#embedded-etcd)
+  - [gRPC Transport](#grpc-transport)
+  - [BadgerDB Storage](#badgerdb-storage)
 - [Data Distribution Model](#data-distribution-model)
 - [Message Flow](#message-flow)
 - [Failure Scenarios](#failure-scenarios)
@@ -186,11 +190,80 @@ The `TakeoverSession` RPC returns a complete `SessionState` protobuf containing:
 - Offline message queue
 - Local subscriptions (backup)
 
-## Data Distribution Model
+## Infrastructure Deep Dive
 
-### Metadata (Strong Consistency via etcd)
+### Embedded etcd
 
-**Session Ownership**
+#### Overview
+
+The broker uses **embedded etcd** - not an etcd client connecting to an external cluster, but a full etcd server running inside the broker process.
+
+```go
+import "go.etcd.io/etcd/server/v3/embed"
+
+eCfg := embed.NewConfig()
+eCfg.Name = "node1"
+eCfg.Dir = "/tmp/mqtt/node1/etcd"
+eCfg.ClusterState = "new"  // or "existing"
+
+etcd, err := embed.StartEtcd(eCfg)
+```
+
+**Key Insight**: Each broker node IS an etcd node. The etcd cluster and broker cluster are the same thing.
+
+#### Raft Consensus
+
+etcd uses the Raft consensus algorithm for:
+- **Leader election**: One node becomes leader
+- **Log replication**: All nodes agree on operation order
+- **Strong consistency**: Reads guaranteed to see latest writes
+
+**Raft Roles**:
+- **Leader**: Handles all writes, replicates to followers
+- **Follower**: Replicates log, votes in elections
+- **Candidate**: Follower requesting votes during election
+
+```
+Initial Cluster Formation:
+┌──────────┐   ┌──────────┐   ┌──────────┐
+│  Node1   │   │  Node2   │   │  Node3   │
+│ (Leader) │──▶│(Follower)│──▶│(Follower)│
+└──────────┘   └──────────┘   └──────────┘
+      │              │              │
+      └──────────────┴──────────────┘
+         Raft Log Replication
+
+Write Path:
+Client → Leader → Replicate to Majority → Commit → Respond
+         Node1  →  Node2, Node3 (2/3)  →    ✓    →   OK
+```
+
+#### Configuration
+
+**Bootstrap Node** (`node1.yaml`):
+```yaml
+cluster:
+  enabled: true
+  node_id: "node1"
+  etcd:
+    data_dir: "/tmp/mqtt/node1/etcd"
+    bind_addr: "127.0.0.1:2380"      # Raft peer communication
+    client_addr: "127.0.0.1:2379"    # Client API
+    initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
+    bootstrap: true  # cluster_state = "new"
+```
+
+**Port Mapping**:
+- `bind_addr`: Raft protocol (node-to-node)
+- `client_addr`: etcd API (used by broker locally)
+
+**Important**: For initial cluster formation, ALL nodes set `bootstrap: true`. Only use `bootstrap: false` when adding a node to an already-running cluster.
+
+#### Data Model
+
+etcd stores data as key-value pairs with optional TTL (lease).
+
+**Session Ownership**:
 ```
 Key:   /mqtt/sessions/{clientID}
 Value: {"node_id": "node2", "lease_id": "7587869134..."}
@@ -203,20 +276,240 @@ When a client connects:
 3. Auto-renewing lease maintains ownership
 4. On disconnect, ownership released
 
-**Subscriptions**
+**Subscriptions**:
 ```
 Key:   /mqtt/subscriptions/{clientID}/{filter}
 Value: {"qos": 1, "no_local": false, ...}
 ```
 
-When a client subscribes:
-1. Added to local router (trie)
-2. Stored in local BadgerDB
-3. Registered in etcd for cluster visibility
-
 **Why Both Local and etcd?**
 - **Local router**: Fast O(log n) matching for local subscribers
 - **etcd**: Cluster-wide visibility for routing to remote nodes
+
+#### Leadership and Background Tasks
+
+Some tasks should run on exactly one node (e.g., processing pending will messages):
+
+```go
+// Create election
+election := concurrency.NewElection(session, "/mqtt/leader")
+
+// Campaign to become leader
+err := election.Campaign(ctx, nodeID)
+if err == nil {
+    // This node is the leader
+    go processWillMessages()
+}
+```
+
+#### Performance Considerations
+
+**Reads**:
+- Linearizable reads: Contact leader (slower, guaranteed latest)
+- Serializable reads: Local replica (faster, may be stale)
+
+**Writes**:
+- All writes go through leader
+- Require quorum (majority) to commit
+- Latency: ~1-5ms in LAN, ~10-100ms WAN
+
+**Best Practices**:
+- Batch small writes when possible
+- Use transactions for atomic operations
+- Keep values small (<1KB recommended)
+- Use leases for automatic cleanup
+
+### gRPC Transport
+
+#### Overview
+
+gRPC provides the inter-broker communication layer for routing messages between nodes.
+
+**Protocol**: gRPC over HTTP/2
+**Serialization**: Protocol Buffers
+**Pattern**: Request-response (not streaming)
+
+#### Service Definition
+
+`cluster/broker.proto`:
+```protobuf
+syntax = "proto3";
+
+package cluster;
+
+service BrokerService {
+  rpc RoutePublish(PublishRequest) returns (PublishResponse);
+  rpc TakeoverSession(TakeoverRequest) returns (TakeoverResponse);
+}
+
+message PublishRequest {
+  string client_id = 1;
+  string topic = 2;
+  bytes payload = 3;
+  uint32 qos = 4;
+  bool retain = 5;
+  bool dup = 6;
+  map<string, string> properties = 7;
+}
+
+message PublishResponse {
+  bool success = 1;
+  string error = 2;
+}
+```
+
+#### Connection Management
+
+**Peer Discovery**:
+```yaml
+cluster:
+  transport:
+    bind_addr: "127.0.0.1:7948"
+    peers:
+      node2: "127.0.0.1:7949"
+      node3: "127.0.0.1:7950"
+```
+
+**Connection Topology**:
+```
+3-node cluster:
+
+Node1 ←→ Node2
+  ↕        ↕
+Node3 ←→ Node3
+
+Fully connected mesh: N*(N-1)/2 connections
+3 nodes: 3 connections
+10 nodes: 45 connections
+```
+
+#### Performance Considerations
+
+**Latency**:
+- LAN: ~1-2ms per RPC
+- WAN: 50-200ms depending on distance
+
+**Throughput**:
+- HTTP/2 multiplexing: Multiple RPCs per connection
+- Protobuf serialization: ~10x faster than JSON
+- No TLS (for now): Lower CPU overhead
+
+### BadgerDB Storage
+
+#### Overview
+
+BadgerDB is an embedded key-value store designed for high performance:
+- **LSM tree** architecture (like RocksDB, LevelDB)
+- **Embedded**: No server process, library only
+- **Written in Go**: No CGO, pure Go
+- **Fast writes**: Sequential writes optimized
+- **TTL support**: Automatic expiration
+
+#### Architecture
+
+```
+BadgerDB Structure:
+
+Write Path:
+  Put(key, value) → MemTable (in-memory) → WAL (disk)
+                       ↓
+                   (when full)
+                       ↓
+                   SSTable (disk, immutable)
+
+Read Path:
+  Get(key) → MemTable → L0 SSTables → L1 SSTables → ... → Ln SSTables
+             (newest)     (newer)       (older)
+```
+
+**LSM Tree Levels**:
+- **L0**: Recently flushed from MemTable
+- **L1-Ln**: Compacted and merged SSTables
+- **Compaction**: Merge and sort SSTables to reduce read amplification
+
+#### Data Model
+
+BadgerDB is a **pure key-value store** - no tables, no indexes, just `[]byte → []byte`.
+
+**Session Store**:
+```
+Key:   session:{clientID}
+Value: JSON{
+  "client_id": "client1",
+  "clean_start": false,
+  "expiry_interval": 300,
+  "keep_alive": 60,
+  ...
+}
+```
+
+**Message Store**:
+```
+Inflight: {clientID}/inflight/{packetID} → Message
+Queue:    {clientID}/queue/{sequence}    → Message
+```
+
+**Subscription Store**:
+```
+Key:   sub:{clientID}:{filter}
+Value: JSON{qos: 1, no_local: false, ...}
+```
+
+#### Garbage Collection
+
+BadgerDB requires periodic GC to reclaim space:
+
+```go
+ticker := time.NewTicker(5 * time.Minute)
+for range ticker.C {
+    again := true
+    for again {
+        again = db.RunValueLogGC(0.5)  // Discard 50% garbage
+    }
+}
+```
+
+**Why GC?**
+- Values stored separately in value log
+- Deleted/updated values leave garbage
+- GC compacts and reclaims space
+
+#### Performance Characteristics
+
+**Write Performance**:
+- Sequential writes to WAL: ~100K writes/sec
+- MemTable flush: Batched, amortized cost
+- Async mode (SyncWrites=false): Even faster, less durable
+
+**Read Performance**:
+- MemTable hit: ~1-2μs
+- SSTable hit: ~10-100μs (depending on level)
+- Bloom filters reduce unnecessary reads
+
+**Comparison**:
+| Store | Write | Read | Durability |
+|-------|-------|------|------------|
+| Memory | Fastest | Fastest | None |
+| BadgerDB (async) | Fast | Fast | Medium |
+| BadgerDB (sync) | Medium | Fast | High |
+| PostgreSQL | Slow | Medium | Highest |
+
+## Data Distribution Model
+
+### Metadata (Strong Consistency via etcd)
+
+**Session Ownership**
+```
+Key:   /mqtt/sessions/{clientID}
+Value: {"node_id": "node2", "lease_id": "7587869134..."}
+TTL:   30 seconds (auto-renewed while connected)
+```
+
+**Subscriptions**
+```
+Key:   /mqtt/subscriptions/{clientID}/{filter}
+Value: {"qos": 1, "no_local": false, ...}
+```
 
 ### Messages (Direct Routing via gRPC)
 
@@ -571,7 +864,9 @@ The clustering architecture balances several concerns:
 - Automatic coordination
 - No external dependencies
 
-For implementation details, see:
-- [Clustering Infrastructure](clustering-infrastructure.md) - etcd, gRPC, BadgerDB deep dive
-- [Broker & Routing](broker-routing.md) - Message routing internals
-- [Configuration](configuration.md) - Cluster setup and tuning
+---
+
+For related documentation, see:
+- [Configuration Guide](configuration.md) - Cluster setup and tuning
+- [Broker & Routing](broker.md) - Message routing internals
+- [Architecture Overview](architecture.md) - Overall broker architecture
