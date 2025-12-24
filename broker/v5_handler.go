@@ -375,7 +375,8 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 
 		reasonCodes[i] = t.MaxQoS
 
-		retained, err := h.broker.retained.Match(t.Topic)
+		// Send retained messages matching the subscription filter
+		retained, err := h.broker.GetRetainedMatching(t.Topic)
 		if err == nil {
 			for _, msg := range retained {
 				deliverQoS := msg.QoS

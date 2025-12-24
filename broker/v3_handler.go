@@ -317,7 +317,8 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 
 		reasonCodes[i] = t.QoS
 
-		retained, err := h.broker.retained.Match(t.Name)
+		// Send retained messages matching the subscription filter
+		retained, err := h.broker.GetRetainedMatching(t.Name)
 		if err == nil {
 			for _, msg := range retained {
 				deliverQoS := msg.QoS

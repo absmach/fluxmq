@@ -299,8 +299,16 @@ func (b *Broker) Publish(msg *storage.Message) error {
 
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
+			// Clear retained message
 			if err := b.retained.Delete(msg.Topic); err != nil {
 				return err
+			}
+			// Also delete from cluster
+			if b.cluster != nil {
+				ctx := context.Background()
+				if err := b.cluster.DeleteRetained(ctx, msg.Topic); err != nil {
+					b.logError("cluster_delete_retained", err, slog.String("topic", msg.Topic))
+				}
 			}
 			// Webhook: retained message cleared
 			if b.webhooks != nil {
@@ -311,9 +319,17 @@ func (b *Broker) Publish(msg *storage.Message) error {
 				})
 			}
 		} else {
+			// Set retained message
 			msg.Retain = true
 			if err := b.retained.Set(msg.Topic, msg); err != nil {
 				return err
+			}
+			// Also store in cluster
+			if b.cluster != nil {
+				ctx := context.Background()
+				if err := b.cluster.SetRetained(ctx, msg.Topic, msg); err != nil {
+					b.logError("cluster_set_retained", err, slog.String("topic", msg.Topic))
+				}
 			}
 			// Webhook: retained message set
 			if b.webhooks != nil {
@@ -505,6 +521,17 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 // Match returns all subscriptions matching a topic (implements Service interface).
 func (b *Broker) Match(topic string) ([]*storage.Subscription, error) {
 	return b.router.Match(topic)
+}
+
+// GetRetainedMatching returns all retained messages matching a topic filter.
+// In clustered mode, queries the cluster; otherwise uses local storage.
+func (b *Broker) GetRetainedMatching(filter string) ([]*storage.Message, error) {
+	if b.cluster != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return b.cluster.GetRetainedMatching(ctx, filter)
+	}
+	return b.retained.Match(filter)
 }
 
 // distribute distributes a message to all matching subscribers (local and remote).
