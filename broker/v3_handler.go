@@ -194,6 +194,18 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		s.Inflight().MarkReceived(packetID)
 
+		// Publish message immediately (distribution to subscribers)
+		msg := &storage.Message{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     qos,
+			Retain:  retain,
+		}
+		if err := h.broker.Publish(msg); err != nil {
+			return err
+		}
+
+		// Store for QoS 2 flow tracking
 		storeMsg := &storage.Message{
 			Topic:    topic,
 			Payload:  payload,
@@ -204,6 +216,11 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			return err
 		}
+
+		h.broker.logger.Debug("v3_publish_complete",
+			slog.String("client_id", s.ID),
+			slog.Duration("duration", time.Since(start)),
+		)
 
 		return sendV3PubRec(s, packetID)
 	}
@@ -249,11 +266,8 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	packetID := p.ID
 
-	inf, ok := s.Inflight().Get(packetID)
-	if ok && inf.Message != nil {
-		h.broker.Publish(inf.Message)
-	}
-
+	// Message was already published when PUBLISH was received
+	// PUBREL just confirms the handshake for QoS 2
 	h.broker.AckMessage(s, packetID)
 	s.Inflight().ClearReceived(packetID)
 	comp := &v3.PubComp{
