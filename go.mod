@@ -4,8 +4,10 @@ go 1.24.3
 
 require (
 	github.com/dgraph-io/badger/v4 v4.9.0
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/plgd-dev/go-coap/v3 v3.4.1
+	github.com/sony/gobreaker v1.0.0
 	go.etcd.io/etcd/client/v3 v3.5.17
 	go.etcd.io/etcd/server/v3 v3.5.17
 	google.golang.org/grpc v1.77.0
@@ -28,7 +30,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/btree v1.0.1 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
@@ -48,7 +49,6 @@ require (
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/soheilhy/cmux v0.1.5 // indirect
-	github.com/sony/gobreaker v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20201229170055-e5319fda7802 // indirect
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
