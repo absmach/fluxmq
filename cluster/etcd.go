@@ -163,15 +163,16 @@ func NewEtcdCluster(cfg *EtcdConfig, logger *slog.Logger) (*EtcdCluster, error) 
 	election := concurrency.NewElection(s, electionPrefix)
 
 	c := &EtcdCluster{
-		nodeID:   cfg.NodeID,
-		config:   cfg,
-		etcd:     e,
-		client:   client,
-		election: election,
-		session:  s,
-		logger:   logger,
-		subCache: make(map[string]*storage.Subscription),
-		stopCh:   make(chan struct{}),
+		nodeID:        cfg.NodeID,
+		config:        cfg,
+		etcd:          e,
+		client:        client,
+		election:      election,
+		session:       s,
+		logger:        logger,
+		subCache:      make(map[string]*storage.Subscription),
+		retainedCache: make(map[string]*storage.Message),
+		stopCh:        make(chan struct{}),
 	}
 
 	// Create a lease for session ownership with auto-renewal
@@ -218,6 +219,14 @@ func (c *EtcdCluster) Start() error {
 
 	// Start watching for subscription changes
 	go c.watchSubscriptions()
+
+	// Load retained message cache on startup
+	if err := c.loadRetainedCache(); err != nil {
+		c.logger.Warn("failed to load retained cache", slog.String("error", err.Error()))
+	}
+
+	// Start watching for retained message changes
+	go c.watchRetained()
 
 	// Start gRPC transport if configured
 	if c.transport != nil {
@@ -331,6 +340,71 @@ func (c *EtcdCluster) WaitForLeader(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 			// Check again
+		}
+	}
+}
+
+// loadRetainedCache loads all retained messages from etcd into the local cache.
+func (c *EtcdCluster) loadRetainedCache() error {
+	ctx := context.Background()
+	resp, err := c.client.Get(ctx, retainedPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load retained messages: %w", err)
+	}
+
+	c.retainedCacheMu.Lock()
+	defer c.retainedCacheMu.Unlock()
+
+	for _, kv := range resp.Kvs {
+		var msg storage.Message
+		if err := json.Unmarshal(kv.Value, &msg); err != nil {
+			c.logger.Warn("failed to unmarshal retained message during cache load", slog.String("error", err.Error()))
+			continue
+		}
+
+		// Extract topic from key (remove prefix)
+		topic := strings.TrimPrefix(string(kv.Key), retainedPrefix)
+		c.retainedCache[topic] = &msg
+	}
+
+	c.logger.Info("loaded retained messages into cache", slog.Int("count", len(c.retainedCache)))
+	return nil
+}
+
+// watchRetained watches etcd for retained message changes and updates the local cache.
+func (c *EtcdCluster) watchRetained() {
+	watchCh := c.client.Watch(context.Background(), retainedPrefix, clientv3.WithPrefix())
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case watchResp := <-watchCh:
+			if watchResp.Err() != nil {
+				c.logger.Error("retained watch error", slog.String("error", watchResp.Err().Error()))
+				continue
+			}
+
+			c.retainedCacheMu.Lock()
+			for _, event := range watchResp.Events {
+				topic := strings.TrimPrefix(string(event.Kv.Key), retainedPrefix)
+
+				switch event.Type {
+				case clientv3.EventTypePut:
+					// Retained message added or updated
+					var msg storage.Message
+					if err := json.Unmarshal(event.Kv.Value, &msg); err != nil {
+						c.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
+						continue
+					}
+					c.retainedCache[topic] = &msg
+
+				case clientv3.EventTypeDelete:
+					// Retained message removed
+					delete(c.retainedCache, topic)
+				}
+			}
+			c.retainedCacheMu.Unlock()
 		}
 	}
 }
@@ -543,7 +617,7 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 
 // Retained returns the cluster-wide retained message store.
 func (c *EtcdCluster) Retained() storage.RetainedStore {
-	return &etcdRetainedStore{logger: c.logger, client: c.client}
+	return &etcdRetainedStore{logger: c.logger, client: c.client, cluster: c}
 }
 
 // Wills returns the cluster-wide will message store.
@@ -553,8 +627,9 @@ func (c *EtcdCluster) Wills() storage.WillStore {
 
 // etcdRetainedStore implements storage.RetainedStore using etcd.
 type etcdRetainedStore struct {
-	logger *slog.Logger
-	client *clientv3.Client
+	logger  *slog.Logger
+	client  *clientv3.Client
+	cluster *EtcdCluster
 }
 
 func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
@@ -601,22 +676,16 @@ func (s *etcdRetainedStore) Delete(ctx context.Context, topic string) error {
 }
 
 func (s *etcdRetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
-	resp, err := s.client.Get(ctx, retainedPrefix, clientv3.WithPrefix())
-	if err != nil {
-		return nil, err
-	}
+	// Use local cache for fast wildcard matching instead of etcd scan
+	s.cluster.retainedCacheMu.RLock()
+	defer s.cluster.retainedCacheMu.RUnlock()
 
 	var matched []*storage.Message
-	for _, kv := range resp.Kvs {
-		topic := string(kv.Key)[len(retainedPrefix):]
-
+	for topic, msg := range s.cluster.retainedCache {
 		if topicMatchesFilter(topic, filter) {
-			var msg storage.Message
-			if err := json.Unmarshal(kv.Value, &msg); err != nil {
-				s.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
-				continue
-			}
-			matched = append(matched, &msg)
+			// Create a copy to avoid returning cached pointers
+			msgCopy := *msg
+			matched = append(matched, &msgCopy)
 		}
 	}
 
