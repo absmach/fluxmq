@@ -46,7 +46,7 @@ func (r *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 }
 
 // Get retrieves a retained message by exact topic.
-func (r *RetainedStore) Get(_ context.Context, topic string) (*storage.Message, error) {
+func (r *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
 	key := []byte("retained:" + topic)
 	var msg *storage.Message
 
@@ -72,7 +72,7 @@ func (r *RetainedStore) Get(_ context.Context, topic string) (*storage.Message, 
 }
 
 // Delete removes a retained message.
-func (r *RetainedStore) Delete(_ context.Context, topic string) error {
+func (r *RetainedStore) Delete(ctx context.Context, topic string) error {
 	key := []byte("retained:" + topic)
 
 	return r.db.Update(func(txn *badger.Txn) error {
@@ -81,7 +81,7 @@ func (r *RetainedStore) Delete(_ context.Context, topic string) error {
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (r *RetainedStore) Match(_ context.Context, filter string) ([]*storage.Message, error) {
+func (r *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
 	var matched []*storage.Message
 
 	err := r.db.View(func(txn *badger.Txn) error {

@@ -56,7 +56,7 @@ func (s *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message
 }
 
 // Delete removes a retained message.
-func (s *RetainedStore) Delete(_ context.Context, topic string) error {
+func (s *RetainedStore) Delete(ctx context.Context, topic string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -65,7 +65,7 @@ func (s *RetainedStore) Delete(_ context.Context, topic string) error {
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (s *RetainedStore) Match(_ context.Context, filter string) ([]*storage.Message, error) {
+func (s *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

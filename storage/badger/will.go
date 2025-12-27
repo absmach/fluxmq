@@ -34,7 +34,7 @@ func NewWillStore(db *badger.DB) *WillStore {
 }
 
 // Set stores a will message for a client.
-func (w *WillStore) Set(_ context.Context, clientID string, will *storage.WillMessage) error {
+func (w *WillStore) Set(ctx context.Context, clientID string, will *storage.WillMessage) error {
 	key := []byte("will:" + clientID)
 
 	entry := &willEntry{
@@ -53,7 +53,7 @@ func (w *WillStore) Set(_ context.Context, clientID string, will *storage.WillMe
 }
 
 // Get retrieves the will message for a client.
-func (w *WillStore) Get(_ context.Context, clientID string) (*storage.WillMessage, error) {
+func (w *WillStore) Get(ctx context.Context, clientID string) (*storage.WillMessage, error) {
 	key := []byte("will:" + clientID)
 	var entry *willEntry
 
@@ -79,7 +79,7 @@ func (w *WillStore) Get(_ context.Context, clientID string) (*storage.WillMessag
 }
 
 // Delete removes the will message for a client.
-func (w *WillStore) Delete(_ context.Context, clientID string) error {
+func (w *WillStore) Delete(ctx context.Context, clientID string) error {
 	key := []byte("will:" + clientID)
 
 	return w.db.Update(func(txn *badger.Txn) error {
@@ -89,7 +89,7 @@ func (w *WillStore) Delete(_ context.Context, clientID string) error {
 
 // GetPending returns will messages that should be triggered.
 // (will delay elapsed and client still disconnected).
-func (w *WillStore) GetPending(_ context.Context, before time.Time) ([]*storage.WillMessage, error) {
+func (w *WillStore) GetPending(ctx context.Context, before time.Time) ([]*storage.WillMessage, error) {
 	var pending []*storage.WillMessage
 
 	err := w.db.View(func(txn *badger.Txn) error {

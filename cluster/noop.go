@@ -86,38 +86,38 @@ func (n *NoopCluster) Wills() storage.WillStore {
 // noopRetainedStore is a no-op implementation of storage.RetainedStore.
 type noopRetainedStore struct{}
 
-func (s *noopRetainedStore) Set(_ context.Context, _ string, _ *storage.Message) error {
+func (s *noopRetainedStore) Set(ctx context.Context, _ string, _ *storage.Message) error {
 	return nil
 }
 
-func (s *noopRetainedStore) Get(_ context.Context, _ string) (*storage.Message, error) {
+func (s *noopRetainedStore) Get(ctx context.Context, _ string) (*storage.Message, error) {
 	return nil, ErrClusterNotEnabled
 }
 
-func (s *noopRetainedStore) Delete(_ context.Context, _ string) error {
+func (s *noopRetainedStore) Delete(ctx context.Context, _ string) error {
 	return nil
 }
 
-func (s *noopRetainedStore) Match(_ context.Context, _ string) ([]*storage.Message, error) {
+func (s *noopRetainedStore) Match(ctx context.Context, _ string) ([]*storage.Message, error) {
 	return nil, ErrClusterNotEnabled
 }
 
 // noopWillStore is a no-op implementation of storage.WillStore.
 type noopWillStore struct{}
 
-func (s *noopWillStore) Set(_ context.Context, _ string, _ *storage.WillMessage) error {
+func (s *noopWillStore) Set(ctx context.Context, _ string, _ *storage.WillMessage) error {
 	return nil
 }
 
-func (s *noopWillStore) Get(_ context.Context, _ string) (*storage.WillMessage, error) {
+func (s *noopWillStore) Get(ctx context.Context, _ string) (*storage.WillMessage, error) {
 	return nil, ErrClusterNotEnabled
 }
 
-func (s *noopWillStore) Delete(_ context.Context, _ string) error {
+func (s *noopWillStore) Delete(ctx context.Context, _ string) error {
 	return nil
 }
 
-func (s *noopWillStore) GetPending(_ context.Context, _ time.Time) ([]*storage.WillMessage, error) {
+func (s *noopWillStore) GetPending(ctx context.Context, _ time.Time) ([]*storage.WillMessage, error) {
 	return nil, ErrClusterNotEnabled
 }
 
