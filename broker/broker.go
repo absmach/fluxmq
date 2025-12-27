@@ -786,12 +786,12 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	if b.messages != nil {
 		msgs := s.OfflineQueue().Drain()
 		for i, msg := range msgs {
-			key := fmt.Sprintf("%s%s%d", queuePrefix, s.ID, i)
+			key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
 			b.messages.Store(key, msg)
 		}
 
 		for _, inf := range s.Inflight().GetAll() {
-			key := fmt.Sprintf("%s%s%d", inflightPrefix, s.ID, inf.PacketID)
+			key := fmt.Sprintf("%s%s%d", s.ID, inflightPrefix, inf.PacketID)
 			b.messages.Store(key, inf.Message)
 		}
 	}
@@ -1132,12 +1132,28 @@ func (b *Broker) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.sessionsMap.ForEach(func(session *session.Session) {
-		if session.IsConnected() {
-			session.Disconnect(false)
+	b.sessionsMap.ForEach(func(s *session.Session) {
+		if s.IsConnected() {
+			s.Disconnect(false)
+		} else {
+			// For already-disconnected sessions, persist any queued messages
+			b.persistOfflineQueue(s)
 		}
 	})
 	return nil
+}
+
+// persistOfflineQueue saves a session's offline queue to storage.
+func (b *Broker) persistOfflineQueue(s *session.Session) {
+	if b.messages == nil {
+		return
+	}
+
+	msgs := s.OfflineQueue().Drain()
+	for i, msg := range msgs {
+		key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
+		b.messages.Store(key, msg)
+	}
 }
 
 // GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.

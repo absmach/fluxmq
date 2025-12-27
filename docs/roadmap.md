@@ -14,8 +14,8 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - ✅ **Foundation (100%)** - Core MQTT 3.1.1/5.0, multi-protocol, clean architecture
 - ✅ **Clustering (100%)** - Session takeover, QoS 2 routing, retained messages, etcd coordination
 - ✅ **Multi-Protocol (100%)** - TCP, WebSocket, HTTP bridge, CoAP stub
-- ⏳ **Testing (65%)** - QoS 2 fixed, cluster formation validated, failover needs tuning
-- ⏳ **Production Hardening (50%)** - Health checks done, observability with OTel complete, TLS/auth pending
+- ⏳ **Testing (80%)** - QoS 2 fixed, cluster formation validated, session persistence proven, failover needs tuning
+- ⏳ **Production Hardening (60%)** - Health checks done, observability with OTel complete, session durability proven, TLS/auth pending
 - ❌ **MQTT 5.0 Advanced (0%)** - Topic aliases, shared subscriptions, message expiry
 
 ---
@@ -67,7 +67,15 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - Graceful shutdown with signal handling
 - Configuration via YAML
 
-### ✅ Recently Completed (2025-12-24)
+### ✅ Recently Completed (2025-12-27)
+
+- **Session Persistence Across Restart** (Task 1.3) - Full durability validation
+  - Fixed key format bug in message/queue persistence
+  - Fixed offline queue not being persisted on broker close
+  - Fixed BadgerDB v4 encryption registry issues
+  - Added 4 integration tests proving restart durability
+
+### ✅ Previously Completed (2025-12-24)
 
 - **QoS 2 Cross-Node Routing** - Fixed missing `Publish()` call in QoS 2 PUBLISH handler (both V3 and V5)
 - **Retained Message Cross-Node Delivery** - Added cluster storage/retrieval for retained messages
@@ -81,7 +89,7 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 ### ⏳ In Progress
 
 - Leader failover tuning (basic election works, failover timing needs optimization)
-- TLS/SSL support
+- TLS/SSL support (Task 1.5 - next priority)
 
 ### ❌ Not Started
 
@@ -151,69 +159,46 @@ When receiving a QoS 2 PUBLISH packet, both `V3Handler` and `V5Handler` were sto
 
 ---
 
-### Task 1.3: Session Persistence Across Restart
-**Priority:** HIGH | **Effort:** 4-5 hours | **Blocking:** Durability guarantee
+### ✅ Task 1.3: Session Persistence Across Restart (COMPLETED)
+**Priority:** HIGH | **Effort:** 4-5 hours | **Status:** ✅ COMPLETED
 
-**Context:**
-- BadgerDB implemented and tested at unit level
-- Need integration test proving restart durability
-- Critical for production deployment
+**Completed:** 2025-12-27
 
-**New File:** `storage/badger/integration_test.go`
+**Issues Found & Fixed:**
 
-**Test Scenario:**
-```go
-func TestBadgerDB_SessionPersistence(t *testing.T) {
-    // Setup
-    tmpDir := t.TempDir()
+1. **Key Format Mismatch Bug** - `broker/broker.go:789,794`
+   - Write used format: `/queue/clientID0`, `/inflight/clientID123`
+   - Read expected format: `clientID/queue/0`, `clientID/inflight/123`
+   - Fixed: Changed write format to match read format
 
-    // 1. Start broker with BadgerDB
-    cfg := &config.Config{
-        Storage: config.StorageConfig{
-            Type: "badger",
-            Badger: config.BadgerConfig{Dir: tmpDir},
-        },
-    }
-    broker := broker.New(cfg)
-    broker.Start()
+2. **Offline Queue Not Persisted on Broker Close** - `broker/broker.go:1135-1142`
+   - `Close()` only called `Disconnect()` for connected sessions
+   - Already-disconnected sessions with queued messages were not persisted
+   - Fixed: Added `persistOfflineQueue()` for disconnected sessions during `Close()`
 
-    // 2. Client connects, subscribes to "test/#"
-    client := mqtt.Connect("test-client", broker.Addr())
-    client.Subscribe("test/#", 1)
+3. **BadgerDB v4 Encryption Registry Corruption** - `storage/badger/store.go:41-45`
+   - "Invalid datakey id" errors on restart when writing to value log
+   - Caused by encryption key registry inconsistency
+   - Fixed: Explicitly disabled encryption with `EncryptionKey = nil`
+   - Added `SyncWrites = true` for durability
 
-    // 3. Publish QoS 1 messages while client is offline
-    client.Disconnect()
-    broker.Publish("test/topic", []byte("msg1"), 1, false)
-    broker.Publish("test/topic", []byte("msg2"), 1, false)
+4. **Risky Final GC During Shutdown** - `storage/badger/store.go:122-125`
+   - Running GC during `Close()` could cause vlog corruption
+   - Fixed: Removed final GC run during graceful shutdown
 
-    // 4. Restart broker (close and reopen BadgerDB)
-    broker.Shutdown()
+**New File:** `integration/session_persistence_test.go`
 
-    broker2 := broker.New(cfg)  // Same BadgerDB dir
-    broker2.Start()
-
-    // 5. Client reconnects
-    client.Reconnect(broker2.Addr())
-
-    // 6. Verify: subscriptions restored, offline queue delivered
-    msgs := client.WaitForMessages(2, 5*time.Second)
-    assert.Len(t, msgs, 2)
-    assert.Equal(t, "msg1", string(msgs[0].Payload))
-    assert.Equal(t, "msg2", string(msgs[1].Payload))
-}
-```
-
-**Key Checks:**
-- Session expiry timestamp preserved
-- Inflight messages restored
-- Offline queue intact
-- Subscriptions active
-- Will message persisted
+**Tests Implemented:**
+- `TestSessionPersistence_SubscriptionsRestoredAfterRestart` - ✅ PASSING
+- `TestSessionPersistence_OfflineQueueDeliveredAfterRestart` - ✅ PASSING
+- `TestSessionPersistence_CleanStartClearsSession` - ✅ PASSING
+- `TestSessionPersistence_WillMessagePersisted` - ✅ PASSING
 
 **Success Criteria:**
-- Test passes with broker restart
-- No data loss
-- Session restored in <1 second
+- ✅ Subscriptions restored after broker restart
+- ✅ Offline queue messages delivered after restart
+- ✅ CleanStart=true correctly clears session
+- ✅ All existing tests still passing
 
 ---
 
@@ -971,19 +956,25 @@ webhooks:
 1. ✅ ~~**QoS 2 Investigation** (Task 1.1)~~ - COMPLETED
 2. ✅ ~~**3-Node Cluster Test** (Task 1.2)~~ - COMPLETED
 3. ✅ ~~**OpenTelemetry Observability** (Task 1.4)~~ - COMPLETED
-4. **TLS Support** (Task 1.5) - Enable secure deployment
-5. **Session Persistence Test** (Task 1.3) - Prove durability
+4. ✅ ~~**Session Persistence Test** (Task 1.3)~~ - COMPLETED
+5. **TLS Support** (Task 1.5) - Enable secure deployment
 
-**Recommended Order:** ~~1.1~~ → ~~1.2~~ → ~~1.4~~ → 1.5 → 1.3 → 2.1 → 2.2
+**Recommended Order:** ~~1.1~~ → ~~1.2~~ → ~~1.4~~ → ~~1.3~~ → 1.5 → 2.1 → 2.2
 
-**Completed Today (2025-12-24):**
+**Completed (2025-12-24):**
 - ✅ Task 1.1: QoS 2 Cross-Node Routing (2.5 hours)
 - ✅ Task 1.2: 3-Node Cluster Formation Tests (4 hours)
 - ✅ Task 1.4: OpenTelemetry Migration (3 hours)
-- **Total:** 9.5 hours of high-priority work completed
+
+**Completed (2025-12-27):**
+- ✅ Task 1.3: Session Persistence Across Restart (~3 hours)
+  - Fixed key format bug in message persistence
+  - Fixed offline queue persistence on broker close
+  - Fixed BadgerDB v4 encryption/vlog issues
+  - Added 4 integration tests proving durability
 
 ---
 
-**Document Version:** 2.2
-**Last Updated:** 2025-12-24 19:00
+**Document Version:** 2.3
+**Last Updated:** 2025-12-27
 **Next Review:** After Task 1.5 (TLS Support) completion

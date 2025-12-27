@@ -38,6 +38,11 @@ type Config struct {
 func New(cfg Config) (*Store, error) {
 	opts := badger.DefaultOptions(cfg.Dir)
 	opts.Logger = nil // Disable BadgerDB's internal logging
+	// Disable encryption to avoid "Invalid datakey id" errors on restart
+	opts.EncryptionKey = nil
+	opts.EncryptionKeyRotationDuration = 0
+	// Use synchronous writes for durability
+	opts.SyncWrites = true
 
 	db, err := badger.Open(opts)
 	if err != nil {
@@ -120,8 +125,8 @@ func (s *Store) runGC() {
 			// This may return an error if no GC was needed, which is fine
 			_ = s.db.RunValueLogGC(0.5)
 		case <-s.gcStopCh:
-			// Graceful shutdown: run final GC before exiting
-			_ = s.db.RunValueLogGC(0.5)
+			// Graceful shutdown: skip final GC to avoid vlog corruption
+			// GC during close can cause "Invalid datakey id" errors on restart
 			return
 		}
 	}
