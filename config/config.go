@@ -27,6 +27,8 @@ type ServerConfig struct {
 	TCPAddr         string        `yaml:"tcp_addr"`
 	TLSCertFile     string        `yaml:"tls_cert_file"`
 	TLSKeyFile      string        `yaml:"tls_key_file"`
+	TLSCAFile       string        `yaml:"tls_ca_file"`       // CA certificate for client verification
+	TLSClientAuth   string        `yaml:"tls_client_auth"`   // "none", "request", or "require"
 	HTTPAddr        string        `yaml:"http_addr"`
 	WSAddr          string        `yaml:"ws_addr"`
 	WSPath          string        `yaml:"ws_path"`
@@ -175,6 +177,7 @@ func Default() *Config {
 			TCPReadTimeout:  60 * time.Second,
 			TCPWriteTimeout: 60 * time.Second,
 			TLSEnabled:      false,
+			TLSClientAuth:   "none",
 			HTTPAddr:        ":8080",
 			HTTPEnabled:     false,
 			WSAddr:          ":8083",
@@ -295,6 +298,17 @@ func (c *Config) Validate() error {
 		}
 		if c.Server.TLSKeyFile == "" {
 			return fmt.Errorf("server.tls_key_file required when TLS is enabled")
+		}
+
+		// Validate client auth mode
+		validClientAuth := map[string]bool{"none": true, "request": true, "require": true}
+		if !validClientAuth[c.Server.TLSClientAuth] {
+			return fmt.Errorf("server.tls_client_auth must be one of: none, request, require")
+		}
+
+		// CA file required for client certificate verification
+		if (c.Server.TLSClientAuth == "request" || c.Server.TLSClientAuth == "require") && c.Server.TLSCAFile == "" {
+			return fmt.Errorf("server.tls_ca_file required when tls_client_auth is '%s'", c.Server.TLSClientAuth)
 		}
 	}
 

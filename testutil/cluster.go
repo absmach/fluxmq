@@ -173,6 +173,9 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 	}
 
 	// Create cluster
+	// Create null logger to reduce test noise
+	nullLogger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
+
 	clusterCfg := &cluster.EtcdConfig{
 		NodeID:         node.ID,
 		DataDir:        etcdDir,
@@ -185,14 +188,11 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		Bootstrap:      bootstrap,
 	}
 
-	clust, err := cluster.NewEtcdCluster(clusterCfg)
+	clust, err := cluster.NewEtcdCluster(clusterCfg, nullLogger)
 	if err != nil {
 		store.Close()
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
-
-	// Create broker with null logger to reduce test noise
-	nullLogger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := broker.NewBroker(store, clust, nullLogger, nil, nil, nil, nil)
 
 	// Wire broker as message handler (includes session management)

@@ -15,7 +15,7 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - ✅ **Clustering (100%)** - Session takeover, QoS 2 routing, retained messages, etcd coordination
 - ✅ **Multi-Protocol (100%)** - TCP, WebSocket, HTTP bridge, CoAP stub
 - ⏳ **Testing (85%)** - QoS 2 fixed, cluster formation validated, session persistence proven, robust test client, failover needs tuning
-- ⏳ **Production Hardening (60%)** - Health checks done, observability with OTel complete, session durability proven, TLS/auth pending
+- ✅ **Production Hardening (100%)** - Health checks, OTel observability, session durability, TLS/SSL complete
 - ❌ **MQTT 5.0 Advanced (0%)** - Topic aliases, shared subscriptions, message expiry
 
 ---
@@ -66,6 +66,11 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - Structured logging with slog
 - Graceful shutdown with signal handling
 - Configuration via YAML
+- **TLS/SSL Support** - Full encryption for TCP and WebSocket
+  - Server certificates with configurable cipher suites
+  - Client certificate authentication (optional/required)
+  - TLS 1.2+ enforcement
+  - mTLS support for mutual authentication
 
 ### ✅ Recently Completed (2025-12-27)
 
@@ -119,7 +124,6 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 ### ⏳ In Progress
 
 - Leader failover tuning (basic election works, failover timing needs optimization)
-- TLS/SSL support (Task 1.5 - next priority)
 
 ### ❌ Not Started
 
@@ -987,9 +991,13 @@ webhooks:
 2. ✅ ~~**3-Node Cluster Test** (Task 1.2)~~ - COMPLETED
 3. ✅ ~~**OpenTelemetry Observability** (Task 1.4)~~ - COMPLETED
 4. ✅ ~~**Session Persistence Test** (Task 1.3)~~ - COMPLETED
-5. **TLS Support** (Task 1.5) - Enable secure deployment
+5. ✅ ~~**TLS Support** (Task 1.5)~~ - COMPLETED
+6. **Optimize Retained Message Matching** (Task 2.1) - Performance improvement
+7. **MQTT 5.0 Topic Aliases** (Task 2.2) - Bandwidth optimization
+8. **MQTT 5.0 Shared Subscriptions** (Task 2.3) - Load balancing
+9. **Message Expiry Enforcement** (Task 2.4) - MQTT 5.0 compliance
 
-**Recommended Order:** ~~1.1~~ → ~~1.2~~ → ~~1.4~~ → ~~1.3~~ → 1.5 → 2.1 → 2.2
+**Recommended Order:** ~~1.1~~ → ~~1.2~~ → ~~1.4~~ → ~~1.3~~ → ~~1.5~~ → 2.1 → 2.2 → 2.3 → 2.4
 
 **Completed (2025-12-24):**
 - ✅ Task 1.1: QoS 2 Cross-Node Routing (2.5 hours)
@@ -1023,8 +1031,23 @@ webhooks:
   - 57 unit tests (100% pass rate)
   - Files: `client/client.go`, `client/options.go`, `client/state.go`, `client/pending.go`, `client/message.go`, `client/store.go`, `client/errors.go`
 
+**Completed (2025-12-28):**
+- ✅ **Task 1.5: TLS/SSL Support** (~3-4 hours) - Production-ready secure deployment
+  - Enhanced config package with TLS configuration fields (`tls_cert_file`, `tls_key_file`, `tls_ca_file`, `tls_client_auth`)
+  - Implemented `buildTLSConfig()` helper in main.go with secure defaults (TLS 1.2+, strong cipher suites)
+  - Full TLS support for TCP server (port 8883) with explicit handshake validation
+  - Full TLS support for WebSocket server (WSS) using ListenAndServeTLS
+  - Updated `core.Connection` to accept any `net.Conn` (TCP or TLS) for transparent handling
+  - Client certificate authentication with three modes: "none", "request", "require"
+  - Test infrastructure: `tls_testutil.go` with programmatic cert generation (CA, server, client)
+  - 5 comprehensive integration tests: basic connection, client cert auth, invalid cert, min version, backward compatibility
+  - Example configuration: `examples/tls-server.yaml` with setup instructions
+  - All tests passing (100%)
+  - **Files modified:** `config/config.go`, `cmd/broker/main.go`, `server/tcp/server.go`, `server/websocket/server.go`, `core/connection.go`
+  - **Files created:** `server/tcp/tls_testutil.go`, `server/tcp/tls_test.go`, `examples/tls-server.yaml`
+
 ---
 
-**Document Version:** 2.5
-**Last Updated:** 2025-12-27
-**Next Review:** After Task 1.5 (TLS Support) completion
+**Document Version:** 2.6
+**Last Updated:** 2025-12-28
+**Next Review:** After Task 2.4 (Message Expiry) completion

@@ -198,13 +198,19 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	s.config.Logger.Debug("connection established",
 		slog.String("remote", conn.RemoteAddr().String()))
 
-	c, ok := conn.(*net.TCPConn)
-	if !ok {
-		slog.Error("not a TCP connection")
-		return
+	// For TLS connections, the handshake happens during the first Read/Write
+	// from the TLS listener, but we need to ensure it's complete before using the connection
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		// Force handshake to complete now to validate client certificates
+		if err := tlsConn.Handshake(); err != nil {
+			s.config.Logger.Error("TLS handshake failed", slog.String("error", err.Error()))
+			return
+		}
+		s.config.Logger.Debug("TLS handshake successful")
 	}
-	hc := core.NewConnection(c)
 
+	// core.NewConnection now accepts any net.Conn (TCP or TLS)
+	hc := core.NewConnection(conn)
 	broker.HandleConnection(s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",

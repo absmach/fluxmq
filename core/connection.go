@@ -39,7 +39,7 @@ type PacketReader interface {
 
 // connection wraps a net.Conn and provides MQTT packet-level I/O with state management.
 type connection struct {
-	conn    *net.TCPConn
+	conn    net.Conn
 	reader  io.Reader
 	version int // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
 
@@ -51,7 +51,8 @@ type connection struct {
 }
 
 // NewConnection creates a new MQTT connection wrapping a network connection.
-func NewConnection(conn *net.TCPConn) Connection {
+// Accepts any net.Conn including *net.TCPConn and *tls.Conn.
+func NewConnection(conn net.Conn) Connection {
 	return &connection{
 		conn:   conn,
 		reader: conn,
@@ -132,12 +133,19 @@ func (c *connection) SetDeadline(t time.Time) error {
 }
 
 func (c *connection) SetKeepAlive(d time.Duration) error {
-	cfg := net.KeepAliveConfig{
-		Enable:   true,
-		Idle:     d,
-		Interval: d,
+	// SetKeepAliveConfig is only available on *net.TCPConn
+	// For TLS connections, we need to check the underlying connection type
+	if tcpConn, ok := c.conn.(*net.TCPConn); ok {
+		cfg := net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     d,
+			Interval: d,
+		}
+		return tcpConn.SetKeepAliveConfig(cfg)
 	}
-	return c.conn.SetKeepAliveConfig(cfg)
+	// For other connection types (like TLS), keep-alive might be handled differently
+	// or not supported - just return nil
+	return nil
 }
 
 func (c *connection) SetOnDisconnect(fn func(graceful bool)) {

@@ -5,7 +5,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -29,6 +32,57 @@ import (
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// buildTLSConfig creates a TLS configuration from the server config.
+func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
+	if !cfg.TLSEnabled {
+		return nil, nil
+	}
+
+	// Load server certificate and key
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load server certificate: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		},
+		PreferServerCipherSuites: true,
+	}
+
+	// Configure client certificate authentication if needed
+	if cfg.TLSClientAuth != "none" && cfg.TLSCAFile != "" {
+		caCert, err := os.ReadFile(cfg.TLSCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		tlsConfig.ClientCAs = caCertPool
+
+		switch cfg.TLSClientAuth {
+		case "require":
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		case "request":
+			tlsConfig.ClientAuth = tls.RequestClientCert
+		default:
+			tlsConfig.ClientAuth = tls.NoClientCert
+		}
+	}
+
+	return tlsConfig, nil
+}
 
 func main() {
 	// Parse command-line flags
@@ -213,9 +267,17 @@ func main() {
 	var wg sync.WaitGroup
 	serverErr := make(chan error, 10)
 
+	// Build TLS configuration if enabled
+	tlsConfig, err := buildTLSConfig(&cfg.Server)
+	if err != nil {
+		slog.Error("Failed to build TLS configuration", "error", err)
+		os.Exit(1)
+	}
+
 	// Start TCP server (always enabled)
 	tcpCfg := tcp.Config{
 		Address:         cfg.Server.TCPAddr,
+		TLSConfig:       tlsConfig,
 		ShutdownTimeout: cfg.Server.ShutdownTimeout,
 		MaxConnections:  cfg.Server.TCPMaxConn,
 		ReadTimeout:     cfg.Server.TCPReadTimeout,
@@ -257,6 +319,7 @@ func main() {
 			Address:         cfg.Server.WSAddr,
 			Path:            cfg.Server.WSPath,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			TLSConfig:       tlsConfig,
 		}
 		wsServer := websocket.New(wsCfg, b, logger)
 

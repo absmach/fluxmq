@@ -61,6 +61,10 @@ type EtcdCluster struct {
 	subCache   map[string]*storage.Subscription // key: clientID|filter
 	subCacheMu sync.RWMutex
 
+	// Local retained message cache for fast wildcard matching
+	retainedCache   map[string]*storage.Message // key: topic
+	retainedCacheMu sync.RWMutex
+
 	stopCh chan struct{}
 }
 

@@ -1,0 +1,73 @@
+# MQTT Broker with TLS/SSL Support
+# This configuration demonstrates how to enable TLS for secure MQTT connections
+
+server:
+  # Standard MQTT TLS port
+  tcp_addr: ":8883"
+  tcp_max_connections: 10000
+  tcp_read_timeout: "60s"
+  tcp_write_timeout: "60s"
+
+  # TLS Configuration
+  tls_enabled: true
+  tls_cert_file: "/etc/mqtt/certs/server.crt"
+  tls_key_file: "/etc/mqtt/certs/server.key"
+
+  # Optional: Client certificate authentication
+  # Options: "none", "request", "require"
+  tls_client_auth: "none"
+  # tls_ca_file: "/etc/mqtt/certs/ca.crt"  # Required if tls_client_auth is "request" or "require"
+
+  # WebSocket with TLS (WSS)
+  ws_enabled: true
+  ws_addr: ":8884"
+  ws_path: "/mqtt"
+
+  # HTTP endpoints
+  http_enabled: false
+  coap_enabled: false
+
+  # Health check endpoint (non-TLS)
+  health_enabled: true
+  health_addr: ":8081"
+
+  # Metrics
+  metrics_enabled: false
+
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576  # 1MB
+  max_retained_messages: 10000
+  retry_interval: "20s"
+  max_retries: 0
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300  # 5 minutes
+  max_offline_queue_size: 1000
+  max_inflight_messages: 100
+
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/mqtt/data"
+
+cluster:
+  enabled: false
+  node_id: "broker-1"
+
+log:
+  level: "info"
+  format: "json"
+
+# Notes:
+# 1. Generate certificates:
+#    openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes
+#
+# 2. For client certificate authentication, set tls_client_auth to "require" and provide tls_ca_file
+#
+# 3. Clients connect using:
+#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -t test -m "hello"
+#
+# 4. For mutual TLS (mTLS):
+#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt --cert client.crt --key client.key -t test -m "hello"

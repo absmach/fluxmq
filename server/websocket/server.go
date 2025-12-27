@@ -6,6 +6,7 @@ package websocket
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
@@ -26,6 +27,7 @@ type Config struct {
 	Address         string
 	Path            string
 	ShutdownTimeout time.Duration
+	TLSConfig       *tls.Config
 }
 
 type Server struct {
@@ -68,13 +70,23 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 }
 
 func (s *Server) Listen(ctx context.Context) error {
+	tlsEnabled := s.config.TLSConfig != nil
 	s.logger.Info("websocket_server_starting",
 		slog.String("addr", s.config.Address),
-		slog.String("path", s.config.Path))
+		slog.String("path", s.config.Path),
+		slog.Bool("tls_enabled", tlsEnabled))
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if s.config.TLSConfig != nil {
+			s.server.TLSConfig = s.config.TLSConfig
+			// ListenAndServeTLS with empty cert/key paths because TLS config is already set
+			err = s.server.ListenAndServeTLS("", "")
+		} else {
+			err = s.server.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
