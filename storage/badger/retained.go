@@ -4,6 +4,7 @@
 package badger
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -27,10 +28,10 @@ func NewRetainedStore(db *badger.DB) *RetainedStore {
 
 // Set stores or updates a retained message.
 // Empty payload deletes the retained message.
-func (r *RetainedStore) Set(topic string, msg *storage.Message) error {
+func (r *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
 	// Empty payload means delete
 	if len(msg.Payload) == 0 {
-		return r.Delete(topic)
+		return r.Delete(ctx, topic)
 	}
 
 	key := []byte("retained:" + topic)
@@ -45,7 +46,7 @@ func (r *RetainedStore) Set(topic string, msg *storage.Message) error {
 }
 
 // Get retrieves a retained message by exact topic.
-func (r *RetainedStore) Get(topic string) (*storage.Message, error) {
+func (r *RetainedStore) Get(_ context.Context, topic string) (*storage.Message, error) {
 	key := []byte("retained:" + topic)
 	var msg *storage.Message
 
@@ -71,7 +72,7 @@ func (r *RetainedStore) Get(topic string) (*storage.Message, error) {
 }
 
 // Delete removes a retained message.
-func (r *RetainedStore) Delete(topic string) error {
+func (r *RetainedStore) Delete(_ context.Context, topic string) error {
 	key := []byte("retained:" + topic)
 
 	return r.db.Update(func(txn *badger.Txn) error {
@@ -80,7 +81,7 @@ func (r *RetainedStore) Delete(topic string) error {
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (r *RetainedStore) Match(filter string) ([]*storage.Message, error) {
+func (r *RetainedStore) Match(_ context.Context, filter string) ([]*storage.Message, error) {
 	var matched []*storage.Message
 
 	err := r.db.View(func(txn *badger.Txn) error {

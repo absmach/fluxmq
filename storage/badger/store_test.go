@@ -111,7 +111,7 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 		Payload: []byte("retained"),
 		QoS:     0,
 	}
-	err = store.Retained().Set("integration/retained", retainedMsg)
+	err = store.Retained().Set(ctx, "integration/retained", retainedMsg)
 	require.NoError(t, err)
 
 	// Save will message
@@ -121,7 +121,7 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 		QoS:     1,
 		Delay:   0,
 	}
-	err = store.Wills().Set("integration-client", will)
+	err = store.Wills().Set(ctx, "integration-client", will)
 	require.NoError(t, err)
 
 	// Close and reopen
@@ -148,11 +148,11 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 	assert.Len(t, retrievedSubs, 1)
 	assert.Equal(t, sub.Filter, retrievedSubs[0].Filter)
 
-	retrievedRetained, err := store.Retained().Get("integration/retained")
+	retrievedRetained, err := store.Retained().Get(ctx, "integration/retained")
 	require.NoError(t, err)
 	assert.Equal(t, retainedMsg.Payload, retrievedRetained.Payload)
 
-	retrievedWill, err := store.Wills().Get("integration-client")
+	retrievedWill, err := store.Wills().Get(ctx, "integration-client")
 	require.NoError(t, err)
 	assert.Equal(t, will.Topic, retrievedWill.Topic)
 }

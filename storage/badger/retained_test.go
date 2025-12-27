@@ -1,6 +1,7 @@
 package badger
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var ctx = context.Background()
 
 func TestRetainedStore_Set(t *testing.T) {
 	store := setupRetainedStore(t)
@@ -19,10 +22,10 @@ func TestRetainedStore_Set(t *testing.T) {
 		QoS:     1,
 	}
 
-	err := store.Set("test/topic", msg)
+	err := store.Set(ctx, "test/topic", msg)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("test/topic")
+	retrieved, err := store.Get(ctx, "test/topic")
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
 	assert.Equal(t, msg.Payload, retrieved.Payload)
@@ -39,7 +42,7 @@ func TestRetainedStore_SetEmptyPayload(t *testing.T) {
 		QoS:     1,
 	}
 
-	err := store.Set("test/topic", msg)
+	err := store.Set(ctx, "test/topic", msg)
 	require.NoError(t, err)
 
 	emptyMsg := &storage.Message{
@@ -47,10 +50,10 @@ func TestRetainedStore_SetEmptyPayload(t *testing.T) {
 		Payload: []byte{},
 		QoS:     0,
 	}
-	err = store.Set("test/topic", emptyMsg)
+	err = store.Set(ctx, "test/topic", emptyMsg)
 	require.NoError(t, err)
 
-	_, err = store.Get("test/topic")
+	_, err = store.Get(ctx, "test/topic")
 	assert.Error(t, err)
 	assert.Equal(t, storage.ErrNotFound, err)
 }
@@ -65,10 +68,10 @@ func TestRetainedStore_Get(t *testing.T) {
 		QoS:     2,
 	}
 
-	err := store.Set("sensor/temperature", msg)
+	err := store.Set(ctx, "sensor/temperature", msg)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("sensor/temperature")
+	retrieved, err := store.Get(ctx, "sensor/temperature")
 	require.NoError(t, err)
 	assert.Equal(t, "sensor/temperature", retrieved.Topic)
 	assert.Equal(t, []byte("25.5"), retrieved.Payload)
@@ -79,7 +82,7 @@ func TestRetainedStore_GetNotFound(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	_, err := store.Get("nonexistent/topic")
+	_, err := store.Get(ctx, "nonexistent/topic")
 	assert.Error(t, err)
 	assert.Equal(t, storage.ErrNotFound, err)
 }
@@ -94,13 +97,13 @@ func TestRetainedStore_Delete(t *testing.T) {
 		QoS:     1,
 	}
 
-	err := store.Set("test/delete", msg)
+	err := store.Set(ctx, "test/delete", msg)
 	require.NoError(t, err)
 
-	err = store.Delete("test/delete")
+	err = store.Delete(ctx, "test/delete")
 	require.NoError(t, err)
 
-	_, err = store.Get("test/delete")
+	_, err = store.Get(ctx, "test/delete")
 	assert.Error(t, err)
 	assert.Equal(t, storage.ErrNotFound, err)
 }
@@ -115,10 +118,10 @@ func TestRetainedStore_MatchExact(t *testing.T) {
 		QoS:     1,
 	}
 
-	err := store.Set("sensor/temp", msg)
+	err := store.Set(ctx, "sensor/temp", msg)
 	require.NoError(t, err)
 
-	matched, err := store.Match("sensor/temp")
+	matched, err := store.Match(ctx, "sensor/temp")
 	require.NoError(t, err)
 	assert.Len(t, matched, 1)
 	assert.Equal(t, "sensor/temp", matched[0].Topic)
@@ -135,11 +138,11 @@ func TestRetainedStore_MatchSingleLevelWildcard(t *testing.T) {
 	}
 
 	for _, msg := range messages {
-		err := store.Set(msg.Topic, msg)
+		err := store.Set(ctx, msg.Topic, msg)
 		require.NoError(t, err)
 	}
 
-	matched, err := store.Match("sensor/temp/+")
+	matched, err := store.Match(ctx, "sensor/temp/+")
 	require.NoError(t, err)
 	assert.Len(t, matched, 2)
 }
@@ -156,15 +159,15 @@ func TestRetainedStore_MatchMultiLevelWildcard(t *testing.T) {
 	}
 
 	for _, msg := range messages {
-		err := store.Set(msg.Topic, msg)
+		err := store.Set(ctx, msg.Topic, msg)
 		require.NoError(t, err)
 	}
 
-	matched, err := store.Match("sensor/#")
+	matched, err := store.Match(ctx, "sensor/#")
 	require.NoError(t, err)
 	assert.Len(t, matched, 3)
 
-	matchAll, err := store.Match("#")
+	matchAll, err := store.Match(ctx, "#")
 	require.NoError(t, err)
 	assert.Len(t, matchAll, 4)
 }
@@ -173,7 +176,7 @@ func TestRetainedStore_MatchEmpty(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	matched, err := store.Match("nonexistent/#")
+	matched, err := store.Match(ctx, "nonexistent/#")
 	require.NoError(t, err)
 	assert.Empty(t, matched)
 }
@@ -191,7 +194,7 @@ func TestRetainedStore_ConcurrentSetGet(t *testing.T) {
 				Payload: []byte("message"),
 				QoS:     1,
 			}
-			err := store.Set("concurrent/topic", msg)
+			err := store.Set(ctx, "concurrent/topic", msg)
 			assert.NoError(t, err)
 			done <- true
 		}(i)
@@ -199,7 +202,7 @@ func TestRetainedStore_ConcurrentSetGet(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		go func() {
-			_, _ = store.Get("concurrent/topic")
+			_, _ = store.Get(ctx, "concurrent/topic")
 			done <- true
 		}()
 	}
@@ -219,7 +222,7 @@ func TestRetainedStore_UpdateExisting(t *testing.T) {
 		QoS:     1,
 	}
 
-	err := store.Set("test/update", original)
+	err := store.Set(ctx, "test/update", original)
 	require.NoError(t, err)
 
 	updated := &storage.Message{
@@ -228,10 +231,10 @@ func TestRetainedStore_UpdateExisting(t *testing.T) {
 		QoS:     2,
 	}
 
-	err = store.Set("test/update", updated)
+	err = store.Set(ctx, "test/update", updated)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("test/update")
+	retrieved, err := store.Get(ctx, "test/update")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("updated"), retrieved.Payload)
 	assert.Equal(t, byte(2), retrieved.QoS)

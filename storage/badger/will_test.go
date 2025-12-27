@@ -1,6 +1,7 @@
 package badger
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var willCtx = context.Background()
 
 func TestWillStore_Set(t *testing.T) {
 	store := setupWillStore(t)
@@ -22,10 +25,10 @@ func TestWillStore_Set(t *testing.T) {
 		Delay:   5,
 	}
 
-	err := store.Set("client-1", will)
+	err := store.Set(willCtx, "client-1", will)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("client-1")
+	retrieved, err := store.Get(willCtx, "client-1")
 	require.NoError(t, err)
 	assert.Equal(t, will.Topic, retrieved.Topic)
 	assert.Equal(t, will.Payload, retrieved.Payload)
@@ -46,10 +49,10 @@ func TestWillStore_Get(t *testing.T) {
 		Delay:   10,
 	}
 
-	err := store.Set("device-123", will)
+	err := store.Set(willCtx, "device-123", will)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("device-123")
+	retrieved, err := store.Get(willCtx, "device-123")
 	require.NoError(t, err)
 	assert.NotNil(t, retrieved)
 	assert.Equal(t, "device/last-will", retrieved.Topic)
@@ -60,7 +63,7 @@ func TestWillStore_GetNotFound(t *testing.T) {
 	store := setupWillStore(t)
 	defer cleanupWillStore(t, store)
 
-	_, err := store.Get("nonexistent-client")
+	_, err := store.Get(willCtx, "nonexistent-client")
 	assert.Error(t, err)
 	assert.Equal(t, storage.ErrNotFound, err)
 }
@@ -75,13 +78,13 @@ func TestWillStore_Delete(t *testing.T) {
 		QoS:     1,
 	}
 
-	err := store.Set("client-delete", will)
+	err := store.Set(willCtx, "client-delete", will)
 	require.NoError(t, err)
 
-	err = store.Delete("client-delete")
+	err = store.Delete(willCtx, "client-delete")
 	require.NoError(t, err)
 
-	_, err = store.Get("client-delete")
+	_, err = store.Get(willCtx, "client-delete")
 	assert.Error(t, err)
 	assert.Equal(t, storage.ErrNotFound, err)
 }
@@ -97,10 +100,10 @@ func TestWillStore_GetPendingNoDelay(t *testing.T) {
 		Delay:   0,
 	}
 
-	err := store.Set("client-immediate", will)
+	err := store.Set(willCtx, "client-immediate", will)
 	require.NoError(t, err)
 
-	pending, err := store.GetPending(time.Now().Add(1 * time.Second))
+	pending, err := store.GetPending(willCtx, time.Now().Add(1*time.Second))
 	require.NoError(t, err)
 	assert.Len(t, pending, 1)
 	assert.Equal(t, "client/offline", pending[0].Topic)
@@ -117,16 +120,16 @@ func TestWillStore_GetPendingWithDelay(t *testing.T) {
 		Delay:   5,
 	}
 
-	err := store.Set("client-delayed", will)
+	err := store.Set(willCtx, "client-delayed", will)
 	require.NoError(t, err)
 
 	before := time.Now().Add(3 * time.Second)
-	pending, err := store.GetPending(before)
+	pending, err := store.GetPending(willCtx, before)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 
 	after := time.Now().Add(10 * time.Second)
-	pending, err = store.GetPending(after)
+	pending, err = store.GetPending(willCtx, after)
 	require.NoError(t, err)
 	assert.Len(t, pending, 1)
 }
@@ -142,12 +145,12 @@ func TestWillStore_GetPendingMultiple(t *testing.T) {
 	}
 
 	for i, will := range wills {
-		err := store.Set(string(rune('A'+i)), will)
+		err := store.Set(willCtx, string(rune('A'+i)), will)
 		require.NoError(t, err)
 	}
 
 	checkTime := time.Now().Add(5 * time.Second)
-	pending, err := store.GetPending(checkTime)
+	pending, err := store.GetPending(willCtx, checkTime)
 	require.NoError(t, err)
 	assert.Len(t, pending, 2)
 }
@@ -156,7 +159,7 @@ func TestWillStore_GetPendingEmpty(t *testing.T) {
 	store := setupWillStore(t)
 	defer cleanupWillStore(t, store)
 
-	pending, err := store.GetPending(time.Now())
+	pending, err := store.GetPending(willCtx, time.Now())
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 }
@@ -175,7 +178,7 @@ func TestWillStore_ConcurrentOperations(t *testing.T) {
 				QoS:     1,
 				Delay:   0,
 			}
-			err := store.Set("concurrent-client", will)
+			err := store.Set(willCtx, "concurrent-client", will)
 			assert.NoError(t, err)
 			done <- true
 		}(i)
@@ -183,7 +186,7 @@ func TestWillStore_ConcurrentOperations(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		go func() {
-			_, _ = store.Get("concurrent-client")
+			_, _ = store.Get(willCtx, "concurrent-client")
 			done <- true
 		}()
 	}
@@ -204,7 +207,7 @@ func TestWillStore_UpdateExisting(t *testing.T) {
 		Delay:   5,
 	}
 
-	err := store.Set("client-update", original)
+	err := store.Set(willCtx, "client-update", original)
 	require.NoError(t, err)
 
 	updated := &storage.WillMessage{
@@ -214,10 +217,10 @@ func TestWillStore_UpdateExisting(t *testing.T) {
 		Delay:   10,
 	}
 
-	err = store.Set("client-update", updated)
+	err = store.Set(willCtx, "client-update", updated)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("client-update")
+	retrieved, err := store.Get(willCtx, "client-update")
 	require.NoError(t, err)
 	assert.Equal(t, "client/will/updated", retrieved.Topic)
 	assert.Equal(t, []byte("updated"), retrieved.Payload)
@@ -246,10 +249,10 @@ func TestWillStore_QoSLevels(t *testing.T) {
 				QoS:     tt.qos,
 			}
 
-			err := store.Set("client-qos", will)
+			err := store.Set(willCtx, "client-qos", will)
 			require.NoError(t, err)
 
-			retrieved, err := store.Get("client-qos")
+			retrieved, err := store.Get(willCtx, "client-qos")
 			require.NoError(t, err)
 			assert.Equal(t, tt.qos, retrieved.QoS)
 		})

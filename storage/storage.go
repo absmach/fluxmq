@@ -4,6 +4,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -239,30 +240,30 @@ type SubscriptionStore interface {
 type RetainedStore interface {
 	// Set stores or updates a retained message.
 	// Empty payload deletes the retained message.
-	Set(topic string, msg *Message) error
+	Set(ctx context.Context, topic string, msg *Message) error
 
 	// Get retrieves a retained message by exact topic.
-	Get(topic string) (*Message, error)
+	Get(ctx context.Context, topic string) (*Message, error)
 
 	// Delete removes a retained message.
-	Delete(topic string) error
+	Delete(ctx context.Context, topic string) error
 
 	// Match returns all retained messages matching a filter (supports wildcards).
-	Match(filter string) ([]*Message, error)
+	Match(ctx context.Context, filter string) ([]*Message, error)
 }
 
 // WillStore handles will message persistence.
 type WillStore interface {
 	// Set stores a will message for a client.
-	Set(clientID string, will *WillMessage) error
+	Set(ctx context.Context, clientID string, will *WillMessage) error
 
 	// Get retrieves the will message for a client.
-	Get(clientID string) (*WillMessage, error)
+	Get(ctx context.Context, clientID string) (*WillMessage, error)
 
 	// Delete removes the will message for a client.
-	Delete(clientID string) error
+	Delete(ctx context.Context, clientID string) error
 
 	// GetPending returns will messages that should be triggered.
 	// (will delay elapsed and client still disconnected)
-	GetPending(before time.Time) ([]*WillMessage, error)
+	GetPending(ctx context.Context, before time.Time) ([]*WillMessage, error)
 }

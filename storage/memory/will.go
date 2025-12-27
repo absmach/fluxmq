@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -31,7 +32,7 @@ func NewWillStore() *WillStore {
 }
 
 // Set stores a will message for a client.
-func (s *WillStore) Set(clientID string, will *storage.WillMessage) error {
+func (s *WillStore) Set(_ context.Context, clientID string, will *storage.WillMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -43,7 +44,7 @@ func (s *WillStore) Set(clientID string, will *storage.WillMessage) error {
 }
 
 // Get retrieves the will message for a client.
-func (s *WillStore) Get(clientID string) (*storage.WillMessage, error) {
+func (s *WillStore) Get(_ context.Context, clientID string) (*storage.WillMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -55,7 +56,7 @@ func (s *WillStore) Get(clientID string) (*storage.WillMessage, error) {
 }
 
 // Delete removes the will message for a client.
-func (s *WillStore) Delete(clientID string) error {
+func (s *WillStore) Delete(_ context.Context, clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -78,7 +79,7 @@ func (s *WillStore) MarkDisconnected(clientID string) error {
 
 // GetPending returns will messages that should be triggered.
 // (will delay elapsed and client still disconnected).
-func (s *WillStore) GetPending(before time.Time) ([]*storage.WillMessage, error) {
+func (s *WillStore) GetPending(_ context.Context, before time.Time) ([]*storage.WillMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

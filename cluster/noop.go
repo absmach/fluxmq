@@ -6,6 +6,7 @@ package cluster
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/storage"
@@ -72,41 +73,51 @@ func (n *NoopCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 	return nil, ErrClusterNotEnabled
 }
 
-// Retained messages - not replicated in single-node
+// Retained returns a noop retained store for single-node mode.
+func (n *NoopCluster) Retained() storage.RetainedStore {
+	return &noopRetainedStore{}
+}
 
-func (n *NoopCluster) SetRetained(ctx context.Context, topic string, msg *storage.Message) error {
-	// Single-node: retained messages handled by local storage
+// Wills returns a noop will store for single-node mode.
+func (n *NoopCluster) Wills() storage.WillStore {
+	return &noopWillStore{}
+}
+
+// noopRetainedStore is a no-op implementation of storage.RetainedStore.
+type noopRetainedStore struct{}
+
+func (s *noopRetainedStore) Set(_ context.Context, _ string, _ *storage.Message) error {
 	return nil
 }
 
-func (n *NoopCluster) GetRetained(ctx context.Context, topic string) (*storage.Message, error) {
+func (s *noopRetainedStore) Get(_ context.Context, _ string) (*storage.Message, error) {
 	return nil, ErrClusterNotEnabled
 }
 
-func (n *NoopCluster) DeleteRetained(ctx context.Context, topic string) error {
+func (s *noopRetainedStore) Delete(_ context.Context, _ string) error {
 	return nil
 }
 
-func (n *NoopCluster) GetRetainedMatching(ctx context.Context, filter string) ([]*storage.Message, error) {
+func (s *noopRetainedStore) Match(_ context.Context, _ string) ([]*storage.Message, error) {
 	return nil, ErrClusterNotEnabled
 }
 
-// Will messages - not replicated in single-node
+// noopWillStore is a no-op implementation of storage.WillStore.
+type noopWillStore struct{}
 
-func (n *NoopCluster) SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error {
-	// Single-node: wills handled by local storage
+func (s *noopWillStore) Set(_ context.Context, _ string, _ *storage.WillMessage) error {
 	return nil
 }
 
-func (n *NoopCluster) GetWill(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+func (s *noopWillStore) Get(_ context.Context, _ string) (*storage.WillMessage, error) {
 	return nil, ErrClusterNotEnabled
 }
 
-func (n *NoopCluster) DeleteWill(ctx context.Context, clientID string) error {
+func (s *noopWillStore) Delete(_ context.Context, _ string) error {
 	return nil
 }
 
-func (n *NoopCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessage, error) {
+func (s *noopWillStore) GetPending(_ context.Context, _ time.Time) ([]*storage.WillMessage, error) {
 	return nil, ErrClusterNotEnabled
 }
 

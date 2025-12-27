@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -170,6 +171,7 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 
 func TestRetainedStore(t *testing.T) {
 	s := NewRetainedStore()
+	ctx := context.Background()
 
 	// Test Set and Get
 	msg := &storage.Message{
@@ -179,11 +181,11 @@ func TestRetainedStore(t *testing.T) {
 		Retain:  true,
 	}
 
-	if err := s.Set("sensors/temp", msg); err != nil {
+	if err := s.Set(ctx, "sensors/temp", msg); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	got, err := s.Get("sensors/temp")
+	got, err := s.Get(ctx, "sensors/temp")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -192,10 +194,10 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Match with exact filter
-	s.Set("sensors/humidity", &storage.Message{Payload: []byte("60")})
-	s.Set("sensors/pressure", &storage.Message{Payload: []byte("1013")})
+	s.Set(ctx, "sensors/humidity", &storage.Message{Payload: []byte("60")})
+	s.Set(ctx, "sensors/pressure", &storage.Message{Payload: []byte("1013")})
 
-	matched, err := s.Match("sensors/+")
+	matched, err := s.Match(ctx, "sensors/+")
 	if err != nil {
 		t.Fatalf("Match failed: %v", err)
 	}
@@ -204,7 +206,7 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Match with #
-	matched, err = s.Match("sensors/#")
+	matched, err = s.Match(ctx, "sensors/#")
 	if err != nil {
 		t.Fatalf("Match failed: %v", err)
 	}
@@ -213,19 +215,19 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Delete via empty payload
-	if err := s.Set("sensors/temp", &storage.Message{Payload: nil}); err != nil {
+	if err := s.Set(ctx, "sensors/temp", &storage.Message{Payload: nil}); err != nil {
 		t.Fatalf("Set with empty payload failed: %v", err)
 	}
-	_, err = s.Get("sensors/temp")
+	_, err = s.Get(ctx, "sensors/temp")
 	if err != storage.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete, got %v", err)
 	}
 
 	// Test Delete
-	if err := s.Delete("sensors/humidity"); err != nil {
+	if err := s.Delete(ctx, "sensors/humidity"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	matched, _ = s.Match("sensors/#")
+	matched, _ = s.Match(ctx, "sensors/#")
 	if len(matched) != 1 {
 		t.Errorf("Expected 1 match after delete, got %d", len(matched))
 	}
@@ -233,24 +235,25 @@ func TestRetainedStore(t *testing.T) {
 
 func TestRetainedStoreSystemTopics(t *testing.T) {
 	s := NewRetainedStore()
+	ctx := context.Background()
 
-	s.Set("$SYS/broker/clients", &storage.Message{Payload: []byte("10")})
-	s.Set("normal/topic", &storage.Message{Payload: []byte("data")})
+	s.Set(ctx, "$SYS/broker/clients", &storage.Message{Payload: []byte("10")})
+	s.Set(ctx, "normal/topic", &storage.Message{Payload: []byte("data")})
 
 	// # should not match $SYS topics
-	matched, _ := s.Match("#")
+	matched, _ := s.Match(ctx, "#")
 	if len(matched) != 1 {
 		t.Errorf("# should not match $SYS topics, got %d matches", len(matched))
 	}
 
 	// + should not match $SYS topics
-	matched, _ = s.Match("+/broker/clients")
+	matched, _ = s.Match(ctx, "+/broker/clients")
 	if len(matched) != 0 {
 		t.Errorf("+ should not match $SYS topics, got %d matches", len(matched))
 	}
 
 	// Explicit $SYS filter should match
-	matched, _ = s.Match("$SYS/#")
+	matched, _ = s.Match(ctx, "$SYS/#")
 	if len(matched) != 1 {
 		t.Errorf("$SYS/# should match $SYS topics, got %d matches", len(matched))
 	}
@@ -258,6 +261,7 @@ func TestRetainedStoreSystemTopics(t *testing.T) {
 
 func TestWillStore(t *testing.T) {
 	s := NewWillStore()
+	ctx := context.Background()
 
 	// Test Set and Get
 	will := &storage.WillMessage{
@@ -269,11 +273,11 @@ func TestWillStore(t *testing.T) {
 		Delay:    5, // 5 second delay
 	}
 
-	if err := s.Set("client1", will); err != nil {
+	if err := s.Set(ctx, "client1", will); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	got, err := s.Get("client1")
+	got, err := s.Get(ctx, "client1")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -285,7 +289,7 @@ func TestWillStore(t *testing.T) {
 	}
 
 	// Test GetPending - should be empty (not disconnected yet)
-	pending, err := s.GetPending(time.Now())
+	pending, err := s.GetPending(ctx, time.Now())
 	if err != nil {
 		t.Fatalf("GetPending failed: %v", err)
 	}
@@ -297,22 +301,22 @@ func TestWillStore(t *testing.T) {
 	s.MarkDisconnected("client1")
 
 	// Still not pending (delay not elapsed)
-	pending, _ = s.GetPending(time.Now())
+	pending, _ = s.GetPending(ctx, time.Now())
 	if len(pending) != 0 {
 		t.Errorf("Expected 0 pending wills before delay, got %d", len(pending))
 	}
 
 	// After delay elapsed
-	pending, _ = s.GetPending(time.Now().Add(10 * time.Second))
+	pending, _ = s.GetPending(ctx, time.Now().Add(10*time.Second))
 	if len(pending) != 1 {
 		t.Errorf("Expected 1 pending will after delay, got %d", len(pending))
 	}
 
 	// Test Delete
-	if err := s.Delete("client1"); err != nil {
+	if err := s.Delete(ctx, "client1"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	_, err = s.Get("client1")
+	_, err = s.Get(ctx, "client1")
 	if err != storage.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete")
 	}

@@ -311,15 +311,15 @@ func (b *Broker) Publish(msg *storage.Message) error {
 	}
 
 	if msg.Retain {
+		ctx := context.Background()
 		if len(msg.Payload) == 0 {
 			// Clear retained message
-			if err := b.retained.Delete(msg.Topic); err != nil {
+			if err := b.retained.Delete(ctx, msg.Topic); err != nil {
 				return err
 			}
 			// Also delete from cluster
 			if b.cluster != nil {
-				ctx := context.Background()
-				if err := b.cluster.DeleteRetained(ctx, msg.Topic); err != nil {
+				if err := b.cluster.Retained().Delete(ctx, msg.Topic); err != nil {
 					b.logError("cluster_delete_retained", err, slog.String("topic", msg.Topic))
 				}
 			}
@@ -334,13 +334,12 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		} else {
 			// Set retained message
 			msg.Retain = true
-			if err := b.retained.Set(msg.Topic, msg); err != nil {
+			if err := b.retained.Set(ctx, msg.Topic, msg); err != nil {
 				return err
 			}
 			// Also store in cluster
 			if b.cluster != nil {
-				ctx := context.Background()
-				if err := b.cluster.SetRetained(ctx, msg.Topic, msg); err != nil {
+				if err := b.cluster.Retained().Set(ctx, msg.Topic, msg); err != nil {
 					b.logError("cluster_set_retained", err, slog.String("topic", msg.Topic))
 				}
 			}
@@ -521,7 +520,8 @@ func (b *Broker) PublishWill(clientID string) error {
 		return nil
 	}
 
-	will, err := b.wills.Get(clientID)
+	ctx := context.Background()
+	will, err := b.wills.Get(ctx, clientID)
 	if err != nil {
 		if err == storage.ErrNotFound {
 			return nil
@@ -533,7 +533,7 @@ func (b *Broker) PublishWill(clientID string) error {
 		return err
 	}
 
-	return b.wills.Delete(clientID)
+	return b.wills.Delete(ctx, clientID)
 }
 
 // Distribute distributes a message to all matching subscribers (implements Service interface).
@@ -549,12 +549,12 @@ func (b *Broker) Match(topic string) ([]*storage.Subscription, error) {
 // GetRetainedMatching returns all retained messages matching a topic filter.
 // In clustered mode, queries the cluster; otherwise uses local storage.
 func (b *Broker) GetRetainedMatching(filter string) ([]*storage.Message, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	if b.cluster != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		return b.cluster.GetRetainedMatching(ctx, filter)
+		return b.cluster.Retained().Match(ctx, filter)
 	}
-	return b.retained.Match(filter)
+	return b.retained.Match(ctx, filter)
 }
 
 // distribute distributes a message to all matching subscribers (local and remote).
@@ -634,7 +634,7 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 		}
 	}
 	if b.wills != nil {
-		if err := b.wills.Delete(s.ID); err != nil {
+		if err := b.wills.Delete(context.Background(), s.ID); err != nil {
 			return fmt.Errorf("failed to delete will: %w", err)
 		}
 	}
@@ -776,11 +776,12 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		b.sessions.Save(s.Info())
 	}
 	if b.wills != nil {
+		ctx := context.Background()
 		will := s.GetWill()
 		if !graceful && will != nil {
-			b.wills.Set(s.ID, will)
+			b.wills.Set(ctx, s.ID, will)
 		} else if graceful {
-			b.wills.Delete(s.ID)
+			b.wills.Delete(ctx, s.ID)
 		}
 	}
 	if b.messages != nil {
@@ -866,7 +867,8 @@ func (b *Broker) triggerWills() {
 		return
 	}
 
-	pending, err := b.wills.GetPending(time.Now())
+	ctx := context.Background()
+	pending, err := b.wills.GetPending(ctx, time.Now())
 	if err != nil {
 		return
 	}
@@ -874,12 +876,12 @@ func (b *Broker) triggerWills() {
 	for _, will := range pending {
 		s := b.Get(will.ClientID)
 		if s != nil && s.IsConnected() {
-			b.wills.Delete(will.ClientID)
+			b.wills.Delete(ctx, will.ClientID)
 			continue
 		}
 
 		b.distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
-		b.wills.Delete(will.ClientID)
+		b.wills.Delete(ctx, will.ClientID)
 	}
 }
 

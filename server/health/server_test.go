@@ -66,36 +66,12 @@ func (m *mockCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 	return nil, nil
 }
 
-func (m *mockCluster) SetRetained(ctx context.Context, topic string, msg *storage.Message) error {
+func (m *mockCluster) Retained() storage.RetainedStore {
 	return nil
 }
 
-func (m *mockCluster) GetRetained(ctx context.Context, topic string) (*storage.Message, error) {
-	return nil, nil
-}
-
-func (m *mockCluster) DeleteRetained(ctx context.Context, topic string) error {
+func (m *mockCluster) Wills() storage.WillStore {
 	return nil
-}
-
-func (m *mockCluster) GetRetainedMatching(ctx context.Context, filter string) ([]*storage.Message, error) {
-	return nil, nil
-}
-
-func (m *mockCluster) SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error {
-	return nil
-}
-
-func (m *mockCluster) GetWill(ctx context.Context, clientID string) (*storage.WillMessage, error) {
-	return nil, nil
-}
-
-func (m *mockCluster) DeleteWill(ctx context.Context, clientID string) error {
-	return nil
-}
-
-func (m *mockCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessage, error) {
-	return nil, nil
 }
 
 func (m *mockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {

@@ -471,13 +471,27 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 	return matched, nil
 }
 
-// SetRetained stores a retained message in etcd.
-func (c *EtcdCluster) SetRetained(ctx context.Context, topic string, msg *storage.Message) error {
+// Retained returns the cluster-wide retained message store.
+func (c *EtcdCluster) Retained() storage.RetainedStore {
+	return &etcdRetainedStore{client: c.client}
+}
+
+// Wills returns the cluster-wide will message store.
+func (c *EtcdCluster) Wills() storage.WillStore {
+	return &etcdWillStore{client: c.client}
+}
+
+// etcdRetainedStore implements storage.RetainedStore using etcd.
+type etcdRetainedStore struct {
+	client *clientv3.Client
+}
+
+func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
 	key := retainedPrefix + topic
 
 	// Empty payload means delete
 	if len(msg.Payload) == 0 {
-		return c.DeleteRetained(ctx, topic)
+		return s.Delete(ctx, topic)
 	}
 
 	data, err := json.Marshal(msg)
@@ -485,15 +499,14 @@ func (c *EtcdCluster) SetRetained(ctx context.Context, topic string, msg *storag
 		return fmt.Errorf("failed to marshal retained message: %w", err)
 	}
 
-	_, err = c.client.Put(ctx, key, string(data))
+	_, err = s.client.Put(ctx, key, string(data))
 	return err
 }
 
-// GetRetained retrieves a retained message by exact topic.
-func (c *EtcdCluster) GetRetained(ctx context.Context, topic string) (*storage.Message, error) {
+func (s *etcdRetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
 	key := retainedPrefix + topic
 
-	resp, err := c.client.Get(ctx, key)
+	resp, err := s.client.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -510,27 +523,22 @@ func (c *EtcdCluster) GetRetained(ctx context.Context, topic string) (*storage.M
 	return &msg, nil
 }
 
-// DeleteRetained removes a retained message.
-func (c *EtcdCluster) DeleteRetained(ctx context.Context, topic string) error {
+func (s *etcdRetainedStore) Delete(ctx context.Context, topic string) error {
 	key := retainedPrefix + topic
-	_, err := c.client.Delete(ctx, key)
+	_, err := s.client.Delete(ctx, key)
 	return err
 }
 
-// GetRetainedMatching returns all retained messages matching a filter.
-func (c *EtcdCluster) GetRetainedMatching(ctx context.Context, filter string) ([]*storage.Message, error) {
-	// Get all retained messages
-	resp, err := c.client.Get(ctx, retainedPrefix, clientv3.WithPrefix())
+func (s *etcdRetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
+	resp, err := s.client.Get(ctx, retainedPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
 
 	var matched []*storage.Message
 	for _, kv := range resp.Kvs {
-		// Extract topic from key (remove "/mqtt/retained/" prefix)
 		topic := string(kv.Key)[len(retainedPrefix):]
 
-		// Check if topic matches the filter
 		if topicMatchesFilter(topic, filter) {
 			var msg storage.Message
 			if err := json.Unmarshal(kv.Value, &msg); err != nil {
@@ -544,32 +552,37 @@ func (c *EtcdCluster) GetRetainedMatching(ctx context.Context, filter string) ([
 	return matched, nil
 }
 
-// SetWill stores a will message in etcd.
-func (c *EtcdCluster) SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error {
+// etcdWillStore implements storage.WillStore using etcd.
+type etcdWillStore struct {
+	client *clientv3.Client
+}
+
+type etcdWillEntry struct {
+	Will           *storage.WillMessage `json:"will"`
+	DisconnectedAt time.Time            `json:"disconnected_at"`
+}
+
+func (s *etcdWillStore) Set(ctx context.Context, clientID string, will *storage.WillMessage) error {
 	key := willPrefix + clientID
 
-	willEntry := struct {
-		Will           *storage.WillMessage `json:"will"`
-		DisconnectedAt time.Time            `json:"disconnected_at"`
-	}{
+	entry := etcdWillEntry{
 		Will:           will,
 		DisconnectedAt: time.Now(),
 	}
 
-	data, err := json.Marshal(willEntry)
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("failed to marshal will message: %w", err)
 	}
 
-	_, err = c.client.Put(ctx, key, string(data))
+	_, err = s.client.Put(ctx, key, string(data))
 	return err
 }
 
-// GetWill retrieves the will message for a client.
-func (c *EtcdCluster) GetWill(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+func (s *etcdWillStore) Get(ctx context.Context, clientID string) (*storage.WillMessage, error) {
 	key := willPrefix + clientID
 
-	resp, err := c.client.Get(ctx, key)
+	resp, err := s.client.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -578,52 +591,38 @@ func (c *EtcdCluster) GetWill(ctx context.Context, clientID string) (*storage.Wi
 		return nil, storage.ErrNotFound
 	}
 
-	var willEntry struct {
-		Will           *storage.WillMessage `json:"will"`
-		DisconnectedAt time.Time            `json:"disconnected_at"`
-	}
-
-	if err := json.Unmarshal(resp.Kvs[0].Value, &willEntry); err != nil {
+	var entry etcdWillEntry
+	if err := json.Unmarshal(resp.Kvs[0].Value, &entry); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal will message: %w", err)
 	}
 
-	return willEntry.Will, nil
+	return entry.Will, nil
 }
 
-// DeleteWill removes the will message for a client.
-func (c *EtcdCluster) DeleteWill(ctx context.Context, clientID string) error {
+func (s *etcdWillStore) Delete(ctx context.Context, clientID string) error {
 	key := willPrefix + clientID
-	_, err := c.client.Delete(ctx, key)
+	_, err := s.client.Delete(ctx, key)
 	return err
 }
 
-// GetPendingWills returns will messages that should be triggered.
-func (c *EtcdCluster) GetPendingWills(ctx context.Context) ([]*storage.WillMessage, error) {
-	// Get all will messages
-	resp, err := c.client.Get(ctx, willPrefix, clientv3.WithPrefix())
+func (s *etcdWillStore) GetPending(ctx context.Context, before time.Time) ([]*storage.WillMessage, error) {
+	resp, err := s.client.Get(ctx, willPrefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
 
 	var pending []*storage.WillMessage
-	now := time.Now()
-
 	for _, kv := range resp.Kvs {
-		var willEntry struct {
-			Will           *storage.WillMessage `json:"will"`
-			DisconnectedAt time.Time            `json:"disconnected_at"`
-		}
-
-		if err := json.Unmarshal(kv.Value, &willEntry); err != nil {
+		var entry etcdWillEntry
+		if err := json.Unmarshal(kv.Value, &entry); err != nil {
 			log.Printf("Failed to unmarshal will entry: %v", err)
 			continue
 		}
 
-		// Check if will delay has elapsed
-		if !willEntry.DisconnectedAt.IsZero() {
-			triggerTime := willEntry.DisconnectedAt.Add(time.Duration(willEntry.Will.Delay) * time.Second)
-			if now.After(triggerTime) || now.Equal(triggerTime) {
-				pending = append(pending, willEntry.Will)
+		if !entry.DisconnectedAt.IsZero() {
+			triggerTime := entry.DisconnectedAt.Add(time.Duration(entry.Will.Delay) * time.Second)
+			if triggerTime.Before(before) || triggerTime.Equal(before) {
+				pending = append(pending, entry.Will)
 			}
 		}
 	}

@@ -12,7 +12,8 @@ import (
 	"github.com/absmach/mqtt/storage"
 )
 
-type SessionStore interface {
+// SessionOwnership manages distributed session ownership across cluster nodes.
+type SessionOwnership interface {
 	// AcquireSession registers this node as the owner of a session.
 	// Returns error if another node owns the session.
 	AcquireSession(ctx context.Context, clientID, nodeID string) error
@@ -29,7 +30,8 @@ type SessionStore interface {
 	WatchSessionOwner(ctx context.Context, clientID string) <-chan OwnershipChange
 }
 
-type SubscriptionStore interface {
+// SubscriptionRouter manages cluster-wide subscription routing.
+type SubscriptionRouter interface {
 	// AddSubscription adds a subscription for a client.
 	// This is visible to all nodes in the cluster for routing.
 	AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error
@@ -43,37 +45,6 @@ type SubscriptionStore interface {
 	// GetSubscribersForTopic returns all subscriptions matching a topic.
 	// Used for routing publishes to interested nodes.
 	GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error)
-}
-
-type RetainedStore interface {
-	// SetRetained stores a retained message visible to all nodes.
-	// Empty payload deletes the retained message.
-	SetRetained(ctx context.Context, topic string, msg *storage.Message) error
-
-	// GetRetained retrieves a retained message by exact topic.
-	GetRetained(ctx context.Context, topic string) (*storage.Message, error)
-
-	// DeleteRetained removes a retained message.
-	DeleteRetained(ctx context.Context, topic string) error
-
-	// GetRetainedMatching returns all retained messages matching a filter.
-	// Used when a client subscribes to deliver matching retained messages.
-	GetRetainedMatching(ctx context.Context, filter string) ([]*storage.Message, error)
-}
-
-type WillStore interface {
-	// SetWill stores a will message for a client.
-	SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error
-
-	// GetWill retrieves the will message for a client.
-	GetWill(ctx context.Context, clientID string) (*storage.WillMessage, error)
-
-	// DeleteWill removes the will message for a client.
-	DeleteWill(ctx context.Context, clientID string) error
-
-	// GetPendingWills returns will messages that should be triggered.
-	// Used by leader node to process pending wills.
-	GetPendingWills(ctx context.Context) ([]*storage.WillMessage, error)
 }
 
 type Lifecycle interface {
@@ -106,11 +77,16 @@ type Lifecycle interface {
 // This interface abstracts the clustering implementation, allowing
 // different backends (etcd, raft, or noop for single-node).
 type Cluster interface {
-	SessionStore
-	SubscriptionStore
-	RetainedStore
-	WillStore
+	SessionOwnership
+	SubscriptionRouter
 	Lifecycle
+
+	// Retained returns the cluster-wide retained message store.
+	Retained() storage.RetainedStore
+
+	// Wills returns the cluster-wide will message store.
+	Wills() storage.WillStore
+
 	// RoutePublish routes a publish message to all nodes with interested subscribers.
 	// The cluster implementation finds which nodes have matching subscriptions
 	// and forwards the message to them.

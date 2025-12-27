@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -28,7 +29,7 @@ func NewRetainedStore() *RetainedStore {
 
 // Set stores or updates a retained message.
 // Empty payload deletes the retained message.
-func (s *RetainedStore) Set(topic string, msg *storage.Message) error {
+func (s *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -43,7 +44,7 @@ func (s *RetainedStore) Set(topic string, msg *storage.Message) error {
 }
 
 // Get retrieves a retained message by exact topic.
-func (s *RetainedStore) Get(topic string) (*storage.Message, error) {
+func (s *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -55,7 +56,7 @@ func (s *RetainedStore) Get(topic string) (*storage.Message, error) {
 }
 
 // Delete removes a retained message.
-func (s *RetainedStore) Delete(topic string) error {
+func (s *RetainedStore) Delete(_ context.Context, topic string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -64,7 +65,7 @@ func (s *RetainedStore) Delete(topic string) error {
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (s *RetainedStore) Match(filter string) ([]*storage.Message, error) {
+func (s *RetainedStore) Match(_ context.Context, filter string) ([]*storage.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
