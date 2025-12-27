@@ -12,6 +12,9 @@ server:
   ws_enabled: false
   coap_enabled: false
 
+  health_enabled: true
+  health_addr: ":8083"
+
   shutdown_timeout: "30s"
 
 broker:

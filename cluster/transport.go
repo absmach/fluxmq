@@ -6,7 +6,7 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -25,12 +25,13 @@ type Transport struct {
 	grpcServer  *gogrpc.Server
 	listener    net.Listener
 	peerClients map[string]grpc.BrokerServiceClient
+	logger      *slog.Logger
 	handler     MessageHandler
 	stopCh      chan struct{}
 }
 
 // NewTransport creates a new gRPC transport.
-func NewTransport(nodeID, bindAddr string, handler MessageHandler) (*Transport, error) {
+func NewTransport(nodeID, bindAddr string, handler MessageHandler, logger *slog.Logger) (*Transport, error) {
 	listener, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", bindAddr, err)
@@ -44,6 +45,7 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler) (*Transport, 
 		grpcServer:  grpcServer,
 		listener:    listener,
 		peerClients: make(map[string]grpc.BrokerServiceClient),
+		logger:      logger,
 		handler:     handler,
 		stopCh:      make(chan struct{}),
 	}
@@ -57,9 +59,9 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler) (*Transport, 
 // Start starts the gRPC server.
 func (t *Transport) Start() error {
 	go func() {
-		log.Printf("Starting gRPC transport server on %s", t.bindAddr)
+		t.logger.Info("starting gRPC transport server", slog.String("address", t.bindAddr))
 		if err := t.grpcServer.Serve(t.listener); err != nil {
-			log.Printf("gRPC server error: %v", err)
+			t.logger.Error("gRPC server error", slog.String("error", err.Error()))
 		}
 	}()
 	return nil
@@ -106,7 +108,7 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 	client := grpc.NewBrokerServiceClient(conn)
 	t.peerClients[nodeID] = client
 
-	log.Printf("Connected to peer %s at %s", nodeID, addr)
+	t.logger.Info("connected to peer", slog.String("node_id", nodeID), slog.String("address", addr))
 	return nil
 }
 

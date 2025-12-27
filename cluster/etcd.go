@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
@@ -26,6 +26,9 @@ const (
 	retainedPrefix      = "/mqtt/retained/"
 	subscriptionsPrefix = "/mqtt/subscriptions/"
 	sessionsPrefix      = "/mqtt/sessions/"
+
+	electionPrefix = "/mqtt/leader"
+	urlPrefix      = "http://"
 )
 
 var _ Cluster = (*EtcdCluster)(nil)
@@ -52,6 +55,8 @@ type EtcdCluster struct {
 	// Handler for incoming routed messages and session management
 	msgHandler MessageHandler
 
+	logger *slog.Logger
+
 	// Local subscription cache for fast topic matching
 	subCache   map[string]*storage.Subscription // key: clientID|filter
 	subCacheMu sync.RWMutex
@@ -73,14 +78,14 @@ type EtcdConfig struct {
 }
 
 // NewEtcdCluster creates a new embedded etcd cluster.
-func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
+func NewEtcdCluster(cfg *EtcdConfig, logger *slog.Logger) (*EtcdCluster, error) {
 	// Create embedded etcd configuration
 	eCfg := embed.NewConfig()
 	eCfg.Name = cfg.NodeID
 	eCfg.Dir = cfg.DataDir
 
 	// Peer URLs (for Raft communication)
-	peerURL, err := url.Parse("http://" + cfg.BindAddr)
+	peerURL, err := url.Parse(urlPrefix + cfg.BindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid bind address: %w", err)
 	}
@@ -88,7 +93,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 
 	// Advertise URL (what other nodes use to contact this node)
 	if cfg.AdvertiseAddr != "" {
-		advertiseURL, err := url.Parse("http://" + cfg.AdvertiseAddr)
+		advertiseURL, err := url.Parse(urlPrefix + cfg.AdvertiseAddr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid advertise address: %w", err)
 		}
@@ -98,7 +103,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 	}
 
 	// Client URLs (for KV operations)
-	clientURL, err := url.Parse("http://" + cfg.ClientAddr)
+	clientURL, err := url.Parse(urlPrefix + cfg.ClientAddr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client address: %w", err)
 	}
@@ -126,7 +131,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 	// Wait for etcd to be ready
 	select {
 	case <-e.Server.ReadyNotify():
-		log.Printf("etcd server is ready on node %s", cfg.NodeID)
+		logger.Info("etcd server is ready", slog.String("node_id", cfg.NodeID))
 	case <-time.After(60 * time.Second):
 		e.Server.Stop()
 		return nil, fmt.Errorf("etcd server took too long to start")
@@ -151,7 +156,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 	}
 
 	// Create election for leadership
-	election := concurrency.NewElection(s, "/mqtt/leader")
+	election := concurrency.NewElection(s, electionPrefix)
 
 	c := &EtcdCluster{
 		nodeID:   cfg.NodeID,
@@ -160,6 +165,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 		client:   client,
 		election: election,
 		session:  s,
+		logger:   logger,
 		subCache: make(map[string]*storage.Subscription),
 		stopCh:   make(chan struct{}),
 	}
@@ -186,7 +192,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 
 	// Initialize gRPC transport if configured
 	if cfg.TransportAddr != "" {
-		transport, err := NewTransport(cfg.NodeID, cfg.TransportAddr, c)
+		transport, err := NewTransport(cfg.NodeID, cfg.TransportAddr, c, logger)
 		if err != nil {
 			client.Close()
 			s.Close()
@@ -203,7 +209,7 @@ func NewEtcdCluster(cfg *EtcdConfig) (*EtcdCluster, error) {
 func (c *EtcdCluster) Start() error {
 	// Load existing subscriptions into cache
 	if err := c.loadSubscriptionCache(); err != nil {
-		log.Printf("Warning: failed to load subscription cache: %v", err)
+		c.logger.Warn("failed to load subscription cache", slog.String("error", err.Error()))
 	}
 
 	// Start watching for subscription changes
@@ -220,14 +226,13 @@ func (c *EtcdCluster) Start() error {
 			for nodeID, addr := range c.config.PeerTransports {
 				if nodeID != c.nodeID {
 					if err := c.transport.ConnectPeer(nodeID, addr); err != nil {
-						log.Printf("Warning: failed to connect to peer %s: %v", nodeID, err)
+						c.logger.Warn("failed to connect to peer", slog.String("node_id", nodeID), slog.String("error", err.Error()))
 					}
 				}
 			}
 		}
 	}
 
-	// Campaign for leadership in background
 	go c.campaignLeader()
 	return nil
 }
@@ -327,15 +332,76 @@ func (c *EtcdCluster) WaitForLeader(ctx context.Context) error {
 }
 
 // campaignLeader attempts to become the cluster leader.
+// Retries on failure until successful or cluster stops.
 func (c *EtcdCluster) campaignLeader() {
-	ctx := context.Background()
+	// Wait a bit for cluster to form quorum (2 out of 3 nodes)
+	// This prevents racing to campaign before the cluster is ready
+	time.Sleep(3 * time.Second)
 
-	if err := c.election.Campaign(ctx, c.nodeID); err != nil {
-		log.Printf("Failed to campaign for leader: %v", err)
+	ctx := context.Background()
+	retryDelay := 2 * time.Second
+	maxRetryDelay := 30 * time.Second
+
+	for {
+		c.logger.Info("Campaigning for leadership", slog.String("node_id", c.nodeID))
+
+		if err := c.election.Campaign(ctx, c.nodeID); err != nil {
+			c.logger.Warn("Failed to campaign for leader",
+				slog.String("node_id", c.nodeID),
+				slog.String("error", err.Error()),
+				slog.Duration("retry_in", retryDelay))
+
+			// If the error is about lost watcher/session, recreate the session and election
+			if strings.Contains(err.Error(), "lost watcher") || strings.Contains(err.Error(), "session") {
+				c.logger.Info("Recreating session and election due to session loss")
+				if err := c.recreateSessionAndElection(); err != nil {
+					c.logger.Error("Failed to recreate session", slog.String("error", err.Error()))
+				}
+			}
+
+			// Check if cluster is stopping
+			select {
+			case <-c.stopCh:
+				c.logger.Info("Cluster stopping, ending campaign", slog.String("node_id", c.nodeID))
+				return
+			case <-time.After(retryDelay):
+				// Exponential backoff with max cap
+				retryDelay *= 2
+				if retryDelay > maxRetryDelay {
+					retryDelay = maxRetryDelay
+				}
+				continue
+			}
+		}
+
+		c.logger.Info("Node became cluster leader", slog.String("node_id", c.nodeID))
 		return
 	}
+}
 
-	log.Printf("Node %s became cluster leader", c.nodeID)
+// recreateSessionAndElection recreates the concurrency session and election
+// when the previous session has been lost or expired.
+func (c *EtcdCluster) recreateSessionAndElection() error {
+	// Close the old session if it exists
+	if c.session != nil {
+		c.session.Close()
+	}
+
+	// Create a new session
+	s, err := concurrency.NewSession(c.client, concurrency.WithTTL(10))
+	if err != nil {
+		return fmt.Errorf("failed to create new session: %w", err)
+	}
+
+	// Create a new election with the new session
+	election := concurrency.NewElection(s, electionPrefix)
+
+	// Update the cluster's session and election
+	c.session = s
+	c.election = election
+
+	c.logger.Info("Successfully recreated session and election", slog.String("node_id", c.nodeID))
+	return nil
 }
 
 // AcquireSession registers this node as the owner of a session.
@@ -445,7 +511,7 @@ func (c *EtcdCluster) GetSubscriptionsForClient(ctx context.Context, clientID st
 	for _, kv := range resp.Kvs {
 		var sub storage.Subscription
 		if err := json.Unmarshal(kv.Value, &sub); err != nil {
-			log.Printf("Failed to unmarshal subscription: %v", err)
+			c.logger.Warn("failed to unmarshal subscription", slog.String("error", err.Error()))
 			continue
 		}
 		subs = append(subs, &sub)
@@ -473,16 +539,17 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 
 // Retained returns the cluster-wide retained message store.
 func (c *EtcdCluster) Retained() storage.RetainedStore {
-	return &etcdRetainedStore{client: c.client}
+	return &etcdRetainedStore{logger: c.logger, client: c.client}
 }
 
 // Wills returns the cluster-wide will message store.
 func (c *EtcdCluster) Wills() storage.WillStore {
-	return &etcdWillStore{client: c.client}
+	return &etcdWillStore{logger: c.logger, client: c.client}
 }
 
 // etcdRetainedStore implements storage.RetainedStore using etcd.
 type etcdRetainedStore struct {
+	logger *slog.Logger
 	client *clientv3.Client
 }
 
@@ -542,7 +609,7 @@ func (s *etcdRetainedStore) Match(ctx context.Context, filter string) ([]*storag
 		if topicMatchesFilter(topic, filter) {
 			var msg storage.Message
 			if err := json.Unmarshal(kv.Value, &msg); err != nil {
-				log.Printf("Failed to unmarshal retained message: %v", err)
+				s.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
 				continue
 			}
 			matched = append(matched, &msg)
@@ -554,6 +621,7 @@ func (s *etcdRetainedStore) Match(ctx context.Context, filter string) ([]*storag
 
 // etcdWillStore implements storage.WillStore using etcd.
 type etcdWillStore struct {
+	logger *slog.Logger
 	client *clientv3.Client
 }
 
@@ -615,7 +683,7 @@ func (s *etcdWillStore) GetPending(ctx context.Context, before time.Time) ([]*st
 	for _, kv := range resp.Kvs {
 		var entry etcdWillEntry
 		if err := json.Unmarshal(kv.Value, &entry); err != nil {
-			log.Printf("Failed to unmarshal will entry: %v", err)
+			s.logger.Warn("failed to unmarshal will entry", slog.String("error", err.Error()))
 			continue
 		}
 
@@ -652,7 +720,7 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	for _, sub := range subs {
 		nodeID, exists, err := c.GetSessionOwner(ctx, sub.ClientID)
 		if err != nil {
-			log.Printf("Failed to get session owner for %s: %v", sub.ClientID, err)
+			c.logger.Warn("failed to get session owner for", slog.String("client_id", sub.ClientID), slog.String("error", err.Error()))
 			continue
 		}
 		if !exists {
@@ -671,7 +739,10 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		for _, clientID := range clientIDs {
 			err := c.transport.SendPublish(ctx, nodeID, clientID, topic, payload, qos, retain, false, properties)
 			if err != nil {
-				log.Printf("Failed to route publish to %s on node %s: %v", clientID, nodeID, err)
+				c.logger.Warn("failed to route publish",
+					slog.String("client_id", clientID),
+					slog.String("node_id", nodeID),
+					slog.String("error", err.Error()))
 			}
 		}
 	}
@@ -706,7 +777,10 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 		return nil, fmt.Errorf("failed to acquire session ownership: %w", err)
 	}
 
-	log.Printf("Session %s taken over from %s to %s", clientID, fromNode, toNode)
+	c.logger.Info("session taken over",
+		slog.String("client_id", clientID),
+		slog.String("from_node", fromNode),
+		slog.String("to_node", toNode))
 	return state, nil
 }
 
@@ -769,7 +843,10 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 		return nil, fmt.Errorf("failed to get session state: %w", err)
 	}
 
-	log.Printf("Session %s handed over from %s to %s", clientID, fromNode, toNode)
+	c.logger.Info("session handed over",
+		slog.String("client_id", clientID),
+		slog.String("from_node", fromNode),
+		slog.String("to_node", toNode))
 	return sessionState, nil
 }
 
@@ -787,7 +864,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 	for _, kv := range resp.Kvs {
 		var sub storage.Subscription
 		if err := json.Unmarshal(kv.Value, &sub); err != nil {
-			log.Printf("Failed to unmarshal subscription during cache load: %v", err)
+			c.logger.Warn("failed to unmarshal subscription during cache load", slog.String("error", err.Error()))
 			continue
 		}
 
@@ -795,7 +872,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 		c.subCache[cacheKey] = &sub
 	}
 
-	log.Printf("Loaded %d subscriptions into cache", len(c.subCache))
+	c.logger.Info("loaded subscriptions into cache", slog.Int("cache_len", len(c.subCache)))
 	return nil
 }
 
@@ -809,7 +886,7 @@ func (c *EtcdCluster) watchSubscriptions() {
 			return
 		case watchResp := <-watchCh:
 			if watchResp.Err() != nil {
-				log.Printf("Subscription watch error: %v", watchResp.Err())
+				c.logger.Error("subscription watch error", slog.String("error", watchResp.Err().Error()))
 				continue
 			}
 
@@ -820,7 +897,7 @@ func (c *EtcdCluster) watchSubscriptions() {
 					// Subscription added or updated
 					var sub storage.Subscription
 					if err := json.Unmarshal(event.Kv.Value, &sub); err != nil {
-						log.Printf("Failed to unmarshal subscription in watch: %v", err)
+						c.logger.Error("failed to unmarshal subscription in watch", slog.String("error", err.Error()))
 						continue
 					}
 

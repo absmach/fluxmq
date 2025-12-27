@@ -111,7 +111,7 @@ func main() {
 			PeerTransports: cfg.Cluster.Transport.Peers,
 		}
 
-		ec, err := cluster.NewEtcdCluster(etcdCfg)
+		ec, err := cluster.NewEtcdCluster(etcdCfg, logger)
 		if err != nil {
 			slog.Error("Failed to initialize etcd cluster", "error", err)
 			os.Exit(1)
