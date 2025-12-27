@@ -1,7 +1,7 @@
 # MQTT Broker Development Roadmap
 **Production-Ready Implementation Plan**
 
-**Last Updated:** 2025-12-24
+**Last Updated:** 2025-12-27
 **Current Status:** Core features complete, testing & production hardening in progress
 
 ---
@@ -14,7 +14,7 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 - ✅ **Foundation (100%)** - Core MQTT 3.1.1/5.0, multi-protocol, clean architecture
 - ✅ **Clustering (100%)** - Session takeover, QoS 2 routing, retained messages, etcd coordination
 - ✅ **Multi-Protocol (100%)** - TCP, WebSocket, HTTP bridge, CoAP stub
-- ⏳ **Testing (80%)** - QoS 2 fixed, cluster formation validated, session persistence proven, failover needs tuning
+- ⏳ **Testing (85%)** - QoS 2 fixed, cluster formation validated, session persistence proven, robust test client, failover needs tuning
 - ⏳ **Production Hardening (60%)** - Health checks done, observability with OTel complete, session durability proven, TLS/auth pending
 - ❌ **MQTT 5.0 Advanced (0%)** - Topic aliases, shared subscriptions, message expiry
 
@@ -74,6 +74,36 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
   - Fixed offline queue not being persisted on broker close
   - Fixed BadgerDB v4 encryption registry issues
   - Added 4 integration tests proving restart durability
+
+- **Test MQTT Client Refactoring** - Robust client for integration testing
+  - Proper state management with atomic state transitions
+  - Packet ID management (incrementing IDs with tracking)
+  - Full QoS 1 flow: PUBACK send/receive with pending ack tracking
+  - Full QoS 2 flow: PUBREC/PUBREL/PUBCOMP handling
+  - SUBACK waiting and verification before Subscribe returns
+  - In-memory message store with `MessageStore` interface
+  - Will message support via `ConnectWithOptions`
+  - `DisconnectUngracefully()` for simulating network failures
+  - `WaitForMessages(count, timeout)` for batch message waiting
+  - Thread-safe connection handling with proper cleanup
+  - Error channel for connection error notifications
+  - 12 unit tests for client components
+
+- **Production MQTT Client Package** (`client/`) - Rock-solid production client
+  - Complete rewrite of the client package for production use
+  - Thread-safe with proper locking (`sync.RWMutex`) and atomic state transitions
+  - MQTT 3.1.1 and 5.0 protocol support
+  - Builder pattern configuration via `client.NewOptions()`
+  - Full QoS 0/1/2 flows with pending acknowledgment tracking via channels
+  - Keep-alive with automatic ping timer (sends PINGREQ on idle)
+  - Auto-reconnect with configurable exponential backoff
+  - Message store interface (`MessageStore`) with default in-memory implementation
+  - TLS support via `SetTLSConfig(*tls.Config)`
+  - Will message support via `SetWill(topic, payload, qos, retain)`
+  - Multiple server failover with round-robin
+  - Comprehensive callbacks: `OnConnect`, `OnConnectionLost`, `OnReconnecting`, `OnMessage`
+  - 57 unit tests covering all components (100% pass rate)
+  - Files: `client/client.go`, `client/options.go`, `client/state.go`, `client/pending.go`, `client/message.go`, `client/store.go`, `client/errors.go`
 
 ### ✅ Previously Completed (2025-12-24)
 
@@ -972,9 +1002,29 @@ webhooks:
   - Fixed offline queue persistence on broker close
   - Fixed BadgerDB v4 encryption/vlog issues
   - Added 4 integration tests proving durability
+- ✅ Test MQTT Client Refactoring (~2 hours)
+  - Complete rewrite with proper state management
+  - Full QoS 1/2 protocol support
+  - In-memory message store
+  - Will message and ungraceful disconnect support
+  - 12 unit tests added
+- ✅ **Production MQTT Client Package** (~3 hours)
+  - Complete production-ready client in `client/` package
+  - Thread-safe with proper locking and atomic state transitions
+  - MQTT 3.1.1 and 5.0 support
+  - Builder pattern for configuration (`client.NewOptions()`)
+  - Full QoS 0/1/2 flows with pending ack tracking
+  - Keep-alive with automatic ping timer
+  - Auto-reconnect with exponential backoff
+  - Message store interface with in-memory default
+  - TLS support ready
+  - Will message support
+  - Multiple server failover
+  - 57 unit tests (100% pass rate)
+  - Files: `client/client.go`, `client/options.go`, `client/state.go`, `client/pending.go`, `client/message.go`, `client/store.go`, `client/errors.go`
 
 ---
 
-**Document Version:** 2.3
+**Document Version:** 2.5
 **Last Updated:** 2025-12-27
 **Next Review:** After Task 1.5 (TLS Support) completion

@@ -52,7 +52,7 @@ type Broker struct {
 	auth          *AuthEngine
 	logger        *slog.Logger
 	stats         *Stats
-	webhooks      Notifier     // nil if webhooks disabled
+	webhooks      Notifier      // nil if webhooks disabled
 	metrics       *otel.Metrics // nil if metrics disabled
 	tracer        trace.Tracer  // nil if tracing disabled
 	stopCh        chan struct{}

@@ -43,10 +43,7 @@ func TestSessionTakeover_BasicReconnect(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Disconnect ungracefully (close connection without DISCONNECT packet)
-	if client.Conn != nil {
-		client.Conn.Close()
-		client.Conn = nil
-	}
+	client.DisconnectUngracefully()
 
 	t.Log("Client disconnected from node-0")
 
@@ -114,10 +111,7 @@ func TestSessionTakeover_QoS1Messages(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Disconnect ungracefully
-	if subscriber.Conn != nil {
-		subscriber.Conn.Close()
-		subscriber.Conn = nil
-	}
+	subscriber.DisconnectUngracefully()
 
 	t.Log("Subscriber disconnected from node-0")
 
@@ -200,18 +194,9 @@ func TestSessionTakeover_MultipleClients(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Disconnect all clients ungracefully
-	if client1.Conn != nil {
-		client1.Conn.Close()
-		client1.Conn = nil
-	}
-	if client2.Conn != nil {
-		client2.Conn.Close()
-		client2.Conn = nil
-	}
-	if client3.Conn != nil {
-		client3.Conn.Close()
-		client3.Conn = nil
-	}
+	client1.DisconnectUngracefully()
+	client2.DisconnectUngracefully()
+	client3.DisconnectUngracefully()
 
 	t.Log("All clients disconnected")
 
