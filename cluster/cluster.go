@@ -12,12 +12,7 @@ import (
 	"github.com/absmach/mqtt/storage"
 )
 
-// Cluster provides distributed coordination for the broker.
-// This interface abstracts the clustering implementation, allowing
-// different backends (etcd, raft, or noop for single-node).
-type Cluster interface {
-	// Session ownership - strongly consistent
-
+type SessionStore interface {
 	// AcquireSession registers this node as the owner of a session.
 	// Returns error if another node owns the session.
 	AcquireSession(ctx context.Context, clientID, nodeID string) error
@@ -32,9 +27,9 @@ type Cluster interface {
 	// WatchSessionOwner watches for ownership changes of a specific session.
 	// Useful for detecting when another node takes over a session.
 	WatchSessionOwner(ctx context.Context, clientID string) <-chan OwnershipChange
+}
 
-	// Subscriptions - cluster-wide visibility
-
+type SubscriptionStore interface {
 	// AddSubscription adds a subscription for a client.
 	// This is visible to all nodes in the cluster for routing.
 	AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error
@@ -48,9 +43,9 @@ type Cluster interface {
 	// GetSubscribersForTopic returns all subscriptions matching a topic.
 	// Used for routing publishes to interested nodes.
 	GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error)
+}
 
-	// Retained messages - cluster-wide replication
-
+type RetainedStore interface {
 	// SetRetained stores a retained message visible to all nodes.
 	// Empty payload deletes the retained message.
 	SetRetained(ctx context.Context, topic string, msg *storage.Message) error
@@ -64,9 +59,9 @@ type Cluster interface {
 	// GetRetainedMatching returns all retained messages matching a filter.
 	// Used when a client subscribes to deliver matching retained messages.
 	GetRetainedMatching(ctx context.Context, filter string) ([]*storage.Message, error)
+}
 
-	// Will messages - cluster-wide, strongly consistent
-
+type WillStore interface {
 	// SetWill stores a will message for a client.
 	SetWill(ctx context.Context, clientID string, will *storage.WillMessage) error
 
@@ -79,22 +74,9 @@ type Cluster interface {
 	// GetPendingWills returns will messages that should be triggered.
 	// Used by leader node to process pending wills.
 	GetPendingWills(ctx context.Context) ([]*storage.WillMessage, error)
+}
 
-	// Message routing - inter-broker communication
-
-	// RoutePublish routes a publish message to all nodes with interested subscribers.
-	// The cluster implementation finds which nodes have matching subscriptions
-	// and forwards the message to them.
-	RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error
-
-	// Session takeover - coordinated session migration
-
-	// TakeoverSession initiates session takeover from one node to another.
-	// This is called when a client reconnects to a different node.
-	// The old node disconnects the client and returns its full state.
-	// Returns the session state to be restored, or nil if no state exists.
-	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error)
-
+type Lifecycle interface {
 	// Leadership - for coordinating background tasks
 
 	// IsLeader returns true if this node is the cluster leader.
@@ -118,6 +100,27 @@ type Cluster interface {
 
 	// Nodes returns information about all nodes in the cluster.
 	Nodes() []NodeInfo
+}
+
+// Cluster provides distributed coordination for the broker.
+// This interface abstracts the clustering implementation, allowing
+// different backends (etcd, raft, or noop for single-node).
+type Cluster interface {
+	SessionStore
+	SubscriptionStore
+	RetainedStore
+	WillStore
+	Lifecycle
+	// RoutePublish routes a publish message to all nodes with interested subscribers.
+	// The cluster implementation finds which nodes have matching subscriptions
+	// and forwards the message to them.
+	RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error
+
+	// TakeoverSession initiates session takeover from one node to another.
+	// This is called when a client reconnects to a different node.
+	// The old node disconnects the client and returns its full state.
+	// Returns the session state to be restored, or nil if no state exists.
+	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error)
 }
 
 // OwnershipChange represents a session ownership change event.
