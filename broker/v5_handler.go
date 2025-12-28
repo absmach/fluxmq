@@ -188,13 +188,26 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return sendV5PubAck(s, packetID, v5.PubAckNotAuthorized, "Not authorized")
 	}
 
+	// Extract message expiry interval if present
+	var messageExpiry *uint32
+	var expiryTime time.Time
+	publishTime := time.Now()
+
+	if p.Properties != nil && p.Properties.MessageExpiry != nil {
+		messageExpiry = p.Properties.MessageExpiry
+		expiryTime = publishTime.Add(time.Duration(*messageExpiry) * time.Second)
+	}
+
 	switch qos {
 	case 0:
 		msg := &storage.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
+			Topic:         topic,
+			Payload:       payload,
+			QoS:           qos,
+			Retain:        retain,
+			MessageExpiry: messageExpiry,
+			Expiry:        expiryTime,
+			PublishTime:   publishTime,
 		}
 		err := h.broker.Publish(msg)
 		h.broker.logger.Debug("v5_publish_complete",
@@ -206,10 +219,13 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	case 1:
 		msg := &storage.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
+			Topic:         topic,
+			Payload:       payload,
+			QoS:           qos,
+			Retain:        retain,
+			MessageExpiry: messageExpiry,
+			Expiry:        expiryTime,
+			PublishTime:   publishTime,
 		}
 		if err := h.broker.Publish(msg); err != nil {
 			return sendV5PubAck(s, packetID, v5.PubAckUnspecifiedError, "Unspecified error")
@@ -229,10 +245,13 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		// Publish message immediately (distribution to subscribers)
 		msg := &storage.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
+			Topic:         topic,
+			Payload:       payload,
+			QoS:           qos,
+			Retain:        retain,
+			MessageExpiry: messageExpiry,
+			Expiry:        expiryTime,
+			PublishTime:   publishTime,
 		}
 		if err := h.broker.Publish(msg); err != nil {
 			return sendV5PubRec(s, packetID, v5.PubRecUnspecifiedError, "Publish failed")
@@ -240,11 +259,14 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		// Store for QoS 2 flow tracking
 		storeMsg := &storage.Message{
-			Topic:    topic,
-			Payload:  payload,
-			QoS:      2,
-			Retain:   retain,
-			PacketID: packetID,
+			Topic:         topic,
+			Payload:       payload,
+			QoS:           2,
+			Retain:        retain,
+			PacketID:      packetID,
+			MessageExpiry: messageExpiry,
+			Expiry:        expiryTime,
+			PublishTime:   publishTime,
 		}
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			return err

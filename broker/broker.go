@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/absmach/mqtt/storage"
 	"github.com/absmach/mqtt/storage/memory"
 	"github.com/absmach/mqtt/storage/messages"
+	"github.com/absmach/mqtt/topics"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -58,6 +60,9 @@ type Broker struct {
 	stopCh        chan struct{}
 	shuttingDown  bool
 	closed        bool
+	// Shared subscriptions (MQTT 5.0)
+	shareGroups   map[string]*topics.ShareGroup // key: "shareName/topicFilter"
+	shareGroupsMu sync.RWMutex
 }
 
 // NewBroker creates a new broker instance.
@@ -99,6 +104,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		metrics:       metrics,
 		tracer:        tracer,
 		stopCh:        make(chan struct{}),
+		shareGroups:   make(map[string]*topics.ShareGroup),
 	}
 
 	b.wg.Add(2)
@@ -360,14 +366,44 @@ func (b *Broker) Publish(msg *storage.Message) error {
 // subscribe adds a subscription for a session (internal domain method).
 func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts storage.SubscribeOptions) error {
 	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(qos)))
+
+	// Check if this is a shared subscription
+	shareName, topicFilter, isShared := topics.ParseShared(filter)
+	if isShared {
+		// Handle shared subscription
+		b.shareGroupsMu.Lock()
+		groupKey := shareName + "/" + topicFilter
+		group, exists := b.shareGroups[groupKey]
+		if !exists {
+			group = &topics.ShareGroup{
+				Name:        shareName,
+				TopicFilter: topicFilter,
+				Subscribers: []string{},
+			}
+			b.shareGroups[groupKey] = group
+
+			// Only subscribe to router when creating a new share group
+			shareClientID := "$share/" + groupKey
+			b.router.Subscribe(shareClientID, topicFilter, qos, opts)
+		}
+		group.AddSubscriber(s.ID)
+		b.shareGroupsMu.Unlock()
+
+		b.logOp("shared_subscribe",
+			slog.String("client_id", s.ID),
+			slog.String("share_name", shareName),
+			slog.String("topic_filter", topicFilter))
+	} else {
+		// Normal subscription
+		b.router.Subscribe(s.ID, filter, qos, opts)
+	}
+
 	b.stats.IncrementSubscriptions()
 
 	// Record metrics
 	if b.metrics != nil {
 		b.metrics.RecordSubscriptionAdded()
 	}
-
-	b.router.Subscribe(s.ID, filter, qos, opts)
 
 	sub := &storage.Subscription{
 		ClientID: s.ID,
@@ -405,14 +441,39 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 // unsubscribeInternal removes a subscription for a session (internal domain method).
 func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	b.logOp("unsubscribe", slog.String("client_id", s.ID), slog.String("filter", filter))
+
+	// Check if this is a shared subscription
+	shareName, topicFilter, isShared := topics.ParseShared(filter)
+	if isShared {
+		// Handle shared subscription removal
+		b.shareGroupsMu.Lock()
+		groupKey := shareName + "/" + topicFilter
+		if group, exists := b.shareGroups[groupKey]; exists {
+			group.RemoveSubscriber(s.ID)
+			// If group is now empty, remove it and unsubscribe from router
+			if group.IsEmpty() {
+				delete(b.shareGroups, groupKey)
+				shareClientID := "$share/" + groupKey
+				b.router.Unsubscribe(shareClientID, topicFilter)
+			}
+		}
+		b.shareGroupsMu.Unlock()
+
+		b.logOp("shared_unsubscribe",
+			slog.String("client_id", s.ID),
+			slog.String("share_name", shareName),
+			slog.String("topic_filter", topicFilter))
+	} else {
+		// Normal unsubscribe
+		b.router.Unsubscribe(s.ID, filter)
+	}
+
 	b.stats.DecrementSubscriptions()
 
 	// Record metrics
 	if b.metrics != nil {
 		b.metrics.RecordSubscriptionRemoved()
 	}
-
-	b.router.Unsubscribe(s.ID, filter)
 
 	if err := b.subscriptions.Remove(s.ID, filter); err != nil {
 		return fmt.Errorf("failed to remove subscription: %w", err)
@@ -462,6 +523,15 @@ func (b *Broker) Unsubscribe(clientID string, filter string) error {
 // DeliverToSession queues a message for delivery to a session.
 // Returns packet ID (>0) if session is connected and QoS>0, otherwise 0.
 func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uint16, error) {
+	// Check if message has expired
+	if msg.MessageExpiry != nil && !msg.Expiry.IsZero() && time.Now().After(msg.Expiry) {
+		b.logOp("message_expired",
+			slog.String("client_id", s.ID),
+			slog.String("topic", msg.Topic),
+			slog.Time("expiry", msg.Expiry))
+		return 0, nil // Drop expired message
+	}
+
 	if !s.IsConnected() {
 		if msg.QoS > 0 {
 			return 0, s.OfflineQueue().Enqueue(msg)
@@ -565,27 +635,79 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 		return err
 	}
 
+	// Track which share groups have already received the message
+	deliveredGroups := make(map[string]bool)
+
 	for _, sub := range matched {
-		s := b.sessionsMap.Get(sub.ClientID)
-		if s == nil {
-			continue
-		}
+		clientID := sub.ClientID
 
-		deliverQoS := qos
-		if sub.QoS < deliverQoS {
-			deliverQoS = sub.QoS
-		}
+		// Check if this is a shared subscription
+		if strings.HasPrefix(clientID, "$share/") {
+			// Extract group key from the special client ID
+			groupKey := clientID[7:] // Remove "$share/" prefix
 
-		msg := &storage.Message{
-			Topic:      topic,
-			Payload:    payload,
-			QoS:        deliverQoS,
-			Retain:     retain,
-			Properties: props,
-		}
+			// Skip if we already delivered to this group
+			if deliveredGroups[groupKey] {
+				continue
+			}
 
-		if _, err := b.DeliverToSession(s, msg); err != nil {
-			continue
+			// Get the share group and select next subscriber
+			b.shareGroupsMu.RLock()
+			group, exists := b.shareGroups[groupKey]
+			b.shareGroupsMu.RUnlock()
+
+			if !exists || group.IsEmpty() {
+				continue
+			}
+
+			// Round-robin: select next subscriber in the group
+			selectedClientID := group.NextSubscriber()
+			deliveredGroups[groupKey] = true
+
+			s := b.sessionsMap.Get(selectedClientID)
+			if s == nil {
+				continue
+			}
+
+			deliverQoS := qos
+			if sub.QoS < deliverQoS {
+				deliverQoS = sub.QoS
+			}
+
+			msg := &storage.Message{
+				Topic:      topic,
+				Payload:    payload,
+				QoS:        deliverQoS,
+				Retain:     false, // MQTT spec: shared subscriptions don't receive retained flag
+				Properties: props,
+			}
+
+			if _, err := b.DeliverToSession(s, msg); err != nil {
+				continue
+			}
+		} else {
+			// Normal subscription
+			s := b.sessionsMap.Get(clientID)
+			if s == nil {
+				continue
+			}
+
+			deliverQoS := qos
+			if sub.QoS < deliverQoS {
+				deliverQoS = sub.QoS
+			}
+
+			msg := &storage.Message{
+				Topic:      topic,
+				Payload:    payload,
+				QoS:        deliverQoS,
+				Retain:     retain,
+				Properties: props,
+			}
+
+			if _, err := b.DeliverToSession(s, msg); err != nil {
+				continue
+			}
 		}
 	}
 
@@ -643,7 +765,23 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 
 	subs := s.GetSubscriptions()
 	for filter := range subs {
-		b.router.Unsubscribe(s.ID, filter)
+		// Check if this is a shared subscription and clean up share groups
+		shareName, topicFilter, isShared := topics.ParseShared(filter)
+		if isShared {
+			b.shareGroupsMu.Lock()
+			groupKey := shareName + "/" + topicFilter
+			if group, exists := b.shareGroups[groupKey]; exists {
+				group.RemoveSubscriber(s.ID)
+				if group.IsEmpty() {
+					delete(b.shareGroups, groupKey)
+					shareClientID := "$share/" + groupKey
+					b.router.Unsubscribe(shareClientID, topicFilter)
+				}
+			}
+			b.shareGroupsMu.Unlock()
+		} else {
+			b.router.Unsubscribe(s.ID, filter)
+		}
 
 		// Remove subscription from cluster
 		if b.cluster != nil {
@@ -944,6 +1082,20 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 
 	switch s.Version {
 	case 5:
+		props := &v5.PublishProperties{}
+
+		// Calculate remaining message expiry interval
+		if msg.MessageExpiry != nil && !msg.Expiry.IsZero() {
+			remaining := time.Until(msg.Expiry)
+
+			if remaining > 0 {
+				// Send remaining expiry in seconds
+				remainingSec := uint32(remaining.Seconds())
+				props.MessageExpiry = &remainingSec
+			}
+			// If remaining <= 0, don't include expiry (message should have been filtered already)
+		}
+
 		pub = &v5.Publish{
 			FixedHeader: packets.FixedHeader{
 				PacketType: packets.PublishType,
@@ -953,7 +1105,7 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 			TopicName:  msg.Topic,
 			Payload:    msg.Payload,
 			ID:         msg.PacketID,
-			Properties: &v5.PublishProperties{},
+			Properties: props,
 		}
 	default:
 		pub = &v3.Publish{
