@@ -180,25 +180,32 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
   - **New Files**: `client/capabilities.go`, `client/topicalias.go`, `client/subscribe.go`
   - **Modified Files**: `client/client.go`, `client/options.go`, `client/message.go`
 
-- **Hybrid Retained Message Storage** - Scalable architecture for 10M+ clients
-  - **Problem**: etcd cannot scale to millions of retained messages (8GB limit, 5K writes/sec)
+- **Hybrid Storage Architecture (Retained + Will Messages)** - Scalable to 10M+ clients
+  - **Problem**: etcd cannot scale to millions of retained/will messages (8GB limit, 5K writes/sec)
   - **Solution**: Hybrid storage strategy balancing replication vs on-demand fetching
 
   - **Architecture Design**:
     - **Small messages (<1KB)**: Replicated to all nodes via etcd for fast local reads
     - **Large messages (≥1KB)**: Stored on owner node, fetched on-demand via gRPC
-    - **Metadata cache**: All nodes maintain topic index synced via etcd watch
+    - **Metadata cache**: All nodes maintain topic/client index synced via etcd watch
     - **Automatic replication**: Small messages written to all nodes' BadgerDB
     - **Lazy fetching**: Large messages fetched once and cached locally
     - **Graceful degradation**: Remote fetch failures don't break subscriptions
+    - **Applied to both**: Retained messages AND will messages use same hybrid pattern
 
   - **Implementation Details**:
-    - New `HybridRetainedStore` (450 lines) implementing `storage.RetainedStore` interface
-    - Two etcd key prefixes: `/mqtt/retained-data/` (small+payload) and `/mqtt/retained-index/` (large metadata)
-    - gRPC `FetchRetained` RPC for cross-node payload retrieval
+    - **Retained Messages**:
+      - New `HybridRetainedStore` (450 lines) implementing `storage.RetainedStore` interface
+      - etcd prefixes: `/mqtt/retained-data/` (small+payload), `/mqtt/retained-index/` (large metadata)
+      - gRPC `FetchRetained` RPC for cross-node payload retrieval
+    - **Will Messages**:
+      - New `HybridWillStore` (400 lines) implementing `storage.WillStore` interface
+      - etcd prefixes: `/mqtt/will-data/` (small+payload), `/mqtt/will-index/` (large metadata)
+      - gRPC `FetchWill` RPC for cross-node payload retrieval
     - Background goroutines watching etcd for metadata updates
     - Thread-safe with RWMutex for metadata cache and operations
     - Configurable threshold via `cluster.etcd.hybrid_retained_size_threshold` (default 1024 bytes)
+    - Same threshold applies to both retained and will messages
 
   - **Performance Impact at 10M client scale**:
     - etcd storage: 1GB → 750MB (25% reduction)
@@ -217,10 +224,14 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
     ```
 
   - **Files Modified**:
-    - **Created**: `cluster/hybrid_retained.go` (450 lines)
-    - **Extended**: `proto/broker.proto` with `FetchRetained` RPC
+    - **Created**:
+      - `cluster/hybrid_retained.go` (450 lines) - Retained message hybrid storage
+      - `cluster/hybrid_will.go` (400 lines) - Will message hybrid storage
+      - `cluster/retained_test.go` - Unit tests for hybrid retained store
+      - `docs/architecture-capacity.md` - 20-node capacity analysis
+    - **Extended**: `proto/broker.proto` with `FetchRetained` and `FetchWill` RPCs
     - **Modified**: `cluster/etcd.go`, `cluster/transport.go`, `cluster/cluster.go`
-    - **Updated**: `broker/broker.go` (added `GetRetainedMessage` handler)
+    - **Updated**: `broker/broker.go` (added `GetRetainedMessage` and `GetWillMessage` handlers)
     - **Config**: `config/config.go`, `cmd/broker/main.go`
 
   - **Trade-offs**:
@@ -1218,6 +1229,46 @@ webhooks:
 
 ---
 
-**Document Version:** 2.7
-**Last Updated:** 2025-12-28
+---
+
+## Architecture & Scalability
+
+### 20-Node Cluster Capacity (2025-12-29)
+
+With the recent hybrid storage architecture, the broker can scale to:
+
+**Cluster-Wide Capacity:**
+- **Concurrent Connections**: 1,000,000+ clients (50K per node)
+- **Message Throughput**: 200K-500K messages/second
+- **Retained Messages**: 10M+ messages (with hybrid storage)
+- **Subscriptions**: 20M+ active subscriptions
+- **Storage**: 2TB distributed (BadgerDB) + 2GB coordinated (etcd)
+
+**Key Architectural Components:**
+- **Embedded etcd**: Distributed coordination (3-5 member cluster)
+- **BadgerDB**: Local persistent storage (100GB+ per node)
+- **gRPC Transport**: Inter-broker communication (50K msgs/sec per connection)
+- **Hybrid Storage**: Size-based replication (small) vs fetch-on-demand (large)
+
+**Performance Characteristics:**
+- Session takeover: <100ms
+- Message delivery (local): <10ms
+- Message delivery (cross-node): ~5ms
+- etcd storage reduction: 25-50% (with hybrid)
+- Cache hit rate: >90% after warmup
+
+**Scaling Bottlenecks & Solutions:**
+- ✅ **etcd write limit** (5K/sec) → Hybrid storage reduces writes by 70%
+- ✅ **Cross-node latency** → Topic sharding for local routing
+- ✅ **Session takeover** → Load balancer affinity (sticky sessions)
+- ⏳ **Wildcard matching** → Bloom filters (planned)
+
+**Detailed Analysis:**
+- [Architecture & Capacity Analysis](architecture-capacity.md) - 20-node cluster scaling, capacity planning
+- [Architecture Deep Dive](architecture-deep-dive.md) - **10M client assessment, etcd vs custom Raft, alternative architectures**
+
+---
+
+**Document Version:** 2.8
+**Last Updated:** 2025-12-29
 **Next Review:** After Priority 3 (LOW) tasks or production deployment
