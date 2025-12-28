@@ -27,6 +27,15 @@ type WillMessage struct {
 	Payload []byte
 	QoS     byte
 	Retain  bool
+
+	// MQTT 5.0 Will Properties
+	WillDelayInterval uint32            // Delay before sending will (seconds)
+	PayloadFormat     *byte             // 0=bytes, 1=UTF-8
+	MessageExpiry     uint32            // Will message lifetime (seconds)
+	ContentType       string            // MIME type
+	ResponseTopic     string            // Response topic for request/response
+	CorrelationData   []byte            // Correlation data for request/response
+	UserProperties    map[string]string // User-defined properties
 }
 
 // Options configures the MQTT client.
@@ -43,9 +52,16 @@ type Options struct {
 	PingTimeout     time.Duration // Timeout waiting for PINGRESP
 
 	// Session
-	CleanSession   bool          // Start with clean session
-	SessionExpiry  uint32        // Session expiry interval (MQTT 5.0, seconds)
-	ProtocolVersion byte         // 4 for MQTT 3.1.1, 5 for MQTT 5.0
+	CleanSession    bool   // Start with clean session
+	SessionExpiry   uint32 // Session expiry interval (MQTT 5.0, seconds)
+	ProtocolVersion byte   // 4 for MQTT 3.1.1, 5 for MQTT 5.0
+
+	// MQTT 5.0 Connect Properties
+	ReceiveMaximum        uint16 // Maximum inflight messages client accepts (0 = use default 65535)
+	MaximumPacketSize     uint32 // Maximum packet size client accepts (0 = no limit)
+	TopicAliasMaximum     uint16 // Maximum topic aliases client accepts (0 = disabled)
+	RequestResponseInfo   bool   // Request server to send response information in CONNACK
+	RequestProblemInfo    bool   // Request detailed error information (default true)
 
 	// Will
 	Will *WillMessage // Last will and testament
@@ -60,10 +76,11 @@ type Options struct {
 	MaxReconnectWait time.Duration // Maximum reconnect delay
 
 	// Callbacks
-	OnConnect         func()                                    // Called on successful connection
-	OnConnectionLost  func(error)                               // Called when connection is lost
-	OnReconnecting    func(attempt int)                         // Called before each reconnect attempt
-	OnMessage         func(topic string, payload []byte, qos byte) // Called for incoming messages
+	OnConnect            func()                          // Called on successful connection
+	OnConnectionLost     func(error)                     // Called when connection is lost
+	OnReconnecting       func(attempt int)               // Called before each reconnect attempt
+	OnMessage            func(topic string, payload []byte, qos byte) // Called for incoming messages
+	OnServerCapabilities func(*ServerCapabilities)       // Called when server capabilities received (MQTT 5.0)
 
 	// Advanced
 	MessageChanSize int          // Size of internal message channel
@@ -87,6 +104,8 @@ func NewOptions() *Options {
 		MaxReconnectWait: DefaultReconnectMax,
 		MaxInflight:      DefaultMaxInflight,
 		MessageChanSize:  DefaultMessageChanSize,
+		// MQTT 5.0 defaults
+		RequestProblemInfo: true, // Request detailed error information
 	}
 }
 
@@ -145,6 +164,50 @@ func (o *Options) SetProtocolVersion(v byte) *Options {
 	return o
 }
 
+// SetSessionExpiry sets the session expiry interval in seconds (MQTT 5.0).
+// 0 means the session expires when the network connection closes.
+func (o *Options) SetSessionExpiry(seconds uint32) *Options {
+	o.SessionExpiry = seconds
+	return o
+}
+
+// SetReceiveMaximum sets the maximum inflight messages the client accepts (MQTT 5.0).
+// Default is 65535 if not set. Must be > 0.
+func (o *Options) SetReceiveMaximum(max uint16) *Options {
+	o.ReceiveMaximum = max
+	return o
+}
+
+// SetMaximumPacketSize sets the maximum packet size the client accepts (MQTT 5.0).
+// 0 means no limit beyond protocol maximum (256 MB).
+func (o *Options) SetMaximumPacketSize(size uint32) *Options {
+	o.MaximumPacketSize = size
+	return o
+}
+
+// SetTopicAliasMaximum sets the maximum topic aliases the client accepts (MQTT 5.0).
+// 0 means topic aliases are disabled. Server cannot use topic aliases if set to 0.
+func (o *Options) SetTopicAliasMaximum(max uint16) *Options {
+	o.TopicAliasMaximum = max
+	return o
+}
+
+// SetRequestResponseInfo requests the server to send response information (MQTT 5.0).
+// The server may include response information in CONNACK which can be used for
+// request/response patterns.
+func (o *Options) SetRequestResponseInfo(request bool) *Options {
+	o.RequestResponseInfo = request
+	return o
+}
+
+// SetRequestProblemInfo requests detailed error information from server (MQTT 5.0).
+// When true, server includes reason strings and user properties in error responses.
+// Default is true.
+func (o *Options) SetRequestProblemInfo(request bool) *Options {
+	o.RequestProblemInfo = request
+	return o
+}
+
 // SetWill sets the last will and testament.
 func (o *Options) SetWill(topic string, payload []byte, qos byte, retain bool) *Options {
 	o.Will = &WillMessage{
@@ -189,6 +252,12 @@ func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
 // SetOnMessage sets the message handler callback.
 func (o *Options) SetOnMessage(fn func(topic string, payload []byte, qos byte)) *Options {
 	o.OnMessage = fn
+	return o
+}
+
+// SetOnServerCapabilities sets the server capabilities callback (MQTT 5.0).
+func (o *Options) SetOnServerCapabilities(fn func(*ServerCapabilities)) *Options {
+	o.OnServerCapabilities = fn
 	return o
 }
 

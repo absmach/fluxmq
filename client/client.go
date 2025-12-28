@@ -27,6 +27,13 @@ type Client struct {
 	conn   net.Conn
 	connMu sync.RWMutex
 
+	// Server capabilities (MQTT 5.0)
+	serverCaps   *ServerCapabilities
+	serverCapsMu sync.RWMutex
+
+	// Topic aliases (MQTT 5.0)
+	topicAliases *topicAliasManager
+
 	// Pending operations
 	pending *pendingStore
 
@@ -200,13 +207,82 @@ func (c *Client) sendConnect(conn net.Conn) error {
 			pkt.WillRetain = c.opts.Will.Retain
 			pkt.WillTopic = c.opts.Will.Topic
 			pkt.WillPayload = c.opts.Will.Payload
+
+			// Set v5 Will properties
+			if c.opts.Will.WillDelayInterval > 0 || c.opts.Will.PayloadFormat != nil ||
+				c.opts.Will.MessageExpiry > 0 || c.opts.Will.ContentType != "" ||
+				c.opts.Will.ResponseTopic != "" || len(c.opts.Will.CorrelationData) > 0 ||
+				len(c.opts.Will.UserProperties) > 0 {
+
+				pkt.WillProperties = &v5.WillProperties{}
+
+				if c.opts.Will.WillDelayInterval > 0 {
+					pkt.WillProperties.WillDelayInterval = &c.opts.Will.WillDelayInterval
+				}
+
+				if c.opts.Will.PayloadFormat != nil {
+					pkt.WillProperties.PayloadFormat = c.opts.Will.PayloadFormat
+				}
+
+				if c.opts.Will.MessageExpiry > 0 {
+					pkt.WillProperties.MessageExpiry = &c.opts.Will.MessageExpiry
+				}
+
+				if c.opts.Will.ContentType != "" {
+					pkt.WillProperties.ContentType = c.opts.Will.ContentType
+				}
+
+				if c.opts.Will.ResponseTopic != "" {
+					pkt.WillProperties.ResponseTopic = c.opts.Will.ResponseTopic
+				}
+
+				if len(c.opts.Will.CorrelationData) > 0 {
+					pkt.WillProperties.CorrelationData = c.opts.Will.CorrelationData
+				}
+
+				if len(c.opts.Will.UserProperties) > 0 {
+					pkt.WillProperties.User = make([]v5.User, 0, len(c.opts.Will.UserProperties))
+					for k, v := range c.opts.Will.UserProperties {
+						pkt.WillProperties.User = append(pkt.WillProperties.User, v5.User{Key: k, Value: v})
+					}
+				}
+			}
 		}
 
-		if c.opts.SessionExpiry > 0 {
+		// Set v5 Connect properties
+		if c.opts.SessionExpiry > 0 || c.opts.ReceiveMaximum > 0 ||
+			c.opts.MaximumPacketSize > 0 || c.opts.TopicAliasMaximum > 0 ||
+			c.opts.RequestResponseInfo || !c.opts.RequestProblemInfo {
 			if pkt.Properties == nil {
 				pkt.Properties = &v5.ConnectProperties{}
 			}
-			pkt.Properties.SessionExpiryInterval = &c.opts.SessionExpiry
+
+			if c.opts.SessionExpiry > 0 {
+				pkt.Properties.SessionExpiryInterval = &c.opts.SessionExpiry
+			}
+
+			if c.opts.ReceiveMaximum > 0 {
+				pkt.Properties.ReceiveMaximum = &c.opts.ReceiveMaximum
+			}
+
+			if c.opts.MaximumPacketSize > 0 {
+				pkt.Properties.MaximumPacketSize = &c.opts.MaximumPacketSize
+			}
+
+			if c.opts.TopicAliasMaximum > 0 {
+				pkt.Properties.TopicAliasMaximum = &c.opts.TopicAliasMaximum
+			}
+
+			if c.opts.RequestResponseInfo {
+				one := byte(1)
+				pkt.Properties.RequestResponseInfo = &one
+			}
+
+			// RequestProblemInfo defaults to true, only set if explicitly false
+			if !c.opts.RequestProblemInfo {
+				zero := byte(0)
+				pkt.Properties.RequestProblemInfo = &zero
+			}
 		}
 
 		return pkt.Pack(conn)
@@ -255,6 +331,24 @@ func (c *Client) readConnAck(conn net.Conn) (ConnAckCode, error) {
 		if !ok {
 			return 0, ErrUnexpectedPacket
 		}
+
+		// Parse and store server capabilities
+		caps := parseConnAckProperties(ack.Properties)
+		c.serverCapsMu.Lock()
+		c.serverCaps = caps
+		c.serverCapsMu.Unlock()
+
+		// Initialize topic alias manager with server's limits
+		c.topicAliases = newTopicAliasManager(
+			c.opts.TopicAliasMaximum, // client accepts from server
+			caps.TopicAliasMaximum,   // server accepts from client
+		)
+
+		// Invoke callback if set
+		if c.opts.OnServerCapabilities != nil {
+			c.opts.OnServerCapabilities(caps)
+		}
+
 		return ConnAckCode(ack.ReasonCode), nil
 	}
 
@@ -271,12 +365,22 @@ func (c *Client) readConnAck(conn net.Conn) (ConnAckCode, error) {
 
 // Disconnect gracefully disconnects from the broker.
 func (c *Client) Disconnect() error {
+	return c.DisconnectWithReason(0, 0, "")
+}
+
+// DisconnectWithReason disconnects with an optional reason code (MQTT 5.0).
+// For MQTT 3.1.1, reasonCode and sessionExpiry are ignored.
+// Parameters:
+//   - reasonCode: MQTT 5.0 disconnect reason (0 = normal disconnect)
+//   - sessionExpiry: Update session expiry interval (0 = use current value, ignored if 0)
+//   - reasonString: Human-readable reason (empty = no reason string)
+func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) error {
 	if !c.state.transition(StateConnected, StateDisconnecting) {
 		return nil
 	}
 
 	c.stopKeepAlive()
-	c.sendDisconnect()
+	c.sendDisconnectWithReason(reasonCode, sessionExpiry, reasonString)
 	c.cleanup(nil)
 	c.state.set(StateDisconnected)
 
@@ -284,6 +388,10 @@ func (c *Client) Disconnect() error {
 }
 
 func (c *Client) sendDisconnect() {
+	c.sendDisconnectWithReason(0, 0, "")
+}
+
+func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -297,7 +405,22 @@ func (c *Client) sendDisconnect() {
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.Disconnect{
 			FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
+			ReasonCode:  reasonCode,
 		}
+
+		// Add properties if specified
+		if sessionExpiry > 0 || reasonString != "" {
+			pkt.Properties = &v5.DisconnectProperties{}
+
+			if sessionExpiry > 0 {
+				pkt.Properties.SessionExpiryInterval = &sessionExpiry
+			}
+
+			if reasonString != "" {
+				pkt.Properties.ReasonString = reasonString
+			}
+		}
+
 		pkt.Pack(conn)
 	} else {
 		pkt := &v3.Disconnect{
@@ -340,6 +463,11 @@ func (c *Client) cleanup(err error) {
 	c.qos2IncomingMu.Lock()
 	c.qos2Incoming = make(map[uint16]*Message)
 	c.qos2IncomingMu.Unlock()
+
+	// Reset topic aliases
+	if c.topicAliases != nil {
+		c.topicAliases.reset()
+	}
 }
 
 // IsConnected returns true if the client is connected.
@@ -421,6 +549,23 @@ func (c *Client) sendPublish(msg *Message, packetID uint16) error {
 			Payload:   msg.Payload,
 			ID:        packetID,
 		}
+
+		// Apply topic alias if available
+		if c.topicAliases != nil {
+			if alias, isNew, ok := c.topicAliases.getOrAssignOutbound(msg.Topic); ok {
+				if pkt.Properties == nil {
+					pkt.Properties = &v5.PublishProperties{}
+				}
+				pkt.Properties.TopicAlias = &alias
+
+				// If using existing alias, clear topic name to save bandwidth
+				if !isNew {
+					pkt.TopicName = ""
+				}
+				// If new alias, send both topic and alias for registration
+			}
+		}
+
 		return pkt.Pack(conn)
 	}
 
@@ -471,6 +616,34 @@ func (c *Client) SubscribeSingle(topic string, qos byte) error {
 	return c.Subscribe(map[string]byte{topic: qos})
 }
 
+// SubscribeWithOptions subscribes with advanced MQTT 5.0 options.
+// For MQTT 3.1.1 connections, advanced options are ignored.
+func (c *Client) SubscribeWithOptions(opts ...*SubscribeOption) error {
+	if !c.state.isConnected() {
+		return ErrNotConnected
+	}
+	if len(opts) == 0 {
+		return ErrInvalidTopic
+	}
+
+	packetID := c.pending.nextPacketID()
+	if packetID == 0 {
+		return ErrMaxInflight
+	}
+
+	op, err := c.pending.add(packetID, pendingSubscribe, nil)
+	if err != nil {
+		return err
+	}
+
+	if err := c.sendSubscribeWithOptions(packetID, opts); err != nil {
+		c.pending.remove(packetID)
+		return err
+	}
+
+	return op.wait(c.opts.AckTimeout)
+}
+
 func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
 	c.connMu.RLock()
 	conn := c.conn
@@ -499,6 +672,74 @@ func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
 	ts := make([]v3.Topic, 0, len(topics))
 	for topic, qos := range topics {
 		ts = append(ts, v3.Topic{Name: topic, QoS: qos})
+	}
+	pkt := &v3.Subscribe{
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+		ID:          packetID,
+		Topics:      ts,
+	}
+	c.updateActivity()
+	return pkt.Pack(conn)
+}
+
+func (c *Client) sendSubscribeWithOptions(packetID uint16, opts []*SubscribeOption) error {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil {
+		return ErrNotConnected
+	}
+
+	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
+	defer conn.SetWriteDeadline(time.Time{})
+
+	if c.opts.ProtocolVersion == 5 {
+		v5Opts := make([]v5.SubOption, len(opts))
+		for i, opt := range opts {
+			v5Opts[i] = v5.SubOption{
+				Topic:  opt.Topic,
+				MaxQoS: opt.QoS,
+			}
+
+			// Set advanced options if specified
+			if opt.NoLocal {
+				noLocal := true
+				v5Opts[i].NoLocal = &noLocal
+			}
+
+			if opt.RetainAsPublished {
+				rap := true
+				v5Opts[i].RetainAsPublished = &rap
+			}
+
+			if opt.RetainHandling > 0 {
+				v5Opts[i].RetainHandling = &opt.RetainHandling
+			}
+		}
+
+		pkt := &v5.Subscribe{
+			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+			ID:          packetID,
+			Opts:        v5Opts,
+		}
+
+		// Use subscription identifier from first option (applies to all topics in this packet)
+		if len(opts) > 0 && opts[0].SubscriptionID > 0 {
+			subID := int(opts[0].SubscriptionID)
+			pkt.Properties = &v5.SubscribeProperties{
+				SubscriptionIdentifier: &subID,
+			}
+		}
+
+		c.updateActivity()
+		return pkt.Pack(conn)
+	}
+
+	// For MQTT 3.1.1, ignore advanced options
+	ts := make([]v3.Topic, len(opts))
+	for i, opt := range opts {
+		ts[i] = v3.Topic{Name: opt.Topic, QoS: opt.QoS}
 	}
 	pkt := &v3.Subscribe{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
@@ -633,13 +874,54 @@ func (c *Client) handlePublish(pkt packets.ControlPacket) {
 
 	if c.opts.ProtocolVersion == 5 {
 		p := pkt.(*v5.Publish)
+
+		topic := p.TopicName
+
+		// Handle topic alias
+		if c.topicAliases != nil && p.Properties != nil && p.Properties.TopicAlias != nil {
+			alias := *p.Properties.TopicAlias
+
+			if topic != "" {
+				// Server sent both topic and alias - register the mapping
+				c.topicAliases.registerInbound(alias, topic)
+			} else {
+				// Server sent only alias - resolve it
+				var ok bool
+				topic, ok = c.topicAliases.resolveInbound(alias)
+				if !ok {
+					// Unknown alias - protocol error, ignore message
+					return
+				}
+			}
+		}
+
 		msg = &Message{
-			Topic:    p.TopicName,
+			Topic:    topic,
 			Payload:  p.Payload,
 			QoS:      p.QoS,
 			Retain:   p.Retain,
 			Dup:      p.Dup,
 			PacketID: p.ID,
+		}
+
+		// Parse v5 properties
+		if p.Properties != nil {
+			msg.PayloadFormat = p.Properties.PayloadFormat
+			msg.MessageExpiry = p.Properties.MessageExpiry
+			msg.ContentType = p.Properties.ContentType
+			msg.ResponseTopic = p.Properties.ResponseTopic
+			msg.CorrelationData = p.Properties.CorrelationData
+
+			if len(p.Properties.User) > 0 {
+				msg.UserProperties = make(map[string]string, len(p.Properties.User))
+				for _, u := range p.Properties.User {
+					msg.UserProperties[u.Key] = u.Value
+				}
+			}
+
+			if p.Properties.SubscriptionID != nil {
+				msg.SubscriptionIDs = []uint32{uint32(*p.Properties.SubscriptionID)}
+			}
 		}
 	} else {
 		p := pkt.(*v3.Publish)
@@ -978,4 +1260,13 @@ func (c *Client) updateActivity() {
 	c.activityMu.Lock()
 	defer c.activityMu.Unlock()
 	c.lastActivity = time.Now().UTC()
+}
+
+// ServerCapabilities returns the capabilities advertised by the server
+// in the CONNACK packet. This is only available for MQTT 5.0 connections.
+// Returns nil if not connected or using MQTT 3.1.1.
+func (c *Client) ServerCapabilities() *ServerCapabilities {
+	c.serverCapsMu.RLock()
+	defer c.serverCapsMu.RUnlock()
+	return c.serverCaps
 }

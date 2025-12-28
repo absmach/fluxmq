@@ -110,6 +110,76 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
   - 57 unit tests covering all components (100% pass rate)
   - Files: `client/client.go`, `client/options.go`, `client/state.go`, `client/pending.go`, `client/message.go`, `client/store.go`, `client/errors.go`
 
+### ✅ Recently Completed (2025-12-28)
+
+- **MQTT 5.0 Client Enhancements** - Full v5 feature implementation in client package
+  - **CONNACK Property Handling** - Parse and expose server capabilities
+    - Created `ServerCapabilities` struct with all CONNACK properties
+    - Automatic parsing on connection with `OnServerCapabilities` callback
+    - Accessor method `client.ServerCapabilities()` for querying server limits
+    - 4 unit tests validating property parsing
+
+  - **Advanced Connect Properties** - Client capability advertisement
+    - `ReceiveMaximum` - Maximum inflight messages client accepts
+    - `MaximumPacketSize` - Maximum packet size client accepts
+    - `TopicAliasMaximum` - Maximum topic aliases client accepts
+    - `RequestResponseInfo` - Request response information from server
+    - `RequestProblemInfo` - Request detailed error information (default true)
+    - Builder methods: `SetReceiveMaximum()`, `SetMaximumPacketSize()`, `SetTopicAliasMaximum()`, etc.
+    - 4 unit tests for options configuration
+
+  - **Topic Aliases with Automatic Management** - Bandwidth optimization
+    - Bidirectional alias support (client ↔ server)
+    - Automatic outbound alias assignment for frequently used topics
+    - Respects server's `TopicAliasMaximum` from CONNACK
+    - Thread-safe alias manager with RWMutex protection
+    - Automatic reset on disconnect
+    - 11 comprehensive unit tests (assignment, limits, concurrency, etc.)
+
+  - **Advanced Subscribe Options** - Enhanced subscription control
+    - `NoLocal` - Don't receive own published messages
+    - `RetainAsPublished` - Preserve RETAIN flag as published
+    - `RetainHandling` - Control retained message delivery (0/1/2)
+    - `SubscriptionID` - Identifier for tracking subscriptions
+    - New `SubscribeWithOptions()` method accepting `SubscribeOption` objects
+    - Builder pattern: `NewSubscribeOption(topic, qos).SetNoLocal(true).SetRetainHandling(1)`
+    - 7 unit tests for subscription options
+
+  - **Disconnect Enhancements** - Graceful disconnect with metadata
+    - New `DisconnectWithReason(reasonCode, sessionExpiry, reasonString)` method
+    - Supports MQTT 5.0 reason codes (0 = normal disconnect)
+    - Allows updating session expiry on disconnect
+    - Optional human-readable reason string
+    - Backward compatible (existing `Disconnect()` uses defaults)
+
+  - **Enhanced Will Properties** - Advanced last will and testament
+    - `WillDelayInterval` - Delay before sending will message
+    - `PayloadFormat` - UTF-8 indicator (0=bytes, 1=UTF-8)
+    - `MessageExpiry` - Will message lifetime in seconds
+    - `ContentType` - MIME type of will payload
+    - `ResponseTopic` - Response topic for request/response
+    - `CorrelationData` - Correlation data for request/response
+    - `UserProperties` - User-defined key-value pairs
+    - All properties set via enhanced `WillMessage` struct fields
+
+  - **Subscription Identifiers** - Track subscription sources
+    - Numeric identifiers included in SUBSCRIBE packets
+    - Server echoes identifiers in matching PUBLISH packets
+    - Helps clients determine which subscription(s) triggered a message
+    - Accessible via `Message.SubscriptionIDs` array
+    - Set via `SubscribeOption.SetSubscriptionID(id)`
+
+  - **Message Property Parsing** - Full v5 PUBLISH property support
+    - All incoming message properties parsed and exposed
+    - `PayloadFormat`, `MessageExpiry`, `ContentType`
+    - `ResponseTopic`, `CorrelationData`, `UserProperties`
+    - `SubscriptionIDs` for subscription tracking
+    - Properties available in `Message` struct for OnMessage callback
+
+  - **Test Coverage**: 90+ unit tests, 44% code coverage, 100% pass rate
+  - **New Files**: `client/capabilities.go`, `client/topicalias.go`, `client/subscribe.go`
+  - **Modified Files**: `client/client.go`, `client/options.go`, `client/message.go`
+
 ### ✅ Previously Completed (2025-12-24)
 
 - **QoS 2 Cross-Node Routing** - Fixed missing `Publish()` call in QoS 2 PUBLISH handler (both V3 and V5)
