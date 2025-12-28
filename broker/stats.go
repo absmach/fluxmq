@@ -48,7 +48,6 @@ func NewStats() *Stats {
 	}
 }
 
-// Connection tracking.
 func (s *Stats) IncrementConnections() {
 	s.totalConnections.Add(1)
 	s.currentConnections.Add(1)
@@ -71,7 +70,6 @@ func (s *Stats) GetDisconnections() uint64 {
 	return s.disconnections.Load()
 }
 
-// Message tracking.
 func (s *Stats) IncrementMessagesReceived() {
 	s.messagesReceived.Add(1)
 }
@@ -106,7 +104,6 @@ func (s *Stats) GetPublishSent() uint64 {
 	return s.publishSent.Load()
 }
 
-// Byte tracking.
 func (s *Stats) AddBytesReceived(n uint64) {
 	s.bytesReceived.Add(n)
 }
@@ -123,7 +120,6 @@ func (s *Stats) GetBytesSent() uint64 {
 	return s.bytesSent.Load()
 }
 
-// Subscription tracking.
 func (s *Stats) IncrementSubscriptions() {
 	s.subscriptions.Add(1)
 }
@@ -137,13 +133,10 @@ func (s *Stats) GetSubscriptions() uint64 {
 	return s.subscriptions.Load()
 }
 
-// Retained message tracking
-
 func (s *Stats) GetRetainedMessages() uint64 {
 	return s.retainedMessages.Load()
 }
 
-// Error tracking.
 func (s *Stats) IncrementProtocolErrors() {
 	s.protocolErrors.Add(1)
 }
@@ -176,7 +169,6 @@ func (s *Stats) GetPacketErrors() uint64 {
 	return s.packetErrors.Load()
 }
 
-// Uptime.
 func (s *Stats) GetUptime() time.Duration {
 	return time.Since(s.startTime)
 }
