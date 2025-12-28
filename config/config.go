@@ -115,6 +115,12 @@ type EtcdConfig struct {
 	ClientAddr     string `yaml:"client_addr"`     // Client address (e.g., "0.0.0.0:2379")
 	InitialCluster string `yaml:"initial_cluster"` // "node1=http://host1:2380,node2=http://host2:2380"
 	Bootstrap      bool   `yaml:"bootstrap"`       // true only for first node
+
+	// Hybrid retained message storage threshold (in bytes)
+	// Messages smaller than this are replicated to all nodes via etcd
+	// Messages larger than this are stored on owner node and fetched on-demand via gRPC
+	// Default: 1024 (1KB)
+	HybridRetainedSizeThreshold int `yaml:"hybrid_retained_size_threshold"`
 }
 
 // TransportConfig holds inter-broker transport configuration.

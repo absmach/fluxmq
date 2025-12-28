@@ -244,3 +244,139 @@ func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode
 
 	return resp.SessionState, nil
 }
+
+// FetchRetained implements BrokerServiceServer.FetchRetained.
+// This is called by peer brokers to fetch a retained message payload from the local store.
+func (t *Transport) FetchRetained(ctx context.Context, req *grpc.FetchRetainedRequest) (*grpc.FetchRetainedResponse, error) {
+	if t.handler == nil {
+		return &grpc.FetchRetainedResponse{
+			Found: false,
+			Error: "no handler configured",
+		}, nil
+	}
+
+	// Get retained message from local storage via handler
+	msg, err := t.handler.GetRetainedMessage(ctx, req.Topic)
+	if err != nil {
+		return &grpc.FetchRetainedResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	// Message not found
+	if msg == nil {
+		return &grpc.FetchRetainedResponse{
+			Found: false,
+		}, nil
+	}
+
+	// Convert storage.Message to grpc.RetainedMessage
+	grpcMsg := &grpc.RetainedMessage{
+		Topic:      msg.Topic,
+		Payload:    msg.Payload,
+		Qos:        uint32(msg.QoS),
+		Retain:     msg.Retain,
+		Properties: msg.Properties,
+		Timestamp:  msg.PublishTime.Unix(),
+	}
+
+	return &grpc.FetchRetainedResponse{
+		Found:   true,
+		Message: grpcMsg,
+	}, nil
+}
+
+// SendFetchRetained fetches a retained message from a peer node.
+func (t *Transport) SendFetchRetained(ctx context.Context, nodeID, topic string) (*grpc.RetainedMessage, error) {
+	client, err := t.GetPeerClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &grpc.FetchRetainedRequest{
+		Topic: topic,
+	}
+
+	resp, err := client.FetchRetained(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("grpc call failed: %w", err)
+	}
+
+	if resp.Error != "" {
+		return nil, fmt.Errorf("fetch failed: %s", resp.Error)
+	}
+
+	if !resp.Found {
+		return nil, nil // Message not found (not an error)
+	}
+
+	return resp.Message, nil
+}
+
+// FetchWill handles incoming requests to fetch a will message from this node.
+func (t *Transport) FetchWill(ctx context.Context, req *grpc.FetchWillRequest) (*grpc.FetchWillResponse, error) {
+	if t.handler == nil {
+		return &grpc.FetchWillResponse{
+			Found: false,
+			Error: "no handler configured",
+		}, nil
+	}
+
+	// Get will message from local storage via handler
+	will, err := t.handler.GetWillMessage(ctx, req.ClientId)
+	if err != nil {
+		return &grpc.FetchWillResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	// Will message not found
+	if will == nil {
+		return &grpc.FetchWillResponse{
+			Found: false,
+		}, nil
+	}
+
+	// Convert storage.WillMessage to grpc.WillMessage
+	grpcWill := &grpc.WillMessage{
+		Topic:   will.Topic,
+		Payload: will.Payload,
+		Qos:     uint32(will.QoS),
+		Retain:  will.Retain,
+		Delay:   will.Delay,
+	}
+
+	return &grpc.FetchWillResponse{
+		Found:   true,
+		Message: grpcWill,
+	}, nil
+}
+
+// SendFetchWill fetches a will message from a peer node.
+func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) (*grpc.WillMessage, error) {
+	client, err := t.GetPeerClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &grpc.FetchWillRequest{
+		ClientId: clientID,
+	}
+
+	resp, err := client.FetchWill(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("grpc call failed: %w", err)
+	}
+
+	if resp.Error != "" {
+		return nil, fmt.Errorf("fetch failed: %s", resp.Error)
+	}
+
+	if !resp.Found {
+		return nil, nil // Will message not found (not an error)
+	}
+
+	return resp.Message, nil
+}

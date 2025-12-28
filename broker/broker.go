@@ -1382,6 +1382,24 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	return state, nil
 }
 
+// GetRetainedMessage implements cluster.MessageHandler.GetRetainedMessage.
+// Fetches a retained message from the local storage for remote node requests.
+func (b *Broker) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+	if b.retained == nil {
+		return nil, fmt.Errorf("retained store not configured")
+	}
+	return b.retained.Get(ctx, topic)
+}
+
+// GetWillMessage implements cluster.MessageHandler.GetWillMessage.
+// Fetches a will message from the local storage for remote node requests.
+func (b *Broker) GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+	if b.wills == nil {
+		return nil, fmt.Errorf("will store not configured")
+	}
+	return b.wills.Get(ctx, clientID)
+}
+
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.
 func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error {
 	s := b.Get(clientID)

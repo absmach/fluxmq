@@ -11,6 +11,14 @@ service BrokerService {
 
   // TakeoverSession migrates a session from one broker to another.
   rpc TakeoverSession(TakeoverRequest) returns (TakeoverResponse);
+
+  // FetchRetained fetches a retained message payload from the owning broker node.
+  // Used when a large retained message (above threshold) needs to be delivered to a subscriber on a different node.
+  rpc FetchRetained(FetchRetainedRequest) returns (FetchRetainedResponse);
+
+  // FetchWill fetches a will message payload from the owning broker node.
+  // Used when a large will message (above threshold) needs to be published after client disconnect.
+  rpc FetchWill(FetchWillRequest) returns (FetchWillResponse);
 }
 
 // PublishRequest contains a serialized PUBLISH packet to route to a client.
@@ -97,4 +105,38 @@ message TakeoverResponse {
 
   // Session state transferred from the old node
   SessionState session_state = 3;
+}
+
+// FetchRetainedRequest requests a retained message from the owning node.
+message FetchRetainedRequest {
+  string topic = 1;  // Topic of the retained message to fetch
+}
+
+// RetainedMessage represents a complete retained message with all properties.
+message RetainedMessage {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  map<string, string> properties = 5;  // MQTT v5 properties
+  int64 timestamp = 6;                 // When the message was retained
+}
+
+// FetchRetainedResponse returns the retained message if found.
+message FetchRetainedResponse {
+  bool found = 1;                         // True if message exists
+  RetainedMessage message = 2;            // The retained message (only if found=true)
+  string error = 3;                       // Error message if request failed
+}
+
+// FetchWillRequest requests a will message from the owning node.
+message FetchWillRequest {
+  string client_id = 1;  // Client ID whose will message to fetch
+}
+
+// FetchWillResponse returns the will message if found.
+message FetchWillResponse {
+  bool found = 1;            // True if will message exists
+  WillMessage message = 2;   // The will message (only if found=true)
+  string error = 3;          // Error message if request failed
 }

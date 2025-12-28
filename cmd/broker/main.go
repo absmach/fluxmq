@@ -39,7 +39,7 @@ func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
 		return nil, nil
 	}
 
-	// Load server certificate and key
+
 	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load server certificate: %w", err)
@@ -57,7 +57,7 @@ func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
 		PreferServerCipherSuites: true,
 	}
 
-	// Configure client certificate authentication if needed
+
 	if cfg.TLSClientAuth != "none" && cfg.TLSCAFile != "" {
 		caCert, err := os.ReadFile(cfg.TLSCAFile)
 		if err != nil {
@@ -85,18 +85,18 @@ func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
 }
 
 func main() {
-	// Parse command-line flags
+
 	configFile := flag.String("config", "", "Path to configuration file")
 	flag.Parse()
 
-	// Load configuration
+
 	cfg, err := config.Load(*configFile)
 	if err != nil {
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
 
-	// Setup logging
+
 	logLevel := slog.LevelInfo
 	switch cfg.Log.Level {
 	case "debug":
@@ -126,7 +126,7 @@ func main() {
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
 
-	// Initialize storage backend
+
 	var store storage.Store
 	switch cfg.Storage.Type {
 	case "memory":
@@ -148,24 +148,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize cluster coordination
+
 	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
 	if cfg.Cluster.Enabled {
-		// Create embedded etcd cluster
+
 		etcdCfg := &cluster.EtcdConfig{
-			NodeID:         cfg.Cluster.NodeID,
-			DataDir:        cfg.Cluster.Etcd.DataDir,
-			BindAddr:       cfg.Cluster.Etcd.BindAddr,
-			ClientAddr:     cfg.Cluster.Etcd.ClientAddr,
-			AdvertiseAddr:  cfg.Cluster.Etcd.BindAddr, // Use bind addr as advertise for now
-			InitialCluster: cfg.Cluster.Etcd.InitialCluster,
-			Bootstrap:      cfg.Cluster.Etcd.Bootstrap,
-			TransportAddr:  cfg.Cluster.Transport.BindAddr,
-			PeerTransports: cfg.Cluster.Transport.Peers,
+			NodeID:                      cfg.Cluster.NodeID,
+			DataDir:                     cfg.Cluster.Etcd.DataDir,
+			BindAddr:                    cfg.Cluster.Etcd.BindAddr,
+			ClientAddr:                  cfg.Cluster.Etcd.ClientAddr,
+			AdvertiseAddr:               cfg.Cluster.Etcd.BindAddr, // Use bind addr as advertise for now
+			InitialCluster:              cfg.Cluster.Etcd.InitialCluster,
+			Bootstrap:                   cfg.Cluster.Etcd.Bootstrap,
+			TransportAddr:               cfg.Cluster.Transport.BindAddr,
+			PeerTransports:              cfg.Cluster.Transport.Peers,
+			HybridRetainedSizeThreshold: cfg.Cluster.Etcd.HybridRetainedSizeThreshold,
 		}
 
-		ec, err := cluster.NewEtcdCluster(etcdCfg, logger)
+		ec, err := cluster.NewEtcdCluster(etcdCfg, store, logger)
 		if err != nil {
 			slog.Error("Failed to initialize etcd cluster", "error", err)
 			os.Exit(1)
@@ -174,7 +175,7 @@ func main() {
 		cl = etcdCluster
 		defer cl.Stop()
 
-		// Start cluster (campaign for leadership)
+
 		if err := cl.Start(); err != nil {
 			slog.Error("Failed to start cluster", "error", err)
 			os.Exit(1)
@@ -185,18 +186,18 @@ func main() {
 			"etcd_data_dir", cfg.Cluster.Etcd.DataDir,
 			"etcd_bind", cfg.Cluster.Etcd.BindAddr)
 	} else {
-		// Single-node mode with noop cluster
+
 		cl = cluster.NewNoopCluster(cfg.Cluster.NodeID)
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
-	// Initialize webhooks if enabled
+
 	var webhooks broker.Notifier
 	if cfg.Webhook.Enabled {
-		// Create HTTP sender
+
 		sender := webhook.NewHTTPSender()
 
-		// Create notifier with HTTP sender
+
 		wh, err := webhook.NewNotifier(cfg.Webhook, cfg.Cluster.NodeID, sender, logger)
 		if err != nil {
 			slog.Error("Failed to initialize webhooks", "error", err)
@@ -212,13 +213,13 @@ func main() {
 		slog.Info("Webhooks disabled")
 	}
 
-	// Initialize OpenTelemetry if metrics enabled
+
 	var otelShutdown func(context.Context) error
 	var metrics *otel.Metrics
 	var tracer trace.Tracer
 
 	if cfg.Server.MetricsEnabled {
-		// Initialize OTel SDK (traces and metrics)
+
 		shutdown, err := otel.InitProvider(cfg.Server, cfg.Cluster.NodeID)
 		if err != nil {
 			slog.Error("Failed to initialize OpenTelemetry", "error", err)
@@ -227,7 +228,7 @@ func main() {
 		otelShutdown = shutdown
 		slog.Info("OpenTelemetry initialized", "endpoint", cfg.Server.MetricsAddr)
 
-		// Create metrics instance
+
 		if cfg.Server.OtelMetricsEnabled {
 			m, err := otel.NewMetrics()
 			if err != nil {
@@ -238,7 +239,7 @@ func main() {
 			slog.Info("OTel metrics enabled")
 		}
 
-		// Get tracer if tracing is enabled
+
 		if cfg.Server.OtelTracesEnabled {
 			tracer = oteltrace.Tracer("mqtt-broker")
 			slog.Info("Distributed tracing enabled", "sample_rate", cfg.Server.OtelTraceSampleRate)
@@ -249,7 +250,7 @@ func main() {
 		slog.Info("OpenTelemetry disabled")
 	}
 
-	// Create core broker with storage, cluster, logger, metrics, and webhooks
+
 	stats := broker.NewStats()
 	b := broker.NewBroker(store, cl, logger, stats, webhooks, metrics, tracer)
 	defer b.Close()
@@ -260,21 +261,21 @@ func main() {
 		etcdCluster.SetMessageHandler(b)
 	}
 
-	// Context for graceful shutdown
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var wg sync.WaitGroup
 	serverErr := make(chan error, 10)
 
-	// Build TLS configuration if enabled
+
 	tlsConfig, err := buildTLSConfig(&cfg.Server)
 	if err != nil {
 		slog.Error("Failed to build TLS configuration", "error", err)
 		os.Exit(1)
 	}
 
-	// Start TCP server (always enabled)
+
 	tcpCfg := tcp.Config{
 		Address:         cfg.Server.TCPAddr,
 		TLSConfig:       tlsConfig,
@@ -295,7 +296,7 @@ func main() {
 		}
 	}()
 
-	// Start HTTP-MQTT bridge if enabled
+
 	if cfg.Server.HTTPEnabled {
 		httpCfg := http.Config{
 			Address:         cfg.Server.HTTPAddr,
@@ -313,7 +314,7 @@ func main() {
 		}()
 	}
 
-	// Start WebSocket server if enabled
+
 	if cfg.Server.WSEnabled {
 		wsCfg := websocket.Config{
 			Address:         cfg.Server.WSAddr,
@@ -333,7 +334,7 @@ func main() {
 		}()
 	}
 
-	// Start CoAP server if enabled
+
 	if cfg.Server.CoAPEnabled {
 		coapCfg := coap.Config{
 			Address:         cfg.Server.CoAPAddr,
@@ -351,7 +352,7 @@ func main() {
 		}()
 	}
 
-	// Start health check server if enabled
+
 	if cfg.Server.HealthEnabled {
 		healthCfg := health.Config{
 			Address:         cfg.Server.HealthAddr,
@@ -371,7 +372,7 @@ func main() {
 
 	slog.Info("MQTT broker started successfully")
 
-	// Wait for shutdown signal or server error
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -382,16 +383,16 @@ func main() {
 		slog.Error("Server error", "error", err)
 	}
 
-	// Perform shutdown
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
 
-	// Shutdown broker (drain connections, transfer sessions)
+
 	if err := b.Shutdown(shutdownCtx, cfg.Server.ShutdownTimeout); err != nil {
 		slog.Error("Error during shutdown", "error", err)
 	}
 
-	// Shutdown OpenTelemetry
+
 	if otelShutdown != nil {
 		otelShutdownCtx, otelCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer otelCancel()
@@ -402,10 +403,10 @@ func main() {
 		}
 	}
 
-	// Cancel server contexts to stop accepting new connections
+
 	cancel()
 
-	// Wait for all servers to stop
+
 	wg.Wait()
 	slog.Info("MQTT broker stopped")
 }

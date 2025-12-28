@@ -188,7 +188,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		Bootstrap:      bootstrap,
 	}
 
-	clust, err := cluster.NewEtcdCluster(clusterCfg, nullLogger)
+	clust, err := cluster.NewEtcdCluster(clusterCfg, store, nullLogger)
 	if err != nil {
 		store.Close()
 		return fmt.Errorf("failed to create cluster: %w", err)

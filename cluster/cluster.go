@@ -120,6 +120,8 @@ type NodeInfo struct {
 // This interface is implemented by the broker to handle cluster operations:
 // - Delivering messages routed from other nodes
 // - Providing session state during takeover
+// - Fetching retained messages from local storage
+// - Fetching will messages from local storage
 type MessageHandler interface {
 	// DeliverToClient delivers a message to a local MQTT client.
 	// This is called when a message is routed from another broker node.
@@ -129,4 +131,14 @@ type MessageHandler interface {
 	// This is called when another node is taking over the session.
 	// Returns nil if the session doesn't exist on this node.
 	GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error)
+
+	// GetRetainedMessage fetches a retained message from the local store.
+	// This is called when another node requests a large retained message payload.
+	// Returns (nil, nil) if the message doesn't exist.
+	GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error)
+
+	// GetWillMessage fetches a will message from the local store.
+	// This is called when another node requests a large will message payload.
+	// Returns (nil, nil) if the message doesn't exist.
+	GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error)
 }

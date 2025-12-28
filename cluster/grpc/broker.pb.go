@@ -679,6 +679,303 @@ func (x *TakeoverResponse) GetSessionState() *SessionState {
 	return nil
 }
 
+// FetchRetainedRequest requests a retained message from the owning node.
+type FetchRetainedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"` // Topic of the retained message to fetch
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchRetainedRequest) Reset() {
+	*x = FetchRetainedRequest{}
+	mi := &file_broker_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchRetainedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchRetainedRequest) ProtoMessage() {}
+
+func (x *FetchRetainedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchRetainedRequest.ProtoReflect.Descriptor instead.
+func (*FetchRetainedRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *FetchRetainedRequest) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+// RetainedMessage represents a complete retained message with all properties.
+type RetainedMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
+	Qos           uint32                 `protobuf:"varint,3,opt,name=qos,proto3" json:"qos,omitempty"`
+	Retain        bool                   `protobuf:"varint,4,opt,name=retain,proto3" json:"retain,omitempty"`
+	Properties    map[string]string      `protobuf:"bytes,5,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // MQTT v5 properties
+	Timestamp     int64                  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                                            // When the message was retained
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetainedMessage) Reset() {
+	*x = RetainedMessage{}
+	mi := &file_broker_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetainedMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetainedMessage) ProtoMessage() {}
+
+func (x *RetainedMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetainedMessage.ProtoReflect.Descriptor instead.
+func (*RetainedMessage) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RetainedMessage) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *RetainedMessage) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *RetainedMessage) GetQos() uint32 {
+	if x != nil {
+		return x.Qos
+	}
+	return 0
+}
+
+func (x *RetainedMessage) GetRetain() bool {
+	if x != nil {
+		return x.Retain
+	}
+	return false
+}
+
+func (x *RetainedMessage) GetProperties() map[string]string {
+	if x != nil {
+		return x.Properties
+	}
+	return nil
+}
+
+func (x *RetainedMessage) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+// FetchRetainedResponse returns the retained message if found.
+type FetchRetainedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`    // True if message exists
+	Message       *RetainedMessage       `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"` // The retained message (only if found=true)
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`     // Error message if request failed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchRetainedResponse) Reset() {
+	*x = FetchRetainedResponse{}
+	mi := &file_broker_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchRetainedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchRetainedResponse) ProtoMessage() {}
+
+func (x *FetchRetainedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchRetainedResponse.ProtoReflect.Descriptor instead.
+func (*FetchRetainedResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *FetchRetainedResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *FetchRetainedResponse) GetMessage() *RetainedMessage {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+func (x *FetchRetainedResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// FetchWillRequest requests a will message from the owning node.
+type FetchWillRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"` // Client ID whose will message to fetch
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchWillRequest) Reset() {
+	*x = FetchWillRequest{}
+	mi := &file_broker_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchWillRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchWillRequest) ProtoMessage() {}
+
+func (x *FetchWillRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchWillRequest.ProtoReflect.Descriptor instead.
+func (*FetchWillRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *FetchWillRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+// FetchWillResponse returns the will message if found.
+type FetchWillResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`    // True if will message exists
+	Message       *WillMessage           `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"` // The will message (only if found=true)
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`     // Error message if request failed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchWillResponse) Reset() {
+	*x = FetchWillResponse{}
+	mi := &file_broker_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchWillResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchWillResponse) ProtoMessage() {}
+
+func (x *FetchWillResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchWillResponse.ProtoReflect.Descriptor instead.
+func (*FetchWillResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *FetchWillResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *FetchWillResponse) GetMessage() *WillMessage {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+func (x *FetchWillResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_broker_proto protoreflect.FileDescriptor
 
 const file_broker_proto_rawDesc = "" +
@@ -738,10 +1035,36 @@ const file_broker_proto_rawDesc = "" +
 	"\x10TakeoverResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12:\n" +
-	"\rsession_state\x18\x03 \x01(\v2\x15.cluster.SessionStateR\fsessionState2\x9a\x01\n" +
+	"\rsession_state\x18\x03 \x01(\v2\x15.cluster.SessionStateR\fsessionState\",\n" +
+	"\x14FetchRetainedRequest\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\"\x92\x02\n" +
+	"\x0fRetainedMessage\x12\x14\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\x12\x10\n" +
+	"\x03qos\x18\x03 \x01(\rR\x03qos\x12\x16\n" +
+	"\x06retain\x18\x04 \x01(\bR\x06retain\x12H\n" +
+	"\n" +
+	"properties\x18\x05 \x03(\v2(.cluster.RetainedMessage.PropertiesEntryR\n" +
+	"properties\x12\x1c\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x1a=\n" +
+	"\x0fPropertiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"w\n" +
+	"\x15FetchRetainedResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x122\n" +
+	"\amessage\x18\x02 \x01(\v2\x18.cluster.RetainedMessageR\amessage\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"/\n" +
+	"\x10FetchWillRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\"o\n" +
+	"\x11FetchWillResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12.\n" +
+	"\amessage\x18\x02 \x01(\v2\x14.cluster.WillMessageR\amessage\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error2\xae\x02\n" +
 	"\rBrokerService\x12A\n" +
 	"\fRoutePublish\x12\x17.cluster.PublishRequest\x1a\x18.cluster.PublishResponse\x12F\n" +
-	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
+	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponse\x12N\n" +
+	"\rFetchRetained\x12\x1d.cluster.FetchRetainedRequest\x1a\x1e.cluster.FetchRetainedResponse\x12B\n" +
+	"\tFetchWill\x12\x19.cluster.FetchWillRequest\x1a\x1a.cluster.FetchWillResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
 
 var (
 	file_broker_proto_rawDescOnce sync.Once
@@ -755,35 +1078,48 @@ func file_broker_proto_rawDescGZIP() []byte {
 	return file_broker_proto_rawDescData
 }
 
-var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_broker_proto_goTypes = []any{
-	(*PublishRequest)(nil),   // 0: cluster.PublishRequest
-	(*PublishResponse)(nil),  // 1: cluster.PublishResponse
-	(*TakeoverRequest)(nil),  // 2: cluster.TakeoverRequest
-	(*SessionState)(nil),     // 3: cluster.SessionState
-	(*InflightMessage)(nil),  // 4: cluster.InflightMessage
-	(*QueuedMessage)(nil),    // 5: cluster.QueuedMessage
-	(*Subscription)(nil),     // 6: cluster.Subscription
-	(*WillMessage)(nil),      // 7: cluster.WillMessage
-	(*TakeoverResponse)(nil), // 8: cluster.TakeoverResponse
-	nil,                      // 9: cluster.PublishRequest.PropertiesEntry
+	(*PublishRequest)(nil),        // 0: cluster.PublishRequest
+	(*PublishResponse)(nil),       // 1: cluster.PublishResponse
+	(*TakeoverRequest)(nil),       // 2: cluster.TakeoverRequest
+	(*SessionState)(nil),          // 3: cluster.SessionState
+	(*InflightMessage)(nil),       // 4: cluster.InflightMessage
+	(*QueuedMessage)(nil),         // 5: cluster.QueuedMessage
+	(*Subscription)(nil),          // 6: cluster.Subscription
+	(*WillMessage)(nil),           // 7: cluster.WillMessage
+	(*TakeoverResponse)(nil),      // 8: cluster.TakeoverResponse
+	(*FetchRetainedRequest)(nil),  // 9: cluster.FetchRetainedRequest
+	(*RetainedMessage)(nil),       // 10: cluster.RetainedMessage
+	(*FetchRetainedResponse)(nil), // 11: cluster.FetchRetainedResponse
+	(*FetchWillRequest)(nil),      // 12: cluster.FetchWillRequest
+	(*FetchWillResponse)(nil),     // 13: cluster.FetchWillResponse
+	nil,                           // 14: cluster.PublishRequest.PropertiesEntry
+	nil,                           // 15: cluster.RetainedMessage.PropertiesEntry
 }
 var file_broker_proto_depIdxs = []int32{
-	9, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
-	4, // 1: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage
-	5, // 2: cluster.SessionState.queued_messages:type_name -> cluster.QueuedMessage
-	6, // 3: cluster.SessionState.subscriptions:type_name -> cluster.Subscription
-	7, // 4: cluster.SessionState.will:type_name -> cluster.WillMessage
-	3, // 5: cluster.TakeoverResponse.session_state:type_name -> cluster.SessionState
-	0, // 6: cluster.BrokerService.RoutePublish:input_type -> cluster.PublishRequest
-	2, // 7: cluster.BrokerService.TakeoverSession:input_type -> cluster.TakeoverRequest
-	1, // 8: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
-	8, // 9: cluster.BrokerService.TakeoverSession:output_type -> cluster.TakeoverResponse
-	8, // [8:10] is the sub-list for method output_type
-	6, // [6:8] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	14, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
+	4,  // 1: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage
+	5,  // 2: cluster.SessionState.queued_messages:type_name -> cluster.QueuedMessage
+	6,  // 3: cluster.SessionState.subscriptions:type_name -> cluster.Subscription
+	7,  // 4: cluster.SessionState.will:type_name -> cluster.WillMessage
+	3,  // 5: cluster.TakeoverResponse.session_state:type_name -> cluster.SessionState
+	15, // 6: cluster.RetainedMessage.properties:type_name -> cluster.RetainedMessage.PropertiesEntry
+	10, // 7: cluster.FetchRetainedResponse.message:type_name -> cluster.RetainedMessage
+	7,  // 8: cluster.FetchWillResponse.message:type_name -> cluster.WillMessage
+	0,  // 9: cluster.BrokerService.RoutePublish:input_type -> cluster.PublishRequest
+	2,  // 10: cluster.BrokerService.TakeoverSession:input_type -> cluster.TakeoverRequest
+	9,  // 11: cluster.BrokerService.FetchRetained:input_type -> cluster.FetchRetainedRequest
+	12, // 12: cluster.BrokerService.FetchWill:input_type -> cluster.FetchWillRequest
+	1,  // 13: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
+	8,  // 14: cluster.BrokerService.TakeoverSession:output_type -> cluster.TakeoverResponse
+	11, // 15: cluster.BrokerService.FetchRetained:output_type -> cluster.FetchRetainedResponse
+	13, // 16: cluster.BrokerService.FetchWill:output_type -> cluster.FetchWillResponse
+	13, // [13:17] is the sub-list for method output_type
+	9,  // [9:13] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_broker_proto_init() }
@@ -797,7 +1133,7 @@ func file_broker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_broker_proto_rawDesc), len(file_broker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

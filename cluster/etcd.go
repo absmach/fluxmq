@@ -61,28 +61,34 @@ type EtcdCluster struct {
 	subCache   map[string]*storage.Subscription // key: clientID|filter
 	subCacheMu sync.RWMutex
 
-	// Local retained message cache for fast wildcard matching
+	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
 	retainedCache   map[string]*storage.Message // key: topic
 	retainedCacheMu sync.RWMutex
+
+	// Hybrid storage
+	localStore     storage.Store  // BadgerDB for local payload storage
+	hybridRetained *RetainedStore // Hybrid retained store
+	hybridWill     *WillStore     // Hybrid will store
 
 	stopCh chan struct{}
 }
 
 // EtcdConfig holds embedded etcd configuration.
 type EtcdConfig struct {
-	NodeID         string
-	DataDir        string
-	BindAddr       string
-	ClientAddr     string
-	AdvertiseAddr  string
-	InitialCluster string
-	TransportAddr  string
-	PeerTransports map[string]string
-	Bootstrap      bool
+	NodeID                      string
+	DataDir                     string
+	BindAddr                    string
+	ClientAddr                  string
+	AdvertiseAddr               string
+	InitialCluster              string
+	TransportAddr               string
+	PeerTransports              map[string]string
+	Bootstrap                   bool
+	HybridRetainedSizeThreshold int // Size threshold in bytes for hybrid retained storage (default 1024)
 }
 
 // NewEtcdCluster creates a new embedded etcd cluster.
-func NewEtcdCluster(cfg *EtcdConfig, logger *slog.Logger) (*EtcdCluster, error) {
+func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logger) (*EtcdCluster, error) {
 	// Create embedded etcd configuration
 	eCfg := embed.NewConfig()
 	eCfg.Name = cfg.NodeID
@@ -172,6 +178,7 @@ func NewEtcdCluster(cfg *EtcdConfig, logger *slog.Logger) (*EtcdCluster, error) 
 		logger:        logger,
 		subCache:      make(map[string]*storage.Subscription),
 		retainedCache: make(map[string]*storage.Message),
+		localStore:    localStore,
 		stopCh:        make(chan struct{}),
 	}
 
@@ -205,6 +212,32 @@ func NewEtcdCluster(cfg *EtcdConfig, logger *slog.Logger) (*EtcdCluster, error) 
 			return nil, fmt.Errorf("failed to create transport: %w", err)
 		}
 		c.transport = transport
+	}
+
+	// Initialize hybrid retained store
+	if localStore != nil {
+		threshold := cfg.HybridRetainedSizeThreshold
+		if threshold <= 0 {
+			threshold = 1024 // Default to 1KB if not configured
+		}
+		c.hybridRetained = NewRetainedStore(
+			cfg.NodeID,
+			localStore.Retained(),
+			client,
+			c.transport,
+			threshold,
+			logger,
+		)
+
+		// Initialize hybrid will store using same threshold
+		c.hybridWill = NewWillStore(
+			cfg.NodeID,
+			localStore.Wills(),
+			client,
+			c.transport,
+			threshold,
+			logger,
+		)
 	}
 
 	return c, nil
@@ -617,11 +650,19 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 
 // Retained returns the cluster-wide retained message store.
 func (c *EtcdCluster) Retained() storage.RetainedStore {
+	// Return hybrid retained store if available, otherwise fall back to old implementation
+	if c.hybridRetained != nil {
+		return c.hybridRetained
+	}
 	return &etcdRetainedStore{logger: c.logger, client: c.client, cluster: c}
 }
 
 // Wills returns the cluster-wide will message store.
 func (c *EtcdCluster) Wills() storage.WillStore {
+	// Return hybrid will store if available, otherwise fall back to old implementation
+	if c.hybridWill != nil {
+		return c.hybridWill
+	}
 	return &etcdWillStore{logger: c.logger, client: c.client}
 }
 
@@ -876,6 +917,24 @@ func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID stri
 		return nil, fmt.Errorf("no message handler configured")
 	}
 	return c.msgHandler.GetSessionStateAndClose(ctx, clientID)
+}
+
+// GetRetainedMessage implements MessageHandler.GetRetainedMessage.
+// Fetches a retained message from the local BadgerDB store.
+func (c *EtcdCluster) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+	if c.localStore == nil {
+		return nil, fmt.Errorf("no local store configured")
+	}
+	return c.localStore.Retained().Get(ctx, topic)
+}
+
+// GetWillMessage implements MessageHandler.GetWillMessage.
+// Fetches a will message from the local BadgerDB store.
+func (c *EtcdCluster) GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+	if c.localStore == nil {
+		return nil, fmt.Errorf("no local store configured")
+	}
+	return c.localStore.Wills().Get(ctx, clientID)
 }
 
 // HandlePublish implements TransportHandler.HandlePublish.

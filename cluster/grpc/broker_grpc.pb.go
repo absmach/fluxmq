@@ -21,6 +21,8 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	BrokerService_RoutePublish_FullMethodName    = "/cluster.BrokerService/RoutePublish"
 	BrokerService_TakeoverSession_FullMethodName = "/cluster.BrokerService/TakeoverSession"
+	BrokerService_FetchRetained_FullMethodName   = "/cluster.BrokerService/FetchRetained"
+	BrokerService_FetchWill_FullMethodName       = "/cluster.BrokerService/FetchWill"
 )
 
 // BrokerServiceClient is the client API for BrokerService service.
@@ -33,6 +35,12 @@ type BrokerServiceClient interface {
 	RoutePublish(ctx context.Context, in *PublishRequest, opts ...grpc.CallOption) (*PublishResponse, error)
 	// TakeoverSession migrates a session from one broker to another.
 	TakeoverSession(ctx context.Context, in *TakeoverRequest, opts ...grpc.CallOption) (*TakeoverResponse, error)
+	// FetchRetained fetches a retained message payload from the owning broker node.
+	// Used when a large retained message (above threshold) needs to be delivered to a subscriber on a different node.
+	FetchRetained(ctx context.Context, in *FetchRetainedRequest, opts ...grpc.CallOption) (*FetchRetainedResponse, error)
+	// FetchWill fetches a will message payload from the owning broker node.
+	// Used when a large will message (above threshold) needs to be published after client disconnect.
+	FetchWill(ctx context.Context, in *FetchWillRequest, opts ...grpc.CallOption) (*FetchWillResponse, error)
 }
 
 type brokerServiceClient struct {
@@ -63,6 +71,26 @@ func (c *brokerServiceClient) TakeoverSession(ctx context.Context, in *TakeoverR
 	return out, nil
 }
 
+func (c *brokerServiceClient) FetchRetained(ctx context.Context, in *FetchRetainedRequest, opts ...grpc.CallOption) (*FetchRetainedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchRetainedResponse)
+	err := c.cc.Invoke(ctx, BrokerService_FetchRetained_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *brokerServiceClient) FetchWill(ctx context.Context, in *FetchWillRequest, opts ...grpc.CallOption) (*FetchWillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchWillResponse)
+	err := c.cc.Invoke(ctx, BrokerService_FetchWill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServiceServer is the server API for BrokerService service.
 // All implementations must embed UnimplementedBrokerServiceServer
 // for forward compatibility.
@@ -73,6 +101,12 @@ type BrokerServiceServer interface {
 	RoutePublish(context.Context, *PublishRequest) (*PublishResponse, error)
 	// TakeoverSession migrates a session from one broker to another.
 	TakeoverSession(context.Context, *TakeoverRequest) (*TakeoverResponse, error)
+	// FetchRetained fetches a retained message payload from the owning broker node.
+	// Used when a large retained message (above threshold) needs to be delivered to a subscriber on a different node.
+	FetchRetained(context.Context, *FetchRetainedRequest) (*FetchRetainedResponse, error)
+	// FetchWill fetches a will message payload from the owning broker node.
+	// Used when a large will message (above threshold) needs to be published after client disconnect.
+	FetchWill(context.Context, *FetchWillRequest) (*FetchWillResponse, error)
 	mustEmbedUnimplementedBrokerServiceServer()
 }
 
@@ -88,6 +122,12 @@ func (UnimplementedBrokerServiceServer) RoutePublish(context.Context, *PublishRe
 }
 func (UnimplementedBrokerServiceServer) TakeoverSession(context.Context, *TakeoverRequest) (*TakeoverResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TakeoverSession not implemented")
+}
+func (UnimplementedBrokerServiceServer) FetchRetained(context.Context, *FetchRetainedRequest) (*FetchRetainedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchRetained not implemented")
+}
+func (UnimplementedBrokerServiceServer) FetchWill(context.Context, *FetchWillRequest) (*FetchWillResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchWill not implemented")
 }
 func (UnimplementedBrokerServiceServer) mustEmbedUnimplementedBrokerServiceServer() {}
 func (UnimplementedBrokerServiceServer) testEmbeddedByValue()                       {}
@@ -146,6 +186,42 @@ func _BrokerService_TakeoverSession_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BrokerService_FetchRetained_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchRetainedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).FetchRetained(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_FetchRetained_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).FetchRetained(ctx, req.(*FetchRetainedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BrokerService_FetchWill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchWillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).FetchWill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_FetchWill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).FetchWill(ctx, req.(*FetchWillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrokerService_ServiceDesc is the grpc.ServiceDesc for BrokerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -160,6 +236,14 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TakeoverSession",
 			Handler:    _BrokerService_TakeoverSession_Handler,
+		},
+		{
+			MethodName: "FetchRetained",
+			Handler:    _BrokerService_FetchRetained_Handler,
+		},
+		{
+			MethodName: "FetchWill",
+			Handler:    _BrokerService_FetchWill_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
