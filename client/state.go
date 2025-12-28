@@ -8,7 +8,6 @@ import "sync/atomic"
 // State represents the client connection state.
 type State uint32
 
-// Client states.
 const (
 	StateDisconnected State = iota
 	StateConnecting

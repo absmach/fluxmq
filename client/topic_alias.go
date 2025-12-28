@@ -9,15 +9,15 @@ import "sync"
 // It handles both outbound aliases (client -> server) and inbound aliases (server -> client).
 type topicAliasManager struct {
 	// Outbound (client sending to server)
-	outboundTopicToAlias map[string]uint16   // topic -> alias
-	outboundAliasToTopic map[uint16]string   // alias -> topic
-	outboundNextAlias    uint16              // next alias to assign
-	outboundMaximum      uint16              // maximum aliases server accepts
+	outboundTopicToAlias map[string]uint16 // topic -> alias
+	outboundAliasToTopic map[uint16]string // alias -> topic
+	outboundNextAlias    uint16            // next alias to assign
+	outboundMaximum      uint16            // maximum aliases server accepts
 	outboundMu           sync.RWMutex
 
 	// Inbound (server sending to client)
-	inboundAliasToTopic map[uint16]string    // alias -> topic
-	inboundMaximum      uint16               // maximum aliases client accepts
+	inboundAliasToTopic map[uint16]string // alias -> topic
+	inboundMaximum      uint16            // maximum aliases client accepts
 	inboundMu           sync.RWMutex
 }
 
