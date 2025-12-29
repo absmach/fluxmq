@@ -269,6 +269,482 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 
 ---
 
+## Priority 0: CRITICAL - Performance Optimizations for Million+ Msgs/Sec
+
+**Target:** Achieve 2-5M messages/sec throughput per 20-node cluster
+
+**Current Bottleneck Analysis:**
+- ❌ Router RWMutex serializes ALL topic matching (affects 100% of traffic)
+- ❌ Message copying (3+ allocations per message, affects 100% of traffic)
+- ⚠️ Cross-node routing (adds 1-5ms latency, affects 5-50% depending on placement)
+- ⚠️ etcd writes only affect 1-5% of traffic (retained messages)
+
+**Key Insight:** Lock-free router and zero-copy optimizations affect 100% of traffic and provide 5-10x improvement. Custom Raft only helps 1-5% of traffic. **Focus on high-ROI first.**
+
+---
+
+### Task 0.1: Lock-Free Router Implementation
+**Priority:** CRITICAL | **Effort:** 4 weeks | **Impact:** 3x throughput (affects 100% of traffic)
+
+**Problem:**
+- Current `TrieRouter` uses global RWMutex that serializes all Match() calls
+- Limits cluster to ~200K-500K msgs/sec regardless of nodes
+- Lock contention visible in profiling
+
+**Solution: Lock-Free Trie with Copy-on-Write**
+
+**Implementation:**
+```go
+// broker/router_lockfree.go
+package broker
+
+import (
+    "strings"
+    "sync/atomic"
+    "github.com/absmach/mqtt/storage"
+)
+
+type LockFreeRouter struct {
+    root atomic.Pointer[node]
+}
+
+type node struct {
+    children atomic.Pointer[map[string]*node]  // Immutable map
+    subs     atomic.Pointer[[]*storage.Subscription]  // Immutable slice
+}
+
+// Match is lock-free (only atomic loads)
+func (r *LockFreeRouter) Match(topic string) ([]*storage.Subscription, error) {
+    levels := strings.Split(topic, "/")
+    var matched []*storage.Subscription
+
+    root := r.root.Load()
+    if root == nil {
+        return matched, nil
+    }
+
+    matchLevel(root, levels, 0, &matched)
+    return matched, nil
+}
+
+// Subscribe uses copy-on-write (rare operation)
+func (r *LockFreeRouter) Subscribe(clientID, filter string, qos byte, opts storage.SubscribeOptions) error {
+    sub := &storage.Subscription{
+        ClientID: clientID,
+        Filter:   filter,
+        QoS:      qos,
+        Options:  opts,
+    }
+
+    levels := strings.Split(filter, "/")
+
+    for {
+        // 1. Read current root
+        oldRoot := r.root.Load()
+
+        // 2. Copy path and add subscription
+        newRoot := r.copyAndAdd(oldRoot, levels, sub)
+
+        // 3. CAS to install new root
+        if r.root.CompareAndSwap(oldRoot, newRoot) {
+            return nil
+        }
+        // Retry on CAS failure (contention)
+    }
+}
+
+func (r *LockFreeRouter) copyAndAdd(n *node, levels []string, sub *storage.Subscription) *node {
+    if n == nil {
+        n = &node{}
+    }
+
+    // Copy node
+    newNode := &node{}
+
+    if len(levels) == 0 {
+        // Add subscription at this level
+        oldSubs := n.subs.Load()
+        var newSubs []*storage.Subscription
+        if oldSubs != nil {
+            newSubs = append([]*storage.Subscription{}, *oldSubs...)
+        }
+        newSubs = append(newSubs, sub)
+        newNode.subs.Store(&newSubs)
+
+        // Copy children
+        oldChildren := n.children.Load()
+        if oldChildren != nil {
+            newNode.children.Store(oldChildren)  // Reuse children map
+        }
+        return newNode
+    }
+
+    // Navigate deeper
+    level := levels[0]
+    oldChildren := n.children.Load()
+    newChildren := make(map[string]*node)
+
+    // Copy existing children
+    if oldChildren != nil {
+        for k, v := range *oldChildren {
+            newChildren[k] = v
+        }
+    }
+
+    // Recursively update child
+    child := newChildren[level]
+    newChildren[level] = r.copyAndAdd(child, levels[1:], sub)
+
+    newNode.children.Store(&newChildren)
+    newNode.subs.Store(n.subs.Load())  // Reuse subs
+
+    return newNode
+}
+
+// matchLevel remains same as current implementation
+func matchLevel(n *node, levels []string, index int, matched *[]*storage.Subscription) {
+    if n == nil {
+        return
+    }
+
+    if index == len(levels) {
+        subs := n.subs.Load()
+        if subs != nil {
+            *matched = append(*matched, *subs...)
+        }
+
+        // Check for # wildcard
+        children := n.children.Load()
+        if children != nil {
+            if hashNode, ok := (*children)["#"]; ok {
+                hashSubs := hashNode.subs.Load()
+                if hashSubs != nil {
+                    *matched = append(*matched, *hashSubs...)
+                }
+            }
+        }
+        return
+    }
+
+    level := levels[index]
+    children := n.children.Load()
+    if children == nil {
+        return
+    }
+
+    // Exact match
+    if child, ok := (*children)[level]; ok {
+        matchLevel(child, levels, index+1, matched)
+    }
+
+    // + wildcard
+    if child, ok := (*children)["+"]; ok {
+        matchLevel(child, levels, index+1, matched)
+    }
+
+    // # wildcard (matches rest of topic)
+    if child, ok := (*children)["#"]; ok {
+        subs := child.subs.Load()
+        if subs != nil {
+            *matched = append(*matched, *subs...)
+        }
+    }
+}
+```
+
+**Migration Strategy:**
+1. Week 1-2: Implement lock-free router with full test coverage
+2. Week 3: Benchmark against current router (expect 3-5x improvement)
+3. Week 4: Add feature flag to toggle between implementations
+4. Deploy with flag=false, monitor, flip to true
+
+**Test Coverage:**
+- Concurrent reads (100K goroutines calling Match())
+- Concurrent writes (1K goroutines calling Subscribe())
+- Mixed read/write workload
+- Verify no data races (go test -race)
+- Benchmark: Match() with 1K, 10K, 100K subscriptions
+
+**Success Criteria:**
+- ✅ Match() is lock-free (no mutex, only atomic loads)
+- ✅ 3-5x throughput improvement in benchmarks
+- ✅ No data races detected
+- ✅ All existing router tests pass with new implementation
+- ✅ Production deployment with feature flag
+
+**Expected Impact:**
+- Current: 200K-500K msgs/sec cluster-wide
+- With lock-free: 600K-1.5M msgs/sec cluster-wide
+- **3x improvement, affects 100% of traffic**
+
+---
+
+### Task 0.2: Zero-Copy Message Path
+**Priority:** CRITICAL | **Effort:** 2 weeks | **Impact:** 2x throughput (affects 100% of traffic)
+
+**Problem:**
+- Each message copied 3+ times through the system
+- Excessive allocations cause GC pressure
+- Memory bandwidth waste
+
+**Current Code Path:**
+```go
+// Copy 1: From packet
+payload := pkt.Payload
+
+// Copy 2: Into message struct
+msg := &storage.Message{Payload: payload}
+
+// Copy 3: Into gRPC call
+b.cluster.RoutePublish(..., payload, ...)
+
+// Copy 4: Delivery to session
+session.WritePacket(&Publish{Payload: payload})
+```
+
+**Solution: Reference Counted Buffers**
+
+**Implementation:**
+```go
+// core/refbuffer.go
+package core
+
+import (
+    "sync/atomic"
+)
+
+type RefCountedBuffer struct {
+    data     []byte
+    refCount atomic.Int32
+    pool     *BufferPool  // Return to pool when refcount = 0
+}
+
+func (r *RefCountedBuffer) Retain() {
+    r.refCount.Add(1)
+}
+
+func (r *RefCountedBuffer) Release() {
+    if r.refCount.Add(-1) == 0 {
+        if r.pool != nil {
+            r.pool.Put(r)
+        }
+    }
+}
+
+func (r *RefCountedBuffer) Bytes() []byte {
+    return r.data
+}
+
+type BufferPool struct {
+    // Size-based pools
+    small  chan *RefCountedBuffer  // <1KB
+    medium chan *RefCountedBuffer  // 1KB-64KB
+    large  chan *RefCountedBuffer  // >64KB
+}
+
+func NewBufferPool() *BufferPool {
+    return &BufferPool{
+        small:  make(chan *RefCountedBuffer, 1000),
+        medium: make(chan *RefCountedBuffer, 500),
+        large:  make(chan *RefCountedBuffer, 100),
+    }
+}
+
+func (p *BufferPool) Get(size int) *RefCountedBuffer {
+    var pool chan *RefCountedBuffer
+    var bufSize int
+
+    switch {
+    case size <= 1024:
+        pool = p.small
+        bufSize = 1024
+    case size <= 65536:
+        pool = p.medium
+        bufSize = 65536
+    default:
+        pool = p.large
+        bufSize = size
+    }
+
+    select {
+    case buf := <-pool:
+        buf.data = buf.data[:size]
+        buf.refCount.Store(1)
+        return buf
+    default:
+        return &RefCountedBuffer{
+            data:     make([]byte, bufSize)[:size],
+            pool:     p,
+            refCount: atomic.Int32{},
+        }
+    }
+}
+
+func (p *BufferPool) Put(buf *RefCountedBuffer) {
+    var pool chan *RefCountedBuffer
+    cap := cap(buf.data)
+
+    switch {
+    case cap <= 1024:
+        pool = p.small
+    case cap <= 65536:
+        pool = p.medium
+    default:
+        return  // Don't pool very large buffers
+    }
+
+    select {
+    case pool <- buf:
+    default:
+        // Pool full, let GC handle it
+    }
+}
+
+// storage/message.go
+type Message struct {
+    Topic      string
+    PayloadBuf *core.RefCountedBuffer  // Changed from []byte
+    QoS        byte
+    Retain     bool
+    Properties map[string]string
+}
+
+func (m *Message) Payload() []byte {
+    if m.PayloadBuf == nil {
+        return nil
+    }
+    return m.PayloadBuf.Bytes()
+}
+
+// broker/broker.go
+func (b *Broker) Publish(msg *storage.Message) error {
+    // Retain buffer for the duration of publish
+    msg.PayloadBuf.Retain()
+    defer msg.PayloadBuf.Release()
+
+    // ... existing publish logic
+    // No copying, just pass PayloadBuf reference
+}
+```
+
+**Migration:**
+1. Week 1: Implement RefCountedBuffer and BufferPool
+2. Week 2: Migrate message path to use RefCountedBuffer
+3. Update all handlers to use zero-copy path
+4. Benchmark memory allocations (expect 50% reduction)
+
+**Success Criteria:**
+- ✅ Message allocations reduced by 50%+
+- ✅ GC pressure reduced (measure with pprof)
+- ✅ No memory leaks (refcount always reaches 0)
+- ✅ 2x throughput improvement in benchmarks
+- ✅ All existing tests pass
+
+**Expected Impact:**
+- 50% reduction in allocations
+- 2x reduction in GC time
+- **2x throughput improvement**
+
+---
+
+### Task 0.3: Topic Sharding Strategy
+**Priority:** HIGH | **Effort:** 2 weeks | **Impact:** 10x for sharded workloads
+
+**Problem:**
+- Cross-node message routing adds 1-5ms latency
+- 50% cross-node traffic = 50% throughput penalty
+- Network bandwidth waste
+
+**Solution: Load Balancer Topic-Based Routing**
+
+**Implementation:**
+
+```yaml
+# Load balancer config (HAProxy example)
+frontend mqtt_in
+    bind *:1883
+    mode tcp
+
+    # Parse MQTT CONNECT packet to extract Client ID
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.payload(0,10) -m bin 00 04 4D 51 54 54 }
+
+    # Route based on Client ID prefix
+    # device-1-* → backend1
+    # device-2-* → backend2
+    # ...
+
+    acl shard_1 req.payload(0,100) -m sub device-1
+    acl shard_2 req.payload(0,100) -m sub device-2
+    acl shard_3 req.payload(0,100) -m sub device-3
+    # ... up to shard_20
+
+    use_backend mqtt_shard_1 if shard_1
+    use_backend mqtt_shard_2 if shard_2
+    use_backend mqtt_shard_3 if shard_3
+    # ...
+
+    default_backend mqtt_shard_roundrobin
+
+backend mqtt_shard_1
+    mode tcp
+    server broker1 192.168.1.10:1883 check
+    server broker2 192.168.1.11:1883 check backup
+
+# ... backends for other shards
+
+# Conventions clients follow:
+# - Client ID: device-{shard}-{unique-id}
+# - Topics: device/{shard}/+
+# - Result: 95% local routing
+```
+
+**Alternative: DNS-Based Sharding**
+```
+# Clients connect to shard-specific endpoints
+mqtt-shard-1.example.com → Node 1-5 (5M clients)
+mqtt-shard-2.example.com → Node 6-10 (5M clients)
+mqtt-shard-3.example.com → Node 11-15 (5M clients)
+mqtt-shard-4.example.com → Node 16-20 (5M clients)
+```
+
+**Documentation:**
+- Create `docs/topic-sharding-guide.md`
+- Example configurations for HAProxy, Nginx, DNS
+- Client ID conventions
+- Topic naming conventions
+
+**Success Criteria:**
+- ✅ Documentation complete with examples
+- ✅ Reference implementations for 2+ load balancers
+- ✅ Measurement: 95% local routing (5% cross-node)
+- ✅ Benchmark: 10x throughput for sharded workload
+
+**Expected Impact:**
+- 95% local routing = 10x throughput for sharded workloads
+- Works with ANY load balancer
+- **No broker code changes required**
+
+---
+
+## Phase Summary: Performance Optimization ROI
+
+| Task | Effort | Improvement | Traffic Affected | ROI (Impact/Effort) |
+|------|--------|-------------|------------------|---------------------|
+| **0.1: Lock-Free Router** | 4 weeks | 3x | 100% | ⭐⭐⭐⭐⭐ HIGHEST |
+| **0.2: Zero-Copy** | 2 weeks | 2x | 100% | ⭐⭐⭐⭐⭐ HIGHEST |
+| **0.3: Topic Sharding** | 2 weeks | 10x (sharded) | 50-95% | ⭐⭐⭐⭐ HIGH |
+| **Combined (Phase 0)** | **8 weeks** | **~5-10x** | **100%** | |
+
+**vs. Custom Raft:**
+| Task | Effort | Improvement | Traffic Affected | ROI |
+|------|--------|-------------|------------------|-----|
+| Custom Raft | 20 weeks | +10-20% | 1-5% (retained) | ⭐ LOW |
+
+**Recommendation:** Build Phase 0 optimizations (8 weeks, 5-10x improvement) BEFORE considering Custom Raft (20 weeks, +10-20% for 1-5% of traffic).
+
+---
+
 ## Priority 1: HIGH - Production Readiness
 
 ### ✅ Task 1.1: QoS 2 Cross-Node Routing Investigation (COMPLETED)

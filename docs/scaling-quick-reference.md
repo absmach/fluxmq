@@ -36,20 +36,38 @@ Replace etcd subscription storage with gossip protocol (hashicorp/memberlist):
 
 ---
 
-## Why is etcd slow?
+## Why is etcd the bottleneck for 10M clients?
 
+**IMPORTANT: etcd is NOT slow for pub/sub messages!**
+- Regular MQTT messages bypass etcd completely (local router + gRPC)
+- etcd only stores: session ownership, subscriptions, retained messages
+
+**For 10M clients, etcd has TWO problems:**
+
+### Problem 1: Storage Capacity (8GB limit)
+- 10M clients × 10 subs × 500B = 50GB needed
+- etcd limit: 8GB
+- **Result: Won't fit, even with compression**
+
+### Problem 2: Write Throughput (only for retained messages & sessions)
 **Fundamental Raft limitations:**
 1. Single-threaded leader (serialization bottleneck)
 2. Consensus overhead (2 network round-trips)
 3. Disk fsync for durability (1ms per write)
 4. **Result: ~5K writes/sec maximum**
 
-**Why can't we "just make it faster"?**
+**Impact on different operations:**
+- ✅ **Pub/sub messages**: No impact (etcd not involved)
+- ⚠️ **Session connects**: 10M / hour = 2.8K/sec (within limit)
+- ❌ **Subscription storage**: 50GB (exceeds 8GB limit)
+- ⚠️ **Retained messages**: Depends on traffic % (1-10% typical)
+
+**Why can't we "just make etcd faster"?**
 - More nodes: Doesn't help writes (still single leader)
 - Better hardware: 50% improvement max (still <10K writes/sec)
 - Custom Raft: 10-50x improvement, but 20 weeks effort
 
-**For 10M clients: Gossip is faster and simpler than custom Raft**
+**For 10M clients: Gossip (for subscriptions) is simpler than custom Raft**
 
 ---
 
