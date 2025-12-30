@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/broker/events"
+	brokerrouter "github.com/absmach/mqtt/broker/router"
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/core"
@@ -80,7 +81,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		store = memory.New()
 	}
 
-	router := NewRouter()
+	router := brokerrouter.NewRouter()
 
 	if logger == nil {
 		logger = slog.Default()
@@ -294,11 +295,13 @@ func (b *Broker) DestroySession(clientID string) error {
 func (b *Broker) Publish(msg *storage.Message) error {
 	b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
 	b.stats.IncrementPublishReceived()
-	b.stats.AddBytesReceived(uint64(len(msg.Payload)))
+
+	payloadLen := len(msg.GetPayload())
+	b.stats.AddBytesReceived(uint64(payloadLen))
 
 	// Record metrics
 	if b.metrics != nil {
-		b.metrics.RecordMessageReceived(msg.QoS, int64(len(msg.Payload)))
+		b.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen))
 	}
 
 	// Webhook: message published
@@ -311,14 +314,14 @@ func (b *Broker) Publish(msg *storage.Message) error {
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
 			Retained:     msg.Retain,
-			PayloadSize:  len(msg.Payload),
+			PayloadSize:  payloadLen,
 			Payload:      payload, // Will be set if includePayload is true
 		})
 	}
 
 	if msg.Retain {
 		ctx := context.Background()
-		if len(msg.Payload) == 0 {
+		if payloadLen == 0 {
 			// Clear retained message
 			if err := b.retained.Delete(ctx, msg.Topic); err != nil {
 				return err
@@ -338,14 +341,19 @@ func (b *Broker) Publish(msg *storage.Message) error {
 				})
 			}
 		} else {
-			// Set retained message
-			msg.Retain = true
-			if err := b.retained.Set(ctx, msg.Topic, msg); err != nil {
+			// Set retained message - need to retain buffer for storage
+			msg.RetainPayload()
+			retainedMsg := storage.CopyMessage(msg)
+			retainedMsg.Retain = true
+			if err := b.retained.Set(ctx, msg.Topic, retainedMsg); err != nil {
+				retainedMsg.ReleasePayload()
 				return err
 			}
 			// Also store in cluster
 			if b.cluster != nil {
-				if err := b.cluster.Retained().Set(ctx, msg.Topic, msg); err != nil {
+				retainedMsg.RetainPayload()
+				if err := b.cluster.Retained().Set(ctx, msg.Topic, retainedMsg); err != nil {
+					retainedMsg.ReleasePayload()
 					b.logError("cluster_set_retained", err, slog.String("topic", msg.Topic))
 				}
 			}
@@ -353,14 +361,20 @@ func (b *Broker) Publish(msg *storage.Message) error {
 			if b.webhooks != nil {
 				b.webhooks.Notify(context.Background(), events.RetainedMessageSet{
 					MessageTopic: msg.Topic,
-					PayloadSize:  len(msg.Payload),
+					PayloadSize:  payloadLen,
 					Cleared:      false,
 				})
 			}
 		}
 	}
 
-	return b.distribute(msg.Topic, msg.Payload, msg.QoS, false, msg.Properties)
+	// Distribute message to subscribers (this will retain the buffer as needed)
+	err := b.distribute(msg)
+
+	// Release the original message's buffer - Publish "consumes" the message
+	msg.ReleasePayload()
+
+	return err
 }
 
 // subscribe adds a subscription for a session (internal domain method).
@@ -529,13 +543,16 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic),
 			slog.Time("expiry", msg.Expiry))
-		return 0, nil // Drop expired message
+		msg.ReleasePayload() // Drop expired message - release buffer
+		return 0, nil
 	}
 
 	if !s.IsConnected() {
 		if msg.QoS > 0 {
+			// Offline queue takes ownership - it will release when message is delivered/dropped
 			return 0, s.OfflineQueue().Enqueue(msg)
 		}
+		msg.ReleasePayload() // Drop QoS 0 message for offline client - release buffer
 		return 0, nil
 	}
 
@@ -548,20 +565,25 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 					ClientID:     s.ID,
 					MessageTopic: msg.Topic,
 					QoS:          msg.QoS,
-					PayloadSize:  len(msg.Payload),
+					PayloadSize:  len(msg.GetPayload()),
 				})
 			}
 		}
+		// QoS 0 message delivered - release buffer
+		msg.ReleasePayload()
 		return 0, err
 	}
 
 	packetID := s.NextPacketID()
 	msg.PacketID = packetID
+	// Inflight storage takes ownership - it will release when message is ACK'd or expires
 	if err := s.Inflight().Add(packetID, msg, messages.Outbound); err != nil {
+		msg.ReleasePayload() // Failed to store - release buffer
 		return 0, err
 	}
 
 	if err := b.DeliverMessage(s, msg); err != nil {
+		// Delivery failed, but message is in inflight so buffer stays (will be retried)
 		return packetID, err
 	}
 
@@ -571,7 +593,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 			ClientID:     s.ID,
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
-			PayloadSize:  len(msg.Payload),
+			PayloadSize:  len(msg.GetPayload()),
 		})
 	}
 
@@ -599,16 +621,42 @@ func (b *Broker) PublishWill(clientID string) error {
 		return err
 	}
 
-	if err := b.distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties); err != nil {
+	// Create message from will (will payload is []byte, not RefCountedBuffer)
+	msg := &storage.Message{
+		Topic:      will.Topic,
+		QoS:        will.QoS,
+		Retain:     will.Retain,
+		Properties: will.Properties,
+	}
+	msg.SetPayloadFromBytes(will.Payload)
+
+	if err := b.distribute(msg); err != nil {
+		msg.ReleasePayload()
 		return err
 	}
+
+	// Release the message buffer after distribution
+	msg.ReleasePayload()
 
 	return b.wills.Delete(ctx, clientID)
 }
 
 // Distribute distributes a message to all matching subscribers (implements Service interface).
 func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
-	return b.distribute(topic, payload, qos, retain, props)
+	msg := &storage.Message{
+		Topic:      topic,
+		QoS:        qos,
+		Retain:     retain,
+		Properties: props,
+	}
+	msg.SetPayloadFromBytes(payload)
+
+	err := b.distribute(msg)
+
+	// Release the message buffer after distribution
+	msg.ReleasePayload()
+
+	return err
 }
 
 // Match returns all subscriptions matching a topic (implements Service interface).
@@ -628,9 +676,9 @@ func (b *Broker) GetRetainedMatching(filter string) ([]*storage.Message, error) 
 }
 
 // distribute distributes a message to all matching subscribers (local and remote).
-func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
+func (b *Broker) distribute(msg *storage.Message) error {
 	// Deliver to local subscribers
-	matched, err := b.router.Match(topic)
+	matched, err := b.router.Match(msg.Topic)
 	if err != nil {
 		return err
 	}
@@ -669,20 +717,23 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 				continue
 			}
 
-			deliverQoS := qos
+			deliverQoS := msg.QoS
 			if sub.QoS < deliverQoS {
 				deliverQoS = sub.QoS
 			}
 
-			msg := &storage.Message{
-				Topic:      topic,
-				Payload:    payload,
+			// Zero-copy: Retain buffer for this subscriber's message
+			msg.RetainPayload()
+			deliverMsg := &storage.Message{
+				Topic:      msg.Topic,
 				QoS:        deliverQoS,
 				Retain:     false, // MQTT spec: shared subscriptions don't receive retained flag
-				Properties: props,
+				Properties: msg.Properties,
 			}
+			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
-			if _, err := b.DeliverToSession(s, msg); err != nil {
+			// DeliverToSession takes ownership of the buffer
+			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
 				continue
 			}
 		} else {
@@ -692,20 +743,23 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 				continue
 			}
 
-			deliverQoS := qos
+			deliverQoS := msg.QoS
 			if sub.QoS < deliverQoS {
 				deliverQoS = sub.QoS
 			}
 
-			msg := &storage.Message{
-				Topic:      topic,
-				Payload:    payload,
+			// Zero-copy: Retain buffer for this subscriber's message
+			msg.RetainPayload()
+			deliverMsg := &storage.Message{
+				Topic:      msg.Topic,
 				QoS:        deliverQoS,
-				Retain:     retain,
-				Properties: props,
+				Retain:     false, // Don't retain during distribution
+				Properties: msg.Properties,
 			}
+			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
-			if _, err := b.DeliverToSession(s, msg); err != nil {
+			// DeliverToSession takes ownership of the buffer
+			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
 				continue
 			}
 		}
@@ -716,8 +770,10 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if err := b.cluster.RoutePublish(ctx, topic, payload, qos, retain, props); err != nil {
-			b.logError("cluster_route_publish", err, slog.String("topic", topic))
+		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
+		payload := msg.GetPayload()
+		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.QoS, false, msg.Properties); err != nil {
+			b.logError("cluster_route_publish", err, slog.String("topic", msg.Topic))
 		}
 	}
 
@@ -1018,7 +1074,20 @@ func (b *Broker) triggerWills() {
 			continue
 		}
 
-		b.distribute(will.Topic, will.Payload, will.QoS, will.Retain, will.Properties)
+		// Create message from will (will payload is []byte, not RefCountedBuffer)
+		msg := &storage.Message{
+			Topic:      will.Topic,
+			QoS:        will.QoS,
+			Retain:     will.Retain,
+			Properties: will.Properties,
+		}
+		msg.SetPayloadFromBytes(will.Payload)
+
+		b.distribute(msg)
+
+		// Release the message buffer after distribution
+		msg.ReleasePayload()
+
 		b.wills.Delete(ctx, will.ClientID)
 	}
 }
@@ -1070,13 +1139,23 @@ func (b *Broker) publishStats() {
 	}
 
 	for _, s := range stats {
-		b.distribute(s.topic, []byte(s.value), 0, true, nil)
+		msg := &storage.Message{
+			Topic:  s.topic,
+			QoS:    0,
+			Retain: true,
+		}
+		msg.SetPayloadFromBytes([]byte(s.value))
+
+		b.distribute(msg)
+
+		// Release the message buffer after distribution
+		msg.ReleasePayload()
 	}
 }
 
 func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error {
 	b.stats.IncrementPublishSent()
-	b.stats.AddBytesSent(uint64(len(msg.Payload)))
+	b.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
 	var pub packets.ControlPacket
 
@@ -1103,7 +1182,7 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 				Retain:     msg.Retain,
 			},
 			TopicName:  msg.Topic,
-			Payload:    msg.Payload,
+			Payload:    msg.GetPayload(),
 			ID:         msg.PacketID,
 			Properties: props,
 		}
@@ -1115,7 +1194,7 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 				Retain:     msg.Retain,
 			},
 			TopicName: msg.Topic,
-			Payload:   msg.Payload,
+			Payload:   msg.GetPayload(),
 			ID:        msg.PacketID,
 		}
 	}
@@ -1356,7 +1435,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	for _, msg := range s.OfflineQueue().Drain() {
 		state.QueuedMessages = append(state.QueuedMessages, &grpc.QueuedMessage{
 			Topic:     msg.Topic,
-			Payload:   msg.Payload,
+			Payload:   msg.GetPayload(),
 			Qos:       uint32(msg.QoS),
 			Retain:    msg.Retain,
 			Timestamp: time.Now().Unix(),
@@ -1407,13 +1486,14 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core
 		return fmt.Errorf("session not found: %s", clientID)
 	}
 
+	// core.Message comes from cluster - create storage.Message with zero-copy buffer
 	storeMsg := &storage.Message{
 		Topic:      msg.Topic,
-		Payload:    msg.Payload,
 		QoS:        msg.QoS,
 		Retain:     msg.Retain,
 		Properties: msg.Properties,
 	}
+	storeMsg.SetPayloadFromBytes(msg.Payload)
 
 	_, err := b.DeliverToSession(s, storeMsg)
 	return err
@@ -1451,7 +1531,7 @@ func (b *Broker) restoreQueueFromTakeover(state *grpc.SessionState, queue messag
 	for _, msg := range state.QueuedMessages {
 		storeMsg := &storage.Message{
 			Topic:   msg.Topic,
-			Payload: msg.Payload,
+			Payload: msg.GetPayload(),
 			QoS:     byte(msg.Qos),
 			Retain:  msg.Retain,
 		}

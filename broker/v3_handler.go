@@ -77,6 +77,8 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	var will *storage.WillMessage
 	if p.WillFlag {
+		// Note: Will payload is stored as []byte in storage.WillMessage
+		// TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
 			ClientID: clientID,
 			Topic:    p.WillTopic,
@@ -153,12 +155,14 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
+		// Zero-copy: Create ref-counted buffer from payload
+		buf := core.GetBufferWithData(payload)
 		msg := &storage.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
+			Topic:  topic,
+			QoS:    qos,
+			Retain: retain,
 		}
+		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(msg)
 		h.broker.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
@@ -168,12 +172,14 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return err
 
 	case 1:
+		// Zero-copy: Create ref-counted buffer from payload
+		buf := core.GetBufferWithData(payload)
 		msg := &storage.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
+			Topic:  topic,
+			QoS:    qos,
+			Retain: retain,
 		}
+		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
 			return err
 		}
@@ -194,25 +200,29 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		s.Inflight().MarkReceived(packetID)
 
+		// Zero-copy: Create ref-counted buffer from payload
+		buf := core.GetBufferWithData(payload)
+
 		// Publish message immediately (distribution to subscribers)
 		msg := &storage.Message{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
+			Topic:  topic,
+			QoS:    qos,
+			Retain: retain,
 		}
+		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
 			return err
 		}
 
-		// Store for QoS 2 flow tracking
+		// Store for QoS 2 flow tracking - retain buffer for second message
+		msg.PayloadBuf.Retain()
 		storeMsg := &storage.Message{
 			Topic:    topic,
-			Payload:  payload,
 			QoS:      2,
 			Retain:   retain,
 			PacketID: packetID,
 		}
+		storeMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			return err
 		}
@@ -326,10 +336,17 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 					deliverQoS = t.QoS
 				}
 				deliverMsg := &storage.Message{
-					Topic:   msg.Topic,
-					Payload: msg.Payload,
-					QoS:     deliverQoS,
-					Retain:  true,
+					Topic:  msg.Topic,
+					QoS:    deliverQoS,
+					Retain: true,
+				}
+				// Zero-copy: Share buffer from retained message if available
+				if msg.PayloadBuf != nil {
+					msg.PayloadBuf.Retain()
+					deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
+				} else {
+					// Legacy fallback for messages without PayloadBuf
+					deliverMsg.SetPayloadFromBytes(msg.Payload)
 				}
 				h.broker.DeliverToSession(s, deliverMsg)
 			}
