@@ -52,6 +52,63 @@ test-cover:
 	$(GO) test -coverprofile=$(BUILD_DIR)/coverage.out ./...
 	$(GO) tool cover -html=$(BUILD_DIR)/coverage.out -o $(BUILD_DIR)/coverage.html
 
+# Run benchmarks
+.PHONY: bench
+bench:
+	$(GO) test -bench=. -benchmem -run=^$$ ./...
+
+# Run benchmarks for broker only
+.PHONY: bench-broker
+bench-broker:
+	$(GO) test -bench=. -benchmem -run=^$$ ./broker
+
+# Run zero-copy comparison benchmarks
+.PHONY: bench-zerocopy
+bench-zerocopy:
+	$(GO) test -bench=BenchmarkMessageCopy -benchmem -run=^$$ ./broker
+
+# Run stress tests (all)
+.PHONY: stress
+stress:
+	$(GO) test -v -run=TestStress -timeout=30m ./broker
+
+# Run specific stress tests
+.PHONY: stress-throughput
+stress-throughput:
+	$(GO) test -v -run=TestStress_HighThroughputPublish -timeout=5m ./broker
+
+.PHONY: stress-concurrent
+stress-concurrent:
+	$(GO) test -v -run=TestStress_ConcurrentPublishers -timeout=5m ./broker
+
+.PHONY: stress-memory
+stress-memory:
+	$(GO) test -v -run=TestStress_MemoryPressure -timeout=5m ./broker
+
+.PHONY: stress-sustained
+stress-sustained:
+	$(GO) test -v -run=TestStress_SustainedLoad -timeout=5m ./broker
+
+.PHONY: stress-pool
+stress-pool:
+	$(GO) test -v -run=TestStress_BufferPoolExhaustion -timeout=5m ./broker
+
+.PHONY: stress-fanout
+stress-fanout:
+	$(GO) test -v -run=TestStress_FanOutExtreme -timeout=5m ./broker
+
+.PHONY: stress-churn
+stress-churn:
+	$(GO) test -v -run=TestStress_RapidSubscribeUnsubscribe -timeout=5m ./broker
+
+# Generate benchmark report
+.PHONY: bench-report
+bench-report:
+	@mkdir -p $(BUILD_DIR)
+	$(GO) test -bench=. -benchmem -run=^$$ ./broker | tee $(BUILD_DIR)/benchmark-results.txt
+	@echo ""
+	@echo "Benchmark results saved to $(BUILD_DIR)/benchmark-results.txt"
+
 # Run linter
 .PHONY: lint
 lint:
@@ -129,6 +186,22 @@ help:
 	@echo "  test               Run all tests"
 	@echo "  test-cover         Run tests with coverage report"
 	@echo "  lint               Run golangci-lint"
+	@echo ""
+	@echo "Benchmark Targets:"
+	@echo "  bench              Run all benchmarks"
+	@echo "  bench-broker       Run broker benchmarks only"
+	@echo "  bench-zerocopy     Run zero-copy vs legacy comparison"
+	@echo "  bench-report       Generate benchmark report to $(BUILD_DIR)/"
+	@echo ""
+	@echo "Stress Test Targets:"
+	@echo "  stress             Run all stress tests (~30 min)"
+	@echo "  stress-throughput  High throughput test (10K msg/s)"
+	@echo "  stress-concurrent  Concurrent publishers test"
+	@echo "  stress-memory      Memory pressure test (large messages)"
+	@echo "  stress-sustained   Sustained mixed load test (30s)"
+	@echo "  stress-pool        Buffer pool exhaustion test"
+	@echo "  stress-fanout      Extreme fan-out test (5K subscribers)"
+	@echo "  stress-churn       Subscription churn test"
 	@echo ""
 	@echo "Utility Targets:"
 	@echo "  fmt                Format code"

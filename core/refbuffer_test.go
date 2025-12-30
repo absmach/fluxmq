@@ -104,7 +104,7 @@ func TestRefCountedBuffer_VeryLarge(t *testing.T) {
 
 	// Verify it's not in any pool (stats should show miss)
 	stats := pool.Stats()
-	assert.Greater(t, stats.LargeMisses.Load(), uint64(0))
+	assert.Greater(t, stats.LargeMisses, uint64(0))
 }
 
 func TestRefCountedBuffer_NilSafety(t *testing.T) {
@@ -173,7 +173,7 @@ func TestRefCountedBuffer_ConcurrentGetPut(t *testing.T) {
 
 	// Verify pool has buffers
 	stats := pool.Stats()
-	assert.Greater(t, stats.SmallHits.Load(), uint64(0), "Should have pool hits")
+	assert.Greater(t, stats.SmallHits, uint64(0), "Should have pool hits")
 }
 
 func TestBufferPool_Stats(t *testing.T) {
@@ -182,16 +182,16 @@ func TestBufferPool_Stats(t *testing.T) {
 	// First get is a miss
 	buf1 := pool.Get(512)
 	stats := pool.Stats()
-	assert.Equal(t, uint64(0), stats.SmallHits.Load())
-	assert.Equal(t, uint64(1), stats.SmallMisses.Load())
+	assert.Equal(t, uint64(0), stats.SmallHits)
+	assert.Equal(t, uint64(1), stats.SmallMisses)
 
 	buf1.Release()
 
 	// Second get is a hit
 	buf2 := pool.Get(512)
 	stats = pool.Stats()
-	assert.Equal(t, uint64(1), stats.SmallHits.Load())
-	assert.Equal(t, uint64(1), stats.SmallMisses.Load())
+	assert.Equal(t, uint64(1), stats.SmallHits)
+	assert.Equal(t, uint64(1), stats.SmallMisses)
 
 	buf2.Release()
 }
@@ -212,8 +212,8 @@ func TestBufferPool_PoolFull(t *testing.T) {
 	buf3 := pool.Get(512)
 	stats := pool.Stats()
 	// Should have 2 hits: buf2 and buf3 both got buf1 from pool
-	assert.Equal(t, uint64(2), stats.SmallHits.Load())
-	assert.Equal(t, uint64(1), stats.SmallMisses.Load())
+	assert.Equal(t, uint64(2), stats.SmallHits)
+	assert.Equal(t, uint64(1), stats.SmallMisses)
 
 	buf3.Release()
 }
@@ -235,7 +235,7 @@ func TestBufferPool_Clear(t *testing.T) {
 	buf := pool.Get(512)
 	stats2 := pool.Stats()
 
-	assert.Equal(t, stats1.SmallMisses.Load()+1, stats2.SmallMisses.Load())
+	assert.Equal(t, stats1.SmallMisses+1, stats2.SmallMisses)
 	buf.Release()
 }
 

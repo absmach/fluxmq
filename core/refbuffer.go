@@ -104,13 +104,25 @@ type BufferPool struct {
 }
 
 // BufferPoolStats tracks pool performance metrics.
+// Internal type with atomic fields for concurrent updates.
 type BufferPoolStats struct {
-	SmallHits   atomic.Uint64
-	MediumHits  atomic.Uint64
-	LargeHits   atomic.Uint64
-	SmallMisses atomic.Uint64
+	SmallHits    atomic.Uint64
+	MediumHits   atomic.Uint64
+	LargeHits    atomic.Uint64
+	SmallMisses  atomic.Uint64
 	MediumMisses atomic.Uint64
-	LargeMisses atomic.Uint64
+	LargeMisses  atomic.Uint64
+}
+
+// BufferPoolSnapshot is a point-in-time snapshot of pool statistics.
+// Safe to copy and pass around.
+type BufferPoolSnapshot struct {
+	SmallHits    uint64
+	MediumHits   uint64
+	LargeHits    uint64
+	SmallMisses  uint64
+	MediumMisses uint64
+	LargeMisses  uint64
 }
 
 // NewBufferPool creates a new buffer pool with default capacity.
@@ -217,9 +229,17 @@ func (p *BufferPool) Put(buf *RefCountedBuffer) {
 	}
 }
 
-// Stats returns current pool statistics.
-func (p *BufferPool) Stats() BufferPoolStats {
-	return p.stats
+// Stats returns a consistent snapshot of current pool statistics.
+// Each atomic field is read atomically to ensure thread-safety.
+func (p *BufferPool) Stats() BufferPoolSnapshot {
+	return BufferPoolSnapshot{
+		SmallHits:    p.stats.SmallHits.Load(),
+		MediumHits:   p.stats.MediumHits.Load(),
+		LargeHits:    p.stats.LargeHits.Load(),
+		SmallMisses:  p.stats.SmallMisses.Load(),
+		MediumMisses: p.stats.MediumMisses.Load(),
+		LargeMisses:  p.stats.LargeMisses.Load(),
+	}
 }
 
 // Clear empties all pools. Useful for testing.
