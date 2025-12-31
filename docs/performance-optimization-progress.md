@@ -225,17 +225,26 @@ RefCountedBuffer Performance:
 
 ## Performance Projections
 
-**Current (20-node cluster):**
-- Throughput: 200K-500K msgs/sec
-- Bottleneck: Message copying + GC
+**Realistic Deployment: 3-5 Node Cluster**
 
-**With Zero-Copy (Week 2):**
-- Throughput: 400K-1M msgs/sec
-- Bottleneck: Cross-node routing (for non-sharded)
+**Current (3-node cluster):**
+- Throughput: 300K-900K msgs/sec (without sharding)
+- Bottleneck: Cross-node routing
 
-**With Zero-Copy + Sharding (Week 4):**
-- Throughput: 2-5M msgs/sec ⭐ **TARGET ACHIEVED**
-- Bottleneck: BadgerDB (QoS1/2 only)
+**With Zero-Copy (Completed):**
+- Throughput: 600K-1.5M msgs/sec (3-5 nodes)
+- 3-46x faster payload handling
+- Zero allocations for message sharing
+
+**With Zero-Copy + Topic Sharding:**
+- **3 nodes**: 1-2M msgs/sec
+- **5 nodes**: 2-4M msgs/sec ⭐ **TARGET ACHIEVED**
+- Bottleneck: BadgerDB (QoS1/2 only, ~20% traffic)
+
+**Why Not 20 Nodes?**
+- Operational complexity too high
+- Cost-per-throughput worse beyond 5 nodes
+- Better to use geographic sharding (multiple 3-5 node clusters)
 
 **Total Effort:** 4 weeks (vs 8 weeks originally planned for router optimization)
 

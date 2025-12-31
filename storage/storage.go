@@ -43,8 +43,8 @@ type Store interface {
 type Message struct {
 	Expiry          time.Time
 	PublishTime     time.Time
-	Payload         []byte                  // Deprecated: Use PayloadBuf for zero-copy
-	PayloadBuf      *core.RefCountedBuffer  // Zero-copy payload buffer (preferred)
+	Payload         []byte                 // Deprecated: Use PayloadBuf for zero-copy
+	PayloadBuf      *core.RefCountedBuffer // Zero-copy payload buffer (preferred)
 	CorrelationData []byte
 	SubscriptionIDs []uint32
 	Topic           string

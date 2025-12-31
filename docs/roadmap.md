@@ -1416,39 +1416,56 @@ webhooks:
 
 ## Architecture & Scalability
 
-### 20-Node Cluster Capacity (2025-12-29)
+### Realistic Cluster Capacity: 3-5 Nodes (2025-12-30)
 
-With the recent hybrid storage architecture, the broker can scale to:
+With zero-copy optimization and hybrid storage, the broker scales efficiently:
 
-**Cluster-Wide Capacity:**
-- **Concurrent Connections**: 1,000,000+ clients (50K per node)
-- **Message Throughput**: 200K-500K messages/second
-- **Retained Messages**: 10M+ messages (with hybrid storage)
-- **Subscriptions**: 20M+ active subscriptions
-- **Storage**: 2TB distributed (BadgerDB) + 2GB coordinated (etcd)
+**Recommended: 5-Node Cluster Capacity**
+- **Concurrent Connections**: 250K-500K clients (50K-100K per node)
+- **Message Throughput**: 2-4M messages/second (with topic sharding)
+- **Retained Messages**: 5M-10M messages (hybrid storage)
+- **Subscriptions**: 5M-15M active subscriptions
+- **Storage**: 2.5TB distributed (BadgerDB) + <8GB coordinated (etcd)
+- **Cost**: $2,000-2,500/month (cloud)
+
+**Alternative: 3-Node Cluster (Most Common)**
+- **Connections**: 150K-300K clients
+- **Throughput**: 1-2M messages/second (with topic sharding)
+- **Cost**: $1,200-1,500/month (cloud)
+- **Best for**: Most production deployments ⭐
 
 **Key Architectural Components:**
 - **Embedded etcd**: Distributed coordination (3-5 member cluster)
-- **BadgerDB**: Local persistent storage (100GB+ per node)
+- **BadgerDB**: Local persistent storage (500GB-1TB per node)
 - **gRPC Transport**: Inter-broker communication (50K msgs/sec per connection)
 - **Hybrid Storage**: Size-based replication (small) vs fetch-on-demand (large)
+- **Zero-Copy**: Reference-counted buffers (3-46x faster, zero allocations)
 
 **Performance Characteristics:**
 - Session takeover: <100ms
-- Message delivery (local): <10ms
+- Message delivery (local): <5ms (with zero-copy)
 - Message delivery (cross-node): ~5ms
 - etcd storage reduction: 25-50% (with hybrid)
 - Cache hit rate: >90% after warmup
+- Buffer pool hit rate: >99% under load
 
 **Scaling Bottlenecks & Solutions:**
+- ✅ **Message copying** → Zero-copy (3-46x faster, 100% traffic)
+- ✅ **Cross-node latency** → Topic sharding for local routing (10x gain)
 - ✅ **etcd write limit** (5K/sec) → Hybrid storage reduces writes by 70%
-- ✅ **Cross-node latency** → Topic sharding for local routing
-- ✅ **Session takeover** → Load balancer affinity (sticky sessions)
-- ⏳ **Wildcard matching** → Bloom filters (planned)
+- ✅ **Router performance** → 33.8M matches/sec (NOT a bottleneck)
+- ⏳ **BadgerDB writes** → Async batching (optional, only if QoS1/2 >20%)
+
+**Why Not 20 Nodes?**
+- Operational complexity increases exponentially
+- Cost-per-throughput worse beyond 5 nodes
+- Better to use geographic sharding (multiple 3-5 node clusters)
+- Most deployments never need >5 nodes
 
 **Detailed Analysis:**
-- [Architecture & Capacity Analysis](architecture-capacity.md) - 20-node cluster scaling, capacity planning
-- [Architecture Deep Dive](architecture-deep-dive.md) - **10M client assessment, etcd vs custom Raft, alternative architectures**
+- [Architecture & Capacity Analysis](architecture-capacity.md) - Realistic 3-5 node scaling, cost analysis
+- [Zero-Copy Benchmark Results](zero-copy-benchmark-results.md) - Performance validation
+- [Topic Sharding Guide](topic-sharding-guide.md) - 10x throughput with no code changes
 
 ---
 
