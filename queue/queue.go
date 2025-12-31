@@ -7,34 +7,36 @@ import (
 	"context"
 	"sync"
 
-	"github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/mqtt/queue/storage"
 )
 
 // Queue represents a single durable queue with partitions and consumer groups.
 type Queue struct {
 	name             string
-	config           storage.QueueConfig
+	config           queueStorage.QueueConfig
 	partitions       []*Partition
 	strategy         PartitionStrategy
 	consumerGroups   *ConsumerGroupManager
-	messageStore     storage.MessageStore
+	messageStore     queueStorage.MessageStore
+	orderingEnforcer *OrderingEnforcer
 	mu               sync.RWMutex
 }
 
 // NewQueue creates a new queue instance.
-func NewQueue(config storage.QueueConfig, messageStore storage.MessageStore, consumerStore storage.ConsumerStore) *Queue {
+func NewQueue(config queueStorage.QueueConfig, messageStore queueStorage.MessageStore, consumerStore queueStorage.ConsumerStore) *Queue {
 	partitions := make([]*Partition, config.Partitions)
 	for i := 0; i < config.Partitions; i++ {
 		partitions[i] = NewPartition(i)
 	}
 
 	return &Queue{
-		name:           config.Name,
-		config:         config,
-		partitions:     partitions,
-		strategy:       &HashPartitionStrategy{},
-		consumerGroups: NewConsumerGroupManager(config.Name, consumerStore),
-		messageStore:   messageStore,
+		name:             config.Name,
+		config:           config,
+		partitions:       partitions,
+		strategy:         &HashPartitionStrategy{},
+		consumerGroups:   NewConsumerGroupManager(config.Name, consumerStore),
+		messageStore:     messageStore,
+		orderingEnforcer: NewOrderingEnforcer(config.Ordering),
 	}
 }
 
@@ -44,7 +46,7 @@ func (q *Queue) Name() string {
 }
 
 // Config returns the queue configuration.
-func (q *Queue) Config() storage.QueueConfig {
+func (q *Queue) Config() queueStorage.QueueConfig {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
@@ -52,7 +54,7 @@ func (q *Queue) Config() storage.QueueConfig {
 }
 
 // UpdateConfig updates the queue configuration.
-func (q *Queue) UpdateConfig(config storage.QueueConfig) {
+func (q *Queue) UpdateConfig(config queueStorage.QueueConfig) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -117,11 +119,16 @@ func (q *Queue) RemoveConsumer(ctx context.Context, groupID, consumerID string) 
 }
 
 // GetConsumerForPartition returns the consumer assigned to a partition in a specific group.
-func (q *Queue) GetConsumerForPartition(groupID string, partitionID int) (*storage.Consumer, bool) {
+func (q *Queue) GetConsumerForPartition(groupID string, partitionID int) (*queueStorage.Consumer, bool) {
 	group, exists := q.consumerGroups.GetGroup(groupID)
 	if !exists {
 		return nil, false
 	}
 
 	return group.GetConsumerForPartition(partitionID)
+}
+
+// OrderingEnforcer returns the ordering enforcer for this queue.
+func (q *Queue) OrderingEnforcer() *OrderingEnforcer {
+	return q.orderingEnforcer
 }

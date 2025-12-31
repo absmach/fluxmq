@@ -200,6 +200,9 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		expiryTime = publishTime.Add(time.Duration(*messageExpiry) * time.Second)
 	}
 
+	// Extract MQTT v5 properties for queue functionality
+	properties := extractAllProperties(p.Properties)
+
 	switch qos {
 	case 0:
 		// Zero-copy: Create ref-counted buffer from payload
@@ -211,6 +214,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			MessageExpiry: messageExpiry,
 			Expiry:        expiryTime,
 			PublishTime:   publishTime,
+			Properties:    properties,
 		}
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(msg)
@@ -231,6 +235,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			MessageExpiry: messageExpiry,
 			Expiry:        expiryTime,
 			PublishTime:   publishTime,
+			Properties:    properties,
 		}
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
@@ -260,6 +265,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			MessageExpiry: messageExpiry,
 			Expiry:        expiryTime,
 			PublishTime:   publishTime,
+			Properties:    properties,
 		}
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
@@ -394,10 +400,14 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			retainHandling = *t.RetainHandling
 		}
 
+		// Extract consumer group from subscription properties
+		consumerGroup := extractConsumerGroup(p.Properties)
+
 		opts := storage.SubscribeOptions{
 			NoLocal:           noLocal,
 			RetainAsPublished: retainAsPublished,
 			RetainHandling:    retainHandling,
+			ConsumerGroup:     consumerGroup,
 		}
 
 		if err := h.broker.subscribe(s, t.Topic, t.MaxQoS, opts); err != nil {

@@ -36,7 +36,7 @@ func New(db *badger.DB) *Store {
 
 // QueueStore implementation
 
-func (s *Store) Create(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func (s *Store) Create(ctx context.Context, config storage.QueueConfig) error {
 	})
 }
 
-func (s *Store) Get(ctx context.Context, queueName string) (*storage.QueueConfig, error) {
+func (s *Store) GetQueue(ctx context.Context, queueName string) (*storage.QueueConfig, error) {
 	key := queueMetaPrefix + queueName
 	var config storage.QueueConfig
 
@@ -86,7 +86,7 @@ func (s *Store) Get(ctx context.Context, queueName string) (*storage.QueueConfig
 	return &config, nil
 }
 
-func (s *Store) Update(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) UpdateQueue(ctx context.Context, config storage.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
@@ -111,14 +111,14 @@ func (s *Store) Update(ctx context.Context, config storage.QueueConfig) error {
 	})
 }
 
-func (s *Store) Delete(ctx context.Context, queueName string) error {
+func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 	key := queueMetaPrefix + queueName
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))
 	})
 }
 
-func (s *Store) List(ctx context.Context) ([]storage.QueueConfig, error) {
+func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 	configs := make([]storage.QueueConfig, 0)
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -198,7 +198,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	return msg, err
 }
 
-func (s *Store) Update(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
 	key := makeMessageKey(queueName, msg.PartitionID, msg.Sequence)
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -210,7 +210,7 @@ func (s *Store) Update(ctx context.Context, queueName string, msg *storage.Queue
 	})
 }
 
-func (s *Store) Delete(ctx context.Context, queueName string, messageID string) error {
+func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID string) error {
 	// Find message by ID across all partitions
 	return s.db.Update(func(txn *badger.Txn) error {
 		prefix := queueMessagePrefix + queueName + ":"
@@ -240,7 +240,7 @@ func (s *Store) Delete(ctx context.Context, queueName string, messageID string) 
 	})
 }
 
-func (s *Store) Get(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
 	var result *storage.QueueMessage
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -387,6 +387,46 @@ func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*sto
 				return err
 			}
 			count++
+		}
+		return nil
+	})
+
+	return messages, err
+}
+
+func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string) error {
+	key := makeDLQKey(dlqTopic, messageID)
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte(key))
+	})
+}
+
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.QueueMessage, error) {
+	messages := make([]*storage.QueueMessage, 0)
+	prefix := makePartitionPrefix(queueName, partitionID)
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				var msg storage.QueueMessage
+				if err := json.Unmarshal(val, &msg); err != nil {
+					return err
+				}
+				if msg.State == storage.StateRetry {
+					messages = append(messages, &msg)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	})

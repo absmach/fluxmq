@@ -40,6 +40,18 @@ type Notifier interface {
 	Close() error
 }
 
+// QueueManager defines the interface for durable queue management.
+type QueueManager interface {
+	Start(ctx context.Context) error
+	Stop() error
+	Enqueue(ctx context.Context, queueTopic string, payload []byte, properties map[string]string) error
+	Subscribe(ctx context.Context, queueTopic, clientID, groupID, proxyNodeID string) error
+	Unsubscribe(ctx context.Context, queueTopic, clientID, groupID string) error
+	Ack(ctx context.Context, queueTopic, messageID string) error
+	Nack(ctx context.Context, queueTopic, messageID string) error
+	Reject(ctx context.Context, queueTopic, messageID string, reason string) error
+}
+
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	mu            sync.RWMutex
@@ -52,6 +64,7 @@ type Broker struct {
 	retained      storage.RetainedStore
 	wills         storage.WillStore
 	cluster       cluster.Cluster // nil for single-node mode
+	queueManager  QueueManager    // nil if queue functionality disabled
 	auth          *AuthEngine
 	logger        *slog.Logger
 	stats         *Stats
@@ -113,6 +126,40 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 	go b.statsLoop()
 
 	return b
+}
+
+// SetQueueManager sets the queue manager for the broker.
+// This should be called before the broker starts accepting connections.
+func (b *Broker) SetQueueManager(qm QueueManager) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.queueManager = qm
+
+	// Start queue manager
+	if qm != nil {
+		return qm.Start(context.Background())
+	}
+
+	return nil
+}
+
+// DeliverToSessionByID delivers a message to a client by client ID.
+// This implements the BrokerInterface required by the queue manager.
+func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg interface{}) error {
+	s := b.Get(clientID)
+	if s == nil {
+		return fmt.Errorf("session not found: %s", clientID)
+	}
+
+	// Convert queue message to storage message
+	queueMsg, ok := msg.(*storage.Message)
+	if !ok {
+		return fmt.Errorf("invalid message type")
+	}
+
+	_, err := b.DeliverToSession(s, queueMsg)
+	return err
 }
 
 func (b *Broker) logOp(op string, attrs ...any) {
@@ -304,6 +351,28 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		b.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen))
 	}
 
+	// Route queue topics and ack topics to queue manager
+	if b.queueManager != nil {
+		if isQueueAckTopic(msg.Topic) {
+			// Handle ack/nack/reject
+			return b.handleQueueAck(msg)
+		}
+
+		if isQueueTopic(msg.Topic) {
+			// Route to queue manager
+			ctx := context.Background()
+			properties := make(map[string]string)
+
+			// Extract properties from message (will be set by v5handler for MQTT v5)
+			if msg.Properties != nil {
+				// Properties already set by handler
+				properties = msg.Properties
+			}
+
+			return b.queueManager.Enqueue(ctx, msg.Topic, msg.GetPayload(), properties)
+		}
+	}
+
 	// Webhook: message published
 	if b.webhooks != nil {
 		payload := ""
@@ -381,6 +450,23 @@ func (b *Broker) Publish(msg *storage.Message) error {
 func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts storage.SubscribeOptions) error {
 	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(qos)))
 
+	// Check if this is a queue subscription
+	if b.queueManager != nil && isQueueTopic(filter) {
+		ctx := context.Background()
+		groupID := opts.ConsumerGroup // ConsumerGroup from SubscribeOptions (set by handler)
+		proxyNodeID := ""
+		if b.cluster != nil {
+			proxyNodeID = b.cluster.NodeID()
+		}
+
+		b.logOp("queue_subscribe",
+			slog.String("client_id", s.ID),
+			slog.String("queue", filter),
+			slog.String("group", groupID))
+
+		return b.queueManager.Subscribe(ctx, filter, s.ID, groupID, proxyNodeID)
+	}
+
 	// Check if this is a shared subscription
 	shareName, topicFilter, isShared := topics.ParseShared(filter)
 	if isShared {
@@ -455,6 +541,18 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 // unsubscribeInternal removes a subscription for a session (internal domain method).
 func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	b.logOp("unsubscribe", slog.String("client_id", s.ID), slog.String("filter", filter))
+
+	// Check if this is a queue unsubscription
+	if b.queueManager != nil && isQueueTopic(filter) {
+		ctx := context.Background()
+		groupID := "" // Will be derived from clientID in queue manager
+
+		b.logOp("queue_unsubscribe",
+			slog.String("client_id", s.ID),
+			slog.String("queue", filter))
+
+		return b.queueManager.Unsubscribe(ctx, filter, s.ID, groupID)
+	}
 
 	// Check if this is a shared subscription
 	shareName, topicFilter, isShared := topics.ParseShared(filter)
@@ -673,6 +771,44 @@ func (b *Broker) GetRetainedMatching(filter string) ([]*storage.Message, error) 
 		return b.cluster.Retained().Match(ctx, filter)
 	}
 	return b.retained.Match(ctx, filter)
+}
+
+// handleQueueAck handles queue acknowledgment messages ($ack, $nack, $reject).
+func (b *Broker) handleQueueAck(msg *storage.Message) error {
+	ctx := context.Background()
+
+	// Extract queue topic and message ID
+	queueTopic := extractQueueTopicFromAck(msg.Topic)
+	messageID := ""
+
+	// Extract message ID from properties
+	if msg.Properties != nil {
+		messageID = msg.Properties["message-id"]
+	}
+
+	if messageID == "" {
+		b.logError("queue_ack_missing_message_id", fmt.Errorf("message-id not found in properties"),
+			slog.String("topic", msg.Topic))
+		return fmt.Errorf("message-id required for queue acknowledgment")
+	}
+
+	// Route to appropriate ack method
+	if strings.HasSuffix(msg.Topic, "/$ack") {
+		b.logOp("queue_ack", slog.String("queue", queueTopic), slog.String("message_id", messageID))
+		return b.queueManager.Ack(ctx, queueTopic, messageID)
+	} else if strings.HasSuffix(msg.Topic, "/$nack") {
+		b.logOp("queue_nack", slog.String("queue", queueTopic), slog.String("message_id", messageID))
+		return b.queueManager.Nack(ctx, queueTopic, messageID)
+	} else if strings.HasSuffix(msg.Topic, "/$reject") {
+		reason := "rejected by consumer"
+		if msg.Properties != nil && msg.Properties["reason"] != "" {
+			reason = msg.Properties["reason"]
+		}
+		b.logOp("queue_reject", slog.String("queue", queueTopic), slog.String("message_id", messageID), slog.String("reason", reason))
+		return b.queueManager.Reject(ctx, queueTopic, messageID, reason)
+	}
+
+	return fmt.Errorf("invalid queue ack topic: %s", msg.Topic)
 }
 
 // distribute distributes a message to all matching subscribers (local and remote).

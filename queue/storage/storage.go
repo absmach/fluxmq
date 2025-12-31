@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -52,8 +53,9 @@ type QueueConfig struct {
 	MessageTTL     time.Duration
 
 	// Performance
-	DeliveryTimeout time.Duration
-	BatchSize       int
+	DeliveryTimeout  time.Duration
+	BatchSize        int
+	HeartbeatTimeout time.Duration
 }
 
 // RetryPolicy defines retry behavior for failed messages.
@@ -128,11 +130,11 @@ type ConsumerGroup struct {
 
 // QueueStore manages queue metadata and configuration.
 type QueueStore interface {
-	Create(ctx context.Context, config QueueConfig) error
-	Get(ctx context.Context, queueName string) (*QueueConfig, error)
-	Update(ctx context.Context, config QueueConfig) error
-	Delete(ctx context.Context, queueName string) error
-	List(ctx context.Context) ([]QueueConfig, error)
+	CreateQueue(ctx context.Context, config QueueConfig) error
+	GetQueue(ctx context.Context, queueName string) (*QueueConfig, error)
+	UpdateQueue(ctx context.Context, config QueueConfig) error
+	DeleteQueue(ctx context.Context, queueName string) error
+	ListQueues(ctx context.Context) ([]QueueConfig, error)
 }
 
 // MessageStore manages queue messages and delivery state.
@@ -140,9 +142,9 @@ type MessageStore interface {
 	// Message operations
 	Enqueue(ctx context.Context, queueName string, msg *QueueMessage) error
 	Dequeue(ctx context.Context, queueName string, partitionID int) (*QueueMessage, error)
-	Update(ctx context.Context, queueName string, msg *QueueMessage) error
-	Delete(ctx context.Context, queueName string, messageID string) error
-	Get(ctx context.Context, queueName string, messageID string) (*QueueMessage, error)
+	UpdateMessage(ctx context.Context, queueName string, msg *QueueMessage) error
+	DeleteMessage(ctx context.Context, queueName string, messageID string) error
+	GetMessage(ctx context.Context, queueName string, messageID string) (*QueueMessage, error)
 
 	// Inflight tracking
 	MarkInflight(ctx context.Context, state *DeliveryState) error
@@ -153,6 +155,10 @@ type MessageStore interface {
 	// DLQ operations
 	EnqueueDLQ(ctx context.Context, dlqTopic string, msg *QueueMessage) error
 	ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*QueueMessage, error)
+	DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string) error
+
+	// Retry operations
+	ListRetry(ctx context.Context, queueName string, partitionID int) ([]*QueueMessage, error)
 
 	// Partition operations
 	GetNextSequence(ctx context.Context, queueName string, partitionID int) (uint64, error)
@@ -181,9 +187,10 @@ func DefaultQueueConfig(name string) QueueConfig {
 		Ordering:        OrderingPartition,
 		MaxMessageSize:  1024 * 1024,     // 1MB
 		MaxQueueDepth:   100000,
-		MessageTTL:      7 * 24 * time.Hour, // 7 days
-		DeliveryTimeout: 30 * time.Second,
-		BatchSize:       1,
+		MessageTTL:       7 * 24 * time.Hour, // 7 days
+		DeliveryTimeout:  30 * time.Second,
+		BatchSize:        1,
+		HeartbeatTimeout: 30 * time.Second,
 
 		RetryPolicy: RetryPolicy{
 			MaxRetries:        10,
@@ -205,13 +212,35 @@ func (c *QueueConfig) Validate() error {
 	if c.Name == "" {
 		return ErrInvalidConfig
 	}
+	// Queue name must start with $queue/
+	if !strings.HasPrefix(c.Name, "$queue/") {
+		return ErrInvalidConfig
+	}
 	if c.Partitions < 1 {
+		return ErrInvalidConfig
+	}
+	if c.Partitions > 1000 { // Reasonable upper limit
 		return ErrInvalidConfig
 	}
 	if c.Ordering != OrderingNone && c.Ordering != OrderingPartition && c.Ordering != OrderingStrict {
 		return ErrInvalidConfig
 	}
 	if c.Ordering == OrderingStrict && c.Partitions != 1 {
+		return ErrInvalidConfig
+	}
+	if c.MaxMessageSize <= 0 {
+		return ErrInvalidConfig
+	}
+	if c.MaxQueueDepth <= 0 {
+		return ErrInvalidConfig
+	}
+	if c.DeliveryTimeout <= 0 {
+		return ErrInvalidConfig
+	}
+	if c.BatchSize <= 0 {
+		return ErrInvalidConfig
+	}
+	if c.HeartbeatTimeout <= 0 {
 		return ErrInvalidConfig
 	}
 	if c.RetryPolicy.MaxRetries < 0 {
@@ -221,6 +250,9 @@ func (c *QueueConfig) Validate() error {
 		return ErrInvalidConfig
 	}
 	if c.RetryPolicy.BackoffMultiplier < 1.0 {
+		return ErrInvalidConfig
+	}
+	if c.RetryPolicy.TotalTimeout < 0 {
 		return ErrInvalidConfig
 	}
 	return nil

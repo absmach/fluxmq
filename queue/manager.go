@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/mqtt/queue/storage"
 	"github.com/google/uuid"
 )
 
@@ -23,22 +23,24 @@ type BrokerInterface interface {
 
 // Manager manages all queues in the system.
 type Manager struct {
-	queues         map[string]*Queue
+	queues          map[string]*Queue
 	deliveryWorkers map[string]*DeliveryWorker
-	queueStore     storage.QueueStore
-	messageStore   storage.MessageStore
-	consumerStore  storage.ConsumerStore
-	broker         BrokerInterface
-	mu             sync.RWMutex
-	stopCh         chan struct{}
-	wg             sync.WaitGroup
+	queueStore      queueStorage.QueueStore
+	messageStore    queueStorage.MessageStore
+	consumerStore   queueStorage.ConsumerStore
+	broker          BrokerInterface
+	retryManager    *RetryManager
+	dlqManager      *DLQManager
+	mu              sync.RWMutex
+	stopCh          chan struct{}
+	wg              sync.WaitGroup
 }
 
 // Config holds configuration for the queue manager.
 type Config struct {
-	QueueStore    storage.QueueStore
-	MessageStore  storage.MessageStore
-	ConsumerStore storage.ConsumerStore
+	QueueStore    queueStorage.QueueStore
+	MessageStore  queueStorage.MessageStore
+	ConsumerStore queueStorage.ConsumerStore
 	Broker        BrokerInterface
 }
 
@@ -48,6 +50,13 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("queue stores cannot be nil")
 	}
 
+	// Create DLQ manager with HTTP alert handler
+	alertHandler := NewHTTPAlertHandler(10 * time.Second)
+	dlqManager := NewDLQManager(cfg.MessageStore, alertHandler)
+
+	// Create retry manager
+	retryManager := NewRetryManager(cfg.MessageStore, dlqManager)
+
 	return &Manager{
 		queues:          make(map[string]*Queue),
 		deliveryWorkers: make(map[string]*DeliveryWorker),
@@ -55,6 +64,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		messageStore:    cfg.MessageStore,
 		consumerStore:   cfg.ConsumerStore,
 		broker:          cfg.Broker,
+		retryManager:    retryManager,
+		dlqManager:      dlqManager,
 		stopCh:          make(chan struct{}),
 	}, nil
 }
@@ -62,7 +73,7 @@ func NewManager(cfg Config) (*Manager, error) {
 // Start starts the queue manager background tasks.
 func (m *Manager) Start(ctx context.Context) error {
 	// Load existing queues from storage
-	configs, err := m.queueStore.List(ctx)
+	configs, err := m.queueStore.ListQueues(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load queues: %w", err)
 	}
@@ -72,6 +83,9 @@ func (m *Manager) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to create queue %s: %w", config.Name, err)
 		}
 	}
+
+	// Start retry manager
+	m.retryManager.Start(ctx)
 
 	return nil
 }
@@ -85,13 +99,18 @@ func (m *Manager) Stop() error {
 	}
 	m.mu.Unlock()
 
+	// Stop retry manager
+	if m.retryManager != nil {
+		m.retryManager.Stop()
+	}
+
 	close(m.stopCh)
 	m.wg.Wait()
 	return nil
 }
 
 // CreateQueue creates a new queue with the given configuration.
-func (m *Manager) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
+func (m *Manager) CreateQueue(ctx context.Context, config queueStorage.QueueConfig) error {
 	// Set defaults
 	if config.DLQConfig.Topic == "" && config.DLQConfig.Enabled {
 		config.DLQConfig.Topic = "$queue/dlq/" + strings.TrimPrefix(config.Name, "$queue/")
@@ -103,7 +122,7 @@ func (m *Manager) CreateQueue(ctx context.Context, config storage.QueueConfig) e
 	}
 
 	// Store in persistent storage
-	if err := m.queueStore.Create(ctx, config); err != nil {
+	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
 
@@ -112,16 +131,21 @@ func (m *Manager) CreateQueue(ctx context.Context, config storage.QueueConfig) e
 }
 
 // createQueueInstance creates a queue instance in memory.
-func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
+func (m *Manager) createQueueInstance(config queueStorage.QueueConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if _, exists := m.queues[config.Name]; exists {
-		return storage.ErrQueueAlreadyExists
+		return queueStorage.ErrQueueAlreadyExists
 	}
 
 	queue := NewQueue(config, m.messageStore, m.consumerStore)
 	m.queues[config.Name] = queue
+
+	// Register queue with retry manager
+	if m.retryManager != nil {
+		m.retryManager.RegisterQueue(queue)
+	}
 
 	// Create and start delivery worker
 	worker := NewDeliveryWorker(queue, m.messageStore, m.broker)
@@ -145,7 +169,7 @@ func (m *Manager) GetQueue(queueName string) (*Queue, error) {
 
 	queue, exists := m.queues[queueName]
 	if !exists {
-		return nil, storage.ErrQueueNotFound
+		return nil, queueStorage.ErrQueueNotFound
 	}
 
 	return queue, nil
@@ -159,13 +183,13 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string) (*Queu
 		return queue, nil
 	}
 
-	if err != storage.ErrQueueNotFound {
+	if err != queueStorage.ErrQueueNotFound {
 		return nil, err
 	}
 
 	// Create with default config
-	config := storage.DefaultQueueConfig(queueName)
-	if err := m.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
+	config := queueStorage.DefaultQueueConfig(queueName)
+	if err := m.CreateQueue(ctx, config); err != nil && err != queueStorage.ErrQueueAlreadyExists {
 		return nil, err
 	}
 
@@ -192,7 +216,7 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	}
 
 	// Create message
-	msg := &storage.QueueMessage{
+	msg := &queueStorage.QueueMessage{
 		ID:           uuid.New().String(),
 		Payload:      payload,
 		Topic:        queueTopic,
@@ -200,7 +224,7 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 		PartitionID:  partitionID,
 		Sequence:     sequence,
 		Properties:   properties,
-		State:        storage.StateQueued,
+		State:        queueStorage.StateQueued,
 		CreatedAt:    time.Now(),
 	}
 
@@ -262,13 +286,13 @@ func (m *Manager) Ack(ctx context.Context, queueTopic, messageID string) error {
 	// Remove from inflight tracking
 	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID); err != nil {
 		// Message might not be inflight (already acked), ignore error
-		if err != storage.ErrMessageNotFound {
+		if err != queueStorage.ErrMessageNotFound {
 			return err
 		}
 	}
 
 	// Delete message
-	return m.messageStore.Delete(ctx, queue.Name(), messageID)
+	return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
 }
 
 // Nack negatively acknowledges a message (triggers immediate retry).
@@ -279,7 +303,7 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error 
 	}
 
 	// Get message
-	msg, err := m.messageStore.Get(ctx, queue.Name(), messageID)
+	msg, err := m.messageStore.GetMessage(ctx, queue.Name(), messageID)
 	if err != nil {
 		return err
 	}
@@ -290,11 +314,11 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error 
 	}
 
 	// Update message state for retry
-	msg.State = storage.StateRetry
+	msg.State = queueStorage.StateRetry
 	msg.RetryCount++
 	msg.NextRetryAt = time.Now() // Immediate retry
 
-	return m.messageStore.Update(ctx, queue.Name(), msg)
+	return m.messageStore.UpdateMessage(ctx, queue.Name(), msg)
 }
 
 // Reject permanently rejects a message (move to DLQ).
@@ -305,7 +329,7 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reas
 	}
 
 	// Get message
-	msg, err := m.messageStore.Get(ctx, queue.Name(), messageID)
+	msg, err := m.messageStore.GetMessage(ctx, queue.Name(), messageID)
 	if err != nil {
 		return err
 	}
@@ -318,7 +342,7 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reas
 	// Move to DLQ
 	config := queue.Config()
 	if config.DLQConfig.Enabled {
-		msg.State = storage.StateDLQ
+		msg.State = queueStorage.StateDLQ
 		msg.FailureReason = reason
 		msg.MovedToDLQAt = time.Now()
 
@@ -328,7 +352,7 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reas
 	}
 
 	// Delete from original queue
-	return m.messageStore.Delete(ctx, queue.Name(), messageID)
+	return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
 }
 
 // GetStats returns statistics for a queue.

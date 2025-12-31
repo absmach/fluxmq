@@ -6,7 +6,7 @@ package broker
 import (
 	"strings"
 
-	"github.com/absmach/mqtt/core/packets"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
 // isQueueTopic returns true if the topic is a queue topic.
@@ -37,12 +37,12 @@ func extractQueueTopicFromAck(ackTopic string) string {
 }
 
 // extractConsumerGroup extracts the consumer group from SUBSCRIBE properties.
-func extractConsumerGroup(props *packets.SubscribeProperties) string {
-	if props == nil || props.UserProperty == nil {
+func extractConsumerGroup(props *v5.SubscribeProperties) string {
+	if props == nil || props.User == nil {
 		return "" // Use clientID prefix as fallback
 	}
 
-	for _, prop := range props.UserProperty {
+	for _, prop := range props.User {
 		if prop.Key == "consumer-group" {
 			return prop.Value
 		}
@@ -51,14 +51,14 @@ func extractConsumerGroup(props *packets.SubscribeProperties) string {
 }
 
 // extractMessageID extracts the message ID from PUBLISH properties.
-func extractMessageID(props *packets.PublishProperties) string {
+func extractMessageID(props *v5.PublishProperties) string {
 	if props == nil {
 		return ""
 	}
 
 	// First check User Properties
-	if props.UserProperty != nil {
-		for _, prop := range props.UserProperty {
+	if props.User != nil {
+		for _, prop := range props.User {
 			if prop.Key == "message-id" {
 				return prop.Value
 			}
@@ -69,12 +69,12 @@ func extractMessageID(props *packets.PublishProperties) string {
 }
 
 // extractPartitionKey extracts the partition key from PUBLISH properties.
-func extractPartitionKey(props *packets.PublishProperties) string {
-	if props == nil || props.UserProperty == nil {
+func extractPartitionKey(props *v5.PublishProperties) string {
+	if props == nil || props.User == nil {
 		return ""
 	}
 
-	for _, prop := range props.UserProperty {
+	for _, prop := range props.User {
 		if prop.Key == "partition-key" {
 			return prop.Value
 		}
@@ -83,15 +83,15 @@ func extractPartitionKey(props *packets.PublishProperties) string {
 }
 
 // extractAllProperties converts PUBLISH properties to a map.
-func extractAllProperties(props *packets.PublishProperties) map[string]string {
+func extractAllProperties(props *v5.PublishProperties) map[string]string {
 	result := make(map[string]string)
 
 	if props == nil {
 		return result
 	}
 
-	if props.UserProperty != nil {
-		for _, prop := range props.UserProperty {
+	if props.User != nil {
+		for _, prop := range props.User {
 			result[prop.Key] = prop.Value
 		}
 	}

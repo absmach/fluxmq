@@ -40,7 +40,7 @@ func New() *Store {
 
 // QueueStore implementation
 
-func (s *Store) Create(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func (s *Store) Create(ctx context.Context, config storage.QueueConfig) error {
 	return nil
 }
 
-func (s *Store) Get(ctx context.Context, queueName string) (*storage.QueueConfig, error) {
+func (s *Store) GetQueue(ctx context.Context, queueName string) (*storage.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -82,7 +82,7 @@ func (s *Store) Get(ctx context.Context, queueName string) (*storage.QueueConfig
 	return &configCopy, nil
 }
 
-func (s *Store) Update(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) UpdateQueue(ctx context.Context, config storage.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func (s *Store) Update(ctx context.Context, config storage.QueueConfig) error {
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, queueName string) error {
+func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -116,7 +116,7 @@ func (s *Store) Delete(ctx context.Context, queueName string) error {
 	return nil
 }
 
-func (s *Store) List(ctx context.Context) ([]storage.QueueConfig, error) {
+func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -185,7 +185,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	return nil, nil
 }
 
-func (s *Store) Update(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -204,7 +204,7 @@ func (s *Store) Update(ctx context.Context, queueName string, msg *storage.Queue
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, queueName string, messageID string) error {
+func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -226,7 +226,7 @@ func (s *Store) Delete(ctx context.Context, queueName string, messageID string) 
 	return storage.ErrMessageNotFound
 }
 
-func (s *Store) Get(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -342,6 +342,49 @@ func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*sto
 		msgCopy := *msg
 		messages = append(messages, &msgCopy)
 		count++
+	}
+
+	return messages, nil
+}
+
+func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dlqMessages, exists := s.dlq[dlqTopic]
+	if !exists {
+		return storage.ErrMessageNotFound
+	}
+
+	if _, exists := dlqMessages[messageID]; !exists {
+		return storage.ErrMessageNotFound
+	}
+
+	delete(dlqMessages, messageID)
+	return nil
+}
+
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.QueueMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	messages := make([]*storage.QueueMessage, 0)
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return messages, nil
+	}
+
+	partition, exists := partitions[partitionID]
+	if !exists {
+		return messages, nil
+	}
+
+	// Iterate through partition messages and collect those in retry state
+	for _, msg := range partition {
+		if msg.State == storage.StateRetry {
+			msgCopy := *msg
+			messages = append(messages, &msgCopy)
+		}
 	}
 
 	return messages, nil

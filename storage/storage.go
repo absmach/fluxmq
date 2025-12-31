@@ -218,9 +218,10 @@ func CopySubscription(sub *Subscription) *Subscription {
 
 // SubscribeOptions holds MQTT 5.0 subscription options.
 type SubscribeOptions struct {
-	NoLocal           bool // Don't receive own messages
-	RetainAsPublished bool // Keep original retain flag
-	RetainHandling    byte // 0=send, 1=new only, 2=none
+	NoLocal           bool   // Don't receive own messages
+	RetainAsPublished bool   // Keep original retain flag
+	RetainHandling    byte   // 0=send, 1=new only, 2=none
+	ConsumerGroup     string // Queue consumer group (MQTT v5 User Property)
 }
 
 // WillMessage represents a stored will message.
