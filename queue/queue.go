@@ -34,7 +34,7 @@ func NewQueue(config queueStorage.QueueConfig, messageStore queueStorage.Message
 		config:           config,
 		partitions:       partitions,
 		strategy:         &HashPartitionStrategy{},
-		consumerGroups:   NewConsumerGroupManager(config.Name, consumerStore),
+		consumerGroups:   NewConsumerGroupManager(config.Name, consumerStore, config.HeartbeatTimeout, partitions),
 		messageStore:     messageStore,
 		orderingEnforcer: NewOrderingEnforcer(config.Ordering),
 	}

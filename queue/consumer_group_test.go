@@ -29,7 +29,7 @@ func TestConsumerGroupManager_AddConsumer(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestConsumerGroupManager_AddConsumer_Duplicate(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestConsumerGroupManager_RemoveConsumer(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestConsumerGroupManager_RemoveConsumer(t *testing.T) {
 func TestConsumerGroupManager_RemoveConsumer_NonExistent(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err := mgr.RemoveConsumer(ctx, "nonexistent", "consumer1")
 	assert.Error(t, err)
@@ -100,7 +100,7 @@ func TestConsumerGroupManager_GetGroup(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	// Non-existent group
 	group, exists := mgr.GetGroup("nonexistent")
@@ -125,7 +125,7 @@ func TestConsumerGroupManager_ListGroups(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	// Empty initially
 	groups := mgr.ListGroups()
@@ -149,7 +149,7 @@ func TestConsumerGroupManager_Rebalance(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	// Add 3 consumers
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
@@ -198,7 +198,7 @@ func TestConsumerGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	// Add 2 consumers
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
@@ -236,7 +236,7 @@ func TestConsumerGroup_Consumers(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -259,7 +259,7 @@ func TestConsumerGroup_Size(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -281,7 +281,7 @@ func TestConsumerGroup_GetConsumerForPartition(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store)
+	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
