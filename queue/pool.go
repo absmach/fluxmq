@@ -1,0 +1,69 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package queue
+
+import (
+	"sync"
+
+	queueStorage "github.com/absmach/mqtt/queue/storage"
+)
+
+var (
+	messagePool = sync.Pool{
+		New: func() interface{} {
+			return &queueStorage.QueueMessage{
+				Properties: make(map[string]string, 8),
+			}
+		},
+	}
+
+	propertyMapPool = sync.Pool{
+		New: func() interface{} {
+			return make(map[string]string, 8)
+		},
+	}
+)
+
+// getMessageFromPool retrieves a QueueMessage from the pool.
+func getMessageFromPool() *queueStorage.QueueMessage {
+	return messagePool.Get().(*queueStorage.QueueMessage)
+}
+
+// putMessageToPool returns a QueueMessage to the pool.
+func putMessageToPool(msg *queueStorage.QueueMessage) {
+	if msg == nil {
+		return
+	}
+	// Clear only essential fields - pool New() creates fresh struct
+	msg.Payload = nil
+	// Clear map but keep allocated capacity
+	for k := range msg.Properties {
+		delete(msg.Properties, k)
+	}
+	messagePool.Put(msg)
+}
+
+// getPropertyMap retrieves a property map from the pool.
+func getPropertyMap() map[string]string {
+	return propertyMapPool.Get().(map[string]string)
+}
+
+// putPropertyMap returns a property map to the pool after clearing it.
+func putPropertyMap(m map[string]string) {
+	if m == nil {
+		return
+	}
+	// Clear before returning to pool
+	for k := range m {
+		delete(m, k)
+	}
+	propertyMapPool.Put(m)
+}
+
+// copyProperties copies properties from src to dst.
+func copyProperties(dst, src map[string]string) {
+	for k, v := range src {
+		dst[k] = v
+	}
+}

@@ -5,17 +5,20 @@ package queue
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 	"github.com/absmach/mqtt/queue/storage/memory"
+	brokerStorage "github.com/absmach/mqtt/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // MockBroker implements BrokerInterface for testing
 type MockBroker struct {
+	mu         sync.Mutex
 	deliveries map[string][]interface{}
 }
 
@@ -26,11 +29,30 @@ func NewMockBroker() *MockBroker {
 }
 
 func (m *MockBroker) DeliverToSession(ctx context.Context, clientID string, msg interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// For storage.Message with RefCountedBuffer, copy payload to prevent
+	// buffer pool exhaustion while keeping tests working
+	if storageMsg, ok := msg.(*brokerStorage.Message); ok && storageMsg.PayloadBuf != nil {
+		// Copy payload bytes before releasing buffer
+		payloadCopy := make([]byte, len(storageMsg.PayloadBuf.Bytes()))
+		copy(payloadCopy, storageMsg.PayloadBuf.Bytes())
+
+		// Release the buffer to return it to pool
+		storageMsg.ReleasePayload()
+
+		// Set legacy Payload field with the copy for test access
+		storageMsg.Payload = payloadCopy
+	}
+
 	m.deliveries[clientID] = append(m.deliveries[clientID], msg)
 	return nil
 }
 
 func (m *MockBroker) GetDeliveries(clientID string) []interface{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.deliveries[clientID]
 }
 

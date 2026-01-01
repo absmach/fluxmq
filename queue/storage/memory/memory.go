@@ -144,9 +144,38 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Queu
 		return fmt.Errorf("partition %d not found", msg.PartitionID)
 	}
 
-	msgCopy := *msg
-	partition[msg.Sequence] = &msgCopy
+	// Deep copy the message
+	msgCopy := s.deepCopyMessage(msg)
+	partition[msg.Sequence] = msgCopy
 	return nil
+}
+
+// deepCopyMessage creates a deep copy of a message including Properties map.
+func (s *Store) deepCopyMessage(msg *storage.QueueMessage) *storage.QueueMessage {
+	// Copy properties map
+	props := make(map[string]string, len(msg.Properties))
+	for k, v := range msg.Properties {
+		props[k] = v
+	}
+
+	return &storage.QueueMessage{
+		ID:            msg.ID,
+		Payload:       msg.Payload,
+		Topic:         msg.Topic,
+		PartitionKey:  msg.PartitionKey,
+		PartitionID:   msg.PartitionID,
+		Sequence:      msg.Sequence,
+		Properties:    props,
+		State:         msg.State,
+		CreatedAt:     msg.CreatedAt,
+		DeliveredAt:   msg.DeliveredAt,
+		NextRetryAt:   msg.NextRetryAt,
+		RetryCount:    msg.RetryCount,
+		FailureReason: msg.FailureReason,
+		FirstAttempt:  msg.FirstAttempt,
+		LastAttempt:   msg.LastAttempt,
+		MovedToDLQAt:  msg.MovedToDLQAt,
+	}
 }
 
 func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.QueueMessage, error) {

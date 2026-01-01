@@ -215,27 +215,36 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 		return fmt.Errorf("failed to get next sequence: %w", err)
 	}
 
-	// Create message
-	msg := &queueStorage.QueueMessage{
-		ID:           uuid.New().String(),
-		Payload:      payload,
-		Topic:        queueTopic,
-		PartitionKey: partitionKey,
-		PartitionID:  partitionID,
-		Sequence:     sequence,
-		Properties:   properties,
-		State:        queueStorage.StateQueued,
-		CreatedAt:    time.Now(),
-	}
+	// Get message from pool
+	msg := getMessageFromPool()
 
-	// Store message ID in properties for ack tracking
-	if msg.Properties == nil {
-		msg.Properties = make(map[string]string)
-	}
-	msg.Properties["message-id"] = msg.ID
+	// Get property map from pool and copy properties
+	msgProps := getPropertyMap()
+	copyProperties(msgProps, properties)
 
-	// Enqueue
-	return m.messageStore.Enqueue(ctx, queueTopic, msg)
+	// Generate message ID
+	msgID := uuid.New().String()
+	msgProps["message-id"] = msgID
+
+	// Populate message
+	msg.ID = msgID
+	msg.Payload = payload
+	msg.Topic = queueTopic
+	msg.PartitionKey = partitionKey
+	msg.PartitionID = partitionID
+	msg.Sequence = sequence
+	msg.Properties = msgProps
+	msg.State = queueStorage.StateQueued
+	msg.CreatedAt = time.Now()
+
+	// Enqueue (storage layer will make a deep copy)
+	err = m.messageStore.Enqueue(ctx, queueTopic, msg)
+
+	// Return to pools
+	putPropertyMap(msgProps)
+	putMessageToPool(msg)
+
+	return err
 }
 
 // Subscribe adds a consumer to a queue.
