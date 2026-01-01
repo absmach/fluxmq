@@ -363,7 +363,9 @@ func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Qu
 
 func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.QueueMessage, error) {
 	messages := make([]*storage.QueueMessage, 0, limit)
-	prefix := queueDLQPrefix + dlqTopic + ":"
+	// Remove $queue/dlq/ prefix if present (consistent with makeDLQKey)
+	topic := strings.TrimPrefix(dlqTopic, "$queue/dlq/")
+	prefix := queueDLQPrefix + topic + ":"
 
 	err := s.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
