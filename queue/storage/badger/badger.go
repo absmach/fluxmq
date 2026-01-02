@@ -198,6 +198,56 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	return msg, err
 }
 
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	prefix := makePartitionPrefix(queueName, partitionID)
+	var messages []*storage.QueueMessage
+
+	// Note: Using View (not Update) because we don't delete on dequeue - just read
+	// Messages are marked as delivered and tracked via inflight state
+	// Deletion happens on ACK
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		opts.PrefetchValues = true
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid() && len(messages) < limit; it.Next() {
+			item := it.Item()
+
+			var qm storage.QueueMessage
+			err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &qm)
+			})
+			if err != nil {
+				continue
+			}
+
+			// Only return queued or retry messages that are ready
+			if qm.State == storage.StateQueued ||
+			   (qm.State == storage.StateRetry && time.Now().After(qm.NextRetryAt)) {
+				messages = append(messages, &qm)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(messages) == 0 {
+		return nil, nil
+	}
+
+	return messages, nil
+}
+
 func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
 	key := makeMessageKey(queueName, msg.PartitionID, msg.Sequence)
 	data, err := json.Marshal(msg)

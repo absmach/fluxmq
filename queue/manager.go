@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/mqtt/queue/storage"
 	"github.com/google/uuid"
 )
 
@@ -25,9 +25,9 @@ type BrokerInterface interface {
 type Manager struct {
 	queues          map[string]*Queue
 	deliveryWorkers map[string]*DeliveryWorker
-	queueStore      queueStorage.QueueStore
-	messageStore    queueStorage.MessageStore
-	consumerStore   queueStorage.ConsumerStore
+	queueStore      storage.QueueStore
+	messageStore    storage.MessageStore
+	consumerStore   storage.ConsumerStore
 	broker          BrokerInterface
 	retryManager    *RetryManager
 	dlqManager      *DLQManager
@@ -38,9 +38,9 @@ type Manager struct {
 
 // Config holds configuration for the queue manager.
 type Config struct {
-	QueueStore    queueStorage.QueueStore
-	MessageStore  queueStorage.MessageStore
-	ConsumerStore queueStorage.ConsumerStore
+	QueueStore    storage.QueueStore
+	MessageStore  storage.MessageStore
+	ConsumerStore storage.ConsumerStore
 	Broker        BrokerInterface
 }
 
@@ -110,7 +110,7 @@ func (m *Manager) Stop() error {
 }
 
 // CreateQueue creates a new queue with the given configuration.
-func (m *Manager) CreateQueue(ctx context.Context, config queueStorage.QueueConfig) error {
+func (m *Manager) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
 	// Set defaults
 	if config.DLQConfig.Topic == "" && config.DLQConfig.Enabled {
 		config.DLQConfig.Topic = "$queue/dlq/" + strings.TrimPrefix(config.Name, "$queue/")
@@ -131,12 +131,12 @@ func (m *Manager) CreateQueue(ctx context.Context, config queueStorage.QueueConf
 }
 
 // createQueueInstance creates a queue instance in memory.
-func (m *Manager) createQueueInstance(config queueStorage.QueueConfig) error {
+func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if _, exists := m.queues[config.Name]; exists {
-		return queueStorage.ErrQueueAlreadyExists
+		return storage.ErrQueueAlreadyExists
 	}
 
 	queue := NewQueue(config, m.messageStore, m.consumerStore)
@@ -169,7 +169,7 @@ func (m *Manager) GetQueue(queueName string) (*Queue, error) {
 
 	queue, exists := m.queues[queueName]
 	if !exists {
-		return nil, queueStorage.ErrQueueNotFound
+		return nil, storage.ErrQueueNotFound
 	}
 
 	return queue, nil
@@ -183,13 +183,13 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string) (*Queu
 		return queue, nil
 	}
 
-	if err != queueStorage.ErrQueueNotFound {
+	if err != storage.ErrQueueNotFound {
 		return nil, err
 	}
 
 	// Create with default config
-	config := queueStorage.DefaultQueueConfig(queueName)
-	if err := m.CreateQueue(ctx, config); err != nil && err != queueStorage.ErrQueueAlreadyExists {
+	config := storage.DefaultQueueConfig(queueName)
+	if err := m.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
 		return nil, err
 	}
 
@@ -241,7 +241,7 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	msg.PartitionID = partitionID
 	msg.Sequence = sequence
 	msg.Properties = msgProps
-	msg.State = queueStorage.StateQueued
+	msg.State = storage.StateQueued
 	msg.CreatedAt = time.Now()
 
 	// Enqueue (storage layer will make a deep copy)
@@ -317,7 +317,7 @@ func (m *Manager) Ack(ctx context.Context, queueTopic, messageID string) error {
 	// Remove from inflight tracking
 	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID); err != nil {
 		// Message might not be inflight (already acked), ignore error
-		if err != queueStorage.ErrMessageNotFound {
+		if err != storage.ErrMessageNotFound {
 			return err
 		}
 	}
@@ -345,7 +345,7 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error 
 	}
 
 	// Update message state for retry
-	msg.State = queueStorage.StateRetry
+	msg.State = storage.StateRetry
 	msg.RetryCount++
 	msg.NextRetryAt = time.Now() // Immediate retry
 
@@ -373,7 +373,7 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reas
 	// Move to DLQ
 	config := queue.Config()
 	if config.DLQConfig.Enabled {
-		msg.State = queueStorage.StateDLQ
+		msg.State = storage.StateDLQ
 		msg.FailureReason = reason
 		msg.MovedToDLQAt = time.Now()
 

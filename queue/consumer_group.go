@@ -114,6 +114,16 @@ func (cgm *ConsumerGroupManager) ListGroups() []*ConsumerGroup {
 	for _, group := range cgm.groups {
 		groups = append(groups, group)
 	}
+
+	// Sort groups by ID for deterministic ordering (important for round-robin)
+	for i := 0; i < len(groups)-1; i++ {
+		for j := i + 1; j < len(groups); j++ {
+			if groups[i].ID() > groups[j].ID() {
+				groups[i], groups[j] = groups[j], groups[i]
+			}
+		}
+	}
+
 	return groups
 }
 

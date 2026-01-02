@@ -29,6 +29,8 @@ type PartitionWorker struct {
 
 	batchSize       int           // Max messages to process per wake
 	debounceTimeout time.Duration // Small delay to batch rapid enqueues
+
+	groupIndex int // Round-robin index for consumer groups
 }
 
 // NewPartitionWorker creates a new partition worker.
@@ -97,13 +99,6 @@ func (pw *PartitionWorker) Notify() {
 
 // ProcessMessages processes up to batchSize messages from the partition.
 func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
-	// Get partition assignment
-	partition, exists := pw.queue.GetPartition(pw.partitionID)
-	if !exists || !partition.IsAssigned() {
-		// Partition not assigned to any consumer, skip
-		return
-	}
-
 	// Get consumer groups
 	groups := pw.queue.ConsumerGroups().ListGroups()
 	if len(groups) == 0 {
@@ -125,17 +120,17 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 		return
 	}
 
-	// Round-robin messages across consumer groups
-	// This ensures fair distribution when multiple groups consume from same partition
-	groupIndex := 0
+	// Round-robin messages across consumer groups for fair distribution
+	// Each message goes to exactly one group (not broadcast to all)
+	// groupIndex persists across calls to ensure fair distribution
 	for _, msg := range messages {
 		if len(groups) == 0 {
 			continue
 		}
 
 		// Get next group in round-robin fashion
-		group := groups[groupIndex%len(groups)]
-		groupIndex++
+		group := groups[pw.groupIndex%len(groups)]
+		pw.groupIndex++
 
 		consumer, exists := group.GetConsumerForPartition(pw.partitionID)
 		if !exists {
