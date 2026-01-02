@@ -72,7 +72,8 @@ func TestNewDeliveryWorker(t *testing.T) {
 	assert.Equal(t, queue, worker.queue)
 	assert.Equal(t, store, worker.messageStore)
 	assert.Equal(t, broker, worker.broker)
-	assert.Equal(t, 100*time.Millisecond, worker.tickInterval)
+	assert.NotNil(t, worker.partitionWorkers)
+	assert.Equal(t, len(queue.Partitions()), len(worker.partitionWorkers))
 	assert.NotNil(t, worker.stopCh)
 }
 

@@ -142,6 +142,7 @@ type MessageStore interface {
 	// Message operations
 	Enqueue(ctx context.Context, queueName string, msg *QueueMessage) error
 	Dequeue(ctx context.Context, queueName string, partitionID int) (*QueueMessage, error)
+	DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*QueueMessage, error)
 	UpdateMessage(ctx context.Context, queueName string, msg *QueueMessage) error
 	DeleteMessage(ctx context.Context, queueName string, messageID string) error
 	GetMessage(ctx context.Context, queueName string, messageID string) (*QueueMessage, error)

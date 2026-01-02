@@ -4,9 +4,18 @@
 package queue
 
 import (
+	"hash"
 	"hash/fnv"
 	"math/rand"
+	"sync"
 )
+
+// Hash pool for partition selection
+var hashPool = sync.Pool{
+	New: func() interface{} {
+		return fnv.New32a()
+	},
+}
 
 // PartitionStrategy determines how messages are assigned to partitions.
 type PartitionStrategy interface {
@@ -23,9 +32,15 @@ func (h *HashPartitionStrategy) GetPartition(partitionKey string, numPartitions 
 		return rand.Intn(numPartitions)
 	}
 
-	hash := fnv.New32a()
-	hash.Write([]byte(partitionKey))
-	return int(hash.Sum32()) % numPartitions
+	// Get hash from pool
+	hasher := hashPool.Get().(hash.Hash32)
+	defer func() {
+		hasher.Reset()
+		hashPool.Put(hasher)
+	}()
+
+	hasher.Write([]byte(partitionKey))
+	return int(hasher.Sum32()) % numPartitions
 }
 
 // Partition represents a single partition within a queue.

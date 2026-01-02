@@ -214,6 +214,59 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	return nil, nil
 }
 
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	partition, exists := partitions[partitionID]
+	if !exists {
+		return nil, fmt.Errorf("partition %d not found", partitionID)
+	}
+
+	// Collect all sequences for available messages
+	type seqMsg struct {
+		seq uint64
+		msg *storage.QueueMessage
+	}
+	var available []seqMsg
+
+	now := time.Now()
+	for seq, m := range partition {
+		if m.State == storage.StateQueued ||
+		   (m.State == storage.StateRetry && now.After(m.NextRetryAt)) {
+			available = append(available, seqMsg{seq, m})
+		}
+	}
+
+	// Sort by sequence to maintain order
+	for i := 0; i < len(available)-1; i++ {
+		for j := i + 1; j < len(available); j++ {
+			if available[i].seq > available[j].seq {
+				available[i], available[j] = available[j], available[i]
+			}
+		}
+	}
+
+	// Take up to limit messages
+	count := len(available)
+	if limit > 0 && count > limit {
+		count = limit
+	}
+
+	messages := make([]*storage.QueueMessage, 0, count)
+	for i := 0; i < count; i++ {
+		msgCopy := *available[i].msg
+		messages = append(messages, &msgCopy)
+	}
+
+	return messages, nil
+}
+
 func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

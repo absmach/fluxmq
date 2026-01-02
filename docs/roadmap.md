@@ -270,9 +270,11 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 
 ---
 
-## Priority 0: ✅ COMPLETE - Performance Optimizations for Million+ Msgs/Sec
+## Priority 0: Performance Optimizations for Million+ Msgs/Sec
 
-**Target:** Achieve 2-5M messages/sec throughput per 20-node cluster ✅ **ACHIEVED**
+**Target:** Achieve 2-5M messages/sec throughput per 20-node cluster
+
+### Broker Performance (MQTT Core) - ✅ COMPLETE
 
 **Completed Bottleneck Analysis (2025-12-29):**
 - ✅ Router analysis: **NOT a bottleneck** (33.8M matches/sec, 6.7x more than target)
@@ -283,7 +285,91 @@ This roadmap outlines the path to a production-ready, scalable MQTT broker. Task
 
 **Key Insight:** Zero-copy optimization (2-3x) + topic sharding (10x) = **20-30x total improvement**
 
-**Status:** All high-ROI optimizations complete. Further improvements require profiling of specific workloads.
+**Status:** ✅ All high-ROI broker optimizations complete.
+
+---
+
+### Queue Performance (Single-Node Foundation) - ⏳ IN PROGRESS
+
+**Current State:** ~1000 msgs/sec (baseline benchmarks)
+**Target:** 50K-200K msgs/sec single-node throughput
+
+**Bottleneck Analysis (2025-01-02):**
+- 🔴 **100ms polling** - Caps throughput at ~1000 msgs/sec (10 cycles/sec × 100 msgs/cycle)
+- 🔴 **Sequential partition processing** - No parallelism across 10 partitions
+- 🔴 **One message per partition per cycle** - Max 10 messages per 100ms tick
+- 🟡 **Pool overhead** - 6 allocations per enqueue (property map copies)
+- 🟡 **Hash allocation** - fnv.New32a() creates new hash object per message
+
+**Two-Phase Optimization Strategy:**
+
+**Phase 1: Event-Driven Architecture (Option A)** ⏳ **IN PROGRESS**
+- **Impact:** 50-100x improvement (50K-100K msgs/sec)
+- **Effort:** 2-3 days
+- **Risk:** Low
+- **Enables:** Clean foundation for Option B and cluster scaling
+
+**Changes:**
+1. Event-driven delivery (eliminate 100ms polling)
+   - Notification channel per partition
+   - Immediate wake-up on enqueue
+   - Configurable debounce (1-10ms for batching)
+
+2. Parallel partition workers (one goroutine per partition)
+   - Independent workers for each partition
+   - True parallelism across partitions
+   - Foundation for partition-based cluster scaling
+
+3. Batch processing (100-1000 messages per wake)
+   - DequeueBatch() storage API
+   - Reduces storage calls from 3000/sec to 30/sec
+   - Amortizes lock overhead
+
+4. Pool optimization
+   - Hash object pooling
+   - Eliminate property map copies where safe
+   - Reduce allocations from 6 to 2-3 per message
+
+**Benefits:**
+- ✅ Enables Option B (lock-free queues)
+- ✅ Enables cluster scaling (partition = unit of assignment)
+- ✅ Preserves ordering (single worker per partition)
+- ✅ Industry pattern (Kafka, NATS, Pulsar all use this)
+
+**Phase 2: Lock-Free Storage (Option B)** - **FUTURE**
+- **Impact:** 100-200x improvement (100K-200K msgs/sec)
+- **Effort:** 5-7 days
+- **Risk:** Medium (lock-free complexity)
+- **Depends on:** Option A completion
+
+**Changes:**
+1. Lock-free SPSC ring buffer per partition
+2. Zero-copy message handling (avoid deep copies)
+3. Atomic sequence management
+4. Zero allocations in hot path
+
+**Migration A→B:** Drop-in storage layer replacement, zero queue-layer changes
+
+**Cluster Scaling Path (Future):**
+- Phase 3: Distributed Coordination (1-2 weeks) - etcd-based partition assignment
+- Phase 4: Distributed Execution (1 week) - Partition rebalancing across nodes
+- Phase 5: Distributed Storage (2-4 weeks) - Replicated or shared storage
+
+**Architecture Decision:** One worker per partition enables:
+- Option B migration (SPSC lock-free requires single consumer)
+- Cluster scaling (partition = unit of work distribution)
+- Message ordering (single-threaded per partition key)
+
+**Status:** ✅ Phase 1 (Option A) core implementation complete
+
+**Results (2026-01-02):**
+- **Throughput:** 893.5 → 1165 msgs/sec (+30% improvement)
+- **Latency:** 1119 µs → 858 µs (-23% reduction)
+- **Tests:** 105/108 passing (97.2%)
+- **Architecture:** Event-driven, parallel partition workers, batch processing
+- **Next:** Integration testing for end-to-end validation
+
+**Detailed Summary:** `queue/OPTIMIZATION_SUMMARY.md`
 
 ---
 

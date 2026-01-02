@@ -5,164 +5,94 @@ package queue
 
 import (
 	"context"
-	"fmt"
-	"time"
+	"sync"
 
-	"github.com/absmach/mqtt/core"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	brokerStorage "github.com/absmach/mqtt/storage"
+	"github.com/absmach/mqtt/queue/storage"
 )
 
-// DeliveryWorker handles message delivery for a queue.
+// DeliveryWorker manages partition workers for a queue.
+// This is the coordinator that creates one worker per partition,
+// enabling true parallelism and providing the foundation for
+// both lock-free optimization and cluster scaling.
 type DeliveryWorker struct {
-	queue        *Queue
-	messageStore queueStorage.MessageStore
-	broker       BrokerInterface
-	stopCh       chan struct{}
-	tickInterval time.Duration
+	queue            *Queue
+	messageStore     storage.MessageStore
+	broker           BrokerInterface
+	partitionWorkers []*PartitionWorker
+	stopCh           chan struct{}
+	wg               sync.WaitGroup
 }
 
 // NewDeliveryWorker creates a new delivery worker for a queue.
-func NewDeliveryWorker(queue *Queue, messageStore queueStorage.MessageStore, broker BrokerInterface) *DeliveryWorker {
+func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker BrokerInterface) *DeliveryWorker {
+	config := queue.Config()
+	batchSize := config.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100 // Default batch size for good performance
+	}
+
+	// Create one worker per partition
+	workers := make([]*PartitionWorker, 0, len(queue.Partitions()))
+	for _, partition := range queue.Partitions() {
+		worker := NewPartitionWorker(
+			queue.Name(),
+			partition.ID(),
+			queue,
+			messageStore,
+			broker,
+			batchSize,
+		)
+		workers = append(workers, worker)
+	}
+
 	return &DeliveryWorker{
-		queue:        queue,
-		messageStore: messageStore,
-		broker:       broker,
-		stopCh:       make(chan struct{}),
-		tickInterval: 100 * time.Millisecond, // Check for messages every 100ms
+		queue:            queue,
+		messageStore:     messageStore,
+		broker:           broker,
+		partitionWorkers: workers,
+		stopCh:           make(chan struct{}),
 	}
 }
 
-// Start starts the delivery worker.
+// Start starts all partition workers.
 func (dw *DeliveryWorker) Start(ctx context.Context) {
-	ticker := time.NewTicker(dw.tickInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-dw.stopCh:
-			return
-		case <-ticker.C:
-			dw.deliverMessages(ctx)
-		}
+	// Start one goroutine per partition worker
+	for _, worker := range dw.partitionWorkers {
+		dw.wg.Add(1)
+		go func(w *PartitionWorker) {
+			defer dw.wg.Done()
+			w.Start(ctx)
+		}(worker)
 	}
 }
 
-// Stop stops the delivery worker.
+// Stop stops all partition workers.
 func (dw *DeliveryWorker) Stop() {
+	// Stop all workers
+	for _, worker := range dw.partitionWorkers {
+		worker.Stop()
+	}
+
+	// Wait for all workers to finish
+	dw.wg.Wait()
+
 	close(dw.stopCh)
 }
 
-// deliverMessages attempts to deliver pending messages to consumers.
+// NotifyPartition notifies a specific partition worker that messages are available.
+// This is called by the enqueue operation to wake the worker immediately.
+func (dw *DeliveryWorker) NotifyPartition(partitionID int) {
+	if partitionID >= 0 && partitionID < len(dw.partitionWorkers) {
+		dw.partitionWorkers[partitionID].Notify()
+	}
+}
+
+// deliverMessages is kept for backward compatibility with tests.
+// It processes messages synchronously on all partition workers.
 func (dw *DeliveryWorker) deliverMessages(ctx context.Context) {
-	config := dw.queue.Config()
-
-	// Process each partition
-	for _, partition := range dw.queue.Partitions() {
-		// Skip if partition is not assigned
-		if !partition.IsAssigned() {
-			continue
-		}
-
-		// Get all consumer groups
-		groups := dw.queue.ConsumerGroups().ListGroups()
-		for _, group := range groups {
-			// Get consumer assigned to this partition in this group
-			consumer, exists := group.GetConsumerForPartition(partition.ID())
-			if !exists {
-				continue
-			}
-
-			// Try to deliver next message
-			if err := dw.deliverNext(ctx, partition.ID(), consumer, config); err != nil {
-				// Log error but continue (delivery will be retried on next tick)
-				continue
-			}
-		}
+	// Process messages synchronously for all partition workers
+	// This ensures tests can verify delivery immediately
+	for _, worker := range dw.partitionWorkers {
+		worker.ProcessMessages(ctx)
 	}
-}
-
-// deliverNext delivers the next available message from a partition to a consumer.
-func (dw *DeliveryWorker) deliverNext(ctx context.Context, partitionID int, consumer *queueStorage.Consumer, config queueStorage.QueueConfig) error {
-	// Dequeue next message
-	msg, err := dw.messageStore.Dequeue(ctx, dw.queue.Name(), partitionID)
-	if err != nil {
-		return fmt.Errorf("failed to dequeue: %w", err)
-	}
-
-	if msg == nil {
-		// No messages available
-		return nil
-	}
-
-	// Check ordering constraints
-	if dw.queue.OrderingEnforcer() != nil {
-		canDeliver, err := dw.queue.OrderingEnforcer().CanDeliver(msg)
-		if err != nil {
-			return fmt.Errorf("ordering check failed: %w", err)
-		}
-		if !canDeliver {
-			// Message cannot be delivered due to ordering constraints
-			// This shouldn't happen in practice since Dequeue returns messages in order
-			return fmt.Errorf("message violates ordering constraints")
-		}
-	}
-
-	// Mark as inflight
-	deliveryState := &queueStorage.DeliveryState{
-		MessageID:   msg.ID,
-		QueueName:   dw.queue.Name(),
-		PartitionID: partitionID,
-		ConsumerID:  consumer.ID,
-		DeliveredAt: time.Now(),
-		Timeout:     time.Now().Add(config.DeliveryTimeout),
-		RetryCount:  msg.RetryCount,
-	}
-
-	if err := dw.messageStore.MarkInflight(ctx, deliveryState); err != nil {
-		return fmt.Errorf("failed to mark inflight: %w", err)
-	}
-
-	// Update message state
-	msg.State = queueStorage.StateDelivered
-	msg.DeliveredAt = time.Now()
-
-	if err := dw.messageStore.UpdateMessage(ctx, dw.queue.Name(), msg); err != nil {
-		return fmt.Errorf("failed to update message: %w", err)
-	}
-
-	// Deliver to consumer via broker
-	if dw.broker != nil {
-		storageMsg := toStorageMessage(msg, dw.queue.Name())
-		if err := dw.broker.DeliverToSession(ctx, consumer.ClientID, storageMsg); err != nil {
-			// Delivery failed, but message is marked inflight
-			// Retry logic will handle re-delivery
-			return fmt.Errorf("failed to deliver to client %s: %w", consumer.ClientID, err)
-		}
-	}
-
-	// Mark message as delivered in ordering enforcer
-	if dw.queue.OrderingEnforcer() != nil {
-		dw.queue.OrderingEnforcer().MarkDelivered(msg)
-	}
-
-	return nil
-}
-
-// toStorageMessage converts a queue message to a broker storage message for MQTT delivery.
-func toStorageMessage(msg *queueStorage.QueueMessage, queueTopic string) interface{} {
-	// Create a broker storage.Message with zero-copy buffer
-	buf := core.GetBufferWithData(msg.Payload)
-
-	storageMsg := &brokerStorage.Message{
-		Topic:      queueTopic,
-		QoS:        1, // Queue messages always use QoS 1 for delivery confirmation
-		Retain:     false,
-		Properties: msg.Properties,
-	}
-	storageMsg.SetPayloadFromBuffer(buf)
-
-	return storageMsg
 }

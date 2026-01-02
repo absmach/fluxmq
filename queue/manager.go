@@ -218,9 +218,16 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	// Get message from pool
 	msg := getMessageFromPool()
 
-	// Get property map from pool and copy properties
-	msgProps := getPropertyMap()
-	copyProperties(msgProps, properties)
+	// Optimize: avoid pool allocation for properties if input is empty
+	var msgProps map[string]string
+	if len(properties) == 0 {
+		// No properties from caller, just create small map for message-id
+		msgProps = make(map[string]string, 1)
+	} else {
+		// Get property map from pool and copy properties
+		msgProps = getPropertyMap()
+		copyProperties(msgProps, properties)
+	}
 
 	// Generate message ID
 	msgID := uuid.New().String()
@@ -240,11 +247,26 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	// Enqueue (storage layer will make a deep copy)
 	err = m.messageStore.Enqueue(ctx, queueTopic, msg)
 
-	// Return to pools
-	putPropertyMap(msgProps)
+	// Return to pools (only if we used pool)
+	if len(properties) > 0 {
+		putPropertyMap(msgProps)
+	}
 	putMessageToPool(msg)
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Notify partition worker that a message is available (event-driven delivery)
+	m.mu.RLock()
+	worker, exists := m.deliveryWorkers[queueTopic]
+	m.mu.RUnlock()
+
+	if exists {
+		worker.NotifyPartition(partitionID)
+	}
+
+	return nil
 }
 
 // Subscribe adds a consumer to a queue.
