@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/broker/events"
-	brokerrouter "github.com/absmach/mqtt/broker/router"
+	"github.com/absmach/mqtt/broker/router"
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/core"
@@ -94,7 +94,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		store = memory.New()
 	}
 
-	router := brokerrouter.NewRouter()
+	router := router.NewRouter()
 
 	if logger == nil {
 		logger = slog.Default()
