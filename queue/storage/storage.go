@@ -85,11 +85,11 @@ type QueueMessage struct {
 	Properties   map[string]string
 
 	// Lifecycle tracking
-	State        MessageState
-	CreatedAt    time.Time
-	DeliveredAt  time.Time
-	NextRetryAt  time.Time
-	RetryCount   int
+	State       MessageState
+	CreatedAt   time.Time
+	DeliveredAt time.Time
+	NextRetryAt time.Time
+	RetryCount  int
 
 	// DLQ metadata
 	FailureReason string
@@ -111,14 +111,14 @@ type DeliveryState struct {
 
 // Consumer represents a queue consumer.
 type Consumer struct {
-	ID              string
-	ClientID        string
-	GroupID         string
-	QueueName       string
-	AssignedParts   []int
-	RegisteredAt    time.Time
-	LastHeartbeat   time.Time
-	ProxyNodeID     string // For cluster routing
+	ID            string
+	ClientID      string
+	GroupID       string
+	QueueName     string
+	AssignedParts []int
+	RegisteredAt  time.Time
+	LastHeartbeat time.Time
+	ProxyNodeID   string // For cluster routing
 }
 
 // ConsumerGroup represents a group of consumers.
@@ -183,11 +183,11 @@ type ConsumerStore interface {
 // DefaultQueueConfig returns default queue configuration.
 func DefaultQueueConfig(name string) QueueConfig {
 	return QueueConfig{
-		Name:            name,
-		Partitions:      10,
-		Ordering:        OrderingPartition,
-		MaxMessageSize:  1024 * 1024,     // 1MB
-		MaxQueueDepth:   100000,
+		Name:             name,
+		Partitions:       10,
+		Ordering:         OrderingPartition,
+		MaxMessageSize:   1024 * 1024, // 1MB
+		MaxQueueDepth:    100000,
 		MessageTTL:       7 * 24 * time.Hour, // 7 days
 		DeliveryTimeout:  30 * time.Second,
 		BatchSize:        1,
@@ -210,50 +210,39 @@ func DefaultQueueConfig(name string) QueueConfig {
 
 // Validate validates queue configuration.
 func (c *QueueConfig) Validate() error {
-	if c.Name == "" {
+	switch {
+
+	case c.Name == "":
 		return ErrInvalidConfig
-	}
-	// Queue name must start with $queue/
-	if !strings.HasPrefix(c.Name, "$queue/") {
+	case !strings.HasPrefix(c.Name, "$queue/"):
+		// Queue name must start with $queue/
 		return ErrInvalidConfig
-	}
-	if c.Partitions < 1 {
+	case c.Partitions < 1:
 		return ErrInvalidConfig
-	}
-	if c.Partitions > 1000 { // Reasonable upper limit
+	case c.Partitions > 1000:
+		// Reasonable upper limit
 		return ErrInvalidConfig
-	}
-	if c.Ordering != OrderingNone && c.Ordering != OrderingPartition && c.Ordering != OrderingStrict {
+	case c.Ordering != OrderingNone && c.Ordering != OrderingPartition && c.Ordering != OrderingStrict:
 		return ErrInvalidConfig
-	}
-	if c.Ordering == OrderingStrict && c.Partitions != 1 {
+	case c.Ordering == OrderingStrict && c.Partitions != 1:
 		return ErrInvalidConfig
-	}
-	if c.MaxMessageSize <= 0 {
+	case c.MaxMessageSize <= 0:
 		return ErrInvalidConfig
-	}
-	if c.MaxQueueDepth <= 0 {
+	case c.MaxQueueDepth <= 0:
 		return ErrInvalidConfig
-	}
-	if c.DeliveryTimeout <= 0 {
+	case c.DeliveryTimeout <= 0:
 		return ErrInvalidConfig
-	}
-	if c.BatchSize <= 0 {
+	case c.BatchSize <= 0:
 		return ErrInvalidConfig
-	}
-	if c.HeartbeatTimeout <= 0 {
+	case c.HeartbeatTimeout <= 0:
 		return ErrInvalidConfig
-	}
-	if c.RetryPolicy.MaxRetries < 0 {
+	case c.RetryPolicy.MaxRetries < 0:
 		return ErrInvalidConfig
-	}
-	if c.RetryPolicy.InitialBackoff < 0 || c.RetryPolicy.MaxBackoff < c.RetryPolicy.InitialBackoff {
+	case c.RetryPolicy.InitialBackoff < 0 || c.RetryPolicy.MaxBackoff < c.RetryPolicy.InitialBackoff:
 		return ErrInvalidConfig
-	}
-	if c.RetryPolicy.BackoffMultiplier < 1.0 {
+	case c.RetryPolicy.BackoffMultiplier < 1.0:
 		return ErrInvalidConfig
-	}
-	if c.RetryPolicy.TotalTimeout < 0 {
+	case c.RetryPolicy.TotalTimeout < 0:
 		return ErrInvalidConfig
 	}
 	return nil
