@@ -160,7 +160,7 @@ func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 	// Enqueue message with partition key
 	props := map[string]string{"partition-key": "test-key"}
 	partitionID := queue.GetPartitionForMessage("test-key")
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
@@ -209,7 +209,7 @@ func TestDeliveryWorker_DeliverMessages_MultiplePartitions(t *testing.T) {
 
 	// Enqueue messages to different partitions
 	for i := 0; i < 3; i++ {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          "msg-" + string(rune('0'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('0'+i))),
@@ -253,7 +253,7 @@ func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 	partitionID := queue.GetPartitionForMessage("test-key")
 
 	for i := 0; i < 2; i++ {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          "msg-" + string(rune('1'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('1'+i))),
@@ -292,7 +292,7 @@ func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {
 	broker := NewMockBrokerWithError()
 
 	// Enqueue message but don't assign any consumer
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
@@ -334,7 +334,7 @@ func TestDeliveryWorker_DeliverNext_BrokerDeliveryError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue message
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
@@ -406,7 +406,7 @@ func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 
 	// Enqueue messages in order
 	for i := 0; i < 3; i++ {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          "msg-" + string(rune('0'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('0'+i))),
@@ -455,7 +455,7 @@ func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue message
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
@@ -484,7 +484,7 @@ func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 }
 
 func TestToStorageMessage(t *testing.T) {
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:      "msg-1",
 		Topic:   "$queue/test",
 		Payload: []byte("test payload"),
@@ -530,7 +530,7 @@ func TestDeliveryWorker_ConcurrentDelivery(t *testing.T) {
 	// Enqueue messages to different partitions
 	for i := 0; i < 10; i++ {
 		partitionID := i % 4
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          "msg-" + string(rune('0'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('0'+i))),

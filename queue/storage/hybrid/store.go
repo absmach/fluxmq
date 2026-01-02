@@ -170,7 +170,7 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 // 2. Persist to BadgerDB first for durability
 // 3. Try lock-free ring buffer (best effort hot path)
 // 4. Track metrics for hit/miss rate
-func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
 	// Validate queue exists
 	_, err := s.GetQueue(ctx, queueName)
 	if err != nil {
@@ -213,7 +213,7 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Queu
 // 2. Try lock-free ring buffer first (hot path)
 // 3. Mark as delivered in BadgerDB to avoid duplicates
 // 4. If ring buffer empty, read from BadgerDB (cold path)
-func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.QueueMessage, error) {
+func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.Message, error) {
 	// Validate queue exists
 	_, err := s.GetQueue(ctx, queueName)
 	if err != nil {
@@ -264,8 +264,8 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 // 2. Mark ring buffer messages as delivered in BadgerDB
 // 3. If needed, fetch remaining from BadgerDB
 // 4. Combine results
-func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
-	var messages []*storage.QueueMessage
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+	var messages []*storage.Message
 
 	// Drain lock-free ring buffer first (hot path)
 	ringMessages, err := s.lockfree.DequeueBatch(ctx, queueName, partitionID, limit)
@@ -332,7 +332,7 @@ func (s *Store) GetNextSequence(ctx context.Context, queueName string, partition
 
 // All metadata operations delegate to persistent store
 
-func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.Message) error {
 	return s.persistent.UpdateMessage(ctx, queueName, msg)
 }
 
@@ -340,7 +340,7 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 	return s.persistent.DeleteMessage(ctx, queueName, messageID)
 }
 
-func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.Message, error) {
 	return s.persistent.GetMessage(ctx, queueName, messageID)
 }
 
@@ -360,11 +360,11 @@ func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string)
 	return s.persistent.RemoveInflight(ctx, queueName, messageID)
 }
 
-func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.QueueMessage) error {
+func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Message) error {
 	return s.persistent.EnqueueDLQ(ctx, dlqTopic, msg)
 }
 
-func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.QueueMessage, error) {
+func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.Message, error) {
 	return s.persistent.ListDLQ(ctx, dlqTopic, limit)
 }
 
@@ -372,7 +372,7 @@ func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string
 	return s.persistent.DeleteDLQMessage(ctx, dlqTopic, messageID)
 }
 
-func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.QueueMessage, error) {
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
 	return s.persistent.ListRetry(ctx, queueName, partitionID)
 }
 
@@ -384,7 +384,7 @@ func (s *Store) GetOffset(ctx context.Context, queueName string, partitionID int
 	return s.persistent.GetOffset(ctx, queueName, partitionID)
 }
 
-func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
+func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
 	return s.persistent.ListQueued(ctx, queueName, partitionID, limit)
 }
 

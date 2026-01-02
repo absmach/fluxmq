@@ -150,7 +150,7 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 
 // MessageStore implementation
 
-func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
 	key := makeMessageKey(queueName, msg.PartitionID, msg.Sequence)
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -162,9 +162,9 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Queu
 	})
 }
 
-func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.QueueMessage, error) {
+func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.Message, error) {
 	prefix := makePartitionPrefix(queueName, partitionID)
-	var msg *storage.QueueMessage
+	var msg *storage.Message
 
 	err := s.db.Update(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -177,7 +177,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 
-			var qm storage.QueueMessage
+			var qm storage.Message
 			err := item.Value(func(val []byte) error {
 				return json.Unmarshal(val, &qm)
 			})
@@ -187,7 +187,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 
 			// Only return queued or retry messages that are ready
 			if qm.State == storage.StateQueued ||
-			   (qm.State == storage.StateRetry && time.Now().After(qm.NextRetryAt)) {
+				(qm.State == storage.StateRetry && time.Now().After(qm.NextRetryAt)) {
 				msg = &qm
 				return nil
 			}
@@ -198,13 +198,13 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	return msg, err
 }
 
-func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 
 	prefix := makePartitionPrefix(queueName, partitionID)
-	var messages []*storage.QueueMessage
+	var messages []*storage.Message
 
 	// Note: Using View (not Update) because we don't delete on dequeue - just read
 	// Messages are marked as delivered and tracked via inflight state
@@ -220,7 +220,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 		for it.Rewind(); it.Valid() && len(messages) < limit; it.Next() {
 			item := it.Item()
 
-			var qm storage.QueueMessage
+			var qm storage.Message
 			err := item.Value(func(val []byte) error {
 				return json.Unmarshal(val, &qm)
 			})
@@ -230,7 +230,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 
 			// Only return queued or retry messages that are ready
 			if qm.State == storage.StateQueued ||
-			   (qm.State == storage.StateRetry && time.Now().After(qm.NextRetryAt)) {
+				(qm.State == storage.StateRetry && time.Now().After(qm.NextRetryAt)) {
 				messages = append(messages, &qm)
 			}
 		}
@@ -248,7 +248,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 	return messages, nil
 }
 
-func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.Message) error {
 	key := makeMessageKey(queueName, msg.PartitionID, msg.Sequence)
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -273,7 +273,7 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 
-			var msg storage.QueueMessage
+			var msg storage.Message
 			err := item.Value(func(val []byte) error {
 				return json.Unmarshal(val, &msg)
 			})
@@ -290,8 +290,8 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 	})
 }
 
-func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
-	var result *storage.QueueMessage
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.Message, error) {
+	var result *storage.Message
 
 	err := s.db.View(func(txn *badger.Txn) error {
 		prefix := queueMessagePrefix + queueName + ":"
@@ -304,7 +304,7 @@ func (s *Store) GetMessage(ctx context.Context, queueName string, messageID stri
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 
-			var msg storage.QueueMessage
+			var msg storage.Message
 			err := item.Value(func(val []byte) error {
 				return json.Unmarshal(val, &msg)
 			})
@@ -399,7 +399,7 @@ func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string)
 	})
 }
 
-func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.QueueMessage) error {
+func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Message) error {
 	key := makeDLQKey(dlqTopic, msg.ID)
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -411,8 +411,8 @@ func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Qu
 	})
 }
 
-func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.QueueMessage, error) {
-	messages := make([]*storage.QueueMessage, 0, limit)
+func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.Message, error) {
+	messages := make([]*storage.Message, 0, limit)
 	// Remove $queue/dlq/ prefix if present (consistent with makeDLQKey)
 	topic := strings.TrimPrefix(dlqTopic, "$queue/dlq/")
 	prefix := queueDLQPrefix + topic + ":"
@@ -428,7 +428,7 @@ func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*sto
 		for it.Rewind(); it.Valid() && (limit == 0 || count < limit); it.Next() {
 			item := it.Item()
 			err := item.Value(func(val []byte) error {
-				var msg storage.QueueMessage
+				var msg storage.Message
 				if err := json.Unmarshal(val, &msg); err != nil {
 					return err
 				}
@@ -453,8 +453,8 @@ func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string
 	})
 }
 
-func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.QueueMessage, error) {
-	messages := make([]*storage.QueueMessage, 0)
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
+	messages := make([]*storage.Message, 0)
 	prefix := makePartitionPrefix(queueName, partitionID)
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -467,7 +467,7 @@ func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 			err := item.Value(func(val []byte) error {
-				var msg storage.QueueMessage
+				var msg storage.Message
 				if err := json.Unmarshal(val, &msg); err != nil {
 					return err
 				}
@@ -551,8 +551,8 @@ func (s *Store) GetOffset(ctx context.Context, queueName string, partitionID int
 	return offset, err
 }
 
-func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
-	messages := make([]*storage.QueueMessage, 0, limit)
+func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+	messages := make([]*storage.Message, 0, limit)
 	prefix := makePartitionPrefix(queueName, partitionID)
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -566,7 +566,7 @@ func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID in
 		for it.Rewind(); it.Valid() && (limit == 0 || count < limit); it.Next() {
 			item := it.Item()
 			err := item.Value(func(val []byte) error {
-				var msg storage.QueueMessage
+				var msg storage.Message
 				if err := json.Unmarshal(val, &msg); err != nil {
 					return err
 				}

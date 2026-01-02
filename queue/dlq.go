@@ -30,7 +30,7 @@ func NewDLQManager(messageStore queueStorage.MessageStore, alertHandler AlertHan
 }
 
 // MoveToDLQ moves a failed message to the dead letter queue.
-func (d *DLQManager) MoveToDLQ(ctx context.Context, queue *Queue, msg *queueStorage.QueueMessage, reason string) error {
+func (d *DLQManager) MoveToDLQ(ctx context.Context, queue *Queue, msg *queueStorage.Message, reason string) error {
 	config := queue.Config()
 
 	// Only move to DLQ if enabled
@@ -96,7 +96,7 @@ func (d *DLQManager) RetryFromDLQ(ctx context.Context, queueName, messageID stri
 		return fmt.Errorf("failed to list DLQ messages: %w", err)
 	}
 
-	var msg *queueStorage.QueueMessage
+	var msg *queueStorage.Message
 	for _, m := range dlqMessages {
 		if m.ID == messageID {
 			msg = m
@@ -158,10 +158,10 @@ func (d *DLQManager) GetDLQStats(ctx context.Context, queueName string) (*DLQSta
 	}
 
 	stats := &DLQStats{
-		QueueName:    queueName,
-		DLQTopic:     dlqTopic,
+		QueueName:     queueName,
+		DLQTopic:      dlqTopic,
 		TotalMessages: int64(len(messages)),
-		ByReason:     make(map[string]int64),
+		ByReason:      make(map[string]int64),
 	}
 
 	for _, msg := range messages {

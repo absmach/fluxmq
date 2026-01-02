@@ -74,8 +74,8 @@ type DLQConfig struct {
 	AlertWebhook string
 }
 
-// QueueMessage represents a message in the queue system.
-type QueueMessage struct {
+// Message represents a message in the queue system.
+type Message struct {
 	ID           string
 	Payload      []byte
 	Topic        string
@@ -140,12 +140,12 @@ type QueueStore interface {
 // MessageStore manages queue messages and delivery state.
 type MessageStore interface {
 	// Message operations
-	Enqueue(ctx context.Context, queueName string, msg *QueueMessage) error
-	Dequeue(ctx context.Context, queueName string, partitionID int) (*QueueMessage, error)
-	DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*QueueMessage, error)
-	UpdateMessage(ctx context.Context, queueName string, msg *QueueMessage) error
+	Enqueue(ctx context.Context, queueName string, msg *Message) error
+	Dequeue(ctx context.Context, queueName string, partitionID int) (*Message, error)
+	DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*Message, error)
+	UpdateMessage(ctx context.Context, queueName string, msg *Message) error
 	DeleteMessage(ctx context.Context, queueName string, messageID string) error
-	GetMessage(ctx context.Context, queueName string, messageID string) (*QueueMessage, error)
+	GetMessage(ctx context.Context, queueName string, messageID string) (*Message, error)
 
 	// Inflight tracking
 	MarkInflight(ctx context.Context, state *DeliveryState) error
@@ -154,12 +154,12 @@ type MessageStore interface {
 	RemoveInflight(ctx context.Context, queueName, messageID string) error
 
 	// DLQ operations
-	EnqueueDLQ(ctx context.Context, dlqTopic string, msg *QueueMessage) error
-	ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*QueueMessage, error)
+	EnqueueDLQ(ctx context.Context, dlqTopic string, msg *Message) error
+	ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*Message, error)
 	DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string) error
 
 	// Retry operations
-	ListRetry(ctx context.Context, queueName string, partitionID int) ([]*QueueMessage, error)
+	ListRetry(ctx context.Context, queueName string, partitionID int) ([]*Message, error)
 
 	// Partition operations
 	GetNextSequence(ctx context.Context, queueName string, partitionID int) (uint64, error)
@@ -167,7 +167,7 @@ type MessageStore interface {
 	GetOffset(ctx context.Context, queueName string, partitionID int) (uint64, error)
 
 	// Batch operations
-	ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*QueueMessage, error)
+	ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*Message, error)
 }
 
 // ConsumerStore manages consumer group state.

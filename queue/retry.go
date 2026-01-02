@@ -151,7 +151,7 @@ func (rm *RetryManager) handleInflightTimeout(ctx context.Context, queue *Queue,
 }
 
 // processRetry determines if a message should be retried or moved to DLQ.
-func (rm *RetryManager) processRetry(ctx context.Context, queue *Queue, msg *queueStorage.QueueMessage) {
+func (rm *RetryManager) processRetry(ctx context.Context, queue *Queue, msg *queueStorage.Message) {
 	config := queue.Config()
 
 	// Check if max retries exceeded
@@ -179,7 +179,7 @@ func (rm *RetryManager) processRetry(ctx context.Context, queue *Queue, msg *que
 }
 
 // moveToDLQ moves a message to the dead letter queue.
-func (rm *RetryManager) moveToDLQ(ctx context.Context, queue *Queue, msg *queueStorage.QueueMessage, reason string) {
+func (rm *RetryManager) moveToDLQ(ctx context.Context, queue *Queue, msg *queueStorage.Message, reason string) {
 	if rm.dlqManager != nil {
 		if err := rm.dlqManager.MoveToDLQ(ctx, queue, msg, reason); err != nil {
 			// Failed to move to DLQ, log but continue
@@ -232,17 +232,17 @@ func (rm *RetryManager) GetStats(ctx context.Context, queueName string) (*RetryS
 	}
 
 	return &RetryStats{
-		QueueName:       queueName,
-		InflightCount:   int64(len(inflight)),
-		RetryingCount:   totalRetrying,
-		CheckInterval:   rm.checkInterval,
+		QueueName:     queueName,
+		InflightCount: int64(len(inflight)),
+		RetryingCount: totalRetrying,
+		CheckInterval: rm.checkInterval,
 	}, nil
 }
 
 // RetryStats holds retry-related statistics.
 type RetryStats struct {
-	QueueName       string
-	InflightCount   int64
-	RetryingCount   int64
-	CheckInterval   time.Duration
+	QueueName     string
+	InflightCount int64
+	RetryingCount int64
+	CheckInterval time.Duration
 }

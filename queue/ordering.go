@@ -12,9 +12,9 @@ import (
 
 // OrderingEnforcer enforces message ordering within partitions.
 type OrderingEnforcer struct {
-	mode             queueStorage.OrderingMode
-	lastDelivered    map[int]uint64 // partitionID -> last delivered sequence
-	mu               sync.RWMutex
+	mode          queueStorage.OrderingMode
+	lastDelivered map[int]uint64 // partitionID -> last delivered sequence
+	mu            sync.RWMutex
 }
 
 // NewOrderingEnforcer creates a new ordering enforcer.
@@ -26,7 +26,7 @@ func NewOrderingEnforcer(mode queueStorage.OrderingMode) *OrderingEnforcer {
 }
 
 // CanDeliver checks if a message can be delivered according to ordering rules.
-func (oe *OrderingEnforcer) CanDeliver(msg *queueStorage.QueueMessage) (bool, error) {
+func (oe *OrderingEnforcer) CanDeliver(msg *queueStorage.Message) (bool, error) {
 	switch oe.mode {
 	case queueStorage.OrderingNone:
 		// No ordering requirements
@@ -50,7 +50,7 @@ func (oe *OrderingEnforcer) CanDeliver(msg *queueStorage.QueueMessage) (bool, er
 }
 
 // checkPartitionOrder checks if message is next in sequence for its partition.
-func (oe *OrderingEnforcer) checkPartitionOrder(msg *queueStorage.QueueMessage) (bool, error) {
+func (oe *OrderingEnforcer) checkPartitionOrder(msg *queueStorage.Message) (bool, error) {
 	oe.mu.RLock()
 	lastSeq, exists := oe.lastDelivered[msg.PartitionID]
 	oe.mu.RUnlock()
@@ -71,7 +71,7 @@ func (oe *OrderingEnforcer) checkPartitionOrder(msg *queueStorage.QueueMessage) 
 }
 
 // MarkDelivered records that a message was delivered.
-func (oe *OrderingEnforcer) MarkDelivered(msg *queueStorage.QueueMessage) {
+func (oe *OrderingEnforcer) MarkDelivered(msg *queueStorage.Message) {
 	if oe.mode == queueStorage.OrderingNone {
 		return
 	}
@@ -119,9 +119,9 @@ func (oe *OrderingEnforcer) Stats() OrderingStats {
 	}
 
 	return OrderingStats{
-		Mode:             oe.mode,
-		PartitionCount:   len(oe.lastDelivered),
-		PartitionSeqs:    partitionSeqs,
+		Mode:           oe.mode,
+		PartitionCount: len(oe.lastDelivered),
+		PartitionSeqs:  partitionSeqs,
 	}
 }
 

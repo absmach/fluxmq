@@ -160,7 +160,7 @@ func TestMemoryMessageStore_Enqueue(t *testing.T) {
 	config := storage.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
@@ -184,7 +184,7 @@ func TestMemoryMessageStore_Enqueue_InvalidQueue(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/nonexistent",
@@ -207,7 +207,7 @@ func TestMemoryMessageStore_Dequeue(t *testing.T) {
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue multiple messages
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("payload-1"),
 		Topic:       "$queue/test",
@@ -216,7 +216,7 @@ func TestMemoryMessageStore_Dequeue(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("payload-2"),
 		Topic:       "$queue/test",
@@ -248,7 +248,7 @@ func TestMemoryMessageStore_Dequeue_RetryReady(t *testing.T) {
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Message ready for retry (NextRetryAt in the past)
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -276,7 +276,7 @@ func TestMemoryMessageStore_Dequeue_RetryNotReady(t *testing.T) {
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Message not ready for retry (NextRetryAt in the future)
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -302,7 +302,7 @@ func TestMemoryMessageStore_UpdateMessage(t *testing.T) {
 	config := storage.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("original"),
 		Topic:       "$queue/test",
@@ -338,7 +338,7 @@ func TestMemoryMessageStore_DeleteMessage(t *testing.T) {
 	config := storage.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -382,7 +382,7 @@ func TestMemoryMessageStore_GetMessage(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Create and get message
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -430,7 +430,7 @@ func TestMemoryMessageStore_ListQueued(t *testing.T) {
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue messages in different states
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
@@ -439,7 +439,7 @@ func TestMemoryMessageStore_ListQueued(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
@@ -448,7 +448,7 @@ func TestMemoryMessageStore_ListQueued(t *testing.T) {
 		State:       storage.StateRetry,
 		CreatedAt:   time.Now(),
 	}
-	msg3 := &storage.QueueMessage{
+	msg3 := &storage.Message{
 		ID:          "msg-3",
 		Payload:     []byte("test-3"),
 		Topic:       "$queue/test",
@@ -481,7 +481,7 @@ func TestMemoryMessageStore_ListRetry(t *testing.T) {
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue messages with different states
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
@@ -490,7 +490,7 @@ func TestMemoryMessageStore_ListRetry(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
@@ -635,7 +635,7 @@ func TestMemoryMessageStore_EnqueueDLQ(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed message"),
 		Topic:         "$queue/test",
@@ -663,7 +663,7 @@ func TestMemoryMessageStore_ListDLQ(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue multiple DLQ messages
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed-1"),
 		Topic:         "$queue/test",
@@ -671,7 +671,7 @@ func TestMemoryMessageStore_ListDLQ(t *testing.T) {
 		FailureReason: "reason-1",
 		CreatedAt:     time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:            "msg-2",
 		Payload:       []byte("failed-2"),
 		Topic:         "$queue/test",
@@ -698,7 +698,7 @@ func TestMemoryMessageStore_DeleteDLQMessage(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed"),
 		Topic:         "$queue/test",
@@ -990,7 +990,7 @@ func TestMemoryStore_ConcurrentEnqueue(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < messagesPerGoroutine; j++ {
 				seq, _ := store.GetNextSequence(ctx, "$queue/test", routineID%3)
-				msg := &storage.QueueMessage{
+				msg := &storage.Message{
 					ID:          string(rune(routineID*1000 + j)),
 					Payload:     []byte("test"),
 					Topic:       "$queue/test",
@@ -1060,7 +1060,7 @@ func TestMemoryStore_ErrorHandling_NonExistentQueue(t *testing.T) {
 	err = store.DeleteQueue(ctx, "$queue/nonexistent")
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/nonexistent",

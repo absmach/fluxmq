@@ -134,7 +134,7 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 }
 
 // Enqueue adds a message to a partition's ring buffer (lock-free).
-func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
 	val, exists := s.queues.Load(queueName)
 	if !exists {
 		return storage.ErrQueueNotFound
@@ -156,7 +156,7 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Queu
 }
 
 // Dequeue removes the next message from a partition (lock-free).
-func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.QueueMessage, error) {
+func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.Message, error) {
 	val, exists := s.queues.Load(queueName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
@@ -179,7 +179,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 }
 
 // DequeueBatch removes up to 'limit' messages from a partition (lock-free).
-func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
 	val, exists := s.queues.Load(queueName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
@@ -199,7 +199,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 	}
 
 	// Convert to pointers
-	result := make([]*storage.QueueMessage, len(messages))
+	result := make([]*storage.Message, len(messages))
 	for i := range messages {
 		result[i] = &messages[i]
 	}
@@ -230,7 +230,7 @@ func (s *Store) GetNextSequence(ctx context.Context, queueName string, partition
 // They're part of the MessageStore interface but not in the hot path.
 
 // UpdateMessage updates a message (not used in lock-free hot path).
-func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.QueueMessage) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.Message) error {
 	// Lock-free ring buffers don't support in-place updates
 	// Messages are consumed on dequeue
 	return nil
@@ -244,7 +244,7 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 }
 
 // GetMessage retrieves a specific message (not supported in lock-free store).
-func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.QueueMessage, error) {
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.Message, error) {
 	return nil, fmt.Errorf("GetMessage not supported in lock-free store")
 }
 
@@ -270,13 +270,13 @@ func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string)
 }
 
 // EnqueueDLQ adds a message to the dead-letter queue.
-func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.QueueMessage) error {
+func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Message) error {
 	// DLQ delegated to hybrid store
 	return nil
 }
 
 // ListDLQ lists messages in the dead-letter queue.
-func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.QueueMessage, error) {
+func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.Message, error) {
 	return nil, nil
 }
 
@@ -286,7 +286,7 @@ func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string
 }
 
 // ListRetry lists retry messages.
-func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.QueueMessage, error) {
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
 	return nil, nil
 }
 
@@ -301,7 +301,7 @@ func (s *Store) GetOffset(ctx context.Context, queueName string, partitionID int
 }
 
 // ListQueued lists queued messages.
-func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.QueueMessage, error) {
+func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
 	// Could implement by peeking ring buffer without dequeuing
 	return nil, nil
 }

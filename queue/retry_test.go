@@ -27,9 +27,9 @@ func TestRetryManager_CalculateBackoff(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		retryCount  int
-		expected    time.Duration
+		name       string
+		retryCount int
+		expected   time.Duration
 	}{
 		{"First retry", 1, 5 * time.Second},
 		{"Second retry", 2, 10 * time.Second},
@@ -68,7 +68,7 @@ func TestRetryManager_InflightTimeout(t *testing.T) {
 	rm.RegisterQueue(queue)
 
 	// Enqueue a message
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -130,7 +130,7 @@ func TestRetryManager_MaxRetriesExceeded(t *testing.T) {
 	rm.RegisterQueue(queue)
 
 	// Create message that has already been retried max times
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -192,7 +192,7 @@ func TestRetryManager_TotalTimeoutExceeded(t *testing.T) {
 	rm.RegisterQueue(queue)
 
 	// Create message created 2 hours ago (exceeds total timeout)
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -234,7 +234,7 @@ func TestRetryManager_RetryScheduling(t *testing.T) {
 	rm.RegisterQueue(queue)
 
 	// Create message in retry state scheduled for near future
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -299,7 +299,7 @@ func TestRetryManager_GetStats(t *testing.T) {
 
 	// Add some retry messages
 	for i := 0; i < 2; i++ {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          fmt.Sprintf("retry-msg-%d", i),
 			Payload:     []byte("test"),
 			Topic:       "$queue/test",

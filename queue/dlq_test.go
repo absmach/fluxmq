@@ -34,7 +34,7 @@ func TestDLQManager_MoveToDLQ(t *testing.T) {
 	queue := NewQueue(config, store, store)
 
 	// Create message
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
@@ -80,7 +80,7 @@ func TestDLQManager_MoveToDLQ_DLQDisabled(t *testing.T) {
 	queue := NewQueue(config, store, store)
 
 	// Create message
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
@@ -123,7 +123,7 @@ func TestDLQManager_RetryFromDLQ(t *testing.T) {
 	queue := NewQueue(config, store, store)
 
 	// Create message and move to DLQ
-	msg := &queueStorage.QueueMessage{
+	msg := &queueStorage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("test payload"),
 		Topic:         "$queue/test",
@@ -184,7 +184,7 @@ func TestDLQManager_PurgeDLQ(t *testing.T) {
 
 	// Add multiple messages to DLQ
 	for i := 0; i < 5; i++ {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:           fmt.Sprintf("msg-%d", i),
 			Payload:      []byte("test"),
 			Topic:        "$queue/test",
@@ -225,7 +225,7 @@ func TestDLQManager_GetDLQStats(t *testing.T) {
 	// Add messages with different failure reasons
 	reasons := []string{"max retries", "max retries", "timeout", "timeout", "timeout"}
 	for i, reason := range reasons {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:            fmt.Sprintf("msg-%d", i),
 			Payload:       []byte("test"),
 			Topic:         "$queue/test",

@@ -16,12 +16,12 @@ func TestOrderingEnforcer_OrderingNone(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingNone)
 
 	// With no ordering, all messages can be delivered
-	msg1 := &queueStorage.QueueMessage{
+	msg1 := &queueStorage.Message{
 		ID:          "msg-1",
 		PartitionID: 0,
 		Sequence:    5,
 	}
-	msg2 := &queueStorage.QueueMessage{
+	msg2 := &queueStorage.Message{
 		ID:          "msg-2",
 		PartitionID: 0,
 		Sequence:    3, // Out of order
@@ -41,7 +41,7 @@ func TestOrderingEnforcer_OrderingNone(t *testing.T) {
 func TestOrderingEnforcer_PartitionOrdering_InOrder(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingPartition)
 
-	messages := []*queueStorage.QueueMessage{
+	messages := []*queueStorage.Message{
 		{ID: "msg-1", PartitionID: 0, Sequence: 1},
 		{ID: "msg-2", PartitionID: 0, Sequence: 2},
 		{ID: "msg-3", PartitionID: 0, Sequence: 3},
@@ -60,7 +60,7 @@ func TestOrderingEnforcer_PartitionOrdering_OutOfOrder(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingPartition)
 
 	// Deliver message with sequence 3
-	msg1 := &queueStorage.QueueMessage{
+	msg1 := &queueStorage.Message{
 		ID:          "msg-1",
 		PartitionID: 0,
 		Sequence:    3,
@@ -71,7 +71,7 @@ func TestOrderingEnforcer_PartitionOrdering_OutOfOrder(t *testing.T) {
 	enforcer.MarkDelivered(msg1)
 
 	// Try to deliver message with sequence 2 (out of order)
-	msg2 := &queueStorage.QueueMessage{
+	msg2 := &queueStorage.Message{
 		ID:          "msg-2",
 		PartitionID: 0,
 		Sequence:    2,
@@ -86,7 +86,7 @@ func TestOrderingEnforcer_PartitionOrdering_MultiplePartitions(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingPartition)
 
 	// Partition 0
-	msg1 := &queueStorage.QueueMessage{
+	msg1 := &queueStorage.Message{
 		ID:          "msg-1",
 		PartitionID: 0,
 		Sequence:    1,
@@ -97,7 +97,7 @@ func TestOrderingEnforcer_PartitionOrdering_MultiplePartitions(t *testing.T) {
 	enforcer.MarkDelivered(msg1)
 
 	// Partition 1 (independent ordering)
-	msg2 := &queueStorage.QueueMessage{
+	msg2 := &queueStorage.Message{
 		ID:          "msg-2",
 		PartitionID: 1,
 		Sequence:    1,
@@ -108,7 +108,7 @@ func TestOrderingEnforcer_PartitionOrdering_MultiplePartitions(t *testing.T) {
 	enforcer.MarkDelivered(msg2)
 
 	// Partition 0 continues
-	msg3 := &queueStorage.QueueMessage{
+	msg3 := &queueStorage.Message{
 		ID:          "msg-3",
 		PartitionID: 0,
 		Sequence:    2,
@@ -122,7 +122,7 @@ func TestOrderingEnforcer_PartitionOrdering_Gaps(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingPartition)
 
 	// Deliver message with sequence 1
-	msg1 := &queueStorage.QueueMessage{
+	msg1 := &queueStorage.Message{
 		ID:          "msg-1",
 		PartitionID: 0,
 		Sequence:    1,
@@ -133,7 +133,7 @@ func TestOrderingEnforcer_PartitionOrdering_Gaps(t *testing.T) {
 	enforcer.MarkDelivered(msg1)
 
 	// Deliver message with sequence 5 (gap is allowed - message 2-4 might have been acked/failed)
-	msg2 := &queueStorage.QueueMessage{
+	msg2 := &queueStorage.Message{
 		ID:          "msg-2",
 		PartitionID: 0,
 		Sequence:    5,
@@ -148,7 +148,7 @@ func TestOrderingEnforcer_StrictOrdering_SinglePartition(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingStrict)
 
 	// Message in partition 0 is allowed
-	msg1 := &queueStorage.QueueMessage{
+	msg1 := &queueStorage.Message{
 		ID:          "msg-1",
 		PartitionID: 0,
 		Sequence:    1,
@@ -158,7 +158,7 @@ func TestOrderingEnforcer_StrictOrdering_SinglePartition(t *testing.T) {
 	assert.True(t, canDeliver)
 
 	// Message in partition 1 is NOT allowed for strict ordering
-	msg2 := &queueStorage.QueueMessage{
+	msg2 := &queueStorage.Message{
 		ID:          "msg-2",
 		PartitionID: 1,
 		Sequence:    1,
@@ -172,7 +172,7 @@ func TestOrderingEnforcer_StrictOrdering_SinglePartition(t *testing.T) {
 func TestOrderingEnforcer_Reset(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingPartition)
 
-	msg1 := &queueStorage.QueueMessage{
+	msg1 := &queueStorage.Message{
 		ID:          "msg-1",
 		PartitionID: 0,
 		Sequence:    5,
@@ -192,7 +192,7 @@ func TestOrderingEnforcer_Reset(t *testing.T) {
 	assert.False(t, exists)
 
 	// Can now deliver message with lower sequence
-	msg2 := &queueStorage.QueueMessage{
+	msg2 := &queueStorage.Message{
 		ID:          "msg-2",
 		PartitionID: 0,
 		Sequence:    1,
@@ -207,7 +207,7 @@ func TestOrderingEnforcer_ResetAll(t *testing.T) {
 
 	// Mark several partitions as delivered
 	for i := 0; i < 5; i++ {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			PartitionID: i,
 			Sequence:    10,
@@ -235,7 +235,7 @@ func TestOrderingEnforcer_Stats(t *testing.T) {
 	sequences := []uint64{1, 5, 3, 7, 2}
 
 	for i, partID := range partitions {
-		msg := &queueStorage.QueueMessage{
+		msg := &queueStorage.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			PartitionID: partID,
 			Sequence:    sequences[i],

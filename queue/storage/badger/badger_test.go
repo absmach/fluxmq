@@ -194,7 +194,7 @@ func TestBadgerMessageStore_Enqueue(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
@@ -221,7 +221,7 @@ func TestBadgerMessageStore_Dequeue(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue multiple messages
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("payload-1"),
 		Topic:       "$queue/test",
@@ -230,7 +230,7 @@ func TestBadgerMessageStore_Dequeue(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("payload-2"),
 		Topic:       "$queue/test",
@@ -261,7 +261,7 @@ func TestBadgerMessageStore_Dequeue_RetryReady(t *testing.T) {
 	ctx := context.Background()
 
 	// Message ready for retry (NextRetryAt in the past)
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -288,7 +288,7 @@ func TestBadgerMessageStore_Dequeue_RetryNotReady(t *testing.T) {
 	ctx := context.Background()
 
 	// Message not ready for retry (NextRetryAt in the future)
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -313,7 +313,7 @@ func TestBadgerMessageStore_UpdateMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("original"),
 		Topic:       "$queue/test",
@@ -348,7 +348,7 @@ func TestBadgerMessageStore_DeleteMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -390,7 +390,7 @@ func TestBadgerMessageStore_GetMessage(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Create and get message
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
@@ -436,7 +436,7 @@ func TestBadgerMessageStore_ListQueued(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue messages in different states
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
@@ -445,7 +445,7 @@ func TestBadgerMessageStore_ListQueued(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
@@ -454,7 +454,7 @@ func TestBadgerMessageStore_ListQueued(t *testing.T) {
 		State:       storage.StateRetry,
 		CreatedAt:   time.Now(),
 	}
-	msg3 := &storage.QueueMessage{
+	msg3 := &storage.Message{
 		ID:          "msg-3",
 		Payload:     []byte("test-3"),
 		Topic:       "$queue/test",
@@ -486,7 +486,7 @@ func TestBadgerMessageStore_ListRetry(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue messages with different states
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
@@ -495,7 +495,7 @@ func TestBadgerMessageStore_ListRetry(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
@@ -638,7 +638,7 @@ func TestBadgerMessageStore_EnqueueDLQ(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed message"),
 		Topic:         "$queue/test",
@@ -668,7 +668,7 @@ func TestBadgerMessageStore_ListDLQ(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue multiple DLQ messages
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed-1"),
 		Topic:         "$queue/test",
@@ -676,7 +676,7 @@ func TestBadgerMessageStore_ListDLQ(t *testing.T) {
 		FailureReason: "reason-1",
 		CreatedAt:     time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:            "msg-2",
 		Payload:       []byte("failed-2"),
 		Topic:         "$queue/test",
@@ -705,7 +705,7 @@ func TestBadgerMessageStore_DeleteDLQMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed"),
 		Topic:         "$queue/test",
@@ -968,7 +968,7 @@ func TestBadgerStore_ConcurrentEnqueue(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(routineID int) {
 			for j := 0; j < messagesPerGoroutine; j++ {
-				msg := &storage.QueueMessage{
+				msg := &storage.Message{
 					ID:          filepath.Join("msg", string(rune(routineID)), string(rune(j))),
 					Payload:     []byte("test"),
 					Topic:       "$queue/test",
@@ -1039,7 +1039,7 @@ func TestBadgerStore_MessageKeyFormat(t *testing.T) {
 	ctx := context.Background()
 
 	// Test that messages with different partition IDs don't collide
-	msg1 := &storage.QueueMessage{
+	msg1 := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("partition-0"),
 		Topic:       "$queue/test",
@@ -1048,7 +1048,7 @@ func TestBadgerStore_MessageKeyFormat(t *testing.T) {
 		State:       storage.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("partition-1"),
 		Topic:       "$queue/test",
@@ -1077,7 +1077,7 @@ func TestBadgerStore_DLQTopicPrefixHandling(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed"),
 		Topic:         "$queue/test",

@@ -20,7 +20,7 @@ import (
 // - Cache-line padding to prevent false sharing
 // - Zero-copy (stores messages by value)
 type RingBuffer struct {
-	buffer   []storage.QueueMessage
+	buffer   []storage.Message
 	capacity uint64
 	mask     uint64 // capacity - 1, for fast modulo
 
@@ -45,7 +45,7 @@ func NewRingBuffer(capacity uint64) *RingBuffer {
 	}
 
 	return &RingBuffer{
-		buffer:   make([]storage.QueueMessage, capacity),
+		buffer:   make([]storage.Message, capacity),
 		capacity: capacity,
 		mask:     capacity - 1,
 	}
@@ -58,7 +58,7 @@ func NewRingBuffer(capacity uint64) *RingBuffer {
 // - Only one producer calls this
 // - Uses atomic loads/stores for synchronization
 // - No CAS loops needed (SPSC guarantees)
-func (rb *RingBuffer) Enqueue(msg storage.QueueMessage) bool {
+func (rb *RingBuffer) Enqueue(msg storage.Message) bool {
 	// Load current positions
 	tail := atomic.LoadUint64(&rb.tail)
 	head := atomic.LoadUint64(&rb.head)
@@ -87,14 +87,14 @@ func (rb *RingBuffer) Enqueue(msg storage.QueueMessage) bool {
 // - Only one consumer calls this
 // - Uses atomic loads/stores for synchronization
 // - No CAS loops needed (SPSC guarantees)
-func (rb *RingBuffer) Dequeue() (storage.QueueMessage, bool) {
+func (rb *RingBuffer) Dequeue() (storage.Message, bool) {
 	// Load current positions
 	head := atomic.LoadUint64(&rb.head)
 	tail := atomic.LoadUint64(&rb.tail)
 
 	// Check if buffer is empty
 	if head >= tail {
-		return storage.QueueMessage{}, false
+		return storage.Message{}, false
 	}
 
 	// Read message from buffer
@@ -114,7 +114,7 @@ func (rb *RingBuffer) Dequeue() (storage.QueueMessage, bool) {
 // - Fewer atomic operations (one head update for entire batch)
 // - Better cache utilization
 // - Reduced function call overhead
-func (rb *RingBuffer) DequeueBatch(limit int) []storage.QueueMessage {
+func (rb *RingBuffer) DequeueBatch(limit int) []storage.Message {
 	if limit <= 0 {
 		return nil
 	}
@@ -136,7 +136,7 @@ func (rb *RingBuffer) DequeueBatch(limit int) []storage.QueueMessage {
 	}
 
 	// Pre-allocate result slice
-	messages := make([]storage.QueueMessage, count)
+	messages := make([]storage.Message, count)
 
 	// Copy messages from ring buffer
 	for i := uint64(0); i < count; i++ {

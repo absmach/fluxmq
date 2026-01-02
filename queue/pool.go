@@ -12,7 +12,7 @@ import (
 var (
 	messagePool = sync.Pool{
 		New: func() interface{} {
-			return &queueStorage.QueueMessage{
+			return &queueStorage.Message{
 				Properties: make(map[string]string, 8),
 			}
 		},
@@ -26,12 +26,12 @@ var (
 )
 
 // getMessageFromPool retrieves a QueueMessage from the pool.
-func getMessageFromPool() *queueStorage.QueueMessage {
-	return messagePool.Get().(*queueStorage.QueueMessage)
+func getMessageFromPool() *queueStorage.Message {
+	return messagePool.Get().(*queueStorage.Message)
 }
 
 // putMessageToPool returns a QueueMessage to the pool.
-func putMessageToPool(msg *queueStorage.QueueMessage) {
+func putMessageToPool(msg *queueStorage.Message) {
 	if msg == nil {
 		return
 	}

@@ -148,7 +148,7 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 // deliverMessage delivers a single message to a consumer.
 func (pw *PartitionWorker) deliverMessage(
 	ctx context.Context,
-	msg *queueStorage.QueueMessage,
+	msg *queueStorage.Message,
 	consumer *queueStorage.Consumer,
 	config queueStorage.QueueConfig,
 ) error {
@@ -205,7 +205,7 @@ func (pw *PartitionWorker) deliverMessage(
 }
 
 // toStorageMessage converts a queue message to a broker storage message for MQTT delivery.
-func toStorageMessage(msg *queueStorage.QueueMessage, queueTopic string) interface{} {
+func toStorageMessage(msg *queueStorage.Message, queueTopic string) interface{} {
 	// Create a broker storage.Message with zero-copy buffer
 	buf := core.GetBufferWithData(msg.Payload)
 

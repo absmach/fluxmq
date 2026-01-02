@@ -98,7 +98,7 @@ func TestHybridStore_EnqueueDequeue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue a message
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		PartitionID: 0,
@@ -131,7 +131,7 @@ func TestHybridStore_HotPath_RingBufferHit(t *testing.T) {
 
 	// Enqueue messages (should go to both stores)
 	for i := 0; i < 5; i++ {
-		msg := &storage.QueueMessage{
+		msg := &storage.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
@@ -174,7 +174,7 @@ func TestHybridStore_ColdPath_RingBufferEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue and immediately dequeue to empty ring buffer
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
@@ -190,7 +190,7 @@ func TestHybridStore_ColdPath_RingBufferEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue another message
-	msg2 := &storage.QueueMessage{
+	msg2 := &storage.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test2"),
 		PartitionID: 0,
@@ -228,13 +228,13 @@ func TestHybridStore_Overflow_RingBufferFull(t *testing.T) {
 	numMessages := 20 // Exceed capacity
 
 	for i := 0; i < numMessages; i++ {
-		msg := &storage.QueueMessage{
+		msg := &storage.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+			State:       storage.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -268,13 +268,13 @@ func TestHybridStore_DequeueBatch_FromRingBuffer(t *testing.T) {
 
 	// Enqueue 10 messages
 	for i := 0; i < 10; i++ {
-		msg := &storage.QueueMessage{
+		msg := &storage.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+			State:       storage.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -306,13 +306,13 @@ func TestHybridStore_DequeueBatch_Mixed(t *testing.T) {
 
 	// Enqueue messages to fill ring buffer
 	for i := 0; i < 20; i++ {
-		msg := &storage.QueueMessage{
+		msg := &storage.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+			State:       storage.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -320,7 +320,7 @@ func TestHybridStore_DequeueBatch_Mixed(t *testing.T) {
 
 	// Batch dequeue all messages
 	// Should get some from ring buffer, rest from BadgerDB
-	var allMessages []*storage.QueueMessage
+	var allMessages []*storage.Message
 	for {
 		messages, err := store.DequeueBatch(ctx, "$queue/test", 0, 5)
 		require.NoError(t, err)
@@ -355,7 +355,7 @@ func TestHybridStore_Metrics_HitRate(t *testing.T) {
 	assert.Equal(t, 0.0, hitRate)
 
 	// Enqueue and dequeue (hit)
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
@@ -384,7 +384,7 @@ func TestHybridStore_Metrics_ResetMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate some metrics
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
@@ -426,13 +426,13 @@ func TestHybridStore_MultiPartition(t *testing.T) {
 	// Enqueue to different partitions
 	for partition := 0; partition < 3; partition++ {
 		for i := 0; i < 5; i++ {
-			msg := &storage.QueueMessage{
+			msg := &storage.Message{
 				ID:          fmt.Sprintf("p%d-msg-%d", partition, i),
 				Payload:     []byte(fmt.Sprintf("partition-%d-payload-%d", partition, i)),
 				PartitionID: partition,
 				Sequence:    uint64(i + 1),
 				CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+				State:       storage.StateQueued,
 			}
 			err = store.Enqueue(ctx, "$queue/test", msg)
 			require.NoError(t, err)
@@ -479,7 +479,7 @@ func TestHybridStore_NonExistentQueue(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue to non-existent queue
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
@@ -507,7 +507,7 @@ func TestHybridStore_InflightTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// First enqueue a message
-	msg := &storage.QueueMessage{
+	msg := &storage.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
