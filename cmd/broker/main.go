@@ -20,6 +20,8 @@ import (
 	"github.com/absmach/mqtt/broker/webhook"
 	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/config"
+	"github.com/absmach/mqtt/queue"
+	queueBadger "github.com/absmach/mqtt/queue/storage/badger"
 	"github.com/absmach/mqtt/server/coap"
 	"github.com/absmach/mqtt/server/health"
 	"github.com/absmach/mqtt/server/http"
@@ -29,6 +31,7 @@ import (
 	"github.com/absmach/mqtt/storage"
 	"github.com/absmach/mqtt/storage/badger"
 	"github.com/absmach/mqtt/storage/memory"
+	badgerLink "github.com/dgraph-io/badger/v4"
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -38,7 +41,6 @@ func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
 	if !cfg.TLSEnabled {
 		return nil, nil
 	}
-
 
 	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
 	if err != nil {
@@ -56,7 +58,6 @@ func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
 		},
 		PreferServerCipherSuites: true,
 	}
-
 
 	if cfg.TLSClientAuth != "none" && cfg.TLSCAFile != "" {
 		caCert, err := os.ReadFile(cfg.TLSCAFile)
@@ -85,17 +86,14 @@ func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
 }
 
 func main() {
-
 	configFile := flag.String("config", "", "Path to configuration file")
 	flag.Parse()
-
 
 	cfg, err := config.Load(*configFile)
 	if err != nil {
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
-
 
 	logLevel := slog.LevelInfo
 	switch cfg.Log.Level {
@@ -126,7 +124,6 @@ func main() {
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
 
-
 	var store storage.Store
 	switch cfg.Storage.Type {
 	case "memory":
@@ -147,7 +144,6 @@ func main() {
 		slog.Error("Unknown storage type", "type", cfg.Storage.Type)
 		os.Exit(1)
 	}
-
 
 	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
@@ -175,7 +171,6 @@ func main() {
 		cl = etcdCluster
 		defer cl.Stop()
 
-
 		if err := cl.Start(); err != nil {
 			slog.Error("Failed to start cluster", "error", err)
 			os.Exit(1)
@@ -191,12 +186,10 @@ func main() {
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
-
 	var webhooks broker.Notifier
 	if cfg.Webhook.Enabled {
 
 		sender := webhook.NewHTTPSender()
-
 
 		wh, err := webhook.NewNotifier(cfg.Webhook, cfg.Cluster.NodeID, sender, logger)
 		if err != nil {
@@ -213,7 +206,6 @@ func main() {
 		slog.Info("Webhooks disabled")
 	}
 
-
 	var otelShutdown func(context.Context) error
 	var metrics *otel.Metrics
 	var tracer trace.Tracer
@@ -228,7 +220,6 @@ func main() {
 		otelShutdown = shutdown
 		slog.Info("OpenTelemetry initialized", "endpoint", cfg.Server.MetricsAddr)
 
-
 		if cfg.Server.OtelMetricsEnabled {
 			m, err := otel.NewMetrics()
 			if err != nil {
@@ -238,7 +229,6 @@ func main() {
 			metrics = m
 			slog.Info("OTel metrics enabled")
 		}
-
 
 		if cfg.Server.OtelTracesEnabled {
 			tracer = oteltrace.Tracer("mqtt-broker")
@@ -250,10 +240,44 @@ func main() {
 		slog.Info("OpenTelemetry disabled")
 	}
 
-
 	stats := broker.NewStats()
 	b := broker.NewBroker(store, cl, logger, stats, webhooks, metrics, tracer)
 	defer b.Close()
+
+	// Initialize hybrid queue with separate BadgerDB instance
+	if cfg.Storage.Type == "badger" {
+		queueDir := cfg.Storage.BadgerDir + "_queue"
+		opts := badgerLink.DefaultOptions(queueDir)
+		opts.Logger = nil // Disable default logger to avoid noise
+
+		queueDB, err := badgerLink.Open(opts)
+		if err != nil {
+			slog.Error("Failed to initialize queue BadgerDB", "error", err)
+			os.Exit(1)
+		}
+		// Ensure queueDB is closed after broker (LIFO order: broker closes first)
+		defer queueDB.Close()
+
+		queueStore := queueBadger.New(queueDB)
+
+		qm, err := queue.NewManager(queue.Config{
+			QueueStore:    queueStore,
+			MessageStore:  queueStore,
+			ConsumerStore: queueStore,
+			Broker:        &queueAdapter{b},
+		})
+		if err != nil {
+			slog.Error("Failed to initialize queue manager", "error", err)
+			os.Exit(1)
+		}
+
+		if err := b.SetQueueManager(qm); err != nil {
+			slog.Error("Failed to set queue manager", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("Hybrid queue initialized", "storage", "badger", "dir", queueDir)
+	}
 
 	// Set message handler on cluster if it's an etcd cluster
 	// MessageHandler interface now includes both message routing and session management
@@ -261,20 +285,17 @@ func main() {
 		etcdCluster.SetMessageHandler(b)
 	}
 
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var wg sync.WaitGroup
 	serverErr := make(chan error, 10)
 
-
 	tlsConfig, err := buildTLSConfig(&cfg.Server)
 	if err != nil {
 		slog.Error("Failed to build TLS configuration", "error", err)
 		os.Exit(1)
 	}
-
 
 	tcpCfg := tcp.Config{
 		Address:         cfg.Server.TCPAddr,
@@ -296,7 +317,6 @@ func main() {
 		}
 	}()
 
-
 	if cfg.Server.HTTPEnabled {
 		httpCfg := http.Config{
 			Address:         cfg.Server.HTTPAddr,
@@ -313,7 +333,6 @@ func main() {
 			}
 		}()
 	}
-
 
 	if cfg.Server.WSEnabled {
 		wsCfg := websocket.Config{
@@ -334,7 +353,6 @@ func main() {
 		}()
 	}
 
-
 	if cfg.Server.CoAPEnabled {
 		coapCfg := coap.Config{
 			Address:         cfg.Server.CoAPAddr,
@@ -351,7 +369,6 @@ func main() {
 			}
 		}()
 	}
-
 
 	if cfg.Server.HealthEnabled {
 		healthCfg := health.Config{
@@ -372,7 +389,6 @@ func main() {
 
 	slog.Info("MQTT broker started successfully")
 
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -383,15 +399,12 @@ func main() {
 		slog.Error("Server error", "error", err)
 	}
 
-
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
-
 
 	if err := b.Shutdown(shutdownCtx, cfg.Server.ShutdownTimeout); err != nil {
 		slog.Error("Error during shutdown", "error", err)
 	}
-
 
 	if otelShutdown != nil {
 		otelShutdownCtx, otelCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -403,10 +416,16 @@ func main() {
 		}
 	}
 
-
 	cancel()
-
 
 	wg.Wait()
 	slog.Info("MQTT broker stopped")
+}
+
+type queueAdapter struct {
+	b *broker.Broker
+}
+
+func (qa *queueAdapter) DeliverToSession(ctx context.Context, clientID string, msg interface{}) error {
+	return qa.b.DeliverToSessionByID(ctx, clientID, msg)
 }
