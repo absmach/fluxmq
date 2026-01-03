@@ -265,6 +265,8 @@ func main() {
 			MessageStore:  queueStore,
 			ConsumerStore: queueStore,
 			DeliverFn:     b.DeliverToSessionByID,
+			Cluster:       cl,
+			LocalNodeID:   cfg.Cluster.NodeID,
 		})
 		if err != nil {
 			slog.Error("Failed to initialize queue manager", "error", err)
@@ -274,6 +276,12 @@ func main() {
 		if err := b.SetQueueManager(qm); err != nil {
 			slog.Error("Failed to set queue manager", "error", err)
 			os.Exit(1)
+		}
+
+		// Wire up queue handler for cluster RPC support
+		if etcdCluster != nil {
+			etcdCluster.SetQueueHandler(qm)
+			slog.Info("Queue RPC handler registered with cluster")
 		}
 
 		slog.Info("Hybrid queue initialized", "storage", "badger", "dir", queueDir)

@@ -19,7 +19,29 @@ import (
 // This allows the queue manager to deliver messages without depending on the full broker.
 type DeliverFn func(ctx context.Context, clientID string, msg any) error
 
+// ConsumerRoutingMode defines how messages are delivered to consumers in a cluster.
+type ConsumerRoutingMode string
+
+const (
+	// ProxyMode routes messages through the consumer's proxy node.
+	// The partition owner sends messages to the node where the consumer is connected.
+	// This is the default and recommended mode.
+	ProxyMode ConsumerRoutingMode = "proxy"
+
+	// DirectMode requires consumers to connect directly to partition owners.
+	// Partition workers only deliver to local consumers.
+	// This reduces network hops but requires client-side partition awareness.
+	DirectMode ConsumerRoutingMode = "direct"
+)
+
 // Manager manages all queues in the system.
+//
+// For cluster mode, after creating the Manager, you must register it with the cluster
+// to enable queue RPC handling:
+//
+//	if etcdCluster, ok := cluster.(*cluster.EtcdCluster); ok {
+//	    etcdCluster.SetQueueHandler(queueManager)
+//	}
 type Manager struct {
 	queues          map[string]*Queue
 	deliveryWorkers map[string]*DeliveryWorker
@@ -34,8 +56,9 @@ type Manager struct {
 	wg              sync.WaitGroup
 
 	// Cluster support (nil for single-node mode)
-	cluster     cluster.Cluster
-	localNodeID string
+	cluster            cluster.Cluster
+	localNodeID        string
+	consumerRoutingMode ConsumerRoutingMode
 }
 
 // Config holds configuration for the queue manager.
@@ -46,8 +69,9 @@ type Config struct {
 	DeliverFn     DeliverFn
 
 	// Optional cluster support
-	Cluster     cluster.Cluster
-	LocalNodeID string
+	Cluster             cluster.Cluster
+	LocalNodeID         string
+	ConsumerRoutingMode ConsumerRoutingMode // Default: ProxyMode
 }
 
 // NewManager creates a new queue manager.
@@ -69,18 +93,25 @@ func NewManager(cfg Config) (*Manager, error) {
 		localNodeID = "local"
 	}
 
+	// Default to ProxyMode if not specified
+	routingMode := cfg.ConsumerRoutingMode
+	if routingMode == "" {
+		routingMode = ProxyMode
+	}
+
 	return &Manager{
-		queues:          make(map[string]*Queue),
-		deliveryWorkers: make(map[string]*DeliveryWorker),
-		queueStore:      cfg.QueueStore,
-		messageStore:    cfg.MessageStore,
-		consumerStore:   cfg.ConsumerStore,
-		broker:          cfg.DeliverFn,
-		retryManager:    retryManager,
-		dlqManager:      dlqManager,
-		stopCh:          make(chan struct{}),
-		cluster:         cfg.Cluster,
-		localNodeID:     localNodeID,
+		queues:              make(map[string]*Queue),
+		deliveryWorkers:     make(map[string]*DeliveryWorker),
+		queueStore:          cfg.QueueStore,
+		messageStore:        cfg.MessageStore,
+		consumerStore:       cfg.ConsumerStore,
+		broker:              cfg.DeliverFn,
+		retryManager:        retryManager,
+		dlqManager:          dlqManager,
+		stopCh:              make(chan struct{}),
+		cluster:             cfg.Cluster,
+		localNodeID:         localNodeID,
+		consumerRoutingMode: routingMode,
 	}, nil
 }
 
@@ -172,7 +203,7 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 	}
 
 	// Create and start delivery worker
-	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID)
+	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID, m.consumerRoutingMode)
 	m.deliveryWorkers[config.Name] = worker
 
 	// Start worker in background
@@ -566,15 +597,13 @@ func (m *Manager) acquirePartitionsForQueue(ctx context.Context, queue *Queue) e
 
 // enqueueRemote routes an enqueue operation to a remote partition owner via gRPC.
 func (m *Manager) enqueueRemote(ctx context.Context, targetNode, queueTopic string, payload []byte, properties map[string]string) error {
-	// Get transport from cluster
 	if m.cluster == nil {
 		return fmt.Errorf("cluster not configured")
 	}
 
 	// Call RPC to enqueue on remote node
-	// Note: We need to access the transport through the cluster
-	// For now, return an error indicating RPC integration needed
-	return fmt.Errorf("remote enqueue RPC integration pending (target: %s)", targetNode)
+	_, err := m.cluster.EnqueueRemote(ctx, targetNode, queueTopic, payload, properties)
+	return err
 }
 
 // EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.

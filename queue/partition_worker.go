@@ -34,8 +34,9 @@ type PartitionWorker struct {
 	groupIndex int // Round-robin index for consumer groups
 
 	// Cluster support (nil for single-node mode)
-	cluster     cluster.Cluster
-	localNodeID string
+	cluster             cluster.Cluster
+	localNodeID         string
+	consumerRoutingMode ConsumerRoutingMode
 }
 
 // NewPartitionWorker creates a new partition worker.
@@ -48,6 +49,7 @@ func NewPartitionWorker(
 	batchSize int,
 	c cluster.Cluster,
 	localNodeID string,
+	routingMode ConsumerRoutingMode,
 ) *PartitionWorker {
 	// Default batch size
 	if batchSize <= 0 {
@@ -55,17 +57,18 @@ func NewPartitionWorker(
 	}
 
 	return &PartitionWorker{
-		queueName:       queueName,
-		partitionID:     partitionID,
-		queue:           queue,
-		messageStore:    messageStore,
-		deliverFn:       broker,
-		notifyCh:        make(chan struct{}, 1), // Buffered to prevent blocking
-		stopCh:          make(chan struct{}),
-		batchSize:       batchSize,
-		debounceTimeout: 5 * time.Millisecond, // Small debounce for batching
-		cluster:         c,
-		localNodeID:     localNodeID,
+		queueName:           queueName,
+		partitionID:         partitionID,
+		queue:               queue,
+		messageStore:        messageStore,
+		deliverFn:           broker,
+		notifyCh:            make(chan struct{}, 1), // Buffered to prevent blocking
+		stopCh:              make(chan struct{}),
+		batchSize:           batchSize,
+		debounceTimeout:     5 * time.Millisecond, // Small debounce for batching
+		cluster:             c,
+		localNodeID:         localNodeID,
+		consumerRoutingMode: routingMode,
 	}
 }
 
@@ -210,13 +213,36 @@ func (pw *PartitionWorker) deliverMessage(
 		return fmt.Errorf("failed to update message: %w", err)
 	}
 
-	// Deliver to consumer via broker
-	if pw.deliverFn != nil {
-		storageMsg := toStorageMessage(msg, pw.queueName)
-		if err := pw.deliverFn(ctx, consumer.ClientID, storageMsg); err != nil {
-			// Delivery failed, but message is marked inflight
-			// Retry logic will handle re-delivery
-			return fmt.Errorf("failed to deliver to client %s: %w", consumer.ClientID, err)
+	// Check if consumer is on a remote node (proxy mode)
+	if pw.consumerRoutingMode == ProxyMode && consumer.ProxyNodeID != "" && consumer.ProxyNodeID != pw.localNodeID {
+		// Route message to remote node
+		if pw.cluster == nil {
+			return fmt.Errorf("consumer on remote node %s but cluster not configured", consumer.ProxyNodeID)
+		}
+
+		err := pw.cluster.RouteQueueMessage(
+			ctx,
+			consumer.ProxyNodeID,
+			consumer.ClientID,
+			pw.queueName,
+			msg.ID,
+			msg.Payload,
+			msg.Properties,
+			int64(msg.Sequence),
+			pw.partitionID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to route message to remote node %s: %w", consumer.ProxyNodeID, err)
+		}
+	} else {
+		// Deliver to local consumer via broker
+		if pw.deliverFn != nil {
+			storageMsg := toStorageMessage(msg, pw.queueName)
+			if err := pw.deliverFn(ctx, consumer.ClientID, storageMsg); err != nil {
+				// Delivery failed, but message is marked inflight
+				// Retry logic will handle re-delivery
+				return fmt.Errorf("failed to deliver to client %s: %w", consumer.ClientID, err)
+			}
 		}
 	}
 

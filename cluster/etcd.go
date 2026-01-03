@@ -980,6 +980,30 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return state, nil
 }
 
+// EnqueueRemote sends an enqueue request to a remote partition owner.
+func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
+	if c.transport == nil {
+		return "", fmt.Errorf("transport not configured")
+	}
+	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, payload, properties)
+}
+
+// RouteQueueMessage sends a queue message to a remote consumer.
+func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
+	if c.transport == nil {
+		return fmt.Errorf("transport not configured")
+	}
+	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, messageID, payload, properties, sequence, partitionID)
+}
+
+// SetQueueHandler sets the queue handler for queue distribution operations.
+// This should be called after the queue manager is created to enable queue RPC handling.
+func (c *EtcdCluster) SetQueueHandler(handler QueueHandler) {
+	if c.transport != nil {
+		c.transport.SetQueueHandler(handler)
+	}
+}
+
 // These methods allow EtcdCluster to implement the MessageHandler interface
 // by delegating to the broker's handler.
 

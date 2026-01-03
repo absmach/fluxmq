@@ -158,6 +158,18 @@ func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return nil, nil
 }
 
+// Queue routing - not applicable in single-node
+
+func (n *NoopCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
+	// Single-node: no remote nodes to enqueue to
+	return "", ErrClusterNotEnabled
+}
+
+func (n *NoopCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
+	// Single-node: no remote nodes to route to
+	return ErrClusterNotEnabled
+}
+
 // Leadership - always leader in single-node
 
 func (n *NoopCluster) IsLeader() bool {

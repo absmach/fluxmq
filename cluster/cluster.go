@@ -117,6 +117,15 @@ type Cluster interface {
 	// The old node disconnects the client and returns its full state.
 	// Returns the session state to be restored, or nil if no state exists.
 	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error)
+
+	// EnqueueRemote sends an enqueue request to a remote partition owner.
+	// This is called when a message needs to be enqueued on a partition owned by another node.
+	EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (messageID string, err error)
+
+	// RouteQueueMessage sends a queue message to a remote consumer.
+	// This is called in proxy mode when the partition worker needs to deliver a message
+	// to a consumer connected to a different node.
+	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error
 }
 
 // OwnershipChange represents a session ownership change event.
