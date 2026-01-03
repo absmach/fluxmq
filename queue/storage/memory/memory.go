@@ -150,6 +150,23 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Mess
 	return nil
 }
 
+// Count returns the number of messages in the queue (across all partitions).
+func (s *Store) Count(ctx context.Context, queueName string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return 0, storage.ErrQueueNotFound
+	}
+
+	var count int64
+	for _, partition := range partitions {
+		count += int64(len(partition))
+	}
+	return count, nil
+}
+
 // deepCopyMessage creates a deep copy of a message including Properties map.
 func (s *Store) deepCopyMessage(msg *storage.Message) *storage.Message {
 	// Copy properties map
@@ -175,6 +192,7 @@ func (s *Store) deepCopyMessage(msg *storage.Message) *storage.Message {
 		FirstAttempt:  msg.FirstAttempt,
 		LastAttempt:   msg.LastAttempt,
 		MovedToDLQAt:  msg.MovedToDLQAt,
+		ExpiresAt:     msg.ExpiresAt,
 	}
 }
 

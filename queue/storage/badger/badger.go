@@ -78,7 +78,6 @@ func (s *Store) GetQueue(ctx context.Context, queueName string) (*storage.QueueC
 			return json.Unmarshal(val, &config)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +148,6 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 }
 
 // MessageStore implementation
-
 func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
 	key := makeMessageKey(queueName, msg.PartitionID, msg.Sequence)
 	data, err := json.Marshal(msg)
@@ -158,8 +156,35 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Mess
 	}
 
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(key), data)
+		ttl := time.Until(msg.ExpiresAt)
+		if ttl <= 0 {
+			// Don't store expired messages.
+			return nil
+		}
+
+		return txn.SetEntry(badger.NewEntry([]byte(key), data).WithTTL(ttl))
 	})
+}
+
+func (s *Store) Count(ctx context.Context, queueName string) (int64, error) {
+	var count int64
+	prefix := queueMessagePrefix + queueName + ":"
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		opts.PrefetchValues = false // Key-only iteration is much faster
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			count++
+		}
+		return nil
+	})
+
+	return count, err
 }
 
 func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.Message, error) {
@@ -236,7 +261,6 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +280,14 @@ func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storag
 	}
 
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(key), data)
+		// Calculate TTL
+		// For updates (e.g. changing state from QUEUED to DELIVERED), we should preserve original expiration
+		ttl := time.Until(msg.ExpiresAt)
+		if ttl <= 0 {
+			ttl = time.Second
+		}
+
+		return txn.SetEntry(badger.NewEntry([]byte(key), data).WithTTL(ttl))
 	})
 }
 
@@ -384,7 +415,6 @@ func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID str
 			return json.Unmarshal(val, &state)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +654,6 @@ func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID 
 			return json.Unmarshal(val, &consumer)
 		})
 	})
-
 	if err != nil {
 		return nil, err
 	}

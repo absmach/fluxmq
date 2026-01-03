@@ -96,6 +96,7 @@ type Message struct {
 	FirstAttempt  time.Time
 	LastAttempt   time.Time
 	MovedToDLQAt  time.Time
+	ExpiresAt     time.Time
 }
 
 // DeliveryState tracks inflight message delivery.
@@ -141,6 +142,8 @@ type QueueStore interface {
 type MessageStore interface {
 	// Message operations
 	Enqueue(ctx context.Context, queueName string, msg *Message) error
+	// Count returns the number of messages in the queue (across all partitions).
+	Count(ctx context.Context, queueName string) (int64, error)
 	Dequeue(ctx context.Context, queueName string, partitionID int) (*Message, error)
 	DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*Message, error)
 	UpdateMessage(ctx context.Context, queueName string, msg *Message) error

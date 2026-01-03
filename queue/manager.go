@@ -200,6 +200,19 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 		return err
 	}
 
+	// Check queue limits
+	config := queue.Config()
+	if config.MaxQueueDepth > 0 {
+		count, err := m.messageStore.Count(ctx, queueTopic)
+		if err != nil {
+			return fmt.Errorf("failed to get queue depth: %w", err)
+		}
+
+		if count >= config.MaxQueueDepth {
+			return fmt.Errorf("queue is full (depth: %d, max: %d)", count, config.MaxQueueDepth)
+		}
+	}
+
 	// Extract partition key from properties
 	partitionKey := properties["partition-key"]
 
@@ -240,6 +253,7 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	msg.Properties = msgProps
 	msg.State = storage.StateQueued
 	msg.CreatedAt = time.Now()
+	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
 
 	// Enqueue (storage layer will make a deep copy)
 	err = m.messageStore.Enqueue(ctx, queueTopic, msg)

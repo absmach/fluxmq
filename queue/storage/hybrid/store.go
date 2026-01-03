@@ -252,6 +252,11 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Mess
 	return nil
 }
 
+// Count returns the number of messages in the queue (delegates to persistent store).
+func (s *Store) Count(ctx context.Context, queueName string) (int64, error) {
+	return s.persistent.Count(ctx, queueName)
+}
+
 // Dequeue removes a message, trying lock-free first, then BadgerDB.
 // Strategy:
 // 1. Validate queue exists
