@@ -976,6 +976,274 @@ func (x *FetchWillResponse) GetError() string {
 	return ""
 }
 
+// EnqueueRemoteRequest requests enqueueing a message on a remote partition owner.
+type EnqueueRemoteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`                                                            // Queue topic name
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`                                                                                 // Message payload
+	Properties    map[string]string      `protobuf:"bytes,3,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Message properties (including partition-key)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnqueueRemoteRequest) Reset() {
+	*x = EnqueueRemoteRequest{}
+	mi := &file_broker_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnqueueRemoteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnqueueRemoteRequest) ProtoMessage() {}
+
+func (x *EnqueueRemoteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnqueueRemoteRequest.ProtoReflect.Descriptor instead.
+func (*EnqueueRemoteRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *EnqueueRemoteRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *EnqueueRemoteRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *EnqueueRemoteRequest) GetProperties() map[string]string {
+	if x != nil {
+		return x.Properties
+	}
+	return nil
+}
+
+// EnqueueRemoteResponse indicates whether the enqueue succeeded.
+type EnqueueRemoteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`                          // Error message if success=false
+	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"` // Generated message ID
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnqueueRemoteResponse) Reset() {
+	*x = EnqueueRemoteResponse{}
+	mi := &file_broker_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnqueueRemoteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnqueueRemoteResponse) ProtoMessage() {}
+
+func (x *EnqueueRemoteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnqueueRemoteResponse.ProtoReflect.Descriptor instead.
+func (*EnqueueRemoteResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *EnqueueRemoteResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *EnqueueRemoteResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *EnqueueRemoteResponse) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+// RouteQueueMessageRequest delivers a queue message to a consumer on another node.
+type RouteQueueMessageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`                                                               // Target consumer client ID
+	QueueName     string                 `protobuf:"bytes,2,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`                                                            // Queue name
+	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`                                                            // Message ID
+	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`                                                                                 // Message payload
+	Properties    map[string]string      `protobuf:"bytes,5,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Message properties
+	Sequence      int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`                                                                              // Message sequence number
+	PartitionId   int32                  `protobuf:"varint,7,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`                                                     // Partition ID
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteQueueMessageRequest) Reset() {
+	*x = RouteQueueMessageRequest{}
+	mi := &file_broker_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteQueueMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteQueueMessageRequest) ProtoMessage() {}
+
+func (x *RouteQueueMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteQueueMessageRequest.ProtoReflect.Descriptor instead.
+func (*RouteQueueMessageRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RouteQueueMessageRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *RouteQueueMessageRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *RouteQueueMessageRequest) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *RouteQueueMessageRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *RouteQueueMessageRequest) GetProperties() map[string]string {
+	if x != nil {
+		return x.Properties
+	}
+	return nil
+}
+
+func (x *RouteQueueMessageRequest) GetSequence() int64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *RouteQueueMessageRequest) GetPartitionId() int32 {
+	if x != nil {
+		return x.PartitionId
+	}
+	return 0
+}
+
+// RouteQueueMessageResponse indicates whether the delivery succeeded.
+type RouteQueueMessageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"` // Error message if success=false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteQueueMessageResponse) Reset() {
+	*x = RouteQueueMessageResponse{}
+	mi := &file_broker_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteQueueMessageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteQueueMessageResponse) ProtoMessage() {}
+
+func (x *RouteQueueMessageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteQueueMessageResponse.ProtoReflect.Descriptor instead.
+func (*RouteQueueMessageResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RouteQueueMessageResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RouteQueueMessageResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_broker_proto protoreflect.FileDescriptor
 
 const file_broker_proto_rawDesc = "" +
@@ -1059,12 +1327,47 @@ const file_broker_proto_rawDesc = "" +
 	"\x11FetchWillResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12.\n" +
 	"\amessage\x18\x02 \x01(\v2\x14.cluster.WillMessageR\amessage\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error2\xae\x02\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xdd\x01\n" +
+	"\x14EnqueueRemoteRequest\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\x12M\n" +
+	"\n" +
+	"properties\x18\x03 \x03(\v2-.cluster.EnqueueRemoteRequest.PropertiesEntryR\n" +
+	"properties\x1a=\n" +
+	"\x0fPropertiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"f\n" +
+	"\x15EnqueueRemoteResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\"\xe0\x02\n" +
+	"\x18RouteQueueMessageRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x02 \x01(\tR\tqueueName\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\x12\x18\n" +
+	"\apayload\x18\x04 \x01(\fR\apayload\x12Q\n" +
+	"\n" +
+	"properties\x18\x05 \x03(\v21.cluster.RouteQueueMessageRequest.PropertiesEntryR\n" +
+	"properties\x12\x1a\n" +
+	"\bsequence\x18\x06 \x01(\x03R\bsequence\x12!\n" +
+	"\fpartition_id\x18\a \x01(\x05R\vpartitionId\x1a=\n" +
+	"\x0fPropertiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
+	"\x19RouteQueueMessageResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xda\x03\n" +
 	"\rBrokerService\x12A\n" +
 	"\fRoutePublish\x12\x17.cluster.PublishRequest\x1a\x18.cluster.PublishResponse\x12F\n" +
 	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponse\x12N\n" +
 	"\rFetchRetained\x12\x1d.cluster.FetchRetainedRequest\x1a\x1e.cluster.FetchRetainedResponse\x12B\n" +
-	"\tFetchWill\x12\x19.cluster.FetchWillRequest\x1a\x1a.cluster.FetchWillResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
+	"\tFetchWill\x12\x19.cluster.FetchWillRequest\x1a\x1a.cluster.FetchWillResponse\x12N\n" +
+	"\rEnqueueRemote\x12\x1d.cluster.EnqueueRemoteRequest\x1a\x1e.cluster.EnqueueRemoteResponse\x12Z\n" +
+	"\x11RouteQueueMessage\x12!.cluster.RouteQueueMessageRequest\x1a\".cluster.RouteQueueMessageResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
 
 var (
 	file_broker_proto_rawDescOnce sync.Once
@@ -1078,48 +1381,60 @@ func file_broker_proto_rawDescGZIP() []byte {
 	return file_broker_proto_rawDescData
 }
 
-var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_broker_proto_goTypes = []any{
-	(*PublishRequest)(nil),        // 0: cluster.PublishRequest
-	(*PublishResponse)(nil),       // 1: cluster.PublishResponse
-	(*TakeoverRequest)(nil),       // 2: cluster.TakeoverRequest
-	(*SessionState)(nil),          // 3: cluster.SessionState
-	(*InflightMessage)(nil),       // 4: cluster.InflightMessage
-	(*QueuedMessage)(nil),         // 5: cluster.QueuedMessage
-	(*Subscription)(nil),          // 6: cluster.Subscription
-	(*WillMessage)(nil),           // 7: cluster.WillMessage
-	(*TakeoverResponse)(nil),      // 8: cluster.TakeoverResponse
-	(*FetchRetainedRequest)(nil),  // 9: cluster.FetchRetainedRequest
-	(*RetainedMessage)(nil),       // 10: cluster.RetainedMessage
-	(*FetchRetainedResponse)(nil), // 11: cluster.FetchRetainedResponse
-	(*FetchWillRequest)(nil),      // 12: cluster.FetchWillRequest
-	(*FetchWillResponse)(nil),     // 13: cluster.FetchWillResponse
-	nil,                           // 14: cluster.PublishRequest.PropertiesEntry
-	nil,                           // 15: cluster.RetainedMessage.PropertiesEntry
+	(*PublishRequest)(nil),            // 0: cluster.PublishRequest
+	(*PublishResponse)(nil),           // 1: cluster.PublishResponse
+	(*TakeoverRequest)(nil),           // 2: cluster.TakeoverRequest
+	(*SessionState)(nil),              // 3: cluster.SessionState
+	(*InflightMessage)(nil),           // 4: cluster.InflightMessage
+	(*QueuedMessage)(nil),             // 5: cluster.QueuedMessage
+	(*Subscription)(nil),              // 6: cluster.Subscription
+	(*WillMessage)(nil),               // 7: cluster.WillMessage
+	(*TakeoverResponse)(nil),          // 8: cluster.TakeoverResponse
+	(*FetchRetainedRequest)(nil),      // 9: cluster.FetchRetainedRequest
+	(*RetainedMessage)(nil),           // 10: cluster.RetainedMessage
+	(*FetchRetainedResponse)(nil),     // 11: cluster.FetchRetainedResponse
+	(*FetchWillRequest)(nil),          // 12: cluster.FetchWillRequest
+	(*FetchWillResponse)(nil),         // 13: cluster.FetchWillResponse
+	(*EnqueueRemoteRequest)(nil),      // 14: cluster.EnqueueRemoteRequest
+	(*EnqueueRemoteResponse)(nil),     // 15: cluster.EnqueueRemoteResponse
+	(*RouteQueueMessageRequest)(nil),  // 16: cluster.RouteQueueMessageRequest
+	(*RouteQueueMessageResponse)(nil), // 17: cluster.RouteQueueMessageResponse
+	nil,                               // 18: cluster.PublishRequest.PropertiesEntry
+	nil,                               // 19: cluster.RetainedMessage.PropertiesEntry
+	nil,                               // 20: cluster.EnqueueRemoteRequest.PropertiesEntry
+	nil,                               // 21: cluster.RouteQueueMessageRequest.PropertiesEntry
 }
 var file_broker_proto_depIdxs = []int32{
-	14, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
+	18, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
 	4,  // 1: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage
 	5,  // 2: cluster.SessionState.queued_messages:type_name -> cluster.QueuedMessage
 	6,  // 3: cluster.SessionState.subscriptions:type_name -> cluster.Subscription
 	7,  // 4: cluster.SessionState.will:type_name -> cluster.WillMessage
 	3,  // 5: cluster.TakeoverResponse.session_state:type_name -> cluster.SessionState
-	15, // 6: cluster.RetainedMessage.properties:type_name -> cluster.RetainedMessage.PropertiesEntry
+	19, // 6: cluster.RetainedMessage.properties:type_name -> cluster.RetainedMessage.PropertiesEntry
 	10, // 7: cluster.FetchRetainedResponse.message:type_name -> cluster.RetainedMessage
 	7,  // 8: cluster.FetchWillResponse.message:type_name -> cluster.WillMessage
-	0,  // 9: cluster.BrokerService.RoutePublish:input_type -> cluster.PublishRequest
-	2,  // 10: cluster.BrokerService.TakeoverSession:input_type -> cluster.TakeoverRequest
-	9,  // 11: cluster.BrokerService.FetchRetained:input_type -> cluster.FetchRetainedRequest
-	12, // 12: cluster.BrokerService.FetchWill:input_type -> cluster.FetchWillRequest
-	1,  // 13: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
-	8,  // 14: cluster.BrokerService.TakeoverSession:output_type -> cluster.TakeoverResponse
-	11, // 15: cluster.BrokerService.FetchRetained:output_type -> cluster.FetchRetainedResponse
-	13, // 16: cluster.BrokerService.FetchWill:output_type -> cluster.FetchWillResponse
-	13, // [13:17] is the sub-list for method output_type
-	9,  // [9:13] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	20, // 9: cluster.EnqueueRemoteRequest.properties:type_name -> cluster.EnqueueRemoteRequest.PropertiesEntry
+	21, // 10: cluster.RouteQueueMessageRequest.properties:type_name -> cluster.RouteQueueMessageRequest.PropertiesEntry
+	0,  // 11: cluster.BrokerService.RoutePublish:input_type -> cluster.PublishRequest
+	2,  // 12: cluster.BrokerService.TakeoverSession:input_type -> cluster.TakeoverRequest
+	9,  // 13: cluster.BrokerService.FetchRetained:input_type -> cluster.FetchRetainedRequest
+	12, // 14: cluster.BrokerService.FetchWill:input_type -> cluster.FetchWillRequest
+	14, // 15: cluster.BrokerService.EnqueueRemote:input_type -> cluster.EnqueueRemoteRequest
+	16, // 16: cluster.BrokerService.RouteQueueMessage:input_type -> cluster.RouteQueueMessageRequest
+	1,  // 17: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
+	8,  // 18: cluster.BrokerService.TakeoverSession:output_type -> cluster.TakeoverResponse
+	11, // 19: cluster.BrokerService.FetchRetained:output_type -> cluster.FetchRetainedResponse
+	13, // 20: cluster.BrokerService.FetchWill:output_type -> cluster.FetchWillResponse
+	15, // 21: cluster.BrokerService.EnqueueRemote:output_type -> cluster.EnqueueRemoteResponse
+	17, // 22: cluster.BrokerService.RouteQueueMessage:output_type -> cluster.RouteQueueMessageResponse
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_broker_proto_init() }
@@ -1133,7 +1448,7 @@ func file_broker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_broker_proto_rawDesc), len(file_broker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

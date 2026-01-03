@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/queue/storage"
 	"github.com/google/uuid"
 )
@@ -31,6 +32,10 @@ type Manager struct {
 	mu              sync.RWMutex
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
+
+	// Cluster support (nil for single-node mode)
+	cluster     cluster.Cluster
+	localNodeID string
 }
 
 // Config holds configuration for the queue manager.
@@ -39,6 +44,10 @@ type Config struct {
 	MessageStore  storage.MessageStore
 	ConsumerStore storage.ConsumerStore
 	DeliverFn     DeliverFn
+
+	// Optional cluster support
+	Cluster     cluster.Cluster
+	LocalNodeID string
 }
 
 // NewManager creates a new queue manager.
@@ -54,6 +63,12 @@ func NewManager(cfg Config) (*Manager, error) {
 	// Create retry manager
 	retryManager := NewRetryManager(cfg.MessageStore, dlqManager)
 
+	// Default to single-node if no cluster or node ID provided
+	localNodeID := cfg.LocalNodeID
+	if localNodeID == "" {
+		localNodeID = "local"
+	}
+
 	return &Manager{
 		queues:          make(map[string]*Queue),
 		deliveryWorkers: make(map[string]*DeliveryWorker),
@@ -64,6 +79,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		retryManager:    retryManager,
 		dlqManager:      dlqManager,
 		stopCh:          make(chan struct{}),
+		cluster:         cfg.Cluster,
+		localNodeID:     localNodeID,
 	}, nil
 }
 
@@ -78,6 +95,16 @@ func (m *Manager) Start(ctx context.Context) error {
 	for _, config := range configs {
 		if err := m.createQueueInstance(config); err != nil {
 			return fmt.Errorf("failed to create queue %s: %w", config.Name, err)
+		}
+
+		// Acquire ownership for partitions assigned to this node
+		queue, err := m.GetQueue(config.Name)
+		if err != nil {
+			return fmt.Errorf("failed to get queue %s: %w", config.Name, err)
+		}
+
+		if err := m.acquirePartitionsForQueue(ctx, queue); err != nil {
+			return fmt.Errorf("failed to acquire partitions for queue %s: %w", config.Name, err)
 		}
 	}
 
@@ -145,7 +172,7 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 	}
 
 	// Create and start delivery worker
-	worker := NewDeliveryWorker(queue, m.messageStore, m.broker)
+	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID)
 	m.deliveryWorkers[config.Name] = worker
 
 	// Start worker in background
@@ -218,6 +245,19 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 
 	// Get partition ID
 	partitionID := queue.GetPartitionForMessage(partitionKey)
+
+	// Check partition ownership (distributed mode)
+	if m.cluster != nil {
+		owner, err := m.getPartitionOwner(ctx, queueTopic, partitionID)
+		if err != nil {
+			return fmt.Errorf("failed to determine partition owner: %w", err)
+		}
+
+		// Route to remote node if not local
+		if owner != m.localNodeID {
+			return m.enqueueRemote(ctx, owner, queueTopic, payload, properties)
+		}
+	}
 
 	// Get next sequence number
 	sequence, err := m.messageStore.GetNextSequence(ctx, queueTopic, partitionID)
@@ -455,4 +495,183 @@ type QueueStats struct {
 	DLQMessages      int64
 	ActiveConsumers  int
 	Partitions       int
+}
+
+// getPartitionOwner determines which node owns a partition using the configured strategy.
+func (m *Manager) getPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, error) {
+	// Single-node mode: this node owns all partitions
+	if m.cluster == nil {
+		return m.localNodeID, nil
+	}
+
+	queue, err := m.GetQueue(queueName)
+	if err != nil {
+		return "", err
+	}
+
+	config := queue.Config()
+	nodes := m.cluster.Nodes()
+
+	// Get the appropriate partition assigner
+	assigner := m.getPartitionAssigner(config)
+
+	return assigner.GetOwner(ctx, queueName, partitionID, nodes)
+}
+
+// getPartitionAssigner returns the partition assigner based on queue configuration.
+func (m *Manager) getPartitionAssigner(config storage.QueueConfig) PartitionAssigner {
+	// Check if a partition strategy is configured
+	// For now, we'll use hash by default until we add PartitionStrategy to QueueConfig
+	// In Phase 2, we'll add this field to storage.QueueConfig
+
+	// Default to hash-based assignment
+	if m.cluster == nil {
+		// Single-node: use hash assigner (deterministic)
+		return NewHashPartitionAssigner()
+	}
+
+	// Multi-node: use hash by default for Phase 2
+	// TODO: Add config.PartitionStrategy field and switch based on it
+	return NewHashPartitionAssigner()
+}
+
+// acquirePartitionsForQueue acquires ownership of partitions assigned to this node.
+func (m *Manager) acquirePartitionsForQueue(ctx context.Context, queue *Queue) error {
+	if m.cluster == nil {
+		// Single-node mode: no acquisition needed
+		return nil
+	}
+
+	config := queue.Config()
+	assigner := m.getPartitionAssigner(config)
+	nodes := m.cluster.Nodes()
+
+	// Acquire ownership for partitions assigned to this node
+	for i := 0; i < config.Partitions; i++ {
+		owner, err := assigner.GetOwner(ctx, config.Name, i, nodes)
+		if err != nil {
+			return fmt.Errorf("failed to determine owner for partition %d: %w", i, err)
+		}
+
+		// If this node is the owner, acquire it in etcd
+		if owner == m.localNodeID {
+			if err := m.cluster.AcquirePartition(ctx, config.Name, i, m.localNodeID); err != nil {
+				return fmt.Errorf("failed to acquire partition %d: %w", i, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// enqueueRemote routes an enqueue operation to a remote partition owner via gRPC.
+func (m *Manager) enqueueRemote(ctx context.Context, targetNode, queueTopic string, payload []byte, properties map[string]string) error {
+	// Get transport from cluster
+	if m.cluster == nil {
+		return fmt.Errorf("cluster not configured")
+	}
+
+	// Call RPC to enqueue on remote node
+	// Note: We need to access the transport through the cluster
+	// For now, return an error indicating RPC integration needed
+	return fmt.Errorf("remote enqueue RPC integration pending (target: %s)", targetNode)
+}
+
+// EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.
+// This is called by the gRPC handler when a remote node sends an enqueue request.
+func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) (string, error) {
+	// This is the local enqueue path - bypass ownership checks since we're already the owner
+	queue, err := m.GetOrCreateQueue(ctx, queueName)
+	if err != nil {
+		return "", err
+	}
+
+	config := queue.Config()
+
+	// Check queue limits
+	if config.MaxQueueDepth > 0 {
+		count, err := m.messageStore.Count(ctx, queueName)
+		if err != nil {
+			return "", fmt.Errorf("failed to get queue depth: %w", err)
+		}
+
+		if count >= config.MaxQueueDepth {
+			return "", fmt.Errorf("queue is full (depth: %d, max: %d)", count, config.MaxQueueDepth)
+		}
+	}
+
+	// Extract partition key from properties
+	partitionKey := properties["partition-key"]
+
+	// Get partition ID
+	partitionID := queue.GetPartitionForMessage(partitionKey)
+
+	// Get next sequence number
+	sequence, err := m.messageStore.GetNextSequence(ctx, queueName, partitionID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get next sequence: %w", err)
+	}
+
+	// Get message from pool
+	msg := getMessageFromPool()
+
+	// Optimize: avoid pool allocation for properties if input is empty
+	var msgProps map[string]string
+	if len(properties) == 0 {
+		msgProps = make(map[string]string, 1)
+	} else {
+		msgProps = getPropertyMap()
+		copyProperties(msgProps, properties)
+	}
+
+	// Generate message ID
+	msgID := uuid.New().String()
+	msgProps["message-id"] = msgID
+
+	// Populate message
+	msg.ID = msgID
+	msg.Payload = payload
+	msg.Topic = queueName
+	msg.PartitionKey = partitionKey
+	msg.PartitionID = partitionID
+	msg.Sequence = sequence
+	msg.Properties = msgProps
+	msg.State = storage.StateQueued
+	msg.CreatedAt = time.Now()
+	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
+
+	// Enqueue (storage layer will make a deep copy)
+	err = m.messageStore.Enqueue(ctx, queueName, msg)
+
+	// Return to pools
+	if len(properties) > 0 {
+		putPropertyMap(msgProps)
+	}
+	putMessageToPool(msg)
+
+	if err != nil {
+		return "", err
+	}
+
+	// Notify partition worker that a message is available
+	m.mu.RLock()
+	worker, exists := m.deliveryWorkers[queueName]
+	m.mu.RUnlock()
+
+	if exists {
+		worker.NotifyPartition(partitionID)
+	}
+
+	return msgID, nil
+}
+
+// DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.
+// This is called by the gRPC handler when a remote partition owner delivers a message.
+func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg any) error {
+	// Delegate to the broker's delivery function
+	if m.broker == nil {
+		return fmt.Errorf("no broker delivery function configured")
+	}
+
+	return m.broker(ctx, clientID, msg)
 }

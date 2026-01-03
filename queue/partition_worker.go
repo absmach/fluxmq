@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/core"
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 	brokerStorage "github.com/absmach/mqtt/storage"
@@ -31,6 +32,10 @@ type PartitionWorker struct {
 	debounceTimeout time.Duration // Small delay to batch rapid enqueues
 
 	groupIndex int // Round-robin index for consumer groups
+
+	// Cluster support (nil for single-node mode)
+	cluster     cluster.Cluster
+	localNodeID string
 }
 
 // NewPartitionWorker creates a new partition worker.
@@ -41,6 +46,8 @@ func NewPartitionWorker(
 	messageStore queueStorage.MessageStore,
 	broker DeliverFn,
 	batchSize int,
+	c cluster.Cluster,
+	localNodeID string,
 ) *PartitionWorker {
 	// Default batch size
 	if batchSize <= 0 {
@@ -57,6 +64,8 @@ func NewPartitionWorker(
 		stopCh:          make(chan struct{}),
 		batchSize:       batchSize,
 		debounceTimeout: 5 * time.Millisecond, // Small debounce for batching
+		cluster:         c,
+		localNodeID:     localNodeID,
 	}
 }
 
@@ -100,6 +109,20 @@ func (pw *PartitionWorker) Notify() {
 
 // ProcessMessages processes up to batchSize messages from the partition.
 func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
+	// Check partition ownership (distributed mode)
+	if pw.cluster != nil {
+		owner, exists, err := pw.cluster.GetPartitionOwner(ctx, pw.queueName, pw.partitionID)
+		if err != nil {
+			// Error checking ownership, skip processing
+			return
+		}
+
+		// Skip processing if this node doesn't own the partition
+		if exists && owner != pw.localNodeID {
+			return
+		}
+	}
+
 	// Get consumer groups
 	groups := pw.queue.ConsumerGroups().ListGroups()
 	if len(groups) == 0 {

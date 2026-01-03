@@ -19,10 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BrokerService_RoutePublish_FullMethodName    = "/cluster.BrokerService/RoutePublish"
-	BrokerService_TakeoverSession_FullMethodName = "/cluster.BrokerService/TakeoverSession"
-	BrokerService_FetchRetained_FullMethodName   = "/cluster.BrokerService/FetchRetained"
-	BrokerService_FetchWill_FullMethodName       = "/cluster.BrokerService/FetchWill"
+	BrokerService_RoutePublish_FullMethodName      = "/cluster.BrokerService/RoutePublish"
+	BrokerService_TakeoverSession_FullMethodName   = "/cluster.BrokerService/TakeoverSession"
+	BrokerService_FetchRetained_FullMethodName     = "/cluster.BrokerService/FetchRetained"
+	BrokerService_FetchWill_FullMethodName         = "/cluster.BrokerService/FetchWill"
+	BrokerService_EnqueueRemote_FullMethodName     = "/cluster.BrokerService/EnqueueRemote"
+	BrokerService_RouteQueueMessage_FullMethodName = "/cluster.BrokerService/RouteQueueMessage"
 )
 
 // BrokerServiceClient is the client API for BrokerService service.
@@ -41,6 +43,12 @@ type BrokerServiceClient interface {
 	// FetchWill fetches a will message payload from the owning broker node.
 	// Used when a large will message (above threshold) needs to be published after client disconnect.
 	FetchWill(ctx context.Context, in *FetchWillRequest, opts ...grpc.CallOption) (*FetchWillResponse, error)
+	// EnqueueRemote routes an enqueue operation to the partition owner node.
+	// Used in distributed queue mode when a message needs to be enqueued on a remote partition.
+	EnqueueRemote(ctx context.Context, in *EnqueueRemoteRequest, opts ...grpc.CallOption) (*EnqueueRemoteResponse, error)
+	// RouteQueueMessage delivers a queue message to a consumer on a different node.
+	// Used when partition owner needs to deliver to a consumer connected to another node.
+	RouteQueueMessage(ctx context.Context, in *RouteQueueMessageRequest, opts ...grpc.CallOption) (*RouteQueueMessageResponse, error)
 }
 
 type brokerServiceClient struct {
@@ -91,6 +99,26 @@ func (c *brokerServiceClient) FetchWill(ctx context.Context, in *FetchWillReques
 	return out, nil
 }
 
+func (c *brokerServiceClient) EnqueueRemote(ctx context.Context, in *EnqueueRemoteRequest, opts ...grpc.CallOption) (*EnqueueRemoteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnqueueRemoteResponse)
+	err := c.cc.Invoke(ctx, BrokerService_EnqueueRemote_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *brokerServiceClient) RouteQueueMessage(ctx context.Context, in *RouteQueueMessageRequest, opts ...grpc.CallOption) (*RouteQueueMessageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RouteQueueMessageResponse)
+	err := c.cc.Invoke(ctx, BrokerService_RouteQueueMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServiceServer is the server API for BrokerService service.
 // All implementations must embed UnimplementedBrokerServiceServer
 // for forward compatibility.
@@ -107,6 +135,12 @@ type BrokerServiceServer interface {
 	// FetchWill fetches a will message payload from the owning broker node.
 	// Used when a large will message (above threshold) needs to be published after client disconnect.
 	FetchWill(context.Context, *FetchWillRequest) (*FetchWillResponse, error)
+	// EnqueueRemote routes an enqueue operation to the partition owner node.
+	// Used in distributed queue mode when a message needs to be enqueued on a remote partition.
+	EnqueueRemote(context.Context, *EnqueueRemoteRequest) (*EnqueueRemoteResponse, error)
+	// RouteQueueMessage delivers a queue message to a consumer on a different node.
+	// Used when partition owner needs to deliver to a consumer connected to another node.
+	RouteQueueMessage(context.Context, *RouteQueueMessageRequest) (*RouteQueueMessageResponse, error)
 	mustEmbedUnimplementedBrokerServiceServer()
 }
 
@@ -128,6 +162,12 @@ func (UnimplementedBrokerServiceServer) FetchRetained(context.Context, *FetchRet
 }
 func (UnimplementedBrokerServiceServer) FetchWill(context.Context, *FetchWillRequest) (*FetchWillResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchWill not implemented")
+}
+func (UnimplementedBrokerServiceServer) EnqueueRemote(context.Context, *EnqueueRemoteRequest) (*EnqueueRemoteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnqueueRemote not implemented")
+}
+func (UnimplementedBrokerServiceServer) RouteQueueMessage(context.Context, *RouteQueueMessageRequest) (*RouteQueueMessageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RouteQueueMessage not implemented")
 }
 func (UnimplementedBrokerServiceServer) mustEmbedUnimplementedBrokerServiceServer() {}
 func (UnimplementedBrokerServiceServer) testEmbeddedByValue()                       {}
@@ -222,6 +262,42 @@ func _BrokerService_FetchWill_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BrokerService_EnqueueRemote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnqueueRemoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).EnqueueRemote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_EnqueueRemote_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).EnqueueRemote(ctx, req.(*EnqueueRemoteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BrokerService_RouteQueueMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RouteQueueMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).RouteQueueMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_RouteQueueMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).RouteQueueMessage(ctx, req.(*RouteQueueMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrokerService_ServiceDesc is the grpc.ServiceDesc for BrokerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -244,6 +320,14 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FetchWill",
 			Handler:    _BrokerService_FetchWill_Handler,
+		},
+		{
+			MethodName: "EnqueueRemote",
+			Handler:    _BrokerService_EnqueueRemote_Handler,
+		},
+		{
+			MethodName: "RouteQueueMessage",
+			Handler:    _BrokerService_RouteQueueMessage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

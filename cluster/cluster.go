@@ -30,6 +30,25 @@ type SessionOwnership interface {
 	WatchSessionOwner(ctx context.Context, clientID string) <-chan OwnershipChange
 }
 
+// PartitionOwnership manages distributed partition ownership across cluster nodes.
+// Used for distributing queue partitions across the cluster.
+type PartitionOwnership interface {
+	// AcquirePartition registers this node as the owner of a queue partition.
+	// Uses leased keys that auto-expire if the node dies (30s TTL).
+	AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error
+
+	// ReleasePartition releases ownership of a queue partition.
+	ReleasePartition(ctx context.Context, queueName string, partitionID int) error
+
+	// GetPartitionOwner returns the node ID that owns the partition.
+	// Returns (nodeID, true, nil) if found, ("", false, nil) if not found.
+	GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (nodeID string, exists bool, err error)
+
+	// WatchPartitionOwnership watches for partition ownership changes for a queue.
+	// Useful for detecting partition migrations and rebalancing.
+	WatchPartitionOwnership(ctx context.Context, queueName string) <-chan PartitionOwnershipChange
+}
+
 // SubscriptionRouter manages cluster-wide subscription routing.
 type SubscriptionRouter interface {
 	// AddSubscription adds a subscription for a client.
@@ -78,6 +97,7 @@ type Lifecycle interface {
 // different backends (etcd, raft, or noop for single-node).
 type Cluster interface {
 	SessionOwnership
+	PartitionOwnership
 	SubscriptionRouter
 	Lifecycle
 
@@ -105,6 +125,15 @@ type OwnershipChange struct {
 	OldNode  string // Empty if session is new
 	NewNode  string // Empty if session was released
 	Time     time.Time
+}
+
+// PartitionOwnershipChange represents a partition ownership change event.
+type PartitionOwnershipChange struct {
+	QueueName   string
+	PartitionID int
+	OldNode     string // Empty if partition is newly created
+	NewNode     string // Empty if partition was released
+	Time        time.Time
 }
 
 // NodeInfo contains information about a cluster node.

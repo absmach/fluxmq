@@ -66,7 +66,7 @@ func TestNewDeliveryWorker(t *testing.T) {
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 
 	assert.NotNil(t, worker)
 	assert.Equal(t, queue, worker.queue)
@@ -83,7 +83,7 @@ func TestDeliveryWorker_StartStop(t *testing.T) {
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -116,7 +116,7 @@ func TestDeliveryWorker_StartStopViaContext(t *testing.T) {
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -174,7 +174,7 @@ func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// Verify message was delivered
@@ -223,7 +223,7 @@ func TestDeliveryWorker_DeliverMessages_MultiplePartitions(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// Verify all messages were delivered
@@ -268,7 +268,7 @@ func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// Verify messages were delivered (each group gets one message)
@@ -305,7 +305,7 @@ func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// Verify message was NOT delivered (no consumers)
@@ -350,7 +350,7 @@ func TestDeliveryWorker_DeliverNext_BrokerDeliveryError(t *testing.T) {
 	broker.SetDeliveryError(errors.New("broker delivery failed"))
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// Message should still be marked as inflight despite broker error
@@ -380,7 +380,7 @@ func TestDeliveryWorker_DeliverNext_NoMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// No deliveries should occur
@@ -421,7 +421,7 @@ func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 
 	// Deliver first message
 	worker.deliverMessages(ctx)
@@ -470,7 +470,7 @@ func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 	worker.deliverMessages(ctx)
 
 	// Verify message was delivered
@@ -545,7 +545,7 @@ func TestDeliveryWorker_ConcurrentDelivery(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local")
 
 	// Run multiple delivery cycles
 	for i := 0; i < 5; i++ {

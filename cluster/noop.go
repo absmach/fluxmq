@@ -52,6 +52,29 @@ func (n *NoopCluster) WatchSessionOwner(ctx context.Context, clientID string) <-
 	return ch
 }
 
+// Partition ownership - not applicable in single-node
+
+func (n *NoopCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error {
+	// In single-node mode, partitions are always owned locally
+	return nil
+}
+
+func (n *NoopCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error {
+	return nil
+}
+
+func (n *NoopCluster) GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, bool, error) {
+	// Single-node: this node always owns all partitions
+	return n.nodeID, true, nil
+}
+
+func (n *NoopCluster) WatchPartitionOwnership(ctx context.Context, queueName string) <-chan PartitionOwnershipChange {
+	// No ownership changes in single-node mode
+	ch := make(chan PartitionOwnershipChange)
+	close(ch)
+	return ch
+}
+
 // Subscriptions - not replicated in single-node
 
 func (n *NoopCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error {

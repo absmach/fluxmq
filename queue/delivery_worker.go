@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/absmach/mqtt/cluster"
 	"github.com/absmach/mqtt/queue/storage"
 )
 
@@ -24,7 +25,7 @@ type DeliveryWorker struct {
 }
 
 // NewDeliveryWorker creates a new delivery worker for a queue.
-func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker DeliverFn) *DeliveryWorker {
+func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker DeliverFn, c cluster.Cluster, localNodeID string) *DeliveryWorker {
 	config := queue.Config()
 	batchSize := config.BatchSize
 	// Default batch size
@@ -42,6 +43,8 @@ func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker D
 			messageStore,
 			broker,
 			batchSize,
+			c,
+			localNodeID,
 		)
 		workers = append(workers, worker)
 	}

@@ -26,6 +26,7 @@ const (
 	retainedPrefix      = "/mqtt/retained/"
 	subscriptionsPrefix = "/mqtt/subscriptions/"
 	sessionsPrefix      = "/mqtt/sessions/"
+	partitionsPrefix    = "/mqtt/queue/"
 
 	electionPrefix = "/mqtt/leader"
 	urlPrefix      = "http://"
@@ -560,6 +561,87 @@ func (c *EtcdCluster) WatchSessionOwner(ctx context.Context, clientID string) <-
 			for _, ev := range resp.Events {
 				var change OwnershipChange
 				change.ClientID = clientID
+				change.Time = time.Now()
+
+				if ev.Type == clientv3.EventTypeDelete {
+					if ev.PrevKv != nil {
+						change.OldNode = string(ev.PrevKv.Value)
+					}
+					change.NewNode = ""
+				} else {
+					if ev.PrevKv != nil {
+						change.OldNode = string(ev.PrevKv.Value)
+					}
+					change.NewNode = string(ev.Kv.Value)
+				}
+
+				ch <- change
+			}
+		}
+	}()
+
+	return ch
+}
+
+// AcquirePartition registers this node as the owner of a queue partition.
+func (c *EtcdCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error {
+	key := fmt.Sprintf("%s%s/partitions/%d/owner", partitionsPrefix, queueName, partitionID)
+
+	// Try to acquire with our lease (auto-expires if node dies)
+	_, err := c.client.Put(ctx, key, nodeID, clientv3.WithLease(c.sessionLease))
+	return err
+}
+
+// ReleasePartition releases ownership of a queue partition.
+func (c *EtcdCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error {
+	key := fmt.Sprintf("%s%s/partitions/%d/owner", partitionsPrefix, queueName, partitionID)
+	_, err := c.client.Delete(ctx, key)
+	return err
+}
+
+// GetPartitionOwner returns the node ID that owns the partition.
+func (c *EtcdCluster) GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, bool, error) {
+	key := fmt.Sprintf("%s%s/partitions/%d/owner", partitionsPrefix, queueName, partitionID)
+
+	resp, err := c.client.Get(ctx, key)
+	if err != nil {
+		return "", false, err
+	}
+
+	if len(resp.Kvs) == 0 {
+		return "", false, nil
+	}
+
+	return string(resp.Kvs[0].Value), true, nil
+}
+
+// WatchPartitionOwnership watches for partition ownership changes for a queue.
+func (c *EtcdCluster) WatchPartitionOwnership(ctx context.Context, queueName string) <-chan PartitionOwnershipChange {
+	prefix := fmt.Sprintf("%s%s/partitions/", partitionsPrefix, queueName)
+	ch := make(chan PartitionOwnershipChange, 10)
+
+	watchCh := c.client.Watch(ctx, prefix, clientv3.WithPrefix())
+
+	go func() {
+		defer close(ch)
+		for resp := range watchCh {
+			for _, ev := range resp.Events {
+				// Parse partition ID from key: /mqtt/queue/{queueName}/partitions/{partitionID}/owner
+				keyStr := string(ev.Kv.Key)
+				parts := strings.Split(keyStr, "/")
+				if len(parts) < 6 || parts[len(parts)-1] != "owner" {
+					continue
+				}
+
+				var partitionID int
+				if _, err := fmt.Sscanf(parts[len(parts)-2], "%d", &partitionID); err != nil {
+					c.logger.Warn("failed to parse partition ID from key", slog.String("key", keyStr))
+					continue
+				}
+
+				var change PartitionOwnershipChange
+				change.QueueName = queueName
+				change.PartitionID = partitionID
 				change.Time = time.Now()
 
 				if ev.Type == clientv3.EventTypeDelete {
