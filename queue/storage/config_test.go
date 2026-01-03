@@ -188,7 +188,7 @@ func TestDefaultQueueConfig(t *testing.T) {
 	assert.Equal(t, int64(100000), config.MaxQueueDepth)
 	assert.Equal(t, 7*24*time.Hour, config.MessageTTL)
 	assert.Equal(t, 30*time.Second, config.DeliveryTimeout)
-	assert.Equal(t, 1, config.BatchSize)
+	assert.Equal(t, 100, config.BatchSize)
 
 	// Retry policy
 	assert.Equal(t, 10, config.RetryPolicy.MaxRetries)

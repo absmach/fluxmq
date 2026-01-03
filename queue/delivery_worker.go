@@ -27,8 +27,9 @@ type DeliveryWorker struct {
 func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker DeliverFn) *DeliveryWorker {
 	config := queue.Config()
 	batchSize := config.BatchSize
+	// Default batch size
 	if batchSize <= 0 {
-		batchSize = 100 // Default batch size for good performance
+		batchSize = 100
 	}
 
 	// Create one worker per partition

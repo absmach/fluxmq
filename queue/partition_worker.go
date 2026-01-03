@@ -42,8 +42,9 @@ func NewPartitionWorker(
 	broker DeliverFn,
 	batchSize int,
 ) *PartitionWorker {
+	// Default batch size
 	if batchSize <= 0 {
-		batchSize = 100 // Default batch size
+		batchSize = 100
 	}
 
 	return &PartitionWorker{

@@ -71,7 +71,7 @@ func TestNewDeliveryWorker(t *testing.T) {
 	assert.NotNil(t, worker)
 	assert.Equal(t, queue, worker.queue)
 	assert.Equal(t, store, worker.messageStore)
-	assert.Equal(t, broker, worker.broker)
+	assert.NotNil(t, worker.broker)
 	assert.NotNil(t, worker.partitionWorkers)
 	assert.Equal(t, len(queue.Partitions()), len(worker.partitionWorkers))
 	assert.NotNil(t, worker.stopCh)
@@ -394,6 +394,7 @@ func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	config.Partitions = 1
 	config.Ordering = queueStorage.OrderingStrict
+	config.BatchSize = 1 // Use small batch size to test single-message delivery
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 

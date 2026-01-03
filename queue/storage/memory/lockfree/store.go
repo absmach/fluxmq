@@ -34,13 +34,14 @@ type partitionBuffer struct {
 
 // Config defines lock-free store configuration.
 type Config struct {
-	RingBufferSize uint64 // Size per partition (default: 4096)
+	RingBufferSize uint64 // Size per partition (default: 16384)
 }
 
 // DefaultConfig returns default configuration.
 func DefaultConfig() Config {
 	return Config{
-		RingBufferSize: 4096, // 4K messages per partition
+		// 16K messages per partition
+		RingBufferSize: 16384,
 	}
 }
 

@@ -41,11 +41,18 @@ type Store struct {
 	// Metrics
 	metrics *Metrics
 	mu      sync.RWMutex
+
+	// Async batch persistence
+	batchBuffer []*storage.Message
+	batchMu     sync.Mutex
+	flushTicker *time.Ticker
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
 }
 
 // Config defines hybrid store configuration.
 type Config struct {
-	// Ring buffer size per partition (default: 4096)
+	// Ring buffer size per partition (default: 16384)
 	RingBufferSize uint64
 
 	// Enable async write-behind to BadgerDB (default: true)
@@ -88,7 +95,7 @@ type Metrics struct {
 // DefaultConfig returns default hybrid store configuration.
 func DefaultConfig() Config {
 	return Config{
-		RingBufferSize:   4096,
+		RingBufferSize:   16384, // 16K messages per partition
 		AsyncPersist:     true,
 		PersistBatchSize: 100,
 		PersistInterval:  10 * time.Millisecond,
@@ -111,13 +118,22 @@ func NewWithConfig(persistent PersistentStore, cfg Config) *Store {
 	}
 
 	s := &Store{
-		lockfree:   lockfree.NewWithConfig(lockfreeConfig),
-		persistent: persistent,
-		config:     cfg,
+		lockfree:    lockfree.NewWithConfig(lockfreeConfig),
+		persistent:  persistent,
+		config:      cfg,
+		batchBuffer: make([]*storage.Message, 0, cfg.PersistBatchSize),
+		stopCh:      make(chan struct{}),
 	}
 
 	if cfg.EnableMetrics {
 		s.metrics = &Metrics{}
+	}
+
+	// Start async batch flusher if enabled
+	if cfg.AsyncPersist {
+		s.flushTicker = time.NewTicker(cfg.PersistInterval)
+		s.wg.Add(1)
+		go s.flushLoop()
 	}
 
 	return s
@@ -164,10 +180,9 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 	return s.persistent.ListQueues(ctx)
 }
 
-// Enqueue adds a message to both stores.
-// Strategy:
+// Enqueue adds a message to both stores:
 // 1. Validate queue exists
-// 2. Persist to BadgerDB first for durability
+// 2. Persist to BadgerDB (async batch if enabled, sync otherwise)
 // 3. Try lock-free ring buffer (best effort hot path)
 // 4. Track metrics for hit/miss rate
 func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
@@ -177,16 +192,46 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Mess
 		return err
 	}
 
-	// Persist to BadgerDB first for durability
-	if err := s.persistent.Enqueue(ctx, queueName, msg); err != nil {
-		return err
+	// Make a deep copy for storage (original might be reused by caller)
+	msgCopy := &storage.Message{
+		ID:           msg.ID,
+		Payload:      make([]byte, len(msg.Payload)),
+		Topic:        msg.Topic,
+		PartitionKey: msg.PartitionKey,
+		PartitionID:  msg.PartitionID,
+		Sequence:     msg.Sequence,
+		Properties:   make(map[string]string),
+		State:        msg.State,
+		CreatedAt:    msg.CreatedAt,
+	}
+	copy(msgCopy.Payload, msg.Payload)
+	for k, v := range msg.Properties {
+		msgCopy.Properties[k] = v
 	}
 
-	// Always increment disk writes (we always persist)
-	if s.metrics != nil {
-		s.mu.Lock()
-		s.metrics.DiskWrites++
-		s.mu.Unlock()
+	// Persist to BadgerDB
+	if s.config.AsyncPersist {
+		// Cross-partition batch writes
+		s.batchMu.Lock()
+		s.batchBuffer = append(s.batchBuffer, msgCopy)
+		shouldFlush := len(s.batchBuffer) >= s.config.PersistBatchSize
+		s.batchMu.Unlock()
+
+		// Flush if batch is full (immediate flush to prevent unbounded buffering)
+		if shouldFlush {
+			s.flushBatch()
+		}
+	} else {
+		// Synchronous write (original behavior)
+		if err := s.persistent.Enqueue(ctx, queueName, msgCopy); err != nil {
+			return err
+		}
+
+		if s.metrics != nil {
+			s.mu.Lock()
+			s.metrics.DiskWrites++
+			s.mu.Unlock()
+		}
 	}
 
 	// Try lock-free ring buffer (best effort)
@@ -457,4 +502,63 @@ func (s *Store) HitRate() float64 {
 	}
 
 	return float64(s.metrics.RingHits) / float64(total)
+}
+
+// flushLoop runs in the background and flushes batched messages periodically.
+func (s *Store) flushLoop() {
+	defer s.wg.Done()
+
+	for {
+		select {
+		case <-s.flushTicker.C:
+			s.flushBatch()
+		case <-s.stopCh:
+			// Final flush on shutdown
+			s.flushBatch()
+			return
+		}
+	}
+}
+
+// flushBatch writes all batched messages to BadgerDB.
+func (s *Store) flushBatch() {
+	s.batchMu.Lock()
+	if len(s.batchBuffer) == 0 {
+		s.batchMu.Unlock()
+		return
+	}
+
+	// Swap buffer (minimize lock time)
+	batch := s.batchBuffer
+	s.batchBuffer = make([]*storage.Message, 0, s.config.PersistBatchSize)
+	s.batchMu.Unlock()
+
+	// Write batch to BadgerDB (cross-partition batching)
+	ctx := context.Background()
+	for _, msg := range batch {
+		if err := s.persistent.Enqueue(ctx, msg.Topic, msg); err != nil {
+			// Log error but continue (best effort)
+			// TODO: Add proper logging
+			continue
+		}
+	}
+
+	// Update metrics
+	if s.metrics != nil {
+		s.mu.Lock()
+		s.metrics.DiskWrites += uint64(len(batch))
+		s.mu.Unlock()
+	}
+}
+
+// Close flushes remaining batched messages and stops background goroutines.
+func (s *Store) Close() error {
+	if s.config.AsyncPersist {
+		close(s.stopCh)
+		s.wg.Wait()
+		if s.flushTicker != nil {
+			s.flushTicker.Stop()
+		}
+	}
+	return nil
 }

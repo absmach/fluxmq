@@ -188,9 +188,9 @@ func DefaultQueueConfig(name string) QueueConfig {
 		Ordering:         OrderingPartition,
 		MaxMessageSize:   1024 * 1024, // 1MB
 		MaxQueueDepth:    100000,
-		MessageTTL:       7 * 24 * time.Hour, // 7 days
+		MessageTTL:       7 * 24 * time.Hour,
 		DeliveryTimeout:  30 * time.Second,
-		BatchSize:        1,
+		BatchSize:        100,
 		HeartbeatTimeout: 30 * time.Second,
 
 		RetryPolicy: RetryPolicy{
