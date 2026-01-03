@@ -20,7 +20,7 @@ func BenchmarkEnqueue_SinglePartition(b *testing.B) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -58,7 +58,7 @@ func BenchmarkEnqueue_MultiplePartitions(b *testing.B) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -96,7 +96,7 @@ func BenchmarkEnqueue_SmallPayload(b *testing.B) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -133,7 +133,7 @@ func BenchmarkEnqueue_LargePayload(b *testing.B) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -174,7 +174,7 @@ func BenchmarkEnqueue_WithPartitionKey(b *testing.B) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -212,7 +212,7 @@ func BenchmarkEnqueue_Parallel(b *testing.B) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -256,7 +256,7 @@ func BenchmarkEnqueue_BatchSize(b *testing.B) {
 				QueueStore:    store,
 				MessageStore:  store,
 				ConsumerStore: store,
-				Broker:        broker,
+				DeliverFn:     broker.DeliverToSession,
 			}
 
 			mgr, err := NewManager(cfg)

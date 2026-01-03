@@ -14,12 +14,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// BrokerInterface defines the interface for message delivery to MQTT clients.
+// DeliverFn defines the interface for message delivery to MQTT clients.
 // This allows the queue manager to deliver messages without depending on the full broker.
-type BrokerInterface interface {
-	// DeliverToSession delivers a message to a specific client session.
-	DeliverToSession(ctx context.Context, clientID string, msg interface{}) error
-}
+type DeliverFn func(ctx context.Context, clientID string, msg any) error
 
 // Manager manages all queues in the system.
 type Manager struct {
@@ -28,7 +25,7 @@ type Manager struct {
 	queueStore      storage.QueueStore
 	messageStore    storage.MessageStore
 	consumerStore   storage.ConsumerStore
-	broker          BrokerInterface
+	broker          DeliverFn
 	retryManager    *RetryManager
 	dlqManager      *DLQManager
 	mu              sync.RWMutex
@@ -41,7 +38,7 @@ type Config struct {
 	QueueStore    storage.QueueStore
 	MessageStore  storage.MessageStore
 	ConsumerStore storage.ConsumerStore
-	Broker        BrokerInterface
+	DeliverFn     DeliverFn
 }
 
 // NewManager creates a new queue manager.
@@ -63,7 +60,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		queueStore:      cfg.QueueStore,
 		messageStore:    cfg.MessageStore,
 		consumerStore:   cfg.ConsumerStore,
-		broker:          cfg.Broker,
+		broker:          cfg.DeliverFn,
 		retryManager:    retryManager,
 		dlqManager:      dlqManager,
 		stopCh:          make(chan struct{}),

@@ -22,7 +22,7 @@ type PartitionWorker struct {
 	partitionID  int
 	queue        *Queue
 	messageStore queueStorage.MessageStore
-	broker       BrokerInterface
+	deliverFn    DeliverFn
 
 	notifyCh chan struct{} // Event notification channel
 	stopCh   chan struct{} // Stop signal
@@ -39,7 +39,7 @@ func NewPartitionWorker(
 	partitionID int,
 	queue *Queue,
 	messageStore queueStorage.MessageStore,
-	broker BrokerInterface,
+	broker DeliverFn,
 	batchSize int,
 ) *PartitionWorker {
 	if batchSize <= 0 {
@@ -51,7 +51,7 @@ func NewPartitionWorker(
 		partitionID:     partitionID,
 		queue:           queue,
 		messageStore:    messageStore,
-		broker:          broker,
+		deliverFn:       broker,
 		notifyCh:        make(chan struct{}, 1), // Buffered to prevent blocking
 		stopCh:          make(chan struct{}),
 		batchSize:       batchSize,
@@ -187,9 +187,9 @@ func (pw *PartitionWorker) deliverMessage(
 	}
 
 	// Deliver to consumer via broker
-	if pw.broker != nil {
+	if pw.deliverFn != nil {
 		storageMsg := toStorageMessage(msg, pw.queueName)
-		if err := pw.broker.DeliverToSession(ctx, consumer.ClientID, storageMsg); err != nil {
+		if err := pw.deliverFn(ctx, consumer.ClientID, storageMsg); err != nil {
 			// Delivery failed, but message is marked inflight
 			// Retry logic will handle re-delivery
 			return fmt.Errorf("failed to deliver to client %s: %w", consumer.ClientID, err)

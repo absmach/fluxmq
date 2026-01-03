@@ -17,14 +17,14 @@ import (
 type DeliveryWorker struct {
 	queue            *Queue
 	messageStore     storage.MessageStore
-	broker           BrokerInterface
+	broker           DeliverFn
 	partitionWorkers []*PartitionWorker
 	stopCh           chan struct{}
 	wg               sync.WaitGroup
 }
 
 // NewDeliveryWorker creates a new delivery worker for a queue.
-func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker BrokerInterface) *DeliveryWorker {
+func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker DeliverFn) *DeliveryWorker {
 	config := queue.Config()
 	batchSize := config.BatchSize
 	if batchSize <= 0 {

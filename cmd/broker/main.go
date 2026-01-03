@@ -264,7 +264,7 @@ func main() {
 			QueueStore:    queueStore,
 			MessageStore:  queueStore,
 			ConsumerStore: queueStore,
-			Broker:        &queueAdapter{b},
+			DeliverFn:     b.DeliverToSessionByID,
 		})
 		if err != nil {
 			slog.Error("Failed to initialize queue manager", "error", err)
@@ -420,12 +420,4 @@ func main() {
 
 	wg.Wait()
 	slog.Info("MQTT broker stopped")
-}
-
-type queueAdapter struct {
-	b *broker.Broker
-}
-
-func (qa *queueAdapter) DeliverToSession(ctx context.Context, clientID string, msg interface{}) error {
-	return qa.b.DeliverToSessionByID(ctx, clientID, msg)
 }

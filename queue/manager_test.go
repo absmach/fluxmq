@@ -63,7 +63,7 @@ func TestNewManager(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        NewMockBroker(),
+		DeliverFn:     NewMockBroker().DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)

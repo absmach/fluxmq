@@ -21,7 +21,7 @@ func setupQueueWithMessages(b *testing.B, queueName string, partitions, messageC
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -68,7 +68,7 @@ func BenchmarkDequeue_SingleConsumer(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -104,7 +104,7 @@ func BenchmarkDequeue_MultipleConsumers(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			worker := NewDeliveryWorker(q, store, broker)
+			worker := NewDeliveryWorker(q, store, broker.DeliverToSession)
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -134,7 +134,7 @@ func BenchmarkDequeue_WithAck(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -178,7 +178,7 @@ func BenchmarkDequeue_PartitionScanning(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			worker := NewDeliveryWorker(q, store, broker)
+			worker := NewDeliveryWorker(q, store, broker.DeliverToSession)
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -211,7 +211,7 @@ func BenchmarkDequeue_Throughput(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession)
 
 	b.ResetTimer()
 	b.ReportAllocs()

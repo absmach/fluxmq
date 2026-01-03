@@ -26,7 +26,7 @@ func TestIntegration_CompleteMessageLifecycle(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -50,7 +50,7 @@ func TestIntegration_CompleteMessageLifecycle(t *testing.T) {
 	queue, err := mgr.GetQueue(queueName)
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
 	worker.deliverMessages(ctx)
 
 	// Verify message was delivered
@@ -86,7 +86,7 @@ func TestIntegration_RetryFlow(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -111,7 +111,7 @@ func TestIntegration_RetryFlow(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/retry-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
 	worker.deliverMessages(ctx)
 
 	// Verify initial delivery
@@ -154,7 +154,7 @@ func TestIntegration_DLQFlow(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -179,7 +179,7 @@ func TestIntegration_DLQFlow(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/dlq-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
 	worker.deliverMessages(ctx)
 
 	// Get message ID
@@ -213,7 +213,7 @@ func TestIntegration_MultipleConsumersWithRebalancing(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -279,7 +279,7 @@ func TestIntegration_OrderingGuarantees(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -307,7 +307,7 @@ func TestIntegration_OrderingGuarantees(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/ordering-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
 	for i := 0; i < 5; i++ {
 		worker.deliverMessages(ctx)
 	}
@@ -336,7 +336,7 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -378,7 +378,7 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/concurrent-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
 
 	// Run multiple delivery cycles
 	for i := 0; i < 10; i++ {
@@ -404,7 +404,7 @@ func TestIntegration_StatsCollection(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -448,7 +448,7 @@ func TestIntegration_MultipleGroups_IndependentConsumption(t *testing.T) {
 		QueueStore:    store,
 		MessageStore:  store,
 		ConsumerStore: store,
-		Broker:        broker,
+		DeliverFn:     broker.DeliverToSession,
 	}
 
 	mgr, err := NewManager(cfg)
@@ -477,7 +477,7 @@ func TestIntegration_MultipleGroups_IndependentConsumption(t *testing.T) {
 	queue, err := mgr.GetQueue(queueName)
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession)
 	for i := 0; i < 5; i++ {
 		worker.deliverMessages(ctx)
 	}
