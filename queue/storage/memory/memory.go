@@ -22,6 +22,7 @@ type Store struct {
 	consumers map[string]map[string]map[string]*storage.Consumer // queueName -> groupID -> consumerID -> consumer
 	sequences map[string]map[int]uint64                          // queueName -> partitionID -> nextSeq
 	offsets   map[string]map[int]uint64                          // queueName -> partitionID -> offset
+	counts    map[string]int64                                   // queueName -> message count (for O(1) Count())
 	mu        sync.RWMutex
 }
 
@@ -35,6 +36,7 @@ func New() *Store {
 		consumers: make(map[string]map[string]map[string]*storage.Consumer),
 		sequences: make(map[string]map[int]uint64),
 		offsets:   make(map[string]map[int]uint64),
+		counts:    make(map[string]int64),
 	}
 }
 
@@ -58,6 +60,7 @@ func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) err
 	s.consumers[config.Name] = make(map[string]map[string]*storage.Consumer)
 	s.sequences[config.Name] = make(map[int]uint64)
 	s.offsets[config.Name] = make(map[int]uint64)
+	s.counts[config.Name] = 0 // Initialize message counter
 
 	// Initialize partitions
 	for i := 0; i < config.Partitions; i++ {
@@ -147,24 +150,21 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Mess
 	// Deep copy the message
 	msgCopy := s.deepCopyMessage(msg)
 	partition[msg.Sequence] = msgCopy
+	s.counts[queueName]++ // Increment message counter
 	return nil
 }
 
 // Count returns the number of messages in the queue (across all partitions).
+// Optimized to use O(1) counter instead of O(n) scan.
 func (s *Store) Count(ctx context.Context, queueName string) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	partitions, exists := s.messages[queueName]
-	if !exists {
+	if _, exists := s.queues[queueName]; !exists {
 		return 0, storage.ErrQueueNotFound
 	}
 
-	var count int64
-	for _, partition := range partitions {
-		count += int64(len(partition))
-	}
-	return count, nil
+	return s.counts[queueName], nil
 }
 
 // deepCopyMessage creates a deep copy of a message including Properties map.
@@ -318,6 +318,7 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 		for seq, msg := range partition {
 			if msg.ID == messageID {
 				delete(partition, seq)
+				s.counts[queueName]-- // Decrement message counter
 				return nil
 			}
 		}
