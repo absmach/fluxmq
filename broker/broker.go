@@ -75,8 +75,7 @@ type Broker struct {
 	shuttingDown  bool
 	closed        bool
 	// Shared subscriptions (MQTT 5.0)
-	shareGroups   map[string]*topics.ShareGroup // key: "shareName/topicFilter"
-	shareGroupsMu sync.RWMutex
+	sharedSubs *SharedSubscriptionManager
 }
 
 // NewBroker creates a new broker instance.
@@ -88,6 +87,8 @@ type Broker struct {
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
 //   - metrics: OTel metrics instance (nil if metrics disabled)
 //   - tracer: OTel tracer (nil if tracing disabled)
+//
+// func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier, metrics *otel.Metrics, tracer trace.Tracer) *Broker {
 func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier, metrics *otel.Metrics, tracer trace.Tracer) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
@@ -118,7 +119,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		metrics:       metrics,
 		tracer:        tracer,
 		stopCh:        make(chan struct{}),
-		shareGroups:   make(map[string]*topics.ShareGroup),
+		sharedSubs:    NewSharedSubscriptionManager(),
 	}
 
 	b.wg.Add(2)
@@ -468,32 +469,20 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 	}
 
 	// Check if this is a shared subscription
-	shareName, topicFilter, isShared := topics.ParseShared(filter)
-	if isShared {
-		// Handle shared subscription
-		b.shareGroupsMu.Lock()
-		groupKey := shareName + "/" + topicFilter
-		group, exists := b.shareGroups[groupKey]
-		if !exists {
-			group = &topics.ShareGroup{
-				Name:        shareName,
-				TopicFilter: topicFilter,
-				Subscribers: []string{},
-			}
-			b.shareGroups[groupKey] = group
-
-			// Only subscribe to router when creating a new share group
-			shareClientID := "$share/" + groupKey
-			b.router.Subscribe(shareClientID, topicFilter, qos, opts)
-		}
-		group.AddSubscriber(s.ID)
-		b.shareGroupsMu.Unlock()
+	if b.sharedSubs.Subscribe(s.ID, filter) {
+		// Only subscribe to router when creating a new share group
+		// The manager handles the grouping logic.
+		// We still need to register the group with the router strictly for routing purposes.
+		// The client ID used for routing is the "$share/group/filter" string.
+		shareName, topicFilter, _ := topics.ParseShared(filter)
+		shareClientID := "$share/" + shareName + "/" + topicFilter
+		b.router.Subscribe(shareClientID, topicFilter, qos, opts)
 
 		b.logOp("shared_subscribe",
 			slog.String("client_id", s.ID),
 			slog.String("share_name", shareName),
 			slog.String("topic_filter", topicFilter))
-	} else {
+	} else if !topics.IsShared(filter) {
 		// Normal subscription
 		b.router.Subscribe(s.ID, filter, qos, opts)
 	}
@@ -555,27 +544,17 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	}
 
 	// Check if this is a shared subscription
-	shareName, topicFilter, isShared := topics.ParseShared(filter)
-	if isShared {
-		// Handle shared subscription removal
-		b.shareGroupsMu.Lock()
-		groupKey := shareName + "/" + topicFilter
-		if group, exists := b.shareGroups[groupKey]; exists {
-			group.RemoveSubscriber(s.ID)
-			// If group is now empty, remove it and unsubscribe from router
-			if group.IsEmpty() {
-				delete(b.shareGroups, groupKey)
-				shareClientID := "$share/" + groupKey
-				b.router.Unsubscribe(shareClientID, topicFilter)
-			}
-		}
-		b.shareGroupsMu.Unlock()
+	if b.sharedSubs.Unsubscribe(s.ID, filter) {
+		// If group became empty, unsubscribe from router
+		shareName, topicFilter, _ := topics.ParseShared(filter)
+		shareClientID := "$share/" + shareName + "/" + topicFilter
+		b.router.Unsubscribe(shareClientID, topicFilter)
 
 		b.logOp("shared_unsubscribe",
 			slog.String("client_id", s.ID),
 			slog.String("share_name", shareName),
 			slog.String("topic_filter", topicFilter))
-	} else {
+	} else if !topics.IsShared(filter) {
 		// Normal unsubscribe
 		b.router.Unsubscribe(s.ID, filter)
 	}
@@ -835,17 +814,14 @@ func (b *Broker) distribute(msg *storage.Message) error {
 				continue
 			}
 
-			// Get the share group and select next subscriber
-			b.shareGroupsMu.RLock()
-			group, exists := b.shareGroups[groupKey]
-			b.shareGroupsMu.RUnlock()
-
-			if !exists || group.IsEmpty() {
+			// Select next subscriber in the group
+			// groupKey here typically looks like "groupName/topicFilter"
+			// GetNextSubscriber handles matching
+			selectedClientID, ok := b.sharedSubs.GetNextSubscriber(groupKey)
+			if !ok {
 				continue
 			}
 
-			// Round-robin: select next subscriber in the group
-			selectedClientID := group.NextSubscriber()
 			deliveredGroups[groupKey] = true
 
 			s := b.sessionsMap.Get(selectedClientID)
@@ -958,19 +934,16 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 	subs := s.GetSubscriptions()
 	for filter := range subs {
 		// Check if this is a shared subscription and clean up share groups
-		shareName, topicFilter, isShared := topics.ParseShared(filter)
-		if isShared {
-			b.shareGroupsMu.Lock()
-			groupKey := shareName + "/" + topicFilter
-			if group, exists := b.shareGroups[groupKey]; exists {
-				group.RemoveSubscriber(s.ID)
-				if group.IsEmpty() {
-					delete(b.shareGroups, groupKey)
-					shareClientID := "$share/" + groupKey
-					b.router.Unsubscribe(shareClientID, topicFilter)
-				}
+		if topics.IsShared(filter) {
+			// RemoveClient handles checking ALL groups, but here we are iterating subscriptions.
+			// Ideally we should use RemoveClient once outside the loop?
+			// Actually, RemoveClient iterates all groups, which is inefficient if we know the subscription.
+			// But for now, let's keep it simple and use Unsubscribe which matches the loop context.
+			if b.sharedSubs.Unsubscribe(s.ID, filter) {
+				shareName, topicFilter, _ := topics.ParseShared(filter)
+				shareClientID := "$share/" + shareName + "/" + topicFilter
+				b.router.Unsubscribe(shareClientID, topicFilter)
 			}
-			b.shareGroupsMu.Unlock()
 		} else {
 			b.router.Unsubscribe(s.ID, filter)
 		}

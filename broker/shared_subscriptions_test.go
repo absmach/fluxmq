@@ -34,9 +34,7 @@ func TestSharedSubscription_GroupCreation(t *testing.T) {
 	b.subscribe(s3, sharedFilter, 1, opts)
 
 	// Verify share group was created with all 3 subscribers
-	b.shareGroupsMu.RLock()
-	group := b.shareGroups["group1/sensors/#"]
-	b.shareGroupsMu.RUnlock()
+	group := b.sharedSubs.GetGroup("group1/sensors/#")
 
 	if group == nil {
 		t.Fatal("Share group was not created")
@@ -69,9 +67,7 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	b.subscribe(s2, sharedFilter, 1, opts)
 	b.subscribe(s3, sharedFilter, 1, opts)
 
-	b.shareGroupsMu.RLock()
-	group := b.shareGroups["workers/jobs/#"]
-	b.shareGroupsMu.RUnlock()
+	group := b.sharedSubs.GetGroup("workers/jobs/#")
 
 	// Test round-robin selection
 	expected := []string{"client1", "client2", "client3", "client1", "client2", "client3"}
@@ -99,9 +95,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b.subscribe(s2, sharedFilter, 1, opts)
 
 	// Verify group exists
-	b.shareGroupsMu.RLock()
-	group := b.shareGroups["group1/test/topic"]
-	b.shareGroupsMu.RUnlock()
+	group := b.sharedSubs.GetGroup("group1/test/topic")
 	if group == nil {
 		t.Fatal("Share group should exist")
 	}
@@ -113,9 +107,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b.unsubscribeInternal(s1, sharedFilter)
 
 	// Group should still exist with 1 subscriber
-	b.shareGroupsMu.RLock()
-	group = b.shareGroups["group1/test/topic"]
-	b.shareGroupsMu.RUnlock()
+	group = b.sharedSubs.GetGroup("group1/test/topic")
 	if group == nil {
 		t.Fatal("Share group should still exist")
 	}
@@ -127,9 +119,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b.unsubscribeInternal(s2, sharedFilter)
 
 	// Group should be deleted
-	b.shareGroupsMu.RLock()
-	group = b.shareGroups["group1/test/topic"]
-	b.shareGroupsMu.RUnlock()
+	group = b.sharedSubs.GetGroup("group1/test/topic")
 	if group != nil {
 		t.Fatal("Share group should be deleted when empty")
 	}
@@ -154,9 +144,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	b.DestroySession("client1")
 
 	// Group should still exist with 1 subscriber
-	b.shareGroupsMu.RLock()
-	group := b.shareGroups["mygroup/data/#"]
-	b.shareGroupsMu.RUnlock()
+	group := b.sharedSubs.GetGroup("mygroup/data/#")
 	if group == nil {
 		t.Fatal("Share group should still exist")
 	}
@@ -171,9 +159,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	b.DestroySession("client2")
 
 	// Group should be deleted
-	b.shareGroupsMu.RLock()
-	group = b.shareGroups["mygroup/data/#"]
-	b.shareGroupsMu.RUnlock()
+	group = b.sharedSubs.GetGroup("mygroup/data/#")
 	if group != nil {
 		t.Fatal("Share group should be deleted when all members are gone")
 	}
@@ -199,10 +185,8 @@ func TestSharedSubscription_MultipleGroups(t *testing.T) {
 	b.subscribe(s3, "$share/group1/sensors/#", 1, opts)
 
 	// Both groups should exist
-	b.shareGroupsMu.RLock()
-	group1 := b.shareGroups["group1/sensors/#"]
-	group2 := b.shareGroups["group2/sensors/#"]
-	b.shareGroupsMu.RUnlock()
+	group1 := b.sharedSubs.GetGroup("group1/sensors/#")
+	group2 := b.sharedSubs.GetGroup("group2/sensors/#")
 
 	if group1 == nil || group2 == nil {
 		t.Fatal("Both share groups should exist")
@@ -231,10 +215,8 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	b.subscribe(s2, "$share/workers/logs/#", 1, opts)
 
 	// Two separate groups should exist
-	b.shareGroupsMu.RLock()
-	sensorsGroup := b.shareGroups["workers/sensors/#"]
-	logsGroup := b.shareGroups["workers/logs/#"]
-	b.shareGroupsMu.RUnlock()
+	sensorsGroup := b.sharedSubs.GetGroup("workers/sensors/#")
+	logsGroup := b.sharedSubs.GetGroup("workers/logs/#")
 
 	if sensorsGroup == nil || logsGroup == nil {
 		t.Fatal("Both share groups should exist")
@@ -266,9 +248,7 @@ func TestSharedSubscription_DuplicateSubscribe(t *testing.T) {
 	b.subscribe(s1, sharedFilter, 1, opts)
 
 	// Group should have the client only once
-	b.shareGroupsMu.RLock()
-	group := b.shareGroups["group1/test/#"]
-	b.shareGroupsMu.RUnlock()
+	group := b.sharedSubs.GetGroup("group1/test/#")
 
 	if group == nil {
 		t.Fatal("Share group should exist")
