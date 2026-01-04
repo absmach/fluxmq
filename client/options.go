@@ -79,7 +79,8 @@ type Options struct {
 	OnConnect            func()                          // Called on successful connection
 	OnConnectionLost     func(error)                     // Called when connection is lost
 	OnReconnecting       func(attempt int)               // Called before each reconnect attempt
-	OnMessage            func(topic string, payload []byte, qos byte) // Called for incoming messages
+	OnMessage            func(topic string, payload []byte, qos byte) // Called for incoming messages (basic)
+	OnMessageV2          func(msg *Message)              // Called for incoming messages (full context, takes precedence over OnMessage)
 	OnServerCapabilities func(*ServerCapabilities)       // Called when server capabilities received (MQTT 5.0)
 
 	// Advanced
@@ -252,6 +253,14 @@ func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
 // SetOnMessage sets the message handler callback.
 func (o *Options) SetOnMessage(fn func(topic string, payload []byte, qos byte)) *Options {
 	o.OnMessage = fn
+	return o
+}
+
+// SetOnMessageV2 sets the enhanced message handler callback with full message context.
+// This takes precedence over OnMessage if both are set.
+// The Message includes MQTT v5 properties, user properties, and other metadata.
+func (o *Options) SetOnMessageV2(fn func(msg *Message)) *Options {
+	o.OnMessageV2 = fn
 	return o
 }
 

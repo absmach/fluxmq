@@ -16,6 +16,8 @@ import (
 	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
+var timeZero = time.Time{}
+
 // Client is a thread-safe MQTT client.
 type Client struct {
 	opts *Options
@@ -33,6 +35,9 @@ type Client struct {
 
 	// Topic aliases (MQTT 5.0)
 	topicAliases *topicAliasManager
+
+	// Queue subscriptions
+	queueSubs *queueSubscriptions
 
 	// Pending operations
 	pending *pendingStore
@@ -76,6 +81,7 @@ func New(opts *Options) (*Client, error) {
 		pending:      newPendingStore(opts.MaxInflight),
 		store:        store,
 		qos2Incoming: make(map[uint16]*Message),
+		queueSubs:    newQueueSubscriptions(),
 	}, nil
 }
 
@@ -950,9 +956,67 @@ func (c *Client) handlePublish(pkt packets.ControlPacket) {
 }
 
 func (c *Client) deliverMessage(msg *Message) {
+	// Check if this is a queue message
+	if isQueueTopic(msg.Topic) {
+		c.handleQueueMessage(msg)
+		return
+	}
+
+	// Call OnMessageV2 if set (provides full message context)
+	if c.opts.OnMessageV2 != nil {
+		c.opts.OnMessageV2(msg)
+		return
+	}
+
+	// Fall back to OnMessage for backward compatibility
 	if c.opts.OnMessage != nil {
 		c.opts.OnMessage(msg.Topic, msg.Payload, msg.QoS)
 	}
+}
+
+// handleQueueMessage processes a queue message and calls the appropriate handler.
+func (c *Client) handleQueueMessage(msg *Message) {
+	// Get queue subscription
+	sub, ok := c.queueSubs.get(msg.Topic)
+	if !ok || sub.handler == nil {
+		// No handler registered, fall through to default handlers
+		if c.opts.OnMessageV2 != nil {
+			c.opts.OnMessageV2(msg)
+		} else if c.opts.OnMessage != nil {
+			c.opts.OnMessage(msg.Topic, msg.Payload, msg.QoS)
+		}
+		return
+	}
+
+	// Extract queue message metadata from user properties
+	var messageID string
+	var partitionID int
+	var sequence uint64
+
+	if msg.UserProperties != nil {
+		if msgID, ok := msg.UserProperties["message-id"]; ok {
+			messageID = msgID
+		}
+		if partID, ok := msg.UserProperties["partition-id"]; ok {
+			fmt.Sscanf(partID, "%d", &partitionID)
+		}
+		if seq, ok := msg.UserProperties["sequence"]; ok {
+			fmt.Sscanf(seq, "%d", &sequence)
+		}
+	}
+
+	// Create queue message with ack/nack/reject methods
+	queueMsg := &QueueMessage{
+		Message:     msg,
+		MessageID:   messageID,
+		PartitionID: partitionID,
+		Sequence:    sequence,
+		client:      c,
+		queueName:   sub.queueName,
+	}
+
+	// Call handler
+	sub.handler(queueMsg)
 }
 
 func (c *Client) handlePubAck(pkt packets.ControlPacket) {
