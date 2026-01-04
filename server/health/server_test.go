@@ -40,6 +40,10 @@ func (m *mockCluster) AcquirePartition(ctx context.Context, queueName string, pa
 	return nil
 }
 
+func (m *mockCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error {
+	return nil
+}
+
 func (m *mockCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
 	return "", nil
 }
@@ -54,6 +58,16 @@ func (m *mockCluster) ReleaseSession(ctx context.Context, clientID string) error
 
 func (m *mockCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
 	return "", false, nil
+}
+
+func (m *mockCluster) GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, bool, error) {
+	return "", false, nil
+}
+
+func (m *mockCluster) WatchPartitionOwnership(ctx context.Context, queueName string) <-chan cluster.PartitionOwnershipChange {
+	ch := make(chan cluster.PartitionOwnershipChange)
+	close(ch)
+	return ch
 }
 
 func (m *mockCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan cluster.OwnershipChange {
