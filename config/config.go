@@ -27,8 +27,8 @@ type ServerConfig struct {
 	TCPAddr         string        `yaml:"tcp_addr"`
 	TLSCertFile     string        `yaml:"tls_cert_file"`
 	TLSKeyFile      string        `yaml:"tls_key_file"`
-	TLSCAFile       string        `yaml:"tls_ca_file"`       // CA certificate for client verification
-	TLSClientAuth   string        `yaml:"tls_client_auth"`   // "none", "request", or "require"
+	TLSCAFile       string        `yaml:"tls_ca_file"`     // CA certificate for client verification
+	TLSClientAuth   string        `yaml:"tls_client_auth"` // "none", "request", or "require"
 	HTTPAddr        string        `yaml:"http_addr"`
 	WSAddr          string        `yaml:"ws_addr"`
 	WSPath          string        `yaml:"ws_path"`
@@ -131,14 +131,14 @@ type TransportConfig struct {
 
 // WebhookConfig holds webhook notification configuration.
 type WebhookConfig struct {
-	Enabled        bool              `yaml:"enabled"`
-	QueueSize      int               `yaml:"queue_size"`
-	DropPolicy     string            `yaml:"drop_policy"`      // "oldest" or "newest"
-	Workers        int               `yaml:"workers"`          // Number of worker goroutines
-	IncludePayload bool              `yaml:"include_payload"`  // Include message payload in events
-	ShutdownTimeout time.Duration    `yaml:"shutdown_timeout"` // Graceful shutdown timeout
-	Defaults       WebhookDefaults   `yaml:"defaults"`
-	Endpoints      []WebhookEndpoint `yaml:"endpoints"`
+	Enabled         bool              `yaml:"enabled"`
+	QueueSize       int               `yaml:"queue_size"`
+	DropPolicy      string            `yaml:"drop_policy"`      // "oldest" or "newest"
+	Workers         int               `yaml:"workers"`          // Number of worker goroutines
+	IncludePayload  bool              `yaml:"include_payload"`  // Include message payload in events
+	ShutdownTimeout time.Duration     `yaml:"shutdown_timeout"` // Graceful shutdown timeout
+	Defaults        WebhookDefaults   `yaml:"defaults"`
+	Endpoints       []WebhookEndpoint `yaml:"endpoints"`
 }
 
 // WebhookDefaults holds default settings for webhook endpoints.
@@ -170,8 +170,8 @@ type WebhookEndpoint struct {
 	Events       []string          `yaml:"events"`        // Event type filter (empty = all)
 	TopicFilters []string          `yaml:"topic_filters"` // Topic pattern filter (empty = all)
 	Headers      map[string]string `yaml:"headers"`
-	Timeout      time.Duration     `yaml:"timeout,omitempty"`      // Override default
-	Retry        *RetryConfig      `yaml:"retry,omitempty"`        // Override default
+	Timeout      time.Duration     `yaml:"timeout,omitempty"` // Override default
+	Retry        *RetryConfig      `yaml:"retry,omitempty"`   // Override default
 }
 
 // Default returns a configuration with sensible defaults.
