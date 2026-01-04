@@ -36,6 +36,18 @@ func (m *mockCluster) AcquireSession(ctx context.Context, clientID, nodeID strin
 	return nil
 }
 
+func (m *mockCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error {
+	return nil
+}
+
+func (m *mockCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
+	return "", nil
+}
+
+func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
+	return nil
+}
+
 func (m *mockCluster) ReleaseSession(ctx context.Context, clientID string) error {
 	return nil
 }
