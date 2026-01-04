@@ -221,16 +221,17 @@ func (b *Broker) distribute(msg *storage.Message) error {
 
 			// Zero-copy: Retain buffer for this subscriber's message
 			msg.RetainPayload()
-			deliverMsg := &storage.Message{
-				Topic:      msg.Topic,
-				QoS:        deliverQoS,
-				Retain:     false, // MQTT spec: shared subscriptions don't receive retained flag
-				Properties: msg.Properties,
-			}
+			deliverMsg := storage.AcquireMessage()
+			deliverMsg.Topic = msg.Topic
+			deliverMsg.QoS = deliverQoS
+			deliverMsg.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
+			deliverMsg.Properties = msg.Properties
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
-			// DeliverToSession takes ownership of the buffer
+			// DeliverToSession takes ownership of the buffer and message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
+				// Failed to deliver - release message back to pool
+				storage.ReleaseMessage(deliverMsg)
 				continue
 			}
 		} else {
@@ -247,16 +248,17 @@ func (b *Broker) distribute(msg *storage.Message) error {
 
 			// Zero-copy: Retain buffer for this subscriber's message
 			msg.RetainPayload()
-			deliverMsg := &storage.Message{
-				Topic:      msg.Topic,
-				QoS:        deliverQoS,
-				Retain:     false, // Don't retain during distribution
-				Properties: msg.Properties,
-			}
+			deliverMsg := storage.AcquireMessage()
+			deliverMsg.Topic = msg.Topic
+			deliverMsg.QoS = deliverQoS
+			deliverMsg.Retain = false // Don't retain during distribution
+			deliverMsg.Properties = msg.Properties
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
-			// DeliverToSession takes ownership of the buffer
+			// DeliverToSession takes ownership of the buffer and message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
+				// Failed to deliver - release message back to pool
+				storage.ReleaseMessage(deliverMsg)
 				continue
 			}
 		}

@@ -38,6 +38,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 			return 0, s.OfflineQueue().Enqueue(msg)
 		}
 		msg.ReleasePayload() // Drop QoS 0 message for offline client - release buffer
+		storage.ReleaseMessage(msg)
 		return 0, nil
 	}
 
@@ -54,8 +55,9 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 				})
 			}
 		}
-		// QoS 0 message delivered - release buffer
+		// QoS 0 message delivered - release buffer and return message to pool
 		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
 		return 0, err
 	}
 
@@ -100,7 +102,8 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 
 	switch s.Version {
 	case 5:
-		props := &v5.PublishProperties{}
+		p := v5.AcquirePublish()
+		defer v5.ReleasePublish(p)
 
 		// Calculate remaining message expiry interval
 		if msg.MessageExpiry != nil && !msg.Expiry.IsZero() {
@@ -109,33 +112,35 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 			if remaining > 0 {
 				// Send remaining expiry in seconds
 				remainingSec := uint32(remaining.Seconds())
-				props.MessageExpiry = &remainingSec
+				p.Properties.MessageExpiry = &remainingSec
 			}
 			// If remaining <= 0, don't include expiry (message should have been filtered already)
 		}
 
-		pub = &v5.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        msg.QoS,
-				Retain:     msg.Retain,
-			},
-			TopicName:  msg.Topic,
-			Payload:    msg.GetPayload(),
-			ID:         msg.PacketID,
-			Properties: props,
+		p.FixedHeader = packets.FixedHeader{
+			PacketType: packets.PublishType,
+			QoS:        msg.QoS,
+			Retain:     msg.Retain,
 		}
+		p.TopicName = msg.Topic
+		p.Payload = msg.GetPayload()
+		p.ID = msg.PacketID
+
+		pub = p
 	default:
-		pub = &v3.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        msg.QoS,
-				Retain:     msg.Retain,
-			},
-			TopicName: msg.Topic,
-			Payload:   msg.GetPayload(),
-			ID:        msg.PacketID,
+		p := v3.AcquirePublish()
+		defer v3.ReleasePublish(p)
+
+		p.FixedHeader = packets.FixedHeader{
+			PacketType: packets.PublishType,
+			QoS:        msg.QoS,
+			Retain:     msg.Retain,
 		}
+		p.TopicName = msg.Topic
+		p.Payload = msg.GetPayload()
+		p.ID = msg.PacketID
+
+		pub = p
 	}
 
 	return s.WritePacket(pub)
@@ -149,15 +154,16 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core
 	}
 
 	// core.Message comes from cluster - create storage.Message with zero-copy buffer
-	storeMsg := &storage.Message{
-		Topic:      msg.Topic,
-		QoS:        msg.QoS,
-		Retain:     msg.Retain,
-		Properties: msg.Properties,
-	}
+	storeMsg := storage.AcquireMessage()
+	storeMsg.Topic = msg.Topic
+	storeMsg.QoS = msg.QoS
+	storeMsg.Retain = msg.Retain
+	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
 	_, err := b.DeliverToSession(s, storeMsg)
+	// Note: DeliverToSession will release the message for QoS 0
+	// For QoS 1/2, Inflight storage takes ownership
 	return err
 }
 

@@ -31,7 +31,9 @@ func BenchmarkEnqueue_SinglePartition(b *testing.B) {
 	ctx := context.Background()
 	queueName := "$queue/bench-single"
 	config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 1
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
 		b.Fatal(err)
@@ -69,6 +71,7 @@ func BenchmarkEnqueue_MultiplePartitions(b *testing.B) {
 	ctx := context.Background()
 	queueName := "$queue/bench-multi"
 	config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 10
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -107,6 +110,7 @@ func BenchmarkEnqueue_SmallPayload(b *testing.B) {
 	ctx := context.Background()
 	queueName := "$queue/bench-small"
 	config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
 		b.Fatal(err)
@@ -144,6 +148,7 @@ func BenchmarkEnqueue_LargePayload(b *testing.B) {
 	ctx := context.Background()
 	queueName := "$queue/bench-large"
 	config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
 		b.Fatal(err)
@@ -185,6 +190,7 @@ func BenchmarkEnqueue_WithPartitionKey(b *testing.B) {
 	ctx := context.Background()
 	queueName := "$queue/bench-partkey"
 	config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 10
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -223,6 +229,7 @@ func BenchmarkEnqueue_Parallel(b *testing.B) {
 	ctx := context.Background()
 	queueName := "$queue/bench-parallel"
 	config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 10
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -267,6 +274,7 @@ func BenchmarkEnqueue_BatchSize(b *testing.B) {
 			ctx := context.Background()
 			queueName := fmt.Sprintf("$queue/bench-batch-%d", size)
 			config := queueStorage.DefaultQueueConfig(queueName)
+	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 			if err := mgr.CreateQueue(ctx, config); err != nil {
 				b.Fatal(err)
