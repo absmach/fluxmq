@@ -256,16 +256,23 @@ func (pw *PartitionWorker) deliverMessage(
 
 // toStorageMessage converts a queue message to a broker storage message for MQTT delivery.
 func toStorageMessage(msg *queueStorage.Message, queueTopic string) interface{} {
-	// Create a broker storage.Message with zero-copy buffer
-	buf := core.GetBufferWithData(msg.Payload)
-
 	storageMsg := &brokerStorage.Message{
 		Topic:      queueTopic,
 		QoS:        1, // Queue messages always use QoS 1 for delivery confirmation
 		Retain:     false,
 		Properties: msg.Properties,
 	}
-	storageMsg.SetPayloadFromBuffer(buf)
+
+	// Use existing PayloadBuf if available (zero-copy), otherwise create from Payload
+	if msg.PayloadBuf != nil {
+		// Retain the buffer for the broker message
+		msg.PayloadBuf.Retain()
+		storageMsg.SetPayloadFromBuffer(msg.PayloadBuf)
+	} else if len(msg.Payload) > 0 {
+		// Fallback for legacy Payload field
+		buf := core.GetBufferWithData(msg.Payload)
+		storageMsg.SetPayloadFromBuffer(buf)
+	}
 
 	return storageMsg
 }

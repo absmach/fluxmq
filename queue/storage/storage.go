@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/absmach/mqtt/core"
 )
 
 var (
@@ -77,7 +79,8 @@ type DLQConfig struct {
 // Message represents a message in the queue system.
 type Message struct {
 	ID           string
-	Payload      []byte
+	Payload      []byte                 // Deprecated: Use PayloadBuf for zero-copy
+	PayloadBuf   *core.RefCountedBuffer // Zero-copy payload buffer (preferred)
 	Topic        string
 	PartitionKey string
 	PartitionID  int
@@ -97,6 +100,49 @@ type Message struct {
 	LastAttempt   time.Time
 	MovedToDLQAt  time.Time
 	ExpiresAt     time.Time
+}
+
+// GetPayload returns the message payload, preferring PayloadBuf if available.
+// This provides backward compatibility during migration to zero-copy.
+func (m *Message) GetPayload() []byte {
+	if m.PayloadBuf != nil {
+		return m.PayloadBuf.Bytes()
+	}
+	return m.Payload
+}
+
+// SetPayloadFromBuffer sets the payload from a RefCountedBuffer.
+// The message takes ownership of one reference.
+func (m *Message) SetPayloadFromBuffer(buf *core.RefCountedBuffer) {
+	if m.PayloadBuf != nil {
+		m.PayloadBuf.Release() // Release previous buffer
+	}
+	m.PayloadBuf = buf
+	m.Payload = nil // Clear legacy field
+}
+
+// SetPayloadFromBytes creates a new buffer from bytes (for backward compatibility).
+// This will eventually be phased out in favor of direct buffer creation.
+func (m *Message) SetPayloadFromBytes(data []byte) {
+	if m.PayloadBuf != nil {
+		m.PayloadBuf.Release()
+	}
+	if len(data) > 0 {
+		m.PayloadBuf = core.GetBufferWithData(data)
+	} else {
+		m.PayloadBuf = nil
+	}
+	m.Payload = nil
+}
+
+// ReleasePayload releases the buffer reference if PayloadBuf is set.
+// This should be called when the message is no longer needed.
+func (m *Message) ReleasePayload() {
+	if m.PayloadBuf != nil {
+		m.PayloadBuf.Release()
+		m.PayloadBuf = nil
+	}
+	m.Payload = nil
 }
 
 // DeliveryState tracks inflight message delivery.

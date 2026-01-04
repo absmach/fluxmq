@@ -35,8 +35,8 @@ func putMessageToPool(msg *queueStorage.Message) {
 	if msg == nil {
 		return
 	}
-	// Clear only essential fields - pool New() creates fresh struct
-	msg.Payload = nil
+	// Release buffer reference if set
+	msg.ReleasePayload()
 	// Clear map but keep allocated capacity
 	for k := range msg.Properties {
 		delete(msg.Properties, k)

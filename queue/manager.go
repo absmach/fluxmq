@@ -659,7 +659,7 @@ func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []
 
 	// Populate message
 	msg.ID = msgID
-	msg.Payload = payload
+	msg.SetPayloadFromBytes(payload) // Use zero-copy buffer
 	msg.Topic = queueName
 	msg.PartitionKey = partitionKey
 	msg.PartitionID = partitionID
