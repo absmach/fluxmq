@@ -40,6 +40,22 @@ const (
 	StateDLQ       MessageState = "dlq"
 )
 
+// ReplicationMode defines the replication behavior for queue messages.
+type ReplicationMode string
+
+const (
+	ReplicationSync  ReplicationMode = "sync"  // Wait for quorum ACK before returning
+	ReplicationAsync ReplicationMode = "async" // Return immediately after leader accepts
+)
+
+// PlacementStrategy defines how replicas are assigned to nodes.
+type PlacementStrategy string
+
+const (
+	PlacementRoundRobin PlacementStrategy = "round-robin" // Distribute replicas evenly
+	PlacementManual     PlacementStrategy = "manual"      // Operator-specified placement
+)
+
 // QueueConfig defines configuration for a queue.
 type QueueConfig struct {
 	Name       string
@@ -48,6 +64,7 @@ type QueueConfig struct {
 
 	RetryPolicy RetryPolicy
 	DLQConfig   DLQConfig
+	Replication ReplicationConfig
 
 	// Limits
 	MaxMessageSize int64
@@ -74,6 +91,23 @@ type DLQConfig struct {
 	Enabled      bool
 	Topic        string
 	AlertWebhook string
+}
+
+// ReplicationConfig defines Raft-based replication for queue partitions.
+type ReplicationConfig struct {
+	Enabled           bool
+	ReplicationFactor int               // Number of replicas per partition (default: 3)
+	Mode              ReplicationMode   // sync or async
+	Placement         PlacementStrategy // How to assign replicas to nodes
+	ManualReplicas    map[int][]string  // For manual placement: partitionID -> []nodeID
+	MinInSyncReplicas int               // Min replicas that must ACK (default: 2)
+	AckTimeout        time.Duration     // Timeout for sync mode operations (default: 5s)
+
+	// Raft tuning (optional, uses defaults if zero)
+	HeartbeatTimeout  time.Duration // Raft heartbeat interval (default: 1s)
+	ElectionTimeout   time.Duration // Raft election timeout (default: 3s)
+	SnapshotInterval  time.Duration // Snapshot frequency (default: 5m)
+	SnapshotThreshold uint64        // Snapshot after N log entries (default: 8192)
 }
 
 // Message represents a message in the queue system.
@@ -254,6 +288,15 @@ func DefaultQueueConfig(name string) QueueConfig {
 			Enabled: true,
 			Topic:   "", // Auto-generated
 		},
+
+		Replication: ReplicationConfig{
+			Enabled:           false, // Disabled by default for backward compatibility
+			ReplicationFactor: 3,
+			Mode:              ReplicationSync,
+			Placement:         PlacementRoundRobin,
+			MinInSyncReplicas: 2,
+			AckTimeout:        5 * time.Second,
+		},
 	}
 }
 
@@ -294,5 +337,36 @@ func (c *QueueConfig) Validate() error {
 	case c.RetryPolicy.TotalTimeout < 0:
 		return ErrInvalidConfig
 	}
+
+	// Validate replication config if enabled
+	if c.Replication.Enabled {
+		switch {
+		case c.Replication.ReplicationFactor < 1 || c.Replication.ReplicationFactor > 10:
+			return ErrInvalidConfig
+		case c.Replication.MinInSyncReplicas < 1 || c.Replication.MinInSyncReplicas > c.Replication.ReplicationFactor:
+			return ErrInvalidConfig
+		case c.Replication.Mode != ReplicationSync && c.Replication.Mode != ReplicationAsync:
+			return ErrInvalidConfig
+		case c.Replication.Placement != PlacementRoundRobin && c.Replication.Placement != PlacementManual:
+			return ErrInvalidConfig
+		case c.Replication.Placement == PlacementManual && len(c.Replication.ManualReplicas) != c.Partitions:
+			return ErrInvalidConfig
+		case c.Replication.AckTimeout <= 0:
+			return ErrInvalidConfig
+		}
+
+		// Validate manual replica assignments
+		if c.Replication.Placement == PlacementManual {
+			for partID, replicas := range c.Replication.ManualReplicas {
+				if partID < 0 || partID >= c.Partitions {
+					return ErrInvalidConfig
+				}
+				if len(replicas) != c.Replication.ReplicationFactor {
+					return ErrInvalidConfig
+				}
+			}
+		}
+	}
+
 	return nil
 }

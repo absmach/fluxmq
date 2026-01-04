@@ -6,6 +6,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,7 @@ const (
 type Manager struct {
 	queues          map[string]*Queue
 	deliveryWorkers map[string]*DeliveryWorker
+	raftManagers    map[string]*RaftManager // Per-queue Raft managers
 	queueStore      storage.QueueStore
 	messageStore    storage.MessageStore
 	consumerStore   storage.ConsumerStore
@@ -56,9 +58,11 @@ type Manager struct {
 	wg              sync.WaitGroup
 
 	// Cluster support (nil for single-node mode)
-	cluster            cluster.Cluster
-	localNodeID        string
+	cluster             cluster.Cluster
+	localNodeID         string
 	consumerRoutingMode ConsumerRoutingMode
+	dataDir             string             // For Raft storage
+	nodeAddresses       map[string]string  // nodeID -> raft bind address
 }
 
 // Config holds configuration for the queue manager.
@@ -72,6 +76,10 @@ type Config struct {
 	Cluster             cluster.Cluster
 	LocalNodeID         string
 	ConsumerRoutingMode ConsumerRoutingMode // Default: ProxyMode
+
+	// Optional Raft replication support
+	DataDir       string            // Directory for Raft data storage
+	NodeAddresses map[string]string // nodeID -> raft bind address (for Raft transport)
 }
 
 // NewManager creates a new queue manager.
@@ -102,6 +110,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	return &Manager{
 		queues:              make(map[string]*Queue),
 		deliveryWorkers:     make(map[string]*DeliveryWorker),
+		raftManagers:        make(map[string]*RaftManager),
 		queueStore:          cfg.QueueStore,
 		messageStore:        cfg.MessageStore,
 		consumerStore:       cfg.ConsumerStore,
@@ -112,6 +121,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		cluster:             cfg.Cluster,
 		localNodeID:         localNodeID,
 		consumerRoutingMode: routingMode,
+		dataDir:             cfg.DataDir,
+		nodeAddresses:       cfg.NodeAddresses,
 	}, nil
 }
 
@@ -151,6 +162,13 @@ func (m *Manager) Stop() error {
 	// Stop all delivery workers
 	for _, worker := range m.deliveryWorkers {
 		worker.Stop()
+	}
+
+	// Stop all Raft managers
+	for _, raftMgr := range m.raftManagers {
+		if err := raftMgr.Shutdown(); err != nil {
+			slog.Error("failed to shutdown raft manager", slog.String("error", err.Error()))
+		}
 	}
 	m.mu.Unlock()
 
@@ -202,8 +220,33 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 		m.retryManager.RegisterQueue(queue)
 	}
 
+	// Create RaftManager if replication is enabled
+	if config.Replication.Enabled {
+		raftMgr, err := NewRaftManager(RaftManagerConfig{
+			QueueName:     config.Name,
+			Config:        config.Replication,
+			NodeID:        m.localNodeID,
+			DataDir:       m.dataDir,
+			MessageStore:  m.messageStore,
+			NodeAddresses: m.nodeAddresses,
+			Logger:        slog.Default(),
+		})
+		if err != nil {
+			delete(m.queues, config.Name)
+			return fmt.Errorf("failed to create raft manager: %w", err)
+		}
+
+		m.raftManagers[config.Name] = raftMgr
+	}
+
+	// Get RaftManager if exists
+	var raftMgr *RaftManager
+	if config.Replication.Enabled {
+		raftMgr = m.raftManagers[config.Name]
+	}
+
 	// Create and start delivery worker
-	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID, m.consumerRoutingMode)
+	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID, m.consumerRoutingMode, raftMgr)
 	m.deliveryWorkers[config.Name] = worker
 
 	// Start worker in background
@@ -277,6 +320,12 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	// Get partition ID
 	partitionID := queue.GetPartitionForMessage(partitionKey)
 
+	// Replicated path: use Raft for consensus
+	if config.Replication.Enabled {
+		return m.enqueueReplicated(ctx, queueTopic, partitionID, payload, properties, config)
+	}
+
+	// Non-replicated path: original logic
 	// Check partition ownership (distributed mode)
 	if m.cluster != nil {
 		owner, err := m.getPartitionOwner(ctx, queueTopic, partitionID)
@@ -340,6 +389,97 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	}
 
 	// Notify partition worker that a message is available (event-driven delivery)
+	m.mu.RLock()
+	worker, exists := m.deliveryWorkers[queueTopic]
+	m.mu.RUnlock()
+
+	if exists {
+		worker.NotifyPartition(partitionID)
+	}
+
+	return nil
+}
+
+// enqueueReplicated routes an enqueue through Raft for replication.
+func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, partitionID int, payload []byte, properties map[string]string, config storage.QueueConfig) error {
+	// Get Raft manager for this queue
+	m.mu.RLock()
+	raftMgr, exists := m.raftManagers[queueTopic]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("raft manager not found for queue %s", queueTopic)
+	}
+
+	// Check if this node is the Raft leader for this partition
+	if !raftMgr.IsLeader(partitionID) {
+		// Wait for leader or fail
+		if err := raftMgr.WaitForLeader(ctx, partitionID); err != nil {
+			return fmt.Errorf("no leader available for partition %d: %w", partitionID, err)
+		}
+
+		// After waiting, check again if we're the leader
+		// If not, this is a follower and we should reject the enqueue
+		if !raftMgr.IsLeader(partitionID) {
+			leaderID := ""
+			if group, err := raftMgr.GetPartitionGroup(partitionID); err == nil {
+				leaderID = group.Leader()
+			}
+			return fmt.Errorf("not leader for partition %d (leader: %s)", partitionID, leaderID)
+		}
+	}
+
+	// Prepare message
+	sequence, err := m.messageStore.GetNextSequence(ctx, queueTopic, partitionID)
+	if err != nil {
+		return fmt.Errorf("failed to get next sequence: %w", err)
+	}
+
+	// Get message from pool
+	msg := getMessageFromPool()
+
+	// Optimize: avoid pool allocation for properties if input is empty
+	var msgProps map[string]string
+	if len(properties) == 0 {
+		msgProps = make(map[string]string, 1)
+	} else {
+		msgProps = getPropertyMap()
+		copyProperties(msgProps, properties)
+	}
+
+	// Generate message ID
+	msgID := uuid.New().String()
+	msgProps["message-id"] = msgID
+
+	// Extract partition key
+	partitionKey := properties["partition-key"]
+
+	// Populate message
+	msg.ID = msgID
+	msg.Payload = payload
+	msg.Topic = queueTopic
+	msg.PartitionKey = partitionKey
+	msg.PartitionID = partitionID
+	msg.Sequence = sequence
+	msg.Properties = msgProps
+	msg.State = storage.StateQueued
+	msg.CreatedAt = time.Now()
+	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
+
+	// Apply via Raft (this will replicate to followers)
+	err = raftMgr.ApplyEnqueue(ctx, partitionID, msg)
+
+	// Return to pools
+	if len(properties) > 0 {
+		putPropertyMap(msgProps)
+	}
+	putMessageToPool(msg)
+
+	if err != nil {
+		return fmt.Errorf("raft apply failed: %w", err)
+	}
+
+	// Notify partition worker that a message is available
 	m.mu.RLock()
 	worker, exists := m.deliveryWorkers[queueTopic]
 	m.mu.RUnlock()

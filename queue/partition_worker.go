@@ -37,6 +37,9 @@ type PartitionWorker struct {
 	cluster             cluster.Cluster
 	localNodeID         string
 	consumerRoutingMode ConsumerRoutingMode
+
+	// Raft support (nil for non-replicated queues)
+	raftManager *RaftManager
 }
 
 // NewPartitionWorker creates a new partition worker.
@@ -50,6 +53,7 @@ func NewPartitionWorker(
 	c cluster.Cluster,
 	localNodeID string,
 	routingMode ConsumerRoutingMode,
+	raftMgr *RaftManager,
 ) *PartitionWorker {
 	// Default batch size
 	if batchSize <= 0 {
@@ -69,6 +73,7 @@ func NewPartitionWorker(
 		cluster:             c,
 		localNodeID:         localNodeID,
 		consumerRoutingMode: routingMode,
+		raftManager:         raftMgr,
 	}
 }
 
@@ -112,17 +117,25 @@ func (pw *PartitionWorker) Notify() {
 
 // ProcessMessages processes up to batchSize messages from the partition.
 func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
-	// Check partition ownership (distributed mode)
-	if pw.cluster != nil {
-		owner, exists, err := pw.cluster.GetPartitionOwner(ctx, pw.queueName, pw.partitionID)
-		if err != nil {
-			// Error checking ownership, skip processing
+	// For replicated queues, only the Raft leader can deliver messages
+	if pw.raftManager != nil {
+		if !pw.raftManager.IsLeader(pw.partitionID) {
+			// Not the Raft leader for this partition, skip processing
 			return
 		}
+	} else {
+		// Non-replicated mode: check partition ownership (distributed mode)
+		if pw.cluster != nil {
+			owner, exists, err := pw.cluster.GetPartitionOwner(ctx, pw.queueName, pw.partitionID)
+			if err != nil {
+				// Error checking ownership, skip processing
+				return
+			}
 
-		// Skip processing if this node doesn't own the partition
-		if exists && owner != pw.localNodeID {
-			return
+			// Skip processing if this node doesn't own the partition
+			if exists && owner != pw.localNodeID {
+				return
+			}
 		}
 	}
 

@@ -25,7 +25,7 @@ type DeliveryWorker struct {
 }
 
 // NewDeliveryWorker creates a new delivery worker for a queue.
-func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker DeliverFn, c cluster.Cluster, localNodeID string, routingMode ConsumerRoutingMode) *DeliveryWorker {
+func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker DeliverFn, c cluster.Cluster, localNodeID string, routingMode ConsumerRoutingMode, raftMgr *RaftManager) *DeliveryWorker {
 	config := queue.Config()
 	batchSize := config.BatchSize
 	// Default batch size
@@ -46,6 +46,7 @@ func NewDeliveryWorker(queue *Queue, messageStore storage.MessageStore, broker D
 			c,
 			localNodeID,
 			routingMode,
+			raftMgr,
 		)
 		workers = append(workers, worker)
 	}

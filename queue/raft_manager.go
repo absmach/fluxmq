@@ -1,0 +1,383 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package queue
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"path/filepath"
+	"sync"
+
+	"github.com/absmach/mqtt/queue/raft"
+	"github.com/absmach/mqtt/queue/storage"
+	raftlib "github.com/hashicorp/raft"
+)
+
+// RaftManager manages Raft groups for all partitions of a queue.
+type RaftManager struct {
+	queueName    string
+	config       storage.ReplicationConfig
+	nodeID       string
+	dataDir      string
+	messageStore storage.MessageStore
+	logger       *slog.Logger
+
+	// Raft groups per partition
+	groups   map[int]*raft.RaftGroup
+	groupsMu sync.RWMutex
+
+	// Placement strategy
+	placement PlacementStrategy
+
+	// Cluster node addresses for Raft transport
+	nodeAddresses map[string]string // nodeID -> raft bind address
+}
+
+// RaftManagerConfig contains configuration for creating a RaftManager.
+type RaftManagerConfig struct {
+	QueueName     string
+	Config        storage.ReplicationConfig
+	NodeID        string
+	DataDir       string
+	MessageStore  storage.MessageStore
+	NodeAddresses map[string]string // nodeID -> raft bind address
+	Logger        *slog.Logger
+}
+
+// NewRaftManager creates a new Raft manager for a queue.
+func NewRaftManager(cfg RaftManagerConfig) (*RaftManager, error) {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+
+	if !cfg.Config.Enabled {
+		return nil, fmt.Errorf("replication not enabled for queue %s", cfg.QueueName)
+	}
+
+	// Create placement strategy
+	var placement PlacementStrategy
+	switch cfg.Config.Placement {
+	case storage.PlacementRoundRobin:
+		placement = NewRoundRobinPlacement(cfg.NodeAddresses)
+	case storage.PlacementManual:
+		placement = NewManualPlacement(cfg.Config.ManualReplicas)
+	default:
+		return nil, fmt.Errorf("unknown placement strategy: %s", cfg.Config.Placement)
+	}
+
+	rm := &RaftManager{
+		queueName:     cfg.QueueName,
+		config:        cfg.Config,
+		nodeID:        cfg.NodeID,
+		dataDir:       cfg.DataDir,
+		messageStore:  cfg.MessageStore,
+		logger:        cfg.Logger,
+		groups:        make(map[int]*raft.RaftGroup),
+		placement:     placement,
+		nodeAddresses: cfg.NodeAddresses,
+	}
+
+	return rm, nil
+}
+
+// StartPartition creates and starts a Raft group for the given partition.
+func (rm *RaftManager) StartPartition(ctx context.Context, partitionID int, partitionCount int) error {
+	rm.groupsMu.Lock()
+	defer rm.groupsMu.Unlock()
+
+	if _, exists := rm.groups[partitionID]; exists {
+		return fmt.Errorf("partition %d already started", partitionID)
+	}
+
+	// Get replica assignments for this partition
+	replicas := rm.placement.AssignReplicas(partitionID, partitionCount, rm.config.ReplicationFactor)
+
+	// Create Raft group configuration
+	raftConfig := raft.RaftGroupConfig{
+		QueueName:   rm.queueName,
+		PartitionID: partitionID,
+		NodeID:      rm.nodeID,
+		BindAddr:    rm.getBindAddress(rm.nodeID),
+		DataDir:     filepath.Join(rm.dataDir, rm.queueName),
+		SyncMode:    rm.config.Mode == storage.ReplicationSync,
+		AckTimeout:  rm.config.AckTimeout,
+
+		HeartbeatTimeout:  rm.config.HeartbeatTimeout,
+		ElectionTimeout:   rm.config.ElectionTimeout,
+		SnapshotInterval:  rm.config.SnapshotInterval,
+		SnapshotThreshold: rm.config.SnapshotThreshold,
+
+		MessageStore: rm.messageStore,
+		Logger:       rm.logger,
+	}
+
+	// Create Raft group
+	group, err := raft.NewRaftGroup(raftConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create raft group: %w", err)
+	}
+
+	// Bootstrap if this is the initial cluster setup
+	if err := rm.bootstrapPartition(group, replicas); err != nil {
+		group.Shutdown()
+		return fmt.Errorf("failed to bootstrap partition: %w", err)
+	}
+
+	rm.groups[partitionID] = group
+
+	rm.logger.Info("started raft partition",
+		slog.String("queue", rm.queueName),
+		slog.Int("partition", partitionID),
+		slog.String("node_id", rm.nodeID),
+		slog.Int("replica_count", len(replicas)))
+
+	return nil
+}
+
+// bootstrapPartition bootstraps the Raft cluster for a partition.
+func (rm *RaftManager) bootstrapPartition(group *raft.RaftGroup, replicas []string) error {
+	// Build server list for bootstrap
+	var servers []raftlib.Server
+	for _, nodeID := range replicas {
+		addr := rm.getBindAddress(nodeID)
+		servers = append(servers, raftlib.Server{
+			ID:      raftlib.ServerID(nodeID),
+			Address: raftlib.ServerAddress(addr),
+		})
+	}
+
+	return group.Bootstrap(servers)
+}
+
+// getBindAddress returns the Raft bind address for a node.
+func (rm *RaftManager) getBindAddress(nodeID string) string {
+	if addr, ok := rm.nodeAddresses[nodeID]; ok {
+		return addr
+	}
+	// Fallback: derive from node ID (this should not happen in production)
+	return fmt.Sprintf("%s:7946", nodeID)
+}
+
+// StopPartition stops the Raft group for the given partition.
+func (rm *RaftManager) StopPartition(partitionID int) error {
+	rm.groupsMu.Lock()
+	defer rm.groupsMu.Unlock()
+
+	group, exists := rm.groups[partitionID]
+	if !exists {
+		return fmt.Errorf("partition %d not found", partitionID)
+	}
+
+	if err := group.Shutdown(); err != nil {
+		rm.logger.Error("failed to shutdown raft group",
+			slog.String("queue", rm.queueName),
+			slog.Int("partition", partitionID),
+			slog.String("error", err.Error()))
+		return err
+	}
+
+	delete(rm.groups, partitionID)
+
+	rm.logger.Info("stopped raft partition",
+		slog.String("queue", rm.queueName),
+		slog.Int("partition", partitionID))
+
+	return nil
+}
+
+// GetPartitionGroup returns the Raft group for a partition.
+func (rm *RaftManager) GetPartitionGroup(partitionID int) (*raft.RaftGroup, error) {
+	rm.groupsMu.RLock()
+	defer rm.groupsMu.RUnlock()
+
+	group, exists := rm.groups[partitionID]
+	if !exists {
+		return nil, fmt.Errorf("partition %d not found", partitionID)
+	}
+
+	return group, nil
+}
+
+// IsLeader returns true if this node is the Raft leader for the partition.
+func (rm *RaftManager) IsLeader(partitionID int) bool {
+	rm.groupsMu.RLock()
+	defer rm.groupsMu.RUnlock()
+
+	group, exists := rm.groups[partitionID]
+	if !exists {
+		return false
+	}
+
+	return group.IsLeader()
+}
+
+// ApplyEnqueue replicates an enqueue operation via Raft.
+func (rm *RaftManager) ApplyEnqueue(ctx context.Context, partitionID int, msg *storage.Message) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:    raft.OpEnqueue,
+		Message: msg,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
+// ApplyAck replicates an ACK operation via Raft.
+func (rm *RaftManager) ApplyAck(ctx context.Context, partitionID int, messageID string) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:      raft.OpAck,
+		MessageID: messageID,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
+// ApplyNack replicates a NACK operation via Raft.
+func (rm *RaftManager) ApplyNack(ctx context.Context, partitionID int, messageID, reason string) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:      raft.OpNack,
+		MessageID: messageID,
+		Reason:    reason,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
+// ApplyReject replicates a REJECT operation via Raft.
+func (rm *RaftManager) ApplyReject(ctx context.Context, partitionID int, messageID, reason string) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:      raft.OpReject,
+		MessageID: messageID,
+		Reason:    reason,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
+// WaitForLeader blocks until the partition has a leader or timeout.
+func (rm *RaftManager) WaitForLeader(ctx context.Context, partitionID int) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	return group.WaitForLeader(ctx, rm.config.AckTimeout)
+}
+
+// Shutdown stops all Raft groups.
+func (rm *RaftManager) Shutdown() error {
+	rm.groupsMu.Lock()
+	defer rm.groupsMu.Unlock()
+
+	var errors []error
+	for partitionID, group := range rm.groups {
+		if err := group.Shutdown(); err != nil {
+			rm.logger.Error("failed to shutdown raft group",
+				slog.String("queue", rm.queueName),
+				slog.Int("partition", partitionID),
+				slog.String("error", err.Error()))
+			errors = append(errors, err)
+		}
+	}
+
+	rm.groups = make(map[int]*raft.RaftGroup)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to shutdown %d raft groups", len(errors))
+	}
+
+	return nil
+}
+
+// GetStats returns statistics for all Raft groups.
+func (rm *RaftManager) GetStats() map[int]map[string]string {
+	rm.groupsMu.RLock()
+	defer rm.groupsMu.RUnlock()
+
+	stats := make(map[int]map[string]string)
+	for partitionID, group := range rm.groups {
+		stats[partitionID] = group.GetStats()
+	}
+
+	return stats
+}
+
+// PlacementStrategy determines how replicas are assigned to nodes.
+type PlacementStrategy interface {
+	// AssignReplicas returns the node IDs that should host replicas for a partition.
+	AssignReplicas(partitionID, partitionCount, replicationFactor int) []string
+}
+
+// RoundRobinPlacement distributes replicas evenly across nodes.
+type RoundRobinPlacement struct {
+	nodeIDs []string
+}
+
+// NewRoundRobinPlacement creates a round-robin placement strategy.
+func NewRoundRobinPlacement(nodeAddresses map[string]string) *RoundRobinPlacement {
+	nodeIDs := make([]string, 0, len(nodeAddresses))
+	for nodeID := range nodeAddresses {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+
+	return &RoundRobinPlacement{
+		nodeIDs: nodeIDs,
+	}
+}
+
+// AssignReplicas implements PlacementStrategy.
+func (p *RoundRobinPlacement) AssignReplicas(partitionID, partitionCount, replicationFactor int) []string {
+	if replicationFactor > len(p.nodeIDs) {
+		replicationFactor = len(p.nodeIDs)
+	}
+
+	replicas := make([]string, replicationFactor)
+	for i := 0; i < replicationFactor; i++ {
+		nodeIdx := (partitionID + i) % len(p.nodeIDs)
+		replicas[i] = p.nodeIDs[nodeIdx]
+	}
+
+	return replicas
+}
+
+// ManualPlacement uses operator-specified replica assignments.
+type ManualPlacement struct {
+	assignments map[int][]string // partitionID -> []nodeID
+}
+
+// NewManualPlacement creates a manual placement strategy.
+func NewManualPlacement(assignments map[int][]string) *ManualPlacement {
+	return &ManualPlacement{
+		assignments: assignments,
+	}
+}
+
+// AssignReplicas implements PlacementStrategy.
+func (p *ManualPlacement) AssignReplicas(partitionID, partitionCount, replicationFactor int) []string {
+	if replicas, ok := p.assignments[partitionID]; ok {
+		return replicas
+	}
+
+	return nil
+}
