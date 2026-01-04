@@ -91,9 +91,15 @@ func (r *TrieRouter) Match(topic string) ([]*storage.Subscription, error) {
 	defer r.mu.RUnlock()
 
 	levels := strings.Split(topic, separator)
-	var matched []*storage.Subscription
-	matchLevel(r.root, levels, 0, &matched)
-	return matched, nil
+	matched := AcquireSubscriptionSlice()
+	matchLevel(r.root, levels, 0, matched)
+	result := *matched
+
+	// Release the pooled slice pointer back to pool
+	// The slice data itself is now referenced by 'result'
+	ReleaseSubscriptionSlice(matched)
+
+	return result, nil
 }
 
 func matchLevel(n *node, levels []string, index int, matched *[]*storage.Subscription) {
