@@ -25,6 +25,9 @@ const (
 	BrokerService_FetchWill_FullMethodName         = "/cluster.BrokerService/FetchWill"
 	BrokerService_EnqueueRemote_FullMethodName     = "/cluster.BrokerService/EnqueueRemote"
 	BrokerService_RouteQueueMessage_FullMethodName = "/cluster.BrokerService/RouteQueueMessage"
+	BrokerService_AppendEntries_FullMethodName     = "/cluster.BrokerService/AppendEntries"
+	BrokerService_RequestVote_FullMethodName       = "/cluster.BrokerService/RequestVote"
+	BrokerService_InstallSnapshot_FullMethodName   = "/cluster.BrokerService/InstallSnapshot"
 )
 
 // BrokerServiceClient is the client API for BrokerService service.
@@ -49,6 +52,13 @@ type BrokerServiceClient interface {
 	// RouteQueueMessage delivers a queue message to a consumer on a different node.
 	// Used when partition owner needs to deliver to a consumer connected to another node.
 	RouteQueueMessage(ctx context.Context, in *RouteQueueMessageRequest, opts ...grpc.CallOption) (*RouteQueueMessageResponse, error)
+	// AppendEntries is invoked by the Raft leader to replicate log entries.
+	// Also used as a heartbeat to maintain leadership.
+	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
+	// RequestVote is invoked by candidates during leader election.
+	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
+	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
+	InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error)
 }
 
 type brokerServiceClient struct {
@@ -119,6 +129,36 @@ func (c *brokerServiceClient) RouteQueueMessage(ctx context.Context, in *RouteQu
 	return out, nil
 }
 
+func (c *brokerServiceClient) AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AppendEntriesResponse)
+	err := c.cc.Invoke(ctx, BrokerService_AppendEntries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *brokerServiceClient) RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestVoteResponse)
+	err := c.cc.Invoke(ctx, BrokerService_RequestVote_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *brokerServiceClient) InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallSnapshotResponse)
+	err := c.cc.Invoke(ctx, BrokerService_InstallSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServiceServer is the server API for BrokerService service.
 // All implementations must embed UnimplementedBrokerServiceServer
 // for forward compatibility.
@@ -141,6 +181,13 @@ type BrokerServiceServer interface {
 	// RouteQueueMessage delivers a queue message to a consumer on a different node.
 	// Used when partition owner needs to deliver to a consumer connected to another node.
 	RouteQueueMessage(context.Context, *RouteQueueMessageRequest) (*RouteQueueMessageResponse, error)
+	// AppendEntries is invoked by the Raft leader to replicate log entries.
+	// Also used as a heartbeat to maintain leadership.
+	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
+	// RequestVote is invoked by candidates during leader election.
+	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
+	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
+	InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
 	mustEmbedUnimplementedBrokerServiceServer()
 }
 
@@ -168,6 +215,15 @@ func (UnimplementedBrokerServiceServer) EnqueueRemote(context.Context, *EnqueueR
 }
 func (UnimplementedBrokerServiceServer) RouteQueueMessage(context.Context, *RouteQueueMessageRequest) (*RouteQueueMessageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RouteQueueMessage not implemented")
+}
+func (UnimplementedBrokerServiceServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AppendEntries not implemented")
+}
+func (UnimplementedBrokerServiceServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestVote not implemented")
+}
+func (UnimplementedBrokerServiceServer) InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallSnapshot not implemented")
 }
 func (UnimplementedBrokerServiceServer) mustEmbedUnimplementedBrokerServiceServer() {}
 func (UnimplementedBrokerServiceServer) testEmbeddedByValue()                       {}
@@ -298,6 +354,60 @@ func _BrokerService_RouteQueueMessage_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BrokerService_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AppendEntriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).AppendEntries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_AppendEntries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).AppendEntries(ctx, req.(*AppendEntriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BrokerService_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestVoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).RequestVote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_RequestVote_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).RequestVote(ctx, req.(*RequestVoteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BrokerService_InstallSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).InstallSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_InstallSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).InstallSnapshot(ctx, req.(*InstallSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrokerService_ServiceDesc is the grpc.ServiceDesc for BrokerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -328,6 +438,18 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RouteQueueMessage",
 			Handler:    _BrokerService_RouteQueueMessage_Handler,
+		},
+		{
+			MethodName: "AppendEntries",
+			Handler:    _BrokerService_AppendEntries_Handler,
+		},
+		{
+			MethodName: "RequestVote",
+			Handler:    _BrokerService_RequestVote_Handler,
+		},
+		{
+			MethodName: "InstallSnapshot",
+			Handler:    _BrokerService_InstallSnapshot_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

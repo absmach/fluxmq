@@ -1244,6 +1244,452 @@ func (x *RouteQueueMessageResponse) GetError() string {
 	return ""
 }
 
+// AppendEntriesRequest is sent by the leader to replicate log entries.
+type AppendEntriesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`             // Queue name for routing
+	PartitionId   int32                  `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`      // Partition ID for routing
+	Term          uint64                 `protobuf:"varint,3,opt,name=term,proto3" json:"term,omitempty"`                                       // Leader's term
+	LeaderId      string                 `protobuf:"bytes,4,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`                // Leader's node ID
+	PrevLogIndex  uint64                 `protobuf:"varint,5,opt,name=prev_log_index,json=prevLogIndex,proto3" json:"prev_log_index,omitempty"` // Index of log entry immediately preceding new ones
+	PrevLogTerm   uint64                 `protobuf:"varint,6,opt,name=prev_log_term,json=prevLogTerm,proto3" json:"prev_log_term,omitempty"`    // Term of prev_log_index entry
+	Entries       [][]byte               `protobuf:"bytes,7,rep,name=entries,proto3" json:"entries,omitempty"`                                  // Log entries to store (serialized)
+	LeaderCommit  uint64                 `protobuf:"varint,8,opt,name=leader_commit,json=leaderCommit,proto3" json:"leader_commit,omitempty"`   // Leader's commit index
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppendEntriesRequest) Reset() {
+	*x = AppendEntriesRequest{}
+	mi := &file_broker_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppendEntriesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppendEntriesRequest) ProtoMessage() {}
+
+func (x *AppendEntriesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppendEntriesRequest.ProtoReflect.Descriptor instead.
+func (*AppendEntriesRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *AppendEntriesRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *AppendEntriesRequest) GetPartitionId() int32 {
+	if x != nil {
+		return x.PartitionId
+	}
+	return 0
+}
+
+func (x *AppendEntriesRequest) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *AppendEntriesRequest) GetLeaderId() string {
+	if x != nil {
+		return x.LeaderId
+	}
+	return ""
+}
+
+func (x *AppendEntriesRequest) GetPrevLogIndex() uint64 {
+	if x != nil {
+		return x.PrevLogIndex
+	}
+	return 0
+}
+
+func (x *AppendEntriesRequest) GetPrevLogTerm() uint64 {
+	if x != nil {
+		return x.PrevLogTerm
+	}
+	return 0
+}
+
+func (x *AppendEntriesRequest) GetEntries() [][]byte {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *AppendEntriesRequest) GetLeaderCommit() uint64 {
+	if x != nil {
+		return x.LeaderCommit
+	}
+	return 0
+}
+
+// AppendEntriesResponse is the response to AppendEntries.
+type AppendEntriesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`                                       // Current term, for leader to update itself
+	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`                                 // True if follower contained entry matching prev_log_index and prev_log_term
+	LastLogIndex  uint64                 `protobuf:"varint,3,opt,name=last_log_index,json=lastLogIndex,proto3" json:"last_log_index,omitempty"` // Follower's last log index (for leader to update next_index)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppendEntriesResponse) Reset() {
+	*x = AppendEntriesResponse{}
+	mi := &file_broker_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppendEntriesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppendEntriesResponse) ProtoMessage() {}
+
+func (x *AppendEntriesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppendEntriesResponse.ProtoReflect.Descriptor instead.
+func (*AppendEntriesResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *AppendEntriesResponse) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *AppendEntriesResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AppendEntriesResponse) GetLastLogIndex() uint64 {
+	if x != nil {
+		return x.LastLogIndex
+	}
+	return 0
+}
+
+// RequestVoteRequest is sent by candidates during leader election.
+type RequestVoteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`             // Queue name for routing
+	PartitionId   int32                  `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`      // Partition ID for routing
+	Term          uint64                 `protobuf:"varint,3,opt,name=term,proto3" json:"term,omitempty"`                                       // Candidate's term
+	CandidateId   string                 `protobuf:"bytes,4,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`       // Candidate's node ID
+	LastLogIndex  uint64                 `protobuf:"varint,5,opt,name=last_log_index,json=lastLogIndex,proto3" json:"last_log_index,omitempty"` // Index of candidate's last log entry
+	LastLogTerm   uint64                 `protobuf:"varint,6,opt,name=last_log_term,json=lastLogTerm,proto3" json:"last_log_term,omitempty"`    // Term of candidate's last log entry
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestVoteRequest) Reset() {
+	*x = RequestVoteRequest{}
+	mi := &file_broker_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestVoteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestVoteRequest) ProtoMessage() {}
+
+func (x *RequestVoteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestVoteRequest.ProtoReflect.Descriptor instead.
+func (*RequestVoteRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RequestVoteRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *RequestVoteRequest) GetPartitionId() int32 {
+	if x != nil {
+		return x.PartitionId
+	}
+	return 0
+}
+
+func (x *RequestVoteRequest) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *RequestVoteRequest) GetCandidateId() string {
+	if x != nil {
+		return x.CandidateId
+	}
+	return ""
+}
+
+func (x *RequestVoteRequest) GetLastLogIndex() uint64 {
+	if x != nil {
+		return x.LastLogIndex
+	}
+	return 0
+}
+
+func (x *RequestVoteRequest) GetLastLogTerm() uint64 {
+	if x != nil {
+		return x.LastLogTerm
+	}
+	return 0
+}
+
+// RequestVoteResponse is the response to RequestVote.
+type RequestVoteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`                                  // Current term, for candidate to update itself
+	VoteGranted   bool                   `protobuf:"varint,2,opt,name=vote_granted,json=voteGranted,proto3" json:"vote_granted,omitempty"` // True if candidate received vote
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestVoteResponse) Reset() {
+	*x = RequestVoteResponse{}
+	mi := &file_broker_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestVoteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestVoteResponse) ProtoMessage() {}
+
+func (x *RequestVoteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestVoteResponse.ProtoReflect.Descriptor instead.
+func (*RequestVoteResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *RequestVoteResponse) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *RequestVoteResponse) GetVoteGranted() bool {
+	if x != nil {
+		return x.VoteGranted
+	}
+	return false
+}
+
+// InstallSnapshotRequest is sent by leader to transfer snapshot to follower.
+type InstallSnapshotRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	QueueName         string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`                            // Queue name for routing
+	PartitionId       int32                  `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`                     // Partition ID for routing
+	Term              uint64                 `protobuf:"varint,3,opt,name=term,proto3" json:"term,omitempty"`                                                      // Leader's term
+	LeaderId          string                 `protobuf:"bytes,4,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`                               // Leader's node ID
+	LastIncludedIndex uint64                 `protobuf:"varint,5,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"` // Snapshot replaces all entries up through this index
+	LastIncludedTerm  uint64                 `protobuf:"varint,6,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`    // Term of last_included_index
+	Data              []byte                 `protobuf:"bytes,7,opt,name=data,proto3" json:"data,omitempty"`                                                       // Snapshot data (chunk)
+	Done              bool                   `protobuf:"varint,8,opt,name=done,proto3" json:"done,omitempty"`                                                      // True if this is the last chunk
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *InstallSnapshotRequest) Reset() {
+	*x = InstallSnapshotRequest{}
+	mi := &file_broker_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstallSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallSnapshotRequest) ProtoMessage() {}
+
+func (x *InstallSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*InstallSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *InstallSnapshotRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *InstallSnapshotRequest) GetPartitionId() int32 {
+	if x != nil {
+		return x.PartitionId
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequest) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequest) GetLeaderId() string {
+	if x != nil {
+		return x.LeaderId
+	}
+	return ""
+}
+
+func (x *InstallSnapshotRequest) GetLastIncludedIndex() uint64 {
+	if x != nil {
+		return x.LastIncludedIndex
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequest) GetLastIncludedTerm() uint64 {
+	if x != nil {
+		return x.LastIncludedTerm
+	}
+	return 0
+}
+
+func (x *InstallSnapshotRequest) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *InstallSnapshotRequest) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+// InstallSnapshotResponse is the response to InstallSnapshot.
+type InstallSnapshotResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"` // Current term, for leader to update itself
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstallSnapshotResponse) Reset() {
+	*x = InstallSnapshotResponse{}
+	mi := &file_broker_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstallSnapshotResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallSnapshotResponse) ProtoMessage() {}
+
+func (x *InstallSnapshotResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_broker_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallSnapshotResponse.ProtoReflect.Descriptor instead.
+func (*InstallSnapshotResponse) Descriptor() ([]byte, []int) {
+	return file_broker_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *InstallSnapshotResponse) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
 var File_broker_proto protoreflect.FileDescriptor
 
 const file_broker_proto_rawDesc = "" +
@@ -1360,14 +1806,54 @@ const file_broker_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
 	"\x19RouteQueueMessageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xda\x03\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x92\x02\n" +
+	"\x14AppendEntriesRequest\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
+	"\fpartition_id\x18\x02 \x01(\x05R\vpartitionId\x12\x12\n" +
+	"\x04term\x18\x03 \x01(\x04R\x04term\x12\x1b\n" +
+	"\tleader_id\x18\x04 \x01(\tR\bleaderId\x12$\n" +
+	"\x0eprev_log_index\x18\x05 \x01(\x04R\fprevLogIndex\x12\"\n" +
+	"\rprev_log_term\x18\x06 \x01(\x04R\vprevLogTerm\x12\x18\n" +
+	"\aentries\x18\a \x03(\fR\aentries\x12#\n" +
+	"\rleader_commit\x18\b \x01(\x04R\fleaderCommit\"k\n" +
+	"\x15AppendEntriesResponse\x12\x12\n" +
+	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x18\n" +
+	"\asuccess\x18\x02 \x01(\bR\asuccess\x12$\n" +
+	"\x0elast_log_index\x18\x03 \x01(\x04R\flastLogIndex\"\xd7\x01\n" +
+	"\x12RequestVoteRequest\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
+	"\fpartition_id\x18\x02 \x01(\x05R\vpartitionId\x12\x12\n" +
+	"\x04term\x18\x03 \x01(\x04R\x04term\x12!\n" +
+	"\fcandidate_id\x18\x04 \x01(\tR\vcandidateId\x12$\n" +
+	"\x0elast_log_index\x18\x05 \x01(\x04R\flastLogIndex\x12\"\n" +
+	"\rlast_log_term\x18\x06 \x01(\x04R\vlastLogTerm\"L\n" +
+	"\x13RequestVoteResponse\x12\x12\n" +
+	"\x04term\x18\x01 \x01(\x04R\x04term\x12!\n" +
+	"\fvote_granted\x18\x02 \x01(\bR\vvoteGranted\"\x91\x02\n" +
+	"\x16InstallSnapshotRequest\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
+	"\fpartition_id\x18\x02 \x01(\x05R\vpartitionId\x12\x12\n" +
+	"\x04term\x18\x03 \x01(\x04R\x04term\x12\x1b\n" +
+	"\tleader_id\x18\x04 \x01(\tR\bleaderId\x12.\n" +
+	"\x13last_included_index\x18\x05 \x01(\x04R\x11lastIncludedIndex\x12,\n" +
+	"\x12last_included_term\x18\x06 \x01(\x04R\x10lastIncludedTerm\x12\x12\n" +
+	"\x04data\x18\a \x01(\fR\x04data\x12\x12\n" +
+	"\x04done\x18\b \x01(\bR\x04done\"-\n" +
+	"\x17InstallSnapshotResponse\x12\x12\n" +
+	"\x04term\x18\x01 \x01(\x04R\x04term2\xca\x05\n" +
 	"\rBrokerService\x12A\n" +
 	"\fRoutePublish\x12\x17.cluster.PublishRequest\x1a\x18.cluster.PublishResponse\x12F\n" +
 	"\x0fTakeoverSession\x12\x18.cluster.TakeoverRequest\x1a\x19.cluster.TakeoverResponse\x12N\n" +
 	"\rFetchRetained\x12\x1d.cluster.FetchRetainedRequest\x1a\x1e.cluster.FetchRetainedResponse\x12B\n" +
 	"\tFetchWill\x12\x19.cluster.FetchWillRequest\x1a\x1a.cluster.FetchWillResponse\x12N\n" +
 	"\rEnqueueRemote\x12\x1d.cluster.EnqueueRemoteRequest\x1a\x1e.cluster.EnqueueRemoteResponse\x12Z\n" +
-	"\x11RouteQueueMessage\x12!.cluster.RouteQueueMessageRequest\x1a\".cluster.RouteQueueMessageResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
+	"\x11RouteQueueMessage\x12!.cluster.RouteQueueMessageRequest\x1a\".cluster.RouteQueueMessageResponse\x12N\n" +
+	"\rAppendEntries\x12\x1d.cluster.AppendEntriesRequest\x1a\x1e.cluster.AppendEntriesResponse\x12H\n" +
+	"\vRequestVote\x12\x1b.cluster.RequestVoteRequest\x1a\x1c.cluster.RequestVoteResponse\x12T\n" +
+	"\x0fInstallSnapshot\x12\x1f.cluster.InstallSnapshotRequest\x1a .cluster.InstallSnapshotResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
 
 var (
 	file_broker_proto_rawDescOnce sync.Once
@@ -1381,7 +1867,7 @@ func file_broker_proto_rawDescGZIP() []byte {
 	return file_broker_proto_rawDescData
 }
 
-var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_broker_proto_goTypes = []any{
 	(*PublishRequest)(nil),            // 0: cluster.PublishRequest
 	(*PublishResponse)(nil),           // 1: cluster.PublishResponse
@@ -1401,37 +1887,49 @@ var file_broker_proto_goTypes = []any{
 	(*EnqueueRemoteResponse)(nil),     // 15: cluster.EnqueueRemoteResponse
 	(*RouteQueueMessageRequest)(nil),  // 16: cluster.RouteQueueMessageRequest
 	(*RouteQueueMessageResponse)(nil), // 17: cluster.RouteQueueMessageResponse
-	nil,                               // 18: cluster.PublishRequest.PropertiesEntry
-	nil,                               // 19: cluster.RetainedMessage.PropertiesEntry
-	nil,                               // 20: cluster.EnqueueRemoteRequest.PropertiesEntry
-	nil,                               // 21: cluster.RouteQueueMessageRequest.PropertiesEntry
+	(*AppendEntriesRequest)(nil),      // 18: cluster.AppendEntriesRequest
+	(*AppendEntriesResponse)(nil),     // 19: cluster.AppendEntriesResponse
+	(*RequestVoteRequest)(nil),        // 20: cluster.RequestVoteRequest
+	(*RequestVoteResponse)(nil),       // 21: cluster.RequestVoteResponse
+	(*InstallSnapshotRequest)(nil),    // 22: cluster.InstallSnapshotRequest
+	(*InstallSnapshotResponse)(nil),   // 23: cluster.InstallSnapshotResponse
+	nil,                               // 24: cluster.PublishRequest.PropertiesEntry
+	nil,                               // 25: cluster.RetainedMessage.PropertiesEntry
+	nil,                               // 26: cluster.EnqueueRemoteRequest.PropertiesEntry
+	nil,                               // 27: cluster.RouteQueueMessageRequest.PropertiesEntry
 }
 var file_broker_proto_depIdxs = []int32{
-	18, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
+	24, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
 	4,  // 1: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage
 	5,  // 2: cluster.SessionState.queued_messages:type_name -> cluster.QueuedMessage
 	6,  // 3: cluster.SessionState.subscriptions:type_name -> cluster.Subscription
 	7,  // 4: cluster.SessionState.will:type_name -> cluster.WillMessage
 	3,  // 5: cluster.TakeoverResponse.session_state:type_name -> cluster.SessionState
-	19, // 6: cluster.RetainedMessage.properties:type_name -> cluster.RetainedMessage.PropertiesEntry
+	25, // 6: cluster.RetainedMessage.properties:type_name -> cluster.RetainedMessage.PropertiesEntry
 	10, // 7: cluster.FetchRetainedResponse.message:type_name -> cluster.RetainedMessage
 	7,  // 8: cluster.FetchWillResponse.message:type_name -> cluster.WillMessage
-	20, // 9: cluster.EnqueueRemoteRequest.properties:type_name -> cluster.EnqueueRemoteRequest.PropertiesEntry
-	21, // 10: cluster.RouteQueueMessageRequest.properties:type_name -> cluster.RouteQueueMessageRequest.PropertiesEntry
+	26, // 9: cluster.EnqueueRemoteRequest.properties:type_name -> cluster.EnqueueRemoteRequest.PropertiesEntry
+	27, // 10: cluster.RouteQueueMessageRequest.properties:type_name -> cluster.RouteQueueMessageRequest.PropertiesEntry
 	0,  // 11: cluster.BrokerService.RoutePublish:input_type -> cluster.PublishRequest
 	2,  // 12: cluster.BrokerService.TakeoverSession:input_type -> cluster.TakeoverRequest
 	9,  // 13: cluster.BrokerService.FetchRetained:input_type -> cluster.FetchRetainedRequest
 	12, // 14: cluster.BrokerService.FetchWill:input_type -> cluster.FetchWillRequest
 	14, // 15: cluster.BrokerService.EnqueueRemote:input_type -> cluster.EnqueueRemoteRequest
 	16, // 16: cluster.BrokerService.RouteQueueMessage:input_type -> cluster.RouteQueueMessageRequest
-	1,  // 17: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
-	8,  // 18: cluster.BrokerService.TakeoverSession:output_type -> cluster.TakeoverResponse
-	11, // 19: cluster.BrokerService.FetchRetained:output_type -> cluster.FetchRetainedResponse
-	13, // 20: cluster.BrokerService.FetchWill:output_type -> cluster.FetchWillResponse
-	15, // 21: cluster.BrokerService.EnqueueRemote:output_type -> cluster.EnqueueRemoteResponse
-	17, // 22: cluster.BrokerService.RouteQueueMessage:output_type -> cluster.RouteQueueMessageResponse
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
+	18, // 17: cluster.BrokerService.AppendEntries:input_type -> cluster.AppendEntriesRequest
+	20, // 18: cluster.BrokerService.RequestVote:input_type -> cluster.RequestVoteRequest
+	22, // 19: cluster.BrokerService.InstallSnapshot:input_type -> cluster.InstallSnapshotRequest
+	1,  // 20: cluster.BrokerService.RoutePublish:output_type -> cluster.PublishResponse
+	8,  // 21: cluster.BrokerService.TakeoverSession:output_type -> cluster.TakeoverResponse
+	11, // 22: cluster.BrokerService.FetchRetained:output_type -> cluster.FetchRetainedResponse
+	13, // 23: cluster.BrokerService.FetchWill:output_type -> cluster.FetchWillResponse
+	15, // 24: cluster.BrokerService.EnqueueRemote:output_type -> cluster.EnqueueRemoteResponse
+	17, // 25: cluster.BrokerService.RouteQueueMessage:output_type -> cluster.RouteQueueMessageResponse
+	19, // 26: cluster.BrokerService.AppendEntries:output_type -> cluster.AppendEntriesResponse
+	21, // 27: cluster.BrokerService.RequestVote:output_type -> cluster.RequestVoteResponse
+	23, // 28: cluster.BrokerService.InstallSnapshot:output_type -> cluster.InstallSnapshotResponse
+	20, // [20:29] is the sub-list for method output_type
+	11, // [11:20] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
 	11, // [11:11] is the sub-list for extension extendee
 	0,  // [0:11] is the sub-list for field type_name
@@ -1448,7 +1946,7 @@ func file_broker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_broker_proto_rawDesc), len(file_broker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

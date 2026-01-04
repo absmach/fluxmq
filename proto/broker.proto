@@ -27,6 +27,18 @@ service BrokerService {
   // RouteQueueMessage delivers a queue message to a consumer on a different node.
   // Used when partition owner needs to deliver to a consumer connected to another node.
   rpc RouteQueueMessage(RouteQueueMessageRequest) returns (RouteQueueMessageResponse);
+
+  // Raft RPCs for queue partition replication
+
+  // AppendEntries is invoked by the Raft leader to replicate log entries.
+  // Also used as a heartbeat to maintain leadership.
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+
+  // RequestVote is invoked by candidates during leader election.
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+
+  // InstallSnapshot is invoked by leader to transfer snapshot to a follower.
+  rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
 }
 
 // PublishRequest contains a serialized PUBLISH packet to route to a client.
@@ -178,4 +190,58 @@ message RouteQueueMessageRequest {
 message RouteQueueMessageResponse {
   bool success = 1;
   string error = 2;          // Error message if success=false
+}
+
+// Raft RPC messages
+
+// AppendEntriesRequest is sent by the leader to replicate log entries.
+message AppendEntriesRequest {
+  string queue_name = 1;      // Queue name for routing
+  int32 partition_id = 2;     // Partition ID for routing
+  uint64 term = 3;            // Leader's term
+  string leader_id = 4;       // Leader's node ID
+  uint64 prev_log_index = 5;  // Index of log entry immediately preceding new ones
+  uint64 prev_log_term = 6;   // Term of prev_log_index entry
+  repeated bytes entries = 7;  // Log entries to store (serialized)
+  uint64 leader_commit = 8;   // Leader's commit index
+}
+
+// AppendEntriesResponse is the response to AppendEntries.
+message AppendEntriesResponse {
+  uint64 term = 1;            // Current term, for leader to update itself
+  bool success = 2;           // True if follower contained entry matching prev_log_index and prev_log_term
+  uint64 last_log_index = 3;  // Follower's last log index (for leader to update next_index)
+}
+
+// RequestVoteRequest is sent by candidates during leader election.
+message RequestVoteRequest {
+  string queue_name = 1;      // Queue name for routing
+  int32 partition_id = 2;     // Partition ID for routing
+  uint64 term = 3;            // Candidate's term
+  string candidate_id = 4;    // Candidate's node ID
+  uint64 last_log_index = 5;  // Index of candidate's last log entry
+  uint64 last_log_term = 6;   // Term of candidate's last log entry
+}
+
+// RequestVoteResponse is the response to RequestVote.
+message RequestVoteResponse {
+  uint64 term = 1;            // Current term, for candidate to update itself
+  bool vote_granted = 2;      // True if candidate received vote
+}
+
+// InstallSnapshotRequest is sent by leader to transfer snapshot to follower.
+message InstallSnapshotRequest {
+  string queue_name = 1;      // Queue name for routing
+  int32 partition_id = 2;     // Partition ID for routing
+  uint64 term = 3;            // Leader's term
+  string leader_id = 4;       // Leader's node ID
+  uint64 last_included_index = 5;  // Snapshot replaces all entries up through this index
+  uint64 last_included_term = 6;   // Term of last_included_index
+  bytes data = 7;             // Snapshot data (chunk)
+  bool done = 8;              // True if this is the last chunk
+}
+
+// InstallSnapshotResponse is the response to InstallSnapshot.
+message InstallSnapshotResponse {
+  uint64 term = 1;            // Current term, for leader to update itself
 }
