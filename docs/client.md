@@ -215,6 +215,17 @@ opts.SetOnMessageV2(func(msg *client.Message) {
 
 The client supports durable queues with consumer groups, message acknowledgment, and dead-letter queues.
 
+**When to use queues instead of regular pub/sub:**
+- You need guaranteed message processing (exactly-once semantics)
+- Multiple consumers should share the workload (consumer groups)
+- Failed messages need retry logic or dead-letter handling
+
+**Key concepts:**
+- **Queue**: Persistent message buffer with ordered delivery per partition
+- **Consumer Group**: Multiple consumers share messages from the same queue
+- **Partition Key**: Messages with the same key are processed in order
+- **Acknowledgment**: Confirm successful processing (Ack), request retry (Nack), or reject permanently (Reject)
+
 ### Publishing to Queues
 
 ```go

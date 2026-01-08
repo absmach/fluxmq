@@ -845,6 +845,6 @@ Key configuration areas:
 **Log**: Logging output
 
 For more details, see:
-- [Clustering Architecture](clustering-architecture.md) - Overall design
-- [Clustering Infrastructure](clustering-infrastructure.md) - etcd, gRPC, BadgerDB
-- [Broker & Routing](broker-routing.md) - Message routing internals
+- [Clustering](clustering.md) - Distributed broker design, etcd, gRPC, BadgerDB
+- [Broker & Message Routing](broker.md) - Message routing internals
+- [Architecture](architecture.md) - Detailed system design

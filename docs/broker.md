@@ -869,6 +869,5 @@ The broker architecture provides:
 - Seamless local/remote delivery
 
 For more details, see:
-- [Clustering Architecture](clustering-architecture.md) - Overall design
-- [Clustering Infrastructure](clustering-infrastructure.md) - etcd, gRPC, BadgerDB
+- [Clustering](clustering.md) - Distributed broker design, etcd, gRPC, BadgerDB
 - [Configuration](configuration.md) - Setup and tuning

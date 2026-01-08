@@ -50,7 +50,7 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 ### Documentation
 
-- **Results:** [`docs/PERFORMANCE_RESULTS.md`](PERFORMANCE_RESULTS.md)
+- **Scaling & Performance:** [`docs/scaling.md`](scaling.md)
 - **Benchmarks:** [`benchmarks/README.md`](../benchmarks/README.md)
 - **Summary:** [`PERFORMANCE_COMPLETE.md`](../PERFORMANCE_COMPLETE.md)
 
@@ -251,9 +251,8 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 
 ### Reference Documentation
 
-- [`docs/custom-raft-implementation-plan.md`](custom-raft-implementation-plan.md) - Detailed design
-- [`docs/etcd-vs-custom-raft.md`](etcd-vs-custom-raft.md) - Trade-off analysis
-- [`docs/alternatives-to-raft.md`](alternatives-to-raft.md) - Other coordination options
+- [`docs/scaling.md#custom-raft-implementation-plan`](scaling.md#custom-raft-implementation-plan) - Detailed design
+- [`docs/scaling.md#etcd-deep-dive--alternatives`](scaling.md#etcd-deep-dive--alternatives) - etcd analysis and alternatives
 
 ---
 
@@ -348,15 +347,14 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 - [`docs/queue.md`](queue.md) - Durable queue system
 - [`docs/broker.md`](broker.md) - Core broker implementation
 
-### Performance
-- [`docs/PERFORMANCE_RESULTS.md`](PERFORMANCE_RESULTS.md) - Optimization results
+### Performance & Scaling
+- [`docs/scaling.md`](scaling.md) - Comprehensive scaling & performance guide
 - [`benchmarks/README.md`](../benchmarks/README.md) - Benchmark guide
-- [`docs/topic-sharding-guide.md`](topic-sharding-guide.md) - 10x throughput guide
+- [`docs/client.md`](client.md) - Go client library with queue support
 
 ### Operations
 - [`docs/configuration.md`](configuration.md) - Configuration reference
 - [`docs/webhooks.md`](webhooks.md) - Event notification system
-- [`docs/scaling-quick-reference.md`](scaling-quick-reference.md) - Capacity planning
 
 ---
 
