@@ -255,6 +255,7 @@ func TestReplication_ConfigValidation(t *testing.T) {
 			config: queueStorage.QueueConfig{
 				Name:       "$queue/valid-sync",
 				Partitions: 3,
+				Ordering:   queueStorage.OrderingPartition,
 				Replication: queueStorage.ReplicationConfig{
 					Enabled:           true,
 					ReplicationFactor: 3,
@@ -263,6 +264,17 @@ func TestReplication_ConfigValidation(t *testing.T) {
 					MinInSyncReplicas: 2,
 					AckTimeout:        5 * time.Second,
 				},
+				RetryPolicy: queueStorage.RetryPolicy{
+					MaxRetries:        3,
+					InitialBackoff:    100 * time.Millisecond,
+					MaxBackoff:        1 * time.Second,
+					BackoffMultiplier: 2.0,
+				},
+				MaxMessageSize:   1024 * 1024,
+				MaxQueueDepth:    10000,
+				DeliveryTimeout:  30 * time.Second,
+				BatchSize:        100,
+				HeartbeatTimeout: 10 * time.Second,
 			},
 			expectError: false,
 		},
@@ -271,13 +283,26 @@ func TestReplication_ConfigValidation(t *testing.T) {
 			config: queueStorage.QueueConfig{
 				Name:       "$queue/valid-async",
 				Partitions: 3,
+				Ordering:   queueStorage.OrderingPartition,
 				Replication: queueStorage.ReplicationConfig{
 					Enabled:           true,
 					ReplicationFactor: 3,
 					Mode:              queueStorage.ReplicationAsync,
 					Placement:         queueStorage.PlacementRoundRobin,
 					MinInSyncReplicas: 2,
+					AckTimeout:        5 * time.Second,
 				},
+				RetryPolicy: queueStorage.RetryPolicy{
+					MaxRetries:        3,
+					InitialBackoff:    100 * time.Millisecond,
+					MaxBackoff:        1 * time.Second,
+					BackoffMultiplier: 2.0,
+				},
+				MaxMessageSize:   1024 * 1024,
+				MaxQueueDepth:    10000,
+				DeliveryTimeout:  30 * time.Second,
+				BatchSize:        100,
+				HeartbeatTimeout: 10 * time.Second,
 			},
 			expectError: false,
 		},
@@ -286,9 +311,21 @@ func TestReplication_ConfigValidation(t *testing.T) {
 			config: queueStorage.QueueConfig{
 				Name:       "$queue/no-replication",
 				Partitions: 3,
+				Ordering:   queueStorage.OrderingPartition,
 				Replication: queueStorage.ReplicationConfig{
 					Enabled: false,
 				},
+				RetryPolicy: queueStorage.RetryPolicy{
+					MaxRetries:        3,
+					InitialBackoff:    100 * time.Millisecond,
+					MaxBackoff:        1 * time.Second,
+					BackoffMultiplier: 2.0,
+				},
+				MaxMessageSize:   1024 * 1024,
+				MaxQueueDepth:    10000,
+				DeliveryTimeout:  30 * time.Second,
+				BatchSize:        100,
+				HeartbeatTimeout: 10 * time.Second,
 			},
 			expectError: false,
 		},
@@ -296,10 +333,6 @@ func TestReplication_ConfigValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.config.Ordering = queueStorage.OrderingPartition
-			tt.config.MaxMessageSize = 1024 * 1024
-			tt.config.DeliveryTimeout = 30 * time.Second
-
 			err := mgr.CreateQueue(ctx, tt.config)
 			if tt.expectError {
 				assert.Error(t, err)
