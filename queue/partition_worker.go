@@ -40,6 +40,9 @@ type PartitionWorker struct {
 
 	// Raft support (nil for non-replicated queues)
 	raftManager *RaftManager
+
+	// Retention support (nil if retention not configured)
+	retentionManager *RetentionManager
 }
 
 // NewPartitionWorker creates a new partition worker.
@@ -54,6 +57,7 @@ func NewPartitionWorker(
 	localNodeID string,
 	routingMode ConsumerRoutingMode,
 	raftMgr *RaftManager,
+	retentionMgr *RetentionManager,
 ) *PartitionWorker {
 	// Default batch size
 	if batchSize <= 0 {
@@ -74,11 +78,27 @@ func NewPartitionWorker(
 		localNodeID:         localNodeID,
 		consumerRoutingMode: routingMode,
 		raftManager:         raftMgr,
+		retentionManager:    retentionMgr,
 	}
 }
 
 // Start starts the partition worker main loop.
 func (pw *PartitionWorker) Start(ctx context.Context) {
+	// Start retention background jobs (only if leader in replicated mode)
+	if pw.retentionManager != nil {
+		shouldRunRetention := true
+
+		// In replicated mode, only leader runs retention
+		if pw.raftManager != nil {
+			shouldRunRetention = pw.raftManager.IsLeader(pw.partitionID)
+		}
+
+		if shouldRunRetention {
+			pw.retentionManager.Start(ctx, pw.partitionID)
+			defer pw.retentionManager.Stop()
+		}
+	}
+
 	// Ticker as fallback in case notifications are missed
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

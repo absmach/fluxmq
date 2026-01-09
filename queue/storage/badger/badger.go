@@ -837,3 +837,202 @@ func makeSeqKey(queueName string, partitionID int) string {
 func makeOffsetKey(queueName string, partitionID int) string {
 	return fmt.Sprintf("%s%s:%d", queueOffsetPrefix, queueName, partitionID)
 }
+
+// Retention operations
+
+func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+	prefix := makePartitionPrefix(queueName, partitionID)
+	var messages []*storage.Message
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		opts.PrefetchValues = true
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		// Messages are already sorted by sequence due to key format
+		for it.Rewind(); it.Valid(); it.Next() {
+			if limit > 0 && len(messages) >= limit {
+				break
+			}
+
+			item := it.Item()
+			var msg storage.Message
+			err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &msg)
+			})
+			if err != nil {
+				continue
+			}
+
+			messages = append(messages, &msg)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func (s *Store) ListMessagesBefore(ctx context.Context, queueName string, partitionID int, cutoffTime time.Time, limit int) ([]*storage.Message, error) {
+	prefix := makePartitionPrefix(queueName, partitionID)
+	var messages []*storage.Message
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		opts.PrefetchValues = true
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			if limit > 0 && len(messages) >= limit {
+				break
+			}
+
+			item := it.Item()
+			var msg storage.Message
+			err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &msg)
+			})
+			if err != nil {
+				continue
+			}
+
+			// Filter by creation time
+			if msg.CreatedAt.Before(cutoffTime) {
+				messages = append(messages, &msg)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func (s *Store) DeleteMessageBatch(ctx context.Context, queueName string, messageIDs []string) (int64, error) {
+	if len(messageIDs) == 0 {
+		return 0, nil
+	}
+
+	// Create a set for fast ID lookup
+	idSet := make(map[string]struct{}, len(messageIDs))
+	for _, id := range messageIDs {
+		idSet[id] = struct{}{}
+	}
+
+	// Get queue config to know partition count
+	queueConfig, err := s.GetQueue(ctx, queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	var deletedCount int64
+
+	// Scan all partitions to find and delete messages by ID
+	err = s.db.Update(func(txn *badger.Txn) error {
+		keysToDelete := make([][]byte, 0)
+
+		// Scan each partition
+		for partitionID := 0; partitionID < queueConfig.Partitions; partitionID++ {
+			prefix := makePartitionPrefix(queueName, partitionID)
+			opts := badger.DefaultIteratorOptions
+			opts.Prefix = []byte(prefix)
+			opts.PrefetchValues = true
+
+			it := txn.NewIterator(opts)
+
+			for it.Rewind(); it.Valid(); it.Next() {
+				item := it.Item()
+				var msg storage.Message
+				err := item.Value(func(val []byte) error {
+					return json.Unmarshal(val, &msg)
+				})
+				if err != nil {
+					continue
+				}
+
+				// Check if this message should be deleted
+				if _, found := idSet[msg.ID]; found {
+					keysToDelete = append(keysToDelete, item.KeyCopy(nil))
+					deletedCount++
+				}
+			}
+			it.Close()
+		}
+
+		// Delete all found messages
+		for _, key := range keysToDelete {
+			if err := txn.Delete(key); err != nil {
+				return err
+			}
+		}
+
+		// Update count
+		if deletedCount > 0 {
+			counterKey := queueCountPrefix + queueName
+			return s.incrementCounter(txn, counterKey, -deletedCount)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	return deletedCount, nil
+}
+
+func (s *Store) GetQueueSize(ctx context.Context, queueName string) (int64, error) {
+	// Get queue config to know partition count
+	queueConfig, err := s.GetQueue(ctx, queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	var totalSize int64
+
+	err = s.db.View(func(txn *badger.Txn) error {
+		// Scan each partition
+		for partitionID := 0; partitionID < queueConfig.Partitions; partitionID++ {
+			prefix := makePartitionPrefix(queueName, partitionID)
+			opts := badger.DefaultIteratorOptions
+			opts.Prefix = []byte(prefix)
+			opts.PrefetchValues = true
+
+			it := txn.NewIterator(opts)
+			defer it.Close()
+
+			for it.Rewind(); it.Valid(); it.Next() {
+				item := it.Item()
+				var msg storage.Message
+				err := item.Value(func(val []byte) error {
+					return json.Unmarshal(val, &msg)
+				})
+				if err != nil {
+					continue
+				}
+
+				totalSize += int64(len(msg.GetPayload()))
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	return totalSize, nil
+}

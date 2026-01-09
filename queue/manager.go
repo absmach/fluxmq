@@ -44,19 +44,20 @@ const (
 //	    etcdCluster.SetQueueHandler(queueManager)
 //	}
 type Manager struct {
-	queues          map[string]*Queue
-	deliveryWorkers map[string]*DeliveryWorker
-	raftManagers    map[string]*RaftManager // Per-queue Raft managers
-	queueStore      storage.QueueStore
-	messageStore    storage.MessageStore
-	consumerStore   storage.ConsumerStore
-	broker          DeliverFn
-	retryManager    *RetryManager
-	dlqManager      *DLQManager
-	mu              sync.RWMutex
-	stopCh          chan struct{}
-	stopOnce        sync.Once
-	wg              sync.WaitGroup
+	queues            map[string]*Queue
+	deliveryWorkers   map[string]*DeliveryWorker
+	raftManagers      map[string]*RaftManager      // Per-queue Raft managers
+	retentionManagers map[string]*RetentionManager // Per-queue retention managers
+	queueStore        storage.QueueStore
+	messageStore      storage.MessageStore
+	consumerStore     storage.ConsumerStore
+	broker            DeliverFn
+	retryManager      *RetryManager
+	dlqManager        *DLQManager
+	mu                sync.RWMutex
+	stopCh            chan struct{}
+	stopOnce          sync.Once
+	wg                sync.WaitGroup
 
 	// Cluster support (nil for single-node mode)
 	cluster             cluster.Cluster
@@ -112,6 +113,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		queues:              make(map[string]*Queue),
 		deliveryWorkers:     make(map[string]*DeliveryWorker),
 		raftManagers:        make(map[string]*RaftManager),
+		retentionManagers:   make(map[string]*RetentionManager),
 		queueStore:          cfg.QueueStore,
 		messageStore:        cfg.MessageStore,
 		consumerStore:       cfg.ConsumerStore,
@@ -242,14 +244,24 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 		m.raftManagers[config.Name] = raftMgr
 	}
 
+	// Create RetentionManager if retention policy is configured
+	if config.Retention.RetentionTime > 0 || config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0 || config.Retention.CompactionEnabled {
+		retentionMgr := NewRetentionManager(config.Name, config.Retention, m.messageStore, slog.Default())
+		m.retentionManagers[config.Name] = retentionMgr
+		// Note: RetentionManager will be started by partition workers (only leaders should run retention)
+	}
+
 	// Get RaftManager if exists
 	var raftMgr *RaftManager
 	if config.Replication.Enabled {
 		raftMgr = m.raftManagers[config.Name]
 	}
 
+	// Get RetentionManager if exists
+	retentionMgr := m.retentionManagers[config.Name]
+
 	// Create and start delivery worker
-	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID, m.consumerRoutingMode, raftMgr)
+	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID, m.consumerRoutingMode, raftMgr, retentionMgr)
 	m.deliveryWorkers[config.Name] = worker
 
 	// Start worker in background
@@ -389,6 +401,30 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 
 	if err != nil {
 		return err
+	}
+
+	// Size-based retention check (only if retention is configured)
+	m.mu.RLock()
+	retentionMgr, hasRetention := m.retentionManagers[queueTopic]
+	m.mu.RUnlock()
+
+	if hasRetention && (config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0) {
+		// Run size retention check asynchronously to avoid blocking enqueue
+		go func() {
+			deletedCount, bytesFreed, retErr := retentionMgr.CheckSizeRetention(ctx, partitionID)
+			if retErr != nil {
+				slog.Error("size retention check failed",
+					slog.String("queue", queueTopic),
+					slog.Int("partition", partitionID),
+					slog.String("error", retErr.Error()))
+			} else if deletedCount > 0 {
+				slog.Debug("size retention cleanup completed",
+					slog.String("queue", queueTopic),
+					slog.Int("partition", partitionID),
+					slog.Int64("deleted", deletedCount),
+					slog.Int64("bytes_freed", bytesFreed))
+			}
+		}()
 	}
 
 	// Notify partition worker that a message is available (event-driven delivery)

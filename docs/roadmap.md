@@ -27,7 +27,7 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 **Current Sprint Focus: Phase 2.3 - Testing & Optimization**
 
-**Completed Today (2026-01-09):**
+**Completed (2026-01-09):**
 - ✅ Fixed Raft storage initialization (BadgerStableStore contract)
 - ✅ Fixed partition port conflicts (per-partition bind addresses)
 - ✅ Fixed message pool corruption (copy message for Raft FSM)
@@ -39,6 +39,12 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
   - ✅ `TestFailover_MessageDurability` - Messages survive leader failure
   - ✅ `TestReplication_ISRTracking` - ISR tracking and quorum maintenance
   - ✅ `TestFailover_FollowerCatchup` - Follower lag behavior (100 msg delta)
+- ✅ **Phase 2.4 Week 1 Complete (Retention Infrastructure):**
+  - ✅ RetentionPolicy schema added to QueueConfig
+  - ✅ RetentionManager core logic (356 lines)
+  - ✅ Raft OpRetentionDelete operation
+  - ✅ MessageStore interface extended (4 new methods)
+  - ✅ Stub implementations in memory and badger stores
 
 **Next: Phase 2.4 Retention Policies**
 - Time-based retention (background cleanup) - delete messages older than X
@@ -355,30 +361,30 @@ type RetentionPolicy struct {
 
 **Implementation Plan (2 Weeks):**
 
-**Week 1: Retention Policies (Time + Size)**
+**Week 1: Retention Policies (Time + Size)** ✅ INFRASTRUCTURE COMPLETE
 
-1. **Day 1-2: Schema & Core Logic**
-   - `queue/storage/storage.go` - Add `RetentionPolicy` to `QueueConfig`
-   - `queue/retention.go` (NEW) - RetentionManager with:
-     - `CheckSizeRetention()` - called on enqueue
-     - `RunTimeBasedCleanup()` - background job
-     - `DeleteBatch()` - efficient batch deletion
+1. **Day 1-2: Schema & Core Logic** ✅ COMPLETE
+   - ✅ `queue/storage/storage.go` - Added `RetentionPolicy` to `QueueConfig`
+   - ✅ `queue/retention.go` (NEW - 356 lines) - RetentionManager with:
+     - ✅ `CheckSizeRetention()` - called on enqueue
+     - ✅ `RunTimeBasedCleanup()` - background job
+     - ✅ `DeleteBatch()` - efficient batch deletion
 
-2. **Day 3-4: Integration & Replication**
-   - `queue/raft/fsm.go` - Add `OpRetentionDelete` operation
-   - `queue/manager.go` - Integrate size checks on enqueue path
-   - `queue/partition_worker.go` - Background time-based cleanup job
-   - Ensure only leader runs retention logic
+2. **Day 3-4: Integration & Replication** ✅ PARTIAL (Raft complete, integration pending)
+   - ✅ `queue/raft/fsm.go` - Added `OpRetentionDelete` operation
+   - ✅ MessageStore interface - 4 new retention methods:
+     - `ListOldestMessages()` - for size-based retention
+     - `ListMessagesBefore()` - for time-based retention
+     - `DeleteMessageBatch()` - batch deletion
+     - `GetQueueSize()` - total queue size
+   - ✅ Stub implementations in memory and badger stores
+   - ⏳ `queue/manager.go` - Integrate size checks on enqueue path (NEXT)
+   - ⏳ `queue/partition_worker.go` - Background time-based cleanup job (NEXT)
+   - ⏳ Ensure only leader runs retention logic (NEXT)
 
-3. **Day 5: Testing**
-   - `queue/retention_test.go` - Unit tests:
-     - Time-based retention deletes old messages
-     - Size-based retention enforces limits
-     - Batch deletions work correctly
-   - `queue/replication_retention_test.go` - Integration tests:
-     - Retention replicates via Raft
-     - All replicas converge to same state
-     - Leader-only execution verified
+3. **Day 5: Testing** (PENDING)
+   - `queue/retention_test.go` - Unit tests
+   - `queue/replication_retention_test.go` - Integration tests
 
 **Week 2: Log Compaction**
 
@@ -403,18 +409,20 @@ type RetentionPolicy struct {
      - Compaction replicates correctly
      - Event sourcing use case tested
 
-**Files to Create:**
-- `queue/retention.go` (~250 lines) - Retention manager
-- `queue/compaction.go` (~200 lines) - Compaction manager
-- `queue/retention_test.go` (~300 lines) - Retention tests
-- `queue/compaction_test.go` (~250 lines) - Compaction tests
-- `queue/replication_retention_test.go` (~200 lines) - Integration tests
+**Files Created:**
+- ✅ `queue/retention.go` (356 lines) - Retention manager
+- ⏳ `queue/compaction.go` (~200 lines) - Compaction manager (Week 2)
+- ⏳ `queue/retention_test.go` (~300 lines) - Retention tests (NEXT)
+- ⏳ `queue/compaction_test.go` (~250 lines) - Compaction tests (Week 2)
+- ⏳ `queue/replication_retention_test.go` (~200 lines) - Integration tests (NEXT)
 
-**Files to Modify:**
-- `queue/storage/storage.go` (+30 lines) - Add RetentionPolicy
-- `queue/manager.go` (+50 lines) - Integrate retention checks
-- `queue/raft/fsm.go` (+80 lines) - OpRetentionDelete, OpCompact
-- `queue/partition_worker.go` (+100 lines) - Background jobs
+**Files Modified:**
+- ✅ `queue/storage/storage.go` (+30 lines) - Added RetentionPolicy
+- ✅ `queue/raft/fsm.go` (+30 lines) - Added OpRetentionDelete
+- ✅ `queue/storage/memory/memory.go` (+90 lines) - Stub retention methods
+- ✅ `queue/storage/badger/badger.go` (+30 lines) - Stub retention methods
+- ⏳ `queue/manager.go` (+50 lines) - Integrate retention checks (NEXT)
+- ⏳ `queue/partition_worker.go` (+100 lines) - Background jobs (NEXT)
 
 **Success Criteria:**
 - Time-based retention deletes messages older than threshold
@@ -556,11 +564,11 @@ queue:
 | 2.1: Raft Infrastructure | Week 1 | ✅ Complete | 100% |
 | 2.2: Queue Integration | Week 2 | ✅ Complete | 100% |
 | 2.3: Testing & Optimization | Week 3 | ✅ Mostly Complete | 90% |
-| 2.4: Retention Policies | Weeks 4-5 | 📋 **NEXT** | 0% |
+| 2.4: Retention Policies | Weeks 4-5 | 🔄 **IN PROGRESS** | 40% |
 | 2.5: Observability & Migration | Weeks 6-7 | 📋 Planned (deferred) | 0% |
 
-**Total:** 7 weeks (4 weeks remaining)
-**Overall Progress:** ~80% complete
+**Total:** 7 weeks (3-4 weeks remaining)
+**Overall Progress:** ~85% complete
 
 ---
 
@@ -814,16 +822,18 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 | **Phase 3: E2E Cluster Testing** | 2-3 weeks | 0% | ⏳ Planned |
 | **Phase 4: Custom Raft** | 20 weeks | N/A | 📋 Future (50M+ only) |
 
-**Current Sprint:** Phase 2.3 Complete → Phase 2.4 Retention Next (Week 4 of 7)
+**Current Sprint:** Phase 2.4 Retention - Week 1 Infrastructure Complete (Week 4 of 7)
 
 **Key Metrics:**
 - ✅ 2,300+ lines of queue replication code complete
 - ✅ 13/13 unit tests passing
 - ✅ 4/4 core failover tests passing (leader election, durability, ISR, catch-up)
 - ✅ Performance benchmarks complete (sync/async modes, latency, concurrency)
-- 📋 **Next:** Phase 2.4 Retention Policies
-  - Week 1: Time-based (background) + Size-based (active on enqueue)
-  - Week 2: Log compaction (Kafka-style)
+- ✅ **Phase 2.4 Week 1 (40% complete):**
+  - ✅ Retention infrastructure complete (schema, manager, Raft ops, stubs)
+  - ⏳ Integration pending (manager.go, partition_worker.go)
+  - ⏳ Tests pending (retention_test.go, integration tests)
+- 📋 **Week 2:** Log compaction (Kafka-style)
 
 ---
 

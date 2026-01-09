@@ -37,6 +37,7 @@ func TestPartitionWorker_RouteQueueMessage_ProxyMode(t *testing.T) {
 		"node-1",
 		ProxyMode,
 		nil,
+		nil,
 	)
 
 	// Create queue in store first
@@ -111,6 +112,7 @@ func TestPartitionWorker_LocalDelivery_ProxyMode(t *testing.T) {
 		"node-1",
 		ProxyMode,
 		nil,
+		nil,
 	)
 
 	// Create queue in store first
@@ -180,6 +182,7 @@ func TestPartitionWorker_DirectMode_LocalDelivery(t *testing.T) {
 		"node-1",
 		DirectMode, // Direct mode - no routing
 		nil,
+		nil,
 	)
 
 	// Create queue in store first
@@ -246,6 +249,7 @@ func TestPartitionWorker_NoCluster(t *testing.T) {
 		"node-1",
 		ProxyMode,
 		nil,
+		nil,
 	)
 
 	// Create queue in store first
@@ -305,6 +309,7 @@ func TestPartitionWorker_RemoteConsumer_NoCluster_Error(t *testing.T) {
 		nil, // No cluster
 		"node-1",
 		ProxyMode,
+		nil,
 		nil,
 	)
 

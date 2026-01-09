@@ -49,7 +49,7 @@ func BenchmarkE2E_PublishToAck(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	payload := []byte("e2e benchmark message")
 	props := map[string]string{}
@@ -118,7 +118,7 @@ func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	payload := []byte("concurrent message")
 	props := map[string]string{}
@@ -203,7 +203,7 @@ func BenchmarkE2E_Latency(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	payload := []byte("latency test message")
 	props := map[string]string{}
@@ -290,7 +290,7 @@ func BenchmarkE2E_Sustained(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	payload := []byte("sustained throughput message")
 	props := map[string]string{}

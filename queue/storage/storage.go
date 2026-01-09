@@ -65,6 +65,7 @@ type QueueConfig struct {
 	RetryPolicy RetryPolicy
 	DLQConfig   DLQConfig
 	Replication ReplicationConfig
+	Retention   RetentionPolicy
 
 	// Limits
 	MaxMessageSize int64
@@ -108,6 +109,24 @@ type ReplicationConfig struct {
 	ElectionTimeout   time.Duration // Raft election timeout (default: 3s)
 	SnapshotInterval  time.Duration // Snapshot frequency (default: 5m)
 	SnapshotThreshold uint64        // Snapshot after N log entries (default: 8192)
+}
+
+// RetentionPolicy defines Kafka-style retention policies for automatic message cleanup.
+type RetentionPolicy struct {
+	// Time-based retention (background cleanup)
+	RetentionTime     time.Duration // Delete messages older than this (0 = disabled)
+	TimeCheckInterval time.Duration // How often to run cleanup (default: 5m)
+
+	// Size-based retention (active check on enqueue)
+	RetentionBytes    int64 // Max total queue size in bytes (0 = unlimited)
+	RetentionMessages int64 // Max message count (0 = unlimited)
+	SizeCheckEvery    int   // Check size every N enqueues (default: 100, optimization)
+
+	// Log compaction (Kafka-style)
+	CompactionEnabled  bool          // Enable log compaction
+	CompactionKey      string        // Message property to use as compaction key
+	CompactionLag      time.Duration // Wait before compacting new messages (default: 5m)
+	CompactionInterval time.Duration // How often to run compaction (default: 10m)
 }
 
 // Message represents a message in the queue system.
@@ -251,6 +270,12 @@ type MessageStore interface {
 
 	// Batch operations
 	ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*Message, error)
+
+	// Retention operations
+	ListOldestMessages(ctx context.Context, queueName string, partitionID int, limit int) ([]*Message, error)
+	ListMessagesBefore(ctx context.Context, queueName string, partitionID int, cutoffTime time.Time, limit int) ([]*Message, error)
+	DeleteMessageBatch(ctx context.Context, queueName string, messageIDs []string) (int64, error)
+	GetQueueSize(ctx context.Context, queueName string) (int64, error) // Total size in bytes
 }
 
 // ConsumerStore manages consumer group state.

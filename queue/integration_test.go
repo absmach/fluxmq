@@ -50,7 +50,7 @@ func TestIntegration_CompleteMessageLifecycle(t *testing.T) {
 	queue, err := mgr.GetQueue(queueName)
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 	worker.deliverMessages(ctx)
 
 	// Verify message was delivered
@@ -111,7 +111,7 @@ func TestIntegration_RetryFlow(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/retry-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 	worker.deliverMessages(ctx)
 
 	// Verify initial delivery
@@ -179,7 +179,7 @@ func TestIntegration_DLQFlow(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/dlq-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 	worker.deliverMessages(ctx)
 
 	// Get message ID
@@ -307,7 +307,7 @@ func TestIntegration_OrderingGuarantees(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/ordering-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 	for i := 0; i < 5; i++ {
 		worker.deliverMessages(ctx)
 	}
@@ -385,7 +385,7 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/concurrent-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	// Run delivery cycles until all messages are delivered or timeout
 	// This handles varying batch sizes and ensures test reliability
@@ -500,7 +500,7 @@ func TestIntegration_MultipleGroups_IndependentConsumption(t *testing.T) {
 	queue, err := mgr.GetQueue(queueName)
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 	for i := 0; i < 5; i++ {
 		worker.deliverMessages(ctx)
 	}

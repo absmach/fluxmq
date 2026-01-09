@@ -6,6 +6,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -686,4 +687,132 @@ func (s *Store) UpdateHeartbeat(ctx context.Context, queueName, groupID, consume
 
 	consumer.LastHeartbeat = timestamp
 	return nil
+}
+
+// Retention operations
+
+func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	partition, exists := partitions[partitionID]
+	if !exists {
+		return []*storage.Message{}, nil
+	}
+
+	// Collect all messages from partition
+	messages := make([]*storage.Message, 0, len(partition))
+	for _, msg := range partition {
+		messages = append(messages, msg)
+	}
+
+	// Sort by sequence (oldest first)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Sequence < messages[j].Sequence
+	})
+
+	// Apply limit
+	if limit > 0 && len(messages) > limit {
+		messages = messages[:limit]
+	}
+
+	return messages, nil
+}
+
+func (s *Store) ListMessagesBefore(ctx context.Context, queueName string, partitionID int, cutoffTime time.Time, limit int) ([]*storage.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	partition, exists := partitions[partitionID]
+	if !exists {
+		return []*storage.Message{}, nil
+	}
+
+	// Collect messages older than cutoff time
+	messages := make([]*storage.Message, 0)
+	for _, msg := range partition {
+		if msg.CreatedAt.Before(cutoffTime) {
+			messages = append(messages, msg)
+		}
+	}
+
+	// Sort by sequence (oldest first)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Sequence < messages[j].Sequence
+	})
+
+	// Apply limit
+	if limit > 0 && len(messages) > limit {
+		messages = messages[:limit]
+	}
+
+	return messages, nil
+}
+
+func (s *Store) DeleteMessageBatch(ctx context.Context, queueName string, messageIDs []string) (int64, error) {
+	if len(messageIDs) == 0 {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return 0, storage.ErrQueueNotFound
+	}
+
+	// Create a set for fast ID lookup
+	idSet := make(map[string]struct{}, len(messageIDs))
+	for _, id := range messageIDs {
+		idSet[id] = struct{}{}
+	}
+
+	var deletedCount int64
+
+	// Scan all partitions and delete messages by ID
+	for partitionID, partition := range partitions {
+		for seq, msg := range partition {
+			if _, found := idSet[msg.ID]; found {
+				delete(partitions[partitionID], seq)
+				deletedCount++
+			}
+		}
+	}
+
+	// Update count
+	s.counts[queueName] -= deletedCount
+
+	return deletedCount, nil
+}
+
+func (s *Store) GetQueueSize(ctx context.Context, queueName string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return 0, storage.ErrQueueNotFound
+	}
+
+	var totalSize int64
+
+	// Calculate total size of all messages
+	for _, msgs := range partitions {
+		for _, msg := range msgs {
+			totalSize += int64(len(msg.GetPayload()))
+		}
+	}
+
+	return totalSize, nil
 }

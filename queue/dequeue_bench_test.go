@@ -68,7 +68,7 @@ func BenchmarkDequeue_SingleConsumer(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -104,7 +104,7 @@ func BenchmarkDequeue_MultipleConsumers(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+			worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -134,7 +134,7 @@ func BenchmarkDequeue_WithAck(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -178,7 +178,7 @@ func BenchmarkDequeue_PartitionScanning(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+			worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -211,7 +211,7 @@ func BenchmarkDequeue_Throughput(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil)
+	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()

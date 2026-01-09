@@ -25,6 +25,7 @@ const (
 	OpNack
 	OpReject
 	OpUpdateMessage
+	OpRetentionDelete // Batch delete messages for retention
 )
 
 // Operation represents a queue operation to be replicated via Raft.
@@ -38,6 +39,9 @@ type Operation struct {
 	// For OpAck, OpNack, OpReject
 	MessageID string
 	Reason    string
+
+	// For OpRetentionDelete
+	MessageIDs []string // Batch of message IDs to delete
 }
 
 // PartitionFSM implements the Raft FSM interface for a queue partition.
@@ -89,6 +93,8 @@ func (f *PartitionFSM) Apply(l *raft.Log) interface{} {
 		return f.applyReject(ctx, op.MessageID, op.Reason)
 	case OpUpdateMessage:
 		return f.applyUpdateMessage(ctx, op.Message)
+	case OpRetentionDelete:
+		return f.applyRetentionDelete(ctx, op.MessageIDs)
 	default:
 		err := fmt.Errorf("unknown operation type: %d", op.Type)
 		f.logger.Error("unknown operation",
@@ -269,6 +275,31 @@ func (f *PartitionFSM) applyUpdateMessage(ctx context.Context, msg *storage.Mess
 		slog.String("queue", f.queueName),
 		slog.Int("partition", f.partitionID),
 		slog.String("message_id", msg.ID))
+
+	return nil
+}
+
+// applyRetentionDelete applies a batch retention delete operation.
+func (f *PartitionFSM) applyRetentionDelete(ctx context.Context, messageIDs []string) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	deletedCount, err := f.messageStore.DeleteMessageBatch(ctx, f.queueName, messageIDs)
+	if err != nil {
+		f.logger.Error("failed to apply retention delete",
+			slog.String("queue", f.queueName),
+			slog.Int("partition", f.partitionID),
+			slog.Int("message_count", len(messageIDs)),
+			slog.String("error", err.Error()))
+		return err
+	}
+
+	f.logger.Info("applied retention delete",
+		slog.String("queue", f.queueName),
+		slog.Int("partition", f.partitionID),
+		slog.Int("requested", len(messageIDs)),
+		slog.Int64("deleted", deletedCount))
 
 	return nil
 }
