@@ -55,6 +55,7 @@ type Manager struct {
 	dlqManager      *DLQManager
 	mu              sync.RWMutex
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 	wg              sync.WaitGroup
 
 	// Cluster support (nil for single-node mode)
@@ -158,27 +159,29 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // Stop stops the queue manager and all background tasks.
 func (m *Manager) Stop() error {
-	m.mu.Lock()
-	// Stop all delivery workers
-	for _, worker := range m.deliveryWorkers {
-		worker.Stop()
-	}
-
-	// Stop all Raft managers
-	for _, raftMgr := range m.raftManagers {
-		if err := raftMgr.Shutdown(); err != nil {
-			slog.Error("failed to shutdown raft manager", slog.String("error", err.Error()))
+	m.stopOnce.Do(func() {
+		m.mu.Lock()
+		// Stop all delivery workers
+		for _, worker := range m.deliveryWorkers {
+			worker.Stop()
 		}
-	}
-	m.mu.Unlock()
 
-	// Stop retry manager
-	if m.retryManager != nil {
-		m.retryManager.Stop()
-	}
+		// Stop all Raft managers
+		for _, raftMgr := range m.raftManagers {
+			if err := raftMgr.Shutdown(); err != nil {
+				slog.Error("failed to shutdown raft manager", slog.String("error", err.Error()))
+			}
+		}
+		m.mu.Unlock()
 
-	close(m.stopCh)
-	m.wg.Wait()
+		// Stop retry manager
+		if m.retryManager != nil {
+			m.retryManager.Stop()
+		}
+
+		close(m.stopCh)
+		m.wg.Wait()
+	})
 	return nil
 }
 
@@ -466,10 +469,29 @@ func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, part
 	msg.CreatedAt = time.Now()
 	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
 
-	// Apply via Raft (this will replicate to followers)
-	err = raftMgr.ApplyEnqueue(ctx, partitionID, msg)
+	// Create a copy for Raft (FSM needs the data to persist)
+	// We can't return msg to pool until FSM applies it
+	raftMsg := &storage.Message{
+		ID:           msg.ID,
+		Payload:      append([]byte(nil), msg.Payload...), // Copy payload
+		Topic:        msg.Topic,
+		PartitionKey: msg.PartitionKey,
+		PartitionID:  msg.PartitionID,
+		Sequence:     msg.Sequence,
+		State:        msg.State,
+		CreatedAt:    msg.CreatedAt,
+		ExpiresAt:    msg.ExpiresAt,
+	}
+	// Copy properties map
+	raftMsg.Properties = make(map[string]string, len(msg.Properties))
+	for k, v := range msg.Properties {
+		raftMsg.Properties[k] = v
+	}
 
-	// Return to pools
+	// Apply via Raft (this will replicate to followers)
+	err = raftMgr.ApplyEnqueue(ctx, partitionID, raftMsg)
+
+	// Return to pools (safe now since we made a copy)
 	if len(properties) > 0 {
 		putPropertyMap(msgProps)
 	}

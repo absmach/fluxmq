@@ -105,6 +105,12 @@ func (f *PartitionFSM) applyEnqueue(ctx context.Context, msg *storage.Message) e
 		return fmt.Errorf("nil message in enqueue operation")
 	}
 
+	f.logger.Info("FSM applying enqueue",
+		slog.String("queue", f.queueName),
+		slog.Int("partition", f.partitionID),
+		slog.String("message_id", msg.ID),
+		slog.Uint64("sequence", msg.Sequence))
+
 	if err := f.messageStore.Enqueue(ctx, f.queueName, msg); err != nil {
 		f.logger.Error("failed to apply enqueue",
 			slog.String("queue", f.queueName),
@@ -114,7 +120,7 @@ func (f *PartitionFSM) applyEnqueue(ctx context.Context, msg *storage.Message) e
 		return err
 	}
 
-	f.logger.Debug("applied enqueue",
+	f.logger.Info("FSM applied enqueue successfully",
 		slog.String("queue", f.queueName),
 		slog.Int("partition", f.partitionID),
 		slog.String("message_id", msg.ID),
