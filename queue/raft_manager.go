@@ -303,6 +303,21 @@ func (rm *RaftManager) ApplyReject(ctx context.Context, partitionID int, message
 	return group.Apply(op, rm.config.AckTimeout)
 }
 
+// ApplyRetentionDelete replicates a batch retention delete operation via Raft.
+func (rm *RaftManager) ApplyRetentionDelete(ctx context.Context, partitionID int, messageIDs []string) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:       raft.OpRetentionDelete,
+		MessageIDs: messageIDs,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
 // WaitForLeader blocks until the partition has a leader or timeout.
 func (rm *RaftManager) WaitForLeader(ctx context.Context, partitionID int) error {
 	group, err := rm.GetPartitionGroup(partitionID)

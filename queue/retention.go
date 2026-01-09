@@ -20,6 +20,9 @@ type RetentionManager struct {
 	policy    storage.RetentionPolicy
 	store     storage.MessageStore
 
+	// Raft integration (optional)
+	raftManager *RaftManager
+
 	// Size-based retention tracking
 	enqueueCounter int
 	mu             sync.Mutex
@@ -40,7 +43,7 @@ type RetentionStats struct {
 }
 
 // NewRetentionManager creates a new retention manager for a queue.
-func NewRetentionManager(queueName string, policy storage.RetentionPolicy, store storage.MessageStore, logger *slog.Logger) *RetentionManager {
+func NewRetentionManager(queueName string, policy storage.RetentionPolicy, store storage.MessageStore, raftManager *RaftManager, logger *slog.Logger) *RetentionManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,11 +63,12 @@ func NewRetentionManager(queueName string, policy storage.RetentionPolicy, store
 	}
 
 	return &RetentionManager{
-		queueName: queueName,
-		policy:    policy,
-		store:     store,
-		stopCh:    make(chan struct{}),
-		logger:    logger,
+		queueName:   queueName,
+		policy:      policy,
+		store:       store,
+		raftManager: raftManager,
+		stopCh:      make(chan struct{}),
+		logger:      logger,
 	}
 }
 
@@ -104,6 +108,11 @@ func (rm *RetentionManager) Stop() {
 // This is called on the enqueue path (active retention).
 // Returns the number of messages deleted, bytes freed, and any error.
 func (rm *RetentionManager) CheckSizeRetention(ctx context.Context, partitionID int) (int64, int64, error) {
+	// Only run retention on the leader to avoid duplicate cleanup
+	if rm.raftManager != nil && !rm.raftManager.IsLeader(partitionID) {
+		return 0, 0, nil
+	}
+
 	// Optimization: only check every N enqueues to minimize overhead
 	rm.mu.Lock()
 	rm.enqueueCounter++
@@ -128,16 +137,11 @@ func (rm *RetentionManager) CheckSizeRetention(ctx context.Context, partitionID 
 		return 0, 0, fmt.Errorf("failed to get message count: %w", err)
 	}
 
-	// Check if we need to delete messages
-	var needsCleanup bool
-	var targetDeleteCount int64
+	var totalDeleted int64
+	var totalBytesFreed int64
 
-	if rm.policy.RetentionMessages > 0 && count > rm.policy.RetentionMessages {
-		needsCleanup = true
-		targetDeleteCount = count - rm.policy.RetentionMessages
-	}
-
-	// Check bytes-based retention
+	// For byte-based retention, we need to loop until under the limit
+	// because we can't accurately estimate message sizes
 	if rm.policy.RetentionBytes > 0 {
 		currentSize, err := rm.store.GetQueueSize(ctx, rm.queueName)
 		if err != nil {
@@ -145,30 +149,71 @@ func (rm *RetentionManager) CheckSizeRetention(ctx context.Context, partitionID 
 				slog.String("queue", rm.queueName),
 				slog.String("error", err.Error()))
 		} else if currentSize > rm.policy.RetentionBytes {
-			needsCleanup = true
-			// Estimate how many messages to delete based on average message size
-			if count > 0 {
-				avgSize := currentSize / count
-				if avgSize > 0 {
-					bytesToFree := currentSize - rm.policy.RetentionBytes
-					estimatedCount := bytesToFree / avgSize
-					if estimatedCount > targetDeleteCount {
-						targetDeleteCount = estimatedCount
+			// Keep deleting oldest messages until under byte limit
+			const batchSize = 100 // Delete in batches to avoid edge cases
+			for currentSize > rm.policy.RetentionBytes {
+				// Calculate how many messages to delete in this batch
+				// Use estimation as a starting point but limit to batchSize
+				var deleteCount int
+				if count > 0 {
+					avgSize := currentSize / count
+					if avgSize > 0 {
+						bytesToFree := currentSize - rm.policy.RetentionBytes
+						estimatedCount := (bytesToFree / avgSize) + 1 // Round up
+						deleteCount = int(estimatedCount)
+						if deleteCount > batchSize {
+							deleteCount = batchSize
+						}
+					} else {
+						deleteCount = 10 // Fallback if avgSize is 0
 					}
+				} else {
+					break // No messages left
+				}
+
+				deleted, bytesFreed, err := rm.deleteOldestMessages(ctx, partitionID, deleteCount)
+				if err != nil {
+					return totalDeleted, totalBytesFreed, fmt.Errorf("failed to delete oldest messages: %w", err)
+				}
+
+				if deleted == 0 {
+					break // No more messages to delete
+				}
+
+				totalDeleted += deleted
+				totalBytesFreed += bytesFreed
+
+				// Get updated size and count
+				currentSize, err = rm.store.GetQueueSize(ctx, rm.queueName)
+				if err != nil {
+					return totalDeleted, totalBytesFreed, fmt.Errorf("failed to get queue size: %w", err)
+				}
+
+				count, err = rm.store.Count(ctx, rm.queueName)
+				if err != nil {
+					return totalDeleted, totalBytesFreed, fmt.Errorf("failed to get message count: %w", err)
 				}
 			}
 		}
 	}
 
-	if !needsCleanup {
+	// Check message count-based retention
+	if rm.policy.RetentionMessages > 0 && count > rm.policy.RetentionMessages {
+		targetDeleteCount := count - rm.policy.RetentionMessages
+		deleted, bytesFreed, err := rm.deleteOldestMessages(ctx, partitionID, int(targetDeleteCount))
+		if err != nil {
+			return totalDeleted, totalBytesFreed, fmt.Errorf("failed to delete oldest messages: %w", err)
+		}
+		totalDeleted += deleted
+		totalBytesFreed += bytesFreed
+	}
+
+	if totalDeleted == 0 {
 		return 0, 0, nil
 	}
 
-	// Delete oldest messages to get back under limit
-	deletedCount, bytesFreed, err := rm.deleteOldestMessages(ctx, partitionID, int(targetDeleteCount))
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to delete oldest messages: %w", err)
-	}
+	deletedCount := totalDeleted
+	bytesFreed := totalBytesFreed
 
 	if deletedCount > 0 {
 		rm.logger.Info("size-based retention cleanup",
@@ -282,10 +327,20 @@ func (rm *RetentionManager) deleteOldestMessages(ctx context.Context, partitionI
 		totalBytes += int64(len(msg.GetPayload()))
 	}
 
-	// Batch delete
-	deletedCount, err := rm.store.DeleteMessageBatch(ctx, rm.queueName, messageIDs)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to delete message batch: %w", err)
+	// Delete via Raft if available, otherwise delete directly
+	var deletedCount int64
+	if rm.raftManager != nil {
+		// Replicate deletion via Raft
+		if err := rm.raftManager.ApplyRetentionDelete(ctx, partitionID, messageIDs); err != nil {
+			return 0, 0, fmt.Errorf("failed to replicate retention delete: %w", err)
+		}
+		deletedCount = int64(len(messageIDs))
+	} else {
+		// Direct deletion (non-replicated mode)
+		deletedCount, err = rm.store.DeleteMessageBatch(ctx, rm.queueName, messageIDs)
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed to delete message batch: %w", err)
+		}
 	}
 
 	return deletedCount, totalBytes, nil
@@ -317,10 +372,20 @@ func (rm *RetentionManager) deleteMessagesBefore(ctx context.Context, partitionI
 			batchBytes += int64(len(msg.GetPayload()))
 		}
 
-		// Batch delete
-		deletedCount, err := rm.store.DeleteMessageBatch(ctx, rm.queueName, messageIDs)
-		if err != nil {
-			return totalDeleted, totalBytesFreed, fmt.Errorf("failed to delete message batch: %w", err)
+		// Delete via Raft if available, otherwise delete directly
+		var deletedCount int64
+		if rm.raftManager != nil {
+			// Replicate deletion via Raft
+			if err := rm.raftManager.ApplyRetentionDelete(ctx, partitionID, messageIDs); err != nil {
+				return totalDeleted, totalBytesFreed, fmt.Errorf("failed to replicate retention delete: %w", err)
+			}
+			deletedCount = int64(len(messageIDs))
+		} else {
+			// Direct deletion (non-replicated mode)
+			deletedCount, err = rm.store.DeleteMessageBatch(ctx, rm.queueName, messageIDs)
+			if err != nil {
+				return totalDeleted, totalBytesFreed, fmt.Errorf("failed to delete message batch: %w", err)
+			}
 		}
 
 		totalDeleted += deletedCount

@@ -244,17 +244,17 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 		m.raftManagers[config.Name] = raftMgr
 	}
 
-	// Create RetentionManager if retention policy is configured
-	if config.Retention.RetentionTime > 0 || config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0 || config.Retention.CompactionEnabled {
-		retentionMgr := NewRetentionManager(config.Name, config.Retention, m.messageStore, slog.Default())
-		m.retentionManagers[config.Name] = retentionMgr
-		// Note: RetentionManager will be started by partition workers (only leaders should run retention)
-	}
-
 	// Get RaftManager if exists
 	var raftMgr *RaftManager
 	if config.Replication.Enabled {
 		raftMgr = m.raftManagers[config.Name]
+	}
+
+	// Create RetentionManager if retention policy is configured
+	if config.Retention.RetentionTime > 0 || config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0 || config.Retention.CompactionEnabled {
+		retentionMgr := NewRetentionManager(config.Name, config.Retention, m.messageStore, raftMgr, slog.Default())
+		m.retentionManagers[config.Name] = retentionMgr
+		// Note: RetentionManager will be started by partition workers (only leaders should run retention)
 	}
 
 	// Get RetentionManager if exists
