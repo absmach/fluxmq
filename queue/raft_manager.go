@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"github.com/absmach/mqtt/queue/raft"
@@ -99,7 +101,7 @@ func (rm *RaftManager) StartPartition(ctx context.Context, partitionID int, part
 		QueueName:   rm.queueName,
 		PartitionID: partitionID,
 		NodeID:      rm.nodeID,
-		BindAddr:    rm.getBindAddress(rm.nodeID),
+		BindAddr:    rm.getPartitionBindAddress(rm.nodeID, partitionID),
 		DataDir:     filepath.Join(rm.dataDir, rm.queueName),
 		SyncMode:    rm.config.Mode == storage.ReplicationSync,
 		AckTimeout:  rm.config.AckTimeout,
@@ -120,7 +122,7 @@ func (rm *RaftManager) StartPartition(ctx context.Context, partitionID int, part
 	}
 
 	// Bootstrap if this is the initial cluster setup
-	if err := rm.bootstrapPartition(group, replicas); err != nil {
+	if err := rm.bootstrapPartition(group, replicas, partitionID); err != nil {
 		group.Shutdown()
 		return fmt.Errorf("failed to bootstrap partition: %w", err)
 	}
@@ -137,11 +139,11 @@ func (rm *RaftManager) StartPartition(ctx context.Context, partitionID int, part
 }
 
 // bootstrapPartition bootstraps the Raft cluster for a partition.
-func (rm *RaftManager) bootstrapPartition(group *raft.RaftGroup, replicas []string) error {
+func (rm *RaftManager) bootstrapPartition(group *raft.RaftGroup, replicas []string, partitionID int) error {
 	// Build server list for bootstrap
 	var servers []raftlib.Server
 	for _, nodeID := range replicas {
-		addr := rm.getBindAddress(nodeID)
+		addr := rm.getPartitionBindAddress(nodeID, partitionID)
 		servers = append(servers, raftlib.Server{
 			ID:      raftlib.ServerID(nodeID),
 			Address: raftlib.ServerAddress(addr),
@@ -151,13 +153,39 @@ func (rm *RaftManager) bootstrapPartition(group *raft.RaftGroup, replicas []stri
 	return group.Bootstrap(servers)
 }
 
-// getBindAddress returns the Raft bind address for a node.
+// getBindAddress returns the base Raft bind address for a node.
 func (rm *RaftManager) getBindAddress(nodeID string) string {
 	if addr, ok := rm.nodeAddresses[nodeID]; ok {
 		return addr
 	}
 	// Fallback: derive from node ID (this should not happen in production)
 	return fmt.Sprintf("%s:7946", nodeID)
+}
+
+// getPartitionBindAddress returns the Raft bind address for a specific partition on a node.
+// Each partition needs its own unique address to avoid port conflicts.
+func (rm *RaftManager) getPartitionBindAddress(nodeID string, partitionID int) string {
+	baseAddr := rm.getBindAddress(nodeID)
+
+	// Parse the base address to extract host and port
+	// Format: "host:port" -> "host:(port + partitionOffset)"
+	// Example: node1 base=127.0.0.1:7000, partition 0->7000, partition 1->7100, partition 2->7200
+
+	// For testing with multiple partitions, offset by 100 per partition to avoid conflicts
+	// In production, you'd use a multiplexed transport instead
+	host, portStr, err := net.SplitHostPort(baseAddr)
+	if err != nil {
+		// Fallback if parsing fails
+		return fmt.Sprintf("%s:%d", baseAddr, 7000+(partitionID*100))
+	}
+
+	basePort, err := strconv.Atoi(portStr)
+	if err != nil {
+		basePort = 7000
+	}
+
+	partitionPort := basePort + (partitionID * 100)
+	return fmt.Sprintf("%s:%d", host, partitionPort)
 }
 
 // StopPartition stops the Raft group for the given partition.

@@ -179,6 +179,7 @@ func (b *BadgerStableStore) Set(key []byte, val []byte) error {
 }
 
 // Get retrieves a value by key.
+// Returns (nil, nil) if key doesn't exist (per Raft StableStore contract).
 func (b *BadgerStableStore) Get(key []byte) ([]byte, error) {
 	fullKey := append([]byte(b.prefix), key...)
 	var val []byte
@@ -186,7 +187,7 @@ func (b *BadgerStableStore) Get(key []byte) ([]byte, error) {
 	err := b.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(fullKey)
 		if err == badger.ErrKeyNotFound {
-			return ErrKeyNotFound
+			return nil // Key not found is not an error for Raft
 		}
 		if err != nil {
 			return err
@@ -207,10 +208,14 @@ func (b *BadgerStableStore) SetUint64(key []byte, val uint64) error {
 }
 
 // GetUint64 retrieves a uint64 value.
+// Returns (0, nil) if key doesn't exist (per Raft StableStore contract).
 func (b *BadgerStableStore) GetUint64(key []byte) (uint64, error) {
 	val, err := b.Get(key)
 	if err != nil {
 		return 0, err
+	}
+	if val == nil {
+		return 0, nil // Key not found, return zero value
 	}
 	if len(val) != 8 {
 		return 0, fmt.Errorf("invalid uint64 value length: %d", len(val))

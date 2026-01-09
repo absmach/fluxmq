@@ -97,10 +97,11 @@ func setupReplicatedTest(t *testing.T, nodeCount int, queueName string, partitio
 			MaxBackoff:        1 * time.Second,
 			BackoffMultiplier: 2.0,
 		},
-		MaxMessageSize: 1024 * 1024, // 1MB
-		MaxQueueDepth:  10000,
-		DeliveryTimeout: 30 * time.Second,
-		BatchSize:       100,
+		MaxMessageSize:   1024 * 1024, // 1MB
+		MaxQueueDepth:    10000,
+		DeliveryTimeout:  30 * time.Second,
+		BatchSize:        100,
+		HeartbeatTimeout: 10 * time.Second,
 	}
 
 	ctx := context.Background()
@@ -109,8 +110,24 @@ func setupReplicatedTest(t *testing.T, nodeCount int, queueName string, partitio
 		require.NoError(t, err, "node%d failed to create queue", i+1)
 	}
 
-	// Raft managers will be created by the manager when CreateQueue is called with replication enabled
-	// No need to manually create them here
+	// Start Raft partitions on all nodes
+	for i, mgr := range managers {
+		raftMgr, exists := mgr.raftManagers[queueName]
+		require.True(t, exists, "node%d: raft manager not found for queue %s", i+1, queueName)
+		require.NotNil(t, raftMgr, "node%d: raft manager is nil", i+1)
+
+		// Start all partitions
+		for partID := 0; partID < partitions; partID++ {
+			err := raftMgr.StartPartition(ctx, partID, partitions)
+			require.NoError(t, err, "node%d: failed to start partition %d", i+1, partID)
+		}
+	}
+
+	// Wait for leader election on all partitions
+	for partID := 0; partID < partitions; partID++ {
+		waitForRaftStable(t, managers, queueName, partID, 10*time.Second)
+		t.Logf("Partition %d: leader elected", partID)
+	}
 
 	cleanup := func() {
 		for _, mgr := range managers {
@@ -148,21 +165,28 @@ func TestReplication_BasicEnqueueDequeue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give time for replication
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 
-	// Verify message was stored - check message count
+	// Verify message was stored - check message count on all nodes
+	totalCount := int64(0)
 	for i, store := range stores {
 		count, err := store.Count(ctx, queueName)
 		assert.NoError(t, err, "node%d: failed to count messages", i+1)
-		// At least one node (partition leader) should have the message
+		totalCount += count
 		if count > 0 {
 			t.Logf("node%d: has %d messages", i+1, count)
 		}
 	}
 
-	// TODO: Add delivery and ack verification
-	// This requires starting partition workers and delivery workers
-	// For now, this test validates config and basic enqueue works
+	// With replication factor 3, message should be on multiple nodes
+	// The partition leader definitely has it, and it's replicated to followers via Raft
+	assert.Greater(t, totalCount, int64(0), "at least one node should have the message")
+
+	// Verify we can retrieve the message from the leader node
+	// Find which partition the message went to (hash-based routing)
+	// For now, just verify it's stored somewhere
+
+	t.Logf("Total messages across all nodes: %d", totalCount)
 }
 
 // TestReplication_SyncVsAsync compares sync and async replication modes.
