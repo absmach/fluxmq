@@ -3,7 +3,79 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/absmach/mqtt)](https://goreportcard.com/report/github.com/absmach/mqtt)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity Supports MQTT 3.1.1 and 5.0 over TCP and WebSocket, plus HTTP-MQTT and CoAP bridges for IoT integration.
+A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. Supports MQTT 3.1.1 and 5.0 over TCP and WebSocket, plus HTTP-MQTT and CoAP bridges for IoT integration.
+
+## Who Is This For
+
+### ✅ Ideal Use Cases
+
+**Event-Driven Architectures**
+- **Event backbone for microservices** - Reliable, ordered event distribution between services with at-least-once or exactly-once delivery (QoS 1/2)
+- **CQRS systems** - Durable queues for command/event distribution with partition-based ordering per aggregate
+- **Asynchronous workflows** - Decouple services with persistent message queues and automatic retries
+- **Real-time event processing** - High throughput (300K-500K msg/s per node) with low latency (<10ms local, ~5ms cross-node)
+
+**Why choose this over Kafka for EDA:**
+- ✅ Simpler operations - single binary with embedded storage, no Zookeeper/KRaft
+- ✅ Multi-protocol - same broker handles MQTT, HTTP, WebSocket, CoAP
+- ✅ Partition-based ordering with sequence numbers (perfect for aggregate-based event streams)
+- ✅ Configurable retention (hours to days) for event replay during deployments/failures
+- ✅ Raft replication with quorum writes ensures no lost events
+
+**IoT & Real-Time Systems**
+- **Device communication** - MQTT 3.1.1/5.0 with QoS levels for reliable delivery over unreliable networks
+- **Edge computing** - Embedded deployment with low resource footprint
+- **Browser clients** - WebSocket transport for real-time web applications
+- **Constrained devices** - CoAP bridge for resource-limited IoT hardware
+
+**High-Availability Systems**
+- **Clustered deployments** - 3-5 node clusters with automatic failover (sub-100ms session takeover)
+- **Geographic distribution** - gRPC-based cross-node routing with embedded etcd coordination
+- **Scalability** - Linear scaling (3-node cluster: 1-2M msg/s, 5-node cluster: 2-4M msg/s)
+
+### ⚠️ Not Recommended For
+
+**Long-term Event Storage**
+- ❌ Event sourcing as permanent source of truth - storage uses LSM-tree (compaction/deletion allowed)
+- ❌ Compliance/audit trails requiring immutability - use purpose-built event stores (EventStoreDB)
+- ❌ Time-travel debugging or temporal queries - no time-range indexing
+
+**Complex Event Processing**
+- ❌ Advanced queries over events - no indexing beyond partition+sequence
+- ❌ Built-in stream processing - no Kafka Streams equivalent (process events in consumers)
+
+**Large Payloads**
+- ❌ Multi-megabyte messages - 1MB default limit (configurable, but storage optimized for smaller messages)
+
+### Event-Driven Architecture Pattern
+
+```
+┌─────────────┐         ┌──────────────────┐         ┌─────────────┐
+│  Service A  │────────>│   MQTT Broker    │────────>│  Service B  │
+│ (Producer)  │  events │  (Event Bus)     │ events  │ (Consumer)  │
+└─────────────┘         │                  │         └─────────────┘
+      │                 │  • Retention: 7d │               │
+      │                 │  • Replication:3x│               │
+      ▼                 │  • Ordering: Yes │               ▼
+┌─────────────┐         └──────────────────┘         ┌─────────────┐
+│  Database   │                                      │  Database   │
+│  (State)    │         Broker = Durable Pipe        │  (State)    │
+└─────────────┘         Database = Source of Truth   └─────────────┘
+```
+
+**Recommended configuration for EDA:**
+```yaml
+queue:
+  ordering: partition              # FIFO per aggregate/entity
+  partitions: 50-100               # Balance parallelism vs overhead
+  retention:
+    retention_time: 168h           # 7 days for replay
+  replication:
+    enabled: true
+    replication_factor: 3          # Survive node failures
+    mode: sync                     # Don't lose events
+    min_in_sync_replicas: 2        # Quorum writes
+```
 
 ## Features
 
@@ -162,13 +234,13 @@ See [Configuration Guide](docs/configuration.md) for complete reference.
 
 ## Performance
 
-| Metric | Value |
-|--------|-------|
-| **Concurrent Connections** | 500K+ per node |
-| **Message Throughput** | 300K-500K msg/s per node |
-| **Latency (local)** | <10ms |
-| **Latency (cross-node)** | ~5ms |
-| **Session Takeover** | <100ms |
+| Metric                     | Value                    |
+| -------------------------- | ------------------------ |
+| **Concurrent Connections** | 500K+ per node           |
+| **Message Throughput**     | 300K-500K msg/s per node |
+| **Latency (local)**        | <10ms                    |
+| **Latency (cross-node)**   | ~5ms                     |
+| **Session Takeover**       | <100ms                   |
 
 **With clustering and topic sharding:**
 - 3-node cluster: 1-2M msg/s
@@ -178,17 +250,17 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | Detailed system design |
+| Document                                 | Description                                 |
+| ---------------------------------------- | ------------------------------------------- |
+| [Architecture](docs/architecture.md)     | Detailed system design                      |
 | [Scaling & Performance](docs/scaling.md) | Capacity analysis, benchmarks, optimization |
-| [Clustering](docs/clustering.md) | Distributed broker design |
-| [Client Library](docs/client.md) | Go client with queue support |
-| [Broker Internals](docs/broker.md) | Message routing, sessions |
-| [Durable Queues](docs/queue.md) | Queue configuration, consumer groups |
-| [Configuration](docs/configuration.md) | Complete config reference |
-| [Webhooks](docs/webhooks.md) | Webhook event system |
-| [Roadmap](docs/roadmap.md) | Development plan |
+| [Clustering](docs/clustering.md)         | Distributed broker design                   |
+| [Client Library](docs/client.md)         | Go client with queue support                |
+| [Broker Internals](docs/broker.md)       | Message routing, sessions                   |
+| [Durable Queues](docs/queue.md)          | Queue configuration, consumer groups        |
+| [Configuration](docs/configuration.md)   | Complete config reference                   |
+| [Webhooks](docs/webhooks.md)             | Webhook event system                        |
+| [Roadmap](docs/roadmap.md)               | Development plan                            |
 
 ## Roadmap
 
