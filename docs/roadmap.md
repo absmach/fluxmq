@@ -1,7 +1,7 @@
 # MQTT Broker Development Roadmap
 
-**Last Updated:** 2026-01-09
-**Current Phase:** Phase 2 - Queue Replication
+**Last Updated:** 2026-01-10
+**Current Phase:** Phase 0 - Production Hardening (TOP PRIORITY)
 
 ---
 
@@ -11,6 +11,7 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 ### Current Status
 
+- 🚨 **Phase 0: Production Hardening** - TOP PRIORITY (Critical security & operational fixes)
 - ✅ **Phase 1: Performance Optimization** - COMPLETE (3.27x faster)
 - 🔄 **Phase 2: Queue Replication** - IN PROGRESS (~88% complete)
   - ✅ Phase 2.1: Raft Infrastructure - COMPLETE
@@ -25,7 +26,9 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 ## 🎯 Immediate Next Steps
 
-**Current Sprint Focus: Phase 2.3 - Testing & Optimization**
+**Current Sprint Focus: Phase 0 - Production Hardening (TOP PRIORITY)**
+
+Phase 0 must be completed before any production deployment. These are critical security vulnerabilities and operational gaps identified during code audit.
 
 **Completed (2026-01-09):**
 - ✅ Fixed Raft storage initialization (BadgerStableStore contract)
@@ -63,6 +66,291 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 - Can be done in parallel with production usage
 
 **See Phase 2.3 and Phase 2.4 sections below for complete details.**
+
+---
+
+## Phase 0: Production Hardening 🚨 TOP PRIORITY
+
+**Status:** NOT STARTED - Must complete before production deployment
+**Goal:** Address critical security vulnerabilities and operational gaps
+
+This phase was identified through comprehensive code audit comparing against NATS, RabbitMQ, Kafka, HiveMQ, and EMQX.
+
+---
+
+### 0.1: Critical Security Fixes 🔴 CRITICAL
+
+**Priority:** P0 - Block production deployment
+
+**0.1.1 Secure Inter-Broker Communication**
+- **File:** `cluster/transport.go`
+- **Issue:** Uses `insecure.NewCredentials()` - cluster traffic is unencrypted
+- **Risk:** Man-in-the-middle attacks, data interception between nodes
+- **Fix:** Implement mTLS for gRPC connections
+```go
+// Current (INSECURE):
+conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(insecure.NewCredentials()))
+
+// Required:
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    RootCAs:      certPool,
+    MinVersion:   tls.VersionTLS12,
+}
+conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+```
+- [ ] Add cluster TLS configuration options
+- [ ] Generate/load certificates for inter-broker auth
+- [ ] Implement certificate rotation support
+- [ ] Add cluster TLS validation tests
+
+**0.1.2 WebSocket Origin Validation**
+- **File:** `server/websocket/server.go`
+- **Issue:** `CheckOrigin` always returns `true` - accepts all origins
+- **Risk:** Cross-Site WebSocket Hijacking (CSWSH), CSRF attacks
+- **Fix:** Implement configurable origin allowlist
+```go
+// Current (INSECURE):
+upgrader: websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool {
+        return true  // ACCEPTS ALL ORIGINS
+    },
+}
+
+// Required:
+upgrader: websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool {
+        origin := r.Header.Get("Origin")
+        return s.isAllowedOrigin(origin)
+    },
+}
+```
+- [ ] Add `allowed_origins` configuration option
+- [ ] Implement origin validation logic
+- [ ] Support wildcard patterns (e.g., `*.example.com`)
+- [ ] Add WebSocket security tests
+
+**0.1.3 Secure Default ACL**
+- **File:** `broker/auth.go`
+- **Issue:** Default allows all when no authorizer configured
+- **Risk:** Unauthorized access to all topics and operations
+- **Fix:** Change default to deny-all, require explicit authorization
+- [ ] Change default ACL policy to deny-all
+- [ ] Add explicit `development_mode: true` flag for permissive mode
+- [ ] Log warnings when running without authorizer
+- [ ] Document security configuration requirements
+
+---
+
+### 0.2: Rate Limiting 🔴 HIGH
+
+**Priority:** P1 - Required for production
+
+**Issue:** No rate limiting anywhere in the codebase
+**Risk:** DoS attacks, resource exhaustion, noisy neighbor problems
+
+**Implementation:**
+```go
+type RateLimiter struct {
+    connectRate   *rate.Limiter  // Per-IP connection rate
+    messageRate   *rate.Limiter  // Per-client publish rate
+    subscribeRate *rate.Limiter  // Per-client subscription rate
+}
+
+type RateLimitConfig struct {
+    // Connection rate limiting
+    MaxConnectionsPerIP    int           // Default: 100
+    ConnectionBurstSize    int           // Default: 20
+    ConnectionWindow       time.Duration // Default: 1m
+
+    // Message rate limiting
+    MaxMessagesPerClient   int           // Default: 1000/s
+    MessageBurstSize       int           // Default: 100
+
+    // Subscription rate limiting
+    MaxSubscriptionsPerClient int        // Default: 100
+    SubscribeBurstSize        int        // Default: 10
+}
+```
+
+- [ ] Create `server/ratelimit/ratelimit.go` - Rate limiter implementation
+- [ ] Add per-IP connection rate limiting in TCP/WebSocket servers
+- [ ] Add per-client message rate limiting in broker
+- [ ] Add per-client subscription rate limiting
+- [ ] Add rate limit configuration options
+- [ ] Add rate limit metrics (rejected connections, throttled messages)
+- [ ] Add rate limiting tests
+
+---
+
+### 0.3: Observability Completion 🟡 MEDIUM
+
+**Priority:** P2 - Required for production operations
+
+**0.3.1 Distributed Tracing Instrumentation**
+- **File:** `server/otel/tracer.go`
+- **Issue:** Tracer created but never used in message paths
+- **Risk:** No visibility into message flow, debugging blind spots
+- [ ] Add spans to CONNECT/DISCONNECT handlers
+- [ ] Add spans to PUBLISH/SUBSCRIBE/UNSUBSCRIBE handlers
+- [ ] Add spans to message routing and delivery
+- [ ] Propagate trace context through cluster forwarding
+- [ ] Add span attributes (client_id, topic, qos, etc.)
+
+**0.3.2 Prometheus Metrics Endpoint**
+- **Issue:** Only OTLP export, no native Prometheus format
+- **Risk:** Incompatible with most monitoring stacks
+- [ ] Add `/metrics` endpoint with Prometheus format
+- [ ] Expose all existing OTLP metrics in Prometheus format
+- [ ] Add Prometheus configuration documentation
+
+---
+
+### 0.4: Protocol Compliance 🟡 MEDIUM
+
+**Priority:** P2 - Required for MQTT spec compliance
+
+**0.4.1 MaxQoS Enforcement**
+- **Issue:** Server doesn't downgrade QoS when client requests higher than supported
+- **MQTT Spec:** Server MUST downgrade QoS to maximum supported level
+```go
+// In publish handling:
+if msg.QoS > session.MaxQoS {
+    msg.QoS = session.MaxQoS // Downgrade as per MQTT spec
+}
+```
+- [ ] Implement QoS downgrade in publish handler
+- [ ] Add CONNACK response with actual MaxQoS
+- [ ] Add QoS enforcement tests
+
+**0.4.2 Complete Shared Subscriptions**
+- **Issue:** `$share/{group}/topic` prefix parsing incomplete
+- **MQTT 5.0 Spec:** Required for load-balanced consumer groups
+- [ ] Implement `$share/` prefix parsing in subscription handler
+- [ ] Add load balancing strategies (round-robin, sticky, random)
+- [ ] Implement consumer group management
+- [ ] Add shared subscription tests
+
+---
+
+### 0.5: Management Dashboard 🟢 ENHANCEMENT
+
+**Priority:** P3 - Improves operational experience
+
+**Goal:** Modern web UI for broker management and monitoring
+
+**Dashboard Features:**
+- **Overview Page**
+  - Connection count (current, peak, 24h graph)
+  - Message throughput (publish/subscribe rates)
+  - Cluster health status
+  - Active topics and subscriptions count
+
+- **Clients Page**
+  - Client list with search/filter
+  - Per-client details (session info, subscriptions, stats)
+  - Disconnect client action
+  - Connection history
+
+- **Topics Page**
+  - Topic tree visualization
+  - Per-topic subscriber count
+  - Message rate per topic
+  - Retained message management
+
+- **Queues Page**
+  - Queue list with depth, consumer count
+  - Per-queue message rate graphs
+  - Partition distribution across nodes
+  - Retention policy status
+
+- **Cluster Page**
+  - Node list with health status
+  - Leader/follower distribution
+  - Raft group status per queue
+  - Network topology visualization
+
+- **Settings Page**
+  - Configuration viewer
+  - Log level adjustment (runtime)
+  - Rate limit configuration
+
+**Technical Stack:**
+- Backend: REST API in Go (extend existing `/api/` routes)
+- Frontend: React + TypeScript + Tailwind CSS
+- Charts: Recharts or Chart.js
+- Real-time: WebSocket for live metrics
+- Build: Embedded in binary via `go:embed`
+
+**Implementation Tasks:**
+- [ ] Create `dashboard/` directory for frontend code
+- [ ] Implement REST API endpoints for management operations
+- [ ] Build React frontend with modern UI
+- [ ] Add WebSocket endpoint for real-time metrics
+- [ ] Implement client list/disconnect API
+- [ ] Implement topic inspection API
+- [ ] Implement queue management API
+- [ ] Add cluster status API
+- [ ] Embed frontend assets in Go binary
+- [ ] Add dashboard configuration options
+- [ ] Document dashboard usage
+
+**API Endpoints:**
+```
+GET  /api/v1/overview          - System overview metrics
+GET  /api/v1/clients           - List connected clients
+GET  /api/v1/clients/:id       - Client details
+DELETE /api/v1/clients/:id     - Disconnect client
+GET  /api/v1/topics            - List topics
+GET  /api/v1/topics/:name      - Topic details
+GET  /api/v1/subscriptions     - List subscriptions
+GET  /api/v1/queues            - List queues
+GET  /api/v1/queues/:name      - Queue details
+GET  /api/v1/cluster/nodes     - List cluster nodes
+GET  /api/v1/cluster/status    - Cluster health status
+WS   /api/v1/metrics/stream    - Real-time metrics stream
+```
+
+---
+
+### 0.6: Operational Readiness 🟢 ENHANCEMENT
+
+**Priority:** P3 - Improves production operations
+
+**0.6.1 Hot Configuration Reload**
+- [ ] Implement SIGHUP handler for config reload
+- [ ] Support dynamic TLS certificate rotation
+- [ ] Support runtime log level changes
+- [ ] Support rate limit adjustments without restart
+
+**0.6.2 Graceful Shutdown**
+- [ ] Drain connections before shutdown
+- [ ] Wait for inflight messages to complete
+- [ ] Transfer sessions to other nodes (clustered mode)
+- [ ] Add shutdown timeout configuration
+
+---
+
+### Phase 0 Success Criteria
+
+| Task | Priority | Status |
+|------|----------|--------|
+| Inter-broker TLS | P0 Critical | 📋 Planned |
+| WebSocket origin validation | P0 Critical | 📋 Planned |
+| Secure default ACL | P0 Critical | 📋 Planned |
+| Rate limiting | P1 High | 📋 Planned |
+| Distributed tracing | P2 Medium | 📋 Planned |
+| Prometheus endpoint | P2 Medium | 📋 Planned |
+| MaxQoS enforcement | P2 Medium | 📋 Planned |
+| Shared subscriptions | P2 Medium | 📋 Planned |
+| Management dashboard | P3 Enhancement | 📋 Planned |
+| Hot config reload | P3 Enhancement | 📋 Planned |
+| Graceful shutdown | P3 Enhancement | 📋 Planned |
+
+**Blocking Production:**
+- P0 tasks MUST be complete before production deployment
+- P1 tasks SHOULD be complete before production deployment
+- P2/P3 tasks can be deployed incrementally
 
 ---
 
@@ -821,6 +1109,13 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 
 | Phase | Duration | Completion | Status |
 |-------|----------|------------|--------|
+| **Phase 0: Production Hardening** | 3-4 weeks | 0% | 🚨 **TOP PRIORITY** |
+| └─ 0.1: Critical Security Fixes | 1 week | 0% | 📋 Planned (P0) |
+| └─ 0.2: Rate Limiting | 1 week | 0% | 📋 Planned (P1) |
+| └─ 0.3: Observability Completion | 3-5 days | 0% | 📋 Planned (P2) |
+| └─ 0.4: Protocol Compliance | 3-5 days | 0% | 📋 Planned (P2) |
+| └─ 0.5: Management Dashboard | 2-3 weeks | 0% | 📋 Planned (P3) |
+| └─ 0.6: Operational Readiness | 1 week | 0% | 📋 Planned (P3) |
 | **Phase 1: Performance Optimization** | 2 weeks | 100% | ✅ Complete |
 | **Phase 2: Queue Replication** | 6 weeks | 88% | 🔄 In Progress |
 | └─ 2.1: Raft Infrastructure | 1 week | 100% | ✅ Complete |
@@ -831,7 +1126,7 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 | **Phase 3: E2E Cluster Testing** | 2-3 weeks | 0% | ⏳ Planned |
 | **Phase 4: Custom Raft** | 20 weeks | N/A | 📋 Future (50M+ only) |
 
-**Current Sprint:** Phase 2.4 Retention - Week 1 Day 5 Testing (Week 4 of 7)
+**Current Sprint:** Phase 0 - Production Hardening (TOP PRIORITY)
 
 **Key Metrics:**
 - ✅ 2,300+ lines of queue replication code complete
@@ -883,5 +1178,5 @@ When working on this roadmap:
 
 ---
 
-**Next Milestone:** Queue Replication Testing Complete (Phase 2.3) - Target: 1-2 weeks
-**Final Goal:** Queue Replication GA (Phase 2 complete) - Target: 4 weeks
+**Next Milestone:** Critical Security Fixes Complete (Phase 0.1) - BLOCKING PRODUCTION
+**Final Goal:** Production Hardening Complete (Phase 0) - Required before production deployment
