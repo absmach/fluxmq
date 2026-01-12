@@ -51,13 +51,6 @@ type BasicProperties struct {
 }
 
 func (p *BasicProperties) Unpack(r io.Reader) error {
-	length, err := codec.DecodeVBI(r)
-	if err != nil {
-		return err
-	}
-	if length == 0 {
-		return nil
-	}
 	for {
 		prop, err := codec.DecodeByte(r)
 		if err == io.EOF {
