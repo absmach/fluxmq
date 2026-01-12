@@ -64,13 +64,20 @@ func (pkt *PubComp) Unpack(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	// MQTT 5.0 reason code and properties
+	// MQTT 5.0 allows minimal packets with just packet ID (remaining length = 2).
+	// In this case, reason code defaults to 0x00 (Success) and no properties.
 	rc, err := codec.DecodeByte(r)
+	if err == io.EOF {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	pkt.ReasonCode = &rc
 	length, err := codec.DecodeVBI(r)
+	if err == io.EOF {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
