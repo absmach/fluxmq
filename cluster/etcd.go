@@ -86,6 +86,16 @@ type EtcdConfig struct {
 	PeerTransports              map[string]string
 	Bootstrap                   bool
 	HybridRetainedSizeThreshold int // Size threshold in bytes for hybrid retained storage (default 1024)
+
+	// Transport TLS configuration
+	TransportTLS *TransportTLSConfig
+}
+
+// TransportTLSConfig holds TLS configuration for inter-broker gRPC transport.
+type TransportTLSConfig struct {
+	CertFile string // Server certificate file
+	KeyFile  string // Server private key file
+	CAFile   string // CA certificate for verifying peer certificates
 }
 
 // NewEtcdCluster creates a new embedded etcd cluster.
@@ -205,7 +215,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 
 	// Initialize gRPC transport if configured
 	if cfg.TransportAddr != "" {
-		transport, err := NewTransport(cfg.NodeID, cfg.TransportAddr, c, logger)
+		transport, err := NewTransport(cfg.NodeID, cfg.TransportAddr, c, cfg.TransportTLS, logger)
 		if err != nil {
 			client.Close()
 			s.Close()

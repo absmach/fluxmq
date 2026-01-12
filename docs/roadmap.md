@@ -1,6 +1,6 @@
 # MQTT Broker Development Roadmap
 
-**Last Updated:** 2026-01-10
+**Last Updated:** 2026-01-12
 **Current Phase:** Phase 0 - Production Hardening (TOP PRIORITY)
 
 ---
@@ -82,53 +82,54 @@ This phase was identified through comprehensive code audit comparing against NAT
 
 **Priority:** P0 - Block production deployment
 
-**0.1.1 Secure Inter-Broker Communication**
+**0.1.1 Secure Inter-Broker Communication** ✅ COMPLETE
 - **File:** `cluster/transport.go`
 - **Issue:** Uses `insecure.NewCredentials()` - cluster traffic is unencrypted
 - **Risk:** Man-in-the-middle attacks, data interception between nodes
-- **Fix:** Implement mTLS for gRPC connections
-```go
-// Current (INSECURE):
-conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(insecure.NewCredentials()))
+- **Fix:** Implemented mTLS for gRPC connections
 
-// Required:
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{cert},
-    RootCAs:      certPool,
-    MinVersion:   tls.VersionTLS12,
-}
-conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+**Configuration:**
+```yaml
+cluster:
+  transport:
+    tls_enabled: true
+    tls_cert_file: "/path/to/server.crt"
+    tls_key_file: "/path/to/server.key"
+    tls_ca_file: "/path/to/ca.crt"
 ```
-- [ ] Add cluster TLS configuration options
-- [ ] Generate/load certificates for inter-broker auth
-- [ ] Implement certificate rotation support
-- [ ] Add cluster TLS validation tests
 
-**0.1.2 WebSocket Origin Validation**
+**Implementation:**
+- [x] Add cluster TLS configuration options (`config/config.go`)
+- [x] Load certificates for inter-broker mTLS auth (`cluster/transport.go`)
+- [x] Server uses `tls.RequireAndVerifyClientCert` for mutual TLS
+- [x] Client connections use same cert for peer authentication
+- [x] Warning logged when TLS disabled (development mode)
+- [ ] Implement certificate rotation support (future enhancement)
+- [ ] Add cluster TLS validation tests (future enhancement)
+
+**0.1.2 WebSocket Origin Validation** ✅ COMPLETE
 - **File:** `server/websocket/server.go`
 - **Issue:** `CheckOrigin` always returns `true` - accepts all origins
 - **Risk:** Cross-Site WebSocket Hijacking (CSWSH), CSRF attacks
-- **Fix:** Implement configurable origin allowlist
-```go
-// Current (INSECURE):
-upgrader: websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool {
-        return true  // ACCEPTS ALL ORIGINS
-    },
-}
+- **Fix:** Implemented configurable origin allowlist
 
-// Required:
-upgrader: websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool {
-        origin := r.Header.Get("Origin")
-        return s.isAllowedOrigin(origin)
-    },
-}
+**Configuration:**
+```yaml
+server:
+  ws_allowed_origins:
+    - "https://example.com"
+    - "https://app.example.com"
+    - "*.example.com"  # Wildcard subdomain support
 ```
-- [ ] Add `allowed_origins` configuration option
-- [ ] Implement origin validation logic
-- [ ] Support wildcard patterns (e.g., `*.example.com`)
-- [ ] Add WebSocket security tests
+
+**Implementation:**
+- [x] Add `ws_allowed_origins` configuration option (`config/config.go`)
+- [x] Implement origin validation logic (`server/websocket/server.go`)
+- [x] Support exact match origins
+- [x] Support wildcard subdomain patterns (e.g., `*.example.com`)
+- [x] Warning logged when origins not configured (development mode)
+- [x] Requests without Origin header allowed (same-origin or non-browser)
+- [ ] Add WebSocket security tests (future enhancement)
 
 **0.1.3 Secure Default ACL**
 - **File:** `broker/auth.go`
@@ -318,10 +319,51 @@ WS   /api/v1/metrics/stream    - Real-time metrics stream
 **Priority:** P3 - Improves production operations
 
 **0.6.1 Hot Configuration Reload**
-- [ ] Implement SIGHUP handler for config reload
-- [ ] Support dynamic TLS certificate rotation
-- [ ] Support runtime log level changes
-- [ ] Support rate limit adjustments without restart
+
+**Goal:** Enable configuration changes without broker restart
+
+**Reloadable Configuration:**
+- TLS certificates (rotation without connection drops)
+- Log level (debug/info/warn/error)
+- Rate limits (connections, messages, subscriptions)
+- WebSocket allowed origins
+- Webhook endpoints and settings
+- Session expiry defaults
+
+**Non-Reloadable (Requires Restart):**
+- Listen addresses (TCP, WebSocket, CoAP, HTTP)
+- Storage backend type
+- Cluster node ID and etcd configuration
+- Maximum message size
+
+**Implementation:**
+```go
+// Signal handler for SIGHUP
+func (b *Broker) setupSignalHandler() {
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, syscall.SIGHUP)
+
+    go func() {
+        for range sigCh {
+            if err := b.ReloadConfig(); err != nil {
+                b.logger.Error("config reload failed", slog.String("error", err.Error()))
+            } else {
+                b.logger.Info("configuration reloaded successfully")
+            }
+        }
+    }()
+}
+```
+
+**Tasks:**
+- [ ] Add `ReloadConfig()` method to Broker
+- [ ] Implement SIGHUP handler in main.go
+- [ ] Add TLS certificate watcher for auto-rotation
+- [ ] Add `/api/v1/config/reload` HTTP endpoint
+- [ ] Add config diff logging (show what changed)
+- [ ] Implement atomic config swapping (no race conditions)
+- [ ] Add reload metrics (count, last reload time, failures)
+- [ ] Document which settings are hot-reloadable
 
 **0.6.2 Graceful Shutdown**
 - [ ] Drain connections before shutdown
@@ -335,8 +377,8 @@ WS   /api/v1/metrics/stream    - Real-time metrics stream
 
 | Task | Priority | Status |
 |------|----------|--------|
-| Inter-broker TLS | P0 Critical | 📋 Planned |
-| WebSocket origin validation | P0 Critical | 📋 Planned |
+| Inter-broker TLS | P0 Critical | ✅ Complete |
+| WebSocket origin validation | P0 Critical | ✅ Complete |
 | Secure default ACL | P0 Critical | 📋 Planned |
 | Rate limiting | P1 High | 📋 Planned |
 | Distributed tracing | P2 Medium | 📋 Planned |
@@ -1109,8 +1151,8 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 
 | Phase | Duration | Completion | Status |
 |-------|----------|------------|--------|
-| **Phase 0: Production Hardening** | 3-4 weeks | 0% | 🚨 **TOP PRIORITY** |
-| └─ 0.1: Critical Security Fixes | 1 week | 0% | 📋 Planned (P0) |
+| **Phase 0: Production Hardening** | 3-4 weeks | 20% | 🚨 **TOP PRIORITY** |
+| └─ 0.1: Critical Security Fixes | 1 week | 67% | 🔄 In Progress (2/3 complete) |
 | └─ 0.2: Rate Limiting | 1 week | 0% | 📋 Planned (P1) |
 | └─ 0.3: Observability Completion | 3-5 days | 0% | 📋 Planned (P2) |
 | └─ 0.4: Protocol Compliance | 3-5 days | 0% | 📋 Planned (P2) |

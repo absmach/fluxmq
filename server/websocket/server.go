@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,14 +30,17 @@ type Config struct {
 	Path            string
 	ShutdownTimeout time.Duration
 	TLSConfig       *tls.Config
+	AllowedOrigins  []string // Allowed origins for CORS (empty = allow all, use "*" for explicit wildcard)
 }
 
 type Server struct {
-	config   Config
-	broker   *broker.Broker
-	logger   *slog.Logger
-	server   *http.Server
-	upgrader websocket.Upgrader
+	config         Config
+	broker         *broker.Broker
+	logger         *slog.Logger
+	server         *http.Server
+	upgrader       websocket.Upgrader
+	allowedOrigins map[string]bool
+	allowAll       bool
 }
 
 func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
@@ -48,14 +53,33 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	}
 
 	s := &Server{
-		config: cfg,
-		broker: b,
-		logger: logger,
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true
-			},
-		},
+		config:         cfg,
+		broker:         b,
+		logger:         logger,
+		allowedOrigins: make(map[string]bool),
+	}
+
+	// Build allowed origins lookup
+	if len(cfg.AllowedOrigins) == 0 {
+		// No origins configured - allow all (development mode)
+		s.allowAll = true
+		logger.Warn("websocket origin validation disabled - allowing all origins (development mode only)")
+	} else {
+		for _, origin := range cfg.AllowedOrigins {
+			if origin == "*" {
+				s.allowAll = true
+				break
+			}
+			// Normalize origin to lowercase
+			s.allowedOrigins[strings.ToLower(origin)] = true
+		}
+		if !s.allowAll {
+			logger.Info("websocket origin validation enabled", slog.Int("allowed_origins", len(cfg.AllowedOrigins)))
+		}
+	}
+
+	s.upgrader = websocket.Upgrader{
+		CheckOrigin: s.checkOrigin,
 	}
 
 	mux := http.NewServeMux()
@@ -67,6 +91,53 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	}
 
 	return s
+}
+
+// checkOrigin validates the Origin header against the allowed origins list.
+func (s *Server) checkOrigin(r *http.Request) bool {
+	if s.allowAll {
+		return true
+	}
+
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// No origin header - allow (same-origin request or non-browser client)
+		return true
+	}
+
+	// Parse and normalize origin
+	parsedOrigin, err := url.Parse(origin)
+	if err != nil {
+		s.logger.Warn("invalid origin header", slog.String("origin", origin))
+		return false
+	}
+
+	// Build normalized origin (scheme://host)
+	normalizedOrigin := strings.ToLower(parsedOrigin.Scheme + "://" + parsedOrigin.Host)
+
+	// Check exact match
+	if s.allowedOrigins[normalizedOrigin] {
+		return true
+	}
+
+	// Check wildcard subdomain patterns (e.g., "*.example.com")
+	for allowedOrigin := range s.allowedOrigins {
+		if strings.HasPrefix(allowedOrigin, "*.") {
+			// Extract domain part after "*."
+			domain := allowedOrigin[1:] // e.g., ".example.com"
+			hostWithScheme := parsedOrigin.Scheme + "://" + parsedOrigin.Host
+			// Check if origin ends with the domain pattern
+			if strings.HasSuffix(strings.ToLower(hostWithScheme), domain) ||
+				strings.ToLower(hostWithScheme) == parsedOrigin.Scheme+"://"+allowedOrigin[2:] {
+				return true
+			}
+		}
+	}
+
+	s.logger.Warn("origin not allowed",
+		slog.String("origin", origin),
+		slog.String("remote_addr", r.RemoteAddr))
+	return false
 }
 
 func (s *Server) Listen(ctx context.Context) error {

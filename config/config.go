@@ -30,8 +30,9 @@ type ServerConfig struct {
 	TLSCAFile       string        `yaml:"tls_ca_file"`     // CA certificate for client verification
 	TLSClientAuth   string        `yaml:"tls_client_auth"` // "none", "request", or "require"
 	HTTPAddr        string        `yaml:"http_addr"`
-	WSAddr          string        `yaml:"ws_addr"`
-	WSPath          string        `yaml:"ws_path"`
+	WSAddr           string   `yaml:"ws_addr"`
+	WSPath           string   `yaml:"ws_path"`
+	WSAllowedOrigins []string `yaml:"ws_allowed_origins"` // Allowed origins for WebSocket (empty = allow all in dev mode)
 	CoAPAddr        string        `yaml:"coap_addr"`
 	HealthAddr      string        `yaml:"health_addr"`
 	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
@@ -127,6 +128,12 @@ type EtcdConfig struct {
 type TransportConfig struct {
 	BindAddr string            `yaml:"bind_addr"` // gRPC address (e.g., "0.0.0.0:7948")
 	Peers    map[string]string `yaml:"peers"`     // Map of nodeID -> transport address for peers
+
+	// TLS configuration for inter-broker communication
+	TLSEnabled  bool   `yaml:"tls_enabled"`   // Enable TLS for gRPC transport
+	TLSCertFile string `yaml:"tls_cert_file"` // Server certificate file
+	TLSKeyFile  string `yaml:"tls_key_file"`  // Server private key file
+	TLSCAFile   string `yaml:"tls_ca_file"`   // CA certificate for verifying peer certificates
 }
 
 // WebhookConfig holds webhook notification configuration.
@@ -376,6 +383,19 @@ func (c *Config) Validate() error {
 		}
 		if c.Cluster.Transport.BindAddr == "" {
 			return fmt.Errorf("cluster.transport.bind_addr required when clustering is enabled")
+		}
+
+		// Transport TLS validation
+		if c.Cluster.Transport.TLSEnabled {
+			if c.Cluster.Transport.TLSCertFile == "" {
+				return fmt.Errorf("cluster.transport.tls_cert_file required when transport TLS is enabled")
+			}
+			if c.Cluster.Transport.TLSKeyFile == "" {
+				return fmt.Errorf("cluster.transport.tls_key_file required when transport TLS is enabled")
+			}
+			if c.Cluster.Transport.TLSCAFile == "" {
+				return fmt.Errorf("cluster.transport.tls_ca_file required when transport TLS is enabled")
+			}
 		}
 	}
 

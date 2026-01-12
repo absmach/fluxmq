@@ -149,6 +149,16 @@ func main() {
 	var etcdCluster *cluster.EtcdCluster
 	if cfg.Cluster.Enabled {
 
+		// Build transport TLS config if enabled
+		var transportTLS *cluster.TransportTLSConfig
+		if cfg.Cluster.Transport.TLSEnabled {
+			transportTLS = &cluster.TransportTLSConfig{
+				CertFile: cfg.Cluster.Transport.TLSCertFile,
+				KeyFile:  cfg.Cluster.Transport.TLSKeyFile,
+				CAFile:   cfg.Cluster.Transport.TLSCAFile,
+			}
+		}
+
 		etcdCfg := &cluster.EtcdConfig{
 			NodeID:                      cfg.Cluster.NodeID,
 			DataDir:                     cfg.Cluster.Etcd.DataDir,
@@ -160,6 +170,7 @@ func main() {
 			TransportAddr:               cfg.Cluster.Transport.BindAddr,
 			PeerTransports:              cfg.Cluster.Transport.Peers,
 			HybridRetainedSizeThreshold: cfg.Cluster.Etcd.HybridRetainedSizeThreshold,
+			TransportTLS:                transportTLS,
 		}
 
 		ec, err := cluster.NewEtcdCluster(etcdCfg, store, logger)
@@ -348,6 +359,7 @@ func main() {
 			Path:            cfg.Server.WSPath,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			TLSConfig:       tlsConfig,
+			AllowedOrigins:  cfg.Server.WSAllowedOrigins,
 		}
 		wsServer := websocket.New(wsCfg, b, logger)
 

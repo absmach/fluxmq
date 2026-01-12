@@ -5,14 +5,18 @@ package cluster
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 
 	"github.com/absmach/mqtt/cluster/grpc"
 	"github.com/absmach/mqtt/core"
 	gogrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -38,16 +42,77 @@ type Transport struct {
 	handler      MessageHandler
 	queueHandler QueueHandler
 	stopCh       chan struct{}
+	tlsConfig    *TransportTLSConfig
+	clientCreds  credentials.TransportCredentials
 }
 
 // NewTransport creates a new gRPC transport.
-func NewTransport(nodeID, bindAddr string, handler MessageHandler, logger *slog.Logger) (*Transport, error) {
-	listener, err := net.Listen("tcp", bindAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", bindAddr, err)
-	}
+// If tlsCfg is nil, the transport uses insecure connections (development mode only).
+func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *TransportTLSConfig, logger *slog.Logger) (*Transport, error) {
+	var listener net.Listener
+	var grpcServer *gogrpc.Server
+	var clientCreds credentials.TransportCredentials
+	var err error
 
-	grpcServer := gogrpc.NewServer()
+	if tlsCfg != nil {
+		// Load server certificate and key
+		cert, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load server certificate: %w", err)
+		}
+
+		// Load CA certificate for client verification
+		caCert, err := os.ReadFile(tlsCfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CA certificate: %w", err)
+		}
+
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		// Server TLS config (for accepting connections)
+		serverTLSConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			ClientCAs:    caPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			MinVersion:   tls.VersionTLS12,
+		}
+
+		// Client TLS config (for connecting to peers)
+		clientTLSConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      caPool,
+			MinVersion:   tls.VersionTLS12,
+		}
+
+		// Create TLS listener
+		listener, err = tls.Listen("tcp", bindAddr, serverTLSConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create TLS listener on %s: %w", bindAddr, err)
+		}
+
+		// Create gRPC server with TLS credentials
+		serverCreds := credentials.NewTLS(serverTLSConfig)
+		grpcServer = gogrpc.NewServer(gogrpc.Creds(serverCreds))
+
+		// Store client credentials for peer connections
+		clientCreds = credentials.NewTLS(clientTLSConfig)
+
+		logger.Info("transport TLS enabled", slog.String("address", bindAddr))
+	} else {
+		// Insecure mode (development only)
+		listener, err = net.Listen("tcp", bindAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on %s: %w", bindAddr, err)
+		}
+
+		grpcServer = gogrpc.NewServer()
+		clientCreds = insecure.NewCredentials()
+
+		logger.Warn("transport TLS disabled - using insecure connections (development mode only)")
+	}
 
 	t := &Transport{
 		nodeID:      nodeID,
@@ -58,6 +123,8 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, logger *slog.
 		logger:      logger,
 		handler:     handler,
 		stopCh:      make(chan struct{}),
+		tlsConfig:   tlsCfg,
+		clientCreds: clientCreds,
 	}
 
 	// Register gRPC service
@@ -109,8 +176,8 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 		return nil
 	}
 
-	// Create gRPC connection
-	conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Create gRPC connection using stored credentials (TLS or insecure)
+	conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(t.clientCreds))
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer %s at %s: %w", nodeID, addr, err)
 	}
@@ -118,7 +185,10 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 	client := grpc.NewBrokerServiceClient(conn)
 	t.peerClients[nodeID] = client
 
-	t.logger.Info("connected to peer", slog.String("node_id", nodeID), slog.String("address", addr))
+	t.logger.Info("connected to peer",
+		slog.String("node_id", nodeID),
+		slog.String("address", addr),
+		slog.Bool("tls_enabled", t.tlsConfig != nil))
 	return nil
 }
 
