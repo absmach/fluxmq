@@ -147,7 +147,6 @@ func (c *Client) connectToServer(addr string) error {
 	var err error
 
 	dialer := &net.Dialer{Timeout: c.opts.ConnectTimeout}
-
 	if c.opts.TLSConfig != nil {
 		conn, err = tls.DialWithDialer(dialer, "tcp", addr, c.opts.TLSConfig)
 	} else {
@@ -668,7 +667,7 @@ func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
 			opts = append(opts, v5.SubOption{Topic: topic, MaxQoS: qos})
 		}
 		pkt := &v5.Subscribe{
-			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 			ID:          packetID,
 			Opts:        opts,
 		}
@@ -680,7 +679,7 @@ func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
 		ts = append(ts, v3.Topic{Name: topic, QoS: qos})
 	}
 	pkt := &v3.Subscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 		ID:          packetID,
 		Topics:      ts,
 	}
@@ -725,7 +724,7 @@ func (c *Client) sendSubscribeWithOptions(packetID uint16, opts []*SubscribeOpti
 		}
 
 		pkt := &v5.Subscribe{
-			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 			ID:          packetID,
 			Opts:        v5Opts,
 		}
@@ -748,7 +747,7 @@ func (c *Client) sendSubscribeWithOptions(packetID uint16, opts []*SubscribeOpti
 		ts[i] = v3.Topic{Name: opt.Topic, QoS: opt.QoS}
 	}
 	pkt := &v3.Subscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 		ID:          packetID,
 		Topics:      ts,
 	}
@@ -797,7 +796,7 @@ func (c *Client) sendUnsubscribe(packetID uint16, topics []string) error {
 
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.Unsubscribe{
-			FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType},
+			FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType, QoS: 1},
 			ID:          packetID,
 			Topics:      topics,
 		}
@@ -805,7 +804,7 @@ func (c *Client) sendUnsubscribe(packetID uint16, topics []string) error {
 	}
 
 	pkt := &v3.Unsubscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType},
+		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType, QoS: 1},
 		ID:          packetID,
 		Topics:      topics,
 	}

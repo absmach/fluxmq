@@ -342,3 +342,260 @@ func TestRetentionManager_BothSizeLimits(t *testing.T) {
 	require.NoError(t, err)
 	assert.LessOrEqual(t, count, int64(10))
 }
+
+func TestRetentionManager_Compaction_Basic(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	queueName := "$queue/test-compaction"
+
+	// Create queue
+	config := storage.DefaultQueueConfig(queueName)
+	err := store.CreateQueue(ctx, config)
+	require.NoError(t, err)
+
+	// Configure compaction with a key
+	policy := storage.RetentionPolicy{
+		CompactionEnabled:  true,
+		CompactionKey:      "entity_id", // Compact by entity_id property
+		CompactionLag:      0,           // No lag for testing
+		CompactionInterval: 100 * time.Millisecond,
+	}
+
+	rm := NewRetentionManager(queueName, policy, store, nil, slog.Default())
+
+	// Enqueue multiple messages for the same entity_id (should compact to 1)
+	// Entity A: 3 messages (only latest should survive)
+	for i := 0; i < 3; i++ {
+		msg := &storage.Message{
+			ID:        fmt.Sprintf("entity-a-msg-%d", i),
+			Topic:     queueName,
+			Payload:   []byte(fmt.Sprintf("entity A update %d", i)),
+			Sequence:  uint64(i),
+			State:     storage.StateQueued,
+			CreatedAt: time.Now().Add(-time.Hour), // Old messages
+			Properties: map[string]string{
+				"entity_id": "entity-A",
+			},
+		}
+		err := store.Enqueue(ctx, queueName, msg)
+		require.NoError(t, err)
+	}
+
+	// Entity B: 2 messages
+	for i := 3; i < 5; i++ {
+		msg := &storage.Message{
+			ID:        fmt.Sprintf("entity-b-msg-%d", i),
+			Topic:     queueName,
+			Payload:   []byte(fmt.Sprintf("entity B update %d", i-3)),
+			Sequence:  uint64(i),
+			State:     storage.StateQueued,
+			CreatedAt: time.Now().Add(-time.Hour),
+			Properties: map[string]string{
+				"entity_id": "entity-B",
+			},
+		}
+		err := store.Enqueue(ctx, queueName, msg)
+		require.NoError(t, err)
+	}
+
+	// Verify we have 5 messages
+	count, err := store.Count(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+
+	// Run compaction
+	stats, err := rm.runCompaction(ctx, 0)
+	require.NoError(t, err)
+
+	// Should delete 3 messages (2 from entity-A, 1 from entity-B)
+	assert.Equal(t, int64(3), stats.MessagesDeleted)
+
+	// Verify we now have 2 messages (one per entity)
+	count, err = store.Count(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count)
+
+	// Verify the latest messages survived (highest sequence per entity)
+	messages, err := store.ListAllMessages(ctx, queueName, 0)
+	require.NoError(t, err)
+	assert.Len(t, messages, 2)
+
+	// Should have entity-a-msg-2 (seq 2) and entity-b-msg-4 (seq 4)
+	seqs := make(map[uint64]bool)
+	for _, msg := range messages {
+		seqs[msg.Sequence] = true
+	}
+	assert.True(t, seqs[2], "entity-A latest message should survive")
+	assert.True(t, seqs[4], "entity-B latest message should survive")
+}
+
+func TestRetentionManager_Compaction_RespectLag(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	queueName := "$queue/test-compaction-lag"
+
+	// Create queue
+	config := storage.DefaultQueueConfig(queueName)
+	err := store.CreateQueue(ctx, config)
+	require.NoError(t, err)
+
+	// Configure compaction with 1-hour lag
+	policy := storage.RetentionPolicy{
+		CompactionEnabled:  true,
+		CompactionKey:      "entity_id",
+		CompactionLag:      1 * time.Hour, // Messages within the last hour won't be compacted
+		CompactionInterval: 100 * time.Millisecond,
+	}
+
+	rm := NewRetentionManager(queueName, policy, store, nil, slog.Default())
+
+	// Enqueue old messages (should be compacted)
+	for i := 0; i < 2; i++ {
+		msg := &storage.Message{
+			ID:        fmt.Sprintf("old-msg-%d", i),
+			Topic:     queueName,
+			Payload:   []byte("old message"),
+			Sequence:  uint64(i),
+			State:     storage.StateQueued,
+			CreatedAt: time.Now().Add(-2 * time.Hour), // 2 hours ago
+			Properties: map[string]string{
+				"entity_id": "entity-X",
+			},
+		}
+		err := store.Enqueue(ctx, queueName, msg)
+		require.NoError(t, err)
+	}
+
+	// Enqueue recent messages (should NOT be compacted due to lag)
+	for i := 2; i < 4; i++ {
+		msg := &storage.Message{
+			ID:        fmt.Sprintf("new-msg-%d", i),
+			Topic:     queueName,
+			Payload:   []byte("new message"),
+			Sequence:  uint64(i),
+			State:     storage.StateQueued,
+			CreatedAt: time.Now().Add(-10 * time.Minute), // 10 minutes ago (within lag)
+			Properties: map[string]string{
+				"entity_id": "entity-X",
+			},
+		}
+		err := store.Enqueue(ctx, queueName, msg)
+		require.NoError(t, err)
+	}
+
+	// Verify we have 4 messages
+	count, err := store.Count(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), count)
+
+	// Run compaction
+	stats, err := rm.runCompaction(ctx, 0)
+	require.NoError(t, err)
+
+	// Should only delete 1 old message (keep latest old message, all new messages untouched)
+	assert.Equal(t, int64(1), stats.MessagesDeleted)
+
+	// Verify we have 3 messages (2 recent + 1 old latest)
+	count, err = store.Count(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), count)
+}
+
+func TestRetentionManager_Compaction_NoKeyProperty(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	queueName := "$queue/test-compaction-no-key"
+
+	// Create queue
+	config := storage.DefaultQueueConfig(queueName)
+	err := store.CreateQueue(ctx, config)
+	require.NoError(t, err)
+
+	// Configure compaction with a key
+	policy := storage.RetentionPolicy{
+		CompactionEnabled:  true,
+		CompactionKey:      "entity_id",
+		CompactionLag:      0,
+		CompactionInterval: 100 * time.Millisecond,
+	}
+
+	rm := NewRetentionManager(queueName, policy, store, nil, slog.Default())
+
+	// Enqueue messages WITHOUT the compaction key property
+	for i := 0; i < 5; i++ {
+		msg := &storage.Message{
+			ID:        fmt.Sprintf("msg-%d", i),
+			Topic:     queueName,
+			Payload:   []byte("message without entity_id"),
+			Sequence:  uint64(i),
+			State:     storage.StateQueued,
+			CreatedAt: time.Now().Add(-time.Hour),
+			Properties: map[string]string{
+				"other_key": "some_value", // No entity_id
+			},
+		}
+		err := store.Enqueue(ctx, queueName, msg)
+		require.NoError(t, err)
+	}
+
+	// Verify we have 5 messages
+	count, err := store.Count(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+
+	// Run compaction
+	stats, err := rm.runCompaction(ctx, 0)
+	require.NoError(t, err)
+
+	// No messages should be deleted (no compaction key)
+	assert.Equal(t, int64(0), stats.MessagesDeleted)
+
+	// All messages should still exist
+	count, err = store.Count(ctx, queueName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+}
+
+func TestRetentionManager_Compaction_NotConfigured(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	queueName := "$queue/test-no-compaction"
+
+	// Create queue
+	config := storage.DefaultQueueConfig(queueName)
+	err := store.CreateQueue(ctx, config)
+	require.NoError(t, err)
+
+	// No compaction configured (empty key)
+	policy := storage.RetentionPolicy{
+		CompactionEnabled:  true,
+		CompactionKey:      "", // No key = no compaction
+		CompactionInterval: 100 * time.Millisecond,
+	}
+
+	rm := NewRetentionManager(queueName, policy, store, nil, slog.Default())
+
+	// Enqueue messages
+	for i := 0; i < 5; i++ {
+		msg := &storage.Message{
+			ID:        fmt.Sprintf("msg-%d", i),
+			Topic:     queueName,
+			Payload:   []byte("message"),
+			Sequence:  uint64(i),
+			State:     storage.StateQueued,
+			CreatedAt: time.Now().Add(-time.Hour),
+			Properties: map[string]string{
+				"entity_id": "entity-A",
+			},
+		}
+		err := store.Enqueue(ctx, queueName, msg)
+		require.NoError(t, err)
+	}
+
+	// Run compaction
+	stats, err := rm.runCompaction(ctx, 0)
+	require.NoError(t, err)
+
+	// No messages should be deleted (no compaction key configured)
+	assert.Equal(t, int64(0), stats.MessagesDeleted)
+}

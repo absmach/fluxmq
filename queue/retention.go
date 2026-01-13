@@ -296,11 +296,139 @@ func (rm *RetentionManager) compactionLoop(ctx context.Context, partitionID int)
 		case <-rm.stopCh:
 			return
 		case <-ticker.C:
-			// TODO: Implement log compaction in Week 2
-			// This will scan messages, group by compaction key,
-			// and delete all but the latest message per key
+			// Only run compaction on the leader to avoid duplicate cleanup
+			if rm.raftManager != nil && !rm.raftManager.IsLeader(partitionID) {
+				continue
+			}
+
+			stats, err := rm.runCompaction(ctx, partitionID)
+			if err != nil {
+				rm.logger.Error("compaction failed",
+					slog.String("queue", rm.queueName),
+					slog.Int("partition", partitionID),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			if stats.MessagesDeleted > 0 {
+				rm.logger.Info("log compaction completed",
+					slog.String("queue", rm.queueName),
+					slog.Int("partition", partitionID),
+					slog.Int64("deleted", stats.MessagesDeleted),
+					slog.Int64("bytes_freed", stats.BytesFreed),
+					slog.Duration("duration", stats.LastRunDuration))
+			}
 		}
 	}
+}
+
+// runCompaction performs log compaction by keeping only the latest message per compaction key.
+func (rm *RetentionManager) runCompaction(ctx context.Context, partitionID int) (*RetentionStats, error) {
+	startTime := time.Now()
+	stats := &RetentionStats{
+		LastRunTime: startTime,
+	}
+
+	if rm.policy.CompactionKey == "" {
+		return stats, nil // No compaction key configured
+	}
+
+	// Only run compaction on the leader when Raft is enabled
+	if rm.raftManager != nil && !rm.raftManager.IsLeader(partitionID) {
+		stats.LastRunDuration = time.Since(startTime)
+		return stats, nil // Not the leader, skip compaction
+	}
+
+	// Get all messages in the partition
+	messages, err := rm.store.ListAllMessages(ctx, rm.queueName, partitionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list messages for compaction: %w", err)
+	}
+
+	if len(messages) == 0 {
+		stats.LastRunDuration = time.Since(startTime)
+		return stats, nil
+	}
+
+	// Group messages by compaction key
+	keyGroups := make(map[string][]*storage.Message)
+	cutoffTime := time.Now().Add(-rm.policy.CompactionLag)
+
+	for _, msg := range messages {
+		// Skip messages within the compaction lag period
+		if msg.CreatedAt.After(cutoffTime) {
+			continue
+		}
+
+		// Extract compaction key from message properties
+		key := rm.extractCompactionKey(msg)
+		if key == "" {
+			continue // No compaction key for this message
+		}
+
+		keyGroups[key] = append(keyGroups[key], msg)
+	}
+
+	// Find messages to delete (keep only the latest per key)
+	var toDelete []string
+	var totalBytes int64
+
+	for _, msgs := range keyGroups {
+		if len(msgs) <= 1 {
+			continue // Only one message for this key, nothing to compact
+		}
+
+		// Find the latest message (highest sequence)
+		var latestSeq uint64
+		var latestIdx int
+		for i, msg := range msgs {
+			if msg.Sequence > latestSeq {
+				latestSeq = msg.Sequence
+				latestIdx = i
+			}
+		}
+
+		// Mark all others for deletion
+		for i, msg := range msgs {
+			if i != latestIdx {
+				toDelete = append(toDelete, msg.ID)
+				totalBytes += int64(len(msg.GetPayload()))
+			}
+		}
+	}
+
+	if len(toDelete) == 0 {
+		stats.LastRunDuration = time.Since(startTime)
+		return stats, nil
+	}
+
+	// Delete via Raft if available, otherwise delete directly
+	var deletedCount int64
+	if rm.raftManager != nil {
+		if err := rm.raftManager.ApplyRetentionDelete(ctx, partitionID, toDelete); err != nil {
+			return nil, fmt.Errorf("failed to replicate compaction delete: %w", err)
+		}
+		deletedCount = int64(len(toDelete))
+	} else {
+		deletedCount, err = rm.store.DeleteMessageBatch(ctx, rm.queueName, toDelete)
+		if err != nil {
+			return nil, fmt.Errorf("failed to delete compacted messages: %w", err)
+		}
+	}
+
+	stats.MessagesDeleted = deletedCount
+	stats.BytesFreed = totalBytes
+	stats.LastRunDuration = time.Since(startTime)
+
+	return stats, nil
+}
+
+// extractCompactionKey extracts the compaction key from a message's properties.
+func (rm *RetentionManager) extractCompactionKey(msg *storage.Message) string {
+	if msg.Properties == nil {
+		return ""
+	}
+	return msg.Properties[rm.policy.CompactionKey]
 }
 
 // deleteOldestMessages deletes the N oldest messages from a partition.

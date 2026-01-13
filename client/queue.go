@@ -319,7 +319,7 @@ func (c *Client) sendSubscribeWithUserProps(packetID uint16, topic string, qos b
 	defer conn.SetWriteDeadline(timeZero)
 
 	pkt := &v5.Subscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType},
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: qos},
 		ID:          packetID,
 		Opts: []v5.SubOption{
 			{Topic: topic, MaxQoS: qos},

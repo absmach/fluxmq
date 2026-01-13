@@ -816,3 +816,31 @@ func (s *Store) GetQueueSize(ctx context.Context, queueName string) (int64, erro
 
 	return totalSize, nil
 }
+
+func (s *Store) ListAllMessages(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	partitions, exists := s.messages[queueName]
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	partition, exists := partitions[partitionID]
+	if !exists {
+		return []*storage.Message{}, nil
+	}
+
+	// Collect all messages from partition
+	messages := make([]*storage.Message, 0, len(partition))
+	for _, msg := range partition {
+		messages = append(messages, msg)
+	}
+
+	// Sort by sequence (oldest first)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Sequence < messages[j].Sequence
+	})
+
+	return messages, nil
+}

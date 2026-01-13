@@ -276,6 +276,9 @@ type MessageStore interface {
 	ListMessagesBefore(ctx context.Context, queueName string, partitionID int, cutoffTime time.Time, limit int) ([]*Message, error)
 	DeleteMessageBatch(ctx context.Context, queueName string, messageIDs []string) (int64, error)
 	GetQueueSize(ctx context.Context, queueName string) (int64, error) // Total size in bytes
+
+	// Compaction operations
+	ListAllMessages(ctx context.Context, queueName string, partitionID int) ([]*Message, error)
 }
 
 // ConsumerStore manages consumer group state.

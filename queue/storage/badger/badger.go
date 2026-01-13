@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1035,4 +1036,44 @@ func (s *Store) GetQueueSize(ctx context.Context, queueName string) (int64, erro
 	}
 
 	return totalSize, nil
+}
+
+func (s *Store) ListAllMessages(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
+	messages := make([]*storage.Message, 0)
+	prefix := makePartitionPrefix(queueName, partitionID)
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		opts.PrefetchValues = true
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			var msg storage.Message
+			err := item.Value(func(val []byte) error {
+				return json.Unmarshal(val, &msg)
+			})
+			if err != nil {
+				continue
+			}
+
+			msgCopy := msg
+			messages = append(messages, &msgCopy)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort by sequence (oldest first) - already sorted by key, but make sure
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Sequence < messages[j].Sequence
+	})
+
+	return messages, nil
 }
