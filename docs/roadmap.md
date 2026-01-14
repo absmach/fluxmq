@@ -1,6 +1,6 @@
 # MQTT Broker Development Roadmap
 
-**Last Updated:** 2026-01-12
+**Last Updated:** 2026-01-14
 **Current Phase:** Phase 0 - Production Hardening (TOP PRIORITY)
 
 ---
@@ -13,11 +13,11 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 - 🚨 **Phase 0: Production Hardening** - TOP PRIORITY (Critical security & operational fixes)
 - ✅ **Phase 1: Performance Optimization** - COMPLETE (3.27x faster)
-- 🔄 **Phase 2: Queue Replication** - IN PROGRESS (~88% complete)
+- ✅ **Phase 2: Queue Replication** - COMPLETE (~98%)
   - ✅ Phase 2.1: Raft Infrastructure - COMPLETE
   - ✅ Phase 2.2: Queue Integration - COMPLETE
-  - ✅ Phase 2.3: Testing & Optimization - MOSTLY COMPLETE (core tests done, benchmarks done)
-  - 🔄 Phase 2.4: Retention Policies - IN PROGRESS (Week 1: 80% done, testing next)
+  - ✅ Phase 2.3: Testing & Optimization - COMPLETE (core tests done, benchmarks done)
+  - ✅ Phase 2.4: Retention Policies - COMPLETE (time/size retention + log compaction)
   - 📋 Phase 2.5: Observability & Migration - PLANNED (deferred)
 - ⏳ **Phase 3: E2E Cluster Testing** - PLANNED (after Phase 2)
 - 📋 **Phase 4: Custom Raft** - FUTURE (50M+ clients only)
@@ -30,7 +30,7 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 Phase 0 must be completed before any production deployment. These are critical security vulnerabilities and operational gaps identified during code audit.
 
-**Completed (2026-01-09):**
+**Completed (2026-01-13):**
 - ✅ Fixed Raft storage initialization (BadgerStableStore contract)
 - ✅ Fixed partition port conflicts (per-partition bind addresses)
 - ✅ Fixed message pool corruption (copy message for Raft FSM)
@@ -42,30 +42,36 @@ Phase 0 must be completed before any production deployment. These are critical s
   - ✅ `TestFailover_MessageDurability` - Messages survive leader failure
   - ✅ `TestReplication_ISRTracking` - ISR tracking and quorum maintenance
   - ✅ `TestFailover_FollowerCatchup` - Follower lag behavior (100 msg delta)
-- ✅ **Phase 2.4 Week 1 Mostly Complete (80%):**
+- ✅ **Phase 2.4 Retention Policies - COMPLETE:**
   - ✅ RetentionPolicy schema added to QueueConfig
-  - ✅ RetentionManager core logic (356 lines)
+  - ✅ RetentionManager core logic (400+ lines)
   - ✅ Raft OpRetentionDelete operation
-  - ✅ MessageStore interface extended (4 new methods)
+  - ✅ MessageStore interface extended (5 new methods including ListAllMessages)
   - ✅ Full retention implementations in memory and badger stores
   - ✅ Manager integration (async size checks on enqueue)
   - ✅ Partition worker integration (background time-based cleanup)
   - ✅ Leader-only execution for replicated queues
-  - ⏳ Unit tests pending (Day 5)
+  - ✅ **Retention unit tests** (`retention_test.go`, `retention_manager_test.go`)
+  - ✅ **Retention integration tests** (`retention_integration_test.go`)
+  - ✅ **Log compaction implementation** (Kafka-style, keeps latest per key)
+  - ✅ **Compaction unit tests** (4 tests: basic, lag, no-key, not-configured)
+  - ✅ **Compaction integration tests** (2 tests: replication, leader-only)
 
-**Next: Phase 2.4 Week 1 - Day 5 (Testing)**
-- Write retention unit tests (`queue/retention_test.go`)
-- Write retention integration tests (`queue/replication_retention_test.go`)
-- Validate size-based and time-based retention work correctly
-- Test retention with Raft replication
-- After tests: Week 2 - Log compaction implementation
+**Next: Phase 0 - Production Hardening**
+
+The queue replication system is now feature-complete. Focus shifts to production hardening:
+
+1. **Secure Default ACL (P0 Critical)** - Change default to deny-all
+2. **Rate Limiting (P1 High)** - Per-IP connections, per-client messages
+3. **Distributed Tracing (P2)** - Instrument message paths with spans
+4. **Prometheus Endpoint (P2)** - Native `/metrics` endpoint
 
 **Deferred: Phase 2.5 Observability & Migration**
-- Will be implemented after retention policies
+- Will be implemented after Phase 0
 - Metrics, health checks, and migration tooling
 - Can be done in parallel with production usage
 
-**See Phase 2.3 and Phase 2.4 sections below for complete details.**
+**See Phase 0 section below for complete details.**
 
 ---
 
@@ -601,37 +607,7 @@ type PartitionFSM struct {
 
 ---
 
-### Phase 2.4: Retention Policies 📋 NEXT
-
-**Goal:** Production readiness with full observability
-
-**Metrics to Add:**
-- Raft leader election count
-- Log replication lag (ms)
-- FSM apply latency (P50/P99)
-- ISR replica count per partition
-- Leader availability percentage
-
-**Health Checks:**
-- Raft group status endpoint
-- Leader availability check
-- Replica health monitoring
-
-**Migration Tooling:**
-- Online migration: snapshot → bootstrap → switch routing
-- Config validation and warnings
-- Rollback capability
-
-**Documentation:**
-- Replication configuration guide
-- Migration guide for existing queues
-- Troubleshooting runbook
-
-**Estimated Timeline:** 2-3 weeks
-
----
-
-### Phase 2.5: Retention Policies 📋 NEXT (RECOMMENDED)
+### Phase 2.4: Retention Policies ✅ COMPLETE
 
 **Goal:** Kafka-style retention policies for queue management
 
@@ -695,71 +671,71 @@ type RetentionPolicy struct {
 
 **Implementation Plan (2 Weeks):**
 
-**Week 1: Retention Policies (Time + Size)** ✅ MOSTLY COMPLETE
+**Week 1: Retention Policies (Time + Size)** ✅ COMPLETE
 
 1. **Day 1-2: Schema & Core Logic** ✅ COMPLETE
    - ✅ `queue/storage/storage.go` - Added `RetentionPolicy` to `QueueConfig`
-   - ✅ `queue/retention.go` (NEW - 356 lines) - RetentionManager with:
+   - ✅ `queue/retention.go` (NEW - 400+ lines) - RetentionManager with:
      - ✅ `CheckSizeRetention()` - called on enqueue
      - ✅ `RunTimeBasedCleanup()` - background job
      - ✅ `DeleteBatch()` - efficient batch deletion
 
 2. **Day 3-4: Integration & Replication** ✅ COMPLETE
    - ✅ `queue/raft/fsm.go` - Added `OpRetentionDelete` operation
-   - ✅ MessageStore interface - 4 new retention methods:
+   - ✅ MessageStore interface - 5 new retention methods:
      - ✅ `ListOldestMessages()` - for size-based retention (memory & badger)
      - ✅ `ListMessagesBefore()` - for time-based retention (memory & badger)
      - ✅ `DeleteMessageBatch()` - batch deletion (memory & badger)
      - ✅ `GetQueueSize()` - total queue size (memory & badger)
-   - ✅ Full implementations in memory and badger stores (replaced stubs)
+     - ✅ `ListAllMessages()` - for compaction (memory & badger)
+   - ✅ Full implementations in memory and badger stores
    - ✅ `queue/manager.go` - Integrated size checks on enqueue path (async)
    - ✅ `queue/partition_worker.go` - Background time-based cleanup job
    - ✅ Leader-only retention execution (replication mode)
-   - ✅ All compilation errors fixed across test files
 
-3. **Day 5: Testing** ⏳ NEXT
-   - ⏳ `queue/retention_test.go` - Unit tests (RetentionManager)
-   - ⏳ `queue/replication_retention_test.go` - Integration tests (with Raft)
+3. **Day 5: Testing** ✅ COMPLETE
+   - ✅ `queue/retention_test.go` - Unit tests (RetentionPolicy)
+   - ✅ `queue/retention_manager_test.go` - Unit tests (RetentionManager)
+   - ✅ `queue/retention_integration_test.go` - Integration tests (with Raft)
 
-**Week 2: Log Compaction**
+**Week 2: Log Compaction** ✅ COMPLETE
 
-1. **Day 1-2: Compaction Logic**
-   - `queue/compaction.go` (NEW) - CompactionManager with:
-     - `ExtractCompactionKey()` - from message properties
-     - `ScanAndCompact()` - background job
-     - `FindDuplicates()` - group messages by key
-   - Configurable compaction lag (5m default)
+1. **Day 1-2: Compaction Logic** ✅ COMPLETE
+   - ✅ `queue/retention.go` - Added compaction to RetentionManager:
+     - ✅ `runCompaction()` - scans messages, groups by key, keeps latest
+     - ✅ `extractCompactionKey()` - from message properties
+     - ✅ `compactionLoop()` - background job with configurable interval
+   - ✅ Configurable compaction lag (respects CompactionLag before compacting)
 
-2. **Day 3-4: Integration**
-   - `queue/raft/fsm.go` - Add `OpCompact` operation
-   - `queue/partition_worker.go` - Background compaction job
-   - Integrate with retention pipeline
+2. **Day 3-4: Integration** ✅ COMPLETE
+   - ✅ Uses existing `OpRetentionDelete` for Raft replication (no new op needed)
+   - ✅ `queue/partition_worker.go` - Background compaction via RetentionManager.Start()
+   - ✅ Leader-only compaction execution
 
-3. **Day 5: Testing**
-   - `queue/compaction_test.go` - Unit tests:
-     - Extract compaction key from properties
-     - Keep only latest per key
-     - Compaction lag respected
-   - `queue/replication_compaction_test.go` - Integration tests:
-     - Compaction replicates correctly
-     - Event sourcing use case tested
+3. **Day 5: Testing** ✅ COMPLETE
+   - ✅ `queue/retention_manager_test.go` - Compaction unit tests:
+     - ✅ `TestRetentionManager_Compaction_Basic` - keeps latest per key
+     - ✅ `TestRetentionManager_Compaction_RespectLag` - lag is honored
+     - ✅ `TestRetentionManager_Compaction_NoKeyProperty` - messages without key skipped
+     - ✅ `TestRetentionManager_Compaction_NotConfigured` - no-op when key empty
+   - ✅ `queue/retention_integration_test.go` - Integration tests:
+     - ✅ `TestCompaction_ReplicationBasic` - compaction replicates correctly
+     - ✅ `TestCompaction_LeaderOnly` - only leader compacts
 
 **Files Created:**
-- ✅ `queue/retention.go` (356 lines) - Retention manager
-- ⏳ `queue/compaction.go` (~200 lines) - Compaction manager (Week 2)
-- ⏳ `queue/retention_test.go` (~300 lines) - Retention tests (NEXT)
-- ⏳ `queue/compaction_test.go` (~250 lines) - Compaction tests (Week 2)
-- ⏳ `queue/replication_retention_test.go` (~200 lines) - Integration tests (NEXT)
+- ✅ `queue/retention.go` (400+ lines) - Retention & compaction manager
+- ✅ `queue/retention_test.go` - Retention policy tests
+- ✅ `queue/retention_manager_test.go` - RetentionManager + compaction tests
+- ✅ `queue/retention_integration_test.go` - Raft integration tests
 
 **Files Modified:**
-- ✅ `queue/storage/storage.go` (+30 lines) - Added RetentionPolicy
+- ✅ `queue/storage/storage.go` (+35 lines) - Added RetentionPolicy + ListAllMessages
 - ✅ `queue/raft/fsm.go` (+30 lines) - Added OpRetentionDelete
-- ✅ `queue/storage/memory/memory.go` (+150 lines) - Full retention implementations
-- ✅ `queue/storage/badger/badger.go` (+190 lines) - Full retention implementations
+- ✅ `queue/storage/memory/memory.go` (+180 lines) - Full retention + compaction implementations
+- ✅ `queue/storage/badger/badger.go` (+230 lines) - Full retention + compaction implementations
 - ✅ `queue/manager.go` (+100 lines) - Integrated retention checks and manager lifecycle
 - ✅ `queue/partition_worker.go` (+40 lines) - Background retention jobs
 - ✅ `queue/delivery_worker.go` (+5 lines) - RetentionManager parameter
-- ✅ All test files updated for new signatures (delivery_test.go, integration_test.go, etc.)
 
 **Success Criteria:**
 - Time-based retention deletes messages older than threshold
@@ -900,14 +876,14 @@ queue:
 |-----------|----------|--------|------------|
 | 2.1: Raft Infrastructure | Week 1 | ✅ Complete | 100% |
 | 2.2: Queue Integration | Week 2 | ✅ Complete | 100% |
-| 2.3: Testing & Optimization | Week 3 | ✅ Mostly Complete | 90% |
-| 2.4: Retention Policies | Weeks 4-5 | 🔄 **IN PROGRESS** | 40% |
-| └─ Week 1: Time & Size Retention | 1 week | 🔄 In Progress | 80% |
-| └─ Week 2: Log Compaction | 1 week | 📋 Planned | 0% |
+| 2.3: Testing & Optimization | Week 3 | ✅ Complete | 100% |
+| 2.4: Retention Policies | Weeks 4-5 | ✅ **COMPLETE** | 100% |
+| └─ Week 1: Time & Size Retention | 1 week | ✅ Complete | 100% |
+| └─ Week 2: Log Compaction | 1 week | ✅ Complete | 100% |
 | 2.5: Observability & Migration | Weeks 6-7 | 📋 Planned (deferred) | 0% |
 
-**Total:** 7 weeks (2-3 weeks remaining)
-**Overall Progress:** ~88% complete
+**Total:** 7 weeks (Phase 2.5 deferred to after Phase 0)
+**Overall Progress:** ~98% complete (core replication feature-complete)
 
 ---
 
@@ -1159,29 +1135,30 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 | └─ 0.5: Management Dashboard | 2-3 weeks | 0% | 📋 Planned (P3) |
 | └─ 0.6: Operational Readiness | 1 week | 0% | 📋 Planned (P3) |
 | **Phase 1: Performance Optimization** | 2 weeks | 100% | ✅ Complete |
-| **Phase 2: Queue Replication** | 6 weeks | 88% | 🔄 In Progress |
+| **Phase 2: Queue Replication** | 6 weeks | 98% | ✅ **COMPLETE** |
 | └─ 2.1: Raft Infrastructure | 1 week | 100% | ✅ Complete |
 | └─ 2.2: Queue Integration | 1 week | 100% | ✅ Complete |
-| └─ 2.3: Testing & Optimization | 1 week | 90% | ✅ Mostly Complete |
-| └─ 2.4: Retention Policies | 2 weeks | 40% | 🔄 **IN PROGRESS** |
-| └─ 2.5: Observability & Migration | 2-3 weeks | 0% | 📋 Planned |
+| └─ 2.3: Testing & Optimization | 1 week | 100% | ✅ Complete |
+| └─ 2.4: Retention Policies | 2 weeks | 100% | ✅ **COMPLETE** |
+| └─ 2.5: Observability & Migration | 2-3 weeks | 0% | 📋 Planned (deferred) |
 | **Phase 3: E2E Cluster Testing** | 2-3 weeks | 0% | ⏳ Planned |
 | **Phase 4: Custom Raft** | 20 weeks | N/A | 📋 Future (50M+ only) |
 
 **Current Sprint:** Phase 0 - Production Hardening (TOP PRIORITY)
 
 **Key Metrics:**
-- ✅ 2,300+ lines of queue replication code complete
-- ✅ 13/13 unit tests passing
+- ✅ 2,800+ lines of queue replication code complete
+- ✅ 17+ unit tests passing (retention + compaction)
 - ✅ 4/4 core failover tests passing (leader election, durability, ISR, catch-up)
 - ✅ Performance benchmarks complete (sync/async modes, latency, concurrency)
-- ✅ **Phase 2.4 Week 1 (80% complete):**
+- ✅ **Phase 2.4 Retention Policies - COMPLETE:**
   - ✅ Retention infrastructure complete (schema, manager, Raft ops)
   - ✅ Full storage implementations (memory & badger stores)
   - ✅ Manager & partition worker integration complete
   - ✅ Leader-only execution & async size checks
-  - ⏳ Tests pending (retention_test.go, integration tests) - **NEXT**
-- 📋 **Week 2:** Log compaction (Kafka-style)
+  - ✅ Retention unit & integration tests (11 tests)
+  - ✅ Log compaction (Kafka-style, keeps latest per key)
+  - ✅ Compaction unit & integration tests (6 tests)
 
 ---
 
@@ -1220,5 +1197,43 @@ When working on this roadmap:
 
 ---
 
-**Next Milestone:** Critical Security Fixes Complete (Phase 0.1) - BLOCKING PRODUCTION
+**Next Milestone:** Secure Default ACL (Phase 0.1.3) - Last critical security fix
 **Final Goal:** Production Hardening Complete (Phase 0) - Required before production deployment
+
+---
+
+## What's Next: Recommended Priority Order
+
+The queue replication system is now feature-complete. Here are the recommended next steps:
+
+### Option A: E2E Cluster Testing First (Recommended)
+Validate the full system under stress before production hardening:
+1. **Phase 3: E2E Cluster Testing** - 2-3 weeks
+   - Multi-node failure scenarios
+   - Network partition testing
+   - Load testing with chaos engineering
+   - Combined pub-sub + queue workloads
+   - Session takeover under load
+
+### Option B: Production Hardening
+Security and operational improvements for production deployment:
+1. **Secure Default ACL** (P0) - 1-2 days
+   - Change default to deny-all when no authorizer configured
+   - Add `development_mode: true` flag for permissive mode
+
+2. **Rate Limiting** (P1) - 3-5 days
+   - Per-IP connection rate limiting
+   - Per-client message rate limiting
+   - Per-client subscription rate limiting
+
+3. **Observability** (P2) - 3-5 days
+   - Distributed tracing instrumentation
+   - Prometheus `/metrics` endpoint
+
+### Option C: Observability First
+If you want visibility before testing/hardening:
+1. **Phase 2.5: Observability & Migration** - 2-3 weeks
+   - Raft metrics (leader elections, lag, apply latency)
+   - Retention metrics (deleted count, bytes freed)
+   - Health check endpoints
+   - Migration tooling
