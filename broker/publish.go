@@ -35,17 +35,8 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		}
 
 		if isQueueTopic(msg.Topic) {
-			// Route to queue manager
-			ctx := context.Background()
-			properties := make(map[string]string)
-
-			// Extract properties from message (will be set by v5handler for MQTT v5)
-			if msg.Properties != nil {
-				// Properties already set by handler
-				properties = msg.Properties
-			}
-
-			return b.queueManager.Enqueue(ctx, msg.Topic, msg.GetPayload(), properties)
+			// Route to queue manager - use existing properties or nil (avoid allocation)
+			return b.queueManager.Enqueue(context.Background(), msg.Topic, msg.GetPayload(), msg.Properties)
 		}
 	}
 
@@ -183,8 +174,8 @@ func (b *Broker) distribute(msg *storage.Message) error {
 		return err
 	}
 
-	// Track which share groups have already received the message
-	deliveredGroups := make(map[string]bool)
+	// Track which share groups have already received the message (lazy init)
+	var deliveredGroups map[string]bool
 
 	for _, sub := range matched {
 		clientID := sub.ClientID
@@ -193,6 +184,11 @@ func (b *Broker) distribute(msg *storage.Message) error {
 		if strings.HasPrefix(clientID, "$share/") {
 			// Extract group key from the special client ID
 			groupKey := clientID[7:] // Remove "$share/" prefix
+
+			// Lazy init the map only when we have shared subscriptions
+			if deliveredGroups == nil {
+				deliveredGroups = make(map[string]bool)
+			}
 
 			// Skip if we already delivered to this group
 			if deliveredGroups[groupKey] {

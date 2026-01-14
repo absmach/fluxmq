@@ -163,18 +163,6 @@ func (b *Broker) MaxQoS() byte {
 	return b.maxQoS
 }
 
-// versionToProtocol converts MQTT version byte to protocol string.
-func versionToProtocol(version byte) string {
-	switch version {
-	case 3, 4:
-		return "mqtt3"
-	case 5:
-		return "mqtt5"
-	default:
-		return "unknown"
-	}
-}
-
 func (b *Broker) logOp(op string, attrs ...any) {
 	b.logger.Debug(op, attrs...)
 }

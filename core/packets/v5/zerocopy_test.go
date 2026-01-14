@@ -9,7 +9,6 @@ import (
 
 	"github.com/absmach/mqtt/core/packets"
 	. "github.com/absmach/mqtt/core/packets/v5"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
 )
 
 func TestPublishUnpackBytes(t *testing.T) {
@@ -36,7 +35,7 @@ func TestPublishUnpackBytes(t *testing.T) {
 	}
 
 	// Create a new packet and unpack using zero-copy
-	pkt := &v5.Publish{FixedHeader: fh}
+	pkt := &Publish{FixedHeader: fh}
 	err := pkt.UnpackBytes(encoded[headerLen:])
 	if err != nil {
 		t.Fatalf("UnpackBytes failed: %v", err)

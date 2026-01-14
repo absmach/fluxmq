@@ -392,10 +392,6 @@ func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, rea
 	return nil
 }
 
-func (c *Client) sendDisconnect() {
-	c.sendDisconnectWithReason(0, 0, "")
-}
-
 func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) {
 	c.connMu.RLock()
 	conn := c.conn

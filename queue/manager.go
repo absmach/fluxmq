@@ -329,8 +329,11 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 		}
 	}
 
-	// Extract partition key from properties
-	partitionKey := properties["partition-key"]
+	// Extract partition key from properties (nil-safe)
+	var partitionKey string
+	if properties != nil {
+		partitionKey = properties["partition-key"]
+	}
 
 	// Get partition ID
 	partitionID := queue.GetPartitionForMessage(partitionKey)
@@ -827,8 +830,11 @@ func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []
 		}
 	}
 
-	// Extract partition key from properties
-	partitionKey := properties["partition-key"]
+	// Extract partition key from properties (nil-safe)
+	var partitionKey string
+	if properties != nil {
+		partitionKey = properties["partition-key"]
+	}
 
 	// Get partition ID
 	partitionID := queue.GetPartitionForMessage(partitionKey)

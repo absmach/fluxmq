@@ -50,38 +50,6 @@ func extractConsumerGroup(props *v5.SubscribeProperties) string {
 	return ""
 }
 
-// extractMessageID extracts the message ID from PUBLISH properties.
-func extractMessageID(props *v5.PublishProperties) string {
-	if props == nil {
-		return ""
-	}
-
-	// First check User Properties
-	if props.User != nil {
-		for _, prop := range props.User {
-			if prop.Key == "message-id" {
-				return prop.Value
-			}
-		}
-	}
-
-	return ""
-}
-
-// extractPartitionKey extracts the partition key from PUBLISH properties.
-func extractPartitionKey(props *v5.PublishProperties) string {
-	if props == nil || props.User == nil {
-		return ""
-	}
-
-	for _, prop := range props.User {
-		if prop.Key == "partition-key" {
-			return prop.Value
-		}
-	}
-	return ""
-}
-
 // extractAllProperties converts PUBLISH properties to a map.
 func extractAllProperties(props *v5.PublishProperties) map[string]string {
 	result := make(map[string]string)

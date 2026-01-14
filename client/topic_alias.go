@@ -66,15 +66,6 @@ func (m *topicAliasManager) getOrAssignOutbound(topic string) (uint16, bool, boo
 	return 0, false, false
 }
 
-// getOutboundTopic resolves an outbound alias to a topic.
-// Used for debugging/validation.
-func (m *topicAliasManager) getOutboundTopic(alias uint16) (string, bool) {
-	m.outboundMu.RLock()
-	defer m.outboundMu.RUnlock()
-	topic, ok := m.outboundAliasToTopic[alias]
-	return topic, ok
-}
-
 // registerInbound registers an inbound alias mapping from the server.
 // Called when receiving a PUBLISH with both topic and alias.
 func (m *topicAliasManager) registerInbound(alias uint16, topic string) bool {
