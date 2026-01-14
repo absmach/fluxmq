@@ -64,6 +64,8 @@ type Broker struct {
 	closed        bool
 	// Shared subscriptions (MQTT 5.0)
 	sharedSubs *SharedSubscriptionManager
+	// Maximum QoS level supported by this broker (0, 1, or 2)
+	maxQoS byte
 }
 
 // NewBroker creates a new broker instance.
@@ -106,6 +108,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		tracer:        tracer,
 		stopCh:        make(chan struct{}),
 		sharedSubs:    NewSharedSubscriptionManager(),
+		maxQoS:        2, // Default to QoS 2 (highest)
 	}
 
 	b.wg.Add(2)
@@ -144,6 +147,20 @@ func (b *Broker) Stats() *Stats {
 // SetAuthEngine sets the authentication and authorization engine.
 func (b *Broker) SetAuthEngine(auth *AuthEngine) {
 	b.auth = auth
+}
+
+// SetMaxQoS sets the maximum QoS level supported by this broker.
+// Valid values are 0, 1, or 2. Default is 2.
+func (b *Broker) SetMaxQoS(qos byte) {
+	if qos > 2 {
+		qos = 2
+	}
+	b.maxQoS = qos
+}
+
+// MaxQoS returns the maximum QoS level supported by this broker.
+func (b *Broker) MaxQoS() byte {
+	return b.maxQoS
 }
 
 // versionToProtocol converts MQTT version byte to protocol string.

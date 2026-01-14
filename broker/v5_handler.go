@@ -131,7 +131,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	}
 
 	sessionPresent := !isNew && !cleanStart
-	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess); err != nil {
+	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {
 		s.Disconnect(false)
 		return err
 	}
@@ -168,6 +168,16 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
+
+	// Downgrade QoS if it exceeds server's maximum (MQTT 5.0 spec 3.3.2-4)
+	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
+		h.broker.logger.Debug("v5_publish_qos_downgrade",
+			slog.String("client_id", s.ID),
+			slog.Int("requested_qos", int(qos)),
+			slog.Int("server_max_qos", int(maxQoS)),
+		)
+		qos = maxQoS
+	}
 
 	if p.Properties != nil && p.Properties.TopicAlias != nil {
 		alias := *p.Properties.TopicAlias
@@ -528,7 +538,7 @@ func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
 	}
 }
 
-func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte) error {
+func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte, maxQoS byte) error {
 	receiveMax := uint16(maxReceived)
 	topicAliasMax := s.TopicAliasMax
 	retainAvailable := byte(1)
@@ -538,6 +548,7 @@ func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessi
 	props := &v5.ConnAckProperties{
 		ReceiveMax:           &receiveMax,
 		TopicAliasMax:        &topicAliasMax,
+		MaxQoS:               &maxQoS,
 		RetainAvailable:      &retainAvailable,
 		WildcardSubAvailable: &wildcardSubAvailable,
 		SubIDAvailable:       &subIDAvailable,

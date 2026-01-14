@@ -255,6 +255,11 @@ func main() {
 	b := broker.NewBroker(store, cl, logger, stats, webhooks, metrics, tracer)
 	defer b.Close()
 
+	// Configure maximum QoS level
+	if cfg.Broker.MaxQoS >= 0 && cfg.Broker.MaxQoS <= 2 {
+		b.SetMaxQoS(byte(cfg.Broker.MaxQoS))
+	}
+
 	// Initialize hybrid queue with separate BadgerDB instance
 	if cfg.Storage.Type == "badger" {
 		queueDir := cfg.Storage.BadgerDir + "_queue"

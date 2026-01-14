@@ -148,6 +148,16 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
 
+	// Downgrade QoS if it exceeds server's maximum
+	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
+		h.broker.logger.Debug("v3_publish_qos_downgrade",
+			slog.String("client_id", s.ID),
+			slog.Int("requested_qos", int(qos)),
+			slog.Int("server_max_qos", int(maxQoS)),
+		)
+		qos = maxQoS
+	}
+
 	if h.broker.auth != nil && !h.broker.auth.CanPublish(s.ID, topic) {
 		h.broker.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized

@@ -66,6 +66,10 @@ type BrokerConfig struct {
 	// QoS retry settings
 	RetryInterval time.Duration `yaml:"retry_interval"`
 	MaxRetries    int           `yaml:"max_retries"`
+
+	// Maximum QoS level supported (0, 1, or 2). Default: 2
+	// Server will downgrade publish QoS to this level per MQTT 5.0 spec
+	MaxQoS int `yaml:"max_qos"`
 }
 
 // SessionConfig holds session management settings.
@@ -216,6 +220,7 @@ func Default() *Config {
 			MaxRetainedMessages: 10000,
 			RetryInterval:       20 * time.Second,
 			MaxRetries:          0, // Infinite retries
+			MaxQoS:              2, // Support all QoS levels
 		},
 		Session: SessionConfig{
 			MaxSessions:           10000,
