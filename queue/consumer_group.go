@@ -6,6 +6,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -116,15 +117,25 @@ func (cgm *ConsumerGroupManager) ListGroups() []*ConsumerGroup {
 	}
 
 	// Sort groups by ID for deterministic ordering (important for round-robin)
-	for i := 0; i < len(groups)-1; i++ {
-		for j := i + 1; j < len(groups); j++ {
-			if groups[i].ID() > groups[j].ID() {
-				groups[i], groups[j] = groups[j], groups[i]
-			}
-		}
-	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].ID() < groups[j].ID()
+	})
 
 	return groups
+}
+
+// restoreConsumer restores a consumer from persistent storage without re-persisting.
+// This is used during startup to restore consumers that were saved before shutdown.
+func (cgm *ConsumerGroupManager) restoreConsumer(consumer *queueStorage.Consumer) {
+	cgm.mu.Lock()
+	defer cgm.mu.Unlock()
+
+	group, exists := cgm.groups[consumer.GroupID]
+	if !exists {
+		group = NewConsumerGroup(consumer.GroupID, cgm.queueName)
+		cgm.groups[consumer.GroupID] = group
+	}
+	group.AddConsumer(consumer)
 }
 
 // Rebalance triggers rebalancing for a specific group.
@@ -142,22 +153,24 @@ func (cgm *ConsumerGroupManager) Rebalance(groupID string, partitions []*Partiti
 }
 
 // UpdateHeartbeat updates the heartbeat timestamp for a consumer.
+// Uses write lock to prevent race condition when updating consumer.LastHeartbeat.
 func (cgm *ConsumerGroupManager) UpdateHeartbeat(ctx context.Context, groupID, consumerID string) error {
-	cgm.mu.RLock()
+	cgm.mu.Lock()
 	group, exists := cgm.groups[groupID]
-	cgm.mu.RUnlock()
-
 	if !exists {
+		cgm.mu.Unlock()
 		return queueStorage.ErrConsumerNotFound
 	}
 
 	consumer, exists := group.GetConsumer(consumerID)
 	if !exists {
+		cgm.mu.Unlock()
 		return queueStorage.ErrConsumerNotFound
 	}
 
 	now := time.Now()
 	consumer.LastHeartbeat = now
+	cgm.mu.Unlock()
 
 	return cgm.consumerStore.UpdateHeartbeat(ctx, cgm.queueName, groupID, consumerID, now)
 }
@@ -195,11 +208,12 @@ func (cgm *ConsumerGroupManager) checkStaleConsumers() {
 			if now.Sub(consumer.LastHeartbeat) > timeout {
 				// Consumer heartbeat is stale, remove it
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if err := cgm.RemoveConsumer(ctx, group.ID(), consumer.ID); err == nil {
+				err := cgm.RemoveConsumer(ctx, group.ID(), consumer.ID)
+				cancel() // Always cancel immediately after use to prevent context leak
+				if err == nil {
 					// Rebalance partitions after removing stale consumer
 					_ = cgm.Rebalance(group.ID(), cgm.partitions)
 				}
-				cancel()
 			}
 		}
 	}
@@ -281,16 +295,14 @@ func (cg *ConsumerGroup) Size() int {
 
 // Rebalance assigns partitions to consumers in the group.
 // Uses simple round-robin strategy: partitions divided evenly among consumers.
+// Note: Partition.assignedTo is per-partition global state and not used for actual delivery.
+// Delivery uses consumer.AssignedParts instead. We only clear consumer assignments here
+// to avoid affecting other groups' partition tracking.
 func (cg *ConsumerGroup) Rebalance(partitions []*Partition) {
 	cg.mu.Lock()
 	defer cg.mu.Unlock()
 
-	// Clear existing assignments
-	for _, partition := range partitions {
-		partition.Unassign()
-	}
-
-	// Clear consumer assignments
+	// Clear consumer assignments (don't clear partition.assignedTo as it affects all groups)
 	for _, consumer := range cg.consumers {
 		consumer.AssignedParts = []int{}
 	}

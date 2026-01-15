@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"time"
@@ -404,6 +405,13 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 // HandlePingReq handles PINGREQ packets.
 func (h *V3Handler) HandlePingReq(s *session.Session) error {
 	h.broker.logger.Debug("v3_pingreq", slog.String("client_id", s.ID))
+
+	// Update heartbeat for queue consumers
+	// Fire and forget - don't block PINGRESP on this
+	if h.broker.queueManager != nil {
+		go h.broker.queueManager.UpdateHeartbeat(context.Background(), s.ID)
+	}
+
 	resp := &v3.PingResp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
 	}

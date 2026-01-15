@@ -63,8 +63,8 @@ type Manager struct {
 	cluster             cluster.Cluster
 	localNodeID         string
 	consumerRoutingMode ConsumerRoutingMode
-	dataDir             string             // For Raft storage
-	nodeAddresses       map[string]string  // nodeID -> raft bind address
+	dataDir             string            // For Raft storage
+	nodeAddresses       map[string]string // nodeID -> raft bind address
 }
 
 // Config holds configuration for the queue manager.
@@ -150,6 +150,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 		if err := m.acquirePartitionsForQueue(ctx, queue); err != nil {
 			return fmt.Errorf("failed to acquire partitions for queue %s: %w", config.Name, err)
+		}
+
+		// Restore consumers from persistent storage
+		if err := m.restoreConsumers(ctx, queue); err != nil {
+			return fmt.Errorf("failed to restore consumers for queue %s: %w", config.Name, err)
 		}
 	}
 
@@ -907,4 +912,47 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 	}
 
 	return m.broker(ctx, clientID, msg)
+}
+
+// restoreConsumers restores consumers from persistent storage after startup.
+func (m *Manager) restoreConsumers(ctx context.Context, queue *Queue) error {
+	groups, err := m.consumerStore.ListGroups(ctx, queue.Name())
+	if err != nil {
+		return err
+	}
+
+	for _, groupID := range groups {
+		consumers, err := m.consumerStore.ListConsumers(ctx, queue.Name(), groupID)
+		if err != nil {
+			return err
+		}
+
+		for _, consumer := range consumers {
+			// Add to in-memory state (skip storage write since already persisted)
+			queue.ConsumerGroups().restoreConsumer(consumer)
+		}
+
+		// Rebalance after restoring group
+		if len(consumers) > 0 {
+			queue.ConsumerGroups().Rebalance(groupID, queue.Partitions())
+		}
+	}
+	return nil
+}
+
+// UpdateHeartbeat updates the heartbeat timestamp for a consumer across all queues/groups.
+// This should be called when a PINGREQ is received from a client.
+func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Update heartbeat for this client across all queues/groups
+	for _, queue := range m.queues {
+		for _, group := range queue.ConsumerGroups().ListGroups() {
+			if consumer, exists := group.GetConsumer(clientID); exists {
+				queue.ConsumerGroups().UpdateHeartbeat(ctx, group.ID(), consumer.ID)
+			}
+		}
+	}
+	return nil
 }

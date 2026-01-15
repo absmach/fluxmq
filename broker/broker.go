@@ -38,6 +38,9 @@ type QueueManager interface {
 	Ack(ctx context.Context, queueTopic, messageID string) error
 	Nack(ctx context.Context, queueTopic, messageID string) error
 	Reject(ctx context.Context, queueTopic, messageID string, reason string) error
+	// UpdateHeartbeat updates the heartbeat timestamp for a consumer across all queues/groups.
+	// This should be called when a PINGREQ is received from a client.
+	UpdateHeartbeat(ctx context.Context, clientID string) error
 }
 
 // Broker is the core MQTT broker with clean domain methods.

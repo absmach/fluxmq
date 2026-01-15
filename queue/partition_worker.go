@@ -180,27 +180,28 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 		return
 	}
 
-	// Round-robin messages across consumer groups for fair distribution
-	// Each message goes to exactly one group (not broadcast to all)
-	// groupIndex persists across calls to ensure fair distribution
+	// Broadcast each message to ALL consumer groups
+	// This is the correct semantics: each group receives all messages,
+	// and within each group, one consumer handles it based on partition assignment.
 	for _, msg := range messages {
-		if len(groups) == 0 {
-			continue
+		delivered := false
+
+		for _, group := range groups {
+			consumer, exists := group.GetConsumerForPartition(pw.partitionID)
+			if !exists {
+				continue
+			}
+
+			if err := pw.deliverMessage(ctx, msg, consumer, config); err != nil {
+				// Log error but continue to other groups
+				continue
+			}
+			delivered = true
 		}
 
-		// Get next group in round-robin fashion
-		group := groups[pw.groupIndex%len(groups)]
-		pw.groupIndex++
-
-		consumer, exists := group.GetConsumerForPartition(pw.partitionID)
-		if !exists {
-			continue
-		}
-
-		if err := pw.deliverMessage(ctx, msg, consumer, config); err != nil {
-			// Log error but continue with next message
-			// Delivery failures will be retried via timeout mechanism
-			continue
+		if !delivered {
+			// No group could receive - message stays queued for retry
+			// The message will be retried via timeout mechanism
 		}
 	}
 }
