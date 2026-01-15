@@ -32,12 +32,10 @@ type QueueSource interface {
 }
 
 // OrderingEnforcer abstracts the ordering enforcement logic.
-// We can define methods if needed, or if it's a specific struct in queue, we might need to extract it or use interface.
-// queue/ordering.go defines OrderingEnforcer struct.
-// To avoid importing queue, we need an interface.
+// Group-aware: each consumer group tracks its own ordering independently.
 type OrderingEnforcer interface {
-	CanDeliver(msg *queueStorage.Message) (bool, error)
-	MarkDelivered(msg *queueStorage.Message)
+	CanDeliver(msg *queueStorage.Message, groupID string) (bool, error)
+	MarkDelivered(msg *queueStorage.Message, groupID string)
 }
 
 // RaftManager abstracts the Raft consensus manager.

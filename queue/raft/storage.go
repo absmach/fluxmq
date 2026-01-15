@@ -6,17 +6,12 @@ package raft
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
 )
 
-var (
-	// ErrKeyNotFound is returned when a key is not found in the stable store.
-	ErrKeyNotFound = errors.New("key not found")
-)
 
 // BadgerLogStore implements raft.LogStore using BadgerDB.
 // It stores Raft log entries with efficient sequential writes.

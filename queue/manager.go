@@ -249,23 +249,39 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 		}
 
 		m.raftManagers[config.Name] = raftMgr
+
+		// Start Raft partitions
+		ctx := context.Background()
+		for partID := 0; partID < config.Partitions; partID++ {
+			if err := raftMgr.StartPartition(ctx, partID, config.Partitions); err != nil {
+				delete(m.queues, config.Name)
+				raftMgr.Shutdown()
+				delete(m.raftManagers, config.Name)
+				return fmt.Errorf("failed to start raft partition %d: %w", partID, err)
+			}
+		}
 	}
 
-	// Get RaftManager if exists
-	var raftMgr *RaftManager
+	// Get RaftManager if exists (use interface type to avoid Go's typed nil gotcha)
+	var raftMgr delivery.RaftManager
 	if config.Replication.Enabled {
-		raftMgr = m.raftManagers[config.Name]
+		if rm := m.raftManagers[config.Name]; rm != nil {
+			raftMgr = rm
+		}
 	}
 
 	// Create RetentionManager if retention policy is configured
 	if config.Retention.RetentionTime > 0 || config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0 || config.Retention.CompactionEnabled {
-		retentionMgr := NewRetentionManager(config.Name, config.Retention, m.messageStore, raftMgr, slog.Default())
+		retentionMgr := NewRetentionManager(config.Name, config.Retention, m.messageStore, m.raftManagers[config.Name], slog.Default())
 		m.retentionManagers[config.Name] = retentionMgr
 		// Note: RetentionManager will be started by partition workers (only leaders should run retention)
 	}
 
-	// Get RetentionManager if exists
-	retentionMgr := m.retentionManagers[config.Name]
+	// Get RetentionManager if exists (use interface type to avoid Go's typed nil gotcha)
+	var retentionMgr delivery.RetentionManager
+	if rm := m.retentionManagers[config.Name]; rm != nil {
+		retentionMgr = rm
+	}
 
 	// Create delivery worker
 	worker := delivery.NewWorker(

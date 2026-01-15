@@ -45,11 +45,11 @@ func (m *MockQueue) ConsumerGroups() *consumer.GroupManager {
 // MockOrderingEnforcer implements OrderingEnforcer interface
 type MockOrderingEnforcer struct{}
 
-func (m *MockOrderingEnforcer) CanDeliver(msg *queueStorage.Message) (bool, error) {
+func (m *MockOrderingEnforcer) CanDeliver(msg *queueStorage.Message, groupID string) (bool, error) {
 	return true, nil
 }
 
-func (m *MockOrderingEnforcer) MarkDelivered(msg *queueStorage.Message) {}
+func (m *MockOrderingEnforcer) MarkDelivered(msg *queueStorage.Message, groupID string) {}
 
 // MockBroker is a simple mock for broker delivery
 type MockBroker struct {

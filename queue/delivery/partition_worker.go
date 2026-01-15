@@ -200,9 +200,9 @@ func (pw *PartitionWorker) deliverMessage(
 	consumer *queueStorage.Consumer,
 	config queueStorage.QueueConfig,
 ) error {
-	// Check ordering constraints
+	// Check ordering constraints (per-group)
 	if pw.queue.OrderingEnforcer() != nil {
-		canDeliver, err := pw.queue.OrderingEnforcer().CanDeliver(msg)
+		canDeliver, err := pw.queue.OrderingEnforcer().CanDeliver(msg, consumer.GroupID)
 		if err != nil {
 			return fmt.Errorf("ordering check failed: %w", err)
 		}
@@ -265,9 +265,9 @@ func (pw *PartitionWorker) deliverMessage(
 		}
 	}
 
-	// Mark message as delivered in ordering enforcer
+	// Mark message as delivered in ordering enforcer (per-group)
 	if pw.queue.OrderingEnforcer() != nil {
-		pw.queue.OrderingEnforcer().MarkDelivered(msg)
+		pw.queue.OrderingEnforcer().MarkDelivered(msg, consumer.GroupID)
 	}
 
 	return nil

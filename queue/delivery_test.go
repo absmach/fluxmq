@@ -267,13 +267,13 @@ func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 	worker.DeliverMessages(ctx)
 
-	// Verify messages were delivered (each group gets one message)
+	// Verify messages were delivered (broadcast: each group gets ALL messages)
 	deliveries1 := broker.GetDeliveries("client1")
 	deliveries2 := broker.GetDeliveries("client2")
 
-	// Both groups should receive a message
-	assert.Len(t, deliveries1, 1)
-	assert.Len(t, deliveries2, 1)
+	// Both groups should receive all messages (broadcast semantics)
+	assert.Len(t, deliveries1, 2)
+	assert.Len(t, deliveries2, 2)
 }
 
 func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {

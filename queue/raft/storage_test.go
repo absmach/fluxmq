@@ -219,8 +219,12 @@ func TestBadgerStableStore_GetNonExistent(t *testing.T) {
 
 	store := NewBadgerStableStore(db, "test-queue", 0)
 
-	_, err := store.Get([]byte("non-existent"))
-	if err != ErrKeyNotFound {
-		t.Errorf("expected ErrKeyNotFound, got %v", err)
+	// Per Raft StableStore contract, Get returns (nil, nil) for non-existent keys
+	val, err := store.Get([]byte("non-existent"))
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+	if val != nil {
+		t.Errorf("expected nil value, got %v", val)
 	}
 }

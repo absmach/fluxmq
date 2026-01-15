@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testGroupID = "test-group"
+
 func TestOrderingEnforcer_OrderingNone(t *testing.T) {
 	enforcer := NewOrderingEnforcer(queueStorage.OrderingNone)
 
@@ -27,13 +29,13 @@ func TestOrderingEnforcer_OrderingNone(t *testing.T) {
 		Sequence:    3, // Out of order
 	}
 
-	canDeliver, err := enforcer.CanDeliver(msg1)
+	canDeliver, err := enforcer.CanDeliver(msg1, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
 
-	enforcer.MarkDelivered(msg1)
+	enforcer.MarkDelivered(msg1, testGroupID)
 
-	canDeliver, err = enforcer.CanDeliver(msg2)
+	canDeliver, err = enforcer.CanDeliver(msg2, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver) // Can deliver even though out of order
 }
@@ -48,11 +50,11 @@ func TestOrderingEnforcer_PartitionOrdering_InOrder(t *testing.T) {
 	}
 
 	for i, msg := range messages {
-		canDeliver, err := enforcer.CanDeliver(msg)
+		canDeliver, err := enforcer.CanDeliver(msg, testGroupID)
 		require.NoError(t, err, "message %d should be deliverable", i)
 		assert.True(t, canDeliver, "message %d should be deliverable", i)
 
-		enforcer.MarkDelivered(msg)
+		enforcer.MarkDelivered(msg, testGroupID)
 	}
 }
 
@@ -65,10 +67,10 @@ func TestOrderingEnforcer_PartitionOrdering_OutOfOrder(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    3,
 	}
-	canDeliver, err := enforcer.CanDeliver(msg1)
+	canDeliver, err := enforcer.CanDeliver(msg1, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
-	enforcer.MarkDelivered(msg1)
+	enforcer.MarkDelivered(msg1, testGroupID)
 
 	// Try to deliver message with sequence 2 (out of order)
 	msg2 := &queueStorage.Message{
@@ -76,7 +78,7 @@ func TestOrderingEnforcer_PartitionOrdering_OutOfOrder(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    2,
 	}
-	canDeliver, err = enforcer.CanDeliver(msg2)
+	canDeliver, err = enforcer.CanDeliver(msg2, testGroupID)
 	assert.Error(t, err)
 	assert.False(t, canDeliver)
 	assert.Contains(t, err.Error(), "out-of-order")
@@ -91,10 +93,10 @@ func TestOrderingEnforcer_PartitionOrdering_MultiplePartitions(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    1,
 	}
-	canDeliver, err := enforcer.CanDeliver(msg1)
+	canDeliver, err := enforcer.CanDeliver(msg1, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
-	enforcer.MarkDelivered(msg1)
+	enforcer.MarkDelivered(msg1, testGroupID)
 
 	// Partition 1 (independent ordering)
 	msg2 := &queueStorage.Message{
@@ -102,10 +104,10 @@ func TestOrderingEnforcer_PartitionOrdering_MultiplePartitions(t *testing.T) {
 		PartitionID: 1,
 		Sequence:    1,
 	}
-	canDeliver, err = enforcer.CanDeliver(msg2)
+	canDeliver, err = enforcer.CanDeliver(msg2, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
-	enforcer.MarkDelivered(msg2)
+	enforcer.MarkDelivered(msg2, testGroupID)
 
 	// Partition 0 continues
 	msg3 := &queueStorage.Message{
@@ -113,7 +115,7 @@ func TestOrderingEnforcer_PartitionOrdering_MultiplePartitions(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    2,
 	}
-	canDeliver, err = enforcer.CanDeliver(msg3)
+	canDeliver, err = enforcer.CanDeliver(msg3, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
 }
@@ -127,10 +129,10 @@ func TestOrderingEnforcer_PartitionOrdering_Gaps(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    1,
 	}
-	canDeliver, err := enforcer.CanDeliver(msg1)
+	canDeliver, err := enforcer.CanDeliver(msg1, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
-	enforcer.MarkDelivered(msg1)
+	enforcer.MarkDelivered(msg1, testGroupID)
 
 	// Deliver message with sequence 5 (gap is allowed - message 2-4 might have been acked/failed)
 	msg2 := &queueStorage.Message{
@@ -138,10 +140,10 @@ func TestOrderingEnforcer_PartitionOrdering_Gaps(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    5,
 	}
-	canDeliver, err = enforcer.CanDeliver(msg2)
+	canDeliver, err = enforcer.CanDeliver(msg2, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
-	enforcer.MarkDelivered(msg2)
+	enforcer.MarkDelivered(msg2, testGroupID)
 }
 
 func TestOrderingEnforcer_StrictOrdering_SinglePartition(t *testing.T) {
@@ -153,7 +155,7 @@ func TestOrderingEnforcer_StrictOrdering_SinglePartition(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    1,
 	}
-	canDeliver, err := enforcer.CanDeliver(msg1)
+	canDeliver, err := enforcer.CanDeliver(msg1, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
 
@@ -163,7 +165,7 @@ func TestOrderingEnforcer_StrictOrdering_SinglePartition(t *testing.T) {
 		PartitionID: 1,
 		Sequence:    1,
 	}
-	canDeliver, err = enforcer.CanDeliver(msg2)
+	canDeliver, err = enforcer.CanDeliver(msg2, testGroupID)
 	assert.Error(t, err)
 	assert.False(t, canDeliver)
 	assert.Contains(t, err.Error(), "strict ordering requires all messages in partition 0")
@@ -177,10 +179,10 @@ func TestOrderingEnforcer_Reset(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    5,
 	}
-	enforcer.MarkDelivered(msg1)
+	enforcer.MarkDelivered(msg1, testGroupID)
 
 	// Verify last delivered is tracked
-	lastSeq, exists := enforcer.GetLastDelivered(0)
+	lastSeq, exists := enforcer.GetLastDelivered(testGroupID, 0)
 	assert.True(t, exists)
 	assert.Equal(t, uint64(5), lastSeq)
 
@@ -188,7 +190,7 @@ func TestOrderingEnforcer_Reset(t *testing.T) {
 	enforcer.Reset(0)
 
 	// Verify cleared
-	_, exists = enforcer.GetLastDelivered(0)
+	_, exists = enforcer.GetLastDelivered(testGroupID, 0)
 	assert.False(t, exists)
 
 	// Can now deliver message with lower sequence
@@ -197,7 +199,7 @@ func TestOrderingEnforcer_Reset(t *testing.T) {
 		PartitionID: 0,
 		Sequence:    1,
 	}
-	canDeliver, err := enforcer.CanDeliver(msg2)
+	canDeliver, err := enforcer.CanDeliver(msg2, testGroupID)
 	require.NoError(t, err)
 	assert.True(t, canDeliver)
 }
@@ -212,7 +214,7 @@ func TestOrderingEnforcer_ResetAll(t *testing.T) {
 			PartitionID: i,
 			Sequence:    10,
 		}
-		enforcer.MarkDelivered(msg)
+		enforcer.MarkDelivered(msg, testGroupID)
 	}
 
 	// Verify tracked
@@ -240,15 +242,63 @@ func TestOrderingEnforcer_Stats(t *testing.T) {
 			PartitionID: partID,
 			Sequence:    sequences[i],
 		}
-		enforcer.MarkDelivered(msg)
+		enforcer.MarkDelivered(msg, testGroupID)
 	}
 
 	stats := enforcer.Stats()
 	assert.Equal(t, queueStorage.OrderingPartition, stats.Mode)
 	assert.Equal(t, 3, stats.PartitionCount)
-	assert.Equal(t, uint64(5), stats.PartitionSeqs[0])
-	assert.Equal(t, uint64(7), stats.PartitionSeqs[1])
-	assert.Equal(t, uint64(2), stats.PartitionSeqs[2])
+	assert.Equal(t, uint64(5), stats.GroupStats[testGroupID][0])
+	assert.Equal(t, uint64(7), stats.GroupStats[testGroupID][1])
+	assert.Equal(t, uint64(2), stats.GroupStats[testGroupID][2])
+}
+
+func TestOrderingEnforcer_MultipleGroups(t *testing.T) {
+	enforcer := NewOrderingEnforcer(queueStorage.OrderingPartition)
+
+	// Same message delivered to multiple groups should work
+	msg := &queueStorage.Message{
+		ID:          "msg-1",
+		PartitionID: 0,
+		Sequence:    1,
+	}
+
+	// Deliver to group1
+	canDeliver, err := enforcer.CanDeliver(msg, "group1")
+	require.NoError(t, err)
+	assert.True(t, canDeliver)
+	enforcer.MarkDelivered(msg, "group1")
+
+	// Same message can be delivered to group2 (groups are independent)
+	canDeliver, err = enforcer.CanDeliver(msg, "group2")
+	require.NoError(t, err)
+	assert.True(t, canDeliver)
+	enforcer.MarkDelivered(msg, "group2")
+
+	// Next message in group1
+	msg2 := &queueStorage.Message{
+		ID:          "msg-2",
+		PartitionID: 0,
+		Sequence:    2,
+	}
+	canDeliver, err = enforcer.CanDeliver(msg2, "group1")
+	require.NoError(t, err)
+	assert.True(t, canDeliver)
+
+	// Out of order message in group1 should fail
+	msgOld := &queueStorage.Message{
+		ID:          "msg-0",
+		PartitionID: 0,
+		Sequence:    0,
+	}
+	canDeliver, err = enforcer.CanDeliver(msgOld, "group1")
+	assert.Error(t, err)
+	assert.False(t, canDeliver)
+
+	// But out of order check for group2 is independent
+	canDeliver, err = enforcer.CanDeliver(msgOld, "group2")
+	assert.Error(t, err)
+	assert.False(t, canDeliver)
 }
 
 func TestHashPartitionStrategy(t *testing.T) {
