@@ -255,7 +255,7 @@ func TestQueue_OrderingEnforcer(t *testing.T) {
 	enforcer := queue.OrderingEnforcer()
 	assert.NotNil(t, enforcer)
 
-	stats := enforcer.Stats()
+	stats := enforcer.(*OrderingEnforcer).Stats()
 	assert.Equal(t, queueStorage.OrderingPartition, stats.Mode)
 }
 

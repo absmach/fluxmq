@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package consumer
 
 import (
 	"context"
@@ -14,22 +14,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewConsumerGroupManager(t *testing.T) {
+// MockPartition implements Partition interface for testing
+type MockPartition struct {
+	id         int
+	assignedTo string
+}
+
+func NewMockPartition(id int) *MockPartition {
+	return &MockPartition{
+		id: id,
+	}
+}
+
+func (p *MockPartition) ID() int {
+	return p.id
+}
+
+func (p *MockPartition) AssignTo(consumerID string) {
+	p.assignedTo = consumerID
+}
+
+func (p *MockPartition) AssignedTo() string {
+	return p.assignedTo
+}
+
+func (p *MockPartition) IsAssigned() bool {
+	return p.assignedTo != ""
+}
+
+func toPartitions(mocks []*MockPartition) []Partition {
+	parts := make([]Partition, len(mocks))
+	for i, m := range mocks {
+		parts[i] = m
+	}
+	return parts
+}
+
+func TestNewGroupManager(t *testing.T) {
 	store := memory.New()
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	assert.NotNil(t, mgr)
 	assert.Equal(t, "$queue/test", mgr.queueName)
 }
 
-func TestConsumerGroupManager_AddConsumer(t *testing.T) {
+func TestGroupManager_AddConsumer(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -46,14 +82,14 @@ func TestConsumerGroupManager_AddConsumer(t *testing.T) {
 	assert.Equal(t, "group1", consumer.GroupID)
 }
 
-func TestConsumerGroupManager_AddConsumer_Duplicate(t *testing.T) {
+func TestGroupManager_AddConsumer_Duplicate(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -63,14 +99,14 @@ func TestConsumerGroupManager_AddConsumer_Duplicate(t *testing.T) {
 	assert.NoError(t, err) // Should succeed (idempotent)
 }
 
-func TestConsumerGroupManager_RemoveConsumer(t *testing.T) {
+func TestGroupManager_RemoveConsumer(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -84,23 +120,23 @@ func TestConsumerGroupManager_RemoveConsumer(t *testing.T) {
 	assert.Nil(t, group)
 }
 
-func TestConsumerGroupManager_RemoveConsumer_NonExistent(t *testing.T) {
+func TestGroupManager_RemoveConsumer_NonExistent(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err := mgr.RemoveConsumer(ctx, "nonexistent", "consumer1")
 	assert.Error(t, err)
 }
 
-func TestConsumerGroupManager_GetGroup(t *testing.T) {
+func TestGroupManager_GetGroup(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	// Non-existent group
 	group, exists := mgr.GetGroup("nonexistent")
@@ -118,14 +154,14 @@ func TestConsumerGroupManager_GetGroup(t *testing.T) {
 	assert.Equal(t, "group1", group.ID())
 }
 
-func TestConsumerGroupManager_ListGroups(t *testing.T) {
+func TestGroupManager_ListGroups(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	// Empty initially
 	groups := mgr.ListGroups()
@@ -141,7 +177,7 @@ func TestConsumerGroupManager_ListGroups(t *testing.T) {
 	assert.Len(t, groups, 2)
 }
 
-func TestConsumerGroupManager_Rebalance(t *testing.T) {
+func TestGroupManager_Rebalance(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
@@ -149,7 +185,7 @@ func TestConsumerGroupManager_Rebalance(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	// Add 3 consumers
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
@@ -160,13 +196,13 @@ func TestConsumerGroupManager_Rebalance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create partitions
-	partitions := make([]*Partition, 6)
+	partitions := make([]*MockPartition, 6)
 	for i := 0; i < 6; i++ {
-		partitions[i] = NewPartition(i)
+		partitions[i] = NewMockPartition(i)
 	}
 
 	// Rebalance
-	err = mgr.Rebalance("group1", partitions)
+	err = mgr.Rebalance("group1", toPartitions(partitions))
 	require.NoError(t, err)
 
 	// Verify all partitions are assigned
@@ -190,7 +226,7 @@ func TestConsumerGroupManager_Rebalance(t *testing.T) {
 	}
 }
 
-func TestConsumerGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
+func TestGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
@@ -198,7 +234,7 @@ func TestConsumerGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	// Add 2 consumers
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
@@ -207,13 +243,13 @@ func TestConsumerGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create partitions
-	partitions := make([]*Partition, 5)
+	partitions := make([]*MockPartition, 5)
 	for i := 0; i < 5; i++ {
-		partitions[i] = NewPartition(i)
+		partitions[i] = NewMockPartition(i)
 	}
 
 	// Rebalance
-	err = mgr.Rebalance("group1", partitions)
+	err = mgr.Rebalance("group1", toPartitions(partitions))
 	require.NoError(t, err)
 
 	// Verify all partitions are assigned
@@ -229,14 +265,14 @@ func TestConsumerGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	assert.True(t, len(consumer1.AssignedParts) == 2 || len(consumer2.AssignedParts) == 2)
 }
 
-func TestConsumerGroup_Consumers(t *testing.T) {
+func TestGroup_Consumers(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -252,14 +288,14 @@ func TestConsumerGroup_Consumers(t *testing.T) {
 	assert.Contains(t, ids, "consumer2")
 }
 
-func TestConsumerGroup_Size(t *testing.T) {
+func TestGroup_Size(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
@@ -273,7 +309,7 @@ func TestConsumerGroup_Size(t *testing.T) {
 	assert.Equal(t, 2, group.Size())
 }
 
-func TestConsumerGroup_GetConsumerForPartition(t *testing.T) {
+func TestGroup_GetConsumerForPartition(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := queueStorage.DefaultQueueConfig("$queue/test")
@@ -281,17 +317,17 @@ func TestConsumerGroup_GetConsumerForPartition(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	mgr := NewConsumerGroupManager("$queue/test", store, time.Second, nil)
+	mgr := NewGroupManager("$queue/test", store, time.Second, nil)
 
 	err = mgr.AddConsumer(ctx, "group1", "consumer1", "client1", "")
 	require.NoError(t, err)
 
 	// Create and assign partitions
-	partitions := make([]*Partition, 4)
+	partitions := make([]*MockPartition, 4)
 	for i := 0; i < 4; i++ {
-		partitions[i] = NewPartition(i)
+		partitions[i] = NewMockPartition(i)
 	}
-	err = mgr.Rebalance("group1", partitions)
+	err = mgr.Rebalance("group1", toPartitions(partitions))
 	require.NoError(t, err)
 
 	group, _ := mgr.GetGroup("group1")

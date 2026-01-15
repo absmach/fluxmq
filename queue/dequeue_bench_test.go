@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/mqtt/queue/delivery"
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 	"github.com/absmach/mqtt/queue/storage/memory"
 )
@@ -68,14 +69,14 @@ func BenchmarkDequeue_SingleConsumer(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	// Deliver all messages
 	for i := 0; i < b.N; i++ {
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 	}
 }
 
@@ -104,13 +105,13 @@ func BenchmarkDequeue_MultipleConsumers(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+			worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				worker.deliverMessages(ctx)
+				worker.DeliverMessages(ctx)
 			}
 		})
 	}
@@ -134,14 +135,14 @@ func BenchmarkDequeue_WithAck(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
 		// Deliver message
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 
 		// Get inflight messages
 		inflight, err := store.GetInflight(ctx, queueName)
@@ -178,13 +179,13 @@ func BenchmarkDequeue_PartitionScanning(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+			worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				worker.deliverMessages(ctx)
+				worker.DeliverMessages(ctx)
 			}
 		})
 	}
@@ -211,7 +212,7 @@ func BenchmarkDequeue_Throughput(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -220,7 +221,7 @@ func BenchmarkDequeue_Throughput(b *testing.B) {
 	delivered := 0
 
 	for i := 0; i < b.N; i++ {
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 		delivered++
 
 		if delivered >= messageCount {

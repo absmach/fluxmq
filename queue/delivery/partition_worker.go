@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package delivery
 
 import (
 	"context"
@@ -15,13 +15,10 @@ import (
 )
 
 // PartitionWorker handles message delivery for a single partition.
-// One worker runs per partition, enabling true parallelism and
-// providing the foundation for both lock-free optimization (Option B)
-// and future cluster scaling (partition-based work distribution).
 type PartitionWorker struct {
 	queueName    string
 	partitionID  int
-	queue        *Queue
+	queue        QueueSource
 	messageStore queueStorage.MessageStore
 	deliverFn    DeliverFn
 
@@ -31,33 +28,31 @@ type PartitionWorker struct {
 	batchSize       int           // Max messages to process per wake
 	debounceTimeout time.Duration // Small delay to batch rapid enqueues
 
-	groupIndex int // Round-robin index for consumer groups
-
 	// Cluster support (nil for single-node mode)
 	cluster             cluster.Cluster
 	localNodeID         string
 	consumerRoutingMode ConsumerRoutingMode
 
 	// Raft support (nil for non-replicated queues)
-	raftManager *RaftManager
+	raftManager RaftManager
 
 	// Retention support (nil if retention not configured)
-	retentionManager *RetentionManager
+	retentionManager RetentionManager
 }
 
 // NewPartitionWorker creates a new partition worker.
 func NewPartitionWorker(
 	queueName string,
 	partitionID int,
-	queue *Queue,
+	queue QueueSource,
 	messageStore queueStorage.MessageStore,
-	broker DeliverFn,
+	deliverFn DeliverFn,
 	batchSize int,
 	c cluster.Cluster,
 	localNodeID string,
 	routingMode ConsumerRoutingMode,
-	raftMgr *RaftManager,
-	retentionMgr *RetentionManager,
+	raftMgr RaftManager,
+	retentionMgr RetentionManager,
 ) *PartitionWorker {
 	// Default batch size
 	if batchSize <= 0 {
@@ -69,11 +64,11 @@ func NewPartitionWorker(
 		partitionID:         partitionID,
 		queue:               queue,
 		messageStore:        messageStore,
-		deliverFn:           broker,
+		deliverFn:           deliverFn,
 		notifyCh:            make(chan struct{}, 1), // Buffered to prevent blocking
 		stopCh:              make(chan struct{}),
 		batchSize:           batchSize,
-		debounceTimeout:     5 * time.Millisecond, // Small debounce for batching
+		debounceTimeout:     5 * time.Millisecond,
 		cluster:             c,
 		localNodeID:         localNodeID,
 		consumerRoutingMode: routingMode,
@@ -125,7 +120,6 @@ func (pw *PartitionWorker) Stop() {
 }
 
 // Notify signals the worker that messages are available.
-// Non-blocking - uses buffered channel and select to avoid blocking enqueue.
 func (pw *PartitionWorker) Notify() {
 	select {
 	case pw.notifyCh <- struct{}{}:
@@ -162,7 +156,6 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 	// Get consumer groups
 	groups := pw.queue.ConsumerGroups().ListGroups()
 	if len(groups) == 0 {
-		// No consumer groups, skip
 		return
 	}
 
@@ -171,18 +164,14 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 	// Batch dequeue messages
 	messages, err := pw.messageStore.DequeueBatch(ctx, pw.queueName, pw.partitionID, pw.batchSize)
 	if err != nil {
-		// Log error but continue (will retry on next tick)
 		return
 	}
 
 	if len(messages) == 0 {
-		// No messages available
 		return
 	}
 
 	// Broadcast each message to ALL consumer groups
-	// This is the correct semantics: each group receives all messages,
-	// and within each group, one consumer handles it based on partition assignment.
 	for _, msg := range messages {
 		delivered := false
 
@@ -193,7 +182,6 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 			}
 
 			if err := pw.deliverMessage(ctx, msg, consumer, config); err != nil {
-				// Log error but continue to other groups
 				continue
 			}
 			delivered = true
@@ -201,7 +189,6 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 
 		if !delivered {
 			// No group could receive - message stays queued for retry
-			// The message will be retried via timeout mechanism
 		}
 	}
 }
@@ -271,10 +258,8 @@ func (pw *PartitionWorker) deliverMessage(
 	} else {
 		// Deliver to local consumer via broker
 		if pw.deliverFn != nil {
-			storageMsg := toStorageMessage(msg, pw.queueName)
+			storageMsg := ToStorageMessage(msg, pw.queueName)
 			if err := pw.deliverFn(ctx, consumer.ClientID, storageMsg); err != nil {
-				// Delivery failed, but message is marked inflight
-				// Retry logic will handle re-delivery
 				return fmt.Errorf("failed to deliver to client %s: %w", consumer.ClientID, err)
 			}
 		}
@@ -288,8 +273,8 @@ func (pw *PartitionWorker) deliverMessage(
 	return nil
 }
 
-// toStorageMessage converts a queue message to a broker storage message for MQTT delivery.
-func toStorageMessage(msg *queueStorage.Message, queueTopic string) interface{} {
+// ToStorageMessage converts a queue message to a broker storage message for MQTT delivery.
+func ToStorageMessage(msg *queueStorage.Message, queueTopic string) interface{} {
 	storageMsg := &brokerStorage.Message{
 		Topic:      queueTopic,
 		QoS:        1, // Queue messages always use QoS 1 for delivery confirmation

@@ -7,6 +7,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/absmach/mqtt/queue/consumer"
+	"github.com/absmach/mqtt/queue/delivery"
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 )
 
@@ -16,7 +18,7 @@ type Queue struct {
 	config           queueStorage.QueueConfig
 	partitions       []*Partition
 	strategy         PartitionStrategy
-	consumerGroups   *ConsumerGroupManager
+	consumerGroups   *consumer.GroupManager
 	messageStore     queueStorage.MessageStore
 	orderingEnforcer *OrderingEnforcer
 	mu               sync.RWMutex
@@ -29,12 +31,18 @@ func NewQueue(config queueStorage.QueueConfig, messageStore queueStorage.Message
 		partitions[i] = NewPartition(i)
 	}
 
+	// Convert partitions to consumer.Partition interface slice
+	consumerPartitions := make([]consumer.Partition, len(partitions))
+	for i, p := range partitions {
+		consumerPartitions[i] = p
+	}
+
 	return &Queue{
 		name:             config.Name,
 		config:           config,
 		partitions:       partitions,
 		strategy:         &HashPartitionStrategy{},
-		consumerGroups:   NewConsumerGroupManager(config.Name, consumerStore, config.HeartbeatTimeout, partitions),
+		consumerGroups:   consumer.NewGroupManager(config.Name, consumerStore, config.HeartbeatTimeout, consumerPartitions),
 		messageStore:     messageStore,
 		orderingEnforcer: NewOrderingEnforcer(config.Ordering),
 	}
@@ -90,7 +98,7 @@ func (q *Queue) GetPartitionForMessage(partitionKey string) int {
 }
 
 // ConsumerGroups returns the consumer group manager.
-func (q *Queue) ConsumerGroups() *ConsumerGroupManager {
+func (q *Queue) ConsumerGroups() *consumer.GroupManager {
 	return q.consumerGroups
 }
 
@@ -101,7 +109,7 @@ func (q *Queue) AddConsumer(ctx context.Context, groupID, consumerID, clientID, 
 	}
 
 	// Trigger rebalancing for this group
-	return q.consumerGroups.Rebalance(groupID, q.partitions)
+	return q.consumerGroups.Rebalance(groupID, q.toConsumerPartitions())
 }
 
 // RemoveConsumer removes a consumer from a consumer group.
@@ -112,7 +120,7 @@ func (q *Queue) RemoveConsumer(ctx context.Context, groupID, consumerID string) 
 
 	// Trigger rebalancing for this group if it still exists
 	if group, exists := q.consumerGroups.GetGroup(groupID); exists {
-		return q.consumerGroups.Rebalance(group.ID(), q.partitions)
+		return q.consumerGroups.Rebalance(group.ID(), q.toConsumerPartitions())
 	}
 
 	return nil
@@ -129,6 +137,18 @@ func (q *Queue) GetConsumerForPartition(groupID string, partitionID int) (*queue
 }
 
 // OrderingEnforcer returns the ordering enforcer for this queue.
-func (q *Queue) OrderingEnforcer() *OrderingEnforcer {
+func (q *Queue) OrderingEnforcer() delivery.OrderingEnforcer {
 	return q.orderingEnforcer
+}
+
+// toConsumerPartitions converts the queue's partitions to a slice of consumer.Partition interface.
+func (q *Queue) toConsumerPartitions() []consumer.Partition {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	consumerPartitions := make([]consumer.Partition, len(q.partitions))
+	for i, p := range q.partitions {
+		consumerPartitions[i] = p
+	}
+	return consumerPartitions
 }

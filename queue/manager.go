@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/absmach/mqtt/cluster"
+	"github.com/absmach/mqtt/queue/consumer"
+	"github.com/absmach/mqtt/queue/delivery"
 	"github.com/absmach/mqtt/queue/storage"
 	"github.com/google/uuid"
 )
@@ -45,7 +47,7 @@ const (
 //	}
 type Manager struct {
 	queues            map[string]*Queue
-	deliveryWorkers   map[string]*DeliveryWorker
+	deliveryWorkers   map[string]*delivery.Worker
 	raftManagers      map[string]*RaftManager      // Per-queue Raft managers
 	retentionManagers map[string]*RetentionManager // Per-queue retention managers
 	queueStore        storage.QueueStore
@@ -111,7 +113,7 @@ func NewManager(cfg Config) (*Manager, error) {
 
 	return &Manager{
 		queues:              make(map[string]*Queue),
-		deliveryWorkers:     make(map[string]*DeliveryWorker),
+		deliveryWorkers:     make(map[string]*delivery.Worker),
 		raftManagers:        make(map[string]*RaftManager),
 		retentionManagers:   make(map[string]*RetentionManager),
 		queueStore:          cfg.QueueStore,
@@ -265,8 +267,20 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 	// Get RetentionManager if exists
 	retentionMgr := m.retentionManagers[config.Name]
 
-	// Create and start delivery worker
-	worker := NewDeliveryWorker(queue, m.messageStore, m.broker, m.cluster, m.localNodeID, m.consumerRoutingMode, raftMgr, retentionMgr)
+	// Create delivery worker
+	worker := delivery.NewWorker(
+		queue,
+		m.messageStore,
+		// Cast m.DeliverQueueMessage to delivery.DeliverFn
+		// This works because the signature matches
+		m.DeliverQueueMessage,
+		m.cluster,
+		m.localNodeID,
+		delivery.ConsumerRoutingMode(m.consumerRoutingMode),
+		raftMgr,
+		retentionMgr,
+	)
+
 	m.deliveryWorkers[config.Name] = worker
 
 	// Start worker in background
@@ -756,7 +770,7 @@ func (m *Manager) getPartitionOwner(ctx context.Context, queueName string, parti
 }
 
 // getPartitionAssigner returns the partition assigner based on queue configuration.
-func (m *Manager) getPartitionAssigner(config storage.QueueConfig) PartitionAssigner {
+func (m *Manager) getPartitionAssigner(config storage.QueueConfig) consumer.PartitionAssigner {
 	// Check if a partition strategy is configured
 	// For now, we'll use hash by default until we add PartitionStrategy to QueueConfig
 	// In Phase 2, we'll add this field to storage.QueueConfig
@@ -764,12 +778,12 @@ func (m *Manager) getPartitionAssigner(config storage.QueueConfig) PartitionAssi
 	// Default to hash-based assignment
 	if m.cluster == nil {
 		// Single-node: use hash assigner (deterministic)
-		return NewHashPartitionAssigner()
+		return consumer.NewHashPartitionAssigner()
 	}
 
 	// Multi-node: use hash by default for Phase 2
 	// TODO: Add config.PartitionStrategy field and switch based on it
-	return NewHashPartitionAssigner()
+	return consumer.NewHashPartitionAssigner()
 }
 
 // acquirePartitionsForQueue acquires ownership of partitions assigned to this node.
@@ -929,12 +943,12 @@ func (m *Manager) restoreConsumers(ctx context.Context, queue *Queue) error {
 
 		for _, consumer := range consumers {
 			// Add to in-memory state (skip storage write since already persisted)
-			queue.ConsumerGroups().restoreConsumer(consumer)
+			queue.ConsumerGroups().RestoreConsumer(consumer)
 		}
 
 		// Rebalance after restoring group
 		if len(consumers) > 0 {
-			queue.ConsumerGroups().Rebalance(groupID, queue.Partitions())
+			queue.ConsumerGroups().Rebalance(groupID, queue.toConsumerPartitions())
 		}
 	}
 	return nil
@@ -956,3 +970,4 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 	}
 	return nil
 }
+

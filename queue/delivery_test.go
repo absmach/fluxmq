@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/mqtt/queue/delivery"
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 	"github.com/absmach/mqtt/queue/storage/memory"
 	brokerStorage "github.com/absmach/mqtt/storage"
@@ -66,15 +67,10 @@ func TestNewDeliveryWorker(t *testing.T) {
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	assert.NotNil(t, worker)
-	assert.Equal(t, queue, worker.queue)
-	assert.Equal(t, store, worker.messageStore)
-	assert.NotNil(t, worker.broker)
-	assert.NotNil(t, worker.partitionWorkers)
-	assert.Equal(t, len(queue.Partitions()), len(worker.partitionWorkers))
-	assert.NotNil(t, worker.stopCh)
+	assert.NotNil(t, worker)
 }
 
 func TestDeliveryWorker_StartStop(t *testing.T) {
@@ -83,7 +79,7 @@ func TestDeliveryWorker_StartStop(t *testing.T) {
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -116,7 +112,7 @@ func TestDeliveryWorker_StartStopViaContext(t *testing.T) {
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -174,8 +170,8 @@ func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify message was delivered
 	deliveries := broker.GetDeliveries("client1")
@@ -223,8 +219,8 @@ func TestDeliveryWorker_DeliverMessages_MultiplePartitions(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify all messages were delivered
 	deliveries := broker.GetDeliveries("client1")
@@ -268,8 +264,8 @@ func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify messages were delivered (each group gets one message)
 	deliveries1 := broker.GetDeliveries("client1")
@@ -305,8 +301,8 @@ func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify message was NOT delivered (no consumers)
 	deliveries := broker.GetDeliveries("client1")
@@ -350,8 +346,8 @@ func TestDeliveryWorker_DeliverNext_BrokerDeliveryError(t *testing.T) {
 	broker.SetDeliveryError(errors.New("broker delivery failed"))
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Message should still be marked as inflight despite broker error
 	inflight, err := store.GetInflight(ctx, "$queue/test")
@@ -380,8 +376,8 @@ func TestDeliveryWorker_DeliverNext_NoMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// No deliveries should occur
 	deliveries := broker.GetDeliveries("client1")
@@ -421,15 +417,15 @@ func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	// Deliver first message
-	worker.deliverMessages(ctx)
+	worker.DeliverMessages(ctx)
 	deliveries := broker.GetDeliveries("client1")
 	assert.Len(t, deliveries, 1)
 
 	// Deliver second message - strict ordering ensures they're delivered in sequence order
-	worker.deliverMessages(ctx)
+	worker.DeliverMessages(ctx)
 	deliveries = broker.GetDeliveries("client1")
 	assert.Len(t, deliveries, 2) // Both messages delivered in order
 
@@ -470,8 +466,8 @@ func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify message was delivered
 	deliveries := broker.GetDeliveries("client1")
@@ -497,7 +493,7 @@ func TestToStorageMessage(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	storageMsg := toStorageMessage(msg, "$queue/test")
+	storageMsg := delivery.ToStorageMessage(msg, "$queue/test")
 
 	assert.NotNil(t, storageMsg)
 	brokerMsg, ok := storageMsg.(*brokerStorage.Message)
@@ -545,11 +541,11 @@ func TestDeliveryWorker_ConcurrentDelivery(t *testing.T) {
 	}
 
 	// Create and run delivery worker
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	// Run multiple delivery cycles
 	for i := 0; i < 5; i++ {
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 	}
 
 	// Verify messages were distributed across consumers

@@ -1,7 +1,8 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+// Package consumer provides consumer group management for durable queues.
+package consumer
 
 import (
 	"context"
@@ -13,24 +14,31 @@ import (
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 )
 
-// ConsumerGroupManager manages consumer groups for a queue.
-type ConsumerGroupManager struct {
+// Partition is an interface for partition operations needed by consumer groups.
+// This avoids circular dependency with the queue package.
+type Partition interface {
+	ID() int
+	AssignTo(consumerID string)
+}
+
+// GroupManager manages consumer groups for a queue.
+type GroupManager struct {
 	queueName        string
-	groups           map[string]*ConsumerGroup
+	groups           map[string]*Group
 	consumerStore    queueStorage.ConsumerStore
 	heartbeatTimeout time.Duration
-	partitions       []*Partition
+	partitions       []Partition
 	ctx              context.Context
 	cancel           context.CancelFunc
 	mu               sync.RWMutex
 }
 
-// NewConsumerGroupManager creates a new consumer group manager.
-func NewConsumerGroupManager(queueName string, consumerStore queueStorage.ConsumerStore, heartbeatTimeout time.Duration, partitions []*Partition) *ConsumerGroupManager {
+// NewGroupManager creates a new consumer group manager.
+func NewGroupManager(queueName string, consumerStore queueStorage.ConsumerStore, heartbeatTimeout time.Duration, partitions []Partition) *GroupManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	cgm := &ConsumerGroupManager{
+	cgm := &GroupManager{
 		queueName:        queueName,
-		groups:           make(map[string]*ConsumerGroup),
+		groups:           make(map[string]*Group),
 		consumerStore:    consumerStore,
 		heartbeatTimeout: heartbeatTimeout,
 		partitions:       partitions,
@@ -45,13 +53,13 @@ func NewConsumerGroupManager(queueName string, consumerStore queueStorage.Consum
 }
 
 // AddConsumer adds a consumer to a group.
-func (cgm *ConsumerGroupManager) AddConsumer(ctx context.Context, groupID, consumerID, clientID, proxyNodeID string) error {
+func (cgm *GroupManager) AddConsumer(ctx context.Context, groupID, consumerID, clientID, proxyNodeID string) error {
 	cgm.mu.Lock()
 	defer cgm.mu.Unlock()
 
 	group, exists := cgm.groups[groupID]
 	if !exists {
-		group = NewConsumerGroup(groupID, cgm.queueName)
+		group = NewGroup(groupID, cgm.queueName)
 		cgm.groups[groupID] = group
 	}
 
@@ -74,7 +82,7 @@ func (cgm *ConsumerGroupManager) AddConsumer(ctx context.Context, groupID, consu
 }
 
 // RemoveConsumer removes a consumer from a group.
-func (cgm *ConsumerGroupManager) RemoveConsumer(ctx context.Context, groupID, consumerID string) error {
+func (cgm *GroupManager) RemoveConsumer(ctx context.Context, groupID, consumerID string) error {
 	cgm.mu.Lock()
 	defer cgm.mu.Unlock()
 
@@ -98,7 +106,7 @@ func (cgm *ConsumerGroupManager) RemoveConsumer(ctx context.Context, groupID, co
 }
 
 // GetGroup returns a consumer group by ID.
-func (cgm *ConsumerGroupManager) GetGroup(groupID string) (*ConsumerGroup, bool) {
+func (cgm *GroupManager) GetGroup(groupID string) (*Group, bool) {
 	cgm.mu.RLock()
 	defer cgm.mu.RUnlock()
 
@@ -107,11 +115,11 @@ func (cgm *ConsumerGroupManager) GetGroup(groupID string) (*ConsumerGroup, bool)
 }
 
 // ListGroups returns all consumer groups.
-func (cgm *ConsumerGroupManager) ListGroups() []*ConsumerGroup {
+func (cgm *GroupManager) ListGroups() []*Group {
 	cgm.mu.RLock()
 	defer cgm.mu.RUnlock()
 
-	groups := make([]*ConsumerGroup, 0, len(cgm.groups))
+	groups := make([]*Group, 0, len(cgm.groups))
 	for _, group := range cgm.groups {
 		groups = append(groups, group)
 	}
@@ -124,22 +132,22 @@ func (cgm *ConsumerGroupManager) ListGroups() []*ConsumerGroup {
 	return groups
 }
 
-// restoreConsumer restores a consumer from persistent storage without re-persisting.
+// RestoreConsumer restores a consumer from persistent storage without re-persisting.
 // This is used during startup to restore consumers that were saved before shutdown.
-func (cgm *ConsumerGroupManager) restoreConsumer(consumer *queueStorage.Consumer) {
+func (cgm *GroupManager) RestoreConsumer(consumer *queueStorage.Consumer) {
 	cgm.mu.Lock()
 	defer cgm.mu.Unlock()
 
 	group, exists := cgm.groups[consumer.GroupID]
 	if !exists {
-		group = NewConsumerGroup(consumer.GroupID, cgm.queueName)
+		group = NewGroup(consumer.GroupID, cgm.queueName)
 		cgm.groups[consumer.GroupID] = group
 	}
 	group.AddConsumer(consumer)
 }
 
 // Rebalance triggers rebalancing for a specific group.
-func (cgm *ConsumerGroupManager) Rebalance(groupID string, partitions []*Partition) error {
+func (cgm *GroupManager) Rebalance(groupID string, partitions []Partition) error {
 	cgm.mu.Lock()
 	defer cgm.mu.Unlock()
 
@@ -154,7 +162,7 @@ func (cgm *ConsumerGroupManager) Rebalance(groupID string, partitions []*Partiti
 
 // UpdateHeartbeat updates the heartbeat timestamp for a consumer.
 // Uses write lock to prevent race condition when updating consumer.LastHeartbeat.
-func (cgm *ConsumerGroupManager) UpdateHeartbeat(ctx context.Context, groupID, consumerID string) error {
+func (cgm *GroupManager) UpdateHeartbeat(ctx context.Context, groupID, consumerID string) error {
 	cgm.mu.Lock()
 	group, exists := cgm.groups[groupID]
 	if !exists {
@@ -176,7 +184,7 @@ func (cgm *ConsumerGroupManager) UpdateHeartbeat(ctx context.Context, groupID, c
 }
 
 // monitorHeartbeats runs in the background to check for stale consumers.
-func (cgm *ConsumerGroupManager) monitorHeartbeats() {
+func (cgm *GroupManager) monitorHeartbeats() {
 	ticker := time.NewTicker(cgm.heartbeatTimeout / 3)
 	defer ticker.Stop()
 
@@ -191,9 +199,9 @@ func (cgm *ConsumerGroupManager) monitorHeartbeats() {
 }
 
 // checkStaleConsumers identifies and removes consumers with stale heartbeats.
-func (cgm *ConsumerGroupManager) checkStaleConsumers() {
+func (cgm *GroupManager) checkStaleConsumers() {
 	cgm.mu.RLock()
-	groups := make([]*ConsumerGroup, 0, len(cgm.groups))
+	groups := make([]*Group, 0, len(cgm.groups))
 	for _, group := range cgm.groups {
 		groups = append(groups, group)
 	}
@@ -220,23 +228,23 @@ func (cgm *ConsumerGroupManager) checkStaleConsumers() {
 }
 
 // Stop stops the heartbeat monitoring.
-func (cgm *ConsumerGroupManager) Stop() {
+func (cgm *GroupManager) Stop() {
 	if cgm.cancel != nil {
 		cgm.cancel()
 	}
 }
 
-// ConsumerGroup represents a group of consumers sharing a queue.
-type ConsumerGroup struct {
+// Group represents a group of consumers sharing a queue.
+type Group struct {
 	id        string
 	queueName string
 	consumers map[string]*queueStorage.Consumer
 	mu        sync.RWMutex
 }
 
-// NewConsumerGroup creates a new consumer group.
-func NewConsumerGroup(id, queueName string) *ConsumerGroup {
-	return &ConsumerGroup{
+// NewGroup creates a new consumer group.
+func NewGroup(id, queueName string) *Group {
+	return &Group{
 		id:        id,
 		queueName: queueName,
 		consumers: make(map[string]*queueStorage.Consumer),
@@ -244,12 +252,12 @@ func NewConsumerGroup(id, queueName string) *ConsumerGroup {
 }
 
 // ID returns the group ID.
-func (cg *ConsumerGroup) ID() string {
+func (cg *Group) ID() string {
 	return cg.id
 }
 
 // AddConsumer adds a consumer to the group.
-func (cg *ConsumerGroup) AddConsumer(consumer *queueStorage.Consumer) {
+func (cg *Group) AddConsumer(consumer *queueStorage.Consumer) {
 	cg.mu.Lock()
 	defer cg.mu.Unlock()
 
@@ -257,7 +265,7 @@ func (cg *ConsumerGroup) AddConsumer(consumer *queueStorage.Consumer) {
 }
 
 // RemoveConsumer removes a consumer from the group.
-func (cg *ConsumerGroup) RemoveConsumer(consumerID string) {
+func (cg *Group) RemoveConsumer(consumerID string) {
 	cg.mu.Lock()
 	defer cg.mu.Unlock()
 
@@ -265,7 +273,7 @@ func (cg *ConsumerGroup) RemoveConsumer(consumerID string) {
 }
 
 // GetConsumer returns a consumer by ID.
-func (cg *ConsumerGroup) GetConsumer(consumerID string) (*queueStorage.Consumer, bool) {
+func (cg *Group) GetConsumer(consumerID string) (*queueStorage.Consumer, bool) {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
@@ -274,7 +282,7 @@ func (cg *ConsumerGroup) GetConsumer(consumerID string) (*queueStorage.Consumer,
 }
 
 // ListConsumers returns all consumers in the group.
-func (cg *ConsumerGroup) ListConsumers() []*queueStorage.Consumer {
+func (cg *Group) ListConsumers() []*queueStorage.Consumer {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
@@ -286,7 +294,7 @@ func (cg *ConsumerGroup) ListConsumers() []*queueStorage.Consumer {
 }
 
 // Size returns the number of consumers in the group.
-func (cg *ConsumerGroup) Size() int {
+func (cg *Group) Size() int {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
@@ -298,7 +306,7 @@ func (cg *ConsumerGroup) Size() int {
 // Note: Partition.assignedTo is per-partition global state and not used for actual delivery.
 // Delivery uses consumer.AssignedParts instead. We only clear consumer assignments here
 // to avoid affecting other groups' partition tracking.
-func (cg *ConsumerGroup) Rebalance(partitions []*Partition) {
+func (cg *Group) Rebalance(partitions []Partition) {
 	cg.mu.Lock()
 	defer cg.mu.Unlock()
 
@@ -339,7 +347,7 @@ func (cg *ConsumerGroup) Rebalance(partitions []*Partition) {
 }
 
 // GetConsumerForPartition returns the consumer assigned to a partition.
-func (cg *ConsumerGroup) GetConsumerForPartition(partitionID int) (*queueStorage.Consumer, bool) {
+func (cg *Group) GetConsumerForPartition(partitionID int) (*queueStorage.Consumer, bool) {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 

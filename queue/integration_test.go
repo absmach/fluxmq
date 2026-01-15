@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/mqtt/queue/delivery"
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 	"github.com/absmach/mqtt/queue/storage/memory"
 	"github.com/stretchr/testify/assert"
@@ -50,8 +51,8 @@ func TestIntegration_CompleteMessageLifecycle(t *testing.T) {
 	queue, err := mgr.GetQueue(queueName)
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify message was delivered
 	deliveries := broker.GetDeliveries("client-1")
@@ -111,8 +112,8 @@ func TestIntegration_RetryFlow(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/retry-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Verify initial delivery
 	deliveries := broker.GetDeliveries("client-1")
@@ -179,8 +180,8 @@ func TestIntegration_DLQFlow(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/dlq-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
-	worker.deliverMessages(ctx)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
+	worker.DeliverMessages(ctx)
 
 	// Get message ID
 	inflight, err := store.GetInflight(ctx, "$queue/dlq-test")
@@ -307,9 +308,9 @@ func TestIntegration_OrderingGuarantees(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/ordering-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 	for i := 0; i < 5; i++ {
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 	}
 
 	// Verify all messages were delivered in order
@@ -385,13 +386,13 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 	queue, err := mgr.GetQueue("$queue/concurrent-test")
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	// Run delivery cycles until all messages are delivered or timeout
 	// This handles varying batch sizes and ensures test reliability
 	maxAttempts := 100
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 
 		// Count total deliveries
 		totalDeliveries := 0
@@ -500,9 +501,9 @@ func TestIntegration_MultipleGroups_IndependentConsumption(t *testing.T) {
 	queue, err := mgr.GetQueue(queueName)
 	require.NoError(t, err)
 
-	worker := NewDeliveryWorker(queue, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(queue, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 	for i := 0; i < 5; i++ {
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 	}
 
 	// Both groups should receive messages independently

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/mqtt/queue/delivery"
 	queueStorage "github.com/absmach/mqtt/queue/storage"
 	"github.com/absmach/mqtt/queue/storage/memory"
 )
@@ -49,7 +50,7 @@ func BenchmarkE2E_PublishToAck(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	payload := []byte("e2e benchmark message")
 	props := map[string]string{}
@@ -64,7 +65,7 @@ func BenchmarkE2E_PublishToAck(b *testing.B) {
 		}
 
 		// 2. Deliver
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 
 		// 3. Ack
 		inflight, err := store.GetInflight(ctx, queueName)
@@ -118,7 +119,7 @@ func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	payload := []byte("concurrent message")
 	props := map[string]string{}
@@ -147,7 +148,7 @@ func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 	go func() {
 		defer wg.Done()
 		for consumed.Load() < int64(b.N) {
-			worker.deliverMessages(ctx)
+			worker.DeliverMessages(ctx)
 
 			inflight, err := store.GetInflight(ctx, queueName)
 			if err != nil {
@@ -203,7 +204,7 @@ func BenchmarkE2E_Latency(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	payload := []byte("latency test message")
 	props := map[string]string{}
@@ -221,7 +222,7 @@ func BenchmarkE2E_Latency(b *testing.B) {
 		}
 
 		// Deliver
-		worker.deliverMessages(ctx)
+		worker.DeliverMessages(ctx)
 
 		// Ack
 		inflight, err := store.GetInflight(ctx, queueName)
@@ -290,7 +291,7 @@ func BenchmarkE2E_Sustained(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	worker := NewDeliveryWorker(q, store, broker.DeliverToSession, nil, "local", ProxyMode, nil, nil)
+	worker := delivery.NewWorker(q, store, broker.DeliverToSession, nil, "local", delivery.ProxyMode, nil, nil)
 
 	payload := []byte("sustained throughput message")
 	props := map[string]string{}
@@ -323,7 +324,7 @@ func BenchmarkE2E_Sustained(b *testing.B) {
 		for consumed.Load() < int64(b.N) {
 			select {
 			case <-ticker.C:
-				worker.deliverMessages(ctx)
+				worker.DeliverMessages(ctx)
 
 				inflight, err := store.GetInflight(ctx, queueName)
 				if err != nil {
