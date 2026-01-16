@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets"
-	v3 "github.com/absmach/mqtt/core/packets/v3"
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/storage/messages"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/core/packets"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/messages"
 )
 
 var _ Handler = (*V3Handler)(nil)

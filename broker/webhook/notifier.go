@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/broker/events"
-	"github.com/absmach/mqtt/config"
+	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/config"
 	"github.com/sony/gobreaker"
 )
 
@@ -267,7 +267,6 @@ func (n *GenericNotifier) processJob(job eventJob) {
 	_, err := breaker.Execute(func() (interface{}, error) {
 		return nil, n.sendWebhook(job)
 	})
-
 	if err != nil {
 		// Retry logic
 		if job.attempt < job.endpoint.retryConfig.MaxAttempts-1 {

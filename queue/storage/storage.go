@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/absmach/mqtt/core"
+	"github.com/absmach/fluxmq/core"
 )
 
 var (

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/testutil"
+	"github.com/absmach/fluxmq/testutil"
 	"github.com/stretchr/testify/require"
 )
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/fluxmq/core/packets"
 	"github.com/stretchr/testify/assert"
 )
 

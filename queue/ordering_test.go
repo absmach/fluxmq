@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

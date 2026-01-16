@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/core/packets"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/core/packets"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 // mockAddr implements net.Addr for testing.

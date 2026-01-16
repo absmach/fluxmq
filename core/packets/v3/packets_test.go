@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	. "github.com/absmach/mqtt/core/packets/v3"
+	. "github.com/absmach/fluxmq/core/packets/v3"
 )
 
 func TestConnectEncodeDecode(t *testing.T) {

@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/absmach/mqtt/broker/events"
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/storage/messages"
-	"github.com/absmach/mqtt/topics"
+	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/messages"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // CreateSession creates a new session or returns an existing one.

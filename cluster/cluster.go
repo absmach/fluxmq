@@ -7,9 +7,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // SessionOwnership manages distributed session ownership across cluster nodes.

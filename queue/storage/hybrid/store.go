@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory/lockfree"
+	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory/lockfree"
 )
 
 // PersistentStore combines all storage interfaces for the persistent layer.

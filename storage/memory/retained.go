@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/topics"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 )
 
 var _ storage.RetainedStore = (*RetainedStore)(nil)

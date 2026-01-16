@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // Queue defines operations on offline message queue.

@@ -36,7 +36,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/absmach/mqtt/client"
+	"github.com/absmach/fluxmq/client"
 )
 
 const queueName = "tasks/orders"

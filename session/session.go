@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets"
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/storage/messages"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/core/packets"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/messages"
 )
 
 // State represents the session state.

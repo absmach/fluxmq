@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.etcd.io/etcd/server/v3/embed"

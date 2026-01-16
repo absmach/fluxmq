@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/queue/delivery"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory"
-	brokerStorage "github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/queue/delivery"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory"
+	brokerStorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

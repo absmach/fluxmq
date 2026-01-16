@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 // DLQManager manages dead letter queue operations.

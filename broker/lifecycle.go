@@ -8,8 +8,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/absmach/mqtt/core/packets"
-	"github.com/absmach/mqtt/session"
+	"github.com/absmach/fluxmq/core/packets"
+	"github.com/absmach/fluxmq/session"
 )
 
 // runSession runs the main packet loop for a session using a Handler.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // LockFreeRouter implements a lock-free topic router using atomic operations

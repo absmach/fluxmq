@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/broker/events"
-	"github.com/absmach/mqtt/config"
+	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/config"
 )
 
 // mockSender implements Sender interface for testing

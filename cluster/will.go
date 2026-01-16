@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

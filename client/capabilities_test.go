@@ -6,7 +6,7 @@ package client
 import (
 	"testing"
 
-	v5 "github.com/absmach/mqtt/core/packets/v5"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 func TestParseConnAckProperties_Nil(t *testing.T) {

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	badgerstore "github.com/absmach/mqtt/queue/storage/badger"
-	memstore "github.com/absmach/mqtt/queue/storage/memory"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
+	memstore "github.com/absmach/fluxmq/queue/storage/memory"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,7 +64,7 @@ func setupReplicatedTest(t *testing.T, nodeCount int, queueName string, partitio
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		nodeDir := filepath.Join(tempDir, nodeID)
-		err := os.MkdirAll(nodeDir, 0755)
+		err := os.MkdirAll(nodeDir, 0o755)
 		require.NoError(t, err)
 
 		// Create BadgerDB store for this node
@@ -190,7 +190,7 @@ func TestReplication_BasicEnqueueDequeue(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		nodeDir := filepath.Join(tempDir, nodeID)
-		err := os.MkdirAll(nodeDir, 0755)
+		err := os.MkdirAll(nodeDir, 0o755)
 		require.NoError(t, err)
 
 		// Create BadgerDB store for this node

@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
@@ -65,9 +65,9 @@ type RaftGroupConfig struct {
 	AckTimeout time.Duration
 
 	// Raft tuning
-	HeartbeatTimeout time.Duration
-	ElectionTimeout  time.Duration
-	SnapshotInterval time.Duration
+	HeartbeatTimeout  time.Duration
+	ElectionTimeout   time.Duration
+	SnapshotInterval  time.Duration
 	SnapshotThreshold uint64
 
 	MessageStore storage.MessageStore
@@ -111,7 +111,7 @@ func NewRaftGroup(cfg RaftGroupConfig) (*RaftGroup, error) {
 	// Create data directory for this partition
 	partitionDir := filepath.Join(cfg.DataDir, fmt.Sprintf("partition-%d", cfg.PartitionID))
 	raftDir := filepath.Join(partitionDir, "raft")
-	if err := os.MkdirAll(raftDir, 0755); err != nil {
+	if err := os.MkdirAll(raftDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create raft directory: %w", err)
 	}
 

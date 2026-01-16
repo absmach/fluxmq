@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/core/packets"
-	v3 "github.com/absmach/mqtt/core/packets/v3"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/core/packets"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 var _ Connection = (*connection)(nil)

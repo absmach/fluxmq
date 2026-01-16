@@ -1,6 +1,6 @@
-# Absmach MQTT Broker
+# FluxMQ
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/absmach/mqtt)](https://goreportcard.com/report/github.com/absmach/mqtt)
+[![Go Report Card](https://goreportcard.com/badge/github.com/absmach/fluxmq)](https://goreportcard.com/report/github.com/absmach/fluxmq)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. Supports MQTT 3.1.1 and 5.0 over TCP and WebSocket, plus HTTP-MQTT and CoAP bridges for IoT integration.
@@ -181,7 +181,7 @@ All protocols share the same broker core - messages flow seamlessly across proto
 
 ```bash
 # Clone and build
-git clone https://github.com/absmach/mqtt.git
+git clone https://github.com/absmach/fluxmq.git
 cd mqtt
 make build
 

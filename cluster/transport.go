@@ -13,8 +13,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/core"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/core"
 	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"

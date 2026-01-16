@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/absmach/mqtt/core/codec"
+	"github.com/absmach/fluxmq/core/codec"
 )
 
 // ErrFailRemaining indicates remaining data does not match the size of sent data.

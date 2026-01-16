@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -872,7 +872,6 @@ func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partit
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -913,7 +912,6 @@ func (s *Store) ListMessagesBefore(ctx context.Context, queueName string, partit
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -987,7 +985,6 @@ func (s *Store) DeleteMessageBatch(ctx context.Context, queueName string, messag
 
 		return nil
 	})
-
 	if err != nil {
 		return 0, err
 	}
@@ -1030,7 +1027,6 @@ func (s *Store) GetQueueSize(ctx context.Context, queueName string) (int64, erro
 		}
 		return nil
 	})
-
 	if err != nil {
 		return 0, err
 	}
@@ -1065,7 +1061,6 @@ func (s *Store) ListAllMessages(ctx context.Context, queueName string, partition
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}

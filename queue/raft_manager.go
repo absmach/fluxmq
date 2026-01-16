@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/absmach/mqtt/queue/raft"
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/raft"
+	"github.com/absmach/fluxmq/queue/storage"
 	raftlib "github.com/hashicorp/raft"
 )
 

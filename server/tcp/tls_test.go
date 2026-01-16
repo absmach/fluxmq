@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/core/packets/v3"
-	"github.com/absmach/mqtt/storage/memory"
+	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/cluster"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	"github.com/absmach/fluxmq/storage/memory"
 )
 
 func TestTLS_BasicConnection(t *testing.T) {
@@ -64,11 +64,11 @@ func TestTLS_BasicConnection(t *testing.T) {
 
 	// Send MQTT CONNECT packet
 	connectPkt := &v3.Connect{
-		FixedHeader:  v3.FixedHeader{PacketType: v3.ConnectType},
-		ProtocolName: "MQTT",
+		FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
+		ProtocolName:    "MQTT",
 		ProtocolVersion: 4,
-		CleanSession: true,
-		ClientID:     "tls-test-client",
+		CleanSession:    true,
+		ClientID:        "tls-test-client",
 	}
 
 	if err := connectPkt.Pack(conn); err != nil {

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/absmach/mqtt/core/codec"
-	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/fluxmq/core/codec"
+	"github.com/absmach/fluxmq/core/packets"
 )
 
 // PubAck represents the MQTT V3.1.1 PUBACK packet.

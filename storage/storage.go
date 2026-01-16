@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/absmach/mqtt/core"
+	"github.com/absmach/fluxmq/core"
 )
 
 // Common errors.

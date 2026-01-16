@@ -6,7 +6,7 @@ package queue
 import (
 	"sync"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 var (

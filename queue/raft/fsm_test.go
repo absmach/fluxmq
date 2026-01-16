@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
-	badgerstore "github.com/absmach/mqtt/queue/storage/badger"
+	"github.com/absmach/fluxmq/queue/storage"
+	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
 )

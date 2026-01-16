@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/storage"
 	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/message/codes"

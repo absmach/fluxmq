@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	badgerstore "github.com/absmach/mqtt/queue/storage/badger"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -231,7 +231,7 @@ func setupBenchCluster(b *testing.B, nodeCount int, queueName string, partitions
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		nodeDir := filepath.Join(tempDir, nodeID)
-		err := os.MkdirAll(nodeDir, 0755)
+		err := os.MkdirAll(nodeDir, 0o755)
 		require.NoError(b, err)
 
 		dbPath := filepath.Join(nodeDir, "data")

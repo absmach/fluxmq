@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 const separator = "/" // TrieRouter handles topic matching and subscription storage.

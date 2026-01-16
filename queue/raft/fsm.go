@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/hashicorp/raft"
 )
 

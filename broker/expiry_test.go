@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/core/packets"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/storage/memory"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/core/packets"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/memory"
 )
 
 func TestMessageExpiry_ImmediateDelivery(t *testing.T) {

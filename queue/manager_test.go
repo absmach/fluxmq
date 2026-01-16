@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/cluster/grpc"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory"
-	brokerStorage "github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory"
+	brokerStorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -560,14 +560,14 @@ func TestManager_GetStats(t *testing.T) {
 
 // MockCluster implements cluster.Cluster for testing
 type MockCluster struct {
-	nodeID               string
-	nodes                []string // List of node IDs in the cluster
-	enqueueRemoteCalls   []EnqueueRemoteCall
-	routeQueueMsgCalls   []RouteQueueMessageCall
-	partitionOwners      map[string]map[int]string // queueName -> partitionID -> nodeID
-	enqueueRemoteError   error
-	routeQueueMsgError   error
-	mu                   sync.Mutex
+	nodeID             string
+	nodes              []string // List of node IDs in the cluster
+	enqueueRemoteCalls []EnqueueRemoteCall
+	routeQueueMsgCalls []RouteQueueMessageCall
+	partitionOwners    map[string]map[int]string // queueName -> partitionID -> nodeID
+	enqueueRemoteError error
+	routeQueueMsgError error
+	mu                 sync.Mutex
 }
 
 type EnqueueRemoteCall struct {
@@ -666,48 +666,61 @@ func (m *MockCluster) SetPartitionOwner(queueName string, partitionID int, nodeI
 
 // Stub methods for cluster.Cluster interface
 func (m *MockCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error { return nil }
-func (m *MockCluster) ReleaseSession(ctx context.Context, clientID string) error { return nil }
+func (m *MockCluster) ReleaseSession(ctx context.Context, clientID string) error         { return nil }
 func (m *MockCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
 	return m.nodeID, true, nil
 }
+
 func (m *MockCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan cluster.OwnershipChange {
 	ch := make(chan cluster.OwnershipChange)
 	close(ch)
 	return ch
 }
+
 func (m *MockCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error {
 	m.SetPartitionOwner(queueName, partitionID, nodeID)
 	return nil
 }
-func (m *MockCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error { return nil }
+
+func (m *MockCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error {
+	return nil
+}
+
 func (m *MockCluster) WatchPartitionOwnership(ctx context.Context, queueName string) <-chan cluster.PartitionOwnershipChange {
 	ch := make(chan cluster.PartitionOwnershipChange)
 	close(ch)
 	return ch
 }
+
 func (m *MockCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts brokerStorage.SubscribeOptions) error {
 	return nil
 }
-func (m *MockCluster) RemoveSubscription(ctx context.Context, clientID, filter string) error { return nil }
+
+func (m *MockCluster) RemoveSubscription(ctx context.Context, clientID, filter string) error {
+	return nil
+}
+
 func (m *MockCluster) GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*brokerStorage.Subscription, error) {
 	return nil, nil
 }
+
 func (m *MockCluster) GetSubscribersForTopic(ctx context.Context, topic string) ([]*brokerStorage.Subscription, error) {
 	return nil, nil
 }
 func (m *MockCluster) Retained() brokerStorage.RetainedStore { return nil }
-func (m *MockCluster) Wills() brokerStorage.WillStore { return nil }
+func (m *MockCluster) Wills() brokerStorage.WillStore        { return nil }
 func (m *MockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
 	return nil
 }
+
 func (m *MockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
 	return nil, nil
 }
-func (m *MockCluster) IsLeader() bool { return true }
+func (m *MockCluster) IsLeader() bool                          { return true }
 func (m *MockCluster) WaitForLeader(ctx context.Context) error { return nil }
-func (m *MockCluster) Start() error { return nil }
-func (m *MockCluster) Stop() error { return nil }
-func (m *MockCluster) NodeID() string { return m.nodeID }
+func (m *MockCluster) Start() error                            { return nil }
+func (m *MockCluster) Stop() error                             { return nil }
+func (m *MockCluster) NodeID() string                          { return m.nodeID }
 func (m *MockCluster) Nodes() []cluster.NodeInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/fluxmq/core/packets"
 )
 
 // Re-export common types.

@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/absmach/mqtt/broker/router"
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/server/otel"
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/storage/memory"
+	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/server/otel"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/memory"
 	"go.opentelemetry.io/otel/trace"
 )
 

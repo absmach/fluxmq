@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"io"
 
-	codec "github.com/absmach/mqtt/core/codec"
-	"github.com/absmach/mqtt/core/packets"
+	codec "github.com/absmach/fluxmq/core/codec"
+	"github.com/absmach/fluxmq/core/packets"
 )
 
 // The List of valid PubRec reason codes

@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets"
-	v3 "github.com/absmach/mqtt/core/packets/v3"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/core/packets"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
 	"github.com/gorilla/websocket"
 )
 

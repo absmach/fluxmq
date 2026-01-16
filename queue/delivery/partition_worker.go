@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/core"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	brokerStorage "github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/core"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	brokerStorage "github.com/absmach/fluxmq/storage"
 )
 
 // PartitionWorker handles message delivery for a single partition.

@@ -6,7 +6,7 @@ package router
 import (
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // Pool for subscription slices to reduce allocations in Match()

@@ -227,7 +227,7 @@ The zero-copy optimization using reference-counted buffers provides significant 
 | **Throughput**          | 4.6K msg/s | 14.9K msg/s | **3.24x increase**   |
 | **GC CPU Time**         | 75%        | ~40%        | **35% reduction**    |
 
-📁 **Test file:** [broker/message_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/broker/message_bench_test.go)
+📁 **Test file:** [broker/message_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/message_bench_test.go)
 
 ```bash
 # Run this benchmark
@@ -245,7 +245,7 @@ go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 -benchmem -bench
 
 **Key insight:** Larger messages see dramatically better improvements.
 
-📁 **Test file:** [broker/message_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/broker/message_bench_test.go)
+📁 **Test file:** [broker/message_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/message_bench_test.go)
 
 ```bash
 # Run zero-copy comparison
@@ -317,7 +317,7 @@ go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./broker
 - Pool provides consistent performance regardless of buffer size
 - Zero allocations when pool is warm
 
-📁 **Test file:** [core/refbuffer_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/core/refbuffer_test.go)
+📁 **Test file:** [core/refbuffer_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/core/refbuffer_test.go)
 
 ```bash
 go test -bench=BenchmarkBufferPool -benchmem ./core
@@ -332,7 +332,7 @@ go test -bench=BenchmarkBufferPool -benchmem ./core
 | Unsubscribe         | 21.7 μs/op | 109 B/op | 4      |
 | Wildcard matching   | 212 ns/op  | 199 B/op | 6      |
 
-📁 **Test file:** [broker/router/router_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/broker/router/router_bench_test.go)
+📁 **Test file:** [broker/router/router_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/router/router_bench_test.go)
 
 ```bash
 go test -bench=. -benchmem ./broker/router
@@ -348,7 +348,7 @@ go test -bench=. -benchmem ./broker/router
 | **Memory Pressure** | 64KB-1MB messages to 20 subs | <100MB total |
 | **Extreme Fan-Out** | 1K msgs to 5K subs | 5M deliveries, <100 B/delivery |
 
-📁 **Test file:** [broker/message_stress_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/broker/message_stress_test.go)
+📁 **Test file:** [broker/message_stress_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/message_stress_test.go)
 
 ```bash
 # Run all stress tests
@@ -374,8 +374,8 @@ go test -race -run=TestStress_ConcurrentPublishers ./broker
 | Dequeue (1 consumer)   | 337 μs/op  | 5,645 B/op | 9    |
 
 📁 **Test files:**
-- [queue/enqueue_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/queue/enqueue_bench_test.go)
-- [queue/dequeue_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/queue/dequeue_bench_test.go)
+- [queue/enqueue_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/enqueue_bench_test.go)
+- [queue/dequeue_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/dequeue_bench_test.go)
 
 ```bash
 go test -bench=. -benchmem ./queue
@@ -410,8 +410,8 @@ go test -bench=. -benchmem ./queue
 | Log compaction | <500ms | Per partition, 10min interval |
 
 📁 **Test files:**
-- [queue/replication_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/queue/replication_bench_test.go) - Performance benchmarks
-- [queue/failover_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/queue/failover_test.go) - Failover tests
+- [queue/replication_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/replication_bench_test.go) - Performance benchmarks
+- [queue/failover_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/failover_test.go) - Failover tests
 
 ```bash
 # Run replication benchmarks

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/topics"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // SharedSubscriptionManager manages shared subscriptions (MQTT 5.0).

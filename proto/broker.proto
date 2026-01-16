@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package cluster;
 
-option go_package = "github.com/absmach/mqtt/cluster/grpc";
+option go_package = "github.com/absmach/fluxmq/cluster/grpc";
 
 // BrokerService defines RPC methods for inter-broker communication in the cluster.
 service BrokerService {

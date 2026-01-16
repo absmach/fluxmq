@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/absmach/mqtt/config"
+	"github.com/absmach/fluxmq/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"

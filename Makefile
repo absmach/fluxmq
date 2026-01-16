@@ -2,7 +2,7 @@
 
 # Build configuration
 BUILD_DIR := build
-BINARY := mqttd
+BINARY := fluxmq
 GO := go
 
 # Build flags

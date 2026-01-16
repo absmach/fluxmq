@@ -7,11 +7,12 @@
 package grpc
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -1853,7 +1854,7 @@ const file_broker_proto_rawDesc = "" +
 	"\x11RouteQueueMessage\x12!.cluster.RouteQueueMessageRequest\x1a\".cluster.RouteQueueMessageResponse\x12N\n" +
 	"\rAppendEntries\x12\x1d.cluster.AppendEntriesRequest\x1a\x1e.cluster.AppendEntriesResponse\x12H\n" +
 	"\vRequestVote\x12\x1b.cluster.RequestVoteRequest\x1a\x1c.cluster.RequestVoteResponse\x12T\n" +
-	"\x0fInstallSnapshot\x12\x1f.cluster.InstallSnapshotRequest\x1a .cluster.InstallSnapshotResponseB&Z$github.com/absmach/mqtt/cluster/grpcb\x06proto3"
+	"\x0fInstallSnapshot\x12\x1f.cluster.InstallSnapshotRequest\x1a .cluster.InstallSnapshotResponseB&Z$github.com/absmach/fluxmq/cluster/grpcb\x06proto3"
 
 var (
 	file_broker_proto_rawDescOnce sync.Once
@@ -1867,37 +1868,39 @@ func file_broker_proto_rawDescGZIP() []byte {
 	return file_broker_proto_rawDescData
 }
 
-var file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
-var file_broker_proto_goTypes = []any{
-	(*PublishRequest)(nil),            // 0: cluster.PublishRequest
-	(*PublishResponse)(nil),           // 1: cluster.PublishResponse
-	(*TakeoverRequest)(nil),           // 2: cluster.TakeoverRequest
-	(*SessionState)(nil),              // 3: cluster.SessionState
-	(*InflightMessage)(nil),           // 4: cluster.InflightMessage
-	(*QueuedMessage)(nil),             // 5: cluster.QueuedMessage
-	(*Subscription)(nil),              // 6: cluster.Subscription
-	(*WillMessage)(nil),               // 7: cluster.WillMessage
-	(*TakeoverResponse)(nil),          // 8: cluster.TakeoverResponse
-	(*FetchRetainedRequest)(nil),      // 9: cluster.FetchRetainedRequest
-	(*RetainedMessage)(nil),           // 10: cluster.RetainedMessage
-	(*FetchRetainedResponse)(nil),     // 11: cluster.FetchRetainedResponse
-	(*FetchWillRequest)(nil),          // 12: cluster.FetchWillRequest
-	(*FetchWillResponse)(nil),         // 13: cluster.FetchWillResponse
-	(*EnqueueRemoteRequest)(nil),      // 14: cluster.EnqueueRemoteRequest
-	(*EnqueueRemoteResponse)(nil),     // 15: cluster.EnqueueRemoteResponse
-	(*RouteQueueMessageRequest)(nil),  // 16: cluster.RouteQueueMessageRequest
-	(*RouteQueueMessageResponse)(nil), // 17: cluster.RouteQueueMessageResponse
-	(*AppendEntriesRequest)(nil),      // 18: cluster.AppendEntriesRequest
-	(*AppendEntriesResponse)(nil),     // 19: cluster.AppendEntriesResponse
-	(*RequestVoteRequest)(nil),        // 20: cluster.RequestVoteRequest
-	(*RequestVoteResponse)(nil),       // 21: cluster.RequestVoteResponse
-	(*InstallSnapshotRequest)(nil),    // 22: cluster.InstallSnapshotRequest
-	(*InstallSnapshotResponse)(nil),   // 23: cluster.InstallSnapshotResponse
-	nil,                               // 24: cluster.PublishRequest.PropertiesEntry
-	nil,                               // 25: cluster.RetainedMessage.PropertiesEntry
-	nil,                               // 26: cluster.EnqueueRemoteRequest.PropertiesEntry
-	nil,                               // 27: cluster.RouteQueueMessageRequest.PropertiesEntry
-}
+var (
+	file_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+	file_broker_proto_goTypes  = []any{
+		(*PublishRequest)(nil),            // 0: cluster.PublishRequest
+		(*PublishResponse)(nil),           // 1: cluster.PublishResponse
+		(*TakeoverRequest)(nil),           // 2: cluster.TakeoverRequest
+		(*SessionState)(nil),              // 3: cluster.SessionState
+		(*InflightMessage)(nil),           // 4: cluster.InflightMessage
+		(*QueuedMessage)(nil),             // 5: cluster.QueuedMessage
+		(*Subscription)(nil),              // 6: cluster.Subscription
+		(*WillMessage)(nil),               // 7: cluster.WillMessage
+		(*TakeoverResponse)(nil),          // 8: cluster.TakeoverResponse
+		(*FetchRetainedRequest)(nil),      // 9: cluster.FetchRetainedRequest
+		(*RetainedMessage)(nil),           // 10: cluster.RetainedMessage
+		(*FetchRetainedResponse)(nil),     // 11: cluster.FetchRetainedResponse
+		(*FetchWillRequest)(nil),          // 12: cluster.FetchWillRequest
+		(*FetchWillResponse)(nil),         // 13: cluster.FetchWillResponse
+		(*EnqueueRemoteRequest)(nil),      // 14: cluster.EnqueueRemoteRequest
+		(*EnqueueRemoteResponse)(nil),     // 15: cluster.EnqueueRemoteResponse
+		(*RouteQueueMessageRequest)(nil),  // 16: cluster.RouteQueueMessageRequest
+		(*RouteQueueMessageResponse)(nil), // 17: cluster.RouteQueueMessageResponse
+		(*AppendEntriesRequest)(nil),      // 18: cluster.AppendEntriesRequest
+		(*AppendEntriesResponse)(nil),     // 19: cluster.AppendEntriesResponse
+		(*RequestVoteRequest)(nil),        // 20: cluster.RequestVoteRequest
+		(*RequestVoteResponse)(nil),       // 21: cluster.RequestVoteResponse
+		(*InstallSnapshotRequest)(nil),    // 22: cluster.InstallSnapshotRequest
+		(*InstallSnapshotResponse)(nil),   // 23: cluster.InstallSnapshotResponse
+		nil,                               // 24: cluster.PublishRequest.PropertiesEntry
+		nil,                               // 25: cluster.RetainedMessage.PropertiesEntry
+		nil,                               // 26: cluster.EnqueueRemoteRequest.PropertiesEntry
+		nil,                               // 27: cluster.RouteQueueMessageRequest.PropertiesEntry
+	}
+)
 var file_broker_proto_depIdxs = []int32{
 	24, // 0: cluster.PublishRequest.properties:type_name -> cluster.PublishRequest.PropertiesEntry
 	4,  // 1: cluster.SessionState.inflight_messages:type_name -> cluster.InflightMessage

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/absmach/mqtt/core/codec"
+	"github.com/absmach/fluxmq/core/codec"
 )
 
 // PropPayloadFormat, etc are the list of property codes for the

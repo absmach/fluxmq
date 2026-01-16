@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 func TestMessageStore(t *testing.T) {

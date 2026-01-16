@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/queue/delivery"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/delivery"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory"
 )
 
 // setupQueueWithMessages creates a queue and enqueues N messages

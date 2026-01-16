@@ -8,7 +8,7 @@ import (
 	"io"
 	"testing"
 
-	. "github.com/absmach/mqtt/core/packets/v5"
+	. "github.com/absmach/fluxmq/core/packets/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

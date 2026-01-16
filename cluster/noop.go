@@ -8,8 +8,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // ErrClusterNotEnabled is returned when cluster operations are called on a non-clustered broker.

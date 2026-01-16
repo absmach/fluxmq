@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 )
 
 // Store is a lock-free message store using SPSC ring buffers per partition.

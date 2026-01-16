@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/absmach/mqtt/cluster"
+	"github.com/absmach/fluxmq/cluster"
 )
 
 // PartitionAssigner determines which node owns a partition.

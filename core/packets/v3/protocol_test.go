@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/absmach/mqtt/core/packets/v3"
+	. "github.com/absmach/fluxmq/core/packets/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

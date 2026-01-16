@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // expiryLoop periodically checks for expired sessions.

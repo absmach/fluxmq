@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/queue/consumer"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory"
-	brokerStorage "github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/queue/consumer"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory"
+	brokerStorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +112,7 @@ func (c *MockCluster) Wills() brokerStorage.WillStore        { return nil }
 func (c *MockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
 	return nil
 }
+
 func (c *MockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
 	return nil, nil
 }
@@ -122,6 +123,7 @@ func (c *MockCluster) Leave(string) error        { return nil }
 func (c *MockCluster) WatchSessionOwner(context.Context, string) <-chan cluster.OwnershipChange {
 	return nil
 }
+
 func (c *MockCluster) WatchPartitionOwnership(context.Context, string) <-chan cluster.PartitionOwnershipChange {
 	return nil
 }
@@ -131,6 +133,7 @@ func (c *MockCluster) RemoveSubscription(context.Context, string, string) error 
 func (c *MockCluster) GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, bool, error) {
 	return "", false, nil
 }
+
 func (c *MockCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, owner string) error {
 	return nil
 }
@@ -146,6 +149,7 @@ func (c *MockCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 func (c *MockCluster) GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*brokerStorage.Subscription, error) {
 	return nil, nil
 }
+
 func (c *MockCluster) EnqueueRemote(ctx context.Context, nodeID, queue string, payload []byte, properties map[string]string) (string, error) {
 	return "", nil
 }

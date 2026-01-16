@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 )
 
 // Store implements all queue storage interfaces using in-memory maps.

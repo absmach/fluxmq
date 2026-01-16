@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/storage/memory"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"

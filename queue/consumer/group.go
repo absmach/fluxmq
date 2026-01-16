@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 // Partition is an interface for partition operations needed by consumer groups.

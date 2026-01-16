@@ -4,10 +4,10 @@
 package broker
 
 import (
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets"
-	v3 "github.com/absmach/mqtt/core/packets/v3"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/core/packets"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 // HandleConnection handles a new incoming connection from the TCP server.

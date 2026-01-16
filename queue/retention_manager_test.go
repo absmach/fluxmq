@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

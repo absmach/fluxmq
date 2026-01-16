@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/queue/consumer"
-	"github.com/absmach/mqtt/queue/delivery"
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/queue/consumer"
+	"github.com/absmach/fluxmq/queue/delivery"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/google/uuid"
 )
 
@@ -986,4 +986,3 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 	}
 	return nil
 }
-

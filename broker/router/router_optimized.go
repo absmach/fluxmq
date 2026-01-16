@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // OptimizedRouter uses per-node RWMutex instead of a global lock.

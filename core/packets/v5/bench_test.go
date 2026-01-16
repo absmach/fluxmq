@@ -8,8 +8,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/absmach/mqtt/core/codec"
-	. "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/core/codec"
+	. "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 func BenchmarkReadInline(b *testing.B) {

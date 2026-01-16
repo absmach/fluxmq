@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/absmach/mqtt/broker/events"
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
-	"github.com/absmach/mqtt/topics"
+	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // subscribe adds a subscription for a session (internal domain method).

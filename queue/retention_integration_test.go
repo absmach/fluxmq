@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	badgerstore "github.com/absmach/mqtt/queue/storage/badger"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -285,7 +285,7 @@ func setupReplicatedTestWithRetention(t *testing.T, nodeCount int, queueName str
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		nodeDir := filepath.Join(tempDir, nodeID)
-		err := os.MkdirAll(nodeDir, 0755)
+		err := os.MkdirAll(nodeDir, 0o755)
 		require.NoError(t, err)
 
 		// Create BadgerDB store
@@ -332,10 +332,10 @@ func setupReplicatedTestWithRetention(t *testing.T, nodeCount int, queueName str
 			ElectionTimeout:   3 * time.Second,
 		},
 		Retention: queueStorage.RetentionPolicy{
-			RetentionMessages: 5,              // Keep max 5 messages
-			SizeCheckEvery:    5,              // Check every 5 enqueues
-			RetentionBytes:    0,              // No byte limit
-			RetentionTime:     0,              // No time limit
+			RetentionMessages: 5,               // Keep max 5 messages
+			SizeCheckEvery:    5,               // Check every 5 enqueues
+			RetentionBytes:    0,               // No byte limit
+			RetentionTime:     0,               // No time limit
 			TimeCheckInterval: 5 * time.Minute, // Not used for size-based
 		},
 		RetryPolicy: queueStorage.RetryPolicy{
@@ -410,7 +410,7 @@ func setupReplicatedTestWithTimeRetention(t *testing.T, nodeCount int, queueName
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		nodeDir := filepath.Join(tempDir, nodeID)
-		err := os.MkdirAll(nodeDir, 0755)
+		err := os.MkdirAll(nodeDir, 0o755)
 		require.NoError(t, err)
 
 		dbPath := filepath.Join(nodeDir, "data")
@@ -453,9 +453,9 @@ func setupReplicatedTestWithTimeRetention(t *testing.T, nodeCount int, queueName
 			ElectionTimeout:   3 * time.Second,
 		},
 		Retention: queueStorage.RetentionPolicy{
-			RetentionMessages: 0,                     // No message limit
-			SizeCheckEvery:    100,                   // Not used for time-based
-			RetentionBytes:    0,                     // No byte limit
+			RetentionMessages: 0,                      // No message limit
+			SizeCheckEvery:    100,                    // Not used for time-based
+			RetentionBytes:    0,                      // No byte limit
 			RetentionTime:     100 * time.Millisecond, // Messages older than 100ms are deleted
 			TimeCheckInterval: 50 * time.Millisecond,  // Check every 50ms
 		},
@@ -724,7 +724,7 @@ func setupReplicatedTestWithCompaction(t *testing.T, nodeCount int, queueName st
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node%d", i+1)
 		nodeDir := filepath.Join(tempDir, nodeID)
-		err := os.MkdirAll(nodeDir, 0755)
+		err := os.MkdirAll(nodeDir, 0o755)
 		require.NoError(t, err)
 
 		dbPath := filepath.Join(nodeDir, "data")

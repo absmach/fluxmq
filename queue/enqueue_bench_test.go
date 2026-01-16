@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"testing"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
-	"github.com/absmach/mqtt/queue/storage/memory"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage/memory"
 )
 
 // BenchmarkEnqueue_SinglePartition measures enqueue performance with one partition
@@ -274,7 +274,7 @@ func BenchmarkEnqueue_BatchSize(b *testing.B) {
 			ctx := context.Background()
 			queueName := fmt.Sprintf("$queue/bench-batch-%d", size)
 			config := queueStorage.DefaultQueueConfig(queueName)
-	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
+			config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 			if err := mgr.CreateQueue(ctx, config); err != nil {
 				b.Fatal(err)

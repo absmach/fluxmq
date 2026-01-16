@@ -1436,5 +1436,5 @@ client.SubscribeWithProperties("$queue/tasks/image-processing", qos, props)
 ## Support
 
 For questions or issues with durable queues:
-- GitHub Issues: https://github.com/absmach/mqtt/issues
-- Documentation: https://github.com/absmach/mqtt/docs
+- GitHub Issues: https://github.com/absmach/fluxmq/issues
+- Documentation: https://github.com/absmach/fluxmq/docs

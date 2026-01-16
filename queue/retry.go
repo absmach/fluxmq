@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 // RetryManager monitors inflight messages and handles retry logic.

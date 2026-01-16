@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/storage/memory"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

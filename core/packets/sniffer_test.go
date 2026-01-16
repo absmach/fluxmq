@@ -8,7 +8,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/fluxmq/core/packets"
 )
 
 func TestDetectProtocolVersion(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // Benchmark: Match operation (read-heavy, the common case)

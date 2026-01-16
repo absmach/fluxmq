@@ -6,8 +6,8 @@ package delivery
 import (
 	"context"
 
-	"github.com/absmach/mqtt/queue/consumer"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/consumer"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 // DeliverFn defines the function signature for delivering messages to clients.

@@ -7,8 +7,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/absmach/mqtt/cluster"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/cluster"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 // Worker manages partition workers for a queue.

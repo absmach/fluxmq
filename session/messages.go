@@ -9,11 +9,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets"
-	v3 "github.com/absmach/mqtt/core/packets/v3"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
-	"github.com/absmach/mqtt/storage/messages"
+	core "github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/core/packets"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
+	"github.com/absmach/fluxmq/storage/messages"
 )
 
 // msgHandler manages message tracking, inflight operations, and aliases.

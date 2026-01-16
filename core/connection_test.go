@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/core"
-	v3 "github.com/absmach/mqtt/core/packets/v3"
-	v5 "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/core"
+	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	v5 "github.com/absmach/fluxmq/core/packets/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

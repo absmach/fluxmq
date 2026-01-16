@@ -6,10 +6,10 @@ package broker
 import (
 	"errors"
 
-	"github.com/absmach/mqtt/core"
-	"github.com/absmach/mqtt/core/packets"
-	"github.com/absmach/mqtt/session"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/core"
+	"github.com/absmach/fluxmq/core/packets"
+	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // Common handler errors.

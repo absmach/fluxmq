@@ -25,7 +25,7 @@ package main
 
 import (
     "log"
-    "github.com/absmach/mqtt/client"
+    "github.com/absmach/fluxmq/client"
 )
 
 func main() {
@@ -295,7 +295,7 @@ package main
 
 import (
     "log"
-    "github.com/absmach/mqtt/client"
+    "github.com/absmach/fluxmq/client"
 )
 
 func main() {

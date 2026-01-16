@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // InflightState represents the state of an inflight message.

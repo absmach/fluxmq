@@ -4,7 +4,7 @@
 package memory
 
 import (
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 var _ storage.Store = (*Store)(nil)

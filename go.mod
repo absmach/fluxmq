@@ -1,4 +1,4 @@
-module github.com/absmach/mqtt
+module github.com/absmach/fluxmq
 
 go 1.24.3
 

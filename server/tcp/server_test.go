@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
+	"github.com/absmach/fluxmq/broker"
 )
 
 func TestServerStartStop(t *testing.T) {

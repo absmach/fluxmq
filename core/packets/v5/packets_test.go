@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	. "github.com/absmach/mqtt/core/packets/v5"
+	. "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 // Helper to create pointer to value.

@@ -942,8 +942,8 @@ Visit https://httpbin.org to see received requests.
 
 For questions, issues, or feature requests:
 
-- GitHub Issues: https://github.com/absmach/mqtt/issues
-- Documentation: https://github.com/absmach/mqtt/tree/main/docs
+- GitHub Issues: https://github.com/absmach/fluxmq/issues
+- Documentation: https://github.com/absmach/fluxmq/tree/main/docs
 
 ## License
 

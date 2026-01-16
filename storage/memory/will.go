@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 var _ storage.WillStore = (*WillStore)(nil)

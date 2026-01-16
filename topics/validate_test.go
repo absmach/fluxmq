@@ -6,7 +6,7 @@ package topics_test
 import (
 	"testing"
 
-	"github.com/absmach/mqtt/topics"
+	"github.com/absmach/fluxmq/topics"
 )
 
 func TestValidateTopicName(t *testing.T) {

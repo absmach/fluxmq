@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/server/tcp"
-	"github.com/absmach/mqtt/storage/badger"
-	"github.com/absmach/mqtt/testutil"
+	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/server/tcp"
+	"github.com/absmach/fluxmq/storage/badger"
+	"github.com/absmach/fluxmq/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

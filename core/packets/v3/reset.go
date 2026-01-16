@@ -3,7 +3,7 @@
 
 package v3
 
-import "github.com/absmach/mqtt/core/packets"
+import "github.com/absmach/fluxmq/core/packets"
 
 func (c *Connect) Reset() {
 	c.FixedHeader = packets.FixedHeader{PacketType: packets.ConnectType}

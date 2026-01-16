@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/absmach/mqtt/core/packets"
-	. "github.com/absmach/mqtt/core/packets/v5"
+	"github.com/absmach/fluxmq/core/packets"
+	. "github.com/absmach/fluxmq/core/packets/v5"
 )
 
 func TestPublishUnpackBytes(t *testing.T) {

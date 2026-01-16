@@ -7,9 +7,9 @@ import (
 	"context"
 	"sync"
 
-	"github.com/absmach/mqtt/queue/consumer"
-	"github.com/absmach/mqtt/queue/delivery"
-	queueStorage "github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/consumer"
+	"github.com/absmach/fluxmq/queue/delivery"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 )
 
 // Queue represents a single durable queue with partitions and consumer groups.

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/absmach/mqtt/broker/events"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.

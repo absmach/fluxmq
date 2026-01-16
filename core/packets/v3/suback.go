@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/absmach/mqtt/core/codec"
-	"github.com/absmach/mqtt/core/packets"
+	"github.com/absmach/fluxmq/core/codec"
+	"github.com/absmach/fluxmq/core/packets"
 )
 
 // SubAck return codes for MQTT v3.1.1.

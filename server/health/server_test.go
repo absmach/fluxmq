@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/cluster"
-	"github.com/absmach/mqtt/cluster/grpc"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/cluster/grpc"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // mockCluster implements cluster.Cluster interface for testing.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 var _ storage.MessageStore = (*MessageStore)(nil)

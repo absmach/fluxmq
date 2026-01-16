@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/storage"
 )
 
 var _ storage.SessionStore = (*SessionStore)(nil)

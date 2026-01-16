@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 )
 
 // RetentionManager handles automatic message cleanup based on retention policies.

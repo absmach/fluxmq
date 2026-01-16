@@ -6,7 +6,7 @@ package lockfree
 import (
 	"sync/atomic"
 
-	"github.com/absmach/mqtt/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 )
 
 // RingBuffer is a lock-free SPSC (Single-Producer-Single-Consumer) ring buffer.

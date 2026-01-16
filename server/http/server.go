@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/absmach/mqtt/broker"
-	"github.com/absmach/mqtt/storage"
+	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/storage"
 )
 
 type Config struct {
