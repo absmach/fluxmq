@@ -24,7 +24,7 @@ broker:
   max_retries: 0
 
 session:
-  max_sessions: 10000
+  max_sessions: 1000000
   default_expiry_interval: 300
   max_offline_queue_size: 1000
   max_inflight_messages: 100
