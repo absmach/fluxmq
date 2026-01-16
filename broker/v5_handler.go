@@ -556,14 +556,15 @@ func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessi
 	retainAvailable := byte(1)
 	wildcardSubAvailable := byte(1)
 	subIDAvailable := byte(1)
-
 	props := &v5.ConnAckProperties{
 		ReceiveMax:           &receiveMax,
 		TopicAliasMax:        &topicAliasMax,
-		MaxQoS:               &maxQoS,
 		RetainAvailable:      &retainAvailable,
 		WildcardSubAvailable: &wildcardSubAvailable,
 		SubIDAvailable:       &subIDAvailable,
+	}
+	if maxQoS < 2 {
+		props.MaxQoS = &maxQoS
 	}
 
 	ack := &v5.ConnAck{
