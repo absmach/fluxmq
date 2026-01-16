@@ -44,6 +44,7 @@ func (pkt *UnsubAck) Type() byte {
 
 func (pkt *UnsubAck) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
+	// MQTT 5.0 spec: UNSUBACK always requires property length
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -52,6 +53,8 @@ func (pkt *UnsubAck) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	if pkt.ReasonCodes != nil {
 		ret = append(ret, *pkt.ReasonCodes...)

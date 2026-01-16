@@ -103,7 +103,7 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		receiveMax = 65535
 	}
 
-	msgHandler := newMessageHandler(inflight, offlineQueue)
+	msgHandler := newMessageHandler(inflight, offlineQueue, version)
 
 	s := &Session{
 		ID:                   clientID,

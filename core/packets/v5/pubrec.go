@@ -45,17 +45,27 @@ func (pkt *PubRec) Type() byte {
 
 func (pkt *PubRec) Encode() []byte {
 	ret := codec.EncodeUint16(pkt.ID)
-	if pkt.ReasonCode != nil {
-		ret = append(ret, *pkt.ReasonCode)
-	}
+	// MQTT 5.0 spec allows minimal formats:
+	// - Remaining Length 2: Packet ID only (reason code defaults to 0x00)
+	// - Remaining Length 3: Packet ID + Reason Code (no properties)
+	// - Remaining Length >= 4: Packet ID + Reason Code + Property Length + Properties
+	// If properties are present, reason code MUST be included
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
-		l := len(props)
-		proplen := codec.EncodeVBI(l)
-		ret = append(ret, proplen...)
-		if l > 0 {
+		if len(props) > 0 || pkt.ReasonCode != nil {
+			// Include reason code (use 0x00 if nil)
+			if pkt.ReasonCode != nil {
+				ret = append(ret, *pkt.ReasonCode)
+			} else {
+				ret = append(ret, 0x00)
+			}
+			proplen := codec.EncodeVBI(len(props))
+			ret = append(ret, proplen...)
 			ret = append(ret, props...)
 		}
+	} else if pkt.ReasonCode != nil && *pkt.ReasonCode != 0x00 {
+		// Only include reason code if non-zero (minimal format optimization)
+		ret = append(ret, *pkt.ReasonCode)
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(ret)

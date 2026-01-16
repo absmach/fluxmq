@@ -17,7 +17,11 @@ import (
 	"github.com/absmach/mqtt/storage/messages"
 )
 
-const maxReceived = 65535
+const (
+	maxReceived     = uint16(65535)
+	topicAliasMax   = uint16(10)
+	noSessionExpiry = uint32(0)
+)
 
 var _ Handler = (*V5Handler)(nil)
 
@@ -91,9 +95,9 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		}
 	}
 
-	receiveMax := uint16(65535)
-	topicAliasMax := uint16(10)
-	sessionExpiry := uint32(0)
+	receiveMax := maxReceived
+	topicAliasMax := topicAliasMax
+	sessionExpiry := noSessionExpiry
 
 	if p.Properties != nil {
 		if p.Properties.ReceiveMaximum != nil {
@@ -547,7 +551,7 @@ func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
 }
 
 func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte, maxQoS byte) error {
-	receiveMax := uint16(maxReceived)
+	receiveMax := maxReceived
 	topicAliasMax := s.TopicAliasMax
 	retainAvailable := byte(1)
 	wildcardSubAvailable := byte(1)

@@ -70,7 +70,7 @@ func DecodeVBI(r io.Reader) (int, error) {
 	var b [1]byte
 	for {
 		_, err := io.ReadFull(r, b[:])
-		if err != nil && err != io.EOF {
+		if err != nil {
 			return 0, err
 		}
 		digit := b[0]

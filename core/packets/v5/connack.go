@@ -294,6 +294,7 @@ func (pkt *ConnAck) Type() byte {
 
 func (pkt *ConnAck) Encode() []byte {
 	ret := []byte{codec.EncodeBool(pkt.SessionPresent), pkt.ReasonCode}
+	// MQTT 5.0 spec: CONNACK always requires property length
 	if pkt.Properties != nil {
 		props := pkt.Properties.Encode()
 		l := len(props)
@@ -302,6 +303,8 @@ func (pkt *ConnAck) Encode() []byte {
 		if l > 0 {
 			ret = append(ret, props...)
 		}
+	} else {
+		ret = append(ret, 0) // Zero-length properties
 	}
 	// Take care size is calculated properly if someone tempered with the packet.
 	pkt.FixedHeader.RemainingLength = len(ret)

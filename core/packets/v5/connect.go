@@ -508,12 +508,13 @@ func (pkt *Connect) Validate() byte {
 		// Bad reserved bit
 		return ErrProtocolViolation
 	}
-	if (pkt.ProtocolName == "MQIsdp" && pkt.ProtocolVersion != 3) || (pkt.ProtocolName == "MQTT" && pkt.ProtocolVersion != 4) {
-		// Mismatched or unsupported protocol version
+	// MQTT 5.0 uses protocol name "MQTT" with version 5
+	if pkt.ProtocolName == "MQTT" && pkt.ProtocolVersion != 5 {
+		// This is the v5 package, only accept v5
 		return ErrRefusedBadProtocolVersion
 	}
-	if pkt.ProtocolName != "MQIsdp" && pkt.ProtocolName != "MQTT" {
-		// Bad protocol name
+	if pkt.ProtocolName != "MQTT" {
+		// Bad protocol name for v5
 		return ErrProtocolViolation
 	}
 	if len(pkt.ClientID) > 65535 || len(pkt.Username) > 65535 || len(pkt.Password) > 65535 {

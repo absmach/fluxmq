@@ -12,6 +12,7 @@ import (
 	core "github.com/absmach/mqtt/core"
 	"github.com/absmach/mqtt/core/packets"
 	v3 "github.com/absmach/mqtt/core/packets/v3"
+	v5 "github.com/absmach/mqtt/core/packets/v5"
 	"github.com/absmach/mqtt/storage/messages"
 )
 
@@ -25,16 +26,18 @@ type msgHandler struct {
 	inboundAliases  map[uint16]string
 	stopCh          chan struct{}
 	nextPacketID    uint32
+	version         byte
 }
 
 // newMessageHandler creates a new message handler.
-func newMessageHandler(inflight messages.Inflight, offlineQueue messages.Queue) *msgHandler {
+func newMessageHandler(inflight messages.Inflight, offlineQueue messages.Queue, version byte) *msgHandler {
 	return &msgHandler{
 		inflight:        inflight,
 		offlineQueue:    offlineQueue,
 		outboundAliases: make(map[string]uint16),
 		inboundAliases:  make(map[uint16]string),
 		stopCh:          make(chan struct{}),
+		version:         version,
 	}
 }
 
@@ -139,17 +142,32 @@ func (h *msgHandler) retryLoop(writer core.PacketWriter) {
 func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage) error {
 	msg := inflight.Message
 
-	pub := &v3.Publish{
-		FixedHeader: packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-			Dup:        true,
-		},
-		TopicName: msg.Topic,
-		Payload:   msg.Payload,
-		ID:        inflight.PacketID,
+	var pkt packets.ControlPacket
+	if h.version == packets.V5 {
+		pkt = &v5.Publish{
+			FixedHeader: packets.FixedHeader{
+				PacketType: packets.PublishType,
+				QoS:        msg.QoS,
+				Retain:     msg.Retain,
+				Dup:        true,
+			},
+			TopicName: msg.Topic,
+			Payload:   msg.Payload,
+			ID:        inflight.PacketID,
+		}
+	} else {
+		pkt = &v3.Publish{
+			FixedHeader: packets.FixedHeader{
+				PacketType: packets.PublishType,
+				QoS:        msg.QoS,
+				Retain:     msg.Retain,
+				Dup:        true,
+			},
+			TopicName: msg.Topic,
+			Payload:   msg.Payload,
+			ID:        inflight.PacketID,
+		}
 	}
 
-	return writer.WritePacket(pub)
+	return writer.WritePacket(pkt)
 }
