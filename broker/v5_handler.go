@@ -161,6 +161,18 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return ErrInvalidPacketType
 	}
 
+	// Check client rate limit
+	if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowPublish(s.ID) {
+		h.broker.logger.Warn("v5_publish_rate_limit",
+			slog.String("client_id", s.ID),
+			slog.String("topic", p.TopicName))
+		// Return QuotaExceeded for QoS > 0, silently drop for QoS 0
+		if p.FixedHeader.QoS > 0 {
+			return sendV5PubAck(s, p.ID, v5.PubAckQuotaExceeded, "Rate limit exceeded")
+		}
+		return nil
+	}
+
 	h.broker.logger.Debug("v5_publish",
 		slog.String("client_id", s.ID),
 		slog.String("topic", p.TopicName),
@@ -398,6 +410,15 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Topic) {
 			h.broker.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v5.SubAckNotAuthorized
+			continue
+		}
+
+		// Check subscription rate limit
+		if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowSubscribe(s.ID) {
+			h.broker.logger.Warn("v5_subscribe_rate_limit",
+				slog.String("client_id", s.ID),
+				slog.String("topic", t.Topic))
+			reasonCodes[i] = v5.SubAckQuotaExceeded
 			continue
 		}
 

@@ -6,22 +6,39 @@ package coap
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/absmach/mqtt/broker"
 	"github.com/absmach/mqtt/storage"
+	piondtls "github.com/pion/dtls/v3"
+	"github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/udp"
 )
 
+// Config holds the CoAP server configuration.
 type Config struct {
 	Address         string
 	ShutdownTimeout time.Duration
+
+	// DTLS configuration
+	DTLSEnabled    bool
+	DTLSCertFile   string
+	DTLSKeyFile    string
+	DTLSCAFile     string // For mDTLS client verification
+	DTLSClientAuth string // "none", "request", "require"
 }
 
+// Server is a CoAP server that bridges CoAP to MQTT.
 type Server struct {
 	config Config
 	broker *broker.Broker
@@ -29,6 +46,7 @@ type Server struct {
 	mux    *mux.Router
 }
 
+// New creates a new CoAP server.
 func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -41,54 +59,150 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 		mux:    mux.NewRouter(),
 	}
 
-	s.mux.Handle("/mqtt/publish/*topic", mux.HandlerFunc(s.handlePublish))
+	s.mux.Handle("/mqtt/publish/{topic}", mux.HandlerFunc(s.handlePublish))
 	s.mux.Handle("/health", mux.HandlerFunc(s.handleHealth))
 
 	return s
 }
 
+// Listen starts the CoAP server and blocks until the context is cancelled.
 func (s *Server) Listen(ctx context.Context) error {
-	s.logger.Info("coap_server_starting", slog.String("addr", s.config.Address))
+	if s.config.DTLSEnabled {
+		return s.listenDTLS(ctx)
+	}
+	return s.listenUDP(ctx)
+}
 
-	s.logger.Warn("coap_server_not_implemented",
-		slog.String("reason", "CoAP implementation requires additional setup"))
+// listenUDP starts a plain UDP CoAP server.
+func (s *Server) listenUDP(ctx context.Context) error {
+	s.logger.Info("coap_udp_server_starting", slog.String("addr", s.config.Address))
 
-	<-ctx.Done()
-	s.logger.Info("coap_server_stopped")
-	return nil
+	conn, err := net.NewListenUDP("udp", s.config.Address)
+	if err != nil {
+		return fmt.Errorf("failed to create UDP listener: %w", err)
+	}
+
+	server := udp.NewServer(options.WithMux(s.mux))
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := server.Serve(conn); err != nil {
+			errCh <- err
+		}
+	}()
+
+	s.logger.Info("coap_udp_server_started", slog.String("addr", s.config.Address))
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("CoAP UDP server error: %w", err)
+	case <-ctx.Done():
+		s.logger.Info("coap_udp_server_shutdown_initiated")
+		server.Stop()
+		s.logger.Info("coap_udp_server_stopped")
+		return nil
+	}
+}
+
+// listenDTLS starts a DTLS-secured CoAP server.
+func (s *Server) listenDTLS(ctx context.Context) error {
+	s.logger.Info("coap_dtls_server_starting",
+		slog.String("addr", s.config.Address),
+		slog.String("client_auth", s.config.DTLSClientAuth))
+
+	dtlsConfig, err := s.buildDTLSConfig()
+	if err != nil {
+		return fmt.Errorf("failed to build DTLS config: %w", err)
+	}
+
+	listener, err := net.NewDTLSListener("udp", s.config.Address, dtlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create DTLS listener: %w", err)
+	}
+
+	server := dtls.NewServer(options.WithMux(s.mux))
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); err != nil {
+			errCh <- err
+		}
+	}()
+
+	s.logger.Info("coap_dtls_server_started",
+		slog.String("addr", s.config.Address),
+		slog.Bool("mtls", s.config.DTLSClientAuth == "require"))
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("CoAP DTLS server error: %w", err)
+	case <-ctx.Done():
+		s.logger.Info("coap_dtls_server_shutdown_initiated")
+		server.Stop()
+		listener.Close()
+		s.logger.Info("coap_dtls_server_stopped")
+		return nil
+	}
+}
+
+// buildDTLSConfig creates a pion DTLS configuration.
+func (s *Server) buildDTLSConfig() (*piondtls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(s.config.DTLSCertFile, s.config.DTLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load DTLS certificate: %w", err)
+	}
+
+	config := &piondtls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	// Configure client authentication
+	switch s.config.DTLSClientAuth {
+	case "require":
+		config.ClientAuth = piondtls.RequireAndVerifyClientCert
+	case "request":
+		config.ClientAuth = piondtls.RequestClientCert
+	default:
+		config.ClientAuth = piondtls.NoClientCert
+	}
+
+	// Load CA for client certificate verification
+	if s.config.DTLSCAFile != "" && (s.config.DTLSClientAuth == "require" || s.config.DTLSClientAuth == "request") {
+		caCert, err := os.ReadFile(s.config.DTLSCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		config.ClientCAs = caCertPool
+	}
+
+	return config, nil
 }
 
 func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	path, err := r.Options().Path()
 	if err != nil {
 		s.logger.Warn("coap_publish_path_error", slog.String("error", err.Error()))
-		customResp := w.Conn().AcquireMessage(r.Context())
-		defer w.Conn().ReleaseMessage(customResp)
-		customResp.SetCode(codes.BadRequest)
-		customResp.SetBody(bytes.NewReader([]byte("invalid path")))
-		w.Conn().WriteMessage(customResp)
+		s.sendResponse(w, r, codes.BadRequest, "invalid path")
 		return
 	}
 
 	topic := strings.TrimPrefix(path, "/mqtt/publish/")
 	if topic == "" {
 		s.logger.Warn("coap_publish_missing_topic")
-		customResp := w.Conn().AcquireMessage(r.Context())
-		defer w.Conn().ReleaseMessage(customResp)
-		customResp.SetCode(codes.BadRequest)
-		customResp.SetBody(bytes.NewReader([]byte("topic is required in path")))
-		w.Conn().WriteMessage(customResp)
+		s.sendResponse(w, r, codes.BadRequest, "topic is required in path")
 		return
 	}
 
 	payload, err := r.ReadBody()
 	if err != nil {
 		s.logger.Warn("coap_publish_read_body_error", slog.String("error", err.Error()))
-		customResp := w.Conn().AcquireMessage(r.Context())
-		defer w.Conn().ReleaseMessage(customResp)
-		customResp.SetCode(codes.BadRequest)
-		customResp.SetBody(bytes.NewReader([]byte(fmt.Sprintf("failed to read body: %v", err))))
-		w.Conn().WriteMessage(customResp)
+		s.sendResponse(w, r, codes.BadRequest, fmt.Sprintf("failed to read body: %v", err))
 		return
 	}
 
@@ -105,25 +219,23 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 
 	if err := s.broker.Publish(msg); err != nil {
 		s.logger.Error("coap_publish_failed", slog.String("error", err.Error()))
-		customResp := w.Conn().AcquireMessage(r.Context())
-		defer w.Conn().ReleaseMessage(customResp)
-		customResp.SetCode(codes.InternalServerError)
-		customResp.SetBody(bytes.NewReader([]byte(fmt.Sprintf("publish failed: %v", err))))
-		w.Conn().WriteMessage(customResp)
+		s.sendResponse(w, r, codes.InternalServerError, fmt.Sprintf("publish failed: %v", err))
 		return
 	}
 
-	customResp := w.Conn().AcquireMessage(r.Context())
-	defer w.Conn().ReleaseMessage(customResp)
-	customResp.SetCode(codes.Changed)
-	customResp.SetBody(bytes.NewReader([]byte("ok")))
-	w.Conn().WriteMessage(customResp)
+	s.sendResponse(w, r, codes.Changed, "ok")
 }
 
 func (s *Server) handleHealth(w mux.ResponseWriter, r *mux.Message) {
-	customResp := w.Conn().AcquireMessage(r.Context())
-	defer w.Conn().ReleaseMessage(customResp)
-	customResp.SetCode(codes.Content)
-	customResp.SetBody(bytes.NewReader([]byte("healthy")))
-	w.Conn().WriteMessage(customResp)
+	s.sendResponse(w, r, codes.Content, "healthy")
+}
+
+func (s *Server) sendResponse(w mux.ResponseWriter, r *mux.Message, code codes.Code, body string) {
+	resp := w.Conn().AcquireMessage(r.Context())
+	defer w.Conn().ReleaseMessage(resp)
+	resp.SetCode(code)
+	resp.SetBody(bytes.NewReader([]byte(body)))
+	if err := w.Conn().WriteMessage(resp); err != nil {
+		s.logger.Error("coap_send_response_error", slog.String("error", err.Error()))
+	}
 }

@@ -43,6 +43,16 @@ type QueueManager interface {
 	UpdateHeartbeat(ctx context.Context, clientID string) error
 }
 
+// ClientRateLimiter defines the interface for per-client rate limiting.
+type ClientRateLimiter interface {
+	// AllowPublish checks if a publish from the given client is allowed.
+	AllowPublish(clientID string) bool
+	// AllowSubscribe checks if a subscription from the given client is allowed.
+	AllowSubscribe(clientID string) bool
+	// OnClientDisconnect cleans up rate limiters for a disconnected client.
+	OnClientDisconnect(clientID string)
+}
+
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	mu            sync.RWMutex
@@ -57,6 +67,7 @@ type Broker struct {
 	cluster       cluster.Cluster // nil for single-node mode
 	queueManager  QueueManager    // nil if queue functionality disabled
 	auth          *AuthEngine
+	rateLimiter   ClientRateLimiter // nil if rate limiting disabled
 	logger        *slog.Logger
 	stats         *Stats
 	webhooks      Notifier      // nil if webhooks disabled
@@ -150,6 +161,11 @@ func (b *Broker) Stats() *Stats {
 // SetAuthEngine sets the authentication and authorization engine.
 func (b *Broker) SetAuthEngine(auth *AuthEngine) {
 	b.auth = auth
+}
+
+// SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.
+func (b *Broker) SetClientRateLimiter(rl ClientRateLimiter) {
+	b.rateLimiter = rl
 }
 
 // SetMaxQoS sets the maximum QoS level supported by this broker.

@@ -20,6 +20,11 @@ import (
 // ErrShutdownTimeout is returned when graceful shutdown exceeds the configured timeout.
 var ErrShutdownTimeout = errors.New("shutdown timeout exceeded")
 
+// IPRateLimiter is the interface for IP-based rate limiting.
+type IPRateLimiter interface {
+	Allow(addr net.Addr) bool
+}
+
 // Config holds the TCP server configuration.
 type Config struct {
 	Address         string
@@ -33,17 +38,19 @@ type Config struct {
 	MaxConnections  int
 	BufferSize      int
 	DisableNoDelay  bool
+	IPRateLimiter   IPRateLimiter // Optional IP-based rate limiter
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
 // It provides robust connection handling, graceful shutdown, and production-ready features.
 type Server struct {
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	config   Config
-	handler  *broker.Broker
-	listener net.Listener
-	connSem  chan struct{}
+	mu            sync.Mutex
+	wg            sync.WaitGroup
+	config        Config
+	handler       *broker.Broker
+	listener      net.Listener
+	connSem       chan struct{}
+	ipRateLimiter IPRateLimiter
 }
 
 // New creates a new TCP server with the given configuration and broker.
@@ -76,9 +83,10 @@ func New(cfg Config, h *broker.Broker) *Server {
 	}
 
 	return &Server{
-		config:  cfg,
-		handler: h,
-		connSem: connSem,
+		config:        cfg,
+		handler:       h,
+		connSem:       connSem,
+		ipRateLimiter: cfg.IPRateLimiter,
 	}
 }
 
@@ -137,6 +145,14 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 					return
 				}
 				s.config.Logger.Error("failed to accept connection", slog.String("error", err.Error()))
+				continue
+			}
+
+			// Check IP rate limit before acquiring connection slot
+			if s.ipRateLimiter != nil && !s.ipRateLimiter.Allow(conn.RemoteAddr()) {
+				s.config.Logger.Warn("connection rate limit exceeded",
+					slog.String("remote", conn.RemoteAddr().String()))
+				conn.Close()
 				continue
 			}
 

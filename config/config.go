@@ -13,13 +13,44 @@ import (
 
 // Config holds all configuration for the MQTT broker.
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	Broker  BrokerConfig  `yaml:"broker"`
-	Session SessionConfig `yaml:"session"`
-	Log     LogConfig     `yaml:"log"`
-	Storage StorageConfig `yaml:"storage"`
-	Cluster ClusterConfig `yaml:"cluster"`
-	Webhook WebhookConfig `yaml:"webhook"`
+	Server    ServerConfig    `yaml:"server"`
+	Broker    BrokerConfig    `yaml:"broker"`
+	Session   SessionConfig   `yaml:"session"`
+	Log       LogConfig       `yaml:"log"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Cluster   ClusterConfig   `yaml:"cluster"`
+	Webhook   WebhookConfig   `yaml:"webhook"`
+	RateLimit RateLimitConfig `yaml:"ratelimit"`
+}
+
+// RateLimitConfig holds rate limiting configuration.
+type RateLimitConfig struct {
+	Enabled    bool                    `yaml:"enabled"`
+	Connection ConnectionRateLimitConfig `yaml:"connection"`
+	Message    MessageRateLimitConfig    `yaml:"message"`
+	Subscribe  SubscribeRateLimitConfig  `yaml:"subscribe"`
+}
+
+// ConnectionRateLimitConfig holds per-IP connection rate limiting settings.
+type ConnectionRateLimitConfig struct {
+	Enabled         bool          `yaml:"enabled"`
+	Rate            float64       `yaml:"rate"`             // connections per second per IP
+	Burst           int           `yaml:"burst"`            // burst allowance
+	CleanupInterval time.Duration `yaml:"cleanup_interval"` // cleanup interval for stale entries
+}
+
+// MessageRateLimitConfig holds per-client message rate limiting settings.
+type MessageRateLimitConfig struct {
+	Enabled bool    `yaml:"enabled"`
+	Rate    float64 `yaml:"rate"`  // messages per second per client
+	Burst   int     `yaml:"burst"` // burst allowance
+}
+
+// SubscribeRateLimitConfig holds per-client subscription rate limiting settings.
+type SubscribeRateLimitConfig struct {
+	Enabled bool    `yaml:"enabled"`
+	Rate    float64 `yaml:"rate"`  // subscriptions per second per client
+	Burst   int     `yaml:"burst"` // burst allowance
 }
 
 // ServerConfig holds server-related configuration.
@@ -271,6 +302,25 @@ func Default() *Config {
 				},
 			},
 			Endpoints: []WebhookEndpoint{},
+		},
+		RateLimit: RateLimitConfig{
+			Enabled: false,
+			Connection: ConnectionRateLimitConfig{
+				Enabled:         true,
+				Rate:            100.0 / 60.0, // 100 connections per minute per IP
+				Burst:           20,
+				CleanupInterval: 5 * time.Minute,
+			},
+			Message: MessageRateLimitConfig{
+				Enabled: true,
+				Rate:    1000, // 1000 messages per second per client
+				Burst:   100,
+			},
+			Subscribe: SubscribeRateLimitConfig{
+				Enabled: true,
+				Rate:    100, // 100 subscriptions per second per client
+				Burst:   10,
+			},
 		},
 	}
 }

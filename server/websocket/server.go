@@ -25,12 +25,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// IPRateLimiter is the interface for IP-based rate limiting.
+type IPRateLimiter interface {
+	Allow(addr net.Addr) bool
+}
+
 type Config struct {
 	Address         string
 	Path            string
 	ShutdownTimeout time.Duration
 	TLSConfig       *tls.Config
-	AllowedOrigins  []string // Allowed origins for CORS (empty = allow all, use "*" for explicit wildcard)
+	AllowedOrigins  []string      // Allowed origins for CORS (empty = allow all, use "*" for explicit wildcard)
+	IPRateLimiter   IPRateLimiter // Optional IP-based rate limiter
 }
 
 type Server struct {
@@ -41,6 +47,7 @@ type Server struct {
 	upgrader       websocket.Upgrader
 	allowedOrigins map[string]bool
 	allowAll       bool
+	ipRateLimiter  IPRateLimiter
 }
 
 func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
@@ -57,6 +64,7 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 		broker:         b,
 		logger:         logger,
 		allowedOrigins: make(map[string]bool),
+		ipRateLimiter:  cfg.IPRateLimiter,
 	}
 
 	// Build allowed origins lookup
@@ -181,6 +189,18 @@ func (s *Server) Listen(ctx context.Context) error {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Check IP rate limit before upgrade
+	if s.ipRateLimiter != nil {
+		// Create a temporary addr for rate limiting
+		addr := &wsAddr{addr: r.RemoteAddr}
+		if !s.ipRateLimiter.Allow(addr) {
+			s.logger.Warn("websocket_rate_limit_exceeded",
+				slog.String("remote_addr", r.RemoteAddr))
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+	}
+
 	ws, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logger.Warn("websocket_upgrade_failed", slog.String("error", err.Error()))

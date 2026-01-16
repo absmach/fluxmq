@@ -22,6 +22,7 @@ import (
 	"github.com/absmach/mqtt/config"
 	"github.com/absmach/mqtt/queue"
 	queueBadger "github.com/absmach/mqtt/queue/storage/badger"
+	"github.com/absmach/mqtt/ratelimit"
 	"github.com/absmach/mqtt/server/coap"
 	"github.com/absmach/mqtt/server/health"
 	"github.com/absmach/mqtt/server/http"
@@ -260,6 +261,42 @@ func main() {
 		b.SetMaxQoS(byte(cfg.Broker.MaxQoS))
 	}
 
+	// Initialize rate limiting
+	var rateLimitManager *ratelimit.Manager
+	if cfg.RateLimit.Enabled {
+		rlConfig := ratelimit.Config{
+			Enabled: true,
+			Connection: ratelimit.ConnectionConfig{
+				Enabled:         cfg.RateLimit.Connection.Enabled,
+				Rate:            cfg.RateLimit.Connection.Rate,
+				Burst:           cfg.RateLimit.Connection.Burst,
+				CleanupInterval: cfg.RateLimit.Connection.CleanupInterval,
+			},
+			Message: ratelimit.MessageConfig{
+				Enabled: cfg.RateLimit.Message.Enabled,
+				Rate:    cfg.RateLimit.Message.Rate,
+				Burst:   cfg.RateLimit.Message.Burst,
+			},
+			Subscribe: ratelimit.SubscribeConfig{
+				Enabled: cfg.RateLimit.Subscribe.Enabled,
+				Rate:    cfg.RateLimit.Subscribe.Rate,
+				Burst:   cfg.RateLimit.Subscribe.Burst,
+			},
+		}
+		rateLimitManager = ratelimit.NewManager(rlConfig)
+		defer rateLimitManager.Stop()
+
+		// Set client rate limiter on broker
+		b.SetClientRateLimiter(rateLimitManager)
+
+		slog.Info("Rate limiting enabled",
+			slog.Bool("connection", cfg.RateLimit.Connection.Enabled),
+			slog.Bool("message", cfg.RateLimit.Message.Enabled),
+			slog.Bool("subscribe", cfg.RateLimit.Subscribe.Enabled))
+	} else {
+		slog.Info("Rate limiting disabled")
+	}
+
 	// Initialize hybrid queue with separate BadgerDB instance
 	if cfg.Storage.Type == "badger" {
 		queueDir := cfg.Storage.BadgerDir + "_queue"
@@ -330,6 +367,9 @@ func main() {
 		WriteTimeout:    cfg.Server.TCPWriteTimeout,
 		Logger:          logger,
 	}
+	if rateLimitManager != nil {
+		tcpCfg.IPRateLimiter = rateLimitManager
+	}
 	tcpServer := tcp.New(tcpCfg, b)
 
 	wg.Add(1)
@@ -365,6 +405,9 @@ func main() {
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			TLSConfig:       tlsConfig,
 			AllowedOrigins:  cfg.Server.WSAllowedOrigins,
+		}
+		if rateLimitManager != nil {
+			wsCfg.IPRateLimiter = rateLimitManager
 		}
 		wsServer := websocket.New(wsCfg, b, logger)
 

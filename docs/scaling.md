@@ -381,6 +381,46 @@ go test -race -run=TestStress_ConcurrentPublishers ./broker
 go test -bench=. -benchmem ./queue
 ```
 
+### Queue Replication Benchmarks
+
+**Raft-based per-partition replication** with automatic failover (3 replicas per partition).
+
+| Metric | Sync Mode | Async Mode | Notes |
+|--------|-----------|------------|-------|
+| **Throughput** | >5K enqueue/sec | >50K enqueue/sec | Per partition |
+| **P99 Latency** | <50ms | <10ms | Write acknowledgment |
+| **Leader Failover** | 2.4s | 2.4s | Target: <5s |
+| **ISR Convergence** | <1s | <1s | After leader change |
+
+**Failover Test Results:**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| `TestFailover_LeaderElection` | ✅ 2.4s | New leader elected, clients reconnect |
+| `TestFailover_MessageDurability` | ✅ | Zero message loss after leader failure |
+| `TestReplication_ISRTracking` | ✅ | Quorum maintained during failures |
+| `TestFailover_FollowerCatchup` | ✅ | 100 msg delta caught up correctly |
+
+**Retention Performance:**
+
+| Operation | Time | Impact |
+|-----------|------|--------|
+| Size check (per enqueue) | <2ms | Async, no blocking |
+| Time-based cleanup | <100ms | Per partition, 5min interval |
+| Log compaction | <500ms | Per partition, 10min interval |
+
+📁 **Test files:**
+- [queue/replication_bench_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/queue/replication_bench_test.go) - Performance benchmarks
+- [queue/failover_test.go](file:///home/dusan/go/src/github.com/absmach/mqtt/queue/failover_test.go) - Failover tests
+
+```bash
+# Run replication benchmarks
+go test -bench=BenchmarkReplication -benchmem ./queue
+
+# Run failover tests
+go test -v -run=TestFailover ./queue
+```
+
 ---
 
 ## Topic Sharding

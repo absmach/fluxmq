@@ -269,20 +269,27 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 - TCP, WebSocket, HTTP, CoAP transports
 - QoS 0/1/2, retained messages, will messages
 - Clustering with embedded etcd
-- gRPC inter-broker communication
+- gRPC inter-broker communication (mTLS supported)
 - BadgerDB persistent storage
 - Durable queues with consumer groups
+- Queue replication with Raft (3x replication, automatic failover)
+- Kafka-style retention policies (time, size, log compaction)
+- TLS/mTLS for client and inter-broker connections
+- WebSocket origin validation
+- Shared subscriptions (MQTT 5.0)
+- MaxQoS enforcement (MQTT 5.0)
+- Performance optimization (3.3x throughput, zero-copy buffers)
 
 ### In Progress 🚧
-- TLS/SSL support
-- Authentication & Authorization hooks
-- Complete CoAP implementation
+- Rate limiting (per-IP, per-client)
+- CoAP with DTLS support
+- Secure default ACL
 
 ### Planned 📋
-- Shared subscriptions (MQTT 5.0)
-- Topic aliases
-- Admin REST API
-- Prometheus metrics
+- Management dashboard
+- Prometheus metrics endpoint
+- Distributed tracing instrumentation
+- Hot configuration reload
 
 See [Roadmap](docs/roadmap.md) for details.
 

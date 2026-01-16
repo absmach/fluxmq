@@ -136,6 +136,18 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return ErrInvalidPacketType
 	}
 
+	// Check client rate limit
+	if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowPublish(s.ID) {
+		h.broker.logger.Warn("v3_publish_rate_limit",
+			slog.String("client_id", s.ID),
+			slog.String("topic", p.TopicName))
+		// For V3, silently drop QoS 0, return error for QoS > 0 (will disconnect)
+		if p.FixedHeader.QoS > 0 {
+			return ErrQuotaExceeded
+		}
+		return nil
+	}
+
 	h.broker.logger.Debug("v3_publish",
 		slog.String("client_id", s.ID),
 		slog.String("topic", p.TopicName),
@@ -325,6 +337,15 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 	for i, t := range p.Topics {
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Name) {
 			h.broker.stats.IncrementAuthzErrors()
+			reasonCodes[i] = v3.SubAckFailure
+			continue
+		}
+
+		// Check subscription rate limit
+		if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowSubscribe(s.ID) {
+			h.broker.logger.Warn("v3_subscribe_rate_limit",
+				slog.String("client_id", s.ID),
+				slog.String("topic", t.Name))
 			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
