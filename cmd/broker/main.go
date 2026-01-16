@@ -425,6 +425,11 @@ func main() {
 		coapCfg := coap.Config{
 			Address:         cfg.Server.CoAPAddr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			DTLSEnabled:     cfg.Server.CoAPDTLSEnabled,
+			DTLSCertFile:    cfg.Server.CoAPDTLSCertFile,
+			DTLSKeyFile:     cfg.Server.CoAPDTLSKeyFile,
+			DTLSCAFile:      cfg.Server.CoAPDTLSCAFile,
+			DTLSClientAuth:  cfg.Server.CoAPDTLSClientAuth,
 		}
 		coapServer := coap.New(coapCfg, b, logger)
 

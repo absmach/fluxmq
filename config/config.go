@@ -64,8 +64,13 @@ type ServerConfig struct {
 	WSAddr           string   `yaml:"ws_addr"`
 	WSPath           string   `yaml:"ws_path"`
 	WSAllowedOrigins []string `yaml:"ws_allowed_origins"` // Allowed origins for WebSocket (empty = allow all in dev mode)
-	CoAPAddr        string        `yaml:"coap_addr"`
-	HealthAddr      string        `yaml:"health_addr"`
+	CoAPAddr           string `yaml:"coap_addr"`
+	CoAPDTLSEnabled    bool   `yaml:"coap_dtls_enabled"`
+	CoAPDTLSCertFile   string `yaml:"coap_dtls_cert_file"`
+	CoAPDTLSKeyFile    string `yaml:"coap_dtls_key_file"`
+	CoAPDTLSCAFile     string `yaml:"coap_dtls_ca_file"`     // For mDTLS client verification
+	CoAPDTLSClientAuth string `yaml:"coap_dtls_client_auth"` // "none", "request", "require"
+	HealthAddr         string `yaml:"health_addr"`
 	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
 	TCPMaxConn      int           `yaml:"tcp_max_connections"`
 	TCPReadTimeout  time.Duration `yaml:"tcp_read_timeout"`
@@ -231,9 +236,11 @@ func Default() *Config {
 			WSAddr:          ":8083",
 			WSPath:          "/mqtt",
 			WSEnabled:       true,
-			CoAPAddr:        ":5683",
-			CoAPEnabled:     false,
-			HealthAddr:      ":8081",
+			CoAPAddr:           ":5683",
+			CoAPEnabled:        false,
+			CoAPDTLSEnabled:    false,
+			CoAPDTLSClientAuth: "none",
+			HealthAddr:         ":8081",
 			HealthEnabled:   true,
 			MetricsAddr:     "localhost:4317",
 			MetricsEnabled:  false,

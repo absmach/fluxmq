@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/go-hclog v1.6.2
 	github.com/hashicorp/raft v1.7.1
-	github.com/pion/dtls/v2 v2.2.12
+	github.com/pion/dtls/v3 v3.0.7
 	github.com/plgd-dev/go-coap/v3 v3.4.1
 	github.com/sony/gobreaker v1.0.0
 	go.etcd.io/etcd/client/v3 v3.5.17
@@ -60,9 +60,7 @@ require (
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/pion/dtls/v3 v3.0.7 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/transport/v2 v2.2.4 // indirect
 	github.com/pion/transport/v3 v3.0.7 // indirect
 	github.com/prometheus/client_golang v1.11.1 // indirect
 	github.com/prometheus/client_model v0.2.0 // indirect
