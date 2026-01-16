@@ -84,7 +84,7 @@ queue:
   - **MQTT 5.0** - Full support over TCP and WebSocket
   - **HTTP-MQTT Bridge** - RESTful API for publishing messages
   - **WebSocket Transport** - MQTT over WebSocket for browser clients
-  - **CoAP Bridge** - Lightweight protocol for constrained IoT devices
+  - **CoAP Bridge** - UDP and DTLS (mDTLS) support for constrained IoT devices
   - All protocols share the same broker core - messages flow seamlessly across protocols
 
 - **Performance Optimized**
@@ -103,10 +103,19 @@ queue:
   - Topic wildcards (`+` and `#`)
   - Session persistence
   - Keep-alive management
+  - Shared subscriptions (MQTT 5.0)
+  - MaxQoS enforcement (MQTT 5.0)
+
+- **Security**
+  - TLS/mTLS for MQTT client connections
+  - mTLS for inter-broker gRPC communication
+  - DTLS/mDTLS for CoAP connections
+  - WebSocket origin validation
+  - Rate limiting (per-IP connections, per-client messages/subscriptions)
 
 - **Clustering & High Availability**
   - Embedded etcd for distributed coordination
-  - gRPC-based inter-broker communication
+  - gRPC-based inter-broker communication with mTLS
   - Automatic session ownership management
   - Cross-node message routing
   - Persistent storage with BadgerDB
@@ -118,6 +127,8 @@ queue:
   - Ack/Nack/Reject message acknowledgment
   - Partitioning with ordered delivery
   - Dead-letter queue support
+  - Raft-based replication (3x, automatic failover)
+  - Kafka-style retention (time, size, log compaction)
 
 - **Persistent Storage**
   - BadgerDB for session state and offline queues
@@ -266,7 +277,7 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 
 ### Completed ✅
 - MQTT 3.1.1 and 5.0 support
-- TCP, WebSocket, HTTP, CoAP transports
+- TCP, WebSocket, HTTP transports
 - QoS 0/1/2, retained messages, will messages
 - Clustering with embedded etcd
 - gRPC inter-broker communication (mTLS supported)
@@ -279,10 +290,10 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 - Shared subscriptions (MQTT 5.0)
 - MaxQoS enforcement (MQTT 5.0)
 - Performance optimization (3.3x throughput, zero-copy buffers)
+- Rate limiting (per-IP connections, per-client messages/subscriptions)
+- CoAP with UDP and DTLS/mDTLS support
 
 ### In Progress 🚧
-- Rate limiting (per-IP, per-client)
-- CoAP with DTLS support
 - Secure default ACL
 
 ### Planned 📋

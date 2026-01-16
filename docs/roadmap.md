@@ -1,6 +1,6 @@
 # MQTT Broker Development Roadmap
 
-**Last Updated:** 2026-01-14
+**Last Updated:** 2026-01-16
 **Current Phase:** Phase 0 - Production Hardening (TOP PRIORITY)
 
 ---
@@ -57,14 +57,26 @@ Phase 0 must be completed before any production deployment. These are critical s
   - ✅ **Compaction unit tests** (4 tests: basic, lag, no-key, not-configured)
   - ✅ **Compaction integration tests** (2 tests: replication, leader-only)
 
+**Completed (2026-01-16):**
+- ✅ **Rate Limiting - COMPLETE:**
+  - ✅ Per-IP connection rate limiting (TCP, WebSocket)
+  - ✅ Per-client message rate limiting (V3/V5 handlers)
+  - ✅ Per-client subscription rate limiting
+  - ✅ Configurable rates, bursts, cleanup intervals
+  - ✅ 12 unit tests (`ratelimit/ratelimit_test.go`)
+- ✅ **CoAP with DTLS/mDTLS - COMPLETE:**
+  - ✅ Full UDP CoAP implementation using go-coap v3
+  - ✅ DTLS support with pion/dtls v3
+  - ✅ Mutual TLS (mDTLS) client verification
+  - ✅ 5 unit tests (`server/coap/server_test.go`)
+
 **Next: Phase 0 - Production Hardening**
 
-The queue replication system is now feature-complete. Focus shifts to production hardening:
+Remaining production hardening tasks:
 
 1. **Secure Default ACL (P0 Critical)** - Change default to deny-all
-2. **Rate Limiting (P1 High)** - Per-IP connections, per-client messages
-3. **Distributed Tracing (P2)** - Instrument message paths with spans
-4. **Prometheus Endpoint (P2)** - Native `/metrics` endpoint
+2. **Distributed Tracing (P2)** - Instrument message paths with spans
+3. **Prometheus Endpoint (P2)** - Native `/metrics` endpoint
 
 **Deferred: Phase 2.5 Observability & Migration**
 - Will be implemented after Phase 0
@@ -149,44 +161,44 @@ server:
 
 ---
 
-### 0.2: Rate Limiting 🔴 HIGH
+### 0.2: Rate Limiting ✅ COMPLETE
 
 **Priority:** P1 - Required for production
-
-**Issue:** No rate limiting anywhere in the codebase
-**Risk:** DoS attacks, resource exhaustion, noisy neighbor problems
+**Status:** Completed 2026-01-16
 
 **Implementation:**
-```go
-type RateLimiter struct {
-    connectRate   *rate.Limiter  // Per-IP connection rate
-    messageRate   *rate.Limiter  // Per-client publish rate
-    subscribeRate *rate.Limiter  // Per-client subscription rate
-}
+- ✅ `ratelimit/ratelimit.go` - IPRateLimiter, ClientRateLimiter, Manager (~280 lines)
+- ✅ Per-IP connection rate limiting in TCP server (`server/tcp/server.go`)
+- ✅ Per-IP connection rate limiting in WebSocket server (`server/websocket/server.go`)
+- ✅ Per-client message rate limiting in V5/V3 handlers (returns QuotaExceeded for V5)
+- ✅ Per-client subscription rate limiting in V5/V3 handlers
+- ✅ Rate limit configuration in `config/config.go`
+- ✅ Rate limiter initialization in `cmd/broker/main.go`
+- ✅ 12 unit tests (`ratelimit/ratelimit_test.go`)
 
-type RateLimitConfig struct {
-    // Connection rate limiting
-    MaxConnectionsPerIP    int           // Default: 100
-    ConnectionBurstSize    int           // Default: 20
-    ConnectionWindow       time.Duration // Default: 1m
-
-    // Message rate limiting
-    MaxMessagesPerClient   int           // Default: 1000/s
-    MessageBurstSize       int           // Default: 100
-
-    // Subscription rate limiting
-    MaxSubscriptionsPerClient int        // Default: 100
-    SubscribeBurstSize        int        // Default: 10
-}
+**Configuration:**
+```yaml
+ratelimit:
+  enabled: true
+  connection:
+    enabled: true
+    rate: 1.67              # ~100 connections per minute per IP
+    burst: 20
+    cleanup_interval: 5m
+  message:
+    enabled: true
+    rate: 1000              # messages per second per client
+    burst: 100
+  subscribe:
+    enabled: true
+    rate: 100               # subscriptions per second per client
+    burst: 10
 ```
 
-- [ ] Create `server/ratelimit/ratelimit.go` - Rate limiter implementation
-- [ ] Add per-IP connection rate limiting in TCP/WebSocket servers
-- [ ] Add per-client message rate limiting in broker
-- [ ] Add per-client subscription rate limiting
-- [ ] Add rate limit configuration options
-- [ ] Add rate limit metrics (rejected connections, throttled messages)
-- [ ] Add rate limiting tests
+**Behavior:**
+- Connection rate limiting: Closes connection immediately if exceeded (before MQTT handshake)
+- Message rate limiting: Returns MQTT 5.0 `QuotaExceeded` (0x97) for QoS > 0, silently drops QoS 0
+- Subscribe rate limiting: Returns `SubAckQuotaExceeded` for V5, `SubAckFailure` for V3
 
 ---
 
@@ -398,7 +410,8 @@ func (b *Broker) setupSignalHandler() {
 | Inter-broker TLS | P0 Critical | ✅ Complete |
 | WebSocket origin validation | P0 Critical | ✅ Complete |
 | Secure default ACL | P0 Critical | 📋 Planned |
-| Rate limiting | P1 High | 📋 Planned |
+| Rate limiting | P1 High | ✅ Complete |
+| CoAP with DTLS/mDTLS | P1 High | ✅ Complete |
 | Distributed tracing | P2 Medium | 📋 Planned |
 | Prometheus endpoint | P2 Medium | 📋 Planned |
 | MaxQoS enforcement | P2 Medium | ✅ Complete |
@@ -724,9 +737,9 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 
 | Phase | Duration | Completion | Status |
 |-------|----------|------------|--------|
-| **Phase 0: Production Hardening** | 3-4 weeks | 30% | 🚨 **TOP PRIORITY** |
+| **Phase 0: Production Hardening** | 3-4 weeks | 50% | 🚨 **TOP PRIORITY** |
 | └─ 0.1: Critical Security Fixes | 1 week | 67% | 🔄 In Progress (2/3 complete) |
-| └─ 0.2: Rate Limiting | 1 week | 0% | 📋 Planned (P1) |
+| └─ 0.2: Rate Limiting | 1 week | 100% | ✅ Complete |
 | └─ 0.3: Observability Completion | 3-5 days | 0% | 📋 Planned (P2) |
 | └─ 0.4: Protocol Compliance | 3-5 days | 100% | ✅ Complete |
 | └─ 0.5: Management Dashboard | 2-3 weeks | 0% | 📋 Planned (P3) |
@@ -748,6 +761,14 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 - ✅ 17+ unit tests passing (retention + compaction)
 - ✅ 4/4 core failover tests passing (leader election, durability, ISR, catch-up)
 - ✅ Performance benchmarks complete (sync/async modes, latency, concurrency)
+- ✅ **Phase 0.2 Rate Limiting - COMPLETE:**
+  - ✅ Per-IP connection rate limiting (TCP, WebSocket)
+  - ✅ Per-client message/subscription rate limiting
+  - ✅ 12 unit tests (`ratelimit/ratelimit_test.go`)
+- ✅ **CoAP with DTLS/mDTLS - COMPLETE:**
+  - ✅ Full UDP CoAP implementation (go-coap v3)
+  - ✅ DTLS with mutual TLS support (pion/dtls v3)
+  - ✅ 5 unit tests (`server/coap/server_test.go`)
 - ✅ **Phase 2.4 Retention Policies - COMPLETE:**
   - ✅ Retention infrastructure complete (schema, manager, Raft ops)
   - ✅ Full storage implementations (memory & badger stores)
@@ -794,7 +815,7 @@ When working on this roadmap:
 
 ---
 
-**Next Milestone:** Rate Limiting (Phase 0.2) - Protect against DoS attacks
+**Next Milestone:** Secure Default ACL (Phase 0.1.3) - Change to deny-all default
 **Final Goal:** Production Hardening Complete (Phase 0) - Required before production deployment
 
 ---
@@ -818,10 +839,10 @@ Security and operational improvements for production deployment:
    - Change default to deny-all when no authorizer configured
    - Add `development_mode: true` flag for permissive mode
 
-2. **Rate Limiting** (P1) - 3-5 days
-   - Per-IP connection rate limiting
-   - Per-client message rate limiting
-   - Per-client subscription rate limiting
+2. ~~**Rate Limiting** (P1)~~✅ COMPLETE
+   - ~~Per-IP connection rate limiting~~
+   - ~~Per-client message rate limiting~~
+   - ~~Per-client subscription rate limiting~~
 
 3. **Observability** (P2) - 3-5 days
    - Distributed tracing instrumentation
