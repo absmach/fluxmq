@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-// Hash pool for partition selection
+// Hash pool for partition selection.
 var hashPool = sync.Pool{
 	New: func() interface{} {
 		return fnv.New32a()

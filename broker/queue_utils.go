@@ -22,7 +22,7 @@ func isQueueAckTopic(topic string) bool {
 }
 
 // extractQueueTopicFromAck extracts the queue topic from an ack topic.
-// Example: "$queue/tasks/image/$ack" -> "$queue/tasks/image"
+// Example: "$queue/tasks/image/$ack" -> "$queue/tasks/image".
 func extractQueueTopicFromAck(ackTopic string) string {
 	if strings.HasSuffix(ackTopic, "/$ack") {
 		return strings.TrimSuffix(ackTopic, "/$ack")

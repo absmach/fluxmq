@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/delivery"
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
-// setupQueueWithMessages creates a queue and enqueues N messages
+// setupQueueWithMessages creates a queue and enqueues N messages.
 func setupQueueWithMessages(b *testing.B, queueName string, partitions, messageCount int) (*Manager, *memory.Store, *MockBroker) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -31,7 +31,7 @@ func setupQueueWithMessages(b *testing.B, queueName string, partitions, messageC
 	}
 
 	ctx := context.Background()
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.Partitions = partitions
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -51,7 +51,7 @@ func setupQueueWithMessages(b *testing.B, queueName string, partitions, messageC
 	return mgr, store, broker
 }
 
-// BenchmarkDequeue_SingleConsumer measures dequeue with one consumer
+// BenchmarkDequeue_SingleConsumer measures dequeue with one consumer.
 func BenchmarkDequeue_SingleConsumer(b *testing.B) {
 	queueName := "$queue/bench-dequeue-single"
 	mgr, store, broker := setupQueueWithMessages(b, queueName, 1, b.N)
@@ -80,7 +80,7 @@ func BenchmarkDequeue_SingleConsumer(b *testing.B) {
 	}
 }
 
-// BenchmarkDequeue_MultipleConsumers measures dequeue with multiple consumers
+// BenchmarkDequeue_MultipleConsumers measures dequeue with multiple consumers.
 func BenchmarkDequeue_MultipleConsumers(b *testing.B) {
 	consumerCounts := []int{1, 2, 5, 10}
 
@@ -117,7 +117,7 @@ func BenchmarkDequeue_MultipleConsumers(b *testing.B) {
 	}
 }
 
-// BenchmarkDequeue_WithAck measures dequeue + ack cycle
+// BenchmarkDequeue_WithAck measures dequeue + ack cycle.
 func BenchmarkDequeue_WithAck(b *testing.B) {
 	queueName := "$queue/bench-dequeue-ack"
 	mgr, store, broker := setupQueueWithMessages(b, queueName, 1, b.N)
@@ -159,7 +159,7 @@ func BenchmarkDequeue_WithAck(b *testing.B) {
 	}
 }
 
-// BenchmarkDequeue_PartitionScanning measures partition scan performance
+// BenchmarkDequeue_PartitionScanning measures partition scan performance.
 func BenchmarkDequeue_PartitionScanning(b *testing.B) {
 	partitionCounts := []int{1, 5, 10, 20}
 
@@ -191,7 +191,7 @@ func BenchmarkDequeue_PartitionScanning(b *testing.B) {
 	}
 }
 
-// BenchmarkDequeue_Throughput measures sustained dequeue throughput
+// BenchmarkDequeue_Throughput measures sustained dequeue throughput.
 func BenchmarkDequeue_Throughput(b *testing.B) {
 	queueName := "$queue/bench-throughput"
 	messageCount := 100000

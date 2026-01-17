@@ -12,7 +12,7 @@ import (
 	"github.com/absmach/fluxmq/core/packets"
 )
 
-// The List of valid PubRec reason codes
+// The List of valid PubRec reason codes.
 const (
 	PubRecSuccess                     = 0x00
 	PubRecNoMatchingSubscribers       = 0x10

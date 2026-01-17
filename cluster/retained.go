@@ -42,7 +42,7 @@ type RetainedDataEntry struct {
 
 // RetainedStore implements storage.RetainedStore using hybrid storage strategy:
 // - Small messages (<1KB): Replicated to all nodes via etcd
-// - Large messages (≥1KB): Stored on owner node, fetched on-demand via gRPC
+// - Large messages (≥1KB): Stored on owner node, fetched on-demand via gRPC.
 type RetainedStore struct {
 	nodeID        string
 	localStore    storage.RetainedStore // BadgerDB for local payload storage

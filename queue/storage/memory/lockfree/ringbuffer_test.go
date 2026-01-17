@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func TestRingBuffer_EnqueueDequeue(t *testing.T) {
 	rb := NewRingBuffer(4)
 
 	// Enqueue a message
-	msg1 := storage.Message{
+	msg1 := types.Message{
 		ID:       "msg-1",
 		Payload:  []byte("test payload"),
 		Sequence: 1,
@@ -64,7 +64,7 @@ func TestRingBuffer_FIFO(t *testing.T) {
 
 	// Enqueue multiple messages
 	for i := 1; i <= 5; i++ {
-		msg := storage.Message{
+		msg := types.Message{
 			ID:       string(rune('0' + i)),
 			Sequence: uint64(i),
 		}
@@ -89,7 +89,7 @@ func TestRingBuffer_Full(t *testing.T) {
 
 	// Fill the buffer (capacity - 1 because we keep one slot empty)
 	for i := 0; i < 3; i++ {
-		msg := storage.Message{Sequence: uint64(i)}
+		msg := types.Message{Sequence: uint64(i)}
 		ok := rb.Enqueue(msg)
 		require.True(t, ok)
 	}
@@ -98,7 +98,7 @@ func TestRingBuffer_Full(t *testing.T) {
 	assert.True(t, rb.IsFull())
 
 	// Enqueue should fail
-	msg := storage.Message{Sequence: 999}
+	msg := types.Message{Sequence: 999}
 	ok := rb.Enqueue(msg)
 	assert.False(t, ok)
 
@@ -119,7 +119,7 @@ func TestRingBuffer_Empty(t *testing.T) {
 	assert.False(t, ok)
 
 	// Enqueue and dequeue
-	msg := storage.Message{ID: "test"}
+	msg := types.Message{ID: "test"}
 	rb.Enqueue(msg)
 	rb.Dequeue()
 
@@ -135,7 +135,7 @@ func TestRingBuffer_Wraparound(t *testing.T) {
 	for round := 0; round < 10; round++ {
 		// Fill buffer
 		for i := 0; i < 3; i++ {
-			msg := storage.Message{
+			msg := types.Message{
 				Sequence: uint64(round*10 + i),
 			}
 			ok := rb.Enqueue(msg)
@@ -158,7 +158,7 @@ func TestRingBuffer_DequeueBatch(t *testing.T) {
 
 	// Enqueue 10 messages
 	for i := 1; i <= 10; i++ {
-		msg := storage.Message{Sequence: uint64(i)}
+		msg := types.Message{Sequence: uint64(i)}
 		ok := rb.Enqueue(msg)
 		require.True(t, ok)
 	}
@@ -189,7 +189,7 @@ func TestRingBuffer_DequeueBatch_Empty(t *testing.T) {
 
 func TestRingBuffer_DequeueBatch_Zero(t *testing.T) {
 	rb := NewRingBuffer(8)
-	rb.Enqueue(storage.Message{ID: "test"})
+	rb.Enqueue(types.Message{ID: "test"})
 
 	messages := rb.DequeueBatch(0)
 	assert.Nil(t, messages)
@@ -200,7 +200,7 @@ func TestRingBuffer_Reset(t *testing.T) {
 
 	// Add some messages
 	for i := 0; i < 5; i++ {
-		rb.Enqueue(storage.Message{Sequence: uint64(i)})
+		rb.Enqueue(types.Message{Sequence: uint64(i)})
 	}
 	assert.Equal(t, 5, rb.Len())
 
@@ -210,7 +210,7 @@ func TestRingBuffer_Reset(t *testing.T) {
 	assert.Equal(t, 0, rb.Len())
 
 	// Should be able to use after reset
-	msg := storage.Message{ID: "after-reset"}
+	msg := types.Message{ID: "after-reset"}
 	ok := rb.Enqueue(msg)
 	assert.True(t, ok)
 }
@@ -226,7 +226,7 @@ func TestRingBuffer_ConcurrentSPSC(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numMessages; i++ {
-			msg := storage.Message{
+			msg := types.Message{
 				ID:       "msg",
 				Sequence: uint64(i),
 			}
@@ -272,7 +272,7 @@ func TestRingBuffer_ConcurrentBatchSPSC(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numMessages; i++ {
-			msg := storage.Message{
+			msg := types.Message{
 				ID:       "msg",
 				Sequence: uint64(i),
 			}
@@ -307,10 +307,10 @@ func TestRingBuffer_ConcurrentBatchSPSC(t *testing.T) {
 	}
 }
 
-// Benchmark tests
+// Benchmark tests.
 func BenchmarkRingBuffer_Enqueue(b *testing.B) {
 	rb := NewRingBuffer(uint64(b.N))
-	msg := storage.Message{
+	msg := types.Message{
 		ID:       "bench-msg",
 		Payload:  make([]byte, 100),
 		Sequence: 1,
@@ -324,7 +324,7 @@ func BenchmarkRingBuffer_Enqueue(b *testing.B) {
 
 func BenchmarkRingBuffer_Dequeue(b *testing.B) {
 	rb := NewRingBuffer(uint64(b.N))
-	msg := storage.Message{
+	msg := types.Message{
 		ID:       "bench-msg",
 		Payload:  make([]byte, 100),
 		Sequence: 1,
@@ -343,7 +343,7 @@ func BenchmarkRingBuffer_Dequeue(b *testing.B) {
 
 func BenchmarkRingBuffer_DequeueBatch(b *testing.B) {
 	rb := NewRingBuffer(102400)
-	msg := storage.Message{
+	msg := types.Message{
 		ID:       "bench-msg",
 		Payload:  make([]byte, 100),
 		Sequence: 1,
@@ -362,7 +362,7 @@ func BenchmarkRingBuffer_DequeueBatch(b *testing.B) {
 
 func BenchmarkRingBuffer_SPSC_Parallel(b *testing.B) {
 	rb := NewRingBuffer(4096)
-	msg := storage.Message{
+	msg := types.Message{
 		ID:       "bench-msg",
 		Payload:  make([]byte, 100),
 		Sequence: 1,

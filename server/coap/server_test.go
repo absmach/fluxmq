@@ -129,9 +129,9 @@ func TestServer_ListenDTLS_MissingCert(t *testing.T) {
 
 func TestBuildDTLSConfig_ClientAuthModes(t *testing.T) {
 	tests := []struct {
-		name           string
-		clientAuth     string
-		expectedAuth   string
+		name         string
+		clientAuth   string
+		expectedAuth string
 	}{
 		{"none", "none", "none"},
 		{"request", "request", "request"},

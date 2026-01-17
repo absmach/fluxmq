@@ -7,11 +7,11 @@ import "testing"
 
 func TestParseShared(t *testing.T) {
 	tests := []struct {
-		name              string
-		filter            string
-		expectedShare     string
-		expectedTopic     string
-		expectedIsShared  bool
+		name             string
+		filter           string
+		expectedShare    string
+		expectedTopic    string
+		expectedIsShared bool
 	}{
 		{
 			name:             "Valid shared subscription",

@@ -11,6 +11,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/core"
 	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	brokerStorage "github.com/absmach/fluxmq/storage"
 )
 
@@ -196,9 +197,9 @@ func (pw *PartitionWorker) ProcessMessages(ctx context.Context) {
 // deliverMessage delivers a single message to a consumer.
 func (pw *PartitionWorker) deliverMessage(
 	ctx context.Context,
-	msg *queueStorage.Message,
-	consumer *queueStorage.Consumer,
-	config queueStorage.QueueConfig,
+	msg *types.Message,
+	consumer *types.Consumer,
+	config types.QueueConfig,
 ) error {
 	// Check ordering constraints (per-group)
 	if pw.queue.OrderingEnforcer() != nil {
@@ -212,7 +213,7 @@ func (pw *PartitionWorker) deliverMessage(
 	}
 
 	// Mark as inflight
-	deliveryState := &queueStorage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   pw.queueName,
 		PartitionID: pw.partitionID,
@@ -226,8 +227,7 @@ func (pw *PartitionWorker) deliverMessage(
 		return fmt.Errorf("failed to mark inflight: %w", err)
 	}
 
-	// Update message state
-	msg.State = queueStorage.StateDelivered
+	msg.State = types.StateDelivered
 	msg.DeliveredAt = time.Now()
 
 	if err := pw.messageStore.UpdateMessage(ctx, pw.queueName, msg); err != nil {
@@ -274,7 +274,7 @@ func (pw *PartitionWorker) deliverMessage(
 }
 
 // ToStorageMessage converts a queue message to a broker storage message for MQTT delivery.
-func ToStorageMessage(msg *queueStorage.Message, queueTopic string) interface{} {
+func ToStorageMessage(msg *types.Message, queueTopic string) interface{} {
 	storageMsg := &brokerStorage.Message{
 		Topic:      queueTopic,
 		QoS:        1, // Queue messages always use QoS 1 for delivery confirmation

@@ -149,7 +149,6 @@ func main() {
 	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
 	if cfg.Cluster.Enabled {
-
 		// Build transport TLS config if enabled
 		var transportTLS *cluster.TransportTLSConfig
 		if cfg.Cluster.Transport.TLSEnabled {
@@ -193,14 +192,12 @@ func main() {
 			"etcd_data_dir", cfg.Cluster.Etcd.DataDir,
 			"etcd_bind", cfg.Cluster.Etcd.BindAddr)
 	} else {
-
 		cl = cluster.NewNoopCluster(cfg.Cluster.NodeID)
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
 	var webhooks broker.Notifier
 	if cfg.Webhook.Enabled {
-
 		sender := webhook.NewHTTPSender()
 
 		wh, err := webhook.NewNotifier(cfg.Webhook, cfg.Cluster.NodeID, sender, logger)
@@ -223,7 +220,6 @@ func main() {
 	var tracer trace.Tracer
 
 	if cfg.Server.MetricsEnabled {
-
 		shutdown, err := otel.InitProvider(cfg.Server, cfg.Cluster.NodeID)
 		if err != nil {
 			slog.Error("Failed to initialize OpenTelemetry", "error", err)

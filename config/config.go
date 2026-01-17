@@ -25,7 +25,7 @@ type Config struct {
 
 // RateLimitConfig holds rate limiting configuration.
 type RateLimitConfig struct {
-	Enabled    bool                    `yaml:"enabled"`
+	Enabled    bool                      `yaml:"enabled"`
 	Connection ConnectionRateLimitConfig `yaml:"connection"`
 	Message    MessageRateLimitConfig    `yaml:"message"`
 	Subscribe  SubscribeRateLimitConfig  `yaml:"subscribe"`
@@ -55,33 +55,33 @@ type SubscribeRateLimitConfig struct {
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
-	TCPAddr         string        `yaml:"tcp_addr"`
-	TLSCertFile     string        `yaml:"tls_cert_file"`
-	TLSKeyFile      string        `yaml:"tls_key_file"`
-	TLSCAFile       string        `yaml:"tls_ca_file"`     // CA certificate for client verification
-	TLSClientAuth   string        `yaml:"tls_client_auth"` // "none", "request", or "require"
-	HTTPAddr        string        `yaml:"http_addr"`
-	WSAddr           string   `yaml:"ws_addr"`
-	WSPath           string   `yaml:"ws_path"`
-	WSAllowedOrigins []string `yaml:"ws_allowed_origins"` // Allowed origins for WebSocket (empty = allow all in dev mode)
-	CoAPAddr           string `yaml:"coap_addr"`
-	CoAPDTLSEnabled    bool   `yaml:"coap_dtls_enabled"`
-	CoAPDTLSCertFile   string `yaml:"coap_dtls_cert_file"`
-	CoAPDTLSKeyFile    string `yaml:"coap_dtls_key_file"`
-	CoAPDTLSCAFile     string `yaml:"coap_dtls_ca_file"`     // For mDTLS client verification
-	CoAPDTLSClientAuth string `yaml:"coap_dtls_client_auth"` // "none", "request", "require"
-	HealthAddr         string `yaml:"health_addr"`
-	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
-	TCPMaxConn      int           `yaml:"tcp_max_connections"`
-	TCPReadTimeout  time.Duration `yaml:"tcp_read_timeout"`
-	TCPWriteTimeout time.Duration `yaml:"tcp_write_timeout"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
-	TLSEnabled      bool          `yaml:"tls_enabled"`
-	HTTPEnabled     bool          `yaml:"http_enabled"`
-	WSEnabled       bool          `yaml:"ws_enabled"`
-	CoAPEnabled     bool          `yaml:"coap_enabled"`
-	HealthEnabled   bool          `yaml:"health_enabled"`
-	MetricsEnabled  bool          `yaml:"metrics_enabled"` // Now enables OTel
+	TCPAddr            string        `yaml:"tcp_addr"`
+	TLSCertFile        string        `yaml:"tls_cert_file"`
+	TLSKeyFile         string        `yaml:"tls_key_file"`
+	TLSCAFile          string        `yaml:"tls_ca_file"`     // CA certificate for client verification
+	TLSClientAuth      string        `yaml:"tls_client_auth"` // "none", "request", or "require"
+	HTTPAddr           string        `yaml:"http_addr"`
+	WSAddr             string        `yaml:"ws_addr"`
+	WSPath             string        `yaml:"ws_path"`
+	WSAllowedOrigins   []string      `yaml:"ws_allowed_origins"` // Allowed origins for WebSocket (empty = allow all in dev mode)
+	CoAPAddr           string        `yaml:"coap_addr"`
+	CoAPDTLSEnabled    bool          `yaml:"coap_dtls_enabled"`
+	CoAPDTLSCertFile   string        `yaml:"coap_dtls_cert_file"`
+	CoAPDTLSKeyFile    string        `yaml:"coap_dtls_key_file"`
+	CoAPDTLSCAFile     string        `yaml:"coap_dtls_ca_file"`     // For mDTLS client verification
+	CoAPDTLSClientAuth string        `yaml:"coap_dtls_client_auth"` // "none", "request", "require"
+	HealthAddr         string        `yaml:"health_addr"`
+	MetricsAddr        string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
+	TCPMaxConn         int           `yaml:"tcp_max_connections"`
+	TCPReadTimeout     time.Duration `yaml:"tcp_read_timeout"`
+	TCPWriteTimeout    time.Duration `yaml:"tcp_write_timeout"`
+	ShutdownTimeout    time.Duration `yaml:"shutdown_timeout"`
+	TLSEnabled         bool          `yaml:"tls_enabled"`
+	HTTPEnabled        bool          `yaml:"http_enabled"`
+	WSEnabled          bool          `yaml:"ws_enabled"`
+	CoAPEnabled        bool          `yaml:"coap_enabled"`
+	HealthEnabled      bool          `yaml:"health_enabled"`
+	MetricsEnabled     bool          `yaml:"metrics_enabled"` // Now enables OTel
 
 	// OpenTelemetry configuration
 	OtelServiceName     string  `yaml:"otel_service_name"`
@@ -225,26 +225,26 @@ type WebhookEndpoint struct {
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
-			TCPAddr:         ":1883",
-			TCPMaxConn:      10000,
-			TCPReadTimeout:  60 * time.Second,
-			TCPWriteTimeout: 60 * time.Second,
-			TLSEnabled:      false,
-			TLSClientAuth:   "none",
-			HTTPAddr:        ":8080",
-			HTTPEnabled:     false,
-			WSAddr:          ":8083",
-			WSPath:          "/mqtt",
-			WSEnabled:       true,
+			TCPAddr:            ":1883",
+			TCPMaxConn:         10000,
+			TCPReadTimeout:     60 * time.Second,
+			TCPWriteTimeout:    60 * time.Second,
+			TLSEnabled:         false,
+			TLSClientAuth:      "none",
+			HTTPAddr:           ":8080",
+			HTTPEnabled:        false,
+			WSAddr:             ":8083",
+			WSPath:             "/mqtt",
+			WSEnabled:          true,
 			CoAPAddr:           ":5683",
 			CoAPEnabled:        false,
 			CoAPDTLSEnabled:    false,
 			CoAPDTLSClientAuth: "none",
 			HealthAddr:         ":8081",
-			HealthEnabled:   true,
-			MetricsAddr:     "localhost:4317",
-			MetricsEnabled:  false,
-			ShutdownTimeout: 30 * time.Second,
+			HealthEnabled:      true,
+			MetricsAddr:        "localhost:4317",
+			MetricsEnabled:     false,
+			ShutdownTimeout:    30 * time.Second,
 
 			// OpenTelemetry defaults
 			OtelServiceName:     "mqtt-broker",

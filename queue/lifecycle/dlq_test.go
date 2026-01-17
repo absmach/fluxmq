@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"context"
@@ -12,35 +12,57 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// mockQueueInfo is a mock implementation of QueueInfo for testing.
+type mockQueueInfo struct {
+	name   string
+	config types.QueueConfig
+}
+
+func (m *mockQueueInfo) Name() string {
+	return m.name
+}
+
+func (m *mockQueueInfo) Config() types.QueueConfig {
+	return m.config
+}
+
+func newMockQueueInfo(name string, config types.QueueConfig) *mockQueueInfo {
+	return &mockQueueInfo{
+		name:   name,
+		config: config,
+	}
+}
 
 func TestDLQManager_MoveToDLQ(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 
-	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	// Create queue config
+	config := types.DefaultQueueConfig("$queue/test")
 	config.DLQConfig.Enabled = true
 	config.DLQConfig.Topic = "$queue/dlq/test"
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 
 	// Create message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateDelivered,
+		State:       types.StateDelivered,
 		RetryCount:  5,
 		CreatedAt:   time.Now().Add(-1 * time.Hour),
 	}
@@ -56,7 +78,7 @@ func TestDLQManager_MoveToDLQ(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, dlqMessages, 1)
 	assert.Equal(t, "msg-1", dlqMessages[0].ID)
-	assert.Equal(t, queueStorage.StateDLQ, dlqMessages[0].State)
+	assert.Equal(t, types.StateDLQ, dlqMessages[0].State)
 	assert.Equal(t, "max retries exceeded", dlqMessages[0].FailureReason)
 	assert.False(t, dlqMessages[0].MovedToDLQAt.IsZero())
 
@@ -71,22 +93,22 @@ func TestDLQManager_MoveToDLQ_DLQDisabled(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 
 	// Create queue with DLQ disabled
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.DLQConfig.Enabled = false
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 
 	// Create message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateDelivered,
+		State:       types.StateDelivered,
 		RetryCount:  5,
 		CreatedAt:   time.Now(),
 	}
@@ -113,23 +135,21 @@ func TestDLQManager_RetryFromDLQ(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.DLQConfig.Enabled = true
 	config.DLQConfig.Topic = "$queue/dlq/test"
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
-
 	// Create message and move to DLQ
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("test payload"),
 		Topic:         "$queue/test",
 		PartitionID:   0,
 		Sequence:      1,
-		State:         queueStorage.StateDLQ,
+		State:         types.StateDLQ,
 		RetryCount:    10,
 		FailureReason: "max retries exceeded",
 		CreatedAt:     time.Now().Add(-2 * time.Hour),
@@ -139,13 +159,13 @@ func TestDLQManager_RetryFromDLQ(t *testing.T) {
 	require.NoError(t, err)
 
 	// Retry from DLQ
-	err = dlqManager.RetryFromDLQ(ctx, queue.Name(), msg.ID)
+	err = dlqManager.RetryFromDLQ(ctx, "$queue/test", msg.ID)
 	require.NoError(t, err)
 
 	// Verify message back in original queue with reset state
-	retrieved, err := store.GetMessage(ctx, queue.Name(), msg.ID)
+	retrieved, err := store.GetMessage(ctx, "$queue/test", msg.ID)
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateQueued, retrieved.State)
+	assert.Equal(t, types.StateQueued, retrieved.State)
 	assert.Equal(t, 0, retrieved.RetryCount)
 	assert.True(t, retrieved.NextRetryAt.IsZero())
 	assert.Equal(t, "", retrieved.FailureReason)
@@ -162,13 +182,13 @@ func TestDLQManager_RetryFromDLQ_NotFound(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Try to retry non-existent message
 	err = dlqManager.RetryFromDLQ(ctx, "$queue/test", "non-existent")
-	assert.ErrorIs(t, err, queueStorage.ErrMessageNotFound)
+	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 }
 
 func TestDLQManager_PurgeDLQ(t *testing.T) {
@@ -177,18 +197,18 @@ func TestDLQManager_PurgeDLQ(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.DLQConfig.Topic = "$queue/dlq/test"
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Add multiple messages to DLQ
 	for i := 0; i < 5; i++ {
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:           fmt.Sprintf("msg-%d", i),
 			Payload:      []byte("test"),
 			Topic:        "$queue/test",
-			State:        queueStorage.StateDLQ,
+			State:        types.StateDLQ,
 			MovedToDLQAt: time.Now(),
 		}
 		err = store.EnqueueDLQ(ctx, config.DLQConfig.Topic, msg)
@@ -217,7 +237,7 @@ func TestDLQManager_GetDLQStats(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.DLQConfig.Topic = "$queue/dlq/test"
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -225,11 +245,11 @@ func TestDLQManager_GetDLQStats(t *testing.T) {
 	// Add messages with different failure reasons
 	reasons := []string{"max retries", "max retries", "timeout", "timeout", "timeout"}
 	for i, reason := range reasons {
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:            fmt.Sprintf("msg-%d", i),
 			Payload:       []byte("test"),
 			Topic:         "$queue/test",
-			State:         queueStorage.StateDLQ,
+			State:         types.StateDLQ,
 			FailureReason: reason,
 			MovedToDLQAt:  time.Now(),
 		}

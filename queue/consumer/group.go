@@ -12,6 +12,7 @@ import (
 	"time"
 
 	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // Partition is an interface for partition operations needed by consumer groups.
@@ -63,7 +64,7 @@ func (cgm *GroupManager) AddConsumer(ctx context.Context, groupID, consumerID, c
 		cgm.groups[groupID] = group
 	}
 
-	consumer := &queueStorage.Consumer{
+	consumer := &types.Consumer{
 		ID:            consumerID,
 		ClientID:      clientID,
 		GroupID:       groupID,
@@ -134,7 +135,7 @@ func (cgm *GroupManager) ListGroups() []*Group {
 
 // RestoreConsumer restores a consumer from persistent storage without re-persisting.
 // This is used during startup to restore consumers that were saved before shutdown.
-func (cgm *GroupManager) RestoreConsumer(consumer *queueStorage.Consumer) {
+func (cgm *GroupManager) RestoreConsumer(consumer *types.Consumer) {
 	cgm.mu.Lock()
 	defer cgm.mu.Unlock()
 
@@ -238,7 +239,7 @@ func (cgm *GroupManager) Stop() {
 type Group struct {
 	id        string
 	queueName string
-	consumers map[string]*queueStorage.Consumer
+	consumers map[string]*types.Consumer
 	mu        sync.RWMutex
 }
 
@@ -247,7 +248,7 @@ func NewGroup(id, queueName string) *Group {
 	return &Group{
 		id:        id,
 		queueName: queueName,
-		consumers: make(map[string]*queueStorage.Consumer),
+		consumers: make(map[string]*types.Consumer),
 	}
 }
 
@@ -257,7 +258,7 @@ func (cg *Group) ID() string {
 }
 
 // AddConsumer adds a consumer to the group.
-func (cg *Group) AddConsumer(consumer *queueStorage.Consumer) {
+func (cg *Group) AddConsumer(consumer *types.Consumer) {
 	cg.mu.Lock()
 	defer cg.mu.Unlock()
 
@@ -273,7 +274,7 @@ func (cg *Group) RemoveConsumer(consumerID string) {
 }
 
 // GetConsumer returns a consumer by ID.
-func (cg *Group) GetConsumer(consumerID string) (*queueStorage.Consumer, bool) {
+func (cg *Group) GetConsumer(consumerID string) (*types.Consumer, bool) {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
@@ -282,11 +283,11 @@ func (cg *Group) GetConsumer(consumerID string) (*queueStorage.Consumer, bool) {
 }
 
 // ListConsumers returns all consumers in the group.
-func (cg *Group) ListConsumers() []*queueStorage.Consumer {
+func (cg *Group) ListConsumers() []*types.Consumer {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
-	consumers := make([]*queueStorage.Consumer, 0, len(cg.consumers))
+	consumers := make([]*types.Consumer, 0, len(cg.consumers))
 	for _, consumer := range cg.consumers {
 		consumers = append(consumers, consumer)
 	}
@@ -320,7 +321,7 @@ func (cg *Group) Rebalance(partitions []Partition) {
 	}
 
 	// Convert to slice for indexing
-	consumers := make([]*queueStorage.Consumer, 0, len(cg.consumers))
+	consumers := make([]*types.Consumer, 0, len(cg.consumers))
 	for _, consumer := range cg.consumers {
 		consumers = append(consumers, consumer)
 	}
@@ -347,7 +348,7 @@ func (cg *Group) Rebalance(partitions []Partition) {
 }
 
 // GetConsumerForPartition returns the consumer assigned to a partition.
-func (cg *Group) GetConsumerForPartition(partitionID int) (*queueStorage.Consumer, bool) {
+func (cg *Group) GetConsumerForPartition(partitionID int) (*types.Consumer, bool) {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 

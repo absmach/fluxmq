@@ -6,13 +6,13 @@ package queue
 import (
 	"sync"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 var (
 	messagePool = sync.Pool{
 		New: func() interface{} {
-			return &queueStorage.Message{
+			return &types.Message{
 				Properties: make(map[string]string, 8),
 			}
 		},
@@ -26,12 +26,12 @@ var (
 )
 
 // getMessageFromPool retrieves a QueueMessage from the pool.
-func getMessageFromPool() *queueStorage.Message {
-	return messagePool.Get().(*queueStorage.Message)
+func getMessageFromPool() *types.Message {
+	return messagePool.Get().(*types.Message)
 }
 
 // putMessageToPool returns a QueueMessage to the pool.
-func putMessageToPool(msg *queueStorage.Message) {
+func putMessageToPool(msg *types.Message) {
 	if msg == nil {
 		return
 	}

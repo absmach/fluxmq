@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package queue_test
 
 import (
@@ -6,8 +9,8 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue"
-	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +30,7 @@ func TestRetentionPolicy(t *testing.T) {
 
 	ctx := context.Background()
 	queueName := "$queue/retention-test"
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 5                   // Small limit for testing
 	config.MessageTTL = 100 * time.Millisecond // Short TTL
 
@@ -68,7 +71,7 @@ func TestMessageTTL(t *testing.T) {
 
 	ctx := context.Background()
 	queueName := "$queue/ttl-test"
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MessageTTL = 100 * time.Millisecond
 
 	err = manager.CreateQueue(ctx, config)
@@ -95,7 +98,7 @@ func TestMessageTTL(t *testing.T) {
 	// Since we use random partition if no key, might be in any partition.
 	// But DefaultQueueConfig uses 10 partitions.
 	// Let's find it.
-	var found *storage.Message
+	var found *types.Message
 	for i := 0; i < 10; i++ {
 		msgs, err := memStore.ListQueued(ctx, queueName, i, 1)
 		require.NoError(t, err)

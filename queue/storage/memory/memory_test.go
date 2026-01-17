@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +21,7 @@ func TestMemoryQueueStore_CreateQueue(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -35,7 +36,7 @@ func TestMemoryQueueStore_CreateQueue_Duplicate(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -49,7 +50,7 @@ func TestMemoryQueueStore_CreateQueue_InvalidConfig(t *testing.T) {
 	ctx := context.Background()
 
 	// Invalid config (empty name)
-	config := storage.QueueConfig{Name: ""}
+	config := types.QueueConfig{Name: ""}
 	err := store.CreateQueue(ctx, config)
 	assert.Error(t, err)
 }
@@ -63,7 +64,7 @@ func TestMemoryQueueStore_GetQueue(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
 	// Create and get queue
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -77,7 +78,7 @@ func TestMemoryQueueStore_UpdateQueue(t *testing.T) {
 	ctx := context.Background()
 
 	// Update non-existent queue
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.UpdateQueue(ctx, config)
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
@@ -104,7 +105,7 @@ func TestMemoryQueueStore_DeleteQueue(t *testing.T) {
 	err := store.DeleteQueue(ctx, "$queue/nonexistent")
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -127,9 +128,9 @@ func TestMemoryQueueStore_ListQueues(t *testing.T) {
 	assert.Len(t, queues, 0)
 
 	// Create multiple queues
-	config1 := storage.DefaultQueueConfig("$queue/test1")
-	config2 := storage.DefaultQueueConfig("$queue/test2")
-	config3 := storage.DefaultQueueConfig("$queue/test3")
+	config1 := types.DefaultQueueConfig("$queue/test1")
+	config2 := types.DefaultQueueConfig("$queue/test2")
+	config3 := types.DefaultQueueConfig("$queue/test3")
 
 	require.NoError(t, store.CreateQueue(ctx, config1))
 	require.NoError(t, store.CreateQueue(ctx, config2))
@@ -157,16 +158,16 @@ func TestMemoryMessageStore_Enqueue(t *testing.T) {
 	ctx := context.Background()
 
 	// Create queue first
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -184,13 +185,13 @@ func TestMemoryMessageStore_Enqueue_InvalidQueue(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/nonexistent",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -203,26 +204,26 @@ func TestMemoryMessageStore_Dequeue(t *testing.T) {
 	ctx := context.Background()
 
 	// Create queue
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue multiple messages
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("payload-1"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("payload-2"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    2,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -244,17 +245,17 @@ func TestMemoryMessageStore_Dequeue_RetryReady(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Message ready for retry (NextRetryAt in the past)
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		NextRetryAt: time.Now().Add(-1 * time.Second), // Past
 		CreatedAt:   time.Now(),
 	}
@@ -272,17 +273,17 @@ func TestMemoryMessageStore_Dequeue_RetryNotReady(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Message not ready for retry (NextRetryAt in the future)
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		NextRetryAt: time.Now().Add(1 * time.Hour), // Future
 		CreatedAt:   time.Now(),
 	}
@@ -299,16 +300,16 @@ func TestMemoryMessageStore_UpdateMessage(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("original"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		RetryCount:  0,
 		CreatedAt:   time.Now(),
 	}
@@ -316,7 +317,7 @@ func TestMemoryMessageStore_UpdateMessage(t *testing.T) {
 	require.NoError(t, store.Enqueue(ctx, "$queue/test", msg))
 
 	// Update message
-	msg.State = storage.StateRetry
+	msg.State = types.StateRetry
 	msg.RetryCount = 1
 	msg.Payload = []byte("updated")
 
@@ -326,7 +327,7 @@ func TestMemoryMessageStore_UpdateMessage(t *testing.T) {
 	// Verify update
 	retrieved, err := store.GetMessage(ctx, "$queue/test", "msg-1")
 	require.NoError(t, err)
-	assert.Equal(t, storage.StateRetry, retrieved.State)
+	assert.Equal(t, types.StateRetry, retrieved.State)
 	assert.Equal(t, 1, retrieved.RetryCount)
 	assert.Equal(t, []byte("updated"), retrieved.Payload)
 }
@@ -335,16 +336,16 @@ func TestMemoryMessageStore_DeleteMessage(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -363,7 +364,7 @@ func TestMemoryMessageStore_DeleteMessage_NotFound(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	err := store.DeleteMessage(ctx, "$queue/test", "nonexistent")
@@ -374,7 +375,7 @@ func TestMemoryMessageStore_GetMessage(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Get non-existent message
@@ -382,13 +383,13 @@ func TestMemoryMessageStore_GetMessage(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Create and get message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -403,7 +404,7 @@ func TestMemoryMessageStore_GetNextSequence(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// First sequence should be 1
@@ -426,35 +427,35 @@ func TestMemoryMessageStore_ListQueued(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue messages in different states
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    2,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		CreatedAt:   time.Now(),
 	}
-	msg3 := &storage.Message{
+	msg3 := &types.Message{
 		ID:          "msg-3",
 		Payload:     []byte("test-3"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    3,
-		State:       storage.StateDLQ, // Should not be listed
+		State:       types.StateDLQ, // Should not be listed
 		CreatedAt:   time.Now(),
 	}
 
@@ -477,26 +478,26 @@ func TestMemoryMessageStore_ListRetry(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue messages with different states
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    2,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		CreatedAt:   time.Now(),
 	}
 
@@ -508,7 +509,7 @@ func TestMemoryMessageStore_ListRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, messages, 1)
 	assert.Equal(t, "msg-2", messages[0].ID)
-	assert.Equal(t, storage.StateRetry, messages[0].State)
+	assert.Equal(t, types.StateRetry, messages[0].State)
 }
 
 // Inflight Tests
@@ -517,10 +518,10 @@ func TestMemoryMessageStore_MarkInflight(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -543,11 +544,11 @@ func TestMemoryMessageStore_GetInflight(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Mark multiple messages inflight
-	state1 := &storage.DeliveryState{
+	state1 := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -555,7 +556,7 @@ func TestMemoryMessageStore_GetInflight(t *testing.T) {
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
 	}
-	state2 := &storage.DeliveryState{
+	state2 := &types.DeliveryState{
 		MessageID:   "msg-2",
 		QueueName:   "$queue/test",
 		PartitionID: 1,
@@ -577,7 +578,7 @@ func TestMemoryMessageStore_GetInflightMessage(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Get non-existent inflight message
@@ -585,7 +586,7 @@ func TestMemoryMessageStore_GetInflightMessage(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Mark inflight
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -606,10 +607,10 @@ func TestMemoryMessageStore_RemoveInflight(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -635,13 +636,13 @@ func TestMemoryMessageStore_EnqueueDLQ(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed message"),
 		Topic:         "$queue/test",
 		PartitionID:   0,
 		Sequence:      1,
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "max retries exceeded",
 		CreatedAt:     time.Now(),
 		MovedToDLQAt:  time.Now(),
@@ -663,19 +664,19 @@ func TestMemoryMessageStore_ListDLQ(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue multiple DLQ messages
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed-1"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "reason-1",
 		CreatedAt:     time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:            "msg-2",
 		Payload:       []byte("failed-2"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "reason-2",
 		CreatedAt:     time.Now(),
 	}
@@ -698,11 +699,11 @@ func TestMemoryMessageStore_DeleteDLQMessage(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "test failure",
 		CreatedAt:     time.Now(),
 	}
@@ -725,7 +726,7 @@ func TestMemoryMessageStore_UpdateOffset(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	err := store.UpdateOffset(ctx, "$queue/test", 0, 100)
@@ -741,7 +742,7 @@ func TestMemoryMessageStore_GetOffset(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Get offset for partition (should return 0 initially)
@@ -764,10 +765,10 @@ func TestMemoryConsumerStore_RegisterConsumer(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -791,7 +792,7 @@ func TestMemoryConsumerStore_RegisterConsumer_NoQueue(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/nonexistent",
@@ -809,10 +810,10 @@ func TestMemoryConsumerStore_UnregisterConsumer(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -836,7 +837,7 @@ func TestMemoryConsumerStore_GetConsumer(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Get non-existent consumer
@@ -844,7 +845,7 @@ func TestMemoryConsumerStore_GetConsumer(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrConsumerNotFound)
 
 	// Register and get consumer
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -864,7 +865,7 @@ func TestMemoryConsumerStore_ListConsumers(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Empty list
@@ -873,7 +874,7 @@ func TestMemoryConsumerStore_ListConsumers(t *testing.T) {
 	assert.Len(t, consumers, 0)
 
 	// Register multiple consumers
-	consumer1 := &storage.Consumer{
+	consumer1 := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -881,7 +882,7 @@ func TestMemoryConsumerStore_ListConsumers(t *testing.T) {
 		AssignedParts: []int{0},
 		LastHeartbeat: time.Now(),
 	}
-	consumer2 := &storage.Consumer{
+	consumer2 := &types.Consumer{
 		ID:            "consumer-2",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -903,11 +904,11 @@ func TestMemoryConsumerStore_ListGroups(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Register consumers in different groups
-	consumer1 := &storage.Consumer{
+	consumer1 := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -915,7 +916,7 @@ func TestMemoryConsumerStore_ListGroups(t *testing.T) {
 		AssignedParts: []int{0},
 		LastHeartbeat: time.Now(),
 	}
-	consumer2 := &storage.Consumer{
+	consumer2 := &types.Consumer{
 		ID:            "consumer-2",
 		GroupID:       "group-2",
 		QueueName:     "$queue/test",
@@ -945,10 +946,10 @@ func TestMemoryConsumerStore_UpdateHeartbeat(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -976,7 +977,7 @@ func TestMemoryStore_ConcurrentEnqueue(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Enqueue messages concurrently
@@ -990,13 +991,13 @@ func TestMemoryStore_ConcurrentEnqueue(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < messagesPerGoroutine; j++ {
 				seq, _ := store.GetNextSequence(ctx, "$queue/test", routineID%3)
-				msg := &storage.Message{
+				msg := &types.Message{
 					ID:          string(rune(routineID*1000 + j)),
 					Payload:     []byte("test"),
 					Topic:       "$queue/test",
 					PartitionID: routineID % 3,
 					Sequence:    seq,
-					State:       storage.StateQueued,
+					State:       types.StateQueued,
 					CreatedAt:   time.Now(),
 				}
 				store.Enqueue(ctx, "$queue/test", msg)
@@ -1016,7 +1017,7 @@ func TestMemoryStore_ConcurrentConsumerRegistration(t *testing.T) {
 	store := New()
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	require.NoError(t, store.CreateQueue(ctx, config))
 
 	// Register consumers concurrently
@@ -1027,7 +1028,7 @@ func TestMemoryStore_ConcurrentConsumerRegistration(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			consumer := &storage.Consumer{
+			consumer := &types.Consumer{
 				ID:            string(rune(id)),
 				GroupID:       "group-1",
 				QueueName:     "$queue/test",
@@ -1060,13 +1061,13 @@ func TestMemoryStore_ErrorHandling_NonExistentQueue(t *testing.T) {
 	err = store.DeleteQueue(ctx, "$queue/nonexistent")
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/nonexistent",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 	err = store.Enqueue(ctx, "$queue/nonexistent", msg)

@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockPartition implements Partition interface for testing
+// MockPartition implements Partition interface for testing.
 type MockPartition struct {
 	id         int
 	assignedTo string
@@ -61,7 +61,7 @@ func TestNewGroupManager(t *testing.T) {
 func TestGroupManager_AddConsumer(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -85,7 +85,7 @@ func TestGroupManager_AddConsumer(t *testing.T) {
 func TestGroupManager_AddConsumer_Duplicate(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -102,7 +102,7 @@ func TestGroupManager_AddConsumer_Duplicate(t *testing.T) {
 func TestGroupManager_RemoveConsumer(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -132,7 +132,7 @@ func TestGroupManager_RemoveConsumer_NonExistent(t *testing.T) {
 func TestGroupManager_GetGroup(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -157,7 +157,7 @@ func TestGroupManager_GetGroup(t *testing.T) {
 func TestGroupManager_ListGroups(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -180,7 +180,7 @@ func TestGroupManager_ListGroups(t *testing.T) {
 func TestGroupManager_Rebalance(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 6
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -229,7 +229,7 @@ func TestGroupManager_Rebalance(t *testing.T) {
 func TestGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 5
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 func TestGroup_Consumers(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -291,7 +291,7 @@ func TestGroup_Consumers(t *testing.T) {
 func TestGroup_Size(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -312,7 +312,7 @@ func TestGroup_Size(t *testing.T) {
 func TestGroup_GetConsumerForPartition(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 4
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)

@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/delivery"
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
-// BenchmarkE2E_PublishToAck measures full message lifecycle
+// BenchmarkE2E_PublishToAck measures full message lifecycle.
 func BenchmarkE2E_PublishToAck(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -34,7 +34,7 @@ func BenchmarkE2E_PublishToAck(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-e2e"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
 		b.Fatal(err)
@@ -81,7 +81,7 @@ func BenchmarkE2E_PublishToAck(b *testing.B) {
 	}
 }
 
-// BenchmarkE2E_ConcurrentProducerConsumer measures concurrent pub/sub
+// BenchmarkE2E_ConcurrentProducerConsumer measures concurrent pub/sub.
 func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -99,7 +99,7 @@ func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-concurrent"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.Partitions = 10
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -171,7 +171,7 @@ func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 	wg.Wait()
 }
 
-// BenchmarkE2E_Latency measures message latency distribution
+// BenchmarkE2E_Latency measures message latency distribution.
 func BenchmarkE2E_Latency(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -189,7 +189,7 @@ func BenchmarkE2E_Latency(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-latency"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
 		b.Fatal(err)
@@ -253,7 +253,7 @@ func BenchmarkE2E_Latency(b *testing.B) {
 	}
 }
 
-// BenchmarkE2E_Sustained measures sustained throughput over time
+// BenchmarkE2E_Sustained measures sustained throughput over time.
 func BenchmarkE2E_Sustained(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -271,7 +271,7 @@ func BenchmarkE2E_Sustained(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-sustained"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.Partitions = 10
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -351,7 +351,7 @@ func BenchmarkE2E_Sustained(b *testing.B) {
 	b.ReportMetric(throughput, "msgs/sec")
 }
 
-// BenchmarkAllocs_Enqueue measures allocations during enqueue
+// BenchmarkAllocs_Enqueue measures allocations during enqueue.
 func BenchmarkAllocs_Enqueue(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -369,7 +369,7 @@ func BenchmarkAllocs_Enqueue(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-allocs-enq"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
 		b.Fatal(err)
@@ -388,7 +388,7 @@ func BenchmarkAllocs_Enqueue(b *testing.B) {
 	}
 }
 
-// Helper function to calculate percentiles
+// Helper function to calculate percentiles.
 func calculatePercentile(latencies []time.Duration, percentile float64) time.Duration {
 	if len(latencies) == 0 {
 		return 0

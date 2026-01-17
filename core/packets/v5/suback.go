@@ -110,7 +110,7 @@ func (pkt *SubAck) Unpack(r io.Reader) error {
 	return nil
 }
 
-// Reason returns a string representation of the meaning of the ReasonCode
+// Reason returns a string representation of the meaning of the ReasonCode.
 func (s *SubAck) Reason(index int) string {
 	if index >= 0 && index < len(*s.ReasonCodes) {
 		switch (*s.ReasonCodes)[index] {

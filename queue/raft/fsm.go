@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/hashicorp/raft"
 )
 
@@ -34,7 +35,7 @@ type Operation struct {
 	Timestamp time.Time
 
 	// For OpEnqueue
-	Message *storage.Message
+	Message *types.Message
 
 	// For OpAck, OpNack, OpReject
 	MessageID string
@@ -106,7 +107,7 @@ func (f *PartitionFSM) Apply(l *raft.Log) interface{} {
 }
 
 // applyEnqueue applies an enqueue operation.
-func (f *PartitionFSM) applyEnqueue(ctx context.Context, msg *storage.Message) error {
+func (f *PartitionFSM) applyEnqueue(ctx context.Context, msg *types.Message) error {
 	if msg == nil {
 		return fmt.Errorf("nil message in enqueue operation")
 	}
@@ -182,7 +183,7 @@ func (f *PartitionFSM) applyNack(ctx context.Context, messageID string, reason s
 	}
 
 	// Update state to retry
-	msg.State = storage.StateRetry
+	msg.State = types.StateRetry
 	msg.RetryCount++
 	msg.FailureReason = reason
 	msg.LastAttempt = time.Now()
@@ -230,7 +231,7 @@ func (f *PartitionFSM) applyReject(ctx context.Context, messageID string, reason
 	}
 
 	// Move to DLQ
-	msg.State = storage.StateDLQ
+	msg.State = types.StateDLQ
 	msg.FailureReason = reason
 	msg.MovedToDLQAt = time.Now()
 
@@ -257,7 +258,7 @@ func (f *PartitionFSM) applyReject(ctx context.Context, messageID string, reason
 }
 
 // applyUpdateMessage applies a message update operation.
-func (f *PartitionFSM) applyUpdateMessage(ctx context.Context, msg *storage.Message) error {
+func (f *PartitionFSM) applyUpdateMessage(ctx context.Context, msg *types.Message) error {
 	if msg == nil {
 		return fmt.Errorf("nil message in update operation")
 	}
@@ -400,7 +401,7 @@ type PartitionSnapshot struct {
 type SnapshotData struct {
 	QueueName   string
 	PartitionID int
-	Messages    []*storage.Message
+	Messages    []*types.Message
 	Timestamp   time.Time
 }
 
@@ -409,7 +410,7 @@ func (s *PartitionSnapshot) Persist(sink raft.SnapshotSink) error {
 	// Get all messages from partition
 	// Note: This is a simplified implementation
 	// In production, you'd want to page through messages
-	messages := make([]*storage.Message, 0)
+	messages := make([]*types.Message, 0)
 
 	// Get first and last sequences to determine range
 	// This would need to be implemented in the message store

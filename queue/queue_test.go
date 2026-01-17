@@ -7,15 +7,16 @@ import (
 	"context"
 	"testing"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/lifecycle"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewQueue(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 
 	queue := NewQueue(config, store, store)
 
@@ -28,7 +29,7 @@ func TestNewQueue(t *testing.T) {
 
 func TestQueue_Name(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/myqueue")
+	config := types.DefaultQueueConfig("$queue/myqueue")
 	queue := NewQueue(config, store, store)
 
 	assert.Equal(t, "$queue/myqueue", queue.Name())
@@ -36,7 +37,7 @@ func TestQueue_Name(t *testing.T) {
 
 func TestQueue_Config(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 5
 	queue := NewQueue(config, store, store)
 
@@ -47,7 +48,7 @@ func TestQueue_Config(t *testing.T) {
 
 func TestQueue_UpdateConfig(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	queue := NewQueue(config, store, store)
 
 	newConfig := config
@@ -60,7 +61,7 @@ func TestQueue_UpdateConfig(t *testing.T) {
 
 func TestQueue_Partitions(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 5
 	queue := NewQueue(config, store, store)
 
@@ -73,7 +74,7 @@ func TestQueue_Partitions(t *testing.T) {
 
 func TestQueue_GetPartition(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 3
 	queue := NewQueue(config, store, store)
 
@@ -96,7 +97,7 @@ func TestQueue_GetPartition(t *testing.T) {
 
 func TestQueue_GetPartitionForMessage(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 10
 	queue := NewQueue(config, store, store)
 
@@ -117,7 +118,7 @@ func TestQueue_GetPartitionForMessage(t *testing.T) {
 func TestQueue_AddConsumer(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -139,7 +140,7 @@ func TestQueue_AddConsumer(t *testing.T) {
 func TestQueue_AddConsumer_MultipleConsumers(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 4
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -167,7 +168,7 @@ func TestQueue_AddConsumer_MultipleConsumers(t *testing.T) {
 func TestQueue_RemoveConsumer(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -192,7 +193,7 @@ func TestQueue_RemoveConsumer(t *testing.T) {
 func TestQueue_RemoveConsumer_RebalancesPartitions(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 6
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -223,7 +224,7 @@ func TestQueue_RemoveConsumer_RebalancesPartitions(t *testing.T) {
 func TestQueue_GetConsumerForPartition(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 2
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -248,21 +249,21 @@ func TestQueue_GetConsumerForPartition(t *testing.T) {
 
 func TestQueue_OrderingEnforcer(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
-	config.Ordering = queueStorage.OrderingPartition
+	config := types.DefaultQueueConfig("$queue/test")
+	config.Ordering = types.OrderingPartition
 	queue := NewQueue(config, store, store)
 
 	enforcer := queue.OrderingEnforcer()
 	assert.NotNil(t, enforcer)
 
-	stats := enforcer.(*OrderingEnforcer).Stats()
-	assert.Equal(t, queueStorage.OrderingPartition, stats.Mode)
+	stats := enforcer.(*lifecycle.OrderingEnforcer).Stats()
+	assert.Equal(t, types.OrderingPartition, stats.Mode)
 }
 
 func TestQueue_MultipleGroups(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 4
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)

@@ -17,7 +17,7 @@ import (
 	"github.com/absmach/fluxmq/config"
 )
 
-// mockSender implements Sender interface for testing
+// mockSender implements Sender interface for testing.
 type mockSender struct {
 	mu          sync.Mutex
 	sendCount   int32

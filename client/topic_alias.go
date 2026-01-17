@@ -39,7 +39,7 @@ func newTopicAliasManager(clientMax, serverMax uint16) *topicAliasManager {
 // Returns (alias, isNew, ok).
 // - If topic already has an alias: (alias, false, true)
 // - If topic can be assigned new alias: (newAlias, true, true)
-// - If aliases disabled or limit reached: (0, false, false)
+// - If aliases disabled or limit reached: (0, false, false).
 func (m *topicAliasManager) getOrAssignOutbound(topic string) (uint16, bool, bool) {
 	if m.outboundMaximum == 0 {
 		return 0, false, false // Aliases disabled

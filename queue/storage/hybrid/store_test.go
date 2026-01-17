@@ -12,6 +12,7 @@ import (
 
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/badger"
+	"github.com/absmach/fluxmq/queue/types"
 	badgerdb "github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,7 +62,7 @@ func TestHybridStore_CreateQueue(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -78,7 +79,7 @@ func TestHybridStore_CreateQueue_Duplicate(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -93,18 +94,18 @@ func TestHybridStore_EnqueueDequeue(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Enqueue a message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		PartitionID: 0,
 		Sequence:    1,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 
 	err = store.Enqueue(ctx, "$queue/test", msg)
@@ -125,19 +126,19 @@ func TestHybridStore_HotPath_RingBufferHit(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Enqueue messages (should go to both stores)
 	for i := 0; i < 5; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-			State:       storage.StateQueued,
+			State:       types.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -169,18 +170,18 @@ func TestHybridStore_ColdPath_RingBufferEmpty(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Enqueue and immediately dequeue to empty ring buffer
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
 		Sequence:    1,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
 	require.NoError(t, err)
@@ -190,13 +191,13 @@ func TestHybridStore_ColdPath_RingBufferEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue another message
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test2"),
 		PartitionID: 0,
 		Sequence:    2,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg2)
 	require.NoError(t, err)
@@ -219,7 +220,7 @@ func TestHybridStore_Overflow_RingBufferFull(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -228,13 +229,13 @@ func TestHybridStore_Overflow_RingBufferFull(t *testing.T) {
 	numMessages := 20 // Exceed capacity
 
 	for i := 0; i < numMessages; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-			State:       storage.StateQueued,
+			State:       types.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -262,19 +263,19 @@ func TestHybridStore_DequeueBatch_FromRingBuffer(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Enqueue 10 messages
 	for i := 0; i < 10; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-			State:       storage.StateQueued,
+			State:       types.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -300,19 +301,19 @@ func TestHybridStore_DequeueBatch_Mixed(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Enqueue messages to fill ring buffer
 	for i := 0; i < 20; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:          fmt.Sprintf("msg-%d", i),
 			Payload:     []byte(fmt.Sprintf("payload-%d", i)),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
 			CreatedAt:   time.Now(),
-			State:       storage.StateQueued,
+			State:       types.StateQueued,
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
 		require.NoError(t, err)
@@ -320,7 +321,7 @@ func TestHybridStore_DequeueBatch_Mixed(t *testing.T) {
 
 	// Batch dequeue all messages
 	// Should get some from ring buffer, rest from BadgerDB
-	var allMessages []*storage.Message
+	var allMessages []*types.Message
 	for {
 		messages, err := store.DequeueBatch(ctx, "$queue/test", 0, 5)
 		require.NoError(t, err)
@@ -346,7 +347,7 @@ func TestHybridStore_Metrics_HitRate(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -355,13 +356,13 @@ func TestHybridStore_Metrics_HitRate(t *testing.T) {
 	assert.Equal(t, 0.0, hitRate)
 
 	// Enqueue and dequeue (hit)
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
 		Sequence:    1,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
 	require.NoError(t, err)
@@ -379,18 +380,18 @@ func TestHybridStore_Metrics_ResetMetrics(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Generate some metrics
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
 		Sequence:    1,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
 	require.NoError(t, err)
@@ -418,7 +419,7 @@ func TestHybridStore_MultiPartition(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 3
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -426,13 +427,13 @@ func TestHybridStore_MultiPartition(t *testing.T) {
 	// Enqueue to different partitions
 	for partition := 0; partition < 3; partition++ {
 		for i := 0; i < 5; i++ {
-			msg := &storage.Message{
+			msg := &types.Message{
 				ID:          fmt.Sprintf("p%d-msg-%d", partition, i),
 				Payload:     []byte(fmt.Sprintf("partition-%d-payload-%d", partition, i)),
 				PartitionID: partition,
 				Sequence:    uint64(i + 1),
 				CreatedAt:   time.Now(),
-				State:       storage.StateQueued,
+				State:       types.StateQueued,
 			}
 			err = store.Enqueue(ctx, "$queue/test", msg)
 			require.NoError(t, err)
@@ -457,7 +458,7 @@ func TestHybridStore_EmptyQueue(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -479,13 +480,13 @@ func TestHybridStore_NonExistentQueue(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue to non-existent queue
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
 		Sequence:    1,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 	err := store.Enqueue(ctx, "$queue/nonexistent", msg)
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
@@ -502,24 +503,24 @@ func TestHybridStore_InflightTracking(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// First enqueue a message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		PartitionID: 0,
 		Sequence:    1,
 		CreatedAt:   time.Now(),
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
 	require.NoError(t, err)
 
 	// Mark message as inflight
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -558,12 +559,12 @@ func TestHybridStore_ConsumerManagement(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Register consumer
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		ClientID:      "client-1",
 		GroupID:       "group-1",

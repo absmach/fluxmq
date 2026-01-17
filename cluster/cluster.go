@@ -159,7 +159,7 @@ type NodeInfo struct {
 // - Delivering messages routed from other nodes
 // - Providing session state during takeover
 // - Fetching retained messages from local storage
-// - Fetching will messages from local storage
+// - Fetching will messages from local storage.
 type MessageHandler interface {
 	// DeliverToClient delivers a message to a local MQTT client.
 	// This is called when a message is routed from another broker node.

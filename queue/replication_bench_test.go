@@ -12,17 +12,17 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
 )
 
 // BenchmarkReplication_SyncMode benchmarks sync replication throughput.
-// Target: >5K enqueues/sec per partition
+// Target: >5K enqueues/sec per partition.
 func BenchmarkReplication_SyncMode(b *testing.B) {
 	queueName := "$queue/bench-sync"
-	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 3, queueStorage.ReplicationSync)
+	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 3, types.ReplicationSync)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -48,10 +48,10 @@ func BenchmarkReplication_SyncMode(b *testing.B) {
 }
 
 // BenchmarkReplication_AsyncMode benchmarks async replication throughput.
-// Target: >50K enqueues/sec per partition
+// Target: >50K enqueues/sec per partition.
 func BenchmarkReplication_AsyncMode(b *testing.B) {
 	queueName := "$queue/bench-async"
-	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 3, queueStorage.ReplicationAsync)
+	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 3, types.ReplicationAsync)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -77,10 +77,10 @@ func BenchmarkReplication_AsyncMode(b *testing.B) {
 }
 
 // BenchmarkReplication_Latency measures enqueue latency with sync replication.
-// Target P99: <50ms (sync)
+// Target P99: <50ms (sync).
 func BenchmarkReplication_Latency(b *testing.B) {
 	queueName := "$queue/bench-latency"
-	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 1, queueStorage.ReplicationSync)
+	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 1, types.ReplicationSync)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -123,7 +123,7 @@ func BenchmarkReplication_Latency(b *testing.B) {
 // BenchmarkReplication_Concurrent benchmarks concurrent enqueues from multiple goroutines.
 func BenchmarkReplication_Concurrent(b *testing.B) {
 	queueName := "$queue/bench-concurrent"
-	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 3, queueStorage.ReplicationSync)
+	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 3, types.ReplicationSync)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -170,7 +170,7 @@ func BenchmarkReplication_Concurrent(b *testing.B) {
 // BenchmarkReplication_MessageSizes benchmarks different message sizes.
 func BenchmarkReplication_MessageSizes(b *testing.B) {
 	queueName := "$queue/bench-sizes"
-	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 1, queueStorage.ReplicationSync)
+	managers, _, cleanup := setupBenchCluster(b, 3, queueName, 1, types.ReplicationSync)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -210,7 +210,7 @@ func BenchmarkReplication_MessageSizes(b *testing.B) {
 }
 
 // setupBenchCluster creates a 3-node cluster for benchmarking.
-func setupBenchCluster(b *testing.B, nodeCount int, queueName string, partitions int, mode queueStorage.ReplicationMode) ([]*Manager, []*badgerstore.Store, func()) {
+func setupBenchCluster(b *testing.B, nodeCount int, queueName string, partitions int, mode types.ReplicationMode) ([]*Manager, []*badgerstore.Store, func()) {
 	b.Helper()
 
 	tempDir, err := os.MkdirTemp("", "bench-*")
@@ -259,21 +259,21 @@ func setupBenchCluster(b *testing.B, nodeCount int, queueName string, partitions
 	}
 
 	// Create replicated queue
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: nodeCount,
 			Mode:              mode,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: (nodeCount / 2) + 1,
 			AckTimeout:        5 * time.Second,
 			HeartbeatTimeout:  1 * time.Second,
 			ElectionTimeout:   3 * time.Second,
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,

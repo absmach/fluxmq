@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,12 +22,12 @@ func TestRetentionManager_SizeBasedRetention_Messages(t *testing.T) {
 	queueName := "$queue/test-retention"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure retention: max 5 messages
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		RetentionMessages: 5,
 		SizeCheckEvery:    1, // Check on every enqueue for testing
 	}
@@ -36,12 +36,12 @@ func TestRetentionManager_SizeBasedRetention_Messages(t *testing.T) {
 
 	// Enqueue 10 messages
 	for i := 0; i < 10; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("test message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now(),
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -79,12 +79,12 @@ func TestRetentionManager_SizeBasedRetention_Bytes(t *testing.T) {
 	queueName := "$queue/test-retention-bytes"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure retention: max 100 bytes
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		RetentionBytes: 100,
 		SizeCheckEvery: 1, // Check on every enqueue for testing
 	}
@@ -93,12 +93,12 @@ func TestRetentionManager_SizeBasedRetention_Bytes(t *testing.T) {
 
 	// Enqueue messages with 30-byte payloads (total: 150 bytes)
 	for i := 0; i < 5; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   make([]byte, 30), // 30 bytes each
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now(),
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -134,12 +134,12 @@ func TestRetentionManager_TimeBasedRetention(t *testing.T) {
 	queueName := "$queue/test-time-retention"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure retention: 100ms time retention
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		RetentionTime:     100 * time.Millisecond,
 		TimeCheckInterval: 50 * time.Millisecond,
 	}
@@ -149,12 +149,12 @@ func TestRetentionManager_TimeBasedRetention(t *testing.T) {
 	// Enqueue old messages (created 200ms ago)
 	oldTime := time.Now().Add(-200 * time.Millisecond)
 	for i := 0; i < 3; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("old-msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("old message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: oldTime,
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -163,12 +163,12 @@ func TestRetentionManager_TimeBasedRetention(t *testing.T) {
 
 	// Enqueue new messages (just created)
 	for i := 3; i < 6; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("new-msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("new message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now(),
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -204,22 +204,22 @@ func TestRetentionManager_NoRetentionConfigured(t *testing.T) {
 	queueName := "$queue/test-no-retention"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// No retention policy configured
-	policy := storage.RetentionPolicy{}
+	policy := types.RetentionPolicy{}
 	rm := NewRetentionManager(queueName, policy, store, nil, slog.Default())
 
 	// Enqueue messages
 	for i := 0; i < 10; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("test message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now(),
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -244,12 +244,12 @@ func TestRetentionManager_SizeCheckOptimization(t *testing.T) {
 	queueName := "$queue/test-check-optimization"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure retention with specific check interval
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		RetentionMessages: 5,
 		SizeCheckEvery:    5, // Only check every 5 enqueues
 	}
@@ -258,12 +258,12 @@ func TestRetentionManager_SizeCheckOptimization(t *testing.T) {
 
 	// Enqueue 10 messages
 	for i := 0; i < 10; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("test"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now(),
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -298,12 +298,12 @@ func TestRetentionManager_BothSizeLimits(t *testing.T) {
 	queueName := "$queue/test-both-limits"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure both byte and message limits
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		RetentionBytes:    100, // 100 bytes
 		RetentionMessages: 10,  // 10 messages
 		SizeCheckEvery:    1,
@@ -313,12 +313,12 @@ func TestRetentionManager_BothSizeLimits(t *testing.T) {
 
 	// Enqueue 5 messages with 30 bytes each (150 bytes total, but only 5 messages)
 	for i := 0; i < 5; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   make([]byte, 30),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now(),
 		}
 		err := store.Enqueue(ctx, queueName, msg)
@@ -349,12 +349,12 @@ func TestRetentionManager_Compaction_Basic(t *testing.T) {
 	queueName := "$queue/test-compaction"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure compaction with a key
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		CompactionEnabled:  true,
 		CompactionKey:      "entity_id", // Compact by entity_id property
 		CompactionLag:      0,           // No lag for testing
@@ -366,12 +366,12 @@ func TestRetentionManager_Compaction_Basic(t *testing.T) {
 	// Enqueue multiple messages for the same entity_id (should compact to 1)
 	// Entity A: 3 messages (only latest should survive)
 	for i := 0; i < 3; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("entity-a-msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte(fmt.Sprintf("entity A update %d", i)),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now().Add(-time.Hour), // Old messages
 			Properties: map[string]string{
 				"entity_id": "entity-A",
@@ -383,12 +383,12 @@ func TestRetentionManager_Compaction_Basic(t *testing.T) {
 
 	// Entity B: 2 messages
 	for i := 3; i < 5; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("entity-b-msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte(fmt.Sprintf("entity B update %d", i-3)),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now().Add(-time.Hour),
 			Properties: map[string]string{
 				"entity_id": "entity-B",
@@ -404,7 +404,7 @@ func TestRetentionManager_Compaction_Basic(t *testing.T) {
 	assert.Equal(t, int64(5), count)
 
 	// Run compaction
-	stats, err := rm.runCompaction(ctx, 0)
+	stats, err := rm.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 
 	// Should delete 3 messages (2 from entity-A, 1 from entity-B)
@@ -435,12 +435,12 @@ func TestRetentionManager_Compaction_RespectLag(t *testing.T) {
 	queueName := "$queue/test-compaction-lag"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure compaction with 1-hour lag
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		CompactionEnabled:  true,
 		CompactionKey:      "entity_id",
 		CompactionLag:      1 * time.Hour, // Messages within the last hour won't be compacted
@@ -451,12 +451,12 @@ func TestRetentionManager_Compaction_RespectLag(t *testing.T) {
 
 	// Enqueue old messages (should be compacted)
 	for i := 0; i < 2; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("old-msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("old message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now().Add(-2 * time.Hour), // 2 hours ago
 			Properties: map[string]string{
 				"entity_id": "entity-X",
@@ -468,12 +468,12 @@ func TestRetentionManager_Compaction_RespectLag(t *testing.T) {
 
 	// Enqueue recent messages (should NOT be compacted due to lag)
 	for i := 2; i < 4; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("new-msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("new message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now().Add(-10 * time.Minute), // 10 minutes ago (within lag)
 			Properties: map[string]string{
 				"entity_id": "entity-X",
@@ -489,7 +489,7 @@ func TestRetentionManager_Compaction_RespectLag(t *testing.T) {
 	assert.Equal(t, int64(4), count)
 
 	// Run compaction
-	stats, err := rm.runCompaction(ctx, 0)
+	stats, err := rm.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 
 	// Should only delete 1 old message (keep latest old message, all new messages untouched)
@@ -507,12 +507,12 @@ func TestRetentionManager_Compaction_NoKeyProperty(t *testing.T) {
 	queueName := "$queue/test-compaction-no-key"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// Configure compaction with a key
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		CompactionEnabled:  true,
 		CompactionKey:      "entity_id",
 		CompactionLag:      0,
@@ -523,12 +523,12 @@ func TestRetentionManager_Compaction_NoKeyProperty(t *testing.T) {
 
 	// Enqueue messages WITHOUT the compaction key property
 	for i := 0; i < 5; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("message without entity_id"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now().Add(-time.Hour),
 			Properties: map[string]string{
 				"other_key": "some_value", // No entity_id
@@ -544,7 +544,7 @@ func TestRetentionManager_Compaction_NoKeyProperty(t *testing.T) {
 	assert.Equal(t, int64(5), count)
 
 	// Run compaction
-	stats, err := rm.runCompaction(ctx, 0)
+	stats, err := rm.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 
 	// No messages should be deleted (no compaction key)
@@ -562,12 +562,12 @@ func TestRetentionManager_Compaction_NotConfigured(t *testing.T) {
 	queueName := "$queue/test-no-compaction"
 
 	// Create queue
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
 	// No compaction configured (empty key)
-	policy := storage.RetentionPolicy{
+	policy := types.RetentionPolicy{
 		CompactionEnabled:  true,
 		CompactionKey:      "", // No key = no compaction
 		CompactionInterval: 100 * time.Millisecond,
@@ -577,12 +577,12 @@ func TestRetentionManager_Compaction_NotConfigured(t *testing.T) {
 
 	// Enqueue messages
 	for i := 0; i < 5; i++ {
-		msg := &storage.Message{
+		msg := &types.Message{
 			ID:        fmt.Sprintf("msg-%d", i),
 			Topic:     queueName,
 			Payload:   []byte("message"),
 			Sequence:  uint64(i),
-			State:     storage.StateQueued,
+			State:     types.StateQueued,
 			CreatedAt: time.Now().Add(-time.Hour),
 			Properties: map[string]string{
 				"entity_id": "entity-A",
@@ -593,7 +593,7 @@ func TestRetentionManager_Compaction_NotConfigured(t *testing.T) {
 	}
 
 	// Run compaction
-	stats, err := rm.runCompaction(ctx, 0)
+	stats, err := rm.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 
 	// No messages should be deleted (no compaction key configured)

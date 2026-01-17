@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +20,7 @@ func TestRetryManager_CalculateBackoff(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 	rm := NewRetryManager(store, dlqManager)
 
-	policy := queueStorage.RetryPolicy{
+	policy := types.RetryPolicy{
 		InitialBackoff:    5 * time.Second,
 		MaxBackoff:        5 * time.Minute,
 		BackoffMultiplier: 2.0,
@@ -57,31 +57,31 @@ func TestRetryManager_InflightTimeout(t *testing.T) {
 	rm.checkInterval = 100 * time.Millisecond
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.RetryPolicy.InitialBackoff = 1 * time.Second
 	config.DeliveryTimeout = 200 * time.Millisecond // Short timeout for testing
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 	rm.RegisterQueue(queue)
 
 	// Enqueue a message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 	err = store.Enqueue(ctx, queue.Name(), msg)
 	require.NoError(t, err)
 
 	// Mark as inflight with short timeout
-	deliveryState := &queueStorage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: 0,
@@ -102,7 +102,7 @@ func TestRetryManager_InflightTimeout(t *testing.T) {
 	// Message should be in retry state
 	retrieved, err := store.GetMessage(ctx, queue.Name(), msg.ID)
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateRetry, retrieved.State)
+	assert.Equal(t, types.StateRetry, retrieved.State)
 	assert.Equal(t, 1, retrieved.RetryCount)
 	assert.True(t, retrieved.NextRetryAt.After(time.Now()))
 
@@ -119,24 +119,24 @@ func TestRetryManager_MaxRetriesExceeded(t *testing.T) {
 	rm := NewRetryManager(store, dlqManager)
 
 	// Create queue with low max retries
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.RetryPolicy.MaxRetries = 3
 	config.DLQConfig.Enabled = true
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 	rm.RegisterQueue(queue)
 
 	// Create message that has already been retried max times
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateDelivered,
+		State:       types.StateDelivered,
 		RetryCount:  3, // Already at max
 		CreatedAt:   time.Now().Add(-1 * time.Hour),
 	}
@@ -144,7 +144,7 @@ func TestRetryManager_MaxRetriesExceeded(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mark as inflight
-	deliveryState := &queueStorage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: 0,
@@ -165,7 +165,7 @@ func TestRetryManager_MaxRetriesExceeded(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, dlqMessages, 1)
 	assert.Equal(t, "msg-1", dlqMessages[0].ID)
-	assert.Equal(t, queueStorage.StateDLQ, dlqMessages[0].State)
+	assert.Equal(t, types.StateDLQ, dlqMessages[0].State)
 	assert.Equal(t, "max retries exceeded", dlqMessages[0].FailureReason)
 
 	// Should be removed from original queue
@@ -180,7 +180,7 @@ func TestRetryManager_TotalTimeoutExceeded(t *testing.T) {
 	rm := NewRetryManager(store, dlqManager)
 
 	// Create queue with short total timeout
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.RetryPolicy.MaxRetries = 10
 	config.RetryPolicy.TotalTimeout = 1 * time.Hour
 	config.DLQConfig.Enabled = true
@@ -188,17 +188,17 @@ func TestRetryManager_TotalTimeoutExceeded(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 	rm.RegisterQueue(queue)
 
 	// Create message created 2 hours ago (exceeds total timeout)
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateDelivered,
+		State:       types.StateDelivered,
 		RetryCount:  2,
 		CreatedAt:   time.Now().Add(-2 * time.Hour),
 	}
@@ -224,23 +224,23 @@ func TestRetryManager_RetryScheduling(t *testing.T) {
 	rm.checkInterval = 100 * time.Millisecond
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.RetryPolicy.InitialBackoff = 200 * time.Millisecond
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 	rm.RegisterQueue(queue)
 
 	// Create message in retry state scheduled for near future
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateRetry,
+		State:       types.StateRetry,
 		RetryCount:  1,
 		CreatedAt:   time.Now(),
 		NextRetryAt: time.Now().Add(150 * time.Millisecond),
@@ -254,7 +254,7 @@ func TestRetryManager_RetryScheduling(t *testing.T) {
 	// Message should still be in retry state (not ready yet)
 	retrieved, err := store.GetMessage(ctx, queue.Name(), msg.ID)
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateRetry, retrieved.State)
+	assert.Equal(t, types.StateRetry, retrieved.State)
 	assert.Equal(t, 1, retrieved.RetryCount) // Still 1
 
 	// Wait for retry time
@@ -276,16 +276,16 @@ func TestRetryManager_GetStats(t *testing.T) {
 	rm := NewRetryManager(store, dlqManager)
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	queue := NewQueue(config, store, store)
+	queue := newMockQueueInfo(config.Name, config)
 	rm.RegisterQueue(queue)
 
 	// Add some inflight messages
 	for i := 0; i < 3; i++ {
-		deliveryState := &queueStorage.DeliveryState{
+		deliveryState := &types.DeliveryState{
 			MessageID:   fmt.Sprintf("msg-%d", i),
 			QueueName:   queue.Name(),
 			PartitionID: 0,
@@ -299,13 +299,13 @@ func TestRetryManager_GetStats(t *testing.T) {
 
 	// Add some retry messages
 	for i := 0; i < 2; i++ {
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:          fmt.Sprintf("retry-msg-%d", i),
 			Payload:     []byte("test"),
 			Topic:       "$queue/test",
 			PartitionID: 0,
 			Sequence:    uint64(i + 10),
-			State:       queueStorage.StateRetry,
+			State:       types.StateRetry,
 			RetryCount:  1,
 			CreatedAt:   time.Now(),
 			NextRetryAt: time.Now().Add(5 * time.Second),
@@ -327,8 +327,8 @@ func TestRetryManager_RegisterUnregisterQueue(t *testing.T) {
 	dlqManager := NewDLQManager(store, &NoOpAlertHandler{})
 	rm := NewRetryManager(store, dlqManager)
 
-	config := queueStorage.DefaultQueueConfig("$queue/test")
-	queue := NewQueue(config, store, store)
+	config := types.DefaultQueueConfig("$queue/test")
+	queue := newMockQueueInfo(config.Name, config)
 
 	// Register queue
 	rm.RegisterQueue(queue)

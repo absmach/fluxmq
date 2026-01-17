@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestStress_HighThroughputPublish tests sustained high-throughput publishing
+// TestStress_HighThroughputPublish tests sustained high-throughput publishing.
 func TestStress_HighThroughputPublish(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
@@ -92,7 +92,7 @@ func TestStress_HighThroughputPublish(t *testing.T) {
 	assert.Less(t, memIncreasePerMsg, 1000.0, "Memory usage per message should be minimal")
 }
 
-// TestStress_ConcurrentPublishers tests multiple concurrent publishers
+// TestStress_ConcurrentPublishers tests multiple concurrent publishers.
 func TestStress_ConcurrentPublishers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
@@ -160,7 +160,7 @@ func TestStress_ConcurrentPublishers(t *testing.T) {
 	assert.Equal(t, uint64(0), errors.Load())
 }
 
-// TestStress_MemoryPressure tests behavior under memory pressure with large messages
+// TestStress_MemoryPressure tests behavior under memory pressure with large messages.
 func TestStress_MemoryPressure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
@@ -222,7 +222,7 @@ func TestStress_MemoryPressure(t *testing.T) {
 	assert.Less(t, memIncrease, int64(100*1024*1024), "Memory increase should be reasonable")
 }
 
-// TestStress_SustainedLoad tests broker under sustained mixed load
+// TestStress_SustainedLoad tests broker under sustained mixed load.
 func TestStress_SustainedLoad(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
@@ -318,7 +318,7 @@ func TestStress_SustainedLoad(t *testing.T) {
 	assert.Less(t, errors.Load(), totalMessages.Load()/1000) // Less than 0.1% errors
 }
 
-// TestStress_BufferPoolExhaustion tests buffer pool behavior under extreme load
+// TestStress_BufferPoolExhaustion tests buffer pool behavior under extreme load.
 func TestStress_BufferPoolExhaustion(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
@@ -378,7 +378,7 @@ func TestStress_BufferPoolExhaustion(t *testing.T) {
 	assert.Greater(t, totalHits, uint64(0), "Pool should have some hits")
 }
 
-// TestStress_FanOutExtreme tests extreme fanout (1 publisher to many subscribers)
+// TestStress_FanOutExtreme tests extreme fanout (1 publisher to many subscribers).
 func TestStress_FanOutExtreme(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")
@@ -448,7 +448,7 @@ func TestStress_FanOutExtreme(t *testing.T) {
 	assert.Less(t, bytesPerDelivery, 100.0, "Zero-copy should keep per-delivery memory low")
 }
 
-// TestStress_RapidSubscribeUnsubscribe tests stability with subscription churn
+// TestStress_RapidSubscribeUnsubscribe tests stability with subscription churn.
 func TestStress_RapidSubscribeUnsubscribe(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress test in short mode")

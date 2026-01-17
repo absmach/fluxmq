@@ -13,7 +13,7 @@ import (
 	paho "github.com/eclipse/paho.mqtt.golang"
 )
 
-// BenchmarkConnectionEstablishment measures connection throughput
+// BenchmarkConnectionEstablishment measures connection throughput.
 func BenchmarkConnectionEstablishment(b *testing.B) {
 	server := startTestBroker(b)
 	defer server.Stop()
@@ -33,7 +33,7 @@ func BenchmarkConnectionEstablishment(b *testing.B) {
 	}
 }
 
-// BenchmarkConnectionEstablishment_Parallel measures concurrent connection throughput
+// BenchmarkConnectionEstablishment_Parallel measures concurrent connection throughput.
 func BenchmarkConnectionEstablishment_Parallel(b *testing.B) {
 	server := startTestBroker(b)
 	defer server.Stop()
@@ -59,7 +59,7 @@ func BenchmarkConnectionEstablishment_Parallel(b *testing.B) {
 	})
 }
 
-// BenchmarkConcurrentClients measures steady-state performance with N clients
+// BenchmarkConcurrentClients measures steady-state performance with N clients.
 func BenchmarkConcurrentClients(b *testing.B) {
 	clientCounts := []int{100, 1000, 5000, 10000}
 
@@ -108,7 +108,7 @@ func BenchmarkConcurrentClients(b *testing.B) {
 	}
 }
 
-// BenchmarkMessageThroughput_EndToEnd measures end-to-end message throughput
+// BenchmarkMessageThroughput_EndToEnd measures end-to-end message throughput.
 func BenchmarkMessageThroughput_EndToEnd(b *testing.B) {
 	payloadSizes := []int{100, 1024, 10240, 65536}
 
@@ -158,7 +158,7 @@ func BenchmarkMessageThroughput_EndToEnd(b *testing.B) {
 	}
 }
 
-// BenchmarkMessageThroughput_QoS measures throughput at different QoS levels
+// BenchmarkMessageThroughput_QoS measures throughput at different QoS levels.
 func BenchmarkMessageThroughput_QoS(b *testing.B) {
 	qosLevels := []byte{0, 1, 2}
 
@@ -205,7 +205,7 @@ func BenchmarkMessageThroughput_QoS(b *testing.B) {
 	}
 }
 
-// BenchmarkFanOut measures 1:N message distribution
+// BenchmarkFanOut measures 1:N message distribution.
 func BenchmarkFanOut(b *testing.B) {
 	fanoutCounts := []int{10, 100, 500, 1000}
 
@@ -261,7 +261,7 @@ func BenchmarkFanOut(b *testing.B) {
 	}
 }
 
-// BenchmarkRetainedMessages measures retained message performance
+// BenchmarkRetainedMessages measures retained message performance.
 func BenchmarkRetainedMessages(b *testing.B) {
 	server := startTestBroker(b)
 	defer server.Stop()
@@ -286,7 +286,7 @@ func BenchmarkRetainedMessages(b *testing.B) {
 	}
 }
 
-// BenchmarkWildcardSubscriptions measures wildcard routing performance
+// BenchmarkWildcardSubscriptions measures wildcard routing performance.
 func BenchmarkWildcardSubscriptions(b *testing.B) {
 	server := startTestBroker(b)
 	defer server.Stop()
@@ -335,7 +335,7 @@ func BenchmarkWildcardSubscriptions(b *testing.B) {
 	}
 }
 
-// BenchmarkSessionPersistence measures persistent session overhead
+// BenchmarkSessionPersistence measures persistent session overhead.
 func BenchmarkSessionPersistence(b *testing.B) {
 	server := startTestBroker(b)
 	defer server.Stop()
@@ -370,7 +370,7 @@ func BenchmarkSessionPersistence(b *testing.B) {
 	}
 }
 
-// BenchmarkKeepAlive measures keep-alive ping/pong overhead
+// BenchmarkKeepAlive measures keep-alive ping/pong overhead.
 func BenchmarkKeepAlive(b *testing.B) {
 	server := startTestBroker(b)
 	defer server.Stop()
@@ -422,7 +422,7 @@ func createMQTTClient(tb testing.TB, addr, clientID string) paho.Client {
 	return paho.NewClient(opts)
 }
 
-// TestServer wraps broker for testing
+// TestServer wraps broker for testing.
 type TestServer struct {
 	// TODO: Add actual broker instance
 	addr string

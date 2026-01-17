@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,7 +48,7 @@ func TestBadgerQueueStore_CreateQueue(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -64,7 +65,7 @@ func TestBadgerQueueStore_CreateQueue_Duplicate(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -81,7 +82,7 @@ func TestBadgerQueueStore_CreateQueue_InvalidConfig(t *testing.T) {
 	ctx := context.Background()
 
 	// Invalid config (empty name)
-	config := storage.QueueConfig{Name: ""}
+	config := types.QueueConfig{Name: ""}
 	err := store.CreateQueue(ctx, config)
 	assert.Error(t, err)
 }
@@ -97,7 +98,7 @@ func TestBadgerQueueStore_GetQueue(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
 	// Create and get queue
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -113,7 +114,7 @@ func TestBadgerQueueStore_UpdateQueue(t *testing.T) {
 	ctx := context.Background()
 
 	// Update non-existent queue
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.UpdateQueue(ctx, config)
 	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 
@@ -138,7 +139,7 @@ func TestBadgerQueueStore_DeleteQueue(t *testing.T) {
 
 	ctx := context.Background()
 
-	config := storage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -163,9 +164,9 @@ func TestBadgerQueueStore_ListQueues(t *testing.T) {
 	assert.Len(t, queues, 0)
 
 	// Create multiple queues
-	config1 := storage.DefaultQueueConfig("$queue/test1")
-	config2 := storage.DefaultQueueConfig("$queue/test2")
-	config3 := storage.DefaultQueueConfig("$queue/test3")
+	config1 := types.DefaultQueueConfig("$queue/test1")
+	config2 := types.DefaultQueueConfig("$queue/test2")
+	config3 := types.DefaultQueueConfig("$queue/test3")
 
 	require.NoError(t, store.CreateQueue(ctx, config1))
 	require.NoError(t, store.CreateQueue(ctx, config2))
@@ -194,13 +195,13 @@ func TestBadgerMessageStore_Enqueue(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test payload"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -221,22 +222,22 @@ func TestBadgerMessageStore_Dequeue(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue multiple messages
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("payload-1"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("payload-2"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    2,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -261,13 +262,13 @@ func TestBadgerMessageStore_Dequeue_RetryReady(t *testing.T) {
 	ctx := context.Background()
 
 	// Message ready for retry (NextRetryAt in the past)
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		NextRetryAt: time.Now().Add(-1 * time.Second), // Past
 		CreatedAt:   time.Now(),
 	}
@@ -288,13 +289,13 @@ func TestBadgerMessageStore_Dequeue_RetryNotReady(t *testing.T) {
 	ctx := context.Background()
 
 	// Message not ready for retry (NextRetryAt in the future)
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		NextRetryAt: time.Now().Add(1 * time.Hour), // Future
 		CreatedAt:   time.Now(),
 	}
@@ -313,13 +314,13 @@ func TestBadgerMessageStore_UpdateMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("original"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		RetryCount:  0,
 		CreatedAt:   time.Now(),
 	}
@@ -327,7 +328,7 @@ func TestBadgerMessageStore_UpdateMessage(t *testing.T) {
 	require.NoError(t, store.Enqueue(ctx, "$queue/test", msg))
 
 	// Update message
-	msg.State = storage.StateRetry
+	msg.State = types.StateRetry
 	msg.RetryCount = 1
 	msg.Payload = []byte("updated")
 
@@ -337,7 +338,7 @@ func TestBadgerMessageStore_UpdateMessage(t *testing.T) {
 	// Verify update
 	retrieved, err := store.GetMessage(ctx, "$queue/test", "msg-1")
 	require.NoError(t, err)
-	assert.Equal(t, storage.StateRetry, retrieved.State)
+	assert.Equal(t, types.StateRetry, retrieved.State)
 	assert.Equal(t, 1, retrieved.RetryCount)
 	assert.Equal(t, []byte("updated"), retrieved.Payload)
 }
@@ -348,13 +349,13 @@ func TestBadgerMessageStore_DeleteMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -390,13 +391,13 @@ func TestBadgerMessageStore_GetMessage(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Create and get message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -436,31 +437,31 @@ func TestBadgerMessageStore_ListQueued(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue messages in different states
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    2,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		CreatedAt:   time.Now(),
 	}
-	msg3 := &storage.Message{
+	msg3 := &types.Message{
 		ID:          "msg-3",
 		Payload:     []byte("test-3"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    3,
-		State:       storage.StateDLQ, // Should not be listed
+		State:       types.StateDLQ, // Should not be listed
 		CreatedAt:   time.Now(),
 	}
 
@@ -486,22 +487,22 @@ func TestBadgerMessageStore_ListRetry(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue messages with different states
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("test-1"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("test-2"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    2,
-		State:       storage.StateRetry,
+		State:       types.StateRetry,
 		CreatedAt:   time.Now(),
 	}
 
@@ -513,7 +514,7 @@ func TestBadgerMessageStore_ListRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, messages, 1)
 	assert.Equal(t, "msg-2", messages[0].ID)
-	assert.Equal(t, storage.StateRetry, messages[0].State)
+	assert.Equal(t, types.StateRetry, messages[0].State)
 }
 
 // Inflight Tests
@@ -524,7 +525,7 @@ func TestBadgerMessageStore_MarkInflight(t *testing.T) {
 
 	ctx := context.Background()
 
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -550,7 +551,7 @@ func TestBadgerMessageStore_GetInflight(t *testing.T) {
 	ctx := context.Background()
 
 	// Mark multiple messages inflight
-	state1 := &storage.DeliveryState{
+	state1 := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -558,7 +559,7 @@ func TestBadgerMessageStore_GetInflight(t *testing.T) {
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
 	}
-	state2 := &storage.DeliveryState{
+	state2 := &types.DeliveryState{
 		MessageID:   "msg-2",
 		QueueName:   "$queue/test",
 		PartitionID: 1,
@@ -587,7 +588,7 @@ func TestBadgerMessageStore_GetInflightMessage(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Mark inflight
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -610,7 +611,7 @@ func TestBadgerMessageStore_RemoveInflight(t *testing.T) {
 
 	ctx := context.Background()
 
-	state := &storage.DeliveryState{
+	state := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
@@ -638,13 +639,13 @@ func TestBadgerMessageStore_EnqueueDLQ(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed message"),
 		Topic:         "$queue/test",
 		PartitionID:   0,
 		Sequence:      1,
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "max retries exceeded",
 		CreatedAt:     time.Now(),
 		MovedToDLQAt:  time.Now(),
@@ -668,19 +669,19 @@ func TestBadgerMessageStore_ListDLQ(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue multiple DLQ messages
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed-1"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "reason-1",
 		CreatedAt:     time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:            "msg-2",
 		Payload:       []byte("failed-2"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "reason-2",
 		CreatedAt:     time.Now(),
 	}
@@ -705,11 +706,11 @@ func TestBadgerMessageStore_DeleteDLQMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "test failure",
 		CreatedAt:     time.Now(),
 	}
@@ -771,7 +772,7 @@ func TestBadgerConsumerStore_RegisterConsumer(t *testing.T) {
 
 	ctx := context.Background()
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -797,7 +798,7 @@ func TestBadgerConsumerStore_UnregisterConsumer(t *testing.T) {
 
 	ctx := context.Background()
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -828,7 +829,7 @@ func TestBadgerConsumerStore_GetConsumer(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrConsumerNotFound)
 
 	// Register and get consumer
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -856,7 +857,7 @@ func TestBadgerConsumerStore_ListConsumers(t *testing.T) {
 	assert.Len(t, consumers, 0)
 
 	// Register multiple consumers
-	consumer1 := &storage.Consumer{
+	consumer1 := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -864,7 +865,7 @@ func TestBadgerConsumerStore_ListConsumers(t *testing.T) {
 		AssignedParts: []int{0},
 		LastHeartbeat: time.Now(),
 	}
-	consumer2 := &storage.Consumer{
+	consumer2 := &types.Consumer{
 		ID:            "consumer-2",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -889,7 +890,7 @@ func TestBadgerConsumerStore_ListGroups(t *testing.T) {
 	ctx := context.Background()
 
 	// Register consumers in different groups
-	consumer1 := &storage.Consumer{
+	consumer1 := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -897,7 +898,7 @@ func TestBadgerConsumerStore_ListGroups(t *testing.T) {
 		AssignedParts: []int{0},
 		LastHeartbeat: time.Now(),
 	}
-	consumer2 := &storage.Consumer{
+	consumer2 := &types.Consumer{
 		ID:            "consumer-2",
 		GroupID:       "group-2",
 		QueueName:     "$queue/test",
@@ -929,7 +930,7 @@ func TestBadgerConsumerStore_UpdateHeartbeat(t *testing.T) {
 
 	ctx := context.Background()
 
-	consumer := &storage.Consumer{
+	consumer := &types.Consumer{
 		ID:            "consumer-1",
 		GroupID:       "group-1",
 		QueueName:     "$queue/test",
@@ -968,13 +969,13 @@ func TestBadgerStore_ConcurrentEnqueue(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(routineID int) {
 			for j := 0; j < messagesPerGoroutine; j++ {
-				msg := &storage.Message{
+				msg := &types.Message{
 					ID:          filepath.Join("msg", string(rune(routineID)), string(rune(j))),
 					Payload:     []byte("test"),
 					Topic:       "$queue/test",
 					PartitionID: routineID % 3,
 					Sequence:    uint64(routineID*messagesPerGoroutine + j),
-					State:       storage.StateQueued,
+					State:       types.StateQueued,
 					CreatedAt:   time.Now(),
 				}
 				store.Enqueue(ctx, "$queue/test", msg)
@@ -1006,7 +1007,7 @@ func TestBadgerStore_ConcurrentConsumerRegistration(t *testing.T) {
 
 	for i := 0; i < numConsumers; i++ {
 		go func(id int) {
-			consumer := &storage.Consumer{
+			consumer := &types.Consumer{
 				ID:            filepath.Join("consumer", string(rune(id))),
 				GroupID:       "group-1",
 				QueueName:     "$queue/test",
@@ -1039,22 +1040,22 @@ func TestBadgerStore_MessageKeyFormat(t *testing.T) {
 	ctx := context.Background()
 
 	// Test that messages with different partition IDs don't collide
-	msg1 := &storage.Message{
+	msg1 := &types.Message{
 		ID:          "msg-1",
 		Payload:     []byte("partition-0"),
 		Topic:       "$queue/test",
 		PartitionID: 0,
 		Sequence:    1,
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
-	msg2 := &storage.Message{
+	msg2 := &types.Message{
 		ID:          "msg-2",
 		Payload:     []byte("partition-1"),
 		Topic:       "$queue/test",
 		PartitionID: 1,
 		Sequence:    1, // Same sequence, different partition
-		State:       storage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 
@@ -1077,11 +1078,11 @@ func TestBadgerStore_DLQTopicPrefixHandling(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:            "msg-1",
 		Payload:       []byte("failed"),
 		Topic:         "$queue/test",
-		State:         storage.StateDLQ,
+		State:         types.StateDLQ,
 		FailureReason: "test",
 		CreatedAt:     time.Now(),
 	}

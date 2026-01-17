@@ -6,7 +6,7 @@ package lockfree
 import (
 	"sync/atomic"
 
-	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // RingBuffer is a lock-free SPSC (Single-Producer-Single-Consumer) ring buffer.
@@ -18,9 +18,9 @@ import (
 // - Single consumer (dequeue operations)
 // - Fixed capacity (power of 2 for fast modulo)
 // - Cache-line padding to prevent false sharing
-// - Zero-copy (stores messages by value)
+// - Zero-copy (stores messages by value).
 type RingBuffer struct {
-	buffer   []storage.Message
+	buffer   []types.Message
 	capacity uint64
 	mask     uint64 // capacity - 1, for fast modulo
 
@@ -45,7 +45,7 @@ func NewRingBuffer(capacity uint64) *RingBuffer {
 	}
 
 	return &RingBuffer{
-		buffer:   make([]storage.Message, capacity),
+		buffer:   make([]types.Message, capacity),
 		capacity: capacity,
 		mask:     capacity - 1,
 	}
@@ -57,8 +57,8 @@ func NewRingBuffer(capacity uint64) *RingBuffer {
 // This is lock-free because:
 // - Only one producer calls this
 // - Uses atomic loads/stores for synchronization
-// - No CAS loops needed (SPSC guarantees)
-func (rb *RingBuffer) Enqueue(msg storage.Message) bool {
+// - No CAS loops needed (SPSC guarantees).
+func (rb *RingBuffer) Enqueue(msg types.Message) bool {
 	// Load current positions
 	tail := atomic.LoadUint64(&rb.tail)
 	head := atomic.LoadUint64(&rb.head)
@@ -86,15 +86,15 @@ func (rb *RingBuffer) Enqueue(msg storage.Message) bool {
 // This is lock-free because:
 // - Only one consumer calls this
 // - Uses atomic loads/stores for synchronization
-// - No CAS loops needed (SPSC guarantees)
-func (rb *RingBuffer) Dequeue() (storage.Message, bool) {
+// - No CAS loops needed (SPSC guarantees).
+func (rb *RingBuffer) Dequeue() (types.Message, bool) {
 	// Load current positions
 	head := atomic.LoadUint64(&rb.head)
 	tail := atomic.LoadUint64(&rb.tail)
 
 	// Check if buffer is empty
 	if head >= tail {
-		return storage.Message{}, false
+		return types.Message{}, false
 	}
 
 	// Read message from buffer
@@ -113,8 +113,8 @@ func (rb *RingBuffer) Dequeue() (storage.Message, bool) {
 // This provides better performance than calling Dequeue() in a loop because:
 // - Fewer atomic operations (one head update for entire batch)
 // - Better cache utilization
-// - Reduced function call overhead
-func (rb *RingBuffer) DequeueBatch(limit int) []storage.Message {
+// - Reduced function call overhead.
+func (rb *RingBuffer) DequeueBatch(limit int) []types.Message {
 	if limit <= 0 {
 		return nil
 	}
@@ -136,7 +136,7 @@ func (rb *RingBuffer) DequeueBatch(limit int) []storage.Message {
 	}
 
 	// Pre-allocate result slice
-	messages := make([]storage.Message, count)
+	messages := make([]types.Message, count)
 
 	// Copy messages from ring buffer
 	for i := uint64(0); i < count; i++ {

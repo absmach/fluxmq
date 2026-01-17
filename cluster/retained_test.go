@@ -235,7 +235,7 @@ func TestRetainedDataEntry_JSON(t *testing.T) {
 	assert.Equal(t, entry.Properties, unmarshaled.Properties)
 }
 
-// Benchmark tests
+// Benchmark tests.
 func BenchmarkRetainedStore_SetSmallMessage(b *testing.B) {
 	b.Skip("Requires etcd instance")
 	// Benchmark Set() for small messages

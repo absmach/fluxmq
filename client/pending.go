@@ -19,14 +19,14 @@ const (
 
 // pendingOp represents a pending operation waiting for acknowledgment.
 type pendingOp struct {
-	id       uint16
-	opType   pendingType
-	done     chan struct{}
-	err      error
-	result   interface{} // For SUBACK return codes, etc.
-	created  time.Time
-	message  *Message // For QoS 1/2 retransmission
-	qos2State int     // 0: waiting PUBREC, 1: waiting PUBCOMP
+	id        uint16
+	opType    pendingType
+	done      chan struct{}
+	err       error
+	result    interface{} // For SUBACK return codes, etc.
+	created   time.Time
+	message   *Message // For QoS 1/2 retransmission
+	qos2State int      // 0: waiting PUBREC, 1: waiting PUBCOMP
 }
 
 // pendingStore manages pending operations.

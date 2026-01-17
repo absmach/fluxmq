@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"context"
@@ -11,17 +11,18 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // RetentionManager handles automatic message cleanup based on retention policies.
 // It implements both time-based (background) and size-based (active) retention strategies.
 type RetentionManager struct {
 	queueName string
-	policy    storage.RetentionPolicy
+	policy    types.RetentionPolicy
 	store     storage.MessageStore
 
 	// Raft integration (optional)
-	raftManager *RaftManager
+	raftManager RaftCoordinator
 
 	// Size-based retention tracking
 	enqueueCounter int
@@ -43,7 +44,7 @@ type RetentionStats struct {
 }
 
 // NewRetentionManager creates a new retention manager for a queue.
-func NewRetentionManager(queueName string, policy storage.RetentionPolicy, store storage.MessageStore, raftManager *RaftManager, logger *slog.Logger) *RetentionManager {
+func NewRetentionManager(queueName string, policy types.RetentionPolicy, store storage.MessageStore, raftManager RaftCoordinator, logger *slog.Logger) *RetentionManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -301,7 +302,7 @@ func (rm *RetentionManager) compactionLoop(ctx context.Context, partitionID int)
 				continue
 			}
 
-			stats, err := rm.runCompaction(ctx, partitionID)
+			stats, err := rm.RunCompaction(ctx, partitionID)
 			if err != nil {
 				rm.logger.Error("compaction failed",
 					slog.String("queue", rm.queueName),
@@ -322,8 +323,9 @@ func (rm *RetentionManager) compactionLoop(ctx context.Context, partitionID int)
 	}
 }
 
-// runCompaction performs log compaction by keeping only the latest message per compaction key.
-func (rm *RetentionManager) runCompaction(ctx context.Context, partitionID int) (*RetentionStats, error) {
+// RunCompaction performs log compaction by keeping only the latest message per compaction key.
+// This method is exported for testing purposes.
+func (rm *RetentionManager) RunCompaction(ctx context.Context, partitionID int) (*RetentionStats, error) {
 	startTime := time.Now()
 	stats := &RetentionStats{
 		LastRunTime: startTime,
@@ -351,7 +353,7 @@ func (rm *RetentionManager) runCompaction(ctx context.Context, partitionID int) 
 	}
 
 	// Group messages by compaction key
-	keyGroups := make(map[string][]*storage.Message)
+	keyGroups := make(map[string][]*types.Message)
 	cutoffTime := time.Now().Add(-rm.policy.CompactionLag)
 
 	for _, msg := range messages {
@@ -424,7 +426,7 @@ func (rm *RetentionManager) runCompaction(ctx context.Context, partitionID int) 
 }
 
 // extractCompactionKey extracts the compaction key from a message's properties.
-func (rm *RetentionManager) extractCompactionKey(msg *storage.Message) string {
+func (rm *RetentionManager) extractCompactionKey(msg *types.Message) string {
 	if msg.Properties == nil {
 		return ""
 	}

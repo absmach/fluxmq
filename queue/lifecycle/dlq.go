@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"bytes"
@@ -12,17 +12,18 @@ import (
 	"strings"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // DLQManager manages dead letter queue operations.
 type DLQManager struct {
-	messageStore queueStorage.MessageStore
+	messageStore storage.MessageStore
 	alertHandler AlertHandler
 }
 
 // NewDLQManager creates a new DLQ manager.
-func NewDLQManager(messageStore queueStorage.MessageStore, alertHandler AlertHandler) *DLQManager {
+func NewDLQManager(messageStore storage.MessageStore, alertHandler AlertHandler) *DLQManager {
 	return &DLQManager{
 		messageStore: messageStore,
 		alertHandler: alertHandler,
@@ -30,7 +31,7 @@ func NewDLQManager(messageStore queueStorage.MessageStore, alertHandler AlertHan
 }
 
 // MoveToDLQ moves a failed message to the dead letter queue.
-func (d *DLQManager) MoveToDLQ(ctx context.Context, queue *Queue, msg *queueStorage.Message, reason string) error {
+func (d *DLQManager) MoveToDLQ(ctx context.Context, queue QueueInfo, msg *types.Message, reason string) error {
 	config := queue.Config()
 
 	// Only move to DLQ if enabled
@@ -40,7 +41,7 @@ func (d *DLQManager) MoveToDLQ(ctx context.Context, queue *Queue, msg *queueStor
 	}
 
 	// Update message metadata
-	msg.State = queueStorage.StateDLQ
+	msg.State = types.StateDLQ
 	msg.FailureReason = reason
 	msg.MovedToDLQAt = time.Now()
 
@@ -96,7 +97,7 @@ func (d *DLQManager) RetryFromDLQ(ctx context.Context, queueName, messageID stri
 		return fmt.Errorf("failed to list DLQ messages: %w", err)
 	}
 
-	var msg *queueStorage.Message
+	var msg *types.Message
 	for _, m := range dlqMessages {
 		if m.ID == messageID {
 			msg = m
@@ -105,11 +106,11 @@ func (d *DLQManager) RetryFromDLQ(ctx context.Context, queueName, messageID stri
 	}
 
 	if msg == nil {
-		return queueStorage.ErrMessageNotFound
+		return storage.ErrMessageNotFound
 	}
 
 	// Reset message state for retry
-	msg.State = queueStorage.StateQueued
+	msg.State = types.StateQueued
 	msg.RetryCount = 0
 	msg.NextRetryAt = time.Time{}
 	msg.FailureReason = ""

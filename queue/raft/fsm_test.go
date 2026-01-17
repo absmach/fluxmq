@@ -14,6 +14,7 @@ import (
 
 	"github.com/absmach/fluxmq/queue/storage"
 	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
 )
@@ -51,11 +52,11 @@ func TestFSM_ApplyEnqueue(t *testing.T) {
 	fsm, store, cleanup := setupTestFSM(t)
 	defer cleanup()
 
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
-		State:    storage.StateQueued,
+		State:    types.StateQueued,
 	}
 
 	op := Operation{
@@ -99,11 +100,11 @@ func TestFSM_ApplyAck(t *testing.T) {
 	ctx := context.Background()
 
 	// First enqueue a message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
-		State:    storage.StateQueued,
+		State:    types.StateQueued,
 	}
 
 	if err := store.Enqueue(ctx, "test-queue", msg); err != nil {
@@ -111,7 +112,7 @@ func TestFSM_ApplyAck(t *testing.T) {
 	}
 
 	// Mark as inflight
-	deliveryState := &storage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "test-queue",
 		PartitionID: 0,
@@ -160,11 +161,11 @@ func TestFSM_ApplyNack(t *testing.T) {
 	ctx := context.Background()
 
 	// First enqueue a message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
-		State:    storage.StateQueued,
+		State:    types.StateQueued,
 	}
 
 	if err := store.Enqueue(ctx, "test-queue", msg); err != nil {
@@ -172,7 +173,7 @@ func TestFSM_ApplyNack(t *testing.T) {
 	}
 
 	// Mark as inflight
-	deliveryState := &storage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "test-queue",
 		PartitionID: 0,
@@ -214,8 +215,8 @@ func TestFSM_ApplyNack(t *testing.T) {
 		t.Fatalf("failed to get message: %v", err)
 	}
 
-	if retrieved.State != storage.StateRetry {
-		t.Errorf("expected state %v, got %v", storage.StateRetry, retrieved.State)
+	if retrieved.State != types.StateRetry {
+		t.Errorf("expected state %v, got %v", types.StateRetry, retrieved.State)
 	}
 
 	if retrieved.RetryCount != 1 {
@@ -234,11 +235,11 @@ func TestFSM_ApplyReject(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue a message
-	msg := &storage.Message{
+	msg := &types.Message{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
-		State:    storage.StateQueued,
+		State:    types.StateQueued,
 	}
 
 	if err := store.Enqueue(ctx, "test-queue", msg); err != nil {
@@ -246,7 +247,7 @@ func TestFSM_ApplyReject(t *testing.T) {
 	}
 
 	// Mark as inflight
-	deliveryState := &storage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   "msg-1",
 		QueueName:   "test-queue",
 		PartitionID: 0,

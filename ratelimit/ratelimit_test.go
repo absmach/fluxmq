@@ -180,9 +180,9 @@ func TestManager_Enabled(t *testing.T) {
 	cfg := Config{
 		Enabled: true,
 		Connection: ConnectionConfig{
-			Enabled: true,
-			Rate:    1,
-			Burst:   1,
+			Enabled:         true,
+			Rate:            1,
+			Burst:           1,
 			CleanupInterval: time.Minute,
 		},
 		Message: MessageConfig{
@@ -230,9 +230,9 @@ func TestManager_SelectiveEnable(t *testing.T) {
 	cfg := Config{
 		Enabled: true,
 		Connection: ConnectionConfig{
-			Enabled: true,
-			Rate:    1,
-			Burst:   1,
+			Enabled:         true,
+			Rate:            1,
+			Burst:           1,
 			CleanupInterval: time.Minute,
 		},
 		Message: MessageConfig{

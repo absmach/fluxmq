@@ -322,7 +322,7 @@ func TestCrossNode_SubscriptionPropagation(t *testing.T) {
 }
 
 // TestCrossNode_UnsubscribePropagation verifies unsubscribe propagates and stops delivery.
-// NOTE: Requires Unsubscribe() method in testutil.TestMQTTClient (see plan.md Task #7)
+// NOTE: Requires Unsubscribe() method in testutil.TestMQTTClient (see plan.md Task #7).
 func TestCrossNode_UnsubscribePropagation(t *testing.T) {
 	t.Skip("Requires Unsubscribe() implementation in test client (plan.md Task #7)")
 
@@ -365,7 +365,7 @@ func TestCrossNode_UnsubscribePropagation(t *testing.T) {
 
 // TestCrossNode_RetainedMessages verifies retained messages work across nodes.
 // NOTE: Retained messages currently only work within single node (local storage).
-// Cross-node delivery requires centralized storage (plan.md Task #8)
+// Cross-node delivery requires centralized storage (plan.md Task #8).
 func TestCrossNode_RetainedMessages(t *testing.T) {
 	t.Skip("Retained message cross-node delivery requires centralized storage (plan.md Task #8)")
 
@@ -407,7 +407,7 @@ func TestCrossNode_RetainedMessages(t *testing.T) {
 }
 
 // TestCrossNode_HighThroughput verifies cluster can handle high message throughput.
-// NOTE: Performance test - can be slow, enable manually when needed
+// NOTE: Performance test - can be slow, enable manually when needed.
 func TestCrossNode_HighThroughput(t *testing.T) {
 	t.Skip("Performance test - enable manually when needed")
 
@@ -462,7 +462,7 @@ func TestCrossNode_HighThroughput(t *testing.T) {
 }
 
 // BenchmarkCrossNode_MessageLatency measures cross-node message delivery latency.
-// NOTE: Benchmarks are disabled for now - enable when needed for performance testing
+// NOTE: Benchmarks are disabled for now - enable when needed for performance testing.
 func BenchmarkCrossNode_MessageLatency(b *testing.B) {
 	b.Skip("Benchmarks disabled - enable manually when needed")
 
@@ -518,7 +518,7 @@ func BenchmarkCrossNode_MessageLatency(b *testing.B) {
 }
 
 // BenchmarkCrossNode_Throughput measures maximum message throughput across nodes.
-// NOTE: Benchmarks are disabled for now - enable when needed for performance testing
+// NOTE: Benchmarks are disabled for now - enable when needed for performance testing.
 func BenchmarkCrossNode_Throughput(b *testing.B) {
 	b.Skip("Benchmarks disabled - enable manually when needed")
 

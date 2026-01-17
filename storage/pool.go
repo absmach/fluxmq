@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Message pool to reduce allocations during message distribution
+// Message pool to reduce allocations during message distribution.
 var messagePool = sync.Pool{
 	New: func() interface{} {
 		return &Message{}

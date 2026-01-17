@@ -11,30 +11,31 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // Store implements all queue storage interfaces using in-memory maps.
 // This implementation is primarily for testing and development.
 type Store struct {
-	queues    map[string]storage.QueueConfig
-	messages  map[string]map[int]map[uint64]*storage.Message     // queueName -> partitionID -> sequence -> message
-	inflight  map[string]map[string]*storage.DeliveryState       // queueName -> messageID -> state
-	dlq       map[string]map[string]*storage.Message             // dlqTopic -> messageID -> message
-	consumers map[string]map[string]map[string]*storage.Consumer // queueName -> groupID -> consumerID -> consumer
-	sequences map[string]map[int]uint64                          // queueName -> partitionID -> nextSeq
-	offsets   map[string]map[int]uint64                          // queueName -> partitionID -> offset
-	counts    map[string]int64                                   // queueName -> message count (for O(1) Count())
+	queues    map[string]types.QueueConfig
+	messages  map[string]map[int]map[uint64]*types.Message     // queueName -> partitionID -> sequence -> message
+	inflight  map[string]map[string]*types.DeliveryState       // queueName -> messageID -> state
+	dlq       map[string]map[string]*types.Message             // dlqTopic -> messageID -> message
+	consumers map[string]map[string]map[string]*types.Consumer // queueName -> groupID -> consumerID -> consumer
+	sequences map[string]map[int]uint64                        // queueName -> partitionID -> nextSeq
+	offsets   map[string]map[int]uint64                        // queueName -> partitionID -> offset
+	counts    map[string]int64                                 // queueName -> message count (for O(1) Count())
 	mu        sync.RWMutex
 }
 
 // New creates a new in-memory queue store.
 func New() *Store {
 	return &Store{
-		queues:    make(map[string]storage.QueueConfig),
-		messages:  make(map[string]map[int]map[uint64]*storage.Message),
-		inflight:  make(map[string]map[string]*storage.DeliveryState),
-		dlq:       make(map[string]map[string]*storage.Message),
-		consumers: make(map[string]map[string]map[string]*storage.Consumer),
+		queues:    make(map[string]types.QueueConfig),
+		messages:  make(map[string]map[int]map[uint64]*types.Message),
+		inflight:  make(map[string]map[string]*types.DeliveryState),
+		dlq:       make(map[string]map[string]*types.Message),
+		consumers: make(map[string]map[string]map[string]*types.Consumer),
 		sequences: make(map[string]map[int]uint64),
 		offsets:   make(map[string]map[int]uint64),
 		counts:    make(map[string]int64),
@@ -43,7 +44,7 @@ func New() *Store {
 
 // QueueStore implementation
 
-func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
@@ -56,16 +57,16 @@ func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) err
 	}
 
 	s.queues[config.Name] = config
-	s.messages[config.Name] = make(map[int]map[uint64]*storage.Message)
-	s.inflight[config.Name] = make(map[string]*storage.DeliveryState)
-	s.consumers[config.Name] = make(map[string]map[string]*storage.Consumer)
+	s.messages[config.Name] = make(map[int]map[uint64]*types.Message)
+	s.inflight[config.Name] = make(map[string]*types.DeliveryState)
+	s.consumers[config.Name] = make(map[string]map[string]*types.Consumer)
 	s.sequences[config.Name] = make(map[int]uint64)
 	s.offsets[config.Name] = make(map[int]uint64)
 	s.counts[config.Name] = 0 // Initialize message counter
 
 	// Initialize partitions
 	for i := 0; i < config.Partitions; i++ {
-		s.messages[config.Name][i] = make(map[uint64]*storage.Message)
+		s.messages[config.Name][i] = make(map[uint64]*types.Message)
 		s.sequences[config.Name][i] = 0
 		s.offsets[config.Name][i] = 0
 	}
@@ -73,7 +74,7 @@ func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) err
 	return nil
 }
 
-func (s *Store) GetQueue(ctx context.Context, queueName string) (*storage.QueueConfig, error) {
+func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -86,7 +87,7 @@ func (s *Store) GetQueue(ctx context.Context, queueName string) (*storage.QueueC
 	return &configCopy, nil
 }
 
-func (s *Store) UpdateQueue(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
@@ -120,11 +121,11 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 	return nil
 }
 
-func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
+func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	configs := make([]storage.QueueConfig, 0, len(s.queues))
+	configs := make([]types.QueueConfig, 0, len(s.queues))
 	for _, config := range s.queues {
 		configs = append(configs, config)
 	}
@@ -134,7 +135,7 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 
 // MessageStore implementation
 
-func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
+func (s *Store) Enqueue(ctx context.Context, queueName string, msg *types.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -169,14 +170,14 @@ func (s *Store) Count(ctx context.Context, queueName string) (int64, error) {
 }
 
 // deepCopyMessage creates a deep copy of a message including Properties map.
-func (s *Store) deepCopyMessage(msg *storage.Message) *storage.Message {
+func (s *Store) deepCopyMessage(msg *types.Message) *types.Message {
 	// Copy properties map
 	props := make(map[string]string, len(msg.Properties))
 	for k, v := range msg.Properties {
 		props[k] = v
 	}
 
-	return &storage.Message{
+	return &types.Message{
 		ID:            msg.ID,
 		Payload:       msg.Payload,
 		Topic:         msg.Topic,
@@ -197,7 +198,7 @@ func (s *Store) deepCopyMessage(msg *storage.Message) *storage.Message {
 	}
 }
 
-func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.Message, error) {
+func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -213,12 +214,12 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 
 	// Find first queued or ready-to-retry message (ordered by sequence)
 	var minSeq uint64 = ^uint64(0)
-	var msg *storage.Message
+	var msg *types.Message
 
 	for seq, m := range partition {
 		if seq < minSeq {
-			if m.State == storage.StateQueued ||
-				(m.State == storage.StateRetry && time.Now().After(m.NextRetryAt)) {
+			if m.State == types.StateQueued ||
+				(m.State == types.StateRetry && time.Now().After(m.NextRetryAt)) {
 				minSeq = seq
 				msg = m
 			}
@@ -233,7 +234,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	return nil, nil
 }
 
-func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -250,14 +251,14 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 	// Collect all sequences for available messages
 	type seqMsg struct {
 		seq uint64
-		msg *storage.Message
+		msg *types.Message
 	}
 	var available []seqMsg
 
 	now := time.Now()
 	for seq, m := range partition {
-		if m.State == storage.StateQueued ||
-			(m.State == storage.StateRetry && now.After(m.NextRetryAt)) {
+		if m.State == types.StateQueued ||
+			(m.State == types.StateRetry && now.After(m.NextRetryAt)) {
 			available = append(available, seqMsg{seq, m})
 		}
 	}
@@ -277,7 +278,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 		count = limit
 	}
 
-	messages := make([]*storage.Message, 0, count)
+	messages := make([]*types.Message, 0, count)
 	for i := 0; i < count; i++ {
 		msgCopy := *available[i].msg
 		messages = append(messages, &msgCopy)
@@ -286,7 +287,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 	return messages, nil
 }
 
-func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.Message) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *types.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -328,7 +329,7 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 	return storage.ErrMessageNotFound
 }
 
-func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.Message, error) {
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -350,7 +351,7 @@ func (s *Store) GetMessage(ctx context.Context, queueName string, messageID stri
 	return nil, storage.ErrMessageNotFound
 }
 
-func (s *Store) MarkInflight(ctx context.Context, state *storage.DeliveryState) error {
+func (s *Store) MarkInflight(ctx context.Context, state *types.DeliveryState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -364,7 +365,7 @@ func (s *Store) MarkInflight(ctx context.Context, state *storage.DeliveryState) 
 	return nil
 }
 
-func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*storage.DeliveryState, error) {
+func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*types.DeliveryState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -373,7 +374,7 @@ func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*storage.D
 		return nil, storage.ErrQueueNotFound
 	}
 
-	states := make([]*storage.DeliveryState, 0, len(inflight))
+	states := make([]*types.DeliveryState, 0, len(inflight))
 	for _, state := range inflight {
 		stateCopy := *state
 		states = append(states, &stateCopy)
@@ -382,7 +383,7 @@ func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*storage.D
 	return states, nil
 }
 
-func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*storage.DeliveryState, error) {
+func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -413,12 +414,12 @@ func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string)
 	return nil
 }
 
-func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Message) error {
+func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *types.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.dlq[dlqTopic] == nil {
-		s.dlq[dlqTopic] = make(map[string]*storage.Message)
+		s.dlq[dlqTopic] = make(map[string]*types.Message)
 	}
 
 	msgCopy := *msg
@@ -426,11 +427,11 @@ func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Me
 	return nil
 }
 
-func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.Message, error) {
+func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	messages := make([]*storage.Message, 0)
+	messages := make([]*types.Message, 0)
 	dlqMessages, exists := s.dlq[dlqTopic]
 	if !exists {
 		return messages, nil
@@ -466,11 +467,11 @@ func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string
 	return nil
 }
 
-func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	messages := make([]*storage.Message, 0)
+	messages := make([]*types.Message, 0)
 	partitions, exists := s.messages[queueName]
 	if !exists {
 		return messages, nil
@@ -483,7 +484,7 @@ func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int
 
 	// Iterate through partition messages and collect those in retry state
 	for _, msg := range partition {
-		if msg.State == storage.StateRetry {
+		if msg.State == types.StateRetry {
 			msgCopy := *msg
 			messages = append(messages, &msgCopy)
 		}
@@ -532,7 +533,7 @@ func (s *Store) GetOffset(ctx context.Context, queueName string, partitionID int
 	return offsets[partitionID], nil
 }
 
-func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -546,13 +547,13 @@ func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID in
 		return nil, fmt.Errorf("partition %d not found", partitionID)
 	}
 
-	messages := make([]*storage.Message, 0)
+	messages := make([]*types.Message, 0)
 	count := 0
 	for _, msg := range partition {
 		if limit > 0 && count >= limit {
 			break
 		}
-		if msg.State == storage.StateQueued || msg.State == storage.StateRetry {
+		if msg.State == types.StateQueued || msg.State == types.StateRetry {
 			msgCopy := *msg
 			messages = append(messages, &msgCopy)
 			count++
@@ -564,19 +565,19 @@ func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID in
 
 // ConsumerStore implementation
 
-func (s *Store) RegisterConsumer(ctx context.Context, consumer *storage.Consumer) error {
+func (s *Store) RegisterConsumer(ctx context.Context, consumer *types.Consumer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	groups, exists := s.consumers[consumer.QueueName]
 	if !exists {
-		groups = make(map[string]map[string]*storage.Consumer)
+		groups = make(map[string]map[string]*types.Consumer)
 		s.consumers[consumer.QueueName] = groups
 	}
 
 	group, exists := groups[consumer.GroupID]
 	if !exists {
-		group = make(map[string]*storage.Consumer)
+		group = make(map[string]*types.Consumer)
 		groups[consumer.GroupID] = group
 	}
 
@@ -603,7 +604,7 @@ func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, cons
 	return nil
 }
 
-func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID string) (*storage.Consumer, error) {
+func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID string) (*types.Consumer, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -626,7 +627,7 @@ func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID 
 	return &consumerCopy, nil
 }
 
-func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*storage.Consumer, error) {
+func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.Consumer, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -637,10 +638,10 @@ func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([
 
 	group, exists := groups[groupID]
 	if !exists {
-		return []*storage.Consumer{}, nil
+		return []*types.Consumer{}, nil
 	}
 
-	consumers := make([]*storage.Consumer, 0, len(group))
+	consumers := make([]*types.Consumer, 0, len(group))
 	for _, consumer := range group {
 		consumerCopy := *consumer
 		consumers = append(consumers, &consumerCopy)
@@ -691,7 +692,7 @@ func (s *Store) UpdateHeartbeat(ctx context.Context, queueName, groupID, consume
 
 // Retention operations
 
-func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partitionID int, limit int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -702,11 +703,11 @@ func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partit
 
 	partition, exists := partitions[partitionID]
 	if !exists {
-		return []*storage.Message{}, nil
+		return []*types.Message{}, nil
 	}
 
 	// Collect all messages from partition
-	messages := make([]*storage.Message, 0, len(partition))
+	messages := make([]*types.Message, 0, len(partition))
 	for _, msg := range partition {
 		messages = append(messages, msg)
 	}
@@ -724,7 +725,7 @@ func (s *Store) ListOldestMessages(ctx context.Context, queueName string, partit
 	return messages, nil
 }
 
-func (s *Store) ListMessagesBefore(ctx context.Context, queueName string, partitionID int, cutoffTime time.Time, limit int) ([]*storage.Message, error) {
+func (s *Store) ListMessagesBefore(ctx context.Context, queueName string, partitionID int, cutoffTime time.Time, limit int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -735,11 +736,11 @@ func (s *Store) ListMessagesBefore(ctx context.Context, queueName string, partit
 
 	partition, exists := partitions[partitionID]
 	if !exists {
-		return []*storage.Message{}, nil
+		return []*types.Message{}, nil
 	}
 
 	// Collect messages older than cutoff time
-	messages := make([]*storage.Message, 0)
+	messages := make([]*types.Message, 0)
 	for _, msg := range partition {
 		if msg.CreatedAt.Before(cutoffTime) {
 			messages = append(messages, msg)
@@ -817,7 +818,7 @@ func (s *Store) GetQueueSize(ctx context.Context, queueName string) (int64, erro
 	return totalSize, nil
 }
 
-func (s *Store) ListAllMessages(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
+func (s *Store) ListAllMessages(ctx context.Context, queueName string, partitionID int) ([]*types.Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -828,11 +829,11 @@ func (s *Store) ListAllMessages(ctx context.Context, queueName string, partition
 
 	partition, exists := partitions[partitionID]
 	if !exists {
-		return []*storage.Message{}, nil
+		return []*types.Message{}, nil
 	}
 
 	// Collect all messages from partition
-	messages := make([]*storage.Message, 0, len(partition))
+	messages := make([]*types.Message, 0, len(partition))
 	for _, msg := range partition {
 		messages = append(messages, msg)
 	}

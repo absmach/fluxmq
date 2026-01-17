@@ -11,14 +11,14 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/delivery"
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	brokerStorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockBrokerWithError extends MockBroker to simulate delivery errors
+// MockBrokerWithError extends MockBroker to simulate delivery errors.
 type MockBrokerWithError struct {
 	deliveries    map[string][]interface{}
 	deliveryError error
@@ -63,7 +63,7 @@ func (m *MockBrokerWithError) ClearDeliveries() {
 
 func TestNewDeliveryWorker(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
@@ -75,7 +75,7 @@ func TestNewDeliveryWorker(t *testing.T) {
 
 func TestDeliveryWorker_StartStop(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
@@ -108,7 +108,7 @@ func TestDeliveryWorker_StartStop(t *testing.T) {
 
 func TestDeliveryWorker_StartStopViaContext(t *testing.T) {
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	queue := NewQueue(config, store, store)
 	broker := NewMockBrokerWithError()
 
@@ -141,7 +141,7 @@ func TestDeliveryWorker_StartStopViaContext(t *testing.T) {
 func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 2
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -156,14 +156,14 @@ func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 	// Enqueue message with partition key
 	props := map[string]string{"partition-key": "test-key"}
 	partitionID := queue.GetPartitionForMessage("test-key")
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
 		Properties:  props,
 		PartitionID: partitionID,
 		Sequence:    1,
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
@@ -180,7 +180,7 @@ func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 	// Verify message state changed to delivered
 	retrieved, err := store.GetMessage(ctx, "$queue/test", "msg-1")
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateDelivered, retrieved.State)
+	assert.Equal(t, types.StateDelivered, retrieved.State)
 
 	// Verify marked as inflight
 	inflight, err := store.GetInflight(ctx, "$queue/test")
@@ -191,7 +191,7 @@ func TestDeliveryWorker_DeliverMessages(t *testing.T) {
 func TestDeliveryWorker_DeliverMessages_MultiplePartitions(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 3
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -205,13 +205,13 @@ func TestDeliveryWorker_DeliverMessages_MultiplePartitions(t *testing.T) {
 
 	// Enqueue messages to different partitions
 	for i := 0; i < 3; i++ {
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:          "msg-" + string(rune('0'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('0'+i))),
 			PartitionID: i,
 			Sequence:    uint64(i + 1),
-			State:       queueStorage.StateQueued,
+			State:       types.StateQueued,
 			CreatedAt:   time.Now(),
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
@@ -230,7 +230,7 @@ func TestDeliveryWorker_DeliverMessages_MultiplePartitions(t *testing.T) {
 func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 2
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -249,14 +249,14 @@ func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 	partitionID := queue.GetPartitionForMessage("test-key")
 
 	for i := 0; i < 2; i++ {
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:          "msg-" + string(rune('1'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('1'+i))),
 			Properties:  props,
 			PartitionID: partitionID,
 			Sequence:    uint64(i + 1),
-			State:       queueStorage.StateQueued,
+			State:       types.StateQueued,
 			CreatedAt:   time.Now(),
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
@@ -279,7 +279,7 @@ func TestDeliveryWorker_DeliverMessages_MultipleGroups(t *testing.T) {
 func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 2
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -288,13 +288,13 @@ func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {
 	broker := NewMockBrokerWithError()
 
 	// Enqueue message but don't assign any consumer
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
@@ -311,13 +311,13 @@ func TestDeliveryWorker_DeliverMessages_UnassignedPartition(t *testing.T) {
 	// Message should still be queued
 	retrieved, err := store.GetMessage(ctx, "$queue/test", "msg-1")
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateQueued, retrieved.State)
+	assert.Equal(t, types.StateQueued, retrieved.State)
 }
 
 func TestDeliveryWorker_DeliverNext_BrokerDeliveryError(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 1
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -330,13 +330,13 @@ func TestDeliveryWorker_DeliverNext_BrokerDeliveryError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		CreatedAt:   time.Now(),
 	}
 	err = store.Enqueue(ctx, "$queue/test", msg)
@@ -357,13 +357,13 @@ func TestDeliveryWorker_DeliverNext_BrokerDeliveryError(t *testing.T) {
 	// Message state should be delivered (state updated before broker delivery)
 	retrieved, err := store.GetMessage(ctx, "$queue/test", "msg-1")
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateDelivered, retrieved.State)
+	assert.Equal(t, types.StateDelivered, retrieved.State)
 }
 
 func TestDeliveryWorker_DeliverNext_NoMessages(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 1
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -387,9 +387,9 @@ func TestDeliveryWorker_DeliverNext_NoMessages(t *testing.T) {
 func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 1
-	config.Ordering = queueStorage.OrderingStrict
+	config.Ordering = types.OrderingStrict
 	config.BatchSize = 1 // Use small batch size to test single-message delivery
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -403,13 +403,13 @@ func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 
 	// Enqueue messages in order
 	for i := 0; i < 3; i++ {
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:          "msg-" + string(rune('0'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('0'+i))),
 			PartitionID: 0,
 			Sequence:    uint64(i + 1),
-			State:       queueStorage.StateQueued,
+			State:       types.StateQueued,
 			CreatedAt:   time.Now(),
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)
@@ -439,7 +439,7 @@ func TestDeliveryWorker_OrderingEnforcement(t *testing.T) {
 func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 1
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -452,13 +452,13 @@ func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Enqueue message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       "$queue/test",
 		Payload:     []byte("test payload"),
 		PartitionID: 0,
 		Sequence:    1,
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		RetryCount:  2,
 		CreatedAt:   time.Now(),
 	}
@@ -481,7 +481,7 @@ func TestDeliveryWorker_IntegrationWithRetry(t *testing.T) {
 }
 
 func TestToStorageMessage(t *testing.T) {
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:      "msg-1",
 		Topic:   "$queue/test",
 		Payload: []byte("test payload"),
@@ -489,7 +489,7 @@ func TestToStorageMessage(t *testing.T) {
 			"key1": "value1",
 			"key2": "value2",
 		},
-		State:     queueStorage.StateQueued,
+		State:     types.StateQueued,
 		CreatedAt: time.Now(),
 	}
 
@@ -510,7 +510,7 @@ func TestToStorageMessage(t *testing.T) {
 func TestDeliveryWorker_ConcurrentDelivery(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.Partitions = 4
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -527,13 +527,13 @@ func TestDeliveryWorker_ConcurrentDelivery(t *testing.T) {
 	// Enqueue messages to different partitions
 	for i := 0; i < 10; i++ {
 		partitionID := i % 4
-		msg := &queueStorage.Message{
+		msg := &types.Message{
 			ID:          "msg-" + string(rune('0'+i)),
 			Topic:       "$queue/test",
 			Payload:     []byte("test payload " + string(rune('0'+i))),
 			PartitionID: partitionID,
 			Sequence:    uint64(i + 1),
-			State:       queueStorage.StateQueued,
+			State:       types.StateQueued,
 			CreatedAt:   time.Now(),
 		}
 		err = store.Enqueue(ctx, "$queue/test", msg)

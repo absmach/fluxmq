@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"context"
@@ -10,13 +10,14 @@ import (
 	"sync"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // RetryManager monitors inflight messages and handles retry logic.
 type RetryManager struct {
-	queues        map[string]*Queue
-	messageStore  queueStorage.MessageStore
+	queues        map[string]QueueInfo
+	messageStore  storage.MessageStore
 	dlqManager    *DLQManager
 	checkInterval time.Duration
 	stopCh        chan struct{}
@@ -25,9 +26,9 @@ type RetryManager struct {
 }
 
 // NewRetryManager creates a new retry manager.
-func NewRetryManager(messageStore queueStorage.MessageStore, dlqManager *DLQManager) *RetryManager {
+func NewRetryManager(messageStore storage.MessageStore, dlqManager *DLQManager) *RetryManager {
 	return &RetryManager{
-		queues:        make(map[string]*Queue),
+		queues:        make(map[string]QueueInfo),
 		messageStore:  messageStore,
 		dlqManager:    dlqManager,
 		checkInterval: 1 * time.Second, // Check every second
@@ -36,7 +37,7 @@ func NewRetryManager(messageStore queueStorage.MessageStore, dlqManager *DLQMana
 }
 
 // RegisterQueue adds a queue to be monitored for retry timeouts.
-func (rm *RetryManager) RegisterQueue(queue *Queue) {
+func (rm *RetryManager) RegisterQueue(queue QueueInfo) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.queues[queue.Name()] = queue
@@ -85,7 +86,7 @@ func (rm *RetryManager) run(ctx context.Context) {
 // checkInflightTimeouts checks all inflight messages for delivery timeout.
 func (rm *RetryManager) checkInflightTimeouts(ctx context.Context) {
 	rm.mu.RLock()
-	queues := make([]*Queue, 0, len(rm.queues))
+	queues := make([]QueueInfo, 0, len(rm.queues))
 	for _, queue := range rm.queues {
 		queues = append(queues, queue)
 	}
@@ -108,7 +109,7 @@ func (rm *RetryManager) checkInflightTimeouts(ctx context.Context) {
 // checkRetrySchedule checks for messages scheduled for retry.
 func (rm *RetryManager) checkRetrySchedule(ctx context.Context) {
 	rm.mu.RLock()
-	queues := make([]*Queue, 0, len(rm.queues))
+	queues := make([]QueueInfo, 0, len(rm.queues))
 	for _, queue := range rm.queues {
 		queues = append(queues, queue)
 	}
@@ -134,7 +135,7 @@ func (rm *RetryManager) checkRetrySchedule(ctx context.Context) {
 }
 
 // handleInflightTimeout handles a message that has timed out while inflight.
-func (rm *RetryManager) handleInflightTimeout(ctx context.Context, queue *Queue, deliveryState *queueStorage.DeliveryState) {
+func (rm *RetryManager) handleInflightTimeout(ctx context.Context, queue QueueInfo, deliveryState *types.DeliveryState) {
 	// Get the actual message
 	msg, err := rm.messageStore.GetMessage(ctx, queue.Name(), deliveryState.MessageID)
 	if err != nil {
@@ -151,7 +152,7 @@ func (rm *RetryManager) handleInflightTimeout(ctx context.Context, queue *Queue,
 }
 
 // processRetry determines if a message should be retried or moved to DLQ.
-func (rm *RetryManager) processRetry(ctx context.Context, queue *Queue, msg *queueStorage.Message) {
+func (rm *RetryManager) processRetry(ctx context.Context, queue QueueInfo, msg *types.Message) {
 	config := queue.Config()
 
 	// Check if max retries exceeded
@@ -169,7 +170,7 @@ func (rm *RetryManager) processRetry(ctx context.Context, queue *Queue, msg *que
 
 	// Schedule retry
 	msg.RetryCount++
-	msg.State = queueStorage.StateRetry
+	msg.State = types.StateRetry
 	msg.NextRetryAt = time.Now().Add(rm.calculateBackoff(msg.RetryCount, config.RetryPolicy))
 
 	if err := rm.messageStore.UpdateMessage(ctx, queue.Name(), msg); err != nil {
@@ -179,7 +180,7 @@ func (rm *RetryManager) processRetry(ctx context.Context, queue *Queue, msg *que
 }
 
 // moveToDLQ moves a message to the dead letter queue.
-func (rm *RetryManager) moveToDLQ(ctx context.Context, queue *Queue, msg *queueStorage.Message, reason string) {
+func (rm *RetryManager) moveToDLQ(ctx context.Context, queue QueueInfo, msg *types.Message, reason string) {
 	if rm.dlqManager != nil {
 		if err := rm.dlqManager.MoveToDLQ(ctx, queue, msg, reason); err != nil {
 			// Failed to move to DLQ, log but continue
@@ -192,7 +193,7 @@ func (rm *RetryManager) moveToDLQ(ctx context.Context, queue *Queue, msg *queueS
 }
 
 // calculateBackoff calculates exponential backoff duration for a retry.
-func (rm *RetryManager) calculateBackoff(retryCount int, policy queueStorage.RetryPolicy) time.Duration {
+func (rm *RetryManager) calculateBackoff(retryCount int, policy types.RetryPolicy) time.Duration {
 	// Calculate exponential backoff: initialBackoff * (multiplier ^ (retryCount - 1))
 	backoff := float64(policy.InitialBackoff) * math.Pow(policy.BackoffMultiplier, float64(retryCount-1))
 

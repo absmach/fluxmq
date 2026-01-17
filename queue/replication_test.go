@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
 	memstore "github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,21 +96,21 @@ func setupReplicatedTest(t *testing.T, nodeCount int, queueName string, partitio
 	}
 
 	// Create replicated queue on all nodes
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: nodeCount,
-			Mode:              queueStorage.ReplicationSync,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Mode:              types.ReplicationSync,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: (nodeCount / 2) + 1, // Quorum
 			AckTimeout:        5 * time.Second,
 			HeartbeatTimeout:  1 * time.Second,
 			ElectionTimeout:   3 * time.Second,
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,
@@ -222,21 +222,21 @@ func TestReplication_BasicEnqueueDequeue(t *testing.T) {
 	}
 
 	// Create replicated queue on all nodes
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: nodeCount,
-			Mode:              queueStorage.ReplicationSync,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Mode:              types.ReplicationSync,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: (nodeCount / 2) + 1,
 			AckTimeout:        5 * time.Second,
 			HeartbeatTimeout:  1 * time.Second,
 			ElectionTimeout:   3 * time.Second,
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,
@@ -392,7 +392,7 @@ func TestReplication_MessageDurability(t *testing.T) {
 // Verifies that:
 // - All replicas start in-sync (quorum maintained)
 // - Cluster tolerates follower failure (continues with quorum)
-// - Failed follower catches up when it rejoins
+// - Failed follower catches up when it rejoins.
 func TestReplication_ISRTracking(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping ISR tracking test in short mode")
@@ -576,26 +576,26 @@ func TestReplication_ConfigValidation(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		config      queueStorage.QueueConfig
+		config      types.QueueConfig
 		expectError bool
 		errorMsg    string
 		skip        bool // Skip tests that require full cluster infrastructure
 	}{
 		{
 			name: "valid sync replication",
-			config: queueStorage.QueueConfig{
+			config: types.QueueConfig{
 				Name:       "$queue/valid-sync",
 				Partitions: 3,
-				Ordering:   queueStorage.OrderingPartition,
-				Replication: queueStorage.ReplicationConfig{
+				Ordering:   types.OrderingPartition,
+				Replication: types.ReplicationConfig{
 					Enabled:           true,
 					ReplicationFactor: 3,
-					Mode:              queueStorage.ReplicationSync,
-					Placement:         queueStorage.PlacementRoundRobin,
+					Mode:              types.ReplicationSync,
+					Placement:         types.PlacementRoundRobin,
 					MinInSyncReplicas: 2,
 					AckTimeout:        5 * time.Second,
 				},
-				RetryPolicy: queueStorage.RetryPolicy{
+				RetryPolicy: types.RetryPolicy{
 					MaxRetries:        3,
 					InitialBackoff:    100 * time.Millisecond,
 					MaxBackoff:        1 * time.Second,
@@ -612,19 +612,19 @@ func TestReplication_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "valid async replication",
-			config: queueStorage.QueueConfig{
+			config: types.QueueConfig{
 				Name:       "$queue/valid-async",
 				Partitions: 3,
-				Ordering:   queueStorage.OrderingPartition,
-				Replication: queueStorage.ReplicationConfig{
+				Ordering:   types.OrderingPartition,
+				Replication: types.ReplicationConfig{
 					Enabled:           true,
 					ReplicationFactor: 3,
-					Mode:              queueStorage.ReplicationAsync,
-					Placement:         queueStorage.PlacementRoundRobin,
+					Mode:              types.ReplicationAsync,
+					Placement:         types.PlacementRoundRobin,
 					MinInSyncReplicas: 2,
 					AckTimeout:        5 * time.Second,
 				},
-				RetryPolicy: queueStorage.RetryPolicy{
+				RetryPolicy: types.RetryPolicy{
 					MaxRetries:        3,
 					InitialBackoff:    100 * time.Millisecond,
 					MaxBackoff:        1 * time.Second,
@@ -641,14 +641,14 @@ func TestReplication_ConfigValidation(t *testing.T) {
 		},
 		{
 			name: "replication disabled",
-			config: queueStorage.QueueConfig{
+			config: types.QueueConfig{
 				Name:       "$queue/no-replication",
 				Partitions: 3,
-				Ordering:   queueStorage.OrderingPartition,
-				Replication: queueStorage.ReplicationConfig{
+				Ordering:   types.OrderingPartition,
+				Replication: types.ReplicationConfig{
 					Enabled: false,
 				},
-				RetryPolicy: queueStorage.RetryPolicy{
+				RetryPolicy: types.RetryPolicy{
 					MaxRetries:        3,
 					InitialBackoff:    100 * time.Millisecond,
 					MaxBackoff:        1 * time.Second,
@@ -698,7 +698,7 @@ func TestReplication_BackwardCompatibility(t *testing.T) {
 
 	// Create queue WITHOUT replication
 	queueName := "$queue/legacy"
-	queueConfig := queueStorage.DefaultQueueConfig(queueName)
+	queueConfig := types.DefaultQueueConfig(queueName)
 	queueConfig.Replication.Enabled = false // Explicitly disabled
 
 	err = mgr.CreateQueue(ctx, queueConfig)

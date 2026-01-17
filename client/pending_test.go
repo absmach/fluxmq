@@ -36,7 +36,6 @@ func TestPendingStoreAdd(t *testing.T) {
 
 	msg := NewMessage("test/topic", []byte("payload"), 1, false)
 	op, err := ps.add(1, pendingPublish, msg)
-
 	if err != nil {
 		t.Fatalf("add failed: %v", err)
 	}

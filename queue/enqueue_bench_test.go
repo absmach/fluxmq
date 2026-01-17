@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"testing"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
-// BenchmarkEnqueue_SinglePartition measures enqueue performance with one partition
+// BenchmarkEnqueue_SinglePartition measures enqueue performance with one partition.
 func BenchmarkEnqueue_SinglePartition(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -30,7 +30,7 @@ func BenchmarkEnqueue_SinglePartition(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-single"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 1
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
@@ -52,7 +52,7 @@ func BenchmarkEnqueue_SinglePartition(b *testing.B) {
 	}
 }
 
-// BenchmarkEnqueue_MultiplePartitions measures enqueue with multiple partitions
+// BenchmarkEnqueue_MultiplePartitions measures enqueue with multiple partitions.
 func BenchmarkEnqueue_MultiplePartitions(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -70,7 +70,7 @@ func BenchmarkEnqueue_MultiplePartitions(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-multi"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 10
 
@@ -91,7 +91,7 @@ func BenchmarkEnqueue_MultiplePartitions(b *testing.B) {
 	}
 }
 
-// BenchmarkEnqueue_SmallPayload measures enqueue with small messages
+// BenchmarkEnqueue_SmallPayload measures enqueue with small messages.
 func BenchmarkEnqueue_SmallPayload(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -109,7 +109,7 @@ func BenchmarkEnqueue_SmallPayload(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-small"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -129,7 +129,7 @@ func BenchmarkEnqueue_SmallPayload(b *testing.B) {
 	}
 }
 
-// BenchmarkEnqueue_LargePayload measures enqueue with large messages
+// BenchmarkEnqueue_LargePayload measures enqueue with large messages.
 func BenchmarkEnqueue_LargePayload(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -147,7 +147,7 @@ func BenchmarkEnqueue_LargePayload(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-large"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 	if err := mgr.CreateQueue(ctx, config); err != nil {
@@ -171,7 +171,7 @@ func BenchmarkEnqueue_LargePayload(b *testing.B) {
 	}
 }
 
-// BenchmarkEnqueue_WithPartitionKey measures enqueue with partition key routing
+// BenchmarkEnqueue_WithPartitionKey measures enqueue with partition key routing.
 func BenchmarkEnqueue_WithPartitionKey(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -189,7 +189,7 @@ func BenchmarkEnqueue_WithPartitionKey(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-partkey"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 10
 
@@ -210,7 +210,7 @@ func BenchmarkEnqueue_WithPartitionKey(b *testing.B) {
 	}
 }
 
-// BenchmarkEnqueue_Parallel measures concurrent enqueue performance
+// BenchmarkEnqueue_Parallel measures concurrent enqueue performance.
 func BenchmarkEnqueue_Parallel(b *testing.B) {
 	store := memory.New()
 	broker := NewMockBroker()
@@ -228,7 +228,7 @@ func BenchmarkEnqueue_Parallel(b *testing.B) {
 
 	ctx := context.Background()
 	queueName := "$queue/bench-parallel"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 	config.Partitions = 10
 
@@ -251,7 +251,7 @@ func BenchmarkEnqueue_Parallel(b *testing.B) {
 	})
 }
 
-// BenchmarkEnqueue_BatchSize measures different batch sizes
+// BenchmarkEnqueue_BatchSize measures different batch sizes.
 func BenchmarkEnqueue_BatchSize(b *testing.B) {
 	batchSizes := []int{1, 10, 100, 1000}
 
@@ -273,7 +273,7 @@ func BenchmarkEnqueue_BatchSize(b *testing.B) {
 
 			ctx := context.Background()
 			queueName := fmt.Sprintf("$queue/bench-batch-%d", size)
-			config := queueStorage.DefaultQueueConfig(queueName)
+			config := types.DefaultQueueConfig(queueName)
 			config.MaxQueueDepth = 10000000 // Large limit for benchmarks
 
 			if err := mgr.CreateQueue(ctx, config); err != nil {

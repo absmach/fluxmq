@@ -12,16 +12,16 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/cluster/grpc"
 	"github.com/absmach/fluxmq/queue/consumer"
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	brokerStorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockQueue implements QueueSource interface
+// MockQueue implements QueueSource interface.
 type MockQueue struct {
-	config           queueStorage.QueueConfig
+	config           types.QueueConfig
 	consumerGroups   *consumer.GroupManager
 	orderingEnforcer OrderingEnforcer
 }
@@ -30,7 +30,7 @@ func (m *MockQueue) Name() string {
 	return m.config.Name
 }
 
-func (m *MockQueue) Config() queueStorage.QueueConfig {
+func (m *MockQueue) Config() types.QueueConfig {
 	return m.config
 }
 
@@ -42,16 +42,16 @@ func (m *MockQueue) ConsumerGroups() *consumer.GroupManager {
 	return m.consumerGroups
 }
 
-// MockOrderingEnforcer implements OrderingEnforcer interface
+// MockOrderingEnforcer implements OrderingEnforcer interface.
 type MockOrderingEnforcer struct{}
 
-func (m *MockOrderingEnforcer) CanDeliver(msg *queueStorage.Message, groupID string) (bool, error) {
+func (m *MockOrderingEnforcer) CanDeliver(msg *types.Message, groupID string) (bool, error) {
 	return true, nil
 }
 
-func (m *MockOrderingEnforcer) MarkDelivered(msg *queueStorage.Message, groupID string) {}
+func (m *MockOrderingEnforcer) MarkDelivered(msg *types.Message, groupID string) {}
 
-// MockBroker is a simple mock for broker delivery
+// MockBroker is a simple mock for broker delivery.
 type MockBroker struct {
 	deliveries map[string][]any
 	mu         sync.Mutex
@@ -76,7 +76,7 @@ func (m *MockBroker) GetDeliveries(clientID string) []any {
 	return m.deliveries[clientID]
 }
 
-// MockCluster implements cluster.Cluster interface
+// MockCluster implements cluster.Cluster interface.
 type MockCluster struct {
 	localNodeID        string
 	routeQueueMsgCalls []RouteQueueMsgCall
@@ -100,7 +100,7 @@ func NewMockCluster(nodeID string) *MockCluster {
 	}
 }
 
-// Implement required methods of cluster.Cluster interface (stubbed)
+// Implement required methods of cluster.Cluster interface (stubbed).
 func (c *MockCluster) NodeID() string                        { return c.localNodeID }
 func (c *MockCluster) IsLeader() bool                        { return true }
 func (c *MockCluster) WaitForLeader(context.Context) error   { return nil }
@@ -178,7 +178,7 @@ func (c *MockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, q
 	return nil
 }
 
-// Helper to create consumer partitions
+// Helper to create consumer partitions.
 type mockPartition struct {
 	id int
 }
@@ -207,7 +207,7 @@ func TestPartitionWorker_RouteQueueMessage_ProxyMode(t *testing.T) {
 	parts := toConsumerPartitions(1)
 	consumerMgr := consumer.NewGroupManager(queueName, consumerStore, time.Second, parts)
 
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	mockQueue := &MockQueue{
 		config:           config,
 		consumerGroups:   consumerMgr,
@@ -243,12 +243,12 @@ func TestPartitionWorker_RouteQueueMessage_ProxyMode(t *testing.T) {
 	consumerMgr.Rebalance("group-1", parts)
 
 	// Create and store a message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       queueName,
 		Payload:     []byte("test payload"),
 		Properties:  map[string]string{"key": "value"},
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		PartitionID: 0,
 		Sequence:    1,
 	}
@@ -290,7 +290,7 @@ func TestPartitionWorker_LocalDelivery_ProxyMode(t *testing.T) {
 	parts := toConsumerPartitions(1)
 	consumerMgr := consumer.NewGroupManager(queueName, consumerStore, time.Second, parts)
 
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	mockQueue := &MockQueue{
 		config:           config,
 		consumerGroups:   consumerMgr,
@@ -322,12 +322,12 @@ func TestPartitionWorker_LocalDelivery_ProxyMode(t *testing.T) {
 	consumerMgr.Rebalance("group-1", parts)
 
 	// Create and store a message
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       queueName,
 		Payload:     []byte("test payload"),
 		Properties:  map[string]string{"key": "value"},
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		PartitionID: 0,
 		Sequence:    1,
 	}
@@ -362,7 +362,7 @@ func TestPartitionWorker_DirectMode_LocalDelivery(t *testing.T) {
 	parts := toConsumerPartitions(1)
 	consumerMgr := consumer.NewGroupManager(queueName, consumerStore, time.Second, parts)
 
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	mockQueue := &MockQueue{
 		config:           config,
 		consumerGroups:   consumerMgr,
@@ -392,12 +392,12 @@ func TestPartitionWorker_DirectMode_LocalDelivery(t *testing.T) {
 	require.NoError(t, err)
 	consumerMgr.Rebalance("group-1", parts)
 
-	msg := &queueStorage.Message{
+	msg := &types.Message{
 		ID:          "msg-1",
 		Topic:       queueName,
 		Payload:     []byte("test payload"),
 		Properties:  map[string]string{"key": "value"},
-		State:       queueStorage.StateQueued,
+		State:       types.StateQueued,
 		PartitionID: 0,
 		Sequence:    1,
 	}

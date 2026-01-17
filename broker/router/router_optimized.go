@@ -18,7 +18,7 @@ import (
 // - Match operations lock only the nodes they traverse (RLock)
 // - Subscribe/Unsubscribe lock only the affected path (Lock on final node)
 // - Different branches can be accessed concurrently
-// - Much better performance than both global mutex and pure lock-free CAS
+// - Much better performance than both global mutex and pure lock-free CAS.
 type OptimizedRouter struct {
 	root *optimizedNode
 }

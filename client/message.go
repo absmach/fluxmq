@@ -16,13 +16,13 @@ type Message struct {
 	Timestamp time.Time
 
 	// MQTT 5.0 properties
-	PayloadFormat    *byte
-	MessageExpiry    *uint32
-	ContentType      string
-	ResponseTopic    string
-	CorrelationData  []byte
-	UserProperties   map[string]string
-	SubscriptionIDs  []uint32
+	PayloadFormat   *byte
+	MessageExpiry   *uint32
+	ContentType     string
+	ResponseTopic   string
+	CorrelationData []byte
+	UserProperties  map[string]string
+	SubscriptionIDs []uint32
 }
 
 // NewMessage creates a new message with the given parameters.

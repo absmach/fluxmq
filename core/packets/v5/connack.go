@@ -347,7 +347,7 @@ func (pkt *ConnAck) Unpack(r io.Reader) error {
 	return nil
 }
 
-// Reason returns a string representation of the meaning of the ReasonCode
+// Reason returns a string representation of the meaning of the ReasonCode.
 func (c *ConnAck) Reason() string {
 	switch c.ReasonCode {
 	case 0:

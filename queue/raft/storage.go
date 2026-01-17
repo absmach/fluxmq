@@ -12,7 +12,6 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-
 // BadgerLogStore implements raft.LogStore using BadgerDB.
 // It stores Raft log entries with efficient sequential writes.
 type BadgerLogStore struct {

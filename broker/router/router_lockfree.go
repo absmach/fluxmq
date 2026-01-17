@@ -18,7 +18,7 @@ import (
 // - Match operations are lock-free (only atomic loads)
 // - Subscribe/Unsubscribe use copy-on-write with CAS
 // - All data structures (maps, slices) are immutable
-// - Contention on writes is handled by CAS retry loop
+// - Contention on writes is handled by CAS retry loop.
 type LockFreeRouter struct {
 	root atomic.Pointer[lockFreeNode]
 }

@@ -33,11 +33,11 @@ const (
 
 // Errors.
 var (
-	ErrNotConnected    = errors.New("client not connected")
+	ErrNotConnected     = errors.New("client not connected")
 	ErrAlreadyConnected = errors.New("client already connected")
-	ErrTimeout         = errors.New("operation timed out")
-	ErrConnectionLost  = errors.New("connection lost")
-	ErrInvalidPacket   = errors.New("invalid packet received")
+	ErrTimeout          = errors.New("operation timed out")
+	ErrConnectionLost   = errors.New("connection lost")
+	ErrInvalidPacket    = errors.New("invalid packet received")
 )
 
 // Message represents a received MQTT message.
@@ -166,11 +166,11 @@ type TestMQTTClient struct {
 	qos2IncomingMu sync.Mutex
 
 	// Lifecycle
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	errCh    chan error
-	mu       sync.Mutex
-	connMu   sync.RWMutex
+	stopCh chan struct{}
+	doneCh chan struct{}
+	errCh  chan error
+	mu     sync.Mutex
+	connMu sync.RWMutex
 }
 
 // NewTestMQTTClient creates a new test MQTT client.

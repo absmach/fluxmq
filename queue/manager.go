@@ -14,7 +14,9 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/delivery"
+	"github.com/absmach/fluxmq/queue/lifecycle"
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/google/uuid"
 )
 
@@ -48,14 +50,14 @@ const (
 type Manager struct {
 	queues            map[string]*Queue
 	deliveryWorkers   map[string]*delivery.Worker
-	raftManagers      map[string]*RaftManager      // Per-queue Raft managers
-	retentionManagers map[string]*RetentionManager // Per-queue retention managers
+	raftManagers      map[string]*RaftManager                // Per-queue Raft managers
+	retentionManagers map[string]*lifecycle.RetentionManager // Per-queue retention managers
 	queueStore        storage.QueueStore
 	messageStore      storage.MessageStore
 	consumerStore     storage.ConsumerStore
 	broker            DeliverFn
-	retryManager      *RetryManager
-	dlqManager        *DLQManager
+	retryManager      *lifecycle.RetryManager
+	dlqManager        *lifecycle.DLQManager
 	mu                sync.RWMutex
 	stopCh            chan struct{}
 	stopOnce          sync.Once
@@ -93,11 +95,11 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	// Create DLQ manager with HTTP alert handler
-	alertHandler := NewHTTPAlertHandler(10 * time.Second)
-	dlqManager := NewDLQManager(cfg.MessageStore, alertHandler)
+	alertHandler := lifecycle.NewHTTPAlertHandler(10 * time.Second)
+	dlqManager := lifecycle.NewDLQManager(cfg.MessageStore, alertHandler)
 
 	// Create retry manager
-	retryManager := NewRetryManager(cfg.MessageStore, dlqManager)
+	retryManager := lifecycle.NewRetryManager(cfg.MessageStore, dlqManager)
 
 	// Default to single-node if no cluster or node ID provided
 	localNodeID := cfg.LocalNodeID
@@ -115,7 +117,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		queues:              make(map[string]*Queue),
 		deliveryWorkers:     make(map[string]*delivery.Worker),
 		raftManagers:        make(map[string]*RaftManager),
-		retentionManagers:   make(map[string]*RetentionManager),
+		retentionManagers:   make(map[string]*lifecycle.RetentionManager),
 		queueStore:          cfg.QueueStore,
 		messageStore:        cfg.MessageStore,
 		consumerStore:       cfg.ConsumerStore,
@@ -195,7 +197,7 @@ func (m *Manager) Stop() error {
 }
 
 // CreateQueue creates a new queue with the given configuration.
-func (m *Manager) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
+func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	// Set defaults
 	if config.DLQConfig.Topic == "" && config.DLQConfig.Enabled {
 		config.DLQConfig.Topic = "$queue/dlq/" + strings.TrimPrefix(config.Name, "$queue/")
@@ -216,7 +218,7 @@ func (m *Manager) CreateQueue(ctx context.Context, config storage.QueueConfig) e
 }
 
 // createQueueInstance creates a queue instance in memory.
-func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
+func (m *Manager) createQueueInstance(config types.QueueConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -272,7 +274,7 @@ func (m *Manager) createQueueInstance(config storage.QueueConfig) error {
 
 	// Create RetentionManager if retention policy is configured
 	if config.Retention.RetentionTime > 0 || config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0 || config.Retention.CompactionEnabled {
-		retentionMgr := NewRetentionManager(config.Name, config.Retention, m.messageStore, m.raftManagers[config.Name], slog.Default())
+		retentionMgr := lifecycle.NewRetentionManager(config.Name, config.Retention, m.messageStore, m.raftManagers[config.Name], slog.Default())
 		m.retentionManagers[config.Name] = retentionMgr
 		// Note: RetentionManager will be started by partition workers (only leaders should run retention)
 	}
@@ -336,7 +338,7 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string) (*Queu
 	}
 
 	// Create with default config
-	config := storage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	if err := m.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
 		return nil, err
 	}
@@ -424,7 +426,7 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 	msg.PartitionID = partitionID
 	msg.Sequence = sequence
 	msg.Properties = msgProps
-	msg.State = storage.StateQueued
+	msg.State = types.StateQueued
 	msg.CreatedAt = time.Now()
 	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
 
@@ -478,7 +480,7 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 }
 
 // enqueueReplicated routes an enqueue through Raft for replication.
-func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, partitionID int, payload []byte, properties map[string]string, config storage.QueueConfig) error {
+func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, partitionID int, payload []byte, properties map[string]string, config types.QueueConfig) error {
 	// Get Raft manager for this queue
 	m.mu.RLock()
 	raftMgr, exists := m.raftManagers[queueTopic]
@@ -539,13 +541,13 @@ func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, part
 	msg.PartitionID = partitionID
 	msg.Sequence = sequence
 	msg.Properties = msgProps
-	msg.State = storage.StateQueued
+	msg.State = types.StateQueued
 	msg.CreatedAt = time.Now()
 	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
 
 	// Create a copy for Raft (FSM needs the data to persist)
 	// We can't return msg to pool until FSM applies it
-	raftMsg := &storage.Message{
+	raftMsg := &types.Message{
 		ID:           msg.ID,
 		Payload:      append([]byte(nil), msg.Payload...), // Copy payload
 		Topic:        msg.Topic,
@@ -663,7 +665,7 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error 
 	}
 
 	// Update message state for retry
-	msg.State = storage.StateRetry
+	msg.State = types.StateRetry
 	msg.RetryCount++
 	msg.NextRetryAt = time.Now() // Immediate retry
 
@@ -691,7 +693,7 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reas
 	// Move to DLQ
 	config := queue.Config()
 	if config.DLQConfig.Enabled {
-		msg.State = storage.StateDLQ
+		msg.State = types.StateDLQ
 		msg.FailureReason = reason
 		msg.MovedToDLQAt = time.Now()
 
@@ -786,10 +788,10 @@ func (m *Manager) getPartitionOwner(ctx context.Context, queueName string, parti
 }
 
 // getPartitionAssigner returns the partition assigner based on queue configuration.
-func (m *Manager) getPartitionAssigner(config storage.QueueConfig) consumer.PartitionAssigner {
+func (m *Manager) getPartitionAssigner(config types.QueueConfig) consumer.PartitionAssigner {
 	// Check if a partition strategy is configured
 	// For now, we'll use hash by default until we add PartitionStrategy to QueueConfig
-	// In Phase 2, we'll add this field to storage.QueueConfig
+	// In Phase 2, we'll add this field to types.QueueConfig
 
 	// Default to hash-based assignment
 	if m.cluster == nil {
@@ -904,7 +906,7 @@ func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []
 	msg.PartitionID = partitionID
 	msg.Sequence = sequence
 	msg.Properties = msgProps
-	msg.State = storage.StateQueued
+	msg.State = types.StateQueued
 	msg.CreatedAt = time.Now()
 	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
 

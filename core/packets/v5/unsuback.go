@@ -108,7 +108,7 @@ func (pkt *UnsubAck) Details() Details {
 	return Details{Type: UnsubAckType, ID: pkt.ID, QoS: 0}
 }
 
-// Reason returns a string representation of the meaning of the ReasonCode
+// Reason returns a string representation of the meaning of the ReasonCode.
 func (u *UnsubAck) Reason(index int) string {
 	if index >= 0 && index < len(*u.ReasonCodes) {
 		switch (*u.ReasonCodes)[index] {

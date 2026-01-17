@@ -1,25 +1,25 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package lifecycle
 
 import (
 	"fmt"
 	"sync"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // OrderingEnforcer enforces message ordering within partitions.
 // Group-aware: each consumer group tracks its own ordering independently.
 type OrderingEnforcer struct {
-	mode          queueStorage.OrderingMode
+	mode          types.OrderingMode
 	lastDelivered map[string]map[int]uint64 // groupID -> partitionID -> last delivered sequence
 	mu            sync.RWMutex
 }
 
 // NewOrderingEnforcer creates a new ordering enforcer.
-func NewOrderingEnforcer(mode queueStorage.OrderingMode) *OrderingEnforcer {
+func NewOrderingEnforcer(mode types.OrderingMode) *OrderingEnforcer {
 	return &OrderingEnforcer{
 		mode:          mode,
 		lastDelivered: make(map[string]map[int]uint64),
@@ -28,17 +28,17 @@ func NewOrderingEnforcer(mode queueStorage.OrderingMode) *OrderingEnforcer {
 
 // CanDeliver checks if a message can be delivered according to ordering rules.
 // groupID identifies the consumer group - each group has independent ordering tracking.
-func (oe *OrderingEnforcer) CanDeliver(msg *queueStorage.Message, groupID string) (bool, error) {
+func (oe *OrderingEnforcer) CanDeliver(msg *types.Message, groupID string) (bool, error) {
 	switch oe.mode {
-	case queueStorage.OrderingNone:
+	case types.OrderingNone:
 		// No ordering requirements
 		return true, nil
 
-	case queueStorage.OrderingPartition:
+	case types.OrderingPartition:
 		// Partition-based ordering: messages within same partition must be delivered in order
 		return oe.checkPartitionOrder(msg, groupID)
 
-	case queueStorage.OrderingStrict:
+	case types.OrderingStrict:
 		// Strict global ordering: all messages must be delivered in global sequence order
 		// This requires single partition (partition 0)
 		if msg.PartitionID != 0 {
@@ -52,7 +52,7 @@ func (oe *OrderingEnforcer) CanDeliver(msg *queueStorage.Message, groupID string
 }
 
 // checkPartitionOrder checks if message is next in sequence for its partition within a group.
-func (oe *OrderingEnforcer) checkPartitionOrder(msg *queueStorage.Message, groupID string) (bool, error) {
+func (oe *OrderingEnforcer) checkPartitionOrder(msg *types.Message, groupID string) (bool, error) {
 	oe.mu.RLock()
 	groupMap, groupExists := oe.lastDelivered[groupID]
 	if !groupExists {
@@ -78,8 +78,8 @@ func (oe *OrderingEnforcer) checkPartitionOrder(msg *queueStorage.Message, group
 }
 
 // MarkDelivered records that a message was delivered to a consumer group.
-func (oe *OrderingEnforcer) MarkDelivered(msg *queueStorage.Message, groupID string) {
-	if oe.mode == queueStorage.OrderingNone {
+func (oe *OrderingEnforcer) MarkDelivered(msg *types.Message, groupID string) {
+	if oe.mode == types.OrderingNone {
 		return
 	}
 
@@ -158,7 +158,7 @@ func (oe *OrderingEnforcer) Stats() OrderingStats {
 
 // OrderingStats holds ordering statistics.
 type OrderingStats struct {
-	Mode           queueStorage.OrderingMode
+	Mode           types.OrderingMode
 	GroupCount     int
 	PartitionCount int
 	GroupStats     map[string]map[int]uint64

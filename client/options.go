@@ -41,15 +41,15 @@ type WillMessage struct {
 // Options configures the MQTT client.
 type Options struct {
 	// Connection
-	Servers         []string      // List of broker addresses (host:port)
-	ClientID        string        // Client identifier
-	Username        string        // Optional username
-	Password        string        // Optional password
-	TLSConfig       *tls.Config   // TLS configuration (nil for plain TCP)
-	ConnectTimeout  time.Duration // Timeout for connection attempts
-	WriteTimeout    time.Duration // Timeout for write operations
-	KeepAlive       time.Duration // Keep-alive interval (0 to disable)
-	PingTimeout     time.Duration // Timeout waiting for PINGRESP
+	Servers        []string      // List of broker addresses (host:port)
+	ClientID       string        // Client identifier
+	Username       string        // Optional username
+	Password       string        // Optional password
+	TLSConfig      *tls.Config   // TLS configuration (nil for plain TCP)
+	ConnectTimeout time.Duration // Timeout for connection attempts
+	WriteTimeout   time.Duration // Timeout for write operations
+	KeepAlive      time.Duration // Keep-alive interval (0 to disable)
+	PingTimeout    time.Duration // Timeout waiting for PINGRESP
 
 	// Session
 	CleanSession    bool   // Start with clean session
@@ -57,11 +57,11 @@ type Options struct {
 	ProtocolVersion byte   // 4 for MQTT 3.1.1, 5 for MQTT 5.0
 
 	// MQTT 5.0 Connect Properties
-	ReceiveMaximum        uint16 // Maximum inflight messages client accepts (0 = use default 65535)
-	MaximumPacketSize     uint32 // Maximum packet size client accepts (0 = no limit)
-	TopicAliasMaximum     uint16 // Maximum topic aliases client accepts (0 = disabled)
-	RequestResponseInfo   bool   // Request server to send response information in CONNACK
-	RequestProblemInfo    bool   // Request detailed error information (default true)
+	ReceiveMaximum      uint16 // Maximum inflight messages client accepts (0 = use default 65535)
+	MaximumPacketSize   uint32 // Maximum packet size client accepts (0 = no limit)
+	TopicAliasMaximum   uint16 // Maximum topic aliases client accepts (0 = disabled)
+	RequestResponseInfo bool   // Request server to send response information in CONNACK
+	RequestProblemInfo  bool   // Request detailed error information (default true)
 
 	// Will
 	Will *WillMessage // Last will and testament
@@ -76,12 +76,12 @@ type Options struct {
 	MaxReconnectWait time.Duration // Maximum reconnect delay
 
 	// Callbacks
-	OnConnect            func()                          // Called on successful connection
-	OnConnectionLost     func(error)                     // Called when connection is lost
-	OnReconnecting       func(attempt int)               // Called before each reconnect attempt
+	OnConnect            func()                                       // Called on successful connection
+	OnConnectionLost     func(error)                                  // Called when connection is lost
+	OnReconnecting       func(attempt int)                            // Called before each reconnect attempt
 	OnMessage            func(topic string, payload []byte, qos byte) // Called for incoming messages (basic)
-	OnMessageV2          func(msg *Message)              // Called for incoming messages (full context, takes precedence over OnMessage)
-	OnServerCapabilities func(*ServerCapabilities)       // Called when server capabilities received (MQTT 5.0)
+	OnMessageV2          func(msg *Message)                           // Called for incoming messages (full context, takes precedence over OnMessage)
+	OnServerCapabilities func(*ServerCapabilities)                    // Called when server capabilities received (MQTT 5.0)
 
 	// Advanced
 	MessageChanSize int          // Size of internal message channel

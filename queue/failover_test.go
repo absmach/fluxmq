@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -510,19 +510,19 @@ func TestFailover_GracefulShutdown(t *testing.T) {
 	}
 
 	// Create replicated queue on all nodes
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: 3,
-			Mode:              queueStorage.ReplicationSync,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Mode:              types.ReplicationSync,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: 2,
 			AckTimeout:        5 * time.Second,
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,

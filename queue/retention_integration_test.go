@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -197,12 +197,12 @@ func TestRetention_TimeBasedReplication(t *testing.T) {
 	oldTime := time.Now().Add(-200 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		for _, store := range stores {
-			msg := &queueStorage.Message{
+			msg := &types.Message{
 				ID:          fmt.Sprintf("old-msg-%d", i),
 				Topic:       queueName,
 				Payload:     []byte("old message"),
 				Sequence:    uint64(i + 1), // Sequences start at 1
-				State:       queueStorage.StateQueued,
+				State:       types.StateQueued,
 				CreatedAt:   oldTime,
 				PartitionID: 0,
 			}
@@ -214,12 +214,12 @@ func TestRetention_TimeBasedReplication(t *testing.T) {
 	// Enqueue new messages on all stores
 	for i := 3; i < 6; i++ {
 		for _, store := range stores {
-			msg := &queueStorage.Message{
+			msg := &types.Message{
 				ID:          fmt.Sprintf("new-msg-%d", i),
 				Topic:       queueName,
 				Payload:     []byte("new message"),
 				Sequence:    uint64(i + 1), // Sequences start at 1
-				State:       queueStorage.StateQueued,
+				State:       types.StateQueued,
 				CreatedAt:   time.Now(),
 				PartitionID: 0,
 			}
@@ -317,28 +317,28 @@ func setupReplicatedTestWithRetention(t *testing.T, nodeCount int, queueName str
 	}
 
 	// Create replicated queue with retention policy
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: nodeCount,
-			Mode:              queueStorage.ReplicationSync,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Mode:              types.ReplicationSync,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: (nodeCount / 2) + 1,
 			AckTimeout:        5 * time.Second,
 			HeartbeatTimeout:  1 * time.Second,
 			ElectionTimeout:   3 * time.Second,
 		},
-		Retention: queueStorage.RetentionPolicy{
+		Retention: types.RetentionPolicy{
 			RetentionMessages: 5,               // Keep max 5 messages
 			SizeCheckEvery:    5,               // Check every 5 enqueues
 			RetentionBytes:    0,               // No byte limit
 			RetentionTime:     0,               // No time limit
 			TimeCheckInterval: 5 * time.Minute, // Not used for size-based
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,
@@ -438,28 +438,28 @@ func setupReplicatedTestWithTimeRetention(t *testing.T, nodeCount int, queueName
 		managers[i] = mgr
 	}
 
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: nodeCount,
-			Mode:              queueStorage.ReplicationSync,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Mode:              types.ReplicationSync,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: (nodeCount / 2) + 1,
 			AckTimeout:        5 * time.Second,
 			HeartbeatTimeout:  1 * time.Second,
 			ElectionTimeout:   3 * time.Second,
 		},
-		Retention: queueStorage.RetentionPolicy{
+		Retention: types.RetentionPolicy{
 			RetentionMessages: 0,                      // No message limit
 			SizeCheckEvery:    100,                    // Not used for time-based
 			RetentionBytes:    0,                      // No byte limit
 			RetentionTime:     100 * time.Millisecond, // Messages older than 100ms are deleted
 			TimeCheckInterval: 50 * time.Millisecond,  // Check every 50ms
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,
@@ -537,12 +537,12 @@ func TestCompaction_ReplicationBasic(t *testing.T) {
 	oldTime := time.Now().Add(-time.Hour) // Old enough to be compacted
 	for i := 0; i < 3; i++ {
 		for _, store := range stores {
-			msg := &queueStorage.Message{
+			msg := &types.Message{
 				ID:          fmt.Sprintf("entity-a-msg-%d", i),
 				Topic:       queueName,
 				Payload:     []byte(fmt.Sprintf("entity A update %d", i)),
 				Sequence:    uint64(i + 1),
-				State:       queueStorage.StateQueued,
+				State:       types.StateQueued,
 				CreatedAt:   oldTime,
 				PartitionID: 0,
 				Properties: map[string]string{
@@ -557,12 +557,12 @@ func TestCompaction_ReplicationBasic(t *testing.T) {
 	// Entity B: 2 messages
 	for i := 3; i < 5; i++ {
 		for _, store := range stores {
-			msg := &queueStorage.Message{
+			msg := &types.Message{
 				ID:          fmt.Sprintf("entity-b-msg-%d", i),
 				Topic:       queueName,
 				Payload:     []byte(fmt.Sprintf("entity B update %d", i-3)),
 				Sequence:    uint64(i + 1),
-				State:       queueStorage.StateQueued,
+				State:       types.StateQueued,
 				CreatedAt:   oldTime,
 				PartitionID: 0,
 				Properties: map[string]string{
@@ -585,7 +585,7 @@ func TestCompaction_ReplicationBasic(t *testing.T) {
 	retentionMgr := leaderMgr.retentionManagers[queueName]
 	require.NotNil(t, retentionMgr, "retention manager not found")
 
-	stats, err := retentionMgr.runCompaction(ctx, 0)
+	stats, err := retentionMgr.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 
 	// Should delete 3 messages (2 from entity-A, 1 from entity-B)
@@ -648,12 +648,12 @@ func TestCompaction_LeaderOnly(t *testing.T) {
 	oldTime := time.Now().Add(-time.Hour)
 	for i := 0; i < 3; i++ {
 		for _, store := range stores {
-			msg := &queueStorage.Message{
+			msg := &types.Message{
 				ID:          fmt.Sprintf("msg-%d", i),
 				Topic:       queueName,
 				Payload:     []byte("message"),
 				Sequence:    uint64(i + 1),
-				State:       queueStorage.StateQueued,
+				State:       types.StateQueued,
 				CreatedAt:   oldTime,
 				PartitionID: 0,
 				Properties: map[string]string{
@@ -676,7 +676,7 @@ func TestCompaction_LeaderOnly(t *testing.T) {
 	followerRetentionMgr := followerMgrs[0].retentionManagers[queueName]
 	require.NotNil(t, followerRetentionMgr)
 
-	stats, err := followerRetentionMgr.runCompaction(ctx, 0)
+	stats, err := followerRetentionMgr.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), stats.MessagesDeleted, "follower should not compact messages")
 
@@ -689,7 +689,7 @@ func TestCompaction_LeaderOnly(t *testing.T) {
 
 	// Now run compaction on leader
 	leaderRetentionMgr := leaderMgr.retentionManagers[queueName]
-	stats, err = leaderRetentionMgr.runCompaction(ctx, 0)
+	stats, err = leaderRetentionMgr.RunCompaction(ctx, 0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), stats.MessagesDeleted, "leader should compact 2 messages")
 
@@ -752,27 +752,27 @@ func setupReplicatedTestWithCompaction(t *testing.T, nodeCount int, queueName st
 		managers[i] = mgr
 	}
 
-	queueConfig := queueStorage.QueueConfig{
+	queueConfig := types.QueueConfig{
 		Name:       queueName,
 		Partitions: partitions,
-		Ordering:   queueStorage.OrderingPartition,
-		Replication: queueStorage.ReplicationConfig{
+		Ordering:   types.OrderingPartition,
+		Replication: types.ReplicationConfig{
 			Enabled:           true,
 			ReplicationFactor: nodeCount,
-			Mode:              queueStorage.ReplicationSync,
-			Placement:         queueStorage.PlacementRoundRobin,
+			Mode:              types.ReplicationSync,
+			Placement:         types.PlacementRoundRobin,
 			MinInSyncReplicas: (nodeCount / 2) + 1,
 			AckTimeout:        5 * time.Second,
 			HeartbeatTimeout:  1 * time.Second,
 			ElectionTimeout:   3 * time.Second,
 		},
-		Retention: queueStorage.RetentionPolicy{
+		Retention: types.RetentionPolicy{
 			CompactionEnabled:  true,
 			CompactionKey:      "entity_id",
 			CompactionLag:      0, // No lag for testing
 			CompactionInterval: 10 * time.Minute,
 		},
-		RetryPolicy: queueStorage.RetryPolicy{
+		RetryPolicy: types.RetryPolicy{
 			MaxRetries:        3,
 			InitialBackoff:    100 * time.Millisecond,
 			MaxBackoff:        1 * time.Second,

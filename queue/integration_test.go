@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/queue/delivery"
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +35,7 @@ func TestIntegration_CompleteMessageLifecycle(t *testing.T) {
 
 	// Create queue
 	queueName := "$queue/lifecycle-test"
-	err = mgr.CreateQueue(ctx, queueStorage.DefaultQueueConfig(queueName))
+	err = mgr.CreateQueue(ctx, types.DefaultQueueConfig(queueName))
 	require.NoError(t, err)
 
 	// Subscribe consumer
@@ -94,7 +94,7 @@ func TestIntegration_RetryFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create queue with retry policy
-	config := queueStorage.DefaultQueueConfig("$queue/retry-test")
+	config := types.DefaultQueueConfig("$queue/retry-test")
 	config.RetryPolicy.MaxRetries = 3
 	config.RetryPolicy.InitialBackoff = 100 * time.Millisecond
 	err = mgr.CreateQueue(ctx, config)
@@ -137,7 +137,7 @@ func TestIntegration_RetryFlow(t *testing.T) {
 	// Verify message state changed to retry
 	msg, err := store.GetMessage(ctx, "$queue/retry-test", msgID)
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateRetry, msg.State)
+	assert.Equal(t, types.StateRetry, msg.State)
 	assert.Equal(t, 1, msg.RetryCount)
 	assert.False(t, msg.NextRetryAt.IsZero())
 
@@ -162,7 +162,7 @@ func TestIntegration_DLQFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create queue with DLQ enabled
-	config := queueStorage.DefaultQueueConfig("$queue/dlq-test")
+	config := types.DefaultQueueConfig("$queue/dlq-test")
 	config.DLQConfig.Enabled = true
 	config.DLQConfig.Topic = "$queue/dlq-test-dlq"
 	err = mgr.CreateQueue(ctx, config)
@@ -221,7 +221,7 @@ func TestIntegration_MultipleConsumersWithRebalancing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create queue with multiple partitions
-	config := queueStorage.DefaultQueueConfig("$queue/rebalance-test")
+	config := types.DefaultQueueConfig("$queue/rebalance-test")
 	config.Partitions = 6
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -287,9 +287,9 @@ func TestIntegration_OrderingGuarantees(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create queue with strict ordering
-	config := queueStorage.DefaultQueueConfig("$queue/ordering-test")
+	config := types.DefaultQueueConfig("$queue/ordering-test")
 	config.Partitions = 1
-	config.Ordering = queueStorage.OrderingStrict
+	config.Ordering = types.OrderingStrict
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -350,7 +350,7 @@ func TestIntegration_ConcurrentOperations(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig("$queue/concurrent-test")
+	config := types.DefaultQueueConfig("$queue/concurrent-test")
 	config.Partitions = 4
 	config.BatchSize = 1 // Use small batch size to avoid race conditions in concurrent test
 	err = mgr.CreateQueue(ctx, config)
@@ -436,7 +436,7 @@ func TestIntegration_StatsCollection(t *testing.T) {
 
 	// Create queue
 	queueName := "$queue/stats-test"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.Partitions = 5
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -480,7 +480,7 @@ func TestIntegration_MultipleGroups_IndependentConsumption(t *testing.T) {
 
 	// Create queue
 	queueName := "$queue/multi-group-test"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	config.Partitions = 2
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)

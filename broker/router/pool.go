@@ -9,7 +9,7 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
-// Pool for subscription slices to reduce allocations in Match()
+// Pool for subscription slices to reduce allocations in Match().
 var subscriptionSlicePool = sync.Pool{
 	New: func() interface{} {
 		// Pre-allocate with reasonable capacity for most use cases

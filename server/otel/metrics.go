@@ -26,10 +26,10 @@ type Metrics struct {
 	errorsTotal         metric.Int64Counter
 
 	// UpDownCounters (Gauges)
-	connectionsCurrent   metric.Int64UpDownCounter
-	subscriptionsActive  metric.Int64UpDownCounter
-	retainedMessages     metric.Int64UpDownCounter
-	sessionsActive       metric.Int64UpDownCounter
+	connectionsCurrent  metric.Int64UpDownCounter
+	subscriptionsActive metric.Int64UpDownCounter
+	retainedMessages    metric.Int64UpDownCounter
+	sessionsActive      metric.Int64UpDownCounter
 
 	// Histograms
 	messageSize      metric.Int64Histogram

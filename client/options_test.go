@@ -46,9 +46,9 @@ func TestOptionsBuilder(t *testing.T) {
 		SetCredentials("user", "pass").
 		SetTLSConfig(tlsConfig).
 		SetCleanSession(false).
-		SetKeepAlive(30 * time.Second).
-		SetConnectTimeout(5 * time.Second).
-		SetAckTimeout(20 * time.Second).
+		SetKeepAlive(30*time.Second).
+		SetConnectTimeout(5*time.Second).
+		SetAckTimeout(20*time.Second).
 		SetProtocolVersion(5).
 		SetWill("will/topic", []byte("goodbye"), 1, true).
 		SetAutoReconnect(false).

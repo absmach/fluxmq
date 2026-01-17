@@ -10,6 +10,7 @@ import (
 
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory/lockfree"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // PersistentStore combines all storage interfaces for the persistent layer.
@@ -27,7 +28,7 @@ type PersistentStore interface {
 // - Overflow: BadgerDB when ring buffers are full
 // - Persistence: All messages written to BadgerDB for durability
 // - Recovery: Load recent messages from BadgerDB on startup
-// - Metadata: Inflight, DLQ, consumers stored in BadgerDB
+// - Metadata: Inflight, DLQ, consumers stored in BadgerDB.
 type Store struct {
 	// Hot path: lock-free ring buffers
 	lockfree *lockfree.Store
@@ -43,7 +44,7 @@ type Store struct {
 	mu      sync.RWMutex
 
 	// Async batch persistence
-	batchBuffer []*storage.Message
+	batchBuffer []*types.Message
 	batchMu     sync.Mutex
 	flushTicker *time.Ticker
 	stopCh      chan struct{}
@@ -121,7 +122,7 @@ func NewWithConfig(persistent PersistentStore, cfg Config) *Store {
 		lockfree:    lockfree.NewWithConfig(lockfreeConfig),
 		persistent:  persistent,
 		config:      cfg,
-		batchBuffer: make([]*storage.Message, 0, cfg.PersistBatchSize),
+		batchBuffer: make([]*types.Message, 0, cfg.PersistBatchSize),
 		stopCh:      make(chan struct{}),
 	}
 
@@ -140,7 +141,7 @@ func NewWithConfig(persistent PersistentStore, cfg Config) *Store {
 }
 
 // CreateQueue creates a new queue in both stores.
-func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	// Create in persistent store first (source of truth)
 	if err := s.persistent.CreateQueue(ctx, config); err != nil {
 		return err
@@ -157,12 +158,12 @@ func (s *Store) CreateQueue(ctx context.Context, config storage.QueueConfig) err
 }
 
 // GetQueue retrieves queue configuration from persistent store.
-func (s *Store) GetQueue(ctx context.Context, queueName string) (*storage.QueueConfig, error) {
+func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
 	return s.persistent.GetQueue(ctx, queueName)
 }
 
 // UpdateQueue updates queue configuration in both stores.
-func (s *Store) UpdateQueue(ctx context.Context, config storage.QueueConfig) error {
+func (s *Store) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := s.persistent.UpdateQueue(ctx, config); err != nil {
 		return err
 	}
@@ -176,7 +177,7 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 }
 
 // ListQueues lists queues from persistent store.
-func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
+func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	return s.persistent.ListQueues(ctx)
 }
 
@@ -184,8 +185,8 @@ func (s *Store) ListQueues(ctx context.Context) ([]storage.QueueConfig, error) {
 // 1. Validate queue exists
 // 2. Persist to BadgerDB (async batch if enabled, sync otherwise)
 // 3. Try lock-free ring buffer (best effort hot path)
-// 4. Track metrics for hit/miss rate
-func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Message) error {
+// 4. Track metrics for hit/miss rate.
+func (s *Store) Enqueue(ctx context.Context, queueName string, msg *types.Message) error {
 	// Validate queue exists
 	_, err := s.GetQueue(ctx, queueName)
 	if err != nil {
@@ -193,7 +194,7 @@ func (s *Store) Enqueue(ctx context.Context, queueName string, msg *storage.Mess
 	}
 
 	// Make a deep copy for storage (original might be reused by caller)
-	msgCopy := &storage.Message{
+	msgCopy := &types.Message{
 		ID:           msg.ID,
 		Payload:      make([]byte, len(msg.Payload)),
 		Topic:        msg.Topic,
@@ -262,8 +263,8 @@ func (s *Store) Count(ctx context.Context, queueName string) (int64, error) {
 // 1. Validate queue exists
 // 2. Try lock-free ring buffer first (hot path)
 // 3. Mark as delivered in BadgerDB to avoid duplicates
-// 4. If ring buffer empty, read from BadgerDB (cold path)
-func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*storage.Message, error) {
+// 4. If ring buffer empty, read from BadgerDB (cold path).
+func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) (*types.Message, error) {
 	// Validate queue exists
 	_, err := s.GetQueue(ctx, queueName)
 	if err != nil {
@@ -274,7 +275,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	msg, err := s.lockfree.Dequeue(ctx, queueName, partitionID)
 	if err == nil && msg != nil {
 		// Ring buffer hit - mark as delivered in BadgerDB to avoid returning it again
-		msg.State = storage.StateDelivered
+		msg.State = types.StateDelivered
 		s.persistent.UpdateMessage(ctx, queueName, msg)
 
 		if s.metrics != nil {
@@ -293,7 +294,7 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 	}
 
 	// Mark as delivered to avoid returning it again
-	msg.State = storage.StateDelivered
+	msg.State = types.StateDelivered
 	s.persistent.UpdateMessage(ctx, queueName, msg)
 
 	if s.metrics != nil {
@@ -313,9 +314,9 @@ func (s *Store) Dequeue(ctx context.Context, queueName string, partitionID int) 
 // 1. Drain lock-free ring buffer first
 // 2. Mark ring buffer messages as delivered in BadgerDB
 // 3. If needed, fetch remaining from BadgerDB
-// 4. Combine results
-func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
-	var messages []*storage.Message
+// 4. Combine results.
+func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID int, limit int) ([]*types.Message, error) {
+	var messages []*types.Message
 
 	// Drain lock-free ring buffer first (hot path)
 	ringMessages, err := s.lockfree.DequeueBatch(ctx, queueName, partitionID, limit)
@@ -324,7 +325,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 
 		// Mark ring buffer messages as delivered in BadgerDB
 		for _, msg := range ringMessages {
-			msg.State = storage.StateDelivered
+			msg.State = types.StateDelivered
 			s.persistent.UpdateMessage(ctx, queueName, msg)
 		}
 
@@ -357,7 +358,7 @@ func (s *Store) DequeueBatch(ctx context.Context, queueName string, partitionID 
 
 		// Mark BadgerDB messages as delivered
 		for _, msg := range diskMessages {
-			msg.State = storage.StateDelivered
+			msg.State = types.StateDelivered
 			s.persistent.UpdateMessage(ctx, queueName, msg)
 		}
 
@@ -382,7 +383,7 @@ func (s *Store) GetNextSequence(ctx context.Context, queueName string, partition
 
 // All metadata operations delegate to persistent store
 
-func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *storage.Message) error {
+func (s *Store) UpdateMessage(ctx context.Context, queueName string, msg *types.Message) error {
 	return s.persistent.UpdateMessage(ctx, queueName, msg)
 }
 
@@ -390,19 +391,19 @@ func (s *Store) DeleteMessage(ctx context.Context, queueName string, messageID s
 	return s.persistent.DeleteMessage(ctx, queueName, messageID)
 }
 
-func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*storage.Message, error) {
+func (s *Store) GetMessage(ctx context.Context, queueName string, messageID string) (*types.Message, error) {
 	return s.persistent.GetMessage(ctx, queueName, messageID)
 }
 
-func (s *Store) MarkInflight(ctx context.Context, state *storage.DeliveryState) error {
+func (s *Store) MarkInflight(ctx context.Context, state *types.DeliveryState) error {
 	return s.persistent.MarkInflight(ctx, state)
 }
 
-func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*storage.DeliveryState, error) {
+func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*types.DeliveryState, error) {
 	return s.persistent.GetInflight(ctx, queueName)
 }
 
-func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*storage.DeliveryState, error) {
+func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error) {
 	return s.persistent.GetInflightMessage(ctx, queueName, messageID)
 }
 
@@ -410,11 +411,11 @@ func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string)
 	return s.persistent.RemoveInflight(ctx, queueName, messageID)
 }
 
-func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *storage.Message) error {
+func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *types.Message) error {
 	return s.persistent.EnqueueDLQ(ctx, dlqTopic, msg)
 }
 
-func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*storage.Message, error) {
+func (s *Store) ListDLQ(ctx context.Context, dlqTopic string, limit int) ([]*types.Message, error) {
 	return s.persistent.ListDLQ(ctx, dlqTopic, limit)
 }
 
@@ -422,7 +423,7 @@ func (s *Store) DeleteDLQMessage(ctx context.Context, dlqTopic, messageID string
 	return s.persistent.DeleteDLQMessage(ctx, dlqTopic, messageID)
 }
 
-func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*storage.Message, error) {
+func (s *Store) ListRetry(ctx context.Context, queueName string, partitionID int) ([]*types.Message, error) {
 	return s.persistent.ListRetry(ctx, queueName, partitionID)
 }
 
@@ -434,11 +435,11 @@ func (s *Store) GetOffset(ctx context.Context, queueName string, partitionID int
 	return s.persistent.GetOffset(ctx, queueName, partitionID)
 }
 
-func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*storage.Message, error) {
+func (s *Store) ListQueued(ctx context.Context, queueName string, partitionID int, limit int) ([]*types.Message, error) {
 	return s.persistent.ListQueued(ctx, queueName, partitionID, limit)
 }
 
-func (s *Store) RegisterConsumer(ctx context.Context, consumer *storage.Consumer) error {
+func (s *Store) RegisterConsumer(ctx context.Context, consumer *types.Consumer) error {
 	return s.persistent.RegisterConsumer(ctx, consumer)
 }
 
@@ -446,11 +447,11 @@ func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, cons
 	return s.persistent.UnregisterConsumer(ctx, queueName, groupID, consumerID)
 }
 
-func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID string) (*storage.Consumer, error) {
+func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID string) (*types.Consumer, error) {
 	return s.persistent.GetConsumer(ctx, queueName, groupID, consumerID)
 }
 
-func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*storage.Consumer, error) {
+func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.Consumer, error) {
 	return s.persistent.ListConsumers(ctx, queueName, groupID)
 }
 
@@ -535,7 +536,7 @@ func (s *Store) flushBatch() {
 
 	// Swap buffer (minimize lock time)
 	batch := s.batchBuffer
-	s.batchBuffer = make([]*storage.Message, 0, s.config.PersistBatchSize)
+	s.batchBuffer = make([]*types.Message, 0, s.config.PersistBatchSize)
 	s.batchMu.Unlock()
 
 	// Write batch to BadgerDB (cross-partition batching)

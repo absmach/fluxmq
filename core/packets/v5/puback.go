@@ -115,7 +115,7 @@ func (pkt *PubAck) Unpack(r io.Reader) error {
 	return nil
 }
 
-// Reason returns a string representation of the meaning of the ReasonCode
+// Reason returns a string representation of the meaning of the ReasonCode.
 func (p *PubAck) Reason() string {
 	switch *p.ReasonCode {
 	case 0:

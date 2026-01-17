@@ -72,8 +72,8 @@ func TestRefCountedBuffer_SizeClasses(t *testing.T) {
 	pool := NewBufferPool()
 
 	testCases := []struct {
-		name string
-		size int
+		name        string
+		size        int
 		expectedCap int
 	}{
 		{"small", 512, 1024},

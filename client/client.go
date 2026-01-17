@@ -218,7 +218,6 @@ func (c *Client) sendConnect(conn net.Conn) error {
 				c.opts.Will.MessageExpiry > 0 || c.opts.Will.ContentType != "" ||
 				c.opts.Will.ResponseTopic != "" || len(c.opts.Will.CorrelationData) > 0 ||
 				len(c.opts.Will.UserProperties) > 0 {
-
 				pkt.WillProperties = &v5.WillProperties{}
 
 				if c.opts.Will.WillDelayInterval > 0 {

@@ -7,7 +7,7 @@ import (
 	"context"
 
 	"github.com/absmach/fluxmq/queue/consumer"
-	queueStorage "github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // DeliverFn defines the function signature for delivering messages to clients.
@@ -26,7 +26,7 @@ const (
 // QueueSource abstract the queue source to avoid circular dependency.
 type QueueSource interface {
 	Name() string
-	Config() queueStorage.QueueConfig
+	Config() types.QueueConfig
 	OrderingEnforcer() OrderingEnforcer
 	ConsumerGroups() *consumer.GroupManager
 }
@@ -34,8 +34,8 @@ type QueueSource interface {
 // OrderingEnforcer abstracts the ordering enforcement logic.
 // Group-aware: each consumer group tracks its own ordering independently.
 type OrderingEnforcer interface {
-	CanDeliver(msg *queueStorage.Message, groupID string) (bool, error)
-	MarkDelivered(msg *queueStorage.Message, groupID string)
+	CanDeliver(msg *types.Message, groupID string) (bool, error)
+	MarkDelivered(msg *types.Message, groupID string)
 }
 
 // RaftManager abstracts the Raft consensus manager.

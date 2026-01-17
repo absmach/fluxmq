@@ -14,13 +14,14 @@ import (
 
 	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/queue/types"
 	raftlib "github.com/hashicorp/raft"
 )
 
 // RaftManager manages Raft groups for all partitions of a queue.
 type RaftManager struct {
 	queueName    string
-	config       storage.ReplicationConfig
+	config       types.ReplicationConfig
 	nodeID       string
 	dataDir      string
 	messageStore storage.MessageStore
@@ -40,7 +41,7 @@ type RaftManager struct {
 // RaftManagerConfig contains configuration for creating a RaftManager.
 type RaftManagerConfig struct {
 	QueueName     string
-	Config        storage.ReplicationConfig
+	Config        types.ReplicationConfig
 	NodeID        string
 	DataDir       string
 	MessageStore  storage.MessageStore
@@ -61,9 +62,9 @@ func NewRaftManager(cfg RaftManagerConfig) (*RaftManager, error) {
 	// Create placement strategy
 	var placement PlacementStrategy
 	switch cfg.Config.Placement {
-	case storage.PlacementRoundRobin:
+	case types.PlacementRoundRobin:
 		placement = NewRoundRobinPlacement(cfg.NodeAddresses)
-	case storage.PlacementManual:
+	case types.PlacementManual:
 		placement = NewManualPlacement(cfg.Config.ManualReplicas)
 	default:
 		return nil, fmt.Errorf("unknown placement strategy: %s", cfg.Config.Placement)
@@ -103,7 +104,7 @@ func (rm *RaftManager) StartPartition(ctx context.Context, partitionID int, part
 		NodeID:      rm.nodeID,
 		BindAddr:    rm.getPartitionBindAddress(rm.nodeID, partitionID),
 		DataDir:     filepath.Join(rm.dataDir, rm.queueName),
-		SyncMode:    rm.config.Mode == storage.ReplicationSync,
+		SyncMode:    rm.config.Mode == types.ReplicationSync,
 		AckTimeout:  rm.config.AckTimeout,
 
 		HeartbeatTimeout:  rm.config.HeartbeatTimeout,
@@ -242,7 +243,7 @@ func (rm *RaftManager) IsLeader(partitionID int) bool {
 }
 
 // ApplyEnqueue replicates an enqueue operation via Raft.
-func (rm *RaftManager) ApplyEnqueue(ctx context.Context, partitionID int, msg *storage.Message) error {
+func (rm *RaftManager) ApplyEnqueue(ctx context.Context, partitionID int, msg *types.Message) error {
 	group, err := rm.GetPartitionGroup(partitionID)
 	if err != nil {
 		return err

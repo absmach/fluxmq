@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// Publish packet pool to reduce allocations during message delivery
+// Publish packet pool to reduce allocations during message delivery.
 var publishPool = sync.Pool{
 	New: func() interface{} {
 		return &Publish{}

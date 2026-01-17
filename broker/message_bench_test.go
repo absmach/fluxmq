@@ -15,7 +15,7 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
-// BenchmarkMessagePublish_SingleSubscriber benchmarks publishing a message to a single subscriber
+// BenchmarkMessagePublish_SingleSubscriber benchmarks publishing a message to a single subscriber.
 func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 	sizes := []int{
 		100,   // Small message
@@ -53,7 +53,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_MultipleSubscribers benchmarks publishing to multiple subscribers
+// BenchmarkMessagePublish_MultipleSubscribers benchmarks publishing to multiple subscribers.
 func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 	subscriberCounts := []int{1, 10, 100, 1000}
 
@@ -88,7 +88,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_QoS1 benchmarks QoS 1 message publishing
+// BenchmarkMessagePublish_QoS1 benchmarks QoS 1 message publishing.
 func BenchmarkMessagePublish_QoS1(b *testing.B) {
 	broker := createBenchBroker(b)
 	defer broker.Close()
@@ -113,7 +113,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_QoS2 benchmarks QoS 2 message publishing
+// BenchmarkMessagePublish_QoS2 benchmarks QoS 2 message publishing.
 func BenchmarkMessagePublish_QoS2(b *testing.B) {
 	broker := createBenchBroker(b)
 	defer broker.Close()
@@ -138,7 +138,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_SharedSubscription benchmarks shared subscription routing
+// BenchmarkMessagePublish_SharedSubscription benchmarks shared subscription routing.
 func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 	subscriberCounts := []int{2, 5, 10}
 
@@ -173,7 +173,7 @@ func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_MixedSizes benchmarks realistic mixed message sizes
+// BenchmarkMessagePublish_MixedSizes benchmarks realistic mixed message sizes.
 func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 	broker := createBenchBroker(b)
 	defer broker.Close()
@@ -214,7 +214,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_FanOut benchmarks 1:N fanout pattern
+// BenchmarkMessagePublish_FanOut benchmarks 1:N fanout pattern.
 func BenchmarkMessagePublish_FanOut(b *testing.B) {
 	fanoutSizes := []int{10, 100, 500, 1000}
 
@@ -249,7 +249,7 @@ func BenchmarkMessagePublish_FanOut(b *testing.B) {
 	}
 }
 
-// BenchmarkMessagePublish_TopicVariety benchmarks with different topics
+// BenchmarkMessagePublish_TopicVariety benchmarks with different topics.
 func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 	broker := createBenchBroker(b)
 	defer broker.Close()
@@ -289,7 +289,7 @@ func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 	}
 }
 
-// BenchmarkMessageDistribute benchmarks the distribute function directly
+// BenchmarkMessageDistribute benchmarks the distribute function directly.
 func BenchmarkMessageDistribute(b *testing.B) {
 	broker := createBenchBroker(b)
 	defer broker.Close()
@@ -318,7 +318,7 @@ func BenchmarkMessageDistribute(b *testing.B) {
 	}
 }
 
-// BenchmarkBufferPooling benchmarks the buffer pool performance
+// BenchmarkBufferPooling benchmarks the buffer pool performance.
 func BenchmarkBufferPooling(b *testing.B) {
 	pool := core.NewBufferPool()
 	payload := make([]byte, 1024)
@@ -331,7 +331,7 @@ func BenchmarkBufferPooling(b *testing.B) {
 	}
 }
 
-// BenchmarkBufferPooling_Parallel benchmarks parallel buffer pool usage
+// BenchmarkBufferPooling_Parallel benchmarks parallel buffer pool usage.
 func BenchmarkBufferPooling_Parallel(b *testing.B) {
 	pool := core.NewBufferPool()
 	payload := make([]byte, 1024)
@@ -347,7 +347,7 @@ func BenchmarkBufferPooling_Parallel(b *testing.B) {
 	})
 }
 
-// BenchmarkMessageCopy_Legacy simulates the old copy-based approach
+// BenchmarkMessageCopy_Legacy simulates the old copy-based approach.
 func BenchmarkMessageCopy_Legacy(b *testing.B) {
 	sizes := []int{100, 1024, 10240, 65536}
 
@@ -378,7 +378,7 @@ func BenchmarkMessageCopy_Legacy(b *testing.B) {
 	}
 }
 
-// BenchmarkMessageCopy_ZeroCopy benchmarks the new zero-copy approach
+// BenchmarkMessageCopy_ZeroCopy benchmarks the new zero-copy approach.
 func BenchmarkMessageCopy_ZeroCopy(b *testing.B) {
 	sizes := []int{100, 1024, 10240, 65536}
 
@@ -439,13 +439,13 @@ func createBenchSession(tb testing.TB, broker *Broker, clientID string) *session
 	return s
 }
 
-// benchAddr implements net.Addr for benchmarks
+// benchAddr implements net.Addr for benchmarks.
 type benchAddr struct{}
 
 func (b *benchAddr) Network() string { return "tcp" }
 func (b *benchAddr) String() string  { return "127.0.0.1:1883" }
 
-// mockBenchConn is a minimal mock connection for benchmarks
+// mockBenchConn is a minimal mock connection for benchmarks.
 type mockBenchConn struct {
 	net.Conn
 	clientID string

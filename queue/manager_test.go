@@ -13,12 +13,13 @@ import (
 	"github.com/absmach/fluxmq/cluster/grpc"
 	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/storage/memory"
+	"github.com/absmach/fluxmq/queue/types"
 	brokerStorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockBroker implements BrokerInterface for testing
+// MockBroker implements BrokerInterface for testing.
 type MockBroker struct {
 	mu         sync.Mutex
 	deliveries map[string][]interface{}
@@ -101,7 +102,7 @@ func TestManager_CreateQueue(t *testing.T) {
 	mgr, err := NewManager(cfg)
 	require.NoError(t, err)
 
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -125,7 +126,7 @@ func TestManager_CreateQueue_Duplicate(t *testing.T) {
 	mgr, err := NewManager(cfg)
 	require.NoError(t, err)
 
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -148,7 +149,7 @@ func TestManager_CreateQueue_InvalidConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	// Invalid config (empty name)
-	config := queueStorage.QueueConfig{
+	config := types.QueueConfig{
 		Name: "",
 	}
 	err = mgr.CreateQueue(ctx, config)
@@ -174,7 +175,7 @@ func TestManager_GetQueue(t *testing.T) {
 	assert.Nil(t, queue)
 
 	// Create and get queue
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -389,7 +390,7 @@ func TestManager_Ack(t *testing.T) {
 	msg := messages[0]
 
 	// Mark as inflight
-	deliveryState := &queueStorage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: partitionID,
@@ -440,7 +441,7 @@ func TestManager_Nack(t *testing.T) {
 	msg := messages[0]
 
 	// Mark as inflight
-	deliveryState := &queueStorage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: partitionID,
@@ -458,7 +459,7 @@ func TestManager_Nack(t *testing.T) {
 	// Verify message state changed to retry
 	retrieved, err := store.GetMessage(ctx, queue.Name(), msg.ID)
 	require.NoError(t, err)
-	assert.Equal(t, queueStorage.StateRetry, retrieved.State)
+	assert.Equal(t, types.StateRetry, retrieved.State)
 	assert.Equal(t, 1, retrieved.RetryCount)
 }
 
@@ -476,7 +477,7 @@ func TestManager_Reject(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create queue with DLQ enabled
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	config.DLQConfig.Enabled = true
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
@@ -494,7 +495,7 @@ func TestManager_Reject(t *testing.T) {
 	msg := messages[0]
 
 	// Mark as inflight
-	deliveryState := &queueStorage.DeliveryState{
+	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: partitionID,
@@ -535,7 +536,7 @@ func TestManager_GetStats(t *testing.T) {
 	mgr, err := NewManager(cfg)
 	require.NoError(t, err)
 
-	config := queueStorage.DefaultQueueConfig("$queue/test")
+	config := types.DefaultQueueConfig("$queue/test")
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -558,7 +559,7 @@ func TestManager_GetStats(t *testing.T) {
 	assert.GreaterOrEqual(t, stats.TotalMessages, int64(5))
 }
 
-// MockCluster implements cluster.Cluster for testing
+// MockCluster implements cluster.Cluster for testing.
 type MockCluster struct {
 	nodeID             string
 	nodes              []string // List of node IDs in the cluster
@@ -664,7 +665,7 @@ func (m *MockCluster) SetPartitionOwner(queueName string, partitionID int, nodeI
 	m.partitionOwners[queueName][partitionID] = nodeID
 }
 
-// Stub methods for cluster.Cluster interface
+// Stub methods for cluster.Cluster interface.
 func (m *MockCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error { return nil }
 func (m *MockCluster) ReleaseSession(ctx context.Context, clientID string) error         { return nil }
 func (m *MockCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
@@ -757,7 +758,7 @@ func TestManager_EnqueueRemote(t *testing.T) {
 	queueName := "$queue/test"
 
 	// Create queue
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -806,7 +807,7 @@ func TestManager_EnqueueRemote_NoCluster(t *testing.T) {
 	require.NoError(t, err)
 
 	queueName := "$queue/test"
-	config := queueStorage.DefaultQueueConfig(queueName)
+	config := types.DefaultQueueConfig(queueName)
 	err = mgr.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
