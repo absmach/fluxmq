@@ -35,9 +35,13 @@ type QueueManager interface {
 	Enqueue(ctx context.Context, queueTopic string, payload []byte, properties map[string]string) error
 	Subscribe(ctx context.Context, queueTopic, clientID, groupID, proxyNodeID string) error
 	Unsubscribe(ctx context.Context, queueTopic, clientID, groupID string) error
-	Ack(ctx context.Context, queueTopic, messageID string) error
-	Nack(ctx context.Context, queueTopic, messageID string) error
-	Reject(ctx context.Context, queueTopic, messageID string, reason string) error
+	// Ack acknowledges successful processing of a message by a consumer group.
+	// groupID is required for fan-out support - each group acknowledges independently.
+	Ack(ctx context.Context, queueTopic, messageID, groupID string) error
+	// Nack negatively acknowledges a message for a consumer group (triggers retry).
+	Nack(ctx context.Context, queueTopic, messageID, groupID string) error
+	// Reject permanently rejects a message by a consumer group (move to DLQ).
+	Reject(ctx context.Context, queueTopic, messageID, groupID, reason string) error
 	// UpdateHeartbeat updates the heartbeat timestamp for a consumer across all queues/groups.
 	// This should be called when a PINGREQ is received from a client.
 	UpdateHeartbeat(ctx context.Context, clientID string) error

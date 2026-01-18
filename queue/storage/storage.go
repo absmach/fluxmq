@@ -39,11 +39,12 @@ type MessageStore interface {
 	DeleteMessage(ctx context.Context, queueName string, messageID string) error
 	GetMessage(ctx context.Context, queueName string, messageID string) (*types.Message, error)
 
-	// Inflight tracking
+	// Inflight tracking (group-aware for fan-out support)
 	MarkInflight(ctx context.Context, state *types.DeliveryState) error
 	GetInflight(ctx context.Context, queueName string) ([]*types.DeliveryState, error)
-	GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error)
-	RemoveInflight(ctx context.Context, queueName, messageID string) error
+	GetInflightMessage(ctx context.Context, queueName, messageID, groupID string) (*types.DeliveryState, error)
+	GetInflightForMessage(ctx context.Context, queueName, messageID string) ([]*types.DeliveryState, error)
+	RemoveInflight(ctx context.Context, queueName, messageID, groupID string) error
 
 	// DLQ operations
 	EnqueueDLQ(ctx context.Context, dlqTopic string, msg *types.Message) error

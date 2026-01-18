@@ -212,11 +212,12 @@ func (pw *PartitionWorker) deliverMessage(
 		}
 	}
 
-	// Mark as inflight
+	// Mark as inflight (group-aware for fan-out support)
 	deliveryState := &types.DeliveryState{
 		MessageID:   msg.ID,
 		QueueName:   pw.queueName,
 		PartitionID: pw.partitionID,
+		GroupID:     consumer.GroupID,
 		ConsumerID:  consumer.ID,
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(config.DeliveryTimeout),

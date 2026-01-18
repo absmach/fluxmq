@@ -125,6 +125,11 @@ func (q *Queue) RemoveConsumer(ctx context.Context, groupID, consumerID string) 
 		return q.consumerGroups.Rebalance(group.ID(), q.toConsumerPartitions())
 	}
 
+	// Group was removed (became empty) - clean up ordering enforcer state
+	if q.orderingEnforcer != nil {
+		q.orderingEnforcer.ResetGroup(groupID)
+	}
+
 	return nil
 }
 

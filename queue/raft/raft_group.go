@@ -338,7 +338,15 @@ func (rg *RaftGroup) Shutdown() error {
 func (rg *RaftGroup) monitorLeadership() {
 	for {
 		select {
-		case isLeader := <-rg.raft.LeaderCh():
+		case isLeader, ok := <-rg.raft.LeaderCh():
+			if !ok {
+				// Channel closed, Raft is shutting down
+				rg.logger.Debug("leadership monitor exiting (channel closed)",
+					slog.String("queue", rg.queueName),
+					slog.Int("partition", rg.partitionID))
+				return
+			}
+
 			rg.isLeader.Store(isLeader)
 
 			if isLeader {

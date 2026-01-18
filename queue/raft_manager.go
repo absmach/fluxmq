@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -258,7 +259,7 @@ func (rm *RaftManager) ApplyEnqueue(ctx context.Context, partitionID int, msg *t
 }
 
 // ApplyAck replicates an ACK operation via Raft.
-func (rm *RaftManager) ApplyAck(ctx context.Context, partitionID int, messageID string) error {
+func (rm *RaftManager) ApplyAck(ctx context.Context, partitionID int, messageID, groupID string) error {
 	group, err := rm.GetPartitionGroup(partitionID)
 	if err != nil {
 		return err
@@ -267,13 +268,14 @@ func (rm *RaftManager) ApplyAck(ctx context.Context, partitionID int, messageID 
 	op := &raft.Operation{
 		Type:      raft.OpAck,
 		MessageID: messageID,
+		GroupID:   groupID,
 	}
 
 	return group.Apply(op, rm.config.AckTimeout)
 }
 
 // ApplyNack replicates a NACK operation via Raft.
-func (rm *RaftManager) ApplyNack(ctx context.Context, partitionID int, messageID, reason string) error {
+func (rm *RaftManager) ApplyNack(ctx context.Context, partitionID int, messageID, groupID, reason string) error {
 	group, err := rm.GetPartitionGroup(partitionID)
 	if err != nil {
 		return err
@@ -282,6 +284,7 @@ func (rm *RaftManager) ApplyNack(ctx context.Context, partitionID int, messageID
 	op := &raft.Operation{
 		Type:      raft.OpNack,
 		MessageID: messageID,
+		GroupID:   groupID,
 		Reason:    reason,
 	}
 
@@ -289,7 +292,7 @@ func (rm *RaftManager) ApplyNack(ctx context.Context, partitionID int, messageID
 }
 
 // ApplyReject replicates a REJECT operation via Raft.
-func (rm *RaftManager) ApplyReject(ctx context.Context, partitionID int, messageID, reason string) error {
+func (rm *RaftManager) ApplyReject(ctx context.Context, partitionID int, messageID, groupID, reason string) error {
 	group, err := rm.GetPartitionGroup(partitionID)
 	if err != nil {
 		return err
@@ -298,7 +301,24 @@ func (rm *RaftManager) ApplyReject(ctx context.Context, partitionID int, message
 	op := &raft.Operation{
 		Type:      raft.OpReject,
 		MessageID: messageID,
+		GroupID:   groupID,
 		Reason:    reason,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
+// ApplyUpdateMessage replicates a message update operation via Raft.
+// Used by retry manager to update message state to retry.
+func (rm *RaftManager) ApplyUpdateMessage(ctx context.Context, partitionID int, msg *types.Message) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:    raft.OpUpdateMessage,
+		Message: msg,
 	}
 
 	return group.Apply(op, rm.config.AckTimeout)
@@ -314,6 +334,23 @@ func (rm *RaftManager) ApplyRetentionDelete(ctx context.Context, partitionID int
 	op := &raft.Operation{
 		Type:       raft.OpRetentionDelete,
 		MessageIDs: messageIDs,
+	}
+
+	return group.Apply(op, rm.config.AckTimeout)
+}
+
+// ApplyMoveToDLQ replicates a move to DLQ operation via Raft.
+// Used by retry manager when max retries are exceeded or timeout occurs.
+func (rm *RaftManager) ApplyMoveToDLQ(ctx context.Context, partitionID int, msg *types.Message, dlqTopic string) error {
+	group, err := rm.GetPartitionGroup(partitionID)
+	if err != nil {
+		return err
+	}
+
+	op := &raft.Operation{
+		Type:     raft.OpMoveToDLQ,
+		Message:  msg,
+		DLQTopic: dlqTopic,
 	}
 
 	return group.Apply(op, rm.config.AckTimeout)
@@ -384,6 +421,8 @@ func NewRoundRobinPlacement(nodeAddresses map[string]string) *RoundRobinPlacemen
 	for nodeID := range nodeAddresses {
 		nodeIDs = append(nodeIDs, nodeID)
 	}
+	// Sort node IDs for deterministic placement across all cluster nodes
+	sort.Strings(nodeIDs)
 
 	return &RoundRobinPlacement{
 		nodeIDs: nodeIDs,

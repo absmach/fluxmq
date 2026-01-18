@@ -262,6 +262,11 @@ func (m *Manager) createQueueInstance(config types.QueueConfig) error {
 				return fmt.Errorf("failed to start raft partition %d: %w", partID, err)
 			}
 		}
+
+		// Register RaftManager as proposer with retry manager for replicated operations
+		if m.retryManager != nil {
+			m.retryManager.RegisterRaftProposer(config.Name, raftMgr)
+		}
 	}
 
 	// Get RaftManager if exists (use interface type to avoid Go's typed nil gotcha)
@@ -627,27 +632,39 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueTopic, clientID, groupID
 	return queue.RemoveConsumer(ctx, groupID, consumerID)
 }
 
-// Ack acknowledges successful processing of a message.
-func (m *Manager) Ack(ctx context.Context, queueTopic, messageID string) error {
+// Ack acknowledges successful processing of a message by a consumer group.
+// The message is only deleted when ALL consumer groups have acknowledged it.
+func (m *Manager) Ack(ctx context.Context, queueTopic, messageID, groupID string) error {
 	queue, err := m.GetQueue(queueTopic)
 	if err != nil {
 		return err
 	}
 
-	// Remove from inflight tracking
-	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID); err != nil {
+	// Remove this group's inflight tracking
+	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID, groupID); err != nil {
 		// Message might not be inflight (already acked), ignore error
 		if err != storage.ErrMessageNotFound {
 			return err
 		}
 	}
 
-	// Delete message
-	return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
+	// Check if any other groups still have this message inflight
+	remaining, err := m.messageStore.GetInflightForMessage(ctx, queue.Name(), messageID)
+	if err != nil {
+		return err
+	}
+
+	// Only delete message when all groups have acknowledged
+	if len(remaining) == 0 {
+		return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
+	}
+
+	return nil
 }
 
-// Nack negatively acknowledges a message (triggers immediate retry).
-func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error {
+// Nack negatively acknowledges a message (triggers retry for this group).
+// Only affects this consumer group's delivery; other groups are unaffected.
+func (m *Manager) Nack(ctx context.Context, queueTopic, messageID, groupID string) error {
 	queue, err := m.GetQueue(queueTopic)
 	if err != nil {
 		return err
@@ -659,12 +676,14 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error 
 		return err
 	}
 
-	// Remove from inflight
-	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID); err != nil {
-		return err
+	// Remove this group's inflight entry
+	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID, groupID); err != nil {
+		if err != storage.ErrMessageNotFound {
+			return err
+		}
 	}
 
-	// Update message state for retry
+	// Update message state for retry (affects delivery to this group)
 	msg.State = types.StateRetry
 	msg.RetryCount++
 	msg.NextRetryAt = time.Now() // Immediate retry
@@ -672,8 +691,9 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID string) error 
 	return m.messageStore.UpdateMessage(ctx, queue.Name(), msg)
 }
 
-// Reject permanently rejects a message (move to DLQ).
-func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reason string) error {
+// Reject permanently rejects a message by a consumer group (move to DLQ).
+// The message is moved to DLQ and deleted when ALL groups have either ACKed or Rejected.
+func (m *Manager) Reject(ctx context.Context, queueTopic, messageID, groupID, reason string) error {
 	queue, err := m.GetQueue(queueTopic)
 	if err != nil {
 		return err
@@ -685,25 +705,37 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID string, reas
 		return err
 	}
 
-	// Remove from inflight
-	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID); err != nil {
-		return err
-	}
-
-	// Move to DLQ
-	config := queue.Config()
-	if config.DLQConfig.Enabled {
-		msg.State = types.StateDLQ
-		msg.FailureReason = reason
-		msg.MovedToDLQAt = time.Now()
-
-		if err := m.messageStore.EnqueueDLQ(ctx, config.DLQConfig.Topic, msg); err != nil {
+	// Remove this group's inflight entry
+	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID, groupID); err != nil {
+		if err != storage.ErrMessageNotFound {
 			return err
 		}
 	}
 
-	// Delete from original queue
-	return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
+	// Check if any other groups still have this message inflight
+	remaining, err := m.messageStore.GetInflightForMessage(ctx, queue.Name(), messageID)
+	if err != nil {
+		return err
+	}
+
+	// Only move to DLQ and delete when all groups are done
+	if len(remaining) == 0 {
+		config := queue.Config()
+		if config.DLQConfig.Enabled {
+			msg.State = types.StateDLQ
+			msg.FailureReason = reason
+			msg.MovedToDLQAt = time.Now()
+
+			if err := m.messageStore.EnqueueDLQ(ctx, config.DLQConfig.Topic, msg); err != nil {
+				return err
+			}
+		}
+
+		// Delete from original queue
+		return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
+	}
+
+	return nil
 }
 
 // GetStats returns statistics for a queue.

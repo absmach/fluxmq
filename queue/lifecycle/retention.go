@@ -239,6 +239,11 @@ func (rm *RetentionManager) timeBasedCleanupLoop(ctx context.Context, partitionI
 		case <-rm.stopCh:
 			return
 		case <-ticker.C:
+			// Only run cleanup on the leader to avoid duplicate cleanup
+			if rm.raftManager != nil && !rm.raftManager.IsLeader(partitionID) {
+				continue
+			}
+
 			stats, err := rm.runTimeBasedCleanup(ctx, partitionID)
 			if err != nil {
 				rm.logger.Error("time-based cleanup failed",

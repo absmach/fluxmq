@@ -394,6 +394,7 @@ func TestManager_Ack(t *testing.T) {
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: partitionID,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -402,7 +403,7 @@ func TestManager_Ack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ack the message
-	err = mgr.Ack(ctx, "$queue/test", msg.ID)
+	err = mgr.Ack(ctx, "$queue/test", msg.ID, "group-1")
 	require.NoError(t, err)
 
 	// Verify message was deleted
@@ -445,6 +446,7 @@ func TestManager_Nack(t *testing.T) {
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: partitionID,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -453,7 +455,7 @@ func TestManager_Nack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Nack the message
-	err = mgr.Nack(ctx, "$queue/test", msg.ID)
+	err = mgr.Nack(ctx, "$queue/test", msg.ID, "group-1")
 	require.NoError(t, err)
 
 	// Verify message state changed to retry
@@ -499,6 +501,7 @@ func TestManager_Reject(t *testing.T) {
 		MessageID:   msg.ID,
 		QueueName:   queue.Name(),
 		PartitionID: partitionID,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -507,7 +510,7 @@ func TestManager_Reject(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reject the message
-	err = mgr.Reject(ctx, "$queue/test", msg.ID, "processing failed")
+	err = mgr.Reject(ctx, "$queue/test", msg.ID, "group-1", "processing failed")
 	require.NoError(t, err)
 
 	// Verify message moved to DLQ

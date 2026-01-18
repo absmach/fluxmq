@@ -351,6 +351,11 @@ func (s *Store) GetMessage(ctx context.Context, queueName string, messageID stri
 	return nil, storage.ErrMessageNotFound
 }
 
+// inflightKey creates a composite key for group-aware inflight tracking.
+func inflightKey(messageID, groupID string) string {
+	return messageID + ":" + groupID
+}
+
 func (s *Store) MarkInflight(ctx context.Context, state *types.DeliveryState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -361,7 +366,8 @@ func (s *Store) MarkInflight(ctx context.Context, state *types.DeliveryState) er
 	}
 
 	stateCopy := *state
-	inflight[state.MessageID] = &stateCopy
+	key := inflightKey(state.MessageID, state.GroupID)
+	inflight[key] = &stateCopy
 	return nil
 }
 
@@ -383,7 +389,7 @@ func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*types.Del
 	return states, nil
 }
 
-func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error) {
+func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID, groupID string) (*types.DeliveryState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -392,7 +398,8 @@ func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID str
 		return nil, storage.ErrQueueNotFound
 	}
 
-	state, exists := inflight[messageID]
+	key := inflightKey(messageID, groupID)
+	state, exists := inflight[key]
 	if !exists {
 		return nil, storage.ErrMessageNotFound
 	}
@@ -401,7 +408,28 @@ func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID str
 	return &stateCopy, nil
 }
 
-func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string) error {
+func (s *Store) GetInflightForMessage(ctx context.Context, queueName, messageID string) ([]*types.DeliveryState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	inflight, exists := s.inflight[queueName]
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	prefix := messageID + ":"
+	states := make([]*types.DeliveryState, 0)
+	for key, state := range inflight {
+		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
+			stateCopy := *state
+			states = append(states, &stateCopy)
+		}
+	}
+
+	return states, nil
+}
+
+func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID, groupID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -410,7 +438,8 @@ func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string)
 		return storage.ErrQueueNotFound
 	}
 
-	delete(inflight, messageID)
+	key := inflightKey(messageID, groupID)
+	delete(inflight, key)
 	return nil
 }
 

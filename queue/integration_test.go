@@ -63,9 +63,10 @@ func TestIntegration_CompleteMessageLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, inflight, 1)
 	msgID := inflight[0].MessageID
+	groupID := inflight[0].GroupID
 
 	// Ack the message
-	err = mgr.Ack(ctx, queueName, msgID)
+	err = mgr.Ack(ctx, queueName, msgID, groupID)
 	require.NoError(t, err)
 
 	// Verify message was removed
@@ -124,9 +125,10 @@ func TestIntegration_RetryFlow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, inflight, 1)
 	msgID := inflight[0].MessageID
+	groupID := inflight[0].GroupID
 
 	// Nack the message to trigger retry
-	err = mgr.Nack(ctx, "$queue/retry-test", msgID)
+	err = mgr.Nack(ctx, "$queue/retry-test", msgID, groupID)
 	require.NoError(t, err)
 
 	// Verify message was removed from inflight
@@ -188,9 +190,10 @@ func TestIntegration_DLQFlow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, inflight, 1)
 	msgID := inflight[0].MessageID
+	groupID := inflight[0].GroupID
 
 	// Reject the message to send to DLQ
-	err = mgr.Reject(ctx, "$queue/dlq-test", msgID, "processing failed")
+	err = mgr.Reject(ctx, "$queue/dlq-test", msgID, groupID, "processing failed")
 	require.NoError(t, err)
 
 	// Verify message was moved to DLQ

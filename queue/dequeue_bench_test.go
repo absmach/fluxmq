@@ -152,7 +152,7 @@ func BenchmarkDequeue_WithAck(b *testing.B) {
 
 		// Ack all inflight
 		for _, msg := range inflight {
-			if err := mgr.Ack(ctx, queueName, msg.MessageID); err != nil {
+			if err := mgr.Ack(ctx, queueName, msg.MessageID, msg.GroupID); err != nil {
 				b.Fatal(err)
 			}
 		}

@@ -529,6 +529,7 @@ func TestBadgerMessageStore_MarkInflight(t *testing.T) {
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -538,10 +539,11 @@ func TestBadgerMessageStore_MarkInflight(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify inflight
-	retrieved, err := store.GetInflightMessage(ctx, "$queue/test", "msg-1")
+	retrieved, err := store.GetInflightMessage(ctx, "$queue/test", "msg-1", "group-1")
 	require.NoError(t, err)
 	assert.Equal(t, "msg-1", retrieved.MessageID)
 	assert.Equal(t, "consumer-1", retrieved.ConsumerID)
+	assert.Equal(t, "group-1", retrieved.GroupID)
 }
 
 func TestBadgerMessageStore_GetInflight(t *testing.T) {
@@ -555,6 +557,7 @@ func TestBadgerMessageStore_GetInflight(t *testing.T) {
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -563,6 +566,7 @@ func TestBadgerMessageStore_GetInflight(t *testing.T) {
 		MessageID:   "msg-2",
 		QueueName:   "$queue/test",
 		PartitionID: 1,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-2",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -584,7 +588,7 @@ func TestBadgerMessageStore_GetInflightMessage(t *testing.T) {
 	ctx := context.Background()
 
 	// Get non-existent inflight message
-	_, err := store.GetInflightMessage(ctx, "$queue/test", "nonexistent")
+	_, err := store.GetInflightMessage(ctx, "$queue/test", "nonexistent", "group-1")
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 
 	// Mark inflight
@@ -592,6 +596,7 @@ func TestBadgerMessageStore_GetInflightMessage(t *testing.T) {
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -600,7 +605,7 @@ func TestBadgerMessageStore_GetInflightMessage(t *testing.T) {
 	require.NoError(t, store.MarkInflight(ctx, state))
 
 	// Get inflight message
-	retrieved, err := store.GetInflightMessage(ctx, "$queue/test", "msg-1")
+	retrieved, err := store.GetInflightMessage(ctx, "$queue/test", "msg-1", "group-1")
 	require.NoError(t, err)
 	assert.Equal(t, "msg-1", retrieved.MessageID)
 }
@@ -615,6 +620,7 @@ func TestBadgerMessageStore_RemoveInflight(t *testing.T) {
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -623,11 +629,11 @@ func TestBadgerMessageStore_RemoveInflight(t *testing.T) {
 	require.NoError(t, store.MarkInflight(ctx, state))
 
 	// Remove inflight
-	err := store.RemoveInflight(ctx, "$queue/test", "msg-1")
+	err := store.RemoveInflight(ctx, "$queue/test", "msg-1", "group-1")
 	require.NoError(t, err)
 
 	// Verify removed
-	_, err = store.GetInflightMessage(ctx, "$queue/test", "msg-1")
+	_, err = store.GetInflightMessage(ctx, "$queue/test", "msg-1", "group-1")
 	assert.ErrorIs(t, err, storage.ErrMessageNotFound)
 }
 

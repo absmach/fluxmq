@@ -320,11 +320,15 @@ func (cg *Group) Rebalance(partitions []Partition) {
 		return
 	}
 
-	// Convert to slice for indexing
+	// Convert to slice for indexing and sort for deterministic assignment
 	consumers := make([]*types.Consumer, 0, len(cg.consumers))
 	for _, consumer := range cg.consumers {
 		consumers = append(consumers, consumer)
 	}
+	// Sort consumers by ID to ensure deterministic partition assignment across cluster nodes
+	sort.Slice(consumers, func(i, j int) bool {
+		return consumers[i].ID < consumers[j].ID
+	})
 
 	// Calculate partitions per consumer
 	partitionsPerConsumer := len(partitions) / len(consumers)

@@ -394,7 +394,7 @@ func (s *Store) GetMessage(ctx context.Context, queueName string, messageID stri
 }
 
 func (s *Store) MarkInflight(ctx context.Context, state *types.DeliveryState) error {
-	key := makeInflightKey(state.QueueName, state.MessageID)
+	key := makeInflightKey(state.QueueName, state.MessageID, state.GroupID)
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -436,8 +436,8 @@ func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*types.Del
 	return states, err
 }
 
-func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error) {
-	key := makeInflightKey(queueName, messageID)
+func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID, groupID string) (*types.DeliveryState, error) {
+	key := makeInflightKey(queueName, messageID, groupID)
 	var state types.DeliveryState
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -460,8 +460,39 @@ func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID str
 	return &state, nil
 }
 
-func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string) error {
-	key := makeInflightKey(queueName, messageID)
+func (s *Store) GetInflightForMessage(ctx context.Context, queueName, messageID string) ([]*types.DeliveryState, error) {
+	states := make([]*types.DeliveryState, 0)
+	prefix := queueInflightPrefix + queueName + ":" + messageID + ":"
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				var state types.DeliveryState
+				if err := json.Unmarshal(val, &state); err != nil {
+					return err
+				}
+				states = append(states, &state)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	return states, err
+}
+
+func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID, groupID string) error {
+	key := makeInflightKey(queueName, messageID, groupID)
 	return s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))
 	})
@@ -786,8 +817,8 @@ func makePartitionPrefix(queueName string, partitionID int) string {
 	return fmt.Sprintf("%s%s:%d:", queueMessagePrefix, queueName, partitionID)
 }
 
-func makeInflightKey(queueName, messageID string) string {
-	return queueInflightPrefix + queueName + ":" + messageID
+func makeInflightKey(queueName, messageID, groupID string) string {
+	return queueInflightPrefix + queueName + ":" + messageID + ":" + groupID
 }
 
 func makeDLQKey(dlqTopic, messageID string) string {

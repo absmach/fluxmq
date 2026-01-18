@@ -27,6 +27,7 @@ const (
 	OpReject
 	OpUpdateMessage
 	OpRetentionDelete // Batch delete messages for retention
+	OpMoveToDLQ       // Move message to DLQ (used by retry manager)
 )
 
 // Operation represents a queue operation to be replicated via Raft.
@@ -34,15 +35,19 @@ type Operation struct {
 	Type      OpType
 	Timestamp time.Time
 
-	// For OpEnqueue
+	// For OpEnqueue, OpUpdateMessage, OpMoveToDLQ
 	Message *types.Message
 
 	// For OpAck, OpNack, OpReject
 	MessageID string
+	GroupID   string // Consumer group ID for fan-out support
 	Reason    string
 
 	// For OpRetentionDelete
 	MessageIDs []string // Batch of message IDs to delete
+
+	// For OpMoveToDLQ
+	DLQTopic string // Target DLQ topic
 }
 
 // PartitionFSM implements the Raft FSM interface for a queue partition.
@@ -87,15 +92,17 @@ func (f *PartitionFSM) Apply(l *raft.Log) interface{} {
 	case OpEnqueue:
 		return f.applyEnqueue(ctx, op.Message)
 	case OpAck:
-		return f.applyAck(ctx, op.MessageID)
+		return f.applyAck(ctx, op.MessageID, op.GroupID)
 	case OpNack:
-		return f.applyNack(ctx, op.MessageID, op.Reason)
+		return f.applyNack(ctx, op.MessageID, op.GroupID, op.Reason)
 	case OpReject:
-		return f.applyReject(ctx, op.MessageID, op.Reason)
+		return f.applyReject(ctx, op.MessageID, op.GroupID, op.Reason)
 	case OpUpdateMessage:
 		return f.applyUpdateMessage(ctx, op.Message)
 	case OpRetentionDelete:
 		return f.applyRetentionDelete(ctx, op.MessageIDs)
+	case OpMoveToDLQ:
+		return f.applyMoveToDLQ(ctx, op.Message, op.DLQTopic)
 	default:
 		err := fmt.Errorf("unknown operation type: %d", op.Type)
 		f.logger.Error("unknown operation",
@@ -137,47 +144,65 @@ func (f *PartitionFSM) applyEnqueue(ctx context.Context, msg *types.Message) err
 }
 
 // applyAck applies an ACK operation.
-func (f *PartitionFSM) applyAck(ctx context.Context, messageID string) error {
-	// Remove from inflight
-	if err := f.messageStore.RemoveInflight(ctx, f.queueName, messageID); err != nil {
+// Only deletes the message when all groups have acknowledged.
+func (f *PartitionFSM) applyAck(ctx context.Context, messageID, groupID string) error {
+	// Remove this group's inflight entry
+	if err := f.messageStore.RemoveInflight(ctx, f.queueName, messageID, groupID); err != nil {
 		if err != storage.ErrMessageNotFound {
 			f.logger.Error("failed to remove inflight",
 				slog.String("queue", f.queueName),
 				slog.Int("partition", f.partitionID),
 				slog.String("message_id", messageID),
+				slog.String("group_id", groupID),
 				slog.String("error", err.Error()))
 			return err
 		}
 	}
 
-	// Delete message
-	if err := f.messageStore.DeleteMessage(ctx, f.queueName, messageID); err != nil {
-		if err != storage.ErrMessageNotFound {
-			f.logger.Error("failed to delete message",
-				slog.String("queue", f.queueName),
-				slog.Int("partition", f.partitionID),
-				slog.String("message_id", messageID),
-				slog.String("error", err.Error()))
-			return err
+	// Check if any other groups still have this message inflight
+	remaining, err := f.messageStore.GetInflightForMessage(ctx, f.queueName, messageID)
+	if err != nil {
+		f.logger.Error("failed to get remaining inflight entries",
+			slog.String("queue", f.queueName),
+			slog.Int("partition", f.partitionID),
+			slog.String("message_id", messageID),
+			slog.String("error", err.Error()))
+		return err
+	}
+
+	// Only delete message when all groups have acknowledged
+	if len(remaining) == 0 {
+		if err := f.messageStore.DeleteMessage(ctx, f.queueName, messageID); err != nil {
+			if err != storage.ErrMessageNotFound {
+				f.logger.Error("failed to delete message",
+					slog.String("queue", f.queueName),
+					slog.Int("partition", f.partitionID),
+					slog.String("message_id", messageID),
+					slog.String("error", err.Error()))
+				return err
+			}
 		}
 	}
 
 	f.logger.Debug("applied ack",
 		slog.String("queue", f.queueName),
 		slog.Int("partition", f.partitionID),
-		slog.String("message_id", messageID))
+		slog.String("message_id", messageID),
+		slog.String("group_id", groupID),
+		slog.Int("remaining_groups", len(remaining)))
 
 	return nil
 }
 
 // applyNack applies a NACK operation (message delivery failed, should retry).
-func (f *PartitionFSM) applyNack(ctx context.Context, messageID string, reason string) error {
+func (f *PartitionFSM) applyNack(ctx context.Context, messageID, groupID, reason string) error {
 	msg, err := f.messageStore.GetMessage(ctx, f.queueName, messageID)
 	if err != nil {
 		f.logger.Error("failed to get message for nack",
 			slog.String("queue", f.queueName),
 			slog.Int("partition", f.partitionID),
 			slog.String("message_id", messageID),
+			slog.String("group_id", groupID),
 			slog.String("error", err.Error()))
 		return err
 	}
@@ -193,17 +218,19 @@ func (f *PartitionFSM) applyNack(ctx context.Context, messageID string, reason s
 			slog.String("queue", f.queueName),
 			slog.Int("partition", f.partitionID),
 			slog.String("message_id", messageID),
+			slog.String("group_id", groupID),
 			slog.String("error", err.Error()))
 		return err
 	}
 
-	// Remove from inflight
-	if err := f.messageStore.RemoveInflight(ctx, f.queueName, messageID); err != nil {
+	// Remove this group's inflight entry
+	if err := f.messageStore.RemoveInflight(ctx, f.queueName, messageID, groupID); err != nil {
 		if err != storage.ErrMessageNotFound {
 			f.logger.Error("failed to remove inflight for nack",
 				slog.String("queue", f.queueName),
 				slog.Int("partition", f.partitionID),
 				slog.String("message_id", messageID),
+				slog.String("group_id", groupID),
 				slog.String("error", err.Error()))
 			return err
 		}
@@ -213,16 +240,32 @@ func (f *PartitionFSM) applyNack(ctx context.Context, messageID string, reason s
 		slog.String("queue", f.queueName),
 		slog.Int("partition", f.partitionID),
 		slog.String("message_id", messageID),
+		slog.String("group_id", groupID),
 		slog.String("reason", reason))
 
 	return nil
 }
 
 // applyReject applies a REJECT operation (message should go to DLQ).
-func (f *PartitionFSM) applyReject(ctx context.Context, messageID string, reason string) error {
-	msg, err := f.messageStore.GetMessage(ctx, f.queueName, messageID)
+// Only moves to DLQ and deletes when all groups have finished processing.
+func (f *PartitionFSM) applyReject(ctx context.Context, messageID, groupID, reason string) error {
+	// Remove this group's inflight entry
+	if err := f.messageStore.RemoveInflight(ctx, f.queueName, messageID, groupID); err != nil {
+		if err != storage.ErrMessageNotFound {
+			f.logger.Error("failed to remove inflight for reject",
+				slog.String("queue", f.queueName),
+				slog.Int("partition", f.partitionID),
+				slog.String("message_id", messageID),
+				slog.String("group_id", groupID),
+				slog.String("error", err.Error()))
+			return err
+		}
+	}
+
+	// Check if any other groups still have this message inflight
+	remaining, err := f.messageStore.GetInflightForMessage(ctx, f.queueName, messageID)
 	if err != nil {
-		f.logger.Error("failed to get message for reject",
+		f.logger.Error("failed to get remaining inflight entries for reject",
 			slog.String("queue", f.queueName),
 			slog.Int("partition", f.partitionID),
 			slog.String("message_id", messageID),
@@ -230,29 +273,43 @@ func (f *PartitionFSM) applyReject(ctx context.Context, messageID string, reason
 		return err
 	}
 
-	// Move to DLQ
-	msg.State = types.StateDLQ
-	msg.FailureReason = reason
-	msg.MovedToDLQAt = time.Now()
+	// Only move to DLQ and delete when all groups are done
+	if len(remaining) == 0 {
+		msg, err := f.messageStore.GetMessage(ctx, f.queueName, messageID)
+		if err != nil {
+			f.logger.Error("failed to get message for reject",
+				slog.String("queue", f.queueName),
+				slog.Int("partition", f.partitionID),
+				slog.String("message_id", messageID),
+				slog.String("error", err.Error()))
+			return err
+		}
 
-	if err := f.messageStore.EnqueueDLQ(ctx, f.queueName, msg); err != nil {
-		f.logger.Error("failed to enqueue to DLQ",
-			slog.String("queue", f.queueName),
-			slog.Int("partition", f.partitionID),
-			slog.String("message_id", messageID),
-			slog.String("error", err.Error()))
-		return err
+		// Move to DLQ
+		msg.State = types.StateDLQ
+		msg.FailureReason = reason
+		msg.MovedToDLQAt = time.Now()
+
+		if err := f.messageStore.EnqueueDLQ(ctx, f.queueName, msg); err != nil {
+			f.logger.Error("failed to enqueue to DLQ",
+				slog.String("queue", f.queueName),
+				slog.Int("partition", f.partitionID),
+				slog.String("message_id", messageID),
+				slog.String("error", err.Error()))
+			return err
+		}
+
+		// Delete original message
+		f.messageStore.DeleteMessage(ctx, f.queueName, messageID)
 	}
-
-	// Remove from inflight and delete original message
-	f.messageStore.RemoveInflight(ctx, f.queueName, messageID)
-	f.messageStore.DeleteMessage(ctx, f.queueName, messageID)
 
 	f.logger.Debug("applied reject",
 		slog.String("queue", f.queueName),
 		slog.Int("partition", f.partitionID),
 		slog.String("message_id", messageID),
-		slog.String("reason", reason))
+		slog.String("group_id", groupID),
+		slog.String("reason", reason),
+		slog.Int("remaining_groups", len(remaining)))
 
 	return nil
 }
@@ -301,6 +358,46 @@ func (f *PartitionFSM) applyRetentionDelete(ctx context.Context, messageIDs []st
 		slog.Int("partition", f.partitionID),
 		slog.Int("requested", len(messageIDs)),
 		slog.Int64("deleted", deletedCount))
+
+	return nil
+}
+
+// applyMoveToDLQ applies a move to DLQ operation.
+// Used by retry manager when max retries are exceeded or timeout occurs.
+func (f *PartitionFSM) applyMoveToDLQ(ctx context.Context, msg *types.Message, dlqTopic string) error {
+	if msg == nil {
+		return fmt.Errorf("nil message in move to DLQ operation")
+	}
+
+	// Enqueue to DLQ
+	if err := f.messageStore.EnqueueDLQ(ctx, dlqTopic, msg); err != nil {
+		f.logger.Error("failed to enqueue to DLQ",
+			slog.String("queue", f.queueName),
+			slog.Int("partition", f.partitionID),
+			slog.String("message_id", msg.ID),
+			slog.String("dlq_topic", dlqTopic),
+			slog.String("error", err.Error()))
+		return err
+	}
+
+	// Delete from original queue
+	if err := f.messageStore.DeleteMessage(ctx, f.queueName, msg.ID); err != nil {
+		if err != storage.ErrMessageNotFound {
+			f.logger.Error("failed to delete message after DLQ move",
+				slog.String("queue", f.queueName),
+				slog.Int("partition", f.partitionID),
+				slog.String("message_id", msg.ID),
+				slog.String("error", err.Error()))
+			return err
+		}
+	}
+
+	f.logger.Debug("applied move to DLQ",
+		slog.String("queue", f.queueName),
+		slog.Int("partition", f.partitionID),
+		slog.String("message_id", msg.ID),
+		slog.String("dlq_topic", dlqTopic),
+		slog.String("reason", msg.FailureReason))
 
 	return nil
 }
@@ -407,14 +504,18 @@ type SnapshotData struct {
 
 // Persist writes the snapshot to the given sink.
 func (s *PartitionSnapshot) Persist(sink raft.SnapshotSink) error {
-	// Get all messages from partition
-	// Note: This is a simplified implementation
-	// In production, you'd want to page through messages
-	messages := make([]*types.Message, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
-	// Get first and last sequences to determine range
-	// This would need to be implemented in the message store
-	// For now, we'll just capture what we can retrieve
+	messages, err := s.messageStore.ListAllMessages(ctx, s.queueName, s.partitionID)
+	if err != nil {
+		sink.Cancel()
+		s.logger.Error("failed to list messages for snapshot",
+			slog.String("queue", s.queueName),
+			slog.Int("partition", s.partitionID),
+			slog.String("error", err.Error()))
+		return fmt.Errorf("failed to list messages for snapshot: %w", err)
+	}
 
 	snapshot := SnapshotData{
 		QueueName:   s.queueName,

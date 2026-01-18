@@ -138,16 +138,18 @@ func TestRetentionManager_TimeBasedRetention(t *testing.T) {
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
-	// Configure retention: 100ms time retention
+	// Configure retention: 200ms time retention
+	// This ensures new messages (created during test) won't become eligible for deletion
+	// while old messages (400ms ago) will definitely be deleted
 	policy := types.RetentionPolicy{
-		RetentionTime:     100 * time.Millisecond,
+		RetentionTime:     200 * time.Millisecond,
 		TimeCheckInterval: 50 * time.Millisecond,
 	}
 
 	rm := NewRetentionManager(queueName, policy, store, nil, slog.Default())
 
-	// Enqueue old messages (created 200ms ago)
-	oldTime := time.Now().Add(-200 * time.Millisecond)
+	// Enqueue old messages (created 400ms ago - well past retention time)
+	oldTime := time.Now().Add(-400 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		msg := &types.Message{
 			ID:        fmt.Sprintf("old-msg-%d", i),
@@ -187,7 +189,7 @@ func TestRetentionManager_TimeBasedRetention(t *testing.T) {
 	go rm.Start(ctxWithCancel, 0)
 
 	// Wait for time-based cleanup to run (only wait 80ms so new messages don't become old)
-	time.Sleep(80 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// Stop retention manager
 	rm.Stop()

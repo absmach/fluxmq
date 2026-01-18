@@ -291,8 +291,44 @@ func TestFSM_ApplyReject(t *testing.T) {
 }
 
 func TestFSM_SnapshotRestore(t *testing.T) {
-	fsm, _, cleanup := setupTestFSM(t)
+	fsm, store, cleanup := setupTestFSM(t)
 	defer cleanup()
+
+	ctx := context.Background()
+
+	// Enqueue some messages to test snapshot contains actual data
+	messages := []*types.Message{
+		{
+			ID:          "msg-1",
+			Sequence:    1,
+			PartitionID: 0,
+			Payload:     []byte("payload 1"),
+			State:       types.StateQueued,
+			CreatedAt:   time.Now(),
+		},
+		{
+			ID:          "msg-2",
+			Sequence:    2,
+			PartitionID: 0,
+			Payload:     []byte("payload 2"),
+			State:       types.StateQueued,
+			CreatedAt:   time.Now(),
+		},
+		{
+			ID:          "msg-3",
+			Sequence:    3,
+			PartitionID: 0,
+			Payload:     []byte("payload 3"),
+			State:       types.StateQueued,
+			CreatedAt:   time.Now(),
+		},
+	}
+
+	for _, msg := range messages {
+		if err := store.Enqueue(ctx, "test-queue", msg); err != nil {
+			t.Fatalf("failed to enqueue message %s: %v", msg.ID, err)
+		}
+	}
 
 	// Create snapshot
 	snapshot, err := fsm.Snapshot()
@@ -304,6 +340,21 @@ func TestFSM_SnapshotRestore(t *testing.T) {
 	sink := &mockSnapshotSink{data: make([]byte, 0)}
 	if err := snapshot.Persist(sink); err != nil {
 		t.Fatalf("failed to persist snapshot: %v", err)
+	}
+
+	// Verify snapshot contains data
+	if len(sink.data) == 0 {
+		t.Fatal("snapshot data is empty")
+	}
+
+	// Decode snapshot to verify it contains our messages
+	var snapshotData SnapshotData
+	if err := json.Unmarshal(sink.data, &snapshotData); err != nil {
+		t.Fatalf("failed to unmarshal snapshot: %v", err)
+	}
+
+	if len(snapshotData.Messages) != len(messages) {
+		t.Errorf("expected %d messages in snapshot, got %d", len(messages), len(snapshotData.Messages))
 	}
 
 	// Create new FSM for restore
@@ -328,6 +379,25 @@ func TestFSM_SnapshotRestore(t *testing.T) {
 	// Restore from snapshot
 	if err := fsm2.Restore(&mockReadCloser{data: sink.data}); err != nil {
 		t.Fatalf("failed to restore: %v", err)
+	}
+
+	// Verify all messages were restored
+	for _, orig := range messages {
+		restored, err := store2.GetMessage(ctx, "test-queue", orig.ID)
+		if err != nil {
+			t.Errorf("failed to get restored message %s: %v", orig.ID, err)
+			continue
+		}
+
+		if string(restored.Payload) != string(orig.Payload) {
+			t.Errorf("message %s payload mismatch: expected %s, got %s",
+				orig.ID, string(orig.Payload), string(restored.Payload))
+		}
+
+		if restored.Sequence != orig.Sequence {
+			t.Errorf("message %s sequence mismatch: expected %d, got %d",
+				orig.ID, orig.Sequence, restored.Sequence)
+		}
 	}
 }
 

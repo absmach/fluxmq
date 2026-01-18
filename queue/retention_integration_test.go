@@ -358,16 +358,11 @@ func setupReplicatedTestWithRetention(t *testing.T, nodeCount int, queueName str
 		require.NoError(t, err, "node%d failed to create queue", i+1)
 	}
 
-	// Start Raft partitions on all nodes
+	// Verify raft managers were created (partitions are already started by CreateQueue)
 	for i, mgr := range managers {
 		raftMgr, exists := mgr.raftManagers[queueName]
 		require.True(t, exists, "node%d: raft manager not found", i+1)
 		require.NotNil(t, raftMgr, "node%d: raft manager is nil", i+1)
-
-		for partID := 0; partID < partitions; partID++ {
-			err := raftMgr.StartPartition(ctx, partID, partitions)
-			require.NoError(t, err, "node%d: failed to start partition %d", i+1, partID)
-		}
 	}
 
 	// Wait for leader election on all partitions
@@ -479,15 +474,11 @@ func setupReplicatedTestWithTimeRetention(t *testing.T, nodeCount int, queueName
 		require.NoError(t, err, "node%d failed to create queue", i+1)
 	}
 
+	// Verify raft managers were created (partitions are already started by CreateQueue)
 	for i, mgr := range managers {
 		raftMgr, exists := mgr.raftManagers[queueName]
 		require.True(t, exists, "node%d: raft manager not found", i+1)
 		require.NotNil(t, raftMgr, "node%d: raft manager is nil", i+1)
-
-		for partID := 0; partID < partitions; partID++ {
-			err := raftMgr.StartPartition(ctx, partID, partitions)
-			require.NoError(t, err, "node%d: failed to start partition %d", i+1, partID)
-		}
 	}
 
 	for partID := 0; partID < partitions; partID++ {
@@ -792,15 +783,11 @@ func setupReplicatedTestWithCompaction(t *testing.T, nodeCount int, queueName st
 		require.NoError(t, err, "node%d failed to create queue", i+1)
 	}
 
+	// Verify raft managers were created (partitions are already started by CreateQueue)
 	for i, mgr := range managers {
 		raftMgr, exists := mgr.raftManagers[queueName]
 		require.True(t, exists, "node%d: raft manager not found", i+1)
 		require.NotNil(t, raftMgr, "node%d: raft manager is nil", i+1)
-
-		for partID := 0; partID < partitions; partID++ {
-			err := raftMgr.StartPartition(ctx, partID, partitions)
-			require.NoError(t, err, "node%d: failed to start partition %d", i+1, partID)
-		}
 	}
 
 	for partID := 0; partID < partitions; partID++ {

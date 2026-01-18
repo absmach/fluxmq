@@ -403,12 +403,16 @@ func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*types.Del
 	return s.persistent.GetInflight(ctx, queueName)
 }
 
-func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error) {
-	return s.persistent.GetInflightMessage(ctx, queueName, messageID)
+func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID, groupID string) (*types.DeliveryState, error) {
+	return s.persistent.GetInflightMessage(ctx, queueName, messageID, groupID)
 }
 
-func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string) error {
-	return s.persistent.RemoveInflight(ctx, queueName, messageID)
+func (s *Store) GetInflightForMessage(ctx context.Context, queueName, messageID string) ([]*types.DeliveryState, error) {
+	return s.persistent.GetInflightForMessage(ctx, queueName, messageID)
+}
+
+func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID, groupID string) error {
+	return s.persistent.RemoveInflight(ctx, queueName, messageID, groupID)
 }
 
 func (s *Store) EnqueueDLQ(ctx context.Context, dlqTopic string, msg *types.Message) error {

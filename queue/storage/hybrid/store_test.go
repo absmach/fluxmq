@@ -524,6 +524,7 @@ func TestHybridStore_InflightTracking(t *testing.T) {
 		MessageID:   "msg-1",
 		QueueName:   "$queue/test",
 		PartitionID: 0,
+		GroupID:     "group-1",
 		ConsumerID:  "consumer-1",
 		DeliveredAt: time.Now(),
 		Timeout:     time.Now().Add(30 * time.Second),
@@ -534,18 +535,19 @@ func TestHybridStore_InflightTracking(t *testing.T) {
 	require.NoError(t, err)
 
 	// Retrieve inflight message
-	retrieved, err := store.GetInflightMessage(ctx, "$queue/test", "msg-1")
+	retrieved, err := store.GetInflightMessage(ctx, "$queue/test", "msg-1", "group-1")
 	require.NoError(t, err)
 	require.NotNil(t, retrieved)
 	assert.Equal(t, "msg-1", retrieved.MessageID)
 	assert.Equal(t, "consumer-1", retrieved.ConsumerID)
+	assert.Equal(t, "group-1", retrieved.GroupID)
 
 	// Remove inflight
-	err = store.RemoveInflight(ctx, "$queue/test", "msg-1")
+	err = store.RemoveInflight(ctx, "$queue/test", "msg-1", "group-1")
 	require.NoError(t, err)
 
 	// Verify removed - should return nil without error or return not found error
-	retrieved, err = store.GetInflightMessage(ctx, "$queue/test", "msg-1")
+	retrieved, err = store.GetInflightMessage(ctx, "$queue/test", "msg-1", "group-1")
 	if err == nil {
 		assert.Nil(t, retrieved)
 	} else {

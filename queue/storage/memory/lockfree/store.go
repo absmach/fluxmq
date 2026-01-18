@@ -262,12 +262,17 @@ func (s *Store) GetInflight(ctx context.Context, queueName string) ([]*types.Del
 }
 
 // GetInflightMessage retrieves a specific inflight message.
-func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID string) (*types.DeliveryState, error) {
+func (s *Store) GetInflightMessage(ctx context.Context, queueName, messageID, groupID string) (*types.DeliveryState, error) {
+	return nil, nil
+}
+
+// GetInflightForMessage returns all inflight entries for a specific message (across all groups).
+func (s *Store) GetInflightForMessage(ctx context.Context, queueName, messageID string) ([]*types.DeliveryState, error) {
 	return nil, nil
 }
 
 // RemoveInflight removes an inflight tracking entry.
-func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID string) error {
+func (s *Store) RemoveInflight(ctx context.Context, queueName, messageID, groupID string) error {
 	return nil
 }
 

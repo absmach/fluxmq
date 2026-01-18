@@ -74,7 +74,7 @@ func BenchmarkE2E_PublishToAck(b *testing.B) {
 		}
 
 		for _, msg := range inflight {
-			if err := mgr.Ack(ctx, queueName, msg.MessageID); err != nil {
+			if err := mgr.Ack(ctx, queueName, msg.MessageID, msg.GroupID); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -157,7 +157,7 @@ func BenchmarkE2E_ConcurrentProducerConsumer(b *testing.B) {
 			}
 
 			for _, msg := range inflight {
-				if err := mgr.Ack(ctx, queueName, msg.MessageID); err != nil {
+				if err := mgr.Ack(ctx, queueName, msg.MessageID, msg.GroupID); err != nil {
 					b.Error(err)
 					return
 				}
@@ -231,7 +231,7 @@ func BenchmarkE2E_Latency(b *testing.B) {
 		}
 
 		for _, msg := range inflight {
-			if err := mgr.Ack(ctx, queueName, msg.MessageID); err != nil {
+			if err := mgr.Ack(ctx, queueName, msg.MessageID, msg.GroupID); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -333,7 +333,7 @@ func BenchmarkE2E_Sustained(b *testing.B) {
 				}
 
 				for _, msg := range inflight {
-					if err := mgr.Ack(ctx, queueName, msg.MessageID); err != nil {
+					if err := mgr.Ack(ctx, queueName, msg.MessageID, msg.GroupID); err != nil {
 						b.Error(err)
 						return
 					}
