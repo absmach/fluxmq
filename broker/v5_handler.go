@@ -437,7 +437,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		}
 
 		// Extract consumer group from subscription properties
-		consumerGroup := extractConsumerGroup(p.Properties)
+		consumerGroup := extractConsumerGroup(s.ID, p.Properties)
 
 		opts := storage.SubscribeOptions{
 			NoLocal:           noLocal,

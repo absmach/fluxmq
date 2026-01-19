@@ -37,9 +37,9 @@ func extractQueueTopicFromAck(ackTopic string) string {
 }
 
 // extractConsumerGroup extracts the consumer group from SUBSCRIBE properties.
-func extractConsumerGroup(props *v5.SubscribeProperties) string {
+func extractConsumerGroup(id string, props *v5.SubscribeProperties) string {
 	if props == nil || props.User == nil {
-		return "" // Use clientID prefix as fallback
+		return id // Use clientID prefix as fallback
 	}
 
 	for _, prop := range props.User {
@@ -47,7 +47,7 @@ func extractConsumerGroup(props *v5.SubscribeProperties) string {
 			return prop.Value
 		}
 	}
-	return ""
+	return id
 }
 
 // extractAllProperties converts PUBLISH properties to a map.
