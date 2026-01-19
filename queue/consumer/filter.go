@@ -84,11 +84,11 @@ func compilePattern(pattern string) *regexp.Regexp {
 	// Escape regex special characters except our wildcards
 	escaped := regexp.QuoteMeta(pattern)
 
-	// Replace escaped wildcards with regex equivalents
-	// \+ -> [^/]+ (one level, no slashes)
-	// \# -> .* (any levels)
+	// Replace wildcards with regex equivalents
+	// \+ -> [^/]+ (one level, no slashes) - + is escaped by QuoteMeta
+	// # -> .* (any levels) - # is NOT escaped by QuoteMeta, so match directly
 	escaped = strings.ReplaceAll(escaped, `\+`, `[^/]+`)
-	escaped = strings.ReplaceAll(escaped, `\#`, `.*`)
+	escaped = strings.ReplaceAll(escaped, `#`, `.*`)
 
 	// Anchor the pattern
 	regexStr := "^" + escaped + "$"

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
@@ -31,6 +32,10 @@ type Manager struct {
 	deliverFn       DeliverFn
 	logger          *slog.Logger
 	config          Config
+
+	// Cluster support for cross-node message routing
+	cluster     cluster.Cluster
+	localNodeID string
 
 	// Active consumer groups: queueName -> groupID -> group state
 	groups sync.Map // map[string]*sync.Map
@@ -58,10 +63,10 @@ type Config struct {
 	ClaimBatchSize    int
 
 	// Delivery configuration
-	DeliveryInterval   time.Duration
-	DeliveryBatchSize  int
-	HeartbeatInterval  time.Duration
-	ConsumerTimeout    time.Duration
+	DeliveryInterval  time.Duration
+	DeliveryBatchSize int
+	HeartbeatInterval time.Duration
+	ConsumerTimeout   time.Duration
 
 	// DLQ configuration
 	DLQTopicPrefix string
@@ -92,7 +97,8 @@ func DefaultConfig() Config {
 }
 
 // NewManager creates a new log-based queue manager.
-func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore, deliverFn DeliverFn, config Config, logger *slog.Logger) *Manager {
+// The cluster parameter is optional (nil for single-node mode).
+func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore, deliverFn DeliverFn, config Config, logger *slog.Logger, cl cluster.Cluster) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -116,6 +122,11 @@ func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore
 
 	dlqHandler := consumer.NewDLQHandler(logStore, groupStore, dlqCfg, metrics)
 
+	var localNodeID string
+	if cl != nil {
+		localNodeID = cl.NodeID()
+	}
+
 	return &Manager{
 		logStore:        logStore,
 		groupStore:      groupStore,
@@ -124,6 +135,8 @@ func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore
 		deliverFn:       deliverFn,
 		logger:          logger,
 		config:          config,
+		cluster:         cl,
+		localNodeID:     localNodeID,
 		stopCh:          make(chan struct{}),
 		metrics:         metrics,
 	}
@@ -270,8 +283,7 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 	m.logger.Debug("message enqueued",
 		slog.String("queue", queueRoot),
 		slog.Int("partition", partitionID),
-		slog.Uint64("offset", offset),
-		slog.String("routing_key", routingKey))
+		slog.Uint64("offset", offset))
 
 	return nil
 }
@@ -570,23 +582,58 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 
 			msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, partitionID, filter, m.config.DeliveryBatchSize)
 			if err != nil {
+				// ErrNoMessages is normal - no need to log
 				continue
 			}
 
-			consumerInfo := group.Consumers[consumerID]
+			// Fetch fresh group state to get current consumer info
+			freshGroup, err := m.groupStore.GetConsumerGroup(ctx, config.Name, group.ID)
+			if err != nil {
+				m.logger.Debug("failed to get fresh group",
+					slog.String("queue", config.Name),
+					slog.String("group", group.ID),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			consumerInfo := freshGroup.Consumers[consumerID]
 			if consumerInfo == nil {
+				m.logger.Debug("consumer not found in group",
+					slog.String("consumer", consumerID),
+					slog.String("group", group.ID))
 				continue
 			}
 
 			for _, msg := range msgs {
-				// Deliver to client
-				if m.deliverFn != nil {
-					// Create delivery message with ack info
+				// Check if consumer is on a remote node
+				if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
+					// Route to remote node
+					err := m.cluster.RouteQueueMessage(
+						ctx,
+						consumerInfo.ProxyNodeID,
+						consumerInfo.ClientID,
+						config.Name,
+						msg.ID,
+						msg.GetPayload(),
+						msg.Properties,
+						int64(msg.Sequence),
+						partitionID,
+					)
+					if err != nil {
+						m.logger.Warn("queue message remote routing failed",
+							slog.String("client", consumerInfo.ClientID),
+							slog.String("node", consumerInfo.ProxyNodeID),
+							slog.String("topic", msg.Topic),
+							slog.String("error", err.Error()))
+					}
+				} else if m.deliverFn != nil {
+					// Local delivery
 					deliveryMsg := m.createDeliveryMessage(msg, group.ID, partitionID)
 
 					if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
-						m.logger.Debug("delivery failed",
+						m.logger.Warn("queue message delivery failed",
 							slog.String("client", consumerInfo.ClientID),
+							slog.String("topic", msg.Topic),
 							slog.String("error", err.Error()))
 					}
 				}
@@ -805,17 +852,17 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, part
 // DeliveryMessage is the internal message format for queue delivery tracking.
 // Note: For actual MQTT delivery, we convert to *brokerstorage.Message.
 type DeliveryMessage struct {
-	ID           string
-	Payload      []byte
-	Topic        string
-	Properties   map[string]string
-	GroupID      string
-	PartitionID  int
-	Offset       uint64
-	DeliveredAt  time.Time
-	AckTopic     string
-	NackTopic    string
-	RejectTopic  string
+	ID          string
+	Payload     []byte
+	Topic       string
+	Properties  map[string]string
+	GroupID     string
+	PartitionID int
+	Offset      uint64
+	DeliveredAt time.Time
+	AckTopic    string
+	NackTopic   string
+	RejectTopic string
 }
 
 func extractGroupFromClientID(clientID string) string {

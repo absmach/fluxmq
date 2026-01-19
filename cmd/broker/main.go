@@ -317,6 +317,7 @@ func main() {
 			b.DeliverToSessionByID,
 			queuelog.DefaultConfig(),
 			logger,
+			cl,
 		)
 
 		if err := b.SetQueueManager(qm); err != nil {
