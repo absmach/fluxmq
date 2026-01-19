@@ -3,7 +3,7 @@
 
 //go:build integration
 
-package log
+package queue
 
 import (
 	"context"

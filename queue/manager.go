@@ -7,335 +7,201 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
-	"github.com/absmach/fluxmq/queue/delivery"
-	"github.com/absmach/fluxmq/queue/lifecycle"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
-	"github.com/google/uuid"
+	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
-// DeliverFn defines the interface for message delivery to MQTT clients.
-// This allows the queue manager to deliver messages without depending on the full broker.
+// DeliverFn is the callback for delivering messages to MQTT clients.
 type DeliverFn func(ctx context.Context, clientID string, msg any) error
 
-// ConsumerRoutingMode defines how messages are delivered to consumers in a cluster.
-type ConsumerRoutingMode string
-
-const (
-	// ProxyMode routes messages through the consumer's proxy node.
-	// The partition owner sends messages to the node where the consumer is connected.
-	// This is the default and recommended mode.
-	ProxyMode ConsumerRoutingMode = "proxy"
-
-	// DirectMode requires consumers to connect directly to partition owners.
-	// Partition workers only deliver to local consumers.
-	// This reduces network hops but requires client-side partition awareness.
-	DirectMode ConsumerRoutingMode = "direct"
-)
-
-// Manager manages all queues in the system.
-//
-// For cluster mode, after creating the Manager, you must register it with the cluster
-// to enable queue RPC handling:
-//
-//	if etcdCluster, ok := cluster.(*cluster.EtcdCluster); ok {
-//	    etcdCluster.SetQueueHandler(queueManager)
-//	}
+// Manager is the log-based queue manager.
+// It uses append-only logs with cursor-based consumer groups.
 type Manager struct {
-	queues            map[string]*Queue
-	deliveryWorkers   map[string]*delivery.Worker
-	raftManagers      map[string]*RaftManager                // Per-queue Raft managers
-	retentionManagers map[string]*lifecycle.RetentionManager // Per-queue retention managers
-	queueStore        storage.QueueStore
-	messageStore      storage.MessageStore
-	consumerStore     storage.ConsumerStore
-	broker            DeliverFn
-	retryManager      *lifecycle.RetryManager
-	dlqManager        *lifecycle.DLQManager
-	mu                sync.RWMutex
-	stopCh            chan struct{}
-	stopOnce          sync.Once
-	wg                sync.WaitGroup
+	logStore        storage.LogStore
+	groupStore      storage.ConsumerGroupStore
+	consumerManager *consumer.Manager
+	dlqHandler      *consumer.DLQHandler
+	deliverFn       DeliverFn
+	logger          *slog.Logger
+	config          Config
 
-	// Cluster support (nil for single-node mode)
-	cluster             cluster.Cluster
-	localNodeID         string
-	consumerRoutingMode ConsumerRoutingMode
-	dataDir             string            // For Raft storage
-	nodeAddresses       map[string]string // nodeID -> raft bind address
+	// Cluster support for cross-node message routing
+	cluster     cluster.Cluster
+	localNodeID string
+
+	// Active consumer groups: queueName -> groupID -> group state
+	groups sync.Map // map[string]*sync.Map
+
+	// Active delivery workers: queueName -> partitionID -> worker
+	workers sync.Map // map[string]*sync.Map
+
+	// Subscription patterns: clientID -> []pattern
+	subscriptions sync.Map // map[string][]string
+
+	mu       sync.RWMutex
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
+
+	// Metrics
+	metrics *consumer.Metrics
 }
 
-// Config holds configuration for the queue manager.
+// Config holds configuration for the log-based queue manager.
 type Config struct {
-	QueueStore    storage.QueueStore
-	MessageStore  storage.MessageStore
-	ConsumerStore storage.ConsumerStore
-	DeliverFn     DeliverFn
+	// Consumer configuration
+	VisibilityTimeout time.Duration
+	MaxDeliveryCount  int
+	ClaimBatchSize    int
 
-	// Optional cluster support
-	Cluster             cluster.Cluster
-	LocalNodeID         string
-	ConsumerRoutingMode ConsumerRoutingMode // Default: ProxyMode
+	// Delivery configuration
+	DeliveryInterval  time.Duration
+	DeliveryBatchSize int
+	HeartbeatInterval time.Duration
+	ConsumerTimeout   time.Duration
 
-	// Optional Raft replication support
-	DataDir       string            // Directory for Raft data storage
-	NodeAddresses map[string]string // nodeID -> raft bind address (for Raft transport)
+	// DLQ configuration
+	DLQTopicPrefix string
+
+	// Work stealing configuration
+	StealInterval time.Duration
+	StealEnabled  bool
+
+	// Retention configuration
+	RetentionCheckInterval time.Duration
 }
 
-// NewManager creates a new queue manager.
-func NewManager(cfg Config) (*Manager, error) {
-	if cfg.QueueStore == nil || cfg.MessageStore == nil || cfg.ConsumerStore == nil {
-		return nil, fmt.Errorf("queue stores cannot be nil")
+// DefaultConfig returns default configuration.
+func DefaultConfig() Config {
+	return Config{
+		VisibilityTimeout:      30 * time.Second,
+		MaxDeliveryCount:       5,
+		ClaimBatchSize:         10,
+		DeliveryInterval:       10 * time.Millisecond,
+		DeliveryBatchSize:      100,
+		HeartbeatInterval:      10 * time.Second,
+		ConsumerTimeout:        30 * time.Second,
+		DLQTopicPrefix:         "$dlq/",
+		StealInterval:          5 * time.Second,
+		StealEnabled:           true,
+		RetentionCheckInterval: 5 * time.Minute,
+	}
+}
+
+// NewManager creates a new log-based queue manager.
+// The cluster parameter is optional (nil for single-node mode).
+func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore, deliverFn DeliverFn, config Config, logger *slog.Logger, cl cluster.Cluster) *Manager {
+	if logger == nil {
+		logger = slog.Default()
 	}
 
-	// Create DLQ manager with HTTP alert handler
-	alertHandler := lifecycle.NewHTTPAlertHandler(10 * time.Second)
-	dlqManager := lifecycle.NewDLQManager(cfg.MessageStore, alertHandler)
+	metrics := consumer.NewMetrics()
 
-	// Create retry manager
-	retryManager := lifecycle.NewRetryManager(cfg.MessageStore, dlqManager)
-
-	// Default to single-node if no cluster or node ID provided
-	localNodeID := cfg.LocalNodeID
-	if localNodeID == "" {
-		localNodeID = "local"
+	consumerCfg := consumer.Config{
+		VisibilityTimeout: config.VisibilityTimeout,
+		MaxDeliveryCount:  config.MaxDeliveryCount,
+		ClaimBatchSize:    config.ClaimBatchSize,
+		StealBatchSize:    5,
 	}
 
-	// Default to ProxyMode if not specified
-	routingMode := cfg.ConsumerRoutingMode
-	if routingMode == "" {
-		routingMode = ProxyMode
+	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
+
+	dlqCfg := consumer.DLQConfig{
+		MaxDeliveryCount: config.MaxDeliveryCount,
+		DLQTopicPrefix:   config.DLQTopicPrefix,
+		IncludeMetadata:  true,
+	}
+
+	dlqHandler := consumer.NewDLQHandler(logStore, groupStore, dlqCfg, metrics)
+
+	var localNodeID string
+	if cl != nil {
+		localNodeID = cl.NodeID()
 	}
 
 	return &Manager{
-		queues:              make(map[string]*Queue),
-		deliveryWorkers:     make(map[string]*delivery.Worker),
-		raftManagers:        make(map[string]*RaftManager),
-		retentionManagers:   make(map[string]*lifecycle.RetentionManager),
-		queueStore:          cfg.QueueStore,
-		messageStore:        cfg.MessageStore,
-		consumerStore:       cfg.ConsumerStore,
-		broker:              cfg.DeliverFn,
-		retryManager:        retryManager,
-		dlqManager:          dlqManager,
-		stopCh:              make(chan struct{}),
-		cluster:             cfg.Cluster,
-		localNodeID:         localNodeID,
-		consumerRoutingMode: routingMode,
-		dataDir:             cfg.DataDir,
-		nodeAddresses:       cfg.NodeAddresses,
-	}, nil
+		logStore:        logStore,
+		groupStore:      groupStore,
+		consumerManager: consumerMgr,
+		dlqHandler:      dlqHandler,
+		deliverFn:       deliverFn,
+		logger:          logger,
+		config:          config,
+		cluster:         cl,
+		localNodeID:     localNodeID,
+		stopCh:          make(chan struct{}),
+		metrics:         metrics,
+	}
 }
 
-// Start starts the queue manager background tasks.
+// Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
-	// Load existing queues from storage
-	configs, err := m.queueStore.ListQueues(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to load queues: %w", err)
+	// Start delivery workers for each queue
+	m.wg.Add(1)
+	go m.runDeliveryLoop()
+
+	// Start work stealing if enabled
+	if m.config.StealEnabled {
+		m.wg.Add(1)
+		go m.runStealLoop()
 	}
 
-	for _, config := range configs {
-		if err := m.createQueueInstance(config); err != nil {
-			return fmt.Errorf("failed to create queue %s: %w", config.Name, err)
-		}
+	// Start consumer cleanup
+	m.wg.Add(1)
+	go m.runCleanupLoop()
 
-		// Acquire ownership for partitions assigned to this node
-		queue, err := m.GetQueue(config.Name)
-		if err != nil {
-			return fmt.Errorf("failed to get queue %s: %w", config.Name, err)
-		}
+	// Start retention
+	m.wg.Add(1)
+	go m.runRetentionLoop()
 
-		if err := m.acquirePartitionsForQueue(ctx, queue); err != nil {
-			return fmt.Errorf("failed to acquire partitions for queue %s: %w", config.Name, err)
-		}
-
-		// Restore consumers from persistent storage
-		if err := m.restoreConsumers(ctx, queue); err != nil {
-			return fmt.Errorf("failed to restore consumers for queue %s: %w", config.Name, err)
-		}
-	}
-
-	// Start retry manager
-	m.retryManager.Start(ctx)
-
+	m.logger.Info("log-based queue manager started")
 	return nil
 }
 
-// Stop stops the queue manager and all background tasks.
+// Stop stops the manager and all workers.
 func (m *Manager) Stop() error {
 	m.stopOnce.Do(func() {
-		m.mu.Lock()
-		// Stop all delivery workers
-		for _, worker := range m.deliveryWorkers {
-			worker.Stop()
-		}
-
-		// Stop all Raft managers
-		for _, raftMgr := range m.raftManagers {
-			if err := raftMgr.Shutdown(); err != nil {
-				slog.Error("failed to shutdown raft manager", slog.String("error", err.Error()))
-			}
-		}
-		m.mu.Unlock()
-
-		// Stop retry manager
-		if m.retryManager != nil {
-			m.retryManager.Stop()
-		}
-
 		close(m.stopCh)
-		m.wg.Wait()
 	})
+
+	m.wg.Wait()
+	m.logger.Info("log-based queue manager stopped")
 	return nil
 }
 
-// CreateQueue creates a new queue with the given configuration.
+// --- Queue Operations ---
+
+// CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	// Set defaults
-	if config.DLQConfig.Topic == "" && config.DLQConfig.Enabled {
-		config.DLQConfig.Topic = "$queue/dlq/" + strings.TrimPrefix(config.Name, "$queue/")
-	}
-
-	// Validate config
-	if err := config.Validate(); err != nil {
+	if err := m.logStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
 
-	// Store in persistent storage
-	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
-		return err
-	}
-
-	// Create queue instance
-	return m.createQueueInstance(config)
-}
-
-// createQueueInstance creates a queue instance in memory.
-func (m *Manager) createQueueInstance(config types.QueueConfig) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.queues[config.Name]; exists {
-		return storage.ErrQueueAlreadyExists
-	}
-
-	queue := NewQueue(config, m.messageStore, m.consumerStore)
-	m.queues[config.Name] = queue
-
-	// Register queue with retry manager
-	if m.retryManager != nil {
-		m.retryManager.RegisterQueue(queue)
-	}
-
-	// Create RaftManager if replication is enabled
-	if config.Replication.Enabled {
-		raftMgr, err := NewRaftManager(RaftManagerConfig{
-			QueueName:     config.Name,
-			Config:        config.Replication,
-			NodeID:        m.localNodeID,
-			DataDir:       m.dataDir,
-			MessageStore:  m.messageStore,
-			NodeAddresses: m.nodeAddresses,
-			Logger:        slog.Default(),
-		})
-		if err != nil {
-			delete(m.queues, config.Name)
-			return fmt.Errorf("failed to create raft manager: %w", err)
-		}
-
-		m.raftManagers[config.Name] = raftMgr
-
-		// Start Raft partitions
-		ctx := context.Background()
-		for partID := 0; partID < config.Partitions; partID++ {
-			if err := raftMgr.StartPartition(ctx, partID, config.Partitions); err != nil {
-				delete(m.queues, config.Name)
-				raftMgr.Shutdown()
-				delete(m.raftManagers, config.Name)
-				return fmt.Errorf("failed to start raft partition %d: %w", partID, err)
-			}
-		}
-
-		// Register RaftManager as proposer with retry manager for replicated operations
-		if m.retryManager != nil {
-			m.retryManager.RegisterRaftProposer(config.Name, raftMgr)
-		}
-	}
-
-	// Get RaftManager if exists (use interface type to avoid Go's typed nil gotcha)
-	var raftMgr delivery.RaftManager
-	if config.Replication.Enabled {
-		if rm := m.raftManagers[config.Name]; rm != nil {
-			raftMgr = rm
-		}
-	}
-
-	// Create RetentionManager if retention policy is configured
-	if config.Retention.RetentionTime > 0 || config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0 || config.Retention.CompactionEnabled {
-		retentionMgr := lifecycle.NewRetentionManager(config.Name, config.Retention, m.messageStore, m.raftManagers[config.Name], slog.Default())
-		m.retentionManagers[config.Name] = retentionMgr
-		// Note: RetentionManager will be started by partition workers (only leaders should run retention)
-	}
-
-	// Get RetentionManager if exists (use interface type to avoid Go's typed nil gotcha)
-	var retentionMgr delivery.RetentionManager
-	if rm := m.retentionManagers[config.Name]; rm != nil {
-		retentionMgr = rm
-	}
-
-	// Create delivery worker
-	worker := delivery.NewWorker(
-		queue,
-		m.messageStore,
-		// Cast m.DeliverQueueMessage to delivery.DeliverFn
-		// This works because the signature matches
-		m.DeliverQueueMessage,
-		m.cluster,
-		m.localNodeID,
-		delivery.ConsumerRoutingMode(m.consumerRoutingMode),
-		raftMgr,
-		retentionMgr,
-	)
-
-	m.deliveryWorkers[config.Name] = worker
-
-	// Start worker in background
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		ctx := context.Background()
-		worker.Start(ctx)
-	}()
+	m.logger.Info("queue created",
+		slog.String("queue", config.Name),
+		slog.Int("partitions", config.Partitions))
 
 	return nil
 }
 
-// GetQueue returns a queue by name.
-func (m *Manager) GetQueue(queueName string) (*Queue, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	queue, exists := m.queues[queueName]
-	if !exists {
-		return nil, storage.ErrQueueNotFound
+// GetOrCreateQueue gets or creates a queue with default configuration.
+func (m *Manager) GetOrCreateQueue(ctx context.Context, queueTopic string) (*types.QueueConfig, error) {
+	// Extract queue root from topic
+	queueRoot := types.ExtractQueueRoot(queueTopic)
+	if queueRoot == "" {
+		queueRoot = queueTopic
 	}
 
-	return queue, nil
-}
-
-// GetOrCreateQueue gets an existing queue or creates one with default config.
-func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string) (*Queue, error) {
-	// Try to get existing queue
-	queue, err := m.GetQueue(queueName)
+	// Try to get existing
+	config, err := m.logStore.GetQueue(ctx, queueRoot)
 	if err == nil {
-		return queue, nil
+		return config, nil
 	}
 
 	if err != storage.ErrQueueNotFound {
@@ -343,695 +209,752 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string) (*Queu
 	}
 
 	// Create with default config
-	config := types.DefaultQueueConfig(queueName)
-	if err := m.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
-		return nil, err
+	defaultConfig := types.DefaultQueueConfig(queueRoot)
+	if err := m.CreateQueue(ctx, defaultConfig); err != nil {
+		if err != storage.ErrQueueAlreadyExists {
+			return nil, err
+		}
 	}
 
-	return m.GetQueue(queueName)
+	return m.logStore.GetQueue(ctx, queueRoot)
 }
 
+// DeleteQueue deletes a queue.
+func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
+	return m.logStore.DeleteQueue(ctx, queueName)
+}
+
+// --- Publish Operations ---
+
 // Enqueue adds a message to a queue.
-func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte, properties map[string]string) error {
-	queue, err := m.GetOrCreateQueue(ctx, queueTopic)
+func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+	// Extract queue root and routing key
+	queueRoot := types.ExtractQueueRoot(topic)
+	if queueRoot == "" {
+		return fmt.Errorf("invalid queue topic: %s", topic)
+	}
+
+	routingKey := types.ExtractRoutingKey(topic, queueRoot)
+
+	// Get or create queue
+	config, err := m.GetOrCreateQueue(ctx, queueRoot)
 	if err != nil {
 		return err
 	}
 
-	// Check queue limits
-	config := queue.Config()
-	if config.MaxQueueDepth > 0 {
-		count, err := m.messageStore.Count(ctx, queueTopic)
-		if err != nil {
-			return fmt.Errorf("failed to get queue depth: %w", err)
-		}
-
-		if count >= config.MaxQueueDepth {
-			return fmt.Errorf("queue is full (depth: %d, max: %d)", count, config.MaxQueueDepth)
-		}
-	}
-
-	// Extract partition key from properties (nil-safe)
-	var partitionKey string
+	// Determine partition
+	partitionKey := ""
 	if properties != nil {
 		partitionKey = properties["partition-key"]
 	}
-
-	// Get partition ID
-	partitionID := queue.GetPartitionForMessage(partitionKey)
-
-	// Replicated path: use Raft for consensus
-	if config.Replication.Enabled {
-		_, err := m.enqueueReplicated(ctx, queueTopic, partitionID, payload, properties, config)
-		return err
+	if partitionKey == "" {
+		partitionKey = routingKey
 	}
 
-	// Non-replicated path: original logic
-	// Check partition ownership (distributed mode)
-	if m.cluster != nil {
-		owner, err := m.getPartitionOwner(ctx, queueTopic, partitionID)
-		if err != nil {
-			return fmt.Errorf("failed to determine partition owner: %w", err)
-		}
+	partitionID := m.getPartitionID(partitionKey, config.Partitions)
 
-		// Route to remote node if not local
-		if owner != m.localNodeID {
-			return m.enqueueRemote(ctx, owner, queueTopic, payload, properties)
-		}
+	// Create message
+	msg := &types.Message{
+		ID:           generateMessageID(),
+		Payload:      payload,
+		Topic:        topic,
+		PartitionKey: partitionKey,
+		PartitionID:  partitionID,
+		Properties:   properties,
+		State:        types.StateQueued,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().Add(config.MessageTTL),
 	}
 
-	// Get next sequence number
-	sequence, err := m.messageStore.GetNextSequence(ctx, queueTopic, partitionID)
-	if err != nil {
-		return fmt.Errorf("failed to get next sequence: %w", err)
+	// Set routing key in properties for filtering
+	if msg.Properties == nil {
+		msg.Properties = make(map[string]string)
 	}
+	msg.Properties["routing-key"] = routingKey
 
-	// Get message from pool
-	msg := getMessageFromPool()
-
-	// Optimize: avoid pool allocation for properties if input is empty
-	var msgProps map[string]string
-	if len(properties) == 0 {
-		// No properties from caller, just create small map for message-id
-		msgProps = make(map[string]string, 1)
-	} else {
-		// Get property map from pool and copy properties
-		msgProps = getPropertyMap()
-		copyProperties(msgProps, properties)
-	}
-
-	// Generate message ID
-	msgID := uuid.New().String()
-	msgProps["message-id"] = msgID
-
-	// Populate message
-	msg.ID = msgID
-	msg.Payload = payload
-	msg.Topic = queueTopic
-	msg.PartitionKey = partitionKey
-	msg.PartitionID = partitionID
-	msg.Sequence = sequence
-	msg.Properties = msgProps
-	msg.State = types.StateQueued
-	msg.CreatedAt = time.Now()
-	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
-
-	// Enqueue (storage layer will make a deep copy)
-	err = m.messageStore.Enqueue(ctx, queueTopic, msg)
-
-	// Return to pools (only if we used pool)
-	if len(properties) > 0 {
-		putPropertyMap(msgProps)
-	}
-	putMessageToPool(msg)
-
+	// Append to log
+	offset, err := m.logStore.Append(ctx, queueRoot, partitionID, msg)
 	if err != nil {
 		return err
 	}
 
-	// Size-based retention check (only if retention is configured)
-	m.mu.RLock()
-	retentionMgr, hasRetention := m.retentionManagers[queueTopic]
-	m.mu.RUnlock()
-
-	if hasRetention && (config.Retention.RetentionBytes > 0 || config.Retention.RetentionMessages > 0) {
-		// Run size retention check asynchronously to avoid blocking enqueue
-		go func() {
-			deletedCount, bytesFreed, retErr := retentionMgr.CheckSizeRetention(ctx, partitionID)
-			if retErr != nil {
-				slog.Error("size retention check failed",
-					slog.String("queue", queueTopic),
-					slog.Int("partition", partitionID),
-					slog.String("error", retErr.Error()))
-			} else if deletedCount > 0 {
-				slog.Debug("size retention cleanup completed",
-					slog.String("queue", queueTopic),
-					slog.Int("partition", partitionID),
-					slog.Int64("deleted", deletedCount),
-					slog.Int64("bytes_freed", bytesFreed))
-			}
-		}()
-	}
-
-	// Notify partition worker that a message is available (event-driven delivery)
-	m.mu.RLock()
-	worker, exists := m.deliveryWorkers[queueTopic]
-	m.mu.RUnlock()
-
-	if exists {
-		worker.NotifyPartition(partitionID)
-	}
+	m.logger.Debug("message enqueued",
+		slog.String("queue", queueRoot),
+		slog.Int("partition", partitionID),
+		slog.Uint64("offset", offset))
 
 	return nil
 }
 
-// enqueueReplicated routes an enqueue through Raft for replication.
-// Returns the message ID and any error.
-func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, partitionID int, payload []byte, properties map[string]string, config types.QueueConfig) (string, error) {
-	// Get Raft manager for this queue
-	m.mu.RLock()
-	raftMgr, exists := m.raftManagers[queueTopic]
-	m.mu.RUnlock()
+// --- Subscribe Operations ---
 
-	if !exists {
-		return "", fmt.Errorf("raft manager not found for queue %s", queueTopic)
+// Subscribe adds a consumer to a queue with optional pattern matching.
+func (m *Manager) Subscribe(ctx context.Context, filter string, clientID, groupID, proxyNodeID string) error {
+	// Parse queue subscription
+	queueRoot, filterPattern := consumer.ParseQueueSubscription(filter)
+	if queueRoot == "" {
+		return fmt.Errorf("invalid queue subscription: %s", filter)
 	}
 
-	// Check if this node is the Raft leader for this partition
-	if !raftMgr.IsLeader(partitionID) {
-		// Wait for leader or fail
-		if err := raftMgr.WaitForLeader(ctx, partitionID); err != nil {
-			return "", fmt.Errorf("no leader available for partition %d: %w", partitionID, err)
-		}
-
-		// After waiting, check again if we're the leader
-		// If not, this is a follower and we should reject the enqueue
-		if !raftMgr.IsLeader(partitionID) {
-			leaderID := ""
-			if group, err := raftMgr.GetPartitionGroup(partitionID); err == nil {
-				leaderID = group.Leader()
-			}
-			return "", fmt.Errorf("not leader for partition %d (leader: %s)", partitionID, leaderID)
-		}
-	}
-
-	// Prepare message
-	sequence, err := m.messageStore.GetNextSequence(ctx, queueTopic, partitionID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get next sequence: %w", err)
-	}
-
-	// Get message from pool
-	msg := getMessageFromPool()
-
-	// Optimize: avoid pool allocation for properties if input is empty
-	var msgProps map[string]string
-	if len(properties) == 0 {
-		msgProps = make(map[string]string, 1)
-	} else {
-		msgProps = getPropertyMap()
-		copyProperties(msgProps, properties)
-	}
-
-	// Use existing message-id if provided, otherwise generate new one
-	var msgID string
-	if properties != nil && properties["message-id"] != "" {
-		msgID = properties["message-id"]
-	} else {
-		msgID = uuid.New().String()
-	}
-	msgProps["message-id"] = msgID
-
-	// Extract partition key
-	var partitionKey string
-	if properties != nil {
-		partitionKey = properties["partition-key"]
-	}
-
-	// Populate message
-	msg.ID = msgID
-	msg.Payload = payload
-	msg.Topic = queueTopic
-	msg.PartitionKey = partitionKey
-	msg.PartitionID = partitionID
-	msg.Sequence = sequence
-	msg.Properties = msgProps
-	msg.State = types.StateQueued
-	msg.CreatedAt = time.Now()
-	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
-
-	// Create a copy for Raft (FSM needs the data to persist)
-	// We can't return msg to pool until FSM applies it
-	raftMsg := &types.Message{
-		ID:           msg.ID,
-		Payload:      append([]byte(nil), msg.Payload...), // Copy payload
-		Topic:        msg.Topic,
-		PartitionKey: msg.PartitionKey,
-		PartitionID:  msg.PartitionID,
-		Sequence:     msg.Sequence,
-		State:        msg.State,
-		CreatedAt:    msg.CreatedAt,
-		ExpiresAt:    msg.ExpiresAt,
-	}
-	// Copy properties map
-	raftMsg.Properties = make(map[string]string, len(msg.Properties))
-	for k, v := range msg.Properties {
-		raftMsg.Properties[k] = v
-	}
-
-	// Apply via Raft (this will replicate to followers)
-	err = raftMgr.ApplyEnqueue(ctx, partitionID, raftMsg)
-
-	// Return to pools (safe now since we made a copy)
-	if len(properties) > 0 {
-		putPropertyMap(msgProps)
-	}
-	putMessageToPool(msg)
-
-	if err != nil {
-		return "", fmt.Errorf("raft apply failed: %w", err)
-	}
-
-	// Notify partition worker that a message is available
-	m.mu.RLock()
-	worker, exists := m.deliveryWorkers[queueTopic]
-	m.mu.RUnlock()
-
-	if exists {
-		worker.NotifyPartition(partitionID)
-	}
-
-	return msgID, nil
-}
-
-// Subscribe adds a consumer to a queue.
-func (m *Manager) Subscribe(ctx context.Context, queueTopic, clientID, groupID, proxyNodeID string) error {
-	queue, err := m.GetOrCreateQueue(ctx, queueTopic)
+	// Ensure queue exists
+	config, err := m.GetOrCreateQueue(ctx, queueRoot)
 	if err != nil {
 		return err
 	}
 
-	// Use client ID as consumer ID (could be enhanced with separate consumer ID)
-	consumerID := clientID
-
-	// If no group specified, use client ID prefix as group name
+	// Default group ID to client prefix
 	if groupID == "" {
-		// Extract prefix before first dash or use full client ID
-		parts := strings.SplitN(clientID, "-", 2)
-		groupID = parts[0]
+		groupID = extractGroupFromClientID(clientID)
 	}
 
-	return queue.AddConsumer(ctx, groupID, consumerID, clientID, proxyNodeID)
+	// Create unique group ID that includes the pattern
+	patternGroupID := groupID
+	if filterPattern != "" {
+		patternGroupID = fmt.Sprintf("%s@%s", groupID, filterPattern)
+	}
+
+	// Get or create consumer group
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueRoot, patternGroupID, filterPattern)
+	if err != nil {
+		return err
+	}
+
+	// Register consumer
+	if err := m.consumerManager.RegisterConsumer(ctx, queueRoot, group.ID, clientID, clientID, proxyNodeID); err != nil {
+		return err
+	}
+
+	// Track subscription
+	m.trackSubscription(clientID, filter)
+
+	// Start delivery worker if needed
+	m.ensureDeliveryWorker(config, group)
+
+	m.logger.Info("consumer subscribed",
+		slog.String("queue", queueRoot),
+		slog.String("group", patternGroupID),
+		slog.String("client", clientID),
+		slog.String("pattern", filterPattern))
+
+	return nil
 }
 
 // Unsubscribe removes a consumer from a queue.
-func (m *Manager) Unsubscribe(ctx context.Context, queueTopic, clientID, groupID string) error {
-	queue, err := m.GetQueue(queueTopic)
-	if err != nil {
-		return err
-	}
-
-	consumerID := clientID
-
-	// If no group specified, derive from client ID
-	if groupID == "" {
-		parts := strings.SplitN(clientID, "-", 2)
-		groupID = parts[0]
-	}
-
-	return queue.RemoveConsumer(ctx, groupID, consumerID)
-}
-
-// Ack acknowledges successful processing of a message by a consumer group.
-// The message is only deleted when ALL consumer groups have acknowledged it.
-func (m *Manager) Ack(ctx context.Context, queueTopic, messageID, groupID string) error {
-	queue, err := m.GetQueue(queueTopic)
-	if err != nil {
-		return err
-	}
-
-	// Remove this group's inflight tracking
-	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID, groupID); err != nil {
-		// Message might not be inflight (already acked), ignore error
-		if err != storage.ErrMessageNotFound {
-			return err
-		}
-	}
-
-	// Check if any other groups still have this message inflight
-	remaining, err := m.messageStore.GetInflightForMessage(ctx, queue.Name(), messageID)
-	if err != nil {
-		return err
-	}
-
-	// Only delete message when all groups have acknowledged
-	if len(remaining) == 0 {
-		return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
-	}
-
-	return nil
-}
-
-// Nack negatively acknowledges a message (triggers retry for this group).
-// Only affects this consumer group's delivery; other groups are unaffected.
-func (m *Manager) Nack(ctx context.Context, queueTopic, messageID, groupID string) error {
-	queue, err := m.GetQueue(queueTopic)
-	if err != nil {
-		return err
-	}
-
-	// Get message
-	msg, err := m.messageStore.GetMessage(ctx, queue.Name(), messageID)
-	if err != nil {
-		return err
-	}
-
-	// Remove this group's inflight entry
-	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID, groupID); err != nil {
-		if err != storage.ErrMessageNotFound {
-			return err
-		}
-	}
-
-	// Update message state for retry (affects delivery to this group)
-	msg.State = types.StateRetry
-	msg.RetryCount++
-	msg.NextRetryAt = time.Now() // Immediate retry
-
-	return m.messageStore.UpdateMessage(ctx, queue.Name(), msg)
-}
-
-// Reject permanently rejects a message by a consumer group (move to DLQ).
-// The message is moved to DLQ and deleted when ALL groups have either ACKed or Rejected.
-func (m *Manager) Reject(ctx context.Context, queueTopic, messageID, groupID, reason string) error {
-	queue, err := m.GetQueue(queueTopic)
-	if err != nil {
-		return err
-	}
-
-	// Get message
-	msg, err := m.messageStore.GetMessage(ctx, queue.Name(), messageID)
-	if err != nil {
-		return err
-	}
-
-	// Remove this group's inflight entry
-	if err := m.messageStore.RemoveInflight(ctx, queue.Name(), messageID, groupID); err != nil {
-		if err != storage.ErrMessageNotFound {
-			return err
-		}
-	}
-
-	// Check if any other groups still have this message inflight
-	remaining, err := m.messageStore.GetInflightForMessage(ctx, queue.Name(), messageID)
-	if err != nil {
-		return err
-	}
-
-	// Only move to DLQ and delete when all groups are done
-	if len(remaining) == 0 {
-		config := queue.Config()
-		if config.DLQConfig.Enabled {
-			msg.State = types.StateDLQ
-			msg.FailureReason = reason
-			msg.MovedToDLQAt = time.Now()
-
-			if err := m.messageStore.EnqueueDLQ(ctx, config.DLQConfig.Topic, msg); err != nil {
-				return err
-			}
-		}
-
-		// Delete from original queue
-		return m.messageStore.DeleteMessage(ctx, queue.Name(), messageID)
-	}
-
-	return nil
-}
-
-// GetStats returns statistics for a queue.
-func (m *Manager) GetStats(ctx context.Context, queueName string) (*QueueStats, error) {
-	queue, err := m.GetQueue(queueName)
-	if err != nil {
-		return nil, err
-	}
-
-	config := queue.Config()
-
-	// Count messages per partition
-	totalMessages := int64(0)
-	for i := 0; i < config.Partitions; i++ {
-		messages, err := m.messageStore.ListQueued(ctx, queueName, i, 0)
-		if err != nil {
-			return nil, err
-		}
-		totalMessages += int64(len(messages))
-	}
-
-	// Count inflight messages
-	inflight, err := m.messageStore.GetInflight(ctx, queueName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Count DLQ messages
-	dlqMessages := int64(0)
-	if config.DLQConfig.Enabled {
-		dlq, err := m.messageStore.ListDLQ(ctx, config.DLQConfig.Topic, 0)
-		if err == nil {
-			dlqMessages = int64(len(dlq))
-		}
-	}
-
-	// Count active consumers across all groups
-	activeConsumers := 0
-	for _, group := range queue.ConsumerGroups().ListGroups() {
-		activeConsumers += group.Size()
-	}
-
-	return &QueueStats{
-		Name:             queueName,
-		TotalMessages:    totalMessages,
-		InflightMessages: int64(len(inflight)),
-		DLQMessages:      dlqMessages,
-		ActiveConsumers:  activeConsumers,
-		Partitions:       config.Partitions,
-	}, nil
-}
-
-// QueueStats holds queue statistics.
-type QueueStats struct {
-	Name             string
-	TotalMessages    int64
-	InflightMessages int64
-	DLQMessages      int64
-	ActiveConsumers  int
-	Partitions       int
-}
-
-// getPartitionOwner determines which node owns a partition using the configured strategy.
-func (m *Manager) getPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, error) {
-	// Single-node mode: this node owns all partitions
-	if m.cluster == nil {
-		return m.localNodeID, nil
-	}
-
-	queue, err := m.GetQueue(queueName)
-	if err != nil {
-		return "", err
-	}
-
-	config := queue.Config()
-	nodes := m.cluster.Nodes()
-
-	// Get the appropriate partition assigner
-	assigner := m.getPartitionAssigner(config)
-
-	return assigner.GetOwner(ctx, queueName, partitionID, nodes)
-}
-
-// getPartitionAssigner returns the partition assigner based on queue configuration.
-func (m *Manager) getPartitionAssigner(config types.QueueConfig) consumer.PartitionAssigner {
-	// Check if a partition strategy is configured
-	// For now, we'll use hash by default until we add PartitionStrategy to QueueConfig
-	// In Phase 2, we'll add this field to types.QueueConfig
-
-	// Default to hash-based assignment
-	if m.cluster == nil {
-		// Single-node: use hash assigner (deterministic)
-		return consumer.NewHashPartitionAssigner()
-	}
-
-	// Multi-node: use hash by default for Phase 2
-	// TODO: Add config.PartitionStrategy field and switch based on it
-	return consumer.NewHashPartitionAssigner()
-}
-
-// acquirePartitionsForQueue acquires ownership of partitions assigned to this node.
-func (m *Manager) acquirePartitionsForQueue(ctx context.Context, queue *Queue) error {
-	if m.cluster == nil {
-		// Single-node mode: no acquisition needed
+func (m *Manager) Unsubscribe(ctx context.Context, filter string, clientID, groupID string) error {
+	queueRoot, filterPattern := consumer.ParseQueueSubscription(filter)
+	if queueRoot == "" {
 		return nil
 	}
 
-	config := queue.Config()
-	assigner := m.getPartitionAssigner(config)
-	nodes := m.cluster.Nodes()
-
-	// Acquire ownership for partitions assigned to this node
-	for i := 0; i < config.Partitions; i++ {
-		owner, err := assigner.GetOwner(ctx, config.Name, i, nodes)
-		if err != nil {
-			return fmt.Errorf("failed to determine owner for partition %d: %w", i, err)
-		}
-
-		// If this node is the owner, acquire it in etcd
-		if owner == m.localNodeID {
-			if err := m.cluster.AcquirePartition(ctx, config.Name, i, m.localNodeID); err != nil {
-				return fmt.Errorf("failed to acquire partition %d: %w", i, err)
-			}
-		}
+	if groupID == "" {
+		groupID = extractGroupFromClientID(clientID)
 	}
+
+	patternGroupID := groupID
+	if filterPattern != "" {
+		patternGroupID = fmt.Sprintf("%s@%s", groupID, filterPattern)
+	}
+
+	// Unregister consumer
+	if err := m.consumerManager.UnregisterConsumer(ctx, queueRoot, patternGroupID, clientID); err != nil {
+		m.logger.Debug("unregister consumer error",
+			slog.String("error", err.Error()),
+			slog.String("client", clientID))
+	}
+
+	// Untrack subscription
+	m.untrackSubscription(clientID, filter)
+
+	m.logger.Info("consumer unsubscribed",
+		slog.String("queue", queueRoot),
+		slog.String("group", patternGroupID),
+		slog.String("client", clientID))
 
 	return nil
 }
 
-// enqueueRemote routes an enqueue operation to a remote partition owner via gRPC.
-func (m *Manager) enqueueRemote(ctx context.Context, targetNode, queueTopic string, payload []byte, properties map[string]string) error {
-	if m.cluster == nil {
-		return fmt.Errorf("cluster not configured")
+// --- Ack Operations ---
+
+// Ack acknowledges a message.
+func (m *Manager) Ack(ctx context.Context, queueTopic, messageID, groupID string) error {
+	queueRoot := types.ExtractQueueRoot(queueTopic)
+	if queueRoot == "" {
+		return fmt.Errorf("invalid queue topic: %s", queueTopic)
 	}
 
-	// Call RPC to enqueue on remote node
-	_, err := m.cluster.EnqueueRemote(ctx, targetNode, queueTopic, payload, properties)
-	return err
+	// Parse message ID to get partition and offset
+	partitionID, offset, err := parseMessageID(messageID)
+	if err != nil {
+		return err
+	}
+
+	// Find the consumer that has this message pending
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueRoot)
+	if err != nil {
+		return err
+	}
+
+	for _, group := range groups {
+		// Check if this group matches
+		if groupID != "" && group.ID != groupID {
+			continue
+		}
+
+		// Find and ack the message
+		for consumerID := range group.PEL {
+			err := m.consumerManager.Ack(ctx, queueRoot, group.ID, consumerID, partitionID, offset)
+			if err == nil {
+				m.metrics.RecordAck(0)
+				return nil
+			}
+		}
+	}
+
+	return consumer.ErrMessageNotPending
 }
+
+// Nack negatively acknowledges a message.
+func (m *Manager) Nack(ctx context.Context, queueTopic, messageID, groupID string) error {
+	queueRoot := types.ExtractQueueRoot(queueTopic)
+	if queueRoot == "" {
+		return fmt.Errorf("invalid queue topic: %s", queueTopic)
+	}
+
+	partitionID, offset, err := parseMessageID(messageID)
+	if err != nil {
+		return err
+	}
+
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueRoot)
+	if err != nil {
+		return err
+	}
+
+	for _, group := range groups {
+		if groupID != "" && group.ID != groupID {
+			continue
+		}
+
+		for consumerID := range group.PEL {
+			err := m.consumerManager.Nack(ctx, queueRoot, group.ID, consumerID, partitionID, offset)
+			if err == nil {
+				m.metrics.RecordNack()
+				return nil
+			}
+		}
+	}
+
+	return consumer.ErrMessageNotPending
+}
+
+// Reject rejects a message and moves it to DLQ.
+func (m *Manager) Reject(ctx context.Context, queueTopic, messageID, groupID, reason string) error {
+	queueRoot := types.ExtractQueueRoot(queueTopic)
+	if queueRoot == "" {
+		return fmt.Errorf("invalid queue topic: %s", queueTopic)
+	}
+
+	partitionID, offset, err := parseMessageID(messageID)
+	if err != nil {
+		return err
+	}
+
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueRoot)
+	if err != nil {
+		return err
+	}
+
+	for _, group := range groups {
+		if groupID != "" && group.ID != groupID {
+			continue
+		}
+
+		for consumerID := range group.PEL {
+			err := m.consumerManager.Reject(ctx, queueRoot, group.ID, consumerID, partitionID, offset, reason)
+			if err == nil {
+				m.metrics.RecordReject()
+				return nil
+			}
+		}
+	}
+
+	return consumer.ErrMessageNotPending
+}
+
+// --- Heartbeat ---
+
+// UpdateHeartbeat updates the heartbeat for a consumer.
+func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
+	// Find all groups this client belongs to
+	m.subscriptions.Range(func(key, value interface{}) bool {
+		if key.(string) != clientID {
+			return true
+		}
+
+		patterns := value.([]string)
+		for _, filter := range patterns {
+			queueRoot, filterPattern := consumer.ParseQueueSubscription(filter)
+			if queueRoot == "" {
+				continue
+			}
+
+			groupID := extractGroupFromClientID(clientID)
+			if filterPattern != "" {
+				groupID = fmt.Sprintf("%s@%s", groupID, filterPattern)
+			}
+
+			m.consumerManager.UpdateHeartbeat(ctx, queueRoot, groupID, clientID)
+		}
+
+		return true
+	})
+	return nil
+}
+
+// --- Background Workers ---
+
+func (m *Manager) runDeliveryLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.config.DeliveryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.deliverMessages()
+		}
+	}
+}
+
+func (m *Manager) deliverMessages() {
+	ctx := context.Background()
+
+	queues, err := m.logStore.ListQueues(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, queueConfig := range queues {
+		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
+		if err != nil {
+			continue
+		}
+
+		for _, group := range groups {
+			m.deliverToGroup(ctx, &queueConfig, group)
+		}
+	}
+}
+
+func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState) {
+	if len(group.Consumers) == 0 {
+		return
+	}
+
+	// Create filter from group pattern
+	var filter *consumer.Filter
+	if group.Pattern != "" {
+		filter = consumer.NewFilter(group.Pattern)
+	}
+
+	// Round-robin delivery across consumers and partitions
+	consumers := make([]string, 0, len(group.Consumers))
+	for id := range group.Consumers {
+		consumers = append(consumers, id)
+	}
+
+	if len(consumers) == 0 {
+		return
+	}
+
+	consumerIdx := 0
+
+	for partitionID := 0; partitionID < config.Partitions; partitionID++ {
+		// Try to claim messages for each consumer
+		for i := 0; i < len(consumers); i++ {
+			consumerID := consumers[consumerIdx]
+			consumerIdx = (consumerIdx + 1) % len(consumers)
+
+			msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, partitionID, filter, m.config.DeliveryBatchSize)
+			if err != nil {
+				// ErrNoMessages is normal - no need to log
+				continue
+			}
+
+			// Fetch fresh group state to get current consumer info
+			freshGroup, err := m.groupStore.GetConsumerGroup(ctx, config.Name, group.ID)
+			if err != nil {
+				m.logger.Debug("failed to get fresh group",
+					slog.String("queue", config.Name),
+					slog.String("group", group.ID),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			consumerInfo := freshGroup.Consumers[consumerID]
+			if consumerInfo == nil {
+				m.logger.Debug("consumer not found in group",
+					slog.String("consumer", consumerID),
+					slog.String("group", group.ID))
+				continue
+			}
+
+			for _, msg := range msgs {
+				// Check if consumer is on a remote node
+				if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
+					// Route to remote node
+					err := m.cluster.RouteQueueMessage(
+						ctx,
+						consumerInfo.ProxyNodeID,
+						consumerInfo.ClientID,
+						config.Name,
+						msg.ID,
+						msg.GetPayload(),
+						msg.Properties,
+						int64(msg.Sequence),
+						partitionID,
+					)
+					if err != nil {
+						m.logger.Warn("queue message remote routing failed",
+							slog.String("client", consumerInfo.ClientID),
+							slog.String("node", consumerInfo.ProxyNodeID),
+							slog.String("topic", msg.Topic),
+							slog.String("error", err.Error()))
+					}
+				} else if m.deliverFn != nil {
+					// Local delivery
+					deliveryMsg := m.createDeliveryMessage(msg, group.ID, partitionID)
+
+					if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
+						m.logger.Warn("queue message delivery failed",
+							slog.String("client", consumerInfo.ClientID),
+							slog.String("topic", msg.Topic),
+							slog.String("error", err.Error()))
+					}
+				}
+			}
+		}
+	}
+}
+
+func (m *Manager) runStealLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.config.StealInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.processWorkStealing()
+		}
+	}
+}
+
+func (m *Manager) processWorkStealing() {
+	ctx := context.Background()
+
+	queues, err := m.logStore.ListQueues(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, queueConfig := range queues {
+		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
+		if err != nil {
+			continue
+		}
+
+		for _, group := range groups {
+			// Process DLQ for expired entries
+			moved, err := m.dlqHandler.ProcessExpiredEntries(ctx, queueConfig.Name, group.ID)
+			if err != nil {
+				m.logger.Debug("DLQ processing error",
+					slog.String("error", err.Error()))
+			} else if moved > 0 {
+				m.logger.Debug("moved messages to DLQ",
+					slog.Int("count", moved),
+					slog.String("queue", queueConfig.Name))
+			}
+		}
+	}
+}
+
+func (m *Manager) runCleanupLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.config.ConsumerTimeout)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.cleanupStaleConsumers()
+		}
+	}
+}
+
+func (m *Manager) cleanupStaleConsumers() {
+	ctx := context.Background()
+
+	queues, err := m.logStore.ListQueues(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, queueConfig := range queues {
+		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
+		if err != nil {
+			continue
+		}
+
+		for _, group := range groups {
+			removed, err := m.consumerManager.CleanupStaleConsumers(ctx, queueConfig.Name, group.ID, m.config.ConsumerTimeout)
+			if err == nil && len(removed) > 0 {
+				m.logger.Info("cleaned up stale consumers",
+					slog.Int("count", len(removed)),
+					slog.String("queue", queueConfig.Name),
+					slog.String("group", group.ID))
+			}
+		}
+	}
+}
+
+func (m *Manager) runRetentionLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.config.RetentionCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.processRetention()
+		}
+	}
+}
+
+func (m *Manager) processRetention() {
+	ctx := context.Background()
+
+	queues, err := m.logStore.ListQueues(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, queueConfig := range queues {
+		for partitionID := 0; partitionID < queueConfig.Partitions; partitionID++ {
+			// Get minimum committed offset across all groups
+			minCommitted, err := m.consumerManager.GetMinCommittedOffset(ctx, queueConfig.Name, partitionID)
+			if err != nil {
+				continue
+			}
+
+			// Truncate log up to committed offset
+			if err := m.logStore.Truncate(ctx, queueConfig.Name, partitionID, minCommitted); err != nil {
+				m.logger.Debug("truncation error",
+					slog.String("error", err.Error()),
+					slog.String("queue", queueConfig.Name),
+					slog.Int("partition", partitionID))
+			}
+		}
+	}
+}
+
+// --- Helper Functions ---
+
+func (m *Manager) getPartitionID(key string, partitions int) int {
+	if partitions <= 0 {
+		return 0
+	}
+	if key == "" {
+		return 0
+	}
+
+	// FNV-1a hash
+	var hash uint32 = 2166136261
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= 16777619
+	}
+
+	return int(hash % uint32(partitions))
+}
+
+func (m *Manager) trackSubscription(clientID, filter string) {
+	val, _ := m.subscriptions.LoadOrStore(clientID, []string{})
+	patterns := val.([]string)
+	patterns = append(patterns, filter)
+	m.subscriptions.Store(clientID, patterns)
+}
+
+func (m *Manager) untrackSubscription(clientID, filter string) {
+	val, ok := m.subscriptions.Load(clientID)
+	if !ok {
+		return
+	}
+
+	patterns := val.([]string)
+	newPatterns := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if p != filter {
+			newPatterns = append(newPatterns, p)
+		}
+	}
+
+	if len(newPatterns) == 0 {
+		m.subscriptions.Delete(clientID)
+	} else {
+		m.subscriptions.Store(clientID, newPatterns)
+	}
+}
+
+func (m *Manager) ensureDeliveryWorker(config *types.QueueConfig, group *types.ConsumerGroupState) {
+	// Workers are managed by the delivery loop
+}
+
+func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, partitionID int) *brokerstorage.Message {
+	messageID := fmt.Sprintf("%d:%d", partitionID, msg.Sequence)
+
+	// Create properties map with ack info
+	props := make(map[string]string)
+	if msg.Properties != nil {
+		for k, v := range msg.Properties {
+			props[k] = v
+		}
+	}
+	props["message-id"] = messageID
+	props["group-id"] = groupID
+	props["partition-id"] = fmt.Sprintf("%d", partitionID)
+	props["offset"] = fmt.Sprintf("%d", msg.Sequence)
+
+	deliveryMsg := &brokerstorage.Message{
+		Topic:      msg.Topic,
+		QoS:        1, // Queue messages use QoS 1 by default
+		Properties: props,
+	}
+	deliveryMsg.SetPayloadFromBytes(msg.GetPayload())
+
+	return deliveryMsg
+}
+
+// DeliveryMessage is the internal message format for queue delivery tracking.
+// Note: For actual MQTT delivery, we convert to *brokerstorage.Message.
+type DeliveryMessage struct {
+	ID          string
+	Payload     []byte
+	Topic       string
+	Properties  map[string]string
+	GroupID     string
+	PartitionID int
+	Offset      uint64
+	DeliveredAt time.Time
+	AckTopic    string
+	NackTopic   string
+	RejectTopic string
+}
+
+func extractGroupFromClientID(clientID string) string {
+	// Extract prefix before first dash
+	for i, c := range clientID {
+		if c == '-' {
+			return clientID[:i]
+		}
+	}
+	return clientID
+}
+
+func generateMessageID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func parseMessageID(messageID string) (partitionID int, offset uint64, err error) {
+	_, err = fmt.Sscanf(messageID, "%d:%d", &partitionID, &offset)
+	return
+}
+
+// --- Metrics ---
+
+// GetMetrics returns the current metrics snapshot.
+func (m *Manager) GetMetrics() consumer.Metrics {
+	return m.metrics.Snapshot()
+}
+
+// GetLag returns the lag for a consumer group.
+func (m *Manager) GetLag(ctx context.Context, queueName, groupID string, partitionID int) (uint64, error) {
+	return m.consumerManager.GetLag(ctx, queueName, groupID, partitionID)
+}
+
+// GetDLQCount returns the number of messages in the DLQ.
+func (m *Manager) GetDLQCount(ctx context.Context, queueName string) (uint64, error) {
+	return m.dlqHandler.GetDLQCount(ctx, queueName)
+}
+
+// --- Cluster QueueHandler Implementation ---
 
 // EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.
 // This is called by the gRPC handler when a remote node sends an enqueue request.
 func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) (string, error) {
-	// This is the local enqueue path - bypass ownership checks since we're already the owner
-	queue, err := m.GetOrCreateQueue(ctx, queueName)
+	// Use the existing Enqueue method which handles all the logic
+	err := m.Enqueue(ctx, queueName, payload, properties)
 	if err != nil {
 		return "", err
 	}
 
-	config := queue.Config()
-
-	// Check queue limits
-	if config.MaxQueueDepth > 0 {
-		count, err := m.messageStore.Count(ctx, queueName)
-		if err != nil {
-			return "", fmt.Errorf("failed to get queue depth: %w", err)
-		}
-
-		if count >= config.MaxQueueDepth {
-			return "", fmt.Errorf("queue is full (depth: %d, max: %d)", count, config.MaxQueueDepth)
-		}
+	// Return message ID from properties if available
+	if properties != nil && properties["message-id"] != "" {
+		return properties["message-id"], nil
 	}
 
-	// Extract partition key from properties (nil-safe)
-	var partitionKey string
-	if properties != nil {
-		partitionKey = properties["partition-key"]
-	}
-
-	// Get partition ID
-	partitionID := queue.GetPartitionForMessage(partitionKey)
-
-	// Route through Raft if replication is enabled
-	if config.Replication.Enabled {
-		return m.enqueueReplicated(ctx, queueName, partitionID, payload, properties, config)
-	}
-
-	// Get next sequence number
-	sequence, err := m.messageStore.GetNextSequence(ctx, queueName, partitionID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get next sequence: %w", err)
-	}
-
-	// Get message from pool
-	msg := getMessageFromPool()
-
-	// Optimize: avoid pool allocation for properties if input is empty
-	var msgProps map[string]string
-	if len(properties) == 0 {
-		msgProps = make(map[string]string, 1)
-	} else {
-		msgProps = getPropertyMap()
-		copyProperties(msgProps, properties)
-	}
-
-	// Generate message ID
-	msgID := uuid.New().String()
-	msgProps["message-id"] = msgID
-
-	// Populate message
-	msg.ID = msgID
-	msg.SetPayloadFromBytes(payload) // Use zero-copy buffer
-	msg.Topic = queueName
-	msg.PartitionKey = partitionKey
-	msg.PartitionID = partitionID
-	msg.Sequence = sequence
-	msg.Properties = msgProps
-	msg.State = types.StateQueued
-	msg.CreatedAt = time.Now()
-	msg.ExpiresAt = msg.CreatedAt.Add(config.MessageTTL)
-
-	// Enqueue (storage layer will make a deep copy)
-	err = m.messageStore.Enqueue(ctx, queueName, msg)
-
-	// Return to pools
-	if len(properties) > 0 {
-		putPropertyMap(msgProps)
-	}
-	putMessageToPool(msg)
-
-	if err != nil {
-		return "", err
-	}
-
-	// Notify partition worker that a message is available
-	m.mu.RLock()
-	worker, exists := m.deliveryWorkers[queueName]
-	m.mu.RUnlock()
-
-	if exists {
-		worker.NotifyPartition(partitionID)
-	}
-
-	return msgID, nil
+	return generateMessageID(), nil
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.
 // This is called by the gRPC handler when a remote partition owner delivers a message.
 func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg any) error {
-	// Delegate to the broker's delivery function
-	if m.broker == nil {
-		return fmt.Errorf("no broker delivery function configured")
+	if m.deliverFn == nil {
+		return fmt.Errorf("no delivery function configured")
 	}
 
-	return m.broker(ctx, clientID, msg)
-}
-
-// restoreConsumers restores consumers from persistent storage after startup.
-func (m *Manager) restoreConsumers(ctx context.Context, queue *Queue) error {
-	groups, err := m.consumerStore.ListGroups(ctx, queue.Name())
-	if err != nil {
-		return err
+	// The msg is a map[string]interface{} from the transport layer
+	// Convert it to a proper delivery message
+	msgMap, ok := msg.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("invalid message type: expected map[string]interface{}")
 	}
 
-	for _, groupID := range groups {
-		consumers, err := m.consumerStore.ListConsumers(ctx, queue.Name(), groupID)
-		if err != nil {
-			return err
-		}
+	// Extract fields from the map
+	queueName, _ := msgMap["queueName"].(string)
+	payload, _ := msgMap["payload"].([]byte)
+	properties, _ := msgMap["properties"].(map[string]string)
+	messageID, _ := msgMap["id"].(string)
+	sequence, _ := msgMap["sequence"].(int64)
+	partitionID, _ := msgMap["partitionId"].(int32)
 
-		for _, consumer := range consumers {
-			// Add to in-memory state (skip storage write since already persisted)
-			queue.ConsumerGroups().RestoreConsumer(consumer)
-		}
-
-		// Rebalance after restoring group
-		if len(consumers) > 0 {
-			queue.ConsumerGroups().Rebalance(groupID, queue.toConsumerPartitions())
-		}
+	// Build properties if nil
+	if properties == nil {
+		properties = make(map[string]string)
 	}
-	return nil
-}
+	properties["message-id"] = messageID
+	properties["partition-id"] = fmt.Sprintf("%d", partitionID)
+	properties["offset"] = fmt.Sprintf("%d", sequence)
 
-// UpdateHeartbeat updates the heartbeat timestamp for a consumer across all queues/groups.
-// This should be called when a PINGREQ is received from a client.
-func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// Update heartbeat for this client across all queues/groups
-	for _, queue := range m.queues {
-		for _, group := range queue.ConsumerGroups().ListGroups() {
-			if consumer, exists := group.GetConsumer(clientID); exists {
-				queue.ConsumerGroups().UpdateHeartbeat(ctx, group.ID(), consumer.ID)
-			}
-		}
+	// Create delivery message
+	deliveryMsg := &brokerstorage.Message{
+		Topic:      queueName,
+		QoS:        1,
+		Properties: properties,
 	}
-	return nil
+	deliveryMsg.SetPayloadFromBytes(payload)
+
+	return m.deliverFn(ctx, clientID, deliveryMsg)
 }

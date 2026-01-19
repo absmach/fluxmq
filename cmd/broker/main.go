@@ -20,7 +20,7 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
-	queuelog "github.com/absmach/fluxmq/queue/log"
+	"github.com/absmach/fluxmq/queue"
 	queueLogBadger "github.com/absmach/fluxmq/queue/storage/badger/log"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/server/coap"
@@ -311,11 +311,11 @@ func main() {
 		logStore := queueLogBadger.New(queueDB)
 
 		// Create log-based queue manager with wildcard support
-		qm := queuelog.NewManager(
+		qm := queue.NewManager(
 			logStore,
 			logStore,
 			b.DeliverToSessionByID,
-			queuelog.DefaultConfig(),
+			queue.DefaultConfig(),
 			logger,
 			cl,
 		)
@@ -323,6 +323,11 @@ func main() {
 		if err := b.SetQueueManager(qm); err != nil {
 			slog.Error("Failed to set queue manager", "error", err)
 			os.Exit(1)
+		}
+
+		// Set queue handler on cluster for cross-node message routing
+		if etcdCluster != nil {
+			etcdCluster.SetQueueHandler(qm)
 		}
 
 		slog.Info("Log-based queue initialized", "storage", "badger", "dir", queueDir)

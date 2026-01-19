@@ -1,7 +1,9 @@
+//go:build ignore
+
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package log
+package archive
 
 import (
 	"context"
@@ -276,8 +278,8 @@ type FSMSnapshot struct {
 
 // SnapshotData is the serialized snapshot format.
 type SnapshotData struct {
-	Queues []types.QueueConfig           `json:"queues"`
-	Groups []*types.ConsumerGroupState   `json:"groups"`
+	Queues []types.QueueConfig         `json:"queues"`
+	Groups []*types.ConsumerGroupState `json:"groups"`
 }
 
 // Persist writes the snapshot to the given sink.

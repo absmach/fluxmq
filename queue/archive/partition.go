@@ -1,7 +1,9 @@
+//go:build ignore
+
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package queue
+package archive
 
 import (
 	"hash"
