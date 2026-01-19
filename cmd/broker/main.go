@@ -20,8 +20,8 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
-	"github.com/absmach/fluxmq/queue"
-	queueBadger "github.com/absmach/fluxmq/queue/storage/badger"
+	queuelog "github.com/absmach/fluxmq/queue/log"
+	queueLogBadger "github.com/absmach/fluxmq/queue/storage/badger/log"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
@@ -293,7 +293,7 @@ func main() {
 		slog.Info("Rate limiting disabled")
 	}
 
-	// Initialize hybrid queue with separate BadgerDB instance
+	// Initialize log-based queue with separate BadgerDB instance
 	if cfg.Storage.Type == "badger" {
 		queueDir := cfg.Storage.BadgerDir + "_queue"
 		opts := badgerLink.DefaultOptions(queueDir)
@@ -307,33 +307,24 @@ func main() {
 		// Ensure queueDB is closed after broker (LIFO order: broker closes first)
 		defer queueDB.Close()
 
-		queueStore := queueBadger.New(queueDB)
+		// Use log-based store (implements both LogStore and ConsumerGroupStore)
+		logStore := queueLogBadger.New(queueDB)
 
-		qm, err := queue.NewManager(queue.Config{
-			QueueStore:    queueStore,
-			MessageStore:  queueStore,
-			ConsumerStore: queueStore,
-			DeliverFn:     b.DeliverToSessionByID,
-			Cluster:       cl,
-			LocalNodeID:   cfg.Cluster.NodeID,
-		})
-		if err != nil {
-			slog.Error("Failed to initialize queue manager", "error", err)
-			os.Exit(1)
-		}
+		// Create log-based queue manager with wildcard support
+		qm := queuelog.NewManager(
+			logStore,
+			logStore,
+			b.DeliverToSessionByID,
+			queuelog.DefaultConfig(),
+			logger,
+		)
 
 		if err := b.SetQueueManager(qm); err != nil {
 			slog.Error("Failed to set queue manager", "error", err)
 			os.Exit(1)
 		}
 
-		// Wire up queue handler for cluster RPC support
-		if etcdCluster != nil {
-			etcdCluster.SetQueueHandler(qm)
-			slog.Info("Queue RPC handler registered with cluster")
-		}
-
-		slog.Info("Hybrid queue initialized", "storage", "badger", "dir", queueDir)
+		slog.Info("Log-based queue initialized", "storage", "badger", "dir", queueDir)
 	}
 
 	// Set message handler on cluster if it's an etcd cluster
