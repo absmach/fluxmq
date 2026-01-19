@@ -145,9 +145,6 @@ func (s *Session) Connect(c core.Connection) error {
 		s.Disconnect(graceful)
 	})
 
-	// Start retry loop using the connection as the packet writer
-	s.msgHandler.StartRetryLoop(c)
-
 	return nil
 }
 
@@ -172,9 +169,6 @@ func (s *Session) Disconnect(graceful bool) error {
 		s.conn = nil
 	}
 	s.state = StateDisconnected
-
-	// MessageHandler stops background tasks
-	s.msgHandler.Stop()
 
 	if graceful {
 		s.Will = nil
@@ -224,6 +218,19 @@ func (s *Session) OfflineQueue() messages.Queue {
 // NextPacketID generates the next packet ID.
 func (s *Session) NextPacketID() uint16 {
 	return s.msgHandler.NextPacketID()
+}
+
+// ProcessRetries checks for expired inflight messages and resends them.
+// This should be called periodically from the read loop.
+func (s *Session) ProcessRetries() {
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return
+	}
+	s.msgHandler.ProcessRetries(conn)
 }
 
 // WritePacket writes a packet to the connection.

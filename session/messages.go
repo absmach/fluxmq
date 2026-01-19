@@ -19,12 +19,10 @@ import (
 // msgHandler manages message tracking, inflight operations, and aliases.
 type msgHandler struct {
 	mu              sync.RWMutex
-	wg              sync.WaitGroup
 	inflight        messages.Inflight
 	offlineQueue    messages.Queue
 	outboundAliases map[string]uint16
 	inboundAliases  map[uint16]string
-	stopCh          chan struct{}
 	nextPacketID    uint32
 	version         byte
 }
@@ -36,22 +34,24 @@ func newMessageHandler(inflight messages.Inflight, offlineQueue messages.Queue, 
 		offlineQueue:    offlineQueue,
 		outboundAliases: make(map[string]uint16),
 		inboundAliases:  make(map[uint16]string),
-		stopCh:          make(chan struct{}),
 		version:         version,
 	}
 }
 
-// StartRetryLoop starts the retry loop for inflight messages.
-func (h *msgHandler) StartRetryLoop(writer core.PacketWriter) {
-	h.wg.Add(1)
-	go h.retryLoop(writer)
-}
+// RetryTimeout is the duration after which inflight messages are considered expired.
+const RetryTimeout = 20 * time.Second
 
-// Stop stops the message handler background tasks.
-func (h *msgHandler) Stop() {
-	close(h.stopCh)
-	h.wg.Wait()
-	h.stopCh = make(chan struct{}) // Reset for reuse if needed, though usually new session
+// ProcessRetries checks for expired inflight messages and resends them.
+// This is called synchronously from the read loop instead of running in a separate goroutine.
+func (h *msgHandler) ProcessRetries(writer core.PacketWriter) {
+	expired := h.inflight.GetExpired(RetryTimeout)
+	for _, inflight := range expired {
+		if err := h.resendMessage(writer, inflight); err != nil {
+			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
+			continue
+		}
+		h.inflight.MarkRetry(inflight.PacketID)
+	}
 }
 
 // Inflight returns the inflight tracker.
@@ -114,29 +114,6 @@ func (h *msgHandler) ClearAliases() {
 	defer h.mu.Unlock()
 	h.outboundAliases = make(map[string]uint16)
 	h.inboundAliases = make(map[uint16]string)
-}
-
-func (h *msgHandler) retryLoop(writer core.PacketWriter) {
-	defer h.wg.Done()
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			expired := h.inflight.GetExpired(20 * time.Second)
-			for _, inflight := range expired {
-				if err := h.resendMessage(writer, inflight); err != nil {
-					slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
-					continue
-				}
-				h.inflight.MarkRetry(inflight.PacketID)
-			}
-		case <-h.stopCh:
-			return
-		}
-	}
 }
 
 func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage) error {

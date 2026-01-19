@@ -5,28 +5,59 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"time"
 
 	"github.com/absmach/fluxmq/core/packets"
 	"github.com/absmach/fluxmq/session"
 )
 
+// retryCheckInterval is how often we check for expired inflight messages.
+const retryCheckInterval = 1 * time.Second
+
 // runSession runs the main packet loop for a session using a Handler.
+// It handles both packet reading and message retry checking in a single goroutine
+// by using short read deadlines and processing retries on timeout.
 func (b *Broker) runSession(handler Handler, s *session.Session) error {
 	conn := s.Conn()
 	if conn == nil {
 		return nil
 	}
 
-	if s.KeepAlive > 0 {
-		deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
-		conn.SetReadDeadline(deadline)
-	}
+	lastActivity := time.Now()
 
 	for {
+		// Calculate read deadline: minimum of keep-alive and retry check interval
+		// This allows us to check retries periodically while respecting keep-alive
+		readTimeout := retryCheckInterval
+		if s.KeepAlive > 0 && s.KeepAlive < readTimeout {
+			readTimeout = s.KeepAlive
+		}
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+
 		pkt, err := s.ReadPacket()
 		if err != nil {
+			// Check if this is a timeout (expected for retry checking)
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				// Check if keep-alive has actually expired
+				if s.KeepAlive > 0 {
+					keepAliveDeadline := s.KeepAlive + s.KeepAlive/2
+					if time.Since(lastActivity) > keepAliveDeadline {
+						// Real keep-alive timeout - client is unresponsive
+						b.stats.DecrementConnections()
+						s.Disconnect(false)
+						return err
+					}
+				}
+				// Just a retry check interval timeout - process retries and continue
+				s.ProcessRetries()
+				continue
+			}
+
+			// Real error (EOF, connection closed, etc.)
 			if err != io.EOF && err != session.ErrNotConnected {
 				b.stats.IncrementPacketErrors()
 			}
@@ -35,13 +66,14 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 			return err
 		}
 
-		if s.KeepAlive > 0 {
-			deadline := time.Now().Add(s.KeepAlive + s.KeepAlive/2)
-			conn.SetReadDeadline(deadline)
-		}
+		// Packet received - update activity time
+		lastActivity = time.Now()
 
 		b.stats.IncrementMessagesReceived()
 		s.Touch()
+
+		// Also process retries after receiving a packet (opportunistic)
+		s.ProcessRetries()
 
 		if err := dispatchPacket(handler, s, pkt); err != nil {
 			if err == io.EOF {
