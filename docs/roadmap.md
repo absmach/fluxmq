@@ -1,7 +1,7 @@
 # MQTT Broker Development Roadmap
 
-**Last Updated:** 2026-01-16
-**Current Phase:** Phase 0 - Production Hardening (TOP PRIORITY)
+**Last Updated:** 2026-01-19
+**Current Phase:** Phase Q - Queue Architecture Redesign (TOP PRIORITY)
 
 ---
 
@@ -11,7 +11,8 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 ### Current Status
 
-- 🚨 **Phase 0: Production Hardening** - TOP PRIORITY (Critical security & operational fixes)
+- 🚨 **Phase Q: Queue Architecture Redesign** - TOP PRIORITY (Log-based model with work stealing)
+- ⏸️ **Phase 0: Production Hardening** - PAUSED (Resume after Phase Q)
 - ✅ **Phase 1: Performance Optimization** - COMPLETE (3.27x faster)
 - ✅ **Phase 2: Queue Replication** - COMPLETE (~98%)
   - ✅ Phase 2.1: Raft Infrastructure - COMPLETE
@@ -26,7 +27,11 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 ## 🎯 Immediate Next Steps
 
-**Current Sprint Focus: Phase 0 - Production Hardening (TOP PRIORITY)**
+**Current Sprint Focus: Phase Q - Queue Architecture Redesign (TOP PRIORITY)**
+
+Phase Q redesigns the queue system from delete-on-ack to a log-based model inspired by Kafka and Redis Streams. This enables wildcard queue subscriptions, work stealing, and better performance.
+
+**Next: Phase 0 - Production Hardening (After Phase Q)**
 
 Phase 0 must be completed before any production deployment. These are critical security vulnerabilities and operational gaps identified during code audit.
 
@@ -87,9 +92,438 @@ Remaining production hardening tasks:
 
 ---
 
-## Phase 0: Production Hardening 🚨 TOP PRIORITY
+## Phase Q: Queue Architecture Redesign 🚨 TOP PRIORITY
 
-**Status:** NOT STARTED - Must complete before production deployment
+**Status:** PLANNING
+**Goal:** Redesign queue system to log-based model with cursors, PEL, and work stealing
+
+This phase fundamentally changes how queues work, moving from a delete-on-ack model to an append-only log model inspired by Kafka and Redis Streams. This enables wildcard queue subscriptions and improves performance and reliability.
+
+---
+
+### Motivation
+
+**Current Model Problems:**
+- Each `$queue/a/b/c` is a separate queue with independent storage
+- Wildcard subscriptions (`$queue/tasks/+`) don't work - would create literal queue named `$queue/tasks/+`
+- Delete-on-ack requires random I/O and causes fragmentation
+- Partition assignment is sticky - slow consumer blocks partition
+
+**New Model Benefits:**
+- Wildcard queue subscriptions work naturally (single log, filter at read time)
+- Sequential append-only writes (high throughput)
+- Work stealing enables self-healing (claim from slow consumer's PEL)
+- Simpler recovery (just load cursors, no rebuild)
+
+---
+
+### Architecture: Log-Based Model
+
+#### Core Concepts
+
+```
+Queue: $queue/tasks (single append-only log)
+├── Partition 0: [offset 0] [offset 1] [offset 2] ... [offset N]
+├── Partition 1: [offset 0] [offset 1] [offset 2] ... [offset M]
+└── Partition 2: [offset 0] [offset 1] [offset 2] ... [offset K]
+
+Each message has:
+- Offset (position in partition log)
+- Routing key (subtopic after queue name)
+- Payload, properties, timestamp
+```
+
+#### Consumer Groups with Cursors
+
+```
+Consumer Group "workers" for $queue/tasks/#
+├── Partition 0:
+│   ├── cursor: 100 (next offset to deliver)
+│   ├── committed: 95 (oldest unacked)
+│   └── PEL: {consumer-a: [95, 97], consumer-b: [96, 98, 99]}
+├── Partition 1:
+│   ├── cursor: 50
+│   ├── committed: 48
+│   └── PEL: {consumer-a: [48, 49]}
+└── Partition 2: ...
+```
+
+#### Key Differences from Current Model
+
+| Aspect | Current | New (Log-Based) |
+|--------|---------|-----------------|
+| Storage | Delete on ack | Append-only, truncate by retention |
+| Consumer state | Partition assignment (sticky) | Cursor + PEL per partition |
+| Delivery | Push to assigned consumer | Consumer claims from any partition |
+| Ack | Delete message | Advance committed offset, remove from PEL |
+| Failure handling | Redeliver after timeout | Work stealing (claim from other's PEL) |
+| Wildcards | Not supported | Supported via routing key filtering |
+
+---
+
+### Topic Model: Queue Root + Routing Key
+
+**Convention:** `$queue/{name}/{routing-key...}`
+
+```
+Publish to $queue/tasks/images    → queue="$queue/tasks", routing_key="images"
+Publish to $queue/tasks/videos    → queue="$queue/tasks", routing_key="videos"
+Publish to $queue/tasks/us/images → queue="$queue/tasks", routing_key="us/images"
+```
+
+**Subscription Patterns:**
+
+| Pattern | Behavior |
+|---------|----------|
+| `$queue/tasks` | All messages (no filter) |
+| `$queue/tasks/#` | All messages (explicit wildcard) |
+| `$queue/tasks/+` | All messages (single-level wildcard) |
+| `$queue/tasks/images` | Filter: routing_key == "images" |
+| `$queue/tasks/+/png` | Filter: routing_key matches "*/png" |
+
+**Consumer Groups per Subscription Pattern:**
+
+```
+Queue: $queue/tasks
+
+Group "all-workers" @ "$queue/tasks/#"
+├── Reads all messages
+└── Cursor: p0=100, p1=95, p2=80
+
+Group "image-workers" @ "$queue/tasks/images"
+├── Reads only routing_key="images"
+└── Cursor: p0=50, p1=48, p2=40 (lower - skips non-matching)
+```
+
+Same message delivered to both groups if routing key matches both patterns.
+
+---
+
+### Work Stealing
+
+When a consumer is slow or crashes, other consumers can steal its pending work.
+
+**Flow:**
+
+1. Consumer A claims message at offset 100 → added to A's PEL with timestamp
+2. Consumer A crashes or is slow
+3. Consumer B requests work, cursor is at log tail (no new messages)
+4. Consumer B scans PEL for entries older than visibility timeout
+5. Consumer B claims offset 100 from A's PEL → moves to B's PEL
+6. Consumer B processes and acks → removed from PEL, committed advances
+
+**Data Structures:**
+
+```go
+type PendingEntry struct {
+    Offset        uint64
+    ClaimedAt     time.Time
+    DeliveryCount int
+    ConsumerID    string
+}
+
+type PartitionState struct {
+    Cursor    uint64                    // Next offset to deliver
+    Committed uint64                    // Min unacked offset (safe to truncate)
+    PEL       map[string][]PendingEntry // ConsumerID -> pending entries
+}
+
+type ConsumerGroup struct {
+    Name          string
+    Pattern       string                      // Subscription pattern
+    Filter        func(routingKey string) bool // Compiled filter
+    Partitions    map[int]*PartitionState
+}
+```
+
+**Claiming Algorithm:**
+
+```go
+func (g *ConsumerGroup) Claim(ctx context.Context, consumerID string, partition int) (*Message, error) {
+    state := g.Partitions[partition]
+
+    // 1. Try to get next from cursor
+    if state.Cursor < log.Tail(partition) {
+        offset := state.Cursor
+        state.Cursor++
+
+        msg := log.Read(partition, offset)
+        if g.Filter(msg.RoutingKey) {
+            state.PEL[consumerID] = append(state.PEL[consumerID], PendingEntry{
+                Offset:    offset,
+                ClaimedAt: time.Now(),
+                ConsumerID: consumerID,
+            })
+            return msg, nil
+        }
+        // Skip non-matching, try next
+        return g.Claim(ctx, consumerID, partition)
+    }
+
+    // 2. Cursor at tail - try work stealing
+    return g.StealWork(ctx, consumerID, partition)
+}
+
+func (g *ConsumerGroup) StealWork(ctx context.Context, consumerID string, partition int) (*Message, error) {
+    state := g.Partitions[partition]
+    now := time.Now()
+
+    for otherConsumer, entries := range state.PEL {
+        if otherConsumer == consumerID {
+            continue
+        }
+        for i, entry := range entries {
+            if now.Sub(entry.ClaimedAt) > visibilityTimeout {
+                // Steal this entry
+                state.PEL[otherConsumer] = slices.Delete(entries, i, i+1)
+                entry.ClaimedAt = now
+                entry.DeliveryCount++
+                entry.ConsumerID = consumerID
+                state.PEL[consumerID] = append(state.PEL[consumerID], entry)
+
+                return log.Read(partition, entry.Offset), nil
+            }
+        }
+    }
+
+    return nil, ErrNoMessages
+}
+```
+
+---
+
+### Ack and Committed Offset
+
+**Ack advances committed offset (not cursor):**
+
+```
+Before:
+  cursor=10, committed=5, PEL=[5,6,7,8,9]
+
+Ack offset 5:
+  cursor=10, committed=6, PEL=[6,7,8,9]
+
+Ack offset 7 (out of order):
+  cursor=10, committed=6, PEL=[6,8,9]  ← committed stays (gap at 6)
+
+Ack offset 6:
+  cursor=10, committed=8, PEL=[8,9]    ← committed jumps past filled gap
+```
+
+**Committed offset determines retention truncation:**
+
+```go
+func (g *ConsumerGroup) Ack(ctx context.Context, consumerID string, partition int, offset uint64) error {
+    state := g.Partitions[partition]
+
+    // Remove from PEL
+    entries := state.PEL[consumerID]
+    for i, e := range entries {
+        if e.Offset == offset {
+            state.PEL[consumerID] = slices.Delete(entries, i, i+1)
+            break
+        }
+    }
+
+    // Advance committed if possible
+    state.advanceCommitted()
+
+    return nil
+}
+
+func (state *PartitionState) advanceCommitted() {
+    // Find minimum offset across all PEL entries
+    minPending := uint64(math.MaxUint64)
+    for _, entries := range state.PEL {
+        for _, e := range entries {
+            if e.Offset < minPending {
+                minPending = e.Offset
+            }
+        }
+    }
+
+    if minPending > state.Committed {
+        state.Committed = minPending
+    }
+}
+```
+
+---
+
+### Implementation Plan
+
+#### Q.1: Storage Layer Changes
+
+**Goal:** Append-only log storage with offset-based access
+
+**Tasks:**
+- [ ] Define `LogStore` interface (append, read by offset, truncate)
+- [ ] Implement memory-based log store (ring buffer with offset tracking)
+- [ ] Implement BadgerDB-based log store (offset as key prefix)
+- [ ] Add offset-based iteration (read range of offsets)
+- [ ] Implement retention truncation (by offset, not message ID)
+- [ ] Update hybrid store for log semantics
+- [ ] Migrate existing tests to new interface
+
+**Interface:**
+
+```go
+type LogStore interface {
+    // Append adds message to partition, returns assigned offset
+    Append(ctx context.Context, queue string, partition int, msg *Message) (uint64, error)
+
+    // Read gets message at specific offset
+    Read(ctx context.Context, queue string, partition int, offset uint64) (*Message, error)
+
+    // ReadBatch reads messages from startOffset (inclusive) up to limit
+    ReadBatch(ctx context.Context, queue string, partition int, startOffset uint64, limit int) ([]*Message, error)
+
+    // Tail returns the next offset that will be assigned (log length)
+    Tail(ctx context.Context, queue string, partition int) (uint64, error)
+
+    // Truncate removes messages with offset < minOffset
+    Truncate(ctx context.Context, queue string, partition int, minOffset uint64) error
+}
+```
+
+#### Q.2: Consumer Group Redesign
+
+**Goal:** Cursor-based consumer groups with PEL tracking
+
+**Tasks:**
+- [ ] Define new `ConsumerGroup` struct with cursor and PEL per partition
+- [ ] Implement pattern-based subscription matching
+- [ ] Add routing key filter compilation (wildcard patterns)
+- [ ] Implement cursor advancement logic
+- [ ] Implement PEL management (add, remove, query)
+- [ ] Add committed offset tracking and advancement
+- [ ] Persist consumer group state (cursors, PEL) to storage
+- [ ] Recovery: reload consumer group state on startup
+
+#### Q.3: Work Stealing Implementation
+
+**Goal:** Automatic work redistribution from slow/dead consumers
+
+**Tasks:**
+- [ ] Add visibility timeout configuration
+- [ ] Implement PEL scanning for timed-out entries
+- [ ] Implement claim transfer between consumers
+- [ ] Add delivery count tracking for DLQ routing
+- [ ] Optimize with min-heap for O(1) oldest pending lookup
+- [ ] Add metrics: steal count, steal latency, PEL depth
+
+#### Q.4: Wildcard Subscription Support
+
+**Goal:** Support `$queue/tasks/+` and `$queue/tasks/#` patterns
+
+**Tasks:**
+- [ ] Parse queue subscription patterns (extract queue name + filter)
+- [ ] Create consumer group per unique (queue, pattern) combination
+- [ ] Implement routing key extraction from publish topic
+- [ ] Implement filter matching during claim
+- [ ] Handle multiple groups receiving same message
+- [ ] Update broker subscribe/unsubscribe handlers
+
+#### Q.5: Delivery Integration
+
+**Goal:** Integrate new model with message delivery system
+
+**Tasks:**
+- [ ] Update delivery workers to use claim-based model
+- [ ] Implement batch claiming for efficiency
+- [ ] Update ack/nack/reject handlers for new model
+- [ ] Handle multi-group ack (message acked when all groups ack)
+- [ ] Integrate with existing Raft replication (replicate cursor/PEL state)
+- [ ] Update partition workers for log-based delivery
+
+#### Q.6: Migration and Testing
+
+**Goal:** Migrate existing queues and validate new model
+
+**Tasks:**
+- [ ] Create migration path for existing queue data
+- [ ] Update all queue unit tests for new model
+- [ ] Add cursor/PEL persistence tests
+- [ ] Add work stealing tests (timeout, claim, concurrent)
+- [ ] Add wildcard subscription tests
+- [ ] Add multi-group delivery tests
+- [ ] Performance benchmarks (compare to current model)
+- [ ] Integration tests with real MQTT clients
+
+---
+
+### Success Criteria
+
+| Criteria | Target |
+|----------|--------|
+| Wildcard subscriptions work | `$queue/tasks/+` receives from `$queue/tasks/a`, `$queue/tasks/b` |
+| Work stealing functional | Pending messages claimed after visibility timeout |
+| No message loss | All messages delivered at least once |
+| Throughput improvement | ≥ current throughput (sequential I/O benefit) |
+| Recovery time | Cursor reload < 1 second |
+| PEL accuracy | No orphaned entries, no duplicate delivery |
+
+---
+
+### Configuration
+
+```yaml
+queue:
+  model: log  # "log" (new) or "legacy" (current, deprecated)
+
+  # Log storage settings
+  log:
+    segment_size: 1073741824    # 1GB per segment file
+    index_interval: 4096        # Index every N messages
+
+  # Consumer group settings
+  consumer:
+    visibility_timeout: 30s     # Time before message eligible for stealing
+    max_delivery_count: 5       # Max deliveries before DLQ
+    cursor_checkpoint_interval: 1s  # How often to persist cursors
+
+  # Work stealing settings
+  stealing:
+    enabled: true
+    scan_interval: 5s           # How often to scan for stealable work
+    batch_size: 10              # Max messages to steal per scan
+
+  # Retention (unchanged from Phase 2.4)
+  retention:
+    time: 168h
+    bytes: 10737418240
+```
+
+---
+
+### Risks and Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Breaking change for existing queues | Provide migration tool, support legacy mode |
+| PEL memory growth | Limit PEL size, oldest entries go to DLQ |
+| Work stealing contention | Randomize steal targets, backoff on conflict |
+| Complex Raft integration | Reuse existing FSM patterns, incremental changes |
+
+---
+
+### Estimated Effort
+
+| Sub-phase | Effort |
+|-----------|--------|
+| Q.1: Storage Layer | 1-2 weeks |
+| Q.2: Consumer Groups | 1-2 weeks |
+| Q.3: Work Stealing | 1 week |
+| Q.4: Wildcards | 1 week |
+| Q.5: Delivery Integration | 1-2 weeks |
+| Q.6: Migration & Testing | 1-2 weeks |
+| **Total** | **6-10 weeks** |
+
+---
+
+## Phase 0: Production Hardening ⏸️ PAUSED
+
+**Status:** PAUSED - Resume after Phase Q
 **Goal:** Address critical security vulnerabilities and operational gaps
 
 This phase was identified through comprehensive code audit comparing against NATS, RabbitMQ, Kafka, HiveMQ, and EMQX.
@@ -737,8 +1171,15 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 
 | Phase | Duration | Completion | Status |
 |-------|----------|------------|--------|
-| **Phase 0: Production Hardening** | 3-4 weeks | 50% | 🚨 **TOP PRIORITY** |
-| └─ 0.1: Critical Security Fixes | 1 week | 67% | 🔄 In Progress (2/3 complete) |
+| **Phase Q: Queue Architecture Redesign** | 6-10 weeks | 0% | 🚨 **TOP PRIORITY** |
+| └─ Q.1: Storage Layer Changes | 1-2 weeks | 0% | 📋 Planned |
+| └─ Q.2: Consumer Group Redesign | 1-2 weeks | 0% | 📋 Planned |
+| └─ Q.3: Work Stealing | 1 week | 0% | 📋 Planned |
+| └─ Q.4: Wildcard Subscriptions | 1 week | 0% | 📋 Planned |
+| └─ Q.5: Delivery Integration | 1-2 weeks | 0% | 📋 Planned |
+| └─ Q.6: Migration & Testing | 1-2 weeks | 0% | 📋 Planned |
+| **Phase 0: Production Hardening** | 3-4 weeks | 50% | ⏸️ PAUSED |
+| └─ 0.1: Critical Security Fixes | 1 week | 67% | ⏸️ Paused (2/3 complete) |
 | └─ 0.2: Rate Limiting | 1 week | 100% | ✅ Complete |
 | └─ 0.3: Observability Completion | 3-5 days | 0% | 📋 Planned (P2) |
 | └─ 0.4: Protocol Compliance | 3-5 days | 100% | ✅ Complete |
@@ -754,7 +1195,7 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 | **Phase 3: E2E Cluster Testing** | 2-3 weeks | 0% | ⏳ Planned |
 | **Phase 4: Custom Raft** | 20 weeks | N/A | 📋 Future (50M+ only) |
 
-**Current Sprint:** Phase 0 - Production Hardening (TOP PRIORITY)
+**Current Sprint:** Phase Q - Queue Architecture Redesign (TOP PRIORITY)
 
 **Key Metrics:**
 - ✅ 2,800+ lines of queue replication code complete
@@ -815,43 +1256,33 @@ When working on this roadmap:
 
 ---
 
-**Next Milestone:** Secure Default ACL (Phase 0.1.3) - Change to deny-all default
-**Final Goal:** Production Hardening Complete (Phase 0) - Required before production deployment
+**Next Milestone:** Phase Q.1 - Storage Layer Changes (Log-based storage interface)
+**Final Goal:** Phase Q Complete - Log-based queue model with wildcards and work stealing
 
 ---
 
 ## What's Next: Recommended Priority Order
 
-The queue replication system is now feature-complete. Here are the recommended next steps:
+### Current Priority: Phase Q - Queue Architecture Redesign
 
-### Option A: E2E Cluster Testing First (Recommended)
-Validate the full system under stress before production hardening:
-1. **Phase 3: E2E Cluster Testing** - 2-3 weeks
-   - Multi-node failure scenarios
-   - Network partition testing
-   - Load testing with chaos engineering
-   - Combined pub-sub + queue workloads
-   - Session takeover under load
+The queue system needs architectural redesign to support wildcard subscriptions and work stealing. This is now the top priority.
 
-### Option B: Production Hardening
-Security and operational improvements for production deployment:
-1. **Secure Default ACL** (P0) - 1-2 days
-   - Change default to deny-all when no authorizer configured
-   - Add `development_mode: true` flag for permissive mode
+**Why Phase Q First:**
+- Current model doesn't support wildcard queue subscriptions
+- Delete-on-ack model has performance limitations
+- Work stealing enables better fault tolerance
+- This is a foundational change that other features build upon
 
-2. ~~**Rate Limiting** (P1)~~✅ COMPLETE
-   - ~~Per-IP connection rate limiting~~
-   - ~~Per-client message rate limiting~~
-   - ~~Per-client subscription rate limiting~~
+**Recommended Order within Phase Q:**
+1. **Q.1: Storage Layer** - Foundation for everything else
+2. **Q.2: Consumer Groups** - Core cursor/PEL mechanics
+3. **Q.3: Work Stealing** - Fault tolerance
+4. **Q.4: Wildcards** - User-facing feature
+5. **Q.5: Delivery Integration** - Wire it all together
+6. **Q.6: Testing** - Validate and benchmark
 
-3. **Observability** (P2) - 3-5 days
-   - Distributed tracing instrumentation
-   - Prometheus `/metrics` endpoint
+### After Phase Q
 
-### Option C: Observability First
-If you want visibility before testing/hardening:
-1. **Phase 2.5: Observability & Migration** - 2-3 weeks
-   - Raft metrics (leader elections, lag, apply latency)
-   - Retention metrics (deleted count, bytes freed)
-   - Health check endpoints
-   - Migration tooling
+1. **Phase 0: Production Hardening** - Resume security/operational fixes
+2. **Phase 3: E2E Cluster Testing** - Validate full system
+3. **Phase 2.5: Observability** - Metrics and monitoring
