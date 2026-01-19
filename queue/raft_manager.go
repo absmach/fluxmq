@@ -100,13 +100,14 @@ func (rm *RaftManager) StartPartition(ctx context.Context, partitionID int, part
 
 	// Create Raft group configuration
 	raftConfig := raft.RaftGroupConfig{
-		QueueName:   rm.queueName,
-		PartitionID: partitionID,
-		NodeID:      rm.nodeID,
-		BindAddr:    rm.getPartitionBindAddress(rm.nodeID, partitionID),
-		DataDir:     filepath.Join(rm.dataDir, rm.queueName),
-		SyncMode:    rm.config.Mode == types.ReplicationSync,
-		AckTimeout:  rm.config.AckTimeout,
+		QueueName:         rm.queueName,
+		PartitionID:       partitionID,
+		NodeID:            rm.nodeID,
+		BindAddr:          rm.getPartitionBindAddress(rm.nodeID, partitionID),
+		DataDir:           filepath.Join(rm.dataDir, rm.queueName),
+		SyncMode:          rm.config.Mode == types.ReplicationSync,
+		AckTimeout:        rm.config.AckTimeout,
+		MinInSyncReplicas: rm.config.MinInSyncReplicas,
 
 		HeartbeatTimeout:  rm.config.HeartbeatTimeout,
 		ElectionTimeout:   rm.config.ElectionTimeout,

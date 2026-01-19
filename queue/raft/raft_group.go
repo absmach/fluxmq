@@ -42,8 +42,9 @@ type RaftGroup struct {
 	raftDB *badger.DB // Raft log and metadata
 
 	// Configuration
-	syncMode   bool          // sync=wait for quorum, async=leader returns immediately
-	ackTimeout time.Duration // Timeout for sync operations
+	syncMode          bool          // sync=wait for quorum, async=leader returns immediately
+	ackTimeout        time.Duration // Timeout for sync operations
+	minInSyncReplicas int           // Minimum in-sync replicas required for writes
 
 	// State tracking
 	isLeader atomic.Bool
@@ -61,8 +62,9 @@ type RaftGroupConfig struct {
 	DataDir     string
 
 	// Replication settings
-	SyncMode   bool
-	AckTimeout time.Duration
+	SyncMode          bool
+	AckTimeout        time.Duration
+	MinInSyncReplicas int
 
 	// Raft tuning
 	HeartbeatTimeout  time.Duration
@@ -98,14 +100,15 @@ func NewRaftGroup(cfg RaftGroupConfig) (*RaftGroup, error) {
 	}
 
 	rg := &RaftGroup{
-		queueName:   cfg.QueueName,
-		partitionID: cfg.PartitionID,
-		nodeID:      cfg.NodeID,
-		bindAddr:    cfg.BindAddr,
-		syncMode:    cfg.SyncMode,
-		ackTimeout:  cfg.AckTimeout,
-		leaderCh:    make(chan bool, 10),
-		logger:      cfg.Logger,
+		queueName:         cfg.QueueName,
+		partitionID:       cfg.PartitionID,
+		nodeID:            cfg.NodeID,
+		bindAddr:          cfg.BindAddr,
+		syncMode:          cfg.SyncMode,
+		ackTimeout:        cfg.AckTimeout,
+		minInSyncReplicas: cfg.MinInSyncReplicas,
+		leaderCh:          make(chan bool, 10),
+		logger:            cfg.Logger,
 	}
 
 	// Create data directory for this partition
@@ -228,6 +231,15 @@ func (rg *RaftGroup) Apply(op *Operation, timeout time.Duration) error {
 		return fmt.Errorf("not leader")
 	}
 
+	// Check minimum in-sync replicas in sync mode
+	if rg.syncMode && rg.minInSyncReplicas > 0 {
+		isrCount := rg.getInSyncReplicaCount()
+		if isrCount < rg.minInSyncReplicas {
+			return fmt.Errorf("insufficient in-sync replicas: %d < %d required",
+				isrCount, rg.minInSyncReplicas)
+		}
+	}
+
 	op.Timestamp = time.Now()
 	data, err := json.Marshal(op)
 	if err != nil {
@@ -269,6 +281,25 @@ func (rg *RaftGroup) Apply(op *Operation, timeout time.Duration) error {
 // IsLeader returns true if this node is the Raft leader for this partition.
 func (rg *RaftGroup) IsLeader() bool {
 	return rg.isLeader.Load()
+}
+
+// getInSyncReplicaCount returns the count of in-sync replicas (voting members).
+func (rg *RaftGroup) getInSyncReplicaCount() int {
+	if !rg.isLeader.Load() {
+		return 0
+	}
+	configFuture := rg.raft.GetConfiguration()
+	if err := configFuture.Error(); err != nil {
+		return 0
+	}
+	config := configFuture.Configuration()
+	count := 0
+	for _, server := range config.Servers {
+		if server.Suffrage == raft.Voter {
+			count++
+		}
+	}
+	return count
 }
 
 // Leader returns the current leader's node ID.

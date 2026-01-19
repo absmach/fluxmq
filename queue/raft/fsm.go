@@ -450,10 +450,24 @@ func (f *PartitionFSM) Restore(rc io.ReadCloser) error {
 		}
 	}
 
+	// Restore inflight state
+	for _, state := range snapshot.Inflight {
+		if err := f.messageStore.MarkInflight(ctx, state); err != nil {
+			f.logger.Error("failed to restore inflight state",
+				slog.String("queue", f.queueName),
+				slog.Int("partition", f.partitionID),
+				slog.String("message_id", state.MessageID),
+				slog.String("group_id", state.GroupID),
+				slog.String("error", err.Error()))
+			return err
+		}
+	}
+
 	f.logger.Info("restored snapshot",
 		slog.String("queue", f.queueName),
 		slog.Int("partition", f.partitionID),
-		slog.Int("message_count", len(snapshot.Messages)))
+		slog.Int("message_count", len(snapshot.Messages)),
+		slog.Int("inflight_count", len(snapshot.Inflight)))
 
 	return nil
 }
@@ -499,6 +513,7 @@ type SnapshotData struct {
 	QueueName   string
 	PartitionID int
 	Messages    []*types.Message
+	Inflight    []*types.DeliveryState
 	Timestamp   time.Time
 }
 
@@ -517,10 +532,28 @@ func (s *PartitionSnapshot) Persist(sink raft.SnapshotSink) error {
 		return fmt.Errorf("failed to list messages for snapshot: %w", err)
 	}
 
+	allInflight, err := s.messageStore.GetInflight(ctx, s.queueName)
+	if err != nil {
+		sink.Cancel()
+		s.logger.Error("failed to get inflight messages for snapshot",
+			slog.String("queue", s.queueName),
+			slog.Int("partition", s.partitionID),
+			slog.String("error", err.Error()))
+		return fmt.Errorf("failed to get inflight messages for snapshot: %w", err)
+	}
+
+	var partitionInflight []*types.DeliveryState
+	for _, state := range allInflight {
+		if state.PartitionID == s.partitionID {
+			partitionInflight = append(partitionInflight, state)
+		}
+	}
+
 	snapshot := SnapshotData{
 		QueueName:   s.queueName,
 		PartitionID: s.partitionID,
 		Messages:    messages,
+		Inflight:    partitionInflight,
 		Timestamp:   time.Now(),
 	}
 
@@ -544,7 +577,8 @@ func (s *PartitionSnapshot) Persist(sink raft.SnapshotSink) error {
 	s.logger.Info("persisted snapshot",
 		slog.String("queue", s.queueName),
 		slog.Int("partition", s.partitionID),
-		slog.Int("message_count", len(messages)))
+		slog.Int("message_count", len(messages)),
+		slog.Int("inflight_count", len(partitionInflight)))
 
 	return nil
 }

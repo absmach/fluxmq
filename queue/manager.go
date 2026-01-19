@@ -382,7 +382,8 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 
 	// Replicated path: use Raft for consensus
 	if config.Replication.Enabled {
-		return m.enqueueReplicated(ctx, queueTopic, partitionID, payload, properties, config)
+		_, err := m.enqueueReplicated(ctx, queueTopic, partitionID, payload, properties, config)
+		return err
 	}
 
 	// Non-replicated path: original logic
@@ -485,21 +486,22 @@ func (m *Manager) Enqueue(ctx context.Context, queueTopic string, payload []byte
 }
 
 // enqueueReplicated routes an enqueue through Raft for replication.
-func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, partitionID int, payload []byte, properties map[string]string, config types.QueueConfig) error {
+// Returns the message ID and any error.
+func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, partitionID int, payload []byte, properties map[string]string, config types.QueueConfig) (string, error) {
 	// Get Raft manager for this queue
 	m.mu.RLock()
 	raftMgr, exists := m.raftManagers[queueTopic]
 	m.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("raft manager not found for queue %s", queueTopic)
+		return "", fmt.Errorf("raft manager not found for queue %s", queueTopic)
 	}
 
 	// Check if this node is the Raft leader for this partition
 	if !raftMgr.IsLeader(partitionID) {
 		// Wait for leader or fail
 		if err := raftMgr.WaitForLeader(ctx, partitionID); err != nil {
-			return fmt.Errorf("no leader available for partition %d: %w", partitionID, err)
+			return "", fmt.Errorf("no leader available for partition %d: %w", partitionID, err)
 		}
 
 		// After waiting, check again if we're the leader
@@ -509,14 +511,14 @@ func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, part
 			if group, err := raftMgr.GetPartitionGroup(partitionID); err == nil {
 				leaderID = group.Leader()
 			}
-			return fmt.Errorf("not leader for partition %d (leader: %s)", partitionID, leaderID)
+			return "", fmt.Errorf("not leader for partition %d (leader: %s)", partitionID, leaderID)
 		}
 	}
 
 	// Prepare message
 	sequence, err := m.messageStore.GetNextSequence(ctx, queueTopic, partitionID)
 	if err != nil {
-		return fmt.Errorf("failed to get next sequence: %w", err)
+		return "", fmt.Errorf("failed to get next sequence: %w", err)
 	}
 
 	// Get message from pool
@@ -531,12 +533,20 @@ func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, part
 		copyProperties(msgProps, properties)
 	}
 
-	// Generate message ID
-	msgID := uuid.New().String()
+	// Use existing message-id if provided, otherwise generate new one
+	var msgID string
+	if properties != nil && properties["message-id"] != "" {
+		msgID = properties["message-id"]
+	} else {
+		msgID = uuid.New().String()
+	}
 	msgProps["message-id"] = msgID
 
 	// Extract partition key
-	partitionKey := properties["partition-key"]
+	var partitionKey string
+	if properties != nil {
+		partitionKey = properties["partition-key"]
+	}
 
 	// Populate message
 	msg.ID = msgID
@@ -579,7 +589,7 @@ func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, part
 	putMessageToPool(msg)
 
 	if err != nil {
-		return fmt.Errorf("raft apply failed: %w", err)
+		return "", fmt.Errorf("raft apply failed: %w", err)
 	}
 
 	// Notify partition worker that a message is available
@@ -591,7 +601,7 @@ func (m *Manager) enqueueReplicated(ctx context.Context, queueTopic string, part
 		worker.NotifyPartition(partitionID)
 	}
 
-	return nil
+	return msgID, nil
 }
 
 // Subscribe adds a consumer to a queue.
@@ -907,6 +917,11 @@ func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []
 
 	// Get partition ID
 	partitionID := queue.GetPartitionForMessage(partitionKey)
+
+	// Route through Raft if replication is enabled
+	if config.Replication.Enabled {
+		return m.enqueueReplicated(ctx, queueName, partitionID, payload, properties, config)
+	}
 
 	// Get next sequence number
 	sequence, err := m.messageStore.GetNextSequence(ctx, queueName, partitionID)
