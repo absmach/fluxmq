@@ -262,7 +262,11 @@ server:
       cert_file: "/path/to/server.crt"
       key_file: "/path/to/server.key"
       ca_file: "/path/to/ca.crt"
+      client_auth: "require"
 ```
+
+`client_auth` supports `none`, `request`, `require_any`, `verify_if_given`, or `require` (alias for require-and-verify).
+If `ca_file` is set and `client_auth` is empty, the server defaults to `require`.
 
 See [Configuration Guide](docs/configuration.md) for complete reference.
 

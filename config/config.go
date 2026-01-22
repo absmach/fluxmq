@@ -697,7 +697,7 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 }
 
 func tlsConfigured(cfg mqtttls.Config) bool {
-	return cfg.CertFile != "" || cfg.KeyFile != "" || cfg.ServerCAFile != "" || cfg.ClientCAFile != ""
+	return cfg.CertFile != "" || cfg.KeyFile != "" || cfg.ServerCAFile != "" || cfg.ClientCAFile != "" || cfg.ClientAuth != ""
 }
 
 func hasAddr(addr string) bool {

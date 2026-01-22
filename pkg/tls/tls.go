@@ -7,8 +7,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/absmach/fluxmq/pkg/tls/verifier"
 	"github.com/absmach/fluxmq/pkg/tls/verifier/crl"
@@ -30,8 +32,40 @@ type Config struct {
 	KeyFile      string      `yaml:"key_file"`
 	ServerCAFile string      `yaml:"server_ca_file"`
 	ClientCAFile string      `yaml:"ca_file"`
+	ClientAuth   string      `yaml:"client_auth"`
 	OCSP         ocsp.Config `yaml:"ocsp"`
 	CRL          crl.Config  `yaml:"crl"`
+}
+
+type clientAuthMode int
+
+const (
+	clientAuthUnset clientAuthMode = iota
+	clientAuthNone
+	clientAuthRequest
+	clientAuthRequireAny
+	clientAuthVerifyIfGiven
+	clientAuthRequireAndVerify
+)
+
+func parseClientAuth(value string) (clientAuthMode, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "":
+		return clientAuthUnset, nil
+	case "none", "no":
+		return clientAuthNone, nil
+	case "request":
+		return clientAuthRequest, nil
+	case "require_any", "require-any", "requireany":
+		return clientAuthRequireAny, nil
+	case "verify_if_given", "verify-if-given", "verifyifgiven":
+		return clientAuthVerifyIfGiven, nil
+	case "require", "require_and_verify", "require-and-verify", "requireandverify":
+		return clientAuthRequireAndVerify, nil
+	default:
+		return clientAuthUnset, fmt.Errorf("invalid client_auth %q", value)
+	}
 }
 
 type TLSConfig interface {
@@ -69,6 +103,11 @@ func LoadTLSConfig[sc TLSConfig](c *Config) (sc, error) {
 		return zero, err
 	}
 
+	clientAuthMode, err := parseClientAuth(c.ClientAuth)
+	if err != nil {
+		return zero, err
+	}
+
 	switch any(zero).(type) {
 	case *tls.Config:
 
@@ -100,8 +139,9 @@ func LoadTLSConfig[sc TLSConfig](c *Config) (sc, error) {
 			if !config.ClientCAs.AppendCertsFromPEM(clientCA) {
 				return zero, errAppendCA
 			}
-			config.ClientAuth = tls.RequireAndVerifyClientCert
 		}
+
+		applyClientAuthTLS(config, clientAuthMode, len(clientCA) > 0)
 
 		if len(verifiers) > 0 {
 			config.VerifyPeerCertificate = verifier.NewValidator(verifiers)
@@ -134,8 +174,9 @@ func LoadTLSConfig[sc TLSConfig](c *Config) (sc, error) {
 			if !config.ClientCAs.AppendCertsFromPEM(clientCA) {
 				return zero, errAppendCA
 			}
-			config.ClientAuth = dtls.RequireAndVerifyClientCert
 		}
+
+		applyClientAuthDTLS(config, clientAuthMode, len(clientCA) > 0)
 
 		if len(verifiers) > 0 {
 			config.VerifyPeerCertificate = verifier.NewValidator(verifiers)
@@ -195,4 +236,42 @@ func loadCertFile(certFile string) ([]byte, error) {
 		return os.ReadFile(certFile)
 	}
 	return []byte{}, nil
+}
+
+func applyClientAuthTLS(config *tls.Config, mode clientAuthMode, hasClientCA bool) {
+	switch mode {
+	case clientAuthUnset:
+		if hasClientCA {
+			config.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+	case clientAuthNone:
+		config.ClientAuth = tls.NoClientCert
+	case clientAuthRequest:
+		config.ClientAuth = tls.RequestClientCert
+	case clientAuthRequireAny:
+		config.ClientAuth = tls.RequireAnyClientCert
+	case clientAuthVerifyIfGiven:
+		config.ClientAuth = tls.VerifyClientCertIfGiven
+	case clientAuthRequireAndVerify:
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+}
+
+func applyClientAuthDTLS(config *dtls.Config, mode clientAuthMode, hasClientCA bool) {
+	switch mode {
+	case clientAuthUnset:
+		if hasClientCA {
+			config.ClientAuth = dtls.RequireAndVerifyClientCert
+		}
+	case clientAuthNone:
+		config.ClientAuth = dtls.NoClientCert
+	case clientAuthRequest:
+		config.ClientAuth = dtls.RequestClientCert
+	case clientAuthRequireAny:
+		config.ClientAuth = dtls.RequireAnyClientCert
+	case clientAuthVerifyIfGiven:
+		config.ClientAuth = dtls.VerifyClientCertIfGiven
+	case clientAuthRequireAndVerify:
+		config.ClientAuth = dtls.RequireAndVerifyClientCert
+	}
 }

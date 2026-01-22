@@ -93,6 +93,7 @@ server:
       cert_file: "/path/to/server.crt"
       key_file: "/path/to/server.key"
       ca_file: "/path/to/ca.crt"
+      client_auth: "require"
 
   # WebSocket Transport (MQTT over WebSocket)
   websocket:
@@ -125,6 +126,11 @@ server:
 
 TLS fields (`cert_file`, `key_file`, `ca_file`, `server_ca_file`) are inline
 under each listener slot (not nested under `tls:`).
+
+`client_auth` is optional and accepts `none`, `request`, `require_any`,
+`verify_if_given`, or `require` (alias for require-and-verify). If `ca_file` is
+set and `client_auth` is empty, the server defaults to `require` (RequireAndVerifyClientCert).
+Set `client_auth` explicitly to override that default.
 
 ### TCP Configuration
 

@@ -23,6 +23,7 @@ server:
       cert_file: "/etc/mqtt/certs/server.crt"
       key_file: "/etc/mqtt/certs/server.key"
       ca_file: "/etc/mqtt/certs/ca.crt"
+      client_auth: "require"
 
   # WebSocket with TLS (WSS)
   websocket:
@@ -40,6 +41,7 @@ server:
       cert_file: "/etc/mqtt/certs/server.crt"
       key_file: "/etc/mqtt/certs/server.key"
       ca_file: "/etc/mqtt/certs/ca.crt"
+      client_auth: "require"
 
   http:
     plain:
@@ -59,6 +61,7 @@ server:
       cert_file: "/etc/mqtt/certs/server.crt"
       key_file: "/etc/mqtt/certs/server.key"
       ca_file: "/etc/mqtt/certs/ca.crt"
+      client_auth: "require"
 
   # Health check endpoint (non-TLS)
   health_enabled: true
@@ -101,6 +104,7 @@ log:
 #    cert_file: "/etc/mqtt/certs/server.crt"
 #    key_file: "/etc/mqtt/certs/server.key"
 #    ca_file: "/etc/mqtt/certs/ca.crt"
+#    client_auth: "require"
 #
 # 3. Clients connect using:
 #    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -t test -m "hello"
