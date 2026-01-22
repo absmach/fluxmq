@@ -634,10 +634,11 @@ func (cgp *ConsumerGroupPELs) Delete(groupID string) error {
 	}
 
 	// Remove files
-	os.Remove(filepath.Join(cgp.dir, groupID+PELExtension))
-	os.Remove(filepath.Join(cgp.dir, groupID+PELExtension+".log"))
+	if err := os.Remove(filepath.Join(cgp.dir, groupID+PELExtension)); err != nil {
+		return err
+	}
 
-	return nil
+	return os.Remove(filepath.Join(cgp.dir, groupID+PELExtension+".log"))
 }
 
 // Close closes all PELs.
