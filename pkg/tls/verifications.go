@@ -4,9 +4,9 @@
 package tls
 
 import (
-	"github.com/absmach/mqtt/pkg/tls/verifier"
-	"github.com/absmach/mqtt/pkg/tls/verifier/crl"
-	"github.com/absmach/mqtt/pkg/tls/verifier/ocsp"
+	"github.com/absmach/fluxmq/pkg/tls/verifier"
+	"github.com/absmach/fluxmq/pkg/tls/verifier/crl"
+	"github.com/absmach/fluxmq/pkg/tls/verifier/ocsp"
 )
 
 func BuildVerifiers(cfg Config) ([]verifier.Verifier, error) {

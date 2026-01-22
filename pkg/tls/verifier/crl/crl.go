@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/absmach/mqtt/pkg/tls/verifier"
+	"github.com/absmach/fluxmq/pkg/tls/verifier"
 )
 
 var (

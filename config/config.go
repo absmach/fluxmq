@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	mqtttls "github.com/absmach/mqtt/pkg/tls"
+	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"gopkg.in/yaml.v3"
 )
 

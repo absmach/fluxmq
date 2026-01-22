@@ -10,9 +10,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/absmach/mqtt/pkg/tls/verifier"
-	"github.com/absmach/mqtt/pkg/tls/verifier/crl"
-	"github.com/absmach/mqtt/pkg/tls/verifier/ocsp"
+	"github.com/absmach/fluxmq/pkg/tls/verifier"
+	"github.com/absmach/fluxmq/pkg/tls/verifier/crl"
+	"github.com/absmach/fluxmq/pkg/tls/verifier/ocsp"
 	"github.com/pion/dtls/v3"
 )
 

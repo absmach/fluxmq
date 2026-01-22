@@ -34,6 +34,7 @@ import (
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/absmach/fluxmq/storage/memory"
+	mqtttls "github.com/absmach/mqtt/pkg/tls"
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )

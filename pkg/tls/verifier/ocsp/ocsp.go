@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/absmach/mqtt/pkg/tls/verifier"
+	"github.com/absmach/fluxmq/pkg/tls/verifier"
 	"golang.org/x/crypto/ocsp"
 )
 
