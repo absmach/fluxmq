@@ -125,7 +125,8 @@ type HTTPConfig struct {
 
 // CoAPListenerConfig holds CoAP listener configuration.
 type CoAPListenerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr string         `yaml:"addr"`
+	TLS  mqtttls.Config `yaml:"tls"`
 }
 
 // CoAPConfig groups CoAP listeners by mode.
@@ -536,8 +537,32 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("server.http.tls and server.http.mtls are not supported yet")
 	}
 
-	if hasAddr(c.Server.CoAP.DTLS.Addr) || hasAddr(c.Server.CoAP.MDTLS.Addr) {
-		return fmt.Errorf("server.coap.dtls and server.coap.mdtls are not supported yet")
+	coapSlots := []struct {
+		name              string
+		cfg               CoAPListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.CoAP.Plain},
+		{name: "dtls", cfg: c.Server.CoAP.DTLS},
+		{name: "mdtls", cfg: c.Server.CoAP.MDTLS, requireClientAuth: true},
+	}
+
+	for _, slot := range coapSlots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.coap.%s.tls is not supported for plain listeners", slot.name)
+			}
+			continue
+		}
+
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.coap.%s.tls is not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.coap."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
+		}
 	}
 
 	if c.Broker.MaxMessageSize < 1024 {

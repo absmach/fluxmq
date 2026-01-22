@@ -34,7 +34,7 @@ import (
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/absmach/fluxmq/storage/memory"
-	mqtttls "github.com/absmach/mqtt/pkg/tls"
+	piondtls "github.com/pion/dtls/v3"
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -411,6 +411,10 @@ func main() {
 			TLSConfig:       tlsCfg,
 			AllowedOrigins:  slot.cfg.AllowedOrigins,
 		}
+		if rateLimitManager != nil {
+			wsCfg.IPRateLimiter = rateLimitManager
+		}
+
 		wsServer := websocket.New(wsCfg, b, logger)
 
 		wg.Add(1)
@@ -428,9 +432,6 @@ func main() {
 			Address:         cfg.Server.HTTP.Plain.Addr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 		}
-		if rateLimitManager != nil {
-			wsCfg.IPRateLimiter = rateLimitManager
-		}
 		httpServer := http.New(httpCfg, b, logger)
 
 		wg.Add(1)
@@ -443,26 +444,45 @@ func main() {
 		}(cfg.Server.HTTP.Plain.Addr)
 	}
 
-	if strings.TrimSpace(cfg.Server.CoAP.Plain.Addr) != "" {
+	coapSlots := []struct {
+		name string
+		cfg  config.CoAPListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.CoAP.Plain},
+		{name: "dtls", cfg: cfg.Server.CoAP.DTLS},
+		{name: "mdtls", cfg: cfg.Server.CoAP.MDTLS},
+	}
+
+	for _, slot := range coapSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		var dtlsCfg *piondtls.Config
+		if slot.name != "plain" {
+			var err error
+			dtlsCfg, err = mqtttls.LoadTLSConfig[*piondtls.Config](&slot.cfg.TLS)
+			if err != nil {
+				slog.Error("Failed to build CoAP DTLS configuration", "listener", slot.name, "error", err)
+				os.Exit(1)
+			}
+		}
+
 		coapCfg := coap.Config{
-			Address:         cfg.Server.CoAP.Plain.Addr,
+			Address:         slot.cfg.Addr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			DTLSEnabled:     cfg.Server.CoAPDTLSEnabled,
-			DTLSCertFile:    cfg.Server.CoAPDTLSCertFile,
-			DTLSKeyFile:     cfg.Server.CoAPDTLSKeyFile,
-			DTLSCAFile:      cfg.Server.CoAPDTLSCAFile,
-			DTLSClientAuth:  cfg.Server.CoAPDTLSClientAuth,
+			TLSConfig:       dtlsCfg,
 		}
 		coapServer := coap.New(coapCfg, b, logger)
 
 		wg.Add(1)
-		go func(addr string) {
+		go func(name, addr string, server *coap.Server) {
 			defer wg.Done()
-			slog.Info("Starting CoAP server", "address", addr)
-			if err := coapServer.Listen(ctx); err != nil {
+			slog.Info("Starting CoAP server", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}(cfg.Server.CoAP.Plain.Addr)
+		}(slot.name, slot.cfg.Addr, coapServer)
 	}
 
 	if cfg.Server.HealthEnabled {
