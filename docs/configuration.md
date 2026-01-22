@@ -88,6 +88,13 @@ server:
       addr: ":8883"
       cert_file: "/path/to/server.crt"
       key_file: "/path/to/server.key"
+      min_version: "TLS1.2"
+      prefer_server_cipher_suites: true
+      cipher_suites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
     mtls:
       addr: ":8884"
       cert_file: "/path/to/server.crt"
@@ -131,6 +138,46 @@ under each listener slot (not nested under `tls:`).
 `verify_if_given`, or `require` (alias for require-and-verify). If `ca_file` is
 set and `client_auth` is empty, the server defaults to `require` (RequireAndVerifyClientCert).
 Set `client_auth` explicitly to override that default.
+
+`min_version` uses string values like `TLS1.2` or `TLS1.3` and applies only to TLS.
+If omitted, Go's default TLS behavior is used.
+`cipher_suites` takes TLS cipher suite names; TLS 1.3 suites are not configurable in Go
+and will be rejected. The same list is used for DTLS listeners, but DTLS will reject
+any suites it doesn't support. If `cipher_suites` is omitted, each library's default
+list is used. `prefer_server_cipher_suites` only applies to TLS as well.
+
+### Go TLS Defaults (Go 1.24)
+
+If you omit `min_version`, `cipher_suites`, and `prefer_server_cipher_suites`, Go's
+defaults are used. As of Go 1.24:
+
+- **Minimum version**: TLS 1.2 (TLS 1.3 is enabled by default).
+- **TLS 1.3 cipher suites** (order prefers AES when hardware support is present):
+
+```text
+TLS_AES_128_GCM_SHA256
+TLS_AES_256_GCM_SHA384
+TLS_CHACHA20_POLY1305_SHA256
+```
+
+- **TLS 1.2 cipher suites** (order prefers AES-GCM when hardware support is present):
+
+```text
+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+```
+
+Defaults can change across Go versions and can also be affected by `GODEBUG`
+flags like `tlsrsakex=1` and `tls3des=1`. For DTLS defaults, see the Pion
+DTLS documentation (`dtls.CipherSuites()`).
 
 ### TCP Configuration
 

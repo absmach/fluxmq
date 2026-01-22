@@ -257,6 +257,13 @@ server:
       addr: ":8883"
       cert_file: "/path/to/server.crt"
       key_file: "/path/to/server.key"
+      min_version: "TLS1.2"
+      prefer_server_cipher_suites: true
+      cipher_suites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
     mtls:
       addr: ":8884"
       cert_file: "/path/to/server.crt"
@@ -267,6 +274,37 @@ server:
 
 `client_auth` supports `none`, `request`, `require_any`, `verify_if_given`, or `require` (alias for require-and-verify).
 If `ca_file` is set and `client_auth` is empty, the server defaults to `require`.
+`min_version` and `prefer_server_cipher_suites` apply to TLS only.
+If they are omitted, Go's default TLS behavior is used.
+`cipher_suites` applies to TLS and DTLS; if omitted, each library's default list is used.
+DTLS will reject suites it doesn't support.
+
+Go 1.24 default TLS behavior (when you omit these fields):
+- Minimum version: TLS 1.2 (TLS 1.3 enabled by default)
+- TLS 1.3 suites (order prefers AES when hardware support is present):
+
+```text
+TLS_AES_128_GCM_SHA256
+TLS_AES_256_GCM_SHA384
+TLS_CHACHA20_POLY1305_SHA256
+```
+
+- TLS 1.2 suites (order prefers AES-GCM when hardware support is present):
+
+```text
+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+```
+
+Default order can change with hardware support and `GODEBUG` flags like `tlsrsakex` and `tls3des`.
 
 See [Configuration Guide](docs/configuration.md) for complete reference.
 

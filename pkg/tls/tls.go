@@ -28,13 +28,16 @@ var (
 )
 
 type Config struct {
-	CertFile     string      `yaml:"cert_file"`
-	KeyFile      string      `yaml:"key_file"`
-	ServerCAFile string      `yaml:"server_ca_file"`
-	ClientCAFile string      `yaml:"ca_file"`
-	ClientAuth   string      `yaml:"client_auth"`
-	OCSP         ocsp.Config `yaml:"ocsp"`
-	CRL          crl.Config  `yaml:"crl"`
+	CertFile                 string      `yaml:"cert_file"`
+	KeyFile                  string      `yaml:"key_file"`
+	ServerCAFile             string      `yaml:"server_ca_file"`
+	ClientCAFile             string      `yaml:"ca_file"`
+	ClientAuth               string      `yaml:"client_auth"`
+	MinVersion               string      `yaml:"min_version"`
+	CipherSuites             []string    `yaml:"cipher_suites"`
+	PreferServerCipherSuites *bool       `yaml:"prefer_server_cipher_suites"`
+	OCSP                     ocsp.Config `yaml:"ocsp"`
+	CRL                      crl.Config  `yaml:"crl"`
 }
 
 type clientAuthMode int
@@ -65,6 +68,97 @@ func parseClientAuth(value string) (clientAuthMode, error) {
 		return clientAuthRequireAndVerify, nil
 	default:
 		return clientAuthUnset, fmt.Errorf("invalid client_auth %q", value)
+	}
+}
+
+func parseTLSMinVersion(value string) (uint16, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "":
+		return 0, nil
+	case "tls1.0", "1.0":
+		return tls.VersionTLS10, nil
+	case "tls1.1", "1.1":
+		return tls.VersionTLS11, nil
+	case "tls1.2", "1.2":
+		return tls.VersionTLS12, nil
+	case "tls1.3", "1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("invalid min_version %q", value)
+	}
+}
+
+func parseCipherSuites(names []string) ([]uint16, []dtls.CipherSuiteID, []string, []string, error) {
+	if len(names) == 0 {
+		return nil, nil, nil, nil, nil
+	}
+
+	tlsMap := tlsCipherSuiteMap()
+	dtlsMap := dtlsCipherSuiteMap()
+	tlsSuites := make([]uint16, 0, len(names))
+	dtlsSuites := make([]dtls.CipherSuiteID, 0, len(names))
+	missingTLS := make([]string, 0)
+	missingDTLS := make([]string, 0)
+
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if isTLS13CipherSuite(trimmed) {
+			return nil, nil, nil, nil, fmt.Errorf("cipher_suites %q is TLS 1.3 and not configurable", trimmed)
+		}
+		tlsID, tlsOK := tlsMap[trimmed]
+		dtlsID, dtlsOK := dtlsMap[trimmed]
+		if !tlsOK && !dtlsOK {
+			return nil, nil, nil, nil, fmt.Errorf("unsupported cipher suite %q", trimmed)
+		}
+		if tlsOK {
+			tlsSuites = append(tlsSuites, tlsID)
+		} else {
+			missingTLS = append(missingTLS, trimmed)
+		}
+		if dtlsOK {
+			dtlsSuites = append(dtlsSuites, dtlsID)
+		} else {
+			missingDTLS = append(missingDTLS, trimmed)
+		}
+	}
+
+	return tlsSuites, dtlsSuites, missingTLS, missingDTLS, nil
+}
+
+func tlsCipherSuiteMap() map[string]uint16 {
+	suites := make(map[string]uint16)
+	for _, suite := range tls.CipherSuites() {
+		suites[suite.Name] = suite.ID
+	}
+	for _, suite := range tls.InsecureCipherSuites() {
+		suites[suite.Name] = suite.ID
+	}
+	return suites
+}
+
+func dtlsCipherSuiteMap() map[string]dtls.CipherSuiteID {
+	suites := make(map[string]dtls.CipherSuiteID)
+	for _, suite := range dtls.CipherSuites() {
+		suites[suite.Name] = dtls.CipherSuiteID(suite.ID)
+	}
+	for _, suite := range dtls.InsecureCipherSuites() {
+		suites[suite.Name] = dtls.CipherSuiteID(suite.ID)
+	}
+	return suites
+}
+
+func isTLS13CipherSuite(name string) bool {
+	switch name {
+	case "TLS_AES_128_GCM_SHA256",
+		"TLS_AES_256_GCM_SHA384",
+		"TLS_CHACHA20_POLY1305_SHA256":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -108,18 +202,31 @@ func LoadTLSConfig[sc TLSConfig](c *Config) (sc, error) {
 		return zero, err
 	}
 
+	minVersion, err := parseTLSMinVersion(c.MinVersion)
+	if err != nil {
+		return zero, err
+	}
+
+	tlsSuites, dtlsSuites, missingTLS, missingDTLS, err := parseCipherSuites(c.CipherSuites)
+	if err != nil {
+		return zero, err
+	}
+
 	switch any(zero).(type) {
 	case *tls.Config:
 
-		config := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			CipherSuites: []uint16{
-				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			},
-			PreferServerCipherSuites: true,
+		config := &tls.Config{}
+		if minVersion != 0 {
+			config.MinVersion = minVersion
+		}
+		if len(c.CipherSuites) > 0 {
+			if len(missingTLS) > 0 {
+				return zero, fmt.Errorf("cipher_suites not supported for TLS: %s", strings.Join(missingTLS, ", "))
+			}
+			config.CipherSuites = tlsSuites
+		}
+		if c.PreferServerCipherSuites != nil {
+			config.PreferServerCipherSuites = *c.PreferServerCipherSuites
 		}
 		config.Certificates = []tls.Certificate{certificate}
 
@@ -148,13 +255,12 @@ func LoadTLSConfig[sc TLSConfig](c *Config) (sc, error) {
 		}
 		return any(config).(sc), nil
 	case *dtls.Config:
-		config := &dtls.Config{
-			CipherSuites: []dtls.CipherSuiteID{
-				dtls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-				dtls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-				dtls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			},
+		config := &dtls.Config{}
+		if len(c.CipherSuites) > 0 {
+			if len(missingDTLS) > 0 {
+				return zero, fmt.Errorf("cipher_suites not supported for DTLS: %s", strings.Join(missingDTLS, ", "))
+			}
+			config.CipherSuites = dtlsSuites
 		}
 		config.Certificates = []tls.Certificate{certificate}
 
