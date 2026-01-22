@@ -248,6 +248,22 @@ log:
   level: info
 ```
 
+TLS/mTLS listeners use inline certificate fields under the listener mode:
+
+```yaml
+server:
+  tcp:
+    tls:
+      addr: ":8883"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+    mtls:
+      addr: ":8884"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+      ca_file: "/path/to/ca.crt"
+```
+
 See [Configuration Guide](docs/configuration.md) for complete reference.
 
 ## Performance

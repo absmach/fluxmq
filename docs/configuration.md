@@ -73,7 +73,7 @@ log:
 
 Controls the transport layer (TCP, WebSocket, HTTP, CoAP). Each protocol has
 fixed listener slots (`plain`, `tls`, `mtls`) and a listener is enabled when its
-`addr` is set. HTTP TLS and CoAP DTLS are planned but not yet implemented.
+`addr` is set. HTTP TLS is not supported yet.
 
 ```yaml
 server:
@@ -86,15 +86,13 @@ server:
       write_timeout: "60s"
     tls:
       addr: ":8883"
-      tls:
-        cert_file: "/path/to/server.crt"
-        key_file: "/path/to/server.key"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
     mtls:
       addr: ":8884"
-      tls:
-        cert_file: "/path/to/server.crt"
-        key_file: "/path/to/server.key"
-        ca_file: "/path/to/ca.crt"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+      ca_file: "/path/to/ca.crt"
 
   # WebSocket Transport (MQTT over WebSocket)
   websocket:
@@ -104,9 +102,8 @@ server:
     tls:
       addr: ":8084"
       path: "/mqtt"
-      tls:
-        cert_file: "/path/to/server.crt"
-        key_file: "/path/to/server.key"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
     mtls: {}
 
   # HTTP-MQTT Bridge
@@ -125,6 +122,9 @@ server:
 
   shutdown_timeout: "30s"
 ```
+
+TLS fields (`cert_file`, `key_file`, `ca_file`, `server_ca_file`) are inline
+under each listener slot (not nested under `tls:`).
 
 ### TCP Configuration
 

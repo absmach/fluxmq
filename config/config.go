@@ -86,7 +86,7 @@ type TCPListenerConfig struct {
 	MaxConnections int            `yaml:"max_connections"`
 	ReadTimeout    time.Duration  `yaml:"read_timeout"`
 	WriteTimeout   time.Duration  `yaml:"write_timeout"`
-	TLS            mqtttls.Config `yaml:"tls"`
+	TLS            mqtttls.Config `yaml:",inline"`
 }
 
 // TCPConfig groups TCP listeners by mode.
@@ -101,7 +101,7 @@ type WSListenerConfig struct {
 	Addr           string         `yaml:"addr"`
 	Path           string         `yaml:"path"`
 	AllowedOrigins []string       `yaml:"allowed_origins"`
-	TLS            mqtttls.Config `yaml:"tls"`
+	TLS            mqtttls.Config `yaml:",inline"`
 }
 
 // WebSocketConfig groups WebSocket listeners by mode.
@@ -126,7 +126,7 @@ type HTTPConfig struct {
 // CoAPListenerConfig holds CoAP listener configuration.
 type CoAPListenerConfig struct {
 	Addr string         `yaml:"addr"`
-	TLS  mqtttls.Config `yaml:"tls"`
+	TLS  mqtttls.Config `yaml:",inline"`
 }
 
 // CoAPConfig groups CoAP listeners by mode.
@@ -491,7 +491,7 @@ func (c *Config) Validate() error {
 	for _, slot := range tcpSlots {
 		if !hasAddr(slot.cfg.Addr) {
 			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
-				return fmt.Errorf("server.tcp.%s.tls is not supported for plain listeners", slot.name)
+				return fmt.Errorf("server.tcp.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
 		}
@@ -501,7 +501,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
 		}
 		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.tcp.%s.tls is not supported for plain listeners", slot.name)
+			return fmt.Errorf("server.tcp.%s TLS fields are not supported for plain listeners", slot.name)
 		}
 		if slot.name != "plain" {
 			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
@@ -513,14 +513,14 @@ func (c *Config) Validate() error {
 	for _, slot := range wsSlots {
 		if !hasAddr(slot.cfg.Addr) {
 			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
-				return fmt.Errorf("server.websocket.%s.tls is not supported for plain listeners", slot.name)
+				return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
 		}
 
 		hasMQTTListener = true
 		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.websocket.%s.tls is not supported for plain listeners", slot.name)
+			return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
 		}
 		if slot.name != "plain" {
 			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
@@ -550,13 +550,13 @@ func (c *Config) Validate() error {
 	for _, slot := range coapSlots {
 		if !hasAddr(slot.cfg.Addr) {
 			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
-				return fmt.Errorf("server.coap.%s.tls is not supported for plain listeners", slot.name)
+				return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
 		}
 
 		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.coap.%s.tls is not supported for plain listeners", slot.name)
+			return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
 		}
 		if slot.name != "plain" {
 			if err := validateListenerTLS("server.coap."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
@@ -685,13 +685,13 @@ func (c *Config) Validate() error {
 
 func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) error {
 	if cfg.CertFile == "" {
-		return fmt.Errorf("%s.tls.cert_file required", prefix)
+		return fmt.Errorf("%s.cert_file required", prefix)
 	}
 	if cfg.KeyFile == "" {
-		return fmt.Errorf("%s.tls.key_file required", prefix)
+		return fmt.Errorf("%s.key_file required", prefix)
 	}
 	if requireCA && cfg.ClientCAFile == "" {
-		return fmt.Errorf("%s.tls.ca_file required", prefix)
+		return fmt.Errorf("%s.ca_file required", prefix)
 	}
 	return nil
 }
