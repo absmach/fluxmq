@@ -568,14 +568,16 @@ cluster:
 **Configuration:**
 ```yaml
 server:
-  ws_allowed_origins:
-    - "https://example.com"
-    - "https://app.example.com"
-    - "*.example.com"  # Wildcard subdomain support
+  websocket:
+    plain:
+      allowed_origins:
+        - "https://example.com"
+        - "https://app.example.com"
+        - "*.example.com"  # Wildcard subdomain support
 ```
 
 **Implementation:**
-- [x] Add `ws_allowed_origins` configuration option (`config/config.go`)
+- [x] Add `websocket.*.allowed_origins` configuration option (`config/config.go`)
 - [x] Implement origin validation logic (`server/websocket/server.go`)
 - [x] Support exact match origins
 - [x] Support wildcard subdomain patterns (e.g., `*.example.com`)

@@ -21,7 +21,16 @@ The broker uses YAML configuration files:
 ```yaml
 server:
   # Server transport settings
-  tcp_addr: ":1883"
+  tcp:
+    plain:
+      addr: ":1883"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+  http:
+    plain:
+      addr: ":8080"
   # ...
 
 broker:
@@ -62,53 +71,76 @@ log:
 
 ## Server Configuration
 
-Controls the transport layer (TCP, WebSocket, HTTP, CoAP).
+Controls the transport layer (TCP, WebSocket, HTTP, CoAP). Each protocol has
+fixed listener slots (`plain`, `tls`, `mtls`) and a listener is enabled when its
+`addr` is set. HTTP TLS and CoAP DTLS are planned but not yet implemented.
 
 ```yaml
 server:
   # TCP Transport (MQTT over TCP)
-  tcp_addr: ":1883"                    # Listen address (default: 1883)
-  tcp_max_connections: 10000           # Max concurrent connections
-  tcp_read_timeout: "60s"              # Read timeout
-  tcp_write_timeout: "60s"             # Write timeout
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls:
+      addr: ":8883"
+      tls:
+        cert_file: "/path/to/server.crt"
+        key_file: "/path/to/server.key"
+    mtls:
+      addr: ":8884"
+      tls:
+        cert_file: "/path/to/server.crt"
+        key_file: "/path/to/server.key"
+        ca_file: "/path/to/ca.crt"
 
-  # TLS/SSL (not yet implemented)
-  tls_enabled: false
-  tls_cert_file: ""
-  tls_key_file: ""
+  # WebSocket Transport (MQTT over WebSocket)
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+    tls:
+      addr: ":8084"
+      path: "/mqtt"
+      tls:
+        cert_file: "/path/to/server.crt"
+        key_file: "/path/to/server.key"
+    mtls: {}
 
   # HTTP-MQTT Bridge
-  http_enabled: false                  # Enable HTTP bridge
-  http_addr: ":8080"                   # HTTP listen address
-
-  # WebSocket Transport
-  ws_enabled: false                    # Enable WebSocket
-  ws_addr: ":8083"                     # WebSocket listen address
-  ws_path: "/mqtt"                     # WebSocket path
+  http:
+    plain:
+      addr: ":8080"
+    tls: {}
+    mtls: {}
 
   # CoAP Bridge
-  coap_enabled: false                  # Enable CoAP bridge
-  coap_addr: ":5683"                   # CoAP listen address
+  coap:
+    plain:
+      addr: ":5683"
+    dtls: {}
+    mdtls: {}
 
-  # Shutdown
-  shutdown_timeout: "30s"              # Graceful shutdown timeout
+  shutdown_timeout: "30s"
 ```
 
 ### TCP Configuration
 
-**tcp_addr**:
+**server.tcp.<mode>.addr**:
 - Format: `"host:port"` or `":port"`
 - Examples:
   - `":1883"` - Listen on all interfaces, port 1883
   - `"127.0.0.1:1883"` - Listen only on localhost
   - `"192.168.1.10:1883"` - Listen on specific IP
 
-**tcp_max_connections**:
+**server.tcp.<mode>.max_connections**:
 - Maximum concurrent TCP connections
 - Default: 10000
 - Adjust based on available file descriptors (`ulimit -n`)
 
-**tcp_read_timeout / tcp_write_timeout**:
+**server.tcp.<mode>.read_timeout / server.tcp.<mode>.write_timeout**:
 - Duration format: `"60s"`, `"5m"`, `"1h"`
 - Prevents hung connections
 - Should be longer than maximum expected keep-alive
@@ -117,9 +149,10 @@ server:
 
 ```yaml
 server:
-  ws_enabled: true
-  ws_addr: ":8083"
-  ws_path: "/mqtt"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
 ```
 
 **Client Connection**:
@@ -132,8 +165,9 @@ const client = mqtt.connect('ws://localhost:8083/mqtt');
 
 ```yaml
 server:
-  http_enabled: true
-  http_addr: ":8080"
+  http:
+    plain:
+      addr: ":8080"
 ```
 
 **Publishing via HTTP**:
@@ -568,14 +602,29 @@ Log output format.
 ```yaml
 # examples/no-cluster.yaml
 server:
-  tcp_addr: ":1883"
-  tcp_max_connections: 10000
-  tcp_read_timeout: "60s"
-  tcp_write_timeout: "60s"
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls: {}
+    mtls: {}
 
-  http_enabled: false
-  ws_enabled: false
-  coap_enabled: false
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
   shutdown_timeout: "30s"
 
@@ -609,8 +658,27 @@ log:
 ```yaml
 # examples/single-node-cluster.yaml
 server:
-  tcp_addr: ":1883"
-  tcp_max_connections: 10000
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+    tls: {}
+    mtls: {}
+
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
 storage:
   type: "badger"
@@ -641,7 +709,26 @@ log:
 ```yaml
 # examples/node1.yaml
 server:
-  tcp_addr: ":1883"
+  tcp:
+    plain:
+      addr: ":1883"
+    tls: {}
+    mtls: {}
+
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
 storage:
   type: "badger"
@@ -669,7 +756,7 @@ log:
 ```
 
 **Node 2**: Same as Node 1, with:
-- `tcp_addr: ":1884"`
+- `tcp.plain.addr: ":1884"`
 - `node_id: "node2"`
 - `badger_dir: "/tmp/mqtt/node2/data"`
 - `etcd.data_dir: "/tmp/mqtt/node2/etcd"`
@@ -685,7 +772,26 @@ log:
 **Node 1** (192.168.1.10):
 ```yaml
 server:
-  tcp_addr: "0.0.0.0:1883"
+  tcp:
+    plain:
+      addr: "0.0.0.0:1883"
+    tls: {}
+    mtls: {}
+
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
 storage:
   type: "badger"
@@ -720,10 +826,16 @@ log:
 1. **Bind addresses**:
    ```yaml
    # Development: localhost only
-   tcp_addr: "127.0.0.1:1883"
+   server:
+     tcp:
+       plain:
+         addr: "127.0.0.1:1883"
 
    # Production: specific interface
-   tcp_addr: "0.0.0.0:1883"  # With firewall
+   server:
+     tcp:
+       plain:
+         addr: "0.0.0.0:1883"  # With firewall
 
    # Don't expose etcd client port externally
    client_addr: "127.0.0.1:2379"
@@ -741,7 +853,9 @@ log:
 1. **Connection limits**:
    ```yaml
    server:
-     tcp_max_connections: 50000  # Based on ulimit
+     tcp:
+       plain:
+         max_connections: 50000  # Based on ulimit
 
    session:
      max_sessions: 50000
@@ -760,8 +874,10 @@ log:
 2. **Timeouts**:
    ```yaml
    server:
-     tcp_read_timeout: "120s"   # 2x max keep-alive
-     tcp_write_timeout: "120s"
+     tcp:
+       plain:
+         read_timeout: "120s"   # 2x max keep-alive
+         write_timeout: "120s"
    ```
 
 3. **Storage**:

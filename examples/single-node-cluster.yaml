@@ -3,14 +3,29 @@
 # Uses embedded etcd for metadata storage
 
 server:
-  tcp_addr: ":1883"
-  tcp_max_connections: 10000
-  tcp_read_timeout: "60s"
-  tcp_write_timeout: "60s"
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls: {}
+    mtls: {}
 
-  http_enabled: false
-  ws_enabled: false
-  coap_enabled: false
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
   shutdown_timeout: "30s"
 

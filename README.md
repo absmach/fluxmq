@@ -222,12 +222,19 @@ mosquitto_pub -p 1885 -t "test/hello" -m "Cross-node message"
 
 ```yaml
 server:
-  tcp_addr: ":1883"
-  http_addr: ":8080"
-  http_enabled: true
-  ws_addr: ":8083"
-  ws_path: "/mqtt"
-  ws_enabled: true
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+  http:
+    plain:
+      addr: ":8080"
 
 broker:
   max_message_size: 1048576
