@@ -113,7 +113,8 @@ type WebSocketConfig struct {
 
 // HTTPListenerConfig holds HTTP listener configuration.
 type HTTPListenerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr string         `yaml:"addr"`
+	TLS  mqtttls.Config `yaml:",inline"`
 }
 
 // HTTPConfig groups HTTP listeners by mode.
@@ -486,6 +487,16 @@ func (c *Config) Validate() error {
 		{name: "mtls", cfg: c.Server.WebSocket.MTLS, requireClientAuth: true},
 	}
 
+	httpSlots := []struct {
+		name              string
+		cfg               HTTPListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.HTTP.Plain, requireClientAuth: false},
+		{name: "tls", cfg: c.Server.HTTP.TLS, requireClientAuth: false},
+		{name: "mtls", cfg: c.Server.HTTP.MTLS, requireClientAuth: true},
+	}
+
 	hasMQTTListener := false
 
 	for _, slot := range tcpSlots {
@@ -533,8 +544,22 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one TCP or WebSocket listener must be configured")
 	}
 
-	if hasAddr(c.Server.HTTP.TLS.Addr) || hasAddr(c.Server.HTTP.MTLS.Addr) {
-		return fmt.Errorf("server.http.tls and server.http.mtls are not supported yet")
+	for _, slot := range httpSlots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
+			}
+			continue
+		}
+
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.http."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
+		}
 	}
 
 	coapSlots := []struct {

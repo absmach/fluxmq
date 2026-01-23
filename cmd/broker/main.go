@@ -427,21 +427,45 @@ func main() {
 		}(slot.name, slot.cfg.Addr, slot.cfg.Path, wsServer)
 	}
 
-	if strings.TrimSpace(cfg.Server.HTTP.Plain.Addr) != "" {
+	httpSlots := []struct {
+		name string
+		cfg  config.HTTPListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.HTTP.Plain},
+		{name: "tls", cfg: cfg.Server.HTTP.TLS},
+		{name: "mtls", cfg: cfg.Server.HTTP.MTLS},
+	}
+
+	for _, slot := range httpSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		var tlsCfg *tls.Config
+		if slot.name != "plain" {
+			var err error
+			tlsCfg, err = mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
+			if err != nil {
+				slog.Error("Failed to build HTTP TLS configuration", "listener", slot.name, "error", err)
+				os.Exit(1)
+			}
+		}
+
 		httpCfg := http.Config{
-			Address:         cfg.Server.HTTP.Plain.Addr,
+			Address:         slot.cfg.Addr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			TLSConfig:       tlsCfg,
 		}
 		httpServer := http.New(httpCfg, b, logger)
 
 		wg.Add(1)
-		go func(addr string) {
+		go func(name, addr string, server *http.Server) {
 			defer wg.Done()
-			slog.Info("Starting HTTP-MQTT bridge", "address", addr)
-			if err := httpServer.Listen(ctx); err != nil {
+			slog.Info("Starting HTTP-MQTT bridge", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}(cfg.Server.HTTP.Plain.Addr)
+		}(slot.name, slot.cfg.Addr, httpServer)
 	}
 
 	coapSlots := []struct {

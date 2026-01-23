@@ -278,6 +278,7 @@ If `ca_file` is set and `client_auth` is empty, the server defaults to `require`
 If they are omitted, Go's default TLS behavior is used.
 `cipher_suites` applies to TLS and DTLS; if omitted, each library's default list is used.
 DTLS will reject suites it doesn't support.
+HTTP TLS/mTLS uses the same inline fields under `server.http.tls` and `server.http.mtls`.
 
 Go 1.24 default TLS behavior (when you omit these fields):
 - Minimum version: TLS 1.2 (TLS 1.3 enabled by default)

@@ -73,7 +73,7 @@ log:
 
 Controls the transport layer (TCP, WebSocket, HTTP, CoAP). Each protocol has
 fixed listener slots (`plain`, `tls`, `mtls`) and a listener is enabled when its
-`addr` is set. HTTP TLS is not supported yet.
+`addr` is set.
 
 ```yaml
 server:
@@ -118,8 +118,15 @@ server:
   http:
     plain:
       addr: ":8080"
-    tls: {}
-    mtls: {}
+    tls:
+      addr: ":8443"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+    mtls:
+      addr: ":8444"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+      ca_file: "/path/to/ca.crt"
 
   # CoAP Bridge
   coap:
