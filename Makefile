@@ -155,7 +155,7 @@ run-node3: build
 # Clean all temporary data directories
 .PHONY: clean-data
 clean-data:
-	rm -rf /tmp/mqtt
+	rm -rf /tmp/fluxmq
 
 .PHONY: proto
 proto:
@@ -206,6 +206,6 @@ help:
 	@echo "Utility Targets:"
 	@echo "  fmt                Format code"
 	@echo "  clean              Remove build artifacts"
-	@echo "  clean-data         Remove all /tmp/mqtt data directories"
+	@echo "  clean-data         Remove all /tmp/fluxmq data directories"
 	@echo "  deps               Download and tidy dependencies"
 	@echo "  help               Show this help message"

@@ -20,8 +20,8 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
+	logStorage "github.com/absmach/fluxmq/pkg/queue/storage/log"
 	"github.com/absmach/fluxmq/queue"
-	queueLogBadger "github.com/absmach/fluxmq/queue/storage/badger/log"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
@@ -32,7 +32,6 @@ import (
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/absmach/fluxmq/storage/memory"
-	badgerLink "github.com/dgraph-io/badger/v4"
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -293,22 +292,17 @@ func main() {
 		slog.Info("Rate limiting disabled")
 	}
 
-	// Initialize log-based queue with separate BadgerDB instance
-	if cfg.Storage.Type == "badger" {
+	// Initialize file-based log storage for queues
+	{
 		queueDir := cfg.Storage.BadgerDir + "_queue"
-		opts := badgerLink.DefaultOptions(queueDir)
-		opts.Logger = nil // Disable default logger to avoid noise
 
-		queueDB, err := badgerLink.Open(opts)
+		// Use file-based AOL storage (implements both LogStore and ConsumerGroupStore)
+		logStore, err := logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
 		if err != nil {
-			slog.Error("Failed to initialize queue BadgerDB", "error", err)
+			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
 		}
-		// Ensure queueDB is closed after broker (LIFO order: broker closes first)
-		defer queueDB.Close()
-
-		// Use log-based store (implements both LogStore and ConsumerGroupStore)
-		logStore := queueLogBadger.New(queueDB)
+		defer logStore.Close()
 
 		// Create log-based queue manager with wildcard support
 		qm := queue.NewManager(
@@ -330,7 +324,7 @@ func main() {
 			etcdCluster.SetQueueHandler(qm)
 		}
 
-		slog.Info("Log-based queue initialized", "storage", "badger", "dir", queueDir)
+		slog.Info("Log-based queue initialized", "storage", "file", "dir", queueDir)
 	}
 
 	// Set message handler on cluster if it's an etcd cluster

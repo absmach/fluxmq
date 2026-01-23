@@ -1,0 +1,379 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package log
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/absmach/fluxmq/queue/types"
+)
+
+// ConsumerGroupStateStore manages consumer group state persistence.
+type ConsumerGroupStateStore struct {
+	mu sync.RWMutex
+
+	dir    string
+	groups map[string]map[string]*types.ConsumerGroupState // queueName -> groupID -> state
+	dirty  map[string]bool                                 // groupKey -> dirty flag
+}
+
+const consumerGroupVersion uint8 = 1
+
+// NewConsumerGroupStateStore creates or opens a consumer group state store.
+func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error) {
+	dir := filepath.Join(baseDir, "groups")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create groups directory: %w", err)
+	}
+
+	store := &ConsumerGroupStateStore{
+		dir:    dir,
+		groups: make(map[string]map[string]*types.ConsumerGroupState),
+		dirty:  make(map[string]bool),
+	}
+
+	if err := store.loadAll(); err != nil {
+		return nil, fmt.Errorf("failed to load consumer groups: %w", err)
+	}
+
+	return store, nil
+}
+
+// loadAll loads all consumer group states from disk.
+func (s *ConsumerGroupStateStore) loadAll() error {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		queueName := entry.Name()
+		queueDir := filepath.Join(s.dir, queueName)
+
+		files, err := os.ReadDir(queueDir)
+		if err != nil {
+			continue
+		}
+
+		s.groups[queueName] = make(map[string]*types.ConsumerGroupState)
+
+		for _, file := range files {
+			if file.IsDir() || filepath.Ext(file.Name()) != ".json" {
+				continue
+			}
+
+			groupID := file.Name()[:len(file.Name())-5] // Remove .json extension
+
+			state, err := s.loadGroup(queueName, groupID)
+			if err != nil {
+				continue
+			}
+
+			s.groups[queueName][groupID] = state
+		}
+	}
+
+	return nil
+}
+
+// groupPath returns the path to a group's state file.
+func (s *ConsumerGroupStateStore) groupPath(queueName, groupID string) string {
+	return filepath.Join(s.dir, queueName, groupID+".json")
+}
+
+// groupKey returns a unique key for a group.
+func groupKey(queueName, groupID string) string {
+	return queueName + "/" + groupID
+}
+
+// loadGroup loads a consumer group state from disk.
+func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.ConsumerGroupState, error) {
+	data, err := os.ReadFile(s.groupPath(queueName, groupID))
+	if err != nil {
+		return nil, err
+	}
+
+	var wrapper struct {
+		Version uint8                    `json:"version"`
+		State   *types.ConsumerGroupState `json:"state"`
+		SavedAt int64                     `json:"saved_at"`
+	}
+
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal consumer group state: %w", err)
+	}
+
+	if wrapper.Version > consumerGroupVersion {
+		return nil, fmt.Errorf("unsupported consumer group version: %d", wrapper.Version)
+	}
+
+	state := wrapper.State
+
+	// Ensure maps are initialized
+	if state.Cursors == nil {
+		state.Cursors = make(map[int]*types.PartitionCursor)
+	}
+	if state.PEL == nil {
+		state.PEL = make(map[string][]*types.PendingEntry)
+	}
+	if state.Consumers == nil {
+		state.Consumers = make(map[string]*types.ConsumerInfo)
+	}
+
+	return state, nil
+}
+
+// Save persists a consumer group state.
+func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	queueGroups, ok := s.groups[state.QueueName]
+	if !ok {
+		queueGroups = make(map[string]*types.ConsumerGroupState)
+		s.groups[state.QueueName] = queueGroups
+	}
+
+	queueGroups[state.ID] = state
+	s.dirty[groupKey(state.QueueName, state.ID)] = true
+
+	return s.saveGroup(state)
+}
+
+// saveGroup saves a single group to disk (must hold lock).
+func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) error {
+	queueDir := filepath.Join(s.dir, state.QueueName)
+	if err := os.MkdirAll(queueDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create queue group directory: %w", err)
+	}
+
+	wrapper := struct {
+		Version uint8                    `json:"version"`
+		State   *types.ConsumerGroupState `json:"state"`
+		SavedAt int64                     `json:"saved_at"`
+	}{
+		Version: consumerGroupVersion,
+		State:   state,
+		SavedAt: time.Now().UnixMilli(),
+	}
+
+	data, err := json.MarshalIndent(wrapper, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal consumer group state: %w", err)
+	}
+
+	path := s.groupPath(state.QueueName, state.ID)
+	tempPath := path + TempExtension
+
+	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write consumer group file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("failed to rename consumer group file: %w", err)
+	}
+
+	delete(s.dirty, groupKey(state.QueueName, state.ID))
+
+	return nil
+}
+
+// Get retrieves a consumer group state.
+func (s *ConsumerGroupStateStore) Get(queueName, groupID string) (*types.ConsumerGroupState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	queueGroups, ok := s.groups[queueName]
+	if !ok {
+		return nil, ErrGroupNotFound
+	}
+
+	state, ok := queueGroups[groupID]
+	if !ok {
+		return nil, ErrGroupNotFound
+	}
+
+	return state, nil
+}
+
+// Delete removes a consumer group state.
+func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	queueGroups, ok := s.groups[queueName]
+	if ok {
+		delete(queueGroups, groupID)
+		if len(queueGroups) == 0 {
+			delete(s.groups, queueName)
+		}
+	}
+
+	delete(s.dirty, groupKey(queueName, groupID))
+
+	path := s.groupPath(queueName, groupID)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	// Clean up empty queue directory
+	queueDir := filepath.Join(s.dir, queueName)
+	entries, _ := os.ReadDir(queueDir)
+	if len(entries) == 0 {
+		os.Remove(queueDir)
+	}
+
+	return nil
+}
+
+// List returns all consumer groups for a queue.
+func (s *ConsumerGroupStateStore) List(queueName string) ([]*types.ConsumerGroupState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	queueGroups, ok := s.groups[queueName]
+	if !ok {
+		return []*types.ConsumerGroupState{}, nil
+	}
+
+	result := make([]*types.ConsumerGroupState, 0, len(queueGroups))
+	for _, state := range queueGroups {
+		result = append(result, state)
+	}
+
+	return result, nil
+}
+
+// ListAll returns all consumer groups across all queues.
+func (s *ConsumerGroupStateStore) ListAll() ([]*types.ConsumerGroupState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []*types.ConsumerGroupState
+	for _, queueGroups := range s.groups {
+		for _, state := range queueGroups {
+			result = append(result, state)
+		}
+	}
+
+	return result, nil
+}
+
+// Sync saves all dirty states to disk.
+func (s *ConsumerGroupStateStore) Sync() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var lastErr error
+	for key := range s.dirty {
+		// Parse the key to get queue name and group ID
+		for queueName, queueGroups := range s.groups {
+			for groupID, state := range queueGroups {
+				if groupKey(queueName, groupID) == key {
+					if err := s.saveGroup(state); err != nil {
+						lastErr = err
+					}
+				}
+			}
+		}
+	}
+
+	return lastErr
+}
+
+// Close closes the store.
+func (s *ConsumerGroupStateStore) Close() error {
+	return s.Sync()
+}
+
+// Exists checks if a consumer group exists.
+func (s *ConsumerGroupStateStore) Exists(queueName, groupID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	queueGroups, ok := s.groups[queueName]
+	if !ok {
+		return false
+	}
+
+	_, ok = queueGroups[groupID]
+	return ok
+}
+
+// CreateIfNotExists creates a consumer group if it doesn't exist.
+func (s *ConsumerGroupStateStore) CreateIfNotExists(state *types.ConsumerGroupState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	queueGroups, ok := s.groups[state.QueueName]
+	if !ok {
+		queueGroups = make(map[string]*types.ConsumerGroupState)
+		s.groups[state.QueueName] = queueGroups
+	}
+
+	if _, exists := queueGroups[state.ID]; exists {
+		return nil // Already exists
+	}
+
+	queueGroups[state.ID] = state
+	s.dirty[groupKey(state.QueueName, state.ID)] = true
+
+	return s.saveGroup(state)
+}
+
+// UpdateCursor updates just the cursor for a partition.
+func (s *ConsumerGroupStateStore) UpdateCursor(queueName, groupID string, partitionID int, cursor, committed uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	queueGroups, ok := s.groups[queueName]
+	if !ok {
+		return ErrGroupNotFound
+	}
+
+	state, ok := queueGroups[groupID]
+	if !ok {
+		return ErrGroupNotFound
+	}
+
+	c := state.GetCursor(partitionID)
+	c.Cursor = cursor
+	c.Committed = committed
+	state.UpdatedAt = time.Now()
+
+	s.dirty[groupKey(queueName, groupID)] = true
+
+	return nil
+}
+
+// GetCursor retrieves cursor state for a partition.
+func (s *ConsumerGroupStateStore) GetCursor(queueName, groupID string, partitionID int) (*types.PartitionCursor, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	queueGroups, ok := s.groups[queueName]
+	if !ok {
+		return nil, ErrGroupNotFound
+	}
+
+	state, ok := queueGroups[groupID]
+	if !ok {
+		return nil, ErrGroupNotFound
+	}
+
+	return state.GetCursor(partitionID), nil
+}

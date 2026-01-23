@@ -493,6 +493,20 @@ func (p *PEL) CountByConsumer() map[string]int {
 	return result
 }
 
+// GetAll returns all entries organized by consumer.
+func (p *PEL) GetAll() map[string][]PELEntry {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	result := make(map[string][]PELEntry, len(p.entries))
+	for consumerID, entries := range p.entries {
+		entriesCopy := make([]PELEntry, len(entries))
+		copy(entriesCopy, entries)
+		result[consumerID] = entriesCopy
+	}
+	return result
+}
+
 // MinOffset returns the minimum pending offset.
 func (p *PEL) MinOffset() uint64 {
 	p.mu.RLock()

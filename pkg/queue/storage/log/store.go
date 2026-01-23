@@ -13,6 +13,7 @@ import (
 
 // Store is the main interface for the AOL storage system.
 // It manages multiple queues, each with multiple partitions.
+// Consumer state uses JetStream-style semantics with sharded PEL.
 type Store struct {
 	mu sync.RWMutex
 
@@ -22,9 +23,8 @@ type Store struct {
 	// Queue -> Partition -> SegmentManager
 	queues map[string]map[uint32]*SegmentManager
 
-	// Consumer group state per queue
-	cursors map[string]*ConsumerGroupCursors
-	pels    map[string]*ConsumerGroupPELs
+	// Queue -> ConsumerManager (JetStream-style with sharded PEL)
+	consumers map[string]*ConsumerManager
 
 	closed bool
 }
@@ -32,14 +32,16 @@ type Store struct {
 // StoreConfig holds store configuration.
 type StoreConfig struct {
 	ManagerConfig
+	ConsumerStateConfig
 	AutoCreate bool // Automatically create queues/partitions on first access
 }
 
 // DefaultStoreConfig returns default store configuration.
 func DefaultStoreConfig() StoreConfig {
 	return StoreConfig{
-		ManagerConfig: DefaultManagerConfig(),
-		AutoCreate:    true,
+		ManagerConfig:       DefaultManagerConfig(),
+		ConsumerStateConfig: DefaultConsumerStateConfig(),
+		AutoCreate:          true,
 	}
 }
 
@@ -50,11 +52,10 @@ func NewStore(baseDir string, config StoreConfig) (*Store, error) {
 	}
 
 	s := &Store{
-		baseDir: baseDir,
-		config:  config,
-		queues:  make(map[string]map[uint32]*SegmentManager),
-		cursors: make(map[string]*ConsumerGroupCursors),
-		pels:    make(map[string]*ConsumerGroupPELs),
+		baseDir:   baseDir,
+		config:    config,
+		queues:    make(map[string]map[uint32]*SegmentManager),
+		consumers: make(map[string]*ConsumerManager),
 	}
 
 	// Load existing queues
@@ -125,10 +126,12 @@ func (s *Store) loadQueue(queueName string) error {
 		s.queues[queueName][partitionID] = manager
 	}
 
-	// Load consumer state
-	consumersDir := filepath.Join(queueDir, "consumers")
-	s.cursors[queueName], _ = NewConsumerGroupCursors(filepath.Join(consumersDir, "cursors"))
-	s.pels[queueName], _ = NewConsumerGroupPELs(filepath.Join(consumersDir, "pels"))
+	// Load consumer manager for this queue
+	cm, err := NewConsumerManager(queueDir, s.config.ConsumerStateConfig)
+	if err != nil {
+		return fmt.Errorf("failed to load consumer manager: %w", err)
+	}
+	s.consumers[queueName] = cm
 
 	return nil
 }
@@ -160,10 +163,13 @@ func (s *Store) getOrCreatePartition(queueName string, partitionID uint32) (*Seg
 		partitions = make(map[uint32]*SegmentManager)
 		s.queues[queueName] = partitions
 
-		// Create consumer state directories
-		consumersDir := filepath.Join(s.queueDir(queueName), "consumers")
-		s.cursors[queueName], _ = NewConsumerGroupCursors(filepath.Join(consumersDir, "cursors"))
-		s.pels[queueName], _ = NewConsumerGroupPELs(filepath.Join(consumersDir, "pels"))
+		// Create consumer manager for new queue
+		queueDir := s.queueDir(queueName)
+		cm, err := NewConsumerManager(queueDir, s.config.ConsumerStateConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create consumer manager: %w", err)
+		}
+		s.consumers[queueName] = cm
 	}
 
 	manager, ok := partitions[partitionID]
@@ -205,6 +211,20 @@ func (s *Store) getPartition(queueName string, partitionID uint32) (*SegmentMana
 
 	return manager, nil
 }
+
+// getConsumerManager returns the consumer manager for a queue.
+func (s *Store) getConsumerManager(queueName string) (*ConsumerManager, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	cm, ok := s.consumers[queueName]
+	if !ok {
+		return nil, ErrQueueNotFound
+	}
+	return cm, nil
+}
+
+// Message Operations
 
 // Append appends a message to a partition.
 func (s *Store) Append(queueName string, partitionID uint32, value []byte, key []byte, headers map[string][]byte) (uint64, error) {
@@ -296,154 +316,161 @@ func (s *Store) Truncate(queueName string, partitionID uint32, beforeOffset uint
 	return manager.Truncate(beforeOffset)
 }
 
-// Consumer Group Operations
+// Consumer Group Operations (JetStream-style)
 
-// GetCursor gets the cursor for a consumer group in a partition.
-func (s *Store) GetCursor(queueName, groupID string, partitionID uint32) (*PartitionCursor, error) {
-	s.mu.RLock()
-	cgc, ok := s.cursors[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return nil, ErrQueueNotFound
+// Deliver marks a message as delivered to a consumer.
+func (s *Store) Deliver(queueName, groupID string, partitionID uint32, offset uint64, consumerID string) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
 	}
 
-	cs, err := cgc.GetOrCreate(groupID)
+	state, err := cm.GetOrCreate(groupID)
+	if err != nil {
+		return err
+	}
+
+	return state.Deliver(partitionID, offset, consumerID)
+}
+
+// DeliverBatch marks multiple messages as delivered.
+func (s *Store) DeliverBatch(queueName, groupID string, partitionID uint32, offsets []uint64, consumerID string) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state, err := cm.GetOrCreate(groupID)
+	if err != nil {
+		return err
+	}
+
+	return state.DeliverBatch(partitionID, offsets, consumerID)
+}
+
+// Ack acknowledges a message.
+func (s *Store) Ack(queueName, groupID string, partitionID uint32, offset uint64) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return ErrGroupNotFound
+	}
+
+	return state.Ack(partitionID, offset)
+}
+
+// AckBatch acknowledges multiple messages.
+func (s *Store) AckBatch(queueName, groupID string, partitionID uint32, offsets []uint64) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return ErrGroupNotFound
+	}
+
+	return state.AckBatch(partitionID, offsets)
+}
+
+// Nack negatively acknowledges a message (will be redelivered).
+func (s *Store) Nack(queueName, groupID string, offset uint64) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return ErrGroupNotFound
+	}
+
+	return state.Nack(offset)
+}
+
+// Claim transfers a pending message to a new consumer (work stealing).
+func (s *Store) Claim(queueName, groupID string, offset uint64, newConsumerID string) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return ErrGroupNotFound
+	}
+
+	return state.Claim(offset, newConsumerID)
+}
+
+// ClaimBatch transfers multiple pending messages to a new consumer.
+func (s *Store) ClaimBatch(queueName, groupID string, offsets []uint64, newConsumerID string) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return ErrGroupNotFound
+	}
+
+	return state.ClaimBatch(offsets, newConsumerID)
+}
+
+// GetPartitionState returns consumer state for a partition.
+func (s *Store) GetPartitionState(queueName, groupID string, partitionID uint32) (*PartitionState, error) {
+	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return nil, err
 	}
 
-	return cs.GetCursor(partitionID), nil
+	state := cm.Get(groupID)
+	if state == nil {
+		return &PartitionState{}, nil
+	}
+
+	return state.GetPartitionState(partitionID), nil
 }
 
-// SetCursor sets the cursor for a consumer group in a partition.
-func (s *Store) SetCursor(queueName, groupID string, partitionID uint32, cursor uint64) error {
-	s.mu.RLock()
-	cgc, ok := s.cursors[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return ErrQueueNotFound
-	}
-
-	cs, err := cgc.GetOrCreate(groupID)
-	if err != nil {
-		return err
-	}
-
-	cs.SetCursor(partitionID, cursor)
-	return nil
-}
-
-// CommitOffset commits an offset for a consumer group.
-func (s *Store) CommitOffset(queueName, groupID string, partitionID uint32, offset uint64) error {
-	s.mu.RLock()
-	cgc, ok := s.cursors[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return ErrQueueNotFound
-	}
-
-	cs, err := cgc.GetOrCreate(groupID)
-	if err != nil {
-		return err
-	}
-
-	cs.Commit(partitionID, offset)
-	return nil
-}
-
-// GetCommittedOffset returns the committed offset for a consumer group.
-func (s *Store) GetCommittedOffset(queueName, groupID string, partitionID uint32) (uint64, error) {
-	s.mu.RLock()
-	cgc, ok := s.cursors[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return 0, ErrQueueNotFound
-	}
-
-	cs, err := cgc.GetOrCreate(groupID)
+// GetAckFloor returns the ack floor (highest contiguous acked offset) for a partition.
+func (s *Store) GetAckFloor(queueName, groupID string, partitionID uint32) (uint64, error) {
+	ps, err := s.GetPartitionState(queueName, groupID, partitionID)
 	if err != nil {
 		return 0, err
 	}
+	return ps.AckFloor, nil
+}
 
-	return cs.GetCommitted(partitionID), nil
+// GetCursor returns the cursor (next delivery offset) for a partition.
+func (s *Store) GetCursor(queueName, groupID string, partitionID uint32) (uint64, error) {
+	ps, err := s.GetPartitionState(queueName, groupID, partitionID)
+	if err != nil {
+		return 0, err
+	}
+	return ps.Cursor, nil
 }
 
 // PEL Operations
 
-// AddPending adds a pending entry to the PEL.
-func (s *Store) AddPending(queueName, groupID string, entry PELEntry) error {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return ErrQueueNotFound
-	}
-
-	pel, err := cgp.GetOrCreate(groupID)
-	if err != nil {
-		return err
-	}
-
-	return pel.Add(entry)
-}
-
-// AckPending acknowledges a pending entry.
-func (s *Store) AckPending(queueName, groupID string, offset uint64) error {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return ErrQueueNotFound
-	}
-
-	pel, err := cgp.GetOrCreate(groupID)
-	if err != nil {
-		return err
-	}
-
-	return pel.Ack(offset)
-}
-
-// ClaimPending claims a pending entry for another consumer.
-func (s *Store) ClaimPending(queueName, groupID string, offset uint64, newConsumerID string) error {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return ErrQueueNotFound
-	}
-
-	pel, err := cgp.GetOrCreate(groupID)
-	if err != nil {
-		return err
-	}
-
-	return pel.Claim(offset, newConsumerID)
-}
-
 // GetPending returns a pending entry.
-func (s *Store) GetPending(queueName, groupID string, offset uint64) (*PELEntry, error) {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return nil, ErrQueueNotFound
+func (s *Store) GetPending(queueName, groupID string, offset uint64) (*PendingEntry, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
 	}
 
-	pel := cgp.Get(groupID)
-	if pel == nil {
+	state := cm.Get(groupID)
+	if state == nil {
 		return nil, ErrGroupNotFound
 	}
 
-	entry, ok := pel.Get(offset)
+	entry, ok := state.GetPending(offset)
 	if !ok {
 		return nil, ErrPELEntryNotFound
 	}
@@ -452,57 +479,178 @@ func (s *Store) GetPending(queueName, groupID string, offset uint64) (*PELEntry,
 }
 
 // GetPendingByConsumer returns all pending entries for a consumer.
-func (s *Store) GetPendingByConsumer(queueName, groupID, consumerID string) ([]PELEntry, error) {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return nil, ErrQueueNotFound
+func (s *Store) GetPendingByConsumer(queueName, groupID, consumerID string) ([]PendingEntry, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
 	}
 
-	pel := cgp.Get(groupID)
-	if pel == nil {
-		return nil, ErrGroupNotFound
+	state := cm.Get(groupID)
+	if state == nil {
+		return nil, nil
 	}
 
-	return pel.GetByConsumer(consumerID), nil
+	return state.GetPendingByConsumer(consumerID), nil
 }
 
-// GetStealableEntries returns entries that can be stolen.
-func (s *Store) GetStealableEntries(queueName, groupID string, timeout time.Duration, excludeConsumer string) ([]PELEntry, error) {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return nil, ErrQueueNotFound
+// GetPendingByShard returns all pending entries in a shard (for distributed redelivery).
+func (s *Store) GetPendingByShard(queueName, groupID string, shardID int) ([]PendingEntry, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
 	}
 
-	pel := cgp.Get(groupID)
-	if pel == nil {
-		return nil, ErrGroupNotFound
+	state := cm.Get(groupID)
+	if state == nil {
+		return nil, nil
 	}
 
-	return pel.GetStealable(timeout, excludeConsumer), nil
+	return state.GetPendingByShard(shardID), nil
 }
 
 // PendingCount returns the number of pending entries.
 func (s *Store) PendingCount(queueName, groupID string) (int, error) {
-	s.mu.RLock()
-	cgp, ok := s.pels[queueName]
-	s.mu.RUnlock()
-
-	if !ok {
-		return 0, ErrQueueNotFound
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return 0, err
 	}
 
-	pel := cgp.Get(groupID)
-	if pel == nil {
+	state := cm.Get(groupID)
+	if state == nil {
 		return 0, nil
 	}
 
-	return pel.Count(), nil
+	return state.PendingCount(), nil
+}
+
+// Redelivery Operations
+
+// GetRedeliveryCandidates returns entries eligible for redelivery from a shard.
+func (s *Store) GetRedeliveryCandidates(queueName, groupID string, shardID int, timeout time.Duration, maxCount int) ([]PendingEntry, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return nil, nil
+	}
+
+	candidates := state.GetRedeliveryCandidates(shardID, timeout, maxCount)
+	return candidates.Entries, nil
+}
+
+// GetAllRedeliveryCandidates returns all entries eligible for redelivery.
+func (s *Store) GetAllRedeliveryCandidates(queueName, groupID string, timeout time.Duration, maxCount int) ([]PendingEntry, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return nil, nil
+	}
+
+	return state.GetAllRedeliveryCandidates(timeout, maxCount), nil
+}
+
+// GetRedeliveryBatches returns batches of messages ready for redelivery across all groups.
+func (s *Store) GetRedeliveryBatches(queueName string, timeout time.Duration, maxPerShard int) ([]RedeliveryBatch, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	return cm.GetRedeliveryBatches(timeout, maxPerShard), nil
+}
+
+// GetDeadLetterCandidates returns entries that exceeded max delivery count.
+func (s *Store) GetDeadLetterCandidates(queueName, groupID string, maxDeliveries int, maxCount int) ([]PendingEntry, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return nil, nil
+	}
+
+	return state.GetDeadLetterCandidates(maxDeliveries, maxCount), nil
+}
+
+// Consumer Group Management
+
+// CreateConsumerGroup creates a new consumer group.
+func (s *Store) CreateConsumerGroup(queueName, groupID string) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	_, err = cm.GetOrCreate(groupID)
+	return err
+}
+
+// DeleteConsumerGroup deletes a consumer group.
+func (s *Store) DeleteConsumerGroup(queueName, groupID string) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	return cm.Delete(groupID)
+}
+
+// ConsumerGroupExists checks if a consumer group exists.
+func (s *Store) ConsumerGroupExists(queueName, groupID string) bool {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return false
+	}
+
+	return cm.Exists(groupID)
+}
+
+// ListConsumerGroups returns all consumer groups for a queue.
+func (s *Store) ListConsumerGroups(queueName string) []string {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil
+	}
+
+	return cm.List()
+}
+
+// GetConsumerState returns the consumer state for direct access.
+func (s *Store) GetConsumerState(queueName, groupID string) (*ConsumerState, error) {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return nil, ErrGroupNotFound
+	}
+
+	return state, nil
+}
+
+// GetConsumerManager returns the consumer manager for a queue.
+func (s *Store) GetConsumerManager(queueName string) (*ConsumerManager, error) {
+	return s.getConsumerManager(queueName)
+}
+
+// NumPELShards returns the number of PEL shards for a consumer group.
+func (s *Store) NumPELShards(queueName, groupID string) (int, error) {
+	state, err := s.GetConsumerState(queueName, groupID)
+	if err != nil {
+		return 0, err
+	}
+	return state.NumShards(), nil
 }
 
 // Queue Management
@@ -521,7 +669,7 @@ func (s *Store) CreateQueue(queueName string, partitionCount int) error {
 	}
 
 	partitions := make(map[uint32]*SegmentManager)
-	for i := 0; i < partitionCount; i++ {
+	for i := range partitionCount {
 		partDir := s.partitionDir(queueName, uint32(i))
 		manager, err := NewSegmentManager(partDir, s.config.ManagerConfig)
 		if err != nil {
@@ -536,10 +684,17 @@ func (s *Store) CreateQueue(queueName string, partitionCount int) error {
 
 	s.queues[queueName] = partitions
 
-	// Create consumer state directories
-	consumersDir := filepath.Join(s.queueDir(queueName), "consumers")
-	s.cursors[queueName], _ = NewConsumerGroupCursors(filepath.Join(consumersDir, "cursors"))
-	s.pels[queueName], _ = NewConsumerGroupPELs(filepath.Join(consumersDir, "pels"))
+	// Create consumer manager
+	queueDir := s.queueDir(queueName)
+	cm, err := NewConsumerManager(queueDir, s.config.ConsumerStateConfig)
+	if err != nil {
+		// Cleanup on failure
+		for _, m := range partitions {
+			m.Close()
+		}
+		return fmt.Errorf("failed to create consumer manager: %w", err)
+	}
+	s.consumers[queueName] = cm
 
 	return nil
 }
@@ -563,17 +718,13 @@ func (s *Store) DeleteQueue(queueName string) error {
 		manager.Close()
 	}
 
-	// Close consumer state
-	if cgc, ok := s.cursors[queueName]; ok {
-		cgc.Close()
-	}
-	if cgp, ok := s.pels[queueName]; ok {
-		cgp.Close()
+	// Close consumer manager
+	if cm, ok := s.consumers[queueName]; ok {
+		cm.Close()
 	}
 
 	delete(s.queues, queueName)
-	delete(s.cursors, queueName)
-	delete(s.pels, queueName)
+	delete(s.consumers, queueName)
 
 	// Remove directory
 	return os.RemoveAll(s.queueDir(queueName))
@@ -639,8 +790,22 @@ func (s *Store) Sync() error {
 		}
 	}
 
-	for _, cgc := range s.cursors {
-		if err := cgc.SaveAll(); err != nil {
+	for _, cm := range s.consumers {
+		if err := cm.Sync(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Compact compacts all consumer state.
+func (s *Store) Compact() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, cm := range s.consumers {
+		if err := cm.Compact(); err != nil {
 			return err
 		}
 	}
@@ -682,8 +847,9 @@ func (s *Store) Stats() StoreStats {
 	defer s.mu.RUnlock()
 
 	stats := StoreStats{
-		QueueCount: len(s.queues),
-		QueueStats: make(map[string]QueueStats),
+		QueueCount:    len(s.queues),
+		QueueStats:    make(map[string]QueueStats),
+		ConsumerStats: make(map[string]ConsumerManagerStats),
 	}
 
 	for queueName, partitions := range s.queues {
@@ -708,6 +874,11 @@ func (s *Store) Stats() StoreStats {
 		stats.QueueStats[queueName] = qStats
 		stats.TotalMessages += qStats.TotalMessages
 		stats.TotalSize += qStats.TotalSize
+
+		// Add consumer stats
+		if cm, ok := s.consumers[queueName]; ok {
+			stats.ConsumerStats[queueName] = cm.Stats()
+		}
 	}
 
 	return stats
@@ -735,15 +906,9 @@ func (s *Store) Close() error {
 		}
 	}
 
-	// Close consumer state
-	for _, cgc := range s.cursors {
-		if err := cgc.Close(); err != nil {
-			lastErr = err
-		}
-	}
-
-	for _, cgp := range s.pels {
-		if err := cgp.Close(); err != nil {
+	// Close all consumer managers
+	for _, cm := range s.consumers {
+		if err := cm.Close(); err != nil {
 			lastErr = err
 		}
 	}
@@ -757,6 +922,7 @@ type StoreStats struct {
 	TotalMessages uint64
 	TotalSize     int64
 	QueueStats    map[string]QueueStats
+	ConsumerStats map[string]ConsumerManagerStats
 }
 
 // QueueStats contains queue statistics.
@@ -774,4 +940,115 @@ type PartitionStats struct {
 	MessageCount uint64
 	Size         int64
 	SegmentCount int
+}
+
+// Legacy compatibility methods (map to new JetStream-style API)
+
+// SetCursor sets the cursor for a consumer group (creates delivery if needed).
+func (s *Store) SetCursor(queueName, groupID string, partitionID uint32, cursor uint64) error {
+	// In JetStream model, cursor is advanced by Deliver operations
+	// This is a legacy compatibility method
+	return nil
+}
+
+// CommitOffset commits an offset for a consumer group.
+// In JetStream model, this maps to Ack.
+func (s *Store) CommitOffset(queueName, groupID string, partitionID uint32, offset uint64) error {
+	return s.Ack(queueName, groupID, partitionID, offset)
+}
+
+// GetCommittedOffset returns the committed offset for a consumer group.
+// In JetStream model, this is the AckFloor.
+func (s *Store) GetCommittedOffset(queueName, groupID string, partitionID uint32) (uint64, error) {
+	return s.GetAckFloor(queueName, groupID, partitionID)
+}
+
+// AddPending adds a pending entry (legacy - use Deliver instead).
+func (s *Store) AddPending(queueName, groupID string, entry PELEntry) error {
+	return s.Deliver(queueName, groupID, entry.PartitionID, entry.Offset, entry.ConsumerID)
+}
+
+// AckPending acknowledges a pending entry (legacy - use Ack instead).
+func (s *Store) AckPending(queueName, groupID string, offset uint64) error {
+	// Need partition ID - get from PEL
+	entry, err := s.GetPending(queueName, groupID, offset)
+	if err != nil {
+		return err
+	}
+	return s.Ack(queueName, groupID, entry.PartitionID, offset)
+}
+
+// ClaimPending claims a pending entry (legacy - use Claim instead).
+func (s *Store) ClaimPending(queueName, groupID string, offset uint64, newConsumerID string) error {
+	return s.Claim(queueName, groupID, offset, newConsumerID)
+}
+
+// GetStealableEntries returns entries that can be stolen (legacy - use GetRedeliveryCandidates).
+func (s *Store) GetStealableEntries(queueName, groupID string, timeout time.Duration, excludeConsumer string) ([]PendingEntry, error) {
+	entries, err := s.GetAllRedeliveryCandidates(queueName, groupID, timeout, 1000)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out excluded consumer
+	result := make([]PendingEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.ConsumerID != excludeConsumer {
+			result = append(result, e)
+		}
+	}
+	return result, nil
+}
+
+// GetAllPending returns all pending entries (legacy format).
+func (s *Store) GetAllPending(queueName, groupID string) (map[string][]PELEntry, error) {
+	state, err := s.GetConsumerState(queueName, groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert PendingEntry to PELEntry format
+	result := make(map[string][]PELEntry)
+	for shardID := range state.NumShards() {
+		entries := state.GetPendingByShard(shardID)
+		for _, e := range entries {
+			pelEntry := PELEntry{
+				Offset:        e.Offset,
+				PartitionID:   e.PartitionID,
+				ConsumerID:    e.ConsumerID,
+				ClaimedAt:     e.DeliveredAt,
+				DeliveryCount: e.DeliveryCount,
+			}
+			result[e.ConsumerID] = append(result[e.ConsumerID], pelEntry)
+		}
+	}
+
+	return result, nil
+}
+
+// GetAllCursors returns cursor state for all partitions (legacy format).
+func (s *Store) GetAllCursors(queueName, groupID string) (map[uint32]PartitionCursor, error) {
+	state, err := s.GetConsumerState(queueName, groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[uint32]PartitionCursor)
+
+	// Get all partitions for this queue
+	partitions, err := s.ListPartitions(queueName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, partID := range partitions {
+		ps := state.GetPartitionState(partID)
+		result[partID] = PartitionCursor{
+			Cursor:    ps.Cursor,
+			Committed: ps.AckFloor,
+			UpdatedAt: ps.UpdatedAt,
+		}
+	}
+
+	return result, nil
 }

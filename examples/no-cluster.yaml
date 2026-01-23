@@ -35,7 +35,7 @@ session:
 
 storage:
   type: "badger"
-  badger_dir: "/tmp/mqtt/data"
+  badger_dir: "/tmp/fluxmq/data"
 
 cluster:
   enabled: false

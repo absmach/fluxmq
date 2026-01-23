@@ -31,14 +31,14 @@ session:
 
 storage:
   type: "badger"
-  badger_dir: "/tmp/mqtt/node2/data"
+  badger_dir: "/tmp/fluxmq/node2/data"
 
 cluster:
   enabled: true
   node_id: "node2"
 
   etcd:
-    data_dir: "/tmp/mqtt/node2/etcd"
+    data_dir: "/tmp/fluxmq/node2/etcd"
     bind_addr: "127.0.0.1:2480"
     client_addr: "127.0.0.1:2479"
     initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
