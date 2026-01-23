@@ -121,7 +121,7 @@ func ConsumerShardKey(consumerID string, numShards int) int {
 
 // NewConsumerState creates or opens consumer state for a group.
 func NewConsumerState(baseDir, groupID string, config ConsumerStateConfig) (*ConsumerState, error) {
-	dir := filepath.Join(baseDir, "consumers", groupID)
+	dir := filepath.Join(baseDir, groupID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create consumer state directory: %w", err)
 	}
