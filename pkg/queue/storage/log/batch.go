@@ -159,21 +159,25 @@ func (b *Batch) encodeRecords() []byte {
 		if r.Key == nil {
 			w.WriteVarint(-1)
 		} else {
-			w.WriteBytes(r.Key)
+			w.WriteVarint(int64(len(r.Key)))
+			w.WriteRawBytes(r.Key)
 		}
 
 		// Value (length-prefixed, -1 if nil)
 		if r.Value == nil {
 			w.WriteVarint(-1)
 		} else {
-			w.WriteBytes(r.Value)
+			w.WriteVarint(int64(len(r.Value)))
+			w.WriteRawBytes(r.Value)
 		}
 
 		// Headers count and data
 		w.WriteUvarint(uint64(len(r.Headers)))
 		for k, v := range r.Headers {
-			w.WriteBytes([]byte(k))
-			w.WriteBytes(v)
+			w.WriteUvarint(uint64(len(k)))
+			w.WriteRawBytes([]byte(k))
+			w.WriteUvarint(uint64(len(v)))
+			w.WriteRawBytes(v)
 		}
 	}
 
