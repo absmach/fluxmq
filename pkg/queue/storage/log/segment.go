@@ -192,13 +192,13 @@ func (s *Segment) scan() error {
 			break
 		}
 
-		// Read batch length
-		batchLen := GetUint32(header[12:16])
+		// Read batch length (bytes 16-19)
+		batchLen := GetUint32(header[16:20])
 		totalSize := BatchHeaderSize + int(batchLen)
 
-		// Read base offset and count
+		// Read base offset (bytes 8-15) and count (bytes 20-21)
 		baseOffset := GetUint64(header[8:16])
-		count := GetUint16(header[16:18])
+		count := GetUint16(header[20:22])
 
 		// Record batch position
 		s.batchPositions = append(s.batchPositions, batchPosition{

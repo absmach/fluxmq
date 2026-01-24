@@ -338,8 +338,7 @@ func (p *PEL) Claim(offset uint64, newConsumerID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	entry, ok := p.byOffset[offset]
-	if !ok {
+	if _, ok := p.byOffset[offset]; !ok {
 		return ErrPELEntryNotFound
 	}
 
@@ -350,11 +349,6 @@ func (p *PEL) Claim(offset uint64, newConsumerID string) error {
 
 	p.claimEntryInternal(offset, newConsumerID)
 	p.dirty = true
-
-	// Update entry in place
-	entry.ConsumerID = newConsumerID
-	entry.ClaimedAt = time.Now().UnixMilli()
-	entry.DeliveryCount++
 
 	return nil
 }
@@ -398,8 +392,7 @@ func (p *PEL) IncrementDelivery(offset uint64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	entry, ok := p.byOffset[offset]
-	if !ok {
+	if _, ok := p.byOffset[offset]; !ok {
 		return ErrPELEntryNotFound
 	}
 
@@ -410,9 +403,6 @@ func (p *PEL) IncrementDelivery(offset uint64) error {
 
 	p.incrementDeliveryInternal(offset)
 	p.dirty = true
-
-	entry.DeliveryCount++
-	entry.ClaimedAt = time.Now().UnixMilli()
 
 	return nil
 }
