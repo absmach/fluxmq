@@ -1,11 +1,11 @@
 # MQTT Durable Queues
 
-> **Status**: Cluster RPC Integration Complete
-> **Last Updated**: 2026-01-04
+> **Status**: Log Storage Engine Complete
+> **Last Updated**: 2026-01-25
 > **Compilation Status**: ✅ All code compiles successfully
-> **Test Status**: ✅ All 180 tests passing (including 7 new cluster RPC tests)
-> **Phase 4 Milestone**: ✅ Cross-node routing and consumer distribution implemented
-> **Documentation**: ✅ Consolidated (merged queue-scalability.md)
+> **Test Status**: ✅ All tests passing
+> **Storage Engine**: ✅ Kafka/Redis Streams-style append-only log (AOL)
+> **Documentation**: ✅ Consolidated
 
 This document provides comprehensive documentation for the durable queue functionality in the MQTT broker. It covers architecture, implementation details, configuration guidelines, performance & scalability, current progress, and planned features.
 
@@ -15,14 +15,15 @@ This document provides comprehensive documentation for the durable queue functio
 
 1. [Overview](#overview)
 2. [Architecture](#architecture)
-3. [Implementation Details](#implementation-details)
-4. [Configuration Guidelines](#configuration-guidelines)
-5. [Performance & Scalability](#performance--scalability)
-6. [Current Progress](#current-progress)
-7. [Missing Features & Next Steps](#missing-features--next-steps)
-8. [Quick Start](#quick-start)
-9. [Best Practices](#best-practices)
-10. [Troubleshooting](#troubleshooting)
+3. [Log Storage Engine](#log-storage-engine)
+4. [Implementation Details](#implementation-details)
+5. [Configuration Guidelines](#configuration-guidelines)
+6. [Performance & Scalability](#performance--scalability)
+7. [Current Progress](#current-progress)
+8. [Missing Features & Next Steps](#missing-features--next-steps)
+9. [Quick Start](#quick-start)
+10. [Best Practices](#best-practices)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -227,68 +228,315 @@ The implementation supports **multiple strategies** for key architectural decisi
 
 ---
 
+## Log Storage Engine
+
+The queue system uses a custom **append-only log (AOL)** storage engine inspired by Apache Kafka and Redis Streams. This design provides high-throughput, durable message storage with efficient offset-based access.
+
+### Key Concepts
+
+**Append-Only Log**: Messages are appended sequentially to immutable segment files. Each message receives a monotonically increasing offset. This design enables:
+- High write throughput (sequential I/O)
+- Efficient range queries by offset
+- Simple replication (just stream the log)
+- Time-travel reads (replay from any offset)
+
+**Segments**: The log is divided into segments of configurable size (default 64MB). Only the active segment is writable; older segments are read-only and candidates for retention-based deletion.
+
+**Sparse Indexing**: Offset and time indexes enable fast random access without scanning entire segments. Indexes are built at configurable intervals (default every 4KB).
+
+### Storage Hierarchy
+
+```
+Store
+├── Queue (name)
+│   ├── Partition (ID) → SegmentManager
+│   │   ├── Segments (ordered by base offset)
+│   │   │   ├── 00000000000000000000.seg
+│   │   │   ├── 00000000000000000000.idx  (offset index)
+│   │   │   ├── 00000000000000000000.tix  (time index)
+│   │   │   └── ...
+│   │   └── Write buffer (batched writes)
+│   └── ConsumerManager
+│       └── ConsumerGroup (groupID) → ConsumerState
+│           ├── Partition cursors
+│           ├── PEL Shards (8 default)
+│           └── Operation log
+```
+
+### Segment Files
+
+Segments are the fundamental storage unit. Each segment contains:
+
+**Segment File (`.seg`)**:
+- Magic number: `0x464C5558` ("FLUX")
+- Batches of encoded records with compression
+- CRC32-C checksums for integrity validation
+
+**Offset Index (`.idx`)**:
+- Sparse mapping: relative offset → file position
+- Binary search for O(log n) lookups
+- Entry every 4KB of segment data
+
+**Time Index (`.tix`)**:
+- Mapping: timestamp → offset
+- Enables time-based queries (e.g., "read from 1 hour ago")
+- Minimum 1-second interval between entries
+
+### Batch Encoding
+
+Messages are grouped into batches for efficient storage:
+
+```
+Batch Header (44 bytes):
+┌─────────┬─────────┬────────────┬──────────┬───────┬───────┐
+│ Magic   │ CRC     │ BaseOffset │ BatchLen │ Count │ Flags │
+│ (4B)    │ (4B)    │ (8B)       │ (4B)     │ (2B)  │ (2B)  │
+├─────────┴─────────┴────────────┴──────────┴───────┴───────┤
+│ Compression(1) │ Version(1) │ Reserved(2) │               │
+├────────────────┴────────────┴─────────────┤               │
+│ BaseTimestamp (8B)          │ MaxTimestamp (8B)           │
+└─────────────────────────────┴─────────────────────────────┘
+
+Records (variable):
+┌─────────────────┬────────────────────┬─────┬───────┬─────────┐
+│ OffsetDelta(v)  │ TimestampDelta(v)  │ Key │ Value │ Headers │
+└─────────────────┴────────────────────┴─────┴───────┴─────────┘
+(v) = varint encoded
+```
+
+**Compression Options**:
+| Type | ID | Description |
+|------|-----|-------------|
+| None | 0 | No compression |
+| S2 | 1 | Snappy-compatible, fastest (default) |
+| Zstd | 2 | Best compression ratio |
+
+### Consumer State & PEL
+
+The Pending Entry List (PEL) tracks messages that have been delivered but not yet acknowledged:
+
+**Consumer State (per group)**:
+```go
+type ConsumerState struct {
+    partitions map[uint32]*PartitionState  // Per-partition cursors
+    pelShards  []*PELShard                 // Sharded PEL (8 default)
+    opLog      *os.File                    // Operation log for durability
+}
+```
+
+**Partition Cursor**:
+```go
+type PartitionCursor struct {
+    Cursor    uint64  // Next offset to read
+    Committed uint64  // Last committed offset (safe for truncation)
+}
+```
+
+**PEL Entry**:
+```go
+type PELEntry struct {
+    Offset        uint64  // Message offset
+    PartitionID   uint32  // Which partition
+    ConsumerID    string  // Assigned consumer
+    ClaimedAt     int64   // Delivery timestamp
+    DeliveryCount uint16  // Redelivery count
+}
+```
+
+**PEL Sharding**: Entries are distributed across 8 shards (default) based on `offset % NumPELShards`. This enables parallel redelivery processing and reduces lock contention.
+
+**PEL Operations**:
+| Operation | ID | Description |
+|-----------|-----|-------------|
+| Add | 1 | Message delivered to consumer |
+| Ack | 2 | Consumer acknowledged message |
+| Claim | 3 | Work stealing (reassign to different consumer) |
+| Expire | 4 | Entry timeout for redelivery |
+
+### Message Flow
+
+**Write Path**:
+```
+Append(queue, partition, message)
+  → SegmentManager.AppendMessage()
+    → Batch.Append(record)         # Add to current batch
+    → Batch.Encode()               # Serialize + compress
+    → Segment.Write()              # Write to file + buffer
+    → UpdateIndexes()              # Sparse index + time index
+    → Return assigned offset
+```
+
+**Read Path**:
+```
+Read(queue, partition, offset)
+  → SegmentManager.findSegment(offset)
+    → Index.Lookup(offset)         # Binary search → file position
+    → Segment.ReadAt(position)     # Read batch from disk
+    → Batch.Decode()               # Decompress + parse
+    → Return message at offset
+```
+
+**Delivery Path**:
+```
+Deliver(queue, groupID, partition, offset, consumerID)
+  → ConsumerManager.GetOrCreate(groupID)
+    → PELShard.Add(entry)          # Track pending delivery
+    → OpLog.Append(AddOp)          # Durability
+    → Return message to consumer
+```
+
+**Acknowledgment Path**:
+```
+Ack(queue, groupID, partition, offset)
+  → PELShard.Remove(offset)        # Remove from pending
+  → UpdateCommitted(offset)        # Advance committed cursor
+  → OpLog.Append(AckOp)            # Durability
+```
+
+### Directory Structure
+
+```
+basedir/
+└── queues/
+    └── {queue_name}/
+        ├── queue.json                     # Queue metadata
+        ├── partitions/
+        │   ├── 0/
+        │   │   ├── 00000000000000000000.seg
+        │   │   ├── 00000000000000000000.idx
+        │   │   ├── 00000000000000000000.tix
+        │   │   ├── 00000000067108864.seg  # Next segment at offset 64M
+        │   │   └── ...
+        │   └── 1/
+        │       └── ...
+        └── consumers/
+            └── {group_id}/
+                ├── {group_id}.cur         # Cursor snapshots (JSON)
+                ├── {group_id}.pel         # PEL snapshots
+                └── {group_id}.pel.log     # Operation log
+```
+
+### Configuration Defaults
+
+```go
+DefaultMaxSegmentSize      = 64 * 1024 * 1024  // 64MB per segment
+DefaultMaxSegmentAge       = time.Hour          // Roll after 1 hour
+DefaultIndexIntervalBytes  = 4096               // Index every 4KB
+DefaultMaxBatchSize        = 1024 * 1024        // 1MB max batch
+DefaultWriteBufferSize     = 64 * 1024          // 64KB write buffer
+DefaultSyncInterval        = time.Second         // Sync every 1s
+DefaultPELCompactThreshold = 10000              // Compact after 10k ops
+```
+
+### Retention & Recovery
+
+**Retention**: Segments are deleted when:
+- Size-based: Total partition size exceeds limit
+- Time-based: Segment age exceeds retention duration
+- Offset-based: `Truncate(minOffset)` removes segments with `endOffset < minOffset`
+
+**Recovery on Startup**:
+1. Scan segment directory, load segments in base-offset order
+2. Validate segment integrity (magic numbers, CRC)
+3. Rebuild missing indexes from segment data
+4. Recover PEL state from snapshot + operation log replay
+5. Optionally truncate corrupted trailing batches
+
+---
+
 ## Implementation Details
 
 ### Package Structure
 
-**New Packages** (~85% of code):
+**Core Packages**:
 ```
-queue/                          - Core queue package
-queue/storage/                  - Storage interfaces
-queue/storage/badger/           - BadgerDB implementation
-queue/storage/memory/           - Memory implementation (testing)
+queue/                          - Core queue package (manager, workers)
+queue/storage/                  - Storage interfaces (LogStore, ConsumerGroupStore)
+queue/storage/log/              - Append-only log implementation
+    ├── store.go                - Main store orchestrator (~1055 LOC)
+    ├── segment.go              - Segment file management
+    ├── manager.go              - Segment manager (lifecycle, rolling)
+    ├── batch.go                - Batch encoding/decoding
+    ├── encoding.go             - Record serialization
+    ├── index.go                - Sparse offset index
+    ├── timeindex.go            - Time-based index
+    ├── consumer_state.go       - Consumer state persistence
+    ├── consumer_manager.go     - Consumer group management
+    ├── pel.go                  - Pending Entry List implementation
+    ├── cursor.go               - Cursor store
+    ├── adapter.go              - LogStore interface adapter
+    └── types.go                - Types, constants, defaults
+queue/types/                    - Shared type definitions
 queue/cluster/                  - Cluster coordination
 queue/cluster/proto/            - gRPC definitions
-api/                           - HTTP/gRPC admin API
-examples/                      - Usage examples
 ```
 
 **Modified Existing Code** (~15% of code):
 ```
 broker/broker.go               - Add QueueManager, routing logic (~350 LOC)
-broker/queue_utils.go          - Helper functions (NEW file, ~110 LOC)
+broker/queue_utils.go          - Helper functions (~110 LOC)
 broker/v5_handler.go           - Extract User Properties (~50 LOC)
-storage/storage.go             - Add ConsumerGroup field (~1 LOC)
+cmd/broker/main.go             - QueueHandler wiring
 ```
 
 ### Storage Layer
 
-**Key Interfaces**:
+**Core Interfaces** (in `queue/storage/log.go`):
+
 ```go
-type QueueStore interface {
-    Create(ctx context.Context, config QueueConfig) error
-    Get(ctx context.Context, queueName string) (*QueueConfig, error)
-    Delete(ctx context.Context, queueName string) error
-    List(ctx context.Context) ([]QueueConfig, error)
+// LogStore provides append-only log storage with offset-based access.
+type LogStore interface {
+    // Queue lifecycle
+    CreateQueue(ctx context.Context, config QueueConfig) error
+    GetQueue(ctx context.Context, queueName string) (*QueueConfig, error)
+    DeleteQueue(ctx context.Context, queueName string) error
+    ListQueues(ctx context.Context) ([]QueueConfig, error)
+
+    // Append adds a message, returns assigned offset
+    Append(ctx context.Context, queueName string, partitionID int, msg *Message) (uint64, error)
+    AppendBatch(ctx context.Context, queueName string, partitionID int, msgs []*Message) (uint64, error)
+
+    // Read retrieves message at specific offset
+    Read(ctx context.Context, queueName string, partitionID int, offset uint64) (*Message, error)
+    ReadBatch(ctx context.Context, queueName string, partitionID int, startOffset uint64, limit int) ([]*Message, error)
+
+    // Offset queries
+    Head(ctx context.Context, queueName string, partitionID int) (uint64, error)  // First valid offset
+    Tail(ctx context.Context, queueName string, partitionID int) (uint64, error)  // Next offset to assign
+    Count(ctx context.Context, queueName string, partitionID int) (uint64, error) // tail - head
+
+    // Retention
+    Truncate(ctx context.Context, queueName string, partitionID int, minOffset uint64) error
 }
 
-type MessageStore interface {
-    Enqueue(ctx context.Context, queueName string, msg *QueueMessage) error
-    Dequeue(ctx context.Context, queueName string, partitionID int) (*QueueMessage, error)
-    Ack(ctx context.Context, queueName, messageID string) error
-    Nack(ctx context.Context, queueName, messageID string) error
-    Reject(ctx context.Context, queueName, messageID string) error
-    GetInflight(ctx context.Context, queueName string) ([]*QueueMessage, error)
-}
+// ConsumerGroupStore manages cursor-based consumer groups with PEL tracking.
+type ConsumerGroupStore interface {
+    // Consumer group lifecycle
+    CreateConsumerGroup(ctx context.Context, group *ConsumerGroupState) error
+    GetConsumerGroup(ctx context.Context, queueName, groupID string) (*ConsumerGroupState, error)
+    DeleteConsumerGroup(ctx context.Context, queueName, groupID string) error
 
-type ConsumerStore interface {
-    RegisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
+    // PEL operations
+    AddPendingEntry(ctx context.Context, queueName, groupID string, entry *PendingEntry) error
+    RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64) error
+    GetPendingEntries(ctx context.Context, queueName, groupID, consumerID string) ([]*PendingEntry, error)
+    TransferPendingEntry(ctx context.Context, queueName, groupID string, partitionID int, offset uint64, fromConsumer, toConsumer string) error
+
+    // Cursor management
+    UpdateCursor(ctx context.Context, queueName, groupID string, partitionID int, cursor uint64) error
+    UpdateCommitted(ctx context.Context, queueName, groupID string, partitionID int, committed uint64) error
+
+    // Consumer registration
+    RegisterConsumer(ctx context.Context, queueName, groupID string, consumer *ConsumerInfo) error
     UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
-    GetConsumers(ctx context.Context, queueName, groupID string) ([]Consumer, error)
-    UpdateOffset(ctx context.Context, queueName string, partitionID int, offset uint64) error
-    GetOffset(ctx context.Context, queueName string, partitionID int) (uint64, error)
 }
 ```
 
-**BadgerDB Key Schema**:
-```
-queue:meta:{queueName} → QueueConfig (JSON)
-queue:msg:{queueName}:{partitionID}:{seq} → QueueMessage (protobuf)
-queue:inflight:{queueName}:{messageID} → DeliveryState (JSON)
-queue:dlq:{queueName}:{messageID} → QueueMessage (protobuf)
-queue:consumer:{queueName}:{groupID}:{consumerID} → ConsumerState (JSON)
-queue:offset:{queueName}:{partitionID} → uint64
-queue:seq:{queueName}:{partitionID} → next sequence number
+**File Format Magic Numbers**:
+```go
+SegmentMagic   = 0x464C5558  // "FLUX" - segment files
+IndexMagic     = 0x464C5849  // "FLXI" - offset index
+TimeIndexMagic = 0x464C5854  // "FLXT" - time index
 ```
 
 ### Partition Strategy
@@ -622,193 +870,91 @@ Based on requirements (thousands of msgs/sec, 20-40 services):
 
 ### Progress Summary
 
-| Phase | Status | LOC | Duration | Notes |
-|-------|--------|-----|----------|-------|
-| Phase 1: Core Infrastructure | ✅ Complete | 3,600 | 1 day | Single-node queue functionality |
-| Phase 2: Retry & DLQ | ✅ Complete | ~2,500 | 1 day | Retry state machine, DLQ, ordering |
-| **Testing & Quality** | ✅ **Complete** | **+2,115** | **2 days** | **Production-ready test coverage (89.7%)** |
-| Phase 3: Performance Optimization | ✅ Complete | ~1,200 | 4 days | Reduced memory by 41%, improved latency by 23% |
-| Phase 4: Cluster RPC Integration | ✅ Complete | ~800 | 1 day | Routing strategies, cross-node RPC, main.go wiring |
-| Phase 5: Cluster Testing | 📋 Next | ~500 | 3-5 days | 3-node deployment validation |
-| Phase 6: Fault Tolerance | 📋 Planned | ~2,500 | 7-10 days | Rebalancing, failover, migration |
-| Phase 7: Admin API & Helpers | 📋 Planned | ~2,300 | 6-8 days | REST/gRPC APIs, request/response |
+| Phase | Status | LOC | Notes |
+|-------|--------|-----|-------|
+| Phase 1: Core Infrastructure | ✅ Complete | 3,600 | Single-node queue functionality |
+| Phase 2: Retry & DLQ | ✅ Complete | ~2,500 | Retry state machine, DLQ, ordering |
+| Phase 3: Performance Optimization | ✅ Complete | ~1,200 | Memory/latency improvements |
+| Phase 4: Cluster RPC Integration | ✅ Complete | ~800 | Cross-node routing |
+| **Phase 5: Log Storage Engine** | ✅ **Complete** | **~3,500** | **Kafka-style AOL, segments, indexes, PEL** |
+| Phase 6: Cluster Testing | 📋 Next | ~500 | 3-node deployment validation |
+| Phase 7: Fault Tolerance | 📋 Planned | ~2,500 | Rebalancing, failover |
+| Phase 8: Admin API | 📋 Planned | ~2,300 | REST/gRPC APIs |
 
-### Phase 1 Completed Features
+### Log Storage Engine (Phase 5) ✅
 
-- ✅ Durable queue storage (BadgerDB + in-memory)
+**Completed 2026-01-25** - Major storage layer rewrite from BadgerDB to custom append-only log.
+
+**Architecture**:
+- ✅ Kafka/Redis Streams-style append-only log (AOL)
+- ✅ Segment-based storage with automatic rolling (64MB default)
+- ✅ Sparse offset index for O(log n) lookups
+- ✅ Time index for timestamp-based queries
+- ✅ Batch encoding with S2/Zstd compression
+- ✅ CRC32-C integrity validation
+
+**Consumer State**:
+- ✅ Cursor-based consumer groups (replaces message-ID tracking)
+- ✅ Sharded PEL (Pending Entry List) for scalable acknowledgment tracking
+- ✅ Operation log for PEL durability with compaction
+- ✅ Work stealing via `TransferPendingEntry`
+
+**Files** (in `queue/storage/log/`):
+```
+store.go           ~1,055 LOC  Main store orchestrator
+segment.go         ~350 LOC    Segment file management
+manager.go         ~280 LOC    Segment lifecycle
+batch.go           ~320 LOC    Batch encoding/decoding
+encoding.go        ~250 LOC    Record serialization
+index.go           ~200 LOC    Sparse offset index
+timeindex.go       ~180 LOC    Time-based index
+consumer_state.go  ~300 LOC    Consumer state persistence
+consumer_manager.go ~250 LOC   Consumer group management
+pel.go             ~280 LOC    Pending Entry List
+cursor.go          ~150 LOC    Cursor store
+adapter.go         ~120 LOC    Interface adapter
+types.go           ~185 LOC    Types and constants
+```
+
+### Previous Phase Completions
+
+**Phase 1-4 Features**:
+- ✅ Durable queue storage with offset-based access
 - ✅ Queue manager with basic operations
 - ✅ Consumer group assignment (round-robin rebalancing)
 - ✅ Message delivery loop (background workers)
 - ✅ Ack/nack/reject handling
-- ✅ Broker integration (highly decoupled - 95%)
-- ✅ Basic smoke tests (queue storage)
-- ✅ MQTT v5 property extraction
+- ✅ Retry state machine with exponential backoff
+- ✅ DLQ movement and alerts
+- ✅ Partition-based ordering (3 modes: none, partition, strict)
+- ✅ Broker integration (highly decoupled)
 - ✅ Zero-copy buffer integration
-- ✅ Method name collision fixes (UpdateQueue/UpdateMessage pattern)
-- ✅ Import alias resolution (queueStorage vs brokerStorage)
-
-### Phase 2 Completed Features
-
-- ✅ Retry state machine with timeout monitoring
-- ✅ Exponential backoff calculation
-- ✅ DLQ movement and alerts (with HTTP webhooks)
-- ✅ Partition-based ordering enforcement (3 modes: none, partition, strict)
-- ✅ Comprehensive integration tests (104 tests)
-- ⏱️ Prometheus metrics integration (partial - GetStats() exists)
+- ✅ Cluster RPC integration (ProxyMode/DirectMode)
+- ✅ Cross-node message routing
 
 ### Test Coverage
 
-- **Total Tests**: **180 tests** across all packages (+7 new RPC tests in Phase 4)
-- **Test Code**: ~6,155 lines (+540 LOC in Phase 4)
-- **Coverage by Package**:
-  - `queue`: 81.3% (maintained)
-  - `queue/storage`: 96.9% (maintained)
-  - `queue/storage/badger`: **89.8%** (was 0.0%, **+37 tests**)
-  - `queue/storage/memory`: **90.8%** (was 44.2%, **+38 tests**)
-  - **Overall Average: 89.7%** ✅
-- **Queue Package Tests**: 111 tests
-  - Unit tests: 93 tests (Queue, ConsumerGroup, Partition, Manager, DeliveryWorker, PartitionWorker)
-  - Integration tests: 8 tests (end-to-end message lifecycle, retry, DLQ, rebalancing, ordering, concurrency)
-  - Retry/DLQ tests: 9 tests
-  - Ordering tests: 11 tests
-  - **Cluster RPC tests: 7 tests** ✅ NEW (Phase 4)
-- **All Tests Passing**: ✅ `go test ./queue -v` succeeds (180 tests)
-- **Race Detection**: ✅ No race conditions detected
-- **Test Execution Time**: ~6 seconds for full suite with race detection
+- **Log Storage Tests**: Comprehensive test suite for segment, index, batch, PEL operations
+- **Queue Package Tests**: 111+ tests (manager, consumer groups, partitions, workers)
+- **All Tests Passing**: ✅ Race detection enabled
+- **Coverage**: High coverage across all packages
 
-### Phase 4 Completed Features
+### Key Design Decisions
 
-**Cluster RPC Integration** (Completed 2026-01-03)
+1. **Offset-based vs Message-ID**: Switched from random message IDs to sequential offsets for:
+   - Efficient range queries
+   - Simpler cursor management
+   - Natural ordering guarantees
 
-- ✅ Consumer routing modes (ProxyMode/DirectMode) with configuration
-- ✅ Cluster interface extensions (EnqueueRemote, RouteQueueMessage)
-- ✅ EtcdCluster RPC delegation to transport layer
-- ✅ NoopCluster error returns for single-node mode
-- ✅ Manager.enqueueRemote() implementation (`queue/manager.go:591-600`)
-- ✅ PartitionWorker consumer routing (`queue/partition_worker.go:216-247`)
-- ✅ QueueHandler wiring in main.go (`cmd/broker/main.go:280-283`)
-- ✅ Comprehensive unit tests (7 new tests, all passing)
-  - TestManager_EnqueueRemote
-  - TestPartitionWorker_RouteQueueMessage_ProxyMode
-  - TestPartitionWorker_LocalDelivery_ProxyMode
-  - TestPartitionWorker_DirectMode_LocalDelivery
-  - TestPartitionWorker_NoCluster
-  - TestPartitionWorker_RemoteConsumer_NoCluster_Error
-- ✅ Documentation updates (queue.md, queue-scalability.md)
+2. **Segments vs Single File**: Segment-based design enables:
+   - Retention without rewriting (delete old segments)
+   - Parallel reads across segments
+   - Bounded recovery time
 
-**Architecture**:
-- Hash-based partition assignment: `partitionID % nodeCount`
-- Transparent cross-node routing via gRPC
-- Configurable consumer routing strategies
-- Full bidirectional RPC communication
-
-### Files Created/Modified
-
-**Phase 1-3 Files** (19 new files including tests):
-```
-queue/storage/storage.go                 370 LOC  (interfaces)
-queue/storage/badger/badger.go           691 LOC  (persistence)
-queue/storage/badger/badger_test.go    1,031 LOC  (37 tests) ✅
-queue/storage/memory/memory.go           589 LOC  (testing)
-queue/storage/memory/memory_test.go    1,081 LOC  (41 tests) ✅
-queue/partition.go                        60 LOC  (partitioning)
-queue/consumer_group.go                  200 LOC  (groups)
-queue/queue.go                            90 LOC  (queue instance)
-queue/manager.go                         280 LOC  (main manager)
-queue/delivery.go                        150 LOC  (delivery)
-broker/queue_utils.go                    110 LOC  (utilities)
-queue/queue_test.go                      294 LOC  (17 tests)
-queue/consumer_group_test.go             311 LOC  (12 tests)
-queue/partition_test.go                   80 LOC  (6 tests)
-queue/manager_test.go                    536 LOC  (17 tests)
-queue/delivery_test.go                   560 LOC  (13 tests)
-queue/integration_test.go                497 LOC  (8 tests)
-queue/retry_test.go                      ~250 LOC (9 tests)
-queue/ordering_test.go                   ~300 LOC (11 tests)
-queue/dlq_test.go                        ~200 LOC (tests)
-```
-
-**Phase 4 Files** (new/modified):
-```
-queue/partition_assigner.go               90 LOC  (routing strategies)
-queue/partition_worker.go                +35 LOC  (consumer routing)
-queue/manager.go                         +25 LOC  (remote enqueue)
-queue/partition_worker_test.go           340 LOC  (6 new tests) ✅ NEW
-queue/manager_test.go                    +200 LOC (MockCluster + 2 tests) ✅
-cluster/cluster.go                       +12 LOC  (RPC interface)
-cluster/etcd.go                          +15 LOC  (RPC implementation)
-cluster/noop.go                          +10 LOC  (noop implementation)
-cmd/broker/main.go                       +10 LOC  (QueueHandler wiring)
-docs/queue.md                            +200 LOC (Phase 4 documentation)
-docs/queue-scalability.md                +100 LOC (Phase 2 completion)
-```
-
-### Files Modified (3 files)
-
-- `broker/broker.go` (+350 LOC)
-- `broker/v5_handler.go` (+50 LOC)
-- `storage/storage.go` (+1 LOC)
-
-### Decoupling Score: 95%
-
-**New Packages** (100% new code):
-```
-queue/
-queue/storage/
-queue/storage/badger/
-queue/storage/memory/
-```
-
-**Modified Existing Code** (minimal changes):
-- broker/broker.go: +350 LOC (routing logic)
-- broker/v5_handler.go: +50 LOC (property extraction)
-- storage/storage.go: +1 LOC (ConsumerGroup field)
-
-### Phase: Testing & Quality Assurance (Completed 2026-01-01)
-
-**Duration**: 2 days
-**Test Coverage Improvement**: 75.6% → 89.7% (+14.1%)
-
-**Achievements**:
-- ✅ Created comprehensive BadgerDB storage tests (37 tests, 1,031 LOC)
-- ✅ Expanded memory storage tests (3 → 41 tests, +905 LOC)
-- ✅ Achieved 89.8% coverage on production BadgerDB backend (was 0%)
-- ✅ Achieved 90.8% coverage on memory storage (was 44.2%)
-- ✅ All 173 tests passing with no race conditions
-- ✅ Fixed DLQ prefix handling bug in BadgerDB
-
-**Test Categories Added**:
-- Queue CRUD operations (comprehensive error handling)
-- Message lifecycle (all states and transitions)
-- Inflight tracking (concurrent access patterns)
-- DLQ operations (failure scenarios)
-- Offset management (partition isolation)
-- Consumer management (registration, heartbeat, unregister)
-- Concurrent safety (race detection enabled)
-- Edge case validation (key formats, error paths)
-
-**Quality Metrics**:
-- 173 total tests (+35 new)
-- 89.7% average coverage
-- 0 race conditions
-- <6 seconds test execution time
-- 100% pass rate
-
-### Lessons Learned
-
-1. **Method Name Collisions**: When a single struct implements multiple interfaces with overlapping method names (QueueStore.Update vs MessageStore.Update), Go requires unique method names. **Solution**: Renamed to UpdateQueue/UpdateMessage, DeleteQueue/DeleteMessage, GetQueue/GetMessage.
-
-2. **Import Alias Conflicts**: Having both `queue/storage` and `storage` packages required careful import aliasing throughout. **Solution**: Used `queueStorage` for queue storage package consistently.
-
-3. **MQTT v5 User Properties**: The field is named `User` not `UserProperty` in the v5 packets struct. Fixed in broker/queue_utils.go.
-
-4. **Compilation Verification**: Running `go build ./...` was essential to catch issues early. All code now compiles successfully.
-
-5. **Zero-Copy Integration**: Broker's existing `RefCountedBuffer` system worked seamlessly with queue message delivery.
-
-6. **Test Coverage Gaps**: Initially missed testing the production BadgerDB backend (0% coverage). Comprehensive storage tests are critical for production readiness, especially for key format validation and concurrent access patterns.
-
-7. **Bug Discovery Through Testing**: The DLQ `ListDLQ` prefix bug was discovered during test writing, highlighting the value of thorough test coverage before production deployment.
+3. **PEL Sharding**: 8-shard default for:
+   - Reduced lock contention
+   - Parallel redelivery processing
+   - Better scalability with many consumers
 
 ---
 
@@ -816,263 +962,54 @@ queue/storage/memory/
 
 ### What's Implemented
 
-**Phase 4: Cluster RPC Integration** (✅ Complete - 2026-01-03)
+**Log Storage Engine** (✅ Complete - 2026-01-25)
+- ✅ Append-only log with segment management
+- ✅ Sparse offset and time indexes
+- ✅ Batch encoding with compression (S2/Zstd)
+- ✅ Consumer groups with cursor-based tracking
+- ✅ Sharded PEL with operation log durability
+- ✅ Retention and recovery mechanisms
+
+**Cluster RPC Integration** (✅ Complete)
 - ✅ Partition ownership via etcd with hash-based assignment
 - ✅ Cross-node message routing via gRPC
 - ✅ Consumer routing modes (Proxy/Direct)
 - ✅ Remote enqueue operations
-- ✅ Remote message delivery
-- ✅ QueueHandler registration in main.go
 
 ### What's NOT Implemented Yet
 
-**Phase 5: Cluster Testing & Validation** (📋 Next - 3-5 days)
+**Phase 6: Cluster Testing & Validation** (📋 Next)
 - ❌ 3-node cluster deployment testing
 - ❌ Cross-node throughput benchmarks
 - ❌ Partition rebalancing validation
 - ❌ Network partition handling
-- ❌ Load testing with sustained traffic
 
-**Phase 6: Fault Tolerance** (📋 Planned - 7-10 days)
+**Phase 7: Fault Tolerance** (📋 Planned)
 - ❌ Automatic partition rebalancing
 - ❌ Partition failover on node crash
 - ❌ Partition migration/transfer
-- ❌ Consumer rebalancing across failures
 - ❌ Message replication (optional)
 
-**Phase 7: Admin API & Helpers** (📋 Planned - 6-8 days)
-- ❌ Request/response helpers
+**Phase 8: Admin API & Helpers** (📋 Planned)
 - ❌ REST admin API
 - ❌ gRPC admin API
-- ❌ Documentation and examples
+- ❌ Request/response helpers
 
 **Other Pending Items**
-- ⏱️ Full Prometheus metrics integration (basic stats exist)
-- ⏱️ Enhanced consumer heartbeat monitoring (basic implementation exists)
+- ⏱️ Prometheus metrics integration
+- ⏱️ Enhanced consumer heartbeat monitoring
 
-### Immediate Next Steps
-
-**Phase 3: Single-Node Performance Optimization - COMPLETED**
-
-**Achievements**:
-- ✅ **41% average memory reduction** (exceeds 30-40% target)
-- ✅ **20% average allocation reduction** (good progress toward 40-60% target)
-- ✅ **18% average latency improvement** (on track for 2x target)
-- ⚠️ **11% throughput improvement** (below 2-4x target, needs investigation)
-
-**Priority Order**:
-1. ✅ Testing complete (89.7% coverage achieved)
-2. ✅ **Phase 3: Performance Optimization** (Completed)
-   - Benchmarked and identified bottlenecks
-   - Optimized hot paths (sync.Pool, buffer reuse)
-   - Reduced allocations and memory footprint
-3. 📋 Phase 4: Cluster Support (10-12 days)
-4. 📋 Phase 5: Admin API & Helpers (6-8 days)
-
-**Phase 3 Implementation Details** (see detailed breakdown below)
-
----
-
-### Phase 3: Optimization Results
-
-**Date**: 2026-01-01
-**Optimizations**: High-Impact (sync.Pool, Property Map Pooling, BufferPool Fix, Deep Copy Fix)
-**Test Configuration**: In-memory storage, single-node
-
-#### Executive Summary
-
-Implemented all high-impact optimizations with **significant improvements across all metrics**:
-
-| Metric | Target | Achieved | Status |
-|--------|--------|----------|--------|
-| Memory reduction | 50-70% | **29-49%** | ✅ Excellent |
-| Allocation reduction | 40-60% | **12-25%** | ✅ Good |
-| Latency improvement | 2-4x faster | **1.3x faster (E2E)** | ✅ Good |
-| Throughput improvement | 2-4x | **1.11x** | ⚠️ Modest |
-
-**Key Achievements**:
-- ✅ **41% memory reduction** in E2E tests (3372→1999 B)
-- ✅ **49% memory reduction** in dequeue throughput (24211→12404 B)
-- ✅ **23% faster E2E latency** (6.5µs→5.0µs)
-- ✅ **11% higher throughput** (872→970 msg/s)
-
-#### Optimizations Implemented
-
-**1. sync.Pool for QueueMessage Structs** ✅
-- **File**: `queue/pool.go`
-- **Changes**: Added `messagePool`, pre-allocates Properties map, minimal reset.
-- **Impact**: Eliminates struct allocation on every Enqueue.
-
-**2. Property Map Pooling** ✅
-- **File**: `queue/pool.go`
-- **Changes**: Added `propertyMapPool`, pre-allocated capacity 8.
-- **Impact**: Eliminates map allocation in Manager.Enqueue (6→5 allocs/op).
-
-**3. Storage Layer Deep Copy Fix** ✅
-- **File**: `queue/storage/memory/memory.go`
-- **Changes**: Changed shallow copy to deep copy, safer pooling.
-- **Impact**: Enables safe pooling, fixes data races.
-
-**4. BufferPool - Release Buffers in Tests** ✅
-- **File**: `queue/manager_test.go`
-- **Changes**: MockBroker now releases buffers.
-- **Impact**: Massive memory reduction (prev 3.04 GB), correct buffer pooling.
-
-#### Detailed Performance Comparison
-
-**Enqueue Operations**
-
-| Benchmark | Baseline | Optimized | Improvement |
-|-----------|----------|-----------|-------------|
-| **SinglePartition** |
-| Latency | 1641 ns/op | 1325 ns/op | **19% faster** |
-| Memory | 1028 B/op | 735 B/op | **29% less** |
-| Allocations | 6 allocs/op | 5 allocs/op | **17% less** |
-
-**Dequeue Operations**
-
-| Benchmark | Baseline | Optimized | Improvement |
-|-----------|----------|-----------|-------------|
-| **SingleConsumer** |
-| Latency | 235 µs | 236 µs | ~same |
-| Memory | 2265 B | 1190 B | **47% less** |
-| Allocations | 8 allocs | 6 allocs | **25% less** |
-| **Throughput** |
-| Throughput | 872 msg/s | 970 msg/s | **11% higher** |
-| Memory | 24211 B | 12404 B | **49% less** |
-
-**End-to-End Performance**
-
-| Benchmark | Baseline | Optimized | Improvement |
-|-----------|----------|-----------|-------------|
-| **PublishToAck** |
-| Latency | 6.5 µs | 5.0 µs | **23% faster** |
-| Memory | 3372 B | 1999 B | **41% less** |
-| **Latency Distribution** |
-| p99 | 34 µs | 16 µs | **53% better** |
-
-#### Overall Impact Analysis
-
-- **Memory**: 41.5% Average Reduction ✅
-- **Allocations**: 19.75% Average Reduction ✅
-- **Latency**: 18.25% Average Improvement ✅
-- **Throughput**: 11% Improvement ⚠️
-
-**What Worked Best**:
-1. **BufferPool Fix**: 47-49% memory reduction.
-2. **Property Map Pooling**: 30% memory reduction in enqueue.
-3. **Message Struct Pooling**: Improved p99 latency by 53%.
-
-**What Didn't Meet Expectations**:
-- **Throughput**: Only 1.1x improvement (Target 2-4x). Bottleneck likely in delivery worker coordination or lock contention.
-- **p50 Latency**: Slight regression (4µs → 6µs) due to pool overhead, but p99 is much better.
-
-### Phase 3: Architecture & Optimization Summary
-
-**Status**: ✅ Core Implementation Complete (Phase 1 Option A)
-**Date**: 2026-01-02
-
-#### Objectives
-
-Transform queue from polling-based (100ms tick, ~1000 msgs/sec) to event-driven architecture with parallel processing (target: 50K-100K msgs/sec).
-
-#### Implementation Details
-
-**1. Event-Driven Delivery**
-- Added notification channel per partition worker (`PartitionWorker.notifyCh`)
-- Immediate wake-up on enqueue (eliminates 100ms polling delay)
-- 5ms debounce for batching rapid enqueues
-- Fallback 100ms ticker for retry messages
-
-**2. Parallel Partition Workers**
-- One goroutine per partition (`PartitionWorker`)
-- True parallelism across partitions
-- Foundation for lock-free optimization and cluster scaling
-
-**3. Batch Processing**
-- Added `DequeueBatch(limit int)` API to MessageStore interface
-- Implemented in memory store
-- Default batch size: 100 messages per cycle
-- Reduces storage calls from 3000/sec to 30/sec
-
-**4. Hash Pooling**
-- `sync.Pool` for fnv.New32a() hash objects
-- Eliminates allocation per message in partition selection
-
-**5. Round-Robin Multi-Group**
-- Messages distributed round-robin across consumer groups
-- Fair distribution when multiple groups consume same partition
-
-#### Benchmark Results (Event-Driven)
-
-**Baseline (Before Optimization)**
-- Throughput: 893.5 msgs/sec
-- Latency: 1119 µs
-
-**Optimized**
-- Throughput: 1165 msgs/sec (**+30% improvement**)
-- Latency: 858 µs (**-23% reduction**)
-
-#### Architecture Benefits
-
-1. **Enables Option B (Lock-Free Storage)**: Per-partition workers provide foundation for SPSC lock-free queues.
-2. **Enables Cluster Scaling**: Partition becomes unit of distribution.
-3. **Industry-Standard Pattern**: Matches Kafka/Pulsar architecture (partition-based parallelism).
-
-#### Next Steps
-
-**Option 1: Fix Multi-Group Tests (1-2 hours)**
-- Clarify broadcast vs round-robin semantics
-- Implement per-(message, consumer) inflight tracking
-
-**Option 2: Proceed to Option B (5-7 days)**
-- Lock-free SPSC ring buffer per partition
-- Zero-copy message handling
-- Target: 100K-200K msgs/sec
-
-**Option 3: Integration Testing (1-2 days)**
-- End-to-end benchmark with Manager.Enqueue path
-- Validate event-driven notification performance
-
-**Recommendation**: Proceed with **Option 3** (Integration Testing) to validate true performance gains, then decide between fixing multi-group tests or moving to Option B.
-
----
-
-### Phase 4: Cluster Support Plan (Future)
-
-**Note**: This will be implemented AFTER Phase 3 optimization is complete
-
-**Goal**: Integrate queue clustering with existing broker cluster infrastructure
-
-The cluster support will leverage the existing broker clustering infrastructure (etcd, gRPC)
-and add queue-specific distribution on top of the optimized single-node implementation.
-
----
-
-### Phase 5: Admin API Plan
+### Admin API Plan (Future)
 
 **REST Endpoints**:
 ```
 POST   /api/v1/queues                 - Create queue
 GET    /api/v1/queues                 - List all queues
 GET    /api/v1/queues/{name}          - Get queue details
-PUT    /api/v1/queues/{name}/config   - Update queue config
 DELETE /api/v1/queues/{name}          - Delete queue
 GET    /api/v1/queues/{name}/stats    - Get queue metrics
 GET    /api/v1/queues/{name}/consumers - List consumers
 POST   /api/v1/queues/{name}/purge    - Purge all messages
-GET    /api/v1/queues/{name}/dlq      - List DLQ messages
-POST   /api/v1/queues/{name}/dlq/{id}/retry - Retry DLQ message
-```
-
-**gRPC Service**:
-```protobuf
-service QueueAdmin {
-    rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse);
-    rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
-    rpc GetQueueStats(GetQueueStatsRequest) returns (QueueStats);
-    rpc PurgeQueue(PurgeQueueRequest) returns (PurgeQueueResponse);
-}
 ```
 
 ### Future Enhancements (Post-MVP)
@@ -1081,25 +1018,9 @@ service QueueAdmin {
 - [ ] Scheduled message delivery
 - [ ] Batch acknowledgments
 - [ ] Consumer prefetching
-- [ ] Message compression
 - [ ] Schema validation
 - [ ] Queue templates
 - [ ] Advanced routing (topic exchange, header routing)
-
-### Overall Implementation Timeline
-
-| Phase | Status | Duration | LOC | Complexity |
-|-------|--------|----------|-----|------------|
-| Phase 1: Core Queue Infrastructure | ✅ Complete | 1 day | 3,600 | Medium |
-| Phase 2: Retry, DLQ, Ordering | ✅ Complete | 1 day | 2,500 | Medium |
-| **Testing & Quality Assurance** | ✅ **Complete** | **2 days** | **+2,115** | **Medium** |
-| Phase 3: Performance Optimization | ✅ Complete | 4 days | ~1,200 | Very High (41% mem, 23% latency gain) |
-| Phase 4: Cluster RPC Integration | ✅ Complete | 1 day | ~800 | Medium (routing modes, RPC wiring) |
-| Phase 5: Cluster Testing & Tuning | 📋 Next | 3-5 days | ~500 | High (3-node deployment validation) |
-| Phase 6: Fault Tolerance & Rebalancing | 📋 Planned | 7-10 days | ~2,500 | High (partition migration, failover) |
-| Phase 7: Admin API & Helpers | 📋 Planned | 6-8 days | ~2,300 | Low |
-| **Total Completed** | ✅ | **9 days** | **~10,215 LOC** | - |
-| **Total Remaining** | 📋 | **16-23 days** | **~5,300 LOC** | **Medium-High** |
 
 ---
 
@@ -1137,11 +1058,12 @@ msg := <-client.Messages()
 // Process message
 err := processImage(msg.Payload)
 
-// Acknowledge success
+// Acknowledge success (using offset from message properties)
 if err == nil {
     ackProps := &packets.PublishProperties{
         UserProperty: []packets.UserProperty{
-            {Key: "message-id", Value: extractMessageID(msg)},
+            {Key: "partition", Value: extractPartition(msg)},
+            {Key: "offset", Value: extractOffset(msg)},
         },
     }
     client.PublishWithProperties("$queue/tasks/image-processing/$ack", 1, false, nil, ackProps)
@@ -1157,15 +1079,19 @@ if err == nil {
 // Initialize broker with queue manager
 broker := broker.NewBroker(store, nil, logger, nil, nil, nil, nil)
 
-// Create queue storage
-queueStore := badger.New(db)  // Using same BadgerDB instance
+// Create log-based queue storage
+logStore, _ := log.NewStore(log.Config{
+    BaseDir:        "/var/lib/fluxmq/queues",
+    MaxSegmentSize: 64 * 1024 * 1024,  // 64MB segments
+    SyncInterval:   time.Second,
+    Compression:    log.CompressionS2,  // Snappy-compatible
+})
 
-// Create queue manager
+// Create queue manager with log store
 queueMgr, _ := queue.NewManager(queue.Config{
-    QueueStore:    queueStore,
-    MessageStore:  queueStore,
-    ConsumerStore: queueStore,
-    Broker:        broker,
+    LogStore:           logStore,
+    ConsumerGroupStore: logStore,
+    Broker:             broker,
 })
 
 // Set queue manager on broker
@@ -1271,10 +1197,11 @@ Configure based on actual processing time:
 
 **Fix**:
 ```go
-// Ensure ack sent with correct message-id
+// Ensure ack sent with correct partition and offset
 ackProps := &packets.PublishProperties{
     UserProperty: []packets.UserProperty{
-        {Key: "message-id", Value: msg.Properties["message-id"]},
+        {Key: "partition", Value: msg.Properties["partition"]},
+        {Key: "offset", Value: msg.Properties["offset"]},
     },
 }
 client.Publish("$queue/tasks/image/$ack", 1, false, nil, ackProps)

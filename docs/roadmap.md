@@ -1010,6 +1010,53 @@ Extensive end-to-end testing of cluster behavior under various failure scenarios
 
 ---
 
+## Phase 3.5: Performance & Concurrency Overhaul 📋 PLANNED
+
+**Goal:** Refactor core components to significantly improve throughput and reduce latency under high concurrent load by addressing lock contention bottlenecks.
+
+**Status:** Planned to start after E2E Cluster Testing validates the current architecture's stability.
+
+### Motivation
+
+While the current `queue/storage/log` implementation is durable and feature-rich, analysis shows that its coarse-grained locking strategy will become a bottleneck on multi-core systems. This phase focuses on targeted refactoring to unlock greater performance.
+
+### 3.5.1: Implement Segment Write Buffer
+
+*   **Goal:** Reduce `write` syscalls to improve I/O efficiency.
+*   **Tasks:**
+    *   [ ] Activate and utilize the `writeBuf` in the `Segment` struct.
+    *   [ ] Modify `Segment.Append` to write to the in-memory buffer.
+    *   [ ] Flush the buffer to disk when it's full or when `Sync` is called.
+    *   [ ] Add benchmarks to validate throughput improvement.
+
+### 3.5.2: Improve `Store` Lock Granularity
+
+*   **Goal:** Eliminate the global lock on the main `Store` to allow concurrent operations on different queues.
+*   **Tasks:**
+    *   [ ] Analyze trade-offs between `sync.Map` and a custom sharded map with per-shard locks.
+    *   [ ] Replace the single `RWMutex` in `store.go` with a sharded map (`[256]struct { sync.RWMutex; ... }`).
+    *   [ ] Update all access to `store.queues` and `store.consumers` to use the sharded lock mechanism.
+    *   [ ] Add concurrency tests to verify thread safety and measure contention reduction.
+
+### 3.5.3: Decouple Appends from Disk I/O
+
+*   **Goal:** Drastically reduce append latency by making disk writes asynchronous from the client's perspective.
+*   **Tasks:**
+    *   [ ] Introduce a buffered channel for append requests in `SegmentManager`.
+    *   [ ] Create a dedicated writer goroutine that reads from the channel and performs batched writes to the segment file.
+    *   [ ] Modify the public `Append` method to be a lightweight, non-blocking send to the channel.
+    *   [ ] Update latency benchmarks to measure p99 append latency reduction.
+
+### 3.5.4: Implement Zero-Copy Writes
+
+*   **Goal:** Reduce memory allocations and GC pressure during high-throughput writes.
+*   **Tasks:**
+    *   [ ] Introduce a `sync.Pool` for byte buffers used in batch encoding.
+    *   [ ] Modify `batch.Encode()` and `segment.Append()` to use pooled buffers.
+    *   [ ] Profile memory allocations under load to confirm reduction.
+
+---
+
 ## Phase 4: Custom Raft Implementation 📋 FUTURE
 
 **Status:** LOW PRIORITY - Only needed at 50M+ client scale
