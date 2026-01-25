@@ -451,8 +451,8 @@ DefaultPELCompactThreshold = 10000              // Compact after 10k ops
 **Core Packages**:
 ```
 queue/                          - Core queue package (manager, workers)
-queue/storage/                  - Storage interfaces (LogStore, ConsumerGroupStore)
-queue/storage/log/              - Append-only log implementation
+logstorage/                  - Storage interfaces (LogStore, ConsumerGroupStore)
+logstorage/log/              - Append-only log implementation
     ├── store.go                - Main store orchestrator (~1055 LOC)
     ├── segment.go              - Segment file management
     ├── manager.go              - Segment manager (lifecycle, rolling)
@@ -481,7 +481,7 @@ cmd/broker/main.go             - QueueHandler wiring
 
 ### Storage Layer
 
-**Core Interfaces** (in `queue/storage/log.go`):
+**Core Interfaces** (in `logstorage/log.go`):
 
 ```go
 // LogStore provides append-only log storage with offset-based access.
@@ -899,7 +899,7 @@ Based on requirements (thousands of msgs/sec, 20-40 services):
 - ✅ Operation log for PEL durability with compaction
 - ✅ Work stealing via `TransferPendingEntry`
 
-**Files** (in `queue/storage/log/`):
+**Files** (in `logstorage/log/`):
 ```
 store.go           ~1,055 LOC  Main store orchestrator
 segment.go         ~350 LOC    Segment file management

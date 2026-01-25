@@ -21,7 +21,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/queue"
-	logStorage "github.com/absmach/fluxmq/queue/storage/log"
+	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
