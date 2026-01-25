@@ -47,43 +47,71 @@ func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error
 
 // loadAll loads all consumer group states from disk.
 func (s *ConsumerGroupStateStore) loadAll() error {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		if os.IsNotExist(err) {
+	// Walk through all files to find .json files (handles nested paths)
+	err := filepath.Walk(s.dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+
+		if info.IsDir() || filepath.Ext(path) != ".json" {
 			return nil
 		}
-		return err
-	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		queueName := entry.Name()
-		queueDir := filepath.Join(s.dir, queueName)
-
-		files, err := os.ReadDir(queueDir)
+		// Get the relative path from the groups directory
+		relPath, err := filepath.Rel(s.dir, path)
 		if err != nil {
-			continue
+			return nil
 		}
 
-		s.groups[queueName] = make(map[string]*types.ConsumerGroupState)
+		// Remove the .json extension
+		relPath = relPath[:len(relPath)-5]
 
-		for _, file := range files {
-			if file.IsDir() || filepath.Ext(file.Name()) != ".json" {
-				continue
-			}
-
-			groupID := file.Name()[:len(file.Name())-5] // Remove .json extension
-
-			state, err := s.loadGroup(queueName, groupID)
-			if err != nil {
-				continue
-			}
-
-			s.groups[queueName][groupID] = state
+		// Load the state file directly and get queue name and group ID from it
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
 		}
+
+		var wrapper struct {
+			Version uint8                     `json:"version"`
+			State   *types.ConsumerGroupState `json:"state"`
+			SavedAt int64                     `json:"saved_at"`
+		}
+
+		if err := json.Unmarshal(data, &wrapper); err != nil {
+			return nil
+		}
+
+		if wrapper.State == nil {
+			return nil
+		}
+
+		state := wrapper.State
+
+		// Ensure maps are initialized
+		if state.Cursors == nil {
+			state.Cursors = make(map[int]*types.PartitionCursor)
+		}
+		if state.PEL == nil {
+			state.PEL = make(map[string][]*types.PendingEntry)
+		}
+		if state.Consumers == nil {
+			state.Consumers = make(map[string]*types.ConsumerInfo)
+		}
+
+		// Add to memory map
+		queueGroups, ok := s.groups[state.QueueName]
+		if !ok {
+			queueGroups = make(map[string]*types.ConsumerGroupState)
+			s.groups[state.QueueName] = queueGroups
+		}
+		queueGroups[state.ID] = state
+
+		return nil
+	})
+
+	if err != nil && !os.IsNotExist(err) {
+		return err
 	}
 
 	return nil
@@ -155,13 +183,16 @@ func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {
 
 // saveGroup saves a single group to disk (must hold lock).
 func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) error {
-	queueDir := filepath.Join(s.dir, state.QueueName)
-	if err := os.MkdirAll(queueDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create queue group directory: %w", err)
+	path := s.groupPath(state.QueueName, state.ID)
+
+	// Create the full directory path (handles nested paths from queue name and group ID)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create consumer group directory: %w", err)
 	}
 
 	wrapper := struct {
-		Version uint8                    `json:"version"`
+		Version uint8                     `json:"version"`
 		State   *types.ConsumerGroupState `json:"state"`
 		SavedAt int64                     `json:"saved_at"`
 	}{
@@ -175,7 +206,6 @@ func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) err
 		return fmt.Errorf("failed to marshal consumer group state: %w", err)
 	}
 
-	path := s.groupPath(state.QueueName, state.ID)
 	tempPath := path + TempExtension
 
 	if err := os.WriteFile(tempPath, data, 0o644); err != nil {

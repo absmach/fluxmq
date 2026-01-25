@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -74,7 +75,8 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 		return group, nil
 	}
 
-	if err != storage.ErrConsumerNotFound {
+	// Check for "not found" errors from various storage implementations
+	if err != storage.ErrConsumerNotFound && err != logstorage.ErrGroupNotFound {
 		return nil, err
 	}
 
