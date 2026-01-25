@@ -23,6 +23,7 @@ import (
 	"github.com/absmach/fluxmq/queue"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/ratelimit"
+	"github.com/absmach/fluxmq/server/api"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
 	"github.com/absmach/fluxmq/server/http"
@@ -445,6 +446,38 @@ func main() {
 				serverErr <- err
 			}
 		}()
+	}
+
+	// Start Queue API server (gRPC/HTTP via Connect protocol)
+	if cfg.Server.APIEnabled {
+		apiCfg := api.Config{
+			Address:         cfg.Server.APIAddr,
+			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+		}
+
+		// Get the queue manager from the broker and log store
+		queueManager := b.GetQueueManager()
+		if qm, ok := queueManager.(*queue.Manager); ok {
+			queueDir := cfg.Storage.BadgerDir + "_queue"
+			logStore, err := logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
+			if err == nil {
+				defer logStore.Close()
+				apiServer := api.New(apiCfg, qm, logStore, logStore, logger)
+
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					slog.Info("Starting Queue API server", "address", cfg.Server.APIAddr)
+					if err := apiServer.Listen(ctx); err != nil {
+						serverErr <- err
+					}
+				}()
+			} else {
+				slog.Warn("Failed to create API server log store", "error", err)
+			}
+		} else {
+			slog.Warn("Queue manager not available or wrong type, API server disabled")
+		}
 	}
 
 	slog.Info("MQTT broker started successfully")

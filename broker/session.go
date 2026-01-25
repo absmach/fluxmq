@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
-	"github.com/absmach/fluxmq/cluster/grpc"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
@@ -25,7 +25,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	defer b.mu.Unlock()
 
 	// Check if session is owned by another node in the cluster
-	var takeoverState *grpc.SessionState
+	var takeoverState *clusterv1.SessionState
 	if b.cluster != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -383,7 +383,7 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 }
 
 // restoreInflightFromTakeover restores inflight messages from takeover state.
-func (b *Broker) restoreInflightFromTakeover(state *grpc.SessionState, tracker messages.Inflight) error {
+func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, tracker messages.Inflight) error {
 	if state == nil || state.InflightMessages == nil {
 		return nil
 	}
@@ -406,7 +406,7 @@ func (b *Broker) restoreInflightFromTakeover(state *grpc.SessionState, tracker m
 }
 
 // restoreQueueFromTakeover restores offline queue from takeover state.
-func (b *Broker) restoreQueueFromTakeover(state *grpc.SessionState, queue messages.Queue) error {
+func (b *Broker) restoreQueueFromTakeover(state *clusterv1.SessionState, queue messages.Queue) error {
 	if state == nil || state.QueuedMessages == nil {
 		return nil
 	}
@@ -428,7 +428,7 @@ func (b *Broker) restoreQueueFromTakeover(state *grpc.SessionState, queue messag
 }
 
 // restoreSubscriptionsFromTakeover restores subscriptions from takeover state.
-func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *grpc.SessionState) error {
+func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clusterv1.SessionState) error {
 	if state == nil || state.Subscriptions == nil {
 		return nil
 	}
@@ -466,7 +466,7 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *grp
 
 // GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.
 // This is used during session takeover.
-func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error) {
+func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -476,7 +476,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	}
 
 	// Capture state before destroying
-	state := &grpc.SessionState{
+	state := &clusterv1.SessionState{
 		ExpiryInterval: uint32(s.ExpiryInterval),
 		CleanStart:     s.CleanStart,
 	}
@@ -486,7 +486,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 		subs, err := b.subscriptions.GetForClient(s.ID)
 		if err == nil {
 			for _, sub := range subs {
-				state.Subscriptions = append(state.Subscriptions, &grpc.Subscription{
+				state.Subscriptions = append(state.Subscriptions, &clusterv1.Subscription{
 					Filter: sub.Filter,
 					Qos:    uint32(sub.QoS),
 				})
@@ -496,7 +496,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 
 	// Capture inflight messages
 	for _, msg := range s.Inflight().GetAll() {
-		state.InflightMessages = append(state.InflightMessages, &grpc.InflightMessage{
+		state.InflightMessages = append(state.InflightMessages, &clusterv1.InflightMessage{
 			PacketId:  uint32(msg.PacketID),
 			Topic:     msg.Message.Topic,
 			Payload:   msg.Message.Payload,
@@ -508,7 +508,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 
 	// Capture queued messages
 	for _, msg := range s.OfflineQueue().Drain() {
-		state.QueuedMessages = append(state.QueuedMessages, &grpc.QueuedMessage{
+		state.QueuedMessages = append(state.QueuedMessages, &clusterv1.QueuedMessage{
 			Topic:     msg.Topic,
 			Payload:   msg.GetPayload(),
 			Qos:       uint32(msg.QoS),
@@ -519,7 +519,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 
 	// Capture will message
 	if will := s.GetWill(); will != nil {
-		state.Will = &grpc.WillMessage{
+		state.Will = &clusterv1.WillMessage{
 			Topic:   will.Topic,
 			Payload: will.Payload,
 			Qos:     uint32(will.QoS),

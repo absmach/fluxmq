@@ -152,6 +152,13 @@ func (b *Broker) SetQueueManager(qm QueueManager) error {
 	return nil
 }
 
+// GetQueueManager returns the queue manager.
+func (b *Broker) GetQueueManager() QueueManager {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.queueManager
+}
+
 // Get returns a session by client ID.
 func (b *Broker) Get(clientID string) *session.Session {
 	return b.sessionsMap.Get(clientID)

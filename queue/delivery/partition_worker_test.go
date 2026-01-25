@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
-	"github.com/absmach/fluxmq/cluster/grpc"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage/memory"
 	"github.com/absmach/fluxmq/queue/types"
@@ -113,7 +113,7 @@ func (c *MockCluster) RoutePublish(ctx context.Context, topic string, payload []
 	return nil
 }
 
-func (c *MockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
+func (c *MockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
 func (c *MockCluster) ID() string                { return c.localNodeID }

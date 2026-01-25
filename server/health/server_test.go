@@ -14,7 +14,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
-	"github.com/absmach/fluxmq/cluster/grpc"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -104,7 +104,7 @@ func (m *mockCluster) RoutePublish(ctx context.Context, topic string, payload []
 	return nil
 }
 
-func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
+func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
 

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/absmach/fluxmq/cluster/grpc"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -153,7 +153,7 @@ func (n *NoopCluster) RoutePublish(ctx context.Context, topic string, payload []
 
 // Session takeover - not applicable in single-node
 
-func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
+func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	// Single-node: no remote nodes to take over from
 	return nil, nil
 }

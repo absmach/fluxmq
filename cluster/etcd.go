@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/cluster/grpc"
 	"github.com/absmach/fluxmq/core"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -957,7 +957,7 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 }
 
 // TakeoverSession initiates session takeover from one node to another.
-func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
+func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	if fromNode == toNode {
 		// Same node, no takeover needed
 		return nil, nil
@@ -1028,7 +1028,7 @@ func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg 
 
 // GetSessionStateAndClose implements MessageHandler.GetSessionStateAndClose.
 // Delegates to the broker to capture session state and close the session.
-func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error) {
+func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
 	if c.msgHandler == nil {
 		return nil, fmt.Errorf("no message handler configured")
 	}
@@ -1074,7 +1074,7 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 
 // HandleTakeover implements TransportHandler.HandleTakeover.
 // Called when another broker requests to take over a session from this node.
-func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *grpc.SessionState) (*grpc.SessionState, error) {
+func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *clusterv1.SessionState) (*clusterv1.SessionState, error) {
 	// Verify this is the node being asked to give up the session
 	if fromNode != c.nodeID {
 		return nil, fmt.Errorf("takeover request for wrong node: expected %s, got %s", c.nodeID, fromNode)

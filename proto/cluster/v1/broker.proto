@@ -1,0 +1,232 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package fluxmq.cluster.v1;
+
+// BrokerService defines RPC methods for inter-broker communication in the cluster.
+// This is an internal API not exposed to clients.
+service BrokerService {
+  // RoutePublish forwards a PUBLISH packet to the broker that owns the target session.
+  rpc RoutePublish(PublishRequest) returns (PublishResponse);
+
+  // TakeoverSession migrates a session from one broker to another.
+  rpc TakeoverSession(TakeoverRequest) returns (TakeoverResponse);
+
+  // FetchRetained fetches a retained message payload from the owning broker node.
+  rpc FetchRetained(FetchRetainedRequest) returns (FetchRetainedResponse);
+
+  // FetchWill fetches a will message payload from the owning broker node.
+  rpc FetchWill(FetchWillRequest) returns (FetchWillResponse);
+
+  // EnqueueRemote routes an enqueue operation to the partition owner node.
+  rpc EnqueueRemote(EnqueueRemoteRequest) returns (EnqueueRemoteResponse);
+
+  // RouteQueueMessage delivers a queue message to a consumer on a different node.
+  rpc RouteQueueMessage(RouteQueueMessageRequest) returns (RouteQueueMessageResponse);
+
+  // Raft RPCs for queue partition replication
+
+  // AppendEntries is invoked by the Raft leader to replicate log entries.
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+
+  // RequestVote is invoked by candidates during leader election.
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+
+  // InstallSnapshot is invoked by leader to transfer snapshot to a follower.
+  rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+}
+
+// =============================================================================
+// Publish Routing
+// =============================================================================
+
+message PublishRequest {
+  string client_id = 1;
+  string topic = 2;
+  bytes payload = 3;
+  uint32 qos = 4;
+  bool retain = 5;
+  bool dup = 6;
+  map<string, string> properties = 7;
+}
+
+message PublishResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// =============================================================================
+// Session Takeover
+// =============================================================================
+
+message TakeoverRequest {
+  string client_id = 1;
+  string from_node = 2;
+  string to_node = 3;
+}
+
+message TakeoverResponse {
+  bool success = 1;
+  string error = 2;
+  SessionState session_state = 3;
+}
+
+message SessionState {
+  uint32 expiry_interval = 1;
+  bool clean_start = 2;
+  repeated InflightMessage inflight_messages = 3;
+  repeated QueuedMessage queued_messages = 4;
+  repeated Subscription subscriptions = 5;
+  WillMessage will = 6;
+}
+
+message InflightMessage {
+  uint32 packet_id = 1;
+  string topic = 2;
+  bytes payload = 3;
+  uint32 qos = 4;
+  bool retain = 5;
+  int64 timestamp = 6;
+}
+
+message QueuedMessage {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  int64 timestamp = 5;
+}
+
+message Subscription {
+  string filter = 1;
+  uint32 qos = 2;
+}
+
+message WillMessage {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  uint32 delay = 5;
+  int64 disconnect_time = 6;
+}
+
+// =============================================================================
+// Retained Messages
+// =============================================================================
+
+message FetchRetainedRequest {
+  string topic = 1;
+}
+
+message FetchRetainedResponse {
+  bool found = 1;
+  RetainedMessage message = 2;
+  string error = 3;
+}
+
+message RetainedMessage {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  map<string, string> properties = 5;
+  int64 timestamp = 6;
+}
+
+// =============================================================================
+// Will Messages
+// =============================================================================
+
+message FetchWillRequest {
+  string client_id = 1;
+}
+
+message FetchWillResponse {
+  bool found = 1;
+  WillMessage message = 2;
+  string error = 3;
+}
+
+// =============================================================================
+// Queue Routing
+// =============================================================================
+
+message EnqueueRemoteRequest {
+  string queue_name = 1;
+  bytes payload = 2;
+  map<string, string> properties = 3;
+}
+
+message EnqueueRemoteResponse {
+  bool success = 1;
+  string error = 2;
+  string message_id = 3;
+}
+
+message RouteQueueMessageRequest {
+  string client_id = 1;
+  string queue_name = 2;
+  string message_id = 3;
+  bytes payload = 4;
+  map<string, string> properties = 5;
+  int64 sequence = 6;
+  int32 partition_id = 7;
+}
+
+message RouteQueueMessageResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// =============================================================================
+// Raft Consensus
+// =============================================================================
+
+message AppendEntriesRequest {
+  string queue_name = 1;
+  int32 partition_id = 2;
+  uint64 term = 3;
+  string leader_id = 4;
+  uint64 prev_log_index = 5;
+  uint64 prev_log_term = 6;
+  repeated bytes entries = 7;
+  uint64 leader_commit = 8;
+}
+
+message AppendEntriesResponse {
+  uint64 term = 1;
+  bool success = 2;
+  uint64 last_log_index = 3;
+}
+
+message RequestVoteRequest {
+  string queue_name = 1;
+  int32 partition_id = 2;
+  uint64 term = 3;
+  string candidate_id = 4;
+  uint64 last_log_index = 5;
+  uint64 last_log_term = 6;
+}
+
+message RequestVoteResponse {
+  uint64 term = 1;
+  bool vote_granted = 2;
+}
+
+message InstallSnapshotRequest {
+  string queue_name = 1;
+  int32 partition_id = 2;
+  uint64 term = 3;
+  string leader_id = 4;
+  uint64 last_included_index = 5;
+  uint64 last_included_term = 6;
+  bytes data = 7;
+  bool done = 8;
+}
+
+message InstallSnapshotResponse {
+  uint64 term = 1;
+}

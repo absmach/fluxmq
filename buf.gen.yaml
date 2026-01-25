@@ -1,0 +1,23 @@
+# Copyright (c) Abstract Machines
+# SPDX-License-Identifier: Apache-2.0
+
+version: v2
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/absmach/fluxmq/pkg/proto
+
+plugins:
+  # Standard protobuf Go code
+  - remote: buf.build/protocolbuffers/go
+    out: pkg/proto
+    opt:
+      - paths=source_relative
+
+  # Connect-Go for gRPC + HTTP support
+  - remote: buf.build/connectrpc/go
+    out: pkg/proto
+    opt:
+      - paths=source_relative

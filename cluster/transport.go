@@ -10,14 +10,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"sync"
+	"time"
 
-	"github.com/absmach/fluxmq/cluster/grpc"
+	"connectrpc.com/connect"
 	"github.com/absmach/fluxmq/core"
-	gogrpc "google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
+	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // QueueHandler defines callbacks for queue distribution operations.
@@ -29,30 +32,38 @@ type QueueHandler interface {
 	DeliverQueueMessage(ctx context.Context, clientID string, msg any) error
 }
 
-// Transport handles inter-broker gRPC communication.
+// Transport handles inter-broker communication using Connect protocol.
 type Transport struct {
-	grpc.UnimplementedBrokerServiceServer
 	mu           sync.RWMutex
 	nodeID       string
 	bindAddr     string
-	grpcServer   *gogrpc.Server
+	httpServer   *http.Server
 	listener     net.Listener
-	peerClients  map[string]grpc.BrokerServiceClient
+	peerClients  map[string]clusterv1connect.BrokerServiceClient
 	logger       *slog.Logger
 	handler      MessageHandler
 	queueHandler QueueHandler
 	stopCh       chan struct{}
 	tlsConfig    *TransportTLSConfig
-	clientCreds  credentials.TransportCredentials
+	httpClient   *http.Client
 }
 
-// NewTransport creates a new gRPC transport.
+// NewTransport creates a new Connect transport.
 // If tlsCfg is nil, the transport uses insecure connections (development mode only).
 func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *TransportTLSConfig, logger *slog.Logger) (*Transport, error) {
 	var listener net.Listener
-	var grpcServer *gogrpc.Server
-	var clientCreds credentials.TransportCredentials
+	var httpClient *http.Client
 	var err error
+
+	t := &Transport{
+		nodeID:      nodeID,
+		bindAddr:    bindAddr,
+		peerClients: make(map[string]clusterv1connect.BrokerServiceClient),
+		logger:      logger,
+		handler:     handler,
+		stopCh:      make(chan struct{}),
+		tlsConfig:   tlsCfg,
+	}
 
 	if tlsCfg != nil {
 		// Load server certificate and key
@@ -78,6 +89,7 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 			ClientCAs:    caPool,
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 			MinVersion:   tls.VersionTLS12,
+			NextProtos:   []string{"h2"},
 		}
 
 		// Client TLS config (for connecting to peers)
@@ -93,12 +105,13 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 			return nil, fmt.Errorf("failed to create TLS listener on %s: %w", bindAddr, err)
 		}
 
-		// Create gRPC server with TLS credentials
-		serverCreds := credentials.NewTLS(serverTLSConfig)
-		grpcServer = gogrpc.NewServer(gogrpc.Creds(serverCreds))
-
-		// Store client credentials for peer connections
-		clientCreds = credentials.NewTLS(clientTLSConfig)
+		// Create HTTP client with TLS for peer connections
+		httpClient = &http.Client{
+			Transport: &http2.Transport{
+				TLSClientConfig: clientTLSConfig,
+			},
+			Timeout: 30 * time.Second,
+		}
 
 		logger.Info("transport TLS enabled", slog.String("address", bindAddr))
 	} else {
@@ -108,65 +121,76 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 			return nil, fmt.Errorf("failed to listen on %s: %w", bindAddr, err)
 		}
 
-		grpcServer = gogrpc.NewServer()
-		clientCreds = insecure.NewCredentials()
+		// Create HTTP client for insecure connections
+		httpClient = &http.Client{
+			Transport: &http2.Transport{
+				AllowHTTP: true,
+				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+					return net.Dial(network, addr)
+				},
+			},
+			Timeout: 30 * time.Second,
+		}
 
 		logger.Warn("transport TLS disabled - using insecure connections (development mode only)")
 	}
 
-	t := &Transport{
-		nodeID:      nodeID,
-		bindAddr:    bindAddr,
-		grpcServer:  grpcServer,
-		listener:    listener,
-		peerClients: make(map[string]grpc.BrokerServiceClient),
-		logger:      logger,
-		handler:     handler,
-		stopCh:      make(chan struct{}),
-		tlsConfig:   tlsCfg,
-		clientCreds: clientCreds,
+	t.listener = listener
+	t.httpClient = httpClient
+
+	// Create Connect handler
+	mux := http.NewServeMux()
+	path, connectHandler := clusterv1connect.NewBrokerServiceHandler(t)
+	mux.Handle(path, connectHandler)
+
+	// Create HTTP server with h2c support for HTTP/2 without TLS
+	var httpHandler http.Handler
+	if tlsCfg == nil {
+		httpHandler = h2c.NewHandler(mux, &http2.Server{})
+	} else {
+		httpHandler = mux
 	}
 
-	// Register gRPC service
-	grpc.RegisterBrokerServiceServer(grpcServer, t)
+	t.httpServer = &http.Server{
+		Handler:           httpHandler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	return t, nil
 }
 
-// Start starts the gRPC server.
+// Start starts the HTTP server.
 func (t *Transport) Start() error {
 	go func() {
-		t.logger.Info("starting gRPC transport server", slog.String("address", t.bindAddr))
-		if err := t.grpcServer.Serve(t.listener); err != nil {
-			t.logger.Error("gRPC server error", slog.String("error", err.Error()))
+		t.logger.Info("starting Connect transport server", slog.String("address", t.bindAddr))
+		if err := t.httpServer.Serve(t.listener); err != nil && err != http.ErrServerClosed {
+			t.logger.Error("HTTP server error", slog.String("error", err.Error()))
 		}
 	}()
 	return nil
 }
 
-// Stop gracefully stops the gRPC server.
+// Stop gracefully stops the HTTP server.
 func (t *Transport) Stop() error {
 	close(t.stopCh)
 
 	// Close peer connections
 	t.mu.Lock()
-	for _, client := range t.peerClients {
-		if conn, ok := client.(interface{ Close() error }); ok {
-			conn.Close()
-		}
-	}
 	t.peerClients = nil
 	t.mu.Unlock()
 
-	// Stop gRPC server
-	if t.grpcServer != nil {
-		t.grpcServer.GracefulStop()
+	// Shutdown HTTP server
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if t.httpServer != nil {
+		return t.httpServer.Shutdown(ctx)
 	}
 
 	return nil
 }
 
-// ConnectPeer establishes a gRPC connection to a peer node.
+// ConnectPeer establishes a Connect client connection to a peer node.
 func (t *Transport) ConnectPeer(nodeID, addr string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -176,13 +200,15 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 		return nil
 	}
 
-	// Create gRPC connection using stored credentials (TLS or insecure)
-	conn, err := gogrpc.NewClient(addr, gogrpc.WithTransportCredentials(t.clientCreds))
-	if err != nil {
-		return fmt.Errorf("failed to connect to peer %s at %s: %w", nodeID, addr, err)
+	// Determine URL scheme based on TLS config
+	scheme := "http"
+	if t.tlsConfig != nil {
+		scheme = "https"
 	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, addr)
 
-	client := grpc.NewBrokerServiceClient(conn)
+	// Create Connect client
+	client := clusterv1connect.NewBrokerServiceClient(t.httpClient, baseURL)
 	t.peerClients[nodeID] = client
 
 	t.logger.Info("connected to peer",
@@ -192,8 +218,8 @@ func (t *Transport) ConnectPeer(nodeID, addr string) error {
 	return nil
 }
 
-// GetPeerClient returns the gRPC client for a peer node.
-func (t *Transport) GetPeerClient(nodeID string) (grpc.BrokerServiceClient, error) {
+// GetPeerClient returns the Connect client for a peer node.
+func (t *Transport) GetPeerClient(nodeID string) (clusterv1connect.BrokerServiceClient, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -205,7 +231,7 @@ func (t *Transport) GetPeerClient(nodeID string) (grpc.BrokerServiceClient, erro
 	return client, nil
 }
 
-// HasPeerConnection checks if we have an active gRPC connection to a peer.
+// HasPeerConnection checks if we have an active connection to a peer.
 func (t *Transport) HasPeerConnection(nodeID string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -214,145 +240,84 @@ func (t *Transport) HasPeerConnection(nodeID string) bool {
 	return exists
 }
 
-// RoutePublish implements BrokerServiceServer.RoutePublish.
-// This is called by peer brokers to deliver a message to a local client.
-func (t *Transport) RoutePublish(ctx context.Context, req *grpc.PublishRequest) (*grpc.PublishResponse, error) {
+// RoutePublish implements BrokerServiceHandler.RoutePublish.
+func (t *Transport) RoutePublish(ctx context.Context, req *connect.Request[clusterv1.PublishRequest]) (*connect.Response[clusterv1.PublishResponse], error) {
 	if t.handler == nil {
-		return &grpc.PublishResponse{
+		return connect.NewResponse(&clusterv1.PublishResponse{
 			Success: false,
 			Error:   "no handler configured",
-		}, nil
+		}), nil
 	}
 
 	msg := &core.Message{
-		Topic:      req.Topic,
-		Payload:    req.Payload,
-		QoS:        byte(req.Qos),
-		Retain:     req.Retain,
-		Dup:        req.Dup,
-		Properties: req.Properties,
+		Topic:      req.Msg.Topic,
+		Payload:    req.Msg.Payload,
+		QoS:        byte(req.Msg.Qos),
+		Retain:     req.Msg.Retain,
+		Dup:        req.Msg.Dup,
+		Properties: req.Msg.Properties,
 	}
 
-	err := t.handler.DeliverToClient(ctx, req.ClientId, msg)
+	err := t.handler.DeliverToClient(ctx, req.Msg.ClientId, msg)
 	if err != nil {
-		return &grpc.PublishResponse{
+		return connect.NewResponse(&clusterv1.PublishResponse{
 			Success: false,
 			Error:   err.Error(),
-		}, nil
+		}), nil
 	}
 
-	return &grpc.PublishResponse{
+	return connect.NewResponse(&clusterv1.PublishResponse{
 		Success: true,
-	}, nil
+	}), nil
 }
 
-// TakeoverSession implements BrokerServiceServer.TakeoverSession.
-// This is called by peer brokers to take over a session.
-func (t *Transport) TakeoverSession(ctx context.Context, req *grpc.TakeoverRequest) (*grpc.TakeoverResponse, error) {
+// TakeoverSession implements BrokerServiceHandler.TakeoverSession.
+func (t *Transport) TakeoverSession(ctx context.Context, req *connect.Request[clusterv1.TakeoverRequest]) (*connect.Response[clusterv1.TakeoverResponse], error) {
 	if t.handler == nil {
-		return &grpc.TakeoverResponse{
+		return connect.NewResponse(&clusterv1.TakeoverResponse{
 			Success: false,
 			Error:   "no handler configured",
-		}, nil
+		}), nil
 	}
 
-	// Get session state from the handler (which will disconnect the client)
-	sessionState, err := t.handler.GetSessionStateAndClose(ctx, req.ClientId)
+	sessionState, err := t.handler.GetSessionStateAndClose(ctx, req.Msg.ClientId)
 	if err != nil {
-		return &grpc.TakeoverResponse{
+		return connect.NewResponse(&clusterv1.TakeoverResponse{
 			Success: false,
 			Error:   err.Error(),
-		}, nil
+		}), nil
 	}
 
-	return &grpc.TakeoverResponse{
+	return connect.NewResponse(&clusterv1.TakeoverResponse{
 		Success:      true,
 		SessionState: sessionState,
-	}, nil
+	}), nil
 }
 
-// SendPublish sends a PUBLISH message to a specific peer node.
-func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return err
-	}
-
-	req := &grpc.PublishRequest{
-		ClientId:   clientID,
-		Topic:      topic,
-		Payload:    payload,
-		Qos:        uint32(qos),
-		Retain:     retain,
-		Dup:        dup,
-		Properties: properties,
-	}
-
-	resp, err := client.RoutePublish(ctx, req)
-	if err != nil {
-		return fmt.Errorf("grpc call failed: %w", err)
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("publish failed: %s", resp.Error)
-	}
-
-	return nil
-}
-
-// SendTakeover sends a session takeover request to a peer node and returns the session state.
-func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*grpc.SessionState, error) {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &grpc.TakeoverRequest{
-		ClientId: clientID,
-		FromNode: fromNode,
-		ToNode:   toNode,
-	}
-
-	resp, err := client.TakeoverSession(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("grpc call failed: %w", err)
-	}
-
-	if !resp.Success {
-		return nil, fmt.Errorf("takeover failed: %s", resp.Error)
-	}
-
-	return resp.SessionState, nil
-}
-
-// FetchRetained implements BrokerServiceServer.FetchRetained.
-// This is called by peer brokers to fetch a retained message payload from the local store.
-func (t *Transport) FetchRetained(ctx context.Context, req *grpc.FetchRetainedRequest) (*grpc.FetchRetainedResponse, error) {
+// FetchRetained implements BrokerServiceHandler.FetchRetained.
+func (t *Transport) FetchRetained(ctx context.Context, req *connect.Request[clusterv1.FetchRetainedRequest]) (*connect.Response[clusterv1.FetchRetainedResponse], error) {
 	if t.handler == nil {
-		return &grpc.FetchRetainedResponse{
+		return connect.NewResponse(&clusterv1.FetchRetainedResponse{
 			Found: false,
 			Error: "no handler configured",
-		}, nil
+		}), nil
 	}
 
-	// Get retained message from local storage via handler
-	msg, err := t.handler.GetRetainedMessage(ctx, req.Topic)
+	msg, err := t.handler.GetRetainedMessage(ctx, req.Msg.Topic)
 	if err != nil {
-		return &grpc.FetchRetainedResponse{
+		return connect.NewResponse(&clusterv1.FetchRetainedResponse{
 			Found: false,
 			Error: err.Error(),
-		}, nil
+		}), nil
 	}
 
-	// Message not found
 	if msg == nil {
-		return &grpc.FetchRetainedResponse{
+		return connect.NewResponse(&clusterv1.FetchRetainedResponse{
 			Found: false,
-		}, nil
+		}), nil
 	}
 
-	// Convert storage.Message to grpc.RetainedMessage
-	grpcMsg := &grpc.RetainedMessage{
+	grpcMsg := &clusterv1.RetainedMessage{
 		Topic:      msg.Topic,
 		Payload:    msg.Payload,
 		Qos:        uint32(msg.QoS),
@@ -361,66 +326,36 @@ func (t *Transport) FetchRetained(ctx context.Context, req *grpc.FetchRetainedRe
 		Timestamp:  msg.PublishTime.Unix(),
 	}
 
-	return &grpc.FetchRetainedResponse{
+	return connect.NewResponse(&clusterv1.FetchRetainedResponse{
 		Found:   true,
 		Message: grpcMsg,
-	}, nil
+	}), nil
 }
 
-// SendFetchRetained fetches a retained message from a peer node.
-func (t *Transport) SendFetchRetained(ctx context.Context, nodeID, topic string) (*grpc.RetainedMessage, error) {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &grpc.FetchRetainedRequest{
-		Topic: topic,
-	}
-
-	resp, err := client.FetchRetained(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("grpc call failed: %w", err)
-	}
-
-	if resp.Error != "" {
-		return nil, fmt.Errorf("fetch failed: %s", resp.Error)
-	}
-
-	if !resp.Found {
-		return nil, nil // Message not found (not an error)
-	}
-
-	return resp.Message, nil
-}
-
-// FetchWill handles incoming requests to fetch a will message from this node.
-func (t *Transport) FetchWill(ctx context.Context, req *grpc.FetchWillRequest) (*grpc.FetchWillResponse, error) {
+// FetchWill implements BrokerServiceHandler.FetchWill.
+func (t *Transport) FetchWill(ctx context.Context, req *connect.Request[clusterv1.FetchWillRequest]) (*connect.Response[clusterv1.FetchWillResponse], error) {
 	if t.handler == nil {
-		return &grpc.FetchWillResponse{
+		return connect.NewResponse(&clusterv1.FetchWillResponse{
 			Found: false,
 			Error: "no handler configured",
-		}, nil
+		}), nil
 	}
 
-	// Get will message from local storage via handler
-	will, err := t.handler.GetWillMessage(ctx, req.ClientId)
+	will, err := t.handler.GetWillMessage(ctx, req.Msg.ClientId)
 	if err != nil {
-		return &grpc.FetchWillResponse{
+		return connect.NewResponse(&clusterv1.FetchWillResponse{
 			Found: false,
 			Error: err.Error(),
-		}, nil
+		}), nil
 	}
 
-	// Will message not found
 	if will == nil {
-		return &grpc.FetchWillResponse{
+		return connect.NewResponse(&clusterv1.FetchWillResponse{
 			Found: false,
-		}, nil
+		}), nil
 	}
 
-	// Convert storage.WillMessage to grpc.WillMessage
-	grpcWill := &grpc.WillMessage{
+	grpcWill := &clusterv1.WillMessage{
 		Topic:   will.Topic,
 		Payload: will.Payload,
 		Qos:     uint32(will.QoS),
@@ -428,37 +363,98 @@ func (t *Transport) FetchWill(ctx context.Context, req *grpc.FetchWillRequest) (
 		Delay:   will.Delay,
 	}
 
-	return &grpc.FetchWillResponse{
+	return connect.NewResponse(&clusterv1.FetchWillResponse{
 		Found:   true,
 		Message: grpcWill,
-	}, nil
+	}), nil
 }
 
-// SendFetchWill fetches a will message from a peer node.
-func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) (*grpc.WillMessage, error) {
-	client, err := t.GetPeerClient(nodeID)
+// EnqueueRemote implements BrokerServiceHandler.EnqueueRemote.
+func (t *Transport) EnqueueRemote(ctx context.Context, req *connect.Request[clusterv1.EnqueueRemoteRequest]) (*connect.Response[clusterv1.EnqueueRemoteResponse], error) {
+	t.mu.RLock()
+	handler := t.queueHandler
+	t.mu.RUnlock()
+
+	if handler == nil {
+		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
+			Success: false,
+			Error:   "no queue handler configured",
+		}), nil
+	}
+
+	messageID, err := handler.EnqueueLocal(ctx, req.Msg.QueueName, req.Msg.Payload, req.Msg.Properties)
 	if err != nil {
-		return nil, err
+		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
 	}
 
-	req := &grpc.FetchWillRequest{
-		ClientId: clientID,
+	return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
+		Success:   true,
+		MessageId: messageID,
+	}), nil
+}
+
+// RouteQueueMessage implements BrokerServiceHandler.RouteQueueMessage.
+func (t *Transport) RouteQueueMessage(ctx context.Context, req *connect.Request[clusterv1.RouteQueueMessageRequest]) (*connect.Response[clusterv1.RouteQueueMessageResponse], error) {
+	t.mu.RLock()
+	handler := t.queueHandler
+	t.mu.RUnlock()
+
+	if handler == nil {
+		return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
+			Success: false,
+			Error:   "no queue handler configured",
+		}), nil
 	}
 
-	resp, err := client.FetchWill(ctx, req)
+	msg := map[string]interface{}{
+		"id":          req.Msg.MessageId,
+		"queueName":   req.Msg.QueueName,
+		"payload":     req.Msg.Payload,
+		"properties":  req.Msg.Properties,
+		"sequence":    req.Msg.Sequence,
+		"partitionId": req.Msg.PartitionId,
+	}
+
+	err := handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
 	if err != nil {
-		return nil, fmt.Errorf("grpc call failed: %w", err)
+		return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
 	}
 
-	if resp.Error != "" {
-		return nil, fmt.Errorf("fetch failed: %s", resp.Error)
-	}
+	return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
+		Success: true,
+	}), nil
+}
 
-	if !resp.Found {
-		return nil, nil // Will message not found (not an error)
-	}
+// AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
+func (t *Transport) AppendEntries(ctx context.Context, req *connect.Request[clusterv1.AppendEntriesRequest]) (*connect.Response[clusterv1.AppendEntriesResponse], error) {
+	// TODO: Implement Raft consensus
+	return connect.NewResponse(&clusterv1.AppendEntriesResponse{
+		Term:    req.Msg.Term,
+		Success: false,
+	}), nil
+}
 
-	return resp.Message, nil
+// RequestVote implements BrokerServiceHandler.RequestVote (Raft).
+func (t *Transport) RequestVote(ctx context.Context, req *connect.Request[clusterv1.RequestVoteRequest]) (*connect.Response[clusterv1.RequestVoteResponse], error) {
+	// TODO: Implement Raft consensus
+	return connect.NewResponse(&clusterv1.RequestVoteResponse{
+		Term:        req.Msg.Term,
+		VoteGranted: false,
+	}), nil
+}
+
+// InstallSnapshot implements BrokerServiceHandler.InstallSnapshot (Raft).
+func (t *Transport) InstallSnapshot(ctx context.Context, req *connect.Request[clusterv1.InstallSnapshotRequest]) (*connect.Response[clusterv1.InstallSnapshotResponse], error) {
+	// TODO: Implement Raft consensus
+	return connect.NewResponse(&clusterv1.InstallSnapshotResponse{
+		Term: req.Msg.Term,
+	}), nil
 }
 
 // SetQueueHandler sets the queue handler for queue distribution operations.
@@ -468,32 +464,112 @@ func (t *Transport) SetQueueHandler(handler QueueHandler) {
 	t.queueHandler = handler
 }
 
-// EnqueueRemote implements BrokerServiceServer.EnqueueRemote.
-// This is called by peer brokers to enqueue a message on this node.
-func (t *Transport) EnqueueRemote(ctx context.Context, req *grpc.EnqueueRemoteRequest) (*grpc.EnqueueRemoteResponse, error) {
-	t.mu.RLock()
-	handler := t.queueHandler
-	t.mu.RUnlock()
-
-	if handler == nil {
-		return &grpc.EnqueueRemoteResponse{
-			Success: false,
-			Error:   "no queue handler configured",
-		}, nil
-	}
-
-	messageID, err := handler.EnqueueLocal(ctx, req.QueueName, req.Payload, req.Properties)
+// SendPublish sends a PUBLISH message to a specific peer node.
+func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
+	client, err := t.GetPeerClient(nodeID)
 	if err != nil {
-		return &grpc.EnqueueRemoteResponse{
-			Success: false,
-			Error:   err.Error(),
-		}, nil
+		return err
 	}
 
-	return &grpc.EnqueueRemoteResponse{
-		Success:   true,
-		MessageId: messageID,
-	}, nil
+	req := connect.NewRequest(&clusterv1.PublishRequest{
+		ClientId:   clientID,
+		Topic:      topic,
+		Payload:    payload,
+		Qos:        uint32(qos),
+		Retain:     retain,
+		Dup:        dup,
+		Properties: properties,
+	})
+
+	resp, err := client.RoutePublish(ctx, req)
+	if err != nil {
+		return fmt.Errorf("connect call failed: %w", err)
+	}
+
+	if !resp.Msg.Success {
+		return fmt.Errorf("publish failed: %s", resp.Msg.Error)
+	}
+
+	return nil
+}
+
+// SendTakeover sends a session takeover request to a peer node.
+func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
+	client, err := t.GetPeerClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	req := connect.NewRequest(&clusterv1.TakeoverRequest{
+		ClientId: clientID,
+		FromNode: fromNode,
+		ToNode:   toNode,
+	})
+
+	resp, err := client.TakeoverSession(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("connect call failed: %w", err)
+	}
+
+	if !resp.Msg.Success {
+		return nil, fmt.Errorf("takeover failed: %s", resp.Msg.Error)
+	}
+
+	return resp.Msg.SessionState, nil
+}
+
+// SendFetchRetained fetches a retained message from a peer node.
+func (t *Transport) SendFetchRetained(ctx context.Context, nodeID, topic string) (*clusterv1.RetainedMessage, error) {
+	client, err := t.GetPeerClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	req := connect.NewRequest(&clusterv1.FetchRetainedRequest{
+		Topic: topic,
+	})
+
+	resp, err := client.FetchRetained(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("connect call failed: %w", err)
+	}
+
+	if resp.Msg.Error != "" {
+		return nil, fmt.Errorf("fetch failed: %s", resp.Msg.Error)
+	}
+
+	if !resp.Msg.Found {
+		return nil, nil
+	}
+
+	return resp.Msg.Message, nil
+}
+
+// SendFetchWill fetches a will message from a peer node.
+func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) (*clusterv1.WillMessage, error) {
+	client, err := t.GetPeerClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	req := connect.NewRequest(&clusterv1.FetchWillRequest{
+		ClientId: clientID,
+	})
+
+	resp, err := client.FetchWill(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("connect call failed: %w", err)
+	}
+
+	if resp.Msg.Error != "" {
+		return nil, fmt.Errorf("fetch failed: %s", resp.Msg.Error)
+	}
+
+	if !resp.Msg.Found {
+		return nil, nil
+	}
+
+	return resp.Msg.Message, nil
 }
 
 // SendEnqueueRemote sends an enqueue request to a peer node.
@@ -503,59 +579,22 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 		return "", err
 	}
 
-	req := &grpc.EnqueueRemoteRequest{
+	req := connect.NewRequest(&clusterv1.EnqueueRemoteRequest{
 		QueueName:  queueName,
 		Payload:    payload,
 		Properties: properties,
-	}
+	})
 
 	resp, err := client.EnqueueRemote(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("grpc call failed: %w", err)
+		return "", fmt.Errorf("connect call failed: %w", err)
 	}
 
-	if !resp.Success {
-		return "", fmt.Errorf("enqueue failed: %s", resp.Error)
+	if !resp.Msg.Success {
+		return "", fmt.Errorf("enqueue failed: %s", resp.Msg.Error)
 	}
 
-	return resp.MessageId, nil
-}
-
-// RouteQueueMessage implements BrokerServiceServer.RouteQueueMessage.
-// This is called by peer brokers to deliver a queue message to a local consumer.
-func (t *Transport) RouteQueueMessage(ctx context.Context, req *grpc.RouteQueueMessageRequest) (*grpc.RouteQueueMessageResponse, error) {
-	t.mu.RLock()
-	handler := t.queueHandler
-	t.mu.RUnlock()
-
-	if handler == nil {
-		return &grpc.RouteQueueMessageResponse{
-			Success: false,
-			Error:   "no queue handler configured",
-		}, nil
-	}
-
-	// Create a simplified message structure for delivery
-	msg := map[string]interface{}{
-		"id":          req.MessageId,
-		"queueName":   req.QueueName,
-		"payload":     req.Payload,
-		"properties":  req.Properties,
-		"sequence":    req.Sequence,
-		"partitionId": req.PartitionId,
-	}
-
-	err := handler.DeliverQueueMessage(ctx, req.ClientId, msg)
-	if err != nil {
-		return &grpc.RouteQueueMessageResponse{
-			Success: false,
-			Error:   err.Error(),
-		}, nil
-	}
-
-	return &grpc.RouteQueueMessageResponse{
-		Success: true,
-	}, nil
+	return resp.Msg.MessageId, nil
 }
 
 // SendRouteQueueMessage sends a queue message delivery request to a peer node.
@@ -565,7 +604,7 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 		return err
 	}
 
-	req := &grpc.RouteQueueMessageRequest{
+	req := connect.NewRequest(&clusterv1.RouteQueueMessageRequest{
 		ClientId:    clientID,
 		QueueName:   queueName,
 		MessageId:   messageID,
@@ -573,15 +612,15 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 		Properties:  properties,
 		Sequence:    sequence,
 		PartitionId: int32(partitionID),
-	}
+	})
 
 	resp, err := client.RouteQueueMessage(ctx, req)
 	if err != nil {
-		return fmt.Errorf("grpc call failed: %w", err)
+		return fmt.Errorf("connect call failed: %w", err)
 	}
 
-	if !resp.Success {
-		return fmt.Errorf("route queue message failed: %s", resp.Error)
+	if !resp.Msg.Success {
+		return fmt.Errorf("route queue message failed: %s", resp.Msg.Error)
 	}
 
 	return nil

@@ -7,8 +7,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/absmach/fluxmq/cluster/grpc"
 	"github.com/absmach/fluxmq/core"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -116,7 +116,7 @@ type Cluster interface {
 	// This is called when a client reconnects to a different node.
 	// The old node disconnects the client and returns its full state.
 	// Returns the session state to be restored, or nil if no state exists.
-	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*grpc.SessionState, error)
+	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error)
 
 	// EnqueueRemote sends an enqueue request to a remote partition owner.
 	// This is called when a message needs to be enqueued on a partition owned by another node.
@@ -168,7 +168,7 @@ type MessageHandler interface {
 	// GetSessionStateAndClose captures the full state of a session and closes it.
 	// This is called when another node is taking over the session.
 	// Returns nil if the session doesn't exist on this node.
-	GetSessionStateAndClose(ctx context.Context, clientID string) (*grpc.SessionState, error)
+	GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error)
 
 	// GetRetainedMessage fetches a retained message from the local store.
 	// This is called when another node requests a large retained message payload.

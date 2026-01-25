@@ -89,6 +89,10 @@ type ServerConfig struct {
 	OtelTracesEnabled   bool    `yaml:"otel_traces_enabled"`
 	OtelMetricsEnabled  bool    `yaml:"otel_metrics_enabled"`
 	OtelTraceSampleRate float64 `yaml:"otel_trace_sample_rate"` // 0.0 to 1.0
+
+	// Queue API server (Connect/gRPC)
+	APIEnabled bool   `yaml:"api_enabled"`
+	APIAddr    string `yaml:"api_addr"`
 }
 
 // BrokerConfig holds broker-specific settings.
