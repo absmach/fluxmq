@@ -200,14 +200,14 @@ type ClusterConfig struct {
 
 // RaftConfig holds Raft replication configuration for queue data.
 type RaftConfig struct {
-	Enabled           bool          `yaml:"enabled"`
-	ReplicationFactor int           `yaml:"replication_factor"` // Number of replicas per partition (default: 3)
-	SyncMode          bool          `yaml:"sync_mode"`          // true=wait for quorum, false=async
-	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
-	AckTimeout        time.Duration `yaml:"ack_timeout"`
-	BindAddr          string        `yaml:"bind_addr"`  // Base address for Raft (e.g., "127.0.0.1:7100")
-	DataDir           string        `yaml:"data_dir"`   // Directory for Raft data
-	Peers             map[string]string `yaml:"peers"`  // Map of nodeID -> raft base address
+	Enabled           bool              `yaml:"enabled"`
+	ReplicationFactor int               `yaml:"replication_factor"` // Number of replicas per partition (default: 3)
+	SyncMode          bool              `yaml:"sync_mode"`          // true=wait for quorum, false=async
+	MinInSyncReplicas int               `yaml:"min_in_sync_replicas"`
+	AckTimeout        time.Duration     `yaml:"ack_timeout"`
+	BindAddr          string            `yaml:"bind_addr"` // Base address for Raft (e.g., "127.0.0.1:7100")
+	DataDir           string            `yaml:"data_dir"`  // Directory for Raft data
+	Peers             map[string]string `yaml:"peers"`     // Map of nodeID -> raft base address
 
 	// Raft tuning
 	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
@@ -339,7 +339,7 @@ func Default() *Config {
 			ShutdownTimeout: 30 * time.Second,
 
 			// OpenTelemetry defaults
-			OtelServiceName:     "mqtt-broker",
+			OtelServiceName:     "fluxmq",
 			OtelServiceVersion:  "1.0.0",
 			OtelMetricsEnabled:  true,
 			OtelTracesEnabled:   false, // Disabled by default for performance
@@ -364,13 +364,13 @@ func Default() *Config {
 		},
 		Storage: StorageConfig{
 			Type:      "badger",
-			BadgerDir: "/tmp/mqtt/data",
+			BadgerDir: "/tmp/fluxmq/data",
 		},
 		Cluster: ClusterConfig{
 			Enabled: true,
 			NodeID:  "broker-1",
 			Etcd: EtcdConfig{
-				DataDir:        "/tmp/mqtt/etcd",
+				DataDir:        "/tmp/fluxmq/etcd",
 				BindAddr:       "0.0.0.0:2380",
 				ClientAddr:     "0.0.0.0:2379",
 				InitialCluster: "broker-1=http://0.0.0.0:2380",
@@ -386,7 +386,7 @@ func Default() *Config {
 				MinInSyncReplicas: 2,
 				AckTimeout:        5 * time.Second,
 				BindAddr:          "127.0.0.1:7100",
-				DataDir:           "/tmp/mqtt/raft",
+				DataDir:           "/tmp/fluxmq/raft",
 				Peers:             map[string]string{},
 				HeartbeatTimeout:  1 * time.Second,
 				ElectionTimeout:   3 * time.Second,

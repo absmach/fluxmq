@@ -18,6 +18,11 @@ import (
 	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
+const (
+	fnvPrime  = 16777619
+	fnvOffset = 2166136261
+)
+
 // DeliverFn is the callback for delivering messages to MQTT clients.
 type DeliverFn func(ctx context.Context, clientID string, msg any) error
 
@@ -273,7 +278,7 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 		partitionKey = routingKey
 	}
 
-	partitionID := m.getPartitionID(partitionKey, config.Partitions)
+	partitionID := getPartitionID(partitionKey, config.Partitions)
 
 	// Create message
 	msg := &types.Message{
@@ -814,7 +819,7 @@ func (m *Manager) processRetention() {
 
 // --- Helper Functions ---
 
-func (m *Manager) getPartitionID(key string, partitions int) int {
+func getPartitionID(key string, partitions int) int {
 	if partitions <= 0 {
 		return 0
 	}
@@ -823,10 +828,10 @@ func (m *Manager) getPartitionID(key string, partitions int) int {
 	}
 
 	// FNV-1a hash
-	var hash uint32 = 2166136261
+	var hash uint32 = fnvOffset
 	for i := 0; i < len(key); i++ {
 		hash ^= uint32(key[i])
-		hash *= 16777619
+		hash *= fnvPrime
 	}
 
 	return int(hash % uint32(partitions))

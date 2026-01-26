@@ -116,7 +116,7 @@ func DefaultQueueConfig(name string) QueueConfig {
 		Name:             name,
 		Partitions:       10,
 		Ordering:         OrderingPartition,
-		MaxMessageSize:   1024 * 1024, // 1MB
+		MaxMessageSize:   10 * 1024 * 1024, // 1MB
 		MaxQueueDepth:    100000,
 		MessageTTL:       7 * 24 * time.Hour,
 		DeliveryTimeout:  30 * time.Second,

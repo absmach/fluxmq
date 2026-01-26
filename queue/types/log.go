@@ -102,6 +102,15 @@ func (g *ConsumerGroupState) GetCursor(partitionID int) *PartitionCursor {
 	return cursor
 }
 
+// ReplacePEL atomically replaces the entire PEL map.
+func (g *ConsumerGroupState) ReplacePEL(pel map[string][]*PendingEntry) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.PEL = pel
+	g.UpdatedAt = time.Now()
+}
+
 // AddPending adds a pending entry for a consumer.
 func (g *ConsumerGroupState) AddPending(consumerID string, entry *PendingEntry) {
 	g.mu.Lock()

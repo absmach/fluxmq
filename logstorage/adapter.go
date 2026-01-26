@@ -496,14 +496,15 @@ func (a *Adapter) syncPELFromStore(queueName, groupID string, group *types.Consu
 		return
 	}
 
-	group.PEL = make(map[string][]*types.PendingEntry)
+	pel := make(map[string][]*types.PendingEntry)
 	for consumerID, entries := range allEntries {
 		typeEntries := make([]*types.PendingEntry, len(entries))
 		for i, e := range entries {
 			typeEntries[i] = pelEntryToTypes(&e)
 		}
-		group.PEL[consumerID] = typeEntries
+		pel[consumerID] = typeEntries
 	}
+	group.ReplacePEL(pel)
 }
 
 // logMessageToTypes converts a log Message to a types.Message.
