@@ -50,6 +50,22 @@ cluster:
       node2: "127.0.0.1:7949"
       node3: "127.0.0.1:7950"
 
+  raft:
+    enabled: true
+    replication_factor: 3
+    sync_mode: true
+    min_in_sync_replicas: 2
+    ack_timeout: "5s"
+    bind_addr: "127.0.0.1:7100"
+    data_dir: "/tmp/fluxmq/node1/raft"
+    peers:
+      node2: "127.0.0.1:7200"
+      node3: "127.0.0.1:7300"
+    heartbeat_timeout: "1s"
+    election_timeout: "3s"
+    snapshot_interval: "5m"
+    snapshot_threshold: 8192
+
 log:
   level: "debug"
   format: "text"

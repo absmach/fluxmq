@@ -151,6 +151,27 @@ type ClusterConfig struct {
 
 	// Inter-broker transport
 	Transport TransportConfig `yaml:"transport"`
+
+	// Raft replication for queue data
+	Raft RaftConfig `yaml:"raft"`
+}
+
+// RaftConfig holds Raft replication configuration for queue data.
+type RaftConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	ReplicationFactor int           `yaml:"replication_factor"` // Number of replicas per partition (default: 3)
+	SyncMode          bool          `yaml:"sync_mode"`          // true=wait for quorum, false=async
+	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
+	AckTimeout        time.Duration `yaml:"ack_timeout"`
+	BindAddr          string        `yaml:"bind_addr"`  // Base address for Raft (e.g., "127.0.0.1:7100")
+	DataDir           string        `yaml:"data_dir"`   // Directory for Raft data
+	Peers             map[string]string `yaml:"peers"`  // Map of nodeID -> raft base address
+
+	// Raft tuning
+	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
+	ElectionTimeout   time.Duration `yaml:"election_timeout"`
+	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
+	SnapshotThreshold uint64        `yaml:"snapshot_threshold"`
 }
 
 // EtcdConfig holds embedded etcd configuration.
@@ -290,6 +311,20 @@ func Default() *Config {
 			},
 			Transport: TransportConfig{
 				BindAddr: "0.0.0.0:7948",
+			},
+			Raft: RaftConfig{
+				Enabled:           false, // Disabled by default
+				ReplicationFactor: 3,
+				SyncMode:          true,
+				MinInSyncReplicas: 2,
+				AckTimeout:        5 * time.Second,
+				BindAddr:          "127.0.0.1:7100",
+				DataDir:           "/tmp/mqtt/raft",
+				Peers:             map[string]string{},
+				HeartbeatTimeout:  1 * time.Second,
+				ElectionTimeout:   3 * time.Second,
+				SnapshotInterval:  5 * time.Minute,
+				SnapshotThreshold: 8192,
 			},
 		},
 		Webhook: WebhookConfig{

@@ -12,6 +12,7 @@ import (
 
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
+	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
@@ -30,6 +31,9 @@ type Manager struct {
 	deliverFn       DeliverFn
 	logger          *slog.Logger
 	config          Config
+
+	// Raft replication manager
+	raftManager *raft.Manager
 
 	// Cluster support for cross-node message routing
 	cluster     cluster.Cluster
@@ -171,8 +175,26 @@ func (m *Manager) Stop() error {
 	})
 
 	m.wg.Wait()
+
+	// Stop Raft manager if enabled
+	if m.raftManager != nil {
+		if err := m.raftManager.Stop(); err != nil {
+			m.logger.Error("failed to stop raft manager", slog.String("error", err.Error()))
+		}
+	}
+
 	m.logger.Info("log-based queue manager stopped")
 	return nil
+}
+
+// SetRaftManager sets the Raft replication manager.
+func (m *Manager) SetRaftManager(rm *raft.Manager) {
+	m.raftManager = rm
+}
+
+// GetRaftManager returns the Raft replication manager.
+func (m *Manager) GetRaftManager() *raft.Manager {
+	return m.raftManager
 }
 
 // --- Queue Operations ---
@@ -272,10 +294,45 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 	}
 	msg.Properties["routing-key"] = routingKey
 
-	// Append to log
-	offset, err := m.logStore.Append(ctx, queueRoot, partitionID, msg)
-	if err != nil {
-		return err
+	var offset uint64
+
+	// Use Raft replication if enabled
+	if m.raftManager != nil && m.raftManager.IsEnabled() {
+		// Ensure Raft partition is initialized
+		if err := m.raftManager.EnsurePartition(ctx, queueRoot, partitionID, config.Partitions); err != nil {
+			m.logger.Warn("failed to ensure raft partition, falling back to local",
+				slog.String("queue", queueRoot),
+				slog.Int("partition", partitionID),
+				slog.String("error", err.Error()))
+			// Fall back to local append
+			offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Apply through Raft
+			offset, err = m.raftManager.ApplyAppend(ctx, queueRoot, partitionID, msg)
+			if err != nil {
+				// If not leader, try local append (for now - later route to leader)
+				if err.Error() == "not leader" {
+					m.logger.Debug("not raft leader, appending locally",
+						slog.String("queue", queueRoot),
+						slog.Int("partition", partitionID))
+					offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
+					if err != nil {
+						return err
+					}
+				} else {
+					return fmt.Errorf("raft apply failed: %w", err)
+				}
+			}
+		}
+	} else {
+		// Raft disabled - append directly to log
+		offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
+		if err != nil {
+			return err
+		}
 	}
 
 	m.logger.Debug("message enqueued",

@@ -20,8 +20,9 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
-	"github.com/absmach/fluxmq/queue"
 	logStorage "github.com/absmach/fluxmq/logstorage"
+	"github.com/absmach/fluxmq/queue"
+	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/server/api"
 	"github.com/absmach/fluxmq/server/coap"
@@ -314,6 +315,53 @@ func main() {
 			logger,
 			cl,
 		)
+
+		// Initialize Raft replication if enabled
+		if cfg.Cluster.Enabled && cfg.Cluster.Raft.Enabled {
+			// Build node addresses map (include self and peers)
+			nodeAddresses := make(map[string]string)
+			nodeAddresses[cfg.Cluster.NodeID] = cfg.Cluster.Raft.BindAddr
+			for nodeID, addr := range cfg.Cluster.Raft.Peers {
+				nodeAddresses[nodeID] = addr
+			}
+
+			raftCfg := raft.ManagerConfig{
+				Enabled:           true,
+				ReplicationFactor: cfg.Cluster.Raft.ReplicationFactor,
+				SyncMode:          cfg.Cluster.Raft.SyncMode,
+				MinInSyncReplicas: cfg.Cluster.Raft.MinInSyncReplicas,
+				AckTimeout:        cfg.Cluster.Raft.AckTimeout,
+				HeartbeatTimeout:  cfg.Cluster.Raft.HeartbeatTimeout,
+				ElectionTimeout:   cfg.Cluster.Raft.ElectionTimeout,
+				SnapshotInterval:  cfg.Cluster.Raft.SnapshotInterval,
+				SnapshotThreshold: cfg.Cluster.Raft.SnapshotThreshold,
+				BindAddr:          cfg.Cluster.Raft.BindAddr,
+				DataDir:           cfg.Cluster.Raft.DataDir,
+			}
+
+			raftManager := raft.NewManager(
+				cfg.Cluster.NodeID,
+				cfg.Cluster.Raft.DataDir,
+				logStore,
+				logStore,
+				nodeAddresses,
+				raftCfg,
+				logger,
+			)
+
+			if err := raftManager.Start(context.Background()); err != nil {
+				slog.Error("Failed to start Raft manager", "error", err)
+				os.Exit(1)
+			}
+
+			qm.SetRaftManager(raftManager)
+
+			slog.Info("Raft replication enabled",
+				slog.String("node_id", cfg.Cluster.NodeID),
+				slog.String("bind_addr", cfg.Cluster.Raft.BindAddr),
+				slog.Int("replication_factor", cfg.Cluster.Raft.ReplicationFactor),
+				slog.Bool("sync_mode", cfg.Cluster.Raft.SyncMode))
+		}
 
 		if err := b.SetQueueManager(qm); err != nil {
 			slog.Error("Failed to set queue manager", "error", err)
