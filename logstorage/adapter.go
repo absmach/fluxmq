@@ -14,9 +14,9 @@ import (
 // Adapter wraps the log Store and implements the storage.LogStore and
 // storage.ConsumerGroupStore interfaces for integration with the queue system.
 type Adapter struct {
-	store       *Store
-	queueConfig *QueueConfigStore
-	groupStore  *ConsumerGroupStateStore
+	store      *Store
+	queueStore *QueueConfigStore
+	groupStore *ConsumerGroupStateStore
 }
 
 // AdapterConfig holds adapter configuration.
@@ -52,9 +52,9 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 	}
 
 	return &Adapter{
-		store:       store,
-		queueConfig: queueConfig,
-		groupStore:  groupStore,
+		store:      store,
+		queueStore: queueConfig,
+		groupStore: groupStore,
 	}, nil
 }
 
@@ -66,7 +66,7 @@ func (a *Adapter) Close() error {
 		lastErr = err
 	}
 
-	if err := a.queueConfig.Close(); err != nil {
+	if err := a.queueStore.Close(); err != nil {
 		lastErr = err
 	}
 
@@ -93,12 +93,12 @@ func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) err
 		return err
 	}
 
-	return a.queueConfig.Save(config)
+	return a.queueStore.Save(config)
 }
 
 // GetQueue retrieves a queue's configuration.
 func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
-	config, err := a.queueConfig.Get(queueName)
+	config, err := a.queueStore.Get(queueName)
 	if err != nil {
 		return nil, storage.ErrQueueNotFound
 	}
@@ -107,7 +107,7 @@ func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueC
 
 // DeleteQueue deletes a queue and all its data.
 func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
-	if err := a.queueConfig.Delete(queueName); err != nil {
+	if err := a.queueStore.Delete(queueName); err != nil {
 		return err
 	}
 	return a.store.DeleteQueue(queueName)
@@ -115,7 +115,7 @@ func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
 
 // ListQueues returns all queue configurations.
 func (a *Adapter) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
-	return a.queueConfig.List()
+	return a.queueStore.List()
 }
 
 // Append adds a message to the end of a partition's log.
@@ -466,7 +466,7 @@ func (a *Adapter) Sync() error {
 		return err
 	}
 
-	if err := a.queueConfig.Sync(); err != nil {
+	if err := a.queueStore.Sync(); err != nil {
 		return err
 	}
 
