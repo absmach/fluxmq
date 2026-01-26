@@ -6,8 +6,10 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,33 +57,16 @@ type SubscribeRateLimitConfig struct {
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
-	TCPAddr            string        `yaml:"tcp_addr"`
-	TLSCertFile        string        `yaml:"tls_cert_file"`
-	TLSKeyFile         string        `yaml:"tls_key_file"`
-	TLSCAFile          string        `yaml:"tls_ca_file"`     // CA certificate for client verification
-	TLSClientAuth      string        `yaml:"tls_client_auth"` // "none", "request", or "require"
-	HTTPAddr           string        `yaml:"http_addr"`
-	WSAddr             string        `yaml:"ws_addr"`
-	WSPath             string        `yaml:"ws_path"`
-	WSAllowedOrigins   []string      `yaml:"ws_allowed_origins"` // Allowed origins for WebSocket (empty = allow all in dev mode)
-	CoAPAddr           string        `yaml:"coap_addr"`
-	CoAPDTLSEnabled    bool          `yaml:"coap_dtls_enabled"`
-	CoAPDTLSCertFile   string        `yaml:"coap_dtls_cert_file"`
-	CoAPDTLSKeyFile    string        `yaml:"coap_dtls_key_file"`
-	CoAPDTLSCAFile     string        `yaml:"coap_dtls_ca_file"`     // For mDTLS client verification
-	CoAPDTLSClientAuth string        `yaml:"coap_dtls_client_auth"` // "none", "request", "require"
-	HealthAddr         string        `yaml:"health_addr"`
-	MetricsAddr        string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
-	TCPMaxConn         int           `yaml:"tcp_max_connections"`
-	TCPReadTimeout     time.Duration `yaml:"tcp_read_timeout"`
-	TCPWriteTimeout    time.Duration `yaml:"tcp_write_timeout"`
-	ShutdownTimeout    time.Duration `yaml:"shutdown_timeout"`
-	TLSEnabled         bool          `yaml:"tls_enabled"`
-	HTTPEnabled        bool          `yaml:"http_enabled"`
-	WSEnabled          bool          `yaml:"ws_enabled"`
-	CoAPEnabled        bool          `yaml:"coap_enabled"`
-	HealthEnabled      bool          `yaml:"health_enabled"`
-	MetricsEnabled     bool          `yaml:"metrics_enabled"` // Now enables OTel
+	TCP       TCPConfig       `yaml:"tcp"`
+	WebSocket WebSocketConfig `yaml:"websocket"`
+	HTTP      HTTPConfig      `yaml:"http"`
+	CoAP      CoAPConfig      `yaml:"coap"`
+
+	HealthAddr      string        `yaml:"health_addr"`
+	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	HealthEnabled   bool          `yaml:"health_enabled"`
+	MetricsEnabled  bool          `yaml:"metrics_enabled"` // Now enables OTel
 
 	// OpenTelemetry configuration
 	OtelServiceName     string  `yaml:"otel_service_name"`
@@ -93,6 +78,63 @@ type ServerConfig struct {
 	// Queue API server (Connect/gRPC)
 	APIEnabled bool   `yaml:"api_enabled"`
 	APIAddr    string `yaml:"api_addr"`
+}
+
+// TCPListenerConfig holds TCP listener configuration.
+type TCPListenerConfig struct {
+	Addr           string         `yaml:"addr"`
+	MaxConnections int            `yaml:"max_connections"`
+	ReadTimeout    time.Duration  `yaml:"read_timeout"`
+	WriteTimeout   time.Duration  `yaml:"write_timeout"`
+	TLS            mqtttls.Config `yaml:",inline"`
+}
+
+// TCPConfig groups TCP listeners by mode.
+type TCPConfig struct {
+	Plain TCPListenerConfig `yaml:"plain"`
+	TLS   TCPListenerConfig `yaml:"tls"`
+	MTLS  TCPListenerConfig `yaml:"mtls"`
+}
+
+// WSListenerConfig holds WebSocket listener configuration.
+type WSListenerConfig struct {
+	Addr           string         `yaml:"addr"`
+	Path           string         `yaml:"path"`
+	AllowedOrigins []string       `yaml:"allowed_origins"`
+	TLS            mqtttls.Config `yaml:",inline"`
+}
+
+// WebSocketConfig groups WebSocket listeners by mode.
+type WebSocketConfig struct {
+	Plain WSListenerConfig `yaml:"plain"`
+	TLS   WSListenerConfig `yaml:"tls"`
+	MTLS  WSListenerConfig `yaml:"mtls"`
+}
+
+// HTTPListenerConfig holds HTTP listener configuration.
+type HTTPListenerConfig struct {
+	Addr string         `yaml:"addr"`
+	TLS  mqtttls.Config `yaml:",inline"`
+}
+
+// HTTPConfig groups HTTP listeners by mode.
+type HTTPConfig struct {
+	Plain HTTPListenerConfig `yaml:"plain"`
+	TLS   HTTPListenerConfig `yaml:"tls"`
+	MTLS  HTTPListenerConfig `yaml:"mtls"`
+}
+
+// CoAPListenerConfig holds CoAP listener configuration.
+type CoAPListenerConfig struct {
+	Addr string         `yaml:"addr"`
+	TLS  mqtttls.Config `yaml:",inline"`
+}
+
+// CoAPConfig groups CoAP listeners by mode.
+type CoAPConfig struct {
+	Plain CoAPListenerConfig `yaml:"plain"`
+	DTLS  CoAPListenerConfig `yaml:"dtls"`
+	MDTLS CoAPListenerConfig `yaml:"mdtls"`
 }
 
 // BrokerConfig holds broker-specific settings.
@@ -250,26 +292,51 @@ type WebhookEndpoint struct {
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
-			TCPAddr:            ":1883",
-			TCPMaxConn:         10000,
-			TCPReadTimeout:     60 * time.Second,
-			TCPWriteTimeout:    60 * time.Second,
-			TLSEnabled:         false,
-			TLSClientAuth:      "none",
-			HTTPAddr:           ":8080",
-			HTTPEnabled:        false,
-			WSAddr:             ":8083",
-			WSPath:             "/mqtt",
-			WSEnabled:          true,
-			CoAPAddr:           ":5683",
-			CoAPEnabled:        false,
-			CoAPDTLSEnabled:    false,
-			CoAPDTLSClientAuth: "none",
-			HealthAddr:         ":8081",
-			HealthEnabled:      true,
-			MetricsAddr:        "localhost:4317",
-			MetricsEnabled:     false,
-			ShutdownTimeout:    30 * time.Second,
+			TCP: TCPConfig{
+				Plain: TCPListenerConfig{
+					Addr:           ":1883",
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
+				},
+				TLS: TCPListenerConfig{
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
+				},
+				MTLS: TCPListenerConfig{
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
+				},
+			},
+			WebSocket: WebSocketConfig{
+				Plain: WSListenerConfig{
+					Addr: ":8083",
+					Path: "/mqtt",
+				},
+				TLS: WSListenerConfig{
+					Path: "/mqtt",
+				},
+				MTLS: WSListenerConfig{
+					Path: "/mqtt",
+				},
+			},
+			HTTP: HTTPConfig{
+				Plain: HTTPListenerConfig{},
+				TLS:   HTTPListenerConfig{},
+				MTLS:  HTTPListenerConfig{},
+			},
+			CoAP: CoAPConfig{
+				Plain: CoAPListenerConfig{},
+				DTLS:  CoAPListenerConfig{},
+				MDTLS: CoAPListenerConfig{},
+			},
+			HealthAddr:      ":8081",
+			HealthEnabled:   true,
+			MetricsAddr:     "localhost:4317",
+			MetricsEnabled:  false,
+			ShutdownTimeout: 30 * time.Second,
 
 			// OpenTelemetry defaults
 			OtelServiceName:     "mqtt-broker",
@@ -400,29 +467,126 @@ func Load(filename string) (*Config, error) {
 
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
-	if c.Server.TCPAddr == "" {
-		return fmt.Errorf("server.tcp_addr cannot be empty")
+	tcpSlots := []struct {
+		name              string
+		cfg               TCPListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.TCP.Plain, requireClientAuth: false},
+		{name: "tls", cfg: c.Server.TCP.TLS, requireClientAuth: false},
+		{name: "mtls", cfg: c.Server.TCP.MTLS, requireClientAuth: true},
 	}
-	if c.Server.TCPMaxConn < 0 {
-		return fmt.Errorf("server.tcp_max_connections cannot be negative")
+
+	wsSlots := []struct {
+		name              string
+		cfg               WSListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.WebSocket.Plain, requireClientAuth: false},
+		{name: "tls", cfg: c.Server.WebSocket.TLS, requireClientAuth: false},
+		{name: "mtls", cfg: c.Server.WebSocket.MTLS, requireClientAuth: true},
 	}
-	if c.Server.TLSEnabled {
-		if c.Server.TLSCertFile == "" {
-			return fmt.Errorf("server.tls_cert_file required when TLS is enabled")
-		}
-		if c.Server.TLSKeyFile == "" {
-			return fmt.Errorf("server.tls_key_file required when TLS is enabled")
+
+	httpSlots := []struct {
+		name              string
+		cfg               HTTPListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.HTTP.Plain, requireClientAuth: false},
+		{name: "tls", cfg: c.Server.HTTP.TLS, requireClientAuth: false},
+		{name: "mtls", cfg: c.Server.HTTP.MTLS, requireClientAuth: true},
+	}
+
+	hasMQTTListener := false
+
+	for _, slot := range tcpSlots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.tcp.%s TLS fields are not supported for plain listeners", slot.name)
+			}
+			continue
 		}
 
-		// Validate client auth mode
-		validClientAuth := map[string]bool{"none": true, "request": true, "require": true}
-		if !validClientAuth[c.Server.TLSClientAuth] {
-			return fmt.Errorf("server.tls_client_auth must be one of: none, request, require")
+		hasMQTTListener = true
+		if slot.cfg.MaxConnections < 0 {
+			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
+		}
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.tcp.%s TLS fields are not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, slot := range wsSlots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
+			}
+			continue
 		}
 
-		// CA file required for client certificate verification
-		if (c.Server.TLSClientAuth == "request" || c.Server.TLSClientAuth == "require") && c.Server.TLSCAFile == "" {
-			return fmt.Errorf("server.tls_ca_file required when tls_client_auth is '%s'", c.Server.TLSClientAuth)
+		hasMQTTListener = true
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
+		}
+	}
+
+	if !hasMQTTListener {
+		return fmt.Errorf("at least one TCP or WebSocket listener must be configured")
+	}
+
+	for _, slot := range httpSlots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
+			}
+			continue
+		}
+
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.http."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
+		}
+	}
+
+	coapSlots := []struct {
+		name              string
+		cfg               CoAPListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.CoAP.Plain},
+		{name: "dtls", cfg: c.Server.CoAP.DTLS},
+		{name: "mdtls", cfg: c.Server.CoAP.MDTLS, requireClientAuth: true},
+	}
+
+	for _, slot := range coapSlots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
+			}
+			continue
+		}
+
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.coap."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -542,6 +706,34 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) error {
+	if cfg.CertFile == "" {
+		return fmt.Errorf("%s.cert_file required", prefix)
+	}
+	if cfg.KeyFile == "" {
+		return fmt.Errorf("%s.key_file required", prefix)
+	}
+	if requireCA && cfg.ClientCAFile == "" {
+		return fmt.Errorf("%s.ca_file required", prefix)
+	}
+	return nil
+}
+
+func tlsConfigured(cfg mqtttls.Config) bool {
+	return cfg.CertFile != "" ||
+		cfg.KeyFile != "" ||
+		cfg.ServerCAFile != "" ||
+		cfg.ClientCAFile != "" ||
+		cfg.ClientAuth != "" ||
+		cfg.MinVersion != "" ||
+		len(cfg.CipherSuites) > 0 ||
+		cfg.PreferServerCipherSuites != nil
+}
+
+func hasAddr(addr string) bool {
+	return strings.TrimSpace(addr) != ""
 }
 
 // Save writes the configuration to a YAML file.

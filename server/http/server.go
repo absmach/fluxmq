@@ -5,6 +5,7 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 type Config struct {
 	Address         string
 	ShutdownTimeout time.Duration
+	TLSConfig       *tls.Config
 }
 
 type Server struct {
@@ -43,8 +45,9 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	mux.HandleFunc("/health", s.handleHealth)
 
 	s.server = &http.Server{
-		Addr:    cfg.Address,
-		Handler: mux,
+		Addr:      cfg.Address,
+		Handler:   mux,
+		TLSConfig: cfg.TLSConfig,
 	}
 
 	return s
@@ -55,6 +58,12 @@ func (s *Server) Listen(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
+		if s.config.TLSConfig != nil {
+			if err := s.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				errCh <- err
+			}
+			return
+		}
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}

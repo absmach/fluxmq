@@ -6,11 +6,8 @@ package coap
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -30,12 +27,8 @@ type Config struct {
 	Address         string
 	ShutdownTimeout time.Duration
 
-	// DTLS configuration
-	DTLSEnabled    bool
-	DTLSCertFile   string
-	DTLSKeyFile    string
-	DTLSCAFile     string // For mDTLS client verification
-	DTLSClientAuth string // "none", "request", "require"
+	// DTLS configuration (if nil, runs plain UDP)
+	TLSConfig *piondtls.Config
 }
 
 // Server is a CoAP server that bridges CoAP to MQTT.
@@ -67,7 +60,7 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 
 // Listen starts the CoAP server and blocks until the context is cancelled.
 func (s *Server) Listen(ctx context.Context) error {
-	if s.config.DTLSEnabled {
+	if s.config.TLSConfig != nil {
 		return s.listenDTLS(ctx)
 	}
 	return s.listenUDP(ctx)
@@ -106,16 +99,15 @@ func (s *Server) listenUDP(ctx context.Context) error {
 
 // listenDTLS starts a DTLS-secured CoAP server.
 func (s *Server) listenDTLS(ctx context.Context) error {
+	if s.config.TLSConfig == nil {
+		return fmt.Errorf("dtls config is nil")
+	}
+	isMTLS := s.config.TLSConfig.ClientAuth == piondtls.RequireAndVerifyClientCert
 	s.logger.Info("coap_dtls_server_starting",
 		slog.String("addr", s.config.Address),
-		slog.String("client_auth", s.config.DTLSClientAuth))
+		slog.Bool("mtls", isMTLS))
 
-	dtlsConfig, err := s.buildDTLSConfig()
-	if err != nil {
-		return fmt.Errorf("failed to build DTLS config: %w", err)
-	}
-
-	listener, err := net.NewDTLSListener("udp", s.config.Address, dtlsConfig)
+	listener, err := net.NewDTLSListener("udp", s.config.Address, s.config.TLSConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create DTLS listener: %w", err)
 	}
@@ -131,7 +123,7 @@ func (s *Server) listenDTLS(ctx context.Context) error {
 
 	s.logger.Info("coap_dtls_server_started",
 		slog.String("addr", s.config.Address),
-		slog.Bool("mtls", s.config.DTLSClientAuth == "require"))
+		slog.Bool("mtls", isMTLS))
 
 	select {
 	case err := <-errCh:
@@ -143,45 +135,6 @@ func (s *Server) listenDTLS(ctx context.Context) error {
 		s.logger.Info("coap_dtls_server_stopped")
 		return nil
 	}
-}
-
-// buildDTLSConfig creates a pion DTLS configuration.
-func (s *Server) buildDTLSConfig() (*piondtls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(s.config.DTLSCertFile, s.config.DTLSKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load DTLS certificate: %w", err)
-	}
-
-	config := &piondtls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
-	// Configure client authentication
-	switch s.config.DTLSClientAuth {
-	case "require":
-		config.ClientAuth = piondtls.RequireAndVerifyClientCert
-	case "request":
-		config.ClientAuth = piondtls.RequestClientCert
-	default:
-		config.ClientAuth = piondtls.NoClientCert
-	}
-
-	// Load CA for client certificate verification
-	if s.config.DTLSCAFile != "" && (s.config.DTLSClientAuth == "require" || s.config.DTLSClientAuth == "request") {
-		caCert, err := os.ReadFile(s.config.DTLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-		}
-
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
-		}
-
-		config.ClientCAs = caCertPool
-	}
-
-	return config, nil
 }
 
 func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {

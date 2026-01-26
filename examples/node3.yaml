@@ -3,14 +3,29 @@
 # Run all three nodes simultaneously to form the cluster
 
 server:
-  tcp_addr: ":1885"
-  tcp_max_connections: 10000
-  tcp_read_timeout: "60s"
-  tcp_write_timeout: "60s"
+  tcp:
+    plain:
+      addr: ":1885"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls: {}
+    mtls: {}
 
-  http_enabled: false
-  ws_enabled: false
-  coap_enabled: false
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
   health_enabled: true
   health_addr: ":8083"

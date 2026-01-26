@@ -2,30 +2,88 @@
 # This configuration demonstrates how to enable TLS for secure MQTT connections
 
 server:
-  # Standard MQTT TLS port
-  tcp_addr: ":8883"
-  tcp_max_connections: 10000
-  tcp_read_timeout: "60s"
-  tcp_write_timeout: "60s"
-
-  # TLS Configuration
-  tls_enabled: true
-  tls_cert_file: "/etc/mqtt/certs/server.crt"
-  tls_key_file: "/etc/mqtt/certs/server.key"
-
-  # Optional: Client certificate authentication
-  # Options: "none", "request", "require"
-  tls_client_auth: "none"
-  # tls_ca_file: "/etc/mqtt/certs/ca.crt"  # Required if tls_client_auth is "request" or "require"
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls:
+      addr: ":8883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      min_version: "TLS1.2"
+      prefer_server_cipher_suites: true
+      cipher_suites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+    mtls:
+      addr: ":8884"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      ca_file: "/etc/fluxmq/certs/ca.crt"
+      client_auth: "require"
+      min_version: "TLS1.2"
+      prefer_server_cipher_suites: true
+      cipher_suites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
 
   # WebSocket with TLS (WSS)
-  ws_enabled: true
-  ws_addr: ":8884"
-  ws_path: "/mqtt"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+    tls:
+      addr: ":8084"
+      path: "/mqtt"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+    mtls:
+      addr: ":8085"
+      path: "/mqtt"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      ca_file: "/etc/fluxmq/certs/ca.crt"
+      client_auth: "require"
 
-  # HTTP endpoints
-  http_enabled: false
-  coap_enabled: false
+  http:
+    plain:
+      addr: ":8080"
+    tls:
+      addr: ":8443"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+    mtls:
+      addr: ":8444"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      ca_file: "/etc/fluxmq/certs/ca.crt"
+      client_auth: "require"
+
+  coap:
+    plain:
+      addr: ":5683"
+    dtls:
+      addr: ":5684"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+    mdtls:
+      addr: ":5685"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      ca_file: "/etc/fluxmq/certs/ca.crt"
+      client_auth: "require"
 
   # Health check endpoint (non-TLS)
   health_enabled: true
@@ -37,14 +95,14 @@ server:
   shutdown_timeout: "30s"
 
 broker:
-  max_message_size: 1048576  # 1MB
+  max_message_size: 1048576 # 1MB
   max_retained_messages: 10000
   retry_interval: "20s"
   max_retries: 0
 
 session:
   max_sessions: 10000
-  default_expiry_interval: 300  # 5 minutes
+  default_expiry_interval: 300 # 5 minutes
   max_offline_queue_size: 1000
   max_inflight_messages: 100
 
@@ -59,15 +117,20 @@ cluster:
 log:
   level: "info"
   format: "json"
-
 # Notes:
 # 1. Generate certificates:
 #    openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes
 #
-# 2. For client certificate authentication, set tls_client_auth to "require" and provide tls_ca_file
+# 2. For mutual TLS (mTLS), use tcp.mtls or websocket.mtls and provide a CA file:
+#    cert_file: "/etc/fluxmq/certs/server.crt"
+#    key_file: "/etc/fluxmq/certs/server.key"
+#    ca_file: "/etc/fluxmq/certs/ca.crt"
+#    client_auth: "require"
 #
 # 3. Clients connect using:
 #    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -t test -m "hello"
 #
 # 4. For mutual TLS (mTLS):
-#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt --cert client.crt --key client.key -t test -m "hello"
+#    mosquitto_pub -h localhost -p 8884 --cafile ca.crt --cert client.crt --key client.key -t test -m "hello"
+#
+# 5. For CoAP DTLS, configure coap.dtls or coap.mdtls with cert/key (and ca_file for mdtls).

@@ -21,7 +21,16 @@ The broker uses YAML configuration files:
 ```yaml
 server:
   # Server transport settings
-  tcp_addr: ":1883"
+  tcp:
+    plain:
+      addr: ":1883"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+  http:
+    plain:
+      addr: ":8080"
   # ...
 
 broker:
@@ -62,53 +71,136 @@ log:
 
 ## Server Configuration
 
-Controls the transport layer (TCP, WebSocket, HTTP, CoAP).
+Controls the transport layer (TCP, WebSocket, HTTP, CoAP). Each protocol has
+fixed listener slots (`plain`, `tls`, `mtls`) and a listener is enabled when its
+`addr` is set.
 
 ```yaml
 server:
   # TCP Transport (MQTT over TCP)
-  tcp_addr: ":1883"                    # Listen address (default: 1883)
-  tcp_max_connections: 10000           # Max concurrent connections
-  tcp_read_timeout: "60s"              # Read timeout
-  tcp_write_timeout: "60s"             # Write timeout
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls:
+      addr: ":8883"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+      min_version: "TLS1.2"
+      prefer_server_cipher_suites: true
+      cipher_suites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+    mtls:
+      addr: ":8884"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+      ca_file: "/path/to/ca.crt"
+      client_auth: "require"
 
-  # TLS/SSL (not yet implemented)
-  tls_enabled: false
-  tls_cert_file: ""
-  tls_key_file: ""
+  # WebSocket Transport (MQTT over WebSocket)
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+    tls:
+      addr: ":8084"
+      path: "/mqtt"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+    mtls: {}
 
   # HTTP-MQTT Bridge
-  http_enabled: false                  # Enable HTTP bridge
-  http_addr: ":8080"                   # HTTP listen address
-
-  # WebSocket Transport
-  ws_enabled: false                    # Enable WebSocket
-  ws_addr: ":8083"                     # WebSocket listen address
-  ws_path: "/mqtt"                     # WebSocket path
+  http:
+    plain:
+      addr: ":8080"
+    tls:
+      addr: ":8443"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+    mtls:
+      addr: ":8444"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+      ca_file: "/path/to/ca.crt"
 
   # CoAP Bridge
-  coap_enabled: false                  # Enable CoAP bridge
-  coap_addr: ":5683"                   # CoAP listen address
+  coap:
+    plain:
+      addr: ":5683"
+    dtls: {}
+    mdtls: {}
 
-  # Shutdown
-  shutdown_timeout: "30s"              # Graceful shutdown timeout
+  shutdown_timeout: "30s"
 ```
+
+TLS fields (`cert_file`, `key_file`, `ca_file`, `server_ca_file`) are inline
+under each listener slot (not nested under `tls:`).
+
+`client_auth` is optional and accepts `none`, `request`, `require_any`,
+`verify_if_given`, or `require` (alias for require-and-verify). If `ca_file` is
+set and `client_auth` is empty, the server defaults to `require` (RequireAndVerifyClientCert).
+Set `client_auth` explicitly to override that default.
+
+`min_version` uses string values like `TLS1.2` or `TLS1.3` and applies only to TLS.
+If omitted, Go's default TLS behavior is used.
+`cipher_suites` takes TLS cipher suite names; TLS 1.3 suites are not configurable in Go
+and will be rejected. The same list is used for DTLS listeners, but DTLS will reject
+any suites it doesn't support. If `cipher_suites` is omitted, each library's default
+list is used. `prefer_server_cipher_suites` only applies to TLS as well.
+
+### Go TLS Defaults (Go 1.24)
+
+If you omit `min_version`, `cipher_suites`, and `prefer_server_cipher_suites`, Go's
+defaults are used. As of Go 1.24:
+
+- **Minimum version**: TLS 1.2 (TLS 1.3 is enabled by default).
+- **TLS 1.3 cipher suites** (order prefers AES when hardware support is present):
+
+```text
+TLS_AES_128_GCM_SHA256
+TLS_AES_256_GCM_SHA384
+TLS_CHACHA20_POLY1305_SHA256
+```
+
+- **TLS 1.2 cipher suites** (order prefers AES-GCM when hardware support is present):
+
+```text
+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+```
+
+Defaults can change across Go versions and can also be affected by `GODEBUG`
+flags like `tlsrsakex=1` and `tls3des=1`. For DTLS defaults, see the Pion
+DTLS documentation (`dtls.CipherSuites()`).
 
 ### TCP Configuration
 
-**tcp_addr**:
+**server.tcp.<mode>.addr**:
 - Format: `"host:port"` or `":port"`
 - Examples:
   - `":1883"` - Listen on all interfaces, port 1883
   - `"127.0.0.1:1883"` - Listen only on localhost
   - `"192.168.1.10:1883"` - Listen on specific IP
 
-**tcp_max_connections**:
+**server.tcp.<mode>.max_connections**:
 - Maximum concurrent TCP connections
 - Default: 10000
 - Adjust based on available file descriptors (`ulimit -n`)
 
-**tcp_read_timeout / tcp_write_timeout**:
+**server.tcp.<mode>.read_timeout / server.tcp.<mode>.write_timeout**:
 - Duration format: `"60s"`, `"5m"`, `"1h"`
 - Prevents hung connections
 - Should be longer than maximum expected keep-alive
@@ -117,9 +209,10 @@ server:
 
 ```yaml
 server:
-  ws_enabled: true
-  ws_addr: ":8083"
-  ws_path: "/mqtt"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
 ```
 
 **Client Connection**:
@@ -132,8 +225,9 @@ const client = mqtt.connect('ws://localhost:8083/mqtt');
 
 ```yaml
 server:
-  http_enabled: true
-  http_addr: ":8080"
+  http:
+    plain:
+      addr: ":8080"
 ```
 
 **Publishing via HTTP**:
@@ -568,14 +662,29 @@ Log output format.
 ```yaml
 # examples/no-cluster.yaml
 server:
-  tcp_addr: ":1883"
-  tcp_max_connections: 10000
-  tcp_read_timeout: "60s"
-  tcp_write_timeout: "60s"
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+    tls: {}
+    mtls: {}
 
-  http_enabled: false
-  ws_enabled: false
-  coap_enabled: false
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
   shutdown_timeout: "30s"
 
@@ -609,8 +718,27 @@ log:
 ```yaml
 # examples/single-node-cluster.yaml
 server:
-  tcp_addr: ":1883"
-  tcp_max_connections: 10000
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+    tls: {}
+    mtls: {}
+
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
 storage:
   type: "badger"
@@ -641,7 +769,26 @@ log:
 ```yaml
 # examples/node1.yaml
 server:
-  tcp_addr: ":1883"
+  tcp:
+    plain:
+      addr: ":1883"
+    tls: {}
+    mtls: {}
+
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
 storage:
   type: "badger"
@@ -669,7 +816,7 @@ log:
 ```
 
 **Node 2**: Same as Node 1, with:
-- `tcp_addr: ":1884"`
+- `tcp.plain.addr: ":1884"`
 - `node_id: "node2"`
 - `badger_dir: "/tmp/mqtt/node2/data"`
 - `etcd.data_dir: "/tmp/mqtt/node2/etcd"`
@@ -685,7 +832,26 @@ log:
 **Node 1** (192.168.1.10):
 ```yaml
 server:
-  tcp_addr: "0.0.0.0:1883"
+  tcp:
+    plain:
+      addr: "0.0.0.0:1883"
+    tls: {}
+    mtls: {}
+
+  websocket:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  http:
+    plain: {}
+    tls: {}
+    mtls: {}
+
+  coap:
+    plain: {}
+    dtls: {}
+    mdtls: {}
 
 storage:
   type: "badger"
@@ -720,10 +886,16 @@ log:
 1. **Bind addresses**:
    ```yaml
    # Development: localhost only
-   tcp_addr: "127.0.0.1:1883"
+   server:
+     tcp:
+       plain:
+         addr: "127.0.0.1:1883"
 
    # Production: specific interface
-   tcp_addr: "0.0.0.0:1883"  # With firewall
+   server:
+     tcp:
+       plain:
+         addr: "0.0.0.0:1883"  # With firewall
 
    # Don't expose etcd client port externally
    client_addr: "127.0.0.1:2379"
@@ -741,7 +913,9 @@ log:
 1. **Connection limits**:
    ```yaml
    server:
-     tcp_max_connections: 50000  # Based on ulimit
+     tcp:
+       plain:
+         max_connections: 50000  # Based on ulimit
 
    session:
      max_sessions: 50000
@@ -760,8 +934,10 @@ log:
 2. **Timeouts**:
    ```yaml
    server:
-     tcp_read_timeout: "120s"   # 2x max keep-alive
-     tcp_write_timeout: "120s"
+     tcp:
+       plain:
+         read_timeout: "120s"   # 2x max keep-alive
+         write_timeout: "120s"
    ```
 
 3. **Storage**:

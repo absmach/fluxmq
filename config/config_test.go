@@ -12,11 +12,11 @@ func TestDefault(t *testing.T) {
 	cfg := Default()
 
 	// Test server defaults
-	if cfg.Server.TCPAddr != ":1883" {
-		t.Errorf("expected default TCP addr :1883, got %s", cfg.Server.TCPAddr)
+	if cfg.Server.TCP.Plain.Addr != ":1883" {
+		t.Errorf("expected default TCP addr :1883, got %s", cfg.Server.TCP.Plain.Addr)
 	}
-	if cfg.Server.TCPMaxConn != 10000 {
-		t.Errorf("expected default max connections 10000, got %d", cfg.Server.TCPMaxConn)
+	if cfg.Server.TCP.Plain.MaxConnections != 10000 {
+		t.Errorf("expected default max connections 10000, got %d", cfg.Server.TCP.Plain.MaxConnections)
 	}
 
 	// Test broker defaults
@@ -47,17 +47,23 @@ func TestValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "empty TCP addr",
+			name: "no MQTT listeners configured",
 			modify: func(c *Config) {
-				c.Server.TCPAddr = ""
+				c.Server.TCP.Plain.Addr = ""
+				c.Server.TCP.TLS.Addr = ""
+				c.Server.TCP.MTLS.Addr = ""
+				c.Server.WebSocket.Plain.Addr = ""
+				c.Server.WebSocket.TLS.Addr = ""
+				c.Server.WebSocket.MTLS.Addr = ""
 			},
 			wantErr: true,
 		},
 		{
-			name: "TLS enabled without cert",
+			name: "TCP TLS listener without cert",
 			modify: func(c *Config) {
-				c.Server.TLSEnabled = true
-				c.Server.TLSCertFile = ""
+				c.Server.TCP.TLS.Addr = ":8883"
+				c.Server.TCP.TLS.TLS.CertFile = ""
+				c.Server.TCP.TLS.TLS.KeyFile = ""
 			},
 			wantErr: true,
 		},
@@ -103,8 +109,8 @@ func TestLoadNonExistent(t *testing.T) {
 		t.Fatalf("Load() should return default config when file doesn't exist, got error: %v", err)
 	}
 
-	if cfg.Server.TCPAddr != ":1883" {
-		t.Errorf("expected default config, got TCP addr %s", cfg.Server.TCPAddr)
+	if cfg.Server.TCP.Plain.Addr != ":1883" {
+		t.Errorf("expected default config, got TCP addr %s", cfg.Server.TCP.Plain.Addr)
 	}
 }
 
@@ -113,7 +119,7 @@ func TestSaveLoad(t *testing.T) {
 
 	// Create custom config
 	cfg := Default()
-	cfg.Server.TCPAddr = ":8883"
+	cfg.Server.TCP.Plain.Addr = ":8883"
 	cfg.Broker.RetryInterval = 30 * time.Second
 	cfg.Log.Level = "debug"
 
@@ -129,8 +135,8 @@ func TestSaveLoad(t *testing.T) {
 	}
 
 	// Verify
-	if loaded.Server.TCPAddr != ":8883" {
-		t.Errorf("expected TCP addr :8883, got %s", loaded.Server.TCPAddr)
+	if loaded.Server.TCP.Plain.Addr != ":8883" {
+		t.Errorf("expected TCP addr :8883, got %s", loaded.Server.TCP.Plain.Addr)
 	}
 	if loaded.Broker.RetryInterval != 30*time.Second {
 		t.Errorf("expected retry interval 30s, got %v", loaded.Broker.RetryInterval)

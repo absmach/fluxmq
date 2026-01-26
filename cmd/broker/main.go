@@ -6,12 +6,11 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	logStorage "github.com/absmach/fluxmq/logstorage"
+	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/ratelimit"
@@ -34,58 +34,10 @@ import (
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/absmach/fluxmq/storage/memory"
+	piondtls "github.com/pion/dtls/v3"
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
-
-// buildTLSConfig creates a TLS configuration from the server config.
-func buildTLSConfig(cfg *config.ServerConfig) (*tls.Config, error) {
-	if !cfg.TLSEnabled {
-		return nil, nil
-	}
-
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load server certificate: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-		},
-		PreferServerCipherSuites: true,
-	}
-
-	if cfg.TLSClientAuth != "none" && cfg.TLSCAFile != "" {
-		caCert, err := os.ReadFile(cfg.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-		}
-
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
-		}
-
-		tlsConfig.ClientCAs = caCertPool
-
-		switch cfg.TLSClientAuth {
-		case "require":
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		case "request":
-			tlsConfig.ClientAuth = tls.RequestClientCert
-		default:
-			tlsConfig.ClientAuth = tls.NoClientCert
-		}
-	}
-
-	return tlsConfig, nil
-}
 
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
@@ -118,10 +70,18 @@ func main() {
 
 	slog.Info("Starting MQTT broker", "version", "0.1.0")
 	slog.Info("Configuration loaded",
-		"tcp_addr", cfg.Server.TCPAddr,
-		"http_enabled", cfg.Server.HTTPEnabled,
-		"ws_enabled", cfg.Server.WSEnabled,
-		"coap_enabled", cfg.Server.CoAPEnabled,
+		"tcp_plain_listener", cfg.Server.TCP.Plain.Addr,
+		"tcp_tls_listener", cfg.Server.TCP.TLS.Addr,
+		"tcp_mtls_listener", cfg.Server.TCP.MTLS.Addr,
+		"ws_plain_listener", cfg.Server.WebSocket.Plain.Addr,
+		"ws_tls_listener", cfg.Server.WebSocket.TLS.Addr,
+		"ws_mtls_listener", cfg.Server.WebSocket.MTLS.Addr,
+		"http_plain_listener", cfg.Server.HTTP.Plain.Addr,
+		"http_tls_listener", cfg.Server.HTTP.TLS.Addr,
+		"http_mtls_listener", cfg.Server.HTTP.MTLS.Addr,
+		"coap_plain_listener", cfg.Server.CoAP.Plain.Addr,
+		"coap_dtls_listener", cfg.Server.CoAP.DTLS.Addr,
+		"coap_mdtls_listener", cfg.Server.CoAP.MDTLS.Addr,
 		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
@@ -380,95 +340,173 @@ func main() {
 	var wg sync.WaitGroup
 	serverErr := make(chan error, 10)
 
-	tlsConfig, err := buildTLSConfig(&cfg.Server)
-	if err != nil {
-		slog.Error("Failed to build TLS configuration", "error", err)
-		os.Exit(1)
+	tcpSlots := []struct {
+		name string
+		cfg  config.TCPListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.TCP.Plain},
+		{name: "tls", cfg: cfg.Server.TCP.TLS},
+		{name: "mtls", cfg: cfg.Server.TCP.MTLS},
 	}
 
-	tcpCfg := tcp.Config{
-		Address:         cfg.Server.TCPAddr,
-		TLSConfig:       tlsConfig,
-		ShutdownTimeout: cfg.Server.ShutdownTimeout,
-		MaxConnections:  cfg.Server.TCPMaxConn,
-		ReadTimeout:     cfg.Server.TCPReadTimeout,
-		WriteTimeout:    cfg.Server.TCPWriteTimeout,
-		Logger:          logger,
-	}
-	if rateLimitManager != nil {
-		tcpCfg.IPRateLimiter = rateLimitManager
-	}
-	tcpServer := tcp.New(tcpCfg, b)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		slog.Info("Starting TCP server", "address", cfg.Server.TCPAddr)
-		if err := tcpServer.Listen(ctx); err != nil {
-			serverErr <- err
+	for _, slot := range tcpSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
 		}
-	}()
 
-	if cfg.Server.HTTPEnabled {
-		httpCfg := http.Config{
-			Address:         cfg.Server.HTTPAddr,
+		tlsCfg, err := mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
+		if err != nil {
+			slog.Error("Failed to build TCP TLS configuration", "listener", slot.name, "error", err)
+			os.Exit(1)
+		}
+
+		tcpCfg := tcp.Config{
+			Address:         slot.cfg.Addr,
+			TLSConfig:       tlsCfg,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			MaxConnections:  slot.cfg.MaxConnections,
+			ReadTimeout:     slot.cfg.ReadTimeout,
+			WriteTimeout:    slot.cfg.WriteTimeout,
+			Logger:          logger,
 		}
-		httpServer := http.New(httpCfg, b, logger)
+		if rateLimitManager != nil {
+			tcpCfg.IPRateLimiter = rateLimitManager
+		}
+		tcpServer := tcp.New(tcpCfg, b)
 
 		wg.Add(1)
-		go func() {
+		go func(name, addr string, server *tcp.Server) {
 			defer wg.Done()
-			slog.Info("Starting HTTP-MQTT bridge", "address", cfg.Server.HTTPAddr)
-			if err := httpServer.Listen(ctx); err != nil {
+			slog.Info("Starting TCP server", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}()
+		}(slot.name, slot.cfg.Addr, tcpServer)
 	}
 
-	if cfg.Server.WSEnabled {
+	wsSlots := []struct {
+		name string
+		cfg  config.WSListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.WebSocket.Plain},
+		{name: "tls", cfg: cfg.Server.WebSocket.TLS},
+		{name: "mtls", cfg: cfg.Server.WebSocket.MTLS},
+	}
+
+	for _, slot := range wsSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		tlsCfg, err := mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
+		if err != nil {
+			slog.Error("Failed to build WebSocket TLS configuration", "listener", slot.name, "error", err)
+			os.Exit(1)
+		}
+
 		wsCfg := websocket.Config{
-			Address:         cfg.Server.WSAddr,
-			Path:            cfg.Server.WSPath,
+			Address:         slot.cfg.Addr,
+			Path:            slot.cfg.Path,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			TLSConfig:       tlsConfig,
-			AllowedOrigins:  cfg.Server.WSAllowedOrigins,
+			TLSConfig:       tlsCfg,
+			AllowedOrigins:  slot.cfg.AllowedOrigins,
 		}
 		if rateLimitManager != nil {
 			wsCfg.IPRateLimiter = rateLimitManager
 		}
+
 		wsServer := websocket.New(wsCfg, b, logger)
 
 		wg.Add(1)
-		go func() {
+		go func(name, addr, path string, server *websocket.Server) {
 			defer wg.Done()
-			slog.Info("Starting WebSocket server", "address", cfg.Server.WSAddr, "path", cfg.Server.WSPath)
-			if err := wsServer.Listen(ctx); err != nil {
+			slog.Info("Starting WebSocket server", "mode", name, "address", addr, "path", path)
+			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}()
+		}(slot.name, slot.cfg.Addr, slot.cfg.Path, wsServer)
 	}
 
-	if cfg.Server.CoAPEnabled {
-		coapCfg := coap.Config{
-			Address:         cfg.Server.CoAPAddr,
+	httpSlots := []struct {
+		name string
+		cfg  config.HTTPListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.HTTP.Plain},
+		{name: "tls", cfg: cfg.Server.HTTP.TLS},
+		{name: "mtls", cfg: cfg.Server.HTTP.MTLS},
+	}
+
+	for _, slot := range httpSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		var tlsCfg *tls.Config
+		if slot.name != "plain" {
+			var err error
+			tlsCfg, err = mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
+			if err != nil {
+				slog.Error("Failed to build HTTP TLS configuration", "listener", slot.name, "error", err)
+				os.Exit(1)
+			}
+		}
+
+		httpCfg := http.Config{
+			Address:         slot.cfg.Addr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			DTLSEnabled:     cfg.Server.CoAPDTLSEnabled,
-			DTLSCertFile:    cfg.Server.CoAPDTLSCertFile,
-			DTLSKeyFile:     cfg.Server.CoAPDTLSKeyFile,
-			DTLSCAFile:      cfg.Server.CoAPDTLSCAFile,
-			DTLSClientAuth:  cfg.Server.CoAPDTLSClientAuth,
+			TLSConfig:       tlsCfg,
+		}
+		httpServer := http.New(httpCfg, b, logger)
+
+		wg.Add(1)
+		go func(name, addr string, server *http.Server) {
+			defer wg.Done()
+			slog.Info("Starting HTTP-MQTT bridge", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
+				serverErr <- err
+			}
+		}(slot.name, slot.cfg.Addr, httpServer)
+	}
+
+	coapSlots := []struct {
+		name string
+		cfg  config.CoAPListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.CoAP.Plain},
+		{name: "dtls", cfg: cfg.Server.CoAP.DTLS},
+		{name: "mdtls", cfg: cfg.Server.CoAP.MDTLS},
+	}
+
+	for _, slot := range coapSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		var dtlsCfg *piondtls.Config
+		if slot.name != "plain" {
+			var err error
+			dtlsCfg, err = mqtttls.LoadTLSConfig[*piondtls.Config](&slot.cfg.TLS)
+			if err != nil {
+				slog.Error("Failed to build CoAP DTLS configuration", "listener", slot.name, "error", err)
+				os.Exit(1)
+			}
+		}
+
+		coapCfg := coap.Config{
+			Address:         slot.cfg.Addr,
+			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			TLSConfig:       dtlsCfg,
 		}
 		coapServer := coap.New(coapCfg, b, logger)
 
 		wg.Add(1)
-		go func() {
+		go func(name, addr string, server *coap.Server) {
 			defer wg.Done()
-			slog.Info("Starting CoAP server", "address", cfg.Server.CoAPAddr)
-			if err := coapServer.Listen(ctx); err != nil {
+			slog.Info("Starting CoAP server", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}()
+		}(slot.name, slot.cfg.Addr, coapServer)
 	}
 
 	if cfg.Server.HealthEnabled {

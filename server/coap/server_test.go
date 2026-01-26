@@ -12,6 +12,7 @@ import (
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/storage/memory"
+	piondtls "github.com/pion/dtls/v3"
 )
 
 func TestNew(t *testing.T) {
@@ -42,25 +43,20 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestConfig_DTLSFields(t *testing.T) {
+func TestConfig_TLSConfig(t *testing.T) {
 	cfg := Config{
 		Address:         ":5684",
 		ShutdownTimeout: 5 * time.Second,
-		DTLSEnabled:     true,
-		DTLSCertFile:    "/path/to/cert.pem",
-		DTLSKeyFile:     "/path/to/key.pem",
-		DTLSCAFile:      "/path/to/ca.pem",
-		DTLSClientAuth:  "require",
+		TLSConfig: &piondtls.Config{
+			ClientAuth: piondtls.RequireAndVerifyClientCert,
+		},
 	}
 
-	if !cfg.DTLSEnabled {
-		t.Error("Expected DTLSEnabled to be true")
+	if cfg.TLSConfig == nil {
+		t.Fatal("Expected TLSConfig to be set")
 	}
-	if cfg.DTLSCertFile != "/path/to/cert.pem" {
-		t.Errorf("Expected cert file path, got %s", cfg.DTLSCertFile)
-	}
-	if cfg.DTLSClientAuth != "require" {
-		t.Errorf("Expected client auth 'require', got %s", cfg.DTLSClientAuth)
+	if cfg.TLSConfig.ClientAuth != piondtls.RequireAndVerifyClientCert {
+		t.Errorf("Expected RequireAndVerifyClientCert, got %v", cfg.TLSConfig.ClientAuth)
 	}
 }
 
@@ -101,7 +97,7 @@ func TestServer_ListenUDP_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestServer_ListenDTLS_MissingCert(t *testing.T) {
+func TestServer_ListenDTLS_InvalidConfig(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
@@ -111,9 +107,7 @@ func TestServer_ListenDTLS_MissingCert(t *testing.T) {
 	cfg := Config{
 		Address:         ":15684",
 		ShutdownTimeout: 1 * time.Second,
-		DTLSEnabled:     true,
-		DTLSCertFile:    "/nonexistent/cert.pem",
-		DTLSKeyFile:     "/nonexistent/key.pem",
+		TLSConfig:       &piondtls.Config{},
 	}
 
 	server := New(cfg, b, slog.Default())
@@ -123,41 +117,6 @@ func TestServer_ListenDTLS_MissingCert(t *testing.T) {
 
 	err := server.Listen(ctx)
 	if err == nil {
-		t.Error("Expected error for missing certificate files")
-	}
-}
-
-func TestBuildDTLSConfig_ClientAuthModes(t *testing.T) {
-	tests := []struct {
-		name         string
-		clientAuth   string
-		expectedAuth string
-	}{
-		{"none", "none", "none"},
-		{"request", "request", "request"},
-		{"require", "require", "require"},
-		{"empty_defaults_to_none", "", "none"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{
-				DTLSClientAuth: tt.clientAuth,
-			}
-
-			server := &Server{config: cfg}
-
-			// Verify config is stored correctly
-			if tt.clientAuth == "" {
-				// Empty string should be interpreted as "none" in buildDTLSConfig
-				if server.config.DTLSClientAuth != "" {
-					t.Errorf("Expected empty string, got %s", server.config.DTLSClientAuth)
-				}
-			} else {
-				if server.config.DTLSClientAuth != tt.clientAuth {
-					t.Errorf("Expected %s, got %s", tt.clientAuth, server.config.DTLSClientAuth)
-				}
-			}
-		})
+		t.Error("Expected error for invalid DTLS configuration")
 	}
 }
