@@ -596,7 +596,7 @@ func (m *Manager) deliverMessages() {
 }
 
 func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState) {
-	if len(group.Consumers) == 0 {
+	if group.ConsumerCount() == 0 {
 		return
 	}
 
@@ -607,11 +607,7 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 	}
 
 	// Round-robin delivery across consumers and partitions
-	consumers := make([]string, 0, len(group.Consumers))
-	for id := range group.Consumers {
-		consumers = append(consumers, id)
-	}
-
+	consumers := group.ConsumerIDs()
 	if len(consumers) == 0 {
 		return
 	}
@@ -640,7 +636,7 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 				continue
 			}
 
-			consumerInfo := freshGroup.Consumers[consumerID]
+			consumerInfo := freshGroup.GetConsumer(consumerID)
 			if consumerInfo == nil {
 				m.logger.Debug("consumer not found in group",
 					slog.String("consumer", consumerID),

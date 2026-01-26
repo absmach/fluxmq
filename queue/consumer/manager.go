@@ -478,8 +478,8 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consu
 		return err
 	}
 
-	consumer, ok := group.Consumers[consumerID]
-	if !ok {
+	consumer := group.GetConsumer(consumerID)
+	if consumer == nil {
 		return ErrConsumerNotFound
 	}
 
@@ -497,12 +497,17 @@ func (m *Manager) CleanupStaleConsumers(ctx context.Context, queueName, groupID 
 	cutoff := time.Now().Add(-timeout)
 	var removed []string
 
-	for id, consumer := range group.Consumers {
+	// Collect stale consumer IDs
+	group.ForEachConsumer(func(id string, consumer *types.ConsumerInfo) bool {
 		if consumer.LastHeartbeat.Before(cutoff) {
 			removed = append(removed, id)
-			delete(group.Consumers, id)
-			// Note: PEL entries for stale consumers will be stolen via work stealing
 		}
+		return true
+	})
+
+	// Delete stale consumers
+	for _, id := range removed {
+		group.DeleteConsumer(id)
 	}
 
 	if len(removed) > 0 {

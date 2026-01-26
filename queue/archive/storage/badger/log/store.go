@@ -683,7 +683,7 @@ func (s *Store) RegisterConsumer(ctx context.Context, queueName, groupID string,
 		return err
 	}
 
-	group.Consumers[consumer.ID] = consumer
+	group.SetConsumer(consumer.ID, consumer)
 	return s.UpdateConsumerGroup(ctx, group)
 }
 
@@ -694,8 +694,8 @@ func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, cons
 		return err
 	}
 
-	delete(group.Consumers, consumerID)
-	delete(group.PEL, consumerID)
+	group.DeleteConsumer(consumerID)
+	group.DeleteConsumerPEL(consumerID)
 
 	return s.UpdateConsumerGroup(ctx, group)
 }
@@ -707,10 +707,11 @@ func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([
 		return nil, err
 	}
 
-	result := make([]*types.ConsumerInfo, 0, len(group.Consumers))
-	for _, c := range group.Consumers {
+	var result []*types.ConsumerInfo
+	group.ForEachConsumer(func(_ string, c *types.ConsumerInfo) bool {
 		result = append(result, c)
-	}
+		return true
+	})
 
 	return result, nil
 }

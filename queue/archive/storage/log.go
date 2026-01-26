@@ -6,26 +6,18 @@ package storage
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/absmach/fluxmq/queue/types"
 )
 
 // Log storage errors.
 var (
-	ErrOffsetOutOfRange     = errors.New("offset out of range")
-	ErrPartitionNotFound    = errors.New("partition not found")
-	ErrLogFull              = errors.New("log is full")
-	ErrInvalidOffset        = errors.New("invalid offset")
-	ErrConsumerGroupExists  = errors.New("consumer group already exists")
+	ErrOffsetOutOfRange   = errors.New("offset out of range")
+	ErrPartitionNotFound  = errors.New("partition not found")
+	ErrLogFull            = errors.New("log is full")
+	ErrInvalidOffset      = errors.New("invalid offset")
+	ErrConsumerGroupExists = errors.New("consumer group already exists")
 	ErrPendingEntryNotFound = errors.New("pending entry not found")
-)
-
-var (
-	ErrQueueNotFound      = errors.New("queue not found")
-	ErrMessageNotFound    = errors.New("message not found")
-	ErrConsumerNotFound   = errors.New("consumer not found")
-	ErrQueueAlreadyExists = errors.New("queue already exists")
 )
 
 // LogStore provides append-only log storage with offset-based access.
@@ -115,14 +107,4 @@ type ConsumerGroupStore interface {
 
 	// ListConsumers lists all consumers in a group.
 	ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.ConsumerInfo, error)
-}
-
-// ConsumerStore manages consumer group state.
-type ConsumerStore interface {
-	RegisterConsumer(ctx context.Context, consumer *types.Consumer) error
-	UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
-	GetConsumer(ctx context.Context, queueName, groupID, consumerID string) (*types.Consumer, error)
-	ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.Consumer, error)
-	ListGroups(ctx context.Context, queueName string) ([]string, error)
-	UpdateHeartbeat(ctx context.Context, queueName, groupID, consumerID string, timestamp time.Time) error
 }

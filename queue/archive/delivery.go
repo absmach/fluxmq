@@ -128,7 +128,7 @@ func (w *DeliveryWorker) deliverBatch() {
 }
 
 func (w *DeliveryWorker) deliverToGroup(ctx context.Context, group *types.ConsumerGroupState) {
-	if len(group.Consumers) == 0 {
+	if group.ConsumerCount() == 0 {
 		return
 	}
 
@@ -139,11 +139,11 @@ func (w *DeliveryWorker) deliverToGroup(ctx context.Context, group *types.Consum
 	}
 
 	// Distribute messages among consumers
-	for consumerID, consumerInfo := range group.Consumers {
+	group.ForEachConsumer(func(consumerID string, consumerInfo *types.ConsumerInfo) bool {
 		// Check pending count to respect max in-flight
 		pendingCount := group.PendingCount(w.partitionID)
 		if pendingCount >= w.config.MaxInFlight {
-			continue
+			return true // continue to next
 		}
 
 		// Claim batch of messages
@@ -157,14 +157,15 @@ func (w *DeliveryWorker) deliverToGroup(ctx context.Context, group *types.Consum
 			w.config.BatchSize,
 		)
 		if err != nil {
-			continue
+			return true // continue to next
 		}
 
 		// Deliver each message
 		for _, msg := range msgs {
 			w.deliverMessage(ctx, msg, group.ID, consumerInfo)
 		}
-	}
+		return true
+	})
 }
 
 func (w *DeliveryWorker) deliverMessage(ctx context.Context, msg *types.Message, groupID string, consumerInfo *types.ConsumerInfo) {
