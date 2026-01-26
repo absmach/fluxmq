@@ -318,13 +318,6 @@ func main() {
 
 		// Initialize Raft replication if enabled
 		if cfg.Cluster.Enabled && cfg.Cluster.Raft.Enabled {
-			// Build node addresses map (include self and peers)
-			nodeAddresses := make(map[string]string)
-			nodeAddresses[cfg.Cluster.NodeID] = cfg.Cluster.Raft.BindAddr
-			for nodeID, addr := range cfg.Cluster.Raft.Peers {
-				nodeAddresses[nodeID] = addr
-			}
-
 			raftCfg := raft.ManagerConfig{
 				Enabled:           true,
 				ReplicationFactor: cfg.Cluster.Raft.ReplicationFactor,
@@ -335,16 +328,15 @@ func main() {
 				ElectionTimeout:   cfg.Cluster.Raft.ElectionTimeout,
 				SnapshotInterval:  cfg.Cluster.Raft.SnapshotInterval,
 				SnapshotThreshold: cfg.Cluster.Raft.SnapshotThreshold,
-				BindAddr:          cfg.Cluster.Raft.BindAddr,
-				DataDir:           cfg.Cluster.Raft.DataDir,
 			}
 
 			raftManager := raft.NewManager(
 				cfg.Cluster.NodeID,
+				cfg.Cluster.Raft.BindAddr,
 				cfg.Cluster.Raft.DataDir,
 				logStore,
 				logStore,
-				nodeAddresses,
+				cfg.Cluster.Raft.Peers,
 				raftCfg,
 				logger,
 			)

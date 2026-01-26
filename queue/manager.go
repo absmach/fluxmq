@@ -296,35 +296,24 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 
 	var offset uint64
 
-	// Use Raft replication if enabled
+	// Use Raft replication if enabled and this node is the leader
 	if m.raftManager != nil && m.raftManager.IsEnabled() {
-		// Ensure Raft partition is initialized
-		if err := m.raftManager.EnsurePartition(ctx, queueRoot, partitionID, config.Partitions); err != nil {
-			m.logger.Warn("failed to ensure raft partition, falling back to local",
-				slog.String("queue", queueRoot),
-				slog.Int("partition", partitionID),
-				slog.String("error", err.Error()))
-			// Fall back to local append
-			offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
-			if err != nil {
-				return err
-			}
-		} else {
+		if m.raftManager.IsLeader() {
 			// Apply through Raft
 			offset, err = m.raftManager.ApplyAppend(ctx, queueRoot, partitionID, msg)
 			if err != nil {
-				// If not leader, try local append (for now - later route to leader)
-				if err.Error() == "not leader" {
-					m.logger.Debug("not raft leader, appending locally",
-						slog.String("queue", queueRoot),
-						slog.Int("partition", partitionID))
-					offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
-					if err != nil {
-						return err
-					}
-				} else {
-					return fmt.Errorf("raft apply failed: %w", err)
-				}
+				return fmt.Errorf("raft apply failed: %w", err)
+			}
+		} else {
+			// Not leader - append locally (follower will receive via Raft replication)
+			// In a production system, you'd forward to the leader
+			m.logger.Debug("not raft leader, appending locally",
+				slog.String("queue", queueRoot),
+				slog.Int("partition", partitionID),
+				slog.String("leader", m.raftManager.LeaderID()))
+			offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
+			if err != nil {
+				return err
 			}
 		}
 	} else {
