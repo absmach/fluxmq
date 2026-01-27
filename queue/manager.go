@@ -318,10 +318,10 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 
 // Subscribe adds a consumer to a stream with optional pattern matching.
 func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
-	// Ensure stream exists
-	_, err := m.queueStore.GetQueue(ctx, queueName)
+	// Ensure queue exists (auto-create if not)
+	_, err := m.GetOrCreateQueue(ctx, queueName)
 	if err != nil {
-		return fmt.Errorf("stream not found: %s", queueName)
+		return fmt.Errorf("failed to get or create queue: %w", err)
 	}
 
 	// Default group ID to client prefix
