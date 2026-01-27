@@ -12,18 +12,16 @@ import (
 // PendingEntry represents a message that has been delivered but not yet acknowledged.
 // This is part of the PEL (Pending Entry List) for work stealing support.
 type PendingEntry struct {
-	Offset        uint64    // Message offset in the partition log
-	PartitionID   int       // Partition this entry belongs to
+	Offset        uint64    // Message offset in the queue log
 	ConsumerID    string    // Consumer that claimed this entry
 	ClaimedAt     time.Time // When the entry was claimed
 	DeliveryCount int       // Number of times this message has been delivered
 }
 
-// PartitionCursor tracks consumption state for a single partition within a consumer group.
-type PartitionCursor struct {
-	PartitionID int    // Partition identifier
-	Cursor      uint64 // Next offset to deliver (read position)
-	Committed   uint64 // Oldest unacknowledged offset (safe truncation point)
+// QueueCursor tracks consumption state for a queue within a consumer group.
+type QueueCursor struct {
+	Cursor    uint64 // Next offset to deliver (read position)
+	Committed uint64 // Oldest unacknowledged offset (safe truncation point)
 }
 
 // ConsumerInfo represents a consumer within a consumer group.
@@ -36,7 +34,7 @@ type ConsumerInfo struct {
 }
 
 // ConsumerGroupState represents the complete state of a consumer group.
-// This includes cursors, PEL, and consumer membership.
+// This includes cursor, PEL, and consumer membership.
 // All map access is protected by an internal mutex for thread safety.
 type ConsumerGroupState struct {
 	mu sync.RWMutex `json:"-"`
@@ -44,10 +42,10 @@ type ConsumerGroupState struct {
 	// Identity
 	ID        string // Group identifier
 	QueueName string // Queue this group consumes from
-	Pattern   string // Subscription pattern (e.g., "$queue/tasks/#")
+	Pattern   string // Subscription pattern (e.g., "sensors/#")
 
-	// Per-partition state
-	Cursors map[int]*PartitionCursor // PartitionID -> cursor state
+	// Queue cursor state (single cursor per queue, no partitions)
+	Cursor *QueueCursor
 
 	// Pending Entry List (PEL) - messages delivered but not acked
 	// Organized by consumer for efficient work stealing
@@ -62,22 +60,16 @@ type ConsumerGroupState struct {
 }
 
 // NewConsumerGroupState creates a new consumer group state.
-func NewConsumerGroupState(queueName, groupID, pattern string, partitionCount int) *ConsumerGroupState {
-	cursors := make(map[int]*PartitionCursor, partitionCount)
-	for i := 0; i < partitionCount; i++ {
-		cursors[i] = &PartitionCursor{
-			PartitionID: i,
-			Cursor:      0,
-			Committed:   0,
-		}
-	}
-
+func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroupState {
 	now := time.Now()
 	return &ConsumerGroupState{
 		ID:        groupID,
 		QueueName: queueName,
 		Pattern:   pattern,
-		Cursors:   cursors,
+		Cursor: &QueueCursor{
+			Cursor:    0,
+			Committed: 0,
+		},
 		PEL:       make(map[string][]*PendingEntry),
 		Consumers: make(map[string]*ConsumerInfo),
 		CreatedAt: now,
@@ -85,21 +77,18 @@ func NewConsumerGroupState(queueName, groupID, pattern string, partitionCount in
 	}
 }
 
-// GetCursor returns the cursor for a partition, creating if needed.
-func (g *ConsumerGroupState) GetCursor(partitionID int) *PartitionCursor {
+// GetCursor returns the queue cursor, creating if needed.
+func (g *ConsumerGroupState) GetCursor() *QueueCursor {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if cursor, ok := g.Cursors[partitionID]; ok {
-		return cursor
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{
+			Cursor:    0,
+			Committed: 0,
+		}
 	}
-	cursor := &PartitionCursor{
-		PartitionID: partitionID,
-		Cursor:      0,
-		Committed:   0,
-	}
-	g.Cursors[partitionID] = cursor
-	return cursor
+	return g.Cursor
 }
 
 // ReplacePEL atomically replaces the entire PEL map.
@@ -120,8 +109,8 @@ func (g *ConsumerGroupState) AddPending(consumerID string, entry *PendingEntry) 
 	g.UpdatedAt = time.Now()
 }
 
-// RemovePending removes a pending entry for a consumer by offset and partition.
-func (g *ConsumerGroupState) RemovePending(consumerID string, partitionID int, offset uint64) bool {
+// RemovePending removes a pending entry for a consumer by offset.
+func (g *ConsumerGroupState) RemovePending(consumerID string, offset uint64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -131,7 +120,7 @@ func (g *ConsumerGroupState) RemovePending(consumerID string, partitionID int, o
 	}
 
 	for i, e := range entries {
-		if e.PartitionID == partitionID && e.Offset == offset {
+		if e.Offset == offset {
 			g.PEL[consumerID] = append(entries[:i], entries[i+1:]...)
 			g.UpdatedAt = time.Now()
 			return true
@@ -149,14 +138,14 @@ func (g *ConsumerGroupState) DeleteConsumerPEL(consumerID string) {
 	g.UpdatedAt = time.Now()
 }
 
-// FindPending finds a pending entry by partition and offset across all consumers.
-func (g *ConsumerGroupState) FindPending(partitionID int, offset uint64) (*PendingEntry, string) {
+// FindPending finds a pending entry by offset across all consumers.
+func (g *ConsumerGroupState) FindPending(offset uint64) (*PendingEntry, string) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
 	for consumerID, entries := range g.PEL {
 		for _, e := range entries {
-			if e.PartitionID == partitionID && e.Offset == offset {
+			if e.Offset == offset {
 				return e, consumerID
 			}
 		}
@@ -165,7 +154,7 @@ func (g *ConsumerGroupState) FindPending(partitionID int, offset uint64) (*Pendi
 }
 
 // TransferPending moves a pending entry from one consumer to another.
-func (g *ConsumerGroupState) TransferPending(partitionID int, offset uint64, fromConsumer, toConsumer string) bool {
+func (g *ConsumerGroupState) TransferPending(offset uint64, fromConsumer, toConsumer string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -175,7 +164,7 @@ func (g *ConsumerGroupState) TransferPending(partitionID int, offset uint64, fro
 	}
 
 	for i, e := range entries {
-		if e.PartitionID == partitionID && e.Offset == offset {
+		if e.Offset == offset {
 			g.PEL[fromConsumer] = append(entries[:i], entries[i+1:]...)
 			e.ConsumerID = toConsumer
 			e.ClaimedAt = time.Now()
@@ -188,9 +177,9 @@ func (g *ConsumerGroupState) TransferPending(partitionID int, offset uint64, fro
 	return false
 }
 
-// MinPendingOffset returns the minimum offset across all PEL entries for a partition.
+// MinPendingOffset returns the minimum offset across all PEL entries.
 // This is used to calculate the committed offset.
-func (g *ConsumerGroupState) MinPendingOffset(partitionID int) (uint64, bool) {
+func (g *ConsumerGroupState) MinPendingOffset() (uint64, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -199,11 +188,9 @@ func (g *ConsumerGroupState) MinPendingOffset(partitionID int) (uint64, bool) {
 
 	for _, entries := range g.PEL {
 		for _, e := range entries {
-			if e.PartitionID == partitionID {
-				if !found || e.Offset < minOffset {
-					minOffset = e.Offset
-					found = true
-				}
+			if !found || e.Offset < minOffset {
+				minOffset = e.Offset
+				found = true
 			}
 		}
 	}
@@ -211,24 +198,8 @@ func (g *ConsumerGroupState) MinPendingOffset(partitionID int) (uint64, bool) {
 	return minOffset, found
 }
 
-// PendingCount returns the total number of pending entries for a partition.
-func (g *ConsumerGroupState) PendingCount(partitionID int) int {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	count := 0
-	for _, entries := range g.PEL {
-		for _, e := range entries {
-			if e.PartitionID == partitionID {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-// TotalPendingCount returns the total number of pending entries across all partitions.
-func (g *ConsumerGroupState) TotalPendingCount() int {
+// PendingCount returns the total number of pending entries.
+func (g *ConsumerGroupState) PendingCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -240,7 +211,7 @@ func (g *ConsumerGroupState) TotalPendingCount() int {
 }
 
 // StealableEntries returns entries that are older than the visibility timeout.
-func (g *ConsumerGroupState) StealableEntries(partitionID int, visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
+func (g *ConsumerGroupState) StealableEntries(visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -252,7 +223,7 @@ func (g *ConsumerGroupState) StealableEntries(partitionID int, visibilityTimeout
 			continue
 		}
 		for _, e := range entries {
-			if e.PartitionID == partitionID && e.ClaimedAt.Before(cutoff) {
+			if e.ClaimedAt.Before(cutoff) {
 				stealable = append(stealable, e)
 			}
 		}

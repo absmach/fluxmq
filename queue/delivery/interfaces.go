@@ -23,8 +23,8 @@ const (
 	DirectMode ConsumerRoutingMode = "direct"
 )
 
-// QueueSource abstract the queue source to avoid circular dependency.
-type QueueSource interface {
+// StreamSource abstract the stream source to avoid circular dependency.
+type StreamSource interface {
 	Name() string
 	Config() types.QueueConfig
 	OrderingEnforcer() OrderingEnforcer
@@ -40,11 +40,11 @@ type OrderingEnforcer interface {
 
 // RaftManager abstracts the Raft consensus manager.
 type RaftManager interface {
-	IsLeader(partitionID int) bool
+	IsLeader() bool
 }
 
 // RetentionManager abstracts the retention manager.
 type RetentionManager interface {
-	Start(ctx context.Context, partitionID int)
+	Start(ctx context.Context)
 	Stop()
 }

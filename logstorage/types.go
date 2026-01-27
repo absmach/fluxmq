@@ -23,6 +23,7 @@ var (
 	ErrGroupNotFound     = errors.New("consumer group not found")
 	ErrPartitionNotFound = errors.New("partition not found")
 	ErrQueueNotFound     = errors.New("queue not found")
+	ErrStreamNotFound    = errors.New("stream not found")
 	ErrAlreadyExists     = errors.New("already exists")
 	ErrInvalidOffset     = errors.New("invalid offset")
 	ErrPELEntryNotFound  = errors.New("PEL entry not found")

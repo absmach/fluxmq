@@ -18,21 +18,15 @@ import (
 	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
-const (
-	fnvPrime  = 16777619
-	fnvOffset = 2166136261
-)
-
 // DeliverFn is the callback for delivering messages to MQTT clients.
 type DeliverFn func(ctx context.Context, clientID string, msg any) error
 
-// Manager is the log-based queue manager.
-// It uses append-only logs with cursor-based consumer groups.
+// Manager is the queue-based queue manager.
+// It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
-	logStore        storage.LogStore
+	queueStore     storage.QueueStore
 	groupStore      storage.ConsumerGroupStore
 	consumerManager *consumer.Manager
-	dlqHandler      *consumer.DLQHandler
 	deliverFn       DeliverFn
 	logger          *slog.Logger
 	config          Config
@@ -47,9 +41,6 @@ type Manager struct {
 	// Active consumer groups: queueName -> groupID -> group state
 	groups sync.Map // map[string]*sync.Map
 
-	// Active delivery workers: queueName -> partitionID -> worker
-	workers sync.Map // map[string]*sync.Map
-
 	// Subscription patterns: clientID -> []pattern
 	subscriptions sync.Map // map[string][]string
 
@@ -62,7 +53,7 @@ type Manager struct {
 	metrics *consumer.Metrics
 }
 
-// Config holds configuration for the log-based queue manager.
+// Config holds configuration for the queue-based queue manager.
 type Config struct {
 	// Consumer configuration
 	VisibilityTimeout time.Duration
@@ -103,9 +94,9 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewManager creates a new log-based queue manager.
+// NewManager creates a new queue-based queue manager.
 // The cluster parameter is optional (nil for single-node mode).
-func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore, deliverFn DeliverFn, config Config, logger *slog.Logger, cl cluster.Cluster) *Manager {
+func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, deliverFn DeliverFn, config Config, logger *slog.Logger, cl cluster.Cluster) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -119,15 +110,7 @@ func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore
 		StealBatchSize:    5,
 	}
 
-	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
-
-	dlqCfg := consumer.DLQConfig{
-		MaxDeliveryCount: config.MaxDeliveryCount,
-		DLQTopicPrefix:   config.DLQTopicPrefix,
-		IncludeMetadata:  true,
-	}
-
-	dlqHandler := consumer.NewDLQHandler(logStore, groupStore, dlqCfg, metrics)
+	consumerMgr := consumer.NewManager(queueStore, groupStore, consumerCfg)
 
 	var localNodeID string
 	if cl != nil {
@@ -135,10 +118,9 @@ func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore
 	}
 
 	return &Manager{
-		logStore:        logStore,
+		queueStore:     queueStore,
 		groupStore:      groupStore,
 		consumerManager: consumerMgr,
-		dlqHandler:      dlqHandler,
 		deliverFn:       deliverFn,
 		logger:          logger,
 		config:          config,
@@ -151,7 +133,12 @@ func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore
 
 // Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
-	// Start delivery workers for each queue
+	// Ensure reserved queues exist
+	if err := m.ensureReservedQueues(ctx); err != nil {
+		return fmt.Errorf("failed to create reserved queues: %w", err)
+	}
+
+	// Start delivery workers
 	m.wg.Add(1)
 	go m.runDeliveryLoop()
 
@@ -169,7 +156,25 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.wg.Add(1)
 	go m.runRetentionLoop()
 
-	m.logger.Info("log-based queue manager started")
+	m.logger.Info("queue-based queue manager started")
+	return nil
+}
+
+// ensureReservedQueues creates the reserved mqtt queue if it doesn't exist.
+func (m *Manager) ensureReservedQueues(ctx context.Context) error {
+	// Create the reserved mqtt queue that captures all MQTT messages
+	mqttConfig := types.MQTTQueueConfig()
+
+	if err := m.queueStore.CreateQueue(ctx, mqttConfig); err != nil {
+		if err != storage.ErrQueueAlreadyExists {
+			return err
+		}
+	}
+
+	m.logger.Info("reserved mqtt queue ready",
+		slog.String("stream", types.MQTTQueueName),
+		slog.String("subject", types.MQTTQueueTopic))
+
 	return nil
 }
 
@@ -188,7 +193,7 @@ func (m *Manager) Stop() error {
 		}
 	}
 
-	m.logger.Info("log-based queue manager stopped")
+	m.logger.Info("queue-based queue manager stopped")
 	return nil
 }
 
@@ -204,29 +209,23 @@ func (m *Manager) GetRaftManager() *raft.Manager {
 
 // --- Queue Operations ---
 
-// CreateQueue creates a new queue.
+// CreateQueue creates a new stream.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	if err := m.logStore.CreateQueue(ctx, config); err != nil {
+	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
 
-	m.logger.Info("queue created",
-		slog.String("queue", config.Name),
-		slog.Int("partitions", config.Partitions))
+	m.logger.Info("stream created",
+		slog.String("stream", config.Name),
+		slog.Any("subjects", config.Topics))
 
 	return nil
 }
 
-// GetOrCreateQueue gets or creates a queue with default configuration.
-func (m *Manager) GetOrCreateQueue(ctx context.Context, queueTopic string) (*types.QueueConfig, error) {
-	// Extract queue root from topic
-	queueRoot := types.ExtractQueueRoot(queueTopic)
-	if queueRoot == "" {
-		queueRoot = queueTopic
-	}
-
+// GetOrCreateQueue gets or creates a stream with default configuration.
+func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, subjects ...string) (*types.QueueConfig, error) {
 	// Try to get existing
-	config, err := m.logStore.GetQueue(ctx, queueRoot)
+	config, err := m.queueStore.GetQueue(ctx, queueName)
 	if err == nil {
 		return config, nil
 	}
@@ -236,121 +235,93 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueTopic string) (*typ
 	}
 
 	// Create with default config
-	defaultConfig := types.DefaultQueueConfig(queueRoot)
+	defaultConfig := types.DefaultQueueConfig(queueName, subjects...)
 	if err := m.CreateQueue(ctx, defaultConfig); err != nil {
 		if err != storage.ErrQueueAlreadyExists {
 			return nil, err
 		}
 	}
 
-	return m.logStore.GetQueue(ctx, queueRoot)
+	return m.queueStore.GetQueue(ctx, queueName)
 }
 
-// DeleteQueue deletes a queue.
+// DeleteQueue deletes a stream.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
-	return m.logStore.DeleteQueue(ctx, queueName)
+	return m.queueStore.DeleteQueue(ctx, queueName)
 }
 
 // --- Publish Operations ---
 
-// Enqueue adds a message to a queue.
-func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
-	// Extract queue root and routing key
-	queueRoot := types.ExtractQueueRoot(topic)
-	if queueRoot == "" {
-		return fmt.Errorf("invalid queue topic: %s", topic)
-	}
-
-	routingKey := types.ExtractRoutingKey(topic, queueRoot)
-
-	// Get or create queue
-	config, err := m.GetOrCreateQueue(ctx, queueRoot)
+// Publish adds a message to all queues whose subject patterns match the topic.
+// This is the NATS JetQueue-style "multi-queue" routing.
+func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+	// Find all matching queues
+	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to find matching queues: %w", err)
 	}
 
-	// Determine partition
-	partitionKey := ""
-	if properties != nil {
-		partitionKey = properties["partition-key"]
-	}
-	if partitionKey == "" {
-		partitionKey = routingKey
+	if len(queues) == 0 {
+		m.logger.Debug("no queues match topic", slog.String("topic", topic))
+		return nil
 	}
 
-	partitionID := getPartitionID(partitionKey, config.Partitions)
-
-	// Create message
-	msg := &types.Message{
-		ID:           generateMessageID(),
-		Payload:      payload,
-		Topic:        topic,
-		PartitionKey: partitionKey,
-		PartitionID:  partitionID,
-		Properties:   properties,
-		State:        types.StateQueued,
-		CreatedAt:    time.Now(),
-		ExpiresAt:    time.Now().Add(config.MessageTTL),
-	}
-
-	// Set routing key in properties for filtering
-	if msg.Properties == nil {
-		msg.Properties = make(map[string]string)
-	}
-	msg.Properties["routing-key"] = routingKey
-
-	var offset uint64
-
-	// Use Raft replication if enabled and this node is the leader
-	if m.raftManager != nil && m.raftManager.IsEnabled() {
-		if m.raftManager.IsLeader() {
-			// Apply through Raft
-			offset, err = m.raftManager.ApplyAppend(ctx, queueRoot, partitionID, msg)
-			if err != nil {
-				return fmt.Errorf("raft apply failed: %w", err)
-			}
-		} else {
-			// Not leader - append locally (follower will receive via Raft replication)
-			// In a production system, you'd forward to the leader
-			m.logger.Debug("not raft leader, appending locally",
-				slog.String("queue", queueRoot),
-				slog.Int("partition", partitionID),
-				slog.String("leader", m.raftManager.LeaderID()))
-			offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		// Raft disabled - append directly to log
-		offset, err = m.logStore.Append(ctx, queueRoot, partitionID, msg)
+	// Append to each matching queue
+	for _, queueName := range queues {
+		queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 		if err != nil {
-			return err
+			m.logger.Warn("failed to get queue config", slog.String("stream", queueName), slog.String("error", err.Error()))
+			continue
 		}
-	}
 
-	m.logger.Debug("message enqueued",
-		slog.String("queue", queueRoot),
-		slog.Int("partition", partitionID),
-		slog.Uint64("offset", offset))
+		// Create message for this queue
+		msg := &types.Message{
+			ID:         generateMessageID(),
+			Payload:    payload,
+			Topic:      topic,
+			Properties: properties,
+			State:      types.StateQueued,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(queueConfig.MessageTTL),
+		}
+
+		var offset uint64
+		if m.raftManager != nil && m.raftManager.IsEnabled() && m.raftManager.IsLeader() {
+			offset, err = m.raftManager.ApplyAppend(ctx, queueName, msg)
+		} else {
+			offset, err = m.queueStore.Append(ctx, queueName, msg)
+		}
+
+		if err != nil {
+			m.logger.Warn("failed to append to queue",
+				slog.String("stream", queueName),
+				slog.String("topic", topic),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		m.logger.Debug("message published",
+			slog.String("stream", queueName),
+			slog.String("topic", topic),
+			slog.Uint64("offset", offset))
+	}
 
 	return nil
 }
 
+// Enqueue is an alias for Publish for backward compatibility.
+func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+	return m.Publish(ctx, topic, payload, properties)
+}
+
 // --- Subscribe Operations ---
 
-// Subscribe adds a consumer to a queue with optional pattern matching.
-func (m *Manager) Subscribe(ctx context.Context, filter string, clientID, groupID, proxyNodeID string) error {
-	// Parse queue subscription
-	queueRoot, filterPattern := consumer.ParseQueueSubscription(filter)
-	if queueRoot == "" {
-		return fmt.Errorf("invalid queue subscription: %s", filter)
-	}
-
-	// Ensure queue exists
-	config, err := m.GetOrCreateQueue(ctx, queueRoot)
+// Subscribe adds a consumer to a stream with optional pattern matching.
+func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
+	// Ensure stream exists
+	_, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
-		return err
+		return fmt.Errorf("stream not found: %s", queueName)
 	}
 
 	// Default group ID to client prefix
@@ -360,64 +331,56 @@ func (m *Manager) Subscribe(ctx context.Context, filter string, clientID, groupI
 
 	// Create unique group ID that includes the pattern
 	patternGroupID := groupID
-	if filterPattern != "" {
-		patternGroupID = fmt.Sprintf("%s@%s", groupID, filterPattern)
+	if pattern != "" {
+		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
 	}
 
 	// Get or create consumer group
-	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueRoot, patternGroupID, filterPattern)
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern)
 	if err != nil {
 		return err
 	}
 
 	// Register consumer
-	if err := m.consumerManager.RegisterConsumer(ctx, queueRoot, group.ID, clientID, clientID, proxyNodeID); err != nil {
+	if err := m.consumerManager.RegisterConsumer(ctx, queueName, group.ID, clientID, clientID, proxyNodeID); err != nil {
 		return err
 	}
 
 	// Track subscription
-	m.trackSubscription(clientID, filter)
-
-	// Start delivery worker if needed
-	m.ensureDeliveryWorker(config, group)
+	m.trackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
 
 	m.logger.Info("consumer subscribed",
-		slog.String("queue", queueRoot),
+		slog.String("stream", queueName),
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID),
-		slog.String("pattern", filterPattern))
+		slog.String("pattern", pattern))
 
 	return nil
 }
 
-// Unsubscribe removes a consumer from a queue.
-func (m *Manager) Unsubscribe(ctx context.Context, filter string, clientID, groupID string) error {
-	queueRoot, filterPattern := consumer.ParseQueueSubscription(filter)
-	if queueRoot == "" {
-		return nil
-	}
-
+// Unsubscribe removes a consumer from a stream.
+func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, clientID, groupID string) error {
 	if groupID == "" {
 		groupID = extractGroupFromClientID(clientID)
 	}
 
 	patternGroupID := groupID
-	if filterPattern != "" {
-		patternGroupID = fmt.Sprintf("%s@%s", groupID, filterPattern)
+	if pattern != "" {
+		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
 	}
 
 	// Unregister consumer
-	if err := m.consumerManager.UnregisterConsumer(ctx, queueRoot, patternGroupID, clientID); err != nil {
+	if err := m.consumerManager.UnregisterConsumer(ctx, queueName, patternGroupID, clientID); err != nil {
 		m.logger.Debug("unregister consumer error",
 			slog.String("error", err.Error()),
 			slog.String("client", clientID))
 	}
 
 	// Untrack subscription
-	m.untrackSubscription(clientID, filter)
+	m.untrackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
 
 	m.logger.Info("consumer unsubscribed",
-		slog.String("queue", queueRoot),
+		slog.String("stream", queueName),
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID))
 
@@ -427,20 +390,15 @@ func (m *Manager) Unsubscribe(ctx context.Context, filter string, clientID, grou
 // --- Ack Operations ---
 
 // Ack acknowledges a message.
-func (m *Manager) Ack(ctx context.Context, queueTopic, messageID, groupID string) error {
-	queueRoot := types.ExtractQueueRoot(queueTopic)
-	if queueRoot == "" {
-		return fmt.Errorf("invalid queue topic: %s", queueTopic)
-	}
-
-	// Parse message ID to get partition and offset
-	partitionID, offset, err := parseMessageID(messageID)
+func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
+	// Parse message ID to get offset
+	offset, err := parseStreamMessageID(messageID)
 	if err != nil {
 		return err
 	}
 
 	// Find the consumer that has this message pending
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueRoot)
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
 		return err
 	}
@@ -453,7 +411,7 @@ func (m *Manager) Ack(ctx context.Context, queueTopic, messageID, groupID string
 
 		// Find and ack the message
 		for consumerID := range group.PEL {
-			err := m.consumerManager.Ack(ctx, queueRoot, group.ID, consumerID, partitionID, offset)
+			err := m.consumerManager.Ack(ctx, queueName, group.ID, consumerID, offset)
 			if err == nil {
 				m.metrics.RecordAck(0)
 				return nil
@@ -465,18 +423,13 @@ func (m *Manager) Ack(ctx context.Context, queueTopic, messageID, groupID string
 }
 
 // Nack negatively acknowledges a message.
-func (m *Manager) Nack(ctx context.Context, queueTopic, messageID, groupID string) error {
-	queueRoot := types.ExtractQueueRoot(queueTopic)
-	if queueRoot == "" {
-		return fmt.Errorf("invalid queue topic: %s", queueTopic)
-	}
-
-	partitionID, offset, err := parseMessageID(messageID)
+func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
+	offset, err := parseStreamMessageID(messageID)
 	if err != nil {
 		return err
 	}
 
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueRoot)
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
 		return err
 	}
@@ -487,7 +440,7 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID, groupID strin
 		}
 
 		for consumerID := range group.PEL {
-			err := m.consumerManager.Nack(ctx, queueRoot, group.ID, consumerID, partitionID, offset)
+			err := m.consumerManager.Nack(ctx, queueName, group.ID, consumerID, offset)
 			if err == nil {
 				m.metrics.RecordNack()
 				return nil
@@ -499,18 +452,13 @@ func (m *Manager) Nack(ctx context.Context, queueTopic, messageID, groupID strin
 }
 
 // Reject rejects a message and moves it to DLQ.
-func (m *Manager) Reject(ctx context.Context, queueTopic, messageID, groupID, reason string) error {
-	queueRoot := types.ExtractQueueRoot(queueTopic)
-	if queueRoot == "" {
-		return fmt.Errorf("invalid queue topic: %s", queueTopic)
-	}
-
-	partitionID, offset, err := parseMessageID(messageID)
+func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
+	offset, err := parseStreamMessageID(messageID)
 	if err != nil {
 		return err
 	}
 
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueRoot)
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
 		return err
 	}
@@ -521,7 +469,7 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID, groupID, re
 		}
 
 		for consumerID := range group.PEL {
-			err := m.consumerManager.Reject(ctx, queueRoot, group.ID, consumerID, partitionID, offset, reason)
+			err := m.consumerManager.Reject(ctx, queueName, group.ID, consumerID, offset, reason)
 			if err == nil {
 				m.metrics.RecordReject()
 				return nil
@@ -536,25 +484,24 @@ func (m *Manager) Reject(ctx context.Context, queueTopic, messageID, groupID, re
 
 // UpdateHeartbeat updates the heartbeat for a consumer.
 func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
-	// Find all groups this client belongs to
-	m.subscriptions.Range(func(key, value interface{}) bool {
+	m.subscriptions.Range(func(key, value any) bool {
 		if key.(string) != clientID {
 			return true
 		}
 
 		patterns := value.([]string)
 		for _, filter := range patterns {
-			queueRoot, filterPattern := consumer.ParseQueueSubscription(filter)
-			if queueRoot == "" {
+			queueName, pattern := parseSubscriptionFilter(filter)
+			if queueName == "" {
 				continue
 			}
 
 			groupID := extractGroupFromClientID(clientID)
-			if filterPattern != "" {
-				groupID = fmt.Sprintf("%s@%s", groupID, filterPattern)
+			if pattern != "" {
+				groupID = fmt.Sprintf("%s@%s", groupID, pattern)
 			}
 
-			m.consumerManager.UpdateHeartbeat(ctx, queueRoot, groupID, clientID)
+			m.consumerManager.UpdateHeartbeat(ctx, queueName, groupID, clientID)
 		}
 
 		return true
@@ -583,7 +530,7 @@ func (m *Manager) runDeliveryLoop() {
 func (m *Manager) deliverMessages() {
 	ctx := context.Background()
 
-	queues, err := m.logStore.ListQueues(ctx)
+	queues, err := m.queueStore.ListQueues(ctx)
 	if err != nil {
 		return
 	}
@@ -611,76 +558,60 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 		filter = consumer.NewFilter(group.Pattern)
 	}
 
-	// Round-robin delivery across consumers and partitions
+	// Round-robin delivery across consumers
 	consumers := group.ConsumerIDs()
 	if len(consumers) == 0 {
 		return
 	}
 
-	consumerIdx := 0
+	for _, consumerID := range consumers {
+		msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, m.config.DeliveryBatchSize)
+		if err != nil {
+			continue
+		}
 
-	for partitionID := 0; partitionID < config.Partitions; partitionID++ {
-		// Try to claim messages for each consumer
-		for i := 0; i < len(consumers); i++ {
-			consumerID := consumers[consumerIdx]
-			consumerIdx = (consumerIdx + 1) % len(consumers)
+		// Fetch fresh group state to get current consumer info
+		freshGroup, err := m.groupStore.GetConsumerGroup(ctx, config.Name, group.ID)
+		if err != nil {
+			continue
+		}
 
-			msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, partitionID, filter, m.config.DeliveryBatchSize)
-			if err != nil {
-				// ErrNoMessages is normal - no need to log
-				continue
-			}
+		consumerInfo := freshGroup.GetConsumer(consumerID)
+		if consumerInfo == nil {
+			continue
+		}
 
-			// Fetch fresh group state to get current consumer info
-			freshGroup, err := m.groupStore.GetConsumerGroup(ctx, config.Name, group.ID)
-			if err != nil {
-				m.logger.Debug("failed to get fresh group",
-					slog.String("queue", config.Name),
-					slog.String("group", group.ID),
-					slog.String("error", err.Error()))
-				continue
-			}
+		for _, msg := range msgs {
+			// Check if consumer is on a remote node
+			if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
+				// Route to remote node
+				err := m.cluster.RouteQueueMessage(
+					ctx,
+					consumerInfo.ProxyNodeID,
+					consumerInfo.ClientID,
+					config.Name,
+					msg.ID,
+					msg.GetPayload(),
+					msg.Properties,
+					int64(msg.Sequence),
+					0, // No partition in queue model
+				)
+				if err != nil {
+					m.logger.Warn("stream message remote routing failed",
+						slog.String("client", consumerInfo.ClientID),
+						slog.String("node", consumerInfo.ProxyNodeID),
+						slog.String("topic", msg.Topic),
+						slog.String("error", err.Error()))
+				}
+			} else if m.deliverFn != nil {
+				// Local delivery
+				deliveryMsg := m.createDeliveryMessage(msg, group.ID, config.Name)
 
-			consumerInfo := freshGroup.GetConsumer(consumerID)
-			if consumerInfo == nil {
-				m.logger.Debug("consumer not found in group",
-					slog.String("consumer", consumerID),
-					slog.String("group", group.ID))
-				continue
-			}
-
-			for _, msg := range msgs {
-				// Check if consumer is on a remote node
-				if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
-					// Route to remote node
-					err := m.cluster.RouteQueueMessage(
-						ctx,
-						consumerInfo.ProxyNodeID,
-						consumerInfo.ClientID,
-						config.Name,
-						msg.ID,
-						msg.GetPayload(),
-						msg.Properties,
-						int64(msg.Sequence),
-						partitionID,
-					)
-					if err != nil {
-						m.logger.Warn("queue message remote routing failed",
-							slog.String("client", consumerInfo.ClientID),
-							slog.String("node", consumerInfo.ProxyNodeID),
-							slog.String("topic", msg.Topic),
-							slog.String("error", err.Error()))
-					}
-				} else if m.deliverFn != nil {
-					// Local delivery
-					deliveryMsg := m.createDeliveryMessage(msg, group.ID, partitionID)
-
-					if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
-						m.logger.Warn("queue message delivery failed",
-							slog.String("client", consumerInfo.ClientID),
-							slog.String("topic", msg.Topic),
-							slog.String("error", err.Error()))
-					}
+				if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
+					m.logger.Warn("stream message delivery failed",
+						slog.String("client", consumerInfo.ClientID),
+						slog.String("topic", msg.Topic),
+						slog.String("error", err.Error()))
 				}
 			}
 		}
@@ -698,36 +629,7 @@ func (m *Manager) runStealLoop() {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			m.processWorkStealing()
-		}
-	}
-}
-
-func (m *Manager) processWorkStealing() {
-	ctx := context.Background()
-
-	queues, err := m.logStore.ListQueues(ctx)
-	if err != nil {
-		return
-	}
-
-	for _, queueConfig := range queues {
-		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
-		if err != nil {
-			continue
-		}
-
-		for _, group := range groups {
-			// Process DLQ for expired entries
-			moved, err := m.dlqHandler.ProcessExpiredEntries(ctx, queueConfig.Name, group.ID)
-			if err != nil {
-				m.logger.Debug("DLQ processing error",
-					slog.String("error", err.Error()))
-			} else if moved > 0 {
-				m.logger.Debug("moved messages to DLQ",
-					slog.Int("count", moved),
-					slog.String("queue", queueConfig.Name))
-			}
+			// Work stealing is handled internally by ClaimBatch
 		}
 	}
 }
@@ -751,7 +653,7 @@ func (m *Manager) runCleanupLoop() {
 func (m *Manager) cleanupStaleConsumers() {
 	ctx := context.Background()
 
-	queues, err := m.logStore.ListQueues(ctx)
+	queues, err := m.queueStore.ListQueues(ctx)
 	if err != nil {
 		return
 	}
@@ -767,7 +669,7 @@ func (m *Manager) cleanupStaleConsumers() {
 			if err == nil && len(removed) > 0 {
 				m.logger.Info("cleaned up stale consumers",
 					slog.Int("count", len(removed)),
-					slog.String("queue", queueConfig.Name),
+					slog.String("stream", queueConfig.Name),
 					slog.String("group", group.ID))
 			}
 		}
@@ -793,49 +695,28 @@ func (m *Manager) runRetentionLoop() {
 func (m *Manager) processRetention() {
 	ctx := context.Background()
 
-	queues, err := m.logStore.ListQueues(ctx)
+	queues, err := m.queueStore.ListQueues(ctx)
 	if err != nil {
 		return
 	}
 
 	for _, queueConfig := range queues {
-		for partitionID := 0; partitionID < queueConfig.Partitions; partitionID++ {
-			// Get minimum committed offset across all groups
-			minCommitted, err := m.consumerManager.GetMinCommittedOffset(ctx, queueConfig.Name, partitionID)
-			if err != nil {
-				continue
-			}
+		// Get minimum committed offset across all groups
+		minCommitted, err := m.consumerManager.GetMinCommittedOffset(ctx, queueConfig.Name)
+		if err != nil {
+			continue
+		}
 
-			// Truncate log up to committed offset
-			if err := m.logStore.Truncate(ctx, queueConfig.Name, partitionID, minCommitted); err != nil {
-				m.logger.Debug("truncation error",
-					slog.String("error", err.Error()),
-					slog.String("queue", queueConfig.Name),
-					slog.Int("partition", partitionID))
-			}
+		// Truncate log up to committed offset
+		if err := m.queueStore.Truncate(ctx, queueConfig.Name, minCommitted); err != nil {
+			m.logger.Debug("truncation error",
+				slog.String("error", err.Error()),
+				slog.String("stream", queueConfig.Name))
 		}
 	}
 }
 
 // --- Helper Functions ---
-
-func getPartitionID(key string, partitions int) int {
-	if partitions <= 0 {
-		return 0
-	}
-	if key == "" {
-		return 0
-	}
-
-	// FNV-1a hash
-	var hash uint32 = fnvOffset
-	for i := 0; i < len(key); i++ {
-		hash ^= uint32(key[i])
-		hash *= fnvPrime
-	}
-
-	return int(hash % uint32(partitions))
-}
 
 func (m *Manager) trackSubscription(clientID, filter string) {
 	val, _ := m.subscriptions.LoadOrStore(clientID, []string{})
@@ -865,12 +746,8 @@ func (m *Manager) untrackSubscription(clientID, filter string) {
 	}
 }
 
-func (m *Manager) ensureDeliveryWorker(config *types.QueueConfig, group *types.ConsumerGroupState) {
-	// Workers are managed by the delivery loop
-}
-
-func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, partitionID int) *brokerstorage.Message {
-	messageID := fmt.Sprintf("%d:%d", partitionID, msg.Sequence)
+func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queueName string) *brokerstorage.Message {
+	messageID := fmt.Sprintf("%s:%d", queueName, msg.Sequence)
 
 	// Create properties map with ack info
 	props := make(map[string]string)
@@ -881,12 +758,12 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, part
 	}
 	props["message-id"] = messageID
 	props["group-id"] = groupID
-	props["partition-id"] = fmt.Sprintf("%d", partitionID)
+	props["stream"] = queueName
 	props["offset"] = fmt.Sprintf("%d", msg.Sequence)
 
 	deliveryMsg := &brokerstorage.Message{
 		Topic:      msg.Topic,
-		QoS:        1, // Queue messages use QoS 1 by default
+		QoS:        1, // Stream messages use QoS 1 by default
 		Properties: props,
 	}
 	deliveryMsg.SetPayloadFromBytes(msg.GetPayload())
@@ -894,15 +771,14 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, part
 	return deliveryMsg
 }
 
-// DeliveryMessage is the internal message format for queue delivery tracking.
-// Note: For actual MQTT delivery, we convert to *brokerstorage.Message.
+// DeliveryMessage is the internal message format for stream delivery tracking.
 type DeliveryMessage struct {
 	ID          string
 	Payload     []byte
 	Topic       string
 	Properties  map[string]string
 	GroupID     string
-	PartitionID int
+	StreamName  string
 	Offset      uint64
 	DeliveredAt time.Time
 	AckTopic    string
@@ -911,7 +787,6 @@ type DeliveryMessage struct {
 }
 
 func extractGroupFromClientID(clientID string) string {
-	// Extract prefix before first dash
 	for i, c := range clientID {
 		if c == '-' {
 			return clientID[:i]
@@ -924,9 +799,27 @@ func generateMessageID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-func parseMessageID(messageID string) (partitionID int, offset uint64, err error) {
-	_, err = fmt.Sscanf(messageID, "%d:%d", &partitionID, &offset)
-	return
+func parseStreamMessageID(messageID string) (uint64, error) {
+	var offset uint64
+	// Format: queueName:offset (we only need the offset)
+	for i := len(messageID) - 1; i >= 0; i-- {
+		if messageID[i] == ':' {
+			_, err := fmt.Sscanf(messageID[i+1:], "%d", &offset)
+			return offset, err
+		}
+	}
+	// Try parsing as just an offset
+	_, err := fmt.Sscanf(messageID, "%d", &offset)
+	return offset, err
+}
+
+func parseSubscriptionFilter(filter string) (queueName, pattern string) {
+	for i, c := range filter {
+		if c == '/' {
+			return filter[:i], filter[i+1:]
+		}
+	}
+	return filter, ""
 }
 
 // --- Metrics ---
@@ -937,27 +830,19 @@ func (m *Manager) GetMetrics() consumer.Metrics {
 }
 
 // GetLag returns the lag for a consumer group.
-func (m *Manager) GetLag(ctx context.Context, queueName, groupID string, partitionID int) (uint64, error) {
-	return m.consumerManager.GetLag(ctx, queueName, groupID, partitionID)
-}
-
-// GetDLQCount returns the number of messages in the DLQ.
-func (m *Manager) GetDLQCount(ctx context.Context, queueName string) (uint64, error) {
-	return m.dlqHandler.GetDLQCount(ctx, queueName)
+func (m *Manager) GetLag(ctx context.Context, queueName, groupID string) (uint64, error) {
+	return m.consumerManager.GetLag(ctx, queueName, groupID)
 }
 
 // --- Cluster QueueHandler Implementation ---
 
 // EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.
-// This is called by the gRPC handler when a remote node sends an enqueue request.
-func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) (string, error) {
-	// Use the existing Enqueue method which handles all the logic
-	err := m.Enqueue(ctx, queueName, payload, properties)
+func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) (string, error) {
+	err := m.Publish(ctx, topic, payload, properties)
 	if err != nil {
 		return "", err
 	}
 
-	// Return message ID from properties if available
 	if properties != nil && properties["message-id"] != "" {
 		return properties["message-id"], nil
 	}
@@ -966,36 +851,29 @@ func (m *Manager) EnqueueLocal(ctx context.Context, queueName string, payload []
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.
-// This is called by the gRPC handler when a remote partition owner delivers a message.
 func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg any) error {
 	if m.deliverFn == nil {
 		return fmt.Errorf("no delivery function configured")
 	}
 
-	// The msg is a map[string]interface{} from the transport layer
-	// Convert it to a proper delivery message
-	msgMap, ok := msg.(map[string]interface{})
+	msgMap, ok := msg.(map[string]any)
 	if !ok {
-		return fmt.Errorf("invalid message type: expected map[string]interface{}")
+		return fmt.Errorf("invalid message type: expected map[string]any")
 	}
 
-	// Extract fields from the map
 	queueName, _ := msgMap["queueName"].(string)
 	payload, _ := msgMap["payload"].([]byte)
 	properties, _ := msgMap["properties"].(map[string]string)
 	messageID, _ := msgMap["id"].(string)
 	sequence, _ := msgMap["sequence"].(int64)
-	partitionID, _ := msgMap["partitionId"].(int32)
 
-	// Build properties if nil
 	if properties == nil {
 		properties = make(map[string]string)
 	}
 	properties["message-id"] = messageID
-	properties["partition-id"] = fmt.Sprintf("%d", partitionID)
+	properties["stream"] = queueName
 	properties["offset"] = fmt.Sprintf("%d", sequence)
 
-	// Create delivery message
 	deliveryMsg := &brokerstorage.Message{
 		Topic:      queueName,
 		QoS:        1,

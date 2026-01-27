@@ -15,10 +15,10 @@ import (
 // DLQHandler handles moving messages to the dead-letter queue
 // when they exceed the maximum delivery count.
 type DLQHandler struct {
-	logStore   storage.LogStore
-	groupStore storage.ConsumerGroupStore
-	config     DLQConfig
-	metrics    *Metrics
+	queueStore storage.QueueStore
+	groupStore  storage.ConsumerGroupStore
+	config      DLQConfig
+	metrics     *Metrics
 }
 
 // DLQConfig defines DLQ handler configuration.
@@ -44,12 +44,12 @@ func DefaultDLQConfig() DLQConfig {
 }
 
 // NewDLQHandler creates a new DLQ handler.
-func NewDLQHandler(logStore storage.LogStore, groupStore storage.ConsumerGroupStore, config DLQConfig, metrics *Metrics) *DLQHandler {
+func NewDLQHandler(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, config DLQConfig, metrics *Metrics) *DLQHandler {
 	return &DLQHandler{
-		logStore:   logStore,
-		groupStore: groupStore,
-		config:     config,
-		metrics:    metrics,
+		queueStore: queueStore,
+		groupStore:  groupStore,
+		config:      config,
+		metrics:     metrics,
 	}
 }
 
@@ -59,32 +59,32 @@ func (h *DLQHandler) ShouldMoveToDLQ(deliveryCount int) bool {
 }
 
 // MoveToDLQ moves a message to the dead-letter queue.
-func (h *DLQHandler) MoveToDLQ(ctx context.Context, queueName, groupID string, entry *types.PendingEntry, reason string) error {
+func (h *DLQHandler) MoveToDLQ(ctx context.Context, streamName, groupID string, entry *types.PendingEntry, reason string) error {
 	// Read the original message
-	msg, err := h.logStore.Read(ctx, queueName, entry.PartitionID, entry.Offset)
+	msg, err := h.queueStore.Read(ctx, streamName, entry.Offset)
 	if err != nil {
 		return fmt.Errorf("failed to read message for DLQ: %w", err)
 	}
 
-	// Create DLQ topic name
-	dlqTopic := h.getDLQTopic(queueName)
+	// Create DLQ stream name
+	dlqStream := h.getDLQStream(streamName)
 
-	// Ensure DLQ queue exists
-	if err := h.ensureDLQQueue(ctx, dlqTopic); err != nil {
-		return fmt.Errorf("failed to ensure DLQ queue: %w", err)
+	// Ensure DLQ stream exists
+	if err := h.ensureDLQStream(ctx, dlqStream); err != nil {
+		return fmt.Errorf("failed to ensure DLQ stream: %w", err)
 	}
 
 	// Create DLQ message with metadata
-	dlqMsg := h.createDLQMessage(msg, queueName, groupID, entry, reason)
+	dlqMsg := h.createDLQMessage(msg, streamName, groupID, entry, reason)
 
-	// Append to DLQ (partition 0 for simplicity)
-	_, err = h.logStore.Append(ctx, dlqTopic, 0, dlqMsg)
+	// Append to DLQ
+	_, err = h.queueStore.Append(ctx, dlqStream, dlqMsg)
 	if err != nil {
 		return fmt.Errorf("failed to append to DLQ: %w", err)
 	}
 
 	// Remove from original PEL
-	if err := h.groupStore.RemovePendingEntry(ctx, queueName, groupID, entry.ConsumerID, entry.PartitionID, entry.Offset); err != nil {
+	if err := h.groupStore.RemovePendingEntry(ctx, streamName, groupID, entry.ConsumerID, entry.Offset); err != nil {
 		return fmt.Errorf("failed to remove from PEL: %w", err)
 	}
 
@@ -98,8 +98,8 @@ func (h *DLQHandler) MoveToDLQ(ctx context.Context, queueName, groupID string, e
 
 // ProcessExpiredEntries scans for entries that have exceeded max delivery count
 // and moves them to the DLQ.
-func (h *DLQHandler) ProcessExpiredEntries(ctx context.Context, queueName, groupID string) (int, error) {
-	group, err := h.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+func (h *DLQHandler) ProcessExpiredEntries(ctx context.Context, streamName, groupID string) (int, error) {
+	group, err := h.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return 0, err
 	}
@@ -119,7 +119,7 @@ func (h *DLQHandler) ProcessExpiredEntries(ctx context.Context, queueName, group
 				entryCopy := *entry
 				entryCopy.ConsumerID = consumerID
 
-				if err := h.MoveToDLQ(ctx, queueName, groupID, &entryCopy, reason); err != nil {
+				if err := h.MoveToDLQ(ctx, streamName, groupID, &entryCopy, reason); err != nil {
 					// Log error but continue processing
 					continue
 				}
@@ -132,52 +132,46 @@ func (h *DLQHandler) ProcessExpiredEntries(ctx context.Context, queueName, group
 	return moved, nil
 }
 
-// getDLQTopic returns the DLQ topic name for a queue.
-func (h *DLQHandler) getDLQTopic(queueName string) string {
-	// Convert $queue/tasks to $dlq/tasks
-	if len(queueName) > 7 && queueName[:7] == "$queue/" {
-		return h.config.DLQTopicPrefix + queueName[7:]
-	}
-	return h.config.DLQTopicPrefix + queueName
+// getDLQStream returns the DLQ stream name for a stream.
+func (h *DLQHandler) getDLQStream(streamName string) string {
+	return h.config.DLQTopicPrefix + streamName
 }
 
-// ensureDLQQueue creates the DLQ queue if it doesn't exist.
-func (h *DLQHandler) ensureDLQQueue(ctx context.Context, dlqTopic string) error {
-	_, err := h.logStore.GetQueue(ctx, dlqTopic)
+// ensureDLQStream creates the DLQ stream if it doesn't exist.
+func (h *DLQHandler) ensureDLQStream(ctx context.Context, dlqStream string) error {
+	_, err := h.queueStore.GetQueue(ctx, dlqStream)
 	if err == nil {
-		return nil // Queue exists
+		return nil // Stream exists
 	}
 
 	if err != storage.ErrQueueNotFound {
 		return err
 	}
 
-	// Create DLQ queue with minimal config
+	// Create DLQ stream with minimal config
 	config := types.QueueConfig{
-		Name:             dlqTopic,
-		Partitions:       1, // Single partition for DLQ
-		Ordering:         types.OrderingPartition,
-		MaxMessageSize:   1024 * 1024, // 1MB
-		MaxQueueDepth:    1000000,     // 1M messages
+		Name:             dlqStream,
+		Topics:           []string{dlqStream}, // DLQ stream matches its own name
+		Reserved:         false,
+		MaxMessageSize:   1024 * 1024,         // 1MB
+		MaxStreamDepth:   1000000,             // 1M messages
 		MessageTTL:       30 * 24 * time.Hour, // 30 days retention
 		DeliveryTimeout:  30 * time.Second,
 		BatchSize:        100,
 		HeartbeatTimeout: 30 * time.Second,
 	}
 
-	return h.logStore.CreateQueue(ctx, config)
+	return h.queueStore.CreateQueue(ctx, config)
 }
 
 // createDLQMessage creates a message for the DLQ with failure metadata.
-func (h *DLQHandler) createDLQMessage(original *types.Message, queueName, groupID string, entry *types.PendingEntry, reason string) *types.Message {
+func (h *DLQHandler) createDLQMessage(original *types.Message, streamName, groupID string, entry *types.PendingEntry, reason string) *types.Message {
 	now := time.Now()
 
 	dlqMsg := &types.Message{
 		ID:            original.ID + "-dlq",
 		Payload:       original.Payload,
 		Topic:         original.Topic,
-		PartitionKey:  original.PartitionKey,
-		PartitionID:   0, // DLQ uses single partition
 		Properties:    make(map[string]string),
 		State:         types.StateDLQ,
 		CreatedAt:     now,
@@ -194,8 +188,7 @@ func (h *DLQHandler) createDLQMessage(original *types.Message, queueName, groupI
 
 	// Add DLQ metadata
 	if h.config.IncludeMetadata {
-		dlqMsg.Properties["dlq-original-queue"] = queueName
-		dlqMsg.Properties["dlq-original-partition"] = fmt.Sprintf("%d", entry.PartitionID)
+		dlqMsg.Properties["dlq-original-stream"] = streamName
 		dlqMsg.Properties["dlq-original-offset"] = fmt.Sprintf("%d", entry.Offset)
 		dlqMsg.Properties["dlq-consumer-group"] = groupID
 		dlqMsg.Properties["dlq-consumer-id"] = entry.ConsumerID
@@ -207,29 +200,28 @@ func (h *DLQHandler) createDLQMessage(original *types.Message, queueName, groupI
 	return dlqMsg
 }
 
-// ReplayFromDLQ moves a message from DLQ back to the original queue.
-func (h *DLQHandler) ReplayFromDLQ(ctx context.Context, dlqTopic string, partitionID int, offset uint64) error {
+// ReplayFromDLQ moves a message from DLQ back to the original stream.
+func (h *DLQHandler) ReplayFromDLQ(ctx context.Context, dlqStream string, offset uint64) error {
 	// Read DLQ message
-	msg, err := h.logStore.Read(ctx, dlqTopic, partitionID, offset)
+	msg, err := h.queueStore.Read(ctx, dlqStream, offset)
 	if err != nil {
 		return fmt.Errorf("failed to read DLQ message: %w", err)
 	}
 
-	// Get original queue from metadata
-	originalQueue, ok := msg.Properties["dlq-original-queue"]
+	// Get original stream from metadata
+	originalStream, ok := msg.Properties["dlq-original-stream"]
 	if !ok {
-		return fmt.Errorf("DLQ message missing original queue metadata")
+		return fmt.Errorf("DLQ message missing original stream metadata")
 	}
 
 	// Reset message state
 	replayMsg := &types.Message{
-		ID:           msg.ID + "-replay",
-		Payload:      msg.Payload,
-		Topic:        msg.Topic,
-		PartitionKey: msg.PartitionKey,
-		Properties:   make(map[string]string),
-		State:        types.StateQueued,
-		CreatedAt:    time.Now(),
+		ID:         msg.ID + "-replay",
+		Payload:    msg.Payload,
+		Topic:      msg.Topic,
+		Properties: make(map[string]string),
+		State:      types.StateQueued,
+		CreatedAt:  time.Now(),
 	}
 
 	// Copy properties except DLQ metadata
@@ -240,46 +232,20 @@ func (h *DLQHandler) ReplayFromDLQ(ctx context.Context, dlqTopic string, partiti
 	}
 
 	// Add replay metadata
-	replayMsg.Properties["replayed-from-dlq"] = dlqTopic
+	replayMsg.Properties["replayed-from-dlq"] = dlqStream
 	replayMsg.Properties["replayed-at"] = time.Now().Format(time.RFC3339)
 
-	// Determine partition for replay (use original or hash)
-	partID := 0
-	if pk := replayMsg.PartitionKey; pk != "" {
-		// Hash partition key to get partition ID
-		config, err := h.logStore.GetQueue(ctx, originalQueue)
-		if err == nil && config.Partitions > 0 {
-			partID = hashPartitionKey(pk, config.Partitions)
-		}
-	}
-
-	// Append to original queue
-	_, err = h.logStore.Append(ctx, originalQueue, partID, replayMsg)
+	// Append to original stream
+	_, err = h.queueStore.Append(ctx, originalStream, replayMsg)
 	return err
 }
 
-// hashPartitionKey returns a partition ID for a key.
-func hashPartitionKey(key string, partitions int) int {
-	if partitions <= 0 {
-		return 0
-	}
-
-	// Simple FNV-1a hash
-	var hash uint32 = 2166136261
-	for i := 0; i < len(key); i++ {
-		hash ^= uint32(key[i])
-		hash *= 16777619
-	}
-
-	return int(hash % uint32(partitions))
-}
-
-// ListDLQMessages lists messages in the DLQ for a queue.
-func (h *DLQHandler) ListDLQMessages(ctx context.Context, queueName string, limit int) ([]*types.Message, error) {
-	dlqTopic := h.getDLQTopic(queueName)
+// ListDLQMessages lists messages in the DLQ for a stream.
+func (h *DLQHandler) ListDLQMessages(ctx context.Context, streamName string, limit int) ([]*types.Message, error) {
+	dlqStream := h.getDLQStream(streamName)
 
 	// Check if DLQ exists
-	_, err := h.logStore.GetQueue(ctx, dlqTopic)
+	_, err := h.queueStore.GetQueue(ctx, dlqStream)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
 			return []*types.Message{}, nil
@@ -288,19 +254,19 @@ func (h *DLQHandler) ListDLQMessages(ctx context.Context, queueName string, limi
 	}
 
 	// Read from head
-	head, err := h.logStore.Head(ctx, dlqTopic, 0)
+	head, err := h.queueStore.Head(ctx, dlqStream)
 	if err != nil {
 		return nil, err
 	}
 
-	return h.logStore.ReadBatch(ctx, dlqTopic, 0, head, limit)
+	return h.queueStore.ReadBatch(ctx, dlqStream, head, limit)
 }
 
 // GetDLQCount returns the number of messages in the DLQ.
-func (h *DLQHandler) GetDLQCount(ctx context.Context, queueName string) (uint64, error) {
-	dlqTopic := h.getDLQTopic(queueName)
+func (h *DLQHandler) GetDLQCount(ctx context.Context, streamName string) (uint64, error) {
+	dlqStream := h.getDLQStream(streamName)
 
-	_, err := h.logStore.GetQueue(ctx, dlqTopic)
+	_, err := h.queueStore.GetQueue(ctx, dlqStream)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
 			return 0, nil
@@ -308,5 +274,5 @@ func (h *DLQHandler) GetDLQCount(ctx context.Context, queueName string) (uint64,
 		return 0, err
 	}
 
-	return h.logStore.Count(ctx, dlqTopic, 0)
+	return h.queueStore.Count(ctx, dlqStream)
 }

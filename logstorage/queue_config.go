@@ -13,7 +13,7 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-// QueueConfigStore manages queue configuration persistence.
+// QueueConfigStore manages stream configuration persistence.
 type QueueConfigStore struct {
 	mu sync.RWMutex
 
@@ -22,17 +22,19 @@ type QueueConfigStore struct {
 	dirty   bool
 }
 
-// QueueConfigState is the serialized state of all queue configs.
+// QueueConfigState is the serialized state of all stream configs.
 type QueueConfigState struct {
-	Version uint8                `json:"version"`
-	Configs []types.QueueConfig  `json:"configs"`
-	SavedAt int64                `json:"saved_at"`
+	Version uint8               `json:"version"`
+	Configs []types.QueueConfig `json:"configs"`
+	SavedAt int64               `json:"saved_at"`
 }
 
-const queueConfigVersion uint8 = 1
-const queueConfigFile = "queues.json"
+const (
+	queueConfigVersion uint8 = 2
+	queueConfigFile          = "queues.json"
+)
 
-// NewQueueConfigStore creates or opens a queue config store.
+// NewQueueConfigStore creates or opens a stream config store.
 func NewQueueConfigStore(baseDir string) (*QueueConfigStore, error) {
 	dir := filepath.Join(baseDir, "config")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -45,7 +47,7 @@ func NewQueueConfigStore(baseDir string) (*QueueConfigStore, error) {
 	}
 
 	if err := store.load(); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to load queue configs: %w", err)
+		return nil, fmt.Errorf("failed to load stream configs: %w", err)
 	}
 
 	return store, nil
@@ -56,7 +58,7 @@ func (s *QueueConfigStore) configPath() string {
 	return filepath.Join(s.dir, queueConfigFile)
 }
 
-// load loads queue configs from disk.
+// load loads stream configs from disk.
 func (s *QueueConfigStore) load() error {
 	data, err := os.ReadFile(s.configPath())
 	if err != nil {
@@ -65,11 +67,11 @@ func (s *QueueConfigStore) load() error {
 
 	var state QueueConfigState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("failed to unmarshal queue config state: %w", err)
+		return fmt.Errorf("failed to unmarshal stream config state: %w", err)
 	}
 
 	if state.Version > queueConfigVersion {
-		return fmt.Errorf("unsupported queue config version: %d", state.Version)
+		return fmt.Errorf("unsupported stream config version: %d", state.Version)
 	}
 
 	s.configs = make(map[string]*types.QueueConfig)
@@ -80,7 +82,7 @@ func (s *QueueConfigStore) load() error {
 	return nil
 }
 
-// Save persists a queue config.
+// Save persists a stream config.
 func (s *QueueConfigStore) Save(config types.QueueConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,20 +93,20 @@ func (s *QueueConfigStore) Save(config types.QueueConfig) error {
 	return s.saveUnlocked()
 }
 
-// Get retrieves a queue config.
+// Get retrieves a stream config.
 func (s *QueueConfigStore) Get(queueName string) (*types.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	config, ok := s.configs[queueName]
 	if !ok {
-		return nil, ErrQueueNotFound
+		return nil, ErrStreamNotFound
 	}
 
 	return config, nil
 }
 
-// Delete removes a queue config.
+// Delete removes a stream config.
 func (s *QueueConfigStore) Delete(queueName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,7 +117,7 @@ func (s *QueueConfigStore) Delete(queueName string) error {
 	return s.saveUnlocked()
 }
 
-// List returns all queue configs.
+// List returns all stream configs.
 func (s *QueueConfigStore) List() ([]types.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -154,17 +156,17 @@ func (s *QueueConfigStore) saveUnlocked() error {
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal queue config state: %w", err)
+		return fmt.Errorf("failed to marshal stream config state: %w", err)
 	}
 
 	tempPath := s.configPath() + TempExtension
 	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
-		return fmt.Errorf("failed to write queue config file: %w", err)
+		return fmt.Errorf("failed to write stream config file: %w", err)
 	}
 
 	if err := os.Rename(tempPath, s.configPath()); err != nil {
 		os.Remove(tempPath)
-		return fmt.Errorf("failed to rename queue config file: %w", err)
+		return fmt.Errorf("failed to rename stream config file: %w", err)
 	}
 
 	s.dirty = false

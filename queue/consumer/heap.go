@@ -14,14 +14,9 @@ import (
 // PendingHeap is a min-heap of pending entries ordered by claim time.
 // This allows O(1) access to the oldest pending entry for work stealing.
 type PendingHeap struct {
-	entries  []*heapEntry
-	index    map[heapKey]int // Maps (partition, offset) -> heap index
-	mu       sync.RWMutex
-}
-
-type heapKey struct {
-	partitionID int
-	offset      uint64
+	entries []*heapEntry
+	index   map[uint64]int // Maps offset -> heap index
+	mu      sync.RWMutex
 }
 
 type heapEntry struct {
@@ -33,7 +28,7 @@ type heapEntry struct {
 func NewPendingHeap() *PendingHeap {
 	return &PendingHeap{
 		entries: make([]*heapEntry, 0),
-		index:   make(map[heapKey]int),
+		index:   make(map[uint64]int),
 	}
 }
 
@@ -54,8 +49,8 @@ func (h *PendingHeap) Swap(i, j int) {
 	h.entries[j].index = j
 
 	// Update index map
-	h.index[heapKey{h.entries[i].entry.PartitionID, h.entries[i].entry.Offset}] = i
-	h.index[heapKey{h.entries[j].entry.PartitionID, h.entries[j].entry.Offset}] = j
+	h.index[h.entries[i].entry.Offset] = i
+	h.index[h.entries[j].entry.Offset] = j
 }
 
 // Push adds an entry to the heap.
@@ -66,7 +61,7 @@ func (h *PendingHeap) Push(x interface{}) {
 		index: len(h.entries),
 	}
 	h.entries = append(h.entries, he)
-	h.index[heapKey{entry.PartitionID, entry.Offset}] = he.index
+	h.index[entry.Offset] = he.index
 }
 
 // Pop removes and returns the oldest entry from the heap.
@@ -78,7 +73,7 @@ func (h *PendingHeap) Pop() interface{} {
 
 	he := h.entries[n-1]
 	h.entries = h.entries[:n-1]
-	delete(h.index, heapKey{he.entry.PartitionID, he.entry.Offset})
+	delete(h.index, he.entry.Offset)
 
 	return he.entry
 }
@@ -91,13 +86,12 @@ func (h *PendingHeap) Add(entry *types.PendingEntry) {
 	heap.Push(h, entry)
 }
 
-// Remove removes a specific entry from the heap (thread-safe).
-func (h *PendingHeap) Remove(partitionID int, offset uint64) bool {
+// Remove removes a specific entry from the heap by offset (thread-safe).
+func (h *PendingHeap) Remove(offset uint64) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	key := heapKey{partitionID, offset}
-	idx, ok := h.index[key]
+	idx, ok := h.index[offset]
 	if !ok {
 		return false
 	}
@@ -163,12 +157,11 @@ func (h *PendingHeap) GetStealable(visibilityTimeout time.Duration, excludeConsu
 }
 
 // UpdateClaimTime updates the claim time for an entry and reheapifies.
-func (h *PendingHeap) UpdateClaimTime(partitionID int, offset uint64, newTime time.Time) bool {
+func (h *PendingHeap) UpdateClaimTime(offset uint64, newTime time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	key := heapKey{partitionID, offset}
-	idx, ok := h.index[key]
+	idx, ok := h.index[offset]
 	if !ok {
 		return false
 	}
@@ -191,66 +184,39 @@ func (h *PendingHeap) Clear() {
 	defer h.mu.Unlock()
 
 	h.entries = h.entries[:0]
-	h.index = make(map[heapKey]int)
+	h.index = make(map[uint64]int)
 }
 
-// PartitionHeapManager manages per-partition heaps for a consumer group.
-type PartitionHeapManager struct {
-	heaps map[int]*PendingHeap // partitionID -> heap
-	mu    sync.RWMutex
+// StreamHeapManager manages a single heap for stream-based consumer groups.
+// In the stream model, there's only one log per stream (no partitions).
+type StreamHeapManager struct {
+	heap *PendingHeap
+	mu   sync.RWMutex
 }
 
-// NewPartitionHeapManager creates a new partition heap manager.
-func NewPartitionHeapManager() *PartitionHeapManager {
-	return &PartitionHeapManager{
-		heaps: make(map[int]*PendingHeap),
+// NewStreamHeapManager creates a new stream heap manager.
+func NewStreamHeapManager() *StreamHeapManager {
+	return &StreamHeapManager{
+		heap: NewPendingHeap(),
 	}
 }
 
-// GetOrCreate gets or creates a heap for a partition.
-func (m *PartitionHeapManager) GetOrCreate(partitionID int) *PendingHeap {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if h, ok := m.heaps[partitionID]; ok {
-		return h
-	}
-
-	h := NewPendingHeap()
-	m.heaps[partitionID] = h
-	return h
+// Get returns the heap.
+func (m *StreamHeapManager) Get() *PendingHeap {
+	return m.heap
 }
 
-// Get returns the heap for a partition if it exists.
-func (m *PartitionHeapManager) Get(partitionID int) *PendingHeap {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.heaps[partitionID]
+// Add adds an entry to the heap.
+func (m *StreamHeapManager) Add(entry *types.PendingEntry) {
+	m.heap.Add(entry)
 }
 
-// Add adds an entry to the appropriate partition heap.
-func (m *PartitionHeapManager) Add(entry *types.PendingEntry) {
-	h := m.GetOrCreate(entry.PartitionID)
-	h.Add(entry)
+// Remove removes an entry from the heap.
+func (m *StreamHeapManager) Remove(offset uint64) bool {
+	return m.heap.Remove(offset)
 }
 
-// Remove removes an entry from the appropriate partition heap.
-func (m *PartitionHeapManager) Remove(partitionID int, offset uint64) bool {
-	h := m.Get(partitionID)
-	if h == nil {
-		return false
-	}
-	return h.Remove(partitionID, offset)
-}
-
-// TotalSize returns total entries across all partitions.
-func (m *PartitionHeapManager) TotalSize() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	total := 0
-	for _, h := range m.heaps {
-		total += h.Size()
-	}
-	return total
+// TotalSize returns total entries in the heap.
+func (m *StreamHeapManager) TotalSize() int {
+	return m.heap.Size()
 }

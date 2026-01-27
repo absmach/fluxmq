@@ -9,14 +9,21 @@ import (
 
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/topics"
 )
 
-// Adapter wraps the log Store and implements the storage.LogStore and
+var (
+	_ storage.QueueStore         = (*Adapter)(nil)
+	_ storage.ConsumerGroupStore = (*Adapter)(nil)
+)
+
+// Adapter wraps the log Store and implements the storage.QueueStore and
 // storage.ConsumerGroupStore interfaces for integration with the queue system.
 type Adapter struct {
-	store      *Store
-	queueStore *QueueConfigStore
-	groupStore *ConsumerGroupStateStore
+	store        *Store
+	queueStore   *QueueConfigStore
+	groupStore   *ConsumerGroupStateStore
+	subjectIndex *storage.TopicIndex
 }
 
 // AdapterConfig holds adapter configuration.
@@ -38,7 +45,7 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 		return nil, err
 	}
 
-	queueConfig, err := NewQueueConfigStore(baseDir)
+	queueStore, err := NewQueueConfigStore(baseDir)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -47,15 +54,26 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 	groupStore, err := NewConsumerGroupStateStore(baseDir)
 	if err != nil {
 		store.Close()
-		queueConfig.Close()
+		queueStore.Close()
 		return nil, err
 	}
 
-	return &Adapter{
-		store:      store,
-		queueStore: queueConfig,
-		groupStore: groupStore,
-	}, nil
+	adapter := &Adapter{
+		store:        store,
+		queueStore:   queueStore,
+		groupStore:   groupStore,
+		subjectIndex: storage.NewTopicIndex(),
+	}
+
+	// Rebuild topic index from existing queues
+	queues, err := queueStore.List()
+	if err == nil {
+		for _, cfg := range queues {
+			adapter.subjectIndex.AddQueue(cfg.Name, cfg.Topics)
+		}
+	}
+
+	return adapter, nil
 }
 
 // Close closes the adapter and underlying store.
@@ -82,21 +100,29 @@ func (a *Adapter) Store() *Store {
 	return a.store
 }
 
-// LogStore interface implementation
+// StreamStore interface implementation
 
-// CreateQueue creates a new queue with the given configuration.
+// CreateQueue creates a new stream with the given configuration.
 func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	if err := a.store.CreateQueue(config.Name, config.Partitions); err != nil {
+	// Create a single partition (partition 0) for the stream
+	if err := a.store.CreateQueue(config.Name, 1); err != nil {
 		if err == ErrAlreadyExists {
-			return storage.ErrConsumerGroupExists
+			return storage.ErrQueueAlreadyExists
 		}
 		return err
 	}
 
-	return a.queueStore.Save(config)
+	if err := a.queueStore.Save(config); err != nil {
+		return err
+	}
+
+	// Update topic index
+	a.subjectIndex.AddQueue(config.Name, config.Topics)
+
+	return nil
 }
 
-// GetQueue retrieves a queue's configuration.
+// GetQueue retrieves a stream's configuration.
 func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
 	config, err := a.queueStore.Get(queueName)
 	if err != nil {
@@ -105,23 +131,31 @@ func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueC
 	return config, nil
 }
 
-// DeleteQueue deletes a queue and all its data.
+// DeleteQueue deletes a stream and all its data.
 func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
+	// Remove from topic index
+	a.subjectIndex.RemoveQueue(queueName)
+
 	if err := a.queueStore.Delete(queueName); err != nil {
 		return err
 	}
 	return a.store.DeleteQueue(queueName)
 }
 
-// ListQueues returns all queue configurations.
+// ListQueues returns all stream configurations.
 func (a *Adapter) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	return a.queueStore.List()
 }
 
-// Append adds a message to the end of a partition's log.
-func (a *Adapter) Append(ctx context.Context, queueName string, partitionID int, msg *types.Message) (uint64, error) {
+// FindMatchingQueues returns all queues whose topic patterns match the topic.
+func (a *Adapter) FindMatchingQueues(ctx context.Context, topic string) ([]string, error) {
+	return a.subjectIndex.FindMatching(topic), nil
+}
+
+// Append adds a message to the end of a stream's log.
+func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
 	value := msg.GetPayload()
-	key := []byte(msg.PartitionKey)
+	key := []byte{}
 
 	headers := make(map[string][]byte)
 	for k, v := range msg.Properties {
@@ -134,11 +168,12 @@ func (a *Adapter) Append(ctx context.Context, queueName string, partitionID int,
 		headers["_state"] = []byte(msg.State)
 	}
 
-	return a.store.Append(queueName, uint32(partitionID), value, key, headers)
+	// Always use partition 0
+	return a.store.Append(queueName, 0, value, key, headers)
 }
 
-// AppendBatch adds multiple messages to a partition's log.
-func (a *Adapter) AppendBatch(ctx context.Context, queueName string, partitionID int, msgs []*types.Message) (uint64, error) {
+// AppendBatch adds multiple messages to a stream's log.
+func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error) {
 	if len(msgs) == 0 {
 		return 0, ErrEmptyBatch
 	}
@@ -147,7 +182,7 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, partitionID
 
 	for _, msg := range msgs {
 		value := msg.GetPayload()
-		key := []byte(msg.PartitionKey)
+		key := []byte{}
 
 		headers := make(map[string][]byte)
 		for k, v := range msg.Properties {
@@ -163,33 +198,34 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, partitionID
 		batch.Append(value, key, headers)
 	}
 
-	return a.store.AppendBatch(queueName, uint32(partitionID), batch)
+	// Always use partition 0
+	return a.store.AppendBatch(queueName, 0, batch)
 }
 
 // Read retrieves a message at a specific offset.
-func (a *Adapter) Read(ctx context.Context, queueName string, partitionID int, offset uint64) (*types.Message, error) {
-	msg, err := a.store.Read(queueName, uint32(partitionID), offset)
+func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*types.Message, error) {
+	msg, err := a.store.Read(queueName, 0, offset)
 	if err != nil {
 		if err == ErrOffsetOutOfRange {
 			return nil, storage.ErrOffsetOutOfRange
 		}
 		if err == ErrPartitionNotFound {
-			return nil, storage.ErrPartitionNotFound
+			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
 	}
 
-	return logMessageToTypes(msg, partitionID), nil
+	return logMessageToTypes(msg), nil
 }
 
 // ReadBatch reads messages starting from offset up to limit.
-func (a *Adapter) ReadBatch(ctx context.Context, queueName string, partitionID int, startOffset uint64, limit int) ([]*types.Message, error) {
-	tail, err := a.store.Tail(queueName, uint32(partitionID))
+func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error) {
+	tail, err := a.store.Tail(queueName, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	messages, err := a.store.ReadRange(queueName, uint32(partitionID), startOffset, tail, limit)
+	messages, err := a.store.ReadRange(queueName, 0, startOffset, tail, limit)
 	if err != nil {
 		if err == ErrOffsetOutOfRange {
 			return nil, storage.ErrOffsetOutOfRange
@@ -199,54 +235,40 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, partitionID i
 
 	result := make([]*types.Message, len(messages))
 	for i, msg := range messages {
-		result[i] = logMessageToTypes(&msg, partitionID)
+		result[i] = logMessageToTypes(&msg)
 	}
 
 	return result, nil
 }
 
-// Head returns the first valid offset in the partition.
-func (a *Adapter) Head(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	return a.store.Head(queueName, uint32(partitionID))
+// Head returns the first valid offset in the stream.
+func (a *Adapter) Head(ctx context.Context, queueName string) (uint64, error) {
+	return a.store.Head(queueName, 0)
 }
 
 // Tail returns the next offset that will be assigned.
-func (a *Adapter) Tail(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	return a.store.Tail(queueName, uint32(partitionID))
+func (a *Adapter) Tail(ctx context.Context, queueName string) (uint64, error) {
+	return a.store.Tail(queueName, 0)
 }
 
 // Truncate removes all messages with offset < minOffset.
-func (a *Adapter) Truncate(ctx context.Context, queueName string, partitionID int, minOffset uint64) error {
-	return a.store.Truncate(queueName, uint32(partitionID), minOffset)
+func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint64) error {
+	return a.store.Truncate(queueName, 0, minOffset)
 }
 
-// Count returns the number of messages in a partition.
-func (a *Adapter) Count(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	return a.store.Count(queueName, uint32(partitionID))
+// Count returns the number of messages in a stream.
+func (a *Adapter) Count(ctx context.Context, queueName string) (uint64, error) {
+	return a.store.Count(queueName, 0)
 }
 
-// TotalCount returns total messages across all partitions.
+// TotalCount returns total messages in a stream.
 func (a *Adapter) TotalCount(ctx context.Context, queueName string) (uint64, error) {
-	partitions, err := a.store.ListPartitions(queueName)
-	if err != nil {
-		return 0, err
-	}
-
-	var total uint64
-	for _, partitionID := range partitions {
-		count, err := a.store.Count(queueName, partitionID)
-		if err != nil {
-			return 0, err
-		}
-		total += count
-	}
-
-	return total, nil
+	return a.store.Count(queueName, 0)
 }
 
 // ConsumerGroupStore interface implementation
 
-// CreateConsumerGroup creates a new consumer group for a queue.
+// CreateConsumerGroup creates a new consumer group for a stream.
 func (a *Adapter) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
 	existing, _ := a.groupStore.Get(group.QueueName, group.ID)
 	if existing != nil {
@@ -283,7 +305,7 @@ func (a *Adapter) DeleteConsumerGroup(ctx context.Context, queueName, groupID st
 	return a.groupStore.Delete(queueName, groupID)
 }
 
-// ListConsumerGroups lists all consumer groups for a queue.
+// ListConsumerGroups lists all consumer groups for a stream.
 func (a *Adapter) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error) {
 	return a.groupStore.List(queueName)
 }
@@ -292,7 +314,7 @@ func (a *Adapter) ListConsumerGroups(ctx context.Context, queueName string) ([]*
 func (a *Adapter) AddPendingEntry(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error {
 	pelEntry := PELEntry{
 		Offset:        entry.Offset,
-		PartitionID:   uint32(entry.PartitionID),
+		PartitionID:   0, // Always partition 0
 		ConsumerID:    entry.ConsumerID,
 		ClaimedAt:     entry.ClaimedAt.UnixMilli(),
 		DeliveryCount: uint16(entry.DeliveryCount),
@@ -313,7 +335,7 @@ func (a *Adapter) AddPendingEntry(ctx context.Context, queueName, groupID string
 }
 
 // RemovePendingEntry removes an entry from a consumer's PEL.
-func (a *Adapter) RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64) error {
+func (a *Adapter) RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
 	if err := a.store.AckPending(queueName, groupID, offset); err != nil {
 		if err == ErrPELEntryNotFound {
 			return storage.ErrPendingEntryNotFound
@@ -324,7 +346,7 @@ func (a *Adapter) RemovePendingEntry(ctx context.Context, queueName, groupID, co
 	// Update the group state's PEL as well
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		group.RemovePending(consumerID, partitionID, offset)
+		group.RemovePending(consumerID, offset)
 		a.groupStore.Save(group)
 	}
 
@@ -365,7 +387,7 @@ func (a *Adapter) GetAllPendingEntries(ctx context.Context, queueName, groupID s
 }
 
 // TransferPendingEntry moves a pending entry from one consumer to another.
-func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID string, partitionID int, offset uint64, fromConsumer, toConsumer string) error {
+func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
 	if err := a.store.ClaimPending(queueName, groupID, offset, toConsumer); err != nil {
 		if err == ErrPELEntryNotFound {
 			return storage.ErrPendingEntryNotFound
@@ -376,23 +398,23 @@ func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID s
 	// Update the group state's PEL as well
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		group.TransferPending(partitionID, offset, fromConsumer, toConsumer)
+		group.TransferPending(offset, fromConsumer, toConsumer)
 		a.groupStore.Save(group)
 	}
 
 	return nil
 }
 
-// UpdateCursor updates the cursor position for a partition.
-func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, partitionID int, cursor uint64) error {
-	if err := a.store.SetCursor(queueName, groupID, uint32(partitionID), cursor); err != nil {
+// UpdateCursor updates the cursor position for a stream.
+func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
+	if err := a.store.SetCursor(queueName, groupID, 0, cursor); err != nil {
 		return err
 	}
 
 	// Update the group state's cursor as well
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		c := group.GetCursor(partitionID)
+		c := group.GetCursor()
 		c.Cursor = cursor
 		group.UpdatedAt = time.Now()
 		a.groupStore.Save(group)
@@ -401,16 +423,16 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, p
 	return nil
 }
 
-// UpdateCommitted updates the committed offset for a partition.
-func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string, partitionID int, committed uint64) error {
-	if err := a.store.CommitOffset(queueName, groupID, uint32(partitionID), committed); err != nil {
+// UpdateCommitted updates the committed offset for a stream.
+func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
+	if err := a.store.CommitOffset(queueName, groupID, 0, committed); err != nil {
 		return err
 	}
 
 	// Update the group state's committed offset as well
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		c := group.GetCursor(partitionID)
+		c := group.GetCursor()
 		c.Committed = committed
 		group.UpdatedAt = time.Now()
 		a.groupStore.Save(group)
@@ -426,8 +448,7 @@ func (a *Adapter) RegisterConsumer(ctx context.Context, queueName, groupID strin
 		return err
 	}
 
-	group.Consumers[consumer.ID] = consumer
-	group.UpdatedAt = time.Now()
+	group.SetConsumer(consumer.ID, consumer)
 
 	return a.groupStore.Save(group)
 }
@@ -439,8 +460,7 @@ func (a *Adapter) UnregisterConsumer(ctx context.Context, queueName, groupID, co
 		return err
 	}
 
-	delete(group.Consumers, consumerID)
-	group.UpdatedAt = time.Now()
+	group.DeleteConsumer(consumerID)
 
 	return a.groupStore.Save(group)
 }
@@ -452,10 +472,11 @@ func (a *Adapter) ListConsumers(ctx context.Context, queueName, groupID string) 
 		return nil, err
 	}
 
-	result := make([]*types.ConsumerInfo, 0, len(group.Consumers))
-	for _, consumer := range group.Consumers {
-		result = append(result, consumer)
-	}
+	result := make([]*types.ConsumerInfo, 0, group.ConsumerCount())
+	group.ForEachConsumer(func(id string, info *types.ConsumerInfo) bool {
+		result = append(result, info)
+		return true
+	})
 
 	return result, nil
 }
@@ -482,8 +503,9 @@ func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.C
 		return
 	}
 
-	for partitionID, cursor := range cursors {
-		c := group.GetCursor(int(partitionID))
+	// Use partition 0 cursor for stream cursor
+	if cursor, ok := cursors[0]; ok {
+		c := group.GetCursor()
 		c.Cursor = cursor.Cursor
 		c.Committed = cursor.Committed
 	}
@@ -508,17 +530,12 @@ func (a *Adapter) syncPELFromStore(queueName, groupID string, group *types.Consu
 }
 
 // logMessageToTypes converts a log Message to a types.Message.
-func logMessageToTypes(msg *Message, partitionID int) *types.Message {
+func logMessageToTypes(msg *Message) *types.Message {
 	result := &types.Message{
-		Sequence:    msg.Offset,
-		Payload:     msg.Value,
-		PartitionID: partitionID,
-		CreatedAt:   msg.Timestamp,
-		Properties:  make(map[string]string),
-	}
-
-	if msg.Key != nil {
-		result.PartitionKey = string(msg.Key)
+		Sequence:   msg.Offset,
+		Payload:    msg.Value,
+		CreatedAt:  msg.Timestamp,
+		Properties: make(map[string]string),
 	}
 
 	for k, v := range msg.Headers {
@@ -541,7 +558,6 @@ func logMessageToTypes(msg *Message, partitionID int) *types.Message {
 func pelEntryToTypes(entry *PELEntry) *types.PendingEntry {
 	return &types.PendingEntry{
 		Offset:        entry.Offset,
-		PartitionID:   int(entry.PartitionID),
 		ConsumerID:    entry.ConsumerID,
 		ClaimedAt:     time.UnixMilli(entry.ClaimedAt),
 		DeliveryCount: int(entry.DeliveryCount),
@@ -552,15 +568,13 @@ func pelEntryToTypes(entry *PELEntry) *types.PendingEntry {
 func pendingEntryToTypes(entry *PendingEntry) *types.PendingEntry {
 	return &types.PendingEntry{
 		Offset:        entry.Offset,
-		PartitionID:   int(entry.PartitionID),
 		ConsumerID:    entry.ConsumerID,
 		ClaimedAt:     time.UnixMilli(entry.DeliveredAt),
 		DeliveryCount: int(entry.DeliveryCount),
 	}
 }
 
-// Compile-time interface assertions
-var (
-	_ storage.LogStore           = (*Adapter)(nil)
-	_ storage.ConsumerGroupStore = (*Adapter)(nil)
-)
+// matchTopic checks if a topic matches a topic pattern using MQTT-style wildcards.
+func matchTopic(pattern, topic string) bool {
+	return topics.TopicMatch(pattern, topic)
+}

@@ -24,38 +24,34 @@ import (
 type Handler struct {
 	queuev1connect.UnimplementedQueueServiceHandler
 
-	manager    *queue.Manager
-	logStore   storage.LogStore
-	groupStore storage.ConsumerGroupStore
-	logger     *slog.Logger
+	manager     *queue.Manager
+	queueStore storage.QueueStore
+	groupStore  storage.ConsumerGroupStore
+	logger      *slog.Logger
 }
 
 // NewHandler creates a new queue service handler.
-func NewHandler(manager *queue.Manager, logStore storage.LogStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *Handler {
+func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Handler{
-		manager:    manager,
-		logStore:   logStore,
-		groupStore: groupStore,
-		logger:     logger,
+		manager:     manager,
+		queueStore: queueStore,
+		groupStore:  groupStore,
+		logger:      logger,
 	}
 }
 
-// --- Queue Management ---
+// --- Queue Management (now Stream Management) ---
 
 func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.CreateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	msg := req.Msg
 
 	config := types.QueueConfig{
 		Name:       msg.Name,
-		Partitions: int(msg.Partitions),
+		Topics:     []string{msg.Name}, // Default subject matches stream name
 		MessageTTL: 7 * 24 * time.Hour,
-	}
-
-	if config.Partitions == 0 {
-		config.Partitions = 10
 	}
 
 	if msg.Config != nil && msg.Config.Retention != nil && msg.Config.Retention.MaxAge != nil {
@@ -66,11 +62,11 @@ func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.
 		return nil, connect.NewError(connect.CodeAlreadyExists, err)
 	}
 
-	return connect.NewResponse(h.queueToProto(&config)), nil
+	return connect.NewResponse(h.streamToProto(&config)), nil
 }
 
 func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.GetQueueRequest]) (*connect.Response[queuev1.Queue], error) {
-	config, err := h.logStore.GetQueue(ctx, req.Msg.Name)
+	config, err := h.queueStore.GetQueue(ctx, req.Msg.Name)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
 			return nil, connect.NewError(connect.CodeNotFound, err)
@@ -78,18 +74,18 @@ func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.Get
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(h.queueToProto(config)), nil
+	return connect.NewResponse(h.streamToProto(config)), nil
 }
 
 func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.ListQueuesRequest]) (*connect.Response[queuev1.ListQueuesResponse], error) {
-	configs, err := h.logStore.ListQueues(ctx)
+	configs, err := h.queueStore.ListQueues(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	queues := make([]*queuev1.Queue, len(configs))
 	for i := range configs {
-		queues[i] = h.queueToProto(&configs[i])
+		queues[i] = h.streamToProto(&configs[i])
 	}
 
 	return connect.NewResponse(&queuev1.ListQueuesResponse{
@@ -109,7 +105,7 @@ func (h *Handler) DeleteQueue(ctx context.Context, req *connect.Request[queuev1.
 }
 
 func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.UpdateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
-	config, err := h.logStore.GetQueue(ctx, req.Msg.Name)
+	config, err := h.queueStore.GetQueue(ctx, req.Msg.Name)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
 			return nil, connect.NewError(connect.CodeNotFound, err)
@@ -117,7 +113,7 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(h.queueToProto(config)), nil
+	return connect.NewResponse(h.streamToProto(config)), nil
 }
 
 // --- Append Operations ---
@@ -131,28 +127,16 @@ func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.Appen
 			properties[k] = string(v)
 		}
 	}
-	if len(msg.PartitionKey) > 0 {
-		properties["partition-key"] = string(msg.PartitionKey)
-	}
 
-	if err := h.manager.Enqueue(ctx, msg.QueueName, msg.Value, properties); err != nil {
+	if err := h.manager.Publish(ctx, msg.QueueName, msg.Value, properties); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	config, err := h.logStore.GetQueue(ctx, msg.QueueName)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	partitionID := h.getPartitionID(string(msg.PartitionKey), config.Partitions)
-	if msg.PartitionId != nil {
-		partitionID = int(*msg.PartitionId)
-	}
-	tail, _ := h.logStore.Tail(ctx, msg.QueueName, partitionID)
+	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
 
 	return connect.NewResponse(&queuev1.AppendResponse{
 		Offset:      tail - 1,
-		PartitionId: uint32(partitionID),
+		PartitionId: 0, // Stream model has no partitions
 		Timestamp:   timestamppb.Now(),
 	}), nil
 }
@@ -160,18 +144,9 @@ func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.Appen
 func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.AppendBatchRequest]) (*connect.Response[queuev1.AppendBatchResponse], error) {
 	msg := req.Msg
 
-	config, err := h.logStore.GetQueue(ctx, msg.QueueName)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	partitionID := h.getPartitionID(string(msg.PartitionKey), config.Partitions)
-	if msg.PartitionId != nil {
-		partitionID = int(*msg.PartitionId)
-	}
-
 	var firstOffset, lastOffset uint64
 	var count uint32
+
 	for i, entry := range msg.Messages {
 		properties := make(map[string]string)
 		if len(entry.Headers) > 0 {
@@ -180,11 +155,11 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 			}
 		}
 
-		if err := h.manager.Enqueue(ctx, msg.QueueName, entry.Value, properties); err != nil {
+		if err := h.manager.Publish(ctx, msg.QueueName, entry.Value, properties); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 
-		tail, _ := h.logStore.Tail(ctx, msg.QueueName, partitionID)
+		tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
 		offset := tail - 1
 		if i == 0 {
 			firstOffset = offset
@@ -196,7 +171,7 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 	return connect.NewResponse(&queuev1.AppendBatchResponse{
 		FirstOffset: firstOffset,
 		LastOffset:  lastOffset,
-		PartitionId: uint32(partitionID),
+		PartitionId: 0,
 		Count:       count,
 		Timestamp:   timestamppb.Now(),
 	}), nil
@@ -205,7 +180,6 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream[queuev1.AppendRequest]) (*connect.Response[queuev1.AppendBatchResponse], error) {
 	var firstOffset, lastOffset uint64
 	var count uint32
-	var lastPartitionID uint32
 
 	first := true
 	for stream.Receive() {
@@ -217,24 +191,12 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 				properties[k] = string(v)
 			}
 		}
-		if len(msg.PartitionKey) > 0 {
-			properties["partition-key"] = string(msg.PartitionKey)
-		}
 
-		if err := h.manager.Enqueue(ctx, msg.QueueName, msg.Value, properties); err != nil {
+		if err := h.manager.Publish(ctx, msg.QueueName, msg.Value, properties); err != nil {
 			continue
 		}
 
-		config, err := h.logStore.GetQueue(ctx, msg.QueueName)
-		if err != nil {
-			continue
-		}
-
-		partitionID := h.getPartitionID(string(msg.PartitionKey), config.Partitions)
-		if msg.PartitionId != nil {
-			partitionID = int(*msg.PartitionId)
-		}
-		tail, _ := h.logStore.Tail(ctx, msg.QueueName, partitionID)
+		tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
 		offset := tail - 1
 
 		if first {
@@ -242,7 +204,6 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 			first = false
 		}
 		lastOffset = offset
-		lastPartitionID = uint32(partitionID)
 		count++
 	}
 
@@ -253,7 +214,7 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 	return connect.NewResponse(&queuev1.AppendBatchResponse{
 		FirstOffset: firstOffset,
 		LastOffset:  lastOffset,
-		PartitionId: lastPartitionID,
+		PartitionId: 0,
 		Count:       count,
 		Timestamp:   timestamppb.Now(),
 	}), nil
@@ -264,7 +225,7 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 func (h *Handler) Read(ctx context.Context, req *connect.Request[queuev1.ReadRequest]) (*connect.Response[queuev1.Message], error) {
 	msg := req.Msg
 
-	message, err := h.logStore.Read(ctx, msg.QueueName, int(msg.PartitionId), msg.Offset)
+	message, err := h.queueStore.Read(ctx, msg.QueueName, msg.Offset)
 	if err != nil {
 		if err == storage.ErrOffsetOutOfRange {
 			return nil, connect.NewError(connect.CodeOutOfRange, err)
@@ -283,7 +244,7 @@ func (h *Handler) ReadBatch(ctx context.Context, req *connect.Request[queuev1.Re
 		limit = 100
 	}
 
-	messages, err := h.logStore.ReadBatch(ctx, msg.QueueName, int(msg.PartitionId), msg.StartOffset, limit)
+	messages, err := h.queueStore.ReadBatch(ctx, msg.QueueName, msg.StartOffset, limit)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -309,7 +270,7 @@ func (h *Handler) Tail(ctx context.Context, req *connect.Request[queuev1.TailReq
 		default:
 		}
 
-		messages, err := h.logStore.ReadBatch(ctx, msg.QueueName, int(msg.PartitionId), offset, 10)
+		messages, err := h.queueStore.ReadBatch(ctx, msg.QueueName, offset, 10)
 		if err != nil {
 			if err == storage.ErrOffsetOutOfRange {
 				time.Sleep(100 * time.Millisecond)
@@ -336,12 +297,12 @@ func (h *Handler) Tail(ctx context.Context, req *connect.Request[queuev1.TailReq
 func (h *Handler) SeekToOffset(ctx context.Context, req *connect.Request[queuev1.SeekToOffsetRequest]) (*connect.Response[queuev1.SeekResponse], error) {
 	msg := req.Msg
 
-	head, err := h.logStore.Head(ctx, msg.QueueName, int(msg.PartitionId))
+	head, err := h.queueStore.Head(ctx, msg.QueueName)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	tail, err := h.logStore.Tail(ctx, msg.QueueName, int(msg.PartitionId))
+	tail, err := h.queueStore.Tail(ctx, msg.QueueName)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -356,21 +317,21 @@ func (h *Handler) SeekToOffset(ctx context.Context, req *connect.Request[queuev1
 
 	return connect.NewResponse(&queuev1.SeekResponse{
 		Offset:      offset,
-		PartitionId: msg.PartitionId,
+		PartitionId: 0,
 	}), nil
 }
 
 func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queuev1.SeekToTimestampRequest]) (*connect.Response[queuev1.SeekResponse], error) {
 	msg := req.Msg
 
-	head, err := h.logStore.Head(ctx, msg.QueueName, int(msg.PartitionId))
+	head, err := h.queueStore.Head(ctx, msg.QueueName)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	return connect.NewResponse(&queuev1.SeekResponse{
 		Offset:      head,
-		PartitionId: msg.PartitionId,
+		PartitionId: 0,
 	}), nil
 }
 
@@ -379,7 +340,7 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 func (h *Handler) CreateConsumerGroup(ctx context.Context, req *connect.Request[queuev1.CreateConsumerGroupRequest]) (*connect.Response[queuev1.ConsumerGroup], error) {
 	msg := req.Msg
 
-	config, err := h.logStore.GetQueue(ctx, msg.QueueName)
+	_, err := h.queueStore.GetQueue(ctx, msg.QueueName)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
 			return nil, connect.NewError(connect.CodeNotFound, err)
@@ -387,24 +348,11 @@ func (h *Handler) CreateConsumerGroup(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	group := &types.ConsumerGroupState{
-		ID:        msg.GroupId,
-		QueueName: msg.QueueName,
-		Pattern:   "",
-		Cursors:   make(map[int]*types.PartitionCursor),
-		Consumers: make(map[string]*types.ConsumerInfo),
-		PEL:       make(map[string][]*types.PendingEntry),
-		CreatedAt: time.Now(),
-	}
+	head, _ := h.queueStore.Head(ctx, msg.QueueName)
 
-	for i := 0; i < config.Partitions; i++ {
-		head, _ := h.logStore.Head(ctx, msg.QueueName, i)
-		group.Cursors[i] = &types.PartitionCursor{
-			PartitionID: i,
-			Cursor:      head,
-			Committed:   head,
-		}
-	}
+	group := types.NewConsumerGroupState(msg.QueueName, msg.GroupId, "")
+	group.Cursor.Cursor = head
+	group.Cursor.Committed = head
 
 	if err := h.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		if err == storage.ErrConsumerGroupExists {
@@ -472,19 +420,9 @@ func (h *Handler) JoinGroup(ctx context.Context, req *connect.Request[queuev1.Jo
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	assignedPartitions := make([]uint32, 0)
-	for partitionID := range group.Cursors {
-		assignedPartitions = append(assignedPartitions, uint32(partitionID))
-	}
-
 	return connect.NewResponse(&queuev1.JoinGroupResponse{
 		GenerationId:       1,
-		AssignedPartitions: assignedPartitions,
+		AssignedPartitions: []uint32{0}, // Single partition in queue model
 	}), nil
 }
 
@@ -506,8 +444,8 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	consumer, exists := group.Consumers[msg.ConsumerId]
-	if !exists {
+	consumer := group.GetConsumer(msg.ConsumerId)
+	if consumer == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("consumer not found"))
 	}
 
@@ -533,32 +471,26 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 		limit = 10
 	}
 
-	var messages []*queuev1.Message
-	for partitionID, cursor := range group.Cursors {
-		msgs, err := h.logStore.ReadBatch(ctx, msg.QueueName, partitionID, cursor.Cursor, limit-len(messages))
-		if err != nil {
-			continue
-		}
+	cursor := group.GetCursor()
+	messages, err := h.queueStore.ReadBatch(ctx, msg.QueueName, cursor.Cursor, limit)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 
-		for _, m := range msgs {
-			entry := &types.PendingEntry{
-				PartitionID: partitionID,
-				Offset:      m.Sequence,
-				ConsumerID:  msg.ConsumerId,
-				ClaimedAt:   time.Now(),
-			}
-			h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry)
-
-			messages = append(messages, h.messageToProto(m))
+	var protoMsgs []*queuev1.Message
+	for _, m := range messages {
+		entry := &types.PendingEntry{
+			Offset:     m.Sequence,
+			ConsumerID: msg.ConsumerId,
+			ClaimedAt:  time.Now(),
 		}
+		h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry)
 
-		if len(messages) >= limit {
-			break
-		}
+		protoMsgs = append(protoMsgs, h.messageToProto(m))
 	}
 
 	return connect.NewResponse(&queuev1.ConsumeResponse{
-		Messages: messages,
+		Messages: protoMsgs,
 	}), nil
 }
 
@@ -570,10 +502,8 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 		return connect.NewError(connect.CodeInternal, err)
 	}
 
-	cursors := make(map[int]uint64)
-	for partitionID, cursor := range group.Cursors {
-		cursors[partitionID] = cursor.Cursor
-	}
+	cursor := group.GetCursor()
+	offset := cursor.Cursor
 
 	for {
 		select {
@@ -582,32 +512,24 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 		default:
 		}
 
-		sent := false
-		for partitionID, offset := range cursors {
-			messages, err := h.logStore.ReadBatch(ctx, msg.QueueName, partitionID, offset, 10)
-			if err != nil || len(messages) == 0 {
-				continue
-			}
-
-			for _, m := range messages {
-				entry := &types.PendingEntry{
-					PartitionID: partitionID,
-					Offset:      m.Sequence,
-					ConsumerID:  msg.ConsumerId,
-					ClaimedAt:   time.Now(),
-				}
-				h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry)
-
-				if err := stream.Send(h.messageToProto(m)); err != nil {
-					return err
-				}
-				cursors[partitionID] = m.Sequence + 1
-				sent = true
-			}
+		messages, err := h.queueStore.ReadBatch(ctx, msg.QueueName, offset, 10)
+		if err != nil || len(messages) == 0 {
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 
-		if !sent {
-			time.Sleep(100 * time.Millisecond)
+		for _, m := range messages {
+			entry := &types.PendingEntry{
+				Offset:     m.Sequence,
+				ConsumerID: msg.ConsumerId,
+				ClaimedAt:  time.Now(),
+			}
+			h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry)
+
+			if err := stream.Send(h.messageToProto(m)); err != nil {
+				return err
+			}
+			offset = m.Sequence + 1
 		}
 	}
 }
@@ -618,7 +540,7 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 	var success int32
 	for _, partitionOffsets := range msg.Offsets {
 		for _, offset := range partitionOffsets.Offsets {
-			err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, int(partitionOffsets.PartitionId), offset)
+			err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
 			if err == nil {
 				success++
 			}
@@ -626,7 +548,7 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 
 		if len(partitionOffsets.Offsets) > 0 {
 			maxOffset := partitionOffsets.Offsets[len(partitionOffsets.Offsets)-1]
-			h.groupStore.UpdateCommitted(ctx, msg.QueueName, msg.GroupId, int(partitionOffsets.PartitionId), maxOffset+1)
+			h.groupStore.UpdateCommitted(ctx, msg.QueueName, msg.GroupId, maxOffset+1)
 		}
 	}
 
@@ -640,7 +562,7 @@ func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackReq
 
 	for _, partitionOffsets := range msg.Offsets {
 		for _, offset := range partitionOffsets.Offsets {
-			h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, int(partitionOffsets.PartitionId), offset)
+			h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
 		}
 	}
 
@@ -675,11 +597,7 @@ func (h *Handler) Claim(ctx context.Context, req *connect.Request[queuev1.ClaimR
 				continue
 			}
 
-			if msg.PartitionId != nil && entry.PartitionID != int(*msg.PartitionId) {
-				continue
-			}
-
-			m, err := h.logStore.Read(ctx, msg.QueueName, entry.PartitionID, entry.Offset)
+			m, err := h.queueStore.Read(ctx, msg.QueueName, entry.Offset)
 			if err != nil {
 				continue
 			}
@@ -722,7 +640,7 @@ func (h *Handler) GetPending(ctx context.Context, req *connect.Request[queuev1.G
 	protoEntries := make([]*queuev1.PendingEntry, len(entries))
 	for i, e := range entries {
 		protoEntries[i] = &queuev1.PendingEntry{
-			PartitionId:   uint32(e.PartitionID),
+			PartitionId:   0, // Stream model has no partitions
 			Offset:        e.Offset,
 			ConsumerId:    e.ConsumerID,
 			DeliveredAt:   timestamppb.New(e.ClaimedAt),
@@ -735,25 +653,25 @@ func (h *Handler) GetPending(ctx context.Context, req *connect.Request[queuev1.G
 	}), nil
 }
 
-// --- Partition Info ---
+// --- Partition Info (returns single partition for queue model) ---
 
 func (h *Handler) GetPartitionInfo(ctx context.Context, req *connect.Request[queuev1.GetPartitionInfoRequest]) (*connect.Response[queuev1.PartitionInfo], error) {
 	msg := req.Msg
 
-	head, err := h.logStore.Head(ctx, msg.QueueName, int(msg.PartitionId))
+	head, err := h.queueStore.Head(ctx, msg.QueueName)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	tail, err := h.logStore.Tail(ctx, msg.QueueName, int(msg.PartitionId))
+	tail, err := h.queueStore.Tail(ctx, msg.QueueName)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	count, _ := h.logStore.Count(ctx, msg.QueueName, int(msg.PartitionId))
+	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 
 	return connect.NewResponse(&queuev1.PartitionInfo{
-		PartitionId:  msg.PartitionId,
+		PartitionId:  0,
 		HeadOffset:   head,
 		TailOffset:   tail,
 		MessageCount: count,
@@ -763,24 +681,17 @@ func (h *Handler) GetPartitionInfo(ctx context.Context, req *connect.Request[que
 func (h *Handler) ListPartitions(ctx context.Context, req *connect.Request[queuev1.ListPartitionsRequest]) (*connect.Response[queuev1.ListPartitionsResponse], error) {
 	msg := req.Msg
 
-	config, err := h.logStore.GetQueue(ctx, msg.QueueName)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
+	head, _ := h.queueStore.Head(ctx, msg.QueueName)
+	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
+	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 
-	partitions := make([]*queuev1.PartitionInfo, config.Partitions)
-	for i := 0; i < config.Partitions; i++ {
-		head, _ := h.logStore.Head(ctx, msg.QueueName, i)
-		tail, _ := h.logStore.Tail(ctx, msg.QueueName, i)
-		count, _ := h.logStore.Count(ctx, msg.QueueName, i)
-
-		partitions[i] = &queuev1.PartitionInfo{
-			PartitionId:  uint32(i),
-			HeadOffset:   head,
-			TailOffset:   tail,
-			MessageCount: count,
-		}
-	}
+	// Stream model has single partition
+	partitions := []*queuev1.PartitionInfo{{
+		PartitionId:  0,
+		HeadOffset:   head,
+		TailOffset:   tail,
+		MessageCount: count,
+	}}
 
 	return connect.NewResponse(&queuev1.ListPartitionsResponse{
 		Partitions: partitions,
@@ -792,31 +703,22 @@ func (h *Handler) ListPartitions(ctx context.Context, req *connect.Request[queue
 func (h *Handler) GetStats(ctx context.Context, req *connect.Request[queuev1.GetStatsRequest]) (*connect.Response[queuev1.QueueStats], error) {
 	msg := req.Msg
 
-	config, err := h.logStore.GetQueue(ctx, msg.QueueName)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
+	head, _ := h.queueStore.Head(ctx, msg.QueueName)
+	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
+	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 
-	totalCount, _ := h.logStore.TotalCount(ctx, msg.QueueName)
-
-	partitionStats := make([]*queuev1.PartitionStats, config.Partitions)
-	for i := 0; i < config.Partitions; i++ {
-		head, _ := h.logStore.Head(ctx, msg.QueueName, i)
-		tail, _ := h.logStore.Tail(ctx, msg.QueueName, i)
-		count, _ := h.logStore.Count(ctx, msg.QueueName, i)
-
-		partitionStats[i] = &queuev1.PartitionStats{
-			PartitionId:  uint32(i),
-			HeadOffset:   head,
-			TailOffset:   tail,
-			MessageCount: count,
-		}
-	}
+	// Stream model has single partition
+	partitionStats := []*queuev1.PartitionStats{{
+		PartitionId:  0,
+		HeadOffset:   head,
+		TailOffset:   tail,
+		MessageCount: count,
+	}}
 
 	return connect.NewResponse(&queuev1.QueueStats{
 		QueueName:     msg.QueueName,
 		Partitions:    partitionStats,
-		TotalMessages: totalCount,
+		TotalMessages: count, // In queue model, count is the total
 	}), nil
 }
 
@@ -825,35 +727,19 @@ func (h *Handler) GetStats(ctx context.Context, req *connect.Request[queuev1.Get
 func (h *Handler) Purge(ctx context.Context, req *connect.Request[queuev1.PurgeRequest]) (*connect.Response[queuev1.PurgeResponse], error) {
 	msg := req.Msg
 
-	config, err := h.logStore.GetQueue(ctx, msg.QueueName)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	var purged uint64
-	if msg.PartitionId != nil {
-		count, _ := h.logStore.Count(ctx, msg.QueueName, int(*msg.PartitionId))
-		tail, _ := h.logStore.Tail(ctx, msg.QueueName, int(*msg.PartitionId))
-		h.logStore.Truncate(ctx, msg.QueueName, int(*msg.PartitionId), tail)
-		purged = count
-	} else {
-		for i := 0; i < config.Partitions; i++ {
-			count, _ := h.logStore.Count(ctx, msg.QueueName, i)
-			tail, _ := h.logStore.Tail(ctx, msg.QueueName, i)
-			h.logStore.Truncate(ctx, msg.QueueName, i, tail)
-			purged += count
-		}
-	}
+	count, _ := h.queueStore.Count(ctx, msg.QueueName)
+	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
+	h.queueStore.Truncate(ctx, msg.QueueName, tail)
 
 	return connect.NewResponse(&queuev1.PurgeResponse{
-		MessagesDeleted: purged,
+		MessagesDeleted: count,
 	}), nil
 }
 
 func (h *Handler) Truncate(ctx context.Context, req *connect.Request[queuev1.TruncateRequest]) (*connect.Response[emptypb.Empty], error) {
 	msg := req.Msg
 
-	if err := h.logStore.Truncate(ctx, msg.QueueName, int(msg.PartitionId), msg.MinOffset); err != nil {
+	if err := h.queueStore.Truncate(ctx, msg.QueueName, msg.MinOffset); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -862,10 +748,10 @@ func (h *Handler) Truncate(ctx context.Context, req *connect.Request[queuev1.Tru
 
 // --- Helper Functions ---
 
-func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
+func (h *Handler) streamToProto(config *types.QueueConfig) *queuev1.Queue {
 	return &queuev1.Queue{
 		Name:       config.Name,
-		Partitions: uint32(config.Partitions),
+		Partitions: 1, // Stream model has single partition
 		Config: &queuev1.QueueConfig{
 			Retention: &queuev1.RetentionConfig{
 				MaxAge: durationpb.New(config.MessageTTL),
@@ -877,10 +763,9 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {
 	protoMsg := &queuev1.Message{
 		Offset:      msg.Sequence,
-		PartitionId: uint32(msg.PartitionID),
+		PartitionId: 0,
 		Timestamp:   timestamppb.New(msg.CreatedAt),
 		Value:       msg.GetPayload(),
-		Key:         []byte(msg.PartitionKey),
 	}
 
 	if len(msg.Properties) > 0 {
@@ -902,14 +787,13 @@ func (h *Handler) groupToProto(group *types.ConsumerGroupState) *queuev1.Consume
 		})
 	}
 
-	cursors := make([]*queuev1.PartitionCursor, 0, len(group.Cursors))
-	for partitionID, cursor := range group.Cursors {
-		cursors = append(cursors, &queuev1.PartitionCursor{
-			PartitionId: uint32(partitionID),
-			Cursor:      cursor.Cursor,
-			Committed:   cursor.Committed,
-		})
-	}
+	// Stream model has single cursor
+	cursor := group.GetCursor()
+	cursors := []*queuev1.PartitionCursor{{
+		PartitionId: 0,
+		Cursor:      cursor.Cursor,
+		Committed:   cursor.Committed,
+	}}
 
 	var pendingCount uint64
 	for _, entries := range group.PEL {
@@ -924,21 +808,4 @@ func (h *Handler) groupToProto(group *types.ConsumerGroupState) *queuev1.Consume
 		PendingCount: pendingCount,
 		CreatedAt:    timestamppb.New(group.CreatedAt),
 	}
-}
-
-func (h *Handler) getPartitionID(key string, partitions int) int {
-	if partitions <= 0 {
-		return 0
-	}
-	if key == "" {
-		return 0
-	}
-
-	var hash uint32 = 2166136261
-	for i := 0; i < len(key); i++ {
-		hash ^= uint32(key[i])
-		hash *= 16777619
-	}
-
-	return int(hash % uint32(partitions))
 }

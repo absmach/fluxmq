@@ -23,7 +23,7 @@ type ConsumerGroupStateStore struct {
 	dirty  map[string]bool                                 // groupKey -> dirty flag
 }
 
-const consumerGroupVersion uint8 = 1
+const consumerGroupVersion uint8 = 2
 
 // NewConsumerGroupStateStore creates or opens a consumer group state store.
 func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error) {
@@ -47,26 +47,15 @@ func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error
 
 // loadAll loads all consumer group states from disk.
 func (s *ConsumerGroupStateStore) loadAll() error {
-	// Walk through all files to find .json files (handles nested paths)
 	err := filepath.Walk(s.dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip errors
+			return nil
 		}
 
 		if info.IsDir() || filepath.Ext(path) != ".json" {
 			return nil
 		}
 
-		// Get the relative path from the groups directory
-		relPath, err := filepath.Rel(s.dir, path)
-		if err != nil {
-			return nil
-		}
-
-		// Remove the .json extension
-		relPath = relPath[:len(relPath)-5]
-
-		// Load the state file directly and get queue name and group ID from it
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
@@ -89,8 +78,8 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 		state := wrapper.State
 
 		// Ensure maps are initialized
-		if state.Cursors == nil {
-			state.Cursors = make(map[int]*types.PartitionCursor)
+		if state.Cursor == nil {
+			state.Cursor = &types.QueueCursor{}
 		}
 		if state.PEL == nil {
 			state.PEL = make(map[string][]*types.PendingEntry)
@@ -100,12 +89,12 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 		}
 
 		// Add to memory map
-		queueGroups, ok := s.groups[state.QueueName]
+		streamGroups, ok := s.groups[state.QueueName]
 		if !ok {
-			queueGroups = make(map[string]*types.ConsumerGroupState)
-			s.groups[state.QueueName] = queueGroups
+			streamGroups = make(map[string]*types.ConsumerGroupState)
+			s.groups[state.QueueName] = streamGroups
 		}
-		queueGroups[state.ID] = state
+		streamGroups[state.ID] = state
 
 		return nil
 	})
@@ -135,7 +124,7 @@ func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.C
 	}
 
 	var wrapper struct {
-		Version uint8                    `json:"version"`
+		Version uint8                     `json:"version"`
 		State   *types.ConsumerGroupState `json:"state"`
 		SavedAt int64                     `json:"saved_at"`
 	}
@@ -151,8 +140,8 @@ func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.C
 	state := wrapper.State
 
 	// Ensure maps are initialized
-	if state.Cursors == nil {
-		state.Cursors = make(map[int]*types.PartitionCursor)
+	if state.Cursor == nil {
+		state.Cursor = &types.QueueCursor{}
 	}
 	if state.PEL == nil {
 		state.PEL = make(map[string][]*types.PendingEntry)
@@ -169,13 +158,13 @@ func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	queueGroups, ok := s.groups[state.QueueName]
+	streamGroups, ok := s.groups[state.QueueName]
 	if !ok {
-		queueGroups = make(map[string]*types.ConsumerGroupState)
-		s.groups[state.QueueName] = queueGroups
+		streamGroups = make(map[string]*types.ConsumerGroupState)
+		s.groups[state.QueueName] = streamGroups
 	}
 
-	queueGroups[state.ID] = state
+	streamGroups[state.ID] = state
 	s.dirty[groupKey(state.QueueName, state.ID)] = true
 
 	return s.saveGroup(state)
@@ -185,7 +174,6 @@ func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {
 func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) error {
 	path := s.groupPath(state.QueueName, state.ID)
 
-	// Create the full directory path (handles nested paths from queue name and group ID)
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create consumer group directory: %w", err)
@@ -227,12 +215,12 @@ func (s *ConsumerGroupStateStore) Get(queueName, groupID string) (*types.Consume
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	queueGroups, ok := s.groups[queueName]
+	streamGroups, ok := s.groups[queueName]
 	if !ok {
 		return nil, ErrGroupNotFound
 	}
 
-	state, ok := queueGroups[groupID]
+	state, ok := streamGroups[groupID]
 	if !ok {
 		return nil, ErrGroupNotFound
 	}
@@ -245,10 +233,10 @@ func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	queueGroups, ok := s.groups[queueName]
+	streamGroups, ok := s.groups[queueName]
 	if ok {
-		delete(queueGroups, groupID)
-		if len(queueGroups) == 0 {
+		delete(streamGroups, groupID)
+		if len(streamGroups) == 0 {
 			delete(s.groups, queueName)
 		}
 	}
@@ -260,28 +248,28 @@ func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 		return err
 	}
 
-	// Clean up empty queue directory
-	queueDir := filepath.Join(s.dir, queueName)
-	entries, _ := os.ReadDir(queueDir)
+	// Clean up empty stream directory
+	streamDir := filepath.Join(s.dir, queueName)
+	entries, _ := os.ReadDir(streamDir)
 	if len(entries) == 0 {
-		os.Remove(queueDir)
+		os.Remove(streamDir)
 	}
 
 	return nil
 }
 
-// List returns all consumer groups for a queue.
+// List returns all consumer groups for a stream.
 func (s *ConsumerGroupStateStore) List(queueName string) ([]*types.ConsumerGroupState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	queueGroups, ok := s.groups[queueName]
+	streamGroups, ok := s.groups[queueName]
 	if !ok {
 		return []*types.ConsumerGroupState{}, nil
 	}
 
-	result := make([]*types.ConsumerGroupState, 0, len(queueGroups))
-	for _, state := range queueGroups {
+	result := make([]*types.ConsumerGroupState, 0, len(streamGroups))
+	for _, state := range streamGroups {
 		result = append(result, state)
 	}
 
@@ -294,8 +282,8 @@ func (s *ConsumerGroupStateStore) ListAll() ([]*types.ConsumerGroupState, error)
 	defer s.mu.RUnlock()
 
 	var result []*types.ConsumerGroupState
-	for _, queueGroups := range s.groups {
-		for _, state := range queueGroups {
+	for _, streamGroups := range s.groups {
+		for _, state := range streamGroups {
 			result = append(result, state)
 		}
 	}
@@ -310,9 +298,8 @@ func (s *ConsumerGroupStateStore) Sync() error {
 
 	var lastErr error
 	for key := range s.dirty {
-		// Parse the key to get queue name and group ID
-		for queueName, queueGroups := range s.groups {
-			for groupID, state := range queueGroups {
+		for queueName, streamGroups := range s.groups {
+			for groupID, state := range streamGroups {
 				if groupKey(queueName, groupID) == key {
 					if err := s.saveGroup(state); err != nil {
 						lastErr = err
@@ -335,12 +322,12 @@ func (s *ConsumerGroupStateStore) Exists(queueName, groupID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	queueGroups, ok := s.groups[queueName]
+	streamGroups, ok := s.groups[queueName]
 	if !ok {
 		return false
 	}
 
-	_, ok = queueGroups[groupID]
+	_, ok = streamGroups[groupID]
 	return ok
 }
 
@@ -349,38 +336,38 @@ func (s *ConsumerGroupStateStore) CreateIfNotExists(state *types.ConsumerGroupSt
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	queueGroups, ok := s.groups[state.QueueName]
+	streamGroups, ok := s.groups[state.QueueName]
 	if !ok {
-		queueGroups = make(map[string]*types.ConsumerGroupState)
-		s.groups[state.QueueName] = queueGroups
+		streamGroups = make(map[string]*types.ConsumerGroupState)
+		s.groups[state.QueueName] = streamGroups
 	}
 
-	if _, exists := queueGroups[state.ID]; exists {
-		return nil // Already exists
+	if _, exists := streamGroups[state.ID]; exists {
+		return nil
 	}
 
-	queueGroups[state.ID] = state
+	streamGroups[state.ID] = state
 	s.dirty[groupKey(state.QueueName, state.ID)] = true
 
 	return s.saveGroup(state)
 }
 
-// UpdateCursor updates just the cursor for a partition.
-func (s *ConsumerGroupStateStore) UpdateCursor(queueName, groupID string, partitionID int, cursor, committed uint64) error {
+// UpdateCursor updates just the cursor for a stream.
+func (s *ConsumerGroupStateStore) UpdateCursor(queueName, groupID string, cursor, committed uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	queueGroups, ok := s.groups[queueName]
+	streamGroups, ok := s.groups[queueName]
 	if !ok {
 		return ErrGroupNotFound
 	}
 
-	state, ok := queueGroups[groupID]
+	state, ok := streamGroups[groupID]
 	if !ok {
 		return ErrGroupNotFound
 	}
 
-	c := state.GetCursor(partitionID)
+	c := state.GetCursor()
 	c.Cursor = cursor
 	c.Committed = committed
 	state.UpdatedAt = time.Now()
@@ -390,20 +377,20 @@ func (s *ConsumerGroupStateStore) UpdateCursor(queueName, groupID string, partit
 	return nil
 }
 
-// GetCursor retrieves cursor state for a partition.
-func (s *ConsumerGroupStateStore) GetCursor(queueName, groupID string, partitionID int) (*types.PartitionCursor, error) {
+// GetCursor retrieves cursor state for a stream.
+func (s *ConsumerGroupStateStore) GetCursor(queueName, groupID string) (*types.QueueCursor, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	queueGroups, ok := s.groups[queueName]
+	streamGroups, ok := s.groups[queueName]
 	if !ok {
 		return nil, ErrGroupNotFound
 	}
 
-	state, ok := queueGroups[groupID]
+	state, ok := streamGroups[groupID]
 	if !ok {
 		return nil, ErrGroupNotFound
 	}
 
-	return state.GetCursor(partitionID), nil
+	return state.GetCursor(), nil
 }

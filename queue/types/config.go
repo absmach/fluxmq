@@ -5,23 +5,19 @@ package types
 
 import (
 	"errors"
-	"strings"
 	"time"
 )
 
 // ErrInvalidConfig indicates an invalid queue configuration.
 var ErrInvalidConfig = errors.New("invalid queue configuration")
 
-// OrderingMode defines message ordering guarantees.
-type OrderingMode string
-
+// Queue constants
 const (
-	OrderingNone      OrderingMode = "none"      // No ordering guarantees
-	OrderingPartition OrderingMode = "partition" // FIFO per partition key
-	OrderingStrict    OrderingMode = "strict"    // Global FIFO (single partition)
+	MQTTQueueName  = "mqtt"
+	MQTTQueueTopic = "#"
 )
 
-// ReplicationMode defines the replication behavior for queue messages.
+// ReplicationMode defines the replication behavior for stream messages.
 type ReplicationMode string
 
 const (
@@ -29,19 +25,11 @@ const (
 	ReplicationAsync ReplicationMode = "async" // Return immediately after leader accepts
 )
 
-// PlacementStrategy defines how replicas are assigned to nodes.
-type PlacementStrategy string
-
-const (
-	PlacementRoundRobin PlacementStrategy = "round-robin" // Distribute replicas evenly
-	PlacementManual     PlacementStrategy = "manual"      // Operator-specified placement
-)
-
 // QueueConfig defines configuration for a queue.
 type QueueConfig struct {
-	Name       string
-	Partitions int
-	Ordering   OrderingMode
+	Name     string
+	Topics   []string // Topic patterns that route to this queue (e.g., "sensors/#", "orders/+/created")
+	Reserved bool     // True for system queues like "mqtt" that cannot be deleted
 
 	RetryPolicy RetryPolicy
 	DLQConfig   DLQConfig
@@ -50,7 +38,7 @@ type QueueConfig struct {
 
 	// Limits
 	MaxMessageSize int64
-	MaxQueueDepth  int64
+	MaxStreamDepth int64
 	MessageTTL     time.Duration
 
 	// Performance
@@ -75,15 +63,13 @@ type DLQConfig struct {
 	AlertWebhook string
 }
 
-// ReplicationConfig defines Raft-based replication for queue partitions.
+// ReplicationConfig defines Raft-based replication for queues.
 type ReplicationConfig struct {
 	Enabled           bool
-	ReplicationFactor int               // Number of replicas per partition (default: 3)
-	Mode              ReplicationMode   // sync or async
-	Placement         PlacementStrategy // How to assign replicas to nodes
-	ManualReplicas    map[int][]string  // For manual placement: partitionID -> []nodeID
-	MinInSyncReplicas int               // Min replicas that must ACK (default: 2)
-	AckTimeout        time.Duration     // Timeout for sync mode operations (default: 5s)
+	ReplicationFactor int             // Number of replicas (default: 3)
+	Mode              ReplicationMode // sync or async
+	MinInSyncReplicas int             // Min replicas that must ACK (default: 2)
+	AckTimeout        time.Duration   // Timeout for sync mode operations (default: 5s)
 
 	// Raft tuning (optional, uses defaults if zero)
 	HeartbeatTimeout  time.Duration // Raft heartbeat interval (default: 1s)
@@ -111,13 +97,16 @@ type RetentionPolicy struct {
 }
 
 // DefaultQueueConfig returns default queue configuration.
-func DefaultQueueConfig(name string) QueueConfig {
+func DefaultQueueConfig(name string, topics ...string) QueueConfig {
+	if len(topics) == 0 {
+		topics = []string{"#"} // Match all topics by default
+	}
 	return QueueConfig{
-		Name:             name,
-		Partitions:       10,
-		Ordering:         OrderingPartition,
-		MaxMessageSize:   10 * 1024 * 1024, // 1MB
-		MaxQueueDepth:    100000,
+		Name:   name,
+		Topics: topics,
+		Reserved:         false,
+		MaxMessageSize:   10 * 1024 * 1024, // 10MB
+		MaxStreamDepth:   100000,
 		MessageTTL:       7 * 24 * time.Hour,
 		DeliveryTimeout:  30 * time.Second,
 		BatchSize:        100,
@@ -140,11 +129,17 @@ func DefaultQueueConfig(name string) QueueConfig {
 			Enabled:           false, // Disabled by default for backward compatibility
 			ReplicationFactor: 3,
 			Mode:              ReplicationSync,
-			Placement:         PlacementRoundRobin,
 			MinInSyncReplicas: 2,
 			AckTimeout:        5 * time.Second,
 		},
 	}
+}
+
+// MQTTQueueConfig returns the reserved mqtt queue configuration.
+func MQTTQueueConfig() QueueConfig {
+	config := DefaultQueueConfig(MQTTQueueName, MQTTQueueTopic)
+	config.Reserved = true
+	return config
 }
 
 // Validate validates queue configuration.
@@ -152,21 +147,11 @@ func (c *QueueConfig) Validate() error {
 	switch {
 	case c.Name == "":
 		return ErrInvalidConfig
-	case !strings.HasPrefix(c.Name, "$queue/"):
-		// Queue name must start with $queue/
-		return ErrInvalidConfig
-	case c.Partitions < 1:
-		return ErrInvalidConfig
-	case c.Partitions > 1000:
-		// Reasonable upper limit
-		return ErrInvalidConfig
-	case c.Ordering != OrderingNone && c.Ordering != OrderingPartition && c.Ordering != OrderingStrict:
-		return ErrInvalidConfig
-	case c.Ordering == OrderingStrict && c.Partitions != 1:
+	case len(c.Topics) == 0:
 		return ErrInvalidConfig
 	case c.MaxMessageSize <= 0:
 		return ErrInvalidConfig
-	case c.MaxQueueDepth <= 0:
+	case c.MaxStreamDepth <= 0:
 		return ErrInvalidConfig
 	case c.DeliveryTimeout <= 0:
 		return ErrInvalidConfig
@@ -193,24 +178,8 @@ func (c *QueueConfig) Validate() error {
 			return ErrInvalidConfig
 		case c.Replication.Mode != ReplicationSync && c.Replication.Mode != ReplicationAsync:
 			return ErrInvalidConfig
-		case c.Replication.Placement != PlacementRoundRobin && c.Replication.Placement != PlacementManual:
-			return ErrInvalidConfig
-		case c.Replication.Placement == PlacementManual && len(c.Replication.ManualReplicas) != c.Partitions:
-			return ErrInvalidConfig
 		case c.Replication.AckTimeout <= 0:
 			return ErrInvalidConfig
-		}
-
-		// Validate manual replica assignments
-		if c.Replication.Placement == PlacementManual {
-			for partID, replicas := range c.Replication.ManualReplicas {
-				if partID < 0 || partID >= c.Partitions {
-					return ErrInvalidConfig
-				}
-				if len(replicas) != c.Replication.ReplicationFactor {
-					return ErrInvalidConfig
-				}
-			}
 		}
 	}
 

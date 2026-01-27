@@ -1,9 +1,9 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-// Package log provides an in-memory implementation of the log-based queue storage.
+// Package log provides an in-memory implementation of the stream-based storage.
 // This implementation uses append-only logs with offset-based access, inspired by
-// Kafka and Redis Streams.
+// NATS JetStream.
 package log
 
 import (
@@ -16,22 +16,17 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-// Store implements LogStore and ConsumerGroupStore using in-memory data structures.
+// Store implements StreamStore and ConsumerGroupStore using in-memory data structures.
 type Store struct {
-	queues sync.Map // map[string]*queueLog
-	groups sync.Map // map[string]map[string]*types.ConsumerGroupState (queueName -> groupID -> state)
-	config Config
+	streams      sync.Map // map[string]*streamLog
+	groups       sync.Map // map[string]map[string]*types.ConsumerGroupState (streamName -> groupID -> state)
+	subjectIndex *storage.TopicIndex
+	config       Config
 }
 
-// queueLog holds the log data for a single queue.
-type queueLog struct {
-	config     types.QueueConfig
-	partitions []*partitionLog
-	mu         sync.RWMutex
-}
-
-// partitionLog is an append-only log for a single partition.
-type partitionLog struct {
+// streamLog holds the log data for a single stream.
+type streamLog struct {
+	config   types.QueueConfig
 	messages []*types.Message // Append-only message log
 	head     uint64           // First valid offset (after truncation)
 	tail     uint64           // Next offset to assign (atomic)
@@ -40,7 +35,7 @@ type partitionLog struct {
 
 // Config defines configuration for the memory log store.
 type Config struct {
-	InitialCapacity int // Initial slice capacity per partition
+	InitialCapacity int // Initial slice capacity per stream
 }
 
 // DefaultConfig returns default configuration.
@@ -58,324 +53,275 @@ func New() *Store {
 // NewWithConfig creates a new memory log store with custom configuration.
 func NewWithConfig(cfg Config) *Store {
 	return &Store{
-		config: cfg,
+		config:       cfg,
+		subjectIndex: storage.NewTopicIndex(),
 	}
 }
 
-// CreateQueue creates a new queue with the specified configuration.
+// CreateQueue creates a new stream with the specified configuration.
 func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
 
-	if _, exists := s.queues.Load(config.Name); exists {
+	if _, exists := s.streams.Load(config.Name); exists {
 		return storage.ErrQueueAlreadyExists
 	}
 
-	partitions := make([]*partitionLog, config.Partitions)
-	for i := range partitions {
-		partitions[i] = &partitionLog{
-			messages: make([]*types.Message, 0, s.config.InitialCapacity),
-			head:     0,
-			tail:     0,
-		}
+	sl := &streamLog{
+		config:   config,
+		messages: make([]*types.Message, 0, s.config.InitialCapacity),
+		head:     0,
+		tail:     0,
 	}
 
-	ql := &queueLog{
-		config:     config,
-		partitions: partitions,
-	}
+	s.streams.Store(config.Name, sl)
 
-	s.queues.Store(config.Name, ql)
+	// Index subjects for topic routing
+	s.subjectIndex.AddQueue(config.Name, config.Topics)
 
-	// Initialize empty groups map for this queue
+	// Initialize empty groups map for this stream
 	s.groups.Store(config.Name, &sync.Map{})
 
 	return nil
 }
 
-// GetQueue retrieves queue configuration.
-func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
-	val, exists := s.queues.Load(queueName)
+// GetQueue retrieves stream configuration.
+func (s *Store) GetQueue(ctx context.Context, streamName string) (*types.QueueConfig, error) {
+	val, exists := s.streams.Load(streamName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
 	}
 
-	ql := val.(*queueLog)
-	configCopy := ql.config
+	sl := val.(*streamLog)
+	configCopy := sl.config
 	return &configCopy, nil
 }
 
-// DeleteQueue removes a queue and all its data.
-func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
-	s.queues.Delete(queueName)
-	s.groups.Delete(queueName)
+// DeleteQueue removes a stream and all its data.
+func (s *Store) DeleteQueue(ctx context.Context, streamName string) error {
+	val, exists := s.streams.Load(streamName)
+	if exists {
+		sl := val.(*streamLog)
+		if sl.config.Reserved {
+			return storage.ErrQueueNotFound // Cannot delete reserved streams
+		}
+	}
+
+	s.streams.Delete(streamName)
+	s.groups.Delete(streamName)
+	s.subjectIndex.RemoveQueue(streamName)
 	return nil
 }
 
-// ListQueues returns all queue configurations.
+// ListQueues returns all stream configurations.
 func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	var configs []types.QueueConfig
 
-	s.queues.Range(func(key, value interface{}) bool {
-		ql := value.(*queueLog)
-		configs = append(configs, ql.config)
+	s.streams.Range(func(key, value interface{}) bool {
+		sl := value.(*streamLog)
+		configs = append(configs, sl.config)
 		return true
 	})
 
 	return configs, nil
 }
 
-// Append adds a message to the end of a partition's log.
-func (s *Store) Append(ctx context.Context, queueName string, partitionID int, msg *types.Message) (uint64, error) {
-	ql, err := s.getQueueLog(queueName)
+// FindMatchingQueues returns all streams whose subject patterns match the given topic.
+func (s *Store) FindMatchingQueues(ctx context.Context, topic string) ([]string, error) {
+	return s.subjectIndex.FindMatching(topic), nil
+}
+
+// Append adds a message to the end of a stream's log.
+func (s *Store) Append(ctx context.Context, streamName string, msg *types.Message) (uint64, error) {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return 0, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return 0, storage.ErrPartitionNotFound
-	}
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
 
-	pl := ql.partitions[partitionID]
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-
-	offset := pl.tail
-	pl.tail++
+	offset := sl.tail
+	sl.tail++
 
 	// Set message metadata
 	msg.Sequence = offset
-	msg.PartitionID = partitionID
 
 	// Append to log
-	pl.messages = append(pl.messages, msg)
+	sl.messages = append(sl.messages, msg)
 
 	return offset, nil
 }
 
-// AppendBatch adds multiple messages to a partition's log.
-func (s *Store) AppendBatch(ctx context.Context, queueName string, partitionID int, msgs []*types.Message) (uint64, error) {
+// AppendBatch adds multiple messages to a stream's log.
+func (s *Store) AppendBatch(ctx context.Context, streamName string, msgs []*types.Message) (uint64, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
 
-	ql, err := s.getQueueLog(queueName)
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return 0, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return 0, storage.ErrPartitionNotFound
-	}
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
 
-	pl := ql.partitions[partitionID]
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
+	firstOffset := sl.tail
 
-	firstOffset := pl.tail
-
-	for i, msg := range msgs {
-		offset := pl.tail
-		pl.tail++
+	for _, msg := range msgs {
+		offset := sl.tail
+		sl.tail++
 
 		msg.Sequence = offset
-		msg.PartitionID = partitionID
-		msgs[i] = msg
 	}
 
-	pl.messages = append(pl.messages, msgs...)
+	sl.messages = append(sl.messages, msgs...)
 
 	return firstOffset, nil
 }
 
 // Read retrieves a message at a specific offset.
-func (s *Store) Read(ctx context.Context, queueName string, partitionID int, offset uint64) (*types.Message, error) {
-	ql, err := s.getQueueLog(queueName)
+func (s *Store) Read(ctx context.Context, streamName string, offset uint64) (*types.Message, error) {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return nil, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return nil, storage.ErrPartitionNotFound
-	}
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 
-	pl := ql.partitions[partitionID]
-	pl.mu.RLock()
-	defer pl.mu.RUnlock()
-
-	if offset < pl.head || offset >= pl.tail {
+	if offset < sl.head || offset >= sl.tail {
 		return nil, storage.ErrOffsetOutOfRange
 	}
 
 	// Calculate index in slice (accounting for truncation)
-	idx := int(offset - pl.head)
-	if idx < 0 || idx >= len(pl.messages) {
+	idx := int(offset - sl.head)
+	if idx < 0 || idx >= len(sl.messages) {
 		return nil, storage.ErrOffsetOutOfRange
 	}
 
-	return pl.messages[idx], nil
+	return sl.messages[idx], nil
 }
 
 // ReadBatch reads messages starting from offset up to limit.
-func (s *Store) ReadBatch(ctx context.Context, queueName string, partitionID int, startOffset uint64, limit int) ([]*types.Message, error) {
-	ql, err := s.getQueueLog(queueName)
+func (s *Store) ReadBatch(ctx context.Context, streamName string, startOffset uint64, limit int) ([]*types.Message, error) {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return nil, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return nil, storage.ErrPartitionNotFound
-	}
-
-	pl := ql.partitions[partitionID]
-	pl.mu.RLock()
-	defer pl.mu.RUnlock()
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 
 	// Adjust start offset if before head
-	if startOffset < pl.head {
-		startOffset = pl.head
+	if startOffset < sl.head {
+		startOffset = sl.head
 	}
 
-	if startOffset >= pl.tail {
+	if startOffset >= sl.tail {
 		return []*types.Message{}, nil
 	}
 
-	startIdx := int(startOffset - pl.head)
+	startIdx := int(startOffset - sl.head)
 	endIdx := startIdx + limit
-	if endIdx > len(pl.messages) {
-		endIdx = len(pl.messages)
+	if endIdx > len(sl.messages) {
+		endIdx = len(sl.messages)
 	}
 
 	result := make([]*types.Message, endIdx-startIdx)
-	copy(result, pl.messages[startIdx:endIdx])
+	copy(result, sl.messages[startIdx:endIdx])
 
 	return result, nil
 }
 
-// Head returns the first valid offset in the partition.
-func (s *Store) Head(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	ql, err := s.getQueueLog(queueName)
+// Head returns the first valid offset in the stream.
+func (s *Store) Head(ctx context.Context, streamName string) (uint64, error) {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return 0, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return 0, storage.ErrPartitionNotFound
-	}
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 
-	pl := ql.partitions[partitionID]
-	pl.mu.RLock()
-	defer pl.mu.RUnlock()
-
-	return pl.head, nil
+	return sl.head, nil
 }
 
 // Tail returns the next offset that will be assigned.
-func (s *Store) Tail(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	ql, err := s.getQueueLog(queueName)
+func (s *Store) Tail(ctx context.Context, streamName string) (uint64, error) {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return 0, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return 0, storage.ErrPartitionNotFound
-	}
-
-	pl := ql.partitions[partitionID]
-	return atomic.LoadUint64(&pl.tail), nil
+	return atomic.LoadUint64(&sl.tail), nil
 }
 
 // Truncate removes all messages with offset < minOffset.
-func (s *Store) Truncate(ctx context.Context, queueName string, partitionID int, minOffset uint64) error {
-	ql, err := s.getQueueLog(queueName)
+func (s *Store) Truncate(ctx context.Context, streamName string, minOffset uint64) error {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return storage.ErrPartitionNotFound
-	}
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
 
-	pl := ql.partitions[partitionID]
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-
-	if minOffset <= pl.head {
+	if minOffset <= sl.head {
 		return nil // Nothing to truncate
 	}
 
-	if minOffset > pl.tail {
-		minOffset = pl.tail
+	if minOffset > sl.tail {
+		minOffset = sl.tail
 	}
 
 	// Calculate how many messages to remove
-	removeCount := int(minOffset - pl.head)
-	if removeCount > len(pl.messages) {
-		removeCount = len(pl.messages)
+	removeCount := int(minOffset - sl.head)
+	if removeCount > len(sl.messages) {
+		removeCount = len(sl.messages)
 	}
 
 	// Release payload buffers for removed messages
 	for i := 0; i < removeCount; i++ {
-		if pl.messages[i] != nil {
-			pl.messages[i].ReleasePayload()
+		if sl.messages[i] != nil {
+			sl.messages[i].ReleasePayload()
 		}
 	}
 
 	// Truncate slice
-	pl.messages = pl.messages[removeCount:]
-	pl.head = minOffset
+	sl.messages = sl.messages[removeCount:]
+	sl.head = minOffset
 
 	return nil
 }
 
-// Count returns the number of messages in a partition.
-func (s *Store) Count(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	ql, err := s.getQueueLog(queueName)
+// Count returns the number of messages in a stream.
+func (s *Store) Count(ctx context.Context, streamName string) (uint64, error) {
+	sl, err := s.getStreamLog(streamName)
 	if err != nil {
 		return 0, err
 	}
 
-	if partitionID < 0 || partitionID >= len(ql.partitions) {
-		return 0, storage.ErrPartitionNotFound
-	}
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 
-	pl := ql.partitions[partitionID]
-	pl.mu.RLock()
-	defer pl.mu.RUnlock()
-
-	return pl.tail - pl.head, nil
+	return sl.tail - sl.head, nil
 }
 
-// TotalCount returns total messages across all partitions.
-func (s *Store) TotalCount(ctx context.Context, queueName string) (uint64, error) {
-	ql, err := s.getQueueLog(queueName)
-	if err != nil {
-		return 0, err
-	}
-
-	var total uint64
-	for _, pl := range ql.partitions {
-		pl.mu.RLock()
-		total += pl.tail - pl.head
-		pl.mu.RUnlock()
-	}
-
-	return total, nil
-}
-
-// getQueueLog retrieves the queue log, returning an error if not found.
-func (s *Store) getQueueLog(queueName string) (*queueLog, error) {
-	val, exists := s.queues.Load(queueName)
+// getStreamLog retrieves the stream log, returning an error if not found.
+func (s *Store) getStreamLog(streamName string) (*streamLog, error) {
+	val, exists := s.streams.Load(streamName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
 	}
-	return val.(*queueLog), nil
+	return val.(*streamLog), nil
 }
 
 // --- ConsumerGroupStore Implementation ---
 
-// CreateConsumerGroup creates a new consumer group for a queue.
+// CreateConsumerGroup creates a new consumer group for a stream.
 func (s *Store) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
 	groupsVal, exists := s.groups.Load(group.QueueName)
 	if !exists {
@@ -393,8 +339,8 @@ func (s *Store) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGr
 }
 
 // GetConsumerGroup retrieves a consumer group's state.
-func (s *Store) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroupState, error) {
-	groupsVal, exists := s.groups.Load(queueName)
+func (s *Store) GetConsumerGroup(ctx context.Context, streamName, groupID string) (*types.ConsumerGroupState, error) {
+	groupsVal, exists := s.groups.Load(streamName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
 	}
@@ -422,8 +368,8 @@ func (s *Store) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGr
 }
 
 // DeleteConsumerGroup removes a consumer group.
-func (s *Store) DeleteConsumerGroup(ctx context.Context, queueName, groupID string) error {
-	groupsVal, exists := s.groups.Load(queueName)
+func (s *Store) DeleteConsumerGroup(ctx context.Context, streamName, groupID string) error {
+	groupsVal, exists := s.groups.Load(streamName)
 	if !exists {
 		return storage.ErrQueueNotFound
 	}
@@ -433,9 +379,9 @@ func (s *Store) DeleteConsumerGroup(ctx context.Context, queueName, groupID stri
 	return nil
 }
 
-// ListConsumerGroups lists all consumer groups for a queue.
-func (s *Store) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error) {
-	groupsVal, exists := s.groups.Load(queueName)
+// ListConsumerGroups lists all consumer groups for a stream.
+func (s *Store) ListConsumerGroups(ctx context.Context, streamName string) ([]*types.ConsumerGroupState, error) {
+	groupsVal, exists := s.groups.Load(streamName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
 	}
@@ -452,8 +398,8 @@ func (s *Store) ListConsumerGroups(ctx context.Context, queueName string) ([]*ty
 }
 
 // AddPendingEntry adds an entry to a consumer's PEL.
-func (s *Store) AddPendingEntry(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) AddPendingEntry(ctx context.Context, streamName, groupID string, entry *types.PendingEntry) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
@@ -463,13 +409,13 @@ func (s *Store) AddPendingEntry(ctx context.Context, queueName, groupID string, 
 }
 
 // RemovePendingEntry removes an entry from a consumer's PEL.
-func (s *Store) RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) RemovePendingEntry(ctx context.Context, streamName, groupID, consumerID string, offset uint64) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
-	if !group.RemovePending(consumerID, partitionID, offset) {
+	if !group.RemovePending(consumerID, offset) {
 		return storage.ErrPendingEntryNotFound
 	}
 
@@ -477,8 +423,8 @@ func (s *Store) RemovePendingEntry(ctx context.Context, queueName, groupID, cons
 }
 
 // GetPendingEntries retrieves all pending entries for a consumer.
-func (s *Store) GetPendingEntries(ctx context.Context, queueName, groupID, consumerID string) ([]*types.PendingEntry, error) {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) GetPendingEntries(ctx context.Context, streamName, groupID, consumerID string) ([]*types.PendingEntry, error) {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -495,8 +441,8 @@ func (s *Store) GetPendingEntries(ctx context.Context, queueName, groupID, consu
 }
 
 // GetAllPendingEntries retrieves all pending entries for a group.
-func (s *Store) GetAllPendingEntries(ctx context.Context, queueName, groupID string) ([]*types.PendingEntry, error) {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) GetAllPendingEntries(ctx context.Context, streamName, groupID string) ([]*types.PendingEntry, error) {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -510,50 +456,50 @@ func (s *Store) GetAllPendingEntries(ctx context.Context, queueName, groupID str
 }
 
 // TransferPendingEntry moves a pending entry from one consumer to another.
-func (s *Store) TransferPendingEntry(ctx context.Context, queueName, groupID string, partitionID int, offset uint64, fromConsumer, toConsumer string) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) TransferPendingEntry(ctx context.Context, streamName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
-	if !group.TransferPending(partitionID, offset, fromConsumer, toConsumer) {
+	if !group.TransferPending(offset, fromConsumer, toConsumer) {
 		return storage.ErrPendingEntryNotFound
 	}
 
 	return nil
 }
 
-// UpdateCursor updates the cursor position for a partition.
-func (s *Store) UpdateCursor(ctx context.Context, queueName, groupID string, partitionID int, cursor uint64) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+// UpdateCursor updates the cursor position.
+func (s *Store) UpdateCursor(ctx context.Context, streamName, groupID string, cursor uint64) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
-	pc := group.GetCursor(partitionID)
-	pc.Cursor = cursor
+	c := group.GetCursor()
+	c.Cursor = cursor
 	group.UpdatedAt = time.Now()
 
 	return nil
 }
 
-// UpdateCommitted updates the committed offset for a partition.
-func (s *Store) UpdateCommitted(ctx context.Context, queueName, groupID string, partitionID int, committed uint64) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+// UpdateCommitted updates the committed offset.
+func (s *Store) UpdateCommitted(ctx context.Context, streamName, groupID string, committed uint64) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
-	pc := group.GetCursor(partitionID)
-	pc.Committed = committed
+	c := group.GetCursor()
+	c.Committed = committed
 	group.UpdatedAt = time.Now()
 
 	return nil
 }
 
 // RegisterConsumer adds a consumer to a group.
-func (s *Store) RegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) RegisterConsumer(ctx context.Context, streamName, groupID string, consumer *types.ConsumerInfo) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
@@ -563,8 +509,8 @@ func (s *Store) RegisterConsumer(ctx context.Context, queueName, groupID string,
 }
 
 // UnregisterConsumer removes a consumer from a group.
-func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) UnregisterConsumer(ctx context.Context, streamName, groupID, consumerID string) error {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
@@ -575,8 +521,8 @@ func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, cons
 }
 
 // ListConsumers lists all consumers in a group.
-func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.ConsumerInfo, error) {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
+func (s *Store) ListConsumers(ctx context.Context, streamName, groupID string) ([]*types.ConsumerInfo, error) {
+	group, err := s.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -592,6 +538,6 @@ func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([
 
 // Compile-time interface assertions
 var (
-	_ storage.LogStore           = (*Store)(nil)
+	_ storage.QueueStore        = (*Store)(nil)
 	_ storage.ConsumerGroupStore = (*Store)(nil)
 )

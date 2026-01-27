@@ -44,10 +44,9 @@ type Operation struct {
 	Timestamp time.Time `json:"timestamp"`
 
 	// Target identifiers
-	QueueName   string `json:"queue_name,omitempty"`
-	PartitionID int    `json:"partition_id,omitempty"`
-	GroupID     string `json:"group_id,omitempty"`
-	ConsumerID  string `json:"consumer_id,omitempty"`
+	QueueName  string `json:"queue_name,omitempty"`
+	GroupID    string `json:"group_id,omitempty"`
+	ConsumerID string `json:"consumer_id,omitempty"`
 
 	// For OpAppend
 	Message *types.Message `json:"message,omitempty"`
@@ -83,27 +82,25 @@ type ApplyResult struct {
 }
 
 // LogFSM implements the Raft FSM interface for all queue operations.
-// It applies committed operations to the underlying log and consumer group stores.
-// This is a shared FSM that handles all queues and partitions based on operation data.
+// It applies committed operations to the underlying stream and consumer group stores.
+// This is a shared FSM that handles all queues based on operation data.
 type LogFSM struct {
-	logStore   storage.LogStore
-	groupStore storage.ConsumerGroupStore
-	logger     *slog.Logger
+	queueStore storage.QueueStore
+	groupStore  storage.ConsumerGroupStore
+	logger      *slog.Logger
 
 	mu sync.RWMutex
 }
 
 // NewLogFSM creates a new FSM for queue operations.
-// The queueName and partitionID parameters are ignored (kept for compatibility)
-// as the FSM now handles all queues/partitions based on operation data.
-func NewLogFSM(queueName string, partitionID int, logStore storage.LogStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *LogFSM {
+func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *LogFSM {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &LogFSM{
-		logStore:   logStore,
-		groupStore: groupStore,
-		logger:     logger,
+		queueStore: queueStore,
+		groupStore:  groupStore,
+		logger:      logger,
 	}
 }
 
@@ -148,7 +145,6 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 		err := fmt.Errorf("unknown operation type: %d", op.Type)
 		f.logger.Error("unknown operation",
 			slog.String("queue", op.QueueName),
-			slog.Int("partition", op.PartitionID),
 			slog.Int("op_type", int(op.Type)))
 		return &ApplyResult{Error: err}
 	}
@@ -159,11 +155,10 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 		return &ApplyResult{Error: fmt.Errorf("nil message in append operation")}
 	}
 
-	offset, err := f.logStore.Append(ctx, op.QueueName, op.PartitionID, op.Message)
+	offset, err := f.queueStore.Append(ctx, op.QueueName, op.Message)
 	if err != nil {
 		f.logger.Error("failed to apply append",
 			slog.String("queue", op.QueueName),
-			slog.Int("partition", op.PartitionID),
 			slog.String("message_id", op.Message.ID),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -171,7 +166,6 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 
 	f.logger.Debug("applied append",
 		slog.String("queue", op.QueueName),
-		slog.Int("partition", op.PartitionID),
 		slog.String("message_id", op.Message.ID),
 		slog.Uint64("offset", offset))
 
@@ -183,11 +177,10 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: fmt.Errorf("empty messages in append batch operation")}
 	}
 
-	offset, err := f.logStore.AppendBatch(ctx, op.QueueName, op.PartitionID, op.Messages)
+	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
 	if err != nil {
 		f.logger.Error("failed to apply append batch",
 			slog.String("queue", op.QueueName),
-			slog.Int("partition", op.PartitionID),
 			slog.Int("count", len(op.Messages)),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -195,7 +188,6 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 
 	f.logger.Debug("applied append batch",
 		slog.String("queue", op.QueueName),
-		slog.Int("partition", op.PartitionID),
 		slog.Int("count", len(op.Messages)),
 		slog.Uint64("first_offset", offset))
 
@@ -203,11 +195,10 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 }
 
 func (f *LogFSM) applyTruncate(ctx context.Context, op *Operation) *ApplyResult {
-	err := f.logStore.Truncate(ctx, op.QueueName, op.PartitionID, op.MinOffset)
+	err := f.queueStore.Truncate(ctx, op.QueueName, op.MinOffset)
 	if err != nil {
 		f.logger.Error("failed to apply truncate",
 			slog.String("queue", op.QueueName),
-			slog.Int("partition", op.PartitionID),
 			slog.Uint64("min_offset", op.MinOffset),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -215,7 +206,6 @@ func (f *LogFSM) applyTruncate(ctx context.Context, op *Operation) *ApplyResult 
 
 	f.logger.Debug("applied truncate",
 		slog.String("queue", op.QueueName),
-		slog.Int("partition", op.PartitionID),
 		slog.Uint64("min_offset", op.MinOffset))
 
 	return &ApplyResult{}
@@ -260,12 +250,11 @@ func (f *LogFSM) applyDeleteGroup(ctx context.Context, op *Operation) *ApplyResu
 }
 
 func (f *LogFSM) applyUpdateCursor(ctx context.Context, op *Operation) *ApplyResult {
-	err := f.groupStore.UpdateCursor(ctx, op.QueueName, op.GroupID, op.PartitionID, op.Cursor)
+	err := f.groupStore.UpdateCursor(ctx, op.QueueName, op.GroupID, op.Cursor)
 	if err != nil {
 		f.logger.Error("failed to apply update cursor",
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
-			slog.Int("partition", op.PartitionID),
 			slog.Uint64("cursor", op.Cursor),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -275,12 +264,11 @@ func (f *LogFSM) applyUpdateCursor(ctx context.Context, op *Operation) *ApplyRes
 }
 
 func (f *LogFSM) applyUpdateCommitted(ctx context.Context, op *Operation) *ApplyResult {
-	err := f.groupStore.UpdateCommitted(ctx, op.QueueName, op.GroupID, op.PartitionID, op.Committed)
+	err := f.groupStore.UpdateCommitted(ctx, op.QueueName, op.GroupID, op.Committed)
 	if err != nil {
 		f.logger.Error("failed to apply update committed",
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
-			slog.Int("partition", op.PartitionID),
 			slog.Uint64("committed", op.Committed),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -308,7 +296,7 @@ func (f *LogFSM) applyAddPending(ctx context.Context, op *Operation) *ApplyResul
 }
 
 func (f *LogFSM) applyRemovePending(ctx context.Context, op *Operation) *ApplyResult {
-	err := f.groupStore.RemovePendingEntry(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.PartitionID, op.Offset)
+	err := f.groupStore.RemovePendingEntry(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
 	if err != nil && err != storage.ErrPendingEntryNotFound {
 		f.logger.Error("failed to apply remove pending",
 			slog.String("queue", op.QueueName),
@@ -323,7 +311,7 @@ func (f *LogFSM) applyRemovePending(ctx context.Context, op *Operation) *ApplyRe
 }
 
 func (f *LogFSM) applyTransferPending(ctx context.Context, op *Operation) *ApplyResult {
-	err := f.groupStore.TransferPendingEntry(ctx, op.QueueName, op.GroupID, op.PartitionID, op.Offset, op.FromConsumer, op.ToConsumer)
+	err := f.groupStore.TransferPendingEntry(ctx, op.QueueName, op.GroupID, op.Offset, op.FromConsumer, op.ToConsumer)
 	if err != nil {
 		f.logger.Error("failed to apply transfer pending",
 			slog.String("queue", op.QueueName),
@@ -388,18 +376,18 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 	ctx := context.Background()
 
 	// List all queues
-	queues, err := f.logStore.ListQueues(ctx)
+	streams, err := f.queueStore.ListQueues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list queues: %w", err)
+		return nil, fmt.Errorf("failed to list streams: %w", err)
 	}
 
-	// Collect all queue data
+	// Collect all stream data
 	var queueSnapshots []QueueSnapshotData
-	for _, queueCfg := range queues {
+	for _, queueCfg := range streams {
 		queueName := queueCfg.Name
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueName)
 		if err != nil {
-			f.logger.Warn("failed to list consumer groups for queue",
+			f.logger.Warn("failed to list consumer groups for stream",
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
 			continue
@@ -412,9 +400,9 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 	}
 
 	return &GlobalSnapshot{
-		queues:   queueSnapshots,
-		logStore: f.logStore,
-		logger:   f.logger,
+		queues:     queueSnapshots,
+		queueStore: f.queueStore,
+		logger:     f.logger,
 	}, nil
 }
 
@@ -433,7 +421,7 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 	ctx := context.Background()
 
-	// Restore consumer groups for each queue
+	// Restore consumer groups for each stream
 	for _, queueData := range snapshot.Queues {
 		for _, group := range queueData.Groups {
 			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
@@ -468,9 +456,9 @@ type GlobalSnapshotData struct {
 
 // GlobalSnapshot implements raft.FSMSnapshot for all queues.
 type GlobalSnapshot struct {
-	queues   []QueueSnapshotData
-	logStore storage.LogStore
-	logger   *slog.Logger
+	queues     []QueueSnapshotData
+	queueStore storage.QueueStore
+	logger     *slog.Logger
 }
 
 // Persist writes the snapshot to the given sink.

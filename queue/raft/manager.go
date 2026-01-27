@@ -21,15 +21,15 @@ import (
 )
 
 // Manager manages a single Raft group for all queue operations.
-// All queue partitions share one Raft consensus group per node.
+// All streams share one Raft consensus group per node.
 type Manager struct {
-	nodeID     string
-	bindAddr   string
-	dataDir    string
-	logStore   storage.LogStore
-	groupStore storage.ConsumerGroupStore
-	logger     *slog.Logger
-	config     ManagerConfig
+	nodeID      string
+	bindAddr    string
+	dataDir     string
+	streamStore storage.QueueStore
+	groupStore  storage.ConsumerGroupStore
+	logger      *slog.Logger
+	config      ManagerConfig
 
 	// Single Raft group for all queues
 	raft          *raft.Raft
@@ -82,7 +82,7 @@ func NewManager(
 	nodeID string,
 	bindAddr string,
 	dataDir string,
-	logStore storage.LogStore,
+	streamStore storage.QueueStore,
 	groupStore storage.ConsumerGroupStore,
 	peers map[string]string,
 	config ManagerConfig,
@@ -93,15 +93,15 @@ func NewManager(
 	}
 
 	return &Manager{
-		nodeID:     nodeID,
-		bindAddr:   bindAddr,
-		dataDir:    dataDir,
-		logStore:   logStore,
-		groupStore: groupStore,
-		peers:      peers,
-		config:     config,
-		logger:     logger,
-		stopCh:     make(chan struct{}),
+		nodeID:      nodeID,
+		bindAddr:    bindAddr,
+		dataDir:     dataDir,
+		streamStore: streamStore,
+		groupStore:  groupStore,
+		peers:       peers,
+		config:      config,
+		logger:      logger,
+		stopCh:      make(chan struct{}),
 	}
 }
 
@@ -147,8 +147,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	m.snapshotStore = snapStore
 
-	// Create FSM that handles all queues/partitions
-	m.fsm = NewLogFSM("", 0, m.logStore, m.groupStore, m.logger)
+	// Create FSM that handles all queues
+	m.fsm = NewLogFSM(m.streamStore, m.groupStore, m.logger)
 
 	// Create transport
 	addr, err := net.ResolveTCPAddr("tcp", m.bindAddr)
@@ -383,16 +383,15 @@ func (m *Manager) Apply(ctx context.Context, op *Operation) (*ApplyResult, error
 }
 
 // ApplyAppend submits an append operation to Raft.
-func (m *Manager) ApplyAppend(ctx context.Context, queueName string, partitionID int, msg *types.Message) (uint64, error) {
+func (m *Manager) ApplyAppend(ctx context.Context, streamName string, msg *types.Message) (uint64, error) {
 	if !m.IsEnabled() {
 		return 0, nil
 	}
 
 	op := &Operation{
-		Type:        OpAppend,
-		QueueName:   queueName,
-		PartitionID: partitionID,
-		Message:     msg,
+		Type:       OpAppend,
+		QueueName: streamName,
+		Message:    msg,
 	}
 
 	result, err := m.Apply(ctx, op)
@@ -412,16 +411,15 @@ func (m *Manager) ApplyAppend(ctx context.Context, queueName string, partitionID
 }
 
 // ApplyTruncate submits a truncate operation to Raft.
-func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, partitionID int, minOffset uint64) error {
+func (m *Manager) ApplyTruncate(ctx context.Context, streamName string, minOffset uint64) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
-		Type:        OpTruncate,
-		QueueName:   queueName,
-		PartitionID: partitionID,
-		MinOffset:   minOffset,
+		Type:       OpTruncate,
+		QueueName: streamName,
+		MinOffset:  minOffset,
 	}
 
 	result, err := m.Apply(ctx, op)
@@ -437,14 +435,14 @@ func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, partition
 }
 
 // ApplyCreateGroup submits a create consumer group operation to Raft.
-func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroupState) error {
+func (m *Manager) ApplyCreateGroup(ctx context.Context, streamName string, group *types.ConsumerGroupState) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
 		Type:       OpCreateGroup,
-		QueueName:  queueName,
+		QueueName: streamName,
 		GroupID:    group.ID,
 		GroupState: group,
 	}
@@ -462,17 +460,16 @@ func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group 
 }
 
 // ApplyUpdateCursor submits a cursor update operation to Raft.
-func (m *Manager) ApplyUpdateCursor(ctx context.Context, queueName string, partitionID int, groupID string, cursor uint64) error {
+func (m *Manager) ApplyUpdateCursor(ctx context.Context, streamName, groupID string, cursor uint64) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
-		Type:        OpUpdateCursor,
-		QueueName:   queueName,
-		PartitionID: partitionID,
-		GroupID:     groupID,
-		Cursor:      cursor,
+		Type:       OpUpdateCursor,
+		QueueName: streamName,
+		GroupID:    groupID,
+		Cursor:     cursor,
 	}
 
 	result, err := m.Apply(ctx, op)
@@ -488,15 +485,14 @@ func (m *Manager) ApplyUpdateCursor(ctx context.Context, queueName string, parti
 }
 
 // ApplyAddPending submits an add pending entry operation to Raft.
-func (m *Manager) ApplyAddPending(ctx context.Context, queueName string, partitionID int, groupID string, entry *types.PendingEntry) error {
+func (m *Manager) ApplyAddPending(ctx context.Context, streamName, groupID string, entry *types.PendingEntry) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
 		Type:         OpAddPending,
-		QueueName:    queueName,
-		PartitionID:  partitionID,
+		QueueName:   streamName,
 		GroupID:      groupID,
 		PendingEntry: entry,
 	}
@@ -514,18 +510,17 @@ func (m *Manager) ApplyAddPending(ctx context.Context, queueName string, partiti
 }
 
 // ApplyRemovePending submits a remove pending entry operation to Raft (ACK).
-func (m *Manager) ApplyRemovePending(ctx context.Context, queueName string, partitionID int, groupID, consumerID string, offset uint64) error {
+func (m *Manager) ApplyRemovePending(ctx context.Context, streamName, groupID, consumerID string, offset uint64) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
-		Type:        OpRemovePending,
-		QueueName:   queueName,
-		PartitionID: partitionID,
-		GroupID:     groupID,
-		ConsumerID:  consumerID,
-		Offset:      offset,
+		Type:       OpRemovePending,
+		QueueName: streamName,
+		GroupID:    groupID,
+		ConsumerID: consumerID,
+		Offset:     offset,
 	}
 
 	result, err := m.Apply(ctx, op)
@@ -541,14 +536,14 @@ func (m *Manager) ApplyRemovePending(ctx context.Context, queueName string, part
 }
 
 // ApplyRegisterConsumer submits a register consumer operation to Raft.
-func (m *Manager) ApplyRegisterConsumer(ctx context.Context, queueName string, groupID string, consumer *types.ConsumerInfo) error {
+func (m *Manager) ApplyRegisterConsumer(ctx context.Context, streamName string, groupID string, consumer *types.ConsumerInfo) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
 		Type:         OpRegisterConsumer,
-		QueueName:    queueName,
+		QueueName:   streamName,
 		GroupID:      groupID,
 		ConsumerInfo: consumer,
 	}
@@ -566,14 +561,14 @@ func (m *Manager) ApplyRegisterConsumer(ctx context.Context, queueName string, g
 }
 
 // ApplyUnregisterConsumer submits an unregister consumer operation to Raft.
-func (m *Manager) ApplyUnregisterConsumer(ctx context.Context, queueName string, groupID, consumerID string) error {
+func (m *Manager) ApplyUnregisterConsumer(ctx context.Context, streamName string, groupID, consumerID string) error {
 	if !m.IsEnabled() {
 		return nil
 	}
 
 	op := &Operation{
 		Type:       OpUnregisterConsumer,
-		QueueName:  queueName,
+		QueueName: streamName,
 		GroupID:    groupID,
 		ConsumerID: consumerID,
 	}

@@ -36,7 +36,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 
 		if isQueueTopic(msg.Topic) {
 			// Route to queue manager - use existing properties or nil (avoid allocation)
-			return b.queueManager.Enqueue(context.Background(), msg.Topic, msg.GetPayload(), msg.Properties)
+			return b.queueManager.Publish(context.Background(), msg.Topic, msg.GetPayload(), msg.Properties)
 		}
 	}
 

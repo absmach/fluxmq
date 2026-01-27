@@ -11,10 +11,9 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-// Log storage errors.
+// Queue storage errors.
 var (
 	ErrOffsetOutOfRange     = errors.New("offset out of range")
-	ErrPartitionNotFound    = errors.New("partition not found")
 	ErrLogFull              = errors.New("log is full")
 	ErrInvalidOffset        = errors.New("invalid offset")
 	ErrConsumerGroupExists  = errors.New("consumer group already exists")
@@ -28,45 +27,46 @@ var (
 	ErrQueueAlreadyExists = errors.New("queue already exists")
 )
 
-// LogStore provides append-only log storage with offset-based access.
-// This is the foundation for the Kafka/Redis Streams-style queue model.
-type LogStore interface {
+// QueueStore provides append-only log storage with offset-based access.
+// Each queue has a single log where messages matching any of its topic patterns are stored.
+type QueueStore interface {
 	// Queue lifecycle
 	CreateQueue(ctx context.Context, config types.QueueConfig) error
 	GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error)
 	DeleteQueue(ctx context.Context, queueName string) error
 	ListQueues(ctx context.Context) ([]types.QueueConfig, error)
 
-	// Append adds a message to the end of a partition's log.
-	// Returns the assigned offset.
-	Append(ctx context.Context, queueName string, partitionID int, msg *types.Message) (uint64, error)
+	// FindMatchingQueues returns all queues whose topic patterns match the given topic.
+	// This is used to route a published message to all relevant queues.
+	FindMatchingQueues(ctx context.Context, topic string) ([]string, error)
 
-	// AppendBatch adds multiple messages to a partition's log.
+	// Append adds a message to the end of a queue's log.
+	// Returns the assigned offset.
+	Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error)
+
+	// AppendBatch adds multiple messages to a queue's log.
 	// Returns the first assigned offset.
-	AppendBatch(ctx context.Context, queueName string, partitionID int, msgs []*types.Message) (uint64, error)
+	AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error)
 
 	// Read retrieves a message at a specific offset.
-	Read(ctx context.Context, queueName string, partitionID int, offset uint64) (*types.Message, error)
+	Read(ctx context.Context, queueName string, offset uint64) (*types.Message, error)
 
 	// ReadBatch reads messages starting from offset up to limit.
 	// Returns messages in offset order.
-	ReadBatch(ctx context.Context, queueName string, partitionID int, startOffset uint64, limit int) ([]*types.Message, error)
+	ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error)
 
-	// Head returns the first valid offset in the partition (after truncation).
-	Head(ctx context.Context, queueName string, partitionID int) (uint64, error)
+	// Head returns the first valid offset in the queue (after truncation).
+	Head(ctx context.Context, queueName string) (uint64, error)
 
 	// Tail returns the next offset that will be assigned (one past the last message).
-	Tail(ctx context.Context, queueName string, partitionID int) (uint64, error)
+	Tail(ctx context.Context, queueName string) (uint64, error)
 
 	// Truncate removes all messages with offset < minOffset.
 	// Used for retention policy enforcement.
-	Truncate(ctx context.Context, queueName string, partitionID int, minOffset uint64) error
+	Truncate(ctx context.Context, queueName string, minOffset uint64) error
 
-	// Count returns the number of messages in a partition (tail - head).
-	Count(ctx context.Context, queueName string, partitionID int) (uint64, error)
-
-	// TotalCount returns total messages across all partitions.
-	TotalCount(ctx context.Context, queueName string) (uint64, error)
+	// Count returns the number of messages in the queue (tail - head).
+	Count(ctx context.Context, queueName string) (uint64, error)
 }
 
 // ConsumerGroupStore manages cursor-based consumer groups with PEL tracking.
@@ -77,7 +77,7 @@ type ConsumerGroupStore interface {
 	// GetConsumerGroup retrieves a consumer group's state.
 	GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroupState, error)
 
-	// UpdateConsumerGroup updates a consumer group's state (cursors, PEL).
+	// UpdateConsumerGroup updates a consumer group's state (cursor, PEL).
 	UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error
 
 	// DeleteConsumerGroup removes a consumer group.
@@ -90,7 +90,7 @@ type ConsumerGroupStore interface {
 	AddPendingEntry(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error
 
 	// RemovePendingEntry removes an entry from a consumer's PEL.
-	RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64) error
+	RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error
 
 	// GetPendingEntries retrieves all pending entries for a consumer.
 	GetPendingEntries(ctx context.Context, queueName, groupID, consumerID string) ([]*types.PendingEntry, error)
@@ -99,13 +99,13 @@ type ConsumerGroupStore interface {
 	GetAllPendingEntries(ctx context.Context, queueName, groupID string) ([]*types.PendingEntry, error)
 
 	// TransferPendingEntry moves a pending entry from one consumer to another (work stealing).
-	TransferPendingEntry(ctx context.Context, queueName, groupID string, partitionID int, offset uint64, fromConsumer, toConsumer string) error
+	TransferPendingEntry(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
 
-	// UpdateCursor updates the cursor position for a partition.
-	UpdateCursor(ctx context.Context, queueName, groupID string, partitionID int, cursor uint64) error
+	// UpdateCursor updates the cursor position.
+	UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error
 
-	// UpdateCommitted updates the committed offset for a partition.
-	UpdateCommitted(ctx context.Context, queueName, groupID string, partitionID int, committed uint64) error
+	// UpdateCommitted updates the committed offset.
+	UpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error
 
 	// RegisterConsumer adds a consumer to a group.
 	RegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error

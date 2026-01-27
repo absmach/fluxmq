@@ -24,12 +24,12 @@ var (
 )
 
 // Manager handles consumer group operations including claiming, acknowledging,
-// and work stealing for the log-based queue model.
+// and work stealing for the stream-based model.
 type Manager struct {
-	logStore   storage.LogStore
-	groupStore storage.ConsumerGroupStore
-	config     Config
-	mu         sync.RWMutex
+	streamStore storage.QueueStore
+	groupStore  storage.ConsumerGroupStore
+	config      Config
+	mu          sync.RWMutex
 }
 
 // Config defines configuration for the consumer group manager.
@@ -59,18 +59,18 @@ func DefaultConfig() Config {
 }
 
 // NewManager creates a new consumer group manager.
-func NewManager(logStore storage.LogStore, groupStore storage.ConsumerGroupStore, config Config) *Manager {
+func NewManager(streamStore storage.QueueStore, groupStore storage.ConsumerGroupStore, config Config) *Manager {
 	return &Manager{
-		logStore:   logStore,
-		groupStore: groupStore,
-		config:     config,
+		streamStore: streamStore,
+		groupStore:  groupStore,
+		config:      config,
 	}
 }
 
 // GetOrCreateGroup retrieves or creates a consumer group.
-func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string) (*types.ConsumerGroupState, error) {
+func (m *Manager) GetOrCreateGroup(ctx context.Context, streamName, groupID, pattern string) (*types.ConsumerGroupState, error) {
 	// Try to get existing group
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err == nil {
 		return group, nil
 	}
@@ -80,19 +80,13 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 		return nil, err
 	}
 
-	// Get queue config for partition count
-	queueConfig, err := m.logStore.GetQueue(ctx, queueName)
-	if err != nil {
-		return nil, err
-	}
-
 	// Create new group
-	group = types.NewConsumerGroupState(queueName, groupID, pattern, queueConfig.Partitions)
+	group = types.NewConsumerGroupState(streamName, groupID, pattern)
 
 	if err := m.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		// Handle race condition - another process might have created it
 		if err == storage.ErrConsumerGroupExists {
-			return m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+			return m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 		}
 		return nil, err
 	}
@@ -101,7 +95,7 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 }
 
 // RegisterConsumer adds a consumer to a group.
-func (m *Manager) RegisterConsumer(ctx context.Context, queueName, groupID, consumerID, clientID, proxyNodeID string) error {
+func (m *Manager) RegisterConsumer(ctx context.Context, streamName, groupID, consumerID, clientID, proxyNodeID string) error {
 	consumer := &types.ConsumerInfo{
 		ID:            consumerID,
 		ClientID:      clientID,
@@ -110,28 +104,28 @@ func (m *Manager) RegisterConsumer(ctx context.Context, queueName, groupID, cons
 		LastHeartbeat: time.Now(),
 	}
 
-	return m.groupStore.RegisterConsumer(ctx, queueName, groupID, consumer)
+	return m.groupStore.RegisterConsumer(ctx, streamName, groupID, consumer)
 }
 
 // UnregisterConsumer removes a consumer from a group.
-func (m *Manager) UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
-	return m.groupStore.UnregisterConsumer(ctx, queueName, groupID, consumerID)
+func (m *Manager) UnregisterConsumer(ctx context.Context, streamName, groupID, consumerID string) error {
+	return m.groupStore.UnregisterConsumer(ctx, streamName, groupID, consumerID)
 }
 
 // Claim retrieves the next available message for a consumer.
 // It first tries to get a new message from the log, then falls back to work stealing.
-func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID string, partitionID int, filter *Filter) (*types.Message, error) {
+func (m *Manager) Claim(ctx context.Context, streamName, groupID, consumerID string, filter *Filter) (*types.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Get consumer group
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Try to claim from cursor position
-	msg, err := m.claimFromCursor(ctx, group, consumerID, partitionID, filter)
+	msg, err := m.claimFromCursor(ctx, group, consumerID, filter)
 	if err == nil {
 		return msg, nil
 	}
@@ -141,11 +135,11 @@ func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID stri
 	}
 
 	// No new messages - try work stealing
-	return m.stealWork(ctx, group, consumerID, partitionID, filter)
+	return m.stealWork(ctx, group, consumerID, filter)
 }
 
 // ClaimBatch retrieves multiple messages for a consumer.
-func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID string, partitionID int, filter *Filter, limit int) ([]*types.Message, error) {
+func (m *Manager) ClaimBatch(ctx context.Context, streamName, groupID, consumerID string, filter *Filter, limit int) ([]*types.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -154,7 +148,7 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 	}
 
 	// Get consumer group
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +157,7 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 
 	// Claim from cursor
 	for len(messages) < limit {
-		msg, err := m.claimFromCursor(ctx, group, consumerID, partitionID, filter)
+		msg, err := m.claimFromCursor(ctx, group, consumerID, filter)
 		if err != nil {
 			break
 		}
@@ -172,7 +166,7 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 
 	// Try work stealing if we didn't get enough
 	for len(messages) < limit {
-		msg, err := m.stealWork(ctx, group, consumerID, partitionID, filter)
+		msg, err := m.stealWork(ctx, group, consumerID, filter)
 		if err != nil {
 			break
 		}
@@ -187,11 +181,11 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 }
 
 // claimFromCursor tries to claim a message from the cursor position.
-func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroupState, consumerID string, partitionID int, filter *Filter) (*types.Message, error) {
-	cursor := group.GetCursor(partitionID)
+func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroupState, consumerID string, filter *Filter) (*types.Message, error) {
+	cursor := group.GetCursor()
 
 	// Get log tail
-	tail, err := m.logStore.Tail(ctx, group.QueueName, partitionID)
+	tail, err := m.streamStore.Tail(ctx, group.QueueName)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +196,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 		cursor.Cursor++
 
 		// Read message
-		msg, err := m.logStore.Read(ctx, group.QueueName, partitionID, offset)
+		msg, err := m.streamStore.Read(ctx, group.QueueName, offset)
 		if err != nil {
 			if err == storage.ErrOffsetOutOfRange {
 				continue // Message was truncated, skip
@@ -221,7 +215,6 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 		// Add to PEL
 		entry := &types.PendingEntry{
 			Offset:        offset,
-			PartitionID:   partitionID,
 			ConsumerID:    consumerID,
 			ClaimedAt:     time.Now(),
 			DeliveryCount: 1,
@@ -232,7 +225,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 		}
 
 		// Update cursor
-		if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, partitionID, cursor.Cursor); err != nil {
+		if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, cursor.Cursor); err != nil {
 			return nil, err
 		}
 
@@ -243,9 +236,9 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 }
 
 // stealWork tries to steal a message from another consumer's PEL.
-func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState, consumerID string, partitionID int, filter *Filter) (*types.Message, error) {
+func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState, consumerID string, filter *Filter) (*types.Message, error) {
 	// Get stealable entries
-	stealable := group.StealableEntries(partitionID, m.config.VisibilityTimeout, consumerID)
+	stealable := group.StealableEntries(m.config.VisibilityTimeout, consumerID)
 	if len(stealable) == 0 {
 		return nil, ErrNoMessages
 	}
@@ -259,7 +252,7 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState
 		}
 
 		// Read message
-		msg, err := m.logStore.Read(ctx, group.QueueName, partitionID, entry.Offset)
+		msg, err := m.streamStore.Read(ctx, group.QueueName, entry.Offset)
 		if err != nil {
 			continue // Message might be truncated
 		}
@@ -277,7 +270,6 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState
 			ctx,
 			group.QueueName,
 			group.ID,
-			partitionID,
 			entry.Offset,
 			entry.ConsumerID,
 			consumerID,
@@ -293,59 +285,59 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState
 }
 
 // Ack acknowledges successful processing of a message.
-func (m *Manager) Ack(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64) error {
+func (m *Manager) Ack(ctx context.Context, streamName, groupID, consumerID string, offset uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Remove from PEL
-	if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, partitionID, offset); err != nil {
+	if err := m.groupStore.RemovePendingEntry(ctx, streamName, groupID, consumerID, offset); err != nil {
 		return err
 	}
 
 	// Get group to update committed offset
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
 	// Advance committed offset if possible
-	return m.advanceCommitted(ctx, group, partitionID)
+	return m.advanceCommitted(ctx, group)
 }
 
 // AckBatch acknowledges multiple messages.
-func (m *Manager) AckBatch(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offsets []uint64) error {
+func (m *Manager) AckBatch(ctx context.Context, streamName, groupID, consumerID string, offsets []uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, offset := range offsets {
-		if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, partitionID, offset); err != nil {
+		if err := m.groupStore.RemovePendingEntry(ctx, streamName, groupID, consumerID, offset); err != nil {
 			// Continue even if some fail
 			continue
 		}
 	}
 
 	// Get group to update committed offset
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
-	return m.advanceCommitted(ctx, group, partitionID)
+	return m.advanceCommitted(ctx, group)
 }
 
 // Nack negatively acknowledges a message, making it available for redelivery.
-func (m *Manager) Nack(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64) error {
+func (m *Manager) Nack(ctx context.Context, streamName, groupID, consumerID string, offset uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Get group
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
 	// Find the pending entry
-	entry, ownerID := group.FindPending(partitionID, offset)
+	entry, ownerID := group.FindPending(offset)
 	if entry == nil {
 		return ErrMessageNotPending
 	}
@@ -364,31 +356,31 @@ func (m *Manager) Nack(ctx context.Context, queueName, groupID, consumerID strin
 }
 
 // Reject rejects a message, moving it to the DLQ.
-func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID string, partitionID int, offset uint64, reason string) error {
+func (m *Manager) Reject(ctx context.Context, streamName, groupID, consumerID string, offset uint64, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Remove from PEL (message goes to DLQ via separate mechanism)
-	if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, partitionID, offset); err != nil {
+	if err := m.groupStore.RemovePendingEntry(ctx, streamName, groupID, consumerID, offset); err != nil {
 		return err
 	}
 
 	// Get group to update committed offset
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
 
 	// Advance committed offset if possible
-	return m.advanceCommitted(ctx, group, partitionID)
+	return m.advanceCommitted(ctx, group)
 }
 
 // advanceCommitted updates the committed offset to the minimum pending offset.
-func (m *Manager) advanceCommitted(ctx context.Context, group *types.ConsumerGroupState, partitionID int) error {
-	cursor := group.GetCursor(partitionID)
+func (m *Manager) advanceCommitted(ctx context.Context, group *types.ConsumerGroupState) error {
+	cursor := group.GetCursor()
 
-	// Find minimum pending offset for this partition
-	minOffset, found := group.MinPendingOffset(partitionID)
+	// Find minimum pending offset
+	minOffset, found := group.MinPendingOffset()
 
 	if !found {
 		// No pending entries - committed = cursor
@@ -397,29 +389,29 @@ func (m *Manager) advanceCommitted(ctx context.Context, group *types.ConsumerGro
 		cursor.Committed = minOffset
 	}
 
-	return m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, partitionID, cursor.Committed)
+	return m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, cursor.Committed)
 }
 
-// GetPendingCount returns the number of pending messages for a group and partition.
-func (m *Manager) GetPendingCount(ctx context.Context, queueName, groupID string, partitionID int) (int, error) {
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+// GetPendingCount returns the number of pending messages for a group.
+func (m *Manager) GetPendingCount(ctx context.Context, streamName, groupID string) (int, error) {
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return 0, err
 	}
 
-	return group.PendingCount(partitionID), nil
+	return group.PendingCount(), nil
 }
 
-// GetLag returns the consumer lag (unprocessed messages) for a partition.
-func (m *Manager) GetLag(ctx context.Context, queueName, groupID string, partitionID int) (uint64, error) {
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+// GetLag returns the consumer lag (unprocessed messages).
+func (m *Manager) GetLag(ctx context.Context, streamName, groupID string) (uint64, error) {
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return 0, err
 	}
 
-	cursor := group.GetCursor(partitionID)
+	cursor := group.GetCursor()
 
-	tail, err := m.logStore.Tail(ctx, queueName, partitionID)
+	tail, err := m.streamStore.Tail(ctx, streamName)
 	if err != nil {
 		return 0, err
 	}
@@ -432,36 +424,36 @@ func (m *Manager) GetLag(ctx context.Context, queueName, groupID string, partiti
 	return 0, nil
 }
 
-// GetCommittedOffset returns the committed offset for a partition.
+// GetCommittedOffset returns the committed offset.
 // This is the safe point for log truncation.
-func (m *Manager) GetCommittedOffset(ctx context.Context, queueName, groupID string, partitionID int) (uint64, error) {
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+func (m *Manager) GetCommittedOffset(ctx context.Context, streamName, groupID string) (uint64, error) {
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return 0, err
 	}
 
-	cursor := group.GetCursor(partitionID)
+	cursor := group.GetCursor()
 	return cursor.Committed, nil
 }
 
-// GetMinCommittedOffset returns the minimum committed offset across all groups for a queue.
+// GetMinCommittedOffset returns the minimum committed offset across all groups for a stream.
 // This is the global safe point for log truncation.
-func (m *Manager) GetMinCommittedOffset(ctx context.Context, queueName string, partitionID int) (uint64, error) {
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
+func (m *Manager) GetMinCommittedOffset(ctx context.Context, streamName string) (uint64, error) {
+	groups, err := m.groupStore.ListConsumerGroups(ctx, streamName)
 	if err != nil {
 		return 0, err
 	}
 
 	if len(groups) == 0 {
 		// No consumers - return tail (can truncate everything)
-		return m.logStore.Tail(ctx, queueName, partitionID)
+		return m.streamStore.Tail(ctx, streamName)
 	}
 
 	var minCommitted uint64
 	first := true
 
 	for _, group := range groups {
-		cursor := group.GetCursor(partitionID)
+		cursor := group.GetCursor()
 		if first || cursor.Committed < minCommitted {
 			minCommitted = cursor.Committed
 			first = false
@@ -472,8 +464,8 @@ func (m *Manager) GetMinCommittedOffset(ctx context.Context, queueName string, p
 }
 
 // UpdateHeartbeat updates the heartbeat timestamp for a consumer.
-func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consumerID string) error {
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+func (m *Manager) UpdateHeartbeat(ctx context.Context, streamName, groupID, consumerID string) error {
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return err
 	}
@@ -488,8 +480,8 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consu
 }
 
 // CleanupStaleConsumers removes consumers that haven't sent a heartbeat within the timeout.
-func (m *Manager) CleanupStaleConsumers(ctx context.Context, queueName, groupID string, timeout time.Duration) ([]string, error) {
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+func (m *Manager) CleanupStaleConsumers(ctx context.Context, streamName, groupID string, timeout time.Duration) ([]string, error) {
+	group, err := m.groupStore.GetConsumerGroup(ctx, streamName, groupID)
 	if err != nil {
 		return nil, err
 	}
