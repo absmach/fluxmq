@@ -144,9 +144,9 @@ func TestConsumerManager_Persistence(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add some data
-	err = state1.Deliver(0, 1, "consumer-1")
+	err = state1.Deliver(1, "consumer-1")
 	require.NoError(t, err)
-	err = state1.Deliver(0, 2, "consumer-1")
+	err = state1.Deliver(2, "consumer-1")
 	require.NoError(t, err)
 
 	err = cm.Sync()
@@ -166,8 +166,8 @@ func TestConsumerManager_Persistence(t *testing.T) {
 	require.NotNil(t, state2)
 
 	// Data should be preserved
-	ps := state2.GetPartitionState(0)
-	assert.Equal(t, uint64(3), ps.Cursor)
+	gs := state2.GetGroupState()
+	assert.Equal(t, uint64(3), gs.Cursor)
 	assert.Equal(t, 2, state2.PendingCount())
 }
 
@@ -184,14 +184,14 @@ func TestConsumerManager_GetRedeliveryBatches(t *testing.T) {
 	state1, err := cm.GetOrCreate("group-1")
 	require.NoError(t, err)
 	for i := uint64(0); i < 10; i++ {
-		err = state1.Deliver(0, i, "consumer-1")
+		err = state1.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
 	state2, err := cm.GetOrCreate("group-2")
 	require.NoError(t, err)
 	for i := uint64(0); i < 5; i++ {
-		err = state2.Deliver(0, i, "consumer-2")
+		err = state2.Deliver(i, "consumer-2")
 		require.NoError(t, err)
 	}
 
@@ -227,7 +227,7 @@ func TestConsumerManager_GetRedeliveryBatchForShard(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint64(0); i < 40; i++ {
-		err = state.Deliver(0, i, "consumer-1")
+		err = state.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -258,7 +258,7 @@ func TestConsumerManager_ClaimBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint64(0); i < 5; i++ {
-		err = state.Deliver(0, i, "consumer-1")
+		err = state.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -291,20 +291,20 @@ func TestConsumerManager_AckBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint64(0); i < 10; i++ {
-		err = state.Deliver(0, i, "consumer-1")
+		err = state.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
 	assert.Equal(t, 10, state.PendingCount())
 
 	// Ack batch
-	err = cm.AckBatch("group-1", 0, []uint64{0, 1, 2, 3, 4})
+	err = cm.AckBatch("group-1", []uint64{0, 1, 2, 3, 4})
 	require.NoError(t, err)
 
 	assert.Equal(t, 5, state.PendingCount())
 
 	// Non-existent group
-	err = cm.AckBatch("non-existent", 0, []uint64{0})
+	err = cm.AckBatch("non-existent", []uint64{0})
 	assert.Error(t, err)
 }
 
@@ -319,7 +319,7 @@ func TestConsumerManager_GetDeadLetterBatches(t *testing.T) {
 	state, err := cm.GetOrCreate("group-1")
 	require.NoError(t, err)
 
-	err = state.Deliver(0, 1, "consumer-1")
+	err = state.Deliver(1, "consumer-1")
 	require.NoError(t, err)
 
 	// Nack multiple times
@@ -403,14 +403,14 @@ func TestConsumerManager_Stats(t *testing.T) {
 	state1, err := cm.GetOrCreate("group-1")
 	require.NoError(t, err)
 	for i := uint64(0); i < 10; i++ {
-		err = state1.Deliver(0, i, "consumer-1")
+		err = state1.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
 	state2, err := cm.GetOrCreate("group-2")
 	require.NoError(t, err)
 	for i := uint64(0); i < 5; i++ {
-		err = state2.Deliver(0, i, "consumer-1")
+		err = state2.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -432,7 +432,7 @@ func TestConsumerManager_Compact(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint64(0); i < 100; i++ {
-		err = state.Deliver(0, i, "consumer-1")
+		err = state.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -451,7 +451,7 @@ func TestConsumerManager_Sync(t *testing.T) {
 	state, err := cm.GetOrCreate("group-1")
 	require.NoError(t, err)
 
-	err = state.Deliver(0, 1, "consumer-1")
+	err = state.Deliver(1, "consumer-1")
 	require.NoError(t, err)
 
 	err = cm.Sync()

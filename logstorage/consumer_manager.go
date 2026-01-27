@@ -297,13 +297,13 @@ func (cm *ConsumerManager) ClaimBatch(groupID string, offsets []uint64, newConsu
 }
 
 // AckBatch acknowledges a batch of messages.
-func (cm *ConsumerManager) AckBatch(groupID string, partitionID uint32, offsets []uint64) error {
+func (cm *ConsumerManager) AckBatch(groupID string, offsets []uint64) error {
 	state := cm.Get(groupID)
 	if state == nil {
 		return ErrGroupNotFound
 	}
 
-	return state.AckBatch(partitionID, offsets)
+	return state.AckBatch(offsets)
 }
 
 // GetDeadLetterBatches returns batches of messages that exceeded max delivery count.

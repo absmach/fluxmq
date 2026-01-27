@@ -1219,13 +1219,12 @@ func (x *RouteQueueMessageResponse) GetError() string {
 type AppendEntriesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId   int32                  `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Term          uint64                 `protobuf:"varint,3,opt,name=term,proto3" json:"term,omitempty"`
-	LeaderId      string                 `protobuf:"bytes,4,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
-	PrevLogIndex  uint64                 `protobuf:"varint,5,opt,name=prev_log_index,json=prevLogIndex,proto3" json:"prev_log_index,omitempty"`
-	PrevLogTerm   uint64                 `protobuf:"varint,6,opt,name=prev_log_term,json=prevLogTerm,proto3" json:"prev_log_term,omitempty"`
-	Entries       [][]byte               `protobuf:"bytes,7,rep,name=entries,proto3" json:"entries,omitempty"`
-	LeaderCommit  uint64                 `protobuf:"varint,8,opt,name=leader_commit,json=leaderCommit,proto3" json:"leader_commit,omitempty"`
+	Term          uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
+	LeaderId      string                 `protobuf:"bytes,3,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
+	PrevLogIndex  uint64                 `protobuf:"varint,4,opt,name=prev_log_index,json=prevLogIndex,proto3" json:"prev_log_index,omitempty"`
+	PrevLogTerm   uint64                 `protobuf:"varint,5,opt,name=prev_log_term,json=prevLogTerm,proto3" json:"prev_log_term,omitempty"`
+	Entries       [][]byte               `protobuf:"bytes,6,rep,name=entries,proto3" json:"entries,omitempty"`
+	LeaderCommit  uint64                 `protobuf:"varint,7,opt,name=leader_commit,json=leaderCommit,proto3" json:"leader_commit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1265,13 +1264,6 @@ func (x *AppendEntriesRequest) GetQueueName() string {
 		return x.QueueName
 	}
 	return ""
-}
-
-func (x *AppendEntriesRequest) GetPartitionId() int32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
 }
 
 func (x *AppendEntriesRequest) GetTerm() uint64 {
@@ -1379,11 +1371,10 @@ func (x *AppendEntriesResponse) GetLastLogIndex() uint64 {
 type RequestVoteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId   int32                  `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Term          uint64                 `protobuf:"varint,3,opt,name=term,proto3" json:"term,omitempty"`
-	CandidateId   string                 `protobuf:"bytes,4,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
-	LastLogIndex  uint64                 `protobuf:"varint,5,opt,name=last_log_index,json=lastLogIndex,proto3" json:"last_log_index,omitempty"`
-	LastLogTerm   uint64                 `protobuf:"varint,6,opt,name=last_log_term,json=lastLogTerm,proto3" json:"last_log_term,omitempty"`
+	Term          uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
+	CandidateId   string                 `protobuf:"bytes,3,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
+	LastLogIndex  uint64                 `protobuf:"varint,4,opt,name=last_log_index,json=lastLogIndex,proto3" json:"last_log_index,omitempty"`
+	LastLogTerm   uint64                 `protobuf:"varint,5,opt,name=last_log_term,json=lastLogTerm,proto3" json:"last_log_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1423,13 +1414,6 @@ func (x *RequestVoteRequest) GetQueueName() string {
 		return x.QueueName
 	}
 	return ""
-}
-
-func (x *RequestVoteRequest) GetPartitionId() int32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
 }
 
 func (x *RequestVoteRequest) GetTerm() uint64 {
@@ -1515,13 +1499,12 @@ func (x *RequestVoteResponse) GetVoteGranted() bool {
 type InstallSnapshotRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	QueueName         string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId       int32                  `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Term              uint64                 `protobuf:"varint,3,opt,name=term,proto3" json:"term,omitempty"`
-	LeaderId          string                 `protobuf:"bytes,4,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
-	LastIncludedIndex uint64                 `protobuf:"varint,5,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"`
-	LastIncludedTerm  uint64                 `protobuf:"varint,6,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`
-	Data              []byte                 `protobuf:"bytes,7,opt,name=data,proto3" json:"data,omitempty"`
-	Done              bool                   `protobuf:"varint,8,opt,name=done,proto3" json:"done,omitempty"`
+	Term              uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
+	LeaderId          string                 `protobuf:"bytes,3,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
+	LastIncludedIndex uint64                 `protobuf:"varint,4,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"`
+	LastIncludedTerm  uint64                 `protobuf:"varint,5,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`
+	Data              []byte                 `protobuf:"bytes,6,opt,name=data,proto3" json:"data,omitempty"`
+	Done              bool                   `protobuf:"varint,7,opt,name=done,proto3" json:"done,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1561,13 +1544,6 @@ func (x *InstallSnapshotRequest) GetQueueName() string {
 		return x.QueueName
 	}
 	return ""
-}
-
-func (x *InstallSnapshotRequest) GetPartitionId() int32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
 }
 
 func (x *InstallSnapshotRequest) GetTerm() uint64 {
@@ -1771,42 +1747,39 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
 	"\x19RouteQueueMessageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x92\x02\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xef\x01\n" +
 	"\x14AppendEntriesRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\x05R\vpartitionId\x12\x12\n" +
-	"\x04term\x18\x03 \x01(\x04R\x04term\x12\x1b\n" +
-	"\tleader_id\x18\x04 \x01(\tR\bleaderId\x12$\n" +
-	"\x0eprev_log_index\x18\x05 \x01(\x04R\fprevLogIndex\x12\"\n" +
-	"\rprev_log_term\x18\x06 \x01(\x04R\vprevLogTerm\x12\x18\n" +
-	"\aentries\x18\a \x03(\fR\aentries\x12#\n" +
-	"\rleader_commit\x18\b \x01(\x04R\fleaderCommit\"k\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
+	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x1b\n" +
+	"\tleader_id\x18\x03 \x01(\tR\bleaderId\x12$\n" +
+	"\x0eprev_log_index\x18\x04 \x01(\x04R\fprevLogIndex\x12\"\n" +
+	"\rprev_log_term\x18\x05 \x01(\x04R\vprevLogTerm\x12\x18\n" +
+	"\aentries\x18\x06 \x03(\fR\aentries\x12#\n" +
+	"\rleader_commit\x18\a \x01(\x04R\fleaderCommit\"k\n" +
 	"\x15AppendEntriesResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x18\n" +
 	"\asuccess\x18\x02 \x01(\bR\asuccess\x12$\n" +
-	"\x0elast_log_index\x18\x03 \x01(\x04R\flastLogIndex\"\xd7\x01\n" +
+	"\x0elast_log_index\x18\x03 \x01(\x04R\flastLogIndex\"\xb4\x01\n" +
 	"\x12RequestVoteRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\x05R\vpartitionId\x12\x12\n" +
-	"\x04term\x18\x03 \x01(\x04R\x04term\x12!\n" +
-	"\fcandidate_id\x18\x04 \x01(\tR\vcandidateId\x12$\n" +
-	"\x0elast_log_index\x18\x05 \x01(\x04R\flastLogIndex\x12\"\n" +
-	"\rlast_log_term\x18\x06 \x01(\x04R\vlastLogTerm\"L\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
+	"\x04term\x18\x02 \x01(\x04R\x04term\x12!\n" +
+	"\fcandidate_id\x18\x03 \x01(\tR\vcandidateId\x12$\n" +
+	"\x0elast_log_index\x18\x04 \x01(\x04R\flastLogIndex\x12\"\n" +
+	"\rlast_log_term\x18\x05 \x01(\x04R\vlastLogTerm\"L\n" +
 	"\x13RequestVoteResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term\x12!\n" +
-	"\fvote_granted\x18\x02 \x01(\bR\vvoteGranted\"\x91\x02\n" +
+	"\fvote_granted\x18\x02 \x01(\bR\vvoteGranted\"\xee\x01\n" +
 	"\x16InstallSnapshotRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\x05R\vpartitionId\x12\x12\n" +
-	"\x04term\x18\x03 \x01(\x04R\x04term\x12\x1b\n" +
-	"\tleader_id\x18\x04 \x01(\tR\bleaderId\x12.\n" +
-	"\x13last_included_index\x18\x05 \x01(\x04R\x11lastIncludedIndex\x12,\n" +
-	"\x12last_included_term\x18\x06 \x01(\x04R\x10lastIncludedTerm\x12\x12\n" +
-	"\x04data\x18\a \x01(\fR\x04data\x12\x12\n" +
-	"\x04done\x18\b \x01(\bR\x04done\"-\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
+	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x1b\n" +
+	"\tleader_id\x18\x03 \x01(\tR\bleaderId\x12.\n" +
+	"\x13last_included_index\x18\x04 \x01(\x04R\x11lastIncludedIndex\x12,\n" +
+	"\x12last_included_term\x18\x05 \x01(\x04R\x10lastIncludedTerm\x12\x12\n" +
+	"\x04data\x18\x06 \x01(\fR\x04data\x12\x12\n" +
+	"\x04done\x18\a \x01(\bR\x04done\"-\n" +
 	"\x17InstallSnapshotResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x04R\x04term2\xfe\x06\n" +
 	"\rBrokerService\x12U\n" +

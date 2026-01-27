@@ -15,34 +15,25 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-// Partition is an interface for partition operations needed by consumer groups.
-// This avoids circular dependency with the queue package.
-type Partition interface {
-	ID() int
-	AssignTo(consumerID string)
-}
-
 // GroupManager manages consumer groups for a queue.
 type GroupManager struct {
 	queueName        string
 	groups           map[string]*Group
 	consumerStore    queueStorage.ConsumerStore
 	heartbeatTimeout time.Duration
-	partitions       []Partition
 	ctx              context.Context
 	cancel           context.CancelFunc
 	mu               sync.RWMutex
 }
 
 // NewGroupManager creates a new consumer group manager.
-func NewGroupManager(queueName string, consumerStore queueStorage.ConsumerStore, heartbeatTimeout time.Duration, partitions []Partition) *GroupManager {
+func NewGroupManager(queueName string, consumerStore queueStorage.ConsumerStore, heartbeatTimeout time.Duration) *GroupManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	cgm := &GroupManager{
 		queueName:        queueName,
 		groups:           make(map[string]*Group),
 		consumerStore:    consumerStore,
 		heartbeatTimeout: heartbeatTimeout,
-		partitions:       partitions,
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -147,17 +138,17 @@ func (cgm *GroupManager) RestoreConsumer(consumer *types.Consumer) {
 	group.AddConsumer(consumer)
 }
 
-// Rebalance triggers rebalancing for a specific group.
-func (cgm *GroupManager) Rebalance(groupID string, partitions []Partition) error {
+// Rebalance is a no-op since partitions are removed.
+// Kept for API compatibility but does nothing.
+func (cgm *GroupManager) Rebalance(groupID string) error {
 	cgm.mu.Lock()
 	defer cgm.mu.Unlock()
 
-	group, exists := cgm.groups[groupID]
+	_, exists := cgm.groups[groupID]
 	if !exists {
 		return fmt.Errorf("group %s not found", groupID)
 	}
 
-	group.Rebalance(partitions)
 	return nil
 }
 
@@ -217,12 +208,8 @@ func (cgm *GroupManager) checkStaleConsumers() {
 			if now.Sub(consumer.LastHeartbeat) > timeout {
 				// Consumer heartbeat is stale, remove it
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				err := cgm.RemoveConsumer(ctx, group.ID(), consumer.ID)
+				_ = cgm.RemoveConsumer(ctx, group.ID(), consumer.ID)
 				cancel() // Always cancel immediately after use to prevent context leak
-				if err == nil {
-					// Rebalance partitions after removing stale consumer
-					_ = cgm.Rebalance(group.ID(), cgm.partitions)
-				}
 			}
 		}
 	}
@@ -302,66 +289,19 @@ func (cg *Group) Size() int {
 	return len(cg.consumers)
 }
 
-// Rebalance assigns partitions to consumers in the group.
-// Uses simple round-robin strategy: partitions divided evenly among consumers.
-// Note: Partition.assignedTo is per-partition global state and not used for actual delivery.
-// Delivery uses consumer.AssignedParts instead. We only clear consumer assignments here
-// to avoid affecting other groups' partition tracking.
-func (cg *Group) Rebalance(partitions []Partition) {
-	cg.mu.Lock()
-	defer cg.mu.Unlock()
-
-	// Clear consumer assignments (don't clear partition.assignedTo as it affects all groups)
-	for _, consumer := range cg.consumers {
-		consumer.AssignedParts = []int{}
-	}
-
-	if len(cg.consumers) == 0 {
-		return
-	}
-
-	// Convert to slice for indexing and sort for deterministic assignment
-	consumers := make([]*types.Consumer, 0, len(cg.consumers))
-	for _, consumer := range cg.consumers {
-		consumers = append(consumers, consumer)
-	}
-	// Sort consumers by ID to ensure deterministic partition assignment across cluster nodes
-	sort.Slice(consumers, func(i, j int) bool {
-		return consumers[i].ID < consumers[j].ID
-	})
-
-	// Calculate partitions per consumer
-	partitionsPerConsumer := len(partitions) / len(consumers)
-	remainder := len(partitions) % len(consumers)
-
-	partitionIdx := 0
-	for consumerIdx, consumer := range consumers {
-		count := partitionsPerConsumer
-		if consumerIdx < remainder {
-			count++
-		}
-
-		consumer.AssignedParts = make([]int, 0, count)
-		for i := 0; i < count && partitionIdx < len(partitions); i++ {
-			partition := partitions[partitionIdx]
-			partition.AssignTo(consumer.ID)
-			consumer.AssignedParts = append(consumer.AssignedParts, partition.ID())
-			partitionIdx++
-		}
-	}
-}
-
-// GetConsumerForPartition returns the consumer assigned to a partition.
-func (cg *Group) GetConsumerForPartition(partitionID int) (*types.Consumer, bool) {
+// GetNextConsumer returns the next consumer for round-robin message delivery.
+func (cg *Group) GetNextConsumer() (*types.Consumer, bool) {
 	cg.mu.RLock()
 	defer cg.mu.RUnlock()
 
+	if len(cg.consumers) == 0 {
+		return nil, false
+	}
+
+	// Simple round-robin: return first consumer
+	// For proper round-robin with state, use an external counter
 	for _, consumer := range cg.consumers {
-		for _, assignedPart := range consumer.AssignedParts {
-			if assignedPart == partitionID {
-				return consumer, true
-			}
-		}
+		return consumer, true
 	}
 
 	return nil, false

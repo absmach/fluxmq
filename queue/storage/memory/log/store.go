@@ -501,45 +501,6 @@ func (s *Store) UpdateCommitted(ctx context.Context, queueName, groupID string, 
 	return nil
 }
 
-// RegisterConsumer adds a consumer to a group.
-func (s *Store) RegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
-	if err != nil {
-		return err
-	}
-
-	group.SetConsumer(consumer.ID, consumer)
-	return nil
-}
-
-// UnregisterConsumer removes a consumer from a group.
-func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
-	if err != nil {
-		return err
-	}
-
-	group.DeleteConsumer(consumerID)
-	group.DeleteConsumerPEL(consumerID)
-	return nil
-}
-
-// ListConsumers lists all consumers in a group.
-func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.ConsumerInfo, error) {
-	group, err := s.GetConsumerGroup(ctx, queueName, groupID)
-	if err != nil {
-		return nil, err
-	}
-
-	var result []*types.ConsumerInfo
-	group.ForEachConsumer(func(_ string, c *types.ConsumerInfo) bool {
-		result = append(result, c)
-		return true
-	})
-
-	return result, nil
-}
-
 // --- ConsumerStore Implementation ---
 
 // RegisterConsumer registers a consumer in a group.
@@ -659,7 +620,6 @@ func (s *Store) UpdateHeartbeat(ctx context.Context, queueName, groupID, consume
 
 // Compile-time interface assertions
 var (
-	_ storage.QueueStore         = (*Store)(nil)
-	_ storage.ConsumerGroupStore = (*Store)(nil)
-	_ storage.ConsumerStore      = (*Store)(nil)
+	_ storage.QueueStore    = (*Store)(nil)
+	_ storage.ConsumerStore = (*Store)(nil)
 )

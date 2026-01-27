@@ -11,7 +11,6 @@ type Consumer struct {
 	ClientID      string
 	GroupID       string
 	QueueName     string
-	AssignedParts []int
 	RegisteredAt  time.Time
 	LastHeartbeat time.Time
 	ProxyNodeID   string // For cluster routing

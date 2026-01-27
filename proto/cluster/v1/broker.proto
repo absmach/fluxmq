@@ -186,13 +186,12 @@ message RouteQueueMessageResponse {
 
 message AppendEntriesRequest {
   string queue_name = 1;
-  int32 partition_id = 2;
-  uint64 term = 3;
-  string leader_id = 4;
-  uint64 prev_log_index = 5;
-  uint64 prev_log_term = 6;
-  repeated bytes entries = 7;
-  uint64 leader_commit = 8;
+  uint64 term = 2;
+  string leader_id = 3;
+  uint64 prev_log_index = 4;
+  uint64 prev_log_term = 5;
+  repeated bytes entries = 6;
+  uint64 leader_commit = 7;
 }
 
 message AppendEntriesResponse {
@@ -203,11 +202,10 @@ message AppendEntriesResponse {
 
 message RequestVoteRequest {
   string queue_name = 1;
-  int32 partition_id = 2;
-  uint64 term = 3;
-  string candidate_id = 4;
-  uint64 last_log_index = 5;
-  uint64 last_log_term = 6;
+  uint64 term = 2;
+  string candidate_id = 3;
+  uint64 last_log_index = 4;
+  uint64 last_log_term = 5;
 }
 
 message RequestVoteResponse {
@@ -217,13 +215,12 @@ message RequestVoteResponse {
 
 message InstallSnapshotRequest {
   string queue_name = 1;
-  int32 partition_id = 2;
-  uint64 term = 3;
-  string leader_id = 4;
-  uint64 last_included_index = 5;
-  uint64 last_included_term = 6;
-  bytes data = 7;
-  bool done = 8;
+  uint64 term = 2;
+  string leader_id = 3;
+  uint64 last_included_index = 4;
+  uint64 last_included_term = 5;
+  bytes data = 6;
+  bool done = 7;
 }
 
 message InstallSnapshotResponse {

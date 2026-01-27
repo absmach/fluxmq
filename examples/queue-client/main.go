@@ -179,10 +179,9 @@ func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, coun
 			orderID, customerID, rand.Intn(1000)+100)
 
 		err := c.PublishToQueueWithOptions(&client.QueuePublishOptions{
-			QueueName:    queueName,
-			Payload:      payload,
-			PartitionKey: customerID, // Same customer → same partition → FIFO ordering
-			QoS:          2,          // Exactly-once delivery
+			QueueName: queueName,
+			Payload:   payload,
+			QoS:       2, // Exactly-once delivery
 		})
 		if err != nil {
 			log.Printf("[%s] Failed to publish order %s: %v", clientID, orderID, err)
@@ -253,8 +252,8 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 			time.Sleep(100 * time.Millisecond)
 
 			atomic.AddInt64(processed, 1)
-			log.Printf("[%s] Validated order (partition=%d, seq=%d): %s",
-				clientID, msg.PartitionID, msg.Sequence, string(msg.Payload))
+			log.Printf("[%s] Validated order (seq=%d): %s",
+				clientID, msg.Sequence, string(msg.Payload))
 
 			// Acknowledge successful processing
 			if err := msg.Ack(); err != nil {
@@ -319,8 +318,8 @@ func runFulfillment(ctx context.Context, processed *int64) {
 			time.Sleep(200 * time.Millisecond)
 
 			atomic.AddInt64(processed, 1)
-			log.Printf("[%s] Fulfilled order (partition=%d, seq=%d): %s",
-				clientID, msg.PartitionID, msg.Sequence, string(msg.Payload))
+			log.Printf("[%s] Fulfilled order (seq=%d): %s",
+				clientID, msg.Sequence, string(msg.Payload))
 
 			// Demonstrate different acknowledgment types
 			if rand.Float32() < 0.05 { // 5% chance of needing retry

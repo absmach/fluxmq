@@ -14,11 +14,10 @@ import (
 
 // QueuePublishOptions configures queue message publishing.
 type QueuePublishOptions struct {
-	QueueName    string            // Queue topic name (without $queue/ prefix)
-	Payload      []byte            // Message payload
-	PartitionKey string            // Partition key for ordering (optional)
-	Properties   map[string]string // Additional user properties (optional)
-	QoS          byte              // Quality of Service (default 1)
+	QueueName  string            // Queue topic name (without $queue/ prefix)
+	Payload    []byte            // Message payload
+	Properties map[string]string // Additional user properties (optional)
+	QoS        byte              // Quality of Service (default 1)
 }
 
 // QueueMessageHandler is called when a queue message is received.
@@ -28,9 +27,8 @@ type QueueMessageHandler func(msg *QueueMessage)
 type QueueMessage struct {
 	*Message // Embedded standard MQTT message
 
-	MessageID   string // Unique message ID for acknowledgment
-	PartitionID int    // Partition ID
-	Sequence    uint64 // Message sequence number within partition
+	MessageID string // Unique message ID for acknowledgment
+	Sequence  uint64 // Message sequence number
 
 	// Internal fields for acknowledgment
 	client    *Client
@@ -104,12 +102,11 @@ func (qs *queueSubscriptions) remove(queueTopic string) {
 
 // PublishToQueue publishes a message to a durable queue.
 // The queueName should NOT include the "$queue/" prefix - it will be added automatically.
-func (c *Client) PublishToQueue(queueName string, payload []byte, partitionKey string) error {
+func (c *Client) PublishToQueue(queueName string, payload []byte) error {
 	return c.PublishToQueueWithOptions(&QueuePublishOptions{
-		QueueName:    queueName,
-		Payload:      payload,
-		PartitionKey: partitionKey,
-		QoS:          1, // Default QoS 1 for queues
+		QueueName: queueName,
+		Payload:   payload,
+		QoS:       1, // Default QoS 1 for queues
 	})
 }
 
@@ -128,15 +125,8 @@ func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
 
 	// Build user properties
 	var userProps map[string]string
-	if opts.PartitionKey != "" || len(opts.Properties) > 0 {
+	if len(opts.Properties) > 0 {
 		userProps = make(map[string]string)
-
-		// Add partition key if provided
-		if opts.PartitionKey != "" {
-			userProps["partition-key"] = opts.PartitionKey
-		}
-
-		// Add additional properties
 		for k, v := range opts.Properties {
 			userProps[k] = v
 		}

@@ -984,15 +984,11 @@ func (c *Client) handleQueueMessage(msg *Message) {
 
 	// Extract queue message metadata from user properties
 	var messageID string
-	var partitionID int
 	var sequence uint64
 
 	if msg.UserProperties != nil {
 		if msgID, ok := msg.UserProperties["message-id"]; ok {
 			messageID = msgID
-		}
-		if partID, ok := msg.UserProperties["partition-id"]; ok {
-			fmt.Sscanf(partID, "%d", &partitionID)
 		}
 		if seq, ok := msg.UserProperties["sequence"]; ok {
 			fmt.Sscanf(seq, "%d", &sequence)
@@ -1001,12 +997,11 @@ func (c *Client) handleQueueMessage(msg *Message) {
 
 	// Create queue message with ack/nack/reject methods
 	queueMsg := &QueueMessage{
-		Message:     msg,
-		MessageID:   messageID,
-		PartitionID: partitionID,
-		Sequence:    sequence,
-		client:      c,
-		queueName:   sub.queueName,
+		Message:   msg,
+		MessageID: messageID,
+		Sequence:  sequence,
+		client:    c,
+		queueName: sub.queueName,
 	}
 
 	// Call handler

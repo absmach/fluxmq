@@ -10,7 +10,6 @@ import "time"
 type DeliveryState struct {
 	MessageID   string
 	QueueName   string
-	PartitionID int
 	GroupID     string // Consumer group ID - required for fan-out to multiple groups
 	ConsumerID  string
 	DeliveredAt time.Time

@@ -14,9 +14,8 @@ import (
 
 func TestQueuePublishOptions(t *testing.T) {
 	opts := &QueuePublishOptions{
-		QueueName:    "tasks/image",
-		Payload:      []byte("test payload"),
-		PartitionKey: "user-123",
+		QueueName: "tasks/image",
+		Payload:   []byte("test payload"),
 		Properties: map[string]string{
 			"priority": "high",
 		},
@@ -25,7 +24,6 @@ func TestQueuePublishOptions(t *testing.T) {
 
 	assert.Equal(t, "tasks/image", opts.QueueName)
 	assert.Equal(t, []byte("test payload"), opts.Payload)
-	assert.Equal(t, "user-123", opts.PartitionKey)
 	assert.Equal(t, "high", opts.Properties["priority"])
 	assert.Equal(t, byte(1), opts.QoS)
 }
@@ -235,7 +233,6 @@ func TestClient_HandleQueueMessage_WithHandler(t *testing.T) {
 
 	require.NotNil(t, receivedQueueMsg)
 	assert.Equal(t, "msg-123", receivedQueueMsg.MessageID)
-	assert.Equal(t, 5, receivedQueueMsg.PartitionID)
 	assert.Equal(t, uint64(42), receivedQueueMsg.Sequence)
 	assert.Equal(t, "test", receivedQueueMsg.queueName)
 	assert.Equal(t, client, receivedQueueMsg.client)

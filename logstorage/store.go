@@ -12,7 +12,7 @@ import (
 )
 
 // Store is the main interface for the AOL storage system.
-// It manages multiple queues, each with multiple partitions.
+// It manages multiple queues, each with a single log (no partitions).
 // Consumer state uses JetStream-style semantics with sharded PEL.
 type Store struct {
 	mu sync.RWMutex
@@ -20,8 +20,8 @@ type Store struct {
 	baseDir string
 	config  StoreConfig
 
-	// Queue -> Partition -> SegmentManager
-	queues map[string]map[uint32]*SegmentManager
+	// Queue -> SegmentManager (single log per queue, no partitions)
+	queues map[string]*SegmentManager
 
 	// Queue -> ConsumerManager (JetStream-style with sharded PEL)
 	consumers map[string]*ConsumerManager
@@ -54,7 +54,7 @@ func NewStore(baseDir string, config StoreConfig) (*Store, error) {
 	s := &Store{
 		baseDir:   baseDir,
 		config:    config,
-		queues:    make(map[string]map[uint32]*SegmentManager),
+		queues:    make(map[string]*SegmentManager),
 		consumers: make(map[string]*ConsumerManager),
 	}
 
@@ -92,39 +92,22 @@ func (s *Store) loadQueues() error {
 	return nil
 }
 
-// loadQueue loads a queue and its partitions.
+// loadQueue loads a queue's segment manager.
 func (s *Store) loadQueue(queueName string) error {
 	queueDir := filepath.Join(s.baseDir, "queues", queueName)
-	partitionsDir := filepath.Join(queueDir, "partitions")
+	segmentsDir := filepath.Join(queueDir, "segments")
 
-	entries, err := os.ReadDir(partitionsDir)
+	// Check if segments directory exists
+	if _, err := os.Stat(segmentsDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	manager, err := NewSegmentManager(segmentsDir, s.config.ManagerConfig)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return fmt.Errorf("failed to load queue segments: %w", err)
 	}
 
-	s.queues[queueName] = make(map[uint32]*SegmentManager)
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		var partitionID uint32
-		if _, err := fmt.Sscanf(entry.Name(), "%d", &partitionID); err != nil {
-			continue
-		}
-
-		partitionDir := filepath.Join(partitionsDir, entry.Name())
-		manager, err := NewSegmentManager(partitionDir, s.config.ManagerConfig)
-		if err != nil {
-			return fmt.Errorf("failed to load partition %d: %w", partitionID, err)
-		}
-
-		s.queues[queueName][partitionID] = manager
-	}
+	s.queues[queueName] = manager
 
 	// Load consumer manager for this queue
 	cm, err := NewConsumerManager(queueDir, s.config.ConsumerStateConfig)
@@ -141,13 +124,13 @@ func (s *Store) queueDir(queueName string) string {
 	return filepath.Join(s.baseDir, "queues", queueName)
 }
 
-// partitionDir returns the directory for a partition.
-func (s *Store) partitionDir(queueName string, partitionID uint32) string {
-	return filepath.Join(s.queueDir(queueName), "partitions", fmt.Sprintf("%d", partitionID))
+// segmentsDir returns the segments directory for a queue.
+func (s *Store) segmentsDir(queueName string) string {
+	return filepath.Join(s.queueDir(queueName), "segments")
 }
 
-// getOrCreatePartition gets or creates a partition's segment manager.
-func (s *Store) getOrCreatePartition(queueName string, partitionID uint32) (*SegmentManager, error) {
+// getOrCreateQueue gets or creates a queue's segment manager.
+func (s *Store) getOrCreateQueue(queueName string) (*SegmentManager, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -155,13 +138,11 @@ func (s *Store) getOrCreatePartition(queueName string, partitionID uint32) (*Seg
 		return nil, ErrSegmentClosed
 	}
 
-	partitions, ok := s.queues[queueName]
+	manager, ok := s.queues[queueName]
 	if !ok {
 		if !s.config.AutoCreate {
 			return nil, ErrQueueNotFound
 		}
-		partitions = make(map[uint32]*SegmentManager)
-		s.queues[queueName] = partitions
 
 		// Create consumer manager for new queue
 		queueDir := s.queueDir(queueName)
@@ -170,28 +151,20 @@ func (s *Store) getOrCreatePartition(queueName string, partitionID uint32) (*Seg
 			return nil, fmt.Errorf("failed to create consumer manager: %w", err)
 		}
 		s.consumers[queueName] = cm
-	}
 
-	manager, ok := partitions[partitionID]
-	if !ok {
-		if !s.config.AutoCreate {
-			return nil, ErrQueueNotFound
-		}
-
-		partDir := s.partitionDir(queueName, partitionID)
-		var err error
-		manager, err = NewSegmentManager(partDir, s.config.ManagerConfig)
+		segDir := s.segmentsDir(queueName)
+		manager, err = NewSegmentManager(segDir, s.config.ManagerConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create partition: %w", err)
+			return nil, fmt.Errorf("failed to create queue: %w", err)
 		}
-		partitions[partitionID] = manager
+		s.queues[queueName] = manager
 	}
 
 	return manager, nil
 }
 
-// getPartition gets a partition's segment manager without creating.
-func (s *Store) getPartition(queueName string, partitionID uint32) (*SegmentManager, error) {
+// getQueue gets a queue's segment manager without creating.
+func (s *Store) getQueue(queueName string) (*SegmentManager, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -199,12 +172,7 @@ func (s *Store) getPartition(queueName string, partitionID uint32) (*SegmentMana
 		return nil, ErrSegmentClosed
 	}
 
-	partitions, ok := s.queues[queueName]
-	if !ok {
-		return nil, ErrQueueNotFound
-	}
-
-	manager, ok := partitions[partitionID]
+	manager, ok := s.queues[queueName]
 	if !ok {
 		return nil, ErrQueueNotFound
 	}
@@ -226,9 +194,9 @@ func (s *Store) getConsumerManager(queueName string) (*ConsumerManager, error) {
 
 // Message Operations
 
-// Append appends a message to a partition.
-func (s *Store) Append(queueName string, partitionID uint32, value []byte, key []byte, headers map[string][]byte) (uint64, error) {
-	manager, err := s.getOrCreatePartition(queueName, partitionID)
+// Append appends a message to a queue.
+func (s *Store) Append(queueName string, value []byte, key []byte, headers map[string][]byte) (uint64, error) {
+	manager, err := s.getOrCreateQueue(queueName)
 	if err != nil {
 		return 0, err
 	}
@@ -236,9 +204,9 @@ func (s *Store) Append(queueName string, partitionID uint32, value []byte, key [
 	return manager.AppendMessage(value, key, headers)
 }
 
-// AppendBatch appends a batch of messages to a partition.
-func (s *Store) AppendBatch(queueName string, partitionID uint32, batch *Batch) (uint64, error) {
-	manager, err := s.getOrCreatePartition(queueName, partitionID)
+// AppendBatch appends a batch of messages to a queue.
+func (s *Store) AppendBatch(queueName string, batch *Batch) (uint64, error) {
+	manager, err := s.getOrCreateQueue(queueName)
 	if err != nil {
 		return 0, err
 	}
@@ -247,8 +215,8 @@ func (s *Store) AppendBatch(queueName string, partitionID uint32, batch *Batch) 
 }
 
 // Read reads a message at the given offset.
-func (s *Store) Read(queueName string, partitionID uint32, offset uint64) (*Message, error) {
-	manager, err := s.getPartition(queueName, partitionID)
+func (s *Store) Read(queueName string, offset uint64) (*Message, error) {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return nil, err
 	}
@@ -257,8 +225,8 @@ func (s *Store) Read(queueName string, partitionID uint32, offset uint64) (*Mess
 }
 
 // ReadBatch reads a batch at the given offset.
-func (s *Store) ReadBatch(queueName string, partitionID uint32, offset uint64) (*Batch, error) {
-	manager, err := s.getPartition(queueName, partitionID)
+func (s *Store) ReadBatch(queueName string, offset uint64) (*Batch, error) {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return nil, err
 	}
@@ -267,8 +235,8 @@ func (s *Store) ReadBatch(queueName string, partitionID uint32, offset uint64) (
 }
 
 // ReadRange reads messages in a range.
-func (s *Store) ReadRange(queueName string, partitionID uint32, startOffset, endOffset uint64, maxMessages int) ([]Message, error) {
-	manager, err := s.getPartition(queueName, partitionID)
+func (s *Store) ReadRange(queueName string, startOffset, endOffset uint64, maxMessages int) ([]Message, error) {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return nil, err
 	}
@@ -276,9 +244,9 @@ func (s *Store) ReadRange(queueName string, partitionID uint32, startOffset, end
 	return manager.ReadRange(startOffset, endOffset, maxMessages)
 }
 
-// Head returns the head offset for a partition.
-func (s *Store) Head(queueName string, partitionID uint32) (uint64, error) {
-	manager, err := s.getPartition(queueName, partitionID)
+// Head returns the head offset for a queue.
+func (s *Store) Head(queueName string) (uint64, error) {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return 0, err
 	}
@@ -286,9 +254,9 @@ func (s *Store) Head(queueName string, partitionID uint32) (uint64, error) {
 	return manager.Head(), nil
 }
 
-// Tail returns the tail offset for a partition.
-func (s *Store) Tail(queueName string, partitionID uint32) (uint64, error) {
-	manager, err := s.getPartition(queueName, partitionID)
+// Tail returns the tail offset for a queue.
+func (s *Store) Tail(queueName string) (uint64, error) {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return 0, err
 	}
@@ -296,9 +264,9 @@ func (s *Store) Tail(queueName string, partitionID uint32) (uint64, error) {
 	return manager.Tail(), nil
 }
 
-// Count returns the message count for a partition.
-func (s *Store) Count(queueName string, partitionID uint32) (uint64, error) {
-	manager, err := s.getPartition(queueName, partitionID)
+// Count returns the message count for a queue.
+func (s *Store) Count(queueName string) (uint64, error) {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return 0, err
 	}
@@ -307,8 +275,8 @@ func (s *Store) Count(queueName string, partitionID uint32) (uint64, error) {
 }
 
 // Truncate removes messages before the given offset.
-func (s *Store) Truncate(queueName string, partitionID uint32, beforeOffset uint64) error {
-	manager, err := s.getPartition(queueName, partitionID)
+func (s *Store) Truncate(queueName string, beforeOffset uint64) error {
+	manager, err := s.getQueue(queueName)
 	if err != nil {
 		return err
 	}
@@ -319,7 +287,7 @@ func (s *Store) Truncate(queueName string, partitionID uint32, beforeOffset uint
 // Consumer Group Operations
 
 // Deliver marks a message as delivered to a consumer.
-func (s *Store) Deliver(queueName, groupID string, partitionID uint32, offset uint64, consumerID string) error {
+func (s *Store) Deliver(queueName, groupID string, offset uint64, consumerID string) error {
 	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return err
@@ -330,11 +298,11 @@ func (s *Store) Deliver(queueName, groupID string, partitionID uint32, offset ui
 		return err
 	}
 
-	return state.Deliver(partitionID, offset, consumerID)
+	return state.Deliver(offset, consumerID)
 }
 
 // DeliverBatch marks multiple messages as delivered.
-func (s *Store) DeliverBatch(queueName, groupID string, partitionID uint32, offsets []uint64, consumerID string) error {
+func (s *Store) DeliverBatch(queueName, groupID string, offsets []uint64, consumerID string) error {
 	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return err
@@ -345,11 +313,11 @@ func (s *Store) DeliverBatch(queueName, groupID string, partitionID uint32, offs
 		return err
 	}
 
-	return state.DeliverBatch(partitionID, offsets, consumerID)
+	return state.DeliverBatch(offsets, consumerID)
 }
 
 // Ack acknowledges a message.
-func (s *Store) Ack(queueName, groupID string, partitionID uint32, offset uint64) error {
+func (s *Store) Ack(queueName, groupID string, offset uint64) error {
 	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return err
@@ -360,11 +328,11 @@ func (s *Store) Ack(queueName, groupID string, partitionID uint32, offset uint64
 		return ErrGroupNotFound
 	}
 
-	return state.Ack(partitionID, offset)
+	return state.Ack(offset)
 }
 
 // AckBatch acknowledges multiple messages.
-func (s *Store) AckBatch(queueName, groupID string, partitionID uint32, offsets []uint64) error {
+func (s *Store) AckBatch(queueName, groupID string, offsets []uint64) error {
 	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return err
@@ -375,7 +343,7 @@ func (s *Store) AckBatch(queueName, groupID string, partitionID uint32, offsets 
 		return ErrGroupNotFound
 	}
 
-	return state.AckBatch(partitionID, offsets)
+	return state.AckBatch(offsets)
 }
 
 // Nack negatively acknowledges a message (will be redelivered).
@@ -423,8 +391,8 @@ func (s *Store) ClaimBatch(queueName, groupID string, offsets []uint64, newConsu
 	return state.ClaimBatch(offsets, newConsumerID)
 }
 
-// GetPartitionState returns consumer state for a partition.
-func (s *Store) GetPartitionState(queueName, groupID string, partitionID uint32) (*PartitionState, error) {
+// GetGroupState returns consumer group state.
+func (s *Store) GetGroupState(queueName, groupID string) (*GroupState, error) {
 	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return nil, err
@@ -432,28 +400,28 @@ func (s *Store) GetPartitionState(queueName, groupID string, partitionID uint32)
 
 	state := cm.Get(groupID)
 	if state == nil {
-		return &PartitionState{}, nil
+		return &GroupState{}, nil
 	}
 
-	return state.GetPartitionState(partitionID), nil
+	return state.GetGroupState(), nil
 }
 
-// GetAckFloor returns the ack floor (highest contiguous acked offset) for a partition.
-func (s *Store) GetAckFloor(queueName, groupID string, partitionID uint32) (uint64, error) {
-	ps, err := s.GetPartitionState(queueName, groupID, partitionID)
+// GetAckFloor returns the ack floor (highest contiguous acked offset).
+func (s *Store) GetAckFloor(queueName, groupID string) (uint64, error) {
+	gs, err := s.GetGroupState(queueName, groupID)
 	if err != nil {
 		return 0, err
 	}
-	return ps.AckFloor, nil
+	return gs.AckFloor, nil
 }
 
-// GetCursor returns the cursor (next delivery offset) for a partition.
-func (s *Store) GetCursor(queueName, groupID string, partitionID uint32) (uint64, error) {
-	ps, err := s.GetPartitionState(queueName, groupID, partitionID)
+// GetCursor returns the cursor (next delivery offset).
+func (s *Store) GetCursor(queueName, groupID string) (uint64, error) {
+	gs, err := s.GetGroupState(queueName, groupID)
 	if err != nil {
 		return 0, err
 	}
-	return ps.Cursor, nil
+	return gs.Cursor, nil
 }
 
 // PEL Operations
@@ -655,8 +623,8 @@ func (s *Store) NumPELShards(queueName, groupID string) (int, error) {
 
 // Queue Management
 
-// CreateQueue creates a new queue with the specified number of partitions.
-func (s *Store) CreateQueue(queueName string, partitionCount int) error {
+// CreateQueue creates a new queue.
+func (s *Store) CreateQueue(queueName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -668,30 +636,19 @@ func (s *Store) CreateQueue(queueName string, partitionCount int) error {
 		return ErrAlreadyExists
 	}
 
-	partitions := make(map[uint32]*SegmentManager)
-	for i := range partitionCount {
-		partDir := s.partitionDir(queueName, uint32(i))
-		manager, err := NewSegmentManager(partDir, s.config.ManagerConfig)
-		if err != nil {
-			// Cleanup on failure
-			for _, m := range partitions {
-				m.Close()
-			}
-			return fmt.Errorf("failed to create partition %d: %w", i, err)
-		}
-		partitions[uint32(i)] = manager
+	segDir := s.segmentsDir(queueName)
+	manager, err := NewSegmentManager(segDir, s.config.ManagerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create queue: %w", err)
 	}
 
-	s.queues[queueName] = partitions
+	s.queues[queueName] = manager
 
 	// Create consumer manager
 	queueDir := s.queueDir(queueName)
 	cm, err := NewConsumerManager(queueDir, s.config.ConsumerStateConfig)
 	if err != nil {
-		// Cleanup on failure
-		for _, m := range partitions {
-			m.Close()
-		}
+		manager.Close()
 		return fmt.Errorf("failed to create consumer manager: %w", err)
 	}
 	s.consumers[queueName] = cm
@@ -708,15 +665,13 @@ func (s *Store) DeleteQueue(queueName string) error {
 		return ErrSegmentClosed
 	}
 
-	partitions, ok := s.queues[queueName]
+	manager, ok := s.queues[queueName]
 	if !ok {
 		return ErrQueueNotFound
 	}
 
-	// Close all partitions
-	for _, manager := range partitions {
-		manager.Close()
-	}
+	// Close queue
+	manager.Close()
 
 	// Close consumer manager
 	if cm, ok := s.consumers[queueName]; ok {
@@ -742,21 +697,13 @@ func (s *Store) ListQueues() []string {
 	return names
 }
 
-// ListPartitions returns all partition IDs for a queue.
-func (s *Store) ListPartitions(queueName string) ([]uint32, error) {
+// QueueExists checks if a queue exists.
+func (s *Store) QueueExists(queueName string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	partitions, ok := s.queues[queueName]
-	if !ok {
-		return nil, ErrQueueNotFound
-	}
-
-	ids := make([]uint32, 0, len(partitions))
-	for id := range partitions {
-		ids = append(ids, id)
-	}
-	return ids, nil
+	_, ok := s.queues[queueName]
+	return ok
 }
 
 // Maintenance
@@ -766,11 +713,9 @@ func (s *Store) ApplyRetention() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, partitions := range s.queues {
-		for _, manager := range partitions {
-			if err := manager.ApplyRetention(); err != nil {
-				return err
-			}
+	for _, manager := range s.queues {
+		if err := manager.ApplyRetention(); err != nil {
+			return err
 		}
 	}
 
@@ -782,11 +727,9 @@ func (s *Store) Sync() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, partitions := range s.queues {
-		for _, manager := range partitions {
-			if err := manager.Sync(); err != nil {
-				return err
-			}
+	for _, manager := range s.queues {
+		if err := manager.Sync(); err != nil {
+			return err
 		}
 	}
 
@@ -820,22 +763,29 @@ func (s *Store) Recover() (*RecoveryResult, error) {
 
 	result := &RecoveryResult{}
 
-	for queueName, partitions := range s.queues {
-		for partitionID := range partitions {
-			partDir := s.partitionDir(queueName, partitionID)
-			partResult, err := RecoverPartition(partDir)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("queue %s partition %d: %w", queueName, partitionID, err))
-				continue
-			}
-
-			result.SegmentsRecovered += partResult.SegmentsRecovered
-			result.SegmentsTruncated += partResult.SegmentsTruncated
-			result.IndexesRebuilt += partResult.IndexesRebuilt
-			result.MessagesLost += partResult.MessagesLost
-			result.BytesTruncated += partResult.BytesTruncated
-			result.Errors = append(result.Errors, partResult.Errors...)
+	for queueName, manager := range s.queues {
+		segDir := s.segmentsDir(queueName)
+		queueResult, err := RecoverSegments(segDir)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("queue %s: %w", queueName, err))
+			continue
 		}
+
+		// Reload the manager after recovery
+		newManager, err := NewSegmentManager(segDir, s.config.ManagerConfig)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Errorf("queue %s reload: %w", queueName, err))
+			continue
+		}
+		manager.Close()
+		s.queues[queueName] = newManager
+
+		result.SegmentsRecovered += queueResult.SegmentsRecovered
+		result.SegmentsTruncated += queueResult.SegmentsTruncated
+		result.IndexesRebuilt += queueResult.IndexesRebuilt
+		result.MessagesLost += queueResult.MessagesLost
+		result.BytesTruncated += queueResult.BytesTruncated
+		result.Errors = append(result.Errors, queueResult.Errors...)
 	}
 
 	return result, nil
@@ -852,28 +802,18 @@ func (s *Store) Stats() StoreStats {
 		ConsumerStats: make(map[string]ConsumerManagerStats),
 	}
 
-	for queueName, partitions := range s.queues {
+	for queueName, manager := range s.queues {
 		qStats := QueueStats{
-			PartitionCount: len(partitions),
-			PartitionStats: make(map[uint32]PartitionStats),
-		}
-
-		for partitionID, manager := range partitions {
-			pStats := PartitionStats{
-				Head:         manager.Head(),
-				Tail:         manager.Tail(),
-				MessageCount: manager.Count(),
-				Size:         manager.Size(),
-				SegmentCount: manager.SegmentCount(),
-			}
-			qStats.PartitionStats[partitionID] = pStats
-			qStats.TotalMessages += pStats.MessageCount
-			qStats.TotalSize += pStats.Size
+			Head:         manager.Head(),
+			Tail:         manager.Tail(),
+			MessageCount: manager.Count(),
+			Size:         manager.Size(),
+			SegmentCount: manager.SegmentCount(),
 		}
 
 		stats.QueueStats[queueName] = qStats
-		stats.TotalMessages += qStats.TotalMessages
-		stats.TotalSize += qStats.TotalSize
+		stats.TotalMessages += qStats.MessageCount
+		stats.TotalSize += qStats.Size
 
 		// Add consumer stats
 		if cm, ok := s.consumers[queueName]; ok {
@@ -897,12 +837,10 @@ func (s *Store) Close() error {
 
 	var lastErr error
 
-	// Close all partition managers
-	for _, partitions := range s.queues {
-		for _, manager := range partitions {
-			if err := manager.Close(); err != nil {
-				lastErr = err
-			}
+	// Close all queue managers
+	for _, manager := range s.queues {
+		if err := manager.Close(); err != nil {
+			lastErr = err
 		}
 	}
 
@@ -927,14 +865,6 @@ type StoreStats struct {
 
 // QueueStats contains queue statistics.
 type QueueStats struct {
-	PartitionCount int
-	TotalMessages  uint64
-	TotalSize      int64
-	PartitionStats map[uint32]PartitionStats
-}
-
-// PartitionStats contains partition statistics.
-type PartitionStats struct {
 	Head         uint64
 	Tail         uint64
 	MessageCount uint64
@@ -945,7 +875,7 @@ type PartitionStats struct {
 // Legacy compatibility methods (map to new JetStream-style API)
 
 // SetCursor sets the cursor for a consumer group (creates delivery if needed).
-func (s *Store) SetCursor(queueName, groupID string, partitionID uint32, cursor uint64) error {
+func (s *Store) SetCursor(queueName, groupID string, cursor uint64) error {
 	// In JetStream model, cursor is advanced by Deliver operations
 	// This is a legacy compatibility method
 	return nil
@@ -953,30 +883,24 @@ func (s *Store) SetCursor(queueName, groupID string, partitionID uint32, cursor 
 
 // CommitOffset commits an offset for a consumer group.
 // In JetStream model, this maps to Ack.
-func (s *Store) CommitOffset(queueName, groupID string, partitionID uint32, offset uint64) error {
-	return s.Ack(queueName, groupID, partitionID, offset)
+func (s *Store) CommitOffset(queueName, groupID string, offset uint64) error {
+	return s.Ack(queueName, groupID, offset)
 }
 
 // GetCommittedOffset returns the committed offset for a consumer group.
 // In JetStream model, this is the AckFloor.
-func (s *Store) GetCommittedOffset(queueName, groupID string, partitionID uint32) (uint64, error) {
-	return s.GetAckFloor(queueName, groupID, partitionID)
+func (s *Store) GetCommittedOffset(queueName, groupID string) (uint64, error) {
+	return s.GetAckFloor(queueName, groupID)
 }
 
 // AddPending adds a pending entry (legacy - use Deliver instead).
 func (s *Store) AddPending(queueName, groupID string, entry PELEntry) error {
-	// Using partition 0 since partitions were removed from the public API
-	return s.Deliver(queueName, groupID, 0, entry.Offset, entry.ConsumerID)
+	return s.Deliver(queueName, groupID, entry.Offset, entry.ConsumerID)
 }
 
 // AckPending acknowledges a pending entry (legacy - use Ack instead).
 func (s *Store) AckPending(queueName, groupID string, offset uint64) error {
-	// Need partition ID - get from PEL
-	entry, err := s.GetPending(queueName, groupID, offset)
-	if err != nil {
-		return err
-	}
-	return s.Ack(queueName, groupID, entry.PartitionID, offset)
+	return s.Ack(queueName, groupID, offset)
 }
 
 // ClaimPending claims a pending entry (legacy - use Claim instead).
@@ -1026,29 +950,16 @@ func (s *Store) GetAllPending(queueName, groupID string) (map[string][]PELEntry,
 	return result, nil
 }
 
-// GetAllCursors returns cursor state for all partitions (legacy format).
-func (s *Store) GetAllCursors(queueName, groupID string) (map[uint32]Cursor, error) {
-	state, err := s.GetConsumerState(queueName, groupID)
+// GetCursorState returns cursor state for the queue (legacy format).
+func (s *Store) GetCursorState(queueName, groupID string) (*Cursor, error) {
+	gs, err := s.GetGroupState(queueName, groupID)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make(map[uint32]Cursor)
-
-	// Get all partitions for this queue
-	partitions, err := s.ListPartitions(queueName)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, partID := range partitions {
-		ps := state.GetPartitionState(partID)
-		result[partID] = Cursor{
-			Cursor:    ps.Cursor,
-			Committed: ps.AckFloor,
-			UpdatedAt: ps.UpdatedAt,
-		}
-	}
-
-	return result, nil
+	return &Cursor{
+		Cursor:    gs.Cursor,
+		Committed: gs.AckFloor,
+		UpdatedAt: gs.UpdatedAt,
+	}, nil
 }

@@ -104,8 +104,7 @@ func (a *Adapter) Store() *Store {
 
 // CreateQueue creates a new queue with the given configuration.
 func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	// Create a single partition (partition 0) for the queue
-	if err := a.store.CreateQueue(config.Name, 1); err != nil {
+	if err := a.store.CreateQueue(config.Name); err != nil {
 		if err == ErrAlreadyExists {
 			return storage.ErrQueueAlreadyExists
 		}
@@ -168,8 +167,7 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 		headers["_state"] = []byte(msg.State)
 	}
 
-	// Always use partition 0
-	return a.store.Append(queueName, 0, value, key, headers)
+	return a.store.Append(queueName, value, key, headers)
 }
 
 // AppendBatch adds multiple messages to a queue's log.
@@ -198,13 +196,12 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*typ
 		batch.Append(value, key, headers)
 	}
 
-	// Always use partition 0
-	return a.store.AppendBatch(queueName, 0, batch)
+	return a.store.AppendBatch(queueName, batch)
 }
 
 // Read retrieves a message at a specific offset.
 func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*types.Message, error) {
-	msg, err := a.store.Read(queueName, 0, offset)
+	msg, err := a.store.Read(queueName, offset)
 	if err != nil {
 		if err == ErrOffsetOutOfRange {
 			return nil, storage.ErrOffsetOutOfRange
@@ -220,12 +217,12 @@ func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*t
 
 // ReadBatch reads messages starting from offset up to limit.
 func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error) {
-	tail, err := a.store.Tail(queueName, 0)
+	tail, err := a.store.Tail(queueName)
 	if err != nil {
 		return nil, err
 	}
 
-	messages, err := a.store.ReadRange(queueName, 0, startOffset, tail, limit)
+	messages, err := a.store.ReadRange(queueName, startOffset, tail, limit)
 	if err != nil {
 		if err == ErrOffsetOutOfRange {
 			return nil, storage.ErrOffsetOutOfRange
@@ -243,27 +240,27 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 
 // Head returns the first valid offset in the queue.
 func (a *Adapter) Head(ctx context.Context, queueName string) (uint64, error) {
-	return a.store.Head(queueName, 0)
+	return a.store.Head(queueName)
 }
 
 // Tail returns the next offset that will be assigned.
 func (a *Adapter) Tail(ctx context.Context, queueName string) (uint64, error) {
-	return a.store.Tail(queueName, 0)
+	return a.store.Tail(queueName)
 }
 
 // Truncate removes all messages with offset < minOffset.
 func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint64) error {
-	return a.store.Truncate(queueName, 0, minOffset)
+	return a.store.Truncate(queueName, minOffset)
 }
 
 // Count returns the number of messages in a queue.
 func (a *Adapter) Count(ctx context.Context, queueName string) (uint64, error) {
-	return a.store.Count(queueName, 0)
+	return a.store.Count(queueName)
 }
 
 // TotalCount returns total messages in a queue.
 func (a *Adapter) TotalCount(ctx context.Context, queueName string) (uint64, error) {
-	return a.store.Count(queueName, 0)
+	return a.store.Count(queueName)
 }
 
 // ConsumerGroupStore interface implementation
@@ -406,7 +403,7 @@ func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID s
 
 // UpdateCursor updates the cursor position for a queue.
 func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
-	if err := a.store.SetCursor(queueName, groupID, 0, cursor); err != nil {
+	if err := a.store.SetCursor(queueName, groupID, cursor); err != nil {
 		return err
 	}
 
@@ -424,7 +421,7 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 
 // UpdateCommitted updates the committed offset for a queue.
 func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
-	if err := a.store.CommitOffset(queueName, groupID, 0, committed); err != nil {
+	if err := a.store.CommitOffset(queueName, groupID, committed); err != nil {
 		return err
 	}
 
@@ -497,17 +494,14 @@ func (a *Adapter) Sync() error {
 
 // syncCursorsFromStore syncs cursor state from the log store to the group state.
 func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.ConsumerGroupState) {
-	cursors, err := a.store.GetAllCursors(queueName, groupID)
+	cursorState, err := a.store.GetCursorState(queueName, groupID)
 	if err != nil {
 		return
 	}
 
-	// Use partition 0 cursor for queue cursor
-	if cursor, ok := cursors[0]; ok {
-		c := group.GetCursor()
-		c.Cursor = cursor.Cursor
-		c.Committed = cursor.Committed
-	}
+	c := group.GetCursor()
+	c.Cursor = cursorState.Cursor
+	c.Committed = cursorState.Committed
 }
 
 // syncPELFromStore syncs PEL state from the log store to the group state.

@@ -168,8 +168,8 @@ func rebuildIndexes(dir string, baseOffset uint64) error {
 	return nil
 }
 
-// RecoverPartition recovers all segments in a partition directory.
-func RecoverPartition(dir string) (*RecoveryResult, error) {
+// RecoverSegments recovers all segments in a directory.
+func RecoverSegments(dir string) (*RecoveryResult, error) {
 	result := &RecoveryResult{}
 
 	pattern := filepath.Join(dir, "*"+SegmentExtension)

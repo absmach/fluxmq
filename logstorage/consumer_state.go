@@ -24,8 +24,8 @@ type ConsumerState struct {
 	groupID string
 	config  ConsumerStateConfig
 
-	// Per-partition state
-	partitions map[uint32]*PartitionState
+	// Consumer group state (no partitions - single log per queue)
+	state *GroupState
 
 	// Sharded PEL for scalable redelivery
 	pelShards []*PELShard
@@ -70,8 +70,8 @@ func DefaultConsumerStateConfig() ConsumerStateConfig {
 	}
 }
 
-// PartitionState tracks consumer progress in a single partition.
-type PartitionState struct {
+// GroupState tracks consumer group progress (single log per queue, no partitions).
+type GroupState struct {
 	// JetStream-style monotonic progress
 	AckFloor  uint64 // Highest contiguous acked offset (everything <= is done)
 	Cursor    uint64 // Next offset to deliver
@@ -100,7 +100,6 @@ type PELShard struct {
 // PendingEntry represents a delivered but unacknowledged message.
 type PendingEntry struct {
 	Offset        uint64 `json:"o"`
-	PartitionID   uint32 `json:"p"`
 	ConsumerID    string `json:"c"`
 	DeliveredAt   int64  `json:"d"`
 	DeliveryCount uint16 `json:"n"`
@@ -126,13 +125,14 @@ func NewConsumerState(baseDir, groupID string, config ConsumerStateConfig) (*Con
 		return nil, fmt.Errorf("failed to create consumer state directory: %w", err)
 	}
 
+	now := time.Now().UnixMilli()
 	cs := &ConsumerState{
-		dir:        dir,
-		groupID:    groupID,
-		config:     config,
-		partitions: make(map[uint32]*PartitionState),
-		pelShards:  make([]*PELShard, config.NumPELShards),
-		lastSync:   time.Now(),
+		dir:       dir,
+		groupID:   groupID,
+		config:    config,
+		state:     &GroupState{CreatedAt: now, UpdatedAt: now},
+		pelShards: make([]*PELShard, config.NumPELShards),
+		lastSync:  time.Now(),
 	}
 
 	// Initialize PEL shards
@@ -177,10 +177,10 @@ func (cs *ConsumerState) pelPath(shardID int) string {
 
 // StateSnapshot is the serialized consumer state.
 type StateSnapshot struct {
-	Version    uint64                     `json:"version"`
-	GroupID    string                     `json:"group_id"`
-	Partitions map[uint32]*PartitionState `json:"partitions"`
-	SavedAt    int64                      `json:"saved_at"`
+	Version uint64      `json:"version"`
+	GroupID string      `json:"group_id"`
+	State   *GroupState `json:"state"`
+	SavedAt int64       `json:"saved_at"`
 }
 
 // PELSnapshot is the serialized PEL shard.
@@ -193,16 +193,15 @@ type PELSnapshot struct {
 
 // load loads state from snapshots.
 func (cs *ConsumerState) load() error {
-	// Load partition state
+	// Load group state
 	data, err := os.ReadFile(cs.statePath())
 	if err == nil {
 		var snap StateSnapshot
 		if err := json.Unmarshal(data, &snap); err == nil {
-			cs.partitions = snap.Partitions
-			cs.snapVersion = snap.Version
-			if cs.partitions == nil {
-				cs.partitions = make(map[uint32]*PartitionState)
+			if snap.State != nil {
+				cs.state = snap.State
 			}
+			cs.snapVersion = snap.Version
 		}
 	}
 
@@ -252,12 +251,11 @@ const (
 
 // Operation represents an operation in the log.
 type Operation struct {
-	Type        OpType   `json:"t"`
-	PartitionID uint32   `json:"p,omitempty"`
-	Offset      uint64   `json:"o,omitempty"`
-	Offsets     []uint64 `json:"os,omitempty"` // For batch operations
-	ConsumerID  string   `json:"c,omitempty"`
-	Timestamp   int64    `json:"ts"`
+	Type       OpType   `json:"t"`
+	Offset     uint64   `json:"o,omitempty"`
+	Offsets    []uint64 `json:"os,omitempty"` // For batch operations
+	ConsumerID string   `json:"c,omitempty"`
+	Timestamp  int64    `json:"ts"`
 }
 
 // replayOpLog replays the operation log on top of loaded snapshots.
@@ -294,12 +292,12 @@ func (cs *ConsumerState) replayOpLog() error {
 func (cs *ConsumerState) applyOp(op *Operation) {
 	switch op.Type {
 	case OpDeliver:
-		cs.applyDeliver(op.PartitionID, op.Offset, op.ConsumerID, op.Timestamp)
+		cs.applyDeliver(op.Offset, op.ConsumerID, op.Timestamp)
 	case OpAck:
-		cs.applyAck(op.PartitionID, op.Offset)
+		cs.applyAck(op.Offset)
 	case OpAckBatch:
 		for _, offset := range op.Offsets {
-			cs.applyAck(op.PartitionID, offset)
+			cs.applyAck(offset)
 		}
 	case OpNack:
 		cs.applyNack(op.Offset, op.Timestamp)
@@ -310,24 +308,22 @@ func (cs *ConsumerState) applyOp(op *Operation) {
 			cs.applyClaim(offset, op.ConsumerID, op.Timestamp)
 		}
 	case OpAdvanceFloor:
-		cs.applyAdvanceFloor(op.PartitionID, op.Offset)
+		cs.applyAdvanceFloor(op.Offset)
 	}
 }
 
 // applyDeliver applies a deliver operation.
-func (cs *ConsumerState) applyDeliver(partitionID uint32, offset uint64, consumerID string, ts int64) {
-	// Update partition state
-	ps := cs.getOrCreatePartition(partitionID)
-	ps.Delivered++
-	if offset >= ps.Cursor {
-		ps.Cursor = offset + 1
+func (cs *ConsumerState) applyDeliver(offset uint64, consumerID string, ts int64) {
+	// Update group state
+	cs.state.Delivered++
+	if offset >= cs.state.Cursor {
+		cs.state.Cursor = offset + 1
 	}
-	ps.UpdatedAt = ts
+	cs.state.UpdatedAt = ts
 
 	// Add to PEL
 	entry := &PendingEntry{
 		Offset:        offset,
-		PartitionID:   partitionID,
 		ConsumerID:    consumerID,
 		DeliveredAt:   ts,
 		DeliveryCount: 1,
@@ -344,7 +340,7 @@ func (cs *ConsumerState) applyDeliver(partitionID uint32, offset uint64, consume
 }
 
 // applyAck applies an ack operation.
-func (cs *ConsumerState) applyAck(partitionID uint32, offset uint64) {
+func (cs *ConsumerState) applyAck(offset uint64) {
 	shard := cs.pelShards[cs.ShardKey(offset)]
 
 	entry, ok := shard.entries[offset]
@@ -364,7 +360,7 @@ func (cs *ConsumerState) applyAck(partitionID uint32, offset uint64) {
 	shard.dirty = true
 
 	// Try to advance AckFloor
-	cs.tryAdvanceAckFloor(partitionID)
+	cs.tryAdvanceAckFloor()
 }
 
 // applyNack applies a nack operation (increment delivery count, update timestamp).
@@ -414,25 +410,19 @@ func (cs *ConsumerState) applyClaim(offset uint64, newConsumerID string, ts int6
 }
 
 // applyAdvanceFloor applies an ack floor advancement.
-func (cs *ConsumerState) applyAdvanceFloor(partitionID uint32, floor uint64) {
-	ps := cs.getOrCreatePartition(partitionID)
-	if floor > ps.AckFloor {
-		ps.AckFloor = floor
-		ps.UpdatedAt = time.Now().UnixMilli()
+func (cs *ConsumerState) applyAdvanceFloor(floor uint64) {
+	if floor > cs.state.AckFloor {
+		cs.state.AckFloor = floor
+		cs.state.UpdatedAt = time.Now().UnixMilli()
 	}
 }
 
 // tryAdvanceAckFloor tries to advance the AckFloor if gaps are filled.
-func (cs *ConsumerState) tryAdvanceAckFloor(partitionID uint32) {
-	ps, ok := cs.partitions[partitionID]
-	if !ok {
-		return
-	}
-
+func (cs *ConsumerState) tryAdvanceAckFloor() {
 	// Check if we can advance AckFloor
 	// This is O(gap_size) but gaps should be small in practice
-	newFloor := ps.AckFloor
-	for offset := ps.AckFloor + 1; offset < ps.Cursor; offset++ {
+	newFloor := cs.state.AckFloor
+	for offset := cs.state.AckFloor + 1; offset < cs.state.Cursor; offset++ {
 		shard := cs.pelShards[cs.ShardKey(offset)]
 		if _, pending := shard.entries[offset]; pending {
 			break // Found a gap
@@ -440,25 +430,11 @@ func (cs *ConsumerState) tryAdvanceAckFloor(partitionID uint32) {
 		newFloor = offset
 	}
 
-	if newFloor > ps.AckFloor {
-		ps.AckFloor = newFloor
-		ps.UpdatedAt = time.Now().UnixMilli()
+	if newFloor > cs.state.AckFloor {
+		cs.state.AckFloor = newFloor
+		cs.state.UpdatedAt = time.Now().UnixMilli()
 		cs.dirty = true
 	}
-}
-
-// getOrCreatePartition gets or creates partition state.
-func (cs *ConsumerState) getOrCreatePartition(partitionID uint32) *PartitionState {
-	ps, ok := cs.partitions[partitionID]
-	if !ok {
-		now := time.Now().UnixMilli()
-		ps = &PartitionState{
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		cs.partitions[partitionID] = ps
-	}
-	return ps
 }
 
 // writeOp writes an operation to the log.
@@ -487,40 +463,38 @@ func (cs *ConsumerState) writeOp(op *Operation) error {
 // Public API
 
 // Deliver marks a message as delivered to a consumer.
-func (cs *ConsumerState) Deliver(partitionID uint32, offset uint64, consumerID string) error {
+func (cs *ConsumerState) Deliver(offset uint64, consumerID string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
 	ts := time.Now().UnixMilli()
-	cs.applyDeliver(partitionID, offset, consumerID, ts)
+	cs.applyDeliver(offset, consumerID, ts)
 
 	return cs.writeOp(&Operation{
-		Type:        OpDeliver,
-		PartitionID: partitionID,
-		Offset:      offset,
-		ConsumerID:  consumerID,
-		Timestamp:   ts,
+		Type:       OpDeliver,
+		Offset:     offset,
+		ConsumerID: consumerID,
+		Timestamp:  ts,
 	})
 }
 
 // DeliverBatch marks multiple messages as delivered.
-func (cs *ConsumerState) DeliverBatch(partitionID uint32, offsets []uint64, consumerID string) error {
+func (cs *ConsumerState) DeliverBatch(offsets []uint64, consumerID string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
 	ts := time.Now().UnixMilli()
 	for _, offset := range offsets {
-		cs.applyDeliver(partitionID, offset, consumerID, ts)
+		cs.applyDeliver(offset, consumerID, ts)
 	}
 
 	// Write as individual ops for now (could optimize to batch op)
 	for _, offset := range offsets {
 		if err := cs.writeOp(&Operation{
-			Type:        OpDeliver,
-			PartitionID: partitionID,
-			Offset:      offset,
-			ConsumerID:  consumerID,
-			Timestamp:   ts,
+			Type:       OpDeliver,
+			Offset:     offset,
+			ConsumerID: consumerID,
+			Timestamp:  ts,
 		}); err != nil {
 			return err
 		}
@@ -530,34 +504,32 @@ func (cs *ConsumerState) DeliverBatch(partitionID uint32, offsets []uint64, cons
 }
 
 // Ack acknowledges a message.
-func (cs *ConsumerState) Ack(partitionID uint32, offset uint64) error {
+func (cs *ConsumerState) Ack(offset uint64) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	cs.applyAck(partitionID, offset)
+	cs.applyAck(offset)
 
 	return cs.writeOp(&Operation{
-		Type:        OpAck,
-		PartitionID: partitionID,
-		Offset:      offset,
-		Timestamp:   time.Now().UnixMilli(),
+		Type:      OpAck,
+		Offset:    offset,
+		Timestamp: time.Now().UnixMilli(),
 	})
 }
 
 // AckBatch acknowledges multiple messages.
-func (cs *ConsumerState) AckBatch(partitionID uint32, offsets []uint64) error {
+func (cs *ConsumerState) AckBatch(offsets []uint64) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
 	for _, offset := range offsets {
-		cs.applyAck(partitionID, offset)
+		cs.applyAck(offset)
 	}
 
 	return cs.writeOp(&Operation{
-		Type:        OpAckBatch,
-		PartitionID: partitionID,
-		Offsets:     offsets,
-		Timestamp:   time.Now().UnixMilli(),
+		Type:      OpAckBatch,
+		Offsets:   offsets,
+		Timestamp: time.Now().UnixMilli(),
 	})
 }
 
@@ -610,23 +582,18 @@ func (cs *ConsumerState) ClaimBatch(offsets []uint64, newConsumerID string) erro
 	})
 }
 
-// GetPartitionState returns the state for a partition.
-func (cs *ConsumerState) GetPartitionState(partitionID uint32) *PartitionState {
+// GetGroupState returns the consumer group state.
+func (cs *ConsumerState) GetGroupState() *GroupState {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	ps, ok := cs.partitions[partitionID]
-	if !ok {
-		return &PartitionState{}
-	}
-
 	// Return a copy
-	return &PartitionState{
-		AckFloor:  ps.AckFloor,
-		Cursor:    ps.Cursor,
-		Delivered: ps.Delivered,
-		CreatedAt: ps.CreatedAt,
-		UpdatedAt: ps.UpdatedAt,
+	return &GroupState{
+		AckFloor:  cs.state.AckFloor,
+		Cursor:    cs.state.Cursor,
+		Delivered: cs.state.Delivered,
+		CreatedAt: cs.state.CreatedAt,
+		UpdatedAt: cs.state.UpdatedAt,
 	}
 }
 
@@ -647,7 +614,6 @@ func (cs *ConsumerState) GetPending(offset uint64) (*PendingEntry, bool) {
 	// Return a copy
 	return &PendingEntry{
 		Offset:        entry.Offset,
-		PartitionID:   entry.PartitionID,
 		ConsumerID:    entry.ConsumerID,
 		DeliveredAt:   entry.DeliveredAt,
 		DeliveryCount: entry.DeliveryCount,
@@ -829,12 +795,12 @@ func (cs *ConsumerState) compactLocked() error {
 	cs.snapVersion++
 	now := time.Now().UnixMilli()
 
-	// Save partition state
+	// Save group state
 	stateSnap := StateSnapshot{
-		Version:    cs.snapVersion,
-		GroupID:    cs.groupID,
-		Partitions: cs.partitions,
-		SavedAt:    now,
+		Version: cs.snapVersion,
+		GroupID: cs.groupID,
+		State:   cs.state,
+		SavedAt: now,
 	}
 
 	if err := writeJSONAtomic(cs.statePath(), stateSnap); err != nil {
@@ -899,20 +865,22 @@ func (cs *ConsumerState) Stats() ConsumerStateStats {
 	defer cs.mu.RUnlock()
 
 	stats := ConsumerStateStats{
-		GroupID:        cs.groupID,
-		NumPartitions:  len(cs.partitions),
-		NumShards:      len(cs.pelShards),
-		OpCount:        cs.opCount,
+		GroupID:         cs.groupID,
+		AckFloor:        cs.state.AckFloor,
+		Cursor:          cs.state.Cursor,
+		Delivered:       cs.state.Delivered,
+		NumShards:       len(cs.pelShards),
+		OpCount:         cs.opCount,
 		SnapshotVersion: cs.snapVersion,
-		ShardStats:     make([]ShardStats, len(cs.pelShards)),
+		ShardStats:      make([]ShardStats, len(cs.pelShards)),
 	}
 
 	for i, shard := range cs.pelShards {
 		shard.mu.RLock()
 		stats.TotalPending += len(shard.entries)
 		stats.ShardStats[i] = ShardStats{
-			ShardID:      i,
-			PendingCount: len(shard.entries),
+			ShardID:       i,
+			PendingCount:  len(shard.entries),
 			ConsumerCount: len(shard.byConsumer),
 		}
 		shard.mu.RUnlock()
@@ -924,7 +892,9 @@ func (cs *ConsumerState) Stats() ConsumerStateStats {
 // ConsumerStateStats contains statistics about consumer state.
 type ConsumerStateStats struct {
 	GroupID         string
-	NumPartitions   int
+	AckFloor        uint64
+	Cursor          uint64
+	Delivered       uint64
 	NumShards       int
 	TotalPending    int
 	OpCount         int
