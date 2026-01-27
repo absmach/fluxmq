@@ -66,6 +66,41 @@ type SubscriptionRouter interface {
 	GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error)
 }
 
+// QueueConsumerInfo represents a queue consumer registration visible across the cluster.
+type QueueConsumerInfo struct {
+	QueueName   string // Queue name (e.g., "test" for $queue/test)
+	GroupID     string // Consumer group ID
+	ConsumerID  string // Consumer identifier (usually client ID)
+	ClientID    string // MQTT client ID
+	Pattern     string // Subscription pattern within the queue
+	ProxyNodeID string // Node where the consumer is connected
+	RegisteredAt time.Time
+}
+
+// QueueConsumerRegistry manages cluster-wide queue consumer registrations.
+// This enables cross-node queue message routing.
+type QueueConsumerRegistry interface {
+	// RegisterQueueConsumer registers a queue consumer visible to all nodes.
+	RegisterQueueConsumer(ctx context.Context, info *QueueConsumerInfo) error
+
+	// UnregisterQueueConsumer removes a queue consumer registration.
+	UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error
+
+	// ListQueueConsumers returns all consumers for a queue across all nodes.
+	ListQueueConsumers(ctx context.Context, queueName string) ([]*QueueConsumerInfo, error)
+
+	// ListQueueConsumersByGroup returns all consumers for a specific group.
+	ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*QueueConsumerInfo, error)
+
+	// ListAllQueueConsumers returns all queue consumers across all queues.
+	// Used to find which nodes have consumers for a topic.
+	ListAllQueueConsumers(ctx context.Context) ([]*QueueConsumerInfo, error)
+
+	// ForwardQueuePublish forwards a queue publish to a remote node.
+	// The remote node will store the message in its local matching queues.
+	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error
+}
+
 type Lifecycle interface {
 	// Leadership - for coordinating background tasks
 
@@ -99,6 +134,7 @@ type Cluster interface {
 	SessionOwnership
 	PartitionOwnership
 	SubscriptionRouter
+	QueueConsumerRegistry
 	Lifecycle
 
 	// Retained returns the cluster-wide retained message store.

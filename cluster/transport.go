@@ -30,6 +30,9 @@ type QueueHandler interface {
 
 	// DeliverQueueMessage delivers a queue message to a local consumer.
 	DeliverQueueMessage(ctx context.Context, clientID string, msg any) error
+
+	// PublishLocal publishes a message to local matching queues (called by remote forward).
+	PublishLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) error
 }
 
 // Transport handles inter-broker communication using Connect protocol.
@@ -382,6 +385,29 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *connect.Request[clus
 		}), nil
 	}
 
+	// Check if this is a forwarded publish (topic-based) vs direct enqueue (queue-based)
+	if req.Msg.Properties != nil && req.Msg.Properties["_forward_publish"] == "true" {
+		// This is a forwarded publish - call PublishLocal with the topic
+		topic := req.Msg.QueueName // topic is passed in queueName field for forwards
+		props := make(map[string]string)
+		for k, v := range req.Msg.Properties {
+			if k != "_forward_publish" {
+				props[k] = v
+			}
+		}
+		err := handler.PublishLocal(ctx, topic, req.Msg.Payload, props)
+		if err != nil {
+			return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
+				Success: false,
+				Error:   err.Error(),
+			}), nil
+		}
+		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
+			Success: true,
+		}), nil
+	}
+
+	// Standard enqueue to a specific queue
 	messageID, err := handler.EnqueueLocal(ctx, req.Msg.QueueName, req.Msg.Payload, req.Msg.Properties)
 	if err != nil {
 		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{

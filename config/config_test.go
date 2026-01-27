@@ -106,7 +106,10 @@ func TestValidate(t *testing.T) {
 func TestLoadNonExistent(t *testing.T) {
 	cfg, err := Load("nonexistent.yaml")
 	if err != nil {
-		t.Fatalf("Load() should return default config when file doesn't exist, got error: %v", err)
+		t.Fatalf("Load() should return default config and no error when file doesn't exist, got error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("Load() should return a default config, got nil")
 	}
 
 	if cfg.Server.TCP.Plain.Addr != ":1883" {

@@ -22,11 +22,12 @@ import (
 )
 
 const (
-	willPrefix          = "/mqtt/wills/"
-	retainedPrefix      = "/mqtt/retained/"
-	subscriptionsPrefix = "/mqtt/subscriptions/"
-	sessionsPrefix      = "/mqtt/sessions/"
-	partitionsPrefix    = "/mqtt/queue/"
+	willPrefix           = "/mqtt/wills/"
+	retainedPrefix       = "/mqtt/retained/"
+	subscriptionsPrefix  = "/mqtt/subscriptions/"
+	sessionsPrefix       = "/mqtt/sessions/"
+	partitionsPrefix     = "/mqtt/queue/"
+	queueConsumersPrefix = "/mqtt/queue-consumers/"
 
 	electionPrefix = "/mqtt/leader"
 	urlPrefix      = "http://"
@@ -1070,6 +1071,137 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 	}
 
 	return c.msgHandler.DeliverToClient(ctx, clientID, msg)
+}
+
+// --- Queue Consumer Registry ---
+
+// RegisterQueueConsumer registers a queue consumer visible to all nodes.
+func (c *EtcdCluster) RegisterQueueConsumer(ctx context.Context, info *QueueConsumerInfo) error {
+	// Key format: /mqtt/queue-consumers/{queueName}/{groupID}/{consumerID}
+	key := fmt.Sprintf("%s%s/%s/%s", queueConsumersPrefix, info.QueueName, info.GroupID, info.ConsumerID)
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		return fmt.Errorf("failed to marshal consumer info: %w", err)
+	}
+
+	_, err = c.client.Put(ctx, key, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to store consumer in etcd: %w", err)
+	}
+
+	c.logger.Debug("registered queue consumer in cluster",
+		slog.String("queue", info.QueueName),
+		slog.String("group", info.GroupID),
+		slog.String("consumer", info.ConsumerID),
+		slog.String("node", info.ProxyNodeID))
+
+	return nil
+}
+
+// UnregisterQueueConsumer removes a queue consumer registration.
+func (c *EtcdCluster) UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	key := fmt.Sprintf("%s%s/%s/%s", queueConsumersPrefix, queueName, groupID, consumerID)
+
+	_, err := c.client.Delete(ctx, key)
+	if err != nil {
+		return fmt.Errorf("failed to delete consumer from etcd: %w", err)
+	}
+
+	c.logger.Debug("unregistered queue consumer from cluster",
+		slog.String("queue", queueName),
+		slog.String("group", groupID),
+		slog.String("consumer", consumerID))
+
+	return nil
+}
+
+// ListQueueConsumers returns all consumers for a queue across all nodes.
+func (c *EtcdCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*QueueConsumerInfo, error) {
+	prefix := fmt.Sprintf("%s%s/", queueConsumersPrefix, queueName)
+
+	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list queue consumers: %w", err)
+	}
+
+	var consumers []*QueueConsumerInfo
+	for _, kv := range resp.Kvs {
+		var info QueueConsumerInfo
+		if err := json.Unmarshal(kv.Value, &info); err != nil {
+			c.logger.Warn("failed to unmarshal consumer info",
+				slog.String("key", string(kv.Key)),
+				slog.String("error", err.Error()))
+			continue
+		}
+		consumers = append(consumers, &info)
+	}
+
+	return consumers, nil
+}
+
+// ListQueueConsumersByGroup returns all consumers for a specific group.
+func (c *EtcdCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*QueueConsumerInfo, error) {
+	prefix := fmt.Sprintf("%s%s/%s/", queueConsumersPrefix, queueName, groupID)
+
+	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list queue consumers: %w", err)
+	}
+
+	var consumers []*QueueConsumerInfo
+	for _, kv := range resp.Kvs {
+		var info QueueConsumerInfo
+		if err := json.Unmarshal(kv.Value, &info); err != nil {
+			c.logger.Warn("failed to unmarshal consumer info",
+				slog.String("key", string(kv.Key)),
+				slog.String("error", err.Error()))
+			continue
+		}
+		consumers = append(consumers, &info)
+	}
+
+	return consumers, nil
+}
+
+// ListAllQueueConsumers returns all queue consumers across all queues.
+func (c *EtcdCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsumerInfo, error) {
+	resp, err := c.client.Get(ctx, queueConsumersPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all queue consumers: %w", err)
+	}
+
+	var consumers []*QueueConsumerInfo
+	for _, kv := range resp.Kvs {
+		var info QueueConsumerInfo
+		if err := json.Unmarshal(kv.Value, &info); err != nil {
+			c.logger.Warn("failed to unmarshal consumer info",
+				slog.String("key", string(kv.Key)),
+				slog.String("error", err.Error()))
+			continue
+		}
+		consumers = append(consumers, &info)
+	}
+
+	return consumers, nil
+}
+
+// ForwardQueuePublish forwards a queue publish to a remote node.
+func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+	if c.transport == nil {
+		return fmt.Errorf("transport not configured")
+	}
+
+	// Add special property to indicate this is a forwarded publish
+	props := make(map[string]string)
+	for k, v := range properties {
+		props[k] = v
+	}
+	props["_forward_publish"] = "true"
+
+	// Use SendEnqueueRemote with topic in queueName field
+	_, err := c.transport.SendEnqueueRemote(ctx, nodeID, topic, payload, props)
+	return err
 }
 
 // HandleTakeover implements TransportHandler.HandleTakeover.

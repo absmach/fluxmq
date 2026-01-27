@@ -170,6 +170,38 @@ func (n *NoopCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, q
 	return ErrClusterNotEnabled
 }
 
+// Queue consumer registry - local only in single-node
+
+func (n *NoopCluster) RegisterQueueConsumer(ctx context.Context, info *QueueConsumerInfo) error {
+	// Single-node: consumer registration is handled locally by queue manager
+	return nil
+}
+
+func (n *NoopCluster) UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	// Single-node: consumer unregistration is handled locally by queue manager
+	return nil
+}
+
+func (n *NoopCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*QueueConsumerInfo, error) {
+	// Single-node: return empty list, queue manager uses local storage
+	return nil, nil
+}
+
+func (n *NoopCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*QueueConsumerInfo, error) {
+	// Single-node: return empty list, queue manager uses local storage
+	return nil, nil
+}
+
+func (n *NoopCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsumerInfo, error) {
+	// Single-node: return empty list, queue manager uses local storage
+	return nil, nil
+}
+
+func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+	// Single-node: no remote nodes to forward to
+	return ErrClusterNotEnabled
+}
+
 // Leadership - always leader in single-node
 
 func (n *NoopCluster) IsLeader() bool {

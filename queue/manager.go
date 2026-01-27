@@ -16,6 +16,7 @@ import (
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // DeliverFn is the callback for delivering messages to MQTT clients.
@@ -263,7 +264,24 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 
 // Publish adds a message to all queues whose topic patterns match the topic.
 // This is the NATS JetQueue-style "multi-queue" routing.
+// It also forwards the publish to remote nodes that have consumers for the topic.
 func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+	// Store locally in matching queues
+	if err := m.PublishLocal(ctx, topic, payload, properties); err != nil {
+		return err
+	}
+
+	// Forward to remote nodes that have consumers
+	if m.cluster != nil {
+		m.forwardToRemoteNodes(ctx, topic, payload, properties)
+	}
+
+	return nil
+}
+
+// PublishLocal stores a message in local matching queues without forwarding.
+// This is called directly when receiving forwarded publishes from other nodes.
+func (m *Manager) PublishLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
 	// Find all matching queues
 	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
 	if err != nil {
@@ -318,6 +336,51 @@ func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, pro
 	return nil
 }
 
+// forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
+func (m *Manager) forwardToRemoteNodes(ctx context.Context, topic string, payload []byte, properties map[string]string) {
+	// Get all consumers from the cluster
+	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
+	if err != nil {
+		m.logger.Debug("failed to list cluster consumers for forwarding",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	// Find unique remote nodes that have consumers for queues matching this topic
+	remoteNodes := make(map[string]bool)
+	for _, c := range consumers {
+		// Skip local consumers
+		if c.ProxyNodeID == m.localNodeID {
+			continue
+		}
+
+		// Check if this consumer's queue pattern matches the topic
+		queuePattern := "$queue/" + c.QueueName + "/#"
+		if matchesTopic(queuePattern, topic) {
+			remoteNodes[c.ProxyNodeID] = true
+		}
+	}
+
+	// Forward to each unique remote node
+	for nodeID := range remoteNodes {
+		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, topic, payload, properties); err != nil {
+			m.logger.Warn("failed to forward publish to remote node",
+				slog.String("node", nodeID),
+				slog.String("topic", topic),
+				slog.String("error", err.Error()))
+		} else {
+			m.logger.Debug("forwarded publish to remote node",
+				slog.String("node", nodeID),
+				slog.String("topic", topic))
+		}
+	}
+}
+
+// matchesTopic checks if a filter pattern matches a topic using MQTT wildcard rules.
+func matchesTopic(filter, topic string) bool {
+	return topics.TopicMatch(filter, topic)
+}
+
 // Enqueue is an alias for Publish for backward compatibility.
 func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
 	return m.Publish(ctx, topic, payload, properties)
@@ -352,9 +415,27 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 		return err
 	}
 
-	// Register consumer
+	// Register consumer locally
 	if err := m.consumerManager.RegisterConsumer(ctx, queueName, group.ID, clientID, clientID, proxyNodeID); err != nil {
 		return err
+	}
+
+	// Register consumer in cluster for cross-node visibility
+	if m.cluster != nil {
+		info := &cluster.QueueConsumerInfo{
+			QueueName:    queueName,
+			GroupID:      patternGroupID,
+			ConsumerID:   clientID,
+			ClientID:     clientID,
+			Pattern:      pattern,
+			ProxyNodeID:  proxyNodeID,
+			RegisteredAt: time.Now(),
+		}
+		if err := m.cluster.RegisterQueueConsumer(ctx, info); err != nil {
+			m.logger.Warn("failed to register consumer in cluster",
+				slog.String("error", err.Error()),
+				slog.String("client", clientID))
+		}
 	}
 
 	// Track subscription
@@ -380,11 +461,20 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
 	}
 
-	// Unregister consumer
+	// Unregister consumer locally
 	if err := m.consumerManager.UnregisterConsumer(ctx, queueName, patternGroupID, clientID); err != nil {
 		m.logger.Debug("unregister consumer error",
 			slog.String("error", err.Error()),
 			slog.String("client", clientID))
+	}
+
+	// Unregister consumer from cluster
+	if m.cluster != nil {
+		if err := m.cluster.UnregisterQueueConsumer(ctx, queueName, patternGroupID, clientID); err != nil {
+			m.logger.Warn("failed to unregister consumer from cluster",
+				slog.String("error", err.Error()),
+				slog.String("client", clientID))
+		}
 	}
 
 	// Untrack subscription
@@ -547,6 +637,7 @@ func (m *Manager) deliverMessages() {
 	}
 
 	for _, queueConfig := range queues {
+		// Deliver to local consumer groups
 		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
 		if err != nil {
 			continue
@@ -554,6 +645,85 @@ func (m *Manager) deliverMessages() {
 
 		for _, group := range groups {
 			m.deliverToGroup(ctx, &queueConfig, group)
+		}
+
+		// Also deliver to remote consumers registered in cluster
+		if m.cluster != nil {
+			m.deliverToRemoteConsumers(ctx, &queueConfig)
+		}
+	}
+}
+
+// deliverToRemoteConsumers delivers messages to consumers registered on remote nodes.
+// This enables cross-node queue message routing.
+func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.QueueConfig) {
+	// Get all consumers for this queue from the cluster
+	consumers, err := m.cluster.ListQueueConsumers(ctx, config.Name)
+	if err != nil {
+		m.logger.Debug("failed to list cluster consumers",
+			slog.String("queue", config.Name),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	// Group consumers by groupID for proper cursor management
+	consumersByGroup := make(map[string][]*cluster.QueueConsumerInfo)
+	for _, c := range consumers {
+		// Only process consumers on remote nodes
+		if c.ProxyNodeID == m.localNodeID {
+			continue
+		}
+		consumersByGroup[c.GroupID] = append(consumersByGroup[c.GroupID], c)
+	}
+
+	for groupID, groupConsumers := range consumersByGroup {
+		// Get or create a local consumer group state for tracking cursor
+		group, err := m.consumerManager.GetOrCreateGroup(ctx, config.Name, groupID, groupConsumers[0].Pattern)
+		if err != nil {
+			continue
+		}
+
+		// Create filter from group pattern
+		var filter *consumer.Filter
+		if group.Pattern != "" {
+			filter = consumer.NewFilter(group.Pattern)
+		}
+
+		// Round-robin across remote consumers in this group
+		for _, consumerInfo := range groupConsumers {
+			// Claim messages for this remote consumer
+			msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, m.config.DeliveryBatchSize)
+			if err != nil {
+				continue
+			}
+
+			// Route each message to the remote node
+			for _, msg := range msgs {
+				err := m.cluster.RouteQueueMessage(
+					ctx,
+					consumerInfo.ProxyNodeID,
+					consumerInfo.ClientID,
+					config.Name,
+					msg.ID,
+					msg.GetPayload(),
+					msg.Properties,
+					int64(msg.Sequence),
+					0,
+				)
+				if err != nil {
+					m.logger.Warn("remote queue message delivery failed",
+						slog.String("client", consumerInfo.ClientID),
+						slog.String("node", consumerInfo.ProxyNodeID),
+						slog.String("queue", config.Name),
+						slog.String("error", err.Error()))
+				} else {
+					m.logger.Debug("routed queue message to remote consumer",
+						slog.String("client", consumerInfo.ClientID),
+						slog.String("node", consumerInfo.ProxyNodeID),
+						slog.String("queue", config.Name),
+						slog.Uint64("offset", msg.Sequence))
+				}
+			}
 		}
 	}
 }
