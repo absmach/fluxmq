@@ -708,7 +708,6 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 					msg.GetPayload(),
 					msg.Properties,
 					int64(msg.Sequence),
-					0,
 				)
 				if err != nil {
 					m.logger.Warn("remote queue message delivery failed",
@@ -775,7 +774,6 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 					msg.GetPayload(),
 					msg.Properties,
 					int64(msg.Sequence),
-					0, // No partition in queue model
 				)
 				if err != nil {
 					m.logger.Warn("queue message remote routing failed",

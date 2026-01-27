@@ -436,12 +436,11 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *connect.Request[
 	}
 
 	msg := map[string]interface{}{
-		"id":          req.Msg.MessageId,
-		"queueName":   req.Msg.QueueName,
-		"payload":     req.Msg.Payload,
-		"properties":  req.Msg.Properties,
-		"sequence":    req.Msg.Sequence,
-		"partitionId": req.Msg.PartitionId,
+		"id":         req.Msg.MessageId,
+		"queueName":  req.Msg.QueueName,
+		"payload":    req.Msg.Payload,
+		"properties": req.Msg.Properties,
+		"sequence":   req.Msg.Sequence,
 	}
 
 	err := handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
@@ -624,20 +623,19 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 }
 
 // SendRouteQueueMessage sends a queue message delivery request to a peer node.
-func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
+func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
 	client, err := t.GetPeerClient(nodeID)
 	if err != nil {
 		return err
 	}
 
 	req := connect.NewRequest(&clusterv1.RouteQueueMessageRequest{
-		ClientId:    clientID,
-		QueueName:   queueName,
-		MessageId:   messageID,
-		Payload:     payload,
-		Properties:  properties,
-		Sequence:    sequence,
-		PartitionId: int32(partitionID),
+		ClientId:   clientID,
+		QueueName:  queueName,
+		MessageId:  messageID,
+		Payload:    payload,
+		Properties: properties,
+		Sequence:   sequence,
 	})
 
 	resp, err := client.RouteQueueMessage(ctx, req)

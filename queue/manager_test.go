@@ -860,27 +860,6 @@ func (c *mockCluster) WatchSessionOwner(ctx context.Context, clientID string) <-
 	return nil
 }
 
-func (c *mockCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error {
-	return nil
-}
-
-func (c *mockCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error {
-	return nil
-}
-
-func (c *mockCluster) GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, bool, error) {
-	if owners, ok := c.partitionOwners[queueName]; ok {
-		if owner, ok := owners[partitionID]; ok {
-			return owner, true, nil
-		}
-	}
-	return "", false, nil
-}
-
-func (c *mockCluster) WatchPartitionOwnership(ctx context.Context, queueName string) <-chan cluster.PartitionOwnershipChange {
-	return nil
-}
-
 func (c *mockCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts brokerstorage.SubscribeOptions) error {
 	return nil
 }

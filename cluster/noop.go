@@ -142,7 +142,7 @@ func (n *NoopCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 	return "", ErrClusterNotEnabled
 }
 
-func (n *NoopCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
+func (n *NoopCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
 	// Single-node: no remote nodes to route to
 	return ErrClusterNotEnabled
 }

@@ -60,22 +60,6 @@ func (m *mockCluster) GetSessionOwner(ctx context.Context, clientID string) (str
 	return "", false, nil
 }
 
-func (m *mockCluster) GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (string, bool, error) {
-	return "", false, nil
-}
-
-func (m *mockCluster) WatchPartitionOwnership(ctx context.Context, queueName string) <-chan cluster.PartitionOwnershipChange {
-	ch := make(chan cluster.PartitionOwnershipChange)
-	close(ch)
-	return ch
-}
-
-func (m *mockCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan cluster.OwnershipChange {
-	ch := make(chan cluster.OwnershipChange)
-	close(ch)
-	return ch
-}
-
 func (m *mockCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error {
 	return nil
 }

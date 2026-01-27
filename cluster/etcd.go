@@ -26,7 +26,6 @@ const (
 	retainedPrefix       = "/mqtt/retained/"
 	subscriptionsPrefix  = "/mqtt/subscriptions/"
 	sessionsPrefix       = "/mqtt/sessions/"
-	partitionsPrefix     = "/mqtt/queue/"
 	queueConsumersPrefix = "/mqtt/queue-consumers/"
 
 	electionPrefix = "/mqtt/leader"
@@ -910,7 +909,7 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return state, nil
 }
 
-// EnqueueRemote sends an enqueue request to a remote partition owner.
+// EnqueueRemote sends an enqueue request to a remote node.
 func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
 	if c.transport == nil {
 		return "", fmt.Errorf("transport not configured")
@@ -919,11 +918,11 @@ func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 }
 
 // RouteQueueMessage sends a queue message to a remote consumer.
-func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
+func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
 	if c.transport == nil {
 		return fmt.Errorf("transport not configured")
 	}
-	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, messageID, payload, properties, sequence, partitionID)
+	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, messageID, payload, properties, sequence)
 }
 
 // SetQueueHandler sets the queue handler for queue distribution operations.

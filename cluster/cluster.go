@@ -135,9 +135,9 @@ type Cluster interface {
 	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error)
 
 	// RouteQueueMessage sends a queue message to a remote consumer.
-	// This is called in proxy mode when the partition worker needs to deliver a message
+	// This is called in proxy mode when the worker needs to deliver a message
 	// to a consumer connected to a different node.
-	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error
+	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error
 }
 
 // OwnershipChange represents a session ownership change event.
@@ -146,15 +146,6 @@ type OwnershipChange struct {
 	OldNode  string // Empty if session is new
 	NewNode  string // Empty if session was released
 	Time     time.Time
-}
-
-// PartitionOwnershipChange represents a partition ownership change event.
-type PartitionOwnershipChange struct {
-	QueueName   string
-	PartitionID int
-	OldNode     string // Empty if partition is newly created
-	NewNode     string // Empty if partition was released
-	Time        time.Time
 }
 
 // NodeInfo contains information about a cluster node.

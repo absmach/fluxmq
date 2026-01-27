@@ -20,13 +20,13 @@ service BrokerService {
   // FetchWill fetches a will message payload from the owning broker node.
   rpc FetchWill(FetchWillRequest) returns (FetchWillResponse);
 
-  // EnqueueRemote routes an enqueue operation to the partition owner node.
+  // EnqueueRemote routes an enqueue operation to the remote node.
   rpc EnqueueRemote(EnqueueRemoteRequest) returns (EnqueueRemoteResponse);
 
   // RouteQueueMessage delivers a queue message to a consumer on a different node.
   rpc RouteQueueMessage(RouteQueueMessageRequest) returns (RouteQueueMessageResponse);
 
-  // Raft RPCs for queue partition replication
+  // Raft RPCs for queue replication
 
   // AppendEntries is invoked by the Raft leader to replicate log entries.
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
@@ -173,7 +173,6 @@ message RouteQueueMessageRequest {
   bytes payload = 4;
   map<string, string> properties = 5;
   int64 sequence = 6;
-  int32 partition_id = 7;
 }
 
 message RouteQueueMessageResponse {

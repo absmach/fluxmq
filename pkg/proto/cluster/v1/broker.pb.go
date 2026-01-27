@@ -1088,7 +1088,6 @@ type RouteQueueMessageRequest struct {
 	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
 	Properties    map[string]string      `protobuf:"bytes,5,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Sequence      int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	PartitionId   int32                  `protobuf:"varint,7,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1161,13 +1160,6 @@ func (x *RouteQueueMessageRequest) GetProperties() map[string]string {
 func (x *RouteQueueMessageRequest) GetSequence() int64 {
 	if x != nil {
 		return x.Sequence
-	}
-	return 0
-}
-
-func (x *RouteQueueMessageRequest) GetPartitionId() int32 {
-	if x != nil {
-		return x.PartitionId
 	}
 	return 0
 }
@@ -1762,7 +1754,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +
-	"message_id\x18\x03 \x01(\tR\tmessageId\"\xea\x02\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\"\xc7\x02\n" +
 	"\x18RouteQueueMessageRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +
@@ -1773,8 +1765,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\n" +
 	"properties\x18\x05 \x03(\v2;.fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntryR\n" +
 	"properties\x12\x1a\n" +
-	"\bsequence\x18\x06 \x01(\x03R\bsequence\x12!\n" +
-	"\fpartition_id\x18\a \x01(\x05R\vpartitionId\x1a=\n" +
+	"\bsequence\x18\x06 \x01(\x03R\bsequence\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +

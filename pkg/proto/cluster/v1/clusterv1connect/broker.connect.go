@@ -74,7 +74,7 @@ type BrokerServiceClient interface {
 	FetchRetained(context.Context, *connect.Request[v1.FetchRetainedRequest]) (*connect.Response[v1.FetchRetainedResponse], error)
 	// FetchWill fetches a will message payload from the owning broker node.
 	FetchWill(context.Context, *connect.Request[v1.FetchWillRequest]) (*connect.Response[v1.FetchWillResponse], error)
-	// EnqueueRemote routes an enqueue operation to the partition owner node.
+	// EnqueueRemote routes an enqueue operation to the remote node.
 	EnqueueRemote(context.Context, *connect.Request[v1.EnqueueRemoteRequest]) (*connect.Response[v1.EnqueueRemoteResponse], error)
 	// RouteQueueMessage delivers a queue message to a consumer on a different node.
 	RouteQueueMessage(context.Context, *connect.Request[v1.RouteQueueMessageRequest]) (*connect.Response[v1.RouteQueueMessageResponse], error)
@@ -222,7 +222,7 @@ type BrokerServiceHandler interface {
 	FetchRetained(context.Context, *connect.Request[v1.FetchRetainedRequest]) (*connect.Response[v1.FetchRetainedResponse], error)
 	// FetchWill fetches a will message payload from the owning broker node.
 	FetchWill(context.Context, *connect.Request[v1.FetchWillRequest]) (*connect.Response[v1.FetchWillResponse], error)
-	// EnqueueRemote routes an enqueue operation to the partition owner node.
+	// EnqueueRemote routes an enqueue operation to the remote node.
 	EnqueueRemote(context.Context, *connect.Request[v1.EnqueueRemoteRequest]) (*connect.Response[v1.EnqueueRemoteResponse], error)
 	// RouteQueueMessage delivers a queue message to a consumer on a different node.
 	RouteQueueMessage(context.Context, *connect.Request[v1.RouteQueueMessageRequest]) (*connect.Response[v1.RouteQueueMessageResponse], error)
