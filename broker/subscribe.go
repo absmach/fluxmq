@@ -27,16 +27,16 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 			proxyNodeID = b.cluster.NodeID()
 		}
 
-		// Parse filter into stream name and pattern
-		streamName, pattern := parseQueueFilter(filter)
+		// Parse filter into queue name and pattern
+		queueName, pattern := parseQueueFilter(filter)
 
 		b.logOp("queue_subscribe",
 			slog.String("client_id", s.ID),
-			slog.String("stream", streamName),
+			slog.String("queue", queueName),
 			slog.String("pattern", pattern),
 			slog.String("group", groupID))
 
-		return b.queueManager.Subscribe(ctx, streamName, pattern, s.ID, groupID, proxyNodeID)
+		return b.queueManager.Subscribe(ctx, queueName, pattern, s.ID, groupID, proxyNodeID)
 	}
 
 	// Check if this is a shared subscription
@@ -107,15 +107,15 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 		ctx := context.Background()
 		groupID := "" // Will be derived from clientID in queue manager
 
-		// Parse filter into stream name and pattern
-		streamName, pattern := parseQueueFilter(filter)
+		// Parse filter into queue name and pattern
+		queueName, pattern := parseQueueFilter(filter)
 
 		b.logOp("queue_unsubscribe",
 			slog.String("client_id", s.ID),
-			slog.String("stream", streamName),
+			slog.String("queue", queueName),
 			slog.String("pattern", pattern))
 
-		return b.queueManager.Unsubscribe(ctx, streamName, pattern, s.ID, groupID)
+		return b.queueManager.Unsubscribe(ctx, queueName, pattern, s.ID, groupID)
 	}
 
 	// Check if this is a shared subscription

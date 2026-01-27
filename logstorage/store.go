@@ -316,7 +316,7 @@ func (s *Store) Truncate(queueName string, partitionID uint32, beforeOffset uint
 	return manager.Truncate(beforeOffset)
 }
 
-// Consumer Group Operations (JetStream-style)
+// Consumer Group Operations
 
 // Deliver marks a message as delivered to a consumer.
 func (s *Store) Deliver(queueName, groupID string, partitionID uint32, offset uint64, consumerID string) error {

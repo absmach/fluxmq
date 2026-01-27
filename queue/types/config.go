@@ -17,7 +17,7 @@ const (
 	MQTTQueueTopic = "#"
 )
 
-// ReplicationMode defines the replication behavior for stream messages.
+// ReplicationMode defines the replication behavior for queue messages.
 type ReplicationMode string
 
 const (
@@ -38,7 +38,7 @@ type QueueConfig struct {
 
 	// Limits
 	MaxMessageSize int64
-	MaxStreamDepth int64
+	MaxDepth       int64
 	MessageTTL     time.Duration
 
 	// Performance
@@ -102,11 +102,11 @@ func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 		topics = []string{"#"} // Match all topics by default
 	}
 	return QueueConfig{
-		Name:   name,
-		Topics: topics,
+		Name:             name,
+		Topics:           topics,
 		Reserved:         false,
 		MaxMessageSize:   10 * 1024 * 1024, // 10MB
-		MaxStreamDepth:   100000,
+		MaxDepth:         100000,
 		MessageTTL:       7 * 24 * time.Hour,
 		DeliveryTimeout:  30 * time.Second,
 		BatchSize:        100,
@@ -151,7 +151,7 @@ func (c *QueueConfig) Validate() error {
 		return ErrInvalidConfig
 	case c.MaxMessageSize <= 0:
 		return ErrInvalidConfig
-	case c.MaxStreamDepth <= 0:
+	case c.MaxDepth <= 0:
 		return ErrInvalidConfig
 	case c.DeliveryTimeout <= 0:
 		return ErrInvalidConfig

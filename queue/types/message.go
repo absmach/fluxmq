@@ -9,7 +9,7 @@ import (
 	"github.com/absmach/fluxmq/core"
 )
 
-// MessageState represents the lifecycle state of a stream message.
+// MessageState represents the lifecycle state of a queue message.
 type MessageState string
 
 const (
@@ -20,7 +20,7 @@ const (
 	StateDLQ       MessageState = "dlq"
 )
 
-// Message represents a message in the stream system.
+// Message represents a message in the queue system.
 type Message struct {
 	ID         string
 	Payload    []byte                 // Deprecated: Use PayloadBuf for zero-copy

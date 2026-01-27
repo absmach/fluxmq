@@ -82,12 +82,12 @@ type ApplyResult struct {
 }
 
 // LogFSM implements the Raft FSM interface for all queue operations.
-// It applies committed operations to the underlying stream and consumer group stores.
+// It applies committed operations to the underlying queue and consumer group stores.
 // This is a shared FSM that handles all queues based on operation data.
 type LogFSM struct {
 	queueStore storage.QueueStore
-	groupStore  storage.ConsumerGroupStore
-	logger      *slog.Logger
+	groupStore storage.ConsumerGroupStore
+	logger     *slog.Logger
 
 	mu sync.RWMutex
 }
@@ -99,8 +99,8 @@ func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupSt
 	}
 	return &LogFSM{
 		queueStore: queueStore,
-		groupStore:  groupStore,
-		logger:      logger,
+		groupStore: groupStore,
+		logger:     logger,
 	}
 }
 
@@ -376,18 +376,18 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 	ctx := context.Background()
 
 	// List all queues
-	streams, err := f.queueStore.ListQueues(ctx)
+	queues, err := f.queueStore.ListQueues(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list streams: %w", err)
+		return nil, fmt.Errorf("failed to list queues: %w", err)
 	}
 
-	// Collect all stream data
+	// Collect all queue data
 	var queueSnapshots []QueueSnapshotData
-	for _, queueCfg := range streams {
+	for _, queueCfg := range queues {
 		queueName := queueCfg.Name
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueName)
 		if err != nil {
-			f.logger.Warn("failed to list consumer groups for stream",
+			f.logger.Warn("failed to list consumer groups for queue",
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
 			continue

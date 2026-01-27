@@ -187,36 +187,36 @@ func (h *PendingHeap) Clear() {
 	h.index = make(map[uint64]int)
 }
 
-// StreamHeapManager manages a single heap for stream-based consumer groups.
-// In the stream model, there's only one log per stream (no partitions).
-type StreamHeapManager struct {
+// QueueHeapManager manages a single heap for queue-based consumer groups.
+// There's only one log per queue.
+type QueueHeapManager struct {
 	heap *PendingHeap
 	mu   sync.RWMutex
 }
 
-// NewStreamHeapManager creates a new stream heap manager.
-func NewStreamHeapManager() *StreamHeapManager {
-	return &StreamHeapManager{
+// NewQueueHeapManager creates a new queue heap manager.
+func NewQueueHeapManager() *QueueHeapManager {
+	return &QueueHeapManager{
 		heap: NewPendingHeap(),
 	}
 }
 
 // Get returns the heap.
-func (m *StreamHeapManager) Get() *PendingHeap {
+func (m *QueueHeapManager) Get() *PendingHeap {
 	return m.heap
 }
 
 // Add adds an entry to the heap.
-func (m *StreamHeapManager) Add(entry *types.PendingEntry) {
+func (m *QueueHeapManager) Add(entry *types.PendingEntry) {
 	m.heap.Add(entry)
 }
 
 // Remove removes an entry from the heap.
-func (m *StreamHeapManager) Remove(offset uint64) bool {
+func (m *QueueHeapManager) Remove(offset uint64) bool {
 	return m.heap.Remove(offset)
 }
 
 // TotalSize returns total entries in the heap.
-func (m *StreamHeapManager) TotalSize() int {
+func (m *QueueHeapManager) TotalSize() int {
 	return m.heap.Size()
 }

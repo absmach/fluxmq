@@ -24,7 +24,7 @@ type DeliverFn func(ctx context.Context, clientID string, msg any) error
 // Manager is the queue-based queue manager.
 // It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
-	queueStore     storage.QueueStore
+	queueStore      storage.QueueStore
 	groupStore      storage.ConsumerGroupStore
 	consumerManager *consumer.Manager
 	deliverFn       DeliverFn
@@ -118,7 +118,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	return &Manager{
-		queueStore:     queueStore,
+		queueStore:      queueStore,
 		groupStore:      groupStore,
 		consumerManager: consumerMgr,
 		deliverFn:       deliverFn,
@@ -172,8 +172,8 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 	}
 
 	m.logger.Info("reserved mqtt queue ready",
-		slog.String("stream", types.MQTTQueueName),
-		slog.String("subject", types.MQTTQueueTopic))
+		slog.String("queue", types.MQTTQueueName),
+		slog.String("topic", types.MQTTQueueTopic))
 
 	return nil
 }
@@ -209,21 +209,21 @@ func (m *Manager) GetRaftManager() *raft.Manager {
 
 // --- Queue Operations ---
 
-// CreateQueue creates a new stream.
+// CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
 
-	m.logger.Info("stream created",
-		slog.String("stream", config.Name),
-		slog.Any("subjects", config.Topics))
+	m.logger.Info("queue created",
+		slog.String("queue", config.Name),
+		slog.Any("topics", config.Topics))
 
 	return nil
 }
 
-// GetOrCreateQueue gets or creates a stream with default configuration.
-func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, subjects ...string) (*types.QueueConfig, error) {
+// GetOrCreateQueue gets or creates a queue with default configuration.
+func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics ...string) (*types.QueueConfig, error) {
 	// Try to get existing
 	config, err := m.queueStore.GetQueue(ctx, queueName)
 	if err == nil {
@@ -235,7 +235,7 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, subjec
 	}
 
 	// Create with default config
-	defaultConfig := types.DefaultQueueConfig(queueName, subjects...)
+	defaultConfig := types.DefaultQueueConfig(queueName, topics...)
 	if err := m.CreateQueue(ctx, defaultConfig); err != nil {
 		if err != storage.ErrQueueAlreadyExists {
 			return nil, err
@@ -245,14 +245,14 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, subjec
 	return m.queueStore.GetQueue(ctx, queueName)
 }
 
-// DeleteQueue deletes a stream.
+// DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 	return m.queueStore.DeleteQueue(ctx, queueName)
 }
 
 // --- Publish Operations ---
 
-// Publish adds a message to all queues whose subject patterns match the topic.
+// Publish adds a message to all queues whose topic patterns match the topic.
 // This is the NATS JetQueue-style "multi-queue" routing.
 func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
 	// Find all matching queues
@@ -270,7 +270,7 @@ func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, pro
 	for _, queueName := range queues {
 		queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 		if err != nil {
-			m.logger.Warn("failed to get queue config", slog.String("stream", queueName), slog.String("error", err.Error()))
+			m.logger.Warn("failed to get queue config", slog.String("queue", queueName), slog.String("error", err.Error()))
 			continue
 		}
 
@@ -294,14 +294,14 @@ func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, pro
 
 		if err != nil {
 			m.logger.Warn("failed to append to queue",
-				slog.String("stream", queueName),
+				slog.String("queue", queueName),
 				slog.String("topic", topic),
 				slog.String("error", err.Error()))
 			continue
 		}
 
 		m.logger.Debug("message published",
-			slog.String("stream", queueName),
+			slog.String("queue", queueName),
 			slog.String("topic", topic),
 			slog.Uint64("offset", offset))
 	}
@@ -350,7 +350,7 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 	m.trackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
 
 	m.logger.Info("consumer subscribed",
-		slog.String("stream", queueName),
+		slog.String("queue", queueName),
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID),
 		slog.String("pattern", pattern))
@@ -380,7 +380,7 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 	m.untrackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
 
 	m.logger.Info("consumer unsubscribed",
-		slog.String("stream", queueName),
+		slog.String("queue", queueName),
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID))
 
@@ -392,7 +392,7 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 // Ack acknowledges a message.
 func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
 	// Parse message ID to get offset
-	offset, err := parseStreamMessageID(messageID)
+	offset, err := parseMessageID(messageID)
 	if err != nil {
 		return err
 	}
@@ -424,7 +424,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 
 // Nack negatively acknowledges a message.
 func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
-	offset, err := parseStreamMessageID(messageID)
+	offset, err := parseMessageID(messageID)
 	if err != nil {
 		return err
 	}
@@ -453,7 +453,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 
 // Reject rejects a message and moves it to DLQ.
 func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
-	offset, err := parseStreamMessageID(messageID)
+	offset, err := parseMessageID(messageID)
 	if err != nil {
 		return err
 	}
@@ -597,7 +597,7 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 					0, // No partition in queue model
 				)
 				if err != nil {
-					m.logger.Warn("stream message remote routing failed",
+					m.logger.Warn("queue message remote routing failed",
 						slog.String("client", consumerInfo.ClientID),
 						slog.String("node", consumerInfo.ProxyNodeID),
 						slog.String("topic", msg.Topic),
@@ -608,7 +608,7 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 				deliveryMsg := m.createDeliveryMessage(msg, group.ID, config.Name)
 
 				if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
-					m.logger.Warn("stream message delivery failed",
+					m.logger.Warn("queue message delivery failed",
 						slog.String("client", consumerInfo.ClientID),
 						slog.String("topic", msg.Topic),
 						slog.String("error", err.Error()))
@@ -669,7 +669,7 @@ func (m *Manager) cleanupStaleConsumers() {
 			if err == nil && len(removed) > 0 {
 				m.logger.Info("cleaned up stale consumers",
 					slog.Int("count", len(removed)),
-					slog.String("stream", queueConfig.Name),
+					slog.String("queue", queueConfig.Name),
 					slog.String("group", group.ID))
 			}
 		}
@@ -711,7 +711,7 @@ func (m *Manager) processRetention() {
 		if err := m.queueStore.Truncate(ctx, queueConfig.Name, minCommitted); err != nil {
 			m.logger.Debug("truncation error",
 				slog.String("error", err.Error()),
-				slog.String("stream", queueConfig.Name))
+				slog.String("queue", queueConfig.Name))
 		}
 	}
 }
@@ -758,12 +758,12 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queu
 	}
 	props["message-id"] = messageID
 	props["group-id"] = groupID
-	props["stream"] = queueName
+	props["queue"] = queueName
 	props["offset"] = fmt.Sprintf("%d", msg.Sequence)
 
 	deliveryMsg := &brokerstorage.Message{
 		Topic:      msg.Topic,
-		QoS:        1, // Stream messages use QoS 1 by default
+		QoS:        1, // queue messages use QoS 1 by default
 		Properties: props,
 	}
 	deliveryMsg.SetPayloadFromBytes(msg.GetPayload())
@@ -771,14 +771,14 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queu
 	return deliveryMsg
 }
 
-// DeliveryMessage is the internal message format for stream delivery tracking.
+// DeliveryMessage is the internal message format for queue delivery tracking.
 type DeliveryMessage struct {
 	ID          string
 	Payload     []byte
 	Topic       string
 	Properties  map[string]string
 	GroupID     string
-	StreamName  string
+	queueName   string
 	Offset      uint64
 	DeliveredAt time.Time
 	AckTopic    string
@@ -799,7 +799,7 @@ func generateMessageID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-func parseStreamMessageID(messageID string) (uint64, error) {
+func parseMessageID(messageID string) (uint64, error) {
 	var offset uint64
 	// Format: queueName:offset (we only need the offset)
 	for i := len(messageID) - 1; i >= 0; i-- {
@@ -871,7 +871,7 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 		properties = make(map[string]string)
 	}
 	properties["message-id"] = messageID
-	properties["stream"] = queueName
+	properties["queue"] = queueName
 	properties["offset"] = fmt.Sprintf("%d", sequence)
 
 	deliveryMsg := &brokerstorage.Message{

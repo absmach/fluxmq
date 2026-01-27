@@ -43,8 +43,8 @@ service QueueService {
   // AppendBatch adds multiple messages atomically.
   rpc AppendBatch(AppendBatchRequest) returns (AppendBatchResponse);
 
-  // AppendStream allows streaming multiple messages.
-  rpc AppendStream(stream AppendRequest) returns (AppendBatchResponse);
+  // AppendQueue allows streaming multiple messages.
+  rpc AppendQueue(stream AppendRequest) returns (AppendBatchResponse);
 
   // ---------------------------------------------------------------------------
   // Reading (Fetch)
@@ -103,8 +103,8 @@ service QueueService {
   // Messages are tracked in the Pending Entry List (PEL) until acknowledged.
   rpc Consume(ConsumeRequest) returns (ConsumeResponse);
 
-  // ConsumeStream continuously delivers messages to a consumer (server streaming).
-  rpc ConsumeStream(ConsumeStreamRequest) returns (stream Message);
+  // ConsumeQueue continuously delivers messages to a consumer (server streaming).
+  rpc ConsumeQueue(ConsumeQueueRequest) returns (stream Message);
 
   // Ack acknowledges successful processing of messages.
   rpc Ack(AckRequest) returns (AckResponse);
@@ -615,7 +615,7 @@ message ConsumeResponse {
   repeated Message messages = 1;
 }
 
-message ConsumeStreamRequest {
+message ConsumeQueueRequest {
   string queue_name = 1;
   string group_id = 2;
   string consumer_id = 3;

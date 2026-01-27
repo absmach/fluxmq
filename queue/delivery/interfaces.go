@@ -23,8 +23,8 @@ const (
 	DirectMode ConsumerRoutingMode = "direct"
 )
 
-// StreamSource abstract the stream source to avoid circular dependency.
-type StreamSource interface {
+// QueueSource abstract the queue source to avoid circular dependency.
+type QueueSource interface {
 	Name() string
 	Config() types.QueueConfig
 	OrderingEnforcer() OrderingEnforcer

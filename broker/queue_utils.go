@@ -21,12 +21,12 @@ func isQueueAckTopic(topic string) bool {
 		strings.HasSuffix(topic, "/$reject")
 }
 
-// parseQueueFilter parses a queue filter into stream name and pattern.
+// parseQueueFilter parses a queue filter into queue name and pattern.
 // Examples:
-//   - "$queue/tasks" -> streamName="tasks", pattern=""
-//   - "$queue/tasks/images" -> streamName="tasks", pattern="images"
-//   - "$queue/tasks/images/#" -> streamName="tasks", pattern="images/#"
-func parseQueueFilter(filter string) (streamName, pattern string) {
+//   - "$queue/tasks" -> queueName="tasks", pattern=""
+//   - "$queue/tasks/images" -> queueName="tasks", pattern="images"
+//   - "$queue/tasks/images/#" -> queueName="tasks", pattern="images/#"
+func parseQueueFilter(filter string) (queueName, pattern string) {
 	if !strings.HasPrefix(filter, "$queue/") {
 		return "", ""
 	}
@@ -37,15 +37,15 @@ func parseQueueFilter(filter string) (streamName, pattern string) {
 		return "", ""
 	}
 
-	// Split into stream name and pattern
+	// Split into queue name and pattern
 	parts := strings.SplitN(rest, "/", 2)
-	streamName = parts[0]
+	queueName = parts[0]
 
 	if len(parts) > 1 {
 		pattern = parts[1]
 	}
 
-	return streamName, pattern
+	return queueName, pattern
 }
 
 // extractQueueTopicFromAck extracts the queue topic from an ack topic.

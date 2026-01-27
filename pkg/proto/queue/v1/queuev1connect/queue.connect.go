@@ -55,9 +55,9 @@ const (
 	// QueueServiceAppendBatchProcedure is the fully-qualified name of the QueueService's AppendBatch
 	// RPC.
 	QueueServiceAppendBatchProcedure = "/fluxmq.queue.v1.QueueService/AppendBatch"
-	// QueueServiceAppendStreamProcedure is the fully-qualified name of the QueueService's AppendStream
+	// QueueServiceAppendQueueProcedure is the fully-qualified name of the QueueService's AppendQueue
 	// RPC.
-	QueueServiceAppendStreamProcedure = "/fluxmq.queue.v1.QueueService/AppendStream"
+	QueueServiceAppendQueueProcedure = "/fluxmq.queue.v1.QueueService/AppendQueue"
 	// QueueServiceReadProcedure is the fully-qualified name of the QueueService's Read RPC.
 	QueueServiceReadProcedure = "/fluxmq.queue.v1.QueueService/Read"
 	// QueueServiceReadBatchProcedure is the fully-qualified name of the QueueService's ReadBatch RPC.
@@ -90,9 +90,9 @@ const (
 	QueueServiceHeartbeatProcedure = "/fluxmq.queue.v1.QueueService/Heartbeat"
 	// QueueServiceConsumeProcedure is the fully-qualified name of the QueueService's Consume RPC.
 	QueueServiceConsumeProcedure = "/fluxmq.queue.v1.QueueService/Consume"
-	// QueueServiceConsumeStreamProcedure is the fully-qualified name of the QueueService's
-	// ConsumeStream RPC.
-	QueueServiceConsumeStreamProcedure = "/fluxmq.queue.v1.QueueService/ConsumeStream"
+	// QueueServiceConsumeQueueProcedure is the fully-qualified name of the QueueService's ConsumeQueue
+	// RPC.
+	QueueServiceConsumeQueueProcedure = "/fluxmq.queue.v1.QueueService/ConsumeQueue"
 	// QueueServiceAckProcedure is the fully-qualified name of the QueueService's Ack RPC.
 	QueueServiceAckProcedure = "/fluxmq.queue.v1.QueueService/Ack"
 	// QueueServiceNackProcedure is the fully-qualified name of the QueueService's Nack RPC.
@@ -128,8 +128,8 @@ type QueueServiceClient interface {
 	Append(context.Context, *connect.Request[v1.AppendRequest]) (*connect.Response[v1.AppendResponse], error)
 	// AppendBatch adds multiple messages atomically.
 	AppendBatch(context.Context, *connect.Request[v1.AppendBatchRequest]) (*connect.Response[v1.AppendBatchResponse], error)
-	// AppendStream allows streaming multiple messages.
-	AppendStream(context.Context) *connect.ClientStreamForClient[v1.AppendRequest, v1.AppendBatchResponse]
+	// AppendQueue allows streaming multiple messages.
+	AppendQueue(context.Context) *connect.ClientStreamForClient[v1.AppendRequest, v1.AppendBatchResponse]
 	// Read fetches a single message at a specific offset.
 	Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.Message], error)
 	// ReadBatch fetches multiple messages starting from an offset.
@@ -158,8 +158,8 @@ type QueueServiceClient interface {
 	// Consume fetches the next batch of messages for a consumer.
 	// Messages are tracked in the Pending Entry List (PEL) until acknowledged.
 	Consume(context.Context, *connect.Request[v1.ConsumeRequest]) (*connect.Response[v1.ConsumeResponse], error)
-	// ConsumeStream continuously delivers messages to a consumer (server streaming).
-	ConsumeStream(context.Context, *connect.Request[v1.ConsumeStreamRequest]) (*connect.ServerStreamForClient[v1.Message], error)
+	// ConsumeQueue continuously delivers messages to a consumer (server streaming).
+	ConsumeQueue(context.Context, *connect.Request[v1.ConsumeQueueRequest]) (*connect.ServerStreamForClient[v1.Message], error)
 	// Ack acknowledges successful processing of messages.
 	Ack(context.Context, *connect.Request[v1.AckRequest]) (*connect.Response[v1.AckResponse], error)
 	// Nack indicates processing failure. Messages will be redelivered.
@@ -231,10 +231,10 @@ func NewQueueServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(queueServiceMethods.ByName("AppendBatch")),
 			connect.WithClientOptions(opts...),
 		),
-		appendStream: connect.NewClient[v1.AppendRequest, v1.AppendBatchResponse](
+		appendQueue: connect.NewClient[v1.AppendRequest, v1.AppendBatchResponse](
 			httpClient,
-			baseURL+QueueServiceAppendStreamProcedure,
-			connect.WithSchema(queueServiceMethods.ByName("AppendStream")),
+			baseURL+QueueServiceAppendQueueProcedure,
+			connect.WithSchema(queueServiceMethods.ByName("AppendQueue")),
 			connect.WithClientOptions(opts...),
 		),
 		read: connect.NewClient[v1.ReadRequest, v1.Message](
@@ -315,10 +315,10 @@ func NewQueueServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(queueServiceMethods.ByName("Consume")),
 			connect.WithClientOptions(opts...),
 		),
-		consumeStream: connect.NewClient[v1.ConsumeStreamRequest, v1.Message](
+		consumeQueue: connect.NewClient[v1.ConsumeQueueRequest, v1.Message](
 			httpClient,
-			baseURL+QueueServiceConsumeStreamProcedure,
-			connect.WithSchema(queueServiceMethods.ByName("ConsumeStream")),
+			baseURL+QueueServiceConsumeQueueProcedure,
+			connect.WithSchema(queueServiceMethods.ByName("ConsumeQueue")),
 			connect.WithClientOptions(opts...),
 		),
 		ack: connect.NewClient[v1.AckRequest, v1.AckResponse](
@@ -381,7 +381,7 @@ type queueServiceClient struct {
 	updateQueue         *connect.Client[v1.UpdateQueueRequest, v1.Queue]
 	append              *connect.Client[v1.AppendRequest, v1.AppendResponse]
 	appendBatch         *connect.Client[v1.AppendBatchRequest, v1.AppendBatchResponse]
-	appendStream        *connect.Client[v1.AppendRequest, v1.AppendBatchResponse]
+	appendQueue         *connect.Client[v1.AppendRequest, v1.AppendBatchResponse]
 	read                *connect.Client[v1.ReadRequest, v1.Message]
 	readBatch           *connect.Client[v1.ReadBatchRequest, v1.ReadBatchResponse]
 	tail                *connect.Client[v1.TailRequest, v1.Message]
@@ -395,7 +395,7 @@ type queueServiceClient struct {
 	leaveGroup          *connect.Client[v1.LeaveGroupRequest, emptypb.Empty]
 	heartbeat           *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
 	consume             *connect.Client[v1.ConsumeRequest, v1.ConsumeResponse]
-	consumeStream       *connect.Client[v1.ConsumeStreamRequest, v1.Message]
+	consumeQueue        *connect.Client[v1.ConsumeQueueRequest, v1.Message]
 	ack                 *connect.Client[v1.AckRequest, v1.AckResponse]
 	nack                *connect.Client[v1.NackRequest, emptypb.Empty]
 	claim               *connect.Client[v1.ClaimRequest, v1.ClaimResponse]
@@ -441,9 +441,9 @@ func (c *queueServiceClient) AppendBatch(ctx context.Context, req *connect.Reque
 	return c.appendBatch.CallUnary(ctx, req)
 }
 
-// AppendStream calls fluxmq.queue.v1.QueueService.AppendStream.
-func (c *queueServiceClient) AppendStream(ctx context.Context) *connect.ClientStreamForClient[v1.AppendRequest, v1.AppendBatchResponse] {
-	return c.appendStream.CallClientStream(ctx)
+// AppendQueue calls fluxmq.queue.v1.QueueService.AppendQueue.
+func (c *queueServiceClient) AppendQueue(ctx context.Context) *connect.ClientStreamForClient[v1.AppendRequest, v1.AppendBatchResponse] {
+	return c.appendQueue.CallClientStream(ctx)
 }
 
 // Read calls fluxmq.queue.v1.QueueService.Read.
@@ -511,9 +511,9 @@ func (c *queueServiceClient) Consume(ctx context.Context, req *connect.Request[v
 	return c.consume.CallUnary(ctx, req)
 }
 
-// ConsumeStream calls fluxmq.queue.v1.QueueService.ConsumeStream.
-func (c *queueServiceClient) ConsumeStream(ctx context.Context, req *connect.Request[v1.ConsumeStreamRequest]) (*connect.ServerStreamForClient[v1.Message], error) {
-	return c.consumeStream.CallServerStream(ctx, req)
+// ConsumeQueue calls fluxmq.queue.v1.QueueService.ConsumeQueue.
+func (c *queueServiceClient) ConsumeQueue(ctx context.Context, req *connect.Request[v1.ConsumeQueueRequest]) (*connect.ServerStreamForClient[v1.Message], error) {
+	return c.consumeQueue.CallServerStream(ctx, req)
 }
 
 // Ack calls fluxmq.queue.v1.QueueService.Ack.
@@ -572,8 +572,8 @@ type QueueServiceHandler interface {
 	Append(context.Context, *connect.Request[v1.AppendRequest]) (*connect.Response[v1.AppendResponse], error)
 	// AppendBatch adds multiple messages atomically.
 	AppendBatch(context.Context, *connect.Request[v1.AppendBatchRequest]) (*connect.Response[v1.AppendBatchResponse], error)
-	// AppendStream allows streaming multiple messages.
-	AppendStream(context.Context, *connect.ClientStream[v1.AppendRequest]) (*connect.Response[v1.AppendBatchResponse], error)
+	// AppendQueue allows streaming multiple messages.
+	AppendQueue(context.Context, *connect.ClientStream[v1.AppendRequest]) (*connect.Response[v1.AppendBatchResponse], error)
 	// Read fetches a single message at a specific offset.
 	Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.Message], error)
 	// ReadBatch fetches multiple messages starting from an offset.
@@ -602,8 +602,8 @@ type QueueServiceHandler interface {
 	// Consume fetches the next batch of messages for a consumer.
 	// Messages are tracked in the Pending Entry List (PEL) until acknowledged.
 	Consume(context.Context, *connect.Request[v1.ConsumeRequest]) (*connect.Response[v1.ConsumeResponse], error)
-	// ConsumeStream continuously delivers messages to a consumer (server streaming).
-	ConsumeStream(context.Context, *connect.Request[v1.ConsumeStreamRequest], *connect.ServerStream[v1.Message]) error
+	// ConsumeQueue continuously delivers messages to a consumer (server streaming).
+	ConsumeQueue(context.Context, *connect.Request[v1.ConsumeQueueRequest], *connect.ServerStream[v1.Message]) error
 	// Ack acknowledges successful processing of messages.
 	Ack(context.Context, *connect.Request[v1.AckRequest]) (*connect.Response[v1.AckResponse], error)
 	// Nack indicates processing failure. Messages will be redelivered.
@@ -671,10 +671,10 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(queueServiceMethods.ByName("AppendBatch")),
 		connect.WithHandlerOptions(opts...),
 	)
-	queueServiceAppendStreamHandler := connect.NewClientStreamHandler(
-		QueueServiceAppendStreamProcedure,
-		svc.AppendStream,
-		connect.WithSchema(queueServiceMethods.ByName("AppendStream")),
+	queueServiceAppendQueueHandler := connect.NewClientStreamHandler(
+		QueueServiceAppendQueueProcedure,
+		svc.AppendQueue,
+		connect.WithSchema(queueServiceMethods.ByName("AppendQueue")),
 		connect.WithHandlerOptions(opts...),
 	)
 	queueServiceReadHandler := connect.NewUnaryHandler(
@@ -755,10 +755,10 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(queueServiceMethods.ByName("Consume")),
 		connect.WithHandlerOptions(opts...),
 	)
-	queueServiceConsumeStreamHandler := connect.NewServerStreamHandler(
-		QueueServiceConsumeStreamProcedure,
-		svc.ConsumeStream,
-		connect.WithSchema(queueServiceMethods.ByName("ConsumeStream")),
+	queueServiceConsumeQueueHandler := connect.NewServerStreamHandler(
+		QueueServiceConsumeQueueProcedure,
+		svc.ConsumeQueue,
+		connect.WithSchema(queueServiceMethods.ByName("ConsumeQueue")),
 		connect.WithHandlerOptions(opts...),
 	)
 	queueServiceAckHandler := connect.NewUnaryHandler(
@@ -825,8 +825,8 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 			queueServiceAppendHandler.ServeHTTP(w, r)
 		case QueueServiceAppendBatchProcedure:
 			queueServiceAppendBatchHandler.ServeHTTP(w, r)
-		case QueueServiceAppendStreamProcedure:
-			queueServiceAppendStreamHandler.ServeHTTP(w, r)
+		case QueueServiceAppendQueueProcedure:
+			queueServiceAppendQueueHandler.ServeHTTP(w, r)
 		case QueueServiceReadProcedure:
 			queueServiceReadHandler.ServeHTTP(w, r)
 		case QueueServiceReadBatchProcedure:
@@ -853,8 +853,8 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 			queueServiceHeartbeatHandler.ServeHTTP(w, r)
 		case QueueServiceConsumeProcedure:
 			queueServiceConsumeHandler.ServeHTTP(w, r)
-		case QueueServiceConsumeStreamProcedure:
-			queueServiceConsumeStreamHandler.ServeHTTP(w, r)
+		case QueueServiceConsumeQueueProcedure:
+			queueServiceConsumeQueueHandler.ServeHTTP(w, r)
 		case QueueServiceAckProcedure:
 			queueServiceAckHandler.ServeHTTP(w, r)
 		case QueueServiceNackProcedure:
@@ -908,8 +908,8 @@ func (UnimplementedQueueServiceHandler) AppendBatch(context.Context, *connect.Re
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.AppendBatch is not implemented"))
 }
 
-func (UnimplementedQueueServiceHandler) AppendStream(context.Context, *connect.ClientStream[v1.AppendRequest]) (*connect.Response[v1.AppendBatchResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.AppendStream is not implemented"))
+func (UnimplementedQueueServiceHandler) AppendQueue(context.Context, *connect.ClientStream[v1.AppendRequest]) (*connect.Response[v1.AppendBatchResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.AppendQueue is not implemented"))
 }
 
 func (UnimplementedQueueServiceHandler) Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.Message], error) {
@@ -964,8 +964,8 @@ func (UnimplementedQueueServiceHandler) Consume(context.Context, *connect.Reques
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.Consume is not implemented"))
 }
 
-func (UnimplementedQueueServiceHandler) ConsumeStream(context.Context, *connect.Request[v1.ConsumeStreamRequest], *connect.ServerStream[v1.Message]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.ConsumeStream is not implemented"))
+func (UnimplementedQueueServiceHandler) ConsumeQueue(context.Context, *connect.Request[v1.ConsumeQueueRequest], *connect.ServerStream[v1.Message]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.ConsumeQueue is not implemented"))
 }
 
 func (UnimplementedQueueServiceHandler) Ack(context.Context, *connect.Request[v1.AckRequest]) (*connect.Response[v1.AckResponse], error) {

@@ -20,10 +20,10 @@ var (
 // Adapter wraps the log Store and implements the storage.QueueStore and
 // storage.ConsumerGroupStore interfaces for integration with the queue system.
 type Adapter struct {
-	store        *Store
-	queueStore   *QueueConfigStore
-	groupStore   *ConsumerGroupStateStore
-	subjectIndex *storage.TopicIndex
+	store      *Store
+	queueStore *QueueConfigStore
+	groupStore *ConsumerGroupStateStore
+	topicIndex *storage.TopicIndex
 }
 
 // AdapterConfig holds adapter configuration.
@@ -59,17 +59,17 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 	}
 
 	adapter := &Adapter{
-		store:        store,
-		queueStore:   queueStore,
-		groupStore:   groupStore,
-		subjectIndex: storage.NewTopicIndex(),
+		store:      store,
+		queueStore: queueStore,
+		groupStore: groupStore,
+		topicIndex: storage.NewTopicIndex(),
 	}
 
 	// Rebuild topic index from existing queues
 	queues, err := queueStore.List()
 	if err == nil {
 		for _, cfg := range queues {
-			adapter.subjectIndex.AddQueue(cfg.Name, cfg.Topics)
+			adapter.topicIndex.AddQueue(cfg.Name, cfg.Topics)
 		}
 	}
 
@@ -100,11 +100,11 @@ func (a *Adapter) Store() *Store {
 	return a.store
 }
 
-// StreamStore interface implementation
+// QueueStore interface implementation
 
-// CreateQueue creates a new stream with the given configuration.
+// CreateQueue creates a new queue with the given configuration.
 func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	// Create a single partition (partition 0) for the stream
+	// Create a single partition (partition 0) for the queue
 	if err := a.store.CreateQueue(config.Name, 1); err != nil {
 		if err == ErrAlreadyExists {
 			return storage.ErrQueueAlreadyExists
@@ -117,12 +117,12 @@ func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	}
 
 	// Update topic index
-	a.subjectIndex.AddQueue(config.Name, config.Topics)
+	a.topicIndex.AddQueue(config.Name, config.Topics)
 
 	return nil
 }
 
-// GetQueue retrieves a stream's configuration.
+// GetQueue retrieves a queue's configuration.
 func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
 	config, err := a.queueStore.Get(queueName)
 	if err != nil {
@@ -131,10 +131,10 @@ func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueC
 	return config, nil
 }
 
-// DeleteQueue deletes a stream and all its data.
+// DeleteQueue deletes a queue and all its data.
 func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
 	// Remove from topic index
-	a.subjectIndex.RemoveQueue(queueName)
+	a.topicIndex.RemoveQueue(queueName)
 
 	if err := a.queueStore.Delete(queueName); err != nil {
 		return err
@@ -142,17 +142,17 @@ func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
 	return a.store.DeleteQueue(queueName)
 }
 
-// ListQueues returns all stream configurations.
+// ListQueues returns all queue configurations.
 func (a *Adapter) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	return a.queueStore.List()
 }
 
 // FindMatchingQueues returns all queues whose topic patterns match the topic.
 func (a *Adapter) FindMatchingQueues(ctx context.Context, topic string) ([]string, error) {
-	return a.subjectIndex.FindMatching(topic), nil
+	return a.topicIndex.FindMatching(topic), nil
 }
 
-// Append adds a message to the end of a stream's log.
+// Append adds a message to the end of a queue's log.
 func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
 	value := msg.GetPayload()
 	key := []byte{}
@@ -172,7 +172,7 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 	return a.store.Append(queueName, 0, value, key, headers)
 }
 
-// AppendBatch adds multiple messages to a stream's log.
+// AppendBatch adds multiple messages to a queue's log.
 func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error) {
 	if len(msgs) == 0 {
 		return 0, ErrEmptyBatch
@@ -241,7 +241,7 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 	return result, nil
 }
 
-// Head returns the first valid offset in the stream.
+// Head returns the first valid offset in the queue.
 func (a *Adapter) Head(ctx context.Context, queueName string) (uint64, error) {
 	return a.store.Head(queueName, 0)
 }
@@ -256,19 +256,19 @@ func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint
 	return a.store.Truncate(queueName, 0, minOffset)
 }
 
-// Count returns the number of messages in a stream.
+// Count returns the number of messages in a queue.
 func (a *Adapter) Count(ctx context.Context, queueName string) (uint64, error) {
 	return a.store.Count(queueName, 0)
 }
 
-// TotalCount returns total messages in a stream.
+// TotalCount returns total messages in a queue.
 func (a *Adapter) TotalCount(ctx context.Context, queueName string) (uint64, error) {
 	return a.store.Count(queueName, 0)
 }
 
 // ConsumerGroupStore interface implementation
 
-// CreateConsumerGroup creates a new consumer group for a stream.
+// CreateConsumerGroup creates a new consumer group for a queue.
 func (a *Adapter) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
 	existing, _ := a.groupStore.Get(group.QueueName, group.ID)
 	if existing != nil {
@@ -305,7 +305,7 @@ func (a *Adapter) DeleteConsumerGroup(ctx context.Context, queueName, groupID st
 	return a.groupStore.Delete(queueName, groupID)
 }
 
-// ListConsumerGroups lists all consumer groups for a stream.
+// ListConsumerGroups lists all consumer groups for a queue.
 func (a *Adapter) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error) {
 	return a.groupStore.List(queueName)
 }
@@ -404,7 +404,7 @@ func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID s
 	return nil
 }
 
-// UpdateCursor updates the cursor position for a stream.
+// UpdateCursor updates the cursor position for a queue.
 func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
 	if err := a.store.SetCursor(queueName, groupID, 0, cursor); err != nil {
 		return err
@@ -422,7 +422,7 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 	return nil
 }
 
-// UpdateCommitted updates the committed offset for a stream.
+// UpdateCommitted updates the committed offset for a queue.
 func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
 	if err := a.store.CommitOffset(queueName, groupID, 0, committed); err != nil {
 		return err
@@ -502,7 +502,7 @@ func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.C
 		return
 	}
 
-	// Use partition 0 cursor for stream cursor
+	// Use partition 0 cursor for queue cursor
 	if cursor, ok := cursors[0]; ok {
 		c := group.GetCursor()
 		c.Cursor = cursor.Cursor

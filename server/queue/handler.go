@@ -24,10 +24,10 @@ import (
 type Handler struct {
 	queuev1connect.UnimplementedQueueServiceHandler
 
-	manager     *queue.Manager
+	manager    *queue.Manager
 	queueStore storage.QueueStore
-	groupStore  storage.ConsumerGroupStore
-	logger      *slog.Logger
+	groupStore storage.ConsumerGroupStore
+	logger     *slog.Logger
 }
 
 // NewHandler creates a new queue service handler.
@@ -36,21 +36,20 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 		logger = slog.Default()
 	}
 	return &Handler{
-		manager:     manager,
+		manager:    manager,
 		queueStore: queueStore,
-		groupStore:  groupStore,
-		logger:      logger,
+		groupStore: groupStore,
+		logger:     logger,
 	}
 }
 
-// --- Queue Management (now Stream Management) ---
-
+// --- Queue Management ---
 func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.CreateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	msg := req.Msg
 
 	config := types.QueueConfig{
 		Name:       msg.Name,
-		Topics:     []string{msg.Name}, // Default subject matches stream name
+		Topics:     []string{msg.Name}, // Default subject matches queue name
 		MessageTTL: 7 * 24 * time.Hour,
 	}
 
@@ -62,7 +61,7 @@ func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.
 		return nil, connect.NewError(connect.CodeAlreadyExists, err)
 	}
 
-	return connect.NewResponse(h.streamToProto(&config)), nil
+	return connect.NewResponse(h.queueToProto(&config)), nil
 }
 
 func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.GetQueueRequest]) (*connect.Response[queuev1.Queue], error) {
@@ -74,7 +73,7 @@ func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.Get
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(h.streamToProto(config)), nil
+	return connect.NewResponse(h.queueToProto(config)), nil
 }
 
 func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.ListQueuesRequest]) (*connect.Response[queuev1.ListQueuesResponse], error) {
@@ -85,7 +84,7 @@ func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.L
 
 	queues := make([]*queuev1.Queue, len(configs))
 	for i := range configs {
-		queues[i] = h.streamToProto(&configs[i])
+		queues[i] = h.queueToProto(&configs[i])
 	}
 
 	return connect.NewResponse(&queuev1.ListQueuesResponse{
@@ -113,7 +112,7 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(h.streamToProto(config)), nil
+	return connect.NewResponse(h.queueToProto(config)), nil
 }
 
 // --- Append Operations ---
@@ -488,7 +487,7 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 	}), nil
 }
 
-func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev1.ConsumeStreamRequest], stream *connect.ServerStream[queuev1.Message]) error {
+func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev1.ConsumeQueueRequest], stream *connect.ServerStream[queuev1.Message]) error {
 	msg := req.Msg
 
 	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
@@ -713,7 +712,7 @@ func (h *Handler) Truncate(ctx context.Context, req *connect.Request[queuev1.Tru
 
 // --- Helper Functions ---
 
-func (h *Handler) streamToProto(config *types.QueueConfig) *queuev1.Queue {
+func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 	return &queuev1.Queue{
 		Name:   config.Name,
 		Topics: config.Topics,

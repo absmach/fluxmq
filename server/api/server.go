@@ -34,14 +34,14 @@ type Server struct {
 }
 
 // New creates a new API server.
-func New(config Config, manager *queue.Manager, streamStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *Server {
+func New(config Config, manager *queue.Manager, queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	mux := http.NewServeMux()
 
-	queueHandler := serverqueue.NewHandler(manager, streamStore, groupStore, logger)
+	queueHandler := serverqueue.NewHandler(manager, queueStore, groupStore, logger)
 	path, handler := queuev1connect.NewQueueServiceHandler(queueHandler)
 	mux.Handle(path, handler)
 

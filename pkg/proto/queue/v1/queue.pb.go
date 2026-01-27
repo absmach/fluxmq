@@ -2992,7 +2992,7 @@ func (x *ConsumeResponse) GetMessages() []*Message {
 	return nil
 }
 
-type ConsumeStreamRequest struct {
+type ConsumeQueueRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	QueueName  string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	GroupId    string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
@@ -3003,20 +3003,20 @@ type ConsumeStreamRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ConsumeStreamRequest) Reset() {
-	*x = ConsumeStreamRequest{}
+func (x *ConsumeQueueRequest) Reset() {
+	*x = ConsumeQueueRequest{}
 	mi := &file_queue_v1_queue_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ConsumeStreamRequest) String() string {
+func (x *ConsumeQueueRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ConsumeStreamRequest) ProtoMessage() {}
+func (*ConsumeQueueRequest) ProtoMessage() {}
 
-func (x *ConsumeStreamRequest) ProtoReflect() protoreflect.Message {
+func (x *ConsumeQueueRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_queue_v1_queue_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3028,33 +3028,33 @@ func (x *ConsumeStreamRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ConsumeStreamRequest.ProtoReflect.Descriptor instead.
-func (*ConsumeStreamRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ConsumeQueueRequest.ProtoReflect.Descriptor instead.
+func (*ConsumeQueueRequest) Descriptor() ([]byte, []int) {
 	return file_queue_v1_queue_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *ConsumeStreamRequest) GetQueueName() string {
+func (x *ConsumeQueueRequest) GetQueueName() string {
 	if x != nil {
 		return x.QueueName
 	}
 	return ""
 }
 
-func (x *ConsumeStreamRequest) GetGroupId() string {
+func (x *ConsumeQueueRequest) GetGroupId() string {
 	if x != nil {
 		return x.GroupId
 	}
 	return ""
 }
 
-func (x *ConsumeStreamRequest) GetConsumerId() string {
+func (x *ConsumeQueueRequest) GetConsumerId() string {
 	if x != nil {
 		return x.ConsumerId
 	}
 	return ""
 }
 
-func (x *ConsumeStreamRequest) GetMaxInFlight() uint32 {
+func (x *ConsumeQueueRequest) GetMaxInFlight() uint32 {
 	if x != nil {
 		return x.MaxInFlight
 	}
@@ -4185,8 +4185,8 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\tmax_bytes\x18\x05 \x01(\rR\bmaxBytes\x126\n" +
 	"\twait_time\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\bwaitTime\"G\n" +
 	"\x0fConsumeResponse\x124\n" +
-	"\bmessages\x18\x01 \x03(\v2\x18.fluxmq.queue.v1.MessageR\bmessages\"\x95\x01\n" +
-	"\x14ConsumeStreamRequest\x12\x1d\n" +
+	"\bmessages\x18\x01 \x03(\v2\x18.fluxmq.queue.v1.MessageR\bmessages\"\x94\x01\n" +
+	"\x13ConsumeQueueRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1f\n" +
@@ -4282,7 +4282,7 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x0fInitialPosition\x12 \n" +
 	"\x1cINITIAL_POSITION_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INITIAL_POSITION_EARLIEST\x10\x01\x12\x1b\n" +
-	"\x17INITIAL_POSITION_LATEST\x10\x022\xfd\x12\n" +
+	"\x17INITIAL_POSITION_LATEST\x10\x022\xfa\x12\n" +
 	"\fQueueService\x12J\n" +
 	"\vCreateQueue\x12#.fluxmq.queue.v1.CreateQueueRequest\x1a\x16.fluxmq.queue.v1.Queue\x12D\n" +
 	"\bGetQueue\x12 .fluxmq.queue.v1.GetQueueRequest\x1a\x16.fluxmq.queue.v1.Queue\x12U\n" +
@@ -4291,8 +4291,8 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\vDeleteQueue\x12#.fluxmq.queue.v1.DeleteQueueRequest\x1a\x16.google.protobuf.Empty\x12J\n" +
 	"\vUpdateQueue\x12#.fluxmq.queue.v1.UpdateQueueRequest\x1a\x16.fluxmq.queue.v1.Queue\x12I\n" +
 	"\x06Append\x12\x1e.fluxmq.queue.v1.AppendRequest\x1a\x1f.fluxmq.queue.v1.AppendResponse\x12X\n" +
-	"\vAppendBatch\x12#.fluxmq.queue.v1.AppendBatchRequest\x1a$.fluxmq.queue.v1.AppendBatchResponse\x12V\n" +
-	"\fAppendStream\x12\x1e.fluxmq.queue.v1.AppendRequest\x1a$.fluxmq.queue.v1.AppendBatchResponse(\x01\x12>\n" +
+	"\vAppendBatch\x12#.fluxmq.queue.v1.AppendBatchRequest\x1a$.fluxmq.queue.v1.AppendBatchResponse\x12U\n" +
+	"\vAppendQueue\x12\x1e.fluxmq.queue.v1.AppendRequest\x1a$.fluxmq.queue.v1.AppendBatchResponse(\x01\x12>\n" +
 	"\x04Read\x12\x1c.fluxmq.queue.v1.ReadRequest\x1a\x18.fluxmq.queue.v1.Message\x12R\n" +
 	"\tReadBatch\x12!.fluxmq.queue.v1.ReadBatchRequest\x1a\".fluxmq.queue.v1.ReadBatchResponse\x12@\n" +
 	"\x04Tail\x12\x1c.fluxmq.queue.v1.TailRequest\x1a\x18.fluxmq.queue.v1.Message0\x01\x12S\n" +
@@ -4306,8 +4306,8 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\n" +
 	"LeaveGroup\x12\".fluxmq.queue.v1.LeaveGroupRequest\x1a\x16.google.protobuf.Empty\x12R\n" +
 	"\tHeartbeat\x12!.fluxmq.queue.v1.HeartbeatRequest\x1a\".fluxmq.queue.v1.HeartbeatResponse\x12L\n" +
-	"\aConsume\x12\x1f.fluxmq.queue.v1.ConsumeRequest\x1a .fluxmq.queue.v1.ConsumeResponse\x12R\n" +
-	"\rConsumeStream\x12%.fluxmq.queue.v1.ConsumeStreamRequest\x1a\x18.fluxmq.queue.v1.Message0\x01\x12@\n" +
+	"\aConsume\x12\x1f.fluxmq.queue.v1.ConsumeRequest\x1a .fluxmq.queue.v1.ConsumeResponse\x12P\n" +
+	"\fConsumeQueue\x12$.fluxmq.queue.v1.ConsumeQueueRequest\x1a\x18.fluxmq.queue.v1.Message0\x01\x12@\n" +
 	"\x03Ack\x12\x1b.fluxmq.queue.v1.AckRequest\x1a\x1c.fluxmq.queue.v1.AckResponse\x12<\n" +
 	"\x04Nack\x12\x1c.fluxmq.queue.v1.NackRequest\x1a\x16.google.protobuf.Empty\x12F\n" +
 	"\x05Claim\x12\x1d.fluxmq.queue.v1.ClaimRequest\x1a\x1e.fluxmq.queue.v1.ClaimResponse\x12U\n" +
@@ -4381,7 +4381,7 @@ var file_queue_v1_queue_proto_goTypes = []any{
 	(*HeartbeatResponse)(nil),          // 43: fluxmq.queue.v1.HeartbeatResponse
 	(*ConsumeRequest)(nil),             // 44: fluxmq.queue.v1.ConsumeRequest
 	(*ConsumeResponse)(nil),            // 45: fluxmq.queue.v1.ConsumeResponse
-	(*ConsumeStreamRequest)(nil),       // 46: fluxmq.queue.v1.ConsumeStreamRequest
+	(*ConsumeQueueRequest)(nil),        // 46: fluxmq.queue.v1.ConsumeQueueRequest
 	(*AckRequest)(nil),                 // 47: fluxmq.queue.v1.AckRequest
 	(*AckResponse)(nil),                // 48: fluxmq.queue.v1.AckResponse
 	(*NackRequest)(nil),                // 49: fluxmq.queue.v1.NackRequest
@@ -4467,7 +4467,7 @@ var file_queue_v1_queue_proto_depIdxs = []int32{
 	21, // 58: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
 	22, // 59: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
 	24, // 60: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
-	22, // 61: fluxmq.queue.v1.QueueService.AppendStream:input_type -> fluxmq.queue.v1.AppendRequest
+	22, // 61: fluxmq.queue.v1.QueueService.AppendQueue:input_type -> fluxmq.queue.v1.AppendRequest
 	27, // 62: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
 	28, // 63: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
 	30, // 64: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
@@ -4481,7 +4481,7 @@ var file_queue_v1_queue_proto_depIdxs = []int32{
 	41, // 72: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
 	42, // 73: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
 	44, // 74: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
-	46, // 75: fluxmq.queue.v1.QueueService.ConsumeStream:input_type -> fluxmq.queue.v1.ConsumeStreamRequest
+	46, // 75: fluxmq.queue.v1.QueueService.ConsumeQueue:input_type -> fluxmq.queue.v1.ConsumeQueueRequest
 	47, // 76: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
 	49, // 77: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
 	50, // 78: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
@@ -4497,7 +4497,7 @@ var file_queue_v1_queue_proto_depIdxs = []int32{
 	5,  // 88: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
 	23, // 89: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
 	26, // 90: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	26, // 91: fluxmq.queue.v1.QueueService.AppendStream:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	26, // 91: fluxmq.queue.v1.QueueService.AppendQueue:output_type -> fluxmq.queue.v1.AppendBatchResponse
 	3,  // 92: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
 	29, // 93: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
 	3,  // 94: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
@@ -4511,7 +4511,7 @@ var file_queue_v1_queue_proto_depIdxs = []int32{
 	68, // 102: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
 	43, // 103: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
 	45, // 104: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
-	3,  // 105: fluxmq.queue.v1.QueueService.ConsumeStream:output_type -> fluxmq.queue.v1.Message
+	3,  // 105: fluxmq.queue.v1.QueueService.ConsumeQueue:output_type -> fluxmq.queue.v1.Message
 	48, // 106: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
 	68, // 107: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
 	51, // 108: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
