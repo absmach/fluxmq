@@ -134,10 +134,6 @@ type Cluster interface {
 	// Returns the session state to be restored, or nil if no state exists.
 	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error)
 
-	// EnqueueRemote sends an enqueue request to a remote partition owner.
-	// This is called when a message needs to be enqueued on a partition owned by another node.
-	EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (messageID string, err error)
-
 	// RouteQueueMessage sends a queue message to a remote consumer.
 	// This is called in proxy mode when the partition worker needs to deliver a message
 	// to a consumer connected to a different node.
