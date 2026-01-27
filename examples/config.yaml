@@ -167,6 +167,33 @@ webhook:
       headers:
         Authorization: "Bearer audit-token"
 
+# Queue Configuration
+# Queues are used for durable, persistent message delivery.
+# Messages published to topics starting with $queue/ are routed to matching queues.
+queues:
+  # Default MQTT queue - captures all $queue/* messages
+  - name: "mqtt"
+    topics:
+      - "$queue/#"
+    reserved: true
+    limits:
+      max_message_size: 10485760  # 10MB
+      max_depth: 100000
+      message_ttl: 168h  # 7 days
+    retry:
+      max_retries: 10
+      initial_backoff: 5s
+      max_backoff: 5m
+      multiplier: 2.0
+    dlq:
+      enabled: true
+
+# Queue Usage:
+#   Publish: Client publishes to "$queue/mqtt/orders/created"
+#   Subscribe: Client subscribes to "$queue/mqtt/orders/#" with consumer-group property
+#   Messages are delivered with at-least-once semantics
+#   Acknowledge: Client publishes to "$queue/mqtt/orders/created/$ack" with message-id property
+
 # Event Types Reference:
 # - client.connected          : Client successfully connected
 # - client.disconnected       : Client disconnected

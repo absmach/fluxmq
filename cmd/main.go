@@ -23,6 +23,7 @@ import (
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/queue/raft"
+	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/server/api"
 	"github.com/absmach/fluxmq/server/coap"
@@ -266,12 +267,31 @@ func main() {
 		}
 		defer logStore.Close()
 
+		// Convert queue configs from main config to queue types
+		queueCfg := queue.DefaultConfig()
+		for _, qc := range cfg.Queues {
+			queueCfg.QueueConfigs = append(queueCfg.QueueConfigs, queueTypes.FromInput(queueTypes.QueueConfigInput{
+				Name:           qc.Name,
+				Topics:         qc.Topics,
+				Reserved:       qc.Reserved,
+				MaxMessageSize: qc.Limits.MaxMessageSize,
+				MaxDepth:       qc.Limits.MaxDepth,
+				MessageTTL:     qc.Limits.MessageTTL,
+				MaxRetries:     qc.Retry.MaxRetries,
+				InitialBackoff: qc.Retry.InitialBackoff,
+				MaxBackoff:     qc.Retry.MaxBackoff,
+				Multiplier:     qc.Retry.Multiplier,
+				DLQEnabled:     qc.DLQ.Enabled,
+				DLQTopic:       qc.DLQ.Topic,
+			}))
+		}
+
 		// Create log-based queue manager with wildcard support
 		qm := queue.NewManager(
 			logStore,
 			logStore,
 			b.DeliverToSessionByID,
-			queue.DefaultConfig(),
+			queueCfg,
 			logger,
 			cl,
 		)

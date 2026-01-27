@@ -206,7 +206,8 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 
 		// Check if message matches filter
 		if filter != nil {
-			routingKey := types.ExtractRoutingKey(msg.Topic, group.QueueName)
+			queueRoot := "$queue/" + group.QueueName
+			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
 			if !filter.Matches(routingKey) {
 				continue // Skip non-matching messages
 			}
@@ -259,7 +260,8 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState
 
 		// Check filter
 		if filter != nil {
-			routingKey := types.ExtractRoutingKey(msg.Topic, group.QueueName)
+			queueRoot := "$queue/" + group.QueueName
+			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
 			if !filter.Matches(routingKey) {
 				continue
 			}

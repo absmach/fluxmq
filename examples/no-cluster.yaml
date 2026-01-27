@@ -52,3 +52,21 @@ cluster:
 log:
   level: "debug"
   format: "text"
+
+# Queue Configuration - persistent message queues
+queues:
+  - name: "mqtt"
+    topics:
+      - "$queue/#"
+    reserved: true
+    limits:
+      max_message_size: 10485760  # 10MB
+      max_depth: 100000
+      message_ttl: 168h  # 7 days
+    retry:
+      max_retries: 10
+      initial_backoff: 5s
+      max_backoff: 5m
+      multiplier: 2.0
+    dlq:
+      enabled: true

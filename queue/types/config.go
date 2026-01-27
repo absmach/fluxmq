@@ -14,7 +14,7 @@ var ErrInvalidConfig = errors.New("invalid queue configuration")
 // Queue constants
 const (
 	MQTTQueueName  = "mqtt"
-	MQTTQueueTopic = "#"
+	MQTTQueueTopic = "$queue/#"
 )
 
 // ReplicationMode defines the replication behavior for queue messages.
@@ -140,6 +140,57 @@ func MQTTQueueConfig() QueueConfig {
 	config := DefaultQueueConfig(MQTTQueueName, MQTTQueueTopic)
 	config.Reserved = true
 	return config
+}
+
+// QueueConfigInput is a simplified queue configuration from the main config file.
+type QueueConfigInput struct {
+	Name           string
+	Topics         []string
+	Reserved       bool
+	MaxMessageSize int64
+	MaxDepth       int64
+	MessageTTL     time.Duration
+	MaxRetries     int
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
+	Multiplier     float64
+	DLQEnabled     bool
+	DLQTopic       string
+}
+
+// FromInput creates a QueueConfig from a simplified input config.
+func FromInput(input QueueConfigInput) QueueConfig {
+	cfg := DefaultQueueConfig(input.Name, input.Topics...)
+	cfg.Reserved = input.Reserved
+
+	if input.MaxMessageSize > 0 {
+		cfg.MaxMessageSize = input.MaxMessageSize
+	}
+	if input.MaxDepth > 0 {
+		cfg.MaxDepth = input.MaxDepth
+	}
+	if input.MessageTTL > 0 {
+		cfg.MessageTTL = input.MessageTTL
+	}
+	if input.MaxRetries > 0 {
+		cfg.RetryPolicy.MaxRetries = input.MaxRetries
+	}
+	if input.InitialBackoff > 0 {
+		cfg.RetryPolicy.InitialBackoff = input.InitialBackoff
+	}
+	if input.MaxBackoff > 0 {
+		cfg.RetryPolicy.MaxBackoff = input.MaxBackoff
+	}
+	if input.Multiplier > 0 {
+		cfg.RetryPolicy.BackoffMultiplier = input.Multiplier
+	}
+
+	cfg.DLQConfig.Enabled = input.DLQEnabled
+	if input.DLQTopic != "" {
+		cfg.DLQConfig.Topic = input.DLQTopic
+	}
+
+	return cfg
 }
 
 // Validate validates queue configuration.

@@ -75,6 +75,9 @@ type Config struct {
 
 	// Retention configuration
 	RetentionCheckInterval time.Duration
+
+	// Queue configurations from main config
+	QueueConfigs []types.QueueConfig
 }
 
 // DefaultConfig returns default configuration.
@@ -160,20 +163,26 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// ensureReservedQueues creates the reserved mqtt queue if it doesn't exist.
+// ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
 func (m *Manager) ensureReservedQueues(ctx context.Context) error {
-	// Create the reserved mqtt queue that captures all MQTT messages
-	mqttConfig := types.MQTTQueueConfig()
-
-	if err := m.queueStore.CreateQueue(ctx, mqttConfig); err != nil {
-		if err != storage.ErrQueueAlreadyExists {
-			return err
-		}
+	// If no queue configs provided, use the default mqtt queue
+	configs := m.config.QueueConfigs
+	if len(configs) == 0 {
+		configs = []types.QueueConfig{types.MQTTQueueConfig()}
 	}
 
-	m.logger.Info("reserved mqtt queue ready",
-		slog.String("queue", types.MQTTQueueName),
-		slog.String("topic", types.MQTTQueueTopic))
+	for _, cfg := range configs {
+		if err := m.queueStore.CreateQueue(ctx, cfg); err != nil {
+			if err != storage.ErrQueueAlreadyExists {
+				return err
+			}
+		}
+
+		m.logger.Info("queue ready",
+			slog.String("queue", cfg.Name),
+			slog.Any("topics", cfg.Topics),
+			slog.Bool("reserved", cfg.Reserved))
+	}
 
 	return nil
 }
@@ -319,7 +328,9 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 // Subscribe adds a consumer to a stream with optional pattern matching.
 func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
 	// Ensure queue exists (auto-create if not)
-	_, err := m.GetOrCreateQueue(ctx, queueName)
+	// Use $queue/<name>/# as the topic pattern so messages published to $queue/<name>/... are captured
+	queueTopicPattern := "$queue/" + queueName + "/#"
+	_, err := m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
 	if err != nil {
 		return fmt.Errorf("failed to get or create queue: %w", err)
 	}

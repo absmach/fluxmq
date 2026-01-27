@@ -23,6 +23,38 @@ type Config struct {
 	Cluster   ClusterConfig   `yaml:"cluster"`
 	Webhook   WebhookConfig   `yaml:"webhook"`
 	RateLimit RateLimitConfig `yaml:"ratelimit"`
+	Queues    []QueueConfig   `yaml:"queues"`
+}
+
+// QueueConfig defines configuration for a persistent queue.
+type QueueConfig struct {
+	Name     string        `yaml:"name"`
+	Topics   []string      `yaml:"topics"`
+	Reserved bool          `yaml:"reserved"`
+	Limits   QueueLimits   `yaml:"limits"`
+	Retry    QueueRetry    `yaml:"retry"`
+	DLQ      QueueDLQ      `yaml:"dlq"`
+}
+
+// QueueLimits defines resource limits for a queue.
+type QueueLimits struct {
+	MaxMessageSize int64         `yaml:"max_message_size"`
+	MaxDepth       int64         `yaml:"max_depth"`
+	MessageTTL     time.Duration `yaml:"message_ttl"`
+}
+
+// QueueRetry defines retry policy for failed message delivery.
+type QueueRetry struct {
+	MaxRetries     int           `yaml:"max_retries"`
+	InitialBackoff time.Duration `yaml:"initial_backoff"`
+	MaxBackoff     time.Duration `yaml:"max_backoff"`
+	Multiplier     float64       `yaml:"multiplier"`
+}
+
+// QueueDLQ defines dead-letter queue configuration.
+type QueueDLQ struct {
+	Enabled bool   `yaml:"enabled"`
+	Topic   string `yaml:"topic"`
 }
 
 // RateLimitConfig holds rate limiting configuration.
@@ -435,6 +467,27 @@ func Default() *Config {
 				Burst:   10,
 			},
 		},
+		Queues: []QueueConfig{
+			{
+				Name:     "mqtt",
+				Topics:   []string{"$queue/#"},
+				Reserved: true,
+				Limits: QueueLimits{
+					MaxMessageSize: 10 * 1024 * 1024, // 10MB
+					MaxDepth:       100000,
+					MessageTTL:     7 * 24 * time.Hour,
+				},
+				Retry: QueueRetry{
+					MaxRetries:     10,
+					InitialBackoff: 5 * time.Second,
+					MaxBackoff:     5 * time.Minute,
+					Multiplier:     2.0,
+				},
+				DLQ: QueueDLQ{
+					Enabled: true,
+				},
+			},
+		},
 	}
 }
 
@@ -702,6 +755,21 @@ func (c *Config) Validate() error {
 			if endpoint.URL == "" {
 				return fmt.Errorf("webhook.endpoints[%d].url cannot be empty", i)
 			}
+		}
+	}
+
+	// Queue validation
+	seenQueues := make(map[string]bool)
+	for i, q := range c.Queues {
+		if q.Name == "" {
+			return fmt.Errorf("queues[%d].name cannot be empty", i)
+		}
+		if seenQueues[q.Name] {
+			return fmt.Errorf("queues[%d].name '%s' is duplicated", i, q.Name)
+		}
+		seenQueues[q.Name] = true
+		if len(q.Topics) == 0 {
+			return fmt.Errorf("queues[%d].topics cannot be empty", i)
 		}
 	}
 
