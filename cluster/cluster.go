@@ -30,25 +30,6 @@ type SessionOwnership interface {
 	WatchSessionOwner(ctx context.Context, clientID string) <-chan OwnershipChange
 }
 
-// PartitionOwnership manages distributed partition ownership across cluster nodes.
-// Used for distributing queue partitions across the cluster.
-type PartitionOwnership interface {
-	// AcquirePartition registers this node as the owner of a queue partition.
-	// Uses leased keys that auto-expire if the node dies (30s TTL).
-	AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error
-
-	// ReleasePartition releases ownership of a queue partition.
-	ReleasePartition(ctx context.Context, queueName string, partitionID int) error
-
-	// GetPartitionOwner returns the node ID that owns the partition.
-	// Returns (nodeID, true, nil) if found, ("", false, nil) if not found.
-	GetPartitionOwner(ctx context.Context, queueName string, partitionID int) (nodeID string, exists bool, err error)
-
-	// WatchPartitionOwnership watches for partition ownership changes for a queue.
-	// Useful for detecting partition migrations and rebalancing.
-	WatchPartitionOwnership(ctx context.Context, queueName string) <-chan PartitionOwnershipChange
-}
-
 // SubscriptionRouter manages cluster-wide subscription routing.
 type SubscriptionRouter interface {
 	// AddSubscription adds a subscription for a client.
@@ -68,12 +49,12 @@ type SubscriptionRouter interface {
 
 // QueueConsumerInfo represents a queue consumer registration visible across the cluster.
 type QueueConsumerInfo struct {
-	QueueName   string // Queue name (e.g., "test" for $queue/test)
-	GroupID     string // Consumer group ID
-	ConsumerID  string // Consumer identifier (usually client ID)
-	ClientID    string // MQTT client ID
-	Pattern     string // Subscription pattern within the queue
-	ProxyNodeID string // Node where the consumer is connected
+	QueueName    string // Queue name (e.g., "test" for $queue/test)
+	GroupID      string // Consumer group ID
+	ConsumerID   string // Consumer identifier (usually client ID)
+	ClientID     string // MQTT client ID
+	Pattern      string // Subscription pattern within the queue
+	ProxyNodeID  string // Node where the consumer is connected
 	RegisteredAt time.Time
 }
 
@@ -132,7 +113,6 @@ type Lifecycle interface {
 // different backends (etcd, raft, or noop for single-node).
 type Cluster interface {
 	SessionOwnership
-	PartitionOwnership
 	SubscriptionRouter
 	QueueConsumerRegistry
 	Lifecycle
