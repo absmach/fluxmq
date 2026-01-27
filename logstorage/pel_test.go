@@ -32,7 +32,6 @@ func TestPEL_AddAndGet(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		PartitionID:   0,
 		ConsumerID:    "consumer-1",
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
@@ -47,7 +46,6 @@ func TestPEL_AddAndGet(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, entry.Offset, retrieved.Offset)
 	assert.Equal(t, entry.ConsumerID, retrieved.ConsumerID)
-	assert.Equal(t, entry.PartitionID, retrieved.PartitionID)
 
 	_, found = pel.Get(200)
 	assert.False(t, found)
@@ -61,7 +59,6 @@ func TestPEL_Ack(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		PartitionID:   0,
 		ConsumerID:    "consumer-1",
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
@@ -88,7 +85,6 @@ func TestPEL_Claim(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		PartitionID:   0,
 		ConsumerID:    "consumer-1",
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
@@ -116,7 +112,6 @@ func TestPEL_IncrementDelivery(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		PartitionID:   0,
 		ConsumerID:    "consumer-1",
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,

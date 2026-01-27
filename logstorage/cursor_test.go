@@ -17,7 +17,7 @@ func TestCursorStore_NewAndClose(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cs)
 
-	cursor := cs.GetCursor(0)
+	cursor := cs.GetCursor()
 	assert.Nil(t, cursor)
 
 	err = cs.Close()
@@ -30,13 +30,13 @@ func TestCursorStore_SetAndGetCursor(t *testing.T) {
 	require.NoError(t, err)
 	defer cs.Close()
 
-	cs.SetCursor(0, 100)
+	cs.SetCursor(100)
 
-	cursor := cs.GetCursor(0)
+	cursor := cs.GetCursor()
 	require.NotNil(t, cursor)
 	assert.Equal(t, uint64(100), cursor.Cursor)
 
-	cursor = cs.GetCursor(1)
+	cursor = cs.GetCursor()
 	assert.Nil(t, cursor)
 }
 
@@ -46,22 +46,22 @@ func TestCursorStore_AdvanceCursor(t *testing.T) {
 	require.NoError(t, err)
 	defer cs.Close()
 
-	advanced := cs.AdvanceCursor(0, 100)
+	advanced := cs.AdvanceCursor(100)
 	assert.True(t, advanced)
 
-	cursor := cs.GetCursor(0)
+	cursor := cs.GetCursor()
 	assert.Equal(t, uint64(100), cursor.Cursor)
 
-	advanced = cs.AdvanceCursor(0, 50)
+	advanced = cs.AdvanceCursor(50)
 	assert.False(t, advanced)
 
-	cursor = cs.GetCursor(0)
+	cursor = cs.GetCursor()
 	assert.Equal(t, uint64(100), cursor.Cursor)
 
-	advanced = cs.AdvanceCursor(0, 200)
+	advanced = cs.AdvanceCursor(200)
 	assert.True(t, advanced)
 
-	cursor = cs.GetCursor(0)
+	cursor = cs.GetCursor()
 	assert.Equal(t, uint64(200), cursor.Cursor)
 }
 
@@ -71,81 +71,18 @@ func TestCursorStore_Commit(t *testing.T) {
 	require.NoError(t, err)
 	defer cs.Close()
 
-	cs.Commit(0, 100)
+	cs.Commit(100)
 
-	committed := cs.GetCommitted(0)
+	committed := cs.GetCommitted()
 	assert.Equal(t, uint64(100), committed)
 
-	cs.Commit(0, 50)
-	committed = cs.GetCommitted(0)
+	cs.Commit(50)
+	committed = cs.GetCommitted()
 	assert.Equal(t, uint64(100), committed)
 
-	cs.Commit(0, 200)
-	committed = cs.GetCommitted(0)
+	cs.Commit(200)
+	committed = cs.GetCommitted()
 	assert.Equal(t, uint64(200), committed)
-}
-
-func TestCursorStore_GetAllCursors(t *testing.T) {
-	dir := t.TempDir()
-	cs, err := NewCursorStore(dir, "test-group")
-	require.NoError(t, err)
-	defer cs.Close()
-
-	cs.SetCursor(0, 100)
-	cs.SetCursor(1, 200)
-	cs.SetCursor(2, 300)
-
-	all := cs.GetAllCursors()
-	assert.Len(t, all, 3)
-	assert.Equal(t, uint64(100), all[0].Cursor)
-	assert.Equal(t, uint64(200), all[1].Cursor)
-	assert.Equal(t, uint64(300), all[2].Cursor)
-}
-
-func TestCursorStore_MinCommitted(t *testing.T) {
-	dir := t.TempDir()
-	cs, err := NewCursorStore(dir, "test-group")
-	require.NoError(t, err)
-	defer cs.Close()
-
-	assert.Equal(t, uint64(0), cs.MinCommitted())
-
-	cs.Commit(0, 100)
-	cs.Commit(1, 50)
-	cs.Commit(2, 200)
-
-	assert.Equal(t, uint64(50), cs.MinCommitted())
-}
-
-func TestCursorStore_ResetPartition(t *testing.T) {
-	dir := t.TempDir()
-	cs, err := NewCursorStore(dir, "test-group")
-	require.NoError(t, err)
-	defer cs.Close()
-
-	cs.SetCursor(0, 100)
-	cs.Commit(0, 50)
-
-	cs.ResetPartition(0, 200)
-
-	cursor := cs.GetCursor(0)
-	assert.Equal(t, uint64(200), cursor.Cursor)
-	assert.Equal(t, uint64(200), cursor.Committed)
-}
-
-func TestCursorStore_DeletePartition(t *testing.T) {
-	dir := t.TempDir()
-	cs, err := NewCursorStore(dir, "test-group")
-	require.NoError(t, err)
-	defer cs.Close()
-
-	cs.SetCursor(0, 100)
-	cs.SetCursor(1, 200)
-
-	cs.DeletePartition(0)
-
-	assert.Nil(t, cs.GetCursor(0))
-	assert.NotNil(t, cs.GetCursor(1))
 }
 
 func TestCursorStore_IsDirty(t *testing.T) {
@@ -156,7 +93,7 @@ func TestCursorStore_IsDirty(t *testing.T) {
 
 	assert.False(t, cs.IsDirty())
 
-	cs.SetCursor(0, 100)
+	cs.SetCursor(100)
 	assert.True(t, cs.IsDirty())
 
 	err = cs.Save()
@@ -170,9 +107,9 @@ func TestCursorStore_Persistence(t *testing.T) {
 	cs, err := NewCursorStore(dir, "test-group")
 	require.NoError(t, err)
 
-	cs.SetCursor(0, 100)
-	cs.SetCursor(1, 200)
-	cs.Commit(0, 50)
+	cs.SetCursor(100)
+	cs.SetCursor(200)
+	cs.Commit(50)
 
 	err = cs.Save()
 	require.NoError(t, err)
@@ -183,12 +120,12 @@ func TestCursorStore_Persistence(t *testing.T) {
 	require.NoError(t, err)
 	defer cs2.Close()
 
-	cursor0 := cs2.GetCursor(0)
+	cursor0 := cs2.GetCursor()
 	require.NotNil(t, cursor0)
 	assert.Equal(t, uint64(100), cursor0.Cursor)
 	assert.Equal(t, uint64(50), cursor0.Committed)
 
-	cursor1 := cs2.GetCursor(1)
+	cursor1 := cs2.GetCursor()
 	require.NotNil(t, cursor1)
 	assert.Equal(t, uint64(200), cursor1.Cursor)
 }
@@ -249,7 +186,7 @@ func TestConsumerGroupCursors_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set and save a cursor so the file exists
-	cs.SetCursor(0, 100)
+	cs.SetCursor(100)
 	err = cs.Save()
 	require.NoError(t, err)
 
@@ -290,11 +227,11 @@ func TestConsumerGroupCursors_SaveAll(t *testing.T) {
 
 	cs1, err := cgc.GetOrCreate("group-1")
 	require.NoError(t, err)
-	cs1.SetCursor(0, 100)
+	cs1.SetCursor(100)
 
 	cs2, err := cgc.GetOrCreate("group-2")
 	require.NoError(t, err)
-	cs2.SetCursor(0, 200)
+	cs2.SetCursor(200)
 
 	err = cgc.SaveAll()
 	assert.NoError(t, err)

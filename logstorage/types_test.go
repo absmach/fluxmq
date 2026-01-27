@@ -99,7 +99,6 @@ func TestErrors(t *testing.T) {
 	assert.NotNil(t, ErrEmptyBatch)
 	assert.NotNil(t, ErrConsumerNotFound)
 	assert.NotNil(t, ErrGroupNotFound)
-	assert.NotNil(t, ErrPartitionNotFound)
 	assert.NotNil(t, ErrQueueNotFound)
 	assert.NotNil(t, ErrAlreadyExists)
 	assert.NotNil(t, ErrInvalidOffset)

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/queue/storage/memory"
+	memory "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,7 +181,6 @@ func TestGroupManager_Rebalance(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := types.DefaultQueueConfig("$queue/test")
-	config.Partitions = 6
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -230,7 +229,6 @@ func TestGroupManager_Rebalance_UnevenDistribution(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := types.DefaultQueueConfig("$queue/test")
-	config.Partitions = 5
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 
@@ -313,7 +311,6 @@ func TestGroup_GetConsumerForPartition(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	config := types.DefaultQueueConfig("$queue/test")
-	config.Partitions = 4
 	err := store.CreateQueue(ctx, config)
 	require.NoError(t, err)
 

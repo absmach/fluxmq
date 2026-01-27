@@ -20,6 +20,7 @@ import (
 type Store struct {
 	logs       sync.Map // map[string]*Log
 	groups     sync.Map // map[string]map[string]*types.ConsumerGroupState (queueName -> groupID -> state)
+	consumers  sync.Map // map[string]map[string]map[string]*types.Consumer (queueName -> groupID -> consumerID -> consumer)
 	topicIndex *storage.TopicIndex
 	config     Config
 }
@@ -82,6 +83,9 @@ func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error
 	// Initialize empty groups map for this queue
 	s.groups.Store(config.Name, &sync.Map{})
 
+	// Initialize empty consumers map for this queue
+	s.consumers.Store(config.Name, &sync.Map{})
+
 	return nil
 }
 
@@ -109,6 +113,7 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 
 	s.logs.Delete(queueName)
 	s.groups.Delete(queueName)
+	s.consumers.Delete(queueName)
 	s.topicIndex.RemoveQueue(queueName)
 	return nil
 }
@@ -535,8 +540,126 @@ func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([
 	return result, nil
 }
 
+// --- ConsumerStore Implementation ---
+
+// RegisterConsumer registers a consumer in a group.
+func (s *Store) RegisterConsumer(ctx context.Context, consumer *types.Consumer) error {
+	queueConsumersVal, exists := s.consumers.Load(consumer.QueueName)
+	if !exists {
+		return storage.ErrQueueNotFound
+	}
+
+	queueConsumers := queueConsumersVal.(*sync.Map)
+
+	// Get or create the group map
+	groupConsumersVal, _ := queueConsumers.LoadOrStore(consumer.GroupID, &sync.Map{})
+	groupConsumers := groupConsumersVal.(*sync.Map)
+
+	// Store the consumer
+	groupConsumers.Store(consumer.ID, consumer)
+	return nil
+}
+
+// UnregisterConsumer removes a consumer from a group.
+func (s *Store) UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	queueConsumersVal, exists := s.consumers.Load(queueName)
+	if !exists {
+		return storage.ErrQueueNotFound
+	}
+
+	queueConsumers := queueConsumersVal.(*sync.Map)
+
+	groupConsumersVal, exists := queueConsumers.Load(groupID)
+	if !exists {
+		return storage.ErrConsumerNotFound
+	}
+
+	groupConsumers := groupConsumersVal.(*sync.Map)
+	groupConsumers.Delete(consumerID)
+	return nil
+}
+
+// GetConsumer retrieves a consumer by ID.
+func (s *Store) GetConsumer(ctx context.Context, queueName, groupID, consumerID string) (*types.Consumer, error) {
+	queueConsumersVal, exists := s.consumers.Load(queueName)
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	queueConsumers := queueConsumersVal.(*sync.Map)
+
+	groupConsumersVal, exists := queueConsumers.Load(groupID)
+	if !exists {
+		return nil, storage.ErrConsumerNotFound
+	}
+
+	groupConsumers := groupConsumersVal.(*sync.Map)
+
+	consumerVal, exists := groupConsumers.Load(consumerID)
+	if !exists {
+		return nil, storage.ErrConsumerNotFound
+	}
+
+	return consumerVal.(*types.Consumer), nil
+}
+
+// ListConsumers lists all consumers in a group.
+func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.Consumer, error) {
+	queueConsumersVal, exists := s.consumers.Load(queueName)
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	queueConsumers := queueConsumersVal.(*sync.Map)
+
+	groupConsumersVal, exists := queueConsumers.Load(groupID)
+	if !exists {
+		return []*types.Consumer{}, nil
+	}
+
+	groupConsumers := groupConsumersVal.(*sync.Map)
+	var result []*types.Consumer
+
+	groupConsumers.Range(func(key, value interface{}) bool {
+		result = append(result, value.(*types.Consumer))
+		return true
+	})
+
+	return result, nil
+}
+
+// ListGroups lists all group IDs for a queue.
+func (s *Store) ListGroups(ctx context.Context, queueName string) ([]string, error) {
+	queueConsumersVal, exists := s.consumers.Load(queueName)
+	if !exists {
+		return nil, storage.ErrQueueNotFound
+	}
+
+	queueConsumers := queueConsumersVal.(*sync.Map)
+	var result []string
+
+	queueConsumers.Range(func(key, value interface{}) bool {
+		result = append(result, key.(string))
+		return true
+	})
+
+	return result, nil
+}
+
+// UpdateHeartbeat updates the heartbeat timestamp for a consumer.
+func (s *Store) UpdateHeartbeat(ctx context.Context, queueName, groupID, consumerID string, timestamp time.Time) error {
+	consumer, err := s.GetConsumer(ctx, queueName, groupID, consumerID)
+	if err != nil {
+		return err
+	}
+
+	consumer.LastHeartbeat = timestamp
+	return nil
+}
+
 // Compile-time interface assertions
 var (
 	_ storage.QueueStore         = (*Store)(nil)
 	_ storage.ConsumerGroupStore = (*Store)(nil)
+	_ storage.ConsumerStore      = (*Store)(nil)
 )
