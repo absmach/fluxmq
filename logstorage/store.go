@@ -175,7 +175,7 @@ func (s *Store) getOrCreatePartition(queueName string, partitionID uint32) (*Seg
 	manager, ok := partitions[partitionID]
 	if !ok {
 		if !s.config.AutoCreate {
-			return nil, ErrPartitionNotFound
+			return nil, ErrQueueNotFound
 		}
 
 		partDir := s.partitionDir(queueName, partitionID)
@@ -206,7 +206,7 @@ func (s *Store) getPartition(queueName string, partitionID uint32) (*SegmentMana
 
 	manager, ok := partitions[partitionID]
 	if !ok {
-		return nil, ErrPartitionNotFound
+		return nil, ErrQueueNotFound
 	}
 
 	return manager, nil
@@ -965,7 +965,8 @@ func (s *Store) GetCommittedOffset(queueName, groupID string, partitionID uint32
 
 // AddPending adds a pending entry (legacy - use Deliver instead).
 func (s *Store) AddPending(queueName, groupID string, entry PELEntry) error {
-	return s.Deliver(queueName, groupID, entry.PartitionID, entry.Offset, entry.ConsumerID)
+	// Using partition 0 since partitions were removed from the public API
+	return s.Deliver(queueName, groupID, 0, entry.Offset, entry.ConsumerID)
 }
 
 // AckPending acknowledges a pending entry (legacy - use Ack instead).
@@ -1014,7 +1015,6 @@ func (s *Store) GetAllPending(queueName, groupID string) (map[string][]PELEntry,
 		for _, e := range entries {
 			pelEntry := PELEntry{
 				Offset:        e.Offset,
-				PartitionID:   e.PartitionID,
 				ConsumerID:    e.ConsumerID,
 				ClaimedAt:     e.DeliveredAt,
 				DeliveryCount: e.DeliveryCount,
@@ -1027,13 +1027,13 @@ func (s *Store) GetAllPending(queueName, groupID string) (map[string][]PELEntry,
 }
 
 // GetAllCursors returns cursor state for all partitions (legacy format).
-func (s *Store) GetAllCursors(queueName, groupID string) (map[uint32]PartitionCursor, error) {
+func (s *Store) GetAllCursors(queueName, groupID string) (map[uint32]Cursor, error) {
 	state, err := s.GetConsumerState(queueName, groupID)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make(map[uint32]PartitionCursor)
+	result := make(map[uint32]Cursor)
 
 	// Get all partitions for this queue
 	partitions, err := s.ListPartitions(queueName)
@@ -1043,7 +1043,7 @@ func (s *Store) GetAllCursors(queueName, groupID string) (map[uint32]PartitionCu
 
 	for _, partID := range partitions {
 		ps := state.GetPartitionState(partID)
-		result[partID] = PartitionCursor{
+		result[partID] = Cursor{
 			Cursor:    ps.Cursor,
 			Committed: ps.AckFloor,
 			UpdatedAt: ps.UpdatedAt,

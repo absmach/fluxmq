@@ -209,7 +209,7 @@ func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*t
 		if err == ErrOffsetOutOfRange {
 			return nil, storage.ErrOffsetOutOfRange
 		}
-		if err == ErrPartitionNotFound {
+		if err == ErrQueueNotFound {
 			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
@@ -314,7 +314,6 @@ func (a *Adapter) ListConsumerGroups(ctx context.Context, queueName string) ([]*
 func (a *Adapter) AddPendingEntry(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error {
 	pelEntry := PELEntry{
 		Offset:        entry.Offset,
-		PartitionID:   0, // Always partition 0
 		ConsumerID:    entry.ConsumerID,
 		ClaimedAt:     entry.ClaimedAt.UnixMilli(),
 		DeliveryCount: uint16(entry.DeliveryCount),

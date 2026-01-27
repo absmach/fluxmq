@@ -100,7 +100,7 @@ func (s *QueueConfigStore) Get(queueName string) (*types.QueueConfig, error) {
 
 	config, ok := s.configs[queueName]
 	if !ok {
-		return nil, ErrStreamNotFound
+		return nil, ErrQueueNotFound
 	}
 
 	return config, nil

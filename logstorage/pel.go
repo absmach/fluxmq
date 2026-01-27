@@ -191,11 +191,6 @@ func (p *PEL) readEntry(r *BufferReader) (PELEntry, error) {
 		return PELEntry{}, err
 	}
 
-	partitionID, err := r.ReadUint32()
-	if err != nil {
-		return PELEntry{}, err
-	}
-
 	consumerID, err := r.ReadBytes()
 	if err != nil {
 		return PELEntry{}, err
@@ -213,7 +208,6 @@ func (p *PEL) readEntry(r *BufferReader) (PELEntry, error) {
 
 	return PELEntry{
 		Offset:        offset,
-		PartitionID:   partitionID,
 		ConsumerID:    string(consumerID),
 		ClaimedAt:     int64(claimedAt),
 		DeliveryCount: deliveryCount,
@@ -225,7 +219,6 @@ func (p *PEL) writeEntry(op PELOperation, entry PELEntry) error {
 	w := NewBufferWriter(64)
 	w.WriteUint8(uint8(op))
 	w.WriteUint64(entry.Offset)
-	w.WriteUint32(entry.PartitionID)
 	w.WriteBytes([]byte(entry.ConsumerID))
 	w.WriteUint64(uint64(entry.ClaimedAt))
 	w.WriteUint16(entry.DeliveryCount)

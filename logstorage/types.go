@@ -10,25 +10,23 @@ import (
 
 // Storage errors.
 var (
-	ErrSegmentNotFound   = errors.New("segment not found")
-	ErrOffsetOutOfRange  = errors.New("offset out of range")
-	ErrSegmentClosed     = errors.New("segment is closed")
-	ErrSegmentCorrupted  = errors.New("segment corrupted")
-	ErrInvalidBatch      = errors.New("invalid batch")
-	ErrCRCMismatch       = errors.New("CRC mismatch")
-	ErrInvalidMagic      = errors.New("invalid magic number")
-	ErrBatchTooLarge     = errors.New("batch exceeds maximum size")
-	ErrEmptyBatch        = errors.New("batch contains no records")
-	ErrConsumerNotFound  = errors.New("consumer not found")
-	ErrGroupNotFound     = errors.New("consumer group not found")
-	ErrPartitionNotFound = errors.New("partition not found")
-	ErrQueueNotFound     = errors.New("queue not found")
-	ErrStreamNotFound    = errors.New("stream not found")
-	ErrAlreadyExists     = errors.New("already exists")
-	ErrInvalidOffset     = errors.New("invalid offset")
-	ErrPELEntryNotFound  = errors.New("PEL entry not found")
-	ErrIndexCorrupted    = errors.New("index corrupted")
-	ErrRecoveryFailed    = errors.New("recovery failed")
+	ErrSegmentNotFound  = errors.New("segment not found")
+	ErrOffsetOutOfRange = errors.New("offset out of range")
+	ErrSegmentClosed    = errors.New("segment is closed")
+	ErrSegmentCorrupted = errors.New("segment corrupted")
+	ErrInvalidBatch     = errors.New("invalid batch")
+	ErrCRCMismatch      = errors.New("CRC mismatch")
+	ErrInvalidMagic     = errors.New("invalid magic number")
+	ErrBatchTooLarge    = errors.New("batch exceeds maximum size")
+	ErrEmptyBatch       = errors.New("batch contains no records")
+	ErrConsumerNotFound = errors.New("consumer not found")
+	ErrGroupNotFound    = errors.New("consumer group not found")
+	ErrQueueNotFound    = errors.New("queue not found")
+	ErrAlreadyExists    = errors.New("already exists")
+	ErrInvalidOffset    = errors.New("invalid offset")
+	ErrPELEntryNotFound = errors.New("PEL entry not found")
+	ErrIndexCorrupted   = errors.New("index corrupted")
+	ErrRecoveryFailed   = errors.New("recovery failed")
 )
 
 // Magic number for segment files (FLUX in ASCII).
@@ -122,8 +120,8 @@ type TimeIndexEntry struct {
 	RelativeOffset uint32 // Offset relative to segment base
 }
 
-// PartitionCursor tracks consumer position in a partition.
-type PartitionCursor struct {
+// Cursor tracks consumer position in a queue.
+type Cursor struct {
 	Cursor    uint64 // Next offset to read
 	Committed uint64 // Last committed offset (safe for truncation)
 	UpdatedAt int64  // Last update timestamp (unix millis)
@@ -132,7 +130,6 @@ type PartitionCursor struct {
 // PELEntry represents a pending entry in the Pending Entry List.
 type PELEntry struct {
 	Offset        uint64
-	PartitionID   uint32
 	ConsumerID    string
 	ClaimedAt     int64 // Unix timestamp in milliseconds
 	DeliveryCount uint16

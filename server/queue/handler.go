@@ -135,9 +135,8 @@ func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.Appen
 	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
 
 	return connect.NewResponse(&queuev1.AppendResponse{
-		Offset:      tail - 1,
-		PartitionId: 0, // Stream model has no partitions
-		Timestamp:   timestamppb.Now(),
+		Offset:    tail - 1,
+		Timestamp: timestamppb.Now(),
 	}), nil
 }
 
@@ -171,7 +170,6 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 	return connect.NewResponse(&queuev1.AppendBatchResponse{
 		FirstOffset: firstOffset,
 		LastOffset:  lastOffset,
-		PartitionId: 0,
 		Count:       count,
 		Timestamp:   timestamppb.Now(),
 	}), nil
@@ -214,7 +212,6 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 	return connect.NewResponse(&queuev1.AppendBatchResponse{
 		FirstOffset: firstOffset,
 		LastOffset:  lastOffset,
-		PartitionId: 0,
 		Count:       count,
 		Timestamp:   timestamppb.Now(),
 	}), nil
@@ -316,8 +313,7 @@ func (h *Handler) SeekToOffset(ctx context.Context, req *connect.Request[queuev1
 	}
 
 	return connect.NewResponse(&queuev1.SeekResponse{
-		Offset:      offset,
-		PartitionId: 0,
+		Offset: offset,
 	}), nil
 }
 
@@ -330,8 +326,7 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 	}
 
 	return connect.NewResponse(&queuev1.SeekResponse{
-		Offset:      head,
-		PartitionId: 0,
+		Offset: head,
 	}), nil
 }
 
@@ -421,8 +416,7 @@ func (h *Handler) JoinGroup(ctx context.Context, req *connect.Request[queuev1.Jo
 	}
 
 	return connect.NewResponse(&queuev1.JoinGroupResponse{
-		GenerationId:       1,
-		AssignedPartitions: []uint32{0}, // Single partition in queue model
+		GenerationId: 1,
 	}), nil
 }
 
@@ -538,18 +532,19 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 	msg := req.Msg
 
 	var success int32
-	for _, partitionOffsets := range msg.Offsets {
-		for _, offset := range partitionOffsets.Offsets {
-			err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
-			if err == nil {
-				success++
-			}
+	var maxOffset uint64
+	for _, offset := range msg.Offsets {
+		err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
+		if err == nil {
+			success++
 		}
+		if offset > maxOffset {
+			maxOffset = offset
+		}
+	}
 
-		if len(partitionOffsets.Offsets) > 0 {
-			maxOffset := partitionOffsets.Offsets[len(partitionOffsets.Offsets)-1]
-			h.groupStore.UpdateCommitted(ctx, msg.QueueName, msg.GroupId, maxOffset+1)
-		}
+	if len(msg.Offsets) > 0 {
+		h.groupStore.UpdateCommitted(ctx, msg.QueueName, msg.GroupId, maxOffset+1)
 	}
 
 	return connect.NewResponse(&queuev1.AckResponse{
@@ -560,10 +555,8 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackRequest]) (*connect.Response[emptypb.Empty], error) {
 	msg := req.Msg
 
-	for _, partitionOffsets := range msg.Offsets {
-		for _, offset := range partitionOffsets.Offsets {
-			h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
-		}
+	for _, offset := range msg.Offsets {
+		h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
 	}
 
 	return connect.NewResponse(&emptypb.Empty{}), nil
@@ -640,7 +633,6 @@ func (h *Handler) GetPending(ctx context.Context, req *connect.Request[queuev1.G
 	protoEntries := make([]*queuev1.PendingEntry, len(entries))
 	for i, e := range entries {
 		protoEntries[i] = &queuev1.PendingEntry{
-			PartitionId:   0, // Stream model has no partitions
 			Offset:        e.Offset,
 			ConsumerId:    e.ConsumerID,
 			DeliveredAt:   timestamppb.New(e.ClaimedAt),
@@ -653,9 +645,9 @@ func (h *Handler) GetPending(ctx context.Context, req *connect.Request[queuev1.G
 	}), nil
 }
 
-// --- Partition Info (returns single partition for queue model) ---
+// --- Queue Info ---
 
-func (h *Handler) GetPartitionInfo(ctx context.Context, req *connect.Request[queuev1.GetPartitionInfoRequest]) (*connect.Response[queuev1.PartitionInfo], error) {
+func (h *Handler) GetQueueInfo(ctx context.Context, req *connect.Request[queuev1.GetQueueInfoRequest]) (*connect.Response[queuev1.QueueInfo], error) {
 	msg := req.Msg
 
 	head, err := h.queueStore.Head(ctx, msg.QueueName)
@@ -670,31 +662,11 @@ func (h *Handler) GetPartitionInfo(ctx context.Context, req *connect.Request[que
 
 	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 
-	return connect.NewResponse(&queuev1.PartitionInfo{
-		PartitionId:  0,
+	return connect.NewResponse(&queuev1.QueueInfo{
+		QueueName:    msg.QueueName,
 		HeadOffset:   head,
 		TailOffset:   tail,
 		MessageCount: count,
-	}), nil
-}
-
-func (h *Handler) ListPartitions(ctx context.Context, req *connect.Request[queuev1.ListPartitionsRequest]) (*connect.Response[queuev1.ListPartitionsResponse], error) {
-	msg := req.Msg
-
-	head, _ := h.queueStore.Head(ctx, msg.QueueName)
-	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
-	count, _ := h.queueStore.Count(ctx, msg.QueueName)
-
-	// Stream model has single partition
-	partitions := []*queuev1.PartitionInfo{{
-		PartitionId:  0,
-		HeadOffset:   head,
-		TailOffset:   tail,
-		MessageCount: count,
-	}}
-
-	return connect.NewResponse(&queuev1.ListPartitionsResponse{
-		Partitions: partitions,
 	}), nil
 }
 
@@ -707,18 +679,11 @@ func (h *Handler) GetStats(ctx context.Context, req *connect.Request[queuev1.Get
 	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
 	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 
-	// Stream model has single partition
-	partitionStats := []*queuev1.PartitionStats{{
-		PartitionId:  0,
+	return connect.NewResponse(&queuev1.QueueStats{
+		QueueName:    msg.QueueName,
+		MessageCount: count,
 		HeadOffset:   head,
 		TailOffset:   tail,
-		MessageCount: count,
-	}}
-
-	return connect.NewResponse(&queuev1.QueueStats{
-		QueueName:     msg.QueueName,
-		Partitions:    partitionStats,
-		TotalMessages: count, // In queue model, count is the total
 	}), nil
 }
 
@@ -750,8 +715,8 @@ func (h *Handler) Truncate(ctx context.Context, req *connect.Request[queuev1.Tru
 
 func (h *Handler) streamToProto(config *types.QueueConfig) *queuev1.Queue {
 	return &queuev1.Queue{
-		Name:       config.Name,
-		Partitions: 1, // Stream model has single partition
+		Name:   config.Name,
+		Topics: config.Topics,
 		Config: &queuev1.QueueConfig{
 			Retention: &queuev1.RetentionConfig{
 				MaxAge: durationpb.New(config.MessageTTL),
@@ -762,10 +727,9 @@ func (h *Handler) streamToProto(config *types.QueueConfig) *queuev1.Queue {
 
 func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {
 	protoMsg := &queuev1.Message{
-		Offset:      msg.Sequence,
-		PartitionId: 0,
-		Timestamp:   timestamppb.New(msg.CreatedAt),
-		Value:       msg.GetPayload(),
+		Offset:    msg.Sequence,
+		Timestamp: timestamppb.New(msg.CreatedAt),
+		Value:     msg.GetPayload(),
 	}
 
 	if len(msg.Properties) > 0 {
@@ -787,13 +751,11 @@ func (h *Handler) groupToProto(group *types.ConsumerGroupState) *queuev1.Consume
 		})
 	}
 
-	// Stream model has single cursor
 	cursor := group.GetCursor()
-	cursors := []*queuev1.PartitionCursor{{
-		PartitionId: 0,
-		Cursor:      cursor.Cursor,
-		Committed:   cursor.Committed,
-	}}
+	queueCursor := &queuev1.QueueCursor{
+		Cursor:    cursor.Cursor,
+		Committed: cursor.Committed,
+	}
 
 	var pendingCount uint64
 	for _, entries := range group.PEL {
@@ -804,7 +766,7 @@ func (h *Handler) groupToProto(group *types.ConsumerGroupState) *queuev1.Consume
 		GroupId:      group.ID,
 		QueueName:    group.QueueName,
 		Consumers:    consumers,
-		Cursors:      cursors,
+		Cursor:       queueCursor,
 		PendingCount: pendingCount,
 		CreatedAt:    timestamppb.New(group.CreatedAt),
 	}

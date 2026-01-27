@@ -12,15 +12,15 @@ import (
 	"time"
 )
 
-// CursorStore manages consumer cursors for a consumer group.
+// CursorStore manages consumer cursor for a consumer group.
+// In the new model without partitions, there's a single cursor per consumer group.
 type CursorStore struct {
 	mu sync.RWMutex
 
 	dir     string
 	groupID string
 
-	// Per-partition cursors
-	cursors map[uint32]*PartitionCursor
+	cursor *Cursor
 
 	dirty    bool
 	lastSave time.Time
@@ -28,10 +28,10 @@ type CursorStore struct {
 
 // CursorStoreState is the serialized state of a cursor store.
 type CursorStoreState struct {
-	Version uint8                       `json:"version"`
-	GroupID string                      `json:"group_id"`
-	Cursors map[uint32]*PartitionCursor `json:"cursors"`
-	SavedAt int64                       `json:"saved_at"`
+	Version uint8   `json:"version"`
+	GroupID string  `json:"group_id"`
+	Cursor  *Cursor `json:"cursor"`
+	SavedAt int64   `json:"saved_at"`
 }
 
 // NewCursorStore creates or opens a cursor store for a consumer group.
@@ -43,7 +43,7 @@ func NewCursorStore(dir, groupID string) (*CursorStore, error) {
 	cs := &CursorStore{
 		dir:     dir,
 		groupID: groupID,
-		cursors: make(map[uint32]*PartitionCursor),
+		cursor:  &Cursor{},
 	}
 
 	// Try to load existing state
@@ -75,9 +75,10 @@ func (cs *CursorStore) load() error {
 		return fmt.Errorf("unsupported cursor version: %d", state.Version)
 	}
 
-	cs.cursors = state.Cursors
-	if cs.cursors == nil {
-		cs.cursors = make(map[uint32]*PartitionCursor)
+	if state.Cursor != nil {
+		cs.cursor = state.Cursor
+	} else {
+		cs.cursor = &Cursor{}
 	}
 
 	return nil
@@ -95,7 +96,7 @@ func (cs *CursorStore) saveUnlocked() error {
 	state := CursorStoreState{
 		Version: CursorVersion,
 		GroupID: cs.groupID,
-		Cursors: cs.cursors,
+		Cursor:  cs.cursor,
 		SavedAt: time.Now().UnixMilli(),
 	}
 
@@ -120,54 +121,37 @@ func (cs *CursorStore) saveUnlocked() error {
 	return nil
 }
 
-// GetCursor returns the cursor for a partition.
-func (cs *CursorStore) GetCursor(partitionID uint32) *PartitionCursor {
+// GetCursor returns the cursor.
+func (cs *CursorStore) GetCursor() *Cursor {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	cursor, ok := cs.cursors[partitionID]
-	if !ok {
-		return nil
-	}
-
 	// Return a copy
-	return &PartitionCursor{
-		Cursor:    cursor.Cursor,
-		Committed: cursor.Committed,
-		UpdatedAt: cursor.UpdatedAt,
+	return &Cursor{
+		Cursor:    cs.cursor.Cursor,
+		Committed: cs.cursor.Committed,
+		UpdatedAt: cs.cursor.UpdatedAt,
 	}
 }
 
-// SetCursor sets the cursor for a partition.
-func (cs *CursorStore) SetCursor(partitionID uint32, cursor uint64) {
+// SetCursor sets the cursor position.
+func (cs *CursorStore) SetCursor(cursor uint64) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	c, ok := cs.cursors[partitionID]
-	if !ok {
-		c = &PartitionCursor{}
-		cs.cursors[partitionID] = c
-	}
-
-	c.Cursor = cursor
-	c.UpdatedAt = time.Now().UnixMilli()
+	cs.cursor.Cursor = cursor
+	cs.cursor.UpdatedAt = time.Now().UnixMilli()
 	cs.dirty = true
 }
 
-// AdvanceCursor advances the cursor for a partition if the new value is greater.
-func (cs *CursorStore) AdvanceCursor(partitionID uint32, cursor uint64) bool {
+// AdvanceCursor advances the cursor if the new value is greater.
+func (cs *CursorStore) AdvanceCursor(cursor uint64) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	c, ok := cs.cursors[partitionID]
-	if !ok {
-		c = &PartitionCursor{}
-		cs.cursors[partitionID] = c
-	}
-
-	if cursor > c.Cursor {
-		c.Cursor = cursor
-		c.UpdatedAt = time.Now().UnixMilli()
+	if cursor > cs.cursor.Cursor {
+		cs.cursor.Cursor = cursor
+		cs.cursor.UpdatedAt = time.Now().UnixMilli()
 		cs.dirty = true
 		return true
 	}
@@ -175,84 +159,36 @@ func (cs *CursorStore) AdvanceCursor(partitionID uint32, cursor uint64) bool {
 	return false
 }
 
-// Commit commits the cursor for a partition.
-func (cs *CursorStore) Commit(partitionID uint32, offset uint64) {
+// Commit commits the cursor to a specific offset.
+func (cs *CursorStore) Commit(offset uint64) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	c, ok := cs.cursors[partitionID]
-	if !ok {
-		c = &PartitionCursor{Cursor: offset}
-		cs.cursors[partitionID] = c
-	}
-
-	if offset > c.Committed {
-		c.Committed = offset
-		c.UpdatedAt = time.Now().UnixMilli()
+	if offset > cs.cursor.Committed {
+		cs.cursor.Committed = offset
+		cs.cursor.UpdatedAt = time.Now().UnixMilli()
 		cs.dirty = true
 	}
 }
 
-// GetCommitted returns the committed offset for a partition.
-func (cs *CursorStore) GetCommitted(partitionID uint32) uint64 {
+// GetCommitted returns the committed offset.
+func (cs *CursorStore) GetCommitted() uint64 {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	if c, ok := cs.cursors[partitionID]; ok {
-		return c.Committed
-	}
-	return 0
+	return cs.cursor.Committed
 }
 
-// GetAllCursors returns all partition cursors.
-func (cs *CursorStore) GetAllCursors() map[uint32]PartitionCursor {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-
-	result := make(map[uint32]PartitionCursor, len(cs.cursors))
-	for id, c := range cs.cursors {
-		result[id] = *c
-	}
-	return result
-}
-
-// MinCommitted returns the minimum committed offset across all partitions.
-func (cs *CursorStore) MinCommitted() uint64 {
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-
-	var min uint64 = ^uint64(0)
-	for _, c := range cs.cursors {
-		if c.Committed < min {
-			min = c.Committed
-		}
-	}
-
-	if min == ^uint64(0) {
-		return 0
-	}
-	return min
-}
-
-// ResetPartition resets the cursor for a partition to a specific offset.
-func (cs *CursorStore) ResetPartition(partitionID uint32, offset uint64) {
+// Reset resets the cursor to a specific offset.
+func (cs *CursorStore) Reset(offset uint64) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	cs.cursors[partitionID] = &PartitionCursor{
+	cs.cursor = &Cursor{
 		Cursor:    offset,
 		Committed: offset,
 		UpdatedAt: time.Now().UnixMilli(),
 	}
-	cs.dirty = true
-}
-
-// DeletePartition removes cursor state for a partition.
-func (cs *CursorStore) DeletePartition(partitionID uint32) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	delete(cs.cursors, partitionID)
 	cs.dirty = true
 }
 

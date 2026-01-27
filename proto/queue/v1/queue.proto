@@ -40,10 +40,10 @@ service QueueService {
   // Append adds a single message to a queue. Returns the assigned offset.
   rpc Append(AppendRequest) returns (AppendResponse);
 
-  // AppendBatch adds multiple messages atomically. All messages go to the same partition.
+  // AppendBatch adds multiple messages atomically.
   rpc AppendBatch(AppendBatchRequest) returns (AppendBatchResponse);
 
-  // AppendStream allows streaming multiple messages. Messages may go to different partitions.
+  // AppendStream allows streaming multiple messages.
   rpc AppendStream(stream AppendRequest) returns (AppendBatchResponse);
 
   // ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ service QueueService {
   // Seeking
   // ---------------------------------------------------------------------------
 
-  // SeekToOffset returns partition state at a given offset.
+  // SeekToOffset returns queue state at a given offset.
   rpc SeekToOffset(SeekToOffsetRequest) returns (SeekResponse);
 
   // SeekToTimestamp finds the offset closest to a timestamp.
@@ -86,7 +86,7 @@ service QueueService {
   // DeleteConsumerGroup removes a consumer group.
   rpc DeleteConsumerGroup(DeleteConsumerGroupRequest) returns (google.protobuf.Empty);
 
-  // JoinGroup adds a consumer to a group and receives partition assignments.
+  // JoinGroup adds a consumer to a group.
   rpc JoinGroup(JoinGroupRequest) returns (JoinGroupResponse);
 
   // LeaveGroup removes a consumer from a group.
@@ -119,14 +119,11 @@ service QueueService {
   rpc GetPending(GetPendingRequest) returns (GetPendingResponse);
 
   // ---------------------------------------------------------------------------
-  // Partition Info
+  // Queue Info
   // ---------------------------------------------------------------------------
 
-  // GetPartitionInfo returns metadata for a specific partition.
-  rpc GetPartitionInfo(GetPartitionInfoRequest) returns (PartitionInfo);
-
-  // ListPartitions returns info for all partitions in a queue.
-  rpc ListPartitions(ListPartitionsRequest) returns (ListPartitionsResponse);
+  // GetQueueInfo returns metadata for a queue.
+  rpc GetQueueInfo(GetQueueInfoRequest) returns (QueueInfo);
 
   // ---------------------------------------------------------------------------
   // Admin Operations
@@ -135,7 +132,7 @@ service QueueService {
   // GetStats returns queue statistics.
   rpc GetStats(GetStatsRequest) returns (QueueStats);
 
-  // Purge removes all messages from a queue (or partition).
+  // Purge removes all messages from a queue.
   rpc Purge(PurgeRequest) returns (PurgeResponse);
 
   // Truncate removes messages before a given offset (retention enforcement).
@@ -148,26 +145,23 @@ service QueueService {
 
 // Message represents a single message in the log.
 message Message {
-  // Unique offset within the partition (assigned by server).
+  // Unique offset within the queue (assigned by server).
   uint64 offset = 1;
 
-  // Partition this message belongs to.
-  uint32 partition_id = 2;
-
   // Timestamp when message was appended.
-  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Timestamp timestamp = 2;
 
-  // Optional key for partitioning and compaction.
-  bytes key = 4;
+  // Optional key for compaction.
+  bytes key = 3;
 
   // Message payload.
-  bytes value = 5;
+  bytes value = 4;
 
   // Optional headers (metadata).
-  map<string, bytes> headers = 6;
+  map<string, bytes> headers = 5;
 
   // Delivery metadata (only set when consuming via consumer group).
-  DeliveryInfo delivery_info = 7;
+  DeliveryInfo delivery_info = 6;
 }
 
 // DeliveryInfo contains metadata about message delivery to a consumer.
@@ -193,8 +187,8 @@ message Queue {
   // Queue name (unique identifier).
   string name = 1;
 
-  // Number of partitions.
-  uint32 partitions = 2;
+  // Topic patterns that route messages to this queue.
+  repeated string topics = 2;
 
   // Queue configuration.
   QueueConfig config = 3;
@@ -207,6 +201,9 @@ message Queue {
 
   // Last modification timestamp.
   google.protobuf.Timestamp updated_at = 6;
+
+  // Whether this is a reserved system queue.
+  bool reserved = 7;
 }
 
 message QueueConfig {
@@ -246,7 +243,7 @@ message SegmentConfig {
 }
 
 message QueueState {
-  // Total messages across all partitions.
+  // Total messages in the queue.
   uint64 total_messages = 1;
 
   // Total size in bytes.
@@ -269,9 +266,9 @@ enum CompressionType {
   COMPRESSION_TYPE_ZSTD = 3;
 }
 
-// PartitionInfo contains metadata about a single partition.
-message PartitionInfo {
-  uint32 partition_id = 1;
+// QueueInfo contains metadata about a queue.
+message QueueInfo {
+  string queue_name = 1;
 
   // First valid offset (after truncation).
   uint64 head_offset = 2;
@@ -309,8 +306,8 @@ message ConsumerGroup {
   // Group configuration.
   ConsumerGroupConfig config = 3;
 
-  // Per-partition state.
-  repeated PartitionCursor cursors = 4;
+  // Queue cursor state.
+  QueueCursor cursor = 4;
 
   // Active consumers.
   repeated ConsumerInfo consumers = 5;
@@ -320,6 +317,9 @@ message ConsumerGroup {
 
   // Creation timestamp.
   google.protobuf.Timestamp created_at = 7;
+
+  // Subscription pattern.
+  string pattern = 8;
 }
 
 message ConsumerGroupConfig {
@@ -339,46 +339,41 @@ enum InitialPosition {
   INITIAL_POSITION_LATEST = 2;    // Start from end (new messages only)
 }
 
-message PartitionCursor {
-  uint32 partition_id = 1;
-
+// QueueCursor tracks consumer group position in the queue.
+message QueueCursor {
   // Next offset to deliver.
-  uint64 cursor = 2;
+  uint64 cursor = 1;
 
   // Highest contiguously acknowledged offset.
-  uint64 committed = 3;
+  uint64 committed = 2;
 
   // Lag (tail - cursor).
-  uint64 lag = 4;
+  uint64 lag = 3;
 
   // Last activity timestamp.
-  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Timestamp updated_at = 4;
 }
 
 message ConsumerInfo {
   // Consumer identifier.
   string consumer_id = 1;
 
-  // Assigned partitions.
-  repeated uint32 partitions = 2;
-
   // Number of pending messages for this consumer.
-  uint64 pending_count = 3;
+  uint64 pending_count = 2;
 
   // Last heartbeat timestamp.
-  google.protobuf.Timestamp last_heartbeat = 4;
+  google.protobuf.Timestamp last_heartbeat = 3;
 
   // Consumer metadata (client version, hostname, etc).
-  map<string, string> metadata = 5;
+  map<string, string> metadata = 4;
 }
 
 message PendingEntry {
   uint64 offset = 1;
-  uint32 partition_id = 2;
-  string consumer_id = 3;
-  google.protobuf.Timestamp delivered_at = 4;
-  uint32 delivery_count = 5;
-  google.protobuf.Duration idle_time = 6;
+  string consumer_id = 2;
+  google.protobuf.Timestamp delivered_at = 3;
+  uint32 delivery_count = 4;
+  google.protobuf.Duration idle_time = 5;
 }
 
 // =============================================================================
@@ -389,7 +384,7 @@ message PendingEntry {
 
 message CreateQueueRequest {
   string name = 1;
-  uint32 partitions = 2;
+  repeated string topics = 2;
   QueueConfig config = 3;
 }
 
@@ -425,38 +420,26 @@ message UpdateQueueRequest {
 message AppendRequest {
   string queue_name = 1;
 
-  // Optional partition key (hashed to determine partition).
-  // If not set, round-robin assignment.
-  bytes partition_key = 2;
-
-  // Or explicit partition ID (overrides partition_key).
-  optional uint32 partition_id = 3;
-
   // Message key (for compaction, optional).
-  bytes key = 4;
+  bytes key = 2;
 
   // Message value.
-  bytes value = 5;
+  bytes value = 3;
 
   // Optional headers.
-  map<string, bytes> headers = 6;
+  map<string, bytes> headers = 4;
 }
 
 message AppendResponse {
   uint64 offset = 1;
-  uint32 partition_id = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Timestamp timestamp = 2;
 }
 
 message AppendBatchRequest {
   string queue_name = 1;
 
-  // All messages go to the same partition.
-  bytes partition_key = 2;
-  optional uint32 partition_id = 3;
-
   // Messages to append.
-  repeated BatchMessage messages = 4;
+  repeated BatchMessage messages = 2;
 }
 
 message BatchMessage {
@@ -472,29 +455,26 @@ message AppendBatchResponse {
   // Last offset assigned.
   uint64 last_offset = 2;
 
-  uint32 partition_id = 3;
-  uint32 count = 4;
-  google.protobuf.Timestamp timestamp = 5;
+  uint32 count = 3;
+  google.protobuf.Timestamp timestamp = 4;
 }
 
 // --- Read ---
 
 message ReadRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
-  uint64 offset = 3;
+  uint64 offset = 2;
 }
 
 message ReadBatchRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
-  uint64 start_offset = 3;
+  uint64 start_offset = 2;
 
   // Maximum messages to return.
-  uint32 limit = 4;
+  uint32 limit = 3;
 
   // Maximum bytes to return (soft limit).
-  uint32 max_bytes = 5;
+  uint32 max_bytes = 4;
 }
 
 message ReadBatchResponse {
@@ -503,16 +483,15 @@ message ReadBatchResponse {
   // Next offset to read (for pagination).
   uint64 next_offset = 2;
 
-  // True if end of partition reached.
-  bool end_of_partition = 3;
+  // True if end of queue reached.
+  bool end_of_queue = 3;
 }
 
 message TailRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
 
   // Starting offset. Use HEAD for earliest, TAIL for latest.
-  uint64 start_offset = 3;
+  uint64 start_offset = 2;
 
   // Special offset values.
   enum StartFrom {
@@ -521,30 +500,27 @@ message TailRequest {
     START_FROM_LATEST = 2;    // Start from tail (new messages only)
     START_FROM_OFFSET = 3;    // Use start_offset value
   }
-  StartFrom start_from = 4;
+  StartFrom start_from = 3;
 }
 
 // --- Seek ---
 
 message SeekToOffsetRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
-  uint64 offset = 3;
+  uint64 offset = 2;
 }
 
 message SeekToTimestampRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Timestamp timestamp = 2;
 }
 
 message SeekResponse {
   uint64 offset = 1;
-  uint32 partition_id = 2;
-  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Timestamp timestamp = 2;
 
   // True if exact match found.
-  bool exact_match = 4;
+  bool exact_match = 3;
 }
 
 // --- Consumer Groups ---
@@ -553,6 +529,7 @@ message CreateConsumerGroupRequest {
   string queue_name = 1;
   string group_id = 2;
   ConsumerGroupConfig config = 3;
+  string pattern = 4;
 }
 
 message GetConsumerGroupRequest {
@@ -592,11 +569,8 @@ message JoinGroupResponse {
   // Generation ID (increments on rebalance).
   uint64 generation_id = 1;
 
-  // Partitions assigned to this consumer.
-  repeated uint32 assigned_partitions = 2;
-
   // All consumers in the group.
-  repeated ConsumerInfo consumers = 3;
+  repeated ConsumerInfo consumers = 2;
 }
 
 message LeaveGroupRequest {
@@ -655,28 +629,23 @@ message AckRequest {
   string group_id = 2;
   string consumer_id = 3;
 
-  // Offsets to acknowledge (grouped by partition).
-  repeated PartitionOffsets offsets = 4;
-}
-
-message PartitionOffsets {
-  uint32 partition_id = 1;
-  repeated uint64 offsets = 2;
+  // Offsets to acknowledge.
+  repeated uint64 offsets = 4;
 }
 
 message AckResponse {
   // Number of messages acknowledged.
   uint32 acked_count = 1;
 
-  // New committed offsets after this ack.
-  repeated PartitionCursor committed = 2;
+  // New committed offset after this ack.
+  QueueCursor committed = 2;
 }
 
 message NackRequest {
   string queue_name = 1;
   string group_id = 2;
   string consumer_id = 3;
-  repeated PartitionOffsets offsets = 4;
+  repeated uint64 offsets = 4;
 
   // Optional delay before redelivery.
   google.protobuf.Duration delay = 5;
@@ -694,9 +663,6 @@ message ClaimRequest {
 
   // Maximum messages to claim.
   uint32 limit = 5;
-
-  // Optional: claim from specific partition only.
-  optional uint32 partition_id = 6;
 }
 
 message ClaimResponse {
@@ -710,12 +676,9 @@ message GetPendingRequest {
   // Optional: filter by consumer.
   string consumer_id = 3;
 
-  // Optional: filter by partition.
-  optional uint32 partition_id = 4;
-
   // Pagination.
-  uint32 limit = 5;
-  string page_token = 6;
+  uint32 limit = 4;
+  string page_token = 5;
 }
 
 message GetPendingResponse {
@@ -724,19 +687,10 @@ message GetPendingResponse {
   uint64 total_pending = 3;
 }
 
-// --- Partition Info ---
+// --- Queue Info ---
 
-message GetPartitionInfoRequest {
+message GetQueueInfoRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
-}
-
-message ListPartitionsRequest {
-  string queue_name = 1;
-}
-
-message ListPartitionsResponse {
-  repeated PartitionInfo partitions = 1;
 }
 
 // --- Admin ---
@@ -748,28 +702,18 @@ message GetStatsRequest {
 message QueueStats {
   string queue_name = 1;
 
-  // Per-partition stats.
-  repeated PartitionStats partitions = 2;
-
-  // Aggregate stats.
-  uint64 total_messages = 3;
-  uint64 total_bytes = 4;
-
-  // Throughput (messages/sec, rolling average).
-  double append_rate = 5;
-  double read_rate = 6;
-
-  // Consumer group summaries.
-  repeated ConsumerGroupSummary consumer_groups = 7;
-}
-
-message PartitionStats {
-  uint32 partition_id = 1;
+  // Queue info.
   uint64 message_count = 2;
   uint64 size_bytes = 3;
   uint64 head_offset = 4;
   uint64 tail_offset = 5;
-  uint32 segment_count = 6;
+
+  // Throughput (messages/sec, rolling average).
+  double append_rate = 6;
+  double read_rate = 7;
+
+  // Consumer group summaries.
+  repeated ConsumerGroupSummary consumer_groups = 8;
 }
 
 message ConsumerGroupSummary {
@@ -781,9 +725,6 @@ message ConsumerGroupSummary {
 
 message PurgeRequest {
   string queue_name = 1;
-
-  // Optional: purge specific partition only.
-  optional uint32 partition_id = 2;
 }
 
 message PurgeResponse {
@@ -793,8 +734,7 @@ message PurgeResponse {
 
 message TruncateRequest {
   string queue_name = 1;
-  uint32 partition_id = 2;
 
   // Remove messages with offset < min_offset.
-  uint64 min_offset = 3;
+  uint64 min_offset = 2;
 }

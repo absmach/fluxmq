@@ -101,12 +101,9 @@ const (
 	QueueServiceClaimProcedure = "/fluxmq.queue.v1.QueueService/Claim"
 	// QueueServiceGetPendingProcedure is the fully-qualified name of the QueueService's GetPending RPC.
 	QueueServiceGetPendingProcedure = "/fluxmq.queue.v1.QueueService/GetPending"
-	// QueueServiceGetPartitionInfoProcedure is the fully-qualified name of the QueueService's
-	// GetPartitionInfo RPC.
-	QueueServiceGetPartitionInfoProcedure = "/fluxmq.queue.v1.QueueService/GetPartitionInfo"
-	// QueueServiceListPartitionsProcedure is the fully-qualified name of the QueueService's
-	// ListPartitions RPC.
-	QueueServiceListPartitionsProcedure = "/fluxmq.queue.v1.QueueService/ListPartitions"
+	// QueueServiceGetQueueInfoProcedure is the fully-qualified name of the QueueService's GetQueueInfo
+	// RPC.
+	QueueServiceGetQueueInfoProcedure = "/fluxmq.queue.v1.QueueService/GetQueueInfo"
 	// QueueServiceGetStatsProcedure is the fully-qualified name of the QueueService's GetStats RPC.
 	QueueServiceGetStatsProcedure = "/fluxmq.queue.v1.QueueService/GetStats"
 	// QueueServicePurgeProcedure is the fully-qualified name of the QueueService's Purge RPC.
@@ -129,9 +126,9 @@ type QueueServiceClient interface {
 	UpdateQueue(context.Context, *connect.Request[v1.UpdateQueueRequest]) (*connect.Response[v1.Queue], error)
 	// Append adds a single message to a queue. Returns the assigned offset.
 	Append(context.Context, *connect.Request[v1.AppendRequest]) (*connect.Response[v1.AppendResponse], error)
-	// AppendBatch adds multiple messages atomically. All messages go to the same partition.
+	// AppendBatch adds multiple messages atomically.
 	AppendBatch(context.Context, *connect.Request[v1.AppendBatchRequest]) (*connect.Response[v1.AppendBatchResponse], error)
-	// AppendStream allows streaming multiple messages. Messages may go to different partitions.
+	// AppendStream allows streaming multiple messages.
 	AppendStream(context.Context) *connect.ClientStreamForClient[v1.AppendRequest, v1.AppendBatchResponse]
 	// Read fetches a single message at a specific offset.
 	Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.Message], error)
@@ -140,7 +137,7 @@ type QueueServiceClient interface {
 	// Tail streams new messages as they arrive (server-side streaming).
 	// Starts from specified offset and continues indefinitely.
 	Tail(context.Context, *connect.Request[v1.TailRequest]) (*connect.ServerStreamForClient[v1.Message], error)
-	// SeekToOffset returns partition state at a given offset.
+	// SeekToOffset returns queue state at a given offset.
 	SeekToOffset(context.Context, *connect.Request[v1.SeekToOffsetRequest]) (*connect.Response[v1.SeekResponse], error)
 	// SeekToTimestamp finds the offset closest to a timestamp.
 	SeekToTimestamp(context.Context, *connect.Request[v1.SeekToTimestampRequest]) (*connect.Response[v1.SeekResponse], error)
@@ -152,7 +149,7 @@ type QueueServiceClient interface {
 	ListConsumerGroups(context.Context, *connect.Request[v1.ListConsumerGroupsRequest]) (*connect.Response[v1.ListConsumerGroupsResponse], error)
 	// DeleteConsumerGroup removes a consumer group.
 	DeleteConsumerGroup(context.Context, *connect.Request[v1.DeleteConsumerGroupRequest]) (*connect.Response[emptypb.Empty], error)
-	// JoinGroup adds a consumer to a group and receives partition assignments.
+	// JoinGroup adds a consumer to a group.
 	JoinGroup(context.Context, *connect.Request[v1.JoinGroupRequest]) (*connect.Response[v1.JoinGroupResponse], error)
 	// LeaveGroup removes a consumer from a group.
 	LeaveGroup(context.Context, *connect.Request[v1.LeaveGroupRequest]) (*connect.Response[emptypb.Empty], error)
@@ -171,13 +168,11 @@ type QueueServiceClient interface {
 	Claim(context.Context, *connect.Request[v1.ClaimRequest]) (*connect.Response[v1.ClaimResponse], error)
 	// GetPending retrieves pending (unacknowledged) messages for a consumer or group.
 	GetPending(context.Context, *connect.Request[v1.GetPendingRequest]) (*connect.Response[v1.GetPendingResponse], error)
-	// GetPartitionInfo returns metadata for a specific partition.
-	GetPartitionInfo(context.Context, *connect.Request[v1.GetPartitionInfoRequest]) (*connect.Response[v1.PartitionInfo], error)
-	// ListPartitions returns info for all partitions in a queue.
-	ListPartitions(context.Context, *connect.Request[v1.ListPartitionsRequest]) (*connect.Response[v1.ListPartitionsResponse], error)
+	// GetQueueInfo returns metadata for a queue.
+	GetQueueInfo(context.Context, *connect.Request[v1.GetQueueInfoRequest]) (*connect.Response[v1.QueueInfo], error)
 	// GetStats returns queue statistics.
 	GetStats(context.Context, *connect.Request[v1.GetStatsRequest]) (*connect.Response[v1.QueueStats], error)
-	// Purge removes all messages from a queue (or partition).
+	// Purge removes all messages from a queue.
 	Purge(context.Context, *connect.Request[v1.PurgeRequest]) (*connect.Response[v1.PurgeResponse], error)
 	// Truncate removes messages before a given offset (retention enforcement).
 	Truncate(context.Context, *connect.Request[v1.TruncateRequest]) (*connect.Response[emptypb.Empty], error)
@@ -350,16 +345,10 @@ func NewQueueServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(queueServiceMethods.ByName("GetPending")),
 			connect.WithClientOptions(opts...),
 		),
-		getPartitionInfo: connect.NewClient[v1.GetPartitionInfoRequest, v1.PartitionInfo](
+		getQueueInfo: connect.NewClient[v1.GetQueueInfoRequest, v1.QueueInfo](
 			httpClient,
-			baseURL+QueueServiceGetPartitionInfoProcedure,
-			connect.WithSchema(queueServiceMethods.ByName("GetPartitionInfo")),
-			connect.WithClientOptions(opts...),
-		),
-		listPartitions: connect.NewClient[v1.ListPartitionsRequest, v1.ListPartitionsResponse](
-			httpClient,
-			baseURL+QueueServiceListPartitionsProcedure,
-			connect.WithSchema(queueServiceMethods.ByName("ListPartitions")),
+			baseURL+QueueServiceGetQueueInfoProcedure,
+			connect.WithSchema(queueServiceMethods.ByName("GetQueueInfo")),
 			connect.WithClientOptions(opts...),
 		),
 		getStats: connect.NewClient[v1.GetStatsRequest, v1.QueueStats](
@@ -411,8 +400,7 @@ type queueServiceClient struct {
 	nack                *connect.Client[v1.NackRequest, emptypb.Empty]
 	claim               *connect.Client[v1.ClaimRequest, v1.ClaimResponse]
 	getPending          *connect.Client[v1.GetPendingRequest, v1.GetPendingResponse]
-	getPartitionInfo    *connect.Client[v1.GetPartitionInfoRequest, v1.PartitionInfo]
-	listPartitions      *connect.Client[v1.ListPartitionsRequest, v1.ListPartitionsResponse]
+	getQueueInfo        *connect.Client[v1.GetQueueInfoRequest, v1.QueueInfo]
 	getStats            *connect.Client[v1.GetStatsRequest, v1.QueueStats]
 	purge               *connect.Client[v1.PurgeRequest, v1.PurgeResponse]
 	truncate            *connect.Client[v1.TruncateRequest, emptypb.Empty]
@@ -548,14 +536,9 @@ func (c *queueServiceClient) GetPending(ctx context.Context, req *connect.Reques
 	return c.getPending.CallUnary(ctx, req)
 }
 
-// GetPartitionInfo calls fluxmq.queue.v1.QueueService.GetPartitionInfo.
-func (c *queueServiceClient) GetPartitionInfo(ctx context.Context, req *connect.Request[v1.GetPartitionInfoRequest]) (*connect.Response[v1.PartitionInfo], error) {
-	return c.getPartitionInfo.CallUnary(ctx, req)
-}
-
-// ListPartitions calls fluxmq.queue.v1.QueueService.ListPartitions.
-func (c *queueServiceClient) ListPartitions(ctx context.Context, req *connect.Request[v1.ListPartitionsRequest]) (*connect.Response[v1.ListPartitionsResponse], error) {
-	return c.listPartitions.CallUnary(ctx, req)
+// GetQueueInfo calls fluxmq.queue.v1.QueueService.GetQueueInfo.
+func (c *queueServiceClient) GetQueueInfo(ctx context.Context, req *connect.Request[v1.GetQueueInfoRequest]) (*connect.Response[v1.QueueInfo], error) {
+	return c.getQueueInfo.CallUnary(ctx, req)
 }
 
 // GetStats calls fluxmq.queue.v1.QueueService.GetStats.
@@ -587,9 +570,9 @@ type QueueServiceHandler interface {
 	UpdateQueue(context.Context, *connect.Request[v1.UpdateQueueRequest]) (*connect.Response[v1.Queue], error)
 	// Append adds a single message to a queue. Returns the assigned offset.
 	Append(context.Context, *connect.Request[v1.AppendRequest]) (*connect.Response[v1.AppendResponse], error)
-	// AppendBatch adds multiple messages atomically. All messages go to the same partition.
+	// AppendBatch adds multiple messages atomically.
 	AppendBatch(context.Context, *connect.Request[v1.AppendBatchRequest]) (*connect.Response[v1.AppendBatchResponse], error)
-	// AppendStream allows streaming multiple messages. Messages may go to different partitions.
+	// AppendStream allows streaming multiple messages.
 	AppendStream(context.Context, *connect.ClientStream[v1.AppendRequest]) (*connect.Response[v1.AppendBatchResponse], error)
 	// Read fetches a single message at a specific offset.
 	Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.Message], error)
@@ -598,7 +581,7 @@ type QueueServiceHandler interface {
 	// Tail streams new messages as they arrive (server-side streaming).
 	// Starts from specified offset and continues indefinitely.
 	Tail(context.Context, *connect.Request[v1.TailRequest], *connect.ServerStream[v1.Message]) error
-	// SeekToOffset returns partition state at a given offset.
+	// SeekToOffset returns queue state at a given offset.
 	SeekToOffset(context.Context, *connect.Request[v1.SeekToOffsetRequest]) (*connect.Response[v1.SeekResponse], error)
 	// SeekToTimestamp finds the offset closest to a timestamp.
 	SeekToTimestamp(context.Context, *connect.Request[v1.SeekToTimestampRequest]) (*connect.Response[v1.SeekResponse], error)
@@ -610,7 +593,7 @@ type QueueServiceHandler interface {
 	ListConsumerGroups(context.Context, *connect.Request[v1.ListConsumerGroupsRequest]) (*connect.Response[v1.ListConsumerGroupsResponse], error)
 	// DeleteConsumerGroup removes a consumer group.
 	DeleteConsumerGroup(context.Context, *connect.Request[v1.DeleteConsumerGroupRequest]) (*connect.Response[emptypb.Empty], error)
-	// JoinGroup adds a consumer to a group and receives partition assignments.
+	// JoinGroup adds a consumer to a group.
 	JoinGroup(context.Context, *connect.Request[v1.JoinGroupRequest]) (*connect.Response[v1.JoinGroupResponse], error)
 	// LeaveGroup removes a consumer from a group.
 	LeaveGroup(context.Context, *connect.Request[v1.LeaveGroupRequest]) (*connect.Response[emptypb.Empty], error)
@@ -629,13 +612,11 @@ type QueueServiceHandler interface {
 	Claim(context.Context, *connect.Request[v1.ClaimRequest]) (*connect.Response[v1.ClaimResponse], error)
 	// GetPending retrieves pending (unacknowledged) messages for a consumer or group.
 	GetPending(context.Context, *connect.Request[v1.GetPendingRequest]) (*connect.Response[v1.GetPendingResponse], error)
-	// GetPartitionInfo returns metadata for a specific partition.
-	GetPartitionInfo(context.Context, *connect.Request[v1.GetPartitionInfoRequest]) (*connect.Response[v1.PartitionInfo], error)
-	// ListPartitions returns info for all partitions in a queue.
-	ListPartitions(context.Context, *connect.Request[v1.ListPartitionsRequest]) (*connect.Response[v1.ListPartitionsResponse], error)
+	// GetQueueInfo returns metadata for a queue.
+	GetQueueInfo(context.Context, *connect.Request[v1.GetQueueInfoRequest]) (*connect.Response[v1.QueueInfo], error)
 	// GetStats returns queue statistics.
 	GetStats(context.Context, *connect.Request[v1.GetStatsRequest]) (*connect.Response[v1.QueueStats], error)
-	// Purge removes all messages from a queue (or partition).
+	// Purge removes all messages from a queue.
 	Purge(context.Context, *connect.Request[v1.PurgeRequest]) (*connect.Response[v1.PurgeResponse], error)
 	// Truncate removes messages before a given offset (retention enforcement).
 	Truncate(context.Context, *connect.Request[v1.TruncateRequest]) (*connect.Response[emptypb.Empty], error)
@@ -804,16 +785,10 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(queueServiceMethods.ByName("GetPending")),
 		connect.WithHandlerOptions(opts...),
 	)
-	queueServiceGetPartitionInfoHandler := connect.NewUnaryHandler(
-		QueueServiceGetPartitionInfoProcedure,
-		svc.GetPartitionInfo,
-		connect.WithSchema(queueServiceMethods.ByName("GetPartitionInfo")),
-		connect.WithHandlerOptions(opts...),
-	)
-	queueServiceListPartitionsHandler := connect.NewUnaryHandler(
-		QueueServiceListPartitionsProcedure,
-		svc.ListPartitions,
-		connect.WithSchema(queueServiceMethods.ByName("ListPartitions")),
+	queueServiceGetQueueInfoHandler := connect.NewUnaryHandler(
+		QueueServiceGetQueueInfoProcedure,
+		svc.GetQueueInfo,
+		connect.WithSchema(queueServiceMethods.ByName("GetQueueInfo")),
 		connect.WithHandlerOptions(opts...),
 	)
 	queueServiceGetStatsHandler := connect.NewUnaryHandler(
@@ -888,10 +863,8 @@ func NewQueueServiceHandler(svc QueueServiceHandler, opts ...connect.HandlerOpti
 			queueServiceClaimHandler.ServeHTTP(w, r)
 		case QueueServiceGetPendingProcedure:
 			queueServiceGetPendingHandler.ServeHTTP(w, r)
-		case QueueServiceGetPartitionInfoProcedure:
-			queueServiceGetPartitionInfoHandler.ServeHTTP(w, r)
-		case QueueServiceListPartitionsProcedure:
-			queueServiceListPartitionsHandler.ServeHTTP(w, r)
+		case QueueServiceGetQueueInfoProcedure:
+			queueServiceGetQueueInfoHandler.ServeHTTP(w, r)
 		case QueueServiceGetStatsProcedure:
 			queueServiceGetStatsHandler.ServeHTTP(w, r)
 		case QueueServicePurgeProcedure:
@@ -1011,12 +984,8 @@ func (UnimplementedQueueServiceHandler) GetPending(context.Context, *connect.Req
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.GetPending is not implemented"))
 }
 
-func (UnimplementedQueueServiceHandler) GetPartitionInfo(context.Context, *connect.Request[v1.GetPartitionInfoRequest]) (*connect.Response[v1.PartitionInfo], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.GetPartitionInfo is not implemented"))
-}
-
-func (UnimplementedQueueServiceHandler) ListPartitions(context.Context, *connect.Request[v1.ListPartitionsRequest]) (*connect.Response[v1.ListPartitionsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.ListPartitions is not implemented"))
+func (UnimplementedQueueServiceHandler) GetQueueInfo(context.Context, *connect.Request[v1.GetQueueInfoRequest]) (*connect.Response[v1.QueueInfo], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.queue.v1.QueueService.GetQueueInfo is not implemented"))
 }
 
 func (UnimplementedQueueServiceHandler) GetStats(context.Context, *connect.Request[v1.GetStatsRequest]) (*connect.Response[v1.QueueStats], error) {

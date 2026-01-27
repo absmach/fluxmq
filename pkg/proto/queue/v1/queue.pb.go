@@ -184,20 +184,18 @@ func (TailRequest_StartFrom) EnumDescriptor() ([]byte, []int) {
 // Message represents a single message in the log.
 type Message struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Unique offset within the partition (assigned by server).
+	// Unique offset within the queue (assigned by server).
 	Offset uint64 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	// Partition this message belongs to.
-	PartitionId uint32 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
 	// Timestamp when message was appended.
-	Timestamp *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	// Optional key for partitioning and compaction.
-	Key []byte `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	Timestamp *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	// Optional key for compaction.
+	Key []byte `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
 	// Message payload.
-	Value []byte `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"`
+	Value []byte `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`
 	// Optional headers (metadata).
-	Headers map[string][]byte `protobuf:"bytes,6,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Headers map[string][]byte `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Delivery metadata (only set when consuming via consumer group).
-	DeliveryInfo  *DeliveryInfo `protobuf:"bytes,7,opt,name=delivery_info,json=deliveryInfo,proto3" json:"delivery_info,omitempty"`
+	DeliveryInfo  *DeliveryInfo `protobuf:"bytes,6,opt,name=delivery_info,json=deliveryInfo,proto3" json:"delivery_info,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -235,13 +233,6 @@ func (*Message) Descriptor() ([]byte, []int) {
 func (x *Message) GetOffset() uint64 {
 	if x != nil {
 		return x.Offset
-	}
-	return 0
-}
-
-func (x *Message) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
 	}
 	return 0
 }
@@ -368,8 +359,8 @@ type Queue struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Queue name (unique identifier).
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Number of partitions.
-	Partitions uint32 `protobuf:"varint,2,opt,name=partitions,proto3" json:"partitions,omitempty"`
+	// Topic patterns that route messages to this queue.
+	Topics []string `protobuf:"bytes,2,rep,name=topics,proto3" json:"topics,omitempty"`
 	// Queue configuration.
 	Config *QueueConfig `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
 	// Current queue state.
@@ -377,7 +368,9 @@ type Queue struct {
 	// Creation timestamp.
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// Last modification timestamp.
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Whether this is a reserved system queue.
+	Reserved      bool `protobuf:"varint,7,opt,name=reserved,proto3" json:"reserved,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -419,11 +412,11 @@ func (x *Queue) GetName() string {
 	return ""
 }
 
-func (x *Queue) GetPartitions() uint32 {
+func (x *Queue) GetTopics() []string {
 	if x != nil {
-		return x.Partitions
+		return x.Topics
 	}
-	return 0
+	return nil
 }
 
 func (x *Queue) GetConfig() *QueueConfig {
@@ -452,6 +445,13 @@ func (x *Queue) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *Queue) GetReserved() bool {
+	if x != nil {
+		return x.Reserved
+	}
+	return false
 }
 
 type QueueConfig struct {
@@ -654,7 +654,7 @@ func (x *SegmentConfig) GetIndexInterval() uint32 {
 
 type QueueState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Total messages across all partitions.
+	// Total messages in the queue.
 	TotalMessages uint64 `protobuf:"varint,1,opt,name=total_messages,json=totalMessages,proto3" json:"total_messages,omitempty"`
 	// Total size in bytes.
 	TotalBytes uint64 `protobuf:"varint,2,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
@@ -733,10 +733,10 @@ func (x *QueueState) GetNewestMessage() *timestamppb.Timestamp {
 	return nil
 }
 
-// PartitionInfo contains metadata about a single partition.
-type PartitionInfo struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	PartitionId uint32                 `protobuf:"varint,1,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
+// QueueInfo contains metadata about a queue.
+type QueueInfo struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	// First valid offset (after truncation).
 	HeadOffset uint64 `protobuf:"varint,2,opt,name=head_offset,json=headOffset,proto3" json:"head_offset,omitempty"`
 	// Next offset to be assigned.
@@ -755,20 +755,20 @@ type PartitionInfo struct {
 	sizeCache       protoimpl.SizeCache
 }
 
-func (x *PartitionInfo) Reset() {
-	*x = PartitionInfo{}
+func (x *QueueInfo) Reset() {
+	*x = QueueInfo{}
 	mi := &file_queue_v1_queue_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PartitionInfo) String() string {
+func (x *QueueInfo) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PartitionInfo) ProtoMessage() {}
+func (*QueueInfo) ProtoMessage() {}
 
-func (x *PartitionInfo) ProtoReflect() protoreflect.Message {
+func (x *QueueInfo) ProtoReflect() protoreflect.Message {
 	mi := &file_queue_v1_queue_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -780,61 +780,61 @@ func (x *PartitionInfo) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PartitionInfo.ProtoReflect.Descriptor instead.
-func (*PartitionInfo) Descriptor() ([]byte, []int) {
+// Deprecated: Use QueueInfo.ProtoReflect.Descriptor instead.
+func (*QueueInfo) Descriptor() ([]byte, []int) {
 	return file_queue_v1_queue_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *PartitionInfo) GetPartitionId() uint32 {
+func (x *QueueInfo) GetQueueName() string {
 	if x != nil {
-		return x.PartitionId
+		return x.QueueName
 	}
-	return 0
+	return ""
 }
 
-func (x *PartitionInfo) GetHeadOffset() uint64 {
+func (x *QueueInfo) GetHeadOffset() uint64 {
 	if x != nil {
 		return x.HeadOffset
 	}
 	return 0
 }
 
-func (x *PartitionInfo) GetTailOffset() uint64 {
+func (x *QueueInfo) GetTailOffset() uint64 {
 	if x != nil {
 		return x.TailOffset
 	}
 	return 0
 }
 
-func (x *PartitionInfo) GetMessageCount() uint64 {
+func (x *QueueInfo) GetMessageCount() uint64 {
 	if x != nil {
 		return x.MessageCount
 	}
 	return 0
 }
 
-func (x *PartitionInfo) GetSizeBytes() uint64 {
+func (x *QueueInfo) GetSizeBytes() uint64 {
 	if x != nil {
 		return x.SizeBytes
 	}
 	return 0
 }
 
-func (x *PartitionInfo) GetSegmentCount() uint32 {
+func (x *QueueInfo) GetSegmentCount() uint32 {
 	if x != nil {
 		return x.SegmentCount
 	}
 	return 0
 }
 
-func (x *PartitionInfo) GetOldestTimestamp() *timestamppb.Timestamp {
+func (x *QueueInfo) GetOldestTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.OldestTimestamp
 	}
 	return nil
 }
 
-func (x *PartitionInfo) GetNewestTimestamp() *timestamppb.Timestamp {
+func (x *QueueInfo) GetNewestTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.NewestTimestamp
 	}
@@ -849,14 +849,16 @@ type ConsumerGroup struct {
 	GroupId string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// Group configuration.
 	Config *ConsumerGroupConfig `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
-	// Per-partition state.
-	Cursors []*PartitionCursor `protobuf:"bytes,4,rep,name=cursors,proto3" json:"cursors,omitempty"`
+	// Queue cursor state.
+	Cursor *QueueCursor `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	// Active consumers.
 	Consumers []*ConsumerInfo `protobuf:"bytes,5,rep,name=consumers,proto3" json:"consumers,omitempty"`
 	// Total pending (unacked) messages.
 	PendingCount uint64 `protobuf:"varint,6,opt,name=pending_count,json=pendingCount,proto3" json:"pending_count,omitempty"`
 	// Creation timestamp.
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Subscription pattern.
+	Pattern       string `protobuf:"bytes,8,opt,name=pattern,proto3" json:"pattern,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -912,9 +914,9 @@ func (x *ConsumerGroup) GetConfig() *ConsumerGroupConfig {
 	return nil
 }
 
-func (x *ConsumerGroup) GetCursors() []*PartitionCursor {
+func (x *ConsumerGroup) GetCursor() *QueueCursor {
 	if x != nil {
-		return x.Cursors
+		return x.Cursor
 	}
 	return nil
 }
@@ -938,6 +940,13 @@ func (x *ConsumerGroup) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *ConsumerGroup) GetPattern() string {
+	if x != nil {
+		return x.Pattern
+	}
+	return ""
 }
 
 type ConsumerGroupConfig struct {
@@ -1003,35 +1012,35 @@ func (x *ConsumerGroupConfig) GetInitialPosition() InitialPosition {
 	return InitialPosition_INITIAL_POSITION_UNSPECIFIED
 }
 
-type PartitionCursor struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	PartitionId uint32                 `protobuf:"varint,1,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
+// QueueCursor tracks consumer group position in the queue.
+type QueueCursor struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
 	// Next offset to deliver.
-	Cursor uint64 `protobuf:"varint,2,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	Cursor uint64 `protobuf:"varint,1,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	// Highest contiguously acknowledged offset.
-	Committed uint64 `protobuf:"varint,3,opt,name=committed,proto3" json:"committed,omitempty"`
+	Committed uint64 `protobuf:"varint,2,opt,name=committed,proto3" json:"committed,omitempty"`
 	// Lag (tail - cursor).
-	Lag uint64 `protobuf:"varint,4,opt,name=lag,proto3" json:"lag,omitempty"`
+	Lag uint64 `protobuf:"varint,3,opt,name=lag,proto3" json:"lag,omitempty"`
 	// Last activity timestamp.
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PartitionCursor) Reset() {
-	*x = PartitionCursor{}
+func (x *QueueCursor) Reset() {
+	*x = QueueCursor{}
 	mi := &file_queue_v1_queue_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PartitionCursor) String() string {
+func (x *QueueCursor) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PartitionCursor) ProtoMessage() {}
+func (*QueueCursor) ProtoMessage() {}
 
-func (x *PartitionCursor) ProtoReflect() protoreflect.Message {
+func (x *QueueCursor) ProtoReflect() protoreflect.Message {
 	mi := &file_queue_v1_queue_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1043,40 +1052,33 @@ func (x *PartitionCursor) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PartitionCursor.ProtoReflect.Descriptor instead.
-func (*PartitionCursor) Descriptor() ([]byte, []int) {
+// Deprecated: Use QueueCursor.ProtoReflect.Descriptor instead.
+func (*QueueCursor) Descriptor() ([]byte, []int) {
 	return file_queue_v1_queue_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *PartitionCursor) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
-func (x *PartitionCursor) GetCursor() uint64 {
+func (x *QueueCursor) GetCursor() uint64 {
 	if x != nil {
 		return x.Cursor
 	}
 	return 0
 }
 
-func (x *PartitionCursor) GetCommitted() uint64 {
+func (x *QueueCursor) GetCommitted() uint64 {
 	if x != nil {
 		return x.Committed
 	}
 	return 0
 }
 
-func (x *PartitionCursor) GetLag() uint64 {
+func (x *QueueCursor) GetLag() uint64 {
 	if x != nil {
 		return x.Lag
 	}
 	return 0
 }
 
-func (x *PartitionCursor) GetUpdatedAt() *timestamppb.Timestamp {
+func (x *QueueCursor) GetUpdatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.UpdatedAt
 	}
@@ -1087,14 +1089,12 @@ type ConsumerInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Consumer identifier.
 	ConsumerId string `protobuf:"bytes,1,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
-	// Assigned partitions.
-	Partitions []uint32 `protobuf:"varint,2,rep,packed,name=partitions,proto3" json:"partitions,omitempty"`
 	// Number of pending messages for this consumer.
-	PendingCount uint64 `protobuf:"varint,3,opt,name=pending_count,json=pendingCount,proto3" json:"pending_count,omitempty"`
+	PendingCount uint64 `protobuf:"varint,2,opt,name=pending_count,json=pendingCount,proto3" json:"pending_count,omitempty"`
 	// Last heartbeat timestamp.
-	LastHeartbeat *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_heartbeat,json=lastHeartbeat,proto3" json:"last_heartbeat,omitempty"`
+	LastHeartbeat *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_heartbeat,json=lastHeartbeat,proto3" json:"last_heartbeat,omitempty"`
 	// Consumer metadata (client version, hostname, etc).
-	Metadata      map[string]string `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Metadata      map[string]string `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1136,13 +1136,6 @@ func (x *ConsumerInfo) GetConsumerId() string {
 	return ""
 }
 
-func (x *ConsumerInfo) GetPartitions() []uint32 {
-	if x != nil {
-		return x.Partitions
-	}
-	return nil
-}
-
 func (x *ConsumerInfo) GetPendingCount() uint64 {
 	if x != nil {
 		return x.PendingCount
@@ -1167,11 +1160,10 @@ func (x *ConsumerInfo) GetMetadata() map[string]string {
 type PendingEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Offset        uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	ConsumerId    string                 `protobuf:"bytes,3,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
-	DeliveredAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
-	DeliveryCount uint32                 `protobuf:"varint,5,opt,name=delivery_count,json=deliveryCount,proto3" json:"delivery_count,omitempty"`
-	IdleTime      *durationpb.Duration   `protobuf:"bytes,6,opt,name=idle_time,json=idleTime,proto3" json:"idle_time,omitempty"`
+	ConsumerId    string                 `protobuf:"bytes,2,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
+	DeliveredAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
+	DeliveryCount uint32                 `protobuf:"varint,4,opt,name=delivery_count,json=deliveryCount,proto3" json:"delivery_count,omitempty"`
+	IdleTime      *durationpb.Duration   `protobuf:"bytes,5,opt,name=idle_time,json=idleTime,proto3" json:"idle_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1213,13 +1205,6 @@ func (x *PendingEntry) GetOffset() uint64 {
 	return 0
 }
 
-func (x *PendingEntry) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *PendingEntry) GetConsumerId() string {
 	if x != nil {
 		return x.ConsumerId
@@ -1251,7 +1236,7 @@ func (x *PendingEntry) GetIdleTime() *durationpb.Duration {
 type CreateQueueRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Partitions    uint32                 `protobuf:"varint,2,opt,name=partitions,proto3" json:"partitions,omitempty"`
+	Topics        []string               `protobuf:"bytes,2,rep,name=topics,proto3" json:"topics,omitempty"`
 	Config        *QueueConfig           `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1294,11 +1279,11 @@ func (x *CreateQueueRequest) GetName() string {
 	return ""
 }
 
-func (x *CreateQueueRequest) GetPartitions() uint32 {
+func (x *CreateQueueRequest) GetTopics() []string {
 	if x != nil {
-		return x.Partitions
+		return x.Topics
 	}
-	return 0
+	return nil
 }
 
 func (x *CreateQueueRequest) GetConfig() *QueueConfig {
@@ -1565,17 +1550,12 @@ func (x *UpdateQueueRequest) GetConfig() *QueueConfig {
 type AppendRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	// Optional partition key (hashed to determine partition).
-	// If not set, round-robin assignment.
-	PartitionKey []byte `protobuf:"bytes,2,opt,name=partition_key,json=partitionKey,proto3" json:"partition_key,omitempty"`
-	// Or explicit partition ID (overrides partition_key).
-	PartitionId *uint32 `protobuf:"varint,3,opt,name=partition_id,json=partitionId,proto3,oneof" json:"partition_id,omitempty"`
 	// Message key (for compaction, optional).
-	Key []byte `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	Key []byte `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
 	// Message value.
-	Value []byte `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"`
+	Value []byte `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
 	// Optional headers.
-	Headers       map[string][]byte `protobuf:"bytes,6,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Headers       map[string][]byte `protobuf:"bytes,4,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1617,20 +1597,6 @@ func (x *AppendRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *AppendRequest) GetPartitionKey() []byte {
-	if x != nil {
-		return x.PartitionKey
-	}
-	return nil
-}
-
-func (x *AppendRequest) GetPartitionId() uint32 {
-	if x != nil && x.PartitionId != nil {
-		return *x.PartitionId
-	}
-	return 0
-}
-
 func (x *AppendRequest) GetKey() []byte {
 	if x != nil {
 		return x.Key
@@ -1655,8 +1621,7 @@ func (x *AppendRequest) GetHeaders() map[string][]byte {
 type AppendResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Offset        uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1698,13 +1663,6 @@ func (x *AppendResponse) GetOffset() uint64 {
 	return 0
 }
 
-func (x *AppendResponse) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *AppendResponse) GetTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.Timestamp
@@ -1715,11 +1673,8 @@ func (x *AppendResponse) GetTimestamp() *timestamppb.Timestamp {
 type AppendBatchRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	// All messages go to the same partition.
-	PartitionKey []byte  `protobuf:"bytes,2,opt,name=partition_key,json=partitionKey,proto3" json:"partition_key,omitempty"`
-	PartitionId  *uint32 `protobuf:"varint,3,opt,name=partition_id,json=partitionId,proto3,oneof" json:"partition_id,omitempty"`
 	// Messages to append.
-	Messages      []*BatchMessage `protobuf:"bytes,4,rep,name=messages,proto3" json:"messages,omitempty"`
+	Messages      []*BatchMessage `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1759,20 +1714,6 @@ func (x *AppendBatchRequest) GetQueueName() string {
 		return x.QueueName
 	}
 	return ""
-}
-
-func (x *AppendBatchRequest) GetPartitionKey() []byte {
-	if x != nil {
-		return x.PartitionKey
-	}
-	return nil
-}
-
-func (x *AppendBatchRequest) GetPartitionId() uint32 {
-	if x != nil && x.PartitionId != nil {
-		return *x.PartitionId
-	}
-	return 0
 }
 
 func (x *AppendBatchRequest) GetMessages() []*BatchMessage {
@@ -1848,9 +1789,8 @@ type AppendBatchResponse struct {
 	FirstOffset uint64 `protobuf:"varint,1,opt,name=first_offset,json=firstOffset,proto3" json:"first_offset,omitempty"`
 	// Last offset assigned.
 	LastOffset    uint64                 `protobuf:"varint,2,opt,name=last_offset,json=lastOffset,proto3" json:"last_offset,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,3,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Count         uint32                 `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Count         uint32                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1899,13 +1839,6 @@ func (x *AppendBatchResponse) GetLastOffset() uint64 {
 	return 0
 }
 
-func (x *AppendBatchResponse) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *AppendBatchResponse) GetCount() uint32 {
 	if x != nil {
 		return x.Count
@@ -1923,8 +1856,7 @@ func (x *AppendBatchResponse) GetTimestamp() *timestamppb.Timestamp {
 type ReadRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Offset        uint64                 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	Offset        uint64                 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1966,13 +1898,6 @@ func (x *ReadRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *ReadRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *ReadRequest) GetOffset() uint64 {
 	if x != nil {
 		return x.Offset
@@ -1983,12 +1908,11 @@ func (x *ReadRequest) GetOffset() uint64 {
 type ReadBatchRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	QueueName   string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	StartOffset uint64                 `protobuf:"varint,3,opt,name=start_offset,json=startOffset,proto3" json:"start_offset,omitempty"`
+	StartOffset uint64                 `protobuf:"varint,2,opt,name=start_offset,json=startOffset,proto3" json:"start_offset,omitempty"`
 	// Maximum messages to return.
-	Limit uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	Limit uint32 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
 	// Maximum bytes to return (soft limit).
-	MaxBytes      uint32 `protobuf:"varint,5,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+	MaxBytes      uint32 `protobuf:"varint,4,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2030,13 +1954,6 @@ func (x *ReadBatchRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *ReadBatchRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *ReadBatchRequest) GetStartOffset() uint64 {
 	if x != nil {
 		return x.StartOffset
@@ -2063,10 +1980,10 @@ type ReadBatchResponse struct {
 	Messages []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
 	// Next offset to read (for pagination).
 	NextOffset uint64 `protobuf:"varint,2,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
-	// True if end of partition reached.
-	EndOfPartition bool `protobuf:"varint,3,opt,name=end_of_partition,json=endOfPartition,proto3" json:"end_of_partition,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// True if end of queue reached.
+	EndOfQueue    bool `protobuf:"varint,3,opt,name=end_of_queue,json=endOfQueue,proto3" json:"end_of_queue,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReadBatchResponse) Reset() {
@@ -2113,20 +2030,19 @@ func (x *ReadBatchResponse) GetNextOffset() uint64 {
 	return 0
 }
 
-func (x *ReadBatchResponse) GetEndOfPartition() bool {
+func (x *ReadBatchResponse) GetEndOfQueue() bool {
 	if x != nil {
-		return x.EndOfPartition
+		return x.EndOfQueue
 	}
 	return false
 }
 
 type TailRequest struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	QueueName   string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	// Starting offset. Use HEAD for earliest, TAIL for latest.
-	StartOffset   uint64                `protobuf:"varint,3,opt,name=start_offset,json=startOffset,proto3" json:"start_offset,omitempty"`
-	StartFrom     TailRequest_StartFrom `protobuf:"varint,4,opt,name=start_from,json=startFrom,proto3,enum=fluxmq.queue.v1.TailRequest_StartFrom" json:"start_from,omitempty"`
+	StartOffset   uint64                `protobuf:"varint,2,opt,name=start_offset,json=startOffset,proto3" json:"start_offset,omitempty"`
+	StartFrom     TailRequest_StartFrom `protobuf:"varint,3,opt,name=start_from,json=startFrom,proto3,enum=fluxmq.queue.v1.TailRequest_StartFrom" json:"start_from,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2168,13 +2084,6 @@ func (x *TailRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *TailRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *TailRequest) GetStartOffset() uint64 {
 	if x != nil {
 		return x.StartOffset
@@ -2192,8 +2101,7 @@ func (x *TailRequest) GetStartFrom() TailRequest_StartFrom {
 type SeekToOffsetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Offset        uint64                 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	Offset        uint64                 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2235,13 +2143,6 @@ func (x *SeekToOffsetRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *SeekToOffsetRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *SeekToOffsetRequest) GetOffset() uint64 {
 	if x != nil {
 		return x.Offset
@@ -2252,8 +2153,7 @@ func (x *SeekToOffsetRequest) GetOffset() uint64 {
 type SeekToTimestampRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2295,13 +2195,6 @@ func (x *SeekToTimestampRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *SeekToTimestampRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *SeekToTimestampRequest) GetTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.Timestamp
@@ -2310,12 +2203,11 @@ func (x *SeekToTimestampRequest) GetTimestamp() *timestamppb.Timestamp {
 }
 
 type SeekResponse struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	Offset      uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	PartitionId uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Timestamp   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Offset    uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Timestamp *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	// True if exact match found.
-	ExactMatch    bool `protobuf:"varint,4,opt,name=exact_match,json=exactMatch,proto3" json:"exact_match,omitempty"`
+	ExactMatch    bool `protobuf:"varint,3,opt,name=exact_match,json=exactMatch,proto3" json:"exact_match,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2357,13 +2249,6 @@ func (x *SeekResponse) GetOffset() uint64 {
 	return 0
 }
 
-func (x *SeekResponse) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
 func (x *SeekResponse) GetTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.Timestamp
@@ -2383,6 +2268,7 @@ type CreateConsumerGroupRequest struct {
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	GroupId       string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	Config        *ConsumerGroupConfig   `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
+	Pattern       string                 `protobuf:"bytes,4,opt,name=pattern,proto3" json:"pattern,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2436,6 +2322,13 @@ func (x *CreateConsumerGroupRequest) GetConfig() *ConsumerGroupConfig {
 		return x.Config
 	}
 	return nil
+}
+
+func (x *CreateConsumerGroupRequest) GetPattern() string {
+	if x != nil {
+		return x.Pattern
+	}
+	return ""
 }
 
 type GetConsumerGroupRequest struct {
@@ -2736,10 +2629,8 @@ type JoinGroupResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Generation ID (increments on rebalance).
 	GenerationId uint64 `protobuf:"varint,1,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
-	// Partitions assigned to this consumer.
-	AssignedPartitions []uint32 `protobuf:"varint,2,rep,packed,name=assigned_partitions,json=assignedPartitions,proto3" json:"assigned_partitions,omitempty"`
 	// All consumers in the group.
-	Consumers     []*ConsumerInfo `protobuf:"bytes,3,rep,name=consumers,proto3" json:"consumers,omitempty"`
+	Consumers     []*ConsumerInfo `protobuf:"bytes,2,rep,name=consumers,proto3" json:"consumers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2779,13 +2670,6 @@ func (x *JoinGroupResponse) GetGenerationId() uint64 {
 		return x.GenerationId
 	}
 	return 0
-}
-
-func (x *JoinGroupResponse) GetAssignedPartitions() []uint32 {
-	if x != nil {
-		return x.AssignedPartitions
-	}
-	return nil
 }
 
 func (x *JoinGroupResponse) GetConsumers() []*ConsumerInfo {
@@ -3182,8 +3066,8 @@ type AckRequest struct {
 	QueueName  string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	GroupId    string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	ConsumerId string                 `protobuf:"bytes,3,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
-	// Offsets to acknowledge (grouped by partition).
-	Offsets       []*PartitionOffsets `protobuf:"bytes,4,rep,name=offsets,proto3" json:"offsets,omitempty"`
+	// Offsets to acknowledge.
+	Offsets       []uint64 `protobuf:"varint,4,rep,packed,name=offsets,proto3" json:"offsets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3239,59 +3123,7 @@ func (x *AckRequest) GetConsumerId() string {
 	return ""
 }
 
-func (x *AckRequest) GetOffsets() []*PartitionOffsets {
-	if x != nil {
-		return x.Offsets
-	}
-	return nil
-}
-
-type PartitionOffsets struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PartitionId   uint32                 `protobuf:"varint,1,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	Offsets       []uint64               `protobuf:"varint,2,rep,packed,name=offsets,proto3" json:"offsets,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PartitionOffsets) Reset() {
-	*x = PartitionOffsets{}
-	mi := &file_queue_v1_queue_proto_msgTypes[45]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PartitionOffsets) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PartitionOffsets) ProtoMessage() {}
-
-func (x *PartitionOffsets) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[45]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PartitionOffsets.ProtoReflect.Descriptor instead.
-func (*PartitionOffsets) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{45}
-}
-
-func (x *PartitionOffsets) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
-func (x *PartitionOffsets) GetOffsets() []uint64 {
+func (x *AckRequest) GetOffsets() []uint64 {
 	if x != nil {
 		return x.Offsets
 	}
@@ -3302,15 +3134,15 @@ type AckResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Number of messages acknowledged.
 	AckedCount uint32 `protobuf:"varint,1,opt,name=acked_count,json=ackedCount,proto3" json:"acked_count,omitempty"`
-	// New committed offsets after this ack.
-	Committed     []*PartitionCursor `protobuf:"bytes,2,rep,name=committed,proto3" json:"committed,omitempty"`
+	// New committed offset after this ack.
+	Committed     *QueueCursor `protobuf:"bytes,2,opt,name=committed,proto3" json:"committed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AckResponse) Reset() {
 	*x = AckResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[46]
+	mi := &file_queue_v1_queue_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3322,7 +3154,7 @@ func (x *AckResponse) String() string {
 func (*AckResponse) ProtoMessage() {}
 
 func (x *AckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[46]
+	mi := &file_queue_v1_queue_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3335,7 +3167,7 @@ func (x *AckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckResponse.ProtoReflect.Descriptor instead.
 func (*AckResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{46}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *AckResponse) GetAckedCount() uint32 {
@@ -3345,7 +3177,7 @@ func (x *AckResponse) GetAckedCount() uint32 {
 	return 0
 }
 
-func (x *AckResponse) GetCommitted() []*PartitionCursor {
+func (x *AckResponse) GetCommitted() *QueueCursor {
 	if x != nil {
 		return x.Committed
 	}
@@ -3357,7 +3189,7 @@ type NackRequest struct {
 	QueueName  string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	GroupId    string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	ConsumerId string                 `protobuf:"bytes,3,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
-	Offsets    []*PartitionOffsets    `protobuf:"bytes,4,rep,name=offsets,proto3" json:"offsets,omitempty"`
+	Offsets    []uint64               `protobuf:"varint,4,rep,packed,name=offsets,proto3" json:"offsets,omitempty"`
 	// Optional delay before redelivery.
 	Delay         *durationpb.Duration `protobuf:"bytes,5,opt,name=delay,proto3" json:"delay,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3366,7 +3198,7 @@ type NackRequest struct {
 
 func (x *NackRequest) Reset() {
 	*x = NackRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[47]
+	mi := &file_queue_v1_queue_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3378,7 +3210,7 @@ func (x *NackRequest) String() string {
 func (*NackRequest) ProtoMessage() {}
 
 func (x *NackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[47]
+	mi := &file_queue_v1_queue_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3391,7 +3223,7 @@ func (x *NackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NackRequest.ProtoReflect.Descriptor instead.
 func (*NackRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{47}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *NackRequest) GetQueueName() string {
@@ -3415,7 +3247,7 @@ func (x *NackRequest) GetConsumerId() string {
 	return ""
 }
 
-func (x *NackRequest) GetOffsets() []*PartitionOffsets {
+func (x *NackRequest) GetOffsets() []uint64 {
 	if x != nil {
 		return x.Offsets
 	}
@@ -3438,16 +3270,14 @@ type ClaimRequest struct {
 	// Claim messages idle longer than this duration.
 	MinIdleTime *durationpb.Duration `protobuf:"bytes,4,opt,name=min_idle_time,json=minIdleTime,proto3" json:"min_idle_time,omitempty"`
 	// Maximum messages to claim.
-	Limit uint32 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
-	// Optional: claim from specific partition only.
-	PartitionId   *uint32 `protobuf:"varint,6,opt,name=partition_id,json=partitionId,proto3,oneof" json:"partition_id,omitempty"`
+	Limit         uint32 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ClaimRequest) Reset() {
 	*x = ClaimRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[48]
+	mi := &file_queue_v1_queue_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3459,7 +3289,7 @@ func (x *ClaimRequest) String() string {
 func (*ClaimRequest) ProtoMessage() {}
 
 func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[48]
+	mi := &file_queue_v1_queue_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3472,7 +3302,7 @@ func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimRequest.ProtoReflect.Descriptor instead.
 func (*ClaimRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{48}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ClaimRequest) GetQueueName() string {
@@ -3510,13 +3340,6 @@ func (x *ClaimRequest) GetLimit() uint32 {
 	return 0
 }
 
-func (x *ClaimRequest) GetPartitionId() uint32 {
-	if x != nil && x.PartitionId != nil {
-		return *x.PartitionId
-	}
-	return 0
-}
-
 type ClaimResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Messages      []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
@@ -3526,7 +3349,7 @@ type ClaimResponse struct {
 
 func (x *ClaimResponse) Reset() {
 	*x = ClaimResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[49]
+	mi := &file_queue_v1_queue_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3538,7 +3361,7 @@ func (x *ClaimResponse) String() string {
 func (*ClaimResponse) ProtoMessage() {}
 
 func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[49]
+	mi := &file_queue_v1_queue_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3551,7 +3374,7 @@ func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimResponse.ProtoReflect.Descriptor instead.
 func (*ClaimResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{49}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ClaimResponse) GetMessages() []*Message {
@@ -3567,18 +3390,16 @@ type GetPendingRequest struct {
 	GroupId   string                 `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// Optional: filter by consumer.
 	ConsumerId string `protobuf:"bytes,3,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
-	// Optional: filter by partition.
-	PartitionId *uint32 `protobuf:"varint,4,opt,name=partition_id,json=partitionId,proto3,oneof" json:"partition_id,omitempty"`
 	// Pagination.
-	Limit         uint32 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
-	PageToken     string `protobuf:"bytes,6,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	Limit         uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	PageToken     string `protobuf:"bytes,5,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetPendingRequest) Reset() {
 	*x = GetPendingRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[50]
+	mi := &file_queue_v1_queue_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3590,7 +3411,7 @@ func (x *GetPendingRequest) String() string {
 func (*GetPendingRequest) ProtoMessage() {}
 
 func (x *GetPendingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[50]
+	mi := &file_queue_v1_queue_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3603,7 +3424,7 @@ func (x *GetPendingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingRequest.ProtoReflect.Descriptor instead.
 func (*GetPendingRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{50}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetPendingRequest) GetQueueName() string {
@@ -3625,13 +3446,6 @@ func (x *GetPendingRequest) GetConsumerId() string {
 		return x.ConsumerId
 	}
 	return ""
-}
-
-func (x *GetPendingRequest) GetPartitionId() uint32 {
-	if x != nil && x.PartitionId != nil {
-		return *x.PartitionId
-	}
-	return 0
 }
 
 func (x *GetPendingRequest) GetLimit() uint32 {
@@ -3659,7 +3473,7 @@ type GetPendingResponse struct {
 
 func (x *GetPendingResponse) Reset() {
 	*x = GetPendingResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[51]
+	mi := &file_queue_v1_queue_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3671,7 +3485,7 @@ func (x *GetPendingResponse) String() string {
 func (*GetPendingResponse) ProtoMessage() {}
 
 func (x *GetPendingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[51]
+	mi := &file_queue_v1_queue_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3684,7 +3498,7 @@ func (x *GetPendingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingResponse.ProtoReflect.Descriptor instead.
 func (*GetPendingResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{51}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *GetPendingResponse) GetEntries() []*PendingEntry {
@@ -3708,80 +3522,28 @@ func (x *GetPendingResponse) GetTotalPending() uint64 {
 	return 0
 }
 
-type GetPartitionInfoRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId   uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetPartitionInfoRequest) Reset() {
-	*x = GetPartitionInfoRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[52]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetPartitionInfoRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetPartitionInfoRequest) ProtoMessage() {}
-
-func (x *GetPartitionInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[52]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetPartitionInfoRequest.ProtoReflect.Descriptor instead.
-func (*GetPartitionInfoRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{52}
-}
-
-func (x *GetPartitionInfoRequest) GetQueueName() string {
-	if x != nil {
-		return x.QueueName
-	}
-	return ""
-}
-
-func (x *GetPartitionInfoRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
-type ListPartitionsRequest struct {
+type GetQueueInfoRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListPartitionsRequest) Reset() {
-	*x = ListPartitionsRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[53]
+func (x *GetQueueInfoRequest) Reset() {
+	*x = GetQueueInfoRequest{}
+	mi := &file_queue_v1_queue_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListPartitionsRequest) String() string {
+func (x *GetQueueInfoRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListPartitionsRequest) ProtoMessage() {}
+func (*GetQueueInfoRequest) ProtoMessage() {}
 
-func (x *ListPartitionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[53]
+func (x *GetQueueInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_queue_v1_queue_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3792,60 +3554,16 @@ func (x *ListPartitionsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListPartitionsRequest.ProtoReflect.Descriptor instead.
-func (*ListPartitionsRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{53}
+// Deprecated: Use GetQueueInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetQueueInfoRequest) Descriptor() ([]byte, []int) {
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{51}
 }
 
-func (x *ListPartitionsRequest) GetQueueName() string {
+func (x *GetQueueInfoRequest) GetQueueName() string {
 	if x != nil {
 		return x.QueueName
 	}
 	return ""
-}
-
-type ListPartitionsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Partitions    []*PartitionInfo       `protobuf:"bytes,1,rep,name=partitions,proto3" json:"partitions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListPartitionsResponse) Reset() {
-	*x = ListPartitionsResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[54]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListPartitionsResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListPartitionsResponse) ProtoMessage() {}
-
-func (x *ListPartitionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[54]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListPartitionsResponse.ProtoReflect.Descriptor instead.
-func (*ListPartitionsResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{54}
-}
-
-func (x *ListPartitionsResponse) GetPartitions() []*PartitionInfo {
-	if x != nil {
-		return x.Partitions
-	}
-	return nil
 }
 
 type GetStatsRequest struct {
@@ -3857,7 +3575,7 @@ type GetStatsRequest struct {
 
 func (x *GetStatsRequest) Reset() {
 	*x = GetStatsRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[55]
+	mi := &file_queue_v1_queue_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3869,7 +3587,7 @@ func (x *GetStatsRequest) String() string {
 func (*GetStatsRequest) ProtoMessage() {}
 
 func (x *GetStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[55]
+	mi := &file_queue_v1_queue_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3882,7 +3600,7 @@ func (x *GetStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetStatsRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{55}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *GetStatsRequest) GetQueueName() string {
@@ -3895,23 +3613,23 @@ func (x *GetStatsRequest) GetQueueName() string {
 type QueueStats struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	// Per-partition stats.
-	Partitions []*PartitionStats `protobuf:"bytes,2,rep,name=partitions,proto3" json:"partitions,omitempty"`
-	// Aggregate stats.
-	TotalMessages uint64 `protobuf:"varint,3,opt,name=total_messages,json=totalMessages,proto3" json:"total_messages,omitempty"`
-	TotalBytes    uint64 `protobuf:"varint,4,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	// Queue info.
+	MessageCount uint64 `protobuf:"varint,2,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
+	SizeBytes    uint64 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	HeadOffset   uint64 `protobuf:"varint,4,opt,name=head_offset,json=headOffset,proto3" json:"head_offset,omitempty"`
+	TailOffset   uint64 `protobuf:"varint,5,opt,name=tail_offset,json=tailOffset,proto3" json:"tail_offset,omitempty"`
 	// Throughput (messages/sec, rolling average).
-	AppendRate float64 `protobuf:"fixed64,5,opt,name=append_rate,json=appendRate,proto3" json:"append_rate,omitempty"`
-	ReadRate   float64 `protobuf:"fixed64,6,opt,name=read_rate,json=readRate,proto3" json:"read_rate,omitempty"`
+	AppendRate float64 `protobuf:"fixed64,6,opt,name=append_rate,json=appendRate,proto3" json:"append_rate,omitempty"`
+	ReadRate   float64 `protobuf:"fixed64,7,opt,name=read_rate,json=readRate,proto3" json:"read_rate,omitempty"`
 	// Consumer group summaries.
-	ConsumerGroups []*ConsumerGroupSummary `protobuf:"bytes,7,rep,name=consumer_groups,json=consumerGroups,proto3" json:"consumer_groups,omitempty"`
+	ConsumerGroups []*ConsumerGroupSummary `protobuf:"bytes,8,rep,name=consumer_groups,json=consumerGroups,proto3" json:"consumer_groups,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *QueueStats) Reset() {
 	*x = QueueStats{}
-	mi := &file_queue_v1_queue_proto_msgTypes[56]
+	mi := &file_queue_v1_queue_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3923,7 +3641,7 @@ func (x *QueueStats) String() string {
 func (*QueueStats) ProtoMessage() {}
 
 func (x *QueueStats) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[56]
+	mi := &file_queue_v1_queue_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3936,7 +3654,7 @@ func (x *QueueStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueStats.ProtoReflect.Descriptor instead.
 func (*QueueStats) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{56}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *QueueStats) GetQueueName() string {
@@ -3946,23 +3664,30 @@ func (x *QueueStats) GetQueueName() string {
 	return ""
 }
 
-func (x *QueueStats) GetPartitions() []*PartitionStats {
+func (x *QueueStats) GetMessageCount() uint64 {
 	if x != nil {
-		return x.Partitions
-	}
-	return nil
-}
-
-func (x *QueueStats) GetTotalMessages() uint64 {
-	if x != nil {
-		return x.TotalMessages
+		return x.MessageCount
 	}
 	return 0
 }
 
-func (x *QueueStats) GetTotalBytes() uint64 {
+func (x *QueueStats) GetSizeBytes() uint64 {
 	if x != nil {
-		return x.TotalBytes
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *QueueStats) GetHeadOffset() uint64 {
+	if x != nil {
+		return x.HeadOffset
+	}
+	return 0
+}
+
+func (x *QueueStats) GetTailOffset() uint64 {
+	if x != nil {
+		return x.TailOffset
 	}
 	return 0
 }
@@ -3988,90 +3713,6 @@ func (x *QueueStats) GetConsumerGroups() []*ConsumerGroupSummary {
 	return nil
 }
 
-type PartitionStats struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PartitionId   uint32                 `protobuf:"varint,1,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
-	MessageCount  uint64                 `protobuf:"varint,2,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
-	SizeBytes     uint64                 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	HeadOffset    uint64                 `protobuf:"varint,4,opt,name=head_offset,json=headOffset,proto3" json:"head_offset,omitempty"`
-	TailOffset    uint64                 `protobuf:"varint,5,opt,name=tail_offset,json=tailOffset,proto3" json:"tail_offset,omitempty"`
-	SegmentCount  uint32                 `protobuf:"varint,6,opt,name=segment_count,json=segmentCount,proto3" json:"segment_count,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PartitionStats) Reset() {
-	*x = PartitionStats{}
-	mi := &file_queue_v1_queue_proto_msgTypes[57]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PartitionStats) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PartitionStats) ProtoMessage() {}
-
-func (x *PartitionStats) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[57]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PartitionStats.ProtoReflect.Descriptor instead.
-func (*PartitionStats) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{57}
-}
-
-func (x *PartitionStats) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
-}
-
-func (x *PartitionStats) GetMessageCount() uint64 {
-	if x != nil {
-		return x.MessageCount
-	}
-	return 0
-}
-
-func (x *PartitionStats) GetSizeBytes() uint64 {
-	if x != nil {
-		return x.SizeBytes
-	}
-	return 0
-}
-
-func (x *PartitionStats) GetHeadOffset() uint64 {
-	if x != nil {
-		return x.HeadOffset
-	}
-	return 0
-}
-
-func (x *PartitionStats) GetTailOffset() uint64 {
-	if x != nil {
-		return x.TailOffset
-	}
-	return 0
-}
-
-func (x *PartitionStats) GetSegmentCount() uint32 {
-	if x != nil {
-		return x.SegmentCount
-	}
-	return 0
-}
-
 type ConsumerGroupSummary struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
@@ -4084,7 +3725,7 @@ type ConsumerGroupSummary struct {
 
 func (x *ConsumerGroupSummary) Reset() {
 	*x = ConsumerGroupSummary{}
-	mi := &file_queue_v1_queue_proto_msgTypes[58]
+	mi := &file_queue_v1_queue_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4096,7 +3737,7 @@ func (x *ConsumerGroupSummary) String() string {
 func (*ConsumerGroupSummary) ProtoMessage() {}
 
 func (x *ConsumerGroupSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[58]
+	mi := &file_queue_v1_queue_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4109,7 +3750,7 @@ func (x *ConsumerGroupSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumerGroupSummary.ProtoReflect.Descriptor instead.
 func (*ConsumerGroupSummary) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{58}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ConsumerGroupSummary) GetGroupId() string {
@@ -4141,17 +3782,15 @@ func (x *ConsumerGroupSummary) GetPendingCount() uint64 {
 }
 
 type PurgeRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	// Optional: purge specific partition only.
-	PartitionId   *uint32 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3,oneof" json:"partition_id,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PurgeRequest) Reset() {
 	*x = PurgeRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[59]
+	mi := &file_queue_v1_queue_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4163,7 +3802,7 @@ func (x *PurgeRequest) String() string {
 func (*PurgeRequest) ProtoMessage() {}
 
 func (x *PurgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[59]
+	mi := &file_queue_v1_queue_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4176,7 +3815,7 @@ func (x *PurgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeRequest.ProtoReflect.Descriptor instead.
 func (*PurgeRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{59}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *PurgeRequest) GetQueueName() string {
@@ -4184,13 +3823,6 @@ func (x *PurgeRequest) GetQueueName() string {
 		return x.QueueName
 	}
 	return ""
-}
-
-func (x *PurgeRequest) GetPartitionId() uint32 {
-	if x != nil && x.PartitionId != nil {
-		return *x.PartitionId
-	}
-	return 0
 }
 
 type PurgeResponse struct {
@@ -4203,7 +3835,7 @@ type PurgeResponse struct {
 
 func (x *PurgeResponse) Reset() {
 	*x = PurgeResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[60]
+	mi := &file_queue_v1_queue_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4215,7 +3847,7 @@ func (x *PurgeResponse) String() string {
 func (*PurgeResponse) ProtoMessage() {}
 
 func (x *PurgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[60]
+	mi := &file_queue_v1_queue_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4228,7 +3860,7 @@ func (x *PurgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeResponse.ProtoReflect.Descriptor instead.
 func (*PurgeResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{60}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PurgeResponse) GetMessagesDeleted() uint64 {
@@ -4246,18 +3878,17 @@ func (x *PurgeResponse) GetBytesFreed() uint64 {
 }
 
 type TruncateRequest struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	QueueName   string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	PartitionId uint32                 `protobuf:"varint,2,opt,name=partition_id,json=partitionId,proto3" json:"partition_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	QueueName string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	// Remove messages with offset < min_offset.
-	MinOffset     uint64 `protobuf:"varint,3,opt,name=min_offset,json=minOffset,proto3" json:"min_offset,omitempty"`
+	MinOffset     uint64 `protobuf:"varint,2,opt,name=min_offset,json=minOffset,proto3" json:"min_offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TruncateRequest) Reset() {
 	*x = TruncateRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[61]
+	mi := &file_queue_v1_queue_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4269,7 +3900,7 @@ func (x *TruncateRequest) String() string {
 func (*TruncateRequest) ProtoMessage() {}
 
 func (x *TruncateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[61]
+	mi := &file_queue_v1_queue_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4282,7 +3913,7 @@ func (x *TruncateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TruncateRequest.ProtoReflect.Descriptor instead.
 func (*TruncateRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{61}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *TruncateRequest) GetQueueName() string {
@@ -4290,13 +3921,6 @@ func (x *TruncateRequest) GetQueueName() string {
 		return x.QueueName
 	}
 	return ""
-}
-
-func (x *TruncateRequest) GetPartitionId() uint32 {
-	if x != nil {
-		return x.PartitionId
-	}
-	return 0
 }
 
 func (x *TruncateRequest) GetMinOffset() uint64 {
@@ -4310,15 +3934,14 @@ var File_queue_v1_queue_proto protoreflect.FileDescriptor
 
 const file_queue_v1_queue_proto_rawDesc = "" +
 	"\n" +
-	"\x14queue/v1/queue.proto\x12\x0ffluxmq.queue.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\"\xe7\x02\n" +
+	"\x14queue/v1/queue.proto\x12\x0ffluxmq.queue.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\"\xc4\x02\n" +
 	"\aMessage\x12\x16\n" +
-	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\fR\x03key\x12\x14\n" +
-	"\x05value\x18\x05 \x01(\fR\x05value\x12?\n" +
-	"\aheaders\x18\x06 \x03(\v2%.fluxmq.queue.v1.Message.HeadersEntryR\aheaders\x12B\n" +
-	"\rdelivery_info\x18\a \x01(\v2\x1d.fluxmq.queue.v1.DeliveryInfoR\fdeliveryInfo\x1a:\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x128\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\fR\x03key\x12\x14\n" +
+	"\x05value\x18\x04 \x01(\fR\x05value\x12?\n" +
+	"\aheaders\x18\x05 \x03(\v2%.fluxmq.queue.v1.Message.HeadersEntryR\aheaders\x12B\n" +
+	"\rdelivery_info\x18\x06 \x01(\v2\x1d.fluxmq.queue.v1.DeliveryInfoR\fdeliveryInfo\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xfa\x01\n" +
@@ -4328,18 +3951,17 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\fdelivered_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vdeliveredAt\x12\x19\n" +
 	"\bgroup_id\x18\x04 \x01(\tR\agroupId\x12\x1f\n" +
 	"\vconsumer_id\x18\x05 \x01(\tR\n" +
-	"consumerId\"\x9a\x02\n" +
+	"consumerId\"\xae\x02\n" +
 	"\x05Queue\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +
-	"\n" +
-	"partitions\x18\x02 \x01(\rR\n" +
-	"partitions\x124\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06topics\x18\x02 \x03(\tR\x06topics\x124\n" +
 	"\x06config\x18\x03 \x01(\v2\x1c.fluxmq.queue.v1.QueueConfigR\x06config\x121\n" +
 	"\x05state\x18\x04 \x01(\v2\x1b.fluxmq.queue.v1.QueueStateR\x05state\x129\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xf5\x01\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1a\n" +
+	"\breserved\x18\a \x01(\bR\breserved\"\xf5\x01\n" +
 	"\vQueueConfig\x12>\n" +
 	"\tretention\x18\x01 \x01(\v2 .fluxmq.queue.v1.RetentionConfigR\tretention\x12B\n" +
 	"\vcompression\x18\x02 \x01(\x0e2 .fluxmq.queue.v1.CompressionTypeR\vcompression\x12(\n" +
@@ -4360,9 +3982,10 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"totalBytes\x120\n" +
 	"\x14consumer_group_count\x18\x03 \x01(\rR\x12consumerGroupCount\x12A\n" +
 	"\x0eoldest_message\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\roldestMessage\x12A\n" +
-	"\x0enewest_message\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\rnewestMessage\"\xeb\x02\n" +
-	"\rPartitionInfo\x12!\n" +
-	"\fpartition_id\x18\x01 \x01(\rR\vpartitionId\x12\x1f\n" +
+	"\x0enewest_message\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\rnewestMessage\"\xe3\x02\n" +
+	"\tQueueInfo\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x1f\n" +
 	"\vhead_offset\x18\x02 \x01(\x04R\n" +
 	"headOffset\x12\x1f\n" +
 	"\vtail_offset\x18\x03 \x01(\x04R\n" +
@@ -4372,54 +3995,48 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\x12#\n" +
 	"\rsegment_count\x18\x06 \x01(\rR\fsegmentCount\x12E\n" +
 	"\x10oldest_timestamp\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x0foldestTimestamp\x12E\n" +
-	"\x10newest_timestamp\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\x0fnewestTimestamp\"\xe0\x02\n" +
+	"\x10newest_timestamp\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\x0fnewestTimestamp\"\xf4\x02\n" +
 	"\rConsumerGroup\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12<\n" +
-	"\x06config\x18\x03 \x01(\v2$.fluxmq.queue.v1.ConsumerGroupConfigR\x06config\x12:\n" +
-	"\acursors\x18\x04 \x03(\v2 .fluxmq.queue.v1.PartitionCursorR\acursors\x12;\n" +
+	"\x06config\x18\x03 \x01(\v2$.fluxmq.queue.v1.ConsumerGroupConfigR\x06config\x124\n" +
+	"\x06cursor\x18\x04 \x01(\v2\x1c.fluxmq.queue.v1.QueueCursorR\x06cursor\x12;\n" +
 	"\tconsumers\x18\x05 \x03(\v2\x1d.fluxmq.queue.v1.ConsumerInfoR\tconsumers\x12#\n" +
 	"\rpending_count\x18\x06 \x01(\x04R\fpendingCount\x129\n" +
 	"\n" +
-	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xc9\x01\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x18\n" +
+	"\apattern\x18\b \x01(\tR\apattern\"\xc9\x01\n" +
 	"\x13ConsumerGroupConfig\x12:\n" +
 	"\vack_timeout\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\n" +
 	"ackTimeout\x12)\n" +
 	"\x10max_redeliveries\x18\x02 \x01(\rR\x0fmaxRedeliveries\x12K\n" +
-	"\x10initial_position\x18\x03 \x01(\x0e2 .fluxmq.queue.v1.InitialPositionR\x0finitialPosition\"\xb7\x01\n" +
-	"\x0fPartitionCursor\x12!\n" +
-	"\fpartition_id\x18\x01 \x01(\rR\vpartitionId\x12\x16\n" +
-	"\x06cursor\x18\x02 \x01(\x04R\x06cursor\x12\x1c\n" +
-	"\tcommitted\x18\x03 \x01(\x04R\tcommitted\x12\x10\n" +
-	"\x03lag\x18\x04 \x01(\x04R\x03lag\x129\n" +
+	"\x10initial_position\x18\x03 \x01(\x0e2 .fluxmq.queue.v1.InitialPositionR\x0finitialPosition\"\x90\x01\n" +
+	"\vQueueCursor\x12\x16\n" +
+	"\x06cursor\x18\x01 \x01(\x04R\x06cursor\x12\x1c\n" +
+	"\tcommitted\x18\x02 \x01(\x04R\tcommitted\x12\x10\n" +
+	"\x03lag\x18\x03 \x01(\x04R\x03lag\x129\n" +
 	"\n" +
-	"updated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xbd\x02\n" +
+	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x9d\x02\n" +
 	"\fConsumerInfo\x12\x1f\n" +
 	"\vconsumer_id\x18\x01 \x01(\tR\n" +
-	"consumerId\x12\x1e\n" +
-	"\n" +
-	"partitions\x18\x02 \x03(\rR\n" +
-	"partitions\x12#\n" +
-	"\rpending_count\x18\x03 \x01(\x04R\fpendingCount\x12A\n" +
-	"\x0elast_heartbeat\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\rlastHeartbeat\x12G\n" +
-	"\bmetadata\x18\x05 \x03(\v2+.fluxmq.queue.v1.ConsumerInfo.MetadataEntryR\bmetadata\x1a;\n" +
+	"consumerId\x12#\n" +
+	"\rpending_count\x18\x02 \x01(\x04R\fpendingCount\x12A\n" +
+	"\x0elast_heartbeat\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\rlastHeartbeat\x12G\n" +
+	"\bmetadata\x18\x04 \x03(\v2+.fluxmq.queue.v1.ConsumerInfo.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x88\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe5\x01\n" +
 	"\fPendingEntry\x12\x16\n" +
-	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x12\x1f\n" +
-	"\vconsumer_id\x18\x03 \x01(\tR\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12\x1f\n" +
+	"\vconsumer_id\x18\x02 \x01(\tR\n" +
 	"consumerId\x12=\n" +
-	"\fdelivered_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vdeliveredAt\x12%\n" +
-	"\x0edelivery_count\x18\x05 \x01(\rR\rdeliveryCount\x126\n" +
-	"\tidle_time\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\bidleTime\"~\n" +
+	"\fdelivered_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vdeliveredAt\x12%\n" +
+	"\x0edelivery_count\x18\x04 \x01(\rR\rdeliveryCount\x126\n" +
+	"\tidle_time\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\bidleTime\"v\n" +
 	"\x12CreateQueueRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +
-	"\n" +
-	"partitions\x18\x02 \x01(\rR\n" +
-	"partitions\x124\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06topics\x18\x02 \x03(\tR\x06topics\x124\n" +
 	"\x06config\x18\x03 \x01(\v2\x1c.fluxmq.queue.v1.QueueConfigR\x06config\"%\n" +
 	"\x0fGetQueueRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"`\n" +
@@ -4435,94 +4052,82 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"^\n" +
 	"\x12UpdateQueueRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
-	"\x06config\x18\x02 \x01(\v2\x1c.fluxmq.queue.v1.QueueConfigR\x06config\"\xb7\x02\n" +
+	"\x06config\x18\x02 \x01(\v2\x1c.fluxmq.queue.v1.QueueConfigR\x06config\"\xd9\x01\n" +
 	"\rAppendRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12#\n" +
-	"\rpartition_key\x18\x02 \x01(\fR\fpartitionKey\x12&\n" +
-	"\fpartition_id\x18\x03 \x01(\rH\x00R\vpartitionId\x88\x01\x01\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\fR\x03key\x12\x14\n" +
-	"\x05value\x18\x05 \x01(\fR\x05value\x12E\n" +
-	"\aheaders\x18\x06 \x03(\v2+.fluxmq.queue.v1.AppendRequest.HeadersEntryR\aheaders\x1a:\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\x12E\n" +
+	"\aheaders\x18\x04 \x03(\v2+.fluxmq.queue.v1.AppendRequest.HeadersEntryR\aheaders\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01B\x0f\n" +
-	"\r_partition_id\"\x85\x01\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"b\n" +
 	"\x0eAppendResponse\x12\x16\n" +
-	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xcc\x01\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x128\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"n\n" +
 	"\x12AppendBatchRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12#\n" +
-	"\rpartition_key\x18\x02 \x01(\fR\fpartitionKey\x12&\n" +
-	"\fpartition_id\x18\x03 \x01(\rH\x00R\vpartitionId\x88\x01\x01\x129\n" +
-	"\bmessages\x18\x04 \x03(\v2\x1d.fluxmq.queue.v1.BatchMessageR\bmessagesB\x0f\n" +
-	"\r_partition_id\"\xb8\x01\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x129\n" +
+	"\bmessages\x18\x02 \x03(\v2\x1d.fluxmq.queue.v1.BatchMessageR\bmessages\"\xb8\x01\n" +
 	"\fBatchMessage\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12D\n" +
 	"\aheaders\x18\x03 \x03(\v2*.fluxmq.queue.v1.BatchMessage.HeadersEntryR\aheaders\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xcc\x01\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xa9\x01\n" +
 	"\x13AppendBatchResponse\x12!\n" +
 	"\ffirst_offset\x18\x01 \x01(\x04R\vfirstOffset\x12\x1f\n" +
 	"\vlast_offset\x18\x02 \x01(\x04R\n" +
-	"lastOffset\x12!\n" +
-	"\fpartition_id\x18\x03 \x01(\rR\vpartitionId\x12\x14\n" +
-	"\x05count\x18\x04 \x01(\rR\x05count\x128\n" +
-	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"g\n" +
+	"lastOffset\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\rR\x05count\x128\n" +
+	"\ttimestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"D\n" +
 	"\vReadRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x04R\x06offset\"\xaa\x01\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x04R\x06offset\"\x87\x01\n" +
 	"\x10ReadBatchRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x12!\n" +
-	"\fstart_offset\x18\x03 \x01(\x04R\vstartOffset\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\rR\x05limit\x12\x1b\n" +
-	"\tmax_bytes\x18\x05 \x01(\rR\bmaxBytes\"\x94\x01\n" +
+	"\fstart_offset\x18\x02 \x01(\x04R\vstartOffset\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\rR\x05limit\x12\x1b\n" +
+	"\tmax_bytes\x18\x04 \x01(\rR\bmaxBytes\"\x8c\x01\n" +
 	"\x11ReadBatchResponse\x124\n" +
 	"\bmessages\x18\x01 \x03(\v2\x18.fluxmq.queue.v1.MessageR\bmessages\x12\x1f\n" +
 	"\vnext_offset\x18\x02 \x01(\x04R\n" +
-	"nextOffset\x12(\n" +
-	"\x10end_of_partition\x18\x03 \x01(\bR\x0eendOfPartition\"\xa9\x02\n" +
+	"nextOffset\x12 \n" +
+	"\fend_of_queue\x18\x03 \x01(\bR\n" +
+	"endOfQueue\"\x86\x02\n" +
 	"\vTailRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x12!\n" +
-	"\fstart_offset\x18\x03 \x01(\x04R\vstartOffset\x12E\n" +
+	"\fstart_offset\x18\x02 \x01(\x04R\vstartOffset\x12E\n" +
 	"\n" +
-	"start_from\x18\x04 \x01(\x0e2&.fluxmq.queue.v1.TailRequest.StartFromR\tstartFrom\"n\n" +
+	"start_from\x18\x03 \x01(\x0e2&.fluxmq.queue.v1.TailRequest.StartFromR\tstartFrom\"n\n" +
 	"\tStartFrom\x12\x1a\n" +
 	"\x16START_FROM_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13START_FROM_EARLIEST\x10\x01\x12\x15\n" +
 	"\x11START_FROM_LATEST\x10\x02\x12\x15\n" +
-	"\x11START_FROM_OFFSET\x10\x03\"o\n" +
+	"\x11START_FROM_OFFSET\x10\x03\"L\n" +
 	"\x13SeekToOffsetRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x04R\x06offset\"\x94\x01\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x04R\x06offset\"q\n" +
 	"\x16SeekToTimestampRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xa4\x01\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x128\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x81\x01\n" +
 	"\fSeekResponse\x12\x16\n" +
-	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1f\n" +
-	"\vexact_match\x18\x04 \x01(\bR\n" +
-	"exactMatch\"\x94\x01\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x128\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1f\n" +
+	"\vexact_match\x18\x03 \x01(\bR\n" +
+	"exactMatch\"\xae\x01\n" +
 	"\x1aCreateConsumerGroupRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12<\n" +
-	"\x06config\x18\x03 \x01(\v2$.fluxmq.queue.v1.ConsumerGroupConfigR\x06config\"S\n" +
+	"\x06config\x18\x03 \x01(\v2$.fluxmq.queue.v1.ConsumerGroupConfigR\x06config\x12\x18\n" +
+	"\apattern\x18\x04 \x01(\tR\apattern\"S\n" +
 	"\x17GetConsumerGroupRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
@@ -4550,11 +4155,10 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x0fsession_timeout\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\x0esessionTimeout\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa6\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"u\n" +
 	"\x11JoinGroupResponse\x12#\n" +
-	"\rgeneration_id\x18\x01 \x01(\x04R\fgenerationId\x12/\n" +
-	"\x13assigned_partitions\x18\x02 \x03(\rR\x12assignedPartitions\x12;\n" +
-	"\tconsumers\x18\x03 \x03(\v2\x1d.fluxmq.queue.v1.ConsumerInfoR\tconsumers\"n\n" +
+	"\rgeneration_id\x18\x01 \x01(\x04R\fgenerationId\x12;\n" +
+	"\tconsumers\x18\x02 \x03(\v2\x1d.fluxmq.queue.v1.ConsumerInfoR\tconsumers\"n\n" +
 	"\x11LeaveGroupRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
@@ -4588,30 +4192,27 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1f\n" +
 	"\vconsumer_id\x18\x03 \x01(\tR\n" +
 	"consumerId\x12\"\n" +
-	"\rmax_in_flight\x18\x04 \x01(\rR\vmaxInFlight\"\xa4\x01\n" +
+	"\rmax_in_flight\x18\x04 \x01(\rR\vmaxInFlight\"\x81\x01\n" +
 	"\n" +
 	"AckRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1f\n" +
 	"\vconsumer_id\x18\x03 \x01(\tR\n" +
-	"consumerId\x12;\n" +
-	"\aoffsets\x18\x04 \x03(\v2!.fluxmq.queue.v1.PartitionOffsetsR\aoffsets\"O\n" +
-	"\x10PartitionOffsets\x12!\n" +
-	"\fpartition_id\x18\x01 \x01(\rR\vpartitionId\x12\x18\n" +
-	"\aoffsets\x18\x02 \x03(\x04R\aoffsets\"n\n" +
+	"consumerId\x12\x18\n" +
+	"\aoffsets\x18\x04 \x03(\x04R\aoffsets\"j\n" +
 	"\vAckResponse\x12\x1f\n" +
 	"\vacked_count\x18\x01 \x01(\rR\n" +
-	"ackedCount\x12>\n" +
-	"\tcommitted\x18\x02 \x03(\v2 .fluxmq.queue.v1.PartitionCursorR\tcommitted\"\xd6\x01\n" +
+	"ackedCount\x12:\n" +
+	"\tcommitted\x18\x02 \x01(\v2\x1c.fluxmq.queue.v1.QueueCursorR\tcommitted\"\xb3\x01\n" +
 	"\vNackRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1f\n" +
 	"\vconsumer_id\x18\x03 \x01(\tR\n" +
-	"consumerId\x12;\n" +
-	"\aoffsets\x18\x04 \x03(\v2!.fluxmq.queue.v1.PartitionOffsetsR\aoffsets\x12/\n" +
-	"\x05delay\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\x05delay\"\xf7\x01\n" +
+	"consumerId\x12\x18\n" +
+	"\aoffsets\x18\x04 \x03(\x04R\aoffsets\x12/\n" +
+	"\x05delay\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\x05delay\"\xbe\x01\n" +
 	"\fClaimRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
@@ -4619,84 +4220,60 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\vconsumer_id\x18\x03 \x01(\tR\n" +
 	"consumerId\x12=\n" +
 	"\rmin_idle_time\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\vminIdleTime\x12\x14\n" +
-	"\x05limit\x18\x05 \x01(\rR\x05limit\x12&\n" +
-	"\fpartition_id\x18\x06 \x01(\rH\x00R\vpartitionId\x88\x01\x01B\x0f\n" +
-	"\r_partition_id\"E\n" +
+	"\x05limit\x18\x05 \x01(\rR\x05limit\"E\n" +
 	"\rClaimResponse\x124\n" +
-	"\bmessages\x18\x01 \x03(\v2\x18.fluxmq.queue.v1.MessageR\bmessages\"\xdc\x01\n" +
+	"\bmessages\x18\x01 \x03(\v2\x18.fluxmq.queue.v1.MessageR\bmessages\"\xa3\x01\n" +
 	"\x11GetPendingRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1f\n" +
 	"\vconsumer_id\x18\x03 \x01(\tR\n" +
-	"consumerId\x12&\n" +
-	"\fpartition_id\x18\x04 \x01(\rH\x00R\vpartitionId\x88\x01\x01\x12\x14\n" +
-	"\x05limit\x18\x05 \x01(\rR\x05limit\x12\x1d\n" +
+	"consumerId\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\rR\x05limit\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x06 \x01(\tR\tpageTokenB\x0f\n" +
-	"\r_partition_id\"\x9a\x01\n" +
+	"page_token\x18\x05 \x01(\tR\tpageToken\"\x9a\x01\n" +
 	"\x12GetPendingResponse\x127\n" +
 	"\aentries\x18\x01 \x03(\v2\x1d.fluxmq.queue.v1.PendingEntryR\aentries\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12#\n" +
-	"\rtotal_pending\x18\x03 \x01(\x04R\ftotalPending\"[\n" +
-	"\x17GetPartitionInfoRequest\x12\x1d\n" +
+	"\rtotal_pending\x18\x03 \x01(\x04R\ftotalPending\"4\n" +
+	"\x13GetQueueInfoRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\"6\n" +
-	"\x15ListPartitionsRequest\x12\x1d\n" +
-	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\"X\n" +
-	"\x16ListPartitionsResponse\x12>\n" +
-	"\n" +
-	"partitions\x18\x01 \x03(\v2\x1e.fluxmq.queue.v1.PartitionInfoR\n" +
-	"partitions\"0\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\"0\n" +
 	"\x0fGetStatsRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\"\xc2\x02\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\"\xbf\x02\n" +
 	"\n" +
 	"QueueStats\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12?\n" +
-	"\n" +
-	"partitions\x18\x02 \x03(\v2\x1f.fluxmq.queue.v1.PartitionStatsR\n" +
-	"partitions\x12%\n" +
-	"\x0etotal_messages\x18\x03 \x01(\x04R\rtotalMessages\x12\x1f\n" +
-	"\vtotal_bytes\x18\x04 \x01(\x04R\n" +
-	"totalBytes\x12\x1f\n" +
-	"\vappend_rate\x18\x05 \x01(\x01R\n" +
-	"appendRate\x12\x1b\n" +
-	"\tread_rate\x18\x06 \x01(\x01R\breadRate\x12N\n" +
-	"\x0fconsumer_groups\x18\a \x03(\v2%.fluxmq.queue.v1.ConsumerGroupSummaryR\x0econsumerGroups\"\xde\x01\n" +
-	"\x0ePartitionStats\x12!\n" +
-	"\fpartition_id\x18\x01 \x01(\rR\vpartitionId\x12#\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12#\n" +
 	"\rmessage_count\x18\x02 \x01(\x04R\fmessageCount\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12\x1f\n" +
 	"\vhead_offset\x18\x04 \x01(\x04R\n" +
 	"headOffset\x12\x1f\n" +
 	"\vtail_offset\x18\x05 \x01(\x04R\n" +
-	"tailOffset\x12#\n" +
-	"\rsegment_count\x18\x06 \x01(\rR\fsegmentCount\"\x9a\x01\n" +
+	"tailOffset\x12\x1f\n" +
+	"\vappend_rate\x18\x06 \x01(\x01R\n" +
+	"appendRate\x12\x1b\n" +
+	"\tread_rate\x18\a \x01(\x01R\breadRate\x12N\n" +
+	"\x0fconsumer_groups\x18\b \x03(\v2%.fluxmq.queue.v1.ConsumerGroupSummaryR\x0econsumerGroups\"\x9a\x01\n" +
 	"\x14ConsumerGroupSummary\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12%\n" +
 	"\x0econsumer_count\x18\x02 \x01(\rR\rconsumerCount\x12\x1b\n" +
 	"\ttotal_lag\x18\x03 \x01(\x04R\btotalLag\x12#\n" +
-	"\rpending_count\x18\x04 \x01(\x04R\fpendingCount\"f\n" +
+	"\rpending_count\x18\x04 \x01(\x04R\fpendingCount\"-\n" +
 	"\fPurgeRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12&\n" +
-	"\fpartition_id\x18\x02 \x01(\rH\x00R\vpartitionId\x88\x01\x01B\x0f\n" +
-	"\r_partition_id\"[\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\"[\n" +
 	"\rPurgeResponse\x12)\n" +
 	"\x10messages_deleted\x18\x01 \x01(\x04R\x0fmessagesDeleted\x12\x1f\n" +
 	"\vbytes_freed\x18\x02 \x01(\x04R\n" +
-	"bytesFreed\"r\n" +
+	"bytesFreed\"O\n" +
 	"\x0fTruncateRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12!\n" +
-	"\fpartition_id\x18\x02 \x01(\rR\vpartitionId\x12\x1d\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x1d\n" +
 	"\n" +
-	"min_offset\x18\x03 \x01(\x04R\tminOffset*\x82\x01\n" +
+	"min_offset\x18\x02 \x01(\x04R\tminOffset*\x82\x01\n" +
 	"\x0fCompressionType\x12 \n" +
 	"\x1cCOMPRESSION_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15COMPRESSION_TYPE_NONE\x10\x01\x12\x17\n" +
@@ -4705,7 +4282,7 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x0fInitialPosition\x12 \n" +
 	"\x1cINITIAL_POSITION_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INITIAL_POSITION_EARLIEST\x10\x01\x12\x1b\n" +
-	"\x17INITIAL_POSITION_LATEST\x10\x022\xec\x13\n" +
+	"\x17INITIAL_POSITION_LATEST\x10\x022\xfd\x12\n" +
 	"\fQueueService\x12J\n" +
 	"\vCreateQueue\x12#.fluxmq.queue.v1.CreateQueueRequest\x1a\x16.fluxmq.queue.v1.Queue\x12D\n" +
 	"\bGetQueue\x12 .fluxmq.queue.v1.GetQueueRequest\x1a\x16.fluxmq.queue.v1.Queue\x12U\n" +
@@ -4735,9 +4312,8 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x04Nack\x12\x1c.fluxmq.queue.v1.NackRequest\x1a\x16.google.protobuf.Empty\x12F\n" +
 	"\x05Claim\x12\x1d.fluxmq.queue.v1.ClaimRequest\x1a\x1e.fluxmq.queue.v1.ClaimResponse\x12U\n" +
 	"\n" +
-	"GetPending\x12\".fluxmq.queue.v1.GetPendingRequest\x1a#.fluxmq.queue.v1.GetPendingResponse\x12\\\n" +
-	"\x10GetPartitionInfo\x12(.fluxmq.queue.v1.GetPartitionInfoRequest\x1a\x1e.fluxmq.queue.v1.PartitionInfo\x12a\n" +
-	"\x0eListPartitions\x12&.fluxmq.queue.v1.ListPartitionsRequest\x1a'.fluxmq.queue.v1.ListPartitionsResponse\x12I\n" +
+	"GetPending\x12\".fluxmq.queue.v1.GetPendingRequest\x1a#.fluxmq.queue.v1.GetPendingResponse\x12P\n" +
+	"\fGetQueueInfo\x12$.fluxmq.queue.v1.GetQueueInfoRequest\x1a\x1a.fluxmq.queue.v1.QueueInfo\x12I\n" +
 	"\bGetStats\x12 .fluxmq.queue.v1.GetStatsRequest\x1a\x1b.fluxmq.queue.v1.QueueStats\x12F\n" +
 	"\x05Purge\x12\x1d.fluxmq.queue.v1.PurgeRequest\x1a\x1e.fluxmq.queue.v1.PurgeResponse\x12D\n" +
 	"\bTruncate\x12 .fluxmq.queue.v1.TruncateRequest\x1a\x16.google.protobuf.EmptyB\xb5\x01\n" +
@@ -4757,7 +4333,7 @@ func file_queue_v1_queue_proto_rawDescGZIP() []byte {
 }
 
 var file_queue_v1_queue_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_queue_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
+var file_queue_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
 var file_queue_v1_queue_proto_goTypes = []any{
 	(CompressionType)(0),               // 0: fluxmq.queue.v1.CompressionType
 	(InitialPosition)(0),               // 1: fluxmq.queue.v1.InitialPosition
@@ -4769,10 +4345,10 @@ var file_queue_v1_queue_proto_goTypes = []any{
 	(*RetentionConfig)(nil),            // 7: fluxmq.queue.v1.RetentionConfig
 	(*SegmentConfig)(nil),              // 8: fluxmq.queue.v1.SegmentConfig
 	(*QueueState)(nil),                 // 9: fluxmq.queue.v1.QueueState
-	(*PartitionInfo)(nil),              // 10: fluxmq.queue.v1.PartitionInfo
+	(*QueueInfo)(nil),                  // 10: fluxmq.queue.v1.QueueInfo
 	(*ConsumerGroup)(nil),              // 11: fluxmq.queue.v1.ConsumerGroup
 	(*ConsumerGroupConfig)(nil),        // 12: fluxmq.queue.v1.ConsumerGroupConfig
-	(*PartitionCursor)(nil),            // 13: fluxmq.queue.v1.PartitionCursor
+	(*QueueCursor)(nil),                // 13: fluxmq.queue.v1.QueueCursor
 	(*ConsumerInfo)(nil),               // 14: fluxmq.queue.v1.ConsumerInfo
 	(*PendingEntry)(nil),               // 15: fluxmq.queue.v1.PendingEntry
 	(*CreateQueueRequest)(nil),         // 16: fluxmq.queue.v1.CreateQueueRequest
@@ -4807,158 +4383,148 @@ var file_queue_v1_queue_proto_goTypes = []any{
 	(*ConsumeResponse)(nil),            // 45: fluxmq.queue.v1.ConsumeResponse
 	(*ConsumeStreamRequest)(nil),       // 46: fluxmq.queue.v1.ConsumeStreamRequest
 	(*AckRequest)(nil),                 // 47: fluxmq.queue.v1.AckRequest
-	(*PartitionOffsets)(nil),           // 48: fluxmq.queue.v1.PartitionOffsets
-	(*AckResponse)(nil),                // 49: fluxmq.queue.v1.AckResponse
-	(*NackRequest)(nil),                // 50: fluxmq.queue.v1.NackRequest
-	(*ClaimRequest)(nil),               // 51: fluxmq.queue.v1.ClaimRequest
-	(*ClaimResponse)(nil),              // 52: fluxmq.queue.v1.ClaimResponse
-	(*GetPendingRequest)(nil),          // 53: fluxmq.queue.v1.GetPendingRequest
-	(*GetPendingResponse)(nil),         // 54: fluxmq.queue.v1.GetPendingResponse
-	(*GetPartitionInfoRequest)(nil),    // 55: fluxmq.queue.v1.GetPartitionInfoRequest
-	(*ListPartitionsRequest)(nil),      // 56: fluxmq.queue.v1.ListPartitionsRequest
-	(*ListPartitionsResponse)(nil),     // 57: fluxmq.queue.v1.ListPartitionsResponse
-	(*GetStatsRequest)(nil),            // 58: fluxmq.queue.v1.GetStatsRequest
-	(*QueueStats)(nil),                 // 59: fluxmq.queue.v1.QueueStats
-	(*PartitionStats)(nil),             // 60: fluxmq.queue.v1.PartitionStats
-	(*ConsumerGroupSummary)(nil),       // 61: fluxmq.queue.v1.ConsumerGroupSummary
-	(*PurgeRequest)(nil),               // 62: fluxmq.queue.v1.PurgeRequest
-	(*PurgeResponse)(nil),              // 63: fluxmq.queue.v1.PurgeResponse
-	(*TruncateRequest)(nil),            // 64: fluxmq.queue.v1.TruncateRequest
-	nil,                                // 65: fluxmq.queue.v1.Message.HeadersEntry
-	nil,                                // 66: fluxmq.queue.v1.ConsumerInfo.MetadataEntry
-	nil,                                // 67: fluxmq.queue.v1.AppendRequest.HeadersEntry
-	nil,                                // 68: fluxmq.queue.v1.BatchMessage.HeadersEntry
-	nil,                                // 69: fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
-	(*timestamppb.Timestamp)(nil),      // 70: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),        // 71: google.protobuf.Duration
-	(*emptypb.Empty)(nil),              // 72: google.protobuf.Empty
+	(*AckResponse)(nil),                // 48: fluxmq.queue.v1.AckResponse
+	(*NackRequest)(nil),                // 49: fluxmq.queue.v1.NackRequest
+	(*ClaimRequest)(nil),               // 50: fluxmq.queue.v1.ClaimRequest
+	(*ClaimResponse)(nil),              // 51: fluxmq.queue.v1.ClaimResponse
+	(*GetPendingRequest)(nil),          // 52: fluxmq.queue.v1.GetPendingRequest
+	(*GetPendingResponse)(nil),         // 53: fluxmq.queue.v1.GetPendingResponse
+	(*GetQueueInfoRequest)(nil),        // 54: fluxmq.queue.v1.GetQueueInfoRequest
+	(*GetStatsRequest)(nil),            // 55: fluxmq.queue.v1.GetStatsRequest
+	(*QueueStats)(nil),                 // 56: fluxmq.queue.v1.QueueStats
+	(*ConsumerGroupSummary)(nil),       // 57: fluxmq.queue.v1.ConsumerGroupSummary
+	(*PurgeRequest)(nil),               // 58: fluxmq.queue.v1.PurgeRequest
+	(*PurgeResponse)(nil),              // 59: fluxmq.queue.v1.PurgeResponse
+	(*TruncateRequest)(nil),            // 60: fluxmq.queue.v1.TruncateRequest
+	nil,                                // 61: fluxmq.queue.v1.Message.HeadersEntry
+	nil,                                // 62: fluxmq.queue.v1.ConsumerInfo.MetadataEntry
+	nil,                                // 63: fluxmq.queue.v1.AppendRequest.HeadersEntry
+	nil,                                // 64: fluxmq.queue.v1.BatchMessage.HeadersEntry
+	nil,                                // 65: fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil),      // 66: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),        // 67: google.protobuf.Duration
+	(*emptypb.Empty)(nil),              // 68: google.protobuf.Empty
 }
 var file_queue_v1_queue_proto_depIdxs = []int32{
-	70, // 0: fluxmq.queue.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
-	65, // 1: fluxmq.queue.v1.Message.headers:type_name -> fluxmq.queue.v1.Message.HeadersEntry
+	66, // 0: fluxmq.queue.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
+	61, // 1: fluxmq.queue.v1.Message.headers:type_name -> fluxmq.queue.v1.Message.HeadersEntry
 	4,  // 2: fluxmq.queue.v1.Message.delivery_info:type_name -> fluxmq.queue.v1.DeliveryInfo
-	70, // 3: fluxmq.queue.v1.DeliveryInfo.first_delivered_at:type_name -> google.protobuf.Timestamp
-	70, // 4: fluxmq.queue.v1.DeliveryInfo.delivered_at:type_name -> google.protobuf.Timestamp
+	66, // 3: fluxmq.queue.v1.DeliveryInfo.first_delivered_at:type_name -> google.protobuf.Timestamp
+	66, // 4: fluxmq.queue.v1.DeliveryInfo.delivered_at:type_name -> google.protobuf.Timestamp
 	6,  // 5: fluxmq.queue.v1.Queue.config:type_name -> fluxmq.queue.v1.QueueConfig
 	9,  // 6: fluxmq.queue.v1.Queue.state:type_name -> fluxmq.queue.v1.QueueState
-	70, // 7: fluxmq.queue.v1.Queue.created_at:type_name -> google.protobuf.Timestamp
-	70, // 8: fluxmq.queue.v1.Queue.updated_at:type_name -> google.protobuf.Timestamp
+	66, // 7: fluxmq.queue.v1.Queue.created_at:type_name -> google.protobuf.Timestamp
+	66, // 8: fluxmq.queue.v1.Queue.updated_at:type_name -> google.protobuf.Timestamp
 	7,  // 9: fluxmq.queue.v1.QueueConfig.retention:type_name -> fluxmq.queue.v1.RetentionConfig
 	0,  // 10: fluxmq.queue.v1.QueueConfig.compression:type_name -> fluxmq.queue.v1.CompressionType
 	8,  // 11: fluxmq.queue.v1.QueueConfig.segment:type_name -> fluxmq.queue.v1.SegmentConfig
-	71, // 12: fluxmq.queue.v1.RetentionConfig.max_age:type_name -> google.protobuf.Duration
-	71, // 13: fluxmq.queue.v1.SegmentConfig.max_age:type_name -> google.protobuf.Duration
-	70, // 14: fluxmq.queue.v1.QueueState.oldest_message:type_name -> google.protobuf.Timestamp
-	70, // 15: fluxmq.queue.v1.QueueState.newest_message:type_name -> google.protobuf.Timestamp
-	70, // 16: fluxmq.queue.v1.PartitionInfo.oldest_timestamp:type_name -> google.protobuf.Timestamp
-	70, // 17: fluxmq.queue.v1.PartitionInfo.newest_timestamp:type_name -> google.protobuf.Timestamp
+	67, // 12: fluxmq.queue.v1.RetentionConfig.max_age:type_name -> google.protobuf.Duration
+	67, // 13: fluxmq.queue.v1.SegmentConfig.max_age:type_name -> google.protobuf.Duration
+	66, // 14: fluxmq.queue.v1.QueueState.oldest_message:type_name -> google.protobuf.Timestamp
+	66, // 15: fluxmq.queue.v1.QueueState.newest_message:type_name -> google.protobuf.Timestamp
+	66, // 16: fluxmq.queue.v1.QueueInfo.oldest_timestamp:type_name -> google.protobuf.Timestamp
+	66, // 17: fluxmq.queue.v1.QueueInfo.newest_timestamp:type_name -> google.protobuf.Timestamp
 	12, // 18: fluxmq.queue.v1.ConsumerGroup.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
-	13, // 19: fluxmq.queue.v1.ConsumerGroup.cursors:type_name -> fluxmq.queue.v1.PartitionCursor
+	13, // 19: fluxmq.queue.v1.ConsumerGroup.cursor:type_name -> fluxmq.queue.v1.QueueCursor
 	14, // 20: fluxmq.queue.v1.ConsumerGroup.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
-	70, // 21: fluxmq.queue.v1.ConsumerGroup.created_at:type_name -> google.protobuf.Timestamp
-	71, // 22: fluxmq.queue.v1.ConsumerGroupConfig.ack_timeout:type_name -> google.protobuf.Duration
+	66, // 21: fluxmq.queue.v1.ConsumerGroup.created_at:type_name -> google.protobuf.Timestamp
+	67, // 22: fluxmq.queue.v1.ConsumerGroupConfig.ack_timeout:type_name -> google.protobuf.Duration
 	1,  // 23: fluxmq.queue.v1.ConsumerGroupConfig.initial_position:type_name -> fluxmq.queue.v1.InitialPosition
-	70, // 24: fluxmq.queue.v1.PartitionCursor.updated_at:type_name -> google.protobuf.Timestamp
-	70, // 25: fluxmq.queue.v1.ConsumerInfo.last_heartbeat:type_name -> google.protobuf.Timestamp
-	66, // 26: fluxmq.queue.v1.ConsumerInfo.metadata:type_name -> fluxmq.queue.v1.ConsumerInfo.MetadataEntry
-	70, // 27: fluxmq.queue.v1.PendingEntry.delivered_at:type_name -> google.protobuf.Timestamp
-	71, // 28: fluxmq.queue.v1.PendingEntry.idle_time:type_name -> google.protobuf.Duration
+	66, // 24: fluxmq.queue.v1.QueueCursor.updated_at:type_name -> google.protobuf.Timestamp
+	66, // 25: fluxmq.queue.v1.ConsumerInfo.last_heartbeat:type_name -> google.protobuf.Timestamp
+	62, // 26: fluxmq.queue.v1.ConsumerInfo.metadata:type_name -> fluxmq.queue.v1.ConsumerInfo.MetadataEntry
+	66, // 27: fluxmq.queue.v1.PendingEntry.delivered_at:type_name -> google.protobuf.Timestamp
+	67, // 28: fluxmq.queue.v1.PendingEntry.idle_time:type_name -> google.protobuf.Duration
 	6,  // 29: fluxmq.queue.v1.CreateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
 	5,  // 30: fluxmq.queue.v1.ListQueuesResponse.queues:type_name -> fluxmq.queue.v1.Queue
 	6,  // 31: fluxmq.queue.v1.UpdateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
-	67, // 32: fluxmq.queue.v1.AppendRequest.headers:type_name -> fluxmq.queue.v1.AppendRequest.HeadersEntry
-	70, // 33: fluxmq.queue.v1.AppendResponse.timestamp:type_name -> google.protobuf.Timestamp
+	63, // 32: fluxmq.queue.v1.AppendRequest.headers:type_name -> fluxmq.queue.v1.AppendRequest.HeadersEntry
+	66, // 33: fluxmq.queue.v1.AppendResponse.timestamp:type_name -> google.protobuf.Timestamp
 	25, // 34: fluxmq.queue.v1.AppendBatchRequest.messages:type_name -> fluxmq.queue.v1.BatchMessage
-	68, // 35: fluxmq.queue.v1.BatchMessage.headers:type_name -> fluxmq.queue.v1.BatchMessage.HeadersEntry
-	70, // 36: fluxmq.queue.v1.AppendBatchResponse.timestamp:type_name -> google.protobuf.Timestamp
+	64, // 35: fluxmq.queue.v1.BatchMessage.headers:type_name -> fluxmq.queue.v1.BatchMessage.HeadersEntry
+	66, // 36: fluxmq.queue.v1.AppendBatchResponse.timestamp:type_name -> google.protobuf.Timestamp
 	3,  // 37: fluxmq.queue.v1.ReadBatchResponse.messages:type_name -> fluxmq.queue.v1.Message
 	2,  // 38: fluxmq.queue.v1.TailRequest.start_from:type_name -> fluxmq.queue.v1.TailRequest.StartFrom
-	70, // 39: fluxmq.queue.v1.SeekToTimestampRequest.timestamp:type_name -> google.protobuf.Timestamp
-	70, // 40: fluxmq.queue.v1.SeekResponse.timestamp:type_name -> google.protobuf.Timestamp
+	66, // 39: fluxmq.queue.v1.SeekToTimestampRequest.timestamp:type_name -> google.protobuf.Timestamp
+	66, // 40: fluxmq.queue.v1.SeekResponse.timestamp:type_name -> google.protobuf.Timestamp
 	12, // 41: fluxmq.queue.v1.CreateConsumerGroupRequest.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
 	11, // 42: fluxmq.queue.v1.ListConsumerGroupsResponse.groups:type_name -> fluxmq.queue.v1.ConsumerGroup
-	69, // 43: fluxmq.queue.v1.JoinGroupRequest.metadata:type_name -> fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
-	71, // 44: fluxmq.queue.v1.JoinGroupRequest.session_timeout:type_name -> google.protobuf.Duration
+	65, // 43: fluxmq.queue.v1.JoinGroupRequest.metadata:type_name -> fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
+	67, // 44: fluxmq.queue.v1.JoinGroupRequest.session_timeout:type_name -> google.protobuf.Duration
 	14, // 45: fluxmq.queue.v1.JoinGroupResponse.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
-	71, // 46: fluxmq.queue.v1.ConsumeRequest.wait_time:type_name -> google.protobuf.Duration
+	67, // 46: fluxmq.queue.v1.ConsumeRequest.wait_time:type_name -> google.protobuf.Duration
 	3,  // 47: fluxmq.queue.v1.ConsumeResponse.messages:type_name -> fluxmq.queue.v1.Message
-	48, // 48: fluxmq.queue.v1.AckRequest.offsets:type_name -> fluxmq.queue.v1.PartitionOffsets
-	13, // 49: fluxmq.queue.v1.AckResponse.committed:type_name -> fluxmq.queue.v1.PartitionCursor
-	48, // 50: fluxmq.queue.v1.NackRequest.offsets:type_name -> fluxmq.queue.v1.PartitionOffsets
-	71, // 51: fluxmq.queue.v1.NackRequest.delay:type_name -> google.protobuf.Duration
-	71, // 52: fluxmq.queue.v1.ClaimRequest.min_idle_time:type_name -> google.protobuf.Duration
-	3,  // 53: fluxmq.queue.v1.ClaimResponse.messages:type_name -> fluxmq.queue.v1.Message
-	15, // 54: fluxmq.queue.v1.GetPendingResponse.entries:type_name -> fluxmq.queue.v1.PendingEntry
-	10, // 55: fluxmq.queue.v1.ListPartitionsResponse.partitions:type_name -> fluxmq.queue.v1.PartitionInfo
-	60, // 56: fluxmq.queue.v1.QueueStats.partitions:type_name -> fluxmq.queue.v1.PartitionStats
-	61, // 57: fluxmq.queue.v1.QueueStats.consumer_groups:type_name -> fluxmq.queue.v1.ConsumerGroupSummary
-	16, // 58: fluxmq.queue.v1.QueueService.CreateQueue:input_type -> fluxmq.queue.v1.CreateQueueRequest
-	17, // 59: fluxmq.queue.v1.QueueService.GetQueue:input_type -> fluxmq.queue.v1.GetQueueRequest
-	18, // 60: fluxmq.queue.v1.QueueService.ListQueues:input_type -> fluxmq.queue.v1.ListQueuesRequest
-	20, // 61: fluxmq.queue.v1.QueueService.DeleteQueue:input_type -> fluxmq.queue.v1.DeleteQueueRequest
-	21, // 62: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
-	22, // 63: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
-	24, // 64: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
-	22, // 65: fluxmq.queue.v1.QueueService.AppendStream:input_type -> fluxmq.queue.v1.AppendRequest
-	27, // 66: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
-	28, // 67: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
-	30, // 68: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
-	31, // 69: fluxmq.queue.v1.QueueService.SeekToOffset:input_type -> fluxmq.queue.v1.SeekToOffsetRequest
-	32, // 70: fluxmq.queue.v1.QueueService.SeekToTimestamp:input_type -> fluxmq.queue.v1.SeekToTimestampRequest
-	34, // 71: fluxmq.queue.v1.QueueService.CreateConsumerGroup:input_type -> fluxmq.queue.v1.CreateConsumerGroupRequest
-	35, // 72: fluxmq.queue.v1.QueueService.GetConsumerGroup:input_type -> fluxmq.queue.v1.GetConsumerGroupRequest
-	36, // 73: fluxmq.queue.v1.QueueService.ListConsumerGroups:input_type -> fluxmq.queue.v1.ListConsumerGroupsRequest
-	38, // 74: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:input_type -> fluxmq.queue.v1.DeleteConsumerGroupRequest
-	39, // 75: fluxmq.queue.v1.QueueService.JoinGroup:input_type -> fluxmq.queue.v1.JoinGroupRequest
-	41, // 76: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
-	42, // 77: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
-	44, // 78: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
-	46, // 79: fluxmq.queue.v1.QueueService.ConsumeStream:input_type -> fluxmq.queue.v1.ConsumeStreamRequest
-	47, // 80: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
-	50, // 81: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
-	51, // 82: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
-	53, // 83: fluxmq.queue.v1.QueueService.GetPending:input_type -> fluxmq.queue.v1.GetPendingRequest
-	55, // 84: fluxmq.queue.v1.QueueService.GetPartitionInfo:input_type -> fluxmq.queue.v1.GetPartitionInfoRequest
-	56, // 85: fluxmq.queue.v1.QueueService.ListPartitions:input_type -> fluxmq.queue.v1.ListPartitionsRequest
-	58, // 86: fluxmq.queue.v1.QueueService.GetStats:input_type -> fluxmq.queue.v1.GetStatsRequest
-	62, // 87: fluxmq.queue.v1.QueueService.Purge:input_type -> fluxmq.queue.v1.PurgeRequest
-	64, // 88: fluxmq.queue.v1.QueueService.Truncate:input_type -> fluxmq.queue.v1.TruncateRequest
-	5,  // 89: fluxmq.queue.v1.QueueService.CreateQueue:output_type -> fluxmq.queue.v1.Queue
-	5,  // 90: fluxmq.queue.v1.QueueService.GetQueue:output_type -> fluxmq.queue.v1.Queue
-	19, // 91: fluxmq.queue.v1.QueueService.ListQueues:output_type -> fluxmq.queue.v1.ListQueuesResponse
-	72, // 92: fluxmq.queue.v1.QueueService.DeleteQueue:output_type -> google.protobuf.Empty
-	5,  // 93: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
-	23, // 94: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
-	26, // 95: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	26, // 96: fluxmq.queue.v1.QueueService.AppendStream:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	3,  // 97: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
-	29, // 98: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
-	3,  // 99: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
-	33, // 100: fluxmq.queue.v1.QueueService.SeekToOffset:output_type -> fluxmq.queue.v1.SeekResponse
-	33, // 101: fluxmq.queue.v1.QueueService.SeekToTimestamp:output_type -> fluxmq.queue.v1.SeekResponse
-	11, // 102: fluxmq.queue.v1.QueueService.CreateConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
-	11, // 103: fluxmq.queue.v1.QueueService.GetConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
-	37, // 104: fluxmq.queue.v1.QueueService.ListConsumerGroups:output_type -> fluxmq.queue.v1.ListConsumerGroupsResponse
-	72, // 105: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:output_type -> google.protobuf.Empty
-	40, // 106: fluxmq.queue.v1.QueueService.JoinGroup:output_type -> fluxmq.queue.v1.JoinGroupResponse
-	72, // 107: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
-	43, // 108: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
-	45, // 109: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
-	3,  // 110: fluxmq.queue.v1.QueueService.ConsumeStream:output_type -> fluxmq.queue.v1.Message
-	49, // 111: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
-	72, // 112: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
-	52, // 113: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
-	54, // 114: fluxmq.queue.v1.QueueService.GetPending:output_type -> fluxmq.queue.v1.GetPendingResponse
-	10, // 115: fluxmq.queue.v1.QueueService.GetPartitionInfo:output_type -> fluxmq.queue.v1.PartitionInfo
-	57, // 116: fluxmq.queue.v1.QueueService.ListPartitions:output_type -> fluxmq.queue.v1.ListPartitionsResponse
-	59, // 117: fluxmq.queue.v1.QueueService.GetStats:output_type -> fluxmq.queue.v1.QueueStats
-	63, // 118: fluxmq.queue.v1.QueueService.Purge:output_type -> fluxmq.queue.v1.PurgeResponse
-	72, // 119: fluxmq.queue.v1.QueueService.Truncate:output_type -> google.protobuf.Empty
-	89, // [89:120] is the sub-list for method output_type
-	58, // [58:89] is the sub-list for method input_type
-	58, // [58:58] is the sub-list for extension type_name
-	58, // [58:58] is the sub-list for extension extendee
-	0,  // [0:58] is the sub-list for field type_name
+	13, // 48: fluxmq.queue.v1.AckResponse.committed:type_name -> fluxmq.queue.v1.QueueCursor
+	67, // 49: fluxmq.queue.v1.NackRequest.delay:type_name -> google.protobuf.Duration
+	67, // 50: fluxmq.queue.v1.ClaimRequest.min_idle_time:type_name -> google.protobuf.Duration
+	3,  // 51: fluxmq.queue.v1.ClaimResponse.messages:type_name -> fluxmq.queue.v1.Message
+	15, // 52: fluxmq.queue.v1.GetPendingResponse.entries:type_name -> fluxmq.queue.v1.PendingEntry
+	57, // 53: fluxmq.queue.v1.QueueStats.consumer_groups:type_name -> fluxmq.queue.v1.ConsumerGroupSummary
+	16, // 54: fluxmq.queue.v1.QueueService.CreateQueue:input_type -> fluxmq.queue.v1.CreateQueueRequest
+	17, // 55: fluxmq.queue.v1.QueueService.GetQueue:input_type -> fluxmq.queue.v1.GetQueueRequest
+	18, // 56: fluxmq.queue.v1.QueueService.ListQueues:input_type -> fluxmq.queue.v1.ListQueuesRequest
+	20, // 57: fluxmq.queue.v1.QueueService.DeleteQueue:input_type -> fluxmq.queue.v1.DeleteQueueRequest
+	21, // 58: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
+	22, // 59: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
+	24, // 60: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
+	22, // 61: fluxmq.queue.v1.QueueService.AppendStream:input_type -> fluxmq.queue.v1.AppendRequest
+	27, // 62: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
+	28, // 63: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
+	30, // 64: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
+	31, // 65: fluxmq.queue.v1.QueueService.SeekToOffset:input_type -> fluxmq.queue.v1.SeekToOffsetRequest
+	32, // 66: fluxmq.queue.v1.QueueService.SeekToTimestamp:input_type -> fluxmq.queue.v1.SeekToTimestampRequest
+	34, // 67: fluxmq.queue.v1.QueueService.CreateConsumerGroup:input_type -> fluxmq.queue.v1.CreateConsumerGroupRequest
+	35, // 68: fluxmq.queue.v1.QueueService.GetConsumerGroup:input_type -> fluxmq.queue.v1.GetConsumerGroupRequest
+	36, // 69: fluxmq.queue.v1.QueueService.ListConsumerGroups:input_type -> fluxmq.queue.v1.ListConsumerGroupsRequest
+	38, // 70: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:input_type -> fluxmq.queue.v1.DeleteConsumerGroupRequest
+	39, // 71: fluxmq.queue.v1.QueueService.JoinGroup:input_type -> fluxmq.queue.v1.JoinGroupRequest
+	41, // 72: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
+	42, // 73: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
+	44, // 74: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
+	46, // 75: fluxmq.queue.v1.QueueService.ConsumeStream:input_type -> fluxmq.queue.v1.ConsumeStreamRequest
+	47, // 76: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
+	49, // 77: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
+	50, // 78: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
+	52, // 79: fluxmq.queue.v1.QueueService.GetPending:input_type -> fluxmq.queue.v1.GetPendingRequest
+	54, // 80: fluxmq.queue.v1.QueueService.GetQueueInfo:input_type -> fluxmq.queue.v1.GetQueueInfoRequest
+	55, // 81: fluxmq.queue.v1.QueueService.GetStats:input_type -> fluxmq.queue.v1.GetStatsRequest
+	58, // 82: fluxmq.queue.v1.QueueService.Purge:input_type -> fluxmq.queue.v1.PurgeRequest
+	60, // 83: fluxmq.queue.v1.QueueService.Truncate:input_type -> fluxmq.queue.v1.TruncateRequest
+	5,  // 84: fluxmq.queue.v1.QueueService.CreateQueue:output_type -> fluxmq.queue.v1.Queue
+	5,  // 85: fluxmq.queue.v1.QueueService.GetQueue:output_type -> fluxmq.queue.v1.Queue
+	19, // 86: fluxmq.queue.v1.QueueService.ListQueues:output_type -> fluxmq.queue.v1.ListQueuesResponse
+	68, // 87: fluxmq.queue.v1.QueueService.DeleteQueue:output_type -> google.protobuf.Empty
+	5,  // 88: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
+	23, // 89: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
+	26, // 90: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	26, // 91: fluxmq.queue.v1.QueueService.AppendStream:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	3,  // 92: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
+	29, // 93: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
+	3,  // 94: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
+	33, // 95: fluxmq.queue.v1.QueueService.SeekToOffset:output_type -> fluxmq.queue.v1.SeekResponse
+	33, // 96: fluxmq.queue.v1.QueueService.SeekToTimestamp:output_type -> fluxmq.queue.v1.SeekResponse
+	11, // 97: fluxmq.queue.v1.QueueService.CreateConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
+	11, // 98: fluxmq.queue.v1.QueueService.GetConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
+	37, // 99: fluxmq.queue.v1.QueueService.ListConsumerGroups:output_type -> fluxmq.queue.v1.ListConsumerGroupsResponse
+	68, // 100: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:output_type -> google.protobuf.Empty
+	40, // 101: fluxmq.queue.v1.QueueService.JoinGroup:output_type -> fluxmq.queue.v1.JoinGroupResponse
+	68, // 102: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
+	43, // 103: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
+	45, // 104: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
+	3,  // 105: fluxmq.queue.v1.QueueService.ConsumeStream:output_type -> fluxmq.queue.v1.Message
+	48, // 106: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
+	68, // 107: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
+	51, // 108: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
+	53, // 109: fluxmq.queue.v1.QueueService.GetPending:output_type -> fluxmq.queue.v1.GetPendingResponse
+	10, // 110: fluxmq.queue.v1.QueueService.GetQueueInfo:output_type -> fluxmq.queue.v1.QueueInfo
+	56, // 111: fluxmq.queue.v1.QueueService.GetStats:output_type -> fluxmq.queue.v1.QueueStats
+	59, // 112: fluxmq.queue.v1.QueueService.Purge:output_type -> fluxmq.queue.v1.PurgeResponse
+	68, // 113: fluxmq.queue.v1.QueueService.Truncate:output_type -> google.protobuf.Empty
+	84, // [84:114] is the sub-list for method output_type
+	54, // [54:84] is the sub-list for method input_type
+	54, // [54:54] is the sub-list for extension type_name
+	54, // [54:54] is the sub-list for extension extendee
+	0,  // [0:54] is the sub-list for field type_name
 }
 
 func init() { file_queue_v1_queue_proto_init() }
@@ -4966,18 +4532,13 @@ func file_queue_v1_queue_proto_init() {
 	if File_queue_v1_queue_proto != nil {
 		return
 	}
-	file_queue_v1_queue_proto_msgTypes[19].OneofWrappers = []any{}
-	file_queue_v1_queue_proto_msgTypes[21].OneofWrappers = []any{}
-	file_queue_v1_queue_proto_msgTypes[48].OneofWrappers = []any{}
-	file_queue_v1_queue_proto_msgTypes[50].OneofWrappers = []any{}
-	file_queue_v1_queue_proto_msgTypes[59].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_queue_v1_queue_proto_rawDesc), len(file_queue_v1_queue_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   67,
+			NumMessages:   63,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
