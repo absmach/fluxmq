@@ -12,6 +12,34 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+// QueueConsumerInfo represents a queue consumer registration visible across the cluster.
+type QueueConsumerInfo struct {
+	QueueName    string // Queue name (e.g., "test" for $queue/test)
+	GroupID      string // Consumer group ID
+	ConsumerID   string // Consumer identifier (usually client ID)
+	ClientID     string // MQTT client ID
+	Pattern      string // Subscription pattern within the queue
+	ProxyNodeID  string // Node where the consumer is connected
+	RegisteredAt time.Time
+}
+
+// OwnershipChange represents a session ownership change event.
+type OwnershipChange struct {
+	ClientID string
+	OldNode  string // Empty if session is new
+	NewNode  string // Empty if session was released
+	Time     time.Time
+}
+
+// NodeInfo contains information about a cluster node.
+type NodeInfo struct {
+	ID      string
+	Address string // Inter-broker transport address
+	Healthy bool
+	Leader  bool
+	Uptime  time.Duration
+}
+
 // SessionOwnership manages distributed session ownership across cluster nodes.
 type SessionOwnership interface {
 	// AcquireSession registers this node as the owner of a session.
@@ -45,17 +73,6 @@ type SubscriptionRouter interface {
 	// GetSubscribersForTopic returns all subscriptions matching a topic.
 	// Used for routing publishes to interested nodes.
 	GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error)
-}
-
-// QueueConsumerInfo represents a queue consumer registration visible across the cluster.
-type QueueConsumerInfo struct {
-	QueueName    string // Queue name (e.g., "test" for $queue/test)
-	GroupID      string // Consumer group ID
-	ConsumerID   string // Consumer identifier (usually client ID)
-	ClientID     string // MQTT client ID
-	Pattern      string // Subscription pattern within the queue
-	ProxyNodeID  string // Node where the consumer is connected
-	RegisteredAt time.Time
 }
 
 // QueueConsumerRegistry manages cluster-wide queue consumer registrations.
@@ -138,23 +155,6 @@ type Cluster interface {
 	// This is called in proxy mode when the worker needs to deliver a message
 	// to a consumer connected to a different node.
 	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error
-}
-
-// OwnershipChange represents a session ownership change event.
-type OwnershipChange struct {
-	ClientID string
-	OldNode  string // Empty if session is new
-	NewNode  string // Empty if session was released
-	Time     time.Time
-}
-
-// NodeInfo contains information about a cluster node.
-type NodeInfo struct {
-	ID      string
-	Address string // Inter-broker transport address
-	Healthy bool
-	Leader  bool
-	Uptime  time.Duration
 }
 
 // MessageHandler handles message delivery and session management for the cluster.
