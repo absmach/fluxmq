@@ -13,19 +13,28 @@ server:
     mtls: {}
 
   websocket:
-    plain: {}
-    tls: {}
-    mtls: {}
+    plain:
+      addr: ""  # Disabled for cluster testing
+    tls:
+      addr: ""
+    mtls:
+      addr: ""
 
   http:
-    plain: {}
-    tls: {}
-    mtls: {}
+    plain:
+      addr: ""  # Disabled for cluster testing
+    tls:
+      addr: ""
+    mtls:
+      addr: ""
 
   coap:
-    plain: {}
-    dtls: {}
-    mdtls: {}
+    plain:
+      addr: ""  # Disabled for cluster testing
+    dtls:
+      addr: ""
+    mdtls:
+      addr: ""
 
   health_enabled: true
   health_addr: ":8083"
