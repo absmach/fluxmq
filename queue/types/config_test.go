@@ -24,50 +24,42 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "empty name",
 			config: QueueConfig{
-				Name:       "",
-				Partitions: 1,
+				Name: "",
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid name prefix",
 			config: QueueConfig{
-				Name:       "invalid/test",
-				Partitions: 1,
+				Name: "invalid/test",
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero partitions",
 			config: QueueConfig{
-				Name:       "$queue/test",
-				Partitions: 0,
+				Name: "$queue/test",
 			},
 			wantErr: true,
 		},
 		{
 			name: "too many partitions",
 			config: QueueConfig{
-				Name:       "$queue/test",
-				Partitions: 1001,
+				Name: "$queue/test",
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid ordering mode",
 			config: QueueConfig{
-				Name:       "$queue/test",
-				Partitions: 1,
-				Ordering:   "invalid",
+				Name: "$queue/test",
 			},
 			wantErr: true,
 		},
 		{
 			name: "strict ordering with multiple partitions",
 			config: QueueConfig{
-				Name:       "$queue/test",
-				Partitions: 5,
-				Ordering:   OrderingStrict,
+				Name: "$queue/test",
 			},
 			wantErr: true,
 		},
@@ -75,8 +67,6 @@ func TestQueueConfig_Validate(t *testing.T) {
 			name: "strict ordering with single partition",
 			config: func() QueueConfig {
 				cfg := DefaultQueueConfig("$queue/test")
-				cfg.Partitions = 1
-				cfg.Ordering = OrderingStrict
 				return cfg
 			}(),
 			wantErr: false,
@@ -94,7 +84,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 			name: "zero max queue depth",
 			config: func() QueueConfig {
 				cfg := DefaultQueueConfig("$queue/test")
-				cfg.MaxQueueDepth = 0
+				cfg.MaxDepth = 0
 				return cfg
 			}(),
 			wantErr: true,
@@ -182,25 +172,22 @@ func TestDefaultQueueConfig(t *testing.T) {
 	config := DefaultQueueConfig("$queue/test")
 
 	assert.Equal(t, "$queue/test", config.Name)
-	assert.Equal(t, 10, config.Partitions)
-	assert.Equal(t, OrderingPartition, config.Ordering)
-	assert.Equal(t, int64(1024*1024), config.MaxMessageSize)
-	assert.Equal(t, int64(100000), config.MaxQueueDepth)
-	assert.Equal(t, 7*24*time.Hour, config.MessageTTL)
-	assert.Equal(t, 30*time.Second, config.DeliveryTimeout)
-	assert.Equal(t, 100, config.BatchSize)
+	assert.Equal(t, int64(1024*1024*10), config.MaxMessageSize, "unexpected max message size")
+	assert.Equal(t, 7*24*time.Hour, config.MessageTTL, "unexpected message TTL")
+	assert.Equal(t, 30*time.Second, config.DeliveryTimeout, "unexpected delivery TO")
+	assert.Equal(t, 100, config.BatchSize, "unexpected batch size")
 
 	// Retry policy
-	assert.Equal(t, 10, config.RetryPolicy.MaxRetries)
-	assert.Equal(t, 5*time.Second, config.RetryPolicy.InitialBackoff)
-	assert.Equal(t, 5*time.Minute, config.RetryPolicy.MaxBackoff)
-	assert.Equal(t, 2.0, config.RetryPolicy.BackoffMultiplier)
-	assert.Equal(t, 3*time.Hour, config.RetryPolicy.TotalTimeout)
+	assert.Equal(t, 10, config.RetryPolicy.MaxRetries, "unexpected max reties")
+	assert.Equal(t, 5*time.Second, config.RetryPolicy.InitialBackoff, "unexpected initial backoff")
+	assert.Equal(t, 5*time.Minute, config.RetryPolicy.MaxBackoff, "unexpected max backoff")
+	assert.Equal(t, 2.0, config.RetryPolicy.BackoffMultiplier, "unexpected max backoff multiplier")
+	assert.Equal(t, 24*time.Hour, config.RetryPolicy.TotalTimeout, "unexpected total retry timeout")
 
 	// DLQ config
-	assert.True(t, config.DLQConfig.Enabled)
-	assert.Equal(t, "", config.DLQConfig.Topic) // Auto-generated
-	assert.Equal(t, "", config.DLQConfig.AlertWebhook)
+	assert.True(t, config.DLQConfig.Enabled, "DLQ expected to be enabled")
+	assert.Equal(t, "", config.DLQConfig.Topic, "DLQ topic is not empty")
+	assert.Equal(t, "", config.DLQConfig.AlertWebhook, "DLQ alert webhook is not empty")
 
 	// Validate default config
 	err := config.Validate()

@@ -117,7 +117,7 @@ func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 			InitialBackoff:    5 * time.Second,
 			MaxBackoff:        5 * time.Minute,
 			BackoffMultiplier: 2.0,
-			TotalTimeout:      3 * time.Hour,
+			TotalTimeout:      24 * time.Hour,
 		},
 
 		DLQConfig: DLQConfig{
