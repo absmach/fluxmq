@@ -193,14 +193,14 @@ All protocols share the same broker core - messages flow seamlessly across proto
 ```bash
 # Clone and build
 git clone https://github.com/absmach/fluxmq.git
-cd mqtt
+cd fluxmq
 make build
 
 # Run single node
-./build/mqttd
+./build/fluxmq
 
 # Run with configuration
-./build/mqttd --config config.yaml
+./build/fluxmq --config config.yaml
 
 # Run 3-node cluster
 make run-node1  # Terminal 1

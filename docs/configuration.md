@@ -370,7 +370,7 @@ Selects the storage backend for persistence.
 ```yaml
 storage:
   type: "badger"                       # "memory" or "badger"
-  badger_dir: "/tmp/mqtt/data"         # BadgerDB directory
+  badger_dir: "/tmp/fluxmq/data"         # BadgerDB directory
 ```
 
 ### Memory Storage
@@ -435,7 +435,7 @@ cluster:
   node_id: "node1"                     # Unique node identifier
 
   etcd:
-    data_dir: "/tmp/mqtt/node1/etcd"   # etcd data directory
+    data_dir: "/tmp/fluxmq/node1/etcd"   # etcd data directory
     bind_addr: "127.0.0.1:2380"        # etcd peer address
     client_addr: "127.0.0.1:2379"      # etcd client address
     initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
@@ -702,7 +702,7 @@ session:
 
 storage:
   type: "badger"
-  badger_dir: "/tmp/mqtt/data"
+  badger_dir: "/tmp/fluxmq/data"
 
 cluster:
   enabled: false
@@ -742,14 +742,14 @@ server:
 
 storage:
   type: "badger"
-  badger_dir: "/tmp/mqtt/cluster-data"
+  badger_dir: "/tmp/fluxmq/cluster-data"
 
 cluster:
   enabled: true
   node_id: "node1"
 
   etcd:
-    data_dir: "/tmp/mqtt/cluster-etcd"
+    data_dir: "/tmp/fluxmq/cluster-etcd"
     bind_addr: "127.0.0.1:2380"
     client_addr: "127.0.0.1:2379"
     initial_cluster: "node1=http://127.0.0.1:2380"
@@ -792,14 +792,14 @@ server:
 
 storage:
   type: "badger"
-  badger_dir: "/tmp/mqtt/node1/data"
+  badger_dir: "/tmp/fluxmq/node1/data"
 
 cluster:
   enabled: true
   node_id: "node1"
 
   etcd:
-    data_dir: "/tmp/mqtt/node1/etcd"
+    data_dir: "/tmp/fluxmq/node1/etcd"
     bind_addr: "127.0.0.1:2380"
     client_addr: "127.0.0.1:2379"
     initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
@@ -818,8 +818,8 @@ log:
 **Node 2**: Same as Node 1, with:
 - `tcp.plain.addr: ":1884"`
 - `node_id: "node2"`
-- `badger_dir: "/tmp/mqtt/node2/data"`
-- `etcd.data_dir: "/tmp/mqtt/node2/etcd"`
+- `badger_dir: "/tmp/fluxmq/node2/data"`
+- `etcd.data_dir: "/tmp/fluxmq/node2/etcd"`
 - `etcd.bind_addr: "127.0.0.1:2480"`
 - `etcd.client_addr: "127.0.0.1:2479"`
 - `transport.bind_addr: "127.0.0.1:7949"`
