@@ -148,8 +148,8 @@ Comprehensive performance optimization achieved **3.3x performance improvement**
 
 **Implementation files:**
 - `storage/pool.go` - Message pooling
-- `core/packets/v5/pool.go` - v5 Publish pooling
-- `core/packets/v3/pool.go` - v3 Publish pooling
+- `mqtt/packets/v5/pool.go` - v5 Publish pooling
+- `mqtt/packets/v3/pool.go` - v3 Publish pooling
 
 #### Phase 3: Router Match Pooling (1.10x additional gain)
 
@@ -317,7 +317,7 @@ go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./broker
 - Pool provides consistent performance regardless of buffer size
 - Zero allocations when pool is warm
 
-📁 **Test file:** [core/refbuffer_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/core/refbuffer_test.go)
+📁 **Test file:** [mqtt/refbuffer_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/mqtt/refbuffer_test.go)
 
 ```bash
 go test -bench=BenchmarkBufferPool -benchmem ./core

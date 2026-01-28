@@ -90,7 +90,7 @@ run_with_profiling() {
 }
 
 # 1. Core packet encoding/decoding benchmarks
-run_package_benchmarks "./core/packets/v5" "MQTT v5 Packet Encoding/Decoding"
+run_package_benchmarks "./mqtt/packets/v5" "MQTT v5 Packet Encoding/Decoding"
 
 # 2. Router benchmarks
 run_package_benchmarks "./broker/router" "Topic Router Performance"

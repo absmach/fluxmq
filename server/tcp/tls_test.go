@@ -14,7 +14,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
-	v3 "github.com/absmach/fluxmq/core/packets/v3"
+	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	"github.com/absmach/fluxmq/storage/memory"
 )
 

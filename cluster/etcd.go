@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/core"
+	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"

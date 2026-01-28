@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/core/packets"
-	v5 "github.com/absmach/fluxmq/core/packets/v5"
+	"github.com/absmach/fluxmq/mqtt/packets"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
 // QueuePublishOptions configures queue message publishing.

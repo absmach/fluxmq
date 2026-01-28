@@ -9,9 +9,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/absmach/fluxmq/core"
-	"github.com/absmach/fluxmq/core/packets"
-	v5 "github.com/absmach/fluxmq/core/packets/v5"
+	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/mqtt/packets"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"

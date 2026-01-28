@@ -186,8 +186,8 @@ benchstat old.txt new.txt
 
 **Files Modified:**
 - `storage/pool.go` (new)
-- `core/packets/v5/pool.go` (new)
-- `core/packets/v3/pool.go` (new)
+- `mqtt/packets/v5/pool.go` (new)
+- `mqtt/packets/v3/pool.go` (new)
 - `broker/router/pool.go` (new)
 - `broker/publish.go`
 - `broker/delivery.go`

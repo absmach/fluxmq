@@ -6,7 +6,7 @@ package types
 import (
 	"time"
 
-	"github.com/absmach/fluxmq/core"
+	core "github.com/absmach/fluxmq/mqtt"
 )
 
 // MessageState represents the lifecycle state of a queue message.

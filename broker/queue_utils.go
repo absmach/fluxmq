@@ -6,7 +6,7 @@ package broker
 import (
 	"strings"
 
-	v5 "github.com/absmach/fluxmq/core/packets/v5"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
 // isQueueTopic returns true if the topic is a queue topic.

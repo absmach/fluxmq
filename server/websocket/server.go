@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker"
-	"github.com/absmach/fluxmq/core"
-	"github.com/absmach/fluxmq/core/packets"
-	v3 "github.com/absmach/fluxmq/core/packets/v3"
-	v5 "github.com/absmach/fluxmq/core/packets/v5"
+	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/mqtt/packets"
+	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/gorilla/websocket"
 )
 

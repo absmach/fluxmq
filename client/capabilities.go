@@ -3,7 +3,7 @@
 
 package client
 
-import v5 "github.com/absmach/fluxmq/core/packets/v5"
+import v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 
 // ServerCapabilities represents the capabilities and limits
 // advertised by the server in the CONNACK packet (MQTT 5.0).
