@@ -203,7 +203,7 @@ import "go.etcd.io/etcd/server/v3/embed"
 
 eCfg := embed.NewConfig()
 eCfg.Name = "node1"
-eCfg.Dir = "/tmp/mqtt/node1/etcd"
+eCfg.Dir = "/tmp/fluxmq/node1/etcd"
 eCfg.ClusterState = "new"  // or "existing"
 
 etcd, err := embed.StartEtcd(eCfg)
@@ -246,7 +246,7 @@ cluster:
   enabled: true
   node_id: "node1"
   etcd:
-    data_dir: "/tmp/mqtt/node1/etcd"
+    data_dir: "/tmp/fluxmq/node1/etcd"
     bind_addr: "127.0.0.1:2380"      # Raft peer communication
     client_addr: "127.0.0.1:2379"    # Client API
     initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"

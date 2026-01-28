@@ -30,7 +30,7 @@ server:
   shutdown_timeout: "30s"
 
 broker:
-  max_message_size: 1048576  # 1MB
+  max_message_size: 1048576 # 1MB
   max_retained_messages: 10000
   retry_interval: "20s"
   max_retries: 0
@@ -43,14 +43,14 @@ session:
 
 storage:
   type: "badger"
-  badger_dir: "/tmp/mqtt/cluster-data"
+  badger_dir: "/tmp/fluxmq/cluster-data"
 
 cluster:
   enabled: true
   node_id: "node1"
 
   etcd:
-    data_dir: "/tmp/mqtt/cluster-etcd"
+    data_dir: "/tmp/fluxmq/cluster-etcd"
     bind_addr: "127.0.0.1:2380"
     client_addr: "127.0.0.1:2379"
     initial_cluster: "node1=http://127.0.0.1:2380"

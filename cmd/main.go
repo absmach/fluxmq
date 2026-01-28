@@ -257,7 +257,11 @@ func main() {
 
 	// Initialize file-based log storage for queues
 	{
-		queueDir := cfg.Storage.BadgerDir + "_queue"
+		queueDir := cfg.Storage.BadgerDir
+		if !strings.HasSuffix(queueDir, "/") {
+			queueDir += "/"
+		}
+		queueDir += "queue"
 
 		// Use file-based AOL storage (implements both LogStore and ConsumerGroupStore)
 		logStore, err := logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
@@ -556,7 +560,11 @@ func main() {
 		// Get the queue manager from the broker and log store
 		queueManager := b.GetQueueManager()
 		if qm, ok := queueManager.(*queue.Manager); ok {
-			queueDir := cfg.Storage.BadgerDir + "_queue"
+			queueDir := cfg.Storage.BadgerDir
+			if !strings.HasSuffix(queueDir, "/") {
+				queueDir += "/"
+			}
+			queueDir += "queue"
 			logStore, err := logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
 			if err == nil {
 				defer logStore.Close()

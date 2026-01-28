@@ -42,14 +42,14 @@ server:
 # Broker Configuration
 broker:
   # Maximum message size in bytes
-  max_message_size: 1048576  # 1MB
+  max_message_size: 1048576 # 1MB
 
   # Maximum retained messages
   max_retained_messages: 10000
 
   # QoS retry settings
   retry_interval: 20s
-  max_retries: 0  # 0 = infinite retries
+  max_retries: 0 # 0 = infinite retries
 
 # Session Configuration
 session:
@@ -57,7 +57,7 @@ session:
   max_sessions: 10000
 
   # Default session expiry (seconds) if client doesn't specify
-  default_expiry_interval: 300  # 5 minutes
+  default_expiry_interval: 300 # 5 minutes
 
   # Maximum queued messages per offline client
   max_offline_queue_size: 1000
@@ -67,15 +67,15 @@ session:
 
 # Logging Configuration
 log:
-  level: "info"   # debug, info, warn, error
-  format: "text"  # text, json
+  level: "info" # debug, info, warn, error
+  format: "text" # text, json
 
 # Storage Configuration
 storage:
-  type: "badger"  # memory, badger
+  type: "badger" # memory, badger
 
   # BadgerDB settings (only if type=badger)
-  badger_dir: "/tmp/mqtt/data"
+  badger_dir: "/tmp/fluxmq/data"
 
 # Cluster Configuration
 cluster:
@@ -84,7 +84,7 @@ cluster:
 
   # Embedded etcd configuration
   etcd:
-    data_dir: "/tmp/mqtt/etcd"
+    data_dir: "/tmp/fluxmq/etcd"
     bind_addr: "0.0.0.0:2380"
     client_addr: "0.0.0.0:2379"
     initial_cluster: "broker-1=http://0.0.0.0:2380"
@@ -93,7 +93,7 @@ cluster:
   # Inter-broker transport
   transport:
     bind_addr: "0.0.0.0:7948"
-    peers: {}  # Map of nodeID -> address for other nodes
+    peers: {} # Map of nodeID -> address for other nodes
 
 # Webhook Configuration
 webhook:
@@ -102,8 +102,8 @@ webhook:
 
   # Event queue settings
   queue_size: 10000
-  drop_policy: "oldest"  # "oldest" or "newest" when queue is full
-  workers: 5            # Number of concurrent webhook workers
+  drop_policy: "oldest" # "oldest" or "newest" when queue is full
+  workers: 5 # Number of concurrent webhook workers
 
   # Include message payload in webhook events (base64 encoded)
   include_payload: false
@@ -177,9 +177,9 @@ queues:
       - "$queue/#"
     reserved: true
     limits:
-      max_message_size: 10485760  # 10MB
+      max_message_size: 10485760 # 10MB
       max_depth: 100000
-      message_ttl: 168h  # 7 days
+      message_ttl: 168h # 7 days
     retry:
       max_retries: 10
       initial_backoff: 5s
@@ -187,7 +187,6 @@ queues:
       multiplier: 2.0
     dlq:
       enabled: true
-
 # Queue Usage:
 #   Publish: Client publishes to "$queue/mqtt/orders/created"
 #   Subscribe: Client subscribes to "$queue/mqtt/orders/#" with consumer-group property
