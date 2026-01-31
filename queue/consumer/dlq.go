@@ -158,7 +158,7 @@ func (h *DLQHandler) ensureDLQ(ctx context.Context, dlq string) error {
 		MessageTTL:       30 * 24 * time.Hour, // 30 days retention
 		DeliveryTimeout:  30 * time.Second,
 		BatchSize:        100,
-		HeartbeatTimeout: 30 * time.Second,
+		HeartbeatTimeout: 2 * time.Minute,
 	}
 
 	return h.queueStore.CreateQueue(ctx, config)

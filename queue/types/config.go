@@ -110,7 +110,7 @@ func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 		MessageTTL:       7 * 24 * time.Hour,
 		DeliveryTimeout:  30 * time.Second,
 		BatchSize:        100,
-		HeartbeatTimeout: 30 * time.Second,
+		HeartbeatTimeout: 2 * time.Minute,
 
 		RetryPolicy: RetryPolicy{
 			MaxRetries:        10,

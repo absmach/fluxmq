@@ -90,7 +90,7 @@ func DefaultConfig() Config {
 		DeliveryInterval:       10 * time.Millisecond,
 		DeliveryBatchSize:      100,
 		HeartbeatInterval:      10 * time.Second,
-		ConsumerTimeout:        30 * time.Second,
+		ConsumerTimeout:        2 * time.Minute,
 		DLQTopicPrefix:         "$dlq/",
 		StealInterval:          5 * time.Second,
 		StealEnabled:           true,
@@ -759,6 +759,11 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 		consumerInfo := freshGroup.GetConsumer(consumerID)
 		if consumerInfo == nil {
 			continue
+		}
+
+		// Update heartbeat on delivery so active consumers are never cleaned up as stale.
+		if len(msgs) > 0 {
+			m.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID)
 		}
 
 		for _, msg := range msgs {

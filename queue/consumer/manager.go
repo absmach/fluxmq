@@ -467,6 +467,9 @@ func (m *Manager) GetMinCommittedOffset(ctx context.Context, queueName string) (
 
 // UpdateHeartbeat updates the heartbeat timestamp for a consumer.
 func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consumerID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
 		return err
@@ -483,6 +486,9 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consu
 
 // CleanupStaleConsumers removes consumers that haven't sent a heartbeat within the timeout.
 func (m *Manager) CleanupStaleConsumers(ctx context.Context, queueName, groupID string, timeout time.Duration) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
 		return nil, err
