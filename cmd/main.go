@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/absmach/fluxmq/amqpbroker"
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
@@ -25,6 +26,7 @@ import (
 	"github.com/absmach/fluxmq/queue/raft"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
+	amqpserver "github.com/absmach/fluxmq/server/amqp"
 	"github.com/absmach/fluxmq/server/api"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
@@ -83,6 +85,9 @@ func main() {
 		"coap_plain_listener", cfg.Server.CoAP.Plain.Addr,
 		"coap_dtls_listener", cfg.Server.CoAP.DTLS.Addr,
 		"coap_mdtls_listener", cfg.Server.CoAP.MDTLS.Addr,
+		"amqp_plain_listener", cfg.Server.AMQP.Plain.Addr,
+		"amqp_tls_listener", cfg.Server.AMQP.TLS.Addr,
+		"amqp_mtls_listener", cfg.Server.AMQP.MTLS.Addr,
 		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
@@ -255,6 +260,10 @@ func main() {
 		slog.Info("Rate limiting disabled")
 	}
 
+	// Create AMQP broker (needs queue manager set later)
+	amqpBroker := amqpbroker.New(nil, logger)
+	defer amqpBroker.Close()
+
 	// Initialize file-based log storage for queues
 	{
 		queueDir := cfg.Storage.BadgerDir
@@ -290,11 +299,19 @@ func main() {
 			}))
 		}
 
+		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix
+		deliverFn := func(ctx context.Context, clientID string, msg any) error {
+			if amqpbroker.IsAMQPClient(clientID) {
+				return amqpBroker.DeliverToClient(ctx, clientID, msg)
+			}
+			return b.DeliverToSessionByID(ctx, clientID, msg)
+		}
+
 		// Create log-based queue manager with wildcard support
 		qm := queue.NewManager(
 			logStore,
 			logStore,
-			b.DeliverToSessionByID,
+			deliverFn,
 			queueCfg,
 			logger,
 			cl,
@@ -343,6 +360,9 @@ func main() {
 			slog.Error("Failed to set queue manager", "error", err)
 			os.Exit(1)
 		}
+
+		// Set queue manager on AMQP broker
+		amqpBroker.SetQueueManager(qm)
 
 		// Set queue handler on cluster for cross-node message routing
 		if etcdCluster != nil {
@@ -531,6 +551,46 @@ func main() {
 				serverErr <- err
 			}
 		}(slot.name, slot.cfg.Addr, coapServer)
+	}
+
+	// AMQP 1.0 servers
+	amqpSlots := []struct {
+		name string
+		cfg  config.AMQPListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.AMQP.Plain},
+		{name: "tls", cfg: cfg.Server.AMQP.TLS},
+		{name: "mtls", cfg: cfg.Server.AMQP.MTLS},
+	}
+
+	for _, slot := range amqpSlots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		tlsCfg, err := mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
+		if err != nil {
+			slog.Error("Failed to build AMQP TLS configuration", "listener", slot.name, "error", err)
+			os.Exit(1)
+		}
+
+		amqpCfg := amqpserver.Config{
+			Address:         slot.cfg.Addr,
+			TLSConfig:       tlsCfg,
+			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			MaxConnections:  slot.cfg.MaxConnections,
+			Logger:          logger,
+		}
+		amqpSrv := amqpserver.New(amqpCfg, amqpBroker)
+
+		wg.Add(1)
+		go func(name, addr string, server *amqpserver.Server) {
+			defer wg.Done()
+			slog.Info("Starting AMQP server", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
+				serverErr <- err
+			}
+		}(slot.name, slot.cfg.Addr, amqpSrv)
 	}
 
 	if cfg.Server.HealthEnabled {
