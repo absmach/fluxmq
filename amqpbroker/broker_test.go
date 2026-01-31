@@ -166,6 +166,11 @@ func TestAttachDetach(t *testing.T) {
 	assert.Equal(t, "sender-link", resp.Name)
 	assert.Equal(t, performatives.RoleReceiver, resp.Role) // mirrored
 
+	// Read Flow (credit grant for sender link)
+	_, desc, _, _, err = c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
 	// Detach
 	detach := &performatives.Detach{Handle: 0, Closed: true}
 	body, err = detach.Encode()
@@ -261,6 +266,11 @@ func TestTransferFromClient(t *testing.T) {
 	_, desc, _, _, err := c.ReadPerformative()
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Read Flow (credit grant for sender link)
+	_, desc, _, _, err = c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
 
 	// Send a pre-settled transfer
 	msg := &message.Message{
