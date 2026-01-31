@@ -22,19 +22,23 @@ type Queue interface {
 
 // queue is a queue for offline messages (QoS > 0).
 type queue struct {
-	mu       sync.Mutex
-	messages []*storage.Message
-	maxSize  int
+	mu           sync.Mutex
+	messages     []*storage.Message
+	maxSize      int
+	evictOnFull  bool
 }
 
 // NewMessageQueue creates a new message queue.
-func NewMessageQueue(maxSize int) *queue {
+// If evictOnFull is true, the oldest message is evicted when the queue is full.
+// If false, Enqueue returns ErrQueueFull.
+func NewMessageQueue(maxSize int, evictOnFull bool) *queue {
 	if maxSize <= 0 {
 		maxSize = 1000
 	}
 	return &queue{
-		messages: make([]*storage.Message, 0),
-		maxSize:  maxSize,
+		messages:    make([]*storage.Message, 0),
+		maxSize:     maxSize,
+		evictOnFull: evictOnFull,
 	}
 }
 
@@ -44,8 +48,10 @@ func (q *queue) Enqueue(msg *storage.Message) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// Evict oldest message if queue is full
 	if len(q.messages) >= q.maxSize {
+		if !q.evictOnFull {
+			return ErrQueueFull
+		}
 		evicted := q.messages[0]
 		evicted.ReleasePayload()
 		storage.ReleaseMessage(evicted)

@@ -199,6 +199,9 @@ type SessionConfig struct {
 
 	// Maximum inflight messages per session
 	MaxInflightMessages int `yaml:"max_inflight_messages"`
+
+	// Offline queue eviction policy: "evict" (drop oldest) or "reject" (reject new)
+	OfflineQueuePolicy string `yaml:"offline_queue_policy"`
 }
 
 // LogConfig holds logging configuration.
@@ -389,6 +392,7 @@ func Default() *Config {
 			DefaultExpiryInterval: 300, // 5 minutes
 			MaxOfflineQueueSize:   1000,
 			MaxInflightMessages:   100,
+			OfflineQueuePolicy:    "evict",
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -655,6 +659,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Session.MaxOfflineQueueSize < 10 {
 		return fmt.Errorf("session.max_offline_queue_size must be at least 10")
+	}
+	if c.Session.OfflineQueuePolicy != "evict" && c.Session.OfflineQueuePolicy != "reject" {
+		return fmt.Errorf("session.offline_queue_policy must be 'evict' or 'reject'")
 	}
 
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

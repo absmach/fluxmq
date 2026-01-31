@@ -11,6 +11,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/server/otel"
 	"github.com/absmach/fluxmq/session"
 	"github.com/absmach/fluxmq/storage"
@@ -89,6 +90,9 @@ type Broker struct {
 	sharedSubs *SharedSubscriptionManager
 	// Maximum QoS level supported by this broker (0, 1, or 2)
 	maxQoS byte
+	// Offline queue settings
+	maxOfflineQueueSize int
+	offlineQueueEvict   bool
 }
 
 // NewBroker creates a new broker instance.
@@ -100,7 +104,7 @@ type Broker struct {
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
 //   - metrics: OTel metrics instance (nil if metrics disabled)
 //   - tracer: OTel tracer (nil if tracing disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier, metrics *otel.Metrics, tracer trace.Tracer) *Broker {
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -130,8 +134,10 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		metrics:       metrics,
 		tracer:        tracer,
 		stopCh:        make(chan struct{}),
-		sharedSubs:    NewSharedSubscriptionManager(),
-		maxQoS:        2, // Default to QoS 2 (highest)
+		sharedSubs:          NewSharedSubscriptionManager(),
+		maxQoS:              2, // Default to QoS 2 (highest)
+		maxOfflineQueueSize: sessionCfg.MaxOfflineQueueSize,
+		offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
 	}
 
 	b.wg.Add(2)
