@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/absmach/fluxmq/amqp/performatives"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // Session represents an AMQP session (mapped to a channel pair).
@@ -65,6 +66,11 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 	// Register subscription for receiver links (where we send messages TO the client)
 	if attach.Role { // client is receiver -> we are sender
 		link.subscribe()
+	} else {
+		// Client is sender, broker is receiver — grant initial credit
+		if err := s.grantCredit(link, 100); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -165,7 +171,7 @@ func (s *Session) deliverToMatchingLinks(topic string, payload []byte, props map
 	defer s.linksMu.RUnlock()
 
 	for _, link := range s.links {
-		if link.isSender && link.address == topic {
+		if link.isSender && topics.TopicMatch(link.address, topic) {
 			link.sendMessage(topic, payload, props, qos)
 		}
 	}
@@ -177,10 +183,28 @@ func (s *Session) deliverAMQPMessageToLinks(topic string, msg interface{}, qos b
 	defer s.linksMu.RUnlock()
 
 	for _, link := range s.links {
-		if link.isSender && link.address == topic {
+		if link.isSender && topics.TopicMatch(link.address, topic) {
 			link.sendAMQPMessage(msg, qos)
 		}
 	}
+}
+
+// grantCredit sends a Flow frame granting link credit to the remote sender.
+func (s *Session) grantCredit(link *Link, credit uint32) error {
+	handle := link.handle
+	deliveryCount := uint32(0)
+	flow := &performatives.Flow{
+		IncomingWindow: 2048,
+		OutgoingWindow: 2048,
+		Handle:         &handle,
+		DeliveryCount:  &deliveryCount,
+		LinkCredit:     &credit,
+	}
+	body, err := flow.Encode()
+	if err != nil {
+		return err
+	}
+	return s.conn.conn.WritePerformative(s.localCh, body)
 }
 
 // allocateDeliveryID returns the next delivery ID.
