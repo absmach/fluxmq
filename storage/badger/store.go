@@ -41,8 +41,13 @@ func New(cfg Config) (*Store, error) {
 	// Disable encryption to avoid "Invalid datakey id" errors on restart
 	opts.EncryptionKey = nil
 	opts.EncryptionKeyRotationDuration = 0
-	// Use synchronous writes for durability
-	opts.SyncWrites = true
+	// Async writes: MQTT messages are transient and can be re-delivered.
+	// SyncWrites=true fsyncs on every write, which is 10-100x slower.
+	opts.SyncWrites = false
+	opts.NumVersionsToKeep = 1
+	opts.NumCompactors = 2
+	opts.NumLevelZeroTables = 5
+	opts.NumLevelZeroTablesStall = 15
 
 	db, err := badger.Open(opts)
 	if err != nil {

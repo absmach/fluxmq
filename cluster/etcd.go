@@ -62,6 +62,10 @@ type EtcdCluster struct {
 	subCache   map[string]*storage.Subscription // key: clientID|filter
 	subCacheMu sync.RWMutex
 
+	// Local session owner cache to avoid etcd roundtrips in RoutePublish
+	ownerCache   map[string]string // clientID -> nodeID
+	ownerCacheMu sync.RWMutex
+
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
 	retainedCache   map[string]*storage.Message // key: topic
 	retainedCacheMu sync.RWMutex
@@ -71,6 +75,7 @@ type EtcdCluster struct {
 	hybridRetained *RetainedStore // Hybrid retained store
 	hybridWill     *WillStore     // Hybrid will store
 
+	wg     sync.WaitGroup
 	stopCh chan struct{}
 }
 
@@ -188,6 +193,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		session:       s,
 		logger:        logger,
 		subCache:      make(map[string]*storage.Subscription),
+		ownerCache:    make(map[string]string),
 		retainedCache: make(map[string]*storage.Message),
 		localStore:    localStore,
 		stopCh:        make(chan struct{}),
@@ -261,8 +267,17 @@ func (c *EtcdCluster) Start() error {
 		c.logger.Warn("failed to load subscription cache", slog.String("error", err.Error()))
 	}
 
+	// Load existing session owners into cache
+	if err := c.loadSessionOwnerCache(); err != nil {
+		c.logger.Warn("failed to load session owner cache", slog.String("error", err.Error()))
+	}
+
 	// Start watching for subscription changes
-	go c.watchSubscriptions()
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.watchSubscriptions()
+	}()
 
 	// Load retained message cache on startup
 	if err := c.loadRetainedCache(); err != nil {
@@ -270,7 +285,11 @@ func (c *EtcdCluster) Start() error {
 	}
 
 	// Start watching for retained message changes
-	go c.watchRetained()
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.watchRetained()
+	}()
 
 	// Start gRPC transport if configured
 	if c.transport != nil {
@@ -278,7 +297,7 @@ func (c *EtcdCluster) Start() error {
 			return fmt.Errorf("failed to start transport: %w", err)
 		}
 
-		// Connect to peer nodes
+		// Connect to peer nodes with background retry for failures
 		if c.config.PeerTransports != nil {
 			for nodeID, addr := range c.config.PeerTransports {
 				if nodeID != c.nodeID {
@@ -287,16 +306,27 @@ func (c *EtcdCluster) Start() error {
 					}
 				}
 			}
+
+			c.wg.Add(1)
+			go func() {
+				defer c.wg.Done()
+				c.peerRetryLoop()
+			}()
 		}
 	}
 
-	go c.campaignLeader()
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.campaignLeader()
+	}()
 	return nil
 }
 
 // Stop gracefully shuts down the cluster.
 func (c *EtcdCluster) Stop() error {
 	close(c.stopCh)
+	c.wg.Wait()
 
 	// Stop gRPC transport
 	if c.transport != nil {
@@ -319,6 +349,32 @@ func (c *EtcdCluster) Stop() error {
 	}
 
 	return nil
+}
+
+// peerRetryLoop periodically attempts to reconnect to peers that are not connected.
+func (c *EtcdCluster) peerRetryLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			for nodeID, addr := range c.config.PeerTransports {
+				if nodeID == c.nodeID {
+					continue
+				}
+				if !c.transport.HasPeerConnection(nodeID) {
+					if err := c.transport.ConnectPeer(nodeID, addr); err != nil {
+						c.logger.Debug("peer retry failed", slog.String("node_id", nodeID), slog.String("error", err.Error()))
+					} else {
+						c.logger.Info("reconnected to peer", slog.String("node_id", nodeID))
+					}
+				}
+			}
+		}
+	}
 }
 
 // NodeID returns this node's identifier.
@@ -417,38 +473,54 @@ func (c *EtcdCluster) loadRetainedCache() error {
 
 // watchRetained watches etcd for retained message changes and updates the local cache.
 func (c *EtcdCluster) watchRetained() {
-	watchCh := c.client.Watch(context.Background(), retainedPrefix, clientv3.WithPrefix())
-
 	for {
+		watchCh := c.client.Watch(context.Background(), retainedPrefix, clientv3.WithPrefix())
+
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case watchResp, ok := <-watchCh:
+				if !ok {
+					c.logger.Warn("retained watch channel closed, reloading cache")
+					if err := c.loadRetainedCache(); err != nil {
+						c.logger.Error("failed to reload retained messages", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+				if watchResp.Err() != nil {
+					c.logger.Error("retained watch error", slog.String("error", watchResp.Err().Error()))
+					if err := c.loadRetainedCache(); err != nil {
+						c.logger.Error("failed to reload retained messages", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+
+				c.retainedCacheMu.Lock()
+				for _, event := range watchResp.Events {
+					topic := strings.TrimPrefix(string(event.Kv.Key), retainedPrefix)
+
+					switch event.Type {
+					case clientv3.EventTypePut:
+						var msg storage.Message
+						if err := json.Unmarshal(event.Kv.Value, &msg); err != nil {
+							c.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
+							continue
+						}
+						c.retainedCache[topic] = &msg
+
+					case clientv3.EventTypeDelete:
+						delete(c.retainedCache, topic)
+					}
+				}
+				c.retainedCacheMu.Unlock()
+			}
+		}
+	restart:
 		select {
 		case <-c.stopCh:
 			return
-		case watchResp := <-watchCh:
-			if watchResp.Err() != nil {
-				c.logger.Error("retained watch error", slog.String("error", watchResp.Err().Error()))
-				continue
-			}
-
-			c.retainedCacheMu.Lock()
-			for _, event := range watchResp.Events {
-				topic := strings.TrimPrefix(string(event.Kv.Key), retainedPrefix)
-
-				switch event.Type {
-				case clientv3.EventTypePut:
-					// Retained message added or updated
-					var msg storage.Message
-					if err := json.Unmarshal(event.Kv.Value, &msg); err != nil {
-						c.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
-						continue
-					}
-					c.retainedCache[topic] = &msg
-
-				case clientv3.EventTypeDelete:
-					// Retained message removed
-					delete(c.retainedCache, topic)
-				}
-			}
-			c.retainedCacheMu.Unlock()
+		case <-time.After(time.Second):
 		}
 	}
 }
@@ -527,23 +599,52 @@ func (c *EtcdCluster) recreateSessionAndElection() error {
 }
 
 // AcquireSession registers this node as the owner of a session.
+// Uses a leased Put so ownership auto-expires if this node dies.
+// This is called after takeover has completed (if needed), so it's safe
+// to unconditionally overwrite — the caller already handled ownership transfer.
 func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
 	key := sessionsPrefix + clientID + "/owner"
 
-	// Try to acquire with our lease (auto-expires if node dies)
 	_, err := c.client.Put(ctx, key, nodeID, clientv3.WithLease(c.sessionLease))
-	return err
+	if err != nil {
+		return err
+	}
+
+	c.ownerCacheMu.Lock()
+	c.ownerCache[clientID] = nodeID
+	c.ownerCacheMu.Unlock()
+
+	return nil
 }
 
-// ReleaseSession releases ownership of a session.
+// ReleaseSession releases ownership of a session, only if this node owns it.
 func (c *EtcdCluster) ReleaseSession(ctx context.Context, clientID string) error {
 	key := sessionsPrefix + clientID + "/owner"
-	_, err := c.client.Delete(ctx, key)
+
+	// CAS delete: only delete if we own it
+	_, err := c.client.Txn(ctx).
+		If(clientv3.Compare(clientv3.Value(key), "=", c.nodeID)).
+		Then(clientv3.OpDelete(key)).
+		Commit()
+
+	c.ownerCacheMu.Lock()
+	delete(c.ownerCache, clientID)
+	c.ownerCacheMu.Unlock()
+
 	return err
 }
 
 // GetSessionOwner returns the node ID that owns the session.
+// Uses local cache first, falls back to etcd.
 func (c *EtcdCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
+	// Check local cache first
+	c.ownerCacheMu.RLock()
+	nodeID, ok := c.ownerCache[clientID]
+	c.ownerCacheMu.RUnlock()
+	if ok {
+		return nodeID, true, nil
+	}
+
 	key := sessionsPrefix + clientID + "/owner"
 
 	resp, err := c.client.Get(ctx, key)
@@ -555,7 +656,14 @@ func (c *EtcdCluster) GetSessionOwner(ctx context.Context, clientID string) (str
 		return "", false, nil
 	}
 
-	return string(resp.Kvs[0].Value), true, nil
+	owner := string(resp.Kvs[0].Value)
+
+	// Cache the result
+	c.ownerCacheMu.Lock()
+	c.ownerCache[clientID] = owner
+	c.ownerCacheMu.Unlock()
+
+	return owner, true, nil
 }
 
 // WatchSessionOwner watches for ownership changes of a specific session.
@@ -841,23 +949,30 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		return fmt.Errorf("failed to get subscribers: %w", err)
 	}
 
+	// Batch subscribers by owner node using local cache, with etcd fallback for misses
+	c.ownerCacheMu.RLock()
 	nodeClients := make(map[string][]string) // nodeID -> []clientIDs
+	var cacheMisses []string
 	for _, sub := range subs {
-		nodeID, exists, err := c.GetSessionOwner(ctx, sub.ClientID)
-		if err != nil {
-			c.logger.Warn("failed to get session owner for", slog.String("client_id", sub.ClientID), slog.String("error", err.Error()))
+		nodeID, ok := c.ownerCache[sub.ClientID]
+		if !ok {
+			cacheMisses = append(cacheMisses, sub.ClientID)
 			continue
 		}
-		if !exists {
-			// Client not connected, skip
-			continue
-		}
-
 		if nodeID == c.nodeID {
 			continue
 		}
-
 		nodeClients[nodeID] = append(nodeClients[nodeID], sub.ClientID)
+	}
+	c.ownerCacheMu.RUnlock()
+
+	// Fallback to etcd for cache misses
+	for _, clientID := range cacheMisses {
+		nodeID, _, err := c.GetSessionOwner(ctx, clientID)
+		if err != nil || nodeID == "" || nodeID == c.nodeID {
+			continue
+		}
+		nodeClients[nodeID] = append(nodeClients[nodeID], clientID)
 	}
 
 	for nodeID, clientIDs := range nodeClients {
@@ -1149,6 +1264,31 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 }
 
 // loadSubscriptionCache loads all subscriptions from etcd into the local cache.
+func (c *EtcdCluster) loadSessionOwnerCache() error {
+	ctx := context.Background()
+	resp, err := c.client.Get(ctx, sessionsPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load session owners: %w", err)
+	}
+
+	c.ownerCacheMu.Lock()
+	defer c.ownerCacheMu.Unlock()
+
+	for _, kv := range resp.Kvs {
+		key := string(kv.Key)
+		if !strings.HasSuffix(key, "/owner") {
+			continue
+		}
+		// Key format: /mqtt/sessions/{clientID}/owner
+		clientID := strings.TrimPrefix(key, sessionsPrefix)
+		clientID = strings.TrimSuffix(clientID, "/owner")
+		c.ownerCache[clientID] = string(kv.Value)
+	}
+
+	c.logger.Info("loaded session owners into cache", slog.Int("cache_len", len(c.ownerCache)))
+	return nil
+}
+
 func (c *EtcdCluster) loadSubscriptionCache() error {
 	ctx := context.Background()
 	resp, err := c.client.Get(ctx, subscriptionsPrefix, clientv3.WithPrefix())
@@ -1176,44 +1316,60 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 
 // watchSubscriptions watches etcd for subscription changes and updates the local cache.
 func (c *EtcdCluster) watchSubscriptions() {
-	watchCh := c.client.Watch(context.Background(), subscriptionsPrefix, clientv3.WithPrefix())
-
 	for {
+		watchCh := c.client.Watch(context.Background(), subscriptionsPrefix, clientv3.WithPrefix())
+
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case watchResp, ok := <-watchCh:
+				if !ok {
+					// Watch channel closed, reload and restart
+					c.logger.Warn("subscription watch channel closed, reloading cache")
+					if err := c.loadSubscriptionCache(); err != nil {
+						c.logger.Error("failed to reload subscriptions", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+				if watchResp.Err() != nil {
+					c.logger.Error("subscription watch error", slog.String("error", watchResp.Err().Error()))
+					if err := c.loadSubscriptionCache(); err != nil {
+						c.logger.Error("failed to reload subscriptions", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+
+				c.subCacheMu.Lock()
+				for _, event := range watchResp.Events {
+					switch event.Type {
+					case clientv3.EventTypePut:
+						var sub storage.Subscription
+						if err := json.Unmarshal(event.Kv.Value, &sub); err != nil {
+							c.logger.Error("failed to unmarshal subscription in watch", slog.String("error", err.Error()))
+							continue
+						}
+
+						cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
+						c.subCache[cacheKey] = &sub
+
+					case clientv3.EventTypeDelete:
+						key := string(event.Kv.Key)
+						parts := strings.Split(strings.TrimPrefix(key, subscriptionsPrefix), "/")
+						if len(parts) >= 2 {
+							cacheKey := fmt.Sprintf("%s|%s", parts[0], parts[1])
+							delete(c.subCache, cacheKey)
+						}
+					}
+				}
+				c.subCacheMu.Unlock()
+			}
+		}
+	restart:
 		select {
 		case <-c.stopCh:
 			return
-		case watchResp := <-watchCh:
-			if watchResp.Err() != nil {
-				c.logger.Error("subscription watch error", slog.String("error", watchResp.Err().Error()))
-				continue
-			}
-
-			c.subCacheMu.Lock()
-			for _, event := range watchResp.Events {
-				switch event.Type {
-				case clientv3.EventTypePut:
-					// Subscription added or updated
-					var sub storage.Subscription
-					if err := json.Unmarshal(event.Kv.Value, &sub); err != nil {
-						c.logger.Error("failed to unmarshal subscription in watch", slog.String("error", err.Error()))
-						continue
-					}
-
-					cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
-					c.subCache[cacheKey] = &sub
-
-				case clientv3.EventTypeDelete:
-					// Subscription removed
-					// Parse key to extract clientID and filter
-					key := string(event.Kv.Key)
-					parts := strings.Split(strings.TrimPrefix(key, subscriptionsPrefix), "/")
-					if len(parts) >= 2 {
-						cacheKey := fmt.Sprintf("%s|%s", parts[0], parts[1])
-						delete(c.subCache, cacheKey)
-					}
-				}
-			}
-			c.subCacheMu.Unlock()
+		case <-time.After(time.Second):
 		}
 	}
 }

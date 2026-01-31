@@ -83,26 +83,21 @@ func (sm *SharedSubscriptionManager) Unsubscribe(clientID, filter string) bool {
 // GetNextSubscriber selects the next subscriber in the group (round-robin).
 // Returns the client ID and true if a subscriber was found.
 func (sm *SharedSubscriptionManager) GetNextSubscriber(filter string) (string, bool) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock() // Use Lock because NextSubscriber updates internal state (round-robin index)
-
-	// In the broker distribute logic, the filter passed here is often the groupKey derived from the special client ID
-	// The broker sees matched subscription clientID as "$share/groupName/topicFilter"
-	// So we need to handle that format or just raw groupKey
-
-	// If input is full $share format, parse it
+	// Pre-compute group key outside the lock
 	if strings.HasPrefix(filter, "$share/") {
 		shareName, topicFilter, _ := topics.ParseShared(filter)
 		filter = shareName + "/" + topicFilter
 	}
-	// If input is raw groupKey format (e.g. from tests "group/topic"), use as is
 
+	sm.mu.Lock()
 	group, exists := sm.groups[filter]
 	if !exists || group.IsEmpty() {
+		sm.mu.Unlock()
 		return "", false
 	}
-
-	return group.NextSubscriber(), true
+	next := group.NextSubscriber()
+	sm.mu.Unlock()
+	return next, true
 }
 
 // RemoveClient removes a client from all shared groups it is a member of.

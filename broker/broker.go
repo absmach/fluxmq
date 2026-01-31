@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
@@ -62,7 +63,8 @@ type ClientRateLimiter interface {
 
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
-	mu            sync.RWMutex
+	sessionLocks  keyLock
+	globalMu      sync.Mutex // protects lifecycle (Close, SetQueueManager, transferActiveSessions, expireSessions)
 	wg            sync.WaitGroup
 	sessionsMap   session.Cache
 	router        Router
@@ -81,8 +83,8 @@ type Broker struct {
 	metrics       *otel.Metrics // nil if metrics disabled
 	tracer        trace.Tracer  // nil if tracing disabled
 	stopCh        chan struct{}
-	shuttingDown  bool
-	closed        bool
+	shuttingDown  atomic.Bool
+	closed        atomic.Bool
 	// Shared subscriptions (MQTT 5.0)
 	sharedSubs *SharedSubscriptionManager
 	// Maximum QoS level supported by this broker (0, 1, or 2)
@@ -114,7 +116,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 	}
 
 	b := &Broker{
-		sessionsMap:   session.NewMapCache(),
+		sessionsMap:   session.NewShardedCache(),
 		router:        r,
 		messages:      store.Messages(),
 		sessions:      store.Sessions(),
@@ -142,8 +144,8 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 // SetQueueManager sets the queue manager for the broker.
 // This should be called before the broker starts accepting connections.
 func (b *Broker) SetQueueManager(qm QueueManager) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.globalMu.Lock()
+	defer b.globalMu.Unlock()
 
 	b.queueManager = qm
 
@@ -157,8 +159,8 @@ func (b *Broker) SetQueueManager(qm QueueManager) error {
 
 // GetQueueManager returns the queue manager.
 func (b *Broker) GetQueueManager() QueueManager {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.globalMu.Lock()
+	defer b.globalMu.Unlock()
 	return b.queueManager
 }
 

@@ -34,8 +34,11 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 
 	if !s.IsConnected() {
 		if msg.QoS > 0 {
-			// Offline queue takes ownership - it will release when message is delivered/dropped
-			return 0, s.OfflineQueue().Enqueue(msg)
+			// Offline queue copies the message internally, so we always release the original
+			err := s.OfflineQueue().Enqueue(msg)
+			msg.ReleasePayload()
+			storage.ReleaseMessage(msg)
+			return 0, err
 		}
 		msg.ReleasePayload() // Drop QoS 0 message for offline client - release buffer
 		storage.ReleaseMessage(msg)

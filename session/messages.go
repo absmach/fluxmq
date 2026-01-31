@@ -52,6 +52,8 @@ func (h *msgHandler) ProcessRetries(writer core.PacketWriter) {
 		}
 		h.inflight.MarkRetry(inflight.PacketID)
 	}
+
+	h.inflight.CleanupExpiredReceived(30 * time.Minute)
 }
 
 // Inflight returns the inflight tracker.

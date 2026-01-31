@@ -3,9 +3,13 @@
 
 package session
 
-import "sync"
+import (
+	"hash/fnv"
+	"sync"
+	"sync/atomic"
+)
 
-var _ Cache = (*MapCache)(nil)
+var _ Cache = (*ShardedCache)(nil)
 
 // Cache is an in-memory cache for active sessions.
 // This abstraction allows different cache implementations (map, LRU, distributed, etc.)
@@ -33,70 +37,97 @@ type Cache interface {
 	ConnectedCount() int
 }
 
-// MapCache is a simple map-based cache implementation.
-// It uses a sync.RWMutex for concurrent access.
-type MapCache struct {
+const numShards = 64
+
+type cacheShard struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 }
 
-// NewMapCache creates a new map-based session cache.
-func NewMapCache() *MapCache {
-	return &MapCache{
-		sessions: make(map[string]*Session),
+// ShardedCache splits sessions across multiple shards to reduce lock contention.
+// Each shard has its own RWMutex so concurrent operations on different clients
+// don't block each other.
+type ShardedCache struct {
+	shards [numShards]cacheShard
+	count  atomic.Int64
+}
+
+// NewShardedCache creates a new sharded session cache.
+func NewShardedCache() *ShardedCache {
+	c := &ShardedCache{}
+	for i := range c.shards {
+		c.shards[i].sessions = make(map[string]*Session)
 	}
+	return c
+}
+
+func (c *ShardedCache) shard(key string) *cacheShard {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return &c.shards[h.Sum32()%numShards]
 }
 
 // Get retrieves a session by client ID.
-func (c *MapCache) Get(clientID string) *Session {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.sessions[clientID]
+func (c *ShardedCache) Get(clientID string) *Session {
+	s := c.shard(clientID)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sessions[clientID]
 }
 
 // Set stores a session in the cache.
-func (c *MapCache) Set(clientID string, session *Session) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.sessions[clientID] = session
+func (c *ShardedCache) Set(clientID string, session *Session) {
+	s := c.shard(clientID)
+	s.mu.Lock()
+	if _, exists := s.sessions[clientID]; !exists {
+		c.count.Add(1)
+	}
+	s.sessions[clientID] = session
+	s.mu.Unlock()
 }
 
 // Delete removes a session from the cache.
-func (c *MapCache) Delete(clientID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.sessions[clientID]; exists {
-		delete(c.sessions, clientID)
+func (c *ShardedCache) Delete(clientID string) bool {
+	s := c.shard(clientID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.sessions[clientID]; exists {
+		delete(s.sessions, clientID)
+		c.count.Add(-1)
 		return true
 	}
 	return false
 }
 
 // ForEach iterates over all sessions in the cache.
-func (c *MapCache) ForEach(fn func(*Session)) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, s := range c.sessions {
-		fn(s)
+func (c *ShardedCache) ForEach(fn func(*Session)) {
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.RLock()
+		for _, sess := range s.sessions {
+			fn(sess)
+		}
+		s.mu.RUnlock()
 	}
 }
 
 // Count returns the total number of sessions.
-func (c *MapCache) Count() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.sessions)
+func (c *ShardedCache) Count() int {
+	return int(c.count.Load())
 }
 
 // ConnectedCount returns the number of connected sessions.
-func (c *MapCache) ConnectedCount() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *ShardedCache) ConnectedCount() int {
 	count := 0
-	for _, s := range c.sessions {
-		if s.IsConnected() {
-			count++
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.RLock()
+		for _, sess := range s.sessions {
+			if sess.IsConnected() {
+				count++
+			}
 		}
+		s.mu.RUnlock()
 	}
 	return count
 }

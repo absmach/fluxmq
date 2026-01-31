@@ -52,6 +52,7 @@ type Inflight interface {
 	GetExpired(expiry time.Duration) []*InflightMessage
 	MarkRetry(packetID uint16) error
 	GetAll() []*InflightMessage
+	CleanupExpiredReceived(olderThan time.Duration)
 }
 
 // inflight tracks QoS 1 and QoS 2 messages in flight.

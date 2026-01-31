@@ -21,8 +21,8 @@ import (
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
 func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.sessionLocks.Lock(clientID)
+	defer b.sessionLocks.Unlock(clientID)
 
 	// Check if session is owned by another node in the cluster
 	var takeoverState *clusterv1.SessionState
@@ -74,9 +74,10 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		return existing, false, nil
 	}
 
+	const serverReceiveMaximum = 256
 	receiveMax := opts.ReceiveMaximum
-	if receiveMax == 0 {
-		receiveMax = 65535
+	if receiveMax == 0 || receiveMax > serverReceiveMaximum {
+		receiveMax = serverReceiveMaximum
 	}
 	inflight := messages.NewInflightTracker(int(receiveMax))
 	offlineQueue := messages.NewMessageQueue(1000)
@@ -120,6 +121,13 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		opts.ExpiryInterval = takeoverState.ExpiryInterval
 	}
 
+	// Cap persistent session expiry to prevent indefinite memory growth.
+	// Sessions with CleanStart=false and ExpiryInterval=0 would otherwise live forever.
+	const maxSessionExpiry uint32 = 86400 // 24 hours
+	if !opts.CleanStart && opts.ExpiryInterval == 0 {
+		opts.ExpiryInterval = maxSessionExpiry
+	}
+
 	// Override receive maximum with normalized value
 	opts.ReceiveMaximum = receiveMax
 
@@ -159,8 +167,8 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 // DestroySession removes a session completely.
 func (b *Broker) DestroySession(clientID string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.sessionLocks.Lock(clientID)
+	defer b.sessionLocks.Unlock(clientID)
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {
@@ -170,7 +178,7 @@ func (b *Broker) DestroySession(clientID string) error {
 	return b.destroySessionLocked(s)
 }
 
-// destroySessionLocked destroys a session. Must be called with mu held.
+// destroySessionLocked destroys a session. Must be called with the session's key lock held.
 func (b *Broker) destroySessionLocked(s *session.Session) error {
 	if s.IsConnected() {
 		s.Disconnect(false)
@@ -273,9 +281,9 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	}
 
 	if s.CleanStart && s.ExpiryInterval == 0 {
-		b.mu.Lock()
+		b.sessionLocks.Lock(s.ID)
 		b.destroySessionLocked(s)
-		b.mu.Unlock()
+		b.sessionLocks.Unlock(s.ID)
 
 		// Release ownership for clean sessions
 		if b.cluster != nil {
@@ -467,8 +475,8 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 // GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.
 // This is used during session takeover.
 func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.sessionLocks.Lock(clientID)
+	defer b.sessionLocks.Unlock(clientID)
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {

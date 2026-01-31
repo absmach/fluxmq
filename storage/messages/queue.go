@@ -4,7 +4,6 @@
 package messages
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/absmach/fluxmq/storage"
@@ -40,14 +39,17 @@ func NewMessageQueue(maxSize int) *queue {
 }
 
 // Enqueue adds a message to the queue.
-// Returns ErrQueueFull if the queue is at capacity.
+// If the queue is at capacity, the oldest message is evicted.
 func (q *queue) Enqueue(msg *storage.Message) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	// Evict oldest message if queue is full
 	if len(q.messages) >= q.maxSize {
-		return fmt.Errorf("enqueue message for topic %s (current: %d, max: %d): %w",
-			msg.Topic, len(q.messages), q.maxSize, ErrQueueFull)
+		evicted := q.messages[0]
+		evicted.ReleasePayload()
+		storage.ReleaseMessage(evicted)
+		q.messages = q.messages[1:]
 	}
 
 	cp := storage.CopyMessage(msg)

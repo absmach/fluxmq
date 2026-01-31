@@ -115,19 +115,23 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 		Timestamp:  time.Now(),
 	}
 
-	// Update local metadata cache
+	// Publish to etcd based on size
+	var etcdErr error
+	if metadata.Replicated {
+		etcdErr = h.publishReplicatedMessage(ctx, topic, msg, metadata)
+	} else {
+		etcdErr = h.publishMetadata(ctx, topic, metadata)
+	}
+	if etcdErr != nil {
+		return etcdErr
+	}
+
+	// Update local metadata cache only after successful etcd write
 	h.metadataCacheMu.Lock()
 	h.metadataCache[topic] = metadata
 	h.metadataCacheMu.Unlock()
 
-	// Publish to etcd based on size
-	if metadata.Replicated {
-		// Small message: replicate full payload to all nodes
-		return h.publishReplicatedMessage(ctx, topic, msg, metadata)
-	}
-
-	// Large message: publish only metadata
-	return h.publishMetadata(ctx, topic, metadata)
+	return nil
 }
 
 // Get retrieves a retained message, fetching from remote nodes if necessary.

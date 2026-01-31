@@ -31,9 +31,6 @@ func (b *Broker) expiryLoop() {
 
 // expireSessions removes expired sessions.
 func (b *Broker) expireSessions() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	now := time.Now()
 	var toDelete []string
 
@@ -52,8 +49,12 @@ func (b *Broker) expireSessions() {
 	})
 
 	for _, clientID := range toDelete {
+		b.sessionLocks.Lock(clientID)
 		s := b.sessionsMap.Get(clientID)
-		b.destroySessionLocked(s)
+		if s != nil {
+			b.destroySessionLocked(s)
+		}
+		b.sessionLocks.Unlock(clientID)
 	}
 }
 

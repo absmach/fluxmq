@@ -43,6 +43,7 @@ type Transport struct {
 	httpServer   *http.Server
 	listener     net.Listener
 	peerClients  map[string]clusterv1connect.BrokerServiceClient
+	breakers     *peerBreakers
 	logger       *slog.Logger
 	handler      MessageHandler
 	queueHandler QueueHandler
@@ -62,6 +63,7 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 		nodeID:      nodeID,
 		bindAddr:    bindAddr,
 		peerClients: make(map[string]clusterv1connect.BrokerServiceClient),
+		breakers:    newPeerBreakers(),
 		logger:      logger,
 		handler:     handler,
 		stopCh:      make(chan struct{}),
@@ -177,20 +179,21 @@ func (t *Transport) Start() error {
 func (t *Transport) Stop() error {
 	close(t.stopCh)
 
-	// Close peer connections
-	t.mu.Lock()
-	t.peerClients = nil
-	t.mu.Unlock()
-
-	// Shutdown HTTP server
+	// Shutdown HTTP server first to stop accepting new requests
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	var err error
 	if t.httpServer != nil {
-		return t.httpServer.Shutdown(ctx)
+		err = t.httpServer.Shutdown(ctx)
 	}
 
-	return nil
+	// Clear peer connections after server is stopped (no more in-flight RPCs)
+	t.mu.Lock()
+	t.peerClients = make(map[string]clusterv1connect.BrokerServiceClient)
+	t.mu.Unlock()
+
+	return err
 }
 
 // ConnectPeer establishes a Connect client connection to a peer node.
@@ -489,163 +492,189 @@ func (t *Transport) SetQueueHandler(handler QueueHandler) {
 	t.queueHandler = handler
 }
 
-// SendPublish sends a PUBLISH message to a specific peer node.
+// SendPublish sends a PUBLISH message to a specific peer node with retry and circuit breaker.
 func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return err
-	}
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
 
-	req := connect.NewRequest(&clusterv1.PublishRequest{
-		ClientId:   clientID,
-		Topic:      topic,
-		Payload:    payload,
-		Qos:        uint32(qos),
-		Retain:     retain,
-		Dup:        dup,
-		Properties: properties,
+		req := connect.NewRequest(&clusterv1.PublishRequest{
+			ClientId:   clientID,
+			Topic:      topic,
+			Payload:    payload,
+			Qos:        uint32(qos),
+			Retain:     retain,
+			Dup:        dup,
+			Properties: properties,
+		})
+
+		resp, err := client.RoutePublish(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if !resp.Msg.Success {
+			return fmt.Errorf("publish failed: %s", resp.Msg.Error)
+		}
+
+		return nil
 	})
-
-	resp, err := client.RoutePublish(ctx, req)
-	if err != nil {
-		return fmt.Errorf("connect call failed: %w", err)
-	}
-
-	if !resp.Msg.Success {
-		return fmt.Errorf("publish failed: %s", resp.Msg.Error)
-	}
-
-	return nil
 }
 
-// SendTakeover sends a session takeover request to a peer node.
+// SendTakeover sends a session takeover request to a peer node with retry and circuit breaker.
 func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return nil, err
-	}
+	var state *clusterv1.SessionState
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
 
-	req := connect.NewRequest(&clusterv1.TakeoverRequest{
-		ClientId: clientID,
-		FromNode: fromNode,
-		ToNode:   toNode,
+		req := connect.NewRequest(&clusterv1.TakeoverRequest{
+			ClientId: clientID,
+			FromNode: fromNode,
+			ToNode:   toNode,
+		})
+
+		resp, err := client.TakeoverSession(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if !resp.Msg.Success {
+			return fmt.Errorf("takeover failed: %s", resp.Msg.Error)
+		}
+
+		state = resp.Msg.SessionState
+		return nil
 	})
-
-	resp, err := client.TakeoverSession(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("connect call failed: %w", err)
-	}
-
-	if !resp.Msg.Success {
-		return nil, fmt.Errorf("takeover failed: %s", resp.Msg.Error)
-	}
-
-	return resp.Msg.SessionState, nil
+	return state, err
 }
 
-// SendFetchRetained fetches a retained message from a peer node.
+// SendFetchRetained fetches a retained message from a peer node with retry and circuit breaker.
 func (t *Transport) SendFetchRetained(ctx context.Context, nodeID, topic string) (*clusterv1.RetainedMessage, error) {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return nil, err
-	}
+	var msg *clusterv1.RetainedMessage
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
 
-	req := connect.NewRequest(&clusterv1.FetchRetainedRequest{
-		Topic: topic,
+		req := connect.NewRequest(&clusterv1.FetchRetainedRequest{
+			Topic: topic,
+		})
+
+		resp, err := client.FetchRetained(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if resp.Msg.Error != "" {
+			return fmt.Errorf("fetch failed: %s", resp.Msg.Error)
+		}
+
+		if !resp.Msg.Found {
+			msg = nil
+			return nil
+		}
+
+		msg = resp.Msg.Message
+		return nil
 	})
-
-	resp, err := client.FetchRetained(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("connect call failed: %w", err)
-	}
-
-	if resp.Msg.Error != "" {
-		return nil, fmt.Errorf("fetch failed: %s", resp.Msg.Error)
-	}
-
-	if !resp.Msg.Found {
-		return nil, nil
-	}
-
-	return resp.Msg.Message, nil
+	return msg, err
 }
 
-// SendFetchWill fetches a will message from a peer node.
+// SendFetchWill fetches a will message from a peer node with retry and circuit breaker.
 func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) (*clusterv1.WillMessage, error) {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return nil, err
-	}
+	var will *clusterv1.WillMessage
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
 
-	req := connect.NewRequest(&clusterv1.FetchWillRequest{
-		ClientId: clientID,
+		req := connect.NewRequest(&clusterv1.FetchWillRequest{
+			ClientId: clientID,
+		})
+
+		resp, err := client.FetchWill(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if resp.Msg.Error != "" {
+			return fmt.Errorf("fetch failed: %s", resp.Msg.Error)
+		}
+
+		if !resp.Msg.Found {
+			will = nil
+			return nil
+		}
+
+		will = resp.Msg.Message
+		return nil
 	})
-
-	resp, err := client.FetchWill(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("connect call failed: %w", err)
-	}
-
-	if resp.Msg.Error != "" {
-		return nil, fmt.Errorf("fetch failed: %s", resp.Msg.Error)
-	}
-
-	if !resp.Msg.Found {
-		return nil, nil
-	}
-
-	return resp.Msg.Message, nil
+	return will, err
 }
 
-// SendEnqueueRemote sends an enqueue request to a peer node.
+// SendEnqueueRemote sends an enqueue request to a peer node with retry and circuit breaker.
 func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return "", err
-	}
+	var messageID string
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
 
-	req := connect.NewRequest(&clusterv1.EnqueueRemoteRequest{
-		QueueName:  queueName,
-		Payload:    payload,
-		Properties: properties,
+		req := connect.NewRequest(&clusterv1.EnqueueRemoteRequest{
+			QueueName:  queueName,
+			Payload:    payload,
+			Properties: properties,
+		})
+
+		resp, err := client.EnqueueRemote(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if !resp.Msg.Success {
+			return fmt.Errorf("enqueue failed: %s", resp.Msg.Error)
+		}
+
+		messageID = resp.Msg.MessageId
+		return nil
 	})
-
-	resp, err := client.EnqueueRemote(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("connect call failed: %w", err)
-	}
-
-	if !resp.Msg.Success {
-		return "", fmt.Errorf("enqueue failed: %s", resp.Msg.Error)
-	}
-
-	return resp.Msg.MessageId, nil
+	return messageID, err
 }
 
-// SendRouteQueueMessage sends a queue message delivery request to a peer node.
+// SendRouteQueueMessage sends a queue message delivery request to a peer node with retry and circuit breaker.
 func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
-	client, err := t.GetPeerClient(nodeID)
-	if err != nil {
-		return err
-	}
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
 
-	req := connect.NewRequest(&clusterv1.RouteQueueMessageRequest{
-		ClientId:   clientID,
-		QueueName:  queueName,
-		MessageId:  messageID,
-		Payload:    payload,
-		Properties: properties,
-		Sequence:   sequence,
+		req := connect.NewRequest(&clusterv1.RouteQueueMessageRequest{
+			ClientId:   clientID,
+			QueueName:  queueName,
+			MessageId:  messageID,
+			Payload:    payload,
+			Properties: properties,
+			Sequence:   sequence,
+		})
+
+		resp, err := client.RouteQueueMessage(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if !resp.Msg.Success {
+			return fmt.Errorf("route queue message failed: %s", resp.Msg.Error)
+		}
+
+		return nil
 	})
-
-	resp, err := client.RouteQueueMessage(ctx, req)
-	if err != nil {
-		return fmt.Errorf("connect call failed: %w", err)
-	}
-
-	if !resp.Msg.Success {
-		return fmt.Errorf("route queue message failed: %s", resp.Msg.Error)
-	}
-
-	return nil
 }
