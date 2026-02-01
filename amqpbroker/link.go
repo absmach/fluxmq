@@ -236,13 +236,7 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 		Settled:       settled,
 	}
 
-	perfBody, err := transfer.Encode()
-	if err != nil {
-		l.logger.Error("failed to encode transfer", "error", err)
-		return
-	}
-
-	if err := l.session.conn.conn.WriteTransfer(l.session.localCh, perfBody, msgBytes); err != nil {
+	if err := l.session.conn.conn.WriteTransfer(l.session.localCh, transfer, msgBytes); err != nil {
 		l.logger.Error("failed to send transfer", "error", err)
 		return
 	}
@@ -294,12 +288,7 @@ func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
 		Settled:       settled,
 	}
 
-	perfBody, err := transfer.Encode()
-	if err != nil {
-		return
-	}
-
-	l.session.conn.conn.WriteTransfer(l.session.localCh, perfBody, msgBytes)
+	l.session.conn.conn.WriteTransfer(l.session.localCh, transfer, msgBytes)
 
 	if !settled && amqpMsg.ApplicationProperties != nil {
 		l.pendingMu.Lock()

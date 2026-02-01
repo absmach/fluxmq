@@ -14,6 +14,7 @@ import (
 	"github.com/absmach/fluxmq/amqp/performatives"
 	"github.com/absmach/fluxmq/amqp/sasl"
 	"github.com/absmach/fluxmq/amqp/types"
+
 )
 
 // Connection wraps a net.Conn for AMQP 1.0 frame I/O.
@@ -87,7 +88,103 @@ func (c *Connection) WritePerformative(channel uint16, body []byte) error {
 }
 
 // WriteTransfer writes a transfer frame with payload appended after the performative.
-func (c *Connection) WriteTransfer(channel uint16, perfBody []byte, payload []byte) error {
+// If the combined size exceeds maxFrameSize, the payload is split across multiple
+// frames using the Transfer.More flag per AMQP 1.0 spec.
+func (c *Connection) WriteTransfer(channel uint16, transfer *performatives.Transfer, payload []byte) error {
+	perfBody, err := transfer.Encode()
+	if err != nil {
+		return err
+	}
+
+	maxBody := int(c.maxFrameSize) - frames.HeaderSize
+	combined := len(perfBody) + len(payload)
+
+	if maxBody <= 0 || combined <= maxBody {
+		buf := make([]byte, combined)
+		copy(buf, perfBody)
+		copy(buf[len(perfBody):], payload)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, buf)
+	}
+
+	// Multi-frame: re-encode first transfer with More=true
+	origMore := transfer.More
+	transfer.More = true
+	perfBody, err = transfer.Encode()
+	if err != nil {
+		return err
+	}
+	transfer.More = origMore
+
+	firstChunk := maxBody - len(perfBody)
+	if firstChunk <= 0 {
+		return fmt.Errorf("transfer performative exceeds max frame size")
+	}
+
+	// Pre-encode continuation transfer (handle + more=true)
+	contTransfer := &performatives.Transfer{Handle: transfer.Handle, More: true}
+	contBody, err := contTransfer.Encode()
+	if err != nil {
+		return err
+	}
+	contChunk := maxBody - len(contBody)
+
+	// Pre-encode last continuation (handle + more=false)
+	lastTransfer := &performatives.Transfer{Handle: transfer.Handle, More: false}
+	lastBody, err := lastTransfer.Encode()
+	if err != nil {
+		return err
+	}
+	lastChunk := maxBody - len(lastBody)
+
+	// Hold lock for entire multi-frame sequence to prevent interleaving
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// First frame
+	buf := make([]byte, len(perfBody)+firstChunk)
+	copy(buf, perfBody)
+	copy(buf[len(perfBody):], payload[:firstChunk])
+	if err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, buf); err != nil {
+		return err
+	}
+
+	offset := firstChunk
+	remaining := len(payload) - offset
+
+	for remaining > 0 {
+		var framePerf []byte
+		var chunkSize int
+
+		if remaining <= lastChunk {
+			framePerf = lastBody
+			chunkSize = remaining
+		} else {
+			framePerf = contBody
+			chunkSize = contChunk
+			if chunkSize > remaining {
+				chunkSize = remaining
+			}
+		}
+
+		buf := make([]byte, len(framePerf)+chunkSize)
+		copy(buf, framePerf)
+		copy(buf[len(framePerf):], payload[offset:offset+chunkSize])
+		if err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, buf); err != nil {
+			return err
+		}
+
+		offset += chunkSize
+		remaining -= chunkSize
+	}
+
+	return nil
+}
+
+// WriteTransferRaw writes a pre-encoded transfer frame with payload.
+// Does NOT handle multi-frame splitting — use WriteTransfer for that.
+func (c *Connection) WriteTransferRaw(channel uint16, perfBody []byte, payload []byte) error {
 	combined := make([]byte, len(perfBody)+len(payload))
 	copy(combined, perfBody)
 	copy(combined[len(perfBody):], payload)

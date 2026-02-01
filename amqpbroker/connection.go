@@ -35,7 +35,16 @@ type Connection struct {
 	closeCh   chan struct{}
 	closeOnce sync.Once
 
+	// Multi-frame transfer reassembly per channel
+	partialTransfers   map[uint16]*partialTransfer
+	partialTransfersMu sync.Mutex
+
 	logger *slog.Logger
+}
+
+type partialTransfer struct {
+	transfer *performatives.Transfer
+	payload  []byte
 }
 
 func newConnection(b *Broker, raw net.Conn) *Connection {
@@ -44,9 +53,10 @@ func newConnection(b *Broker, raw net.Conn) *Connection {
 		conn:         amqpconn.NewConnection(raw),
 		maxFrameSize: frames.DefaultMaxFrameSize,
 		channelMax:   65535,
-		sessions:     make(map[uint16]*Session),
-		closeCh:      make(chan struct{}),
-		logger:       b.logger,
+		sessions:         make(map[uint16]*Session),
+		partialTransfers: make(map[uint16]*partialTransfer),
+		closeCh:          make(chan struct{}),
+		logger:           b.logger,
 	}
 }
 
@@ -247,13 +257,42 @@ func (c *Connection) processFrames() error {
 			}
 			s.handleFlow(perf.(*performatives.Flow))
 		case performatives.DescriptorTransfer:
+			transfer := perf.(*performatives.Transfer)
+
+			c.partialTransfersMu.Lock()
+			partial := c.partialTransfers[ch]
+
+			if partial != nil {
+				// Continuation frame: append payload to existing partial
+				partial.payload = append(partial.payload, payload...)
+				if transfer.More {
+					c.partialTransfersMu.Unlock()
+					continue
+				}
+				// Final frame: deliver the reassembled transfer
+				transfer = partial.transfer
+				payload = partial.payload
+				delete(c.partialTransfers, ch)
+				c.partialTransfersMu.Unlock()
+			} else if transfer.More {
+				// First frame of multi-frame transfer
+				c.partialTransfers[ch] = &partialTransfer{
+					transfer: transfer,
+					payload:  append([]byte(nil), payload...),
+				}
+				c.partialTransfersMu.Unlock()
+				continue
+			} else {
+				c.partialTransfersMu.Unlock()
+			}
+
 			c.sessionsMu.RLock()
 			s := c.sessions[ch]
 			c.sessionsMu.RUnlock()
 			if s == nil {
 				continue
 			}
-			s.handleTransfer(perf.(*performatives.Transfer), payload)
+			s.handleTransfer(transfer, payload)
 		case performatives.DescriptorDisposition:
 			c.sessionsMu.RLock()
 			s := c.sessions[ch]
@@ -287,10 +326,33 @@ func (c *Connection) handleBegin(ch uint16, begin *performatives.Begin) error {
 	c.sessionsMu.Lock()
 	defer c.sessionsMu.Unlock()
 
+	// Check channel limit
+	if uint16(len(c.sessions)) >= c.channelMax {
+		c.logger.Warn("channel limit exceeded", "channel", ch, "max", c.channelMax)
+		return c.sendClose(&performatives.Error{
+			Condition:   performatives.ErrResourceLimitExceeded,
+			Description: "channel limit exceeded",
+		})
+	}
+
+	// Reject duplicate channel
+	if _, exists := c.sessions[ch]; exists {
+		c.logger.Warn("duplicate channel", "channel", ch)
+		return c.sendClose(&performatives.Error{
+			Condition:   performatives.ErrFramingError,
+			Description: fmt.Sprintf("channel %d already in use", ch),
+		})
+	}
+
 	localCh := c.nextCh
 	c.nextCh++
 
-	s := newSession(c, localCh, ch)
+	handleMax := uint32(255)
+	if begin.HandleMax > 0 && begin.HandleMax < handleMax {
+		handleMax = begin.HandleMax
+	}
+
+	s := newSession(c, localCh, ch, handleMax)
 	s.remoteIncomingWindow = begin.IncomingWindow
 	s.remoteOutgoingWindow = begin.OutgoingWindow
 	c.sessions[ch] = s
@@ -301,13 +363,35 @@ func (c *Connection) handleBegin(ch uint16, begin *performatives.Begin) error {
 		NextOutgoingID: 0,
 		IncomingWindow: 65535,
 		OutgoingWindow: 65535,
-		HandleMax:      255,
+		HandleMax:      handleMax,
 	}
 	body, err := resp.Encode()
 	if err != nil {
 		return err
 	}
 	return c.conn.WritePerformative(localCh, body)
+}
+
+// sendClose sends a Close frame with an optional error and signals shutdown.
+func (c *Connection) sendClose(amqpErr *performatives.Error) error {
+	resp := &performatives.Close{Error: amqpErr}
+	body, err := resp.Encode()
+	if err != nil {
+		return err
+	}
+	c.conn.WritePerformative(0, body)
+	c.close(nil)
+	return nil
+}
+
+// sendEnd sends an End frame with an error on the given channel.
+func (c *Connection) sendEnd(ch uint16, amqpErr *performatives.Error) error {
+	resp := &performatives.End{Error: amqpErr}
+	body, err := resp.Encode()
+	if err != nil {
+		return err
+	}
+	return c.conn.WritePerformative(ch, body)
 }
 
 func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {

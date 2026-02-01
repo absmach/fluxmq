@@ -289,14 +289,323 @@ func TestTransferFromClient(t *testing.T) {
 		MessageFormat: &mf,
 		Settled:       true,
 	}
-	perfBody, err := transfer.Encode()
-	require.NoError(t, err)
-
 	// Write transfer with payload
-	require.NoError(t, c.WriteTransfer(0, perfBody, msgBytes))
+	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
 
 	// Give time for processing
 	time.Sleep(50 * time.Millisecond)
+}
+
+// doAMQPHandshakeWithFrameSize performs handshake with a custom max frame size.
+func doAMQPHandshakeWithFrameSize(t *testing.T, c *amqpconn.Connection, containerID string, maxFrameSize uint32) {
+	t.Helper()
+
+	require.NoError(t, c.WriteProtocolHeader(frames.ProtoIDSASL))
+	protoID, err := c.ReadProtocolHeader()
+	require.NoError(t, err)
+	assert.Equal(t, frames.ProtoIDSASL, protoID)
+
+	desc, val, err := c.ReadSASLFrame()
+	require.NoError(t, err)
+	assert.Equal(t, sasl.DescriptorMechanisms, desc)
+	mechs := val.(*sasl.Mechanisms)
+	assert.Contains(t, mechs.Mechanisms, types.Symbol("ANONYMOUS"))
+
+	init := &sasl.Init{Mechanism: sasl.MechANONYMOUS}
+	body, err := init.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WriteSASLFrame(body))
+
+	desc, val, err = c.ReadSASLFrame()
+	require.NoError(t, err)
+	assert.Equal(t, sasl.DescriptorOutcome, desc)
+	outcome := val.(*sasl.Outcome)
+	assert.Equal(t, sasl.CodeOK, outcome.Code)
+
+	require.NoError(t, c.WriteProtocolHeader(frames.ProtoIDAMQP))
+	protoID, err = c.ReadProtocolHeader()
+	require.NoError(t, err)
+	assert.Equal(t, frames.ProtoIDAMQP, protoID)
+
+	open := &performatives.Open{
+		ContainerID:  containerID,
+		MaxFrameSize: maxFrameSize,
+		ChannelMax:   255,
+	}
+	openBody, err := open.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, openBody))
+
+	_, desc2, perf, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorOpen, desc2)
+	serverOpen := perf.(*performatives.Open)
+	assert.Equal(t, "fluxmq", serverOpen.ContainerID)
+	assert.LessOrEqual(t, serverOpen.MaxFrameSize, maxFrameSize)
+}
+
+func TestMultiFrameTransferSend(t *testing.T) {
+	b := New(nil, nil)
+	serverConn, clientConn := net.Pipe()
+
+	go b.HandleConnection(serverConn)
+
+	c := amqpconn.NewConnection(clientConn)
+	c.SetMaxFrameSize(512)
+	defer b.Close()
+	defer c.Close()
+
+	// Negotiate small frame size (512 bytes)
+	doAMQPHandshakeWithFrameSize(t, c, "multiframe-send", 512)
+	doBeginSession(t, c, 0)
+
+	// Attach as receiver
+	attach := &performatives.Attach{
+		Name:   "recv-link",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/big"},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Issue credit
+	h := uint32(0)
+	dc := uint32(0)
+	lc := uint32(10)
+	flow := &performatives.Flow{
+		IncomingWindow: 65535,
+		NextOutgoingID: 0,
+		OutgoingWindow: 65535,
+		Handle:         &h,
+		DeliveryCount:  &dc,
+		LinkCredit:     &lc,
+	}
+	body, err = flow.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Publish a large message (larger than 512 byte frame size)
+	bigPayload := make([]byte, 2000)
+	for i := range bigPayload {
+		bigPayload[i] = byte(i % 256)
+	}
+
+	go b.Publish("test/big", bigPayload, nil)
+
+	// Read frames — may be multiple with More=true
+	var reassembled []byte
+	var firstTransfer *performatives.Transfer
+	for {
+		_, desc, perf, payload, err := c.ReadPerformative()
+		require.NoError(t, err)
+		assert.Equal(t, performatives.DescriptorTransfer, desc)
+		transfer := perf.(*performatives.Transfer)
+		if firstTransfer == nil {
+			firstTransfer = transfer
+		}
+		reassembled = append(reassembled, payload...)
+		if !transfer.More {
+			break
+		}
+	}
+
+	// Decode the reassembled AMQP message
+	msg, err := message.Decode(reassembled)
+	require.NoError(t, err)
+	require.Len(t, msg.Data, 1)
+	assert.Equal(t, bigPayload, msg.Data[0])
+}
+
+func TestMultiFrameTransferReceive(t *testing.T) {
+	b := New(nil, nil)
+	serverConn, clientConn := net.Pipe()
+
+	go b.HandleConnection(serverConn)
+
+	c := amqpconn.NewConnection(clientConn)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "multiframe-recv")
+	doBeginSession(t, c, 0)
+
+	// Attach as sender
+	attach := &performatives.Attach{
+		Name:                 "send-link",
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: "test/bigingest"},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Read Flow (credit grant)
+	_, desc, _, _, err = c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
+	// Build a large message
+	bigPayload := make([]byte, 2000)
+	for i := range bigPayload {
+		bigPayload[i] = byte(i % 256)
+	}
+	msg := &message.Message{
+		Properties: &message.Properties{To: "test/bigingest"},
+		Data:       [][]byte{bigPayload},
+	}
+	msgBytes, err := msg.Encode()
+	require.NoError(t, err)
+
+	// Manually split into multi-frame transfer
+	did := uint32(0)
+	mf := uint32(0)
+
+	// First frame: transfer with More=true + first chunk
+	chunkSize := 200
+	firstTransfer := &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &did,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &mf,
+		Settled:       true,
+		More:          true,
+	}
+	require.NoError(t, c.WriteTransferRaw(0, mustEncode(t, firstTransfer), msgBytes[:chunkSize]))
+
+	// Middle frames
+	offset := chunkSize
+	for offset+chunkSize < len(msgBytes) {
+		cont := &performatives.Transfer{Handle: 0, More: true}
+		require.NoError(t, c.WriteTransferRaw(0, mustEncode(t, cont), msgBytes[offset:offset+chunkSize]))
+		offset += chunkSize
+	}
+
+	// Last frame
+	last := &performatives.Transfer{Handle: 0, More: false}
+	require.NoError(t, c.WriteTransferRaw(0, mustEncode(t, last), msgBytes[offset:]))
+
+	// Give time for processing and reassembly
+	time.Sleep(100 * time.Millisecond)
+}
+
+func mustEncode(t *testing.T, p interface{ Encode() ([]byte, error) }) []byte {
+	t.Helper()
+	b, err := p.Encode()
+	require.NoError(t, err)
+	return b
+}
+
+func TestHandleExceedsMax(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "handle-exceed")
+	doBeginSession(t, c, 0)
+
+	// Attach with handle > 255 (handleMax)
+	attach := &performatives.Attach{
+		Name:   "bad-link",
+		Handle: 999,
+		Role:   performatives.RoleSender,
+		Target: &performatives.Target{Address: "test/topic"},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	// Should get a Detach with error (not an Attach response)
+	_, desc, perf, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorDetach, desc)
+	detach := perf.(*performatives.Detach)
+	assert.True(t, detach.Closed)
+	assert.NotNil(t, detach.Error)
+	assert.Equal(t, performatives.ErrNotAllowed, detach.Error.Condition)
+}
+
+func TestLinkSteal(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "link-steal")
+	doBeginSession(t, c, 0)
+
+	// Attach first link on handle 0
+	attach1 := &performatives.Attach{
+		Name:   "link-1",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/a"},
+	}
+	body, err := attach1.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Attach second link on same handle 0 (link steal)
+	attach2 := &performatives.Attach{
+		Name:   "link-2",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/b"},
+	}
+	body, err = attach2.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	// Should get Attach response for the new link
+	_, desc, perf, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+	resp := perf.(*performatives.Attach)
+	assert.Equal(t, "link-2", resp.Name)
+}
+
+func TestDuplicateChannel(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "dup-channel")
+	doBeginSession(t, c, 0)
+
+	// Try to begin another session on same channel 0
+	begin := &performatives.Begin{
+		NextOutgoingID: 0,
+		IncomingWindow: 65535,
+		OutgoingWindow: 65535,
+		HandleMax:      255,
+	}
+	body, err := begin.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	// Should get Close with framing error
+	_, desc, perf, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorClose, desc)
+	cl := perf.(*performatives.Close)
+	require.NotNil(t, cl.Error)
+	assert.Equal(t, performatives.ErrFramingError, cl.Error.Condition)
 }
 
 func TestPrefixedClientID(t *testing.T) {

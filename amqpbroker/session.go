@@ -4,6 +4,7 @@
 package amqpbroker
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -17,27 +18,52 @@ type Session struct {
 	localCh  uint16
 	remoteCh uint16
 
-	links   map[uint32]*Link
-	linksMu sync.RWMutex
+	links    map[uint32]*Link
+	linksMu  sync.RWMutex
+	handleMax uint32
 
 	nextDeliveryID       atomic.Uint32
 	remoteIncomingWindow uint32
 	remoteOutgoingWindow uint32
 }
 
-func newSession(c *Connection, localCh, remoteCh uint16) *Session {
+func newSession(c *Connection, localCh, remoteCh uint16, handleMax uint32) *Session {
 	return &Session{
-		conn:     c,
-		localCh:  localCh,
-		remoteCh: remoteCh,
-		links:    make(map[uint32]*Link),
+		conn:      c,
+		localCh:   localCh,
+		remoteCh:  remoteCh,
+		links:     make(map[uint32]*Link),
+		handleMax: handleMax,
 	}
 }
 
 func (s *Session) handleAttach(attach *performatives.Attach) error {
+	// Check handle limit
+	if attach.Handle > s.handleMax {
+		resp := &performatives.Detach{
+			Handle: attach.Handle,
+			Closed: true,
+			Error: &performatives.Error{
+				Condition:   performatives.ErrNotAllowed,
+				Description: fmt.Sprintf("handle %d exceeds max %d", attach.Handle, s.handleMax),
+			},
+		}
+		body, err := resp.Encode()
+		if err != nil {
+			return err
+		}
+		return s.conn.conn.WritePerformative(s.localCh, body)
+	}
+
 	link := newLink(s, attach)
 
 	s.linksMu.Lock()
+	// Link steal: if handle is already in use, detach the old link
+	if old, exists := s.links[attach.Handle]; exists {
+		s.linksMu.Unlock()
+		old.detach()
+		s.linksMu.Lock()
+	}
 	s.links[attach.Handle] = link
 	s.linksMu.Unlock()
 
