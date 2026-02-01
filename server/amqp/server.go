@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/amqpbroker"
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 )
 
 // ErrShutdownTimeout is returned when graceful shutdown exceeds the configured timeout.

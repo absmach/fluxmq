@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/broker"
 	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"

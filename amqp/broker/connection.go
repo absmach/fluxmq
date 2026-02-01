@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package amqpbroker
+package broker
 
 import (
 	"fmt"
@@ -49,10 +49,10 @@ type partialTransfer struct {
 
 func newConnection(b *Broker, raw net.Conn) *Connection {
 	return &Connection{
-		broker:       b,
-		conn:         amqpconn.NewConnection(raw),
-		maxFrameSize: frames.DefaultMaxFrameSize,
-		channelMax:   65535,
+		broker:           b,
+		conn:             amqpconn.NewConnection(raw),
+		maxFrameSize:     frames.DefaultMaxFrameSize,
+		channelMax:       65535,
 		sessions:         make(map[uint16]*Session),
 		partialTransfers: make(map[uint16]*partialTransfer),
 		closeCh:          make(chan struct{}),
@@ -176,7 +176,6 @@ func (c *Connection) handleSASL() error {
 	}
 	return c.conn.WriteSASLFrame(body)
 }
-
 
 func (c *Connection) handleOpen() error {
 	// Read client OPEN

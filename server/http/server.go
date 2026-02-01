@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
 )
 

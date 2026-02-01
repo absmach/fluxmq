@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package amqpbroker_test
+package broker_test
 
 import (
 	"context"
@@ -12,11 +12,11 @@ import (
 	"time"
 
 	amqpconn "github.com/absmach/fluxmq/amqp"
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	"github.com/absmach/fluxmq/amqp/frames"
 	"github.com/absmach/fluxmq/amqp/message"
 	"github.com/absmach/fluxmq/amqp/performatives"
 	"github.com/absmach/fluxmq/amqp/sasl"
-	"github.com/absmach/fluxmq/amqpbroker"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

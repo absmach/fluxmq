@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package amqpbroker
+package broker
 
 import (
 	"net"
@@ -253,10 +253,10 @@ func TestTransferFromClient(t *testing.T) {
 
 	// Attach as sender (broker receives from us)
 	attach := &performatives.Attach{
-		Name:   "send-link",
-		Handle: 0,
-		Role:   performatives.RoleSender,
-		Target: &performatives.Target{Address: "test/ingest"},
+		Name:                 "send-link",
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: "test/ingest"},
 		InitialDeliveryCount: 0,
 	}
 	body, err := attach.Encode()

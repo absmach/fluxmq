@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/mqtt/broker"
 )
 
 // Config holds health check server configuration.

@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package amqpbroker
+package broker
 
 import (
 	"fmt"
@@ -18,8 +18,8 @@ type Session struct {
 	localCh  uint16
 	remoteCh uint16
 
-	links    map[uint32]*Link
-	linksMu  sync.RWMutex
+	links     map[uint32]*Link
+	linksMu   sync.RWMutex
 	handleMax uint32
 
 	nextDeliveryID       atomic.Uint32

@@ -3,6 +3,17 @@
 
 package broker
 
+// Authenticator validates client credentials.
+type Authenticator interface {
+	Authenticate(clientID, username, secret string) (bool, error)
+}
+
+// Authorizer checks topic permissions.
+type Authorizer interface {
+	CanPublish(clientID string, topic string) bool
+	CanSubscribe(clientID string, filter string) bool
+}
+
 // AuthEngine handles authentication and authorization checks.
 type AuthEngine struct {
 	auth  Authenticator
