@@ -1256,7 +1256,11 @@ func (c *Client) reconnect() {
 // Keep-alive management
 
 func (c *Client) startKeepAlive() {
-	c.pingStop = make(chan struct{})
+	stop := make(chan struct{})
+	c.activityMu.Lock()
+	c.pingStop = stop
+	c.activityMu.Unlock()
+
 	interval := c.opts.KeepAlive
 
 	go func() {
@@ -1265,7 +1269,7 @@ func (c *Client) startKeepAlive() {
 
 		for {
 			select {
-			case <-c.pingStop:
+			case <-stop:
 				return
 			case <-ticker.C:
 				c.activityMu.Lock()
@@ -1281,9 +1285,13 @@ func (c *Client) startKeepAlive() {
 }
 
 func (c *Client) stopKeepAlive() {
-	if c.pingStop != nil {
-		close(c.pingStop)
-		c.pingStop = nil
+	c.activityMu.Lock()
+	stop := c.pingStop
+	c.pingStop = nil
+	c.activityMu.Unlock()
+
+	if stop != nil {
+		close(stop)
 	}
 }
 
