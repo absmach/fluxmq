@@ -36,6 +36,12 @@ server:
     mdtls:
       addr: ""
 
+  amqp:
+    plain:
+      addr: ":5673"
+    tls: {}
+    mtls: {}
+
   health_enabled: true
   health_addr: ":8082"
 
