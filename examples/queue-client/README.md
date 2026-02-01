@@ -16,16 +16,17 @@ This directory contains example configurations and client applications for the M
 
 ### Queue Client (`queue-client/`)
 
-Demonstrates the broker's durable queue functionality with QoS 2 publishing, consumer groups, and message acknowledgments.
+Demonstrates cross-protocol queue interop between MQTT and AMQP 1.0 using the broker's durable queue functionality.
 
 #### Scenario: Order Processing Pipeline
 
-A queue named `tasks/orders` receives orders from multiple publishers. Two independent consumer groups process every message:
+A queue named `tasks/orders` receives orders from multiple MQTT publishers. Two independent consumer groups process every message — one using MQTT, the other using AMQP 1.0:
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │ Publisher 1 │     │ Publisher 2 │     │ Publisher 3 │
 │ (Alice)     │     │ (Bob)       │     │ (Charlie)   │
+│   [MQTT]    │     │   [MQTT]    │     │   [MQTT]    │
 └──────┬──────┘     └──────┬──────┘     └──────┬──────┘
        │                   │                   │
        │    QoS 2 PUBLISH (exactly-once)       │
@@ -43,10 +44,11 @@ A queue named `tasks/orders` receives orders from multiple publishers. Two indep
 ┌─────────────────────┐         ┌─────────────────────┐
 │ order-validators    │         │ order-fulfillment   │
 │ (Consumer Group 1)  │         │ (Consumer Group 2)  │
+│      [MQTT]         │         │    [AMQP 1.0]       │
 ├─────────────────────┤         ├─────────────────────┤
-│ ┌─────┐   ┌─────┐   │         │ ┌─────┐             │
-│ │ C1  │   │ C2  │   │         │ │ C1  │             │
-│ └─────┘   └─────┘   │         │ └─────┘             │
+│ ┌─────┐   ┌─────┐  │         │ ┌─────┐             │
+│ │ C1  │   │ C2  │  │         │ │ C1  │             │
+│ └─────┘   └─────┘  │         │ └─────┘             │
 │  Load balanced      │         │  Single consumer    │
 └─────────────────────┘         └─────────────────────┘
 ```
@@ -55,42 +57,38 @@ A queue named `tasks/orders` receives orders from multiple publishers. Two indep
 
 | Concept | Description |
 |---------|-------------|
+| **Cross-Protocol Interop** | MQTT publishers, AMQP 1.0 consumer on the same queue |
 | **QoS 2 Publishing** | Exactly-once delivery from publisher to broker |
 | **Consumer Groups** | Both groups receive ALL messages (fan-out pattern) |
 | **Load Balancing** | Messages distributed across consumers within a group |
-| **Partition Keys** | Orders from the same customer processed in FIFO order |
-| **Acknowledgments** | `Ack()`, `Nack()`, `Reject()` for processing control |
+| **AMQP Dispositions** | `AcceptMessage`, `ReleaseMessage`, `RejectMessage` for ack/nack/reject |
+| **MQTT Acknowledgments** | `Ack()`, `Nack()`, `Reject()` for processing control |
 
-#### Partition Key Ordering
+#### AMQP 1.0 Consumer
 
-Each publisher uses a customer ID as the partition key:
-
-```go
-c.PublishToQueueWithOptions(&client.QueuePublishOptions{
-    QueueName:    "tasks/orders",
-    Payload:      orderJSON,
-    PartitionKey: "customer-alice",  // Same key → same partition → FIFO
-    QoS:          2,
-})
-```
-
-This guarantees that all orders from `customer-alice` are processed in the order they were published, even when load-balanced across multiple consumers.
-
-#### Message Acknowledgments
-
-Consumers control message lifecycle:
+The fulfillment consumer connects via AMQP 1.0 using [Azure/go-amqp](https://github.com/Azure/go-amqp):
 
 ```go
-c.SubscribeToQueue("tasks/orders", "order-validators", func(msg *client.QueueMessage) {
-    if processedOK {
-        msg.Ack()     // Remove from queue
-    } else if retryable {
-        msg.Nack()    // Retry with exponential backoff
-    } else {
-        msg.Reject()  // Send to dead-letter queue
-    }
+conn, _ := amqp.Dial(ctx, "amqp://localhost:5672", &amqp.ConnOptions{
+    ContainerID: "amqp-fulfillment-1",
+    SASLType:    amqp.SASLTypeAnonymous(),
 })
+session, _ := conn.NewSession(ctx, nil)
+
+receiver, _ := session.NewReceiver(ctx, "$queue/tasks/orders", &amqp.ReceiverOptions{
+    Credit: 10,
+    Properties: map[string]any{
+        "consumer-group": "order-fulfillment",
+    },
+})
+
+msg, _ := receiver.Receive(ctx, nil)
+receiver.AcceptMessage(ctx, msg)  // Ack
+receiver.ReleaseMessage(ctx, msg) // Nack (retry)
+receiver.RejectMessage(ctx, msg, nil) // Reject (DLQ)
 ```
+
+The consumer group is passed via AMQP link properties on attach, matching the MQTT v5 user property convention.
 
 #### Running the Example
 
@@ -106,36 +104,37 @@ c.SubscribeToQueue("tasks/orders", "order-validators", func(msg *client.QueueMes
 
 3. Command-line options:
    ```
-   -broker string    MQTT broker address (default "localhost:1883")
-   -messages int     Number of messages per publisher (default 10)
-   -rate duration    Delay between publishes (default 500ms)
+   -mqtt string      MQTT broker address (default "localhost:1883")
+   -amqp string      AMQP 1.0 broker address (default "localhost:5672")
+   -messages int      Number of messages per publisher (default 10)
+   -rate duration     Delay between publishes (default 200ms)
    ```
 
 #### Expected Output
 
 ```
 Starting consumers...
-[validator-1] Subscribed to queue 'tasks/orders' in group 'order-validators'
-[validator-2] Subscribed to queue 'tasks/orders' in group 'order-validators'
-[fulfillment-1] Subscribed to queue 'tasks/orders' in group 'order-fulfillment'
+[validator-1] Connected to localhost:1883 (MQTT)
+[validator-2] Connected to localhost:1883 (MQTT)
+[amqp-fulfillment-1] Connected to localhost:5672 (AMQP 1.0), receiving from queue 'tasks/orders'
 Starting publishers...
-[publisher-1] Connected, publishing orders for customer-alice
-[publisher-2] Connected, publishing orders for customer-bob
-[publisher-3] Connected, publishing orders for customer-charlie
-[publisher-1] Published order customer-alice-order-1 (QoS 2)
-[validator-1] Validated order (partition=3, seq=1): {"order_id":"customer-alice-order-1"...}
-[fulfillment-1] Fulfilled order (partition=3, seq=1): {"order_id":"customer-alice-order-1"...}
+[publisher-1] Connected to localhost:1883 (MQTT), publishing orders for customer-alice
+[publisher-2] Connected to localhost:1883 (MQTT), publishing orders for customer-bob
+[publisher-3] Connected to localhost:1883 (MQTT), publishing orders for customer-charlie
+[validator-1] Validated order (seq=1): {"order_id":"customer-alice-order-1"...}
+[amqp-fulfillment-1] Fulfilled order (AMQP): {"order_id":"customer-alice-order-1"...}
 ...
 
 === Statistics ===
-Messages published:           30
-Validator group processed:    30
-Fulfillment group processed:  30
+Messages published:              30
+Validator group processed (MQTT): 30
+Fulfillment group processed (AMQP): 30
 ```
 
 #### Architecture Notes
 
 - **MQTT v5 Required**: Consumer groups and partition keys use MQTT v5 user properties
+- **AMQP 1.0 SASL ANONYMOUS**: The example uses anonymous authentication
 - **Durable Storage**: Messages persist to BadgerDB and survive broker restarts
-- **Topic Prefix**: Queue topics use `$queue/` prefix (added automatically by client)
-- **Ack Topics**: Acknowledgments sent to `$queue/{name}/$ack`, `$nack`, or `$reject`
+- **Topic Prefix**: Queue topics use `$queue/` prefix (added automatically by MQTT client, explicit in AMQP)
+- **Consumer Group**: MQTT passes it as a user property, AMQP passes it as a link property — both map to the same queue manager parameter

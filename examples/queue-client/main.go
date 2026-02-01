@@ -1,26 +1,21 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-// Package main demonstrates the MQTT broker's durable queue functionality.
-//
-// This example showcases:
-//   - QoS 2 publishing with exactly-once delivery semantics
-//   - Durable queues with message persistence
-//   - Consumer groups for load balancing
-//   - Partition keys for message ordering
-//   - Ack/Nack/Reject for message processing control
+// Package main demonstrates cross-protocol queue interop between MQTT and AMQP 1.0.
 //
 // Scenario: Order Processing Pipeline
-//   - 3 Publishers send orders from different customers
+//   - 3 MQTT Publishers send orders from different customers
 //   - 2 Consumer Groups process the same queue:
-//   - "order-validators" (2 consumers) - validates each order
-//   - "order-fulfillment" (1 consumer) - fulfills validated orders
+//   - "order-validators" (2 MQTT consumers) - validates each order
+//   - "order-fulfillment" (1 AMQP 1.0 consumer) - fulfills validated orders
 //
 // Key behaviors demonstrated:
-//  1. Each consumer group receives ALL messages (fan-out)
-//  2. Within a group, messages are load-balanced across consumers
-//  3. Partition keys ensure orders from the same customer are processed in order
-//  4. QoS 2 guarantees exactly-once delivery from publisher to broker
+//  1. MQTT publishers write to a durable queue
+//  2. MQTT consumers receive messages via the FluxMQ client library
+//  3. An AMQP 1.0 consumer (using Azure/go-amqp) receives the same messages
+//  4. AMQP consumer uses Accepted/Released dispositions for ack/nack
+//  5. Both consumer groups receive ALL messages independently (fan-out)
+//  6. Within a group, messages are load-balanced across consumers
 package main
 
 import (
@@ -36,14 +31,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Azure/go-amqp"
 	"github.com/absmach/fluxmq/client"
 )
 
 const queueName = "tasks/orders"
 
 var (
-	node1Addr   = flag.String("node1", "localhost:1883", "MQTT node 1 address")
-	node2Addr   = flag.String("node2", "localhost:1884", "MQTT node 2 address")
+	mqttAddr    = flag.String("mqtt", "localhost:1883", "MQTT broker address")
+	amqpAddr    = flag.String("amqp", "localhost:5672", "AMQP 1.0 broker address")
 	numMessages = flag.Int("messages", 10, "Number of messages per publisher")
 	publishRate = flag.Duration("rate", 200*time.Millisecond, "Delay between publishes")
 )
@@ -59,17 +55,15 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Counters for statistics
 	var (
 		publishedCount   int64
 		validatorCount   int64
 		fulfillmentCount int64
 	)
 
-	// Start consumers first to ensure they're ready
 	log.Println("Starting consumers...")
 
-	// Consumer Group 1: order-validators (2 consumers for load balancing)
+	// Consumer Group 1: order-validators (2 MQTT consumers for load balancing)
 	for i := 1; i <= 2; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -78,17 +72,15 @@ func main() {
 		}(i)
 	}
 
-	// Consumer Group 2: order-fulfillment (1 consumer)
+	// Consumer Group 2: order-fulfillment (1 AMQP 1.0 consumer)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runFulfillment(ctx, &fulfillmentCount)
+		runAMQPFulfillment(ctx, &fulfillmentCount)
 	}()
 
-	// Give consumers time to connect and subscribe
 	time.Sleep(time.Second)
 
-	// Start publishers
 	log.Println("Starting publishers...")
 	publishWg := &sync.WaitGroup{}
 
@@ -97,20 +89,15 @@ func main() {
 		publishWg.Add(1)
 		go func(id int, customerID string) {
 			defer publishWg.Done()
-			node := node1Addr
-			// if i%2 != 0 {
-			// 	node = node2Addr
-			// }
-			runPublisher(ctx, id, customerID, *node, *numMessages, &publishedCount)
+			runPublisher(ctx, id, customerID, *mqttAddr, *numMessages, &publishedCount)
 		}(i+1, customer)
 	}
 
-	// Wait for publishers to finish or signal
 	done := make(chan struct{})
 	go func() {
 		publishWg.Wait()
 		log.Println("All publishers finished")
-		time.Sleep(2 * time.Second) // Allow consumers to process remaining messages
+		time.Sleep(2 * time.Second)
 		close(done)
 	}()
 
@@ -125,26 +112,25 @@ func main() {
 
 	wg.Wait()
 
-	// Print statistics
 	fmt.Println("\n=== Statistics ===")
-	fmt.Printf("Messages published:           %d\n", atomic.LoadInt64(&publishedCount))
-	fmt.Printf("Validator group processed:    %d\n", atomic.LoadInt64(&validatorCount))
-	fmt.Printf("Fulfillment group processed:  %d\n", atomic.LoadInt64(&fulfillmentCount))
+	fmt.Printf("Messages published:              %d\n", atomic.LoadInt64(&publishedCount))
+	fmt.Printf("Validator group processed (MQTT): %d\n", atomic.LoadInt64(&validatorCount))
+	fmt.Printf("Fulfillment group processed (AMQP): %d\n", atomic.LoadInt64(&fulfillmentCount))
 	fmt.Println()
 	fmt.Println("Expected behavior:")
 	fmt.Printf("  - Each group receives all %d messages\n", atomic.LoadInt64(&publishedCount))
-	fmt.Println("  - Validators split work across 2 consumers")
-	fmt.Println("  - Orders from same customer processed in order (partition key)")
+	fmt.Println("  - Validators split work across 2 MQTT consumers")
+	fmt.Println("  - Fulfillment processes all messages via AMQP 1.0")
 }
 
-// runPublisher publishes orders with QoS 2 for exactly-once delivery.
+// runPublisher publishes orders via MQTT with QoS 2.
 func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, count int, published *int64) {
 	clientID := fmt.Sprintf("publisher-%d", id)
 
 	opts := client.NewOptions().
 		SetServers(nodeAddr).
 		SetClientID(clientID).
-		SetProtocolVersion(5). // MQTT v5 required for user properties (partition keys)
+		SetProtocolVersion(5).
 		SetCleanSession(true).
 		SetKeepAlive(30 * time.Second).
 		SetConnectTimeout(10 * time.Second).
@@ -165,7 +151,7 @@ func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, coun
 	}
 	defer c.Disconnect()
 
-	log.Printf("[%s] Connected to %s, publishing orders for %s", clientID, nodeAddr, customerID)
+	log.Printf("[%s] Connected to %s (MQTT), publishing orders for %s", clientID, nodeAddr, customerID)
 
 	for i := 1; i <= count; i++ {
 		select {
@@ -181,7 +167,7 @@ func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, coun
 		err := c.PublishToQueueWithOptions(&client.QueuePublishOptions{
 			QueueName: queueName,
 			Payload:   payload,
-			QoS:       2, // Exactly-once delivery
+			QoS:       2,
 		})
 		if err != nil {
 			log.Printf("[%s] Failed to publish order %s: %v", clientID, orderID, err)
@@ -189,21 +175,19 @@ func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, coun
 		}
 
 		atomic.AddInt64(published, 1)
-		// log.Printf("[%s] Published order %s (QoS 2)", clientID, orderID)
-
 		time.Sleep(*publishRate)
 	}
 
 	log.Printf("[%s] Finished publishing %d orders", clientID, count)
 }
 
-// runValidator runs an order validator consumer (part of "order-validators" group).
+// runValidator runs an MQTT order validator consumer.
 func runValidator(ctx context.Context, id int, processed *int64) {
 	clientID := fmt.Sprintf("validator-%d", id)
 	consumerGroup := "order-validators"
 
 	opts := client.NewOptions().
-		SetServers(*node1Addr).
+		SetServers(*mqttAddr).
 		SetClientID(clientID).
 		SetProtocolVersion(5).
 		SetCleanSession(true).
@@ -225,7 +209,7 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 	}
 	defer c.Disconnect()
 
-	log.Printf("[%s] Connected to %s", clientID, *node1Addr)
+	log.Printf("[%s] Connected to %s (MQTT)", clientID, *mqttAddr)
 
 	msgCh := make(chan *client.QueueMessage, 100)
 
@@ -248,14 +232,12 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 		case <-ctx.Done():
 			return
 		case msg := <-msgCh:
-			// Simulate validation work
 			time.Sleep(100 * time.Millisecond)
 
 			atomic.AddInt64(processed, 1)
 			log.Printf("[%s] Validated order (seq=%d): %s",
 				clientID, msg.Sequence, string(msg.Payload))
 
-			// Acknowledge successful processing
 			if err := msg.Ack(); err != nil {
 				log.Printf("[%s] Failed to ack message: %v", clientID, err)
 			}
@@ -263,79 +245,83 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 	}
 }
 
-// runFulfillment runs the order fulfillment consumer (single consumer in "order-fulfillment" group).
-func runFulfillment(ctx context.Context, processed *int64) {
-	clientID := "fulfillment-1"
+// runAMQPFulfillment runs the order fulfillment consumer over AMQP 1.0.
+func runAMQPFulfillment(ctx context.Context, processed *int64) {
+	clientID := "amqp-fulfillment-1"
 	consumerGroup := "order-fulfillment"
 
-	opts := client.NewOptions().
-		SetServers(*node1Addr).
-		SetClientID(clientID).
-		SetProtocolVersion(5).
-		SetCleanSession(true).
-		SetKeepAlive(30 * time.Second).
-		SetConnectTimeout(30 * time.Second).
-		SetOnConnectionLost(func(err error) {
-			log.Printf("[%s] Connection lost: %v", clientID, err)
-		})
+	addr := fmt.Sprintf("amqp://%s", *amqpAddr)
 
-	c, err := client.New(opts)
+	conn, err := amqp.Dial(ctx, addr, &amqp.ConnOptions{
+		ContainerID: clientID,
+		SASLType:    amqp.SASLTypeAnonymous(),
+	})
 	if err != nil {
-		log.Printf("[%s] Failed to create client: %v", clientID, err)
-		return
-	}
-
-	if err := c.Connect(); err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer c.Disconnect()
+	defer conn.Close()
 
-	log.Printf("[%s] Connected to %s", clientID, *node1Addr)
-
-	msgCh := make(chan *client.QueueMessage, 100)
-
-	err = c.SubscribeToQueue(queueName, consumerGroup, func(msg *client.QueueMessage) {
-		select {
-		case msgCh <- msg:
-		default:
-			log.Printf("[%s] Message channel full, dropping message", clientID)
-		}
-	})
+	session, err := conn.NewSession(ctx, nil)
 	if err != nil {
-		log.Printf("[%s] Failed to subscribe: %v", clientID, err)
+		log.Printf("[%s] Failed to create session: %v", clientID, err)
 		return
 	}
 
-	log.Printf("[%s] Subscribed to queue '%s' in group '%s'", clientID, queueName, consumerGroup)
+	// Attach receiver to the queue address with consumer-group in link properties.
+	// FluxMQ maps $queue/<name> addresses to durable queue subscriptions.
+	receiver, err := session.NewReceiver(ctx, "$queue/"+queueName, &amqp.ReceiverOptions{
+		Credit: 10,
+		Properties: map[string]any{
+			"consumer-group": consumerGroup,
+		},
+	})
+	if err != nil {
+		log.Printf("[%s] Failed to create receiver: %v", clientID, err)
+		return
+	}
+	defer receiver.Close(ctx)
+
+	log.Printf("[%s] Connected to %s (AMQP 1.0), receiving from queue '%s' in group '%s'",
+		clientID, *amqpAddr, queueName, consumerGroup)
 
 	for {
-		select {
-		case <-ctx.Done():
+		msg, err := receiver.Receive(ctx, nil)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("[%s] Receive error: %v", clientID, err)
 			return
-		case msg := <-msgCh:
-			// Simulate fulfillment work (slower than validation)
-			time.Sleep(200 * time.Millisecond)
+		}
 
-			atomic.AddInt64(processed, 1)
-			log.Printf("[%s] Fulfilled order (seq=%d): %s",
-				clientID, msg.Sequence, string(msg.Payload))
+		var payload []byte
+		if len(msg.Data) > 0 {
+			payload = msg.Data[0]
+		} else {
+			payload = []byte(fmt.Sprintf("%v", msg.Value))
+		}
 
-			// Demonstrate different acknowledgment types
-			if rand.Float32() < 0.05 { // 5% chance of needing retry
-				log.Printf("[%s] Order needs retry, sending NACK", clientID)
-				if err := msg.Nack(); err != nil {
-					log.Printf("[%s] Failed to nack message: %v", clientID, err)
-				}
-			} else if rand.Float32() < 0.02 { // 2% chance of rejection (goes to DLQ)
-				log.Printf("[%s] Order invalid, rejecting to DLQ", clientID)
-				if err := msg.Reject(); err != nil {
-					log.Printf("[%s] Failed to reject message: %v", clientID, err)
-				}
-			} else {
-				if err := msg.Ack(); err != nil {
-					log.Printf("[%s] Failed to ack message: %v", clientID, err)
-				}
+		// Simulate fulfillment work
+		time.Sleep(200 * time.Millisecond)
+
+		atomic.AddInt64(processed, 1)
+		log.Printf("[%s] Fulfilled order (AMQP): %s", clientID, string(payload))
+
+		// Demonstrate different disposition types
+		if rand.Float32() < 0.05 {
+			log.Printf("[%s] Order needs retry, releasing message", clientID)
+			if err := receiver.ReleaseMessage(ctx, msg); err != nil {
+				log.Printf("[%s] Failed to release message: %v", clientID, err)
+			}
+		} else if rand.Float32() < 0.02 {
+			log.Printf("[%s] Order invalid, rejecting message", clientID)
+			if err := receiver.RejectMessage(ctx, msg, nil); err != nil {
+				log.Printf("[%s] Failed to reject message: %v", clientID, err)
+			}
+		} else {
+			if err := receiver.AcceptMessage(ctx, msg); err != nil {
+				log.Printf("[%s] Failed to accept message: %v", clientID, err)
 			}
 		}
 	}

@@ -24,6 +24,7 @@ type Broker struct {
 	connections  sync.Map // containerID -> *Connection
 	router       *router.TrieRouter
 	queueManager broker.QueueManager
+	auth         *broker.AuthEngine
 	logger       *slog.Logger
 	mu           sync.RWMutex
 }
@@ -126,6 +127,13 @@ func (b *Broker) SetQueueManager(qm broker.QueueManager) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.queueManager = qm
+}
+
+// SetAuthEngine sets the authentication and authorization engine.
+func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.auth = auth
 }
 
 // Close shuts down the broker and all connections.

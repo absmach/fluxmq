@@ -208,6 +208,7 @@ type Attach struct {
 	Target               *Target
 	InitialDeliveryCount uint32
 	MaxMessageSize       uint64
+	Properties           map[string]any
 }
 
 func (a *Attach) Encode() ([]byte, error) {
@@ -320,6 +321,27 @@ func (a *Attach) Encode() ([]byte, error) {
 	}
 	count++
 
+	// Only encode fields 11-13 if Properties is set
+	if len(a.Properties) > 0 {
+		// OfferedCapabilities (11) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// DesiredCapabilities (12) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// Properties (13)
+		if err := types.WriteStringAnyMap(&fields, a.Properties); err != nil {
+			return nil, err
+		}
+		count++
+	}
+
 	return encodePerformative(DescriptorAttach, fields.Bytes(), count)
 }
 
@@ -361,6 +383,16 @@ func DecodeAttach(fields []any) *Attach {
 	}
 	if len(fields) > 10 && fields[10] != nil {
 		a.MaxMessageSize = toUint64(fields[10])
+	}
+	if len(fields) > 13 && fields[13] != nil {
+		if m, ok := fields[13].(map[any]any); ok {
+			a.Properties = make(map[string]any, len(m))
+			for k, v := range m {
+				if ks, ok := k.(string); ok {
+					a.Properties[ks] = v
+				}
+			}
+		}
 	}
 	return a
 }

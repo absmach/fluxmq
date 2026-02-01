@@ -4,6 +4,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -311,4 +312,18 @@ func WriteAny(w io.Writer, v any) error {
 	default:
 		return fmt.Errorf("unsupported type: %T", v)
 	}
+}
+
+// WriteStringAnyMap writes a map with string keys and any values.
+func WriteStringAnyMap(w io.Writer, m map[string]any) error {
+	var pairs bytes.Buffer
+	for k, v := range m {
+		if err := WriteString(&pairs, k); err != nil {
+			return err
+		}
+		if err := WriteAny(&pairs, v); err != nil {
+			return err
+		}
+	}
+	return WriteMap(w, pairs.Bytes(), len(m))
 }

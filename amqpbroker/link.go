@@ -31,8 +31,9 @@ type Link struct {
 	pendingMu sync.Mutex
 
 	// Queue subscription info
-	isQueue   bool
-	queueName string
+	isQueue       bool
+	queueName     string
+	consumerGroup string
 
 	mu     sync.Mutex
 	logger *slog.Logger
@@ -75,9 +76,15 @@ func newLink(s *Session, attach *performatives.Attach) *Link {
 	// Detect queue topic
 	if strings.HasPrefix(address, "$queue/") {
 		l.isQueue = true
-		// Extract queue name: $queue/<name>/... -> <name>
 		parts := strings.SplitN(strings.TrimPrefix(address, "$queue/"), "/", 2)
 		l.queueName = parts[0]
+	}
+
+	// Extract consumer group from attach properties
+	if attach.Properties != nil {
+		if cg, ok := attach.Properties["consumer-group"]; ok {
+			l.consumerGroup, _ = cg.(string)
+		}
 	}
 
 	return l
@@ -85,6 +92,16 @@ func newLink(s *Session, attach *performatives.Attach) *Link {
 
 // subscribe registers this link with the router or queue manager.
 func (l *Link) subscribe() {
+	// Check subscribe authorization
+	auth := l.session.conn.broker.auth
+	if auth != nil {
+		clientID := PrefixedClientID(l.session.conn.containerID)
+		if !auth.CanSubscribe(clientID, l.address) {
+			l.logger.Warn("subscribe denied", "client", clientID, "address", l.address)
+			return
+		}
+	}
+
 	if l.isQueue {
 		// Queue subscription
 		clientID := PrefixedClientID(l.session.conn.containerID)
@@ -104,7 +121,7 @@ func (l *Link) subscribe() {
 			}
 		}
 
-		if err := qm.Subscribe(ctx, l.queueName, pattern, clientID, "", ""); err != nil {
+		if err := qm.Subscribe(ctx, l.queueName, pattern, clientID, l.consumerGroup, ""); err != nil {
 			l.logger.Error("queue subscribe failed", "address", l.address, "error", err)
 		}
 	} else {
@@ -125,7 +142,7 @@ func (l *Link) detach() {
 		ctx := context.Background()
 		qm := l.session.conn.broker.queueManager
 		if qm != nil {
-			qm.Unsubscribe(ctx, l.queueName, "", clientID, "")
+			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup)
 		}
 	} else if l.isSender {
 		l.session.conn.broker.router.Unsubscribe(l.session.conn.containerID, l.address)
@@ -151,6 +168,16 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	var data []byte
 	if len(msg.Data) > 0 {
 		data = msg.Data[0]
+	}
+
+	// Check publish authorization
+	auth := l.session.conn.broker.auth
+	if auth != nil {
+		clientID := PrefixedClientID(l.session.conn.containerID)
+		if !auth.CanPublish(clientID, topic) {
+			l.logger.Warn("publish denied", "client", clientID, "topic", topic)
+			return
+		}
 	}
 
 	if l.isQueue || strings.HasPrefix(topic, "$queue/") {

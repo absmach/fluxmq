@@ -1,6 +1,9 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build ignore
+// TODO: enable when queue/storage/badger packages are implemented
+
 package raft
 
 import (

@@ -143,15 +143,22 @@ func (c *Connection) handleSASL() error {
 	// Validate mechanism
 	switch init.Mechanism {
 	case sasl.MechPLAIN:
-		// Parse and validate credentials
-		_, _, _, err := sasl.ParsePLAIN(init.InitialResponse)
+		_, username, password, err := sasl.ParsePLAIN(init.InitialResponse)
 		if err != nil {
 			outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 			body, _ := outcome.Encode()
 			c.conn.WriteSASLFrame(body)
 			return fmt.Errorf("PLAIN auth failed: %w", err)
 		}
-		// TODO: integrate with AuthEngine for actual credential validation
+		if c.broker.auth != nil {
+			ok, authErr := c.broker.auth.Authenticate(username, username, password)
+			if authErr != nil || !ok {
+				outcome := &sasl.Outcome{Code: sasl.CodeAuth}
+				body, _ := outcome.Encode()
+				c.conn.WriteSASLFrame(body)
+				return fmt.Errorf("PLAIN auth rejected for user %q", username)
+			}
+		}
 	case sasl.MechANONYMOUS:
 		// Anonymous is always accepted
 	default:
