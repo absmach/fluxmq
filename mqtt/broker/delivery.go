@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -150,13 +150,13 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 }
 
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.
-func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error {
+func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
 	s := b.Get(clientID)
 	if s == nil {
 		return fmt.Errorf("session not found: %s", clientID)
 	}
 
-	// core.Message comes from cluster - create storage.Message with zero-copy buffer
+	// cluster.Message comes from cluster - create storage.Message with zero-copy buffer
 	storeMsg := storage.AcquireMessage()
 	storeMsg.Topic = msg.Topic
 	storeMsg.QoS = msg.QoS

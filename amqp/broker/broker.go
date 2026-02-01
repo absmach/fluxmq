@@ -10,10 +10,12 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/absmach/fluxmq/amqp/message"
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -24,6 +26,7 @@ type Broker struct {
 	connections  sync.Map // containerID -> *Connection
 	router       *router.TrieRouter
 	queueManager broker.QueueManager
+	cluster      cluster.Cluster
 	auth         *broker.AuthEngine
 	logger       *slog.Logger
 	mu           sync.RWMutex
@@ -59,7 +62,7 @@ func (b *Broker) unregisterConnection(containerID string) {
 	b.connections.Delete(containerID)
 }
 
-// Publish routes a message to AMQP subscribers via the router.
+// Publish routes a message to AMQP subscribers via the router and cluster.
 func (b *Broker) Publish(topic string, payload []byte, props map[string]string) {
 	subs, err := b.router.Match(topic)
 	if err != nil {
@@ -75,6 +78,14 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 		}
 		c := val.(*Connection)
 		c.deliverMessage(topic, payload, props, sub.QoS)
+	}
+
+	if b.cluster != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := b.cluster.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
+			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
+		}
 	}
 }
 
@@ -120,6 +131,25 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 	default:
 		return fmt.Errorf("unsupported message type: %T", msg)
 	}
+}
+
+// SetCluster sets the cluster reference for cross-node pub/sub routing.
+func (b *Broker) SetCluster(cl cluster.Cluster) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.cluster = cl
+}
+
+// DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP client.
+func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
+	containerID := strings.TrimPrefix(clientID, clientIDPrefix)
+	val, ok := b.connections.Load(containerID)
+	if !ok {
+		return fmt.Errorf("AMQP client not found: %s", containerID)
+	}
+	c := val.(*Connection)
+	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS)
+	return nil
 }
 
 // SetQueueManager sets the queue manager for the AMQP broker.

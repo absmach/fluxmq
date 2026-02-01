@@ -18,6 +18,7 @@ import (
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/config"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/mqtt/broker"
@@ -41,6 +42,31 @@ import (
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// messageDispatcher routes cluster-delivered messages to the appropriate protocol broker.
+type messageDispatcher struct {
+	mqtt cluster.MessageHandler
+	amqp *amqpbroker.Broker
+}
+
+func (d *messageDispatcher) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
+	if amqpbroker.IsAMQPClient(clientID) {
+		return d.amqp.DeliverToClusterMessage(ctx, clientID, msg)
+	}
+	return d.mqtt.DeliverToClient(ctx, clientID, msg)
+}
+
+func (d *messageDispatcher) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
+	return d.mqtt.GetSessionStateAndClose(ctx, clientID)
+}
+
+func (d *messageDispatcher) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+	return d.mqtt.GetRetainedMessage(ctx, topic)
+}
+
+func (d *messageDispatcher) GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+	return d.mqtt.GetWillMessage(ctx, clientID)
+}
 
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
@@ -372,10 +398,13 @@ func main() {
 		slog.Info("Log-based queue initialized", "storage", "file", "dir", queueDir)
 	}
 
+	// Set cluster on AMQP broker for cross-node pub/sub routing
+	amqpBroker.SetCluster(cl)
+
 	// Set message handler on cluster if it's an etcd cluster
 	// MessageHandler interface now includes both message routing and session management
 	if etcdCluster != nil {
-		etcdCluster.SetMessageHandler(b)
+		etcdCluster.SetMessageHandler(&messageDispatcher{mqtt: b, amqp: amqpBroker})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

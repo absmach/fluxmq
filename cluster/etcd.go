@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -1053,7 +1052,7 @@ func (c *EtcdCluster) SetQueueHandler(handler QueueHandler) {
 
 // DeliverToClient implements MessageHandler.DeliverToClient.
 // Delegates to the broker to deliver a message to a local client.
-func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error {
+func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg *Message) error {
 	if c.msgHandler == nil {
 		return fmt.Errorf("no message handler configured")
 	}
@@ -1094,7 +1093,7 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 		return fmt.Errorf("no message handler configured")
 	}
 
-	msg := &core.Message{
+	msg := &Message{
 		Topic:      topic,
 		Payload:    payload,
 		QoS:        qos,

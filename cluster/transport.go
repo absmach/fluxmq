@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
 	"golang.org/x/net/http2"
@@ -255,7 +254,7 @@ func (t *Transport) RoutePublish(ctx context.Context, req *connect.Request[clust
 		}), nil
 	}
 
-	msg := &core.Message{
+	msg := &Message{
 		Topic:      req.Msg.Topic,
 		Payload:    req.Msg.Payload,
 		QoS:        byte(req.Msg.Qos),

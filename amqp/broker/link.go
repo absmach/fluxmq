@@ -132,6 +132,13 @@ func (l *Link) subscribe() {
 			1, // default QoS
 			storage.SubscribeOptions{},
 		)
+
+		if cl := l.session.conn.broker.cluster; cl != nil {
+			clientID := PrefixedClientID(l.session.conn.containerID)
+			if err := cl.AddSubscription(context.Background(), clientID, l.address, 1, storage.SubscribeOptions{}); err != nil {
+				l.logger.Error("cluster add subscription failed", "address", l.address, "error", err)
+			}
+		}
 	}
 }
 
@@ -146,6 +153,13 @@ func (l *Link) detach() {
 		}
 	} else if l.isSender {
 		l.session.conn.broker.router.Unsubscribe(l.session.conn.containerID, l.address)
+
+		if cl := l.session.conn.broker.cluster; cl != nil {
+			clientID := PrefixedClientID(l.session.conn.containerID)
+			if err := cl.RemoveSubscription(context.Background(), clientID, l.address); err != nil {
+				l.logger.Error("cluster remove subscription failed", "address", l.address, "error", err)
+			}
+		}
 	}
 }
 

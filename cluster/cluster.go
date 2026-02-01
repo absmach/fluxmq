@@ -7,7 +7,6 @@ import (
 	"context"
 	"time"
 
-	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -166,7 +165,7 @@ type Cluster interface {
 type MessageHandler interface {
 	// DeliverToClient delivers a message to a local MQTT client.
 	// This is called when a message is routed from another broker node.
-	DeliverToClient(ctx context.Context, clientID string, msg *core.Message) error
+	DeliverToClient(ctx context.Context, clientID string, msg *Message) error
 
 	// GetSessionStateAndClose captures the full state of a session and closes it.
 	// This is called when another node is taking over the session.
