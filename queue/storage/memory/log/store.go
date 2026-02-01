@@ -9,7 +9,6 @@ package log
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
@@ -29,7 +28,7 @@ type log struct {
 	config   types.QueueConfig
 	messages []*types.Message // Append-only message log
 	head     uint64           // First valid offset (after truncation)
-	tail     uint64           // Next offset to assign (atomic)
+	tail     uint64           // Next offset to assign
 	mu       sync.RWMutex
 }
 
@@ -260,7 +259,10 @@ func (s *Store) Tail(ctx context.Context, queueName string) (uint64, error) {
 		return 0, err
 	}
 
-	return atomic.LoadUint64(&sl.tail), nil
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+
+	return sl.tail, nil
 }
 
 // Truncate removes all messages with offset < minOffset.
