@@ -9,7 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/absmach/fluxmq/broker/events"
-	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 )

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/mqtt/packets"
-	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 )
 

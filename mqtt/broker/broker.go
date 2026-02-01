@@ -14,7 +14,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/server/otel"
-	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"go.opentelemetry.io/otel/trace"

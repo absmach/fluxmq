@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/mqtt/packets"
-	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/mqtt/session"
 )
 
 // retryCheckInterval is how often we check for expired inflight messages.

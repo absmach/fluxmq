@@ -11,7 +11,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage/memory"
 )
 

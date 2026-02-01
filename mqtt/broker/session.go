@@ -11,7 +11,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker/events"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
-	"github.com/absmach/fluxmq/session"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/absmach/fluxmq/topics"
