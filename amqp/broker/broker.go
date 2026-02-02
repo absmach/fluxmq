@@ -28,20 +28,44 @@ type Broker struct {
 	queueManager broker.QueueManager
 	cluster      cluster.Cluster
 	auth         *broker.AuthEngine
+	stats        *Stats
+	metrics      *Metrics // nil if OTel disabled
 	logger       *slog.Logger
 	mu           sync.RWMutex
 }
 
 // New creates a new AMQP broker.
-func New(qm broker.QueueManager, logger *slog.Logger) *Broker {
+func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if stats == nil {
+		stats = NewStats()
 	}
 	return &Broker{
 		router:       router.NewRouter(),
 		queueManager: qm,
+		stats:        stats,
 		logger:       logger,
 	}
+}
+
+// SetMetrics sets the OTel metrics instance.
+func (b *Broker) SetMetrics(m *Metrics) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.metrics = m
+}
+
+func (b *Broker) getMetrics() *Metrics {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.metrics
+}
+
+// GetStats returns the broker's stats.
+func (b *Broker) GetStats() *Stats {
+	return b.stats
 }
 
 // HandleConnection handles a new raw TCP connection through the full AMQP lifecycle.

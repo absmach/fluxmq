@@ -6,10 +6,14 @@ package broker
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/absmach/fluxmq/amqp/performatives"
 	"github.com/absmach/fluxmq/topics"
+)
+
+const (
+	initialWindow    = uint32(65535)
+	windowReplenishThreshold = initialWindow / 2
 )
 
 // Session represents an AMQP session (mapped to a channel pair).
@@ -22,18 +26,121 @@ type Session struct {
 	linksMu   sync.RWMutex
 	handleMax uint32
 
-	nextDeliveryID       atomic.Uint32
-	remoteIncomingWindow uint32
-	remoteOutgoingWindow uint32
+	// Session-level flow control (protected by windowMu)
+	nextIncomingID       uint32 // next expected incoming delivery ID
+	nextOutgoingID       uint32 // next outgoing delivery ID
+	incomingWindow       uint32 // our advertised incoming window
+	outgoingWindow       uint32 // our advertised outgoing window capacity
+	remoteIncomingWindow uint32 // remote's incoming window
+	remoteOutgoingWindow uint32 // remote's outgoing window
+	remoteNextIncomingID uint32 // remote's next-incoming-id from their Flow
+	windowMu             sync.Mutex
 }
 
 func newSession(c *Connection, localCh, remoteCh uint16, handleMax uint32) *Session {
 	return &Session{
-		conn:      c,
-		localCh:   localCh,
-		remoteCh:  remoteCh,
-		links:     make(map[uint32]*Link),
-		handleMax: handleMax,
+		conn:           c,
+		localCh:        localCh,
+		remoteCh:       remoteCh,
+		links:          make(map[uint32]*Link),
+		handleMax:      handleMax,
+		incomingWindow: initialWindow,
+		outgoingWindow: initialWindow,
+	}
+}
+
+// initWindows initializes window state from the remote Begin frame.
+func (s *Session) initWindows(remoteBegin *performatives.Begin) {
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
+	s.nextIncomingID = remoteBegin.NextOutgoingID
+	s.remoteIncomingWindow = remoteBegin.IncomingWindow
+	s.remoteOutgoingWindow = remoteBegin.OutgoingWindow
+}
+
+// consumeOutgoingWindow attempts to consume one unit of outgoing window.
+// Returns the allocated delivery ID and true if successful, or 0 and false
+// if the outgoing window or the remote incoming window is exhausted.
+func (s *Session) consumeOutgoingWindow() (uint32, bool) {
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
+
+	if s.outgoingWindow == 0 || s.remoteIncomingWindow == 0 {
+		return 0, false
+	}
+
+	id := s.nextOutgoingID
+	s.nextOutgoingID++
+	s.outgoingWindow--
+	s.remoteIncomingWindow--
+	return id, true
+}
+
+// trackIncomingTransfer updates incoming window tracking for a received transfer.
+// Returns false if the delivery ID is out of window.
+func (s *Session) trackIncomingTransfer(deliveryID *uint32) bool {
+	s.windowMu.Lock()
+
+	if s.incomingWindow == 0 {
+		s.windowMu.Unlock()
+		return false
+	}
+
+	s.incomingWindow--
+	if deliveryID != nil {
+		s.nextIncomingID = *deliveryID + 1
+	}
+
+	needReplenish := s.incomingWindow < windowReplenishThreshold
+	var nextIn, inWin, nextOut, outWin uint32
+	if needReplenish {
+		s.incomingWindow = initialWindow
+		nextIn = s.nextIncomingID
+		inWin = s.incomingWindow
+		nextOut = s.nextOutgoingID
+		outWin = s.outgoingWindow
+	}
+	s.windowMu.Unlock()
+
+	if needReplenish {
+		s.sendSessionFlow(nextIn, inWin, nextOut, outWin)
+	}
+	return true
+}
+
+// updateRemoteFlow updates session windows from a received session-level Flow.
+func (s *Session) updateRemoteFlow(flow *performatives.Flow) {
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
+
+	if flow.NextIncomingID != nil {
+		s.remoteNextIncomingID = *flow.NextIncomingID
+	}
+	s.remoteIncomingWindow = flow.IncomingWindow
+	s.remoteOutgoingWindow = flow.OutgoingWindow
+}
+
+// sessionFlowState returns current window state for inclusion in outgoing Flow frames.
+func (s *Session) sessionFlowState() (nextIncomingID, incomingWindow, nextOutgoingID, outgoingWindow uint32) {
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
+	return s.nextIncomingID, s.incomingWindow, s.nextOutgoingID, s.outgoingWindow
+}
+
+func (s *Session) sendSessionFlow(nextIn, inWin, nextOut, outWin uint32) {
+	flow := &performatives.Flow{
+		NextIncomingID: &nextIn,
+		IncomingWindow: inWin,
+		NextOutgoingID: nextOut,
+		OutgoingWindow: outWin,
+	}
+	body, err := flow.Encode()
+	if err != nil {
+		s.conn.logger.Error("failed to encode session flow", "error", err)
+		return
+	}
+	if err := s.conn.conn.WritePerformative(s.localCh, body); err != nil {
+		s.conn.logger.Error("failed to send session flow", "error", err)
 	}
 }
 
@@ -67,11 +174,16 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 	s.links[attach.Handle] = link
 	s.linksMu.Unlock()
 
+	s.conn.broker.stats.IncrementLinks()
+	if m := s.conn.broker.getMetrics(); m != nil {
+		m.RecordLinkAttached()
+	}
+
 	// Send attach response
 	resp := &performatives.Attach{
 		Name:   attach.Name,
 		Handle: attach.Handle,
-		Role:   !attach.Role, // mirror the role (if client is sender, we are receiver and vice versa)
+		Role:   !attach.Role, // mirror the role
 		Source: attach.Source,
 		Target: attach.Target,
 	}
@@ -92,6 +204,10 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 	// Register subscription for receiver links (where we send messages TO the client)
 	if attach.Role { // client is receiver -> we are sender
 		link.subscribe()
+		s.conn.broker.stats.IncrementSubscriptions()
+		if m := s.conn.broker.getMetrics(); m != nil {
+			m.RecordSubscriptionAdded()
+		}
 	} else {
 		// Client is sender, broker is receiver — grant initial credit
 		if err := s.grantCredit(link, 100); err != nil {
@@ -103,9 +219,10 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 }
 
 func (s *Session) handleFlow(flow *performatives.Flow) {
+	// Always update session-level windows
+	s.updateRemoteFlow(flow)
+
 	if flow.Handle == nil {
-		// Session-level flow, update windows
-		s.remoteIncomingWindow = flow.IncomingWindow
 		return
 	}
 
@@ -122,7 +239,6 @@ func (s *Session) handleFlow(flow *performatives.Flow) {
 		link.mu.Lock()
 		oldCredit := link.credit
 		if flow.DeliveryCount != nil {
-			// credit = link-credit - (delivery-count - remote-delivery-count)
 			link.credit = *flow.LinkCredit
 			link.deliveryCount = *flow.DeliveryCount
 		} else {
@@ -138,6 +254,15 @@ func (s *Session) handleFlow(flow *performatives.Flow) {
 }
 
 func (s *Session) handleTransfer(transfer *performatives.Transfer, payload []byte) {
+	if !s.trackIncomingTransfer(transfer.DeliveryID) {
+		s.conn.logger.Warn("incoming transfer exceeds window, dropping")
+		s.conn.broker.stats.IncrementProtocolErrors()
+		if m := s.conn.broker.getMetrics(); m != nil {
+			m.RecordError("window_exceeded")
+		}
+		return
+	}
+
 	s.linksMu.RLock()
 	link := s.links[transfer.Handle]
 	s.linksMu.RUnlock()
@@ -166,6 +291,16 @@ func (s *Session) handleDetach(detach *performatives.Detach) {
 
 	if link != nil {
 		link.detach()
+		s.conn.broker.stats.DecrementLinks()
+		if m := s.conn.broker.getMetrics(); m != nil {
+			m.RecordLinkDetached()
+		}
+		if link.isSender {
+			s.conn.broker.stats.DecrementSubscriptions()
+			if m := s.conn.broker.getMetrics(); m != nil {
+				m.RecordSubscriptionRemoved()
+			}
+		}
 	}
 
 	// Send detach response
@@ -210,7 +345,7 @@ func (s *Session) deliverToMatchingLinks(topic string, payload []byte, props map
 }
 
 // deliverAMQPMessageToLinks delivers a pre-built AMQP message to matching links.
-func (s *Session) deliverAMQPMessageToLinks(topic string, msg interface{}, qos byte) {
+func (s *Session) deliverAMQPMessageToLinks(topic string, msg any, qos byte) {
 	s.linksMu.RLock()
 	defer s.linksMu.RUnlock()
 
@@ -225,9 +360,12 @@ func (s *Session) deliverAMQPMessageToLinks(topic string, msg interface{}, qos b
 func (s *Session) grantCredit(link *Link, credit uint32) error {
 	handle := link.handle
 	deliveryCount := uint32(0)
+	nextIn, inWin, nextOut, outWin := s.sessionFlowState()
 	flow := &performatives.Flow{
-		IncomingWindow: 2048,
-		OutgoingWindow: 2048,
+		NextIncomingID: &nextIn,
+		IncomingWindow: inWin,
+		NextOutgoingID: nextOut,
+		OutgoingWindow: outWin,
 		Handle:         &handle,
 		DeliveryCount:  &deliveryCount,
 		LinkCredit:     &credit,
@@ -237,9 +375,4 @@ func (s *Session) grantCredit(link *Link, credit uint32) error {
 		return err
 	}
 	return s.conn.conn.WritePerformative(s.localCh, body)
-}
-
-// allocateDeliveryID returns the next delivery ID.
-func (s *Session) allocateDeliveryID() uint32 {
-	return s.nextDeliveryID.Add(1) - 1
 }

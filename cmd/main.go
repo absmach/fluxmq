@@ -125,7 +125,8 @@ func main() {
 		slog.Info("Using in-memory storage")
 	case "badger":
 		badgerStore, err := badger.New(badger.Config{
-			Dir: cfg.Storage.BadgerDir,
+			Dir:        cfg.Storage.BadgerDir,
+			SyncWrites: cfg.Storage.SyncWrites,
 		})
 		if err != nil {
 			slog.Error("Failed to initialize BadgerDB storage", "error", err)
@@ -287,8 +288,19 @@ func main() {
 	}
 
 	// Create AMQP broker (needs queue manager set later)
-	amqpBroker := amqpbroker.New(nil, logger)
+	amqpStats := amqpbroker.NewStats()
+	amqpBroker := amqpbroker.New(nil, amqpStats, logger)
 	defer amqpBroker.Close()
+
+	if metrics != nil {
+		amqpMetrics, err := amqpbroker.NewMetrics()
+		if err != nil {
+			slog.Error("Failed to create AMQP metrics", "error", err)
+			os.Exit(1)
+		}
+		amqpBroker.SetMetrics(amqpMetrics)
+		slog.Info("AMQP OTel metrics enabled")
+	}
 
 	// Initialize file-based log storage for queues
 	{

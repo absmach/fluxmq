@@ -172,6 +172,12 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 		return
 	}
 
+	l.session.conn.broker.stats.IncrementMessagesReceived()
+	l.session.conn.broker.stats.AddBytesReceived(uint64(len(payload)))
+	if m := l.session.conn.broker.getMetrics(); m != nil {
+		m.RecordMessageReceived(int64(len(payload)))
+	}
+
 	// Determine the topic from the message or link address
 	topic := l.address
 	if msg.Properties != nil && msg.Properties.To != "" {
@@ -250,7 +256,10 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 	l.deliveryCount++
 	l.mu.Unlock()
 
-	deliveryID := l.session.allocateDeliveryID()
+	deliveryID, ok := l.session.consumeOutgoingWindow()
+	if !ok {
+		return
+	}
 	settled := qos == 0
 
 	// Build AMQP message
@@ -288,6 +297,12 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 		return
 	}
 
+	l.session.conn.broker.stats.IncrementMessagesSent()
+	l.session.conn.broker.stats.AddBytesSent(uint64(len(msgBytes)))
+	if m := l.session.conn.broker.getMetrics(); m != nil {
+		m.RecordMessageSent(int64(len(msgBytes)))
+	}
+
 	// Track unsettled delivery
 	if !settled {
 		l.pendingMu.Lock()
@@ -318,7 +333,10 @@ func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
 	l.deliveryCount++
 	l.mu.Unlock()
 
-	deliveryID := l.session.allocateDeliveryID()
+	deliveryID, ok := l.session.consumeOutgoingWindow()
+	if !ok {
+		return
+	}
 	settled := qos == 0
 
 	msgBytes, err := amqpMsg.Encode()
@@ -338,6 +356,12 @@ func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
 	if err := l.session.conn.conn.WriteTransfer(l.session.localCh, transfer, msgBytes); err != nil {
 		l.logger.Error("failed to send transfer", "error", err)
 		return
+	}
+
+	l.session.conn.broker.stats.IncrementMessagesSent()
+	l.session.conn.broker.stats.AddBytesSent(uint64(len(msgBytes)))
+	if m := l.session.conn.broker.getMetrics(); m != nil {
+		m.RecordMessageSent(int64(len(msgBytes)))
 	}
 
 	if !settled && amqpMsg.ApplicationProperties != nil {

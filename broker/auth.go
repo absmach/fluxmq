@@ -20,6 +20,11 @@ type AuthEngine struct {
 	authz Authorizer
 }
 
+// NewAuthEngine creates a new AuthEngine with the given authenticator and authorizer.
+func NewAuthEngine(auth Authenticator, authz Authorizer) *AuthEngine {
+	return &AuthEngine{auth: auth, authz: authz}
+}
+
 // CanPublish checks if a client is authorized to publish to a topic.
 // Returns true if authorized or if no authorizer is configured.
 func (e *AuthEngine) CanPublish(clientID, topic string) bool {

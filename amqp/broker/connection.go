@@ -100,6 +100,10 @@ func (c *Connection) run() error {
 	}
 
 	c.broker.registerConnection(c.containerID, c)
+	c.broker.stats.IncrementConnections()
+	if m := c.broker.getMetrics(); m != nil {
+		m.RecordConnection()
+	}
 	c.logger.Info("AMQP connection opened", "container_id", c.containerID, "remote", c.conn.RemoteAddr())
 
 	// Phase 5: Start heartbeat sender if idle timeout is set
@@ -153,6 +157,10 @@ func (c *Connection) handleSASL() error {
 		if auth := c.broker.getAuth(); auth != nil {
 			ok, authErr := auth.Authenticate(username, username, password)
 			if authErr != nil || !ok {
+				c.broker.stats.IncrementAuthErrors()
+				if m := c.broker.getMetrics(); m != nil {
+					m.RecordError("auth")
+				}
 				outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 				body, _ := outcome.Encode()
 				c.conn.WriteSASLFrame(body)
@@ -359,16 +367,21 @@ func (c *Connection) handleBegin(ch uint16, begin *performatives.Begin) error {
 	}
 
 	s := newSession(c, localCh, ch, handleMax)
-	s.remoteIncomingWindow = begin.IncomingWindow
-	s.remoteOutgoingWindow = begin.OutgoingWindow
+	s.initWindows(begin)
 	c.sessions[ch] = s
 
-	// Send Begin response
+	c.broker.stats.IncrementSessions()
+	if m := c.broker.getMetrics(); m != nil {
+		m.RecordSessionOpened()
+	}
+
+	// Send Begin response with our actual window state
+	_, inWin, nextOut, outWin := s.sessionFlowState()
 	resp := &performatives.Begin{
 		RemoteChannel:  &ch,
-		NextOutgoingID: 0,
-		IncomingWindow: 65535,
-		OutgoingWindow: 65535,
+		NextOutgoingID: nextOut,
+		IncomingWindow: inWin,
+		OutgoingWindow: outWin,
 		HandleMax:      handleMax,
 	}
 	body, err := resp.Encode()
@@ -410,6 +423,10 @@ func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {
 
 	if s != nil {
 		s.cleanup()
+		c.broker.stats.DecrementSessions()
+		if m := c.broker.getMetrics(); m != nil {
+			m.RecordSessionClosed()
+		}
 	}
 
 	resp := &performatives.End{}
@@ -468,6 +485,10 @@ func (c *Connection) close(amqpErr *performatives.Error) {
 
 func (c *Connection) cleanup() {
 	c.close(nil)
+	c.broker.stats.DecrementConnections()
+	if m := c.broker.getMetrics(); m != nil {
+		m.RecordDisconnection()
+	}
 	c.broker.unregisterConnection(c.containerID)
 
 	c.sessionsMu.Lock()

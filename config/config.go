@@ -230,7 +230,8 @@ type StorageConfig struct {
 	Type string `yaml:"type"` // memory, badger
 
 	// BadgerDB settings
-	BadgerDir string `yaml:"badger_dir"`
+	BadgerDir  string `yaml:"badger_dir"`
+	SyncWrites bool   `yaml:"sync_writes"`
 }
 
 // ClusterConfig holds clustering configuration.

@@ -31,7 +31,8 @@ type Store struct {
 
 // Config holds BadgerDB configuration.
 type Config struct {
-	Dir string // Directory for BadgerDB data
+	Dir        string // Directory for BadgerDB data
+	SyncWrites bool   // Fsync on every write (slower but durable)
 }
 
 // New creates a new BadgerDB-backed store.
@@ -43,7 +44,7 @@ func New(cfg Config) (*Store, error) {
 	opts.EncryptionKeyRotationDuration = 0
 	// Async writes: MQTT messages are transient and can be re-delivered.
 	// SyncWrites=true fsyncs on every write, which is 10-100x slower.
-	opts.SyncWrites = false
+	opts.SyncWrites = cfg.SyncWrites
 	opts.NumVersionsToKeep = 1
 	opts.NumCompactors = 2
 	opts.NumLevelZeroTables = 5
