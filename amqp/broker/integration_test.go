@@ -17,7 +17,10 @@ import (
 	"github.com/absmach/fluxmq/amqp/message"
 	"github.com/absmach/fluxmq/amqp/performatives"
 	"github.com/absmach/fluxmq/amqp/sasl"
+	"github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/broker"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
+	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -338,6 +341,148 @@ func TestIntegrationIdleTimeout(t *testing.T) {
 	c.SetIdleTimeout(2 * time.Second)
 	_, _, _, _, err = c.ReadPerformative()
 	require.NoError(t, err) // should be a heartbeat or any frame — no error means server is alive
+}
+
+type mockAuth struct {
+	acceptUser string
+	acceptPass string
+}
+
+func (m *mockAuth) Authenticate(clientID, username, password string) (bool, error) {
+	return username == m.acceptUser && password == m.acceptPass, nil
+}
+
+type mockAuthz struct{}
+
+func (m *mockAuthz) CanPublish(clientID, topic string) bool   { return true }
+func (m *mockAuthz) CanSubscribe(clientID, filter string) bool { return true }
+
+func TestIntegrationSASLPlainAuth(t *testing.T) {
+	b := amqpbroker.New(nil, nil)
+	auth := broker.NewAuthEngine(&mockAuth{acceptUser: "alice", acceptPass: "secret"}, &mockAuthz{})
+	b.SetAuthEngine(auth)
+
+	cfg := amqpserver.Config{
+		Address:         "127.0.0.1:0",
+		ShutdownTimeout: 5 * time.Second,
+	}
+	srv := amqpserver.New(cfg, b)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go srv.Listen(ctx)
+
+	var addr net.Addr
+	for range 50 {
+		time.Sleep(10 * time.Millisecond)
+		addr = srv.Addr()
+		if addr != nil {
+			break
+		}
+	}
+	require.NotNil(t, addr)
+
+	t.Run("accepted", func(t *testing.T) {
+		conn, err := net.DialTimeout("tcp", addr.String(), 2*time.Second)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		c := amqpconn.NewConnection(conn)
+
+		require.NoError(t, c.WriteProtocolHeader(frames.ProtoIDSASL))
+		_, err = c.ReadProtocolHeader()
+		require.NoError(t, err)
+
+		_, _, err = c.ReadSASLFrame() // mechanisms
+		require.NoError(t, err)
+
+		// Send PLAIN: \0alice\0secret
+		initFrame := &sasl.Init{
+			Mechanism:       sasl.MechPLAIN,
+			InitialResponse: []byte("\x00alice\x00secret"),
+		}
+		body, err := initFrame.Encode()
+		require.NoError(t, err)
+		require.NoError(t, c.WriteSASLFrame(body))
+
+		desc, val, err := c.ReadSASLFrame()
+		require.NoError(t, err)
+		assert.Equal(t, sasl.DescriptorOutcome, desc)
+		outcome := val.(*sasl.Outcome)
+		assert.Equal(t, sasl.CodeOK, outcome.Code)
+	})
+
+	t.Run("rejected", func(t *testing.T) {
+		conn, err := net.DialTimeout("tcp", addr.String(), 2*time.Second)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		c := amqpconn.NewConnection(conn)
+
+		require.NoError(t, c.WriteProtocolHeader(frames.ProtoIDSASL))
+		_, err = c.ReadProtocolHeader()
+		require.NoError(t, err)
+
+		_, val, err := c.ReadSASLFrame()
+		require.NoError(t, err)
+		mechs := val.(*sasl.Mechanisms)
+		assert.Contains(t, mechs.Mechanisms, types.Symbol("PLAIN"))
+
+		initFrame := &sasl.Init{
+			Mechanism:       sasl.MechPLAIN,
+			InitialResponse: []byte("\x00alice\x00wrongpass"),
+		}
+		body, err := initFrame.Encode()
+		require.NoError(t, err)
+		require.NoError(t, c.WriteSASLFrame(body))
+
+		desc, val, err := c.ReadSASLFrame()
+		require.NoError(t, err)
+		assert.Equal(t, sasl.DescriptorOutcome, desc)
+		outcome := val.(*sasl.Outcome)
+		assert.Equal(t, sasl.CodeAuth, outcome.Code)
+	})
+}
+
+func TestIntegrationDeliverToClient(t *testing.T) {
+	b, addr := startServer(t)
+
+	c := dialAndHandshake(t, addr, "deliver-client")
+	beginSession(t, c, 0)
+
+	// Attach as receiver
+	attach := &performatives.Attach{
+		Name:   "recv",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/deliver"},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+	_, _, _, _, err = c.ReadPerformative() // attach resp
+	require.NoError(t, err)
+
+	grantCredit(t, c, 0, 0, 10)
+	time.Sleep(50 * time.Millisecond)
+
+	// Deliver via DeliverToClient
+	msg := &storage.Message{
+		Topic:      "test/deliver",
+		Payload:    []byte("deliver-payload"),
+		Properties: map[string]string{"key": "val"},
+		QoS:        0,
+	}
+	err = b.DeliverToClient(context.Background(), "amqp:deliver-client", msg)
+	require.NoError(t, err)
+
+	_, desc, _, payload, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorTransfer, desc)
+
+	recvMsg, err := message.Decode(payload)
+	require.NoError(t, err)
+	require.Len(t, recvMsg.Data, 1)
+	assert.Equal(t, []byte("deliver-payload"), recvMsg.Data[0])
 }
 
 func TestIntegrationGracefulClose(t *testing.T) {

@@ -4,7 +4,9 @@
 package broker
 
 import (
+	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -612,4 +614,369 @@ func TestPrefixedClientID(t *testing.T) {
 	assert.Equal(t, "amqp:test", PrefixedClientID("test"))
 	assert.True(t, IsAMQPClient("amqp:test"))
 	assert.False(t, IsAMQPClient("mqtt-client"))
+}
+
+func TestUnsettledTransferDisposition(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "unsettled-client")
+	doBeginSession(t, c, 0)
+
+	// Attach as sender (broker receives)
+	attach := &performatives.Attach{
+		Name:                 "sender",
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: "test/unsettled"},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Read Flow (credit grant)
+	_, desc, _, _, err = c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
+	// Send an unsettled transfer
+	msg := &message.Message{
+		Properties: &message.Properties{To: "test/unsettled"},
+		Data:       [][]byte{[]byte("unsettled payload")},
+	}
+	msgBytes, err := msg.Encode()
+	require.NoError(t, err)
+
+	did := uint32(0)
+	mf := uint32(0)
+	transfer := &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &did,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &mf,
+		Settled:       false, // unsettled
+	}
+	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
+
+	// Should receive Disposition(Accepted, Settled=true) from broker
+	_, desc, perf, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorDisposition, desc)
+	disp := perf.(*performatives.Disposition)
+	assert.True(t, disp.Settled)
+	assert.Equal(t, uint32(0), disp.First)
+	_, isAccepted := disp.State.(*performatives.Accepted)
+	assert.True(t, isAccepted, "expected Accepted state")
+}
+
+func TestCreditExhaustion(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "credit-client")
+	doBeginSession(t, c, 0)
+
+	// Attach as receiver (broker sends to us)
+	attach := &performatives.Attach{
+		Name:   "recv-link",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/credit"},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Grant only 2 credits
+	h := uint32(0)
+	dc := uint32(0)
+	lc := uint32(2)
+	flow := &performatives.Flow{
+		IncomingWindow: 65535,
+		OutgoingWindow: 65535,
+		Handle:         &h,
+		DeliveryCount:  &dc,
+		LinkCredit:     &lc,
+	}
+	body, err = flow.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Publish and read 2 messages (using goroutines since net.Pipe blocks)
+	for i := range 2 {
+		go b.Publish("test/credit", []byte(fmt.Sprintf("msg-%d", i)), nil)
+		_, desc, _, _, err := c.ReadPerformative()
+		require.NoError(t, err)
+		assert.Equal(t, performatives.DescriptorTransfer, desc)
+	}
+
+	// 3rd publish should be silently dropped (no credit left)
+	b.Publish("test/credit", []byte("msg-dropped"), nil)
+
+	// Re-grant credit
+	lc2 := uint32(1)
+	dc2 := uint32(2)
+	flow2 := &performatives.Flow{
+		IncomingWindow: 65535,
+		OutgoingWindow: 65535,
+		Handle:         &h,
+		DeliveryCount:  &dc2,
+		LinkCredit:     &lc2,
+	}
+	body, err = flow2.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	time.Sleep(50 * time.Millisecond)
+
+	// New message should arrive with new credit
+	go b.Publish("test/credit", []byte("after-credit"), nil)
+
+	_, desc, _, payload, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorTransfer, desc)
+	msg, err := message.Decode(payload)
+	require.NoError(t, err)
+	require.Len(t, msg.Data, 1)
+	assert.Equal(t, []byte("after-credit"), msg.Data[0])
+}
+
+func TestMultipleSessions(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "multi-session")
+
+	// Begin two sessions on different channels
+	doBeginSession(t, c, 0)
+	doBeginSession(t, c, 1)
+
+	// Attach receiver on session 0
+	attach0 := &performatives.Attach{
+		Name:   "recv-s0",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/s0"},
+	}
+	body, err := attach0.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Attach receiver on session 1
+	attach1 := &performatives.Attach{
+		Name:   "recv-s1",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/s1"},
+	}
+	body, err = attach1.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(1, body))
+	_, desc, _, _, err = c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	// Grant credit on both
+	h := uint32(0)
+	dc := uint32(0)
+	lc := uint32(5)
+	for _, ch := range []uint16{0, 1} {
+		flow := &performatives.Flow{
+			IncomingWindow: 65535,
+			OutgoingWindow: 65535,
+			Handle:         &h,
+			DeliveryCount:  &dc,
+			LinkCredit:     &lc,
+		}
+		body, err = flow.Encode()
+		require.NoError(t, err)
+		require.NoError(t, c.WritePerformative(ch, body))
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Publish to s0 topic only
+	go b.Publish("test/s0", []byte("for-s0"), nil)
+
+	_, desc, perf, payload, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorTransfer, desc)
+	_ = perf
+	msg, err := message.Decode(payload)
+	require.NoError(t, err)
+	require.Len(t, msg.Data, 1)
+	assert.Equal(t, []byte("for-s0"), msg.Data[0])
+}
+
+func TestConnectionCloseCleanup(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+
+	doAMQPHandshake(t, c, "cleanup-client")
+	doBeginSession(t, c, 0)
+
+	// Attach a receiver link so the router has a subscription
+	attach := &performatives.Attach{
+		Name:   "recv",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/cleanup"},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+	_, _, _, _, err = c.ReadPerformative() // attach resp
+	require.NoError(t, err)
+
+	// Verify connection is registered
+	_, ok := b.connections.Load("cleanup-client")
+	assert.True(t, ok)
+
+	// Close the connection
+	cl := &performatives.Close{}
+	body, err = cl.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	// Read close response
+	_, desc, _, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorClose, desc)
+	c.Close()
+
+	// Wait for cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// Connection should be unregistered
+	_, ok = b.connections.Load("cleanup-client")
+	assert.False(t, ok, "connection should be unregistered after close")
+}
+
+func TestBrokerClose(t *testing.T) {
+	b := New(nil, nil)
+	serverConn1, clientConn1 := net.Pipe()
+	serverConn2, clientConn2 := net.Pipe()
+
+	go b.HandleConnection(serverConn1)
+	go b.HandleConnection(serverConn2)
+
+	c1 := amqpconn.NewConnection(clientConn1)
+	c2 := amqpconn.NewConnection(clientConn2)
+
+	doAMQPHandshake(t, c1, "close-client-1")
+	doAMQPHandshake(t, c2, "close-client-2")
+
+	// Wait for server-side registration (slight race after Open response)
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify both registered
+	_, ok := b.connections.Load("close-client-1")
+	assert.True(t, ok)
+	_, ok = b.connections.Load("close-client-2")
+	assert.True(t, ok)
+
+	// Close broker
+	b.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestConcurrentPublishAndFlow(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "race-client")
+	doBeginSession(t, c, 0)
+
+	// Attach receiver
+	attach := &performatives.Attach{
+		Name:   "recv",
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: "test/race"},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+	_, _, _, _, err = c.ReadPerformative() // attach resp
+	require.NoError(t, err)
+
+	// Grant initial credit
+	h := uint32(0)
+	dc := uint32(0)
+	lc := uint32(100)
+	flow := &performatives.Flow{
+		IncomingWindow: 65535,
+		OutgoingWindow: 65535,
+		Handle:         &h,
+		DeliveryCount:  &dc,
+		LinkCredit:     &lc,
+	}
+	body, err = flow.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain transfers in background (stops when connection closes)
+	stopDrain := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopDrain:
+				return
+			default:
+				c.ReadPerformative()
+			}
+		}
+	}()
+
+	// Concurrently publish and update flow
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 20 {
+			b.Publish("test/race", []byte("msg"), nil)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for range 10 {
+			newLC := uint32(100)
+			newDC := uint32(0)
+			f := &performatives.Flow{
+				IncomingWindow: 65535,
+				OutgoingWindow: 65535,
+				Handle:         &h,
+				DeliveryCount:  &newDC,
+				LinkCredit:     &newLC,
+			}
+			fb, _ := f.Encode()
+			c.WritePerformative(0, fb)
+		}
+	}()
+
+	wg.Wait()
+	close(stopDrain)
 }

@@ -80,10 +80,10 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 		c.deliverMessage(topic, payload, props, sub.QoS)
 	}
 
-	if b.cluster != nil {
+	if cl := b.getCluster(); cl != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if err := b.cluster.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
+		if err := cl.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
 			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
 		}
 	}
@@ -164,6 +164,24 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.auth = auth
+}
+
+func (b *Broker) getCluster() cluster.Cluster {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cluster
+}
+
+func (b *Broker) getAuth() *broker.AuthEngine {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.auth
+}
+
+func (b *Broker) getQueueManager() broker.QueueManager {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.queueManager
 }
 
 // Close shuts down the broker and all connections.

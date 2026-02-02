@@ -173,8 +173,14 @@ func (s *Session) handleDetach(detach *performatives.Detach) {
 		Handle: detach.Handle,
 		Closed: detach.Closed,
 	}
-	body, _ := resp.Encode()
-	s.conn.conn.WritePerformative(s.localCh, body)
+	body, err := resp.Encode()
+	if err != nil {
+		s.conn.logger.Error("failed to encode detach response", "error", err)
+		return
+	}
+	if err := s.conn.conn.WritePerformative(s.localCh, body); err != nil {
+		s.conn.logger.Error("failed to send detach response", "error", err)
+	}
 }
 
 func (s *Session) cleanup() {

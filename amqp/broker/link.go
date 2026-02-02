@@ -93,7 +93,7 @@ func newLink(s *Session, attach *performatives.Attach) *Link {
 // subscribe registers this link with the router or queue manager.
 func (l *Link) subscribe() {
 	// Check subscribe authorization
-	auth := l.session.conn.broker.auth
+	auth := l.session.conn.broker.getAuth()
 	if auth != nil {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		if !auth.CanSubscribe(clientID, l.address) {
@@ -106,7 +106,7 @@ func (l *Link) subscribe() {
 		// Queue subscription
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()
-		qm := l.session.conn.broker.queueManager
+		qm := l.session.conn.broker.getQueueManager()
 		if qm == nil {
 			l.logger.Warn("queue manager not available for subscription", "address", l.address)
 			return
@@ -133,7 +133,7 @@ func (l *Link) subscribe() {
 			storage.SubscribeOptions{},
 		)
 
-		if cl := l.session.conn.broker.cluster; cl != nil {
+		if cl := l.session.conn.broker.getCluster(); cl != nil {
 			clientID := PrefixedClientID(l.session.conn.containerID)
 			if err := cl.AddSubscription(context.Background(), clientID, l.address, 1, storage.SubscribeOptions{}); err != nil {
 				l.logger.Error("cluster add subscription failed", "address", l.address, "error", err)
@@ -147,14 +147,14 @@ func (l *Link) detach() {
 	if l.isQueue {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()
-		qm := l.session.conn.broker.queueManager
+		qm := l.session.conn.broker.getQueueManager()
 		if qm != nil {
 			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup)
 		}
 	} else if l.isSender {
 		l.session.conn.broker.router.Unsubscribe(l.session.conn.containerID, l.address)
 
-		if cl := l.session.conn.broker.cluster; cl != nil {
+		if cl := l.session.conn.broker.getCluster(); cl != nil {
 			clientID := PrefixedClientID(l.session.conn.containerID)
 			if err := cl.RemoveSubscription(context.Background(), clientID, l.address); err != nil {
 				l.logger.Error("cluster remove subscription failed", "address", l.address, "error", err)
@@ -185,7 +185,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	}
 
 	// Check publish authorization
-	auth := l.session.conn.broker.auth
+	auth := l.session.conn.broker.getAuth()
 	if auth != nil {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		if !auth.CanPublish(clientID, topic) {
@@ -196,7 +196,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 
 	if l.isQueue || strings.HasPrefix(topic, "$queue/") {
 		// Publish to queue
-		qm := l.session.conn.broker.queueManager
+		qm := l.session.conn.broker.getQueueManager()
 		if qm != nil {
 			props := make(map[string]string)
 			for k, v := range msg.ApplicationProperties {
@@ -228,8 +228,14 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 			Settled: true,
 			State:   &performatives.Accepted{},
 		}
-		body, _ := disp.Encode()
-		l.session.conn.conn.WritePerformative(l.session.localCh, body)
+		body, err := disp.Encode()
+		if err != nil {
+			l.logger.Error("failed to encode disposition", "error", err)
+			return
+		}
+		if err := l.session.conn.conn.WritePerformative(l.session.localCh, body); err != nil {
+			l.logger.Error("failed to send disposition", "error", err)
+		}
 	}
 }
 
@@ -329,7 +335,10 @@ func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
 		Settled:       settled,
 	}
 
-	l.session.conn.conn.WriteTransfer(l.session.localCh, transfer, msgBytes)
+	if err := l.session.conn.conn.WriteTransfer(l.session.localCh, transfer, msgBytes); err != nil {
+		l.logger.Error("failed to send transfer", "error", err)
+		return
+	}
 
 	if !settled && amqpMsg.ApplicationProperties != nil {
 		l.pendingMu.Lock()
@@ -359,7 +368,7 @@ func (l *Link) handleDisposition(disp *performatives.Disposition) {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
 
-	qm := l.session.conn.broker.queueManager
+	qm := l.session.conn.broker.getQueueManager()
 
 	for id := first; id <= last; id++ {
 		pd, ok := l.pending[id]

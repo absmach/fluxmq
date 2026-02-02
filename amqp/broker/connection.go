@@ -150,8 +150,8 @@ func (c *Connection) handleSASL() error {
 			c.conn.WriteSASLFrame(body)
 			return fmt.Errorf("PLAIN auth failed: %w", err)
 		}
-		if c.broker.auth != nil {
-			ok, authErr := c.broker.auth.Authenticate(username, username, password)
+		if auth := c.broker.getAuth(); auth != nil {
+			ok, authErr := auth.Authenticate(username, username, password)
 			if authErr != nil || !ok {
 				outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 				body, _ := outcome.Encode()
@@ -385,7 +385,9 @@ func (c *Connection) sendClose(amqpErr *performatives.Error) error {
 	if err != nil {
 		return err
 	}
-	c.conn.WritePerformative(0, body)
+	if err := c.conn.WritePerformative(0, body); err != nil {
+		c.logger.Error("failed to send close", "error", err)
+	}
 	c.close(nil)
 	return nil
 }
@@ -420,8 +422,14 @@ func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {
 
 func (c *Connection) handleClose(cl *performatives.Close) {
 	resp := &performatives.Close{}
-	body, _ := resp.Encode()
-	c.conn.WritePerformative(0, body)
+	body, err := resp.Encode()
+	if err != nil {
+		c.logger.Error("failed to encode close response", "error", err)
+		return
+	}
+	if err := c.conn.WritePerformative(0, body); err != nil {
+		c.logger.Error("failed to send close response", "error", err)
+	}
 }
 
 func (c *Connection) heartbeatLoop() {
