@@ -11,6 +11,22 @@ import (
 // ErrInvalidConfig indicates an invalid queue configuration.
 var ErrInvalidConfig = errors.New("invalid queue configuration")
 
+// CursorPosition defines the starting position for a consumer cursor.
+type CursorPosition int
+
+const (
+	CursorDefault  CursorPosition = iota // resume from stored position
+	CursorEarliest                        // start from beginning
+	CursorLatest                          // start from end
+	CursorOffset                          // start from specific offset
+)
+
+// CursorOption specifies cursor positioning for SubscribeWithCursor.
+type CursorOption struct {
+	Position CursorPosition
+	Offset   uint64 // only used when Position == CursorOffset
+}
+
 // Queue constants
 const (
 	MQTTQueueName  = "mqtt"

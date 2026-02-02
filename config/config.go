@@ -15,15 +15,21 @@ import (
 
 // Config holds all configuration for the MQTT broker.
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Broker    BrokerConfig    `yaml:"broker"`
-	Session   SessionConfig   `yaml:"session"`
-	Log       LogConfig       `yaml:"log"`
-	Storage   StorageConfig   `yaml:"storage"`
-	Cluster   ClusterConfig   `yaml:"cluster"`
-	Webhook   WebhookConfig   `yaml:"webhook"`
-	RateLimit RateLimitConfig `yaml:"ratelimit"`
-	Queues    []QueueConfig   `yaml:"queues"`
+	Server     ServerConfig     `yaml:"server"`
+	Broker     BrokerConfig     `yaml:"broker"`
+	AMQPBroker AMQPBrokerConfig `yaml:"amqp_broker"`
+	Session    SessionConfig    `yaml:"session"`
+	Log        LogConfig        `yaml:"log"`
+	Storage    StorageConfig    `yaml:"storage"`
+	Cluster    ClusterConfig    `yaml:"cluster"`
+	Webhook    WebhookConfig    `yaml:"webhook"`
+	RateLimit  RateLimitConfig  `yaml:"ratelimit"`
+	Queues     []QueueConfig    `yaml:"queues"`
+}
+
+// AMQPBrokerConfig holds AMQP-specific broker settings.
+type AMQPBrokerConfig struct {
+	AutoCreateQueues bool `yaml:"auto_create_queues"`
 }
 
 // QueueConfig defines configuration for a persistent queue.
@@ -407,6 +413,9 @@ func Default() *Config {
 			OtelMetricsEnabled:  true,
 			OtelTracesEnabled:   false, // Disabled by default for performance
 			OtelTraceSampleRate: 0.1,   // 10% sampling when enabled
+		},
+		AMQPBroker: AMQPBrokerConfig{
+			AutoCreateQueues: true,
 		},
 		Broker: BrokerConfig{
 			MaxMessageSize:      1024 * 1024, // 1MB

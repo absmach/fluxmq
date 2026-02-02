@@ -15,6 +15,9 @@ const (
 	DescriptorTarget uint64 = 0x29
 )
 
+// CapQueue is the capability symbol indicating a queue node.
+const CapQueue types.Symbol = "queue"
+
 // Source represents an AMQP source.
 type Source struct {
 	Address          string
@@ -23,6 +26,7 @@ type Source struct {
 	Timeout          uint32
 	Dynamic          bool
 	DistributionMode types.Symbol
+	Capabilities     []types.Symbol
 }
 
 // Encode serializes the Source as a described list.
@@ -72,6 +76,44 @@ func (s *Source) Encode() ([]byte, error) {
 	}
 	count++
 
+	if len(s.Capabilities) > 0 {
+		// dynamic-node-properties (5) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// distribution-mode (6) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// filter (7) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// default-outcome (8) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// outcomes (9) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// capabilities (10)
+		if err := types.WriteSymbolArray(&fields, s.Capabilities); err != nil {
+			return nil, err
+		}
+		count++
+	}
+
 	var buf bytes.Buffer
 	if err := types.WriteDescriptor(&buf, DescriptorSource); err != nil {
 		return nil, err
@@ -103,6 +145,9 @@ func DecodeSource(fields []any) *Source {
 	if len(fields) > 6 && fields[6] != nil {
 		s.DistributionMode, _ = fields[6].(types.Symbol)
 	}
+	if len(fields) > 10 && fields[10] != nil {
+		s.Capabilities = decodeCapabilities(fields[10])
+	}
 	return s
 }
 
@@ -113,6 +158,7 @@ type Target struct {
 	ExpiryPolicy types.Symbol
 	Timeout      uint32
 	Dynamic      bool
+	Capabilities []types.Symbol
 }
 
 // Encode serializes the Target as a described list.
@@ -157,6 +203,20 @@ func (t *Target) Encode() ([]byte, error) {
 	}
 	count++
 
+	if len(t.Capabilities) > 0 {
+		// dynamic-node-properties (5) - null
+		if err := types.WriteNull(&fields); err != nil {
+			return nil, err
+		}
+		count++
+
+		// capabilities (6)
+		if err := types.WriteSymbolArray(&fields, t.Capabilities); err != nil {
+			return nil, err
+		}
+		count++
+	}
+
 	var buf bytes.Buffer
 	if err := types.WriteDescriptor(&buf, DescriptorTarget); err != nil {
 		return nil, err
@@ -185,7 +245,38 @@ func DecodeTarget(fields []any) *Target {
 	if len(fields) > 4 && fields[4] != nil {
 		t.Dynamic, _ = fields[4].(bool)
 	}
+	if len(fields) > 6 && fields[6] != nil {
+		t.Capabilities = decodeCapabilities(fields[6])
+	}
 	return t
+}
+
+// decodeCapabilities decodes a "multiple symbol" field — either a single symbol or an array of symbols.
+func decodeCapabilities(field any) []types.Symbol {
+	switch v := field.(type) {
+	case types.Symbol:
+		return []types.Symbol{v}
+	case []any:
+		caps := make([]types.Symbol, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(types.Symbol); ok {
+				caps = append(caps, s)
+			}
+		}
+		return caps
+	default:
+		return nil
+	}
+}
+
+// HasCapability checks whether a list of capabilities contains the given symbol.
+func HasCapability(caps []types.Symbol, cap types.Symbol) bool {
+	for _, c := range caps {
+		if c == cap {
+			return true
+		}
+	}
+	return false
 }
 
 func toUint32(v any) uint32 {

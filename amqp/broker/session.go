@@ -180,12 +180,24 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 	}
 
 	// Send attach response
+	respSource := attach.Source
+	respTarget := attach.Target
+
+	// For management receiver links with dynamic source, assign a reply address
+	if link.isManagement && attach.Role && attach.Source != nil && attach.Source.Dynamic {
+		respSource = &performatives.Source{
+			Address: fmt.Sprintf("$management/reply/%d", attach.Handle),
+			Dynamic: false,
+		}
+		link.address = respSource.Address
+	}
+
 	resp := &performatives.Attach{
 		Name:   attach.Name,
 		Handle: attach.Handle,
 		Role:   !attach.Role, // mirror the role
-		Source: attach.Source,
-		Target: attach.Target,
+		Source: respSource,
+		Target: respTarget,
 	}
 
 	// If we are the sender side, set initial delivery count
@@ -201,8 +213,14 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 		return err
 	}
 
-	// Register subscription for receiver links (where we send messages TO the client)
-	if attach.Role { // client is receiver -> we are sender
+	if link.isManagement {
+		// Management links: sender links get credit, receiver links are used for responses
+		if !attach.Role { // client is sender -> grant credit for management requests
+			if err := s.grantCredit(link, 100); err != nil {
+				return err
+			}
+		}
+	} else if attach.Role { // client is receiver -> we are sender
 		link.subscribe()
 		s.conn.broker.stats.IncrementSubscriptions()
 		if m := s.conn.broker.getMetrics(); m != nil {
@@ -354,6 +372,19 @@ func (s *Session) deliverAMQPMessageToLinks(topic string, msg any, qos byte) {
 			link.sendAMQPMessage(msg, qos)
 		}
 	}
+}
+
+// findManagementSenderLink finds the management sender link (broker→client) in this session.
+func (s *Session) findManagementSenderLink() *Link {
+	s.linksMu.RLock()
+	defer s.linksMu.RUnlock()
+
+	for _, link := range s.links {
+		if link.isManagement && link.isSender {
+			return link
+		}
+	}
+	return nil
 }
 
 // grantCredit sends a Flow frame granting link credit to the remote sender.

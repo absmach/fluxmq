@@ -22,7 +22,7 @@ import (
 
 func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 	t.Helper()
-	b := New(nil, nil, nil)
+	b := New(nil, nil, nil, true)
 	serverConn, clientConn := net.Pipe()
 
 	go b.HandleConnection(serverConn)
@@ -347,7 +347,7 @@ func doAMQPHandshakeWithFrameSize(t *testing.T, c *amqpconn.Connection, containe
 }
 
 func TestMultiFrameTransferSend(t *testing.T) {
-	b := New(nil, nil, nil)
+	b := New(nil, nil, nil, true)
 	serverConn, clientConn := net.Pipe()
 
 	go b.HandleConnection(serverConn)
@@ -427,7 +427,7 @@ func TestMultiFrameTransferSend(t *testing.T) {
 }
 
 func TestMultiFrameTransferReceive(t *testing.T) {
-	b := New(nil, nil, nil)
+	b := New(nil, nil, nil, true)
 	serverConn, clientConn := net.Pipe()
 
 	go b.HandleConnection(serverConn)
@@ -870,7 +870,7 @@ func TestConnectionCloseCleanup(t *testing.T) {
 }
 
 func TestBrokerClose(t *testing.T) {
-	b := New(nil, nil, nil)
+	b := New(nil, nil, nil, true)
 	serverConn1, clientConn1 := net.Pipe()
 	serverConn2, clientConn2 := net.Pipe()
 

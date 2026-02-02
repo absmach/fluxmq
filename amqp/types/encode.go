@@ -314,6 +314,45 @@ func WriteAny(w io.Writer, v any) error {
 	}
 }
 
+// WriteSymbolArray writes an AMQP multiple symbol value.
+// For a single element, encodes as a bare symbol (per AMQP "multiple" encoding).
+// For multiple elements, encodes as an array of symbols.
+func WriteSymbolArray(w io.Writer, symbols []Symbol) error {
+	if len(symbols) == 0 {
+		return WriteNull(w)
+	}
+	if len(symbols) == 1 {
+		return WriteSymbol(w, symbols[0])
+	}
+	var elems bytes.Buffer
+	for _, s := range symbols {
+		b := []byte(s)
+		if len(b) <= 255 {
+			elems.WriteByte(byte(len(b)))
+			elems.Write(b)
+		} else {
+			var buf [4]byte
+			binary.BigEndian.PutUint32(buf[:], uint32(len(b)))
+			elems.Write(buf[:])
+			elems.Write(b)
+		}
+	}
+	// Use sym8 element type for short symbols, sym32 for long
+	// For simplicity, determine based on whether all symbols fit in sym8
+	allShort := true
+	for _, s := range symbols {
+		if len([]byte(s)) > 255 {
+			allShort = false
+			break
+		}
+	}
+	elemType := TypeSymbolShort
+	if !allShort {
+		elemType = TypeSymbolLong
+	}
+	return WriteArray(w, elemType, elems.Bytes(), len(symbols))
+}
+
 // WriteStringAnyMap writes a map with string keys and any values.
 func WriteStringAnyMap(w io.Writer, m map[string]any) error {
 	var pairs bytes.Buffer

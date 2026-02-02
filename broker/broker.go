@@ -5,6 +5,8 @@ package broker
 
 import (
 	"context"
+
+	"github.com/absmach/fluxmq/queue/types"
 )
 
 // Notifier defines the interface for webhook notifications.
@@ -21,6 +23,8 @@ type QueueManager interface {
 	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
 	// Subscribe adds a consumer to a queue with optional pattern matching.
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
+	// SubscribeWithCursor adds a consumer with explicit cursor positioning.
+	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error
 	// Unsubscribe removes a consumer from a queue.
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
 	// Ack acknowledges successful processing of a message by a consumer group.
@@ -33,6 +37,14 @@ type QueueManager interface {
 	// UpdateHeartbeat updates the heartbeat timestamp for a consumer across all queues/groups.
 	// This should be called when a PINGREQ is received from a client.
 	UpdateHeartbeat(ctx context.Context, clientID string) error
+	// CreateQueue creates a new queue with the given configuration.
+	CreateQueue(ctx context.Context, config types.QueueConfig) error
+	// DeleteQueue deletes a queue by name.
+	DeleteQueue(ctx context.Context, queueName string) error
+	// GetQueue returns the configuration for a queue.
+	GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error)
+	// ListQueues returns all queue configurations.
+	ListQueues(ctx context.Context) ([]types.QueueConfig, error)
 }
 
 // ClientRateLimiter defines the interface for per-client rate limiting.

@@ -289,7 +289,7 @@ func main() {
 
 	// Create AMQP broker (needs queue manager set later)
 	amqpStats := amqpbroker.NewStats()
-	amqpBroker := amqpbroker.New(nil, amqpStats, logger)
+	amqpBroker := amqpbroker.New(nil, amqpStats, logger, cfg.AMQPBroker.AutoCreateQueues)
 	defer amqpBroker.Close()
 
 	if metrics != nil {

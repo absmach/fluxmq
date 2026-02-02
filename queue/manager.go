@@ -260,6 +260,16 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 	return m.queueStore.DeleteQueue(ctx, queueName)
 }
 
+// GetQueue returns the configuration for a queue.
+func (m *Manager) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
+	return m.queueStore.GetQueue(ctx, queueName)
+}
+
+// ListQueues returns all queue configurations.
+func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
+	return m.queueStore.ListQueues(ctx)
+}
+
 // --- Publish Operations ---
 
 // Publish adds a message to all queues whose topic patterns match the topic.
@@ -286,6 +296,20 @@ func (m *Manager) PublishLocal(ctx context.Context, topic string, payload []byte
 	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
 	if err != nil {
 		return fmt.Errorf("failed to find matching queues: %w", err)
+	}
+
+	if len(queues) == 0 {
+		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", topic))
+		// Use the topic as the queue name and the topic itself as the matching pattern.
+		if _, err := m.GetOrCreateQueue(ctx, topic, topic); err != nil {
+			m.logger.Error("failed to create ephemeral queue", slog.String("topic", topic), slog.String("error", err.Error()))
+			return err
+		}
+		// After creating, find it again.
+		queues, err = m.queueStore.FindMatchingQueues(ctx, topic)
+		if err != nil {
+			return fmt.Errorf("failed to find matching queues after creation: %w", err)
+		}
 	}
 
 	if len(queues) == 0 {
@@ -387,6 +411,90 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 }
 
 // --- Subscribe Operations ---
+
+// SubscribeWithCursor adds a consumer with explicit cursor positioning.
+func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error {
+	if cursor == nil || cursor.Position == types.CursorDefault {
+		return m.Subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID)
+	}
+
+	// Ensure queue exists
+	queueTopicPattern := "$queue/" + queueName + "/#"
+	_, err := m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
+	if err != nil {
+		return fmt.Errorf("failed to get or create queue: %w", err)
+	}
+
+	if groupID == "" {
+		groupID = extractGroupFromClientID(clientID)
+	}
+
+	patternGroupID := groupID
+	if pattern != "" {
+		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
+	}
+
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern)
+	if err != nil {
+		return err
+	}
+
+	// Apply cursor positioning
+	switch cursor.Position {
+	case types.CursorEarliest:
+		head, err := m.queueStore.Head(ctx, queueName)
+		if err == nil {
+			m.groupStore.UpdateCursor(ctx, queueName, group.ID, head)
+		}
+	case types.CursorLatest:
+		tail, err := m.queueStore.Tail(ctx, queueName)
+		if err == nil {
+			m.groupStore.UpdateCursor(ctx, queueName, group.ID, tail)
+		}
+	case types.CursorOffset:
+		head, _ := m.queueStore.Head(ctx, queueName)
+		tail, _ := m.queueStore.Tail(ctx, queueName)
+		offset := cursor.Offset
+		if offset < head {
+			offset = head
+		}
+		if offset > tail {
+			offset = tail
+		}
+		m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset)
+	}
+
+	if err := m.consumerManager.RegisterConsumer(ctx, queueName, group.ID, clientID, clientID, proxyNodeID); err != nil {
+		return err
+	}
+
+	if m.cluster != nil {
+		info := &cluster.QueueConsumerInfo{
+			QueueName:    queueName,
+			GroupID:      patternGroupID,
+			ConsumerID:   clientID,
+			ClientID:     clientID,
+			Pattern:      pattern,
+			ProxyNodeID:  proxyNodeID,
+			RegisteredAt: time.Now(),
+		}
+		if err := m.cluster.RegisterQueueConsumer(ctx, info); err != nil {
+			m.logger.Warn("failed to register consumer in cluster",
+				slog.String("error", err.Error()),
+				slog.String("client", clientID))
+		}
+	}
+
+	m.trackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
+
+	m.logger.Info("consumer subscribed with cursor",
+		slog.String("queue", queueName),
+		slog.String("group", patternGroupID),
+		slog.String("client", clientID),
+		slog.String("cursor", fmt.Sprintf("%d", cursor.Position)))
+
+	return nil
+}
 
 // Subscribe adds a consumer to a stream with optional pattern matching.
 func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/server/otel"
@@ -35,22 +36,18 @@ type Notifier interface {
 type QueueManager interface {
 	Start(ctx context.Context) error
 	Stop() error
-	// Publish adds a message to all queues whose topic patterns match the topic.
 	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
-	// Subscribe adds a consumer to a queue with optional pattern matching.
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
-	// Unsubscribe removes a consumer from a queue.
+	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
-	// Ack acknowledges successful processing of a message by a consumer group.
-	// groupID is required for fan-out support - each group acknowledges independently.
 	Ack(ctx context.Context, queueName, messageID, groupID string) error
-	// Nack negatively acknowledges a message for a consumer group (triggers retry).
 	Nack(ctx context.Context, queueName, messageID, groupID string) error
-	// Reject permanently rejects a message by a consumer group (move to DLQ).
 	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
-	// UpdateHeartbeat updates the heartbeat timestamp for a consumer across all queues/groups.
-	// This should be called when a PINGREQ is received from a client.
 	UpdateHeartbeat(ctx context.Context, clientID string) error
+	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	DeleteQueue(ctx context.Context, queueName string) error
+	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
+	ListQueues(ctx context.Context) ([]qtypes.QueueConfig, error)
 }
 
 // ClientRateLimiter defines the interface for per-client rate limiting.

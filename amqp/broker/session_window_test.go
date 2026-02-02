@@ -16,7 +16,7 @@ import (
 
 func newTestSession(t *testing.T) *Session {
 	t.Helper()
-	b := New(nil, nil, nil)
+	b := New(nil, nil, nil, true)
 	server, client := net.Pipe()
 	done := make(chan struct{})
 	go func() {
