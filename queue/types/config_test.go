@@ -153,6 +153,30 @@ func TestQueueConfig_Validate(t *testing.T) {
 			}(),
 			wantErr: true,
 		},
+		{
+			name: "ephemeral with zero expires after",
+			config: func() QueueConfig {
+				cfg := DefaultQueueConfig("$queue/test")
+				cfg.Durable = false
+				cfg.ExpiresAfter = 0
+				return cfg
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "valid ephemeral config",
+			config: DefaultEphemeralQueueConfig("$queue/test"),
+			wantErr: false,
+		},
+		{
+			name: "reserved non-durable rejected",
+			config: func() QueueConfig {
+				cfg := DefaultEphemeralQueueConfig("$queue/test")
+				cfg.Reserved = true
+				return cfg
+			}(),
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -172,6 +196,7 @@ func TestDefaultQueueConfig(t *testing.T) {
 	config := DefaultQueueConfig("$queue/test")
 
 	assert.Equal(t, "$queue/test", config.Name)
+	assert.True(t, config.Durable)
 	assert.Equal(t, int64(1024*1024*10), config.MaxMessageSize, "unexpected max message size")
 	assert.Equal(t, 7*24*time.Hour, config.MessageTTL, "unexpected message TTL")
 	assert.Equal(t, 30*time.Second, config.DeliveryTimeout, "unexpected delivery TO")
@@ -192,4 +217,32 @@ func TestDefaultQueueConfig(t *testing.T) {
 	// Validate default config
 	err := config.Validate()
 	assert.NoError(t, err)
+}
+
+func TestDefaultEphemeralQueueConfig(t *testing.T) {
+	config := DefaultEphemeralQueueConfig("test-queue", "test/#")
+
+	assert.Equal(t, "test-queue", config.Name)
+	assert.False(t, config.Durable)
+	assert.Equal(t, 5*time.Minute, config.ExpiresAfter)
+	assert.Equal(t, []string{"test/#"}, config.Topics)
+	assert.True(t, config.LastConsumerDisconnect.IsZero())
+
+	err := config.Validate()
+	assert.NoError(t, err)
+}
+
+func TestMQTTQueueConfig_Durable(t *testing.T) {
+	config := MQTTQueueConfig()
+	assert.True(t, config.Durable)
+	assert.True(t, config.Reserved)
+}
+
+func TestFromInput_Durable(t *testing.T) {
+	input := QueueConfigInput{
+		Name:   "test",
+		Topics: []string{"#"},
+	}
+	config := FromInput(input)
+	assert.True(t, config.Durable)
 }

@@ -27,16 +27,15 @@ type Broker struct {
 	router           *router.TrieRouter
 	queueManager     broker.QueueManager
 	cluster          cluster.Cluster
-	auth             *broker.AuthEngine
-	stats            *Stats
-	metrics          *Metrics // nil if OTel disabled
-	autoCreateQueues bool
-	logger           *slog.Logger
+	auth    *broker.AuthEngine
+	stats   *Stats
+	metrics *Metrics // nil if OTel disabled
+	logger  *slog.Logger
 	mu               sync.RWMutex
 }
 
 // New creates a new AMQP broker.
-func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger, autoCreateQueues bool) *Broker {
+func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -44,11 +43,10 @@ func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger, autoCreateQu
 		stats = NewStats()
 	}
 	return &Broker{
-		router:           router.NewRouter(),
-		queueManager:     qm,
-		stats:            stats,
-		autoCreateQueues: autoCreateQueues,
-		logger:           logger,
+		router:       router.NewRouter(),
+		queueManager: qm,
+		stats:        stats,
+		logger:       logger,
 	}
 }
 

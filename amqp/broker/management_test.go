@@ -12,7 +12,7 @@ import (
 )
 
 func TestManagementHandlerNoQueueManager(t *testing.T) {
-	b := New(nil, nil, nil, true)
+	b := New(nil, nil, nil)
 	h := newManagementHandler(b)
 
 	req := &message.Message{
@@ -32,7 +32,7 @@ func TestManagementHandlerNoQueueManager(t *testing.T) {
 }
 
 func TestManagementHandlerMissingProperties(t *testing.T) {
-	b := New(nil, nil, nil, true)
+	b := New(nil, nil, nil)
 	h := newManagementHandler(b)
 
 	req := &message.Message{
@@ -47,7 +47,7 @@ func TestManagementHandlerMissingProperties(t *testing.T) {
 }
 
 func TestManagementHandlerUnsupportedType(t *testing.T) {
-	b := New(nil, nil, nil, true)
+	b := New(nil, nil, nil)
 	h := newManagementHandler(b)
 
 	req := &message.Message{
@@ -69,7 +69,7 @@ func TestManagementHandlerUnsupportedType(t *testing.T) {
 }
 
 func TestManagementHandlerUnsupportedOperation(t *testing.T) {
-	b := New(nil, nil, nil, true)
+	b := New(nil, nil, nil)
 	h := newManagementHandler(b)
 
 	req := &message.Message{
@@ -89,7 +89,7 @@ func TestManagementHandlerUnsupportedOperation(t *testing.T) {
 }
 
 func TestManagementResponseCorrelation(t *testing.T) {
-	b := New(nil, nil, nil, true)
+	b := New(nil, nil, nil)
 	h := newManagementHandler(b)
 
 	req := &message.Message{

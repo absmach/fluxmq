@@ -27,7 +27,7 @@ import (
 
 func startServer(t *testing.T) (*amqpbroker.Broker, string) {
 	t.Helper()
-	b := amqpbroker.New(nil, nil, nil, true)
+	b := amqpbroker.New(nil, nil, nil)
 	cfg := amqpserver.Config{
 		Address:         "127.0.0.1:0",
 		ShutdownTimeout: 5 * time.Second,
@@ -358,7 +358,7 @@ func (m *mockAuthz) CanPublish(clientID, topic string) bool   { return true }
 func (m *mockAuthz) CanSubscribe(clientID, filter string) bool { return true }
 
 func TestIntegrationSASLPlainAuth(t *testing.T) {
-	b := amqpbroker.New(nil, nil, nil, true)
+	b := amqpbroker.New(nil, nil, nil)
 	auth := broker.NewAuthEngine(&mockAuth{acceptUser: "alice", acceptPass: "secret"}, &mockAuthz{})
 	b.SetAuthEngine(auth)
 

@@ -121,6 +121,11 @@ func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	return nil
 }
 
+// UpdateQueue updates an existing queue's configuration.
+func (a *Adapter) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	return a.queueStore.Save(config)
+}
+
 // GetQueue retrieves a queue's configuration.
 func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
 	config, err := a.queueStore.Get(queueName)

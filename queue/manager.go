@@ -142,6 +142,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create reserved queues: %w", err)
 	}
 
+	// Cleanup ephemeral queues that expired while broker was down
+	m.cleanupEphemeralQueues()
+
 	// Start delivery workers
 	m.wg.Add(1)
 	go m.runDeliveryLoop()
@@ -159,6 +162,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Start retention
 	m.wg.Add(1)
 	go m.runRetentionLoop()
+
+	// Start ephemeral queue cleanup
+	m.wg.Add(1)
+	go m.runEphemeralCleanupLoop()
 
 	m.logger.Info("queue-based queue manager started")
 	return nil
@@ -244,8 +251,8 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 		return nil, err
 	}
 
-	// Create with default config
-	defaultConfig := types.DefaultQueueConfig(queueName, topics...)
+	// Create with ephemeral config (auto-created queues are ephemeral)
+	defaultConfig := types.DefaultEphemeralQueueConfig(queueName, topics...)
 	if err := m.CreateQueue(ctx, defaultConfig); err != nil {
 		if err != storage.ErrQueueAlreadyExists {
 			return nil, err
@@ -468,6 +475,9 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		return err
 	}
 
+	// Clear ephemeral disconnect timestamp since we now have a consumer
+	m.clearEphemeralDisconnect(ctx, queueName)
+
 	if m.cluster != nil {
 		info := &cluster.QueueConsumerInfo{
 			QueueName:    queueName,
@@ -528,6 +538,9 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 		return err
 	}
 
+	// Clear ephemeral disconnect timestamp since we now have a consumer
+	m.clearEphemeralDisconnect(ctx, queueName)
+
 	// Register consumer in cluster for cross-node visibility
 	if m.cluster != nil {
 		info := &cluster.QueueConsumerInfo{
@@ -587,6 +600,9 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 
 	// Untrack subscription
 	m.untrackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
+
+	// Track last consumer disconnect for ephemeral queues
+	m.checkEphemeralDisconnect(ctx, queueName)
 
 	m.logger.Info("consumer unsubscribed",
 		slog.String("queue", queueName),
@@ -1004,6 +1020,120 @@ func (m *Manager) processRetention() {
 			m.logger.Debug("truncation error",
 				slog.String("error", err.Error()),
 				slog.String("queue", queueConfig.Name))
+		}
+	}
+}
+
+// --- Ephemeral Queue Lifecycle ---
+
+// checkEphemeralDisconnect checks if an ephemeral queue has zero consumers and marks the disconnect time.
+func (m *Manager) checkEphemeralDisconnect(ctx context.Context, queueName string) {
+	config, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil || config.Durable || config.Reserved {
+		return
+	}
+
+	if m.queueHasConsumers(ctx, queueName) {
+		return
+	}
+
+	config.LastConsumerDisconnect = time.Now()
+	if err := m.queueStore.UpdateQueue(ctx, *config); err != nil {
+		m.logger.Warn("failed to update ephemeral queue disconnect time",
+			slog.String("queue", queueName),
+			slog.String("error", err.Error()))
+	}
+}
+
+// clearEphemeralDisconnect clears the disconnect timestamp on an ephemeral queue.
+func (m *Manager) clearEphemeralDisconnect(ctx context.Context, queueName string) {
+	config, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil || config.Durable {
+		return
+	}
+
+	if config.LastConsumerDisconnect.IsZero() {
+		return
+	}
+
+	config.LastConsumerDisconnect = time.Time{}
+	if err := m.queueStore.UpdateQueue(ctx, *config); err != nil {
+		m.logger.Warn("failed to clear ephemeral queue disconnect time",
+			slog.String("queue", queueName),
+			slog.String("error", err.Error()))
+	}
+}
+
+// queueHasConsumers returns true if any consumer group for the queue has active consumers.
+func (m *Manager) queueHasConsumers(ctx context.Context, queueName string) bool {
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
+	if err != nil {
+		return false
+	}
+
+	for _, group := range groups {
+		if group.ConsumerCount() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanupEphemeralQueues deletes expired ephemeral queues.
+func (m *Manager) cleanupEphemeralQueues() {
+	ctx := context.Background()
+
+	queues, err := m.queueStore.ListQueues(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, q := range queues {
+		if q.Durable || q.Reserved {
+			continue
+		}
+
+		if q.LastConsumerDisconnect.IsZero() {
+			continue
+		}
+
+		if time.Since(q.LastConsumerDisconnect) < q.ExpiresAfter {
+			continue
+		}
+
+		// Delete consumer groups first
+		groups, err := m.groupStore.ListConsumerGroups(ctx, q.Name)
+		if err == nil {
+			for _, g := range groups {
+				m.groupStore.DeleteConsumerGroup(ctx, q.Name, g.ID)
+			}
+		}
+
+		if err := m.queueStore.DeleteQueue(ctx, q.Name); err != nil {
+			m.logger.Warn("failed to delete expired ephemeral queue",
+				slog.String("queue", q.Name),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		m.logger.Info("deleted expired ephemeral queue",
+			slog.String("queue", q.Name),
+			slog.Duration("expired_after", q.ExpiresAfter))
+	}
+}
+
+func (m *Manager) runEphemeralCleanupLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.config.ConsumerTimeout)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.cleanupEphemeralQueues()
 		}
 	}
 }

@@ -752,6 +752,148 @@ func TestDeliverQueueMessage(t *testing.T) {
 	}
 }
 
+func TestGetOrCreateQueue_CreatesEphemeral(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	deliverFn := func(ctx context.Context, clientID string, msg any) error { return nil }
+	config := DefaultConfig()
+	logger := slog.Default()
+
+	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Failed to start manager: %v", err)
+	}
+	defer manager.Stop()
+
+	cfg, err := manager.GetOrCreateQueue(ctx, "ephemeral-test", "$queue/ephemeral-test/#")
+	if err != nil {
+		t.Fatalf("GetOrCreateQueue failed: %v", err)
+	}
+
+	if cfg.Durable {
+		t.Error("Expected auto-created queue to be ephemeral (Durable=false)")
+	}
+	if cfg.ExpiresAfter != 5*time.Minute {
+		t.Errorf("Expected ExpiresAfter=5m, got %v", cfg.ExpiresAfter)
+	}
+}
+
+func TestEphemeralQueue_DisconnectAndCleanup(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	deliverFn := func(ctx context.Context, clientID string, msg any) error { return nil }
+	config := DefaultConfig()
+	config.DeliveryInterval = 50 * time.Millisecond
+	logger := slog.Default()
+
+	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Failed to start manager: %v", err)
+	}
+	defer manager.Stop()
+
+	// Subscribe creates an ephemeral queue
+	if err := manager.Subscribe(ctx, "eph-queue", "#", "client1", "", ""); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Verify queue exists and disconnect time is zero
+	cfg, err := logStore.GetQueue(ctx, "eph-queue")
+	if err != nil {
+		t.Fatalf("GetQueue failed: %v", err)
+	}
+	if !cfg.LastConsumerDisconnect.IsZero() {
+		t.Error("Expected LastConsumerDisconnect to be zero while consumer is active")
+	}
+
+	// Unsubscribe - should set disconnect time
+	if err := manager.Unsubscribe(ctx, "eph-queue", "#", "client1", ""); err != nil {
+		t.Fatalf("Unsubscribe failed: %v", err)
+	}
+
+	cfg, err = logStore.GetQueue(ctx, "eph-queue")
+	if err != nil {
+		t.Fatalf("GetQueue failed: %v", err)
+	}
+	if cfg.LastConsumerDisconnect.IsZero() {
+		t.Error("Expected LastConsumerDisconnect to be set after last consumer leaves")
+	}
+
+	// Re-subscribe should clear disconnect time
+	if err := manager.Subscribe(ctx, "eph-queue", "#", "client2", "", ""); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	cfg, err = logStore.GetQueue(ctx, "eph-queue")
+	if err != nil {
+		t.Fatalf("GetQueue failed: %v", err)
+	}
+	if !cfg.LastConsumerDisconnect.IsZero() {
+		t.Error("Expected LastConsumerDisconnect to be cleared after new consumer subscribes")
+	}
+}
+
+func TestCleanupEphemeralQueues(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	deliverFn := func(ctx context.Context, clientID string, msg any) error { return nil }
+	config := DefaultConfig()
+	logger := slog.Default()
+
+	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	ctx := context.Background()
+
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Failed to start manager: %v", err)
+	}
+	defer manager.Stop()
+
+	// Create an ephemeral queue with a very short expiry that already expired
+	ephCfg := types.DefaultEphemeralQueueConfig("expired-queue", "$queue/expired/#")
+	ephCfg.ExpiresAfter = 1 * time.Millisecond
+	ephCfg.LastConsumerDisconnect = time.Now().Add(-1 * time.Second) // expired
+	if err := logStore.CreateQueue(ctx, ephCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	// Create a durable queue
+	durCfg := types.DefaultQueueConfig("durable-queue", "$queue/durable/#")
+	if err := logStore.CreateQueue(ctx, durCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	// Create an ephemeral queue with active consumers (zero disconnect time)
+	activeCfg := types.DefaultEphemeralQueueConfig("active-queue", "$queue/active/#")
+	if err := logStore.CreateQueue(ctx, activeCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	// Run cleanup
+	manager.cleanupEphemeralQueues()
+
+	// Expired ephemeral queue should be deleted
+	if _, err := logStore.GetQueue(ctx, "expired-queue"); err != storage.ErrQueueNotFound {
+		t.Error("Expected expired ephemeral queue to be deleted")
+	}
+
+	// Durable queue should still exist
+	if _, err := logStore.GetQueue(ctx, "durable-queue"); err != nil {
+		t.Error("Expected durable queue to still exist")
+	}
+
+	// Active ephemeral queue should still exist (zero disconnect time)
+	if _, err := logStore.GetQueue(ctx, "active-queue"); err != nil {
+		t.Error("Expected active ephemeral queue to still exist")
+	}
+}
+
 func TestEnqueueLocal(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()

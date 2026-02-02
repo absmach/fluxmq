@@ -88,6 +88,20 @@ func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error
 	return nil
 }
 
+// UpdateQueue updates an existing queue's configuration.
+func (s *Store) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	val, exists := s.logs.Load(config.Name)
+	if !exists {
+		return storage.ErrQueueNotFound
+	}
+
+	sl := val.(*log)
+	sl.mu.Lock()
+	sl.config = config
+	sl.mu.Unlock()
+	return nil
+}
+
 // GetQueue retrieves queue configuration.
 func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
 	val, exists := s.logs.Load(queueName)

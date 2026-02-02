@@ -164,15 +164,6 @@ func (l *Link) subscribe() {
 			return
 		}
 
-		// If auto-create disabled, verify queue exists
-		if !l.session.conn.broker.autoCreateQueues {
-			if _, err := qm.GetQueue(ctx, l.queueName); err != nil {
-				l.logger.Warn("queue not found and auto-create disabled", "queue", l.queueName)
-				l.sendDetachError(performatives.ErrNotFound, "queue not found: "+l.queueName)
-				return
-			}
-		}
-
 		pattern := ""
 		if !l.capabilityBased && strings.HasPrefix(l.address, "$queue/") {
 			rest := strings.TrimPrefix(l.address, "$queue/")
@@ -276,14 +267,6 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	if l.isQueue || strings.HasPrefix(topic, "$queue/") {
 		qm := l.session.conn.broker.getQueueManager()
 		if qm != nil {
-			// If auto-create disabled, verify queue exists for producer links
-			if !l.session.conn.broker.autoCreateQueues && l.isQueue {
-				if _, err := qm.GetQueue(context.Background(), l.queueName); err != nil {
-					l.logger.Warn("queue not found for publish, auto-create disabled", "queue", l.queueName)
-					return
-				}
-			}
-
 			// For capability-based links, construct the publish topic
 			publishTopic := topic
 			if l.capabilityBased && !strings.HasPrefix(topic, "$queue/") {

@@ -33,6 +33,7 @@ type QueueStore interface {
 	// Queue lifecycle
 	CreateQueue(ctx context.Context, config types.QueueConfig) error
 	GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error)
+	UpdateQueue(ctx context.Context, config types.QueueConfig) error
 	DeleteQueue(ctx context.Context, queueName string) error
 	ListQueues(ctx context.Context) ([]types.QueueConfig, error)
 

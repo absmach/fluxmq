@@ -47,6 +47,11 @@ type QueueConfig struct {
 	Topics   []string // Topic patterns that route to this queue (e.g., "sensors/#", "orders/+/created")
 	Reserved bool     // True for system queues like "mqtt" that cannot be deleted
 
+	// Durability
+	Durable                bool          // true = persists indefinitely, false = ephemeral (cleaned up when no consumers remain)
+	ExpiresAfter           time.Duration // Grace period before ephemeral queue deletion (default 5m)
+	LastConsumerDisconnect time.Time     // Zero value = has active consumers; set when last consumer leaves
+
 	RetryPolicy RetryPolicy
 	DLQConfig   DLQConfig
 	Replication ReplicationConfig
@@ -112,6 +117,14 @@ type RetentionPolicy struct {
 	CompactionInterval time.Duration // How often to run compaction (default: 10m)
 }
 
+// DefaultEphemeralQueueConfig returns default ephemeral queue configuration.
+func DefaultEphemeralQueueConfig(name string, topics ...string) QueueConfig {
+	cfg := DefaultQueueConfig(name, topics...)
+	cfg.Durable = false
+	cfg.ExpiresAfter = 5 * time.Minute
+	return cfg
+}
+
 // DefaultQueueConfig returns default queue configuration.
 func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 	if len(topics) == 0 {
@@ -121,6 +134,7 @@ func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 		Name:             name,
 		Topics:           topics,
 		Reserved:         false,
+		Durable:          true,
 		MaxMessageSize:   10 * 1024 * 1024, // 10MB
 		MaxDepth:         100000,
 		MessageTTL:       7 * 24 * time.Hour,
@@ -155,6 +169,7 @@ func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 func MQTTQueueConfig() QueueConfig {
 	config := DefaultQueueConfig(MQTTQueueName, MQTTQueueTopic)
 	config.Reserved = true
+	config.Durable = true
 	return config
 }
 
@@ -177,6 +192,7 @@ type QueueConfigInput struct {
 // FromInput creates a QueueConfig from a simplified input config.
 func FromInput(input QueueConfigInput) QueueConfig {
 	cfg := DefaultQueueConfig(input.Name, input.Topics...)
+	cfg.Durable = true
 	cfg.Reserved = input.Reserved
 
 	if input.MaxMessageSize > 0 {
@@ -233,6 +249,10 @@ func (c *QueueConfig) Validate() error {
 	case c.RetryPolicy.BackoffMultiplier < 1.0:
 		return ErrInvalidConfig
 	case c.RetryPolicy.TotalTimeout < 0:
+		return ErrInvalidConfig
+	case !c.Durable && c.ExpiresAfter <= 0:
+		return ErrInvalidConfig
+	case c.Reserved && !c.Durable:
 		return ErrInvalidConfig
 	}
 
