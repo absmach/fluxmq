@@ -39,17 +39,17 @@ func TestConsumerState_DeliverAndAck(t *testing.T) {
 	defer cs.Close()
 
 	// Deliver messages
-	err = cs.Deliver(0, 1, "consumer-1")
+	err = cs.Deliver(1, "consumer-1")
 	require.NoError(t, err)
 
-	err = cs.Deliver(0, 2, "consumer-1")
+	err = cs.Deliver(2, "consumer-1")
 	require.NoError(t, err)
 
-	err = cs.Deliver(0, 3, "consumer-2")
+	err = cs.Deliver(3, "consumer-2")
 	require.NoError(t, err)
 
-	// Check partition state
-	ps := cs.GetPartitionState(0)
+	// Check group state
+	ps := cs.GetGroupState()
 	assert.Equal(t, uint64(4), ps.Cursor)
 	assert.Equal(t, uint64(0), ps.AckFloor)
 	assert.Equal(t, uint64(3), ps.Delivered)
@@ -58,24 +58,24 @@ func TestConsumerState_DeliverAndAck(t *testing.T) {
 	assert.Equal(t, 3, cs.PendingCount())
 
 	// Ack in order
-	err = cs.Ack(0, 1)
+	err = cs.Ack(1)
 	require.NoError(t, err)
 
-	ps = cs.GetPartitionState(0)
+	ps = cs.GetGroupState()
 	assert.Equal(t, uint64(1), ps.AckFloor) // Should advance
 
 	// Ack out of order (offset 3 before 2)
-	err = cs.Ack(0, 3)
+	err = cs.Ack(3)
 	require.NoError(t, err)
 
-	ps = cs.GetPartitionState(0)
+	ps = cs.GetGroupState()
 	assert.Equal(t, uint64(1), ps.AckFloor) // Should NOT advance (gap at 2)
 
 	// Ack offset 2 to fill the gap
-	err = cs.Ack(0, 2)
+	err = cs.Ack(2)
 	require.NoError(t, err)
 
-	ps = cs.GetPartitionState(0)
+	ps = cs.GetGroupState()
 	assert.Equal(t, uint64(3), ps.AckFloor) // Should advance to 3
 
 	// All acked
@@ -90,10 +90,10 @@ func TestConsumerState_DeliverBatch(t *testing.T) {
 	defer cs.Close()
 
 	offsets := []uint64{10, 11, 12, 13, 14}
-	err = cs.DeliverBatch(0, offsets, "consumer-1")
+	err = cs.DeliverBatch(offsets, "consumer-1")
 	require.NoError(t, err)
 
-	ps := cs.GetPartitionState(0)
+	ps := cs.GetGroupState()
 	assert.Equal(t, uint64(15), ps.Cursor)
 	assert.Equal(t, uint64(5), ps.Delivered)
 	assert.Equal(t, 5, cs.PendingCount())
@@ -108,15 +108,15 @@ func TestConsumerState_AckBatch(t *testing.T) {
 
 	// Deliver
 	for i := uint64(0); i < 10; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
 	// Ack batch (contiguous from start)
-	err = cs.AckBatch(0, []uint64{0, 1, 2, 3, 4})
+	err = cs.AckBatch([]uint64{0, 1, 2, 3, 4})
 	require.NoError(t, err)
 
-	ps := cs.GetPartitionState(0)
+	ps := cs.GetGroupState()
 	assert.Equal(t, uint64(4), ps.AckFloor)
 	assert.Equal(t, 5, cs.PendingCount())
 }
@@ -128,7 +128,7 @@ func TestConsumerState_Nack(t *testing.T) {
 	require.NoError(t, err)
 	defer cs.Close()
 
-	err = cs.Deliver(0, 1, "consumer-1")
+	err = cs.Deliver(1, "consumer-1")
 	require.NoError(t, err)
 
 	// Get initial entry
@@ -152,7 +152,7 @@ func TestConsumerState_Claim(t *testing.T) {
 	require.NoError(t, err)
 	defer cs.Close()
 
-	err = cs.Deliver(0, 1, "consumer-1")
+	err = cs.Deliver(1, "consumer-1")
 	require.NoError(t, err)
 
 	// Verify initial owner
@@ -179,7 +179,7 @@ func TestConsumerState_ClaimBatch(t *testing.T) {
 
 	// Deliver multiple
 	for i := uint64(1); i <= 5; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -210,11 +210,11 @@ func TestConsumerState_GetPendingByConsumer(t *testing.T) {
 	defer cs.Close()
 
 	// Deliver to different consumers
-	err = cs.Deliver(0, 1, "consumer-1")
+	err = cs.Deliver(1, "consumer-1")
 	require.NoError(t, err)
-	err = cs.Deliver(0, 2, "consumer-1")
+	err = cs.Deliver(2, "consumer-1")
 	require.NoError(t, err)
-	err = cs.Deliver(0, 3, "consumer-2")
+	err = cs.Deliver(3, "consumer-2")
 	require.NoError(t, err)
 
 	// Get by consumer
@@ -238,7 +238,7 @@ func TestConsumerState_GetPendingByShard(t *testing.T) {
 
 	// Deliver many messages to distribute across shards
 	for i := uint64(0); i < 100; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -264,7 +264,7 @@ func TestConsumerState_RedeliveryCandidates(t *testing.T) {
 
 	// Deliver messages
 	for i := uint64(0); i < 10; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -294,7 +294,7 @@ func TestConsumerState_DeadLetterCandidates(t *testing.T) {
 	defer cs.Close()
 
 	// Deliver a message
-	err = cs.Deliver(0, 1, "consumer-1")
+	err = cs.Deliver(1, "consumer-1")
 	require.NoError(t, err)
 
 	// No DLQ candidates yet
@@ -322,12 +322,12 @@ func TestConsumerState_PersistenceAndRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint64(0); i < 10; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
 	// Ack some
-	err = cs.AckBatch(0, []uint64{0, 1, 2})
+	err = cs.AckBatch([]uint64{0, 1, 2})
 	require.NoError(t, err)
 
 	// Sync and close
@@ -341,7 +341,7 @@ func TestConsumerState_PersistenceAndRecovery(t *testing.T) {
 	require.NoError(t, err)
 	defer cs2.Close()
 
-	ps := cs2.GetPartitionState(0)
+	ps := cs2.GetGroupState()
 	assert.Equal(t, uint64(10), ps.Cursor)
 	assert.Equal(t, uint64(2), ps.AckFloor)
 	assert.Equal(t, 7, cs2.PendingCount())
@@ -357,7 +357,7 @@ func TestConsumerState_CompactAndRecovery(t *testing.T) {
 
 	// Deliver messages
 	for i := uint64(0); i < 20; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -377,45 +377,9 @@ func TestConsumerState_CompactAndRecovery(t *testing.T) {
 	require.NoError(t, err)
 	defer cs2.Close()
 
-	ps := cs2.GetPartitionState(0)
+	ps := cs2.GetGroupState()
 	assert.Equal(t, uint64(20), ps.Cursor)
 	assert.Equal(t, 20, cs2.PendingCount())
-}
-
-func TestConsumerState_MultiplePartitions(t *testing.T) {
-	dir := t.TempDir()
-	config := DefaultConsumerStateConfig()
-	cs, err := NewConsumerState(dir, "test-group", config)
-	require.NoError(t, err)
-	defer cs.Close()
-
-	// Deliver to multiple partitions
-	err = cs.Deliver(0, 1, "consumer-1")
-	require.NoError(t, err)
-	err = cs.Deliver(1, 1, "consumer-1")
-	require.NoError(t, err)
-	err = cs.Deliver(2, 1, "consumer-1")
-	require.NoError(t, err)
-
-	// Check each partition
-	ps0 := cs.GetPartitionState(0)
-	assert.Equal(t, uint64(2), ps0.Cursor)
-
-	ps1 := cs.GetPartitionState(1)
-	assert.Equal(t, uint64(2), ps1.Cursor)
-
-	ps2 := cs.GetPartitionState(2)
-	assert.Equal(t, uint64(2), ps2.Cursor)
-
-	// Ack only partition 0
-	err = cs.Ack(0, 1)
-	require.NoError(t, err)
-
-	ps0 = cs.GetPartitionState(0)
-	assert.Equal(t, uint64(1), ps0.AckFloor)
-
-	ps1 = cs.GetPartitionState(1)
-	assert.Equal(t, uint64(0), ps1.AckFloor) // Unchanged
 }
 
 func TestConsumerState_ShardKey(t *testing.T) {
@@ -445,13 +409,12 @@ func TestConsumerState_Stats(t *testing.T) {
 
 	// Deliver some messages
 	for i := uint64(0); i < 20; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
 	stats := cs.Stats()
 	assert.Equal(t, "test-group", stats.GroupID)
-	assert.Equal(t, 1, stats.NumPartitions)
 	assert.Equal(t, 4, stats.NumShards)
 	assert.Equal(t, 20, stats.TotalPending)
 	assert.Len(t, stats.ShardStats, 4)
@@ -466,7 +429,7 @@ func TestConsumerState_PendingCountByShard(t *testing.T) {
 	defer cs.Close()
 
 	for i := uint64(0); i < 40; i++ {
-		err = cs.Deliver(0, i, "consumer-1")
+		err = cs.Deliver(i, "consumer-1")
 		require.NoError(t, err)
 	}
 
@@ -489,7 +452,7 @@ func TestConsumerState_EmptyGroup(t *testing.T) {
 	defer cs.Close()
 
 	// Empty group should work
-	ps := cs.GetPartitionState(0)
+	ps := cs.GetGroupState()
 	assert.Equal(t, uint64(0), ps.Cursor)
 	assert.Equal(t, uint64(0), ps.AckFloor)
 
@@ -510,7 +473,7 @@ func TestConsumerState_AckNonExistent(t *testing.T) {
 	defer cs.Close()
 
 	// Ack non-existent should not error (idempotent)
-	err = cs.Ack(0, 999)
+	err = cs.Ack(999)
 	assert.NoError(t, err)
 }
 

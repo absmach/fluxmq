@@ -31,25 +31,27 @@ type SegmentManager struct {
 
 // ManagerConfig holds segment manager configuration.
 type ManagerConfig struct {
-	MaxSegmentSize    int64
-	MaxSegmentAge     time.Duration
-	IndexInterval     int
-	Compression       CompressionType
-	SyncInterval      time.Duration
-	RetentionBytes    int64
-	RetentionDuration time.Duration
+	MaxSegmentSize       int64
+	MaxSegmentAge        time.Duration
+	IndexInterval        int
+	Compression          CompressionType
+	SyncInterval         time.Duration
+	TimeIndexMinInterval time.Duration
+	RetentionBytes       int64
+	RetentionDuration    time.Duration
 }
 
 // DefaultManagerConfig returns default manager configuration.
 func DefaultManagerConfig() ManagerConfig {
 	return ManagerConfig{
-		MaxSegmentSize:    DefaultMaxSegmentSize,
-		MaxSegmentAge:     DefaultMaxSegmentAge,
-		IndexInterval:     DefaultIndexIntervalBytes,
-		Compression:       DefaultCompression, // S2 by default
-		SyncInterval:      DefaultSyncInterval,
-		RetentionBytes:    DefaultRetentionBytes,
-		RetentionDuration: DefaultRetentionDuration,
+		MaxSegmentSize:       DefaultMaxSegmentSize,
+		MaxSegmentAge:        DefaultMaxSegmentAge,
+		IndexInterval:        DefaultIndexIntervalBytes,
+		Compression:          DefaultCompression, // S2 by default
+		SyncInterval:         DefaultSyncInterval,
+		TimeIndexMinInterval: DefaultTimeIndexMinInterval,
+		RetentionBytes:       DefaultRetentionBytes,
+		RetentionDuration:    DefaultRetentionDuration,
 	}
 }
 
@@ -131,6 +133,22 @@ func (m *SegmentManager) loadSegments() error {
 			return fmt.Errorf("failed to open segment %d: %w", sf.baseOffset, err)
 		}
 
+		if seg.index == nil {
+			if err := seg.RebuildIndex(m.config.IndexInterval); err != nil {
+				return fmt.Errorf("failed to rebuild index for segment %d: %w", sf.baseOffset, err)
+			}
+		}
+
+		if seg.timeIndex == nil {
+			if err := seg.RebuildTimeIndex(m.config.TimeIndexMinInterval); err != nil {
+				return fmt.Errorf("failed to rebuild time index for segment %d: %w", sf.baseOffset, err)
+			}
+		}
+
+		if seg.timeIndex != nil {
+			seg.timeIndex.SetMinInterval(m.config.TimeIndexMinInterval)
+		}
+
 		m.segments = append(m.segments, seg)
 	}
 
@@ -150,6 +168,10 @@ func (m *SegmentManager) createSegment(baseOffset uint64) error {
 	seg, err := CreateSegment(m.dir, baseOffset, config)
 	if err != nil {
 		return err
+	}
+
+	if seg.timeIndex != nil {
+		seg.timeIndex.SetMinInterval(m.config.TimeIndexMinInterval)
 	}
 
 	// Mark previous active segment as readonly

@@ -261,7 +261,9 @@ func (s *Segment) Append(batch *Batch) (uint64, error) {
 
 	// Update indexes
 	if s.index != nil {
-		s.index.Append(uint32(batch.BaseOffset-s.baseOffset), uint32(pos))
+		if s.index.EntryCount() == 0 || s.index.ShouldIndex(n) {
+			s.index.Append(uint32(batch.BaseOffset-s.baseOffset), uint32(pos))
+		}
 	}
 	if s.timeIndex != nil && batch.MaxTimestamp > 0 {
 		s.timeIndex.Append(batch.MaxTimestamp, uint32(batch.BaseOffset-s.baseOffset))
@@ -567,6 +569,54 @@ func (s *Segment) RebuildIndex(indexInterval int) error {
 	}
 
 	return s.index.Sync()
+}
+
+// RebuildTimeIndex rebuilds the time index from the segment data.
+func (s *Segment) RebuildTimeIndex(minInterval time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir := filepath.Dir(s.path)
+	timeIndexPath := filepath.Join(dir, FormatTimeIndexName(s.baseOffset))
+
+	// Remove old time index
+	if s.timeIndex != nil {
+		s.timeIndex.Close()
+		os.Remove(timeIndexPath)
+	}
+
+	// Create new time index
+	timeIndex, err := CreateTimeIndex(timeIndexPath, s.baseOffset)
+	if err != nil {
+		return err
+	}
+	timeIndex.SetMinInterval(minInterval)
+
+	// Scan through batches and add to time index
+	for _, bp := range s.batchPositions {
+		data := make([]byte, bp.size)
+		_, err := s.file.ReadAt(data, bp.position)
+		if err != nil {
+			timeIndex.Close()
+			return err
+		}
+
+		batch, err := DecodeBatch(data)
+		if err != nil {
+			timeIndex.Close()
+			return err
+		}
+
+		if batch.MaxTimestamp > 0 {
+			if err := timeIndex.Append(batch.MaxTimestamp, uint32(bp.offset-s.baseOffset)); err != nil {
+				timeIndex.Close()
+				return err
+			}
+		}
+	}
+
+	s.timeIndex = timeIndex
+	return s.timeIndex.Sync()
 }
 
 // FormatSegmentName formats a segment file name from base offset.

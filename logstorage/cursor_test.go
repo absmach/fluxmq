@@ -18,7 +18,9 @@ func TestCursorStore_NewAndClose(t *testing.T) {
 	require.NotNil(t, cs)
 
 	cursor := cs.GetCursor()
-	assert.Nil(t, cursor)
+	require.NotNil(t, cursor)
+	assert.Equal(t, uint64(0), cursor.Cursor)
+	assert.Equal(t, uint64(0), cursor.Committed)
 
 	err = cs.Close()
 	assert.NoError(t, err)
@@ -37,7 +39,8 @@ func TestCursorStore_SetAndGetCursor(t *testing.T) {
 	assert.Equal(t, uint64(100), cursor.Cursor)
 
 	cursor = cs.GetCursor()
-	assert.Nil(t, cursor)
+	require.NotNil(t, cursor)
+	assert.Equal(t, uint64(100), cursor.Cursor)
 }
 
 func TestCursorStore_AdvanceCursor(t *testing.T) {
@@ -85,6 +88,24 @@ func TestCursorStore_Commit(t *testing.T) {
 	assert.Equal(t, uint64(200), committed)
 }
 
+func TestCursorStore_Reset(t *testing.T) {
+	dir := t.TempDir()
+	cs, err := NewCursorStore(dir, "test-group")
+	require.NoError(t, err)
+	defer cs.Close()
+
+	cs.SetCursor(100)
+	cs.Commit(80)
+
+	cs.Reset(42)
+
+	cursor := cs.GetCursor()
+	require.NotNil(t, cursor)
+	assert.Equal(t, uint64(42), cursor.Cursor)
+	assert.Equal(t, uint64(42), cursor.Committed)
+	assert.True(t, cs.IsDirty())
+}
+
 func TestCursorStore_IsDirty(t *testing.T) {
 	dir := t.TempDir()
 	cs, err := NewCursorStore(dir, "test-group")
@@ -122,7 +143,7 @@ func TestCursorStore_Persistence(t *testing.T) {
 
 	cursor0 := cs2.GetCursor()
 	require.NotNil(t, cursor0)
-	assert.Equal(t, uint64(100), cursor0.Cursor)
+	assert.Equal(t, uint64(200), cursor0.Cursor)
 	assert.Equal(t, uint64(50), cursor0.Committed)
 
 	cursor1 := cs2.GetCursor()

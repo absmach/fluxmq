@@ -159,16 +159,17 @@ type SegmentInfo struct {
 
 // Default configuration values.
 const (
-	DefaultMaxSegmentSize      = 64 * 1024 * 1024 // 64MB
-	DefaultMaxSegmentAge       = time.Hour
-	DefaultIndexIntervalBytes  = 4096        // Index every 4KB
-	DefaultMaxBatchSize        = 1024 * 1024 // 1MB
-	DefaultWriteBufferSize     = 64 * 1024   // 64KB
-	DefaultReadBufferSize      = 32 * 1024   // 32KB
-	DefaultSyncInterval        = time.Second
-	DefaultRetentionBytes      = 0     // No limit
-	DefaultRetentionDuration   = 0     // No limit
-	DefaultPELCompactThreshold = 10000 // Compact after 10k operations
+	DefaultMaxSegmentSize       = 64 * 1024 * 1024 // 64MB
+	DefaultMaxSegmentAge        = time.Hour
+	DefaultIndexIntervalBytes   = 4096        // Index every 4KB
+	DefaultMaxBatchSize         = 1024 * 1024 // 1MB
+	DefaultWriteBufferSize      = 64 * 1024   // 64KB
+	DefaultReadBufferSize       = 32 * 1024   // 32KB
+	DefaultSyncInterval         = time.Second
+	DefaultTimeIndexMinInterval = time.Second
+	DefaultRetentionBytes       = 0     // No limit
+	DefaultRetentionDuration    = 0     // No limit
+	DefaultPELCompactThreshold  = 10000 // Compact after 10k operations
 )
 
 // File extensions.
