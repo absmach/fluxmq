@@ -222,22 +222,55 @@ func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*t
 
 // ReadBatch reads messages starting from offset up to limit.
 func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error) {
-	tail, err := a.store.Tail(queueName)
-	if err != nil {
-		return nil, err
+	if limit <= 0 {
+		return []*types.Message{}, nil
 	}
 
-	messages, err := a.store.ReadRange(queueName, startOffset, tail, limit)
+	tail, err := a.store.Tail(queueName)
 	if err != nil {
-		if err == ErrOffsetOutOfRange {
-			return nil, storage.ErrOffsetOutOfRange
+		if err == ErrQueueNotFound {
+			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
 	}
 
-	result := make([]*types.Message, len(messages))
-	for i, msg := range messages {
-		result[i] = logMessageToTypes(&msg)
+	if startOffset >= tail {
+		return []*types.Message{}, nil
+	}
+
+	result := make([]*types.Message, 0, limit)
+	current := startOffset
+
+	for current < tail && len(result) < limit {
+		batch, err := a.store.ReadBatch(queueName, current)
+		if err != nil {
+			if err == ErrOffsetOutOfRange {
+				break
+			}
+			if err == ErrQueueNotFound {
+				return nil, storage.ErrQueueNotFound
+			}
+			return nil, err
+		}
+
+		for _, msg := range batch.ToMessages() {
+			if msg.Offset < startOffset {
+				continue
+			}
+			if msg.Offset >= tail {
+				return result, nil
+			}
+			result = append(result, logMessageToTypes(&msg))
+			if len(result) >= limit {
+				return result, nil
+			}
+		}
+
+		next := batch.NextOffset()
+		if next <= current {
+			break
+		}
+		current = next
 	}
 
 	return result, nil

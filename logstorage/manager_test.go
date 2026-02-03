@@ -241,3 +241,39 @@ func TestSegmentManager_RebuildMissingIndexes(t *testing.T) {
 	assert.Greater(t, seg.index.EntryCount(), 0)
 	assert.Greater(t, seg.timeIndex.EntryCount(), 0)
 }
+
+func TestSegmentManager_ReadBatch(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.MaxSegmentSize = DefaultMaxSegmentSize
+	cfg.MaxSegmentAge = 0
+
+	mgr := newTestManager(t, cfg)
+	defer mgr.Close()
+
+	batch1 := NewBatch(0)
+	batch1.Append([]byte("a"), nil, nil)
+	batch1.Append([]byte("b"), nil, nil)
+	batch1.Append([]byte("c"), nil, nil)
+	_, err := mgr.Append(batch1)
+	require.NoError(t, err)
+
+	batch2 := NewBatch(0)
+	batch2.Append([]byte("d"), nil, nil)
+	_, err = mgr.Append(batch2)
+	require.NoError(t, err)
+
+	readBatch, err := mgr.ReadBatch(1)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), readBatch.BaseOffset)
+
+	msg, err := readBatch.GetMessage(1)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("b"), msg.Value)
+
+	readBatch2, err := mgr.ReadBatch(3)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(3), readBatch2.BaseOffset)
+
+	_, err = mgr.ReadBatch(100)
+	assert.ErrorIs(t, err, ErrOffsetOutOfRange)
+}
