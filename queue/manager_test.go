@@ -508,6 +508,82 @@ loop:
 	}
 }
 
+func TestQueueNameWildcardSingleLevel(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+
+	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
+			deliveredMsgs <- brokerMsg
+		}
+		return nil
+	}
+
+	config := DefaultConfig()
+	config.DeliveryInterval = 50 * time.Millisecond
+	logger := slog.Default()
+
+	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+
+	ctx := context.Background()
+
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Failed to start manager: %v", err)
+	}
+	defer manager.Stop()
+
+	if err := manager.Subscribe(ctx, "+", "temperature", "client1", "", ""); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	matching := []string{
+		"$queue/sensors/temperature",
+		"$queue/metrics/temperature",
+	}
+
+	nonMatching := []string{
+		"$queue/sensors/humidity",
+		"$queue/sensors/room/temperature",
+	}
+
+	for _, topic := range matching {
+		if err := manager.Enqueue(ctx, topic, []byte("match"), nil); err != nil {
+			t.Fatalf("Enqueue to %s failed: %v", topic, err)
+		}
+	}
+
+	for _, topic := range nonMatching {
+		if err := manager.Enqueue(ctx, topic, []byte("nomatch"), nil); err != nil {
+			t.Fatalf("Enqueue to %s failed: %v", topic, err)
+		}
+	}
+
+	received := 0
+	timeout := time.After(2 * time.Second)
+
+loop:
+	for {
+		select {
+		case msg := <-deliveredMsgs:
+			if string(msg.GetPayload()) == "nomatch" {
+				t.Errorf("Received non-matching message: %s", msg.Topic)
+			}
+			received++
+			if received >= 2 {
+				break loop
+			}
+		case <-timeout:
+			break loop
+		}
+	}
+
+	if received != 2 {
+		t.Errorf("Expected 2 messages, got %d", received)
+	}
+}
+
 // mockCluster implements cluster.Cluster for testing cross-node routing.
 type mockCluster struct {
 	nodeID           string

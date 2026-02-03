@@ -295,16 +295,38 @@ func (g *ConsumerGroupState) ForEachConsumer(fn func(id string, info *ConsumerIn
 // For topic "$queue/tasks/images/png", if queue root is "$queue/tasks",
 // the routing key is "images/png".
 func ExtractRoutingKey(topic, queueRoot string) string {
-	if !strings.HasPrefix(topic, queueRoot) {
+	if topic == "" || queueRoot == "" {
 		return ""
 	}
 
-	// Remove queue root prefix
-	key := strings.TrimPrefix(topic, queueRoot)
-	// Remove leading slash
-	key = strings.TrimPrefix(key, "/")
+	topicLevels := strings.Split(topic, "/")
+	rootLevels := strings.Split(queueRoot, "/")
 
-	return key
+	t := 0
+	for _, r := range rootLevels {
+		if r == "#" {
+			// '#' matches the rest of the topic, so routing key is what's left.
+			return strings.Join(topicLevels[t:], "/")
+		}
+
+		if t >= len(topicLevels) {
+			return ""
+		}
+
+		if r == "+" {
+			// '+' matches exactly one level.
+			t++
+			continue
+		}
+
+		if r != topicLevels[t] {
+			return ""
+		}
+		t++
+	}
+
+	// Remaining topic levels are the routing key.
+	return strings.Join(topicLevels[t:], "/")
 }
 
 // ExtractQueueRoot extracts the queue root from a topic.

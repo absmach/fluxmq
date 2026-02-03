@@ -137,16 +137,38 @@ func ParseQueueSubscription(topic string) (queueRoot string, filterPattern strin
 //   - topic="$queue/tasks/images/png", root="$queue/tasks" -> "images/png"
 //   - topic="$queue/tasks", root="$queue/tasks" -> ""
 func ExtractRoutingKey(topic, queueRoot string) string {
-	if !strings.HasPrefix(topic, queueRoot) {
+	if topic == "" || queueRoot == "" {
 		return ""
 	}
 
-	// Remove queue root prefix
-	rest := strings.TrimPrefix(topic, queueRoot)
-	// Remove leading slash
-	rest = strings.TrimPrefix(rest, "/")
+	topicLevels := strings.Split(topic, "/")
+	rootLevels := strings.Split(queueRoot, "/")
 
-	return rest
+	t := 0
+	for _, r := range rootLevels {
+		if r == "#" {
+			// '#' matches the rest of the topic, so routing key is what's left.
+			return strings.Join(topicLevels[t:], "/")
+		}
+
+		if t >= len(topicLevels) {
+			return ""
+		}
+
+		if r == "+" {
+			// '+' matches exactly one level.
+			t++
+			continue
+		}
+
+		if r != topicLevels[t] {
+			return ""
+		}
+		t++
+	}
+
+	// Remaining topic levels are the routing key.
+	return strings.Join(topicLevels[t:], "/")
 }
 
 // MatchesSubscription checks if a publish topic matches a subscription pattern.
