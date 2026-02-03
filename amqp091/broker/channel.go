@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,9 +59,11 @@ type Channel struct {
 	nextTag     atomic.Uint64
 
 	// Content accumulation state machine for incoming publishes
-	pendingHeader *codec.ContentHeader
-	pendingBody   []byte
-	pendingMethod *codec.BasicPublish
+	pendingHeader       *codec.ContentHeader
+	pendingBody         []byte
+	pendingMethod       *codec.BasicPublish
+	pendingBodySize     uint64
+	pendingBodyReceived uint64
 
 	// Unacked deliveries for manual ack mode
 	unacked   map[uint64]*unackedDelivery
@@ -77,6 +80,13 @@ type Channel struct {
 	prefetchCount uint16
 	prefetchSize  uint32
 
+	// Pending deliveries for flow control/prefetch
+	pendingDeliveries []pendingDelivery
+	pendingMu         sync.Mutex
+
+	// Queue sequence for server-generated names
+	queueSeq atomic.Uint64
+
 	closed atomic.Bool
 }
 
@@ -87,6 +97,14 @@ type unackedDelivery struct {
 	queueName   string
 	messageID   string
 	groupID     string
+}
+
+type pendingDelivery struct {
+	consumerTag string
+	queue       string
+	topic       string
+	payload     []byte
+	props       map[string]string
 }
 
 func newChannel(c *Connection, id uint16) *Channel {
@@ -106,7 +124,13 @@ func (ch *Channel) handleMethod(decoded interface{}) error {
 	// Channel
 	case *codec.ChannelFlow:
 		ch.flow = m.Active
-		return ch.conn.writeMethod(ch.id, &codec.ChannelFlowOk{Active: m.Active})
+		if err := ch.conn.writeMethod(ch.id, &codec.ChannelFlowOk{Active: m.Active}); err != nil {
+			return err
+		}
+		if m.Active {
+			ch.drainPending()
+		}
+		return nil
 	case *codec.ChannelClose:
 		ch.conn.writeMethod(ch.id, &codec.ChannelCloseOk{})
 		ch.conn.closeChannel(ch.id)
@@ -145,6 +169,19 @@ func (ch *Channel) handleMethod(decoded interface{}) error {
 	case *codec.BasicCancel:
 		return ch.handleBasicCancel(m)
 	case *codec.BasicPublish:
+		if ch.pendingMethod != nil || ch.pendingHeader != nil {
+			_ = ch.conn.sendChannelClose(ch.id, codec.CommandInvalid,
+				"publish in progress", codec.ClassBasic, codec.MethodBasicPublish)
+			ch.resetPendingPublish()
+			return nil
+		}
+		m.Exchange = normalizeExchange(m.Exchange)
+		if m.Exchange != "" && !ch.exchangeExists(m.Exchange) {
+			_ = ch.conn.sendChannelClose(ch.id, codec.NotFound,
+				"exchange not found", codec.ClassBasic, codec.MethodBasicPublish)
+			ch.resetPendingPublish()
+			return nil
+		}
 		ch.pendingMethod = m
 		return nil
 	case *codec.BasicGet:
@@ -183,6 +220,13 @@ func (ch *Channel) handleMethod(decoded interface{}) error {
 
 // handleHeaderFrame processes a content header frame (part of a publish).
 func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
+	if ch.pendingMethod == nil || ch.pendingHeader != nil {
+		_ = ch.conn.sendChannelClose(ch.id, codec.UnexpectedFrame,
+			"unexpected content header", codec.ClassBasic, codec.MethodBasicPublish)
+		ch.resetPendingPublish()
+		return
+	}
+
 	r := bytes.NewReader(frame.Payload)
 	header, err := codec.ReadContentHeader(r)
 	if err != nil {
@@ -190,7 +234,13 @@ func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
 		return
 	}
 	ch.pendingHeader = header
-	ch.pendingBody = make([]byte, 0, header.BodySize)
+	ch.pendingBodySize = header.BodySize
+	ch.pendingBodyReceived = 0
+	capHint := 0
+	if maxInt := uint64(^uint(0) >> 1); header.BodySize <= maxInt {
+		capHint = int(header.BodySize)
+	}
+	ch.pendingBody = make([]byte, 0, capHint)
 
 	// If body size is 0, the message is complete
 	if header.BodySize == 0 {
@@ -200,9 +250,25 @@ func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
 
 // handleBodyFrame processes a content body frame.
 func (ch *Channel) handleBodyFrame(frame *codec.Frame) {
-	ch.pendingBody = append(ch.pendingBody, frame.Payload...)
+	if ch.pendingMethod == nil || ch.pendingHeader == nil {
+		_ = ch.conn.sendChannelClose(ch.id, codec.UnexpectedFrame,
+			"unexpected content body", codec.ClassBasic, codec.MethodBasicPublish)
+		ch.resetPendingPublish()
+		return
+	}
 
-	if ch.pendingHeader != nil && uint64(len(ch.pendingBody)) >= ch.pendingHeader.BodySize {
+	nextSize := ch.pendingBodyReceived + uint64(len(frame.Payload))
+	if nextSize > ch.pendingBodySize {
+		_ = ch.conn.sendChannelClose(ch.id, codec.ContentTooLarge,
+			"content body larger than header", codec.ClassBasic, codec.MethodBasicPublish)
+		ch.resetPendingPublish()
+		return
+	}
+
+	ch.pendingBody = append(ch.pendingBody, frame.Payload...)
+	ch.pendingBodyReceived = nextSize
+
+	if ch.pendingBodyReceived == ch.pendingBodySize {
 		ch.completePublish()
 	}
 }
@@ -213,9 +279,7 @@ func (ch *Channel) completePublish() {
 	header := ch.pendingHeader
 	body := ch.pendingBody
 
-	ch.pendingMethod = nil
-	ch.pendingHeader = nil
-	ch.pendingBody = nil
+	ch.resetPendingPublish()
 
 	if method == nil || header == nil {
 		return
@@ -245,20 +309,28 @@ func (ch *Channel) completePublish() {
 		props["type"] = header.Properties.Type
 	}
 
-	exchangeName := method.Exchange
+	exchangeName := normalizeExchange(method.Exchange)
 	routingKey := method.RoutingKey
 
 	// Determine the topic from exchange+routingKey
 	topic := routingKey
-	if exchangeName != "" && exchangeName != "amq.default" {
+	if exchangeName != "" {
 		topic = exchangeName + "/" + routingKey
 	}
 
 	// Check if this targets a queue via exchange bindings
 	isQueuePublish := false
 	ch.exchangeMu.RLock()
+	bindings := make([]binding, 0, len(ch.bindings))
 	for _, b := range ch.bindings {
-		if b.exchange == exchangeName && ch.routingKeyMatches(b.routingKey, routingKey, exchangeName) {
+		if b.exchange == exchangeName {
+			bindings = append(bindings, b)
+		}
+	}
+	ch.exchangeMu.RUnlock()
+
+	for _, b := range bindings {
+		if ch.routingKeyMatches(b.routingKey, routingKey, exchangeName) {
 			// Route to the bound queue
 			qm := ch.conn.broker.getQueueManager()
 			if qm != nil {
@@ -273,21 +345,28 @@ func (ch *Channel) completePublish() {
 			isQueuePublish = true
 		}
 	}
-	ch.exchangeMu.RUnlock()
 
 	if !isQueuePublish {
 		// Publish to the topic-based router (pub/sub)
+		if method.Mandatory {
+			subs, err := ch.conn.broker.router.Match(topic)
+			if err != nil || len(subs) == 0 {
+				if err != nil {
+					ch.conn.logger.Error("router match failed", "topic", topic, "error", err)
+				}
+				ch.sendBasicReturn(method, header, body)
+				if ch.confirmMode {
+					ch.sendPublisherAck()
+				}
+				return
+			}
+		}
 		ch.conn.broker.Publish(topic, body, props)
 	}
 
 	// Publisher confirms
 	if ch.confirmMode {
-		seq := ch.publishSeq.Add(1)
-		ack := &codec.BasicAck{
-			DeliveryTag: seq,
-			Multiple:    false,
-		}
-		ch.conn.writeMethod(ch.id, ack)
+		ch.sendPublisherAck()
 	}
 }
 
@@ -313,9 +392,275 @@ func (ch *Channel) routingKeyMatches(bindingKey, routingKey, exchangeName string
 	}
 }
 
+func normalizeExchange(name string) string {
+	if name == "amq.default" {
+		return ""
+	}
+	return name
+}
+
+func (ch *Channel) exchangeExists(name string) bool {
+	if name == "" {
+		return true
+	}
+	ch.exchangeMu.RLock()
+	_, exists := ch.exchanges[name]
+	ch.exchangeMu.RUnlock()
+	return exists
+}
+
+func (ch *Channel) resetPendingPublish() {
+	ch.pendingMethod = nil
+	ch.pendingHeader = nil
+	ch.pendingBody = nil
+	ch.pendingBodySize = 0
+	ch.pendingBodyReceived = 0
+}
+
+func (ch *Channel) shouldQueueDelivery(cons *consumer) bool {
+	if !ch.flow {
+		return true
+	}
+	if cons.noAck {
+		return false
+	}
+	if ch.prefetchCount == 0 {
+		return false
+	}
+	ch.unackedMu.Lock()
+	unacked := len(ch.unacked)
+	ch.unackedMu.Unlock()
+	return unacked >= int(ch.prefetchCount)
+}
+
+func (ch *Channel) enqueueDelivery(cons *consumer, topic string, payload []byte, props map[string]string) {
+	cpPayload := make([]byte, len(payload))
+	copy(cpPayload, payload)
+
+	cpProps := make(map[string]string, len(props))
+	for k, v := range props {
+		cpProps[k] = v
+	}
+
+	ch.pendingMu.Lock()
+	ch.pendingDeliveries = append(ch.pendingDeliveries, pendingDelivery{
+		consumerTag: cons.tag,
+		queue:       cons.queue,
+		topic:       topic,
+		payload:     cpPayload,
+		props:       cpProps,
+	})
+	ch.pendingMu.Unlock()
+}
+
+func (ch *Channel) drainPending() {
+	for {
+		if ch.closed.Load() {
+			return
+		}
+		if !ch.flow {
+			return
+		}
+		if ch.prefetchCount > 0 {
+			ch.unackedMu.Lock()
+			unacked := len(ch.unacked)
+			ch.unackedMu.Unlock()
+			if unacked >= int(ch.prefetchCount) {
+				return
+			}
+		}
+
+		ch.pendingMu.Lock()
+		if len(ch.pendingDeliveries) == 0 {
+			ch.pendingMu.Unlock()
+			return
+		}
+		pd := ch.pendingDeliveries[0]
+		ch.pendingDeliveries = ch.pendingDeliveries[1:]
+		ch.pendingMu.Unlock()
+
+		ch.consumersMu.RLock()
+		cons, ok := ch.consumers[pd.consumerTag]
+		ch.consumersMu.RUnlock()
+		if !ok || cons.queue != pd.queue {
+			continue
+		}
+		if ch.shouldQueueDelivery(cons) {
+			ch.pendingMu.Lock()
+			ch.pendingDeliveries = append([]pendingDelivery{pd}, ch.pendingDeliveries...)
+			ch.pendingMu.Unlock()
+			return
+		}
+		if err := ch.sendDelivery(cons, pd.topic, pd.payload, pd.props); err != nil {
+			ch.conn.logger.Error("failed to deliver queued message", "error", err)
+			return
+		}
+	}
+}
+
+func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, props map[string]string) error {
+	deliveryTag := ch.conn.nextDeliveryTag()
+
+	if !cons.noAck {
+		ch.unackedMu.Lock()
+		ch.unacked[deliveryTag] = &unackedDelivery{
+			deliveryTag: deliveryTag,
+			routingKey:  topic,
+			queueName:   cons.queue,
+			messageID:   props["message-id"],
+			groupID:     props["group-id"],
+		}
+		ch.unackedMu.Unlock()
+	}
+
+	exchange := ""
+	routingKey := topic
+	if idx := strings.Index(topic, "/"); idx >= 0 {
+		exchange = topic[:idx]
+		routingKey = topic[idx+1:]
+	}
+
+	deliver := &codec.BasicDeliver{
+		ConsumerTag: cons.tag,
+		DeliveryTag: deliveryTag,
+		Redelivered: false,
+		Exchange:    exchange,
+		RoutingKey:  routingKey,
+	}
+	methodFrame, err := buildMethodFrame(ch.id, deliver)
+	if err != nil {
+		return err
+	}
+
+	properties := codec.BasicProperties{
+		ContentType:   props["content-type"],
+		CorrelationID: props["correlation-id"],
+		ReplyTo:       props["reply-to"],
+		MessageID:     props["message-id"],
+		Type:          props["type"],
+	}
+
+	headerFrame, err := buildContentHeaderFrame(ch.id, uint64(len(payload)), properties)
+	if err != nil {
+		return err
+	}
+
+	bodyFrames := buildBodyFrames(ch.id, payload, ch.conn.frameMax)
+	frames := append([]*codec.Frame{methodFrame, headerFrame}, bodyFrames...)
+	if err := ch.conn.writeFrames(frames...); err != nil {
+		return err
+	}
+
+	ch.conn.broker.stats.IncrementMessagesSent()
+	ch.conn.broker.stats.AddBytesSent(uint64(len(payload)))
+	return nil
+}
+
+func (ch *Channel) sendBasicReturn(method *codec.BasicPublish, header *codec.ContentHeader, body []byte) {
+	ret := &codec.BasicReturn{
+		ReplyCode:  codec.NoRoute,
+		ReplyText:  "NO_ROUTE",
+		Exchange:   normalizeExchange(method.Exchange),
+		RoutingKey: method.RoutingKey,
+	}
+	methodFrame, err := buildMethodFrame(ch.id, ret)
+	if err != nil {
+		ch.conn.logger.Error("failed to write basic.return", "error", err)
+		return
+	}
+	headerFrame, err := buildContentHeaderFrame(ch.id, uint64(len(body)), header.Properties)
+	if err != nil {
+		ch.conn.logger.Error("failed to write return header", "error", err)
+		return
+	}
+	bodyFrames := buildBodyFrames(ch.id, body, ch.conn.frameMax)
+	frames := append([]*codec.Frame{methodFrame, headerFrame}, bodyFrames...)
+	if err := ch.conn.writeFrames(frames...); err != nil {
+		ch.conn.logger.Error("failed to write return frames", "error", err)
+		return
+	}
+}
+
+func (ch *Channel) sendPublisherAck() {
+	seq := ch.publishSeq.Add(1)
+	ack := &codec.BasicAck{
+		DeliveryTag: seq,
+		Multiple:    false,
+	}
+	if err := ch.conn.writeMethod(ch.id, ack); err != nil {
+		ch.conn.logger.Error("failed to write publisher ack", "error", err)
+	}
+}
+
+func buildMethodFrame(channel uint16, method interface{ Write(io.Writer) error }) (*codec.Frame, error) {
+	var buf bytes.Buffer
+	if err := method.Write(&buf); err != nil {
+		return nil, err
+	}
+	return &codec.Frame{
+		Type:    codec.FrameMethod,
+		Channel: channel,
+		Payload: buf.Bytes(),
+	}, nil
+}
+
+func buildContentHeaderFrame(channel uint16, bodySize uint64, props codec.BasicProperties) (*codec.Frame, error) {
+	header := &codec.ContentHeader{
+		ClassID:    codec.ClassBasic,
+		Weight:     0,
+		BodySize:   bodySize,
+		Properties: props,
+	}
+	var headerBuf bytes.Buffer
+	if err := header.WriteContentHeader(&headerBuf); err != nil {
+		return nil, err
+	}
+	return &codec.Frame{
+		Type:    codec.FrameHeader,
+		Channel: channel,
+		Payload: headerBuf.Bytes(),
+	}, nil
+}
+
+func buildBodyFrames(channel uint16, payload []byte, frameMax uint32) []*codec.Frame {
+	maxBody := int(frameMax) - 8 // frame overhead
+	if maxBody <= 0 {
+		maxBody = len(payload)
+	}
+	var frames []*codec.Frame
+	for offset := 0; offset < len(payload) || offset == 0; {
+		end := offset + maxBody
+		if end > len(payload) {
+			end = len(payload)
+		}
+		frames = append(frames, &codec.Frame{
+			Type:    codec.FrameBody,
+			Channel: channel,
+			Payload: payload[offset:end],
+		})
+		offset = end
+		if offset == 0 {
+			break // empty payload
+		}
+	}
+	return frames
+}
+
 // Exchange methods
 
 func (ch *Channel) handleExchangeDeclare(m *codec.ExchangeDeclare) error {
+	m.Exchange = normalizeExchange(m.Exchange)
+	if m.Passive {
+		if !ch.exchangeExists(m.Exchange) {
+			return ch.conn.sendChannelClose(ch.id, codec.NotFound,
+				"exchange not found", codec.ClassExchange, codec.MethodExchangeDeclare)
+		}
+		if !m.NoWait {
+			return ch.conn.writeMethod(ch.id, &codec.ExchangeDeclareOk{})
+		}
+		return nil
+	}
+
 	ch.exchangeMu.Lock()
 	ch.exchanges[m.Exchange] = &exchange{
 		name:       m.Exchange,
@@ -333,6 +678,7 @@ func (ch *Channel) handleExchangeDeclare(m *codec.ExchangeDeclare) error {
 }
 
 func (ch *Channel) handleExchangeDelete(m *codec.ExchangeDelete) error {
+	m.Exchange = normalizeExchange(m.Exchange)
 	ch.exchangeMu.Lock()
 	delete(ch.exchanges, m.Exchange)
 	ch.exchangeMu.Unlock()
@@ -344,6 +690,8 @@ func (ch *Channel) handleExchangeDelete(m *codec.ExchangeDelete) error {
 }
 
 func (ch *Channel) handleExchangeBind(m *codec.ExchangeBind) error {
+	m.Source = normalizeExchange(m.Source)
+	m.Destination = normalizeExchange(m.Destination)
 	ch.exchangeMu.Lock()
 	ch.bindings = append(ch.bindings, binding{
 		queue:      m.Destination,
@@ -360,6 +708,8 @@ func (ch *Channel) handleExchangeBind(m *codec.ExchangeBind) error {
 }
 
 func (ch *Channel) handleExchangeUnbind(m *codec.ExchangeUnbind) error {
+	m.Source = normalizeExchange(m.Source)
+	m.Destination = normalizeExchange(m.Destination)
 	ch.exchangeMu.Lock()
 	filtered := ch.bindings[:0]
 	for _, b := range ch.bindings {
@@ -379,6 +729,29 @@ func (ch *Channel) handleExchangeUnbind(m *codec.ExchangeUnbind) error {
 // Queue methods
 
 func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
+	if m.Passive {
+		ch.exchangeMu.RLock()
+		_, exists := ch.queues[m.Queue]
+		ch.exchangeMu.RUnlock()
+		if !exists {
+			return ch.conn.sendChannelClose(ch.id, codec.NotFound,
+				"queue not found", codec.ClassQueue, codec.MethodQueueDeclare)
+		}
+		if !m.NoWait {
+			return ch.conn.writeMethod(ch.id, &codec.QueueDeclareOk{
+				Queue:         m.Queue,
+				MessageCount:  0,
+				ConsumerCount: 0,
+			})
+		}
+		return nil
+	}
+
+	if m.Queue == "" {
+		seq := ch.queueSeq.Add(1)
+		m.Queue = fmt.Sprintf("amq.gen-%s-%d", ch.conn.connID, seq)
+	}
+
 	ch.exchangeMu.Lock()
 	ch.queues[m.Queue] = true
 	ch.exchangeMu.Unlock()
@@ -403,6 +776,7 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 }
 
 func (ch *Channel) handleQueueBind(m *codec.QueueBind) error {
+	m.Exchange = normalizeExchange(m.Exchange)
 	ch.exchangeMu.Lock()
 	ch.bindings = append(ch.bindings, binding{
 		queue:      m.Queue,
@@ -419,6 +793,7 @@ func (ch *Channel) handleQueueBind(m *codec.QueueBind) error {
 }
 
 func (ch *Channel) handleQueueUnbind(m *codec.QueueUnbind) error {
+	m.Exchange = normalizeExchange(m.Exchange)
 	ch.exchangeMu.Lock()
 	filtered := ch.bindings[:0]
 	for _, b := range ch.bindings {
@@ -545,62 +920,77 @@ func (ch *Channel) handleBasicGet(m *codec.BasicGet) error {
 }
 
 func (ch *Channel) handleBasicAck(m *codec.BasicAck) error {
+	var deliveries []*unackedDelivery
 	ch.unackedMu.Lock()
 	if m.Multiple {
 		for tag, ud := range ch.unacked {
 			if tag <= m.DeliveryTag {
-				ch.ackDelivery(ud)
+				deliveries = append(deliveries, ud)
 				delete(ch.unacked, tag)
 			}
 		}
 	} else {
 		if ud, ok := ch.unacked[m.DeliveryTag]; ok {
-			ch.ackDelivery(ud)
+			deliveries = append(deliveries, ud)
 			delete(ch.unacked, m.DeliveryTag)
 		}
 	}
 	ch.unackedMu.Unlock()
+	for _, ud := range deliveries {
+		ch.ackDelivery(ud)
+	}
+	ch.drainPending()
 	return nil
 }
 
 func (ch *Channel) handleBasicReject(m *codec.BasicReject) error {
+	var deliveries []*unackedDelivery
+	var requeue bool
 	ch.unackedMu.Lock()
 	if ud, ok := ch.unacked[m.DeliveryTag]; ok {
-		if m.Requeue {
+		deliveries = append(deliveries, ud)
+		requeue = m.Requeue
+		delete(ch.unacked, m.DeliveryTag)
+	}
+	ch.unackedMu.Unlock()
+	for _, ud := range deliveries {
+		if requeue {
 			ch.nackDelivery(ud)
 		} else {
 			ch.rejectDelivery(ud)
 		}
-		delete(ch.unacked, m.DeliveryTag)
 	}
-	ch.unackedMu.Unlock()
+	ch.drainPending()
 	return nil
 }
 
 func (ch *Channel) handleBasicNack(m *codec.BasicNack) error {
+	var deliveries []*unackedDelivery
+	var requeue bool
 	ch.unackedMu.Lock()
 	if m.Multiple {
 		for tag, ud := range ch.unacked {
 			if tag <= m.DeliveryTag {
-				if m.Requeue {
-					ch.nackDelivery(ud)
-				} else {
-					ch.rejectDelivery(ud)
-				}
+				deliveries = append(deliveries, ud)
 				delete(ch.unacked, tag)
 			}
 		}
 	} else {
 		if ud, ok := ch.unacked[m.DeliveryTag]; ok {
-			if m.Requeue {
-				ch.nackDelivery(ud)
-			} else {
-				ch.rejectDelivery(ud)
-			}
+			deliveries = append(deliveries, ud)
 			delete(ch.unacked, m.DeliveryTag)
 		}
 	}
 	ch.unackedMu.Unlock()
+	requeue = m.Requeue
+	for _, ud := range deliveries {
+		if requeue {
+			ch.nackDelivery(ud)
+		} else {
+			ch.rejectDelivery(ud)
+		}
+	}
+	ch.drainPending()
 	return nil
 }
 
@@ -650,104 +1040,26 @@ func (ch *Channel) deliverMessage(topic string, payload []byte, props map[string
 	}
 
 	ch.consumersMu.RLock()
-	defer ch.consumersMu.RUnlock()
-
+	consumers := make([]*consumer, 0, len(ch.consumers))
 	for _, cons := range ch.consumers {
+		consumers = append(consumers, cons)
+	}
+	ch.consumersMu.RUnlock()
+
+	for _, cons := range consumers {
 		if !ch.consumerQueueMatches(cons, topic) {
 			continue
 		}
 
-		deliveryTag := ch.conn.nextDeliveryTag()
-
-		// Track for ack if not noAck
-		if !cons.noAck {
-			ch.unackedMu.Lock()
-			ch.unacked[deliveryTag] = &unackedDelivery{
-				deliveryTag: deliveryTag,
-				routingKey:  topic,
-				queueName:   cons.queue,
-				messageID:   props["message-id"],
-				groupID:     props["group-id"],
-			}
-			ch.unackedMu.Unlock()
+		if ch.shouldQueueDelivery(cons) {
+			ch.enqueueDelivery(cons, topic, payload, props)
+			continue
 		}
 
-		// Determine exchange and routing key from topic
-		exchange := ""
-		routingKey := topic
-		if idx := strings.Index(topic, "/"); idx >= 0 {
-			exchange = topic[:idx]
-			routingKey = topic[idx+1:]
-		}
-
-		deliver := &codec.BasicDeliver{
-			ConsumerTag: cons.tag,
-			DeliveryTag: deliveryTag,
-			Redelivered: false,
-			Exchange:    exchange,
-			RoutingKey:  routingKey,
-		}
-		if err := ch.conn.writeMethod(ch.id, deliver); err != nil {
-			ch.conn.logger.Error("failed to write deliver", "error", err)
+		if err := ch.sendDelivery(cons, topic, payload, props); err != nil {
+			ch.conn.logger.Error("failed to deliver message", "error", err)
 			return
 		}
-
-		// Build and send content header
-		properties := codec.BasicProperties{
-			ContentType:   props["content-type"],
-			CorrelationID: props["correlation-id"],
-			ReplyTo:       props["reply-to"],
-			MessageID:     props["message-id"],
-			Type:          props["type"],
-		}
-		header := &codec.ContentHeader{
-			ClassID:    codec.ClassBasic,
-			Weight:     0,
-			BodySize:   uint64(len(payload)),
-			Properties: properties,
-		}
-		var headerBuf bytes.Buffer
-		if err := header.WriteContentHeader(&headerBuf); err != nil {
-			ch.conn.logger.Error("failed to write content header", "error", err)
-			return
-		}
-		headerFrame := &codec.Frame{
-			Type:    codec.FrameHeader,
-			Channel: ch.id,
-			Payload: headerBuf.Bytes(),
-		}
-		if err := ch.conn.writeFrame(headerFrame); err != nil {
-			ch.conn.logger.Error("failed to write header frame", "error", err)
-			return
-		}
-
-		// Send body frame(s)
-		maxBody := int(ch.conn.frameMax) - 8 // frame overhead
-		if maxBody <= 0 {
-			maxBody = len(payload)
-		}
-		for offset := 0; offset < len(payload) || offset == 0; {
-			end := offset + maxBody
-			if end > len(payload) {
-				end = len(payload)
-			}
-			bodyFrame := &codec.Frame{
-				Type:    codec.FrameBody,
-				Channel: ch.id,
-				Payload: payload[offset:end],
-			}
-			if err := ch.conn.writeFrame(bodyFrame); err != nil {
-				ch.conn.logger.Error("failed to write body frame", "error", err)
-				return
-			}
-			offset = end
-			if offset == 0 {
-				break // empty payload
-			}
-		}
-
-		ch.conn.broker.stats.IncrementMessagesSent()
-		ch.conn.broker.stats.AddBytesSent(uint64(len(payload)))
 	}
 }
 

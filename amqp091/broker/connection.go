@@ -123,11 +123,11 @@ func (c *Connection) connectionHandshake() error {
 			"platform":    "Go",
 			"information": "https://github.com/absmach/fluxmq",
 			"capabilities": map[string]interface{}{
-				"basic.nack":                true,
-				"publisher_confirms":        true,
-				"consumer_cancel_notify":    true,
+				"basic.nack":                 true,
+				"publisher_confirms":         true,
+				"consumer_cancel_notify":     true,
 				"exchange_exchange_bindings": true,
-				"connection.blocked":        true,
+				"connection.blocked":         true,
 			},
 		},
 		Mechanisms: "PLAIN",
@@ -356,6 +356,22 @@ func (c *Connection) writeFrame(frame *codec.Frame) error {
 
 	if err := frame.WriteFrame(c.writer); err != nil {
 		return err
+	}
+	return c.writer.Flush()
+}
+
+// writeFrames writes multiple frames to the connection, thread-safe, flushing once.
+func (c *Connection) writeFrames(frames ...*codec.Frame) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if err := frame.WriteFrame(c.writer); err != nil {
+			return err
+		}
 	}
 	return c.writer.Flush()
 }
