@@ -21,6 +21,9 @@ import (
 type consumer struct {
 	tag       string
 	queue     string
+	queueName string
+	pattern   string
+	groupID   string
 	noAck     bool
 	exclusive bool
 }
@@ -316,6 +319,20 @@ func (ch *Channel) completePublish() {
 	topic := routingKey
 	if exchangeName != "" {
 		topic = exchangeName + "/" + routingKey
+	}
+
+	// Direct queue publish: use $queue/ prefix on routing key with default exchange.
+	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") {
+		qm := ch.conn.broker.getQueueManager()
+		if qm != nil {
+			if err := qm.Publish(context.Background(), routingKey, body, props); err != nil {
+				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
+			}
+			if ch.confirmMode {
+				ch.sendPublisherAck()
+			}
+			return
+		}
 	}
 
 	// Check if this targets a queue via exchange bindings
@@ -854,6 +871,14 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		tag = fmt.Sprintf("ctag-%s-%d", ch.conn.connID, ch.nextTag.Add(1))
 	}
 
+	queueFilter := m.Queue
+	queueName, pattern := "", ""
+	isQueue := isQueueTopic(queueFilter)
+	if isQueue {
+		queueName, pattern = parseQueueFilter(queueFilter)
+	}
+	groupID := extractConsumerGroup(m.Arguments)
+
 	ch.consumersMu.Lock()
 	if _, exists := ch.consumers[tag]; exists {
 		ch.consumersMu.Unlock()
@@ -862,7 +887,10 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	}
 	ch.consumers[tag] = &consumer{
 		tag:       tag,
-		queue:     m.Queue,
+		queue:     queueFilter,
+		queueName: queueName,
+		pattern:   pattern,
+		groupID:   groupID,
 		noAck:     m.NoAck,
 		exclusive: m.Exclusive,
 	}
@@ -872,16 +900,18 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 
 	// Subscribe to the queue via queue manager
 	qm := ch.conn.broker.getQueueManager()
-	if qm != nil {
+	if qm != nil && isQueue && queueName != "" {
 		clientID := PrefixedClientID(ch.conn.connID)
-		if err := qm.Subscribe(context.Background(), m.Queue, "", clientID, "", ""); err != nil {
-			ch.conn.logger.Error("queue subscribe failed", "queue", m.Queue, "error", err)
+		if err := qm.Subscribe(context.Background(), queueName, pattern, clientID, groupID, ""); err != nil {
+			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", err)
 		}
 	}
 
-	// Also subscribe via the topic router for pub/sub delivery
-	connID := ch.conn.connID
-	ch.conn.broker.router.Subscribe(connID, m.Queue, 1, storage.SubscribeOptions{})
+	// Subscribe via the topic router for pub/sub delivery (non-queue topics).
+	if !isQueue {
+		connID := ch.conn.connID
+		ch.conn.broker.router.Subscribe(connID, queueFilter, 1, storage.SubscribeOptions{})
+	}
 
 	if !m.NoWait {
 		return ch.conn.writeMethod(ch.id, &codec.BasicConsumeOk{ConsumerTag: tag})
@@ -900,12 +930,14 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 
 		// Unsubscribe from queue manager
 		qm := ch.conn.broker.getQueueManager()
-		if qm != nil {
+		if qm != nil && cons.queueName != "" {
 			clientID := PrefixedClientID(ch.conn.connID)
-			qm.Unsubscribe(context.Background(), cons.queue, "", clientID, "")
+			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID)
 		}
 
-		ch.conn.broker.router.Unsubscribe(ch.conn.connID, cons.queue)
+		if cons.queueName == "" {
+			ch.conn.broker.router.Unsubscribe(ch.conn.connID, cons.queue)
+		}
 	}
 
 	if !m.NoWait {
@@ -1088,9 +1120,55 @@ func (ch *Channel) cleanup() {
 
 	for _, cons := range consumers {
 		ch.conn.broker.stats.DecrementConsumers()
-		if qm != nil {
-			qm.Unsubscribe(context.Background(), cons.queue, "", clientID, "")
+		if qm != nil && cons.queueName != "" {
+			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID)
 		}
-		ch.conn.broker.router.Unsubscribe(ch.conn.connID, cons.queue)
+		if cons.queueName == "" {
+			ch.conn.broker.router.Unsubscribe(ch.conn.connID, cons.queue)
+		}
+	}
+}
+
+func isQueueTopic(topic string) bool {
+	return strings.HasPrefix(topic, "$queue/")
+}
+
+func parseQueueFilter(filter string) (queueName, pattern string) {
+	if !strings.HasPrefix(filter, "$queue/") {
+		return "", ""
+	}
+
+	rest := strings.TrimPrefix(filter, "$queue/")
+	if rest == "" {
+		return "", ""
+	}
+
+	parts := strings.SplitN(rest, "/", 2)
+	queueName = parts[0]
+
+	if len(parts) > 1 {
+		pattern = parts[1]
+	}
+
+	return queueName, pattern
+}
+
+func extractConsumerGroup(args map[string]interface{}) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	val, ok := args["x-consumer-group"]
+	if !ok {
+		return ""
+	}
+
+	switch v := val.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	default:
+		return fmt.Sprintf("%v", v)
 	}
 }

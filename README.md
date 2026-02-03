@@ -332,7 +332,7 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 | [Architecture](docs/architecture.md)     | Detailed system design                      |
 | [Scaling & Performance](docs/scaling.md) | Capacity analysis, benchmarks, optimization |
 | [Clustering](docs/clustering.md)         | Distributed broker design                   |
-| [Client Library](docs/client.md)         | Go client with queue support                |
+| [Client Library](docs/client.md)         | Go MQTT and AMQP 0.9.1 clients with queue support |
 | [Broker Internals](docs/broker.md)       | Message routing, sessions                   |
 | [Durable Queues](docs/queue.md)          | Queue configuration, consumer groups        |
 | [Configuration](docs/configuration.md)   | Complete config reference                   |

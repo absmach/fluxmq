@@ -14,7 +14,7 @@
 //  1. MQTT publishers write to a durable queue
 //  2. MQTT consumers receive messages via the FluxMQ client library
 //  3. An AMQP 1.0 consumer (using Azure/go-amqp) receives the same messages
-//  4. An AMQP 0.9.1 consumer (using rabbitmq/amqp091-go) receives the same messages
+//  4. An AMQP 0.9.1 consumer (using FluxMQ client) receives the same messages
 //  5. AMQP consumers use dispositions/acks for message acknowledgment
 //  6. All three consumer groups receive ALL messages independently (fan-out)
 //  7. Within a group, messages are load-balanced across consumers
@@ -35,7 +35,7 @@ import (
 
 	"github.com/Azure/go-amqp"
 	"github.com/absmach/fluxmq/client"
-	amqp091 "github.com/rabbitmq/amqp091-go"
+	amqp091 "github.com/absmach/fluxmq/client/amqp091"
 )
 
 const queueName = "tasks/orders"
@@ -346,38 +346,35 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 	clientID := "amqp091-shipper-1"
 	consumerGroup := "order-shipper"
 
-	addr := fmt.Sprintf("amqp://guest:guest@%s/", *amqp091Addr)
+	opts := amqp091.NewOptions().
+		SetAddress(*amqp091Addr).
+		SetCredentials("guest", "guest")
 
-	conn, err := amqp091.Dial(addr)
+	c, err := amqp091.New(opts)
 	if err != nil {
+		log.Printf("[%s] Failed to create client: %v", clientID, err)
+		return
+	}
+
+	if err := c.Connect(); err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer conn.Close()
+	defer c.Close()
 
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Printf("[%s] Failed to open a channel: %v", clientID, err)
-		return
-	}
-	defer ch.Close()
-
-	// FluxMQ uses consumer arguments to specify the group
-	args := amqp091.Table{"x-consumer-group": consumerGroup}
-
-	msgs, err := ch.Consume(
-		"$queue/"+queueName,
-		clientID, // consumer tag
-		false,    // auto-ack
-		false,    // exclusive
-		false,    // no-local
-		false,    // no-wait
-		args,
-	)
+	msgCh := make(chan *amqp091.QueueMessage, 100)
+	err = c.SubscribeToQueue(queueName, consumerGroup, func(msg *amqp091.QueueMessage) {
+		select {
+		case msgCh <- msg:
+		default:
+			log.Printf("[%s] Message channel full, dropping message", clientID)
+		}
+	})
 	if err != nil {
 		log.Printf("[%s] Failed to register a consumer: %v", clientID, err)
 		return
 	}
+	defer c.UnsubscribeFromQueue(queueName)
 
 	log.Printf("[%s] Connected to %s (AMQP 0.9.1), receiving from queue '%s' in group '%s'",
 		clientID, *amqp091Addr, "$queue/"+queueName, consumerGroup)
@@ -387,7 +384,7 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 		case <-ctx.Done():
 			log.Printf("[%s] Shutting down", clientID)
 			return
-		case d, ok := <-msgs:
+		case msg, ok := <-msgCh:
 			if !ok {
 				log.Printf("[%s] Consumer channel closed", clientID)
 				return
@@ -395,9 +392,9 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 			time.Sleep(250 * time.Millisecond) // Simulate shipping work
 
 			atomic.AddInt64(processed, 1)
-			log.Printf("[%s] Shipped order (AMQP 0.9.1): %s", clientID, string(d.Body))
+			log.Printf("[%s] Shipped order (AMQP 0.9.1): %s", clientID, string(msg.Body))
 
-			if err := d.Ack(false); err != nil {
+			if err := msg.Ack(); err != nil {
 				log.Printf("[%s] Failed to ack message: %v", clientID, err)
 			}
 		}

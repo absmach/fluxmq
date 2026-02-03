@@ -1,6 +1,6 @@
-# MQTT Client Library
+# Client Libraries
 
-Pure Go MQTT client library supporting MQTT 3.1.1 and 5.0 with durable queue support.
+Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support.
 
 ---
 
@@ -15,6 +15,8 @@ Pure Go MQTT client library supporting MQTT 3.1.1 and 5.0 with durable queue sup
 - **MQTT 5.0 Features:** Topic aliases, user properties, flow control
 
 ---
+
+## MQTT Client
 
 ## Quick Start
 
@@ -458,3 +460,58 @@ Built-in stores:
 | MaxReconnectWait | 2 minutes      |
 | ProtocolVersion  | 4 (MQTT 3.1.1) |
 | CleanSession     | true           |
+
+---
+
+## AMQP 0.9.1 Client
+
+The AMQP 0.9.1 client focuses on durable queue interop with the broker. It uses the same queue naming convention as MQTT: pass the queue name without the `$queue/` prefix.
+
+### Quick Start
+
+```go
+package main
+
+import (
+    "log"
+
+    amqp091 "github.com/absmach/fluxmq/client/amqp091"
+)
+
+func main() {
+    opts := amqp091.NewOptions().
+        SetAddress("localhost:5682").
+        SetCredentials("guest", "guest")
+
+    c, err := amqp091.New(opts)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    if err := c.Connect(); err != nil {
+        log.Fatal(err)
+    }
+    defer c.Close()
+
+    // Subscribe to a queue with a consumer group
+    err = c.SubscribeToQueue("tasks/orders", "order-shipper", func(msg *amqp091.QueueMessage) {
+        log.Printf("Received: %s", string(msg.Body))
+        _ = msg.Ack()
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Publish to the same queue
+    if err := c.PublishToQueue("tasks/orders", []byte("hello")); err != nil {
+        log.Fatal(err)
+    }
+
+    select {}
+}
+```
+
+### Queue Semantics
+
+- `SubscribeToQueue` passes the consumer group via `x-consumer-group` on `basic.consume`.
+- `Ack`, `Nack`, and `Reject` map to `basic.ack`, `basic.nack`, and `basic.reject`.
