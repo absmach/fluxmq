@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ func TestBroker_Shutdown_NoSessions(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil)
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{})
 
 	ctx := context.Background()
 	err := broker.Shutdown(ctx, 5*time.Second)
@@ -34,7 +35,7 @@ func TestBroker_Shutdown_ImmediateWithNoSessions(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil)
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{})
 
 	ctx := context.Background()
 	start := time.Now()
@@ -53,7 +54,7 @@ func TestBroker_Shutdown_ContextCancelled(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil)
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -75,7 +76,7 @@ func TestBroker_Close_Idempotent(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil)
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{})
 
 	// First close should succeed
 	err := broker.Close()
@@ -92,10 +93,10 @@ func TestBroker_Shutdown_SetsFlag(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil)
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{})
 
 	// Initially not shutting down
-	assert.False(t, broker.shuttingDown)
+	assert.False(t, broker.shuttingDown.Load())
 
 	// Start shutdown in background
 	go func() {
@@ -106,9 +107,7 @@ func TestBroker_Shutdown_SetsFlag(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Flag should be set
-	broker.mu.RLock()
-	shuttingDown := broker.shuttingDown
-	broker.mu.RUnlock()
+	shuttingDown := broker.shuttingDown.Load()
 
 	assert.True(t, shuttingDown)
 }

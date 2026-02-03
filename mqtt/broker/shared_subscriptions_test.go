@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -18,7 +19,7 @@ func TestSharedSubscription_GroupCreation(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	// Create 3 clients
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
@@ -54,7 +55,7 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
@@ -83,7 +84,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
@@ -129,7 +130,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
@@ -169,7 +170,7 @@ func TestSharedSubscription_MultipleGroups(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
@@ -203,7 +204,7 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
@@ -236,7 +237,7 @@ func TestSharedSubscription_DuplicateSubscribe(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 
@@ -262,7 +263,7 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil)
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})

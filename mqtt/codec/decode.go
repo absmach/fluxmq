@@ -68,7 +68,7 @@ func DecodeVBI(r io.Reader) (int, error) {
 	var vbi uint32
 	var multiplier uint32
 	var b [1]byte
-	for {
+	for i := 0; ; i++ {
 		_, err := io.ReadFull(r, b[:])
 		if err != nil {
 			return 0, err
@@ -77,6 +77,11 @@ func DecodeVBI(r io.Reader) (int, error) {
 		vbi |= uint32(digit&0x7F) << multiplier
 		if (digit & 0x80) == 0 {
 			break
+		}
+		// MQTT VBI is limited to 4 bytes. If the 4th byte has the continuation
+		// bit set, the length is invalid.
+		if i >= 3 {
+			return 0, ErrMaxLengthExceeded
 		}
 		multiplier += 7
 		if multiplier > maxMultiplier {

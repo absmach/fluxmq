@@ -4,56 +4,36 @@
 package mqtt_test
 
 import (
-	"bytes"
 	"io"
 	"net"
 	"testing"
 	"time"
 
+	core "github.com/absmach/fluxmq/mqtt"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func createMockTCPConnection(t *testing.T) (*net.TCPListener, *net.TCPConn, *net.TCPConn) {
-	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	require.NoError(t, err)
-
-	done := make(chan struct{})
-	var serverConn *net.TCPConn
-	go func() {
-		defer close(done)
-		conn, err := listener.AcceptTCP()
-		if err == nil {
-			serverConn = conn
-		}
-	}()
-
-	clientConn, err := net.DialTCP("tcp", nil, listener.Addr().(*net.TCPAddr))
-	require.NoError(t, err)
-
-	<-done
-	require.NotNil(t, serverConn)
-
-	return listener, serverConn, clientConn
+func createMockTCPConnection(t *testing.T) (net.Conn, net.Conn) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		serverConn.Close()
+		clientConn.Close()
+	})
+	return serverConn, clientConn
 }
 
 func TestNewConnection(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, _ := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 	require.NotNil(t, conn)
 }
 
 func TestConnectionReadPacketV3(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, clientConn := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -81,10 +61,7 @@ func TestConnectionReadPacketV3(t *testing.T) {
 }
 
 func TestConnectionReadPacketV5(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, clientConn := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -112,12 +89,25 @@ func TestConnectionReadPacketV5(t *testing.T) {
 }
 
 func TestConnectionWritePacket(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, clientConn := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
+
+	decodedCh := make(chan *v3.ConnAck, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		pkt, err := v3.ReadPacket(clientConn)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		ack, ok := pkt.(*v3.ConnAck)
+		if !ok {
+			errCh <- assert.AnError
+			return
+		}
+		decodedCh <- ack
+	}()
 
 	connack := &v3.ConnAck{
 		FixedHeader:    v3.FixedHeader{PacketType: v3.ConnAckType},
@@ -128,25 +118,16 @@ func TestConnectionWritePacket(t *testing.T) {
 	err := conn.WritePacket(connack)
 	require.NoError(t, err)
 
-	buf := make([]byte, 1024)
-	n, err := clientConn.Read(buf)
-	require.NoError(t, err)
-	require.Greater(t, n, 0)
-
-	reader := bytes.NewReader(buf[:n])
-	decoded, err := v3.ReadPacket(reader)
-	require.NoError(t, err)
-
-	receivedConnack, ok := decoded.(*v3.ConnAck)
-	require.True(t, ok)
-	assert.Equal(t, byte(0), receivedConnack.ReturnCode)
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case receivedConnack := <-decodedCh:
+		assert.Equal(t, byte(0), receivedConnack.ReturnCode)
+	}
 }
 
 func TestConnectionSetKeepAlive(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, _ := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -155,10 +136,7 @@ func TestConnectionSetKeepAlive(t *testing.T) {
 }
 
 func TestConnectionTouch(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, _ := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -168,10 +146,7 @@ func TestConnectionTouch(t *testing.T) {
 }
 
 func TestConnectionOnDisconnect(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, _ := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -184,10 +159,7 @@ func TestConnectionOnDisconnect(t *testing.T) {
 }
 
 func TestConnectionReadWriteDeadline(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, _ := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -204,10 +176,7 @@ func TestConnectionReadWriteDeadline(t *testing.T) {
 }
 
 func TestConnectionAddresses(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, _ := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
 
@@ -219,12 +188,12 @@ func TestConnectionAddresses(t *testing.T) {
 }
 
 func TestConnectionMultiplePackets(t *testing.T) {
-	listener, serverConn, clientConn := createMockTCPConnection(t)
-	defer listener.Close()
-	defer serverConn.Close()
-	defer clientConn.Close()
+	serverConn, clientConn := createMockTCPConnection(t)
 
 	conn := core.NewConnection(serverConn)
+	go func() {
+		_, _ = io.Copy(io.Discard, clientConn)
+	}()
 
 	cases := []struct {
 		desc string

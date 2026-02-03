@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

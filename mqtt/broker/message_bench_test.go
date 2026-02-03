@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/config"
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
@@ -411,7 +413,7 @@ func BenchmarkMessageCopy_ZeroCopy(b *testing.B) {
 func createBenchBroker(tb testing.TB) *Broker {
 	tb.Helper()
 
-	broker := NewBroker(nil, nil, nil, nil, nil, nil, nil)
+	broker := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{})
 	return broker
 }
 
