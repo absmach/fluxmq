@@ -27,16 +27,30 @@ This document focuses on the MQTT broker internals and the shared queue layer, a
 └──────────┬──────────────┬──────────────┬──────────────┬──────┘
            │              │              │              │
            ▼              ▼              ▼              ▼
-    ┌────────────┐   ┌────────────┐   ┌────────────┐  ┌──────────────┐
-    │ MQTT Broker│   │ AMQP Broker│   │ AMQP091 Br.│  │ Queue Manager│
-    │ (TCP/WS/   │   │   (1.0)    │   │   (0.9.1)  │  │ (AOL + index)│
-    │ HTTP/CoAP) │   └─────┬──────┘   └─────┬──────┘  └──────┬───────┘
-    └─────┬──────┘         │                │               │
-          │                │                │               │
-  ┌───────▼────────┐  ┌────▼──────┐    ┌────▼──────┐   ┌────▼─────────┐
-  │ TCP/WS/HTTP/   │  │ AMQP 1.0  │    │ AMQP 0.9.1│   │ Log Storage  │
-  │ CoAP Servers   │  │ Server    │    │ Server    │   │ + Topic Index│
-  └────────────────┘  └───────────┘    └───────────┘   └──────────────┘
+  ┌────────────────┐   ┌─────────────┐   ┌─────────────┐
+  │ TCP/WS/HTTP/   │   │ AMQP 1.0    │   │ AMQP 0.9.1  │
+  │ CoAP Servers   │   │ Server      │   │ Server      │
+  └──────┬─────────┘   └──────┬──────┘   └──────┬──────┘
+         │                   │                 │
+         ▼                   ▼                 ▼
+    ┌────────────┐      ┌────────────┐     ┌────────────┐
+    │ MQTT Broker│      │ AMQP Broker│     │ AMQP091 Br.│
+    │ (protocol  │      │   (1.0)    │     │   (0.9.1)  │
+    │ logic/fsm) │      └──────┬─────┘     └──────┬─────┘
+    └──────┬─────┘             │                  │
+           └─────────────┬─────┴────────────┬─────┘
+                         │ queue-capable traffic
+                         ▼
+                  ┌────────────────┐
+                  │ Queue Manager  │
+                  │ (bindings +    │
+                  │ delivery)      │
+                  └──────┬─────────┘
+                         ▼
+                  ┌────────────────┐
+                  │ Log Storage    │
+                  │ + Topic Index  │
+                  └────────────────┘
 
 Key Architecture Insight:
 - MQTT transports (TCP/WS/HTTP/CoAP) share ONE MQTT broker
