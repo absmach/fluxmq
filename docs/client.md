@@ -515,3 +515,23 @@ func main() {
 
 - `SubscribeToQueue` passes the consumer group via `x-consumer-group` on `basic.consume`.
 - `Ack`, `Nack`, and `Reject` map to `basic.ack`, `basic.nack`, and `basic.reject`.
+
+### Pub/Sub
+
+```go
+_ = c.Subscribe("sensors/#", func(msg *amqp091.Message) {
+    log.Printf("Topic: %s Payload: %s", msg.Topic, string(msg.Body))
+})
+
+_ = c.Publish("sensors/temp", []byte("22.5"))
+```
+
+### Reconnection
+
+```go
+opts.SetAutoReconnect(true).
+    SetReconnectBackoff(1 * time.Second).
+    SetMaxReconnectWait(2 * time.Minute).
+    SetOnConnectionLost(func(err error) { log.Printf("lost: %v", err) }).
+    SetOnReconnecting(func(attempt int) { log.Printf("reconnect attempt %d", attempt) })
+```

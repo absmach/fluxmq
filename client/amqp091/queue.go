@@ -58,13 +58,16 @@ func (qm *QueueMessage) withChannelLock(fn func() error) error {
 	return fn()
 }
 
-type subscription struct {
-	queueTopic  string
-	consumerTag string
-	done        chan struct{}
+type queueSubscription struct {
+	queueName     string
+	queueTopic    string
+	consumerGroup string
+	consumerTag   string
+	handler       QueueMessageHandler
+	done          chan struct{}
 }
 
-func (s *subscription) close() {
+func (s *queueSubscription) close() {
 	select {
 	case <-s.done:
 		return
@@ -123,67 +126,30 @@ func (c *Client) SubscribeToQueue(queueName, consumerGroup string, handler Queue
 	}
 
 	queueTopic := normalizeQueueTopic(queueName)
-	consumerTag := "ctag-" + strings.ReplaceAll(queueTopic, "/", "-") + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-
-	args := amqp091.Table{}
-	if consumerGroup != "" {
-		args["x-consumer-group"] = consumerGroup
-	}
 
 	c.subsMu.Lock()
-	if _, exists := c.subs[queueTopic]; exists {
+	if _, exists := c.queueSubs[queueTopic]; exists {
 		c.subsMu.Unlock()
 		return ErrAlreadySubscribed
 	}
+
+	sub := &queueSubscription{
+		queueName:     queueName,
+		queueTopic:    queueTopic,
+		consumerGroup: consumerGroup,
+		consumerTag:   "ctag-" + strings.ReplaceAll(queueTopic, "/", "-") + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+		handler:       handler,
+		done:          make(chan struct{}),
+	}
+	c.queueSubs[queueTopic] = sub
 	c.subsMu.Unlock()
 
-	ch, err := c.channel()
-	if err != nil {
+	if err := c.subscribeQueue(sub); err != nil {
+		c.subsMu.Lock()
+		delete(c.queueSubs, queueTopic)
+		c.subsMu.Unlock()
 		return err
 	}
-
-	c.chMu.Lock()
-	deliveries, err := ch.Consume(
-		queueTopic,
-		consumerTag,
-		false, // auto-ack
-		false, // exclusive
-		false, // no-local
-		false, // no-wait
-		args,
-	)
-	c.chMu.Unlock()
-	if err != nil {
-		return err
-	}
-
-	sub := &subscription{
-		queueTopic:  queueTopic,
-		consumerTag: consumerTag,
-		done:        make(chan struct{}),
-	}
-
-	c.subsMu.Lock()
-	c.subs[queueTopic] = sub
-	c.subsMu.Unlock()
-
-	go func() {
-		for {
-			select {
-			case <-sub.done:
-				return
-			case d, ok := <-deliveries:
-				if !ok {
-					return
-				}
-				handler(&QueueMessage{
-					Delivery:  d,
-					queueName: queueName,
-					client:    c,
-				})
-			}
-		}
-	}()
 
 	return nil
 }
@@ -194,9 +160,9 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 	queueTopic := normalizeQueueTopic(queueName)
 
 	c.subsMu.Lock()
-	sub, ok := c.subs[queueTopic]
+	sub, ok := c.queueSubs[queueTopic]
 	if ok {
-		delete(c.subs, queueTopic)
+		delete(c.queueSubs, queueTopic)
 	}
 	c.subsMu.Unlock()
 
@@ -214,6 +180,53 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 	c.chMu.Lock()
 	defer c.chMu.Unlock()
 	return ch.Cancel(sub.consumerTag, false)
+}
+
+func (c *Client) subscribeQueue(sub *queueSubscription) error {
+	ch, err := c.channel()
+	if err != nil {
+		return err
+	}
+
+	args := amqp091.Table{}
+	if sub.consumerGroup != "" {
+		args["x-consumer-group"] = sub.consumerGroup
+	}
+
+	c.chMu.Lock()
+	deliveries, err := ch.Consume(
+		sub.queueTopic,
+		sub.consumerTag,
+		false, // auto-ack
+		false, // exclusive
+		false, // no-local
+		false, // no-wait
+		args,
+	)
+	c.chMu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			select {
+			case <-sub.done:
+				return
+			case d, ok := <-deliveries:
+				if !ok {
+					return
+				}
+				sub.handler(&QueueMessage{
+					Delivery:  d,
+					queueName: sub.queueName,
+					client:    c,
+				})
+			}
+		}
+	}()
+
+	return nil
 }
 
 func normalizeQueueTopic(queueName string) string {

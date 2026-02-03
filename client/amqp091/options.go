@@ -12,9 +12,11 @@ import (
 
 // Default values.
 const (
-	DefaultAddress     = "localhost:5682"
-	DefaultDialTimeout = 10 * time.Second
-	DefaultHeartbeat   = 60 * time.Second
+	DefaultAddress          = "localhost:5682"
+	DefaultDialTimeout      = 10 * time.Second
+	DefaultHeartbeat        = 60 * time.Second
+	DefaultReconnectBackoff = 1 * time.Second
+	DefaultMaxReconnectWait = 2 * time.Minute
 )
 
 // Options configures the AMQP 0.9.1 client.
@@ -32,17 +34,30 @@ type Options struct {
 	// Channel QoS
 	PrefetchCount int // Maximum unacked deliveries
 	PrefetchSize  int // Maximum bytes in-flight
+
+	// Reconnection
+	AutoReconnect    bool
+	ReconnectBackoff time.Duration
+	MaxReconnectWait time.Duration
+
+	// Callbacks
+	OnConnect        func()
+	OnConnectionLost func(error)
+	OnReconnecting   func(attempt int)
 }
 
 // NewOptions creates Options with sensible defaults.
 func NewOptions() *Options {
 	return &Options{
-		Address:     DefaultAddress,
-		Username:    "guest",
-		Password:    "guest",
-		Vhost:       "/",
-		DialTimeout: DefaultDialTimeout,
-		Heartbeat:   DefaultHeartbeat,
+		Address:          DefaultAddress,
+		Username:         "guest",
+		Password:         "guest",
+		Vhost:            "/",
+		DialTimeout:      DefaultDialTimeout,
+		Heartbeat:        DefaultHeartbeat,
+		AutoReconnect:    true,
+		ReconnectBackoff: DefaultReconnectBackoff,
+		MaxReconnectWait: DefaultMaxReconnectWait,
 	}
 }
 
@@ -87,6 +102,42 @@ func (o *Options) SetHeartbeat(d time.Duration) *Options {
 func (o *Options) SetPrefetch(count, size int) *Options {
 	o.PrefetchCount = count
 	o.PrefetchSize = size
+	return o
+}
+
+// SetAutoReconnect enables or disables automatic reconnection.
+func (o *Options) SetAutoReconnect(enable bool) *Options {
+	o.AutoReconnect = enable
+	return o
+}
+
+// SetReconnectBackoff sets the initial reconnect delay.
+func (o *Options) SetReconnectBackoff(d time.Duration) *Options {
+	o.ReconnectBackoff = d
+	return o
+}
+
+// SetMaxReconnectWait sets the maximum reconnect delay.
+func (o *Options) SetMaxReconnectWait(d time.Duration) *Options {
+	o.MaxReconnectWait = d
+	return o
+}
+
+// SetOnConnect sets the connection callback.
+func (o *Options) SetOnConnect(fn func()) *Options {
+	o.OnConnect = fn
+	return o
+}
+
+// SetOnConnectionLost sets the connection lost callback.
+func (o *Options) SetOnConnectionLost(fn func(error)) *Options {
+	o.OnConnectionLost = fn
+	return o
+}
+
+// SetOnReconnecting sets the reconnecting callback.
+func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
+	o.OnReconnecting = fn
 	return o
 }
 
