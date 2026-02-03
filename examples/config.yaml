@@ -32,6 +32,13 @@ server:
     dtls: {}
     mdtls: {}
 
+  # AMQP 0.9.1 listeners
+  amqp091:
+    plain:
+      addr: ":5682"
+    tls: {}
+    mtls: {}
+
   # Health Check Server
   health_enabled: true
   health_addr: ":8081"

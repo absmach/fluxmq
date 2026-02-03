@@ -42,6 +42,12 @@ server:
     tls: {}
     mtls: {}
 
+  amqp091:
+    plain:
+      addr: ":5684"
+    tls: {}
+    mtls: {}
+
   health_enabled: true
   health_addr: ":8083"
 

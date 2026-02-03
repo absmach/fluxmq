@@ -412,7 +412,7 @@ func Default() *Config {
 			},
 			AMQP091: AMQP091Config{
 				Plain: AMQP091ListenerConfig{
-					Addr:           ":5673",
+					Addr:           ":5682",
 					MaxConnections: 10000,
 				},
 				TLS: AMQP091ListenerConfig{
