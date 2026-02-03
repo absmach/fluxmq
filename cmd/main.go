@@ -16,6 +16,7 @@ import (
 	"time"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	amqp091broker "github.com/absmach/fluxmq/amqp091/broker"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
@@ -28,6 +29,7 @@ import (
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
+	amqp091server "github.com/absmach/fluxmq/server/amqp091"
 	"github.com/absmach/fluxmq/server/api"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
@@ -45,13 +47,18 @@ import (
 
 // messageDispatcher routes cluster-delivered messages to the appropriate protocol broker.
 type messageDispatcher struct {
-	mqtt cluster.MessageHandler
-	amqp *amqpbroker.Broker
+	mqtt   cluster.MessageHandler
+	amqp   *amqpbroker.Broker
+	amqp091 *amqp091broker.Broker
 }
 
 func (d *messageDispatcher) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
 	if amqpbroker.IsAMQPClient(clientID) {
 		return d.amqp.DeliverToClusterMessage(ctx, clientID, msg)
+	}
+	if amqp091broker.IsAMQP091Client(clientID) {
+		// This method needs to be implemented in amqp091broker
+		// return d.amqp091.DeliverToClusterMessage(ctx, clientID, msg)
 	}
 	return d.mqtt.DeliverToClient(ctx, clientID, msg)
 }
@@ -114,6 +121,9 @@ func main() {
 		"amqp_plain_listener", cfg.Server.AMQP.Plain.Addr,
 		"amqp_tls_listener", cfg.Server.AMQP.TLS.Addr,
 		"amqp_mtls_listener", cfg.Server.AMQP.MTLS.Addr,
+		"amqp091_plain_listener", cfg.Server.AMQP091.Plain.Addr,
+		"amqp091_tls_listener", cfg.Server.AMQP091.TLS.Addr,
+		"amqp091_mtls_listener", cfg.Server.AMQP091.MTLS.Addr,
 		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
@@ -292,6 +302,10 @@ func main() {
 	amqpBroker := amqpbroker.New(nil, amqpStats, logger)
 	defer amqpBroker.Close()
 
+	// Create AMQP 0.9.1 broker (needs queue manager set later)
+	amqp091Broker := amqp091broker.New(nil, logger)
+	defer amqp091Broker.Close()
+
 	if metrics != nil {
 		amqpMetrics, err := amqpbroker.NewMetrics()
 		if err != nil {
@@ -341,6 +355,9 @@ func main() {
 		deliverFn := func(ctx context.Context, clientID string, msg any) error {
 			if amqpbroker.IsAMQPClient(clientID) {
 				return amqpBroker.DeliverToClient(ctx, clientID, msg)
+			}
+			if amqp091broker.IsAMQP091Client(clientID) {
+				return amqp091Broker.DeliverToClient(ctx, clientID, msg)
 			}
 			return b.DeliverToSessionByID(ctx, clientID, msg)
 		}
@@ -401,6 +418,7 @@ func main() {
 
 		// Set queue manager on AMQP broker
 		amqpBroker.SetQueueManager(qm)
+		amqp091Broker.SetQueueManager(qm)
 
 		// Set queue handler on cluster for cross-node message routing
 		if etcdCluster != nil {
@@ -416,7 +434,7 @@ func main() {
 	// Set message handler on cluster if it's an etcd cluster
 	// MessageHandler interface now includes both message routing and session management
 	if etcdCluster != nil {
-		etcdCluster.SetMessageHandler(&messageDispatcher{mqtt: b, amqp: amqpBroker})
+		etcdCluster.SetMessageHandler(&messageDispatcher{mqtt: b, amqp: amqpBroker, amqp091: amqp091Broker})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -632,6 +650,46 @@ func main() {
 				serverErr <- err
 			}
 		}(slot.name, slot.cfg.Addr, amqpSrv)
+	}
+
+	// AMQP 0.9.1 servers
+	amqp091Slots := []struct {
+		name string
+		cfg  config.AMQP091ListenerConfig
+	}{
+		{name: "plain", cfg: cfg.Server.AMQP091.Plain},
+		{name: "tls", cfg: cfg.Server.AMQP091.TLS},
+		{name: "mtls", cfg: cfg.Server.AMQP091.MTLS},
+	}
+
+	for _, slot := range amqp091Slots {
+		if strings.TrimSpace(slot.cfg.Addr) == "" {
+			continue
+		}
+
+		tlsCfg, err := mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
+		if err != nil {
+			slog.Error("Failed to build AMQP 0.9.1 TLS configuration", "listener", slot.name, "error", err)
+			os.Exit(1)
+		}
+
+		amqp091Cfg := amqp091server.Config{
+			Address:         slot.cfg.Addr,
+			TLSConfig:       tlsCfg,
+			ShutdownTimeout: cfg.Server.ShutdownTimeout,
+			MaxConnections:  slot.cfg.MaxConnections,
+			Logger:          logger,
+		}
+		amqp091Srv := amqp091server.New(amqp091Cfg, amqp091Broker)
+
+		wg.Add(1)
+		go func(name, addr string, server *amqp091server.Server) {
+			defer wg.Done()
+			slog.Info("Starting AMQP 0.9.1 server", "mode", name, "address", addr)
+			if err := server.Listen(ctx); err != nil {
+				serverErr <- err
+			}
+		}(slot.name, slot.cfg.Addr, amqp091Srv)
 	}
 
 	if cfg.Server.HealthEnabled {

@@ -94,6 +94,7 @@ type ServerConfig struct {
 	HTTP      HTTPConfig      `yaml:"http"`
 	CoAP      CoAPConfig      `yaml:"coap"`
 	AMQP      AMQPConfig      `yaml:"amqp"`
+	AMQP091   AMQP091Config   `yaml:"amqp091"`
 
 	HealthAddr      string        `yaml:"health_addr"`
 	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
@@ -182,6 +183,20 @@ type AMQPConfig struct {
 	Plain AMQPListenerConfig `yaml:"plain"`
 	TLS   AMQPListenerConfig `yaml:"tls"`
 	MTLS  AMQPListenerConfig `yaml:"mtls"`
+}
+
+// AMQP091ListenerConfig holds AMQP 0.9.1 listener configuration.
+type AMQP091ListenerConfig struct {
+	Addr           string         `yaml:"addr"`
+	MaxConnections int            `yaml:"max_connections"`
+	TLS            mqtttls.Config `yaml:",inline"`
+}
+
+// AMQP091Config groups AMQP 0.9.1 listeners by mode.
+type AMQP091Config struct {
+	Plain AMQP091ListenerConfig `yaml:"plain"`
+	TLS   AMQP091ListenerConfig `yaml:"tls"`
+	MTLS  AMQP091ListenerConfig `yaml:"mtls"`
 }
 
 // BrokerConfig holds broker-specific settings.
@@ -392,6 +407,18 @@ func Default() *Config {
 					MaxConnections: 10000,
 				},
 				MTLS: AMQPListenerConfig{
+					MaxConnections: 10000,
+				},
+			},
+			AMQP091: AMQP091Config{
+				Plain: AMQP091ListenerConfig{
+					Addr:           ":5673",
+					MaxConnections: 10000,
+				},
+				TLS: AMQP091ListenerConfig{
+					MaxConnections: 10000,
+				},
+				MTLS: AMQP091ListenerConfig{
 					MaxConnections: 10000,
 				},
 			},
@@ -702,6 +729,38 @@ func (c *Config) Validate() error {
 		}
 		if slot.name != "plain" {
 			if err := validateListenerTLS("server.amqp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+				return err
+			}
+		}
+	}
+
+	// AMQP 0.9.1 validation
+	amqp091Slots := []struct {
+		name              string
+		cfg               AMQP091ListenerConfig
+		requireClientAuth bool
+	}{
+		{name: "plain", cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
+		{name: "tls", cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
+		{name: "mtls", cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
+	}
+
+	for _, slot := range amqp091Slots {
+		if !hasAddr(slot.cfg.Addr) {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+				return fmt.Errorf("server.amqp091.%s TLS fields are not supported for plain listeners", slot.name)
+			}
+			continue
+		}
+
+		if slot.cfg.MaxConnections < 0 {
+			return fmt.Errorf("server.amqp091.%s.max_connections cannot be negative", slot.name)
+		}
+		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.amqp091.%s TLS fields are not supported for plain listeners", slot.name)
+		}
+		if slot.name != "plain" {
+			if err := validateListenerTLS("server.amqp091."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
 		}
