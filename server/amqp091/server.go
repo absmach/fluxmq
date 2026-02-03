@@ -72,11 +72,5 @@ func (s *Server) Listen(ctx context.Context) error {
 }
 
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-	s.cfg.Logger.Info("New AMQP 0.9.1 client connected", "remote_addr", conn.RemoteAddr().String())
-
-	// TODO: Implement the AMQP 0.9.1 connection handshake and command loop.
-	// This will involve reading frames from the connection, processing them,
-	// and interacting with the broker.
-	// For now, we just close the connection.
+	s.broker.HandleConnection(conn)
 }
