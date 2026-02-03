@@ -275,7 +275,7 @@ func (b *Broker) CreateSession(...) (*session.Session, bool, error) {
 
 **Dependency Injection Pattern:**
 ```go
-// cmd/broker/main.go
+// cmd/main.go
 
 // Create sender (protocol-specific)
 sender := webhook.NewHTTPSender()

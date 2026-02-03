@@ -1,6 +1,6 @@
-# Broker & Message Routing
+# Broker & Message Routing (MQTT)
 
-This document explains the broker's internal architecture, message routing mechanisms, session management, and how clustering integrates with the core broker logic.
+This document explains the MQTT broker's internal architecture, message routing mechanisms, session management, and how clustering integrates with the core broker logic. AMQP 1.0 and AMQP 0.9.1 have their own brokers and routers; the shared queue manager is the binding layer between protocols.
 
 ## Table of Contents
 

@@ -8,6 +8,7 @@ This document provides a comprehensive guide to configuring the MQTT broker for 
 - [Server Configuration](#server-configuration)
 - [Broker Configuration](#broker-configuration)
 - [Session Configuration](#session-configuration)
+- [Queue Configuration](#queue-configuration)
 - [Storage Configuration](#storage-configuration)
 - [Cluster Configuration](#cluster-configuration)
 - [Logging Configuration](#logging-configuration)
@@ -31,6 +32,12 @@ server:
   http:
     plain:
       addr: ":8080"
+  amqp:
+    plain:
+      addr: ":5672"
+  amqp091:
+    plain:
+      addr: ":5673"
   # ...
 
 broker:
@@ -42,6 +49,11 @@ session:
   # Session management settings
   max_sessions: 10000
   # ...
+
+queues:
+  # Durable queue bindings
+  - name: "orders"
+    topics: ["orders/#", "$queue/orders/#"]
 
 storage:
   # Storage backend settings
@@ -135,8 +147,33 @@ server:
     dtls: {}
     mdtls: {}
 
+  # AMQP 1.0
+  amqp:
+    plain:
+      addr: ":5672"
+      max_connections: 10000
+    tls:
+      addr: ":5671"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+    mtls: {}
+
+  # AMQP 0.9.1
+  amqp091:
+    plain:
+      addr: ":5673"
+      max_connections: 10000
+    tls:
+      addr: ":5674"
+      cert_file: "/path/to/server.crt"
+      key_file: "/path/to/server.key"
+    mtls: {}
+
   shutdown_timeout: "30s"
 ```
+
+AMQP listeners use the same schema as TCP (addr, max_connections, and TLS fields).
+`server.amqp` configures AMQP 1.0, and `server.amqp091` configures AMQP 0.9.1.
 
 TLS fields (`cert_file`, `key_file`, `ca_file`, `server_ca_file`) are inline
 under each listener slot (not nested under `tls:`).
@@ -362,6 +399,56 @@ Maximum unacknowledged QoS 1/2 messages per session.
 - Conservative: 100
 - Standard: 1000
 - Aggressive: 10000
+
+## Queue Configuration
+
+Queues are defined under `queues:` and bind **topic patterns** to durable queues.
+Topics use MQTT-style wildcards (`+`, `#`). A publish routed through the queue
+manager is enqueued into every queue whose bindings match the topic.
+
+If no queues are configured, a default reserved queue named `mqtt` is created
+with topics `["$queue/#"]`, which preserves the `$queue/*` behavior out of the box.
+
+```yaml
+queues:
+  - name: "orders"
+    topics:
+      - "orders/#"
+      - "$queue/orders/#"   # allow explicit queue publish
+    reserved: false
+    limits:
+      max_message_size: 1048576
+      max_depth: 100000
+      message_ttl: "168h"
+    retry:
+      max_retries: 10
+      initial_backoff: "5s"
+      max_backoff: "5m"
+      multiplier: 2.0
+    dlq:
+      enabled: true
+      topic: "$dlq/orders" # default: "$dlq/<queue-name>"
+```
+
+### name
+
+Logical queue name (no `$queue/` prefix). Queue names are referenced by
+protocol-specific addressing (e.g., `$queue/<name>` in MQTT/AMQP interop).
+
+### topics
+
+List of topic filters that route into this queue. A single topic can match
+multiple queues. If you want explicit `$queue/<name>` publishes to feed the
+queue, include `$queue/<name>/#` in the list.
+
+### reserved
+
+Marks a queue as system-reserved (cannot be deleted via management APIs).
+
+### limits / retry / dlq
+
+Per-queue limits, retry policy, and dead-letter behavior. If `dlq.topic` is
+empty, it defaults to `$dlq/<queue-name>`.
 
 ## Storage Configuration
 

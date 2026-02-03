@@ -1,4 +1,4 @@
-# MQTT Durable Queues
+# Durable Queues (MQTT + AMQP)
 
 > **Status**: Log Storage Engine Complete
 > **Last Updated**: 2026-01-25
@@ -7,7 +7,7 @@
 > **Storage Engine**: ✅ Kafka/Redis Streams-style append-only log (AOL)
 > **Documentation**: ✅ Consolidated
 
-This document provides comprehensive documentation for the durable queue functionality in the MQTT broker. It covers architecture, implementation details, configuration guidelines, performance & scalability, current progress, and planned features.
+This document provides comprehensive documentation for the durable queue functionality shared by the MQTT, AMQP 1.0, and AMQP 0.9.1 brokers. It covers architecture, implementation details, configuration guidelines, performance & scalability, current progress, and planned features.
 
 ---
 
@@ -29,7 +29,7 @@ This document provides comprehensive documentation for the durable queue functio
 
 ## Overview
 
-The MQTT broker supports both traditional pub/sub messaging and durable queues. Queues provide:
+FluxMQ supports both traditional pub/sub messaging and durable queues across protocols. Queues provide:
 
 - **Persistent storage**: Messages survive broker restarts
 - **Consumer groups**: Load balancing across multiple consumers
@@ -41,10 +41,10 @@ The MQTT broker supports both traditional pub/sub messaging and durable queues. 
 
 ### Design Principles
 
-1. **Full MQTT Compatibility**: All existing MQTT functionality remains unchanged
-2. **Maximum Decoupling**: Queue implementation in separate packages with minimal broker modifications
-3. **Protocol-Native**: Queue features accessible via MQTT v5 topics and properties (no external APIs required for basic usage)
-4. **Pluggable**: Queue storage backend uses same interface pattern as existing stores
+1. **Protocol Independence**: MQTT and AMQP brokers remain independent
+2. **Binding Glue**: A shared queue manager provides cross-protocol durability
+3. **Protocol-Native**: Queue features accessible via MQTT v5 topics/properties and AMQP queue capabilities
+4. **Pluggable**: Queue storage backend uses the same interface pattern as existing stores
 5. **Observable**: Built-in metrics and monitoring from day one
 
 ---
@@ -54,35 +54,32 @@ The MQTT broker supports both traditional pub/sub messaging and durable queues. 
 ### High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ MQTT Protocol Layer (Unchanged)                         │
-│ - V3Handler, V5Handler                                   │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│ Broker Core (Minimal Changes)                           │
-│ - Add QueueManager injection                            │
-│ - Route $queue/* topics to QueueManager                 │
-│ - Route $ack/$nack topics to QueueManager               │
-└────────────────────┬────────────────────────────────────┘
-                     │
-      ┌──────────────┴──────────────┐
-      │                             │
-┌─────▼──────────────┐    ┌─────────▼────────────────────┐
-│ Topic Router       │    │ Queue Manager (NEW)          │
-│ (Unchanged)        │    │ Package: queue/              │
-└────────────────────┘    └──────────────────────────────┘
-                                      │
-                          ┌───────────┴───────────┐
-                          │                       │
-                    ┌─────▼─────┐         ┌──────▼──────┐
-                    │ Queue     │         │ Consumer    │
-                    │ Store     │         │ Group Mgr   │
-                    │ (NEW)     │         │ (NEW)       │
-                    └───────────┘         └─────────────┘
+┌──────────────┐  ┌──────────────┐  ┌───────────────┐
+│ MQTT Broker  │  │ AMQP Broker  │  │ AMQP091 Broker│
+│ (TCP/WS/     │  │ (AMQP 1.0)   │  │ (AMQP 0.9.1)  │
+│ HTTP/CoAP)   │  │              │  │               │
+└──────┬───────┘  └──────┬───────┘  └──────┬────────┘
+       │                │                │
+       └────────────────┼────────────────┘
+                        ▼
+              ┌─────────────────────────┐
+              │ Shared Queue Manager    │
+              │ - Topic bindings        │
+              │ - Consumer groups       │
+              │ - DLQ handling          │
+              └──────────┬──────────────┘
+                         ▼
+              ┌─────────────────────────┐
+              │ Log Storage (AOL)       │
+              │ + Topic Index           │
+              └─────────────────────────┘
 ```
 
-### Topic Namespace Design
+### Topic & Queue Addressing
+
+The queue manager routes **published topics** into queues using MQTT-style topic filters.
+Queue names are logical identifiers; bindings decide which topics feed a queue.
+One publish can fan out into multiple queues if multiple bindings match.
 
 #### Standard MQTT Topics (Existing Behavior - No Changes)
 ```
@@ -91,12 +88,34 @@ events/user/created             → Normal pub/sub + retained
 $share/web/api/responses        → Shared subscription (ephemeral)
 ```
 
-#### Queue Topics (New Durable Queue Behavior)
+#### Topic-to-Queue Bindings (New)
+
+Queues can be bound to topic patterns in configuration:
+
+```yaml
+queues:
+  - name: "orders"
+    topics: ["orders/#", "payments/approved"]
+```
+
+```
+orders/123                       → Enqueued into "orders"
+payments/approved                → Enqueued into "orders"
+```
+
+By default, auto-created queues bind to `$queue/<name>/#`. You can add additional
+topic patterns to the same queue to fan-in related topics.
+
+#### Explicit Queue Topics (MQTT/AMQP Interop)
 ```
 $queue/tasks/image-processing           → Durable queue
 $queue/tasks/email-sending              → Durable queue
 $queue/events/user-lifecycle            → Durable queue
 ```
+
+AMQP 1.0 clients can use the `queue` capability or address `$queue/<name>` directly.
+AMQP 0.9.1 clients declare/bind queues and the broker maps those bindings to
+`$queue/<name>` internally for durable delivery.
 
 #### Acknowledgment Topics (New)
 ```
@@ -107,7 +126,7 @@ $queue/tasks/image-processing/$reject   → Reject (move to DLQ)
 
 #### Dead-Letter Queue Topics
 ```
-$queue/dlq/{original-queue-name}        → DLQ for failed messages
+$dlq/{queue-name}                       → DLQ for failed messages
 ```
 
 #### Admin Topics (Phase 4)
@@ -124,13 +143,14 @@ $admin/queue/tasks/image/stats         → Queue metrics stream
 ┌──────────────┐
 │  Publisher   │
 └──────┬───────┘
-       │ PUBLISH to $queue/tasks/image
+       │ PUBLISH to orders/123
+       │ (topic bound to queue "orders")
        │ User Property: partition-key=user-123
        ▼
 ┌──────────────────┐
 │  Queue Manager   │
 │  - Hash partition key → partition ID
-│  - Store in BadgerDB
+│  - Store in log storage (AOL)
 │  - Assign to consumer
 └──────┬───────────┘
        │
@@ -153,19 +173,17 @@ $admin/queue/tasks/image/stats         → Queue metrics stream
 
 #### Routing Logic
 ```
-PUBLISH to $queue/tasks/image
+PUBLISH to $queue/orders/123 (MQTT/AMQP queue publish)
   ↓
-broker.Publish()
+queueManager.Publish()
   ↓
-isQueueTopic() = true
+FindMatchingQueues(topic) using queue bindings
   ↓
-queueManager.Enqueue()
-  ↓
-Storage → Partition → DeliveryWorker → Consumer
+Append to each matching queue
 ```
 
 ```
-SUBSCRIBE to $queue/tasks/image
+SUBSCRIBE to $queue/orders/#
   ↓
 broker.Subscribe()
   ↓
@@ -177,7 +195,7 @@ Consumer added to group → Partitions rebalanced
 ```
 
 ```
-PUBLISH to $queue/tasks/image/$ack
+PUBLISH to $queue/orders/123/$ack
   ↓
 broker.Publish()
   ↓
@@ -476,7 +494,7 @@ queue/cluster/proto/            - gRPC definitions
 broker/broker.go               - Add QueueManager, routing logic (~350 LOC)
 broker/queue_utils.go          - Helper functions (~110 LOC)
 broker/v5_handler.go           - Extract User Properties (~50 LOC)
-cmd/broker/main.go             - QueueHandler wiring
+cmd/main.go                    - QueueHandler wiring
 ```
 
 ### Storage Layer
@@ -602,7 +620,8 @@ Messages delivered via queues use the same `RefCountedBuffer` mechanism as stand
 
 ```json
 {
-  "name": "$queue/tasks/image-processing",
+  "name": "tasks",
+  "topics": ["$queue/tasks/#", "orders/#"],
   "partitions": 10,
   "ordering": "partition",
 
@@ -616,7 +635,7 @@ Messages delivered via queues use the same `RefCountedBuffer` mechanism as stand
 
   "dlq_config": {
     "enabled": true,
-    "topic": "$queue/dlq/tasks/image-processing",
+    "topic": "$dlq/tasks/image-processing",
     "alert_webhook": "https://supermq.com/alerts/queue-failure"
   },
 
@@ -659,7 +678,7 @@ QueueConfig{
 
     DLQConfig: {
         Enabled: true,
-        Topic:   "$queue/dlq/{original-queue}",
+        Topic:   "$dlq/{queue-name}",
     },
 }
 ```
@@ -1309,7 +1328,7 @@ Pattern: Request/response with correlation-id
 
 ```
 Original: $queue/tasks/email-sending
-DLQ: $queue/dlq/tasks/email-sending
+DLQ: $dlq/tasks/email-sending
 Alert: Webhook to PagerDuty on DLQ message
 Manual: Retry via admin API after fixing email template
 ```

@@ -1,13 +1,15 @@
-# MQTT Broker Architecture
+# FluxMQ Architecture
 
 ## Overview
 
-This document describes the detailed architecture of the MQTT broker, which implements a **clean layered architecture** with strict separation between transport, protocol handling, and domain logic.
+FluxMQ runs **independent protocol brokers** (MQTT, AMQP 1.0, AMQP 0.9.1) and uses the **durable queue manager** as the binding glue between them. Each broker owns its own routing and session state, while the shared queue layer provides cross-protocol durability and fan-out based on topic bindings.
+
+This document focuses on the MQTT broker internals and the shared queue layer, and calls out where AMQP fits into the system.
 
 **Design Philosophy:**
 1. **Domain-Driven Design** - Pure business logic isolated from protocol concerns
 2. **Protocol Adapters** - Stateless handlers translate packets/requests to domain operations
-3. **Multi-Protocol Support** - All protocols share the same broker core
+3. **Multi-Protocol Support** - MQTT transports share a broker; AMQP brokers are separate; queues provide cross-protocol durability
 4. **Direct Instrumentation** - Logging and metrics embedded at the domain layer
 5. **Zero Indirection** - No middleware chains, decorators, or hidden control flow
 6. **Testability First** - Each layer independently testable
@@ -18,76 +20,36 @@ This document describes the detailed architecture of the MQTT broker, which impl
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                     cmd/broker/main.go                       │
-│  • Creates single Broker instance with logger & metrics      │
-│  • Starts multiple servers (all share the same Broker)       │
-│  • Coordinates graceful shutdown across all servers          │
-└─────┬─────────┬─────────┬──────────┬─────────────────────────┘
-      │         │         │          │
-      │         │         │          │ creates & passes Broker
-      │         │         │          │
-      ▼         ▼         ▼          ▼
-┌──────────┐ ┌─────────┐ ┌───────────┐ ┌───────────┐
-│TCP Server│ │WebSocket│ │HTTP Bridge│ │CoAP Bridge│
-│  :1883   │ │ :8083   │ │  :8080    │ │  :5683    │
-└─────┬────┘ └────┬────┘ └────┬──────┘ └────┬──────┘
-      │           │           │             │
-      │ net.Conn  │ ws.Conn   │             │
-      └─────┬─────┴───────────┘             │
-            │ core.Connection               │
-            ▼                               ▼
-  ┌──────────────────────┐         ┌─────────────────┐
-  │ Protocol Detection   │         │ Direct Domain   │
-  │ (connection.go)      │         │ Calls           │
-  └──────────┬───────────┘         └────────┬────────┘
-             │                              │
-      ┌──────┴──────┐                       │
-      │             │                       │
-┌─────▼─────┐ ┌─────▼─────┐                 │
-│V3Handler  │ │V5Handler  │                 │
-│(Stateless)│ │(Stateless)│                 │
-└─────┬─────┘ └─────┬─────┘                 │
-      │             │                       │
-      │ broker.Publish(), Subscribe()...    │
-      └──────┬──────┴───────────────────────┘
-             ▼
-┌──────────────────────────────────────────────────────────┐
-│              Broker (Domain Layer)                       │
-│                                                          │
-│  Protocol-agnostic domain operations:                    │
-│  • CreateSession(clientID, opts)                         │
-│  • Publish(msg) ← Called from ALL protocols              │
-│  • Subscribe(session, filter, opts)                      │
-│  • Unsubscribe(session, filter)                          │
-│  • DeliverToSession(session, msg)                        │
-│  • AckMessage(session, packetID)                         │
-│                                                          │
-│  Embedded instrumentation:                               │
-│  • logger *slog.Logger                                   │
-│  • stats  *Stats                                         │
-└─────────────────────┬────────────────────────────────────┘
-                      │
-                      ▼
-┌──────────────────────────────────────────────────────────┐
-│                Infrastructure Layer                      │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │
-│   │  Router  │ │ Sessions │ │ Storage  │ │  Stats   │    │
-│   │  (Trie)  │ │ (Cache)  │ │ (Memory) │ │(Metrics) │    │
-│   └──────────┘ └──────────┘ └──────────┘ └──────────┘    │
-└──────────────────────────────────────────────────────────┘
+│                         cmd/main.go                          │
+│  • Creates MQTT, AMQP 1.0, AMQP 0.9.1 brokers                │
+│  • Creates shared Queue Manager (bindings + delivery)        │
+│  • Wires cluster, storage, metrics, shutdown                 │
+└──────────┬──────────────┬──────────────┬──────────────┬──────┘
+           │              │              │              │
+           ▼              ▼              ▼              ▼
+    ┌────────────┐   ┌────────────┐   ┌────────────┐  ┌──────────────┐
+    │ MQTT Broker│   │ AMQP Broker│   │ AMQP091 Br.│  │ Queue Manager│
+    │ (TCP/WS/   │   │   (1.0)    │   │   (0.9.1)  │  │ (AOL + index)│
+    │ HTTP/CoAP) │   └─────┬──────┘   └─────┬──────┘  └──────┬───────┘
+    └─────┬──────┘         │                │               │
+          │                │                │               │
+  ┌───────▼────────┐  ┌────▼──────┐    ┌────▼──────┐   ┌────▼─────────┐
+  │ TCP/WS/HTTP/   │  │ AMQP 1.0  │    │ AMQP 0.9.1│   │ Log Storage  │
+  │ CoAP Servers   │  │ Server    │    │ Server    │   │ + Topic Index│
+  └────────────────┘  └───────────┘    └───────────┘   └──────────────┘
 
 Key Architecture Insight:
-- All protocols (MQTT/TCP, MQTT/WebSocket, HTTP, CoAP) share ONE Broker
-- Message published via HTTP → visible to all MQTT subscriptions
-- Message published via MQTT → can trigger HTTP webhooks (future)
-- Clean separation: Transport → Protocol → Domain
+- MQTT transports (TCP/WS/HTTP/CoAP) share ONE MQTT broker
+- AMQP 1.0 and AMQP 0.9.1 each have their own broker and router
+- Brokers route queue-capable traffic to the shared Queue Manager
+- Pub/sub is protocol-local; queues are shared and topic-bound
 ```
 
 ## Layered Architecture Deep Dive
 
 ### Layer 1: Transport & Protocol Bridges
 
-This layer contains all network-facing servers and protocol bridges. Each implements its own transport but delegates to the shared Broker domain layer.
+This layer contains all network-facing servers and protocol bridges. The MQTT transports below delegate to the MQTT broker domain layer. AMQP servers are separate and talk to their own brokers, but they share the queue manager for durable queue operations.
 
 #### 1.1 TCP Server (server/tcp)
 
@@ -466,6 +428,29 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 
 ---
 
+### Queue Layer (queue/, logstorage/)
+
+The queue system is a shared subsystem used by MQTT, AMQP 1.0, and AMQP 0.9.1
+brokers. It is **protocol-independent** and binds published topics to queues
+using MQTT-style topic patterns.
+
+**Core Components**:
+
+#### Queue Manager (queue/manager.go)
+- **Routing**: Matches a publish topic against queue bindings and appends to each match
+- **Consumer Groups**: Manages consumer membership and cursors per group
+- **Delivery**: Dispatches messages to protocol brokers via a single `DeliverFn`
+- **Cluster-aware**: Forwards publishes to nodes that host matching consumers
+
+#### Log Storage Adapter (logstorage/)
+- **Append-only log** for durable queues
+- **Topic index** to map topics → queues
+- **Config store** for queue metadata and bindings
+
+**Key Insight**:
+- Pub/sub is protocol-local.
+- Queues are shared and topic-bound across protocols.
+
 ## Data Flow Examples
 
 ### CONNECT Flow (MQTT v5)
@@ -527,6 +512,43 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 
 4. Send PUBACK
    └─> handler sends v3.PubAck or v5.PubAck
+```
+
+### Queue PUBLISH Flow
+
+```
+1. MQTT/AMQP publish to queue topic
+   └─> "$queue/orders/123" (MQTT or AMQP queue address)
+
+2. Broker routes to queue manager
+   ├─> MQTT: broker.Publish() sees $queue/ prefix
+   └─> AMQP: broker link/channel marks queue capability
+
+3. QueueManager.Publish()
+   ├─> FindMatchingQueues(topic) using bindings
+   ├─> Append to each matched queue log
+   └─> Trigger delivery workers
+
+4. Delivery worker dispatch
+   └─> deliverFn(clientID, msg) → protocol broker
+```
+
+### Queue SUBSCRIBE Flow
+
+```
+1. Client subscribes to "$queue/orders/#"
+2. Broker calls queueManager.Subscribe(queue, pattern, clientID, groupID)
+3. Consumer group created (or reused) with pattern
+4. Cursor set (default/latest/earliest)
+5. Delivery worker starts pushing messages
+```
+
+### Queue ACK Flow
+
+```
+1. Client ACKs via "$queue/orders/123/$ack"
+2. Broker extracts message-id and group-id from properties
+3. queueManager.Ack() removes from PEL and advances cursor
 ```
 
 ### SUBSCRIBE Flow
@@ -929,17 +951,17 @@ b := broker.NewBroker(logger, stats)
 
 This architecture achieves:
 - ✅ **Clean separation** between transport, protocol, and domain
-- ✅ **Multi-protocol support** - MQTT (TCP/WebSocket), HTTP, CoAP all share one broker
+- ✅ **Multi-protocol support** - MQTT transports share a broker; AMQP brokers are independent
+- ✅ **Cross-protocol durability** via the shared queue manager
 - ✅ **High performance** through direct instrumentation (no middleware overhead)
 - ✅ **Testability** via dependency injection and stateless adapters
-- ✅ **Extensibility** - new protocols require ~100 lines of adapter code
 - ✅ **Maintainability** with clear, single-responsibility components
 
 The key insights:
 1. **Separate what changes (protocols) from what stays stable (domain logic)**
 2. **Protocol handlers are adapters** that translate between wire formats and domain models
-3. **All protocols share one broker** - messages flow seamlessly across protocols
-4. **Transport abstraction** - TCP and WebSocket use same MQTT handling via `core.Connection`
+3. **MQTT transports share one broker** - messages flow across MQTT/HTTP/CoAP
+4. **Queues are the binding layer** - AMQP and MQTT meet at the queue manager
 5. **Direct domain access** - HTTP/CoAP bridges call `broker.Publish()` directly
 
 This design makes adding new protocols trivial while keeping the core broker simple, focused, and protocol-agnostic.

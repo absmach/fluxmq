@@ -1,6 +1,8 @@
 # Client Libraries
 
 Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support.
+Note: FluxMQ also exposes AMQP 1.0 server support, but this repository does not
+currently include a dedicated AMQP 1.0 client library.
 
 ---
 

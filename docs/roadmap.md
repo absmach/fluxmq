@@ -609,7 +609,7 @@ server:
 - ✅ Per-client message rate limiting in V5/V3 handlers (returns QuotaExceeded for V5)
 - ✅ Per-client subscription rate limiting in V5/V3 handlers
 - ✅ Rate limit configuration in `config/config.go`
-- ✅ Rate limiter initialization in `cmd/broker/main.go`
+- ✅ Rate limiter initialization in `cmd/main.go`
 - ✅ 12 unit tests (`ratelimit/ratelimit_test.go`)
 
 **Configuration:**
