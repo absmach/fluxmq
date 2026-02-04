@@ -334,6 +334,7 @@ func main() {
 
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
+		queueCfg.AutoCommitInterval = cfg.QueueManager.AutoCommitInterval
 		for _, qc := range cfg.Queues {
 			queueCfg.QueueConfigs = append(queueCfg.QueueConfigs, queueTypes.FromInput(queueTypes.QueueConfigInput{
 				Name:           qc.Name,

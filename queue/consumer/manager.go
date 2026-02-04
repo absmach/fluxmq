@@ -30,6 +30,7 @@ type Manager struct {
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	config     Config
+	lastCommit map[string]time.Time
 	mu         sync.RWMutex
 }
 
@@ -47,15 +48,20 @@ type Config struct {
 
 	// StealBatchSize is the maximum number of messages to steal at once.
 	StealBatchSize int
+
+	// AutoCommitInterval controls how often stream groups auto-commit offsets.
+	// Zero means commit on every delivery batch.
+	AutoCommitInterval time.Duration
 }
 
 // DefaultConfig returns default manager configuration.
 func DefaultConfig() Config {
 	return Config{
-		VisibilityTimeout: 30 * time.Second,
-		MaxDeliveryCount:  5,
-		ClaimBatchSize:    10,
-		StealBatchSize:    5,
+		VisibilityTimeout:  30 * time.Second,
+		MaxDeliveryCount:   5,
+		ClaimBatchSize:     10,
+		StealBatchSize:     5,
+		AutoCommitInterval: 5 * time.Second,
 	}
 }
 
@@ -65,6 +71,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		queueStore: queueStore,
 		groupStore: groupStore,
 		config:     config,
+		lastCommit: make(map[string]time.Time),
 	}
 }
 
@@ -254,8 +261,20 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 		}
 		// Only auto-commit if the group has AutoCommit enabled.
 		if group.AutoCommit {
-			if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
-				return nil, err
+			if m.config.AutoCommitInterval <= 0 {
+				if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
+					return nil, err
+				}
+			} else {
+				key := group.QueueName + "/" + group.ID
+				now := time.Now()
+				last, ok := m.lastCommit[key]
+				if !ok || now.Sub(last) >= m.config.AutoCommitInterval {
+					if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
+						return nil, err
+					}
+					m.lastCommit[key] = now
+				}
 			}
 		}
 	}

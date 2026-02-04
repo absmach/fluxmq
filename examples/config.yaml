@@ -177,6 +177,9 @@ webhook:
 # Queue Configuration
 # Queues are used for durable, persistent message delivery.
 # Messages published to topics starting with $queue/ are routed to matching queues.
+queue_manager:
+  auto_commit_interval: 5s
+
 queues:
   # Default MQTT queue - captures all $queue/* messages
   - name: "mqtt"

@@ -59,9 +59,10 @@ type Manager struct {
 // Config holds configuration for the queue-based queue manager.
 type Config struct {
 	// Consumer configuration
-	VisibilityTimeout time.Duration
-	MaxDeliveryCount  int
-	ClaimBatchSize    int
+	VisibilityTimeout  time.Duration
+	MaxDeliveryCount   int
+	ClaimBatchSize     int
+	AutoCommitInterval time.Duration
 
 	// Delivery configuration
 	DeliveryInterval  time.Duration
@@ -89,6 +90,7 @@ func DefaultConfig() Config {
 		VisibilityTimeout:      30 * time.Second,
 		MaxDeliveryCount:       5,
 		ClaimBatchSize:         10,
+		AutoCommitInterval:     5 * time.Second,
 		DeliveryInterval:       10 * time.Millisecond,
 		DeliveryBatchSize:      100,
 		HeartbeatInterval:      10 * time.Second,
@@ -110,10 +112,11 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	metrics := consumer.NewMetrics()
 
 	consumerCfg := consumer.Config{
-		VisibilityTimeout: config.VisibilityTimeout,
-		MaxDeliveryCount:  config.MaxDeliveryCount,
-		ClaimBatchSize:    config.ClaimBatchSize,
-		StealBatchSize:    5,
+		VisibilityTimeout:  config.VisibilityTimeout,
+		MaxDeliveryCount:   config.MaxDeliveryCount,
+		ClaimBatchSize:     config.ClaimBatchSize,
+		StealBatchSize:     5,
+		AutoCommitInterval: config.AutoCommitInterval,
 	}
 
 	consumerMgr := consumer.NewManager(queueStore, groupStore, consumerCfg)
@@ -990,7 +993,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 					}
 					if hasWorkCommitted {
 						propsCopy["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-						propsCopy["x-primary-group-processed"] = strconv.FormatBool(msg.Sequence < workCommitted)
+						propsCopy["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
 						propsCopy["x-work-group"] = config.PrimaryGroup
 					}
 					properties = propsCopy
@@ -1403,7 +1406,7 @@ func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *t
 
 	if hasWorkCommitted {
 		delivery.Properties["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-		delivery.Properties["x-primary-group-processed"] = strconv.FormatBool(msg.Sequence < workCommitted)
+		delivery.Properties["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
 		if primaryGroup != "" {
 			delivery.Properties["x-work-group"] = primaryGroup
 		}

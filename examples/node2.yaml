@@ -105,3 +105,6 @@ cluster:
 log:
   level: "debug"
   format: "text"
+
+queue_manager:
+  auto_commit_interval: 5s

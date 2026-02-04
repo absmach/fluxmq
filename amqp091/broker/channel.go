@@ -331,6 +331,38 @@ func (ch *Channel) completePublish() {
 		topic = exchangeName + "/" + routingKey
 	}
 
+	// Stream commit: publish to $queue/<queue>/$commit with x-group-id and x-offset headers.
+	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") && strings.HasSuffix(routingKey, "/$commit") {
+		qm := ch.conn.broker.getQueueManager()
+		if qm == nil {
+			ch.conn.logger.Warn("queue commit ignored: queue manager not configured", "routing_key", routingKey)
+		} else {
+			queueName := strings.TrimSuffix(strings.TrimPrefix(routingKey, "$queue/"), "/$commit")
+			if queueName == "" {
+				ch.conn.logger.Warn("queue commit missing queue name", "routing_key", routingKey)
+			} else {
+				headers := header.Properties.Headers
+				groupID, ok := parseStringArg(headers["x-group-id"])
+				if !ok || groupID == "" {
+					ch.conn.logger.Warn("queue commit missing group id", "queue", queueName)
+				} else {
+					offsetVal, ok := headers["x-offset"]
+					if !ok {
+						ch.conn.logger.Warn("queue commit missing offset", "queue", queueName, "group", groupID)
+					} else if n, ok := parseInt64Arg(offsetVal); !ok || n < 0 {
+						ch.conn.logger.Warn("queue commit invalid offset", "queue", queueName, "group", groupID)
+					} else if err := qm.CommitOffset(context.Background(), queueName, groupID, uint64(n)); err != nil {
+						ch.conn.logger.Warn("queue commit failed", "queue", queueName, "group", groupID, "error", err)
+					}
+				}
+			}
+		}
+		if ch.confirmMode {
+			ch.sendPublisherAck()
+		}
+		return
+	}
+
 	// Direct queue publish: use $queue/ prefix on routing key with default exchange.
 	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") {
 		qm := ch.conn.broker.getQueueManager()
@@ -591,7 +623,7 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 			} else {
 				headers[k] = v
 			}
-		case "x-primary-group-processed":
+		case "x-work-acked":
 			headers[k] = v == "true"
 		default:
 			headers[k] = v
@@ -1486,6 +1518,16 @@ func parseInt64Arg(val any) (int64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func parseStringArg(val any) (string, bool) {
+	switch v := val.(type) {
+	case string:
+		return strings.TrimSpace(v), true
+	case []byte:
+		return strings.TrimSpace(string(v)), true
+	}
+	return "", false
 }
 
 func extractAutoCommit(args map[string]interface{}) *bool {

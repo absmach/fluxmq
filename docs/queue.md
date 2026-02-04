@@ -102,7 +102,7 @@ Queue deliveries include properties:
 Stream deliveries also include:
 - `x-stream-offset`
 - `x-stream-timestamp`
-- `x-primary-group-processed` (based on the primary work group's committed offset)
+ - `x-work-acked` (true when this message is below the primary work group's committed offset; may lag by the auto-commit interval)
 - `x-work-committed-offset`
 - `x-work-group`
 
@@ -155,12 +155,13 @@ truncation point for queue-mode consumers.
 - `timestamp=<unix-seconds|unix-millis>`
 
 FluxMQ extensions for stream consumers:
-- `x-primary-group-processed` and `x-work-committed-offset` to report delivery status for the
+- `x-work-acked` and `x-work-committed-offset` to report delivery status for the
   configured primary work group.
 - `x-work-group` to identify the group used for status.
 - Optional `x-consumer-group` on `basic.consume` to persist a shared cursor.
   If omitted, the consumer tag is used as the stream group ID.
-- Optional `x-auto-commit=false` to disable automatic offset commits (manual commit mode).
+- Optional `x-auto-commit=false` to disable automatic offset commits
+  (default is enabled, similar to Kafka's `enable.auto.commit=true`).
 
 Primary work group is configured per queue (see configuration section) and is
 used only for delivery status reporting; it does not affect routing.
@@ -187,19 +188,25 @@ If a consumer joins a group with a different mode, the broker returns `ErrGroupM
 
 ### Manual Commit for Stream Consumers
 
-By default, stream consumers auto-commit offsets as messages are delivered. For exactly-once processing, disable auto-commit:
+By default, stream consumers auto-commit offsets as messages are delivered.
+Commits are rate-limited by `queue_manager.auto_commit_interval` (default: `5s`),
+so offsets are updated at most once per interval. For exactly-once processing,
+disable auto-commit and commit explicitly.
+
+Minimal example:
 
 ```go
 autoCommit := false
-err := client.SubscribeToStream(&StreamConsumeOptions{
-    QueueName:  "events",
-    AutoCommit: &autoCommit,
-    Offset:     "first",
+_ = client.SubscribeToStream(&StreamConsumeOptions{
+    QueueName:     "events",
+    ConsumerGroup: "my-group",
+    AutoCommit:    &autoCommit,
 }, handler)
 
-// After processing, explicitly commit
-client.CommitOffset("events", "my-group", lastProcessedOffset)
+_ = client.CommitOffset("events", "my-group", lastProcessedOffset)
 ```
+
+Use the same consumer group name in both calls.
 
 With manual commit:
 - Messages are delivered but committed offset doesn't advance automatically
@@ -301,6 +308,9 @@ Zero-copy delivery for queue messages is planned.
 Queue bindings live under `queues` in the main config:
 
 ```yaml
+queue_manager:
+  auto_commit_interval: "5s"
+
 queues:
   - name: "orders"
     topics:
@@ -324,6 +334,8 @@ queues:
 Notes:
 - If no queues are configured, a default reserved queue `mqtt` is created with topic `$queue/#`.
 - Auto-created queues are **ephemeral** and expire after the last consumer disconnects.
+- `queue_manager.auto_commit_interval` controls how often stream offsets are auto-committed.
+  Use `0s` to commit every delivery batch.
 - `message_ttl` is stored in message metadata; automatic expiration is not enforced yet.
 - `limits` and `retry` are parsed into queue configs but not enforced at runtime yet.
 - `dlq` configuration is parsed, but reject/DLQ wiring is not active in the main delivery path.

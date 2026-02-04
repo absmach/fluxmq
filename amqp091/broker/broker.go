@@ -43,6 +43,7 @@ type QueueManager interface {
 	Ack(ctx context.Context, queueName, messageID, groupID string) error
 	Nack(ctx context.Context, queueName, messageID, groupID string) error
 	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
+	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
 }
 
 // Broker is the core AMQP 0.9.1 broker.

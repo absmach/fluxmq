@@ -4,6 +4,7 @@
 package logstorage
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,6 +26,12 @@ type ConsumerGroupStateStore struct {
 
 const consumerGroupVersion uint8 = 2
 
+type consumerGroupWrapper struct {
+	Version uint8           `json:"version"`
+	State   json.RawMessage `json:"state"`
+	SavedAt int64           `json:"saved_at"`
+}
+
 // NewConsumerGroupStateStore creates or opens a consumer group state store.
 func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error) {
 	dir := filepath.Join(baseDir, "groups")
@@ -45,6 +52,40 @@ func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error
 	return store, nil
 }
 
+func decodeConsumerGroupState(data []byte) (*types.ConsumerGroupState, bool, error) {
+	var wrapper consumerGroupWrapper
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return nil, false, err
+	}
+	if wrapper.Version > consumerGroupVersion {
+		return nil, false, fmt.Errorf("unsupported consumer group version: %d", wrapper.Version)
+	}
+
+	rawState := bytes.TrimSpace(wrapper.State)
+	if len(rawState) == 0 || bytes.Equal(rawState, []byte("null")) {
+		return nil, false, nil
+	}
+
+	var state types.ConsumerGroupState
+	if err := json.Unmarshal(rawState, &state); err != nil {
+		return nil, false, err
+	}
+
+	hasAutoCommit := false
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rawState, &fields); err == nil {
+		if _, ok := fields["AutoCommit"]; ok {
+			hasAutoCommit = true
+		} else if _, ok := fields["autoCommit"]; ok {
+			hasAutoCommit = true
+		} else if _, ok := fields["auto_commit"]; ok {
+			hasAutoCommit = true
+		}
+	}
+
+	return &state, hasAutoCommit, nil
+}
+
 // loadAll loads all consumer group states from disk.
 func (s *ConsumerGroupStateStore) loadAll() error {
 	err := filepath.Walk(s.dir, func(path string, info os.FileInfo, err error) error {
@@ -60,22 +101,13 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 		if err != nil {
 			return nil
 		}
-
-		var wrapper struct {
-			Version uint8                     `json:"version"`
-			State   *types.ConsumerGroupState `json:"state"`
-			SavedAt int64                     `json:"saved_at"`
-		}
-
-		if err := json.Unmarshal(data, &wrapper); err != nil {
+		state, hasAutoCommit, err := decodeConsumerGroupState(data)
+		if err != nil {
 			return nil
 		}
-
-		if wrapper.State == nil {
+		if state == nil {
 			return nil
 		}
-
-		state := wrapper.State
 
 		// Ensure maps are initialized
 		if state.Cursor == nil {
@@ -83,6 +115,9 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 		}
 		if state.Mode == "" {
 			state.Mode = types.GroupModeQueue
+		}
+		if !hasAutoCommit {
+			state.AutoCommit = true
 		}
 		if state.PEL == nil {
 			state.PEL = make(map[string][]*types.PendingEntry)
@@ -125,22 +160,13 @@ func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.C
 	if err != nil {
 		return nil, err
 	}
-
-	var wrapper struct {
-		Version uint8                     `json:"version"`
-		State   *types.ConsumerGroupState `json:"state"`
-		SavedAt int64                     `json:"saved_at"`
-	}
-
-	if err := json.Unmarshal(data, &wrapper); err != nil {
+	state, hasAutoCommit, err := decodeConsumerGroupState(data)
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal consumer group state: %w", err)
 	}
-
-	if wrapper.Version > consumerGroupVersion {
-		return nil, fmt.Errorf("unsupported consumer group version: %d", wrapper.Version)
+	if state == nil {
+		return nil, fmt.Errorf("consumer group state is empty")
 	}
-
-	state := wrapper.State
 
 	// Ensure maps are initialized
 	if state.Cursor == nil {
@@ -148,6 +174,9 @@ func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.C
 	}
 	if state.Mode == "" {
 		state.Mode = types.GroupModeQueue
+	}
+	if !hasAutoCommit {
+		state.AutoCommit = true
 	}
 	if state.PEL == nil {
 		state.PEL = make(map[string][]*types.PendingEntry)

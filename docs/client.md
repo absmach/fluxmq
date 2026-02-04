@@ -562,37 +562,37 @@ if err := c.PublishToStream("events", []byte("hello"), nil); err != nil {
 Stream deliveries include:
 - `x-stream-offset`
 - `x-stream-timestamp`
-- `x-primary-group-processed` / `x-work-committed-offset`
+- `x-work-acked` / `x-work-committed-offset`
 
 The `x-work-*` fields report the configured primary work group's committed offset.
+`x-work-acked` is `true` when this message's offset is below the committed offset,
+which can lag slightly due to auto-commit interval batching.
 Convenience accessors are available on `QueueMessage`:
-`StreamOffset()`, `StreamTimestamp()`, `PrimaryGroupProcessed()`, `WorkCommittedOffset()`, `WorkGroup()`.
-`WorkAcked()` is deprecated but still supported for backward compatibility.
+`StreamOffset()`, `StreamTimestamp()`, `WorkAcked()`, `WorkCommittedOffset()`, `WorkGroup()`.
 
 ### Manual Commit Mode
 
-By default, stream consumers auto-commit offsets as messages are delivered. For
-exactly-once processing, disable auto-commit:
+By default, stream consumers auto-commit offsets as messages are delivered
+(similar to Kafka's `enable.auto.commit=true`). For exactly-once processing,
+disable auto-commit and commit explicitly.
+
+Auto-commit is rate-limited by the server setting
+`queue_manager.auto_commit_interval` (default: `5s`).
+
+Minimal example:
 
 ```go
 autoCommit := false
-err = c.SubscribeToStream(&amqp091.StreamConsumeOptions{
-    QueueName:  "events",
-    AutoCommit: &autoCommit,
-    Offset:     "first",
-}, func(msg *amqp091.QueueMessage) {
-    if off, ok := msg.StreamOffset(); ok {
-        log.Printf("offset=%d payload=%s", off, string(msg.Body))
-    }
-    // Process message...
-    // Explicitly commit after successful processing
-})
+_ = c.SubscribeToStream(&amqp091.StreamConsumeOptions{
+    QueueName:     "events",
+    ConsumerGroup: "my-group",
+    AutoCommit:    &autoCommit,
+}, handler)
 
-// After processing a batch, commit the last processed offset
-if err := c.CommitOffset("events", "my-group", lastProcessedOffset); err != nil {
-    log.Printf("commit failed: %v", err)
-}
+_ = c.CommitOffset("events", "my-group", lastProcessedOffset)
 ```
+
+Use the same consumer group name in both calls.
 
 With manual commit:
 - Messages are delivered but the committed offset doesn't advance automatically

@@ -15,15 +15,16 @@ import (
 
 // Config holds all configuration for the MQTT broker.
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Broker    BrokerConfig    `yaml:"broker"`
-	Session   SessionConfig   `yaml:"session"`
-	Log       LogConfig       `yaml:"log"`
-	Storage   StorageConfig   `yaml:"storage"`
-	Cluster   ClusterConfig   `yaml:"cluster"`
-	Webhook   WebhookConfig   `yaml:"webhook"`
-	RateLimit RateLimitConfig `yaml:"ratelimit"`
-	Queues    []QueueConfig   `yaml:"queues"`
+	Server       ServerConfig       `yaml:"server"`
+	Broker       BrokerConfig       `yaml:"broker"`
+	Session      SessionConfig      `yaml:"session"`
+	Log          LogConfig          `yaml:"log"`
+	Storage      StorageConfig      `yaml:"storage"`
+	Cluster      ClusterConfig      `yaml:"cluster"`
+	Webhook      WebhookConfig      `yaml:"webhook"`
+	RateLimit    RateLimitConfig    `yaml:"ratelimit"`
+	QueueManager QueueManagerConfig `yaml:"queue_manager"`
+	Queues       []QueueConfig      `yaml:"queues"`
 }
 
 // QueueConfig defines configuration for a persistent queue.
@@ -65,6 +66,13 @@ type QueueRetention struct {
 	MaxAge            time.Duration `yaml:"max_age"`
 	MaxLengthBytes    int64         `yaml:"max_length_bytes"`
 	MaxLengthMessages int64         `yaml:"max_length_messages"`
+}
+
+// QueueManagerConfig defines runtime behavior for the queue manager.
+type QueueManagerConfig struct {
+	// AutoCommitInterval controls how often stream groups auto-commit offsets.
+	// Zero means commit on every delivery batch.
+	AutoCommitInterval time.Duration `yaml:"auto_commit_interval"`
 }
 
 // RateLimitConfig holds rate limiting configuration.
@@ -536,6 +544,9 @@ func Default() *Config {
 				Burst:   10,
 			},
 		},
+		QueueManager: QueueManagerConfig{
+			AutoCommitInterval: 5 * time.Second,
+		},
 		Queues: []QueueConfig{
 			{
 				Name:     "mqtt",
@@ -892,6 +903,10 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("webhook.endpoints[%d].url cannot be empty", i)
 			}
 		}
+	}
+
+	if c.QueueManager.AutoCommitInterval < 0 {
+		return fmt.Errorf("queue_manager.auto_commit_interval must be >= 0")
 	}
 
 	// Queue validation

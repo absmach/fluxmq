@@ -65,6 +65,9 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 **Recommended configuration for EDA:**
 ```yaml
+queue_manager:
+  auto_commit_interval: "5s"
+
 queues:
   - name: "orders"
     topics: ["orders/#", "$queue/orders/#"]

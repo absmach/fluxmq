@@ -89,17 +89,8 @@ func (qm *QueueMessage) StreamTimestamp() (int64, bool) {
 	return 0, false
 }
 
-// PrimaryGroupProcessed reports whether the primary group has processed this offset.
-func (qm *QueueMessage) PrimaryGroupProcessed() (bool, bool) {
-	return headerBool(qm.Headers, "x-primary-group-processed")
-}
-
 // WorkAcked reports whether the primary work group has acknowledged this offset.
-// Deprecated: Use PrimaryGroupProcessed instead.
 func (qm *QueueMessage) WorkAcked() (bool, bool) {
-	if v, ok := headerBool(qm.Headers, "x-primary-group-processed"); ok {
-		return v, ok
-	}
 	return headerBool(qm.Headers, "x-work-acked")
 }
 

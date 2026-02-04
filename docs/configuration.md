@@ -511,6 +511,21 @@ Controls what happens when the offline queue is full.
 
 ## Queue Configuration
 
+Queue runtime settings live under `queue_manager`:
+
+```yaml
+queue_manager:
+  auto_commit_interval: "5s"
+```
+
+### auto_commit_interval
+
+How often stream consumer groups auto-commit offsets when auto-commit is enabled.
+
+Notes:
+- Default: `5s` (Kafka-like).
+- `0s` commits on every delivery batch (lowest latency, more write pressure).
+
 Queues are defined under `queues:` and bind **topic patterns** to durable queues.
 Topics use MQTT-style wildcards (`+`, `#`). A publish routed through the queue
 manager is enqueued into every queue whose bindings match the topic.
@@ -519,6 +534,9 @@ If no queues are configured, a default reserved queue named `mqtt` is created
 with topics `["$queue/#"]`, which preserves the `$queue/*` behavior out of the box.
 
 ```yaml
+queue_manager:
+  auto_commit_interval: "5s"
+
 queues:
   - name: "orders"
     topics:

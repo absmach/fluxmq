@@ -60,6 +60,9 @@ log:
   format: "text"
 
 # Queue Configuration - persistent message queues
+queue_manager:
+  auto_commit_interval: 5s
+
 queues:
   - name: "mqtt"
     topics:
