@@ -3,6 +3,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/absmach/fluxmq)](https://goreportcard.com/report/github.com/absmach/fluxmq)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+> **Status: Experimental** — FluxMQ is not production-ready yet.
+
 A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. MQTT transports share a single broker, AMQP 1.0 and AMQP 0.9.1 run in independent brokers, and durable queues provide cross-protocol routing and fan-out.
 
 ## Links
