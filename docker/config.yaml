@@ -1,0 +1,10 @@
+# Minimal single-instance configuration for Docker
+cluster:
+  enabled: false
+
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/fluxmq/data"
+
+log:
+  level: "info"

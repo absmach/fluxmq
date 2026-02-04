@@ -8,7 +8,8 @@ GO := go
 # Build flags
 LDFLAGS := -s -w
 GOFLAGS := -trimpath
-
+DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
+DOCKER_IMAGE_GIT := ghcr.io/absmach/fluxmq:$(shell git describe --tags --always --dirty)
 
 
 # Default target
@@ -22,6 +23,16 @@ build: $(BUILD_DIR)/$(BINARY)
 $(BUILD_DIR)/$(BINARY): cmd/main.go $(shell find . -name '*.go' -not -path './build/*')
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd
+
+# Build Docker image (latest tag)
+.PHONY: docker
+docker:
+	docker build -f docker/Dockerfile -t $(DOCKER_IMAGE_LATEST) .
+
+# Build Docker image tagged with the current git tag/sha
+.PHONY: docker-latest
+docker-latest:
+	docker build -f docker/Dockerfile -t $(DOCKER_IMAGE_GIT) .
 
 # Run the broker (uses default configuration)
 .PHONY: run
@@ -212,4 +223,6 @@ help:
 	@echo "  clean              Remove build artifacts"
 	@echo "  clean-data         Remove all /tmp/fluxmq data directories"
 	@echo "  deps               Download and tidy dependencies"
+	@echo "  docker             Build Docker image ($(DOCKER_IMAGE_LATEST))"
+	@echo "  docker-latest      Build Docker image ($(DOCKER_IMAGE_GIT))"
 	@echo "  help               Show this help message"

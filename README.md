@@ -45,16 +45,13 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 ### ⚠️ Not Recommended For
 
 **Long-term Event Storage**
-- ❌ Event sourcing as permanent source of truth - storage uses LSM-tree (compaction/deletion allowed)
+- ❌ Event sourcing as permanent source of truth - compaction/deletion/retention policies are allowed
 - ❌ Compliance/audit trails requiring immutability - use purpose-built event stores (EventStoreDB)
 - ❌ Time-travel debugging or temporal queries - no time-range indexing
 
 **Complex Event Processing**
 - ❌ Advanced queries over events - no indexing beyond topic and offset
-- ❌ Built-in stream processing - no Kafka Streams equivalent (process events in consumers)
-
-**Large Payloads**
-- ❌ Multi-megabyte messages - 1MB default limit (configurable, but storage optimized for smaller messages)
+- ❌ Built-in stream processing - no Kafka Streams equivalent. Consumers do event processing
 
 ### Event-Driven Architecture Pattern
 
@@ -157,6 +154,12 @@ Defaults in `examples/no-cluster.yaml`:
 - MQTT TCP: `:1883`
 - AMQP 0.9.1: `:5682`
 - Data dir: `/tmp/fluxmq/data`
+
+## Docker
+
+- Image: `ghcr.io/absmach/fluxmq`
+- Examples: `docker/README.md`, `docker/compose.yaml`, `docker/config.yaml`
+- Build local images: `make docker` (latest) or `make docker-latest` (git tag/sha)
 
 ## Configuration
 
