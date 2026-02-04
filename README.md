@@ -13,7 +13,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 - [Documentation](https://fluxmq.absmach.eu/docs)
 - [Website](https://fluxmq.absmach.eu)
-- [Professional Support](mailto:support@absmach.eu)
+- [Professional Support](mailto:info@absmach.eu)
 - [Discord](https://discord.gg/HvB5QuzF)
 
 ## ✅ Recommended for
@@ -129,33 +129,33 @@ FluxMQ is optimized for event-driven systems that need ordered delivery, durable
 │  • Set up MQTT, AMQP 1.0, AMQP 0.9.1 brokers                 │
 │  • Creates shared Queue Manager (bindings + delivery)        │
 │  • Wires cluster, storage, metrics, shutdown                 │
-└──────────┬──────────────┬──────────────┬──────────────┬──────┘
-           │              │              │              │
-           ▼              ▼              ▼              ▼
+└──────────┬──────────────────┬──────────────────┬─────────────┘
+           │                  │                  │
+           ▼                  ▼                  ▼
   ┌────────────────┐   ┌─────────────┐   ┌─────────────┐
   │ TCP/WS/HTTP/   │   │ AMQP 1.0    │   │ AMQP 0.9.1  │
   │ CoAP Servers   │   │ Server      │   │ Server      │
-  └──────┬─────────┘   └──────┬──────┘   └──────┬──────┘
-         │                    │                 │
-         ▼                    ▼                 ▼
+  └───────┬────────┘   └──────┬──────┘   └───────┬─────┘
+          │                   │                  │
+          ▼                   ▼                  ▼
     ┌────────────┐      ┌────────────┐     ┌────────────┐
-    │ MQTT Broker│      │ AMQP Broker│     │ AMQP091 Br.│
+    │ MQTT Broker│      │ AMQP Broker│     │ AMQP Broker│
     │ (protocol  │      │   (1.0)    │     │   (0.9.1)  │
-    │ logic/fsm) │      └──────┬─────┘     └──────┬─────┘
-    └──────┬─────┘             │                  │
-           └─────────────┬─────┴──────────────────┘
-                         │ queue-capable traffic
-                         ▼
-                  ┌────────────────┐
-                  │ Queue Manager  │
-                  │ (bindings +    │
-                  │ delivery)      │
-                  └──────┬─────────┘
-                         ▼
-                  ┌────────────────┐
-                  │ Log Storage    │
-                  │ + Topic Index  │
-                  └────────────────┘
+    │ logic/fsm) │      └─────┬──────┘     └─────┬──────┘
+    └──────┬─────┘            │                  │
+           └──────────────────┬──────────────────┘
+                              │ queue-capable traffic
+                              ▼
+                      ┌────────────────┐
+                      │ Queue Manager  │
+                      │ (bindings +    │
+                      │ delivery)      │
+                      └──────┬─────────┘
+                             ▼
+                      ┌────────────────┐
+                      │ Log Storage    │
+                      │ + Topic Index  │
+                      └────────────────┘
 ```
 
 MQTT transports share one broker; AMQP brokers are independent; queues provide the shared durability and cross-protocol fan-out layer.

@@ -20,37 +20,37 @@ This document focuses on the MQTT broker internals and the shared queue layer, a
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                         cmd/main.go                          │
-│  • Creates MQTT, AMQP 1.0, AMQP 0.9.1 brokers                │
+│  • Set up MQTT, AMQP 1.0, AMQP 0.9.1 brokers                 │
 │  • Creates shared Queue Manager (bindings + delivery)        │
 │  • Wires cluster, storage, metrics, shutdown                 │
-└──────────┬──────────────┬──────────────┬──────────────┬──────┘
-           │              │              │              │
-           ▼              ▼              ▼              ▼
+└──────────┬──────────────────┬──────────────────┬─────────────┘
+           │                  │                  │
+           ▼                  ▼                  ▼
   ┌────────────────┐   ┌─────────────┐   ┌─────────────┐
   │ TCP/WS/HTTP/   │   │ AMQP 1.0    │   │ AMQP 0.9.1  │
   │ CoAP Servers   │   │ Server      │   │ Server      │
-  └──────┬─────────┘   └──────┬──────┘   └──────┬──────┘
-         │                   │                 │
-         ▼                   ▼                 ▼
+  └───────┬────────┘   └──────┬──────┘   └───────┬─────┘
+          │                   │                  │
+          ▼                   ▼                  ▼
     ┌────────────┐      ┌────────────┐     ┌────────────┐
-    │ MQTT Broker│      │ AMQP Broker│     │ AMQP091 Br.│
+    │ MQTT Broker│      │ AMQP Broker│     │ AMQP Broker│
     │ (protocol  │      │   (1.0)    │     │   (0.9.1)  │
-    │ logic/fsm) │      └──────┬─────┘     └──────┬─────┘
-    └──────┬─────┘             │                  │
-           └─────────────┬─────┴────────────┬─────┘
-                         │ queue-capable traffic
-                         ▼
-                  ┌────────────────┐
-                  │ Queue Manager  │
-                  │ (bindings +    │
-                  │ delivery)      │
-                  └──────┬─────────┘
-                         ▼
-                  ┌────────────────┐
-                  │ Log Storage    │
-                  │ + Topic Index  │
-                  └────────────────┘
+    │ logic/fsm) │      └─────┬──────┘     └─────┬──────┘
+    └──────┬─────┘            │                  │
+           └──────────────────┬──────────────────┘
+                              │ queue-capable traffic
+                              ▼
+                      ┌────────────────┐
+                      │ Queue Manager  │
+                      │ (bindings +    │
+                      │ delivery)      │
+                      └──────┬─────────┘
+                             ▼
+                      ┌────────────────┐
+                      │ Log Storage    │
+                      │ + Topic Index  │
+                      └────────────────┘
+```
 
 Key Architecture Insight:
 - MQTT transports (TCP/WS/HTTP/CoAP) share ONE MQTT broker
