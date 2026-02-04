@@ -16,7 +16,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ## Who Is This For
 
-### ✅ Ideal Use Cases
+### ✅ Recommended for
 
 **Event-Driven Architectures**
 - **Event backbone for microservices** - Reliable, ordered event distribution between services with at-least-once or exactly-once delivery (QoS 1/2)
@@ -24,8 +24,8 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 - **Asynchronous workflows** - Decouple services with persistent message queues and ack/nack-based redelivery
 - **Real-time event processing** - High throughput (300K-500K msg/s per node) with low latency (<10ms local, ~5ms cross-node)
 
-**Why choose this over Kafka for EDA:**
-- ✅ Simpler operations - single binary with embedded storage, no Zookeeper/KRaft
+**Why choose this over for EDA:**
+- ✅ Simple operations - single binary with embedded storage, no Zookeeper/KRaft
 - ✅ Multi-protocol - same broker handles MQTT, HTTP, WebSocket, CoAP
 - ✅ Per-queue FIFO ordering (single-log queues)
 - ✅ Retention via committed-offset truncation (time/size retention planned)
@@ -40,7 +40,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 **High-Availability Systems**
 - **Clustered deployments** - 3-5 node clusters with automatic failover (sub-100ms session takeover)
 - **Geographic distribution** - gRPC-based cross-node routing with embedded etcd coordination
-- **Scalability** - Linear scaling (3-node cluster: 1-2M msg/s, 5-node cluster: 2-4M msg/s)
+- **Scalability** - Cluster support (3-node cluster: 1-2M msg/s, 5-node cluster: 2-4M msg/s)
 
 ### ⚠️ Not Recommended For
 
@@ -75,7 +75,6 @@ FluxMQ is optimized for event-driven systems that need ordered delivery, durable
   - Efficient trie-based topic matching
   - Direct instrumentation (no middleware overhead)
   - Concurrent connection handling
-  - 3.3x throughput improvement via buffer pooling
 
 - **Full MQTT Feature Set**
   - QoS 0, 1, and 2 message delivery
@@ -126,17 +125,37 @@ FluxMQ is optimized for event-driven systems that need ordered delivery, durable
 ## Architecture
 
 ```
-┌──────────────────┐   ┌──────────────┐   ┌──────────────┐
-│ MQTT Transports  │   │ AMQP 1.0     │   │ AMQP 0.9.1   │
-│ TCP/WS/HTTP/CoAP │   │ Server       │   │ Server       │
-└───────┬──────────┘   └──────┬───────┘   └──────┬───────┘
-        ▼                     ▼                  ▼
-   MQTT Broker           AMQP Broker        AMQP091 Broker
-        └───────────────┬───────────────┬───────────────┘
-                        ▼
-                  Queue Manager
-                        ▼
-               Log Storage + Index
+┌──────────────────────────────────────────────────────────────┐
+│  • Set up MQTT, AMQP 1.0, AMQP 0.9.1 brokers                 │
+│  • Creates shared Queue Manager (bindings + delivery)        │
+│  • Wires cluster, storage, metrics, shutdown                 │
+└──────────┬──────────────┬──────────────┬──────────────┬──────┘
+           │              │              │              │
+           ▼              ▼              ▼              ▼
+  ┌────────────────┐   ┌─────────────┐   ┌─────────────┐
+  │ TCP/WS/HTTP/   │   │ AMQP 1.0    │   │ AMQP 0.9.1  │
+  │ CoAP Servers   │   │ Server      │   │ Server      │
+  └──────┬─────────┘   └──────┬──────┘   └──────┬──────┘
+         │                    │                 │
+         ▼                    ▼                 ▼
+    ┌────────────┐      ┌────────────┐     ┌────────────┐
+    │ MQTT Broker│      │ AMQP Broker│     │ AMQP091 Br.│
+    │ (protocol  │      │   (1.0)    │     │   (0.9.1)  │
+    │ logic/fsm) │      └──────┬─────┘     └──────┬─────┘
+    └──────┬─────┘             │                  │
+           └─────────────┬─────┴──────────────────┘
+                         │ queue-capable traffic
+                         ▼
+                  ┌────────────────┐
+                  │ Queue Manager  │
+                  │ (bindings +    │
+                  │ delivery)      │
+                  └──────┬─────────┘
+                         ▼
+                  ┌────────────────┐
+                  │ Log Storage    │
+                  │ + Topic Index  │
+                  └────────────────┘
 ```
 
 MQTT transports share one broker; AMQP brokers are independent; queues provide the shared durability and cross-protocol fan-out layer.
