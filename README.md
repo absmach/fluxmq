@@ -3,7 +3,14 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/absmach/fluxmq)](https://goreportcard.com/report/github.com/absmach/fluxmq)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. Supports MQTT 3.1.1 and 5.0 over TCP and WebSocket, plus HTTP-MQTT and CoAP bridges for IoT integration.
+A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. MQTT transports share a single broker, AMQP 1.0 and AMQP 0.9.1 run in independent brokers, and durable queues provide cross-protocol routing and fan-out.
+
+## Links
+
+- [Documentation](https://fluxmq.absmach.eu/docs)
+- [Website](https://fluxmq.absmach.eu)
+- [Professional Support](mailto:support@absmach.eu)
+- [Discord](https://discord.gg/HvB5QuzF)
 
 ## Who Is This For
 
@@ -49,51 +56,19 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ### Event-Driven Architecture Pattern
 
-```
-┌─────────────┐         ┌──────────────────┐         ┌─────────────┐
-│  Service A  │────────>│   MQTT Broker    │────────>│  Service B  │
-│ (Producer)  │  events │  (Event Bus)     │ events  │ (Consumer)  │
-└─────────────┘         │                  │         └─────────────┘
-      │                 │  • Retention: committed offset  │
-      │                 │  • Replication: WIP (Raft)       │
-      ▼                 │  • Ordering: FIFO per queue      │
-┌─────────────┐         └──────────────────┘         ┌─────────────┐
-│  Database   │                                      │  Database   │
-│  (State)    │         Broker = Durable Pipe        │  (State)    │
-└─────────────┘         Database = Source of Truth   └─────────────┘
-```
-
-**Recommended configuration for EDA:**
-```yaml
-queue_manager:
-  auto_commit_interval: "5s"
-
-queues:
-  - name: "orders"
-    topics: ["orders/#", "$queue/orders/#"]
-    limits:
-      max_message_size: 1048576
-      max_depth: 100000
-      message_ttl: 168h
-    retry:
-      max_retries: 10
-      initial_backoff: 5s
-      max_backoff: 5m
-      multiplier: 2.0
-    dlq:
-      enabled: true
-```
-Note: queue limits, retry, and DLQ wiring are parsed but not fully enforced yet.
+FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and `docs/queue.md`.
 
 ## Features
 
 - **Multi-Protocol Support**
   - **MQTT 3.1.1** - Full support over TCP and WebSocket
   - **MQTT 5.0** - Full support over TCP and WebSocket
+  - **AMQP 1.0** - Dedicated broker with queue integration
+  - **AMQP 0.9.1** - Dedicated broker with queue integration
   - **HTTP-MQTT Bridge** - RESTful API for publishing messages
   - **WebSocket Transport** - MQTT over WebSocket for browser clients
   - **CoAP Bridge** - UDP and DTLS (mDTLS) support for constrained IoT devices
-  - All protocols share the same broker core - messages flow seamlessly across protocols
+  - MQTT transports share a broker; AMQP brokers are independent; queues are the shared durability layer
 
 - **Performance Optimized**
   - Zero-copy packet parsing
@@ -145,177 +120,45 @@ Note: queue limits, retry, and DLQ wiring are parsed but not fully enforced yet.
 
 - **Extensible Architecture**
   - Clean layered design: Transport → Protocol → Domain
-  - Protocol-agnostic domain logic
+  - Protocol-agnostic domain logic and shared queue manager
   - Easy to add new protocols and transports
   - Dependency injection for logging and metrics
 
 ## Architecture
 
 ```
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│ TCP Server  │  │ WebSocket   │  │ HTTP Bridge │  │ CoAP Bridge │
-│   :1883     │  │   :8083     │  │   :8080     │  │   :5683     │
-└──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-       └────────────────┴────────────────┴────────────────┘
-                                  │
-                  ┌───────────────┴───────────────┐
-                  │     Protocol Detection        │
-                  └───────────────┬───────────────┘
-                                  │
-                  ┌───────────────┴───────────────┐
-                  │                               │
-           ┌──────▼──────┐                 ┌──────▼──────┐
-           │ V3 Handler  │                 │ V5 Handler  │
-           │ (MQTT 3.1.1)│                 │ (MQTT 5.0)  │
-           └──────┬──────┘                 └──────┬──────┘
-                  └───────────────┬───────────────┘
-                                  ▼
-    ┌─────────────────────────────────────────────────────────────┐
-    │                     Domain Layer                            │
-    │                                                             │
-    │  Sessions  │  Router (Trie)  │  Pub/Sub  │  Durable Queues  │
-    │                                                             │
-    │  Built-in: Logging (slog) • Metrics • Instrumentation       │
-    └──────────────────────────────┬──────────────────────────────┘
-                                   │
-    ┌──────────────────────────────┴──────────────────────────────┐
-    │                    Infrastructure                           │
-    │                                                             │
-    │ ┌──────────┐  ┌───────────┐  ┌───────────┐  ┌────────────┐  │
-    │ │ Storage  │  │ Cluster   │  │ Session   │  │   Queue    │  │
-    │ │ BadgerDB │  │ etcd+gRPC │  │ Cache     │  │  Storage   │  │
-    │ └──────────┘  └───────────┘  └───────────┘  └────────────┘  │
-    └─────────────────────────────────────────────────────────────┘
+┌──────────────────┐   ┌──────────────┐   ┌──────────────┐
+│ MQTT Transports  │   │ AMQP 1.0     │   │ AMQP 0.9.1   │
+│ TCP/WS/HTTP/CoAP │   │ Server       │   │ Server       │
+└───────┬──────────┘   └──────┬───────┘   └──────┬───────┘
+        ▼                     ▼                  ▼
+   MQTT Broker           AMQP Broker        AMQP091 Broker
+        └───────────────┬───────────────┬───────────────┘
+                        ▼
+                  Queue Manager
+                        ▼
+               Log Storage + Index
 ```
 
-All protocols share the same broker core - messages flow seamlessly across protocols.
+MQTT transports share one broker; AMQP brokers are independent; queues provide the shared durability and cross-protocol fan-out layer.
 
-## Quick Start
+## Getting Started
 
-### Prerequisites
-
-- Go 1.24 or later
-
-### Build & Run
+### Quick Single-Instance Service (No Clustering)
 
 ```bash
-# Clone and build
-git clone https://github.com/absmach/fluxmq.git
-cd fluxmq
 make build
-
-# Run single node
-./build/fluxmq
-
-# Run with configuration
-./build/fluxmq --config config.yaml
-
-# Run 3-node cluster
-make run-node1  # Terminal 1
-make run-node2  # Terminal 2
-make run-node3  # Terminal 3
+./build/fluxmq --config examples/no-cluster.yaml
 ```
 
-### Test
-
-```bash
-# Subscribe on one node
-mosquitto_sub -p 1884 -t "test/#" -v
-
-# Publish on another node
-mosquitto_pub -p 1885 -t "test/hello" -m "Cross-node message"
-```
+Defaults in `examples/no-cluster.yaml`:
+- MQTT TCP: `:1883`
+- AMQP 0.9.1: `:5682`
+- Data dir: `/tmp/fluxmq/data`
 
 ## Configuration
 
-```yaml
-server:
-  tcp:
-    plain:
-      addr: ":1883"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-  websocket:
-    plain:
-      addr: ":8083"
-      path: "/mqtt"
-  http:
-    plain:
-      addr: ":8080"
-
-broker:
-  max_message_size: 1048576
-  max_retained_messages: 10000
-
-storage:
-  type: badger
-  path: "./data"
-
-log:
-  level: info
-```
-
-TLS/mTLS listeners use inline certificate fields under the listener mode:
-
-```yaml
-server:
-  tcp:
-    tls:
-      addr: ":8883"
-      cert_file: "/path/to/server.crt"
-      key_file: "/path/to/server.key"
-      min_version: "TLS1.2"
-      prefer_server_cipher_suites: true
-      cipher_suites:
-        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-    mtls:
-      addr: ":8884"
-      cert_file: "/path/to/server.crt"
-      key_file: "/path/to/server.key"
-      ca_file: "/path/to/ca.crt"
-      client_auth: "require"
-```
-
-`client_auth` supports `none`, `request`, `require_any`, `verify_if_given`, or `require` (alias for require-and-verify).
-If `ca_file` is set and `client_auth` is empty, the server defaults to `require`.
-`min_version` and `prefer_server_cipher_suites` apply to TLS only.
-If they are omitted, Go's default TLS behavior is used.
-`cipher_suites` applies to TLS and DTLS; if omitted, each library's default list is used.
-DTLS will reject suites it doesn't support.
-HTTP TLS/mTLS uses the same inline fields under `server.http.tls` and `server.http.mtls`.
-
-Go 1.24 default TLS behavior (when you omit these fields):
-- Minimum version: TLS 1.2 (TLS 1.3 enabled by default)
-- TLS 1.3 suites (order prefers AES when hardware support is present):
-
-```text
-TLS_AES_128_GCM_SHA256
-TLS_AES_256_GCM_SHA384
-TLS_CHACHA20_POLY1305_SHA256
-```
-
-- TLS 1.2 suites (order prefers AES-GCM when hardware support is present):
-
-```text
-TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
-TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
-TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
-TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
-TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
-TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
-```
-
-Default order can change with hardware support and `GODEBUG` flags like `tlsrsakex` and `tls3des`.
-
-See [Configuration Guide](docs/configuration.md) for complete reference.
+Configuration is YAML-based. See `examples/` for starter files and `docs/configuration.md` for the full reference.
 
 ## Performance
 
