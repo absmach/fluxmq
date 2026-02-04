@@ -171,9 +171,9 @@ func TestClient_HandleQueueMessage(t *testing.T) {
 		Topic:   "$queue/test",
 		Payload: []byte("test payload"),
 		UserProperties: map[string]string{
-			"message-id":   "msg-123",
-			"partition-id": "5",
-			"sequence":     "42",
+			"message-id": "msg-123",
+			"group-id":   "workers",
+			"offset":     "42",
 		},
 	}
 
@@ -209,9 +209,9 @@ func TestClient_HandleQueueMessage_WithHandler(t *testing.T) {
 		Topic:   "$queue/test",
 		Payload: []byte("test payload"),
 		UserProperties: map[string]string{
-			"message-id":   "msg-123",
-			"partition-id": "5",
-			"sequence":     "42",
+			"message-id": "msg-123",
+			"group-id":   "workers",
+			"offset":     "42",
 		},
 	}
 
@@ -233,6 +233,8 @@ func TestClient_HandleQueueMessage_WithHandler(t *testing.T) {
 
 	require.NotNil(t, receivedQueueMsg)
 	assert.Equal(t, "msg-123", receivedQueueMsg.MessageID)
+	assert.Equal(t, "workers", receivedQueueMsg.GroupID)
+	assert.Equal(t, uint64(42), receivedQueueMsg.Offset)
 	assert.Equal(t, uint64(42), receivedQueueMsg.Sequence)
 	assert.Equal(t, "test", receivedQueueMsg.queueName)
 	assert.Equal(t, client, receivedQueueMsg.client)

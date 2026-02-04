@@ -11,16 +11,16 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 **Event-Driven Architectures**
 - **Event backbone for microservices** - Reliable, ordered event distribution between services with at-least-once or exactly-once delivery (QoS 1/2)
-- **CQRS systems** - Durable queues for command/event distribution with partition-based ordering per aggregate
-- **Asynchronous workflows** - Decouple services with persistent message queues and automatic retries
+- **CQRS systems** - Durable queues for command/event distribution with per-queue FIFO ordering
+- **Asynchronous workflows** - Decouple services with persistent message queues and ack/nack-based redelivery
 - **Real-time event processing** - High throughput (300K-500K msg/s per node) with low latency (<10ms local, ~5ms cross-node)
 
 **Why choose this over Kafka for EDA:**
 - ✅ Simpler operations - single binary with embedded storage, no Zookeeper/KRaft
 - ✅ Multi-protocol - same broker handles MQTT, HTTP, WebSocket, CoAP
-- ✅ Partition-based ordering with sequence numbers (perfect for aggregate-based event streams)
-- ✅ Configurable retention (hours to days) for event replay during deployments/failures
-- ✅ Raft replication with quorum writes ensures no lost events
+- ✅ Per-queue FIFO ordering (single-log queues)
+- ✅ Retention via committed-offset truncation (time/size retention planned)
+- ✅ Optional Raft layer for queue appends (WIP)
 
 **IoT & Real-Time Systems**
 - **Device communication** - MQTT 3.1.1/5.0 with QoS levels for reliable delivery over unreliable networks
@@ -41,7 +41,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 - ❌ Time-travel debugging or temporal queries - no time-range indexing
 
 **Complex Event Processing**
-- ❌ Advanced queries over events - no indexing beyond partition+sequence
+- ❌ Advanced queries over events - no indexing beyond topic and offset
 - ❌ Built-in stream processing - no Kafka Streams equivalent (process events in consumers)
 
 **Large Payloads**
@@ -54,9 +54,9 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 │  Service A  │────────>│   MQTT Broker    │────────>│  Service B  │
 │ (Producer)  │  events │  (Event Bus)     │ events  │ (Consumer)  │
 └─────────────┘         │                  │         └─────────────┘
-      │                 │  • Retention: 7d │               │
-      │                 │  • Replication:3x│               │
-      ▼                 │  • Ordering: Yes │               ▼
+      │                 │  • Retention: committed offset  │
+      │                 │  • Replication: WIP (Raft)       │
+      ▼                 │  • Ordering: FIFO per queue      │
 ┌─────────────┐         └──────────────────┘         ┌─────────────┐
 │  Database   │                                      │  Database   │
 │  (State)    │         Broker = Durable Pipe        │  (State)    │
@@ -65,17 +65,22 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 **Recommended configuration for EDA:**
 ```yaml
-queue:
-  ordering: partition              # FIFO per aggregate/entity
-  partitions: 50-100               # Balance parallelism vs overhead
-  retention:
-    retention_time: 168h           # 7 days for replay
-  replication:
-    enabled: true
-    replication_factor: 3          # Survive node failures
-    mode: sync                     # Don't lose events
-    min_in_sync_replicas: 2        # Quorum writes
+queues:
+  - name: "orders"
+    topics: ["orders/#", "$queue/orders/#"]
+    limits:
+      max_message_size: 1048576
+      max_depth: 100000
+      message_ttl: 168h
+    retry:
+      max_retries: 10
+      initial_backoff: 5s
+      max_backoff: 5m
+      multiplier: 2.0
+    dlq:
+      enabled: true
 ```
+Note: queue limits, retry, and DLQ wiring are parsed but not fully enforced yet.
 
 ## Features
 
@@ -125,10 +130,10 @@ queue:
 - **Durable Queues**
   - Persistent message queues with consumer groups
   - Ack/Nack/Reject message acknowledgment
-  - Partitioning with ordered delivery
-  - Dead-letter queue support
-  - Raft-based replication (3x, automatic failover)
-  - Kafka-style retention (time, size, log compaction)
+  - FIFO per queue and per consumer group (single cursor)
+  - DLQ handler present (delivery path wiring pending)
+  - Optional Raft layer for queue appends (WIP)
+  - Retention via committed-offset truncation (time/size retention planned)
 
 - **Persistent Storage**
   - BadgerDB for session state and offline queues
@@ -349,8 +354,8 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 - gRPC inter-broker communication (mTLS supported)
 - BadgerDB persistent storage
 - Durable queues with consumer groups
-- Queue replication with Raft (3x replication, automatic failover)
-- Kafka-style retention policies (time, size, log compaction)
+- Raft layer for queue appends (WIP)
+- Committed-offset truncation for queues (time/size retention planned)
 - TLS/mTLS for client and inter-broker connections
 - WebSocket origin validation
 - Shared subscriptions (MQTT 5.0)

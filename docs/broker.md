@@ -30,9 +30,20 @@ type Broker struct {
     retained      storage.RetainedStore    // Retained messages
     wills         storage.WillStore        // Will messages
 
-    cluster cluster.Cluster               // Cluster coordination (nil if single-node)
+    cluster      cluster.Cluster          // Cluster coordination (nil if single-node)
+    queueManager QueueManager             // Durable queue manager (nil if disabled)
 
-    auth   *AuthEngine                    // Authentication
+    auth        *AuthEngine               // Authentication
+    rateLimiter ClientRateLimiter         // Rate limiting (nil if disabled)
+    webhooks    Notifier                  // Webhook notifier (nil if disabled)
+    metrics     *otel.Metrics             // OTel metrics (nil if disabled)
+    tracer      trace.Tracer              // OTel tracing (nil if disabled)
+    sharedSubs  *SharedSubscriptionManager
+    maxQoS      byte
+
+    maxOfflineQueueSize int
+    offlineQueueEvict   bool
+
     logger *slog.Logger                   // Structured logging
     stats  *Stats                         // Metrics collection
 
@@ -51,7 +62,16 @@ type Broker struct {
 ### Initialization
 
 ```go
-func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, stats *Stats) *Broker {
+func NewBroker(
+    store storage.Store,
+    clust cluster.Cluster,
+    logger *slog.Logger,
+    stats *Stats,
+    webhooks Notifier,
+    metrics *otel.Metrics,
+    tracer trace.Tracer,
+    sessionCfg config.SessionConfig,
+) *Broker {
     if store == nil {
         store = memory.New()  // Default to in-memory
     }
@@ -67,6 +87,13 @@ func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, 
         cluster:       clust,  // Can be nil for single-node
         logger:        logger,
         stats:         stats,
+        webhooks:      webhooks,
+        metrics:       metrics,
+        tracer:        tracer,
+        sharedSubs:    NewSharedSubscriptionManager(),
+        maxQoS:        2,
+        maxOfflineQueueSize: sessionCfg.MaxOfflineQueueSize,
+        offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
         stopCh:        make(chan struct{}),
     }
 
@@ -83,6 +110,9 @@ func NewBroker(store storage.Store, clust cluster.Cluster, logger *slog.Logger, 
 - `clust`: Cluster coordination (nil, NoopCluster, or EtcdCluster)
 - `logger`: Structured logging (slog)
 - `stats`: Metrics collection
+- `webhooks`: Optional webhook notifier (nil disables)
+- `metrics` / `tracer`: Optional OpenTelemetry instrumentation
+- `sessionCfg`: Session defaults for offline queue behavior
 
 ### Domain Methods
 
@@ -90,12 +120,12 @@ The broker exposes clean, protocol-agnostic methods:
 
 ```go
 // Session Management
-CreateSession(clientID string, opts SessionOptions) (*session.Session, bool, error)
+CreateSession(clientID string, version byte, opts session.Options) (*session.Session, bool, error)
 DestroySession(clientID string) error
 Get(clientID string) *session.Session
 
 // Publishing
-Publish(msg Message) error
+Publish(msg *storage.Message) error
 PublishWill(clientID string) error
 
 // Subscribing
@@ -103,8 +133,9 @@ Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOption
 Unsubscribe(clientID string, filter string) error
 
 // Delivery
-DeliverToSession(s *session.Session, msg Message) (uint16, error)
-AckMessage(clientID string, packetID uint16, qos byte) error
+DeliverToSession(s *session.Session, msg *storage.Message) (uint16, error)
+DeliverToSessionByID(ctx context.Context, clientID string, msg interface{}) error
+AckMessage(s *session.Session, packetID uint16) error
 
 // Cluster Integration (implements cluster.MessageHandler)
 DeliverToClient(ctx context.Context, clientID, topic string, ...) error

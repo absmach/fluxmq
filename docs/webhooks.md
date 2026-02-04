@@ -99,6 +99,9 @@ The MQTT broker provides a comprehensive webhook system for asynchronous event n
 | `authz.publish_denied`        | Publish authorization denied     | clientID, topic, reason                             |
 | `authz.subscribe_denied`      | Subscribe authorization denied   | clientID, topicFilter, reason                       |
 
+Note: Message payloads are not currently included in webhook events. The
+`payload` field is omitted regardless of `include_payload`.
+
 **Event Envelope (Common Wrapper):**
 ```json
 {
@@ -137,7 +140,7 @@ webhook:
   queue_size: 10000
   drop_policy: "oldest"  # or "newest"
   workers: 5
-  include_payload: false  # Exclude message payloads by default
+  include_payload: false  # Accepted by config, payload inclusion not yet wired
   shutdown_timeout: 30s
 ```
 
@@ -386,7 +389,7 @@ webhook:
   queue_size: 10000
   drop_policy: "oldest"
   workers: 5
-  include_payload: false
+  include_payload: false  # Accepted by config, payload inclusion not yet wired
   shutdown_timeout: 30s
 
   defaults:
@@ -505,7 +508,7 @@ Empty `topic_filters` array = all topics.
 | `queue_size`         | int      | 10000     | Max events in memory queue                            |
 | `drop_policy`        | string   | "oldest"  | "oldest" or "newest" when queue is full               |
 | `workers`            | int      | 5         | Number of concurrent worker goroutines                |
-| `include_payload`    | bool     | false     | Include message payloads in events (base64 encoded)   |
+| `include_payload`    | bool     | false     | Accepted by config, payload inclusion not yet wired   |
 | `shutdown_timeout`   | duration | 30s       | Graceful shutdown timeout                             |
 
 ### Default Settings

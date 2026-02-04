@@ -227,11 +227,11 @@ The zero-copy optimization using reference-counted buffers provides significant 
 | **Throughput**          | 4.6K msg/s | 14.9K msg/s | **3.24x increase**   |
 | **GC CPU Time**         | 75%        | ~40%        | **35% reduction**    |
 
-📁 **Test file:** [broker/message_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/message_bench_test.go)
+📁 **Test file:** [mqtt/broker/message_bench_test.go](mqtt/broker/message_bench_test.go)
 
 ```bash
 # Run this benchmark
-go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 -benchmem -benchtime=10s ./broker
+go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 -benchmem -benchtime=10s ./mqtt/broker
 ```
 
 ### Zero-Copy vs Legacy Performance
@@ -245,13 +245,13 @@ go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 -benchmem -bench
 
 **Key insight:** Larger messages see dramatically better improvements.
 
-📁 **Test file:** [broker/message_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/message_bench_test.go)
+📁 **Test file:** [mqtt/broker/message_bench_test.go](mqtt/broker/message_bench_test.go)
 
 ```bash
 # Run zero-copy comparison
 make bench-zerocopy
 # Or directly:
-go test -bench=BenchmarkMessageCopy -benchmem ./broker
+go test -bench=BenchmarkMessageCopy -benchmem ./mqtt/broker
 ```
 
 ### Single Subscriber Performance
@@ -266,7 +266,7 @@ go test -bench=BenchmarkMessageCopy -benchmem ./broker
 **Key insight:** Memory usage is constant (~600 bytes) regardless of message size.
 
 ```bash
-go test -bench=BenchmarkMessagePublish_SingleSubscriber -benchmem ./broker
+go test -bench=BenchmarkMessagePublish_SingleSubscriber -benchmem ./mqtt/broker
 ```
 
 ### Multiple Subscribers Scalability
@@ -284,7 +284,7 @@ go test -bench=BenchmarkMessagePublish_SingleSubscriber -benchmem ./broker
 - Zero-copy prevents O(N*MessageSize) memory usage
 
 ```bash
-go test -bench=BenchmarkMessagePublish_MultipleSubscribers -benchmem ./broker
+go test -bench=BenchmarkMessagePublish_MultipleSubscribers -benchmem ./mqtt/broker
 ```
 
 ### Fan-Out Pattern (1:N)
@@ -299,7 +299,7 @@ Publishing 256-byte messages (typical sensor data) to many subscribers:
 | 1,000       | 253,930      | 3,940             | 424,370       |
 
 ```bash
-go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./broker
+go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./mqtt/broker
 ```
 
 ### Buffer Pool Performance
@@ -317,10 +317,10 @@ go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./broker
 - Pool provides consistent performance regardless of buffer size
 - Zero allocations when pool is warm
 
-📁 **Test file:** [mqtt/refbuffer_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/mqtt/refbuffer_test.go)
+📁 **Test file:** [mqtt/refbuffer_test.go](mqtt/refbuffer_test.go)
 
 ```bash
-go test -bench=BenchmarkBufferPool -benchmem ./core
+go test -bench=BenchmarkRefCountedBuffer -benchmem ./mqtt
 ```
 
 ### Router Performance
@@ -332,7 +332,7 @@ go test -bench=BenchmarkBufferPool -benchmem ./core
 | Unsubscribe         | 21.7 μs/op | 109 B/op | 4      |
 | Wildcard matching   | 212 ns/op  | 199 B/op | 6      |
 
-📁 **Test file:** [broker/router/router_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/router/router_bench_test.go)
+📁 **Test file:** [broker/router/router_bench_test.go](broker/router/router_bench_test.go)
 
 ```bash
 go test -bench=. -benchmem ./broker/router
@@ -348,78 +348,39 @@ go test -bench=. -benchmem ./broker/router
 | **Memory Pressure** | 64KB-1MB messages to 20 subs | <100MB total |
 | **Extreme Fan-Out** | 1K msgs to 5K subs | 5M deliveries, <100 B/delivery |
 
-📁 **Test file:** [broker/message_stress_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/broker/message_stress_test.go)
+📁 **Test file:** [mqtt/broker/message_stress_test.go](mqtt/broker/message_stress_test.go)
 
 ```bash
 # Run all stress tests
 make stress
 
 # Run specific stress test
-go test -v -run=TestStress_BufferPoolExhaustion ./broker
-go test -v -run=TestStress_HighThroughput ./broker
-go test -v -run=TestStress_ConcurrentPublishers ./broker
-go test -v -run=TestStress_MemoryPressure ./broker
-go test -v -run=TestStress_ExtremeFanOut ./broker
+go test -v -run=TestStress_BufferPoolExhaustion ./mqtt/broker
+go test -v -run=TestStress_HighThroughput ./mqtt/broker
+go test -v -run=TestStress_ConcurrentPublishers ./mqtt/broker
+go test -v -run=TestStress_MemoryPressure ./mqtt/broker
+go test -v -run=TestStress_ExtremeFanOut ./mqtt/broker
 
 # With race detector
-go test -race -run=TestStress_ConcurrentPublishers ./broker
+go test -race -run=TestStress_ConcurrentPublishers ./mqtt/broker
 ```
 
 ### Queue Performance
 
-| Operation              | Time       | Memory   | Allocs |
-|-----------------------|------------|----------|--------|
-| Enqueue (1 partition)  | 1,459 ns/op | 776 B/op | 5      |
-| Enqueue (10 partitions)| 1,519 ns/op | 795 B/op | 5      |
-| Dequeue (1 consumer)   | 337 μs/op  | 5,645 B/op | 9    |
-
-📁 **Test files:**
-- [queue/enqueue_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/enqueue_bench_test.go)
-- [queue/dequeue_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/dequeue_bench_test.go)
+Queue-specific benchmarks are not yet included in the repository.
+When benchmarks are added under `queue/` or `logstorage/`, this section should
+be updated to reference them.
 
 ```bash
-go test -bench=. -benchmem ./queue
+go test ./queue ./logstorage
 ```
 
-### Queue Replication Benchmarks
+### Queue Replication
 
-**Raft-based per-partition replication** with automatic failover (3 replicas per partition).
-
-| Metric | Sync Mode | Async Mode | Notes |
-|--------|-----------|------------|-------|
-| **Throughput** | >5K enqueue/sec | >50K enqueue/sec | Per partition |
-| **P99 Latency** | <50ms | <10ms | Write acknowledgment |
-| **Leader Failover** | 2.4s | 2.4s | Target: <5s |
-| **ISR Convergence** | <1s | <1s | After leader change |
-
-**Failover Test Results:**
-
-| Test | Result | Notes |
-|------|--------|-------|
-| `TestFailover_LeaderElection` | ✅ 2.4s | New leader elected, clients reconnect |
-| `TestFailover_MessageDurability` | ✅ | Zero message loss after leader failure |
-| `TestReplication_ISRTracking` | ✅ | Quorum maintained during failures |
-| `TestFailover_FollowerCatchup` | ✅ | 100 msg delta caught up correctly |
-
-**Retention Performance:**
-
-| Operation | Time | Impact |
-|-----------|------|--------|
-| Size check (per enqueue) | <2ms | Async, no blocking |
-| Time-based cleanup | <100ms | Per partition, 5min interval |
-| Log compaction | <500ms | Per partition, 10min interval |
-
-📁 **Test files:**
-- [queue/replication_bench_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/replication_bench_test.go) - Performance benchmarks
-- [queue/failover_test.go](file:///home/dusan/go/src/github.com/absmach/fluxmq/queue/failover_test.go) - Failover tests
-
-```bash
-# Run replication benchmarks
-go test -bench=BenchmarkReplication -benchmem ./queue
-
-# Run failover tests
-go test -v -run=TestFailover ./queue
-```
+Raft replication is implemented for **queue appends only** and is configurable,
+but consumer state (cursor/PEL) and ack/nack/reject paths are not replicated yet.
+Non-leader nodes currently append locally when Raft is enabled. Benchmarks and
+failover tests for the queue Raft layer are not currently present in-tree.
 
 ---
 
@@ -571,22 +532,22 @@ make stress
 
 ```bash
 # All benchmarks
-go test -bench=. -benchmem ./broker
+go test -bench=. -benchmem ./mqtt/broker
 
 # Specific benchmark
-go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./broker
+go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./mqtt/broker
 
 # With specific subscriber count
-go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 -benchtime=10s ./broker
+go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 -benchtime=10s ./mqtt/broker
 
 # Stress tests
-go test -v -run=TestStress -timeout=30m ./broker
+go test -v -run=TestStress -timeout=30m ./mqtt/broker
 
 # Specific stress test
-go test -v -run=TestStress_BufferPoolExhaustion ./broker
+go test -v -run=TestStress_BufferPoolExhaustion ./mqtt/broker
 
 # With race detector
-go test -race -run=TestStress_ConcurrentPublishers ./broker
+go test -race -run=TestStress_ConcurrentPublishers ./mqtt/broker
 ```
 
 ### Interpreting Results

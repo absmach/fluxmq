@@ -1,6 +1,6 @@
 # MQTT Broker Development Roadmap
 
-**Last Updated:** 2026-01-19
+**Last Updated:** 2026-02-03
 **Current Phase:** Phase Q - Queue Architecture Redesign (TOP PRIORITY)
 
 ---
@@ -11,14 +11,14 @@ Production-ready MQTT broker with focus on high performance, durability, and sca
 
 ### Current Status
 
-- 🚨 **Phase Q: Queue Architecture Redesign** - TOP PRIORITY (Log-based model with work stealing)
+- 🚨 **Phase Q: Queue Architecture Redesign** - IN PROGRESS (log-based queues in tree; retention/DLQ wiring and admin API pending)
 - ⏸️ **Phase 0: Production Hardening** - PAUSED (Resume after Phase Q)
 - ✅ **Phase 1: Performance Optimization** - COMPLETE (3.27x faster)
-- ✅ **Phase 2: Queue Replication** - COMPLETE (~98%)
-  - ✅ Phase 2.1: Raft Infrastructure - COMPLETE
-  - ✅ Phase 2.2: Queue Integration - COMPLETE
-  - ✅ Phase 2.3: Testing & Optimization - COMPLETE (core tests done, benchmarks done)
-  - ✅ Phase 2.4: Retention Policies - COMPLETE (time/size retention + log compaction)
+- ⏳ **Phase 2: Queue Replication** - PARTIAL (Raft manager exists; append-only replication; consumer state not replicated)
+  - ⏳ Phase 2.1: Raft Infrastructure - Implemented, not fully integrated
+  - ⏳ Phase 2.2: Queue Integration - Append replication only
+  - ⏳ Phase 2.3: Testing & Optimization - Not present in-tree
+  - ⏳ Phase 2.4: Retention Policies - Not wired into runtime
   - 📋 Phase 2.5: Observability & Migration - PLANNED (deferred)
 - ⏳ **Phase 3: E2E Cluster Testing** - PLANNED (after Phase 2)
 - 📋 **Phase 4: Custom Raft** - FUTURE (50M+ clients only)
@@ -35,32 +35,10 @@ Phase Q redesigns the queue system from delete-on-ack to a log-based model inspi
 
 Phase 0 must be completed before any production deployment. These are critical security vulnerabilities and operational gaps identified during code audit.
 
-**Completed (2026-01-13):**
-- ✅ Fixed Raft storage initialization (BadgerStableStore contract)
-- ✅ Fixed partition port conflicts (per-partition bind addresses)
-- ✅ Fixed message pool corruption (copy message for Raft FSM)
-- ✅ Fixed MessageTTL=0 causing immediate expiration
-- ✅ `TestReplication_BasicEnqueueDequeue` now passing
-- ✅ Created comprehensive performance benchmarks (`replication_bench_test.go`)
-- ✅ **Phase 2.3 Core Tests Complete:**
-  - ✅ `TestFailover_LeaderElection` - Leader failover <5s (2.4s achieved)
-  - ✅ `TestFailover_MessageDurability` - Messages survive leader failure
-  - ✅ `TestReplication_ISRTracking` - ISR tracking and quorum maintenance
-  - ✅ `TestFailover_FollowerCatchup` - Follower lag behavior (100 msg delta)
-- ✅ **Phase 2.4 Retention Policies - COMPLETE:**
-  - ✅ RetentionPolicy schema added to QueueConfig
-  - ✅ RetentionManager core logic (400+ lines)
-  - ✅ Raft OpRetentionDelete operation
-  - ✅ MessageStore interface extended (5 new methods including ListAllMessages)
-  - ✅ Full retention implementations in memory and badger stores
-  - ✅ Manager integration (async size checks on enqueue)
-  - ✅ Partition worker integration (background time-based cleanup)
-  - ✅ Leader-only execution for replicated queues
-  - ✅ **Retention unit tests** (`retention_test.go`, `retention_manager_test.go`)
-  - ✅ **Retention integration tests** (`retention_integration_test.go`)
-  - ✅ **Log compaction implementation** (Kafka-style, keeps latest per key)
-  - ✅ **Compaction unit tests** (4 tests: basic, lag, no-key, not-configured)
-  - ✅ **Compaction integration tests** (2 tests: replication, leader-only)
+**Status Note (2026-02-03):**
+Queue replication and retention are partial in-tree (append-only Raft, committed-offset
+truncation only). The detailed completion checklist previously listed here was
+removed to avoid stale status. See `docs/queue.md` for current implementation notes.
 
 **Completed (2026-01-16):**
 - ✅ **Rate Limiting - COMPLETE:**
@@ -94,10 +72,11 @@ Remaining production hardening tasks:
 
 ## Phase Q: Queue Architecture Redesign 🚨 TOP PRIORITY
 
-**Status:** PLANNING
+**Status:** IN PROGRESS
 **Goal:** Redesign queue system to log-based model with cursors, PEL, and work stealing
 
 This phase fundamentally changes how queues work, moving from a delete-on-ack model to an append-only log model inspired by Kafka and Redis Streams. This enables wildcard queue subscriptions and improves performance and reliability.
+Core log-based queue behavior exists in-tree; remaining work includes retention wiring, DLQ routing, and queue admin APIs.
 
 ---
 
@@ -881,55 +860,38 @@ func (b *Broker) setupSignalHandler() {
 
 ---
 
-## Phase 2: Queue Replication ✅ COMPLETE
+## Phase 2: Queue Replication ⏳ PARTIAL
 
-**Status:** Completed 2026-01-14 | **Progress:** 98% (Phase 2.5 deferred)
+**Status:** In progress | **Scope in tree:** Append-only Raft replication for queue appends; consumer state not replicated; retention policies not wired.
 
-### Summary
+### Current Implementation Notes
 
-Raft-based per-partition replication with automatic failover:
-- Each queue partition = independent Raft group (leader + replicas)
-- Configurable replication factor (default: 3), sync/async modes
-- ISR (In-Sync Replicas) tracking, leader-only delivery
-- Kafka-style retention policies (time, size, log compaction)
-
-### Benchmark Results
-
-| Metric | Result | Target |
-|--------|--------|--------|
-| Sync mode throughput | >5K enqueues/sec | ✅ Met |
-| Async mode throughput | >50K enqueues/sec | ✅ Met |
-| Leader failover | 2.4s | ✅ <5s |
-| P99 latency (sync) | <50ms | ✅ Met |
-| P99 latency (async) | <10ms | ✅ Met |
+- Single Raft group shared by all queues (`queue/raft/manager.go`)
+- Append operations go through Raft only on the leader; non-leader appends are local
+- Ack/Nack/Reject, cursor/PEL updates, and retention truncation are not replicated
+- Benchmarks and failover tests for the Raft layer are not present in-tree
 
 ### Configuration Example
 
 ```yaml
-queue:
-  replication:
+cluster:
+  enabled: true
+  node_id: "node1"
+  raft:
     enabled: true
     replication_factor: 3
-    mode: sync                    # "sync" or "async"
+    sync_mode: true
     min_in_sync_replicas: 2
-  retention:
-    time: 168h                    # 7 days
-    bytes: 10737418240            # 10GB max
-    compaction_enabled: false
-    compaction_key: "entity_id"
+    ack_timeout: 5s
+    bind_addr: "127.0.0.1:7100"
+    data_dir: "/tmp/fluxmq/raft"
+    peers:
+      node1: "127.0.0.1:7100"
+      node2: "127.0.0.1:7200"
+      node3: "127.0.0.1:7300"
 ```
 
-### Sub-Phase Summary
-
-| Phase | Status | Key Deliverable |
-|-------|--------|-----------------|
-| 2.1: Raft Infrastructure | ✅ | Core Raft + FSM + BadgerDB storage |
-| 2.2: Queue Integration | ✅ | Replicated enqueue, leader-only delivery |
-| 2.3: Testing | ✅ | Failover tests, benchmarks |
-| 2.4: Retention | ✅ | Time/size retention, log compaction |
-| 2.5: Observability | 📋 | Deferred (metrics, migration tooling) |
-
-📖 **Details:** [Scaling & Performance Guide](scaling.md#queue-replication-benchmarks)
+📖 **Details:** [Scaling & Performance Guide](scaling.md#queue-replication)
 
 ---
 
@@ -940,8 +902,8 @@ queue:
 **Status:** Planned to start after Phase 2 completion
 
 **Prerequisites:**
-- Phase 2.3 queue replication tests complete
-- Phase 2.4 observability metrics in place
+- Queue Raft benchmarks and failover tests in tree
+- Queue observability metrics in place
 
 ### Scope
 
@@ -1218,55 +1180,12 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 
 ## Overall Progress Summary
 
-| Phase | Duration | Completion | Status |
-|-------|----------|------------|--------|
-| **Phase Q: Queue Architecture Redesign** | 6-10 weeks | 0% | 🚨 **TOP PRIORITY** |
-| └─ Q.1: Storage Layer Changes | 1-2 weeks | 0% | 📋 Planned |
-| └─ Q.2: Consumer Group Redesign | 1-2 weeks | 0% | 📋 Planned |
-| └─ Q.3: Work Stealing | 1 week | 0% | 📋 Planned |
-| └─ Q.4: Wildcard Subscriptions | 1 week | 0% | 📋 Planned |
-| └─ Q.5: Delivery Integration | 1-2 weeks | 0% | 📋 Planned |
-| └─ Q.6: Migration & Testing | 1-2 weeks | 0% | 📋 Planned |
-| **Phase 0: Production Hardening** | 3-4 weeks | 50% | ⏸️ PAUSED |
-| └─ 0.1: Critical Security Fixes | 1 week | 67% | ⏸️ Paused (2/3 complete) |
-| └─ 0.2: Rate Limiting | 1 week | 100% | ✅ Complete |
-| └─ 0.3: Observability Completion | 3-5 days | 0% | 📋 Planned (P2) |
-| └─ 0.4: Protocol Compliance | 3-5 days | 100% | ✅ Complete |
-| └─ 0.5: Management Dashboard | 2-3 weeks | 0% | 📋 Planned (P3) |
-| └─ 0.6: Operational Readiness | 1 week | 0% | 📋 Planned (P3) |
-| **Phase 1: Performance Optimization** | 2 weeks | 100% | ✅ Complete |
-| **Phase 2: Queue Replication** | 6 weeks | 98% | ✅ **COMPLETE** |
-| └─ 2.1: Raft Infrastructure | 1 week | 100% | ✅ Complete |
-| └─ 2.2: Queue Integration | 1 week | 100% | ✅ Complete |
-| └─ 2.3: Testing & Optimization | 1 week | 100% | ✅ Complete |
-| └─ 2.4: Retention Policies | 2 weeks | 100% | ✅ **COMPLETE** |
-| └─ 2.5: Observability & Migration | 2-3 weeks | 0% | 📋 Planned (deferred) |
-| **Phase 3: E2E Cluster Testing** | 2-3 weeks | 0% | ⏳ Planned |
-| **Phase 4: Custom Raft** | 20 weeks | N/A | 📋 Future (50M+ only) |
+Status snapshot (2026-02-03):
+- Phase Q: Log-based queues are in tree (consumer groups, PEL, work stealing, wildcard patterns). Remaining: retention wiring, DLQ routing, queue admin API, Raft state replication.
+- Phase 2: Raft manager exists; append-only replication on leader; consumer state not replicated; tests/benchmarks not in tree.
+- Phase 0.2 Rate limiting and CoAP DTLS/mDTLS are implemented (see sections above).
 
 **Current Sprint:** Phase Q - Queue Architecture Redesign (TOP PRIORITY)
-
-**Key Metrics:**
-- ✅ 2,800+ lines of queue replication code complete
-- ✅ 17+ unit tests passing (retention + compaction)
-- ✅ 4/4 core failover tests passing (leader election, durability, ISR, catch-up)
-- ✅ Performance benchmarks complete (sync/async modes, latency, concurrency)
-- ✅ **Phase 0.2 Rate Limiting - COMPLETE:**
-  - ✅ Per-IP connection rate limiting (TCP, WebSocket)
-  - ✅ Per-client message/subscription rate limiting
-  - ✅ 12 unit tests (`ratelimit/ratelimit_test.go`)
-- ✅ **CoAP with DTLS/mDTLS - COMPLETE:**
-  - ✅ Full UDP CoAP implementation (go-coap v3)
-  - ✅ DTLS with mutual TLS support (pion/dtls v3)
-  - ✅ 5 unit tests (`server/coap/server_test.go`)
-- ✅ **Phase 2.4 Retention Policies - COMPLETE:**
-  - ✅ Retention infrastructure complete (schema, manager, Raft ops)
-  - ✅ Full storage implementations (memory & badger stores)
-  - ✅ Manager & partition worker integration complete
-  - ✅ Leader-only execution & async size checks
-  - ✅ Retention unit & integration tests (11 tests)
-  - ✅ Log compaction (Kafka-style, keeps latest per key)
-  - ✅ Compaction unit & integration tests (6 tests)
 
 ---
 

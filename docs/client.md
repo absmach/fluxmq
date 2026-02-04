@@ -13,7 +13,7 @@ currently include a dedicated AMQP 1.0 client library.
 - **QoS Levels:** Full QoS 0/1/2 support with message persistence
 - **TLS/SSL:** Secure connections with custom certificates
 - **Session Persistence:** Configurable session expiry
-- **Durable Queues:** Consumer groups, acknowledgments, dead-letter queues
+- **Durable Queues:** Consumer groups and acknowledgments (DLQ wiring pending)
 - **MQTT 5.0 Features:** Topic aliases, user properties, flow control
 
 ---
@@ -217,33 +217,29 @@ opts.SetOnMessageV2(func(msg *client.Message) {
 
 ## Durable Queues
 
-The client supports durable queues with consumer groups, message acknowledgment, and dead-letter queues.
+The client supports durable queues with consumer groups and message acknowledgment.
+Reject/DLQ wiring in the broker is pending.
 
 **When to use queues instead of regular pub/sub:**
-- You need guaranteed message processing (exactly-once semantics)
+- You need at-least-once processing with explicit acknowledgments
 - Multiple consumers should share the workload (consumer groups)
 - Failed messages need retry logic or dead-letter handling
 
 **Key concepts:**
-- **Queue**: Persistent message buffer with ordered delivery per partition
+- **Queue**: Persistent message buffer with ordered delivery per queue (single log)
 - **Consumer Group**: Multiple consumers share messages from the same queue
-- **Partition Key**: Messages with the same key are processed in order
-- **Acknowledgment**: Confirm successful processing (Ack), request retry (Nack), or reject permanently (Reject)
+- **Acknowledgment**: Confirm success (Ack), request redelivery (Nack), or reject permanently (Reject)
 
 ### Publishing to Queues
 
 ```go
 // Simple queue publish
-c.PublishToQueue("orders", []byte(`{"item": "widget"}`), "customer-123")
-
-// With partition key for ordered processing
-c.PublishToQueue("transactions", []byte("txn-data"), "account-456")
+c.PublishToQueue("orders", []byte(`{"item": "widget"}`))
 
 // Full control
 c.PublishToQueueWithOptions(&client.QueuePublishOptions{
     QueueName:    "events",
     Payload:      []byte("event-data"),
-    PartitionKey: "user-789",
     Properties:   map[string]string{"priority": "high"},
     QoS:          1,
 })
@@ -256,15 +252,18 @@ c.PublishToQueueWithOptions(&client.QueuePublishOptions{
 err := c.SubscribeToQueue("orders", "order-processors", func(msg *client.QueueMessage) {
     log.Printf("Processing order: %s", msg.Payload)
     log.Printf("Message ID: %s", msg.MessageID)
-    log.Printf("Partition: %d, Sequence: %d", msg.PartitionID, msg.Sequence)
+    if msg.UserProperties != nil {
+        log.Printf("Offset: %s", msg.UserProperties["offset"])
+        log.Printf("Group: %s", msg.UserProperties["group-id"])
+    }
     
     // Process message...
     if processedOK {
         msg.Ack()  // Message removed from queue
     } else if shouldRetry {
-        msg.Nack() // Redelivered with backoff
+        msg.Nack() // Redelivery eligible immediately (no backoff enforcement yet)
     } else {
-        msg.Reject() // Sent to dead-letter queue
+        msg.Reject() // Rejects message; DLQ wiring pending
     }
 })
 ```
@@ -274,17 +273,20 @@ err := c.SubscribeToQueue("orders", "order-processors", func(msg *client.QueueMe
 | Method         | Effect                                             |
 | -------------- | -------------------------------------------------- |
 | `msg.Ack()`    | Message processed successfully, removed from queue |
-| `msg.Nack()`   | Processing failed, retry with backoff              |
-| `msg.Reject()` | Permanent failure, sent to dead-letter queue       |
+| `msg.Nack()`   | Processing failed, make eligible for redelivery    |
+| `msg.Reject()` | Permanent failure, DLQ wiring pending              |
 
 ### Direct Acknowledgment
 
 ```go
-// Acknowledge by message ID
-c.Ack("orders", "msg-12345")
-c.Nack("orders", "msg-12345")
-c.Reject("orders", "msg-12345")
+// Acknowledge by message ID (explicit group)
+c.AckWithGroup("orders", "msg-12345", "processors")
+c.NackWithGroup("orders", "msg-12345", "processors")
+c.RejectWithGroup("orders", "msg-12345", "processors")
 ```
+Note: the broker expects `message-id` and `group-id` user properties on acks
+(MQTT v5). `QueueMessage.Ack()` sends both. For direct acks, use the `*WithGroup`
+helpers or provide `group-id` manually.
 
 ### Unsubscribe from Queue
 
@@ -333,7 +335,7 @@ func main() {
 
     // Publish some orders
     for i := 0; i < 10; i++ {
-        c.PublishToQueue("orders", []byte(`{"id": "`+string(rune(i))+`"}`), "customer-1")
+        c.PublishToQueue("orders", []byte(`{"id": "`+string(rune(i))+`"}`))
     }
 
     select {} // Keep running

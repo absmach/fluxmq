@@ -96,13 +96,9 @@ run_package_benchmarks "./mqtt/packets/v5" "MQTT v5 Packet Encoding/Decoding"
 run_package_benchmarks "./broker/router" "Topic Router Performance"
 
 # 3. Message distribution benchmarks
-run_package_benchmarks "./broker" "Message Distribution & Broker Core"
+run_package_benchmarks "./mqtt/broker" "Message Distribution & Broker Core"
 
-# 4. Queue benchmarks
-echo -e "${BLUE}Running Queue Benchmarks${NC}"
-run_package_benchmarks "./queue" "Queue Operations"
-
-# 5. Storage benchmarks (if they exist)
+# 4. Storage benchmarks (if they exist)
 if [ -d "$PROJECT_ROOT/storage/badger" ]; then
     run_package_benchmarks "./storage/badger" "BadgerDB Storage Backend"
 fi
@@ -118,11 +114,9 @@ echo -e "Running Profiled Benchmarks"
 echo -e "======================================${NC}"
 echo ""
 
-run_with_profiling "./broker" "BenchmarkMessagePublish_MultipleSubscribers/1000" "message_fanout_1000"
-run_with_profiling "./broker" "BenchmarkMessagePublish_FanOut" "message_fanout"
+run_with_profiling "./mqtt/broker" "BenchmarkMessagePublish_MultipleSubscribers/1000" "message_fanout_1000"
+run_with_profiling "./mqtt/broker" "BenchmarkMessagePublish_FanOut" "message_fanout"
 run_with_profiling "./broker/router" "BenchmarkRouter" "router"
-run_with_profiling "./queue" "BenchmarkEnqueue" "queue_enqueue"
-run_with_profiling "./queue" "BenchmarkDequeue" "queue_dequeue"
 
 # Generate summary
 echo ""

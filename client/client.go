@@ -37,7 +37,8 @@ type Client struct {
 	topicAliases *topicAliasManager
 
 	// Queue subscriptions
-	queueSubs *queueSubscriptions
+	queueSubs     *queueSubscriptions
+	queueAckCache *queueAckCache
 
 	// Pending operations
 	pending *pendingStore
@@ -76,12 +77,13 @@ func New(opts *Options) (*Client, error) {
 	}
 
 	return &Client{
-		opts:         opts,
-		state:        newStateManager(),
-		pending:      newPendingStore(opts.MaxInflight),
-		store:        store,
-		qos2Incoming: make(map[uint16]*Message),
-		queueSubs:    newQueueSubscriptions(),
+		opts:          opts,
+		state:         newStateManager(),
+		pending:       newPendingStore(opts.MaxInflight),
+		store:         store,
+		qos2Incoming:  make(map[uint16]*Message),
+		queueSubs:     newQueueSubscriptions(),
+		queueAckCache: newQueueAckCache(5 * time.Minute),
 	}, nil
 }
 
@@ -984,22 +986,34 @@ func (c *Client) handleQueueMessage(msg *Message) {
 
 	// Extract queue message metadata from user properties
 	var messageID string
-	var sequence uint64
+	var groupID string
+	var offset uint64
 
 	if msg.UserProperties != nil {
 		if msgID, ok := msg.UserProperties["message-id"]; ok {
 			messageID = msgID
 		}
-		if seq, ok := msg.UserProperties["sequence"]; ok {
-			fmt.Sscanf(seq, "%d", &sequence)
+		if gid, ok := msg.UserProperties["group-id"]; ok {
+			groupID = gid
 		}
+		if off, ok := msg.UserProperties["offset"]; ok {
+			fmt.Sscanf(off, "%d", &offset)
+		} else if seq, ok := msg.UserProperties["sequence"]; ok {
+			fmt.Sscanf(seq, "%d", &offset)
+		}
+	}
+
+	if c.queueAckCache != nil {
+		c.queueAckCache.set(messageID, groupID)
 	}
 
 	// Create queue message with ack/nack/reject methods
 	queueMsg := &QueueMessage{
 		Message:   msg,
 		MessageID: messageID,
-		Sequence:  sequence,
+		GroupID:   groupID,
+		Offset:    offset,
+		Sequence:  offset,
 		client:    c,
 		queueName: sub.queueName,
 	}

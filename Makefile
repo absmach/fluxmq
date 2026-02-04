@@ -57,52 +57,52 @@ bench:
 # Run benchmarks for broker only
 .PHONY: bench-broker
 bench-broker:
-	$(GO) test -bench=. -benchmem -run=^$$ ./broker
+	$(GO) test -bench=. -benchmem -run=^$$ ./mqtt/broker
 
 # Run zero-copy comparison benchmarks
 .PHONY: bench-zerocopy
 bench-zerocopy:
-	$(GO) test -bench=BenchmarkMessageCopy -benchmem -run=^$$ ./broker
+	$(GO) test -bench=BenchmarkMessageCopy -benchmem -run=^$$ ./mqtt/broker
 
 # Run stress tests (all)
 .PHONY: stress
 stress:
-	$(GO) test -v -run=TestStress -timeout=30m ./broker
+	$(GO) test -v -run=TestStress -timeout=30m ./mqtt/broker
 
 # Run specific stress tests
 .PHONY: stress-throughput
 stress-throughput:
-	$(GO) test -v -run=TestStress_HighThroughputPublish -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_HighThroughputPublish -timeout=5m ./mqtt/broker
 
 .PHONY: stress-concurrent
 stress-concurrent:
-	$(GO) test -v -run=TestStress_ConcurrentPublishers -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_ConcurrentPublishers -timeout=5m ./mqtt/broker
 
 .PHONY: stress-memory
 stress-memory:
-	$(GO) test -v -run=TestStress_MemoryPressure -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_MemoryPressure -timeout=5m ./mqtt/broker
 
 .PHONY: stress-sustained
 stress-sustained:
-	$(GO) test -v -run=TestStress_SustainedLoad -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_SustainedLoad -timeout=5m ./mqtt/broker
 
 .PHONY: stress-pool
 stress-pool:
-	$(GO) test -v -run=TestStress_BufferPoolExhaustion -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_BufferPoolExhaustion -timeout=5m ./mqtt/broker
 
 .PHONY: stress-fanout
 stress-fanout:
-	$(GO) test -v -run=TestStress_FanOutExtreme -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_FanOutExtreme -timeout=5m ./mqtt/broker
 
 .PHONY: stress-churn
 stress-churn:
-	$(GO) test -v -run=TestStress_RapidSubscribeUnsubscribe -timeout=5m ./broker
+	$(GO) test -v -run=TestStress_RapidSubscribeUnsubscribe -timeout=5m ./mqtt/broker
 
 # Generate benchmark report
 .PHONY: bench-report
 bench-report:
 	@mkdir -p $(BUILD_DIR)
-	$(GO) test -bench=. -benchmem -run=^$$ ./broker | tee $(BUILD_DIR)/benchmark-results.txt
+	$(GO) test -bench=. -benchmem -run=^$$ ./mqtt/broker | tee $(BUILD_DIR)/benchmark-results.txt
 	@echo ""
 	@echo "Benchmark results saved to $(BUILD_DIR)/benchmark-results.txt"
 

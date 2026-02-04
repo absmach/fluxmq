@@ -11,6 +11,8 @@ This document provides a comprehensive guide to configuring the MQTT broker for 
 - [Queue Configuration](#queue-configuration)
 - [Storage Configuration](#storage-configuration)
 - [Cluster Configuration](#cluster-configuration)
+- [Rate Limiting Configuration](#rate-limiting-configuration)
+- [Webhook Configuration](#webhook-configuration)
 - [Logging Configuration](#logging-configuration)
 - [Example Configurations](#example-configurations)
 - [Best Practices](#best-practices)
@@ -37,12 +39,25 @@ server:
       addr: ":5672"
   amqp091:
     plain:
-      addr: ":5673"
+      addr: ":5682"
   # ...
+
+  health_enabled: true
+  health_addr: ":8081"
+  metrics_enabled: false
+  metrics_addr: "localhost:4317"
+  otel_service_name: "fluxmq"
+  otel_service_version: "1.0.0"
+  otel_metrics_enabled: true
+  otel_traces_enabled: false
+  otel_trace_sample_rate: 0.1
+  api_enabled: false
+  api_addr: ":9090"
 
 broker:
   # Broker behavior settings
   max_message_size: 1048576
+  max_qos: 2
   # ...
 
 session:
@@ -65,6 +80,12 @@ cluster:
   enabled: true
   # ...
 
+ratelimit:
+  enabled: false
+
+webhook:
+  enabled: false
+
 log:
   # Logging settings
   level: "info"
@@ -75,10 +96,10 @@ log:
 
 ```bash
 # Use default configuration
-./build/mqttd
+./build/fluxmq
 
 # Load from file
-./build/mqttd --config /path/to/config.yaml
+./build/fluxmq --config /path/to/config.yaml
 ```
 
 ## Server Configuration
@@ -119,6 +140,9 @@ server:
     plain:
       addr: ":8083"
       path: "/mqtt"
+      allowed_origins:
+        - "https://app.example.com"
+        - "*.example.com"
     tls:
       addr: ":8084"
       path: "/mqtt"
@@ -161,15 +185,26 @@ server:
   # AMQP 0.9.1
   amqp091:
     plain:
-      addr: ":5673"
+      addr: ":5682"
       max_connections: 10000
     tls:
-      addr: ":5674"
+      addr: ":5681"
       cert_file: "/path/to/server.crt"
       key_file: "/path/to/server.key"
     mtls: {}
 
   shutdown_timeout: "30s"
+  health_enabled: true
+  health_addr: ":8081"
+  metrics_enabled: false
+  metrics_addr: "localhost:4317"
+  otel_service_name: "fluxmq"
+  otel_service_version: "1.0.0"
+  otel_metrics_enabled: true
+  otel_traces_enabled: false
+  otel_trace_sample_rate: 0.1
+  api_enabled: false
+  api_addr: ":9090"
 ```
 
 AMQP listeners use the same schema as TCP (addr, max_connections, and TLS fields).
@@ -250,6 +285,9 @@ server:
     plain:
       addr: ":8083"
       path: "/mqtt"
+      allowed_origins:
+        - "https://app.example.com"
+        - "*.example.com"
 ```
 
 **Client Connection**:
@@ -257,6 +295,12 @@ server:
 // Browser client
 const client = mqtt.connect('ws://localhost:8083/mqtt');
 ```
+
+**Origin Validation**:
+- `allowed_origins` empty: allow all origins (development mode, warns in logs)
+- `allowed_origins` set: only listed origins allowed
+- `"*"`: explicit wildcard for all origins
+- Supports wildcard subdomains like `"*.example.com"`
 
 ### HTTP Bridge Configuration
 
@@ -279,6 +323,50 @@ curl -X POST http://localhost:8080/publish \
   }'
 ```
 
+### Health and Readiness
+
+```yaml
+server:
+  health_enabled: true
+  health_addr: ":8081"
+```
+
+Endpoints:
+- `GET /health` liveness
+- `GET /ready` readiness
+- `GET /cluster/status` cluster status (single node returns `cluster_mode=false`)
+
+### OpenTelemetry / Metrics
+
+OpenTelemetry is enabled when `server.metrics_enabled` is `true`. Metrics and
+traces are exported via OTLP/gRPC to `server.metrics_addr`.
+
+```yaml
+server:
+  metrics_enabled: false
+  metrics_addr: "localhost:4317"
+  otel_service_name: "fluxmq"
+  otel_service_version: "1.0.0"
+  otel_metrics_enabled: true
+  otel_traces_enabled: false
+  otel_trace_sample_rate: 0.1
+```
+
+Notes:
+- `metrics_enabled` controls provider initialization.
+- `otel_metrics_enabled` and `otel_traces_enabled` control what is emitted.
+- `otel_trace_sample_rate` must be between 0.0 and 1.0.
+
+### Queue API Server (Connect/gRPC)
+
+The queue API server exposes Connect/HTTP and h2c endpoints for queue management.
+
+```yaml
+server:
+  api_enabled: false
+  api_addr: ":9090"
+```
+
 ## Broker Configuration
 
 Controls broker behavior and message handling.
@@ -289,6 +377,7 @@ broker:
   max_retained_messages: 10000         # Max retained messages
   retry_interval: "20s"                # QoS retry interval
   max_retries: 0                       # 0 = infinite retries
+  max_qos: 2                           # Max supported QoS (0-2)
 ```
 
 ### max_message_size
@@ -318,6 +407,8 @@ Maximum number of retained messages stored.
 - Small deployments: 1000-10000
 - Large deployments: 100000+
 
+**Note**: This limit is not enforced in the current broker implementation.
+
 ### retry_interval
 
 How often to retry unacknowledged QoS 1/2 messages.
@@ -327,6 +418,8 @@ How often to retry unacknowledged QoS 1/2 messages.
 - Too long: Delayed delivery
 - Typical: 10-30 seconds
 
+**Note**: The broker currently uses a fixed 20s retry timeout; config wiring is planned.
+
 ### max_retries
 
 Maximum retry attempts before giving up.
@@ -334,6 +427,13 @@ Maximum retry attempts before giving up.
 **Values**:
 - `0`: Infinite retries (recommended for reliability)
 - `N`: Give up after N attempts
+
+**Note**: Max retries are not currently enforced.
+
+### max_qos
+
+Maximum QoS level supported by the broker (0, 1, or 2). Higher client QoS
+publishes are downgraded to this level.
 
 ## Session Configuration
 
@@ -345,6 +445,7 @@ session:
   default_expiry_interval: 300         # 5 minutes default expiry
   max_offline_queue_size: 1000         # Max queued messages per session
   max_inflight_messages: 100           # Max inflight QoS 1/2 per session
+  offline_queue_policy: "evict"        # "evict" or "reject"
 ```
 
 ### max_sessions
@@ -378,7 +479,7 @@ Default session expiry for clients that don't specify.
 Maximum messages queued for disconnected client.
 
 **Behavior**:
-- When limit reached, oldest messages discarded (FIFO)
+- When limit reached, behavior is controlled by `offline_queue_policy`
 - Prevents memory exhaustion from offline clients
 - Only applies to QoS > 0 messages
 
@@ -399,6 +500,14 @@ Maximum unacknowledged QoS 1/2 messages per session.
 - Conservative: 100
 - Standard: 1000
 - Aggressive: 10000
+
+### offline_queue_policy
+
+Controls what happens when the offline queue is full.
+
+**Values**:
+- `evict`: Drop oldest messages and enqueue new ones
+- `reject`: Reject new messages while preserving existing queue
 
 ## Queue Configuration
 
@@ -449,6 +558,10 @@ Marks a queue as system-reserved (cannot be deleted via management APIs).
 
 Per-queue limits, retry policy, and dead-letter behavior. If `dlq.topic` is
 empty, it defaults to `$dlq/<queue-name>`.
+
+**Note**: Queue limits, retry policy, and DLQ behavior are parsed into queue
+configs but are not fully enforced at runtime yet. `message_ttl` is stored on
+messages, but automatic expiry is not implemented.
 
 ## Storage Configuration
 
@@ -527,12 +640,31 @@ cluster:
     client_addr: "127.0.0.1:2379"      # etcd client address
     initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
     bootstrap: true                    # Bootstrap new cluster
+    hybrid_retained_size_threshold: 1024 # Bytes; smaller retained messages replicated via etcd
 
   transport:
     bind_addr: "127.0.0.1:7948"        # gRPC listen address
     peers:                             # Peer node addresses
       node2: "127.0.0.1:7949"
       node3: "127.0.0.1:7950"
+    tls_enabled: false
+    tls_cert_file: "/path/to/transport.crt"
+    tls_key_file: "/path/to/transport.key"
+    tls_ca_file: "/path/to/ca.crt"
+
+  raft:
+    enabled: false
+    replication_factor: 3
+    sync_mode: true
+    min_in_sync_replicas: 2
+    ack_timeout: "5s"
+    bind_addr: "127.0.0.1:7100"
+    data_dir: "/tmp/fluxmq/raft"
+    peers: {}
+    heartbeat_timeout: "1s"
+    election_timeout: "3s"
+    snapshot_interval: "5m"
+    snapshot_threshold: 8192
 ```
 
 ### enabled
@@ -540,8 +672,8 @@ cluster:
 Enable or disable clustering.
 
 **Values**:
-- `false`: Single-node mode (default)
-- `true`: Cluster mode
+- `false`: Single-node mode
+- `true`: Cluster mode (default in `config.Default()`)
 
 ### node_id
 
@@ -642,6 +774,12 @@ node3: bootstrap: true
 # 2. Start new node with bootstrap: false
 ```
 
+#### hybrid_retained_size_threshold
+
+Threshold in bytes for hybrid retained storage:
+- Messages smaller than this are replicated via etcd.
+- Larger messages are stored on the owner node and fetched on-demand.
+
 ### transport Configuration
 
 #### bind_addr
@@ -697,6 +835,109 @@ transport:
     node2: "192.168.1.11:7948"
     node3: "192.168.1.12:7948"
 ```
+
+#### transport TLS
+
+Enable mTLS for inter-broker transport:
+
+```yaml
+transport:
+  tls_enabled: true
+  tls_cert_file: "/path/to/transport.crt"
+  tls_key_file: "/path/to/transport.key"
+  tls_ca_file: "/path/to/ca.crt"
+```
+
+All three files are required when `tls_enabled` is `true`.
+
+### Raft Configuration
+
+Raft-based replication for **queue appends** is optional and disabled by default.
+Consumer state and ack/nack/reject paths are not replicated yet.
+
+```yaml
+raft:
+  enabled: false
+  replication_factor: 3
+  sync_mode: true
+  min_in_sync_replicas: 2
+  ack_timeout: "5s"
+  bind_addr: "127.0.0.1:7100"
+  data_dir: "/tmp/fluxmq/raft"
+  peers:
+    node2: "127.0.0.1:7101"
+    node3: "127.0.0.1:7102"
+  heartbeat_timeout: "1s"
+  election_timeout: "3s"
+  snapshot_interval: "5m"
+  snapshot_threshold: 8192
+```
+
+## Rate Limiting Configuration
+
+Rate limiting can be enabled per IP and per client.
+
+```yaml
+ratelimit:
+  enabled: false
+  connection:
+    enabled: true
+    rate: 1.6667            # connections per second per IP (100/min)
+    burst: 20
+    cleanup_interval: "5m"
+  message:
+    enabled: true
+    rate: 1000              # messages per second per client
+    burst: 100
+  subscribe:
+    enabled: true
+    rate: 100               # subscriptions per second per client
+    burst: 10
+```
+
+Behavior:
+- Connection limits are enforced before MQTT handshake.
+- Message limits return MQTT 5 `QuotaExceeded` for QoS > 0 and drop QoS 0.
+- Subscribe limits return MQTT 5 `SubAckQuotaExceeded` or MQTT 3 `SubAckFailure`.
+
+## Webhook Configuration
+
+Webhook notifications are optional and disabled by default.
+
+```yaml
+webhook:
+  enabled: false
+  queue_size: 10000
+  drop_policy: "oldest"
+  workers: 5
+  include_payload: false
+  shutdown_timeout: "30s"
+  defaults:
+    timeout: "5s"
+    retry:
+      max_attempts: 3
+      initial_interval: "1s"
+      max_interval: "30s"
+      multiplier: 2.0
+    circuit_breaker:
+      failure_threshold: 5
+      reset_timeout: "60s"
+  endpoints:
+    - name: "analytics-service"
+      type: "http"
+      url: "https://analytics.example.com/mqtt/events"
+      events: ["message.published", "client.connected"]
+      topic_filters: ["sensors/#"]
+      headers:
+        Authorization: "Bearer token"
+      timeout: "10s"
+      retry:
+        max_attempts: 5
+```
+
+Notes:
+- `include_payload` is accepted by config but payload inclusion is not yet wired in the notifier.
+- Supported endpoint `type` is `"http"` only.
 
 ## Logging Configuration
 

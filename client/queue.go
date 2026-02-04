@@ -28,7 +28,9 @@ type QueueMessage struct {
 	*Message // Embedded standard MQTT message
 
 	MessageID string // Unique message ID for acknowledgment
-	Sequence  uint64 // Message sequence number
+	GroupID   string // Consumer group ID for acknowledgment
+	Offset    uint64 // Queue offset
+	Sequence  uint64 // Legacy alias for Offset
 
 	// Internal fields for acknowledgment
 	client    *Client
@@ -41,7 +43,7 @@ func (qm *QueueMessage) Ack() error {
 	if qm.client == nil {
 		return fmt.Errorf("cannot acknowledge: client not set")
 	}
-	return qm.client.Ack(qm.queueName, qm.MessageID)
+	return qm.client.AckWithGroup(qm.queueName, qm.MessageID, qm.GroupID)
 }
 
 // Nack negatively acknowledges the message, triggering a retry.
@@ -50,7 +52,7 @@ func (qm *QueueMessage) Nack() error {
 	if qm.client == nil {
 		return fmt.Errorf("cannot nack: client not set")
 	}
-	return qm.client.Nack(qm.queueName, qm.MessageID)
+	return qm.client.NackWithGroup(qm.queueName, qm.MessageID, qm.GroupID)
 }
 
 // Reject rejects the message, sending it to the dead-letter queue.
@@ -59,7 +61,7 @@ func (qm *QueueMessage) Reject() error {
 	if qm.client == nil {
 		return fmt.Errorf("cannot reject: client not set")
 	}
-	return qm.client.Reject(qm.queueName, qm.MessageID)
+	return qm.client.RejectWithGroup(qm.queueName, qm.MessageID, qm.GroupID)
 }
 
 // queueSubscription tracks a queue subscription and its handler.
@@ -98,6 +100,55 @@ func (qs *queueSubscriptions) remove(queueTopic string) {
 	qs.mu.Lock()
 	defer qs.mu.Unlock()
 	delete(qs.subs, queueTopic)
+}
+
+type queueAckInfo struct {
+	groupID string
+	expires time.Time
+}
+
+type queueAckCache struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	entries map[string]queueAckInfo
+}
+
+func newQueueAckCache(ttl time.Duration) *queueAckCache {
+	return &queueAckCache{
+		ttl:     ttl,
+		entries: make(map[string]queueAckInfo),
+	}
+}
+
+func (c *queueAckCache) set(messageID, groupID string) {
+	if messageID == "" || groupID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[messageID] = queueAckInfo{
+		groupID: groupID,
+		expires: time.Now().Add(c.ttl),
+	}
+}
+
+func (c *queueAckCache) get(messageID string) (string, bool) {
+	if messageID == "" {
+		return "", false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[messageID]
+	if !ok {
+		return "", false
+	}
+	if !entry.expires.IsZero() && entry.expires.Before(time.Now()) {
+		delete(c.entries, messageID)
+		return "", false
+	}
+	return entry.groupID, true
 }
 
 // PublishToQueue publishes a message to a durable queue.
@@ -345,39 +396,83 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 
 // Ack acknowledges successful processing of a queue message.
 func (c *Client) Ack(queueName, messageID string) error {
-	return c.sendQueueAck(queueName, messageID, "$ack")
+	return c.sendQueueAck(queueName, messageID, "", "$ack")
 }
 
 // Nack negatively acknowledges a queue message, triggering retry.
 func (c *Client) Nack(queueName, messageID string) error {
-	return c.sendQueueAck(queueName, messageID, "$nack")
+	return c.sendQueueAck(queueName, messageID, "", "$nack")
 }
 
 // Reject rejects a queue message, sending it to the dead-letter queue.
 func (c *Client) Reject(queueName, messageID string) error {
-	return c.sendQueueAck(queueName, messageID, "$reject")
+	return c.sendQueueAck(queueName, messageID, "", "$reject")
+}
+
+// AckWithGroup acknowledges a queue message with an explicit consumer group.
+func (c *Client) AckWithGroup(queueName, messageID, groupID string) error {
+	return c.sendQueueAck(queueName, messageID, groupID, "$ack")
+}
+
+// NackWithGroup negatively acknowledges a queue message with an explicit consumer group.
+func (c *Client) NackWithGroup(queueName, messageID, groupID string) error {
+	return c.sendQueueAck(queueName, messageID, groupID, "$nack")
+}
+
+// RejectWithGroup rejects a queue message with an explicit consumer group.
+func (c *Client) RejectWithGroup(queueName, messageID, groupID string) error {
+	return c.sendQueueAck(queueName, messageID, groupID, "$reject")
 }
 
 // sendQueueAck sends an acknowledgment for a queue message.
-func (c *Client) sendQueueAck(queueName, messageID, ackType string) error {
+func (c *Client) sendQueueAck(queueName, messageID, groupID, ackType string) error {
 	if !c.state.isConnected() {
 		return ErrNotConnected
+	}
+
+	if c.opts.ProtocolVersion != 5 {
+		return ErrQueueAckRequiresV5
+	}
+
+	if groupID == "" && c.queueAckCache != nil {
+		if cachedGroup, ok := c.queueAckCache.get(messageID); ok {
+			groupID = cachedGroup
+		}
+	}
+
+	if groupID == "" {
+		queueTopic := "$queue/" + queueName
+		if sub, ok := c.queueSubs.get(queueTopic); ok {
+			if sub.consumerGroup != "" {
+				groupID = sub.consumerGroup
+			} else if c.opts.ClientID != "" {
+				groupID = defaultGroupID(c.opts.ClientID)
+			}
+		}
+	}
+
+	if groupID == "" {
+		return ErrQueueAckMissingGroup
 	}
 
 	// Build ack topic: $queue/{queueName}/{$ack|$nack|$reject}
 	ackTopic := "$queue/" + queueName + "/" + ackType
 
 	// Send with message-id user property (MQTT v5)
-	if c.opts.ProtocolVersion == 5 {
-		userProps := map[string]string{
-			"message-id": messageID,
-		}
-		return c.publishWithUserProperties(ackTopic, nil, 1, false, userProps)
+	userProps := map[string]string{
+		"message-id": messageID,
+		"group-id":   groupID,
 	}
+	return c.publishWithUserProperties(ackTopic, nil, 1, false, userProps)
+}
 
-	// For MQTT v3, we can't send the message ID, so just publish empty message
-	// The broker would need to track inflight by client ID + topic
-	return c.Publish(ackTopic, nil, 1, false)
+func defaultGroupID(clientID string) string {
+	for i, c := range clientID {
+		if c == '-' {
+			return clientID[:i]
+		}
+	}
+	return clientID
 }
 
 // isQueueTopic returns true if the topic is a queue topic.

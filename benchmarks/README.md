@@ -18,14 +18,13 @@ This directory contains benchmark suites and performance analysis results for th
 
 ```bash
 # Message publishing benchmarks
-go test -bench=BenchmarkMessagePublish -benchtime=5s ./broker
+go test -bench=BenchmarkMessagePublish -benchtime=5s ./mqtt/broker
 
 # Router benchmarks
 go test -bench=BenchmarkRouter -benchtime=3s ./broker/router
 
 # Queue benchmarks
-go test -bench=BenchmarkEnqueue -benchtime=3s ./queue
-go test -bench=BenchmarkDequeue -benchtime=3s ./queue
+# Queue benchmarks are not currently present in-tree.
 ```
 
 ## Performance Results
@@ -36,11 +35,11 @@ go test -bench=BenchmarkDequeue -benchtime=3s ./queue
 - **Memory:** 177 B/op
 - **Allocations:** 4 allocs/op
 
-**See:** [`docs/PERFORMANCE_RESULTS.md`](../docs/PERFORMANCE_RESULTS.md) for comprehensive results.
+Results produced by the scripts are stored under `benchmarks/results/`.
 
 ## Benchmark Suite
 
-### Broker Benchmarks (`broker/message_bench_test.go`)
+### Broker Benchmarks (`mqtt/broker/message_bench_test.go`)
 
 **Message Publishing:**
 - `BenchmarkMessagePublish_SingleSubscriber` - Single subscriber performance
@@ -65,19 +64,9 @@ go test -bench=BenchmarkDequeue -benchtime=3s ./queue
 - `BenchmarkRouter_Unsubscribe` - Subscription removal
 - `BenchmarkRouter_Mixed_*` - Mixed read/write workloads
 
-### Queue Benchmarks (`queue/*_bench_test.go`)
+### Queue Benchmarks
 
-**Enqueue:**
-- `BenchmarkEnqueue_SinglePartition` - Single partition enqueue
-- `BenchmarkEnqueue_MultiplePartitions` - Multi-partition enqueue
-- `BenchmarkEnqueue_SmallPayload` - Small message performance
-- `BenchmarkEnqueue_LargePayload` - Large message performance
-- `BenchmarkEnqueue_Parallel` - Concurrent enqueue
-
-**Dequeue:**
-- `BenchmarkDequeue_SingleConsumer` - Single consumer dequeue
-- `BenchmarkDequeue_MultipleConsumers` - Multi-consumer scaling
-- `BenchmarkDequeue_PartitionScanning` - Partition scanning overhead
+Queue benchmarks are not currently present in-tree.
 
 ## Profiling
 
@@ -86,15 +75,15 @@ go test -bench=BenchmarkDequeue -benchtime=3s ./queue
 ```bash
 # CPU profile
 go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 \
-    -cpuprofile=cpu.prof -benchtime=30s ./broker
+    -cpuprofile=cpu.prof -benchtime=30s ./mqtt/broker
 
 # Memory profile
 go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 \
-    -memprofile=mem.prof -benchtime=30s ./broker
+    -memprofile=mem.prof -benchtime=30s ./mqtt/broker
 
 # Mutex contention profile
 go test -bench=BenchmarkMessagePublish_MultipleSubscribers/1000 \
-    -mutexprofile=mutex.prof -benchtime=30s ./broker
+    -mutexprofile=mutex.prof -benchtime=30s ./mqtt/broker
 ```
 
 ### Analyze Profiles

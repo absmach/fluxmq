@@ -1,6 +1,6 @@
 # Competitive Analysis: Absmach MQTT vs Industry Solutions
 
-**Last Updated:** 2026-01-12
+**Last Updated:** 2026-02-03
 
 This document provides a comprehensive comparison of the Absmach MQTT broker against major messaging solutions in the market.
 
@@ -22,8 +22,8 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 | Session Migration        | ✅                | ✅           | ✅      | N/A        | ✅             | ❌          | N/A             |
 | **Persistence**          |
 | Message Persistence      | ✅ (BadgerDB)     | ✅ (RocksDB) | ✅      | ✅ (SQLite) | ✅ (JetStream) | ✅          | ✅               |
-| Queue Replication        | ✅ (Raft)         | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
-| Retention Policies       | ✅                | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
+| Queue Replication        | ⚠️ Append-only Raft (WIP) | ✅     | ✅      | ❌          | ✅             | ✅          | ✅               |
+| Retention Policies       | ⚠️ Committed-offset truncation only | ✅ | ✅      | ❌          | ✅             | ✅          | ✅               |
 | **Performance**          |
 | Zero-Copy                | ✅                | ✅           | ✅      | ❌          | ✅             | ❌          | ✅               |
 | Buffer Pooling           | ✅                | ✅           | ✅      | ❌          | ✅             | ❌          | ✅               |
@@ -32,7 +32,7 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 | TLS                      | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
 | mTLS                     | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
 | Auth Plugins             | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| Rate Limiting            | ❌                | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
+| Rate Limiting            | ✅                | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
 | RBAC                     | ⚠️ Interface only | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
 | **Observability**        |
 | Prometheus Metrics       | ❌ (OTLP only)    | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
@@ -81,7 +81,7 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 
 - In-memory ring buffers for hot data
 - BadgerDB (LSM-tree) for durability
-- Raft replication for queue partitions
+- Optional Raft layer for queue appends (WIP)
 
 ---
 
@@ -199,8 +199,8 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 | ------------- | ---------------- | --------------- |
 | Protocol      | MQTT             | Kafka Protocol  |
 | Message Model | Pub/Sub + Queues | Log-based       |
-| Ordering      | Per-topic        | Per-partition   |
-| Retention     | Configurable     | Log compaction  |
+| Ordering      | Per-queue (single log) | Per-partition   |
+| Retention     | Committed-offset truncation (time/size planned) | Log compaction  |
 | Use Case      | IoT/Real-time    | Event streaming |
 
 **When to choose Absmach MQTT:** IoT devices, bidirectional communication, MQTT protocol.

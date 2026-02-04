@@ -20,13 +20,15 @@ var (
 	ErrConnectTimeout   = errors.New("connection timeout")
 
 	// Operation errors.
-	ErrTimeout         = errors.New("operation timed out")
-	ErrMaxInflight     = errors.New("maximum inflight messages exceeded")
-	ErrConnectionLost  = errors.New("connection lost")
-	ErrClientClosed    = errors.New("client has been closed")
-	ErrInvalidQoS      = errors.New("invalid QoS level (must be 0, 1, or 2)")
-	ErrInvalidTopic    = errors.New("invalid topic")
-	ErrSubscribeFailed = errors.New("subscription failed")
+	ErrTimeout              = errors.New("operation timed out")
+	ErrMaxInflight          = errors.New("maximum inflight messages exceeded")
+	ErrConnectionLost       = errors.New("connection lost")
+	ErrClientClosed         = errors.New("client has been closed")
+	ErrInvalidQoS           = errors.New("invalid QoS level (must be 0, 1, or 2)")
+	ErrInvalidTopic         = errors.New("invalid topic")
+	ErrSubscribeFailed      = errors.New("subscription failed")
+	ErrQueueAckRequiresV5   = errors.New("queue acknowledgments require MQTT v5 user properties")
+	ErrQueueAckMissingGroup = errors.New("group-id required for queue acknowledgment")
 
 	// Protocol errors.
 	ErrUnexpectedPacket = errors.New("unexpected packet type")
