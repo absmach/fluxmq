@@ -102,7 +102,7 @@ Queue deliveries include properties:
 Stream deliveries also include:
 - `x-stream-offset`
 - `x-stream-timestamp`
-- `x-work-acked` (based on the primary work group’s committed offset)
+- `x-primary-group-processed` (based on the primary work group's committed offset)
 - `x-work-committed-offset`
 - `x-work-group`
 
@@ -155,14 +155,56 @@ truncation point for queue-mode consumers.
 - `timestamp=<unix-seconds|unix-millis>`
 
 FluxMQ extensions for stream consumers:
-- `x-work-acked` and `x-work-committed-offset` to report delivery status for the
+- `x-primary-group-processed` and `x-work-committed-offset` to report delivery status for the
   configured primary work group.
 - `x-work-group` to identify the group used for status.
 - Optional `x-consumer-group` on `basic.consume` to persist a shared cursor.
   If omitted, the consumer tag is used as the stream group ID.
+- Optional `x-auto-commit=false` to disable automatic offset commits (manual commit mode).
 
 Primary work group is configured per queue (see configuration section) and is
 used only for delivery status reporting; it does not affect routing.
+
+### Consumer Group Modes
+
+Consumer groups operate in one of two modes:
+
+| Mode | Behavior |
+|------|----------|
+| `queue` | Work queue: messages removed on ack, PEL tracking, redelivery on timeout |
+| `stream` | Log consumption: messages stay in log, cursor-based, optional auto-commit |
+
+**Mode is immutable.** Once a group is created with a mode, all consumers must use the same mode.
+
+#### Mode Mismatch Error
+
+If a consumer joins a group with a different mode, the broker returns `ErrGroupModeMismatch`.
+
+**Resolution:**
+- Use a different consumer group name
+- Ensure all consumers use consistent subscription options
+- Delete and recreate the group (all consumers must disconnect first)
+
+### Manual Commit for Stream Consumers
+
+By default, stream consumers auto-commit offsets as messages are delivered. For exactly-once processing, disable auto-commit:
+
+```go
+autoCommit := false
+err := client.SubscribeToStream(&StreamConsumeOptions{
+    QueueName:  "events",
+    AutoCommit: &autoCommit,
+    Offset:     "first",
+}, handler)
+
+// After processing, explicitly commit
+client.CommitOffset("events", "my-group", lastProcessedOffset)
+```
+
+With manual commit:
+- Messages are delivered but committed offset doesn't advance automatically
+- On reconnect, delivery resumes from last committed offset
+- Use `CommitOffset()` to advance the committed position
 
 ## Model Alignment
 

@@ -562,11 +562,42 @@ if err := c.PublishToStream("events", []byte("hello"), nil); err != nil {
 Stream deliveries include:
 - `x-stream-offset`
 - `x-stream-timestamp`
-- `x-work-acked` / `x-work-committed-offset`
+- `x-primary-group-processed` / `x-work-committed-offset`
 
-The `x-work-*` fields report the configured primary work group’s committed offset.
+The `x-work-*` fields report the configured primary work group's committed offset.
 Convenience accessors are available on `QueueMessage`:
-`StreamOffset()`, `StreamTimestamp()`, `WorkAcked()`, `WorkCommittedOffset()`, `WorkGroup()`.
+`StreamOffset()`, `StreamTimestamp()`, `PrimaryGroupProcessed()`, `WorkCommittedOffset()`, `WorkGroup()`.
+`WorkAcked()` is deprecated but still supported for backward compatibility.
+
+### Manual Commit Mode
+
+By default, stream consumers auto-commit offsets as messages are delivered. For
+exactly-once processing, disable auto-commit:
+
+```go
+autoCommit := false
+err = c.SubscribeToStream(&amqp091.StreamConsumeOptions{
+    QueueName:  "events",
+    AutoCommit: &autoCommit,
+    Offset:     "first",
+}, func(msg *amqp091.QueueMessage) {
+    if off, ok := msg.StreamOffset(); ok {
+        log.Printf("offset=%d payload=%s", off, string(msg.Body))
+    }
+    // Process message...
+    // Explicitly commit after successful processing
+})
+
+// After processing a batch, commit the last processed offset
+if err := c.CommitOffset("events", "my-group", lastProcessedOffset); err != nil {
+    log.Printf("commit failed: %v", err)
+}
+```
+
+With manual commit:
+- Messages are delivered but the committed offset doesn't advance automatically
+- On reconnect, delivery resumes from the last committed offset
+- Use `CommitOffset()` to advance the committed position
 
 ### Pub/Sub
 

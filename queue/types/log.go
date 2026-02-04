@@ -45,6 +45,10 @@ type ConsumerGroupState struct {
 	Pattern   string // Subscription pattern (e.g., "sensors/#")
 	Mode      ConsumerGroupMode
 
+	// AutoCommit controls whether stream groups automatically commit offsets
+	// as messages are delivered. Default is true for backwards compatibility.
+	AutoCommit bool
+
 	// Queue cursor state (single cursor per queue, no partitions)
 	Cursor *QueueCursor
 
@@ -72,10 +76,11 @@ const (
 func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroupState {
 	now := time.Now()
 	return &ConsumerGroupState{
-		ID:        groupID,
-		QueueName: queueName,
-		Pattern:   pattern,
-		Mode:      GroupModeQueue,
+		ID:         groupID,
+		QueueName:  queueName,
+		Pattern:    pattern,
+		Mode:       GroupModeQueue,
+		AutoCommit: true,
 		Cursor: &QueueCursor{
 			Cursor:    0,
 			Committed: 0,

@@ -69,7 +69,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 }
 
 // GetOrCreateGroup retrieves or creates a consumer group.
-func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode) (*types.ConsumerGroupState, error) {
+func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool) (*types.ConsumerGroupState, error) {
 	// Try to get existing group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err == nil {
@@ -78,6 +78,7 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 		}
 		if group.Mode == "" {
 			group.Mode = mode
+			group.AutoCommit = autoCommit
 			_ = m.groupStore.UpdateConsumerGroup(ctx, group)
 			return group, nil
 		}
@@ -97,6 +98,7 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 	if mode != "" {
 		group.Mode = mode
 	}
+	group.AutoCommit = autoCommit
 
 	if err := m.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		// Handle race condition - another process might have created it
@@ -250,9 +252,11 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 		if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, newCursor); err != nil {
 			return nil, err
 		}
-		// Keep committed in sync for stream groups.
-		if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
-			return nil, err
+		// Only auto-commit if the group has AutoCommit enabled.
+		if group.AutoCommit {
+			if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -515,6 +519,29 @@ func (m *Manager) GetCommittedOffset(ctx context.Context, queueName, groupID str
 
 	cursor := group.GetCursor()
 	return cursor.Committed, nil
+}
+
+// CommitOffset explicitly commits an offset for a stream consumer group.
+// This is used when AutoCommit is disabled for manual commit control.
+func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+
+	if group.Mode != types.GroupModeStream {
+		return errors.New("commit offset only supported for stream groups")
+	}
+
+	cursor := group.GetCursor()
+	if offset > cursor.Cursor {
+		return ErrInvalidOffset
+	}
+
+	return m.groupStore.UpdateCommitted(ctx, queueName, groupID, offset)
 }
 
 // GetMinCommittedOffset returns the minimum committed offset across all groups for a stream.

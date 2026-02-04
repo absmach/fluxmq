@@ -579,6 +579,20 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		switch k {
 		case "content-type", "content-encoding", "correlation-id", "reply-to", "message-id", "type":
 			continue
+		case "x-stream-offset", "x-work-committed-offset":
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				headers[k] = int64(n) // AMQP uses signed integers
+			} else {
+				headers[k] = v
+			}
+		case "x-stream-timestamp":
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				headers[k] = n
+			} else {
+				headers[k] = v
+			}
+		case "x-primary-group-processed":
+			headers[k] = v == "true"
 		default:
 			headers[k] = v
 		}
@@ -841,7 +855,9 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 							existing.ExpiresAfter = 5 * time.Minute
 						}
 					}
-					_ = qm.UpdateQueue(context.Background(), *existing)
+					if err := qm.UpdateQueue(context.Background(), *existing); err != nil {
+						ch.conn.logger.Warn("failed to update stream queue config", "queue", m.Queue, "error", err)
+					}
 				}
 			}
 		}
@@ -995,6 +1011,9 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 				cursor = &qtypes.CursorOption{Position: qtypes.CursorLatest}
 			}
 			cursor.Mode = qtypes.GroupModeStream
+			if autoCommit := extractAutoCommit(m.Arguments); autoCommit != nil {
+				cursor.AutoCommit = autoCommit
+			}
 			if err := qm.SubscribeWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor); err != nil {
 				ch.conn.logger.Error("queue subscribe with cursor failed", "queue", queueName, "error", err)
 			}
@@ -1467,4 +1486,22 @@ func parseInt64Arg(val any) (int64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func extractAutoCommit(args map[string]interface{}) *bool {
+	if len(args) == 0 {
+		return nil
+	}
+	val, ok := args["x-auto-commit"]
+	if !ok {
+		return nil
+	}
+	switch v := val.(type) {
+	case bool:
+		return &v
+	case string:
+		b := v == "true"
+		return &b
+	}
+	return nil
 }

@@ -30,6 +30,10 @@ type CursorOption struct {
 	Timestamp time.Time
 	// Mode defines the consumer group mode (queue or stream).
 	Mode ConsumerGroupMode
+	// AutoCommit controls whether the consumer group automatically commits
+	// offsets as messages are delivered. nil = default (true for streams),
+	// explicit false = manual commit required.
+	AutoCommit *bool
 }
 
 // Queue constants

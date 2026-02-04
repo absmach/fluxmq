@@ -447,7 +447,11 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 	}
 	if mode == types.GroupModeStream && queueCfg != nil && queueCfg.Type != types.QueueTypeStream {
 		queueCfg.Type = types.QueueTypeStream
-		_ = m.queueStore.UpdateQueue(ctx, *queueCfg)
+		if err := m.queueStore.UpdateQueue(ctx, *queueCfg); err != nil {
+			m.logger.Warn("failed to update stream queue config",
+				slog.String("queue", queueName),
+				slog.String("error", err.Error()))
+		}
 	}
 
 	if groupID == "" {
@@ -463,7 +467,12 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
 	}
 
-	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, mode)
+	autoCommit := true
+	if cursor != nil && cursor.AutoCommit != nil {
+		autoCommit = *cursor.AutoCommit
+	}
+
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, mode, autoCommit)
 	if err != nil {
 		return err
 	}
@@ -557,8 +566,8 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
 	}
 
-	// Get or create consumer group
-	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, types.GroupModeQueue)
+	// Get or create consumer group (queue mode always auto-commits)
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, types.GroupModeQueue, true)
 	if err != nil {
 		return err
 	}
@@ -659,8 +668,18 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 				cursor := group.GetCursor()
 				next := offset + 1
 				if next > cursor.Cursor {
-					_ = m.groupStore.UpdateCursor(ctx, queueName, group.ID, next)
-					_ = m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next)
+					if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
+						m.logger.Warn("failed to update stream cursor",
+							slog.String("queue", queueName),
+							slog.String("group", group.ID),
+							slog.String("error", err.Error()))
+					}
+					if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
+						m.logger.Warn("failed to update stream committed offset",
+							slog.String("queue", queueName),
+							slog.String("group", group.ID),
+							slog.String("error", err.Error()))
+					}
 				}
 				return nil
 			}
@@ -682,8 +701,18 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 			cursor := group.GetCursor()
 			next := offset + 1
 			if next > cursor.Cursor {
-				_ = m.groupStore.UpdateCursor(ctx, queueName, group.ID, next)
-				_ = m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next)
+				if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
+					m.logger.Warn("failed to update stream cursor",
+						slog.String("queue", queueName),
+						slog.String("group", group.ID),
+						slog.String("error", err.Error()))
+				}
+				if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
+					m.logger.Warn("failed to update stream committed offset",
+						slog.String("queue", queueName),
+						slog.String("group", group.ID),
+						slog.String("error", err.Error()))
+				}
 			}
 			return nil
 		}
@@ -906,8 +935,8 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 		if groupConsumers[0].Mode != "" {
 			mode = types.ConsumerGroupMode(groupConsumers[0].Mode)
 		}
-		// Get or create a local consumer group state for tracking cursor
-		group, err := m.consumerManager.GetOrCreateGroup(ctx, config.Name, groupID, groupConsumers[0].Pattern, mode)
+		// Get or create a local consumer group state for tracking cursor (default auto-commit for remote)
+		group, err := m.consumerManager.GetOrCreateGroup(ctx, config.Name, groupID, groupConsumers[0].Pattern, mode, true)
 		if err != nil {
 			continue
 		}
@@ -961,7 +990,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 					}
 					if hasWorkCommitted {
 						propsCopy["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-						propsCopy["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
+						propsCopy["x-primary-group-processed"] = strconv.FormatBool(msg.Sequence < workCommitted)
 						propsCopy["x-work-group"] = config.PrimaryGroup
 					}
 					properties = propsCopy
@@ -1359,7 +1388,7 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queu
 	return deliveryMsg
 }
 
-func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *types.Message, group *types.ConsumerGroupState, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
+func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *types.Message, _ *types.ConsumerGroupState, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
 	if delivery == nil || msg == nil {
 		return
 	}
@@ -1374,7 +1403,7 @@ func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *t
 
 	if hasWorkCommitted {
 		delivery.Properties["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-		delivery.Properties["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
+		delivery.Properties["x-primary-group-processed"] = strconv.FormatBool(msg.Sequence < workCommitted)
 		if primaryGroup != "" {
 			delivery.Properties["x-work-group"] = primaryGroup
 		}
@@ -1504,6 +1533,12 @@ func (m *Manager) GetMetrics() consumer.Metrics {
 // GetLag returns the lag for a consumer group.
 func (m *Manager) GetLag(ctx context.Context, queueName, groupID string) (uint64, error) {
 	return m.consumerManager.GetLag(ctx, queueName, groupID)
+}
+
+// CommitOffset explicitly commits an offset for a stream consumer group.
+// Use when AutoCommit is disabled for manual commit control.
+func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error {
+	return m.consumerManager.CommitOffset(ctx, queueName, groupID, offset)
 }
 
 // --- Cluster QueueHandler Implementation ---

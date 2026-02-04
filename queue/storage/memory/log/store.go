@@ -302,6 +302,21 @@ func (s *Store) OffsetByTime(ctx context.Context, queueName string, ts time.Time
 	return sl.tail, nil
 }
 
+// messageSize estimates the memory footprint of a message.
+func messageSize(msg *types.Message) int64 {
+	if msg == nil {
+		return 0
+	}
+	size := int64(len(msg.GetPayload()))
+	size += int64(len(msg.Topic))
+	size += int64(len(msg.ID))
+	for k, v := range msg.Properties {
+		size += int64(len(k) + len(v))
+	}
+	const fixedOverhead = 200 // struct fields, pointers, timestamps
+	return size + fixedOverhead
+}
+
 // OffsetBySize returns the offset to keep when enforcing size retention.
 func (s *Store) OffsetBySize(ctx context.Context, queueName string, retentionBytes int64) (uint64, error) {
 	sl, err := s.getQueueLog(queueName)
@@ -318,7 +333,7 @@ func (s *Store) OffsetBySize(ctx context.Context, queueName string, retentionByt
 
 	var total int64
 	for i := len(sl.messages) - 1; i >= 0; i-- {
-		total += int64(len(sl.messages[i].GetPayload()))
+		total += messageSize(sl.messages[i])
 		if total > retentionBytes {
 			return sl.head + uint64(i+1), nil
 		}

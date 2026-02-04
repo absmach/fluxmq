@@ -37,6 +37,7 @@ type StreamConsumeOptions struct {
 	ConsumerGroup string
 	Offset        string // "first", "last", "next", "offset=123", "timestamp=..."
 	AutoAck       bool
+	AutoCommit    *bool // nil = default (true), false = manual commit required
 	Exclusive     bool
 	NoLocal       bool
 	NoWait        bool
@@ -88,8 +89,17 @@ func (qm *QueueMessage) StreamTimestamp() (int64, bool) {
 	return 0, false
 }
 
+// PrimaryGroupProcessed reports whether the primary group has processed this offset.
+func (qm *QueueMessage) PrimaryGroupProcessed() (bool, bool) {
+	return headerBool(qm.Headers, "x-primary-group-processed")
+}
+
 // WorkAcked reports whether the primary work group has acknowledged this offset.
+// Deprecated: Use PrimaryGroupProcessed instead.
 func (qm *QueueMessage) WorkAcked() (bool, bool) {
+	if v, ok := headerBool(qm.Headers, "x-primary-group-processed"); ok {
+		return v, ok
+	}
 	return headerBool(qm.Headers, "x-work-acked")
 }
 
@@ -366,6 +376,30 @@ func (c *Client) UnsubscribeFromStream(queueName string) error {
 	return ch.Cancel(sub.consumerTag, false)
 }
 
+// CommitOffset explicitly commits an offset for a stream consumer group.
+// Use when AutoCommit is false for manual commit control.
+func (c *Client) CommitOffset(queueName, groupID string, offset uint64) error {
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+
+	ch, err := c.channel()
+	if err != nil {
+		return err
+	}
+
+	c.chMu.Lock()
+	defer c.chMu.Unlock()
+
+	// Send commit via publish to a special commit topic
+	return ch.Publish("", "$queue/"+queueName+"/$commit", false, false, amqp091.Publishing{
+		Headers: amqp091.Table{
+			"x-group-id": groupID,
+			"x-offset":   int64(offset),
+		},
+	})
+}
+
 func (c *Client) subscribeQueue(sub *queueSubscription) error {
 	ch, err := c.channel()
 	if err != nil {
@@ -426,6 +460,9 @@ func (c *Client) subscribeStream(sub *queueSubscription, opts *StreamConsumeOpti
 		}
 		if opts.Offset != "" {
 			args["x-stream-offset"] = opts.Offset
+		}
+		if opts.AutoCommit != nil && !*opts.AutoCommit {
+			args["x-auto-commit"] = false
 		}
 		for k, v := range opts.Arguments {
 			args[k] = v
