@@ -5,7 +5,9 @@
 
 > **Status: Experimental** — FluxMQ is not production-ready yet.
 
-A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. MQTT transports share a single broker, AMQP 1.0 and AMQP 0.9.1 run in independent brokers, and durable queues provide cross-protocol routing and fan-out.
+> **Status of this document** — Since the project is still in an early stage, some of the features described here are **not facts, but eventual targets**. Comprehensive benchmarks and tests are not yet available to fully substantiate these claims, and we will update them regularly as the project evolves.
+
+A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. MQTT transports share a single broker, AMQP 0.9.1 and AMQP 1.0 run in independent brokers, and durable queues provide cross-protocol routing and fan-out.
 
 ## Links
 
@@ -14,15 +16,13 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 - [Professional Support](mailto:support@absmach.eu)
 - [Discord](https://discord.gg/HvB5QuzF)
 
-## Who Is This For
-
-### ✅ Recommended for
+## ✅ Recommended for
 
 **Event-Driven Architectures**
 - **Event backbone for microservices** - Reliable, ordered event distribution between services with at-least-once or exactly-once delivery (QoS 1/2)
 - **CQRS systems** - Durable queues for command/event distribution with per-queue FIFO ordering
 - **Asynchronous workflows** - Decouple services with persistent message queues and ack/nack-based redelivery
-- **Real-time event processing** - High throughput (300K-500K msg/s per node) with low latency (<10ms local, ~5ms cross-node)
+- **Real-time event processing** - High throughput (300K-500K msg/s per node) with low latency (<10ms local, ~50ms cross-node)
 
 **Why choose this over for EDA:**
 - ✅ Simple operations - single binary with embedded storage, no Zookeeper/KRaft
@@ -42,7 +42,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 - **Geographic distribution** - gRPC-based cross-node routing with embedded etcd coordination
 - **Scalability** - Cluster support (3-node cluster: 1-2M msg/s, 5-node cluster: 2-4M msg/s)
 
-### ⚠️ Not Recommended For
+## ⚠️ Not Recommended For
 
 **Long-term Event Storage**
 - ❌ Event sourcing as permanent source of truth - compaction/deletion/retention policies are allowed
