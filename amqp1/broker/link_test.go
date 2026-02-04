@@ -6,8 +6,8 @@ package broker
 import (
 	"testing"
 
-	"github.com/absmach/fluxmq/amqp/performatives"
-	"github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/amqp1/performatives"
+	"github.com/absmach/fluxmq/amqp1/types"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

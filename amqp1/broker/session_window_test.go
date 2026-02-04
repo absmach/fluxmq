@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	amqpconn "github.com/absmach/fluxmq/amqp"
-	"github.com/absmach/fluxmq/amqp/performatives"
+	amqpconn "github.com/absmach/fluxmq/amqp1"
+	"github.com/absmach/fluxmq/amqp1/performatives"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

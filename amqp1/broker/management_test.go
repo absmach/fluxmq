@@ -6,7 +6,7 @@ package broker
 import (
 	"testing"
 
-	"github.com/absmach/fluxmq/amqp/message"
+	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

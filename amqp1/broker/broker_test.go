@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	amqpconn "github.com/absmach/fluxmq/amqp"
-	"github.com/absmach/fluxmq/amqp/frames"
-	"github.com/absmach/fluxmq/amqp/message"
-	"github.com/absmach/fluxmq/amqp/performatives"
-	"github.com/absmach/fluxmq/amqp/sasl"
-	"github.com/absmach/fluxmq/amqp/types"
+	amqpconn "github.com/absmach/fluxmq/amqp1"
+	"github.com/absmach/fluxmq/amqp1/frames"
+	"github.com/absmach/fluxmq/amqp1/message"
+	"github.com/absmach/fluxmq/amqp1/performatives"
+	"github.com/absmach/fluxmq/amqp1/sasl"
+	"github.com/absmach/fluxmq/amqp1/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

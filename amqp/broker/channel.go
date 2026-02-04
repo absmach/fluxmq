@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/absmach/fluxmq/amqp091/codec"
+	"github.com/absmach/fluxmq/amqp/codec"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"

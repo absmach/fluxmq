@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	amqpconn "github.com/absmach/fluxmq/amqp"
-	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
-	"github.com/absmach/fluxmq/amqp/frames"
-	"github.com/absmach/fluxmq/amqp/message"
-	"github.com/absmach/fluxmq/amqp/performatives"
-	"github.com/absmach/fluxmq/amqp/sasl"
-	"github.com/absmach/fluxmq/amqp/types"
+	amqpconn "github.com/absmach/fluxmq/amqp1"
+	amqpbroker "github.com/absmach/fluxmq/amqp1/broker"
+	"github.com/absmach/fluxmq/amqp1/frames"
+	"github.com/absmach/fluxmq/amqp1/message"
+	"github.com/absmach/fluxmq/amqp1/performatives"
+	"github.com/absmach/fluxmq/amqp1/sasl"
+	"github.com/absmach/fluxmq/amqp1/types"
 	"github.com/absmach/fluxmq/broker"
-	amqpserver "github.com/absmach/fluxmq/server/amqp"
+	amqpserver "github.com/absmach/fluxmq/server/amqp1"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -354,7 +354,7 @@ func (m *mockAuth) Authenticate(clientID, username, password string) (bool, erro
 
 type mockAuthz struct{}
 
-func (m *mockAuthz) CanPublish(clientID, topic string) bool   { return true }
+func (m *mockAuthz) CanPublish(clientID, topic string) bool    { return true }
 func (m *mockAuthz) CanSubscribe(clientID, filter string) bool { return true }
 
 func TestIntegrationSASLPlainAuth(t *testing.T) {

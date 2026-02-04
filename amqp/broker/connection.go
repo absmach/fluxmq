@@ -4,231 +4,208 @@
 package broker
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	amqpconn "github.com/absmach/fluxmq/amqp"
-	"github.com/absmach/fluxmq/amqp/frames"
-	"github.com/absmach/fluxmq/amqp/performatives"
-	"github.com/absmach/fluxmq/amqp/sasl"
-	"github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/amqp/codec"
 )
 
-// Connection represents a single AMQP client connection.
+// AMQP 0.9.1 protocol header: "AMQP" followed by 0, 0, 9, 1.
+var protocolHeader = []byte{'A', 'M', 'Q', 'P', 0, 0, 9, 1}
+
+const (
+	defaultFrameMax   = uint32(131072)
+	defaultChannelMax = uint16(2047)
+	defaultHeartbeat  = uint16(60)
+)
+
+// Connection represents a single AMQP 0.9.1 client connection.
 type Connection struct {
-	broker       *Broker
-	conn         *amqpconn.Connection
-	containerID  string
-	maxFrameSize uint32
-	channelMax   uint16
-	idleTimeout  time.Duration
+	broker *Broker
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
 
-	sessions   map[uint16]*Session
-	sessionsMu sync.RWMutex
-	nextCh     uint16
+	connID     string
+	frameMax   uint32
+	channelMax uint16
+	heartbeat  uint16
 
+	channels   map[uint16]*Channel
+	channelsMu sync.RWMutex
+
+	writeMu   sync.Mutex
 	closed    atomic.Bool
 	closeCh   chan struct{}
 	closeOnce sync.Once
 
-	// Multi-frame transfer reassembly per channel
-	partialTransfers   map[uint16]*partialTransfer
-	partialTransfersMu sync.Mutex
+	deliveryTag atomic.Uint64
 
 	logger *slog.Logger
 }
 
-type partialTransfer struct {
-	transfer *performatives.Transfer
-	payload  []byte
-}
-
-func newConnection(b *Broker, raw net.Conn) *Connection {
+func newConnection(b *Broker, netConn net.Conn) *Connection {
 	return &Connection{
-		broker:           b,
-		conn:             amqpconn.NewConnection(raw),
-		maxFrameSize:     frames.DefaultMaxFrameSize,
-		channelMax:       65535,
-		sessions:         make(map[uint16]*Session),
-		partialTransfers: make(map[uint16]*partialTransfer),
-		closeCh:          make(chan struct{}),
-		logger:           b.logger,
+		broker:     b,
+		conn:       netConn,
+		reader:     bufio.NewReaderSize(netConn, 65536),
+		writer:     bufio.NewWriterSize(netConn, 65536),
+		frameMax:   defaultFrameMax,
+		channelMax: defaultChannelMax,
+		heartbeat:  defaultHeartbeat,
+		channels:   make(map[uint16]*Channel),
+		closeCh:    make(chan struct{}),
+		logger:     b.logger,
 	}
 }
 
-// run executes the full connection lifecycle:
-// SASL negotiation → OPEN exchange → frame loop → cleanup.
+func (c *Connection) nextDeliveryTag() uint64 {
+	return c.deliveryTag.Add(1)
+}
+
+// run executes the full connection lifecycle.
 func (c *Connection) run() error {
 	defer c.cleanup()
 
-	// Phase 1: Read protocol header
-	protoID, err := c.conn.ReadProtocolHeader()
-	if err != nil {
-		return fmt.Errorf("reading protocol header: %w", err)
+	if err := c.negotiateProtocol(); err != nil {
+		return fmt.Errorf("protocol negotiation: %w", err)
 	}
 
-	// Phase 2: SASL negotiation if client sends SASL header
-	if protoID == frames.ProtoIDSASL {
-		if err := c.handleSASL(); err != nil {
-			return fmt.Errorf("SASL negotiation: %w", err)
-		}
-
-		// After SASL, client must send AMQP protocol header
-		protoID, err = c.conn.ReadProtocolHeader()
-		if err != nil {
-			return fmt.Errorf("reading AMQP header after SASL: %w", err)
-		}
+	if err := c.connectionHandshake(); err != nil {
+		return fmt.Errorf("connection handshake: %w", err)
 	}
 
-	if protoID != frames.ProtoIDAMQP {
-		c.conn.WriteProtocolHeader(frames.ProtoIDAMQP)
-		return fmt.Errorf("unexpected protocol ID: 0x%02x", protoID)
-	}
-
-	// Phase 3: Respond with AMQP header
-	if err := c.conn.WriteProtocolHeader(frames.ProtoIDAMQP); err != nil {
-		return fmt.Errorf("writing AMQP header: %w", err)
-	}
-
-	// Phase 4: OPEN exchange
-	if err := c.handleOpen(); err != nil {
-		return fmt.Errorf("OPEN exchange: %w", err)
-	}
-
-	c.broker.registerConnection(c.containerID, c)
+	c.connID = c.conn.RemoteAddr().String()
+	c.broker.registerConnection(c.connID, c)
 	c.broker.stats.IncrementConnections()
-	if m := c.broker.getMetrics(); m != nil {
-		m.RecordConnection()
-	}
-	c.logger.Info("AMQP connection opened", "container_id", c.containerID, "remote", c.conn.RemoteAddr())
+	c.logger.Info("AMQP 0.9.1 connection opened", "remote", c.connID)
 
-	// Phase 5: Start heartbeat sender if idle timeout is set
-	if c.idleTimeout > 0 {
-		go c.heartbeatLoop()
+	if c.heartbeat > 0 {
+		go c.heartbeatSender()
+		go c.heartbeatMonitor()
 	}
 
-	// Phase 6: Frame processing loop
 	return c.processFrames()
 }
 
-func (c *Connection) handleSASL() error {
-	// Send SASL protocol header
-	if err := c.conn.WriteProtocolHeader(frames.ProtoIDSASL); err != nil {
-		return err
+// negotiateProtocol reads and validates the AMQP 0.9.1 protocol header.
+func (c *Connection) negotiateProtocol() error {
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(c.reader, header); err != nil {
+		return fmt.Errorf("reading protocol header: %w", err)
 	}
 
-	// Send SASL mechanisms
-	mechs := &sasl.Mechanisms{
-		Mechanisms: []types.Symbol{sasl.MechPLAIN, sasl.MechANONYMOUS},
-	}
-	body, err := mechs.Encode()
-	if err != nil {
-		return err
-	}
-	if err := c.conn.WriteSASLFrame(body); err != nil {
-		return err
+	if !bytes.Equal(header, protocolHeader) {
+		// Send correct protocol header and close
+		c.conn.Write(protocolHeader)
+		return fmt.Errorf("unsupported protocol header: %x", header)
 	}
 
-	// Read SASL Init
-	desc, val, err := c.conn.ReadSASLFrame()
-	if err != nil {
-		return err
-	}
-	if desc != sasl.DescriptorInit {
-		return fmt.Errorf("expected SASL-Init, got descriptor 0x%02x", desc)
-	}
-
-	init := val.(*sasl.Init)
-
-	// Validate mechanism
-	switch init.Mechanism {
-	case sasl.MechPLAIN:
-		_, username, password, err := sasl.ParsePLAIN(init.InitialResponse)
-		if err != nil {
-			outcome := &sasl.Outcome{Code: sasl.CodeAuth}
-			body, _ := outcome.Encode()
-			c.conn.WriteSASLFrame(body)
-			return fmt.Errorf("PLAIN auth failed: %w", err)
-		}
-		if auth := c.broker.getAuth(); auth != nil {
-			ok, authErr := auth.Authenticate(username, username, password)
-			if authErr != nil || !ok {
-				c.broker.stats.IncrementAuthErrors()
-				if m := c.broker.getMetrics(); m != nil {
-					m.RecordError("auth")
-				}
-				outcome := &sasl.Outcome{Code: sasl.CodeAuth}
-				body, _ := outcome.Encode()
-				c.conn.WriteSASLFrame(body)
-				return fmt.Errorf("PLAIN auth rejected for user %q", username)
-			}
-		}
-	case sasl.MechANONYMOUS:
-		// Anonymous is always accepted
-	default:
-		outcome := &sasl.Outcome{Code: sasl.CodeAuth}
-		body, _ := outcome.Encode()
-		c.conn.WriteSASLFrame(body)
-		return fmt.Errorf("unsupported SASL mechanism: %s", init.Mechanism)
-	}
-
-	// Send SASL outcome OK
-	outcome := &sasl.Outcome{Code: sasl.CodeOK}
-	body, err = outcome.Encode()
-	if err != nil {
-		return err
-	}
-	return c.conn.WriteSASLFrame(body)
+	return nil
 }
 
-func (c *Connection) handleOpen() error {
-	// Read client OPEN
-	ch, desc, perf, _, err := c.conn.ReadPerformative()
+// connectionHandshake performs the Connection.Start → TuneOk → Open handshake.
+func (c *Connection) connectionHandshake() error {
+	// Send Connection.Start
+	start := &codec.ConnectionStart{
+		VersionMajor: 0,
+		VersionMinor: 9,
+		ServerProperties: map[string]interface{}{
+			"product":     "FluxMQ",
+			"version":     "0.1.0",
+			"platform":    "Go",
+			"information": "https://github.com/absmach/fluxmq",
+			"capabilities": map[string]interface{}{
+				"basic.nack":                 true,
+				"publisher_confirms":         true,
+				"consumer_cancel_notify":     true,
+				"exchange_exchange_bindings": true,
+				"connection.blocked":         true,
+			},
+		},
+		Mechanisms: "PLAIN",
+		Locales:    "en_US",
+	}
+	if err := c.writeMethod(0, start); err != nil {
+		return err
+	}
+
+	// Read Connection.StartOk
+	frame, err := codec.ReadFrame(c.reader)
 	if err != nil {
 		return err
 	}
-	if desc != performatives.DescriptorOpen {
-		return fmt.Errorf("expected OPEN, got descriptor 0x%02x on channel %d", desc, ch)
-	}
-
-	clientOpen := perf.(*performatives.Open)
-	c.containerID = clientOpen.ContainerID
-
-	// Negotiate max frame size (minimum of both)
-	if clientOpen.MaxFrameSize > 0 && clientOpen.MaxFrameSize < c.maxFrameSize {
-		c.maxFrameSize = clientOpen.MaxFrameSize
-	}
-	c.conn.SetMaxFrameSize(c.maxFrameSize)
-
-	if clientOpen.ChannelMax > 0 && clientOpen.ChannelMax < c.channelMax {
-		c.channelMax = clientOpen.ChannelMax
-	}
-
-	// Set idle timeout from client's preference
-	if clientOpen.IdleTimeOut > 0 {
-		c.idleTimeout = time.Duration(clientOpen.IdleTimeOut) * time.Millisecond
-		c.conn.SetIdleTimeout(c.idleTimeout * 2) // read deadline is 2x the timeout
-	}
-
-	// Send our OPEN
-	serverOpen := &performatives.Open{
-		ContainerID:  "fluxmq",
-		MaxFrameSize: c.maxFrameSize,
-		ChannelMax:   c.channelMax,
-		IdleTimeOut:  uint32(c.idleTimeout.Milliseconds()),
-	}
-
-	body, err := serverOpen.Encode()
+	decoded, err := frame.Decode()
 	if err != nil {
 		return err
 	}
-	return c.conn.WritePerformative(0, body)
+	_, ok := decoded.(*codec.ConnectionStartOk)
+	if !ok {
+		return fmt.Errorf("expected Connection.StartOk, got %T", decoded)
+	}
+
+	// Send Connection.Tune
+	tune := &codec.ConnectionTune{
+		ChannelMax: c.channelMax,
+		FrameMax:   c.frameMax,
+		Heartbeat:  c.heartbeat,
+	}
+	if err := c.writeMethod(0, tune); err != nil {
+		return err
+	}
+
+	// Read Connection.TuneOk
+	frame, err = codec.ReadFrame(c.reader)
+	if err != nil {
+		return err
+	}
+	decoded, err = frame.Decode()
+	if err != nil {
+		return err
+	}
+	tuneOk, ok := decoded.(*codec.ConnectionTuneOk)
+	if !ok {
+		return fmt.Errorf("expected Connection.TuneOk, got %T", decoded)
+	}
+
+	// Apply negotiated values (minimum of client/server)
+	if tuneOk.ChannelMax > 0 && tuneOk.ChannelMax < c.channelMax {
+		c.channelMax = tuneOk.ChannelMax
+	}
+	if tuneOk.FrameMax > 0 && tuneOk.FrameMax < c.frameMax {
+		c.frameMax = tuneOk.FrameMax
+	}
+	if tuneOk.Heartbeat < c.heartbeat {
+		c.heartbeat = tuneOk.Heartbeat
+	}
+
+	// Read Connection.Open
+	frame, err = codec.ReadFrame(c.reader)
+	if err != nil {
+		return err
+	}
+	decoded, err = frame.Decode()
+	if err != nil {
+		return err
+	}
+	_, ok = decoded.(*codec.ConnectionOpen)
+	if !ok {
+		return fmt.Errorf("expected Connection.Open, got %T", decoded)
+	}
+
+	// Send Connection.OpenOk
+	openOk := &codec.ConnectionOpenOk{}
+	return c.writeMethod(0, openOk)
 }
 
+// processFrames is the main frame processing loop.
 func (c *Connection) processFrames() error {
 	for {
 		select {
@@ -237,229 +214,193 @@ func (c *Connection) processFrames() error {
 		default:
 		}
 
-		ch, desc, perf, payload, err := c.conn.ReadPerformative()
+		if c.heartbeat > 0 {
+			deadline := time.Now().Add(time.Duration(c.heartbeat*2) * time.Second)
+			c.conn.SetReadDeadline(deadline)
+		}
+
+		frame, err := codec.ReadFrame(c.reader)
 		if err != nil {
-			return err
+			if c.closed.Load() {
+				return nil
+			}
+			return fmt.Errorf("reading frame: %w", err)
 		}
 
-		// Heartbeat
-		if perf == nil && desc == 0 {
-			continue
+		switch frame.Type {
+		case codec.FrameMethod:
+			if err := c.handleMethodFrame(frame); err != nil {
+				return err
+			}
+		case codec.FrameHeader:
+			ch := c.getChannel(frame.Channel)
+			if ch == nil {
+				continue
+			}
+			ch.handleHeaderFrame(frame)
+		case codec.FrameBody:
+			ch := c.getChannel(frame.Channel)
+			if ch == nil {
+				continue
+			}
+			ch.handleBodyFrame(frame)
+		case codec.FrameHeartbeat:
+			// Heartbeat received, deadline already reset
+		default:
+			c.logger.Warn("unknown frame type", "type", frame.Type)
 		}
+	}
+}
 
-		switch desc {
-		case performatives.DescriptorBegin:
-			if err := c.handleBegin(ch, perf.(*performatives.Begin)); err != nil {
-				return err
-			}
-		case performatives.DescriptorAttach:
-			c.sessionsMu.RLock()
-			s := c.sessions[ch]
-			c.sessionsMu.RUnlock()
-			if s == nil {
-				return fmt.Errorf("attach on unknown channel %d", ch)
-			}
-			if err := s.handleAttach(perf.(*performatives.Attach)); err != nil {
-				return err
-			}
-		case performatives.DescriptorFlow:
-			c.sessionsMu.RLock()
-			s := c.sessions[ch]
-			c.sessionsMu.RUnlock()
-			if s == nil {
-				continue
-			}
-			s.handleFlow(perf.(*performatives.Flow))
-		case performatives.DescriptorTransfer:
-			transfer := perf.(*performatives.Transfer)
+func (c *Connection) handleMethodFrame(frame *codec.Frame) error {
+	decoded, err := frame.Decode()
+	if err != nil {
+		return fmt.Errorf("decoding method: %w", err)
+	}
 
-			c.partialTransfersMu.Lock()
-			partial := c.partialTransfers[ch]
-
-			if partial != nil {
-				// Continuation frame: append payload to existing partial
-				partial.payload = append(partial.payload, payload...)
-				if transfer.More {
-					c.partialTransfersMu.Unlock()
-					continue
-				}
-				// Final frame: deliver the reassembled transfer
-				transfer = partial.transfer
-				payload = partial.payload
-				delete(c.partialTransfers, ch)
-				c.partialTransfersMu.Unlock()
-			} else if transfer.More {
-				// First frame of multi-frame transfer
-				c.partialTransfers[ch] = &partialTransfer{
-					transfer: transfer,
-					payload:  append([]byte(nil), payload...),
-				}
-				c.partialTransfersMu.Unlock()
-				continue
-			} else {
-				c.partialTransfersMu.Unlock()
-			}
-
-			c.sessionsMu.RLock()
-			s := c.sessions[ch]
-			c.sessionsMu.RUnlock()
-			if s == nil {
-				continue
-			}
-			s.handleTransfer(transfer, payload)
-		case performatives.DescriptorDisposition:
-			c.sessionsMu.RLock()
-			s := c.sessions[ch]
-			c.sessionsMu.RUnlock()
-			if s == nil {
-				continue
-			}
-			s.handleDisposition(perf.(*performatives.Disposition))
-		case performatives.DescriptorDetach:
-			c.sessionsMu.RLock()
-			s := c.sessions[ch]
-			c.sessionsMu.RUnlock()
-			if s == nil {
-				continue
-			}
-			s.handleDetach(perf.(*performatives.Detach))
-		case performatives.DescriptorEnd:
-			if err := c.handleEnd(ch, perf.(*performatives.End)); err != nil {
-				return err
-			}
-		case performatives.DescriptorClose:
-			c.handleClose(perf.(*performatives.Close))
+	// Connection-level methods (channel 0)
+	if frame.Channel == 0 {
+		switch m := decoded.(type) {
+		case *codec.ConnectionClose:
+			closeOk := &codec.ConnectionCloseOk{}
+			c.writeMethod(0, closeOk)
+			c.close()
+			return nil
+		case *codec.ConnectionCloseOk:
+			c.close()
 			return nil
 		default:
-			c.logger.Warn("unknown performative", "descriptor", desc, "channel", ch)
-		}
-	}
-}
-
-func (c *Connection) handleBegin(ch uint16, begin *performatives.Begin) error {
-	c.sessionsMu.Lock()
-	defer c.sessionsMu.Unlock()
-
-	// Check channel limit
-	if uint16(len(c.sessions)) >= c.channelMax {
-		c.logger.Warn("channel limit exceeded", "channel", ch, "max", c.channelMax)
-		return c.sendClose(&performatives.Error{
-			Condition:   performatives.ErrResourceLimitExceeded,
-			Description: "channel limit exceeded",
-		})
-	}
-
-	// Reject duplicate channel
-	if _, exists := c.sessions[ch]; exists {
-		c.logger.Warn("duplicate channel", "channel", ch)
-		return c.sendClose(&performatives.Error{
-			Condition:   performatives.ErrFramingError,
-			Description: fmt.Sprintf("channel %d already in use", ch),
-		})
-	}
-
-	localCh := c.nextCh
-	c.nextCh++
-
-	handleMax := uint32(255)
-	if begin.HandleMax > 0 && begin.HandleMax < handleMax {
-		handleMax = begin.HandleMax
-	}
-
-	s := newSession(c, localCh, ch, handleMax)
-	s.initWindows(begin)
-	c.sessions[ch] = s
-
-	c.broker.stats.IncrementSessions()
-	if m := c.broker.getMetrics(); m != nil {
-		m.RecordSessionOpened()
-	}
-
-	// Send Begin response with our actual window state
-	_, inWin, nextOut, outWin := s.sessionFlowState()
-	resp := &performatives.Begin{
-		RemoteChannel:  &ch,
-		NextOutgoingID: nextOut,
-		IncomingWindow: inWin,
-		OutgoingWindow: outWin,
-		HandleMax:      handleMax,
-	}
-	body, err := resp.Encode()
-	if err != nil {
-		return err
-	}
-	return c.conn.WritePerformative(localCh, body)
-}
-
-// sendClose sends a Close frame with an optional error and signals shutdown.
-func (c *Connection) sendClose(amqpErr *performatives.Error) error {
-	resp := &performatives.Close{Error: amqpErr}
-	body, err := resp.Encode()
-	if err != nil {
-		return err
-	}
-	if err := c.conn.WritePerformative(0, body); err != nil {
-		c.logger.Error("failed to send close", "error", err)
-	}
-	c.close(nil)
-	return nil
-}
-
-// sendEnd sends an End frame with an error on the given channel.
-func (c *Connection) sendEnd(ch uint16, amqpErr *performatives.Error) error {
-	resp := &performatives.End{Error: amqpErr}
-	body, err := resp.Encode()
-	if err != nil {
-		return err
-	}
-	return c.conn.WritePerformative(ch, body)
-}
-
-func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {
-	c.sessionsMu.Lock()
-	s := c.sessions[ch]
-	delete(c.sessions, ch)
-	c.sessionsMu.Unlock()
-
-	if s != nil {
-		s.cleanup()
-		c.broker.stats.DecrementSessions()
-		if m := c.broker.getMetrics(); m != nil {
-			m.RecordSessionClosed()
+			return fmt.Errorf("unexpected method on channel 0: %T (%+v)", m, m)
 		}
 	}
 
-	resp := &performatives.End{}
-	body, err := resp.Encode()
-	if err != nil {
+	// Channel-level methods
+	switch m := decoded.(type) {
+	case *codec.ChannelOpen:
+		return c.handleChannelOpen(frame.Channel)
+	default:
+		ch := c.getChannel(frame.Channel)
+		if ch == nil {
+			return fmt.Errorf("method on unknown channel %d: %T", frame.Channel, m)
+		}
+		return ch.handleMethod(decoded)
+	}
+}
+
+func (c *Connection) handleChannelOpen(chID uint16) error {
+	c.channelsMu.Lock()
+	defer c.channelsMu.Unlock()
+
+	if uint16(len(c.channels)) >= c.channelMax {
+		return c.sendConnectionClose(codec.ChannelError, "channel limit exceeded", 0, 0)
+	}
+
+	if _, exists := c.channels[chID]; exists {
+		return c.sendConnectionClose(codec.ChannelError,
+			fmt.Sprintf("channel %d already open", chID), 0, 0)
+	}
+
+	ch := newChannel(c, chID)
+	c.channels[chID] = ch
+	c.broker.stats.IncrementChannels()
+
+	openOk := &codec.ChannelOpenOk{}
+	return c.writeMethod(chID, openOk)
+}
+
+func (c *Connection) closeChannel(chID uint16) {
+	c.channelsMu.Lock()
+	ch, exists := c.channels[chID]
+	delete(c.channels, chID)
+	c.channelsMu.Unlock()
+
+	if exists {
+		ch.cleanup()
+		c.broker.stats.DecrementChannels()
+	}
+}
+
+func (c *Connection) getChannel(chID uint16) *Channel {
+	c.channelsMu.RLock()
+	defer c.channelsMu.RUnlock()
+	return c.channels[chID]
+}
+
+// deliverMessage delivers a message to all channels that have matching consumers.
+func (c *Connection) deliverMessage(topic string, payload []byte, props map[string]string) {
+	c.channelsMu.RLock()
+	defer c.channelsMu.RUnlock()
+
+	for _, ch := range c.channels {
+		ch.deliverMessage(topic, payload, props)
+	}
+}
+
+// writeMethod serializes a method and sends it as a FrameMethod.
+func (c *Connection) writeMethod(channel uint16, method interface{ Write(io.Writer) error }) error {
+	var buf bytes.Buffer
+	if err := method.Write(&buf); err != nil {
 		return err
 	}
-	return c.conn.WritePerformative(ch, body)
+	return c.writeFrame(&codec.Frame{
+		Type:    codec.FrameMethod,
+		Channel: channel,
+		Payload: buf.Bytes(),
+	})
 }
 
-func (c *Connection) handleClose(cl *performatives.Close) {
-	resp := &performatives.Close{}
-	body, err := resp.Encode()
-	if err != nil {
-		c.logger.Error("failed to encode close response", "error", err)
-		return
+// writeFrame writes a frame to the connection, thread-safe.
+func (c *Connection) writeFrame(frame *codec.Frame) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if err := frame.WriteFrame(c.writer); err != nil {
+		return err
 	}
-	if err := c.conn.WritePerformative(0, body); err != nil {
-		c.logger.Error("failed to send close response", "error", err)
-	}
+	return c.writer.Flush()
 }
 
-func (c *Connection) heartbeatLoop() {
-	if c.idleTimeout <= 0 {
+// writeFrames writes multiple frames to the connection, thread-safe, flushing once.
+func (c *Connection) writeFrames(frames ...*codec.Frame) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if err := frame.WriteFrame(c.writer); err != nil {
+			return err
+		}
+	}
+	return c.writer.Flush()
+}
+
+func (c *Connection) sendConnectionClose(code uint16, text string, classID, methodID uint16) error {
+	cl := &codec.ConnectionClose{
+		ReplyCode: code,
+		ReplyText: text,
+		ClassID:   classID,
+		MethodID:  methodID,
+	}
+	return c.writeMethod(0, cl)
+}
+
+func (c *Connection) sendChannelClose(chID, code uint16, text string, classID, methodID uint16) error {
+	cl := &codec.ChannelClose{
+		ReplyCode: code,
+		ReplyText: text,
+		ClassID:   classID,
+		MethodID:  methodID,
+	}
+	return c.writeMethod(chID, cl)
+}
+
+func (c *Connection) heartbeatSender() {
+	if c.heartbeat == 0 {
 		return
 	}
-
-	// Send heartbeat at half the idle timeout period
-	interval := c.idleTimeout / 2
-	if interval < time.Second {
-		interval = time.Second
-	}
-
+	interval := time.Duration(c.heartbeat) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -468,7 +409,12 @@ func (c *Connection) heartbeatLoop() {
 		case <-c.closeCh:
 			return
 		case <-ticker.C:
-			if err := c.conn.SendHeartbeat(); err != nil {
+			hb := &codec.Frame{
+				Type:    codec.FrameHeartbeat,
+				Channel: 0,
+				Payload: nil,
+			}
+			if err := c.writeFrame(hb); err != nil {
 				c.logger.Debug("heartbeat send failed", "error", err)
 				return
 			}
@@ -476,7 +422,13 @@ func (c *Connection) heartbeatLoop() {
 	}
 }
 
-func (c *Connection) close(amqpErr *performatives.Error) {
+func (c *Connection) heartbeatMonitor() {
+	// Read deadline is set in processFrames before each read.
+	// If no data arrives within 2x heartbeat, the read will timeout
+	// and processFrames will return an error, closing the connection.
+}
+
+func (c *Connection) close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
 		close(c.closeCh)
@@ -484,45 +436,22 @@ func (c *Connection) close(amqpErr *performatives.Error) {
 }
 
 func (c *Connection) cleanup() {
-	c.close(nil)
+	c.close()
+
+	c.channelsMu.Lock()
+	channels := make([]*Channel, 0, len(c.channels))
+	for _, ch := range c.channels {
+		channels = append(channels, ch)
+	}
+	c.channels = make(map[uint16]*Channel)
+	c.channelsMu.Unlock()
+
+	for _, ch := range channels {
+		ch.cleanup()
+	}
+
 	c.broker.stats.DecrementConnections()
-	if m := c.broker.getMetrics(); m != nil {
-		m.RecordDisconnection()
-	}
-	c.broker.unregisterConnection(c.containerID)
-
-	c.sessionsMu.Lock()
-	sessions := make([]*Session, 0, len(c.sessions))
-	for _, s := range c.sessions {
-		sessions = append(sessions, s)
-	}
-	c.sessions = make(map[uint16]*Session)
-	c.sessionsMu.Unlock()
-
-	for _, s := range sessions {
-		s.cleanup()
-	}
-
+	c.broker.unregisterConnection(c.connID)
 	c.conn.Close()
-	c.logger.Info("AMQP connection closed", "container_id", c.containerID)
-}
-
-// deliverMessage delivers a pub/sub message to the appropriate receiver link.
-func (c *Connection) deliverMessage(topic string, payload []byte, props map[string]string, qos byte) {
-	c.sessionsMu.RLock()
-	defer c.sessionsMu.RUnlock()
-
-	for _, s := range c.sessions {
-		s.deliverToMatchingLinks(topic, payload, props, qos)
-	}
-}
-
-// deliverAMQPMessage delivers a pre-built AMQP message to receiver links matching the topic.
-func (c *Connection) deliverAMQPMessage(topic string, msg interface{}, qos byte) {
-	c.sessionsMu.RLock()
-	defer c.sessionsMu.RUnlock()
-
-	for _, s := range c.sessions {
-		s.deliverAMQPMessageToLinks(topic, msg, qos)
-	}
+	c.logger.Info("AMQP 0.9.1 connection closed", "remote", c.connID)
 }

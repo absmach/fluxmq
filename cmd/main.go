@@ -16,7 +16,7 @@ import (
 	"time"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
-	amqp091broker "github.com/absmach/fluxmq/amqp091/broker"
+	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
@@ -29,7 +29,7 @@ import (
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
-	amqp091server "github.com/absmach/fluxmq/server/amqp091"
+	amqp1server "github.com/absmach/fluxmq/server/amqp1"
 	"github.com/absmach/fluxmq/server/api"
 	"github.com/absmach/fluxmq/server/coap"
 	"github.com/absmach/fluxmq/server/health"
@@ -48,15 +48,15 @@ import (
 // messageDispatcher routes cluster-delivered messages to the appropriate protocol broker.
 type messageDispatcher struct {
 	mqtt    cluster.MessageHandler
-	amqp    *amqpbroker.Broker
-	amqp091 *amqp091broker.Broker
+	amqp    *amqp1broker.Broker
+	amqp091 *amqpbroker.Broker
 }
 
 func (d *messageDispatcher) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
-	if amqpbroker.IsAMQPClient(clientID) {
+	if amqp1broker.IsAMQPClient(clientID) {
 		return d.amqp.DeliverToClusterMessage(ctx, clientID, msg)
 	}
-	if amqp091broker.IsAMQP091Client(clientID) {
+	if amqpbroker.IsAMQP091Client(clientID) {
 		// This method needs to be implemented in amqp091broker
 		// return d.amqp091.DeliverToClusterMessage(ctx, clientID, msg)
 	}
@@ -298,16 +298,16 @@ func main() {
 	}
 
 	// Create AMQP broker (needs queue manager set later)
-	amqpStats := amqpbroker.NewStats()
-	amqpBroker := amqpbroker.New(nil, amqpStats, logger)
+	amqpStats := amqp1broker.NewStats()
+	amqpBroker := amqp1broker.New(nil, amqpStats, logger)
 	defer amqpBroker.Close()
 
 	// Create AMQP 0.9.1 broker (needs queue manager set later)
-	amqp091Broker := amqp091broker.New(nil, logger)
+	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
 
 	if metrics != nil {
-		amqpMetrics, err := amqpbroker.NewMetrics()
+		amqpMetrics, err := amqp1broker.NewMetrics()
 		if err != nil {
 			slog.Error("Failed to create AMQP metrics", "error", err)
 			os.Exit(1)
@@ -361,10 +361,10 @@ func main() {
 
 		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix
 		deliverFn := func(ctx context.Context, clientID string, msg any) error {
-			if amqpbroker.IsAMQPClient(clientID) {
+			if amqp1broker.IsAMQPClient(clientID) {
 				return amqpBroker.DeliverToClient(ctx, clientID, msg)
 			}
-			if amqp091broker.IsAMQP091Client(clientID) {
+			if amqpbroker.IsAMQP091Client(clientID) {
 				return amqp091Broker.DeliverToClient(ctx, clientID, msg)
 			}
 			return b.DeliverToSessionByID(ctx, clientID, msg)
@@ -641,17 +641,17 @@ func main() {
 			os.Exit(1)
 		}
 
-		amqpCfg := amqpserver.Config{
+		amqpCfg := amqp1server.Config{
 			Address:         slot.cfg.Addr,
 			TLSConfig:       tlsCfg,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			MaxConnections:  slot.cfg.MaxConnections,
 			Logger:          logger,
 		}
-		amqpSrv := amqpserver.New(amqpCfg, amqpBroker)
+		amqpSrv := amqp1server.New(amqpCfg, amqpBroker)
 
 		wg.Add(1)
-		go func(name, addr string, server *amqpserver.Server) {
+		go func(name, addr string, server *amqp1server.Server) {
 			defer wg.Done()
 			slog.Info("Starting AMQP server", "mode", name, "address", addr)
 			if err := server.Listen(ctx); err != nil {
@@ -681,17 +681,17 @@ func main() {
 			os.Exit(1)
 		}
 
-		amqp091Cfg := amqp091server.Config{
+		amqp091Cfg := amqpserver.Config{
 			Address:         slot.cfg.Addr,
 			TLSConfig:       tlsCfg,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			MaxConnections:  slot.cfg.MaxConnections,
 			Logger:          logger,
 		}
-		amqp091Srv := amqp091server.New(amqp091Cfg, amqp091Broker)
+		amqp091Srv := amqpserver.New(amqp091Cfg, amqp091Broker)
 
 		wg.Add(1)
-		go func(name, addr string, server *amqp091server.Server) {
+		go func(name, addr string, server *amqpserver.Server) {
 			defer wg.Done()
 			slog.Info("Starting AMQP 0.9.1 server", "mode", name, "address", addr)
 			if err := server.Listen(ctx); err != nil {

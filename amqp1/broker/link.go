@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/fluxmq/amqp/message"
-	"github.com/absmach/fluxmq/amqp/performatives"
-	amqptypes "github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/amqp1/message"
+	"github.com/absmach/fluxmq/amqp1/performatives"
+	amqptypes "github.com/absmach/fluxmq/amqp1/types"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -34,11 +34,11 @@ type Link struct {
 	pendingMu sync.Mutex
 
 	// Queue subscription info
-	isQueue        bool
-	queueName      string
-	consumerGroup  string
+	isQueue         bool
+	queueName       string
+	consumerGroup   string
 	capabilityBased bool // detected via capability (not $queue/ prefix)
-	cursor         *qtypes.CursorOption
+	cursor          *qtypes.CursorOption
 
 	// Management node
 	isManagement bool

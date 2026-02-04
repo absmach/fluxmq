@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Stats tracks AMQP broker statistics using atomic counters.
+// Stats tracks AMQP 0.9.1 broker statistics using atomic counters.
 type Stats struct {
 	startTime time.Time
 
@@ -22,19 +22,14 @@ type Stats struct {
 	bytesReceived atomic.Uint64
 	bytesSent     atomic.Uint64
 
-	currentSessions atomic.Uint64
-	currentLinks    atomic.Uint64
-	subscriptions   atomic.Uint64
+	currentChannels atomic.Uint64
+	consumers       atomic.Uint64
 
-	authErrors     atomic.Uint64
 	protocolErrors atomic.Uint64
 }
 
-// NewStats creates a new Stats instance.
 func NewStats() *Stats {
-	return &Stats{
-		startTime: time.Now(),
-	}
+	return &Stats{startTime: time.Now()}
 }
 
 func (s *Stats) IncrementConnections() {
@@ -47,53 +42,15 @@ func (s *Stats) DecrementConnections() {
 	s.disconnections.Add(1)
 }
 
-func (s *Stats) IncrementMessagesReceived() {
-	s.messagesReceived.Add(1)
-}
-
-func (s *Stats) IncrementMessagesSent() {
-	s.messagesSent.Add(1)
-}
-
-func (s *Stats) AddBytesReceived(n uint64) {
-	s.bytesReceived.Add(n)
-}
-
-func (s *Stats) AddBytesSent(n uint64) {
-	s.bytesSent.Add(n)
-}
-
-func (s *Stats) IncrementSessions() {
-	s.currentSessions.Add(1)
-}
-
-func (s *Stats) DecrementSessions() {
-	s.currentSessions.Add(^uint64(0))
-}
-
-func (s *Stats) IncrementLinks() {
-	s.currentLinks.Add(1)
-}
-
-func (s *Stats) DecrementLinks() {
-	s.currentLinks.Add(^uint64(0))
-}
-
-func (s *Stats) IncrementSubscriptions() {
-	s.subscriptions.Add(1)
-}
-
-func (s *Stats) DecrementSubscriptions() {
-	s.subscriptions.Add(^uint64(0))
-}
-
-func (s *Stats) IncrementAuthErrors() {
-	s.authErrors.Add(1)
-}
-
-func (s *Stats) IncrementProtocolErrors() {
-	s.protocolErrors.Add(1)
-}
+func (s *Stats) IncrementMessagesReceived() { s.messagesReceived.Add(1) }
+func (s *Stats) IncrementMessagesSent()     { s.messagesSent.Add(1) }
+func (s *Stats) AddBytesReceived(n uint64)  { s.bytesReceived.Add(n) }
+func (s *Stats) AddBytesSent(n uint64)      { s.bytesSent.Add(n) }
+func (s *Stats) IncrementChannels()         { s.currentChannels.Add(1) }
+func (s *Stats) DecrementChannels()         { s.currentChannels.Add(^uint64(0)) }
+func (s *Stats) IncrementConsumers()        { s.consumers.Add(1) }
+func (s *Stats) DecrementConsumers()        { s.consumers.Add(^uint64(0)) }
+func (s *Stats) IncrementProtocolErrors()   { s.protocolErrors.Add(1) }
 
 func (s *Stats) GetTotalConnections() uint64   { return s.totalConnections.Load() }
 func (s *Stats) GetCurrentConnections() uint64 { return s.currentConnections.Load() }
@@ -102,9 +59,7 @@ func (s *Stats) GetMessagesReceived() uint64   { return s.messagesReceived.Load(
 func (s *Stats) GetMessagesSent() uint64       { return s.messagesSent.Load() }
 func (s *Stats) GetBytesReceived() uint64      { return s.bytesReceived.Load() }
 func (s *Stats) GetBytesSent() uint64          { return s.bytesSent.Load() }
-func (s *Stats) GetCurrentSessions() uint64    { return s.currentSessions.Load() }
-func (s *Stats) GetCurrentLinks() uint64       { return s.currentLinks.Load() }
-func (s *Stats) GetSubscriptions() uint64      { return s.subscriptions.Load() }
-func (s *Stats) GetAuthErrors() uint64         { return s.authErrors.Load() }
+func (s *Stats) GetCurrentChannels() uint64    { return s.currentChannels.Load() }
+func (s *Stats) GetConsumers() uint64          { return s.consumers.Load() }
 func (s *Stats) GetProtocolErrors() uint64     { return s.protocolErrors.Load() }
 func (s *Stats) GetUptime() time.Duration      { return time.Since(s.startTime) }

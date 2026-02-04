@@ -6,7 +6,7 @@ package sasl
 import (
 	"testing"
 
-	"github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/amqp1/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

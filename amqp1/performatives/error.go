@@ -6,7 +6,7 @@ package performatives
 import (
 	"bytes"
 
-	"github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/amqp1/types"
 )
 
 // AMQP error descriptor

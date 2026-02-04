@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/absmach/fluxmq/amqp/message"
+	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/absmach/fluxmq/queue/types"
 )
 

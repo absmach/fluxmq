@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/absmach/fluxmq/amqp091/codec"
+	"github.com/absmach/fluxmq/amqp/codec"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 

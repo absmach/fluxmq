@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/absmach/fluxmq/amqp/performatives"
+	"github.com/absmach/fluxmq/amqp1/performatives"
 	"github.com/absmach/fluxmq/topics"
 )
 
 const (
-	initialWindow    = uint32(65535)
+	initialWindow            = uint32(65535)
 	windowReplenishThreshold = initialWindow / 2
 )
 

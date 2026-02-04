@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package amqp
+package amqp1
 
 import (
 	"bytes"
@@ -10,11 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/amqp/frames"
-	"github.com/absmach/fluxmq/amqp/performatives"
-	"github.com/absmach/fluxmq/amqp/sasl"
-	"github.com/absmach/fluxmq/amqp/types"
-
+	"github.com/absmach/fluxmq/amqp1/frames"
+	"github.com/absmach/fluxmq/amqp1/performatives"
+	"github.com/absmach/fluxmq/amqp1/sasl"
+	"github.com/absmach/fluxmq/amqp1/types"
 )
 
 // Connection wraps a net.Conn for AMQP 1.0 frame I/O.

@@ -10,219 +10,143 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/absmach/fluxmq/amqp/message"
-	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
-	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/storage"
+
+	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
-const clientIDPrefix = "amqp:"
+const amqp091Prefix = "amqp091-"
 
-// Broker manages AMQP 1.0 connections and message routing.
-type Broker struct {
-	connections      sync.Map // containerID -> *Connection
-	router           *router.TrieRouter
-	queueManager     broker.QueueManager
-	cluster          cluster.Cluster
-	auth    *broker.AuthEngine
-	stats   *Stats
-	metrics *Metrics // nil if OTel disabled
-	logger  *slog.Logger
-	mu               sync.RWMutex
+// IsAMQP091Client checks if a client ID belongs to an AMQP 0.9.1 client.
+func IsAMQP091Client(clientID string) bool {
+	return strings.HasPrefix(clientID, amqp091Prefix)
 }
 
-// New creates a new AMQP broker.
-func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
+// PrefixedClientID returns a client ID with the AMQP 0.9.1 prefix.
+func PrefixedClientID(connID string) string {
+	return amqp091Prefix + connID
+}
+
+// QueueManager defines the interface for durable queue-based queue management.
+type QueueManager interface {
+	Start(ctx context.Context) error
+	Stop() error
+	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	UpdateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
+	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
+	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
+	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
+	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
+	Ack(ctx context.Context, queueName, messageID, groupID string) error
+	Nack(ctx context.Context, queueName, messageID, groupID string) error
+	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
+	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
+}
+
+// Broker is the core AMQP 0.9.1 broker.
+type Broker struct {
+	connections  sync.Map // connID -> *Connection
+	router       *router.TrieRouter
+	queueManager QueueManager
+	stats        *Stats
+	logger       *slog.Logger
+	mu           sync.RWMutex
+}
+
+// New creates a new AMQP 0.9.1 broker.
+func New(qm QueueManager, logger *slog.Logger) *Broker {
 	if logger == nil {
 		logger = slog.Default()
-	}
-	if stats == nil {
-		stats = NewStats()
 	}
 	return &Broker{
 		router:       router.NewRouter(),
 		queueManager: qm,
-		stats:        stats,
+		stats:        NewStats(),
 		logger:       logger,
 	}
 }
 
-// SetMetrics sets the OTel metrics instance.
-func (b *Broker) SetMetrics(m *Metrics) {
+// GetStats returns the broker's stats.
+func (b *Broker) GetStats() *Stats { return b.stats }
+
+// SetQueueManager sets the queue manager for the broker.
+func (b *Broker) SetQueueManager(qm QueueManager) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.metrics = m
+	b.queueManager = qm
 }
 
-func (b *Broker) getMetrics() *Metrics {
+func (b *Broker) getQueueManager() QueueManager {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.metrics
+	return b.queueManager
 }
 
-// GetStats returns the broker's stats.
-func (b *Broker) GetStats() *Stats {
-	return b.stats
-}
-
-// HandleConnection handles a new raw TCP connection through the full AMQP lifecycle.
-func (b *Broker) HandleConnection(conn net.Conn) {
-	c := newConnection(b, conn)
+// HandleConnection handles a new raw TCP connection through the full AMQP 0.9.1 lifecycle.
+func (b *Broker) HandleConnection(netConn net.Conn) {
+	c := newConnection(b, netConn)
 	if err := c.run(); err != nil {
-		b.logger.Debug("AMQP connection ended", "remote", conn.RemoteAddr(), "error", err)
+		b.logger.Debug("AMQP 0.9.1 connection ended", "remote", netConn.RemoteAddr(), "error", err)
 	}
 }
 
-// registerConnection stores a connection by container ID.
-func (b *Broker) registerConnection(containerID string, c *Connection) {
-	b.connections.Store(containerID, c)
+func (b *Broker) registerConnection(connID string, c *Connection) {
+	b.connections.Store(connID, c)
 }
 
-// unregisterConnection removes a connection by container ID.
-func (b *Broker) unregisterConnection(containerID string) {
-	b.connections.Delete(containerID)
+func (b *Broker) unregisterConnection(connID string) {
+	b.connections.Delete(connID)
 }
 
-// Publish routes a message to AMQP subscribers via the router and cluster.
+// Publish routes a message to local AMQP 0.9.1 subscribers via the router.
 func (b *Broker) Publish(topic string, payload []byte, props map[string]string) {
 	subs, err := b.router.Match(topic)
 	if err != nil {
-		b.logger.Error("AMQP router match failed", "topic", topic, "error", err)
+		b.logger.Error("router match failed", "topic", topic, "error", err)
 		return
 	}
 
 	for _, sub := range subs {
-		containerID := sub.ClientID
-		val, ok := b.connections.Load(containerID)
+		val, ok := b.connections.Load(sub.ClientID)
 		if !ok {
 			continue
 		}
 		c := val.(*Connection)
-		c.deliverMessage(topic, payload, props, sub.QoS)
-	}
-
-	if cl := b.getCluster(); cl != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := cl.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
-			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
-		}
+		c.deliverMessage(topic, payload, props)
 	}
 }
 
-// DeliverToClient delivers a queue message to a specific AMQP client.
-// clientID must have the "amqp:" prefix already stripped.
+// DeliverToClient delivers a queue message to a specific AMQP 0.9.1 client.
 func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) error {
-	// Strip the amqp: prefix to get the container ID
-	containerID := strings.TrimPrefix(clientID, clientIDPrefix)
+	connID := strings.TrimPrefix(clientID, amqp091Prefix)
 
-	val, ok := b.connections.Load(containerID)
+	val, ok := b.connections.Load(connID)
 	if !ok {
-		return fmt.Errorf("AMQP client not found: %s", containerID)
+		return fmt.Errorf("AMQP 0.9.1 client not found: %s", connID)
 	}
 
 	c := val.(*Connection)
 
-	// Convert storage.Message to delivery
 	switch m := msg.(type) {
 	case *storage.Message:
 		payload := m.GetPayload()
-		topic := m.Topic
-		props := m.Properties
-
-		// Build AMQP message
-		amqpMsg := &message.Message{
-			Properties: &message.Properties{
-				To: topic,
-			},
-			Data: [][]byte{payload},
-		}
-		if props != nil {
-			amqpMsg.ApplicationProperties = make(map[string]any, len(props))
-			for k, v := range props {
-				amqpMsg.ApplicationProperties[k] = v
-			}
-		}
-		if msgID, ok := props["message-id"]; ok {
-			amqpMsg.Properties.MessageID = msgID
-		}
-
-		c.deliverAMQPMessage(topic, amqpMsg, m.QoS)
+		c.deliverMessage(m.Topic, payload, m.Properties)
 		return nil
 	default:
 		return fmt.Errorf("unsupported message type: %T", msg)
 	}
 }
 
-// SetCluster sets the cluster reference for cross-node pub/sub routing.
-func (b *Broker) SetCluster(cl cluster.Cluster) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.cluster = cl
-}
-
-// DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP client.
-func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
-	containerID := strings.TrimPrefix(clientID, clientIDPrefix)
-	val, ok := b.connections.Load(containerID)
-	if !ok {
-		return fmt.Errorf("AMQP client not found: %s", containerID)
-	}
-	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS)
-	return nil
-}
-
-// SetQueueManager sets the queue manager for the AMQP broker.
-func (b *Broker) SetQueueManager(qm broker.QueueManager) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.queueManager = qm
-}
-
-// SetAuthEngine sets the authentication and authorization engine.
-func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.auth = auth
-}
-
-func (b *Broker) getCluster() cluster.Cluster {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.cluster
-}
-
-func (b *Broker) getAuth() *broker.AuthEngine {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.auth
-}
-
-func (b *Broker) getQueueManager() broker.QueueManager {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.queueManager
-}
-
-// Close shuts down the broker and all connections.
-func (b *Broker) Close() {
+// Close gracefully shuts down the broker.
+func (b *Broker) Close() error {
 	b.connections.Range(func(key, val any) bool {
 		c := val.(*Connection)
-		c.close(nil)
+		c.close()
 		return true
 	})
-}
-
-// PrefixedClientID returns a client ID with the AMQP prefix for use in the QueueManager.
-func PrefixedClientID(containerID string) string {
-	return clientIDPrefix + containerID
-}
-
-// IsAMQPClient checks if a client ID belongs to an AMQP client.
-func IsAMQPClient(clientID string) bool {
-	return strings.HasPrefix(clientID, clientIDPrefix)
+	b.logger.Info("AMQP 0.9.1 broker shut down")
+	return nil
 }

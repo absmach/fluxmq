@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/absmach/fluxmq/amqp/types"
+	"github.com/absmach/fluxmq/amqp1/types"
 )
 
 // Message section descriptors.
