@@ -244,6 +244,26 @@ func (s *Store) ReadRange(queueName string, startOffset, endOffset uint64, maxMe
 	return manager.ReadRange(startOffset, endOffset, maxMessages)
 }
 
+// LookupByTime finds the offset for the given timestamp.
+func (s *Store) LookupByTime(queueName string, ts time.Time) (uint64, error) {
+	manager, err := s.getQueue(queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	return manager.LookupByTime(ts)
+}
+
+// RetentionOffsetBySize returns the offset to keep when enforcing size retention.
+func (s *Store) RetentionOffsetBySize(queueName string, retentionBytes int64) (uint64, error) {
+	manager, err := s.getQueue(queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	return manager.RetentionOffsetBySize(retentionBytes)
+}
+
 // Head returns the head offset for a queue.
 func (s *Store) Head(queueName string) (uint64, error) {
 	manager, err := s.getQueue(queueName)

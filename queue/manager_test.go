@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"sync"
 	"testing"
@@ -326,6 +327,119 @@ func TestWildcardQueueSubscription(t *testing.T) {
 			t.Logf("Group state: %s cursor=%v", g.ID, g.Cursor)
 		}
 		t.Fatal("Timeout waiting for message delivery")
+	}
+}
+
+func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	delivered := make(chan *brokerstorage.Message, 1)
+
+	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+		if m, ok := msg.(*brokerstorage.Message); ok {
+			delivered <- m
+		}
+		return nil
+	}
+
+	cfg := DefaultConfig()
+	cfg.DeliveryBatchSize = 10
+	mgr := NewManager(logStore, groupStore, deliverFn, cfg, logger, nil)
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
+	if err := mgr.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamer", "", cursor); err != nil {
+		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	}
+
+	if err := mgr.Publish(context.Background(), "$queue/events/test", []byte("hello"), nil); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	mgr.deliverMessages()
+
+	select {
+	case msg := <-delivered:
+		if got := msg.Properties["x-stream-offset"]; got != "0" {
+			t.Fatalf("expected stream offset 0, got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delivery")
+	}
+
+	group, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	if err != nil {
+		t.Fatalf("GetConsumerGroup failed: %v", err)
+	}
+	if count := group.PendingCount(); count != 0 {
+		t.Fatalf("expected no pending entries, got %d", count)
+	}
+	if cursor := group.GetCursor().Cursor; cursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", cursor)
+	}
+}
+
+func TestStreamAckAdvancesCursor(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), logger, nil)
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
+	if err := mgr.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamer", "", cursor); err != nil {
+		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	}
+
+	if err := mgr.Ack(context.Background(), "events", "events:0", "streamer"); err != nil {
+		t.Fatalf("Ack failed: %v", err)
+	}
+
+	group, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	if err != nil {
+		t.Fatalf("GetConsumerGroup failed: %v", err)
+	}
+	if cursor := group.GetCursor().Cursor; cursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", cursor)
+	}
+}
+
+func TestRetentionOffsetMessages(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), logger, nil)
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := mgr.Publish(context.Background(), "$queue/events/test", []byte("msg"), nil); err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+	}
+
+	queueCfg.Retention.RetentionMessages = 1
+	queueCfg.Name = "events"
+	offset, ok := mgr.computeRetentionOffset(context.Background(), &queueCfg)
+	if !ok {
+		t.Fatal("expected retention offset")
+	}
+	if offset != 2 {
+		t.Fatalf("expected retention offset 2, got %d", offset)
 	}
 }
 

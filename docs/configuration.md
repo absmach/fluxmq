@@ -525,6 +525,12 @@ queues:
       - "orders/#"
       - "$queue/orders/#"   # allow explicit queue publish
     reserved: false
+    type: "stream"          # classic|stream (optional)
+    primary_group: "workers"
+    retention:
+      max_age: "168h"
+      max_length_bytes: 10737418240
+      max_length_messages: 1000000
     limits:
       max_message_size: 1048576
       max_depth: 100000
@@ -553,6 +559,23 @@ queue, include `$queue/<name>/#` in the list.
 ### reserved
 
 Marks a queue as system-reserved (cannot be deleted via management APIs).
+
+### type
+
+Queue behavior mode:
+- `classic` (default): work-queue semantics (acks drive committed offset)
+- `stream`: append-only log semantics with cursor-based consumption
+
+### primary_group
+
+Consumer group name used to compute delivery status for stream consumers.
+
+### retention
+
+Retention policy for stream-style access:
+- `max_age`: time-based retention window
+- `max_length_bytes`: size-based retention window
+- `max_length_messages`: message-count window
 
 ### limits / retry / dlq
 

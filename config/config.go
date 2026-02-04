@@ -15,25 +15,28 @@ import (
 
 // Config holds all configuration for the MQTT broker.
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	Broker  BrokerConfig  `yaml:"broker"`
-	Session SessionConfig `yaml:"session"`
-	Log        LogConfig        `yaml:"log"`
-	Storage    StorageConfig    `yaml:"storage"`
-	Cluster    ClusterConfig    `yaml:"cluster"`
-	Webhook    WebhookConfig    `yaml:"webhook"`
-	RateLimit  RateLimitConfig  `yaml:"ratelimit"`
-	Queues     []QueueConfig    `yaml:"queues"`
+	Server    ServerConfig    `yaml:"server"`
+	Broker    BrokerConfig    `yaml:"broker"`
+	Session   SessionConfig   `yaml:"session"`
+	Log       LogConfig       `yaml:"log"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Cluster   ClusterConfig   `yaml:"cluster"`
+	Webhook   WebhookConfig   `yaml:"webhook"`
+	RateLimit RateLimitConfig `yaml:"ratelimit"`
+	Queues    []QueueConfig   `yaml:"queues"`
 }
 
 // QueueConfig defines configuration for a persistent queue.
 type QueueConfig struct {
-	Name     string        `yaml:"name"`
-	Topics   []string      `yaml:"topics"`
-	Reserved bool          `yaml:"reserved"`
-	Limits   QueueLimits   `yaml:"limits"`
-	Retry    QueueRetry    `yaml:"retry"`
-	DLQ      QueueDLQ      `yaml:"dlq"`
+	Name         string         `yaml:"name"`
+	Topics       []string       `yaml:"topics"`
+	Reserved     bool           `yaml:"reserved"`
+	Type         string         `yaml:"type"`
+	PrimaryGroup string         `yaml:"primary_group"`
+	Retention    QueueRetention `yaml:"retention"`
+	Limits       QueueLimits    `yaml:"limits"`
+	Retry        QueueRetry     `yaml:"retry"`
+	DLQ          QueueDLQ       `yaml:"dlq"`
 }
 
 // QueueLimits defines resource limits for a queue.
@@ -55,6 +58,13 @@ type QueueRetry struct {
 type QueueDLQ struct {
 	Enabled bool   `yaml:"enabled"`
 	Topic   string `yaml:"topic"`
+}
+
+// QueueRetention defines retention policy for a queue.
+type QueueRetention struct {
+	MaxAge            time.Duration `yaml:"max_age"`
+	MaxLengthBytes    int64         `yaml:"max_length_bytes"`
+	MaxLengthMessages int64         `yaml:"max_length_messages"`
 }
 
 // RateLimitConfig holds rate limiting configuration.

@@ -35,6 +35,7 @@ Queues provide durable, at-least-once delivery across protocols:
 - Redelivery via visibility timeouts and work stealing
 - DLQ handler exists but is not wired into the main delivery path
 - FIFO order per queue and per consumer group (single cursor)
+- Stream queues (RabbitMQ-compatible) for event-log consumption with cursor offsets
 
 Queues are integrated with MQTT and AMQP:
 - MQTT uses `$queue/<name>/...` topics
@@ -78,6 +79,14 @@ $queue/tasks/image-processing/$reject   → Reject (DLQ wiring is planned)
 $dlq/{queue-name}                       → Dead-letter queue
 ```
 
+Stream queues use RabbitMQ-compatible queue names and arguments:
+
+- Declare with `x-queue-type=stream`
+- Consume with `x-stream-offset`
+- Retention via `x-max-age`, `x-max-length-bytes`, `x-max-length`
+
+The `$queue/<name>` prefix remains supported for legacy queue clients.
+
 **Acknowledgment requirements**:
 - `message-id` and `group-id` must be provided in message properties.
 - For MQTT, these are MQTT v5 User Properties.
@@ -89,6 +98,13 @@ Queue deliveries include properties:
 - `group-id`
 - `queue`
 - `offset`
+
+Stream deliveries also include:
+- `x-stream-offset`
+- `x-stream-timestamp`
+- `x-work-acked` (based on the primary work group’s committed offset)
+- `x-work-committed-offset`
+- `x-work-group`
 
 ### Message Flow (Queue Publish)
 
@@ -118,6 +134,46 @@ Note: `MAX_RETRIES → DLQ` is not wired yet. The delivery count limit is tracke
 but DLQ moves are not currently triggered automatically.
 
 ---
+
+## RabbitMQ Stream Compatibility
+
+FluxMQ supports RabbitMQ-style stream queues at the protocol level:
+
+- `queue.declare` with `x-queue-type=stream`
+- `basic.consume` with `x-stream-offset`
+- `x-max-age`, `x-max-length-bytes`, `x-max-length` for retention
+
+Stream queues are append-only: acks do **not** delete messages. Messages are
+removed only when retention policies allow it, and only up to the safe
+truncation point for queue-mode consumers.
+
+`x-stream-offset` supports:
+- `first`
+- `last`
+- `next`
+- `offset=<n>`
+- `timestamp=<unix-seconds|unix-millis>`
+
+FluxMQ extensions for stream consumers:
+- `x-work-acked` and `x-work-committed-offset` to report delivery status for the
+  configured primary work group.
+- `x-work-group` to identify the group used for status.
+- Optional `x-consumer-group` on `basic.consume` to persist a shared cursor.
+  If omitted, the consumer tag is used as the stream group ID.
+
+Primary work group is configured per queue (see configuration section) and is
+used only for delivery status reporting; it does not affect routing.
+
+## Model Alignment
+
+FluxMQ’s queue model aligns with:
+
+- **Kafka**: append-only log + consumer groups + retention.
+- **Pulsar**: subscriptions + retention window for replay.
+- **NATS JetStream**: queue vs log semantics are defined by consumer mode.
+
+Stream queues provide log-like semantics, while classic queue groups preserve
+work-queue behavior.
 
 ## Log Storage Engine
 
@@ -151,10 +207,15 @@ Each queue has a single log (no partitions).
 
 ### Retention
 
-The queue manager periodically truncates logs to the **minimum committed offset**
-across all consumer groups. Time-based or size-based retention policies exist in
-`logstorage` (segment manager retention) but are not wired into the runtime
-loop or exposed via the main config.
+The queue manager truncates logs to a **safe offset** that respects:
+
+- The minimum committed offset across **queue-mode** consumer groups
+- The queue’s retention policy (time/size/message-count)
+
+This means:
+- Queue-mode consumers never lose unacked data.
+- Stream consumers do not block truncation.
+- Retention keeps data available for event-log readers as configured.
 
 ---
 

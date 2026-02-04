@@ -81,6 +81,9 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 		if state.Cursor == nil {
 			state.Cursor = &types.QueueCursor{}
 		}
+		if state.Mode == "" {
+			state.Mode = types.GroupModeQueue
+		}
 		if state.PEL == nil {
 			state.PEL = make(map[string][]*types.PendingEntry)
 		}
@@ -142,6 +145,9 @@ func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.C
 	// Ensure maps are initialized
 	if state.Cursor == nil {
 		state.Cursor = &types.QueueCursor{}
+	}
+	if state.Mode == "" {
+		state.Mode = types.GroupModeQueue
 	}
 	if state.PEL == nil {
 		state.PEL = make(map[string][]*types.PendingEntry)

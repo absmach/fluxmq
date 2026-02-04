@@ -443,6 +443,40 @@ func (m *SegmentManager) ApplyRetention() error {
 	return nil
 }
 
+// RetentionOffsetBySize returns the offset to keep when enforcing size retention.
+// It uses segment granularity (does not split segments).
+func (m *SegmentManager) RetentionOffsetBySize(retentionBytes int64) (uint64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if retentionBytes <= 0 {
+		return m.headOffset, nil
+	}
+
+	var totalSize int64
+	for _, seg := range m.segments {
+		totalSize += seg.Size()
+	}
+
+	if totalSize <= retentionBytes {
+		return m.headOffset, nil
+	}
+
+	sizeToTrim := totalSize - retentionBytes
+	var trimmed int64
+
+	for _, seg := range m.segments {
+		segSize := seg.Size()
+		if trimmed+segSize < sizeToTrim {
+			trimmed += segSize
+			continue
+		}
+		return seg.BaseOffset(), nil
+	}
+
+	return m.headOffset, nil
+}
+
 // applyTimeRetention removes segments older than the cutoff time.
 func (m *SegmentManager) applyTimeRetention(cutoff time.Time) error {
 	// Keep at least one segment (the active one)

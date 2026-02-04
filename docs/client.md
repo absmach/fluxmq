@@ -520,6 +520,54 @@ func main() {
 - `SubscribeToQueue` passes the consumer group via `x-consumer-group` on `basic.consume`.
 - `Ack`, `Nack`, and `Reject` map to `basic.ack`, `basic.nack`, and `basic.reject`.
 
+### Stream Queues (RabbitMQ-Compatible)
+
+Stream queues provide log-style consumption with cursor offsets.
+Stream queue names follow RabbitMQ conventions (no `$queue/` prefix).
+Supported offsets: `first`, `last`, `next`, `offset=<n>`, `timestamp=<unix>`.
+
+```go
+// Declare a stream queue
+qName, err := c.DeclareStreamQueue(&amqp091.StreamQueueOptions{
+    Name:          "events",
+    Durable:       true,
+    MaxAge:        "7D",
+    MaxLengthBytes: 10 * 1024 * 1024 * 1024,
+})
+if err != nil {
+    log.Fatal(err)
+}
+log.Printf("stream queue: %s", qName)
+
+// Consume from the beginning
+err = c.SubscribeToStream(&amqp091.StreamConsumeOptions{
+    QueueName: "events",
+    Offset:    "first",
+}, func(msg *amqp091.QueueMessage) {
+    if off, ok := msg.StreamOffset(); ok {
+        log.Printf("offset=%d payload=%s", off, string(msg.Body))
+    }
+    _ = msg.Ack()
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// Publish to the stream queue (RabbitMQ-style)
+if err := c.PublishToStream("events", []byte("hello"), nil); err != nil {
+    log.Fatal(err)
+}
+```
+
+Stream deliveries include:
+- `x-stream-offset`
+- `x-stream-timestamp`
+- `x-work-acked` / `x-work-committed-offset`
+
+The `x-work-*` fields report the configured primary work group’s committed offset.
+Convenience accessors are available on `QueueMessage`:
+`StreamOffset()`, `StreamTimestamp()`, `WorkAcked()`, `WorkCommittedOffset()`, `WorkGroup()`.
+
 ### Pub/Sub
 
 ```go

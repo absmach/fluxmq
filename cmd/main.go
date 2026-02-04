@@ -19,10 +19,10 @@ import (
 	amqp091broker "github.com/absmach/fluxmq/amqp091/broker"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
-	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/config"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/mqtt/broker"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/queue/raft"
@@ -47,8 +47,8 @@ import (
 
 // messageDispatcher routes cluster-delivered messages to the appropriate protocol broker.
 type messageDispatcher struct {
-	mqtt   cluster.MessageHandler
-	amqp   *amqpbroker.Broker
+	mqtt    cluster.MessageHandler
+	amqp    *amqpbroker.Broker
 	amqp091 *amqp091broker.Broker
 }
 
@@ -339,6 +339,8 @@ func main() {
 				Name:           qc.Name,
 				Topics:         qc.Topics,
 				Reserved:       qc.Reserved,
+				Type:           queueTypes.QueueType(qc.Type),
+				PrimaryGroup:   qc.PrimaryGroup,
 				MaxMessageSize: qc.Limits.MaxMessageSize,
 				MaxDepth:       qc.Limits.MaxDepth,
 				MessageTTL:     qc.Limits.MessageTTL,
@@ -348,6 +350,11 @@ func main() {
 				Multiplier:     qc.Retry.Multiplier,
 				DLQEnabled:     qc.DLQ.Enabled,
 				DLQTopic:       qc.DLQ.Topic,
+				Retention: queueTypes.RetentionPolicy{
+					RetentionTime:     qc.Retention.MaxAge,
+					RetentionBytes:    qc.Retention.MaxLengthBytes,
+					RetentionMessages: qc.Retention.MaxLengthMessages,
+				},
 			}))
 		}
 

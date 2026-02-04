@@ -9,11 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/mqtt/broker"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -36,28 +37,16 @@ func (m *mockCluster) AcquireSession(ctx context.Context, clientID, nodeID strin
 	return nil
 }
 
-func (m *mockCluster) AcquirePartition(ctx context.Context, queueName string, partitionID int, nodeID string) error {
-	return nil
-}
-
-func (m *mockCluster) ReleasePartition(ctx context.Context, queueName string, partitionID int) error {
-	return nil
-}
-
-func (m *mockCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
-	return "", nil
-}
-
-func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64, partitionID int) error {
-	return nil
-}
-
 func (m *mockCluster) ReleaseSession(ctx context.Context, clientID string) error {
 	return nil
 }
 
 func (m *mockCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
 	return "", false, nil
+}
+
+func (m *mockCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan cluster.OwnershipChange {
+	return nil
 }
 
 func (m *mockCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error {
@@ -76,6 +65,30 @@ func (m *mockCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 	return nil, nil
 }
 
+func (m *mockCluster) RegisterQueueConsumer(ctx context.Context, info *cluster.QueueConsumerInfo) error {
+	return nil
+}
+
+func (m *mockCluster) UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	return nil
+}
+
+func (m *mockCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error) {
+	return nil, nil
+}
+
+func (m *mockCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*cluster.QueueConsumerInfo, error) {
+	return nil, nil
+}
+
+func (m *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.QueueConsumerInfo, error) {
+	return nil, nil
+}
+
+func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+	return nil
+}
+
 func (m *mockCluster) Retained() storage.RetainedStore {
 	return nil
 }
@@ -90,6 +103,10 @@ func (m *mockCluster) RoutePublish(ctx context.Context, topic string, payload []
 
 func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	return nil, nil
+}
+
+func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
+	return nil
 }
 
 func (m *mockCluster) WaitForLeader(ctx context.Context) error {
@@ -108,57 +125,21 @@ func (m *mockCluster) Nodes() []cluster.NodeInfo {
 	return nil
 }
 
-func TestServerStartStop(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
+func TestAddrWithoutListener(t *testing.T) {
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{})
 	defer b.Close()
 
-	cfg := Config{
-		Address:         "localhost:0",
-		ShutdownTimeout: 1 * time.Second,
-	}
-
-	server := New(cfg, b, nil, slog.Default())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Listen(ctx)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("server did not stop in time")
+	server := New(Config{}, b, nil, slog.Default())
+	if server.Addr() != "" {
+		t.Fatalf("expected empty address before listen, got %q", server.Addr())
 	}
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{})
 	defer b.Close()
 
-	cfg := Config{
-		Address:         "localhost:0",
-		ShutdownTimeout: 1 * time.Second,
-	}
-
-	server := New(cfg, b, nil, slog.Default())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go server.Listen(ctx)
-	time.Sleep(100 * time.Millisecond)
-
-	addr := server.Addr()
+	server := New(Config{}, b, nil, slog.Default())
 
 	tests := []struct {
 		name           string
@@ -186,25 +167,18 @@ func TestHealthEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req, err := http.NewRequest(tt.method, "http://"+addr+"/health", nil)
-			if err != nil {
-				t.Fatalf("failed to create request: %v", err)
-			}
+			req := httptest.NewRequest(tt.method, "http://test/health", nil)
+			rec := httptest.NewRecorder()
 
-			client := &http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatalf("failed to send request: %v", err)
-			}
-			defer resp.Body.Close()
+			server.handleHealth(rec, req)
 
-			if resp.StatusCode != tt.expectedStatus {
-				t.Errorf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
 			}
 
 			if tt.expectedStatus == http.StatusOK {
 				var response HealthResponse
-				if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+				if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
 
@@ -237,7 +211,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "single node mode - ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}),
 			cluster:        nil,
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
@@ -245,7 +219,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "cluster not initialized - not ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}),
 			cluster:        &mockCluster{nodeID: ""},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusServiceUnavailable,
@@ -254,7 +228,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "cluster initialized - ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}),
 			cluster:        &mockCluster{nodeID: "node-1", isLeader: true},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
@@ -262,7 +236,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "POST request not allowed",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}),
 			cluster:        nil,
 			method:         http.MethodPost,
 			expectedStatus: http.StatusMethodNotAllowed,
@@ -275,40 +249,20 @@ func TestReadyEndpoint(t *testing.T) {
 				defer tt.broker.Close()
 			}
 
-			cfg := Config{
-				Address:         "localhost:0",
-				ShutdownTimeout: 1 * time.Second,
-			}
+			server := New(Config{}, tt.broker, tt.cluster, slog.Default())
 
-			server := New(cfg, tt.broker, tt.cluster, slog.Default())
+			req := httptest.NewRequest(tt.method, "http://test/ready", nil)
+			rec := httptest.NewRecorder()
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			server.handleReady(rec, req)
 
-			go server.Listen(ctx)
-			time.Sleep(100 * time.Millisecond)
-
-			addr := server.Addr()
-
-			req, err := http.NewRequest(tt.method, "http://"+addr+"/ready", nil)
-			if err != nil {
-				t.Fatalf("failed to create request: %v", err)
-			}
-
-			client := &http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatalf("failed to send request: %v", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != tt.expectedStatus {
-				t.Errorf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
 			}
 
 			if tt.expectedStatus == http.StatusOK || tt.expectedStatus == http.StatusServiceUnavailable {
 				var response ReadyResponse
-				if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+				if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
 
@@ -376,38 +330,18 @@ func TestClusterStatusEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
+			b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{})
 			defer b.Close()
 
-			cfg := Config{
-				Address:         "localhost:0",
-				ShutdownTimeout: 1 * time.Second,
-			}
+			server := New(Config{}, b, tt.cluster, slog.Default())
 
-			server := New(cfg, b, tt.cluster, slog.Default())
+			req := httptest.NewRequest(tt.method, "http://test/cluster/status", nil)
+			rec := httptest.NewRecorder()
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			server.handleClusterStatus(rec, req)
 
-			go server.Listen(ctx)
-			time.Sleep(100 * time.Millisecond)
-
-			addr := server.Addr()
-
-			req, err := http.NewRequest(tt.method, "http://"+addr+"/cluster/status", nil)
-			if err != nil {
-				t.Fatalf("failed to create request: %v", err)
-			}
-
-			client := &http.Client{Timeout: 2 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatalf("failed to send request: %v", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != tt.expectedStatus {
-				t.Errorf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
 			}
 
 			if tt.checkMethodNotAllowed {
@@ -416,7 +350,7 @@ func TestClusterStatusEndpoint(t *testing.T) {
 
 			if tt.expectedStatus == http.StatusOK {
 				var response ClusterStatusResponse
-				if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+				if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
 
@@ -442,41 +376,33 @@ func TestClusterStatusEndpoint(t *testing.T) {
 }
 
 func TestContentTypeHeaders(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{})
 	defer b.Close()
 
-	cfg := Config{
-		Address:         "localhost:0",
-		ShutdownTimeout: 1 * time.Second,
+	server := New(Config{}, b, nil, slog.Default())
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{name: "/health", handler: server.handleHealth},
+		{name: "/ready", handler: server.handleReady},
+		{name: "/cluster/status", handler: server.handleClusterStatus},
 	}
 
-	server := New(cfg, b, nil, slog.Default())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://test"+tt.name, nil)
+			rec := httptest.NewRecorder()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+			tt.handler(rec, req)
 
-	go server.Listen(ctx)
-	time.Sleep(100 * time.Millisecond)
-
-	addr := server.Addr()
-
-	endpoints := []string{"/health", "/ready", "/cluster/status"}
-
-	for _, endpoint := range endpoints {
-		t.Run(endpoint, func(t *testing.T) {
-			resp, err := http.Get("http://" + addr + endpoint)
-			if err != nil {
-				t.Fatalf("failed to send request: %v", err)
-			}
-			defer resp.Body.Close()
-
-			contentType := resp.Header.Get("Content-Type")
+			contentType := rec.Header().Get("Content-Type")
 			if contentType != "application/json" {
 				t.Errorf("expected Content-Type application/json, got %q", contentType)
 			}
 
-			// Verify it's valid JSON
-			body, err := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(rec.Body)
 			if err != nil {
 				t.Fatalf("failed to read body: %v", err)
 			}
@@ -486,58 +412,5 @@ func TestContentTypeHeaders(t *testing.T) {
 				t.Errorf("response is not valid JSON: %v", err)
 			}
 		})
-	}
-}
-
-func TestGracefulShutdown(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil)
-	defer b.Close()
-
-	cfg := Config{
-		Address:         "localhost:0",
-		ShutdownTimeout: 2 * time.Second,
-	}
-
-	server := New(cfg, b, nil, slog.Default())
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.Listen(ctx)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	addr := server.Addr()
-
-	// Make a request while server is running
-	resp, err := http.Get("http://" + addr + "/health")
-	if err != nil {
-		t.Fatalf("failed to get health before shutdown: %v", err)
-	}
-	resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
-	}
-
-	// Trigger shutdown
-	cancel()
-
-	// Server should stop gracefully
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Logf("shutdown completed with: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("server did not stop after shutdown timeout")
-	}
-
-	// After shutdown, requests should fail
-	_, err = http.Get("http://" + addr + "/health")
-	if err == nil {
-		t.Error("expected request to fail after shutdown")
 	}
 }

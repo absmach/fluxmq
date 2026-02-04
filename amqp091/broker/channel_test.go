@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/amqp091/codec"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
 func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
@@ -260,5 +261,27 @@ func TestExchangeNotFoundOnPublish(t *testing.T) {
 	}
 	if closeMsg.ReplyCode != codec.NotFound {
 		t.Fatalf("expected NotFound, got %d", closeMsg.ReplyCode)
+	}
+}
+
+func TestParseStreamOffsetString(t *testing.T) {
+	first, ok := parseStreamOffsetString("first")
+	if !ok || first.Position != qtypes.CursorEarliest {
+		t.Fatalf("expected earliest, got %+v", first)
+	}
+
+	last, ok := parseStreamOffsetString("last")
+	if !ok || last.Position != qtypes.CursorLatest {
+		t.Fatalf("expected latest, got %+v", last)
+	}
+
+	offset, ok := parseStreamOffsetString("offset=42")
+	if !ok || offset.Position != qtypes.CursorOffset || offset.Offset != 42 {
+		t.Fatalf("expected offset 42, got %+v", offset)
+	}
+
+	ts, ok := parseStreamOffsetString("timestamp=1700000000")
+	if !ok || ts.Position != qtypes.CursorTimestamp || ts.Timestamp.IsZero() {
+		t.Fatalf("expected timestamp, got %+v", ts)
 	}
 }

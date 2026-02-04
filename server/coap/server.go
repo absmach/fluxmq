@@ -145,6 +145,12 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 
+	// if !strings.HasPrefix(path, "/mqtt/publish/") {
+	// 	s.logger.Warn("coap_publish_invalid_path", slog.String("path", path))
+	// 	s.sendResponse(w, r, codes.BadRequest, "invalid path")
+	// 	return
+	// }
+
 	topic := strings.TrimPrefix(path, "/mqtt/publish/")
 	if topic == "" {
 		s.logger.Warn("coap_publish_missing_topic")

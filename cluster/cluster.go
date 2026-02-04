@@ -18,6 +18,7 @@ type QueueConsumerInfo struct {
 	ConsumerID   string // Consumer identifier (usually client ID)
 	ClientID     string // MQTT client ID
 	Pattern      string // Subscription pattern within the queue
+	Mode         string // Consumer group mode (queue or stream)
 	ProxyNodeID  string // Node where the consumer is connected
 	RegisteredAt time.Time
 }

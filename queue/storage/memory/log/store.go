@@ -279,6 +279,54 @@ func (s *Store) Tail(ctx context.Context, queueName string) (uint64, error) {
 	return sl.tail, nil
 }
 
+// OffsetByTime returns the offset for the given timestamp.
+func (s *Store) OffsetByTime(ctx context.Context, queueName string, ts time.Time) (uint64, error) {
+	sl, err := s.getQueueLog(queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+
+	if len(sl.messages) == 0 {
+		return sl.head, nil
+	}
+
+	for i, msg := range sl.messages {
+		if !msg.CreatedAt.IsZero() && !msg.CreatedAt.Before(ts) {
+			return sl.head + uint64(i), nil
+		}
+	}
+
+	return sl.tail, nil
+}
+
+// OffsetBySize returns the offset to keep when enforcing size retention.
+func (s *Store) OffsetBySize(ctx context.Context, queueName string, retentionBytes int64) (uint64, error) {
+	sl, err := s.getQueueLog(queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+
+	if retentionBytes <= 0 || len(sl.messages) == 0 {
+		return sl.head, nil
+	}
+
+	var total int64
+	for i := len(sl.messages) - 1; i >= 0; i-- {
+		total += int64(len(sl.messages[i].GetPayload()))
+		if total > retentionBytes {
+			return sl.head + uint64(i+1), nil
+		}
+	}
+
+	return sl.head, nil
+}
+
 // Truncate removes all messages with offset < minOffset.
 func (s *Store) Truncate(ctx context.Context, queueName string, minOffset uint64) error {
 	sl, err := s.getQueueLog(queueName)

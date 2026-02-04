@@ -100,6 +100,16 @@ func (a *Adapter) Store() *Store {
 	return a.store
 }
 
+// OffsetByTime returns the offset for the given timestamp.
+func (a *Adapter) OffsetByTime(ctx context.Context, queueName string, ts time.Time) (uint64, error) {
+	return a.store.LookupByTime(queueName, ts)
+}
+
+// OffsetBySize returns the offset to keep when enforcing size retention.
+func (a *Adapter) OffsetBySize(ctx context.Context, queueName string, retentionBytes int64) (uint64, error) {
+	return a.store.RetentionOffsetBySize(queueName, retentionBytes)
+}
+
 // QueueStore interface implementation
 
 // CreateQueue creates a new queue with the given configuration.

@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,6 +241,11 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	return nil
 }
 
+// UpdateQueue updates an existing queue.
+func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	return m.queueStore.UpdateQueue(ctx, config)
+}
+
 // GetOrCreateQueue gets or creates a queue with default configuration.
 func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics ...string) (*types.QueueConfig, error) {
 	// Try to get existing
@@ -421,19 +428,34 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 
 // SubscribeWithCursor adds a consumer with explicit cursor positioning.
 func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error {
+	mode := types.GroupModeQueue
+	if cursor != nil && cursor.Mode != "" {
+		mode = cursor.Mode
+	}
 	if cursor == nil || cursor.Position == types.CursorDefault {
-		return m.Subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID)
+		if mode != types.GroupModeStream {
+			return m.Subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID)
+		}
+		cursor = &types.CursorOption{Position: types.CursorLatest, Mode: mode}
 	}
 
 	// Ensure queue exists
 	queueTopicPattern := "$queue/" + queueName + "/#"
-	_, err := m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
+	queueCfg, err := m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
 	if err != nil {
 		return fmt.Errorf("failed to get or create queue: %w", err)
 	}
+	if mode == types.GroupModeStream && queueCfg != nil && queueCfg.Type != types.QueueTypeStream {
+		queueCfg.Type = types.QueueTypeStream
+		_ = m.queueStore.UpdateQueue(ctx, *queueCfg)
+	}
 
 	if groupID == "" {
-		groupID = extractGroupFromClientID(clientID)
+		if mode == types.GroupModeStream {
+			groupID = clientID
+		} else {
+			groupID = extractGroupFromClientID(clientID)
+		}
 	}
 
 	patternGroupID := groupID
@@ -441,7 +463,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
 	}
 
-	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern)
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, mode)
 	if err != nil {
 		return err
 	}
@@ -469,6 +491,12 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 			offset = tail
 		}
 		m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset)
+	case types.CursorTimestamp:
+		if !cursor.Timestamp.IsZero() {
+			if offset, err := m.offsetByTime(ctx, queueName, cursor.Timestamp); err == nil {
+				m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset)
+			}
+		}
 	}
 
 	if err := m.consumerManager.RegisterConsumer(ctx, queueName, group.ID, clientID, clientID, proxyNodeID); err != nil {
@@ -485,6 +513,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 			ConsumerID:   clientID,
 			ClientID:     clientID,
 			Pattern:      pattern,
+			Mode:         string(mode),
 			ProxyNodeID:  proxyNodeID,
 			RegisteredAt: time.Now(),
 		}
@@ -501,7 +530,8 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		slog.String("queue", queueName),
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID),
-		slog.String("cursor", fmt.Sprintf("%d", cursor.Position)))
+		slog.String("cursor", fmt.Sprintf("%d", cursor.Position)),
+		slog.String("mode", string(mode)))
 
 	return nil
 }
@@ -528,7 +558,7 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 	}
 
 	// Get or create consumer group
-	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern)
+	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, types.GroupModeQueue)
 	if err != nil {
 		return err
 	}
@@ -549,6 +579,7 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 			ConsumerID:   clientID,
 			ClientID:     clientID,
 			Pattern:      pattern,
+			Mode:         string(types.GroupModeQueue),
 			ProxyNodeID:  proxyNodeID,
 			RegisteredAt: time.Now(),
 		}
@@ -622,6 +653,20 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 		return err
 	}
 
+	if groupID != "" {
+		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
+			if group.Mode == types.GroupModeStream {
+				cursor := group.GetCursor()
+				next := offset + 1
+				if next > cursor.Cursor {
+					_ = m.groupStore.UpdateCursor(ctx, queueName, group.ID, next)
+					_ = m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next)
+				}
+				return nil
+			}
+		}
+	}
+
 	// Find the consumer that has this message pending
 	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
@@ -632,6 +677,15 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 		// Check if this group matches
 		if groupID != "" && group.ID != groupID {
 			continue
+		}
+		if group.Mode == types.GroupModeStream {
+			cursor := group.GetCursor()
+			next := offset + 1
+			if next > cursor.Cursor {
+				_ = m.groupStore.UpdateCursor(ctx, queueName, group.ID, next)
+				_ = m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next)
+			}
+			return nil
 		}
 
 		// Find and ack the message
@@ -654,6 +708,14 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 		return err
 	}
 
+	if groupID != "" {
+		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
+			if group.Mode == types.GroupModeStream {
+				return nil
+			}
+		}
+	}
+
 	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
 		return err
@@ -662,6 +724,9 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 	for _, group := range groups {
 		if groupID != "" && group.ID != groupID {
 			continue
+		}
+		if group.Mode == types.GroupModeStream {
+			return nil
 		}
 
 		for consumerID := range group.PEL {
@@ -683,6 +748,14 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 		return err
 	}
 
+	if groupID != "" {
+		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
+			if group.Mode == types.GroupModeStream {
+				return nil
+			}
+		}
+	}
+
 	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
 		return err
@@ -691,6 +764,9 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 	for _, group := range groups {
 		if groupID != "" && group.ID != groupID {
 			continue
+		}
+		if group.Mode == types.GroupModeStream {
+			return nil
 		}
 
 		for consumerID := range group.PEL {
@@ -761,6 +837,31 @@ func (m *Manager) deliverMessages() {
 	}
 
 	for _, queueConfig := range queues {
+		primaryGroup := strings.TrimSpace(queueConfig.PrimaryGroup)
+		primaryCommitted := make(map[string]uint64)
+		getPrimaryCommitted := func(pattern string) (uint64, bool) {
+			if primaryGroup == "" {
+				return 0, false
+			}
+
+			patternGroupID := primaryGroup
+			if pattern != "" {
+				patternGroupID = fmt.Sprintf("%s@%s", primaryGroup, pattern)
+			}
+
+			if val, ok := primaryCommitted[patternGroupID]; ok {
+				return val, true
+			}
+
+			committed, err := m.consumerManager.GetCommittedOffset(ctx, queueConfig.Name, patternGroupID)
+			if err != nil {
+				return 0, false
+			}
+
+			primaryCommitted[patternGroupID] = committed
+			return committed, true
+		}
+
 		// Deliver to local consumer groups
 		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
 		if err != nil {
@@ -768,7 +869,7 @@ func (m *Manager) deliverMessages() {
 		}
 
 		for _, group := range groups {
-			m.deliverToGroup(ctx, &queueConfig, group)
+			m.deliverToGroup(ctx, &queueConfig, group, getPrimaryCommitted)
 		}
 
 		// Also deliver to remote consumers registered in cluster
@@ -801,8 +902,12 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 	}
 
 	for groupID, groupConsumers := range consumersByGroup {
+		mode := types.GroupModeQueue
+		if groupConsumers[0].Mode != "" {
+			mode = types.ConsumerGroupMode(groupConsumers[0].Mode)
+		}
 		// Get or create a local consumer group state for tracking cursor
-		group, err := m.consumerManager.GetOrCreateGroup(ctx, config.Name, groupID, groupConsumers[0].Pattern)
+		group, err := m.consumerManager.GetOrCreateGroup(ctx, config.Name, groupID, groupConsumers[0].Pattern, mode)
 		if err != nil {
 			continue
 		}
@@ -814,23 +919,62 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 		}
 
 		// Round-robin across remote consumers in this group
+		var workCommitted uint64
+		var hasWorkCommitted bool
+		if group.Mode == types.GroupModeStream && config.PrimaryGroup != "" {
+			patternGroupID := config.PrimaryGroup
+			if group.Pattern != "" {
+				patternGroupID = fmt.Sprintf("%s@%s", config.PrimaryGroup, group.Pattern)
+			}
+			if committed, err := m.consumerManager.GetCommittedOffset(ctx, config.Name, patternGroupID); err == nil {
+				workCommitted = committed
+				hasWorkCommitted = true
+			}
+		}
+
 		for _, consumerInfo := range groupConsumers {
 			// Claim messages for this remote consumer
-			msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, m.config.DeliveryBatchSize)
+			var msgs []*types.Message
+			var err error
+			if group.Mode == types.GroupModeStream {
+				msgs, err = m.consumerManager.ClaimBatchStream(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, m.config.DeliveryBatchSize)
+			} else {
+				msgs, err = m.consumerManager.ClaimBatch(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, m.config.DeliveryBatchSize)
+			}
 			if err != nil {
 				continue
 			}
 
 			// Route each message to the remote node
 			for _, msg := range msgs {
+				payload := msg.GetPayload()
+				properties := msg.Properties
+				if group.Mode == types.GroupModeStream {
+					propsCopy := make(map[string]string, len(msg.Properties)+4)
+					for k, v := range msg.Properties {
+						propsCopy[k] = v
+					}
+					// Decorate properties for stream consumers.
+					propsCopy["x-stream-offset"] = fmt.Sprintf("%d", msg.Sequence)
+					if !msg.CreatedAt.IsZero() {
+						propsCopy["x-stream-timestamp"] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
+					}
+					if hasWorkCommitted {
+						propsCopy["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
+						propsCopy["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
+						propsCopy["x-work-group"] = config.PrimaryGroup
+					}
+					properties = propsCopy
+				}
+
 				err := m.cluster.RouteQueueMessage(
 					ctx,
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
 					config.Name,
 					msg.ID,
-					msg.GetPayload(),
-					msg.Properties,
+					payload,
+					properties,
 					int64(msg.Sequence),
 				)
 				if err != nil {
@@ -851,7 +995,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 	}
 }
 
-func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState) {
+func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState, primaryCommitted func(pattern string) (uint64, bool)) {
 	if group.ConsumerCount() == 0 {
 		return
 	}
@@ -869,7 +1013,13 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 	}
 
 	for _, consumerID := range consumers {
-		msgs, err := m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, m.config.DeliveryBatchSize)
+		var msgs []*types.Message
+		var err error
+		if group.Mode == types.GroupModeStream {
+			msgs, err = m.consumerManager.ClaimBatchStream(ctx, config.Name, group.ID, consumerID, filter, m.config.DeliveryBatchSize)
+		} else {
+			msgs, err = m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, m.config.DeliveryBatchSize)
+		}
 		if err != nil {
 			continue
 		}
@@ -888,6 +1038,12 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 		// Update heartbeat on delivery so active consumers are never cleaned up as stale.
 		if len(msgs) > 0 {
 			m.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID)
+		}
+
+		var workCommitted uint64
+		var hasWorkCommitted bool
+		if group.Mode == types.GroupModeStream && primaryCommitted != nil {
+			workCommitted, hasWorkCommitted = primaryCommitted(group.Pattern)
 		}
 
 		for _, msg := range msgs {
@@ -914,6 +1070,9 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 			} else if m.deliverFn != nil {
 				// Local delivery
 				deliveryMsg := m.createDeliveryMessage(msg, group.ID, config.Name)
+				if group.Mode == types.GroupModeStream {
+					m.decorateStreamDelivery(deliveryMsg, msg, group, workCommitted, hasWorkCommitted, config.PrimaryGroup)
+				}
 
 				if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
 					m.logger.Warn("queue message delivery failed",
@@ -1009,14 +1168,21 @@ func (m *Manager) processRetention() {
 	}
 
 	for _, queueConfig := range queues {
-		// Get minimum committed offset across all groups
-		minCommitted, err := m.consumerManager.GetMinCommittedOffset(ctx, queueConfig.Name)
+		// Get minimum committed offset across queue-mode groups
+		minCommitted, err := m.consumerManager.GetMinCommittedOffsetByMode(ctx, queueConfig.Name, types.GroupModeQueue)
 		if err != nil {
 			continue
 		}
 
-		// Truncate log up to committed offset
-		if err := m.queueStore.Truncate(ctx, queueConfig.Name, minCommitted); err != nil {
+		truncateOffset := minCommitted
+		if retentionOffset, hasRetention := m.computeRetentionOffset(ctx, &queueConfig); hasRetention {
+			if retentionOffset < truncateOffset {
+				truncateOffset = retentionOffset
+			}
+		}
+
+		// Truncate log up to the safe offset
+		if err := m.queueStore.Truncate(ctx, queueConfig.Name, truncateOffset); err != nil {
 			m.logger.Debug("truncation error",
 				slog.String("error", err.Error()),
 				slog.String("queue", queueConfig.Name))
@@ -1193,6 +1359,28 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queu
 	return deliveryMsg
 }
 
+func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *types.Message, group *types.ConsumerGroupState, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
+	if delivery == nil || msg == nil {
+		return
+	}
+	if delivery.Properties == nil {
+		delivery.Properties = make(map[string]string)
+	}
+
+	delivery.Properties["x-stream-offset"] = fmt.Sprintf("%d", msg.Sequence)
+	if !msg.CreatedAt.IsZero() {
+		delivery.Properties["x-stream-timestamp"] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
+	}
+
+	if hasWorkCommitted {
+		delivery.Properties["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
+		delivery.Properties["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
+		if primaryGroup != "" {
+			delivery.Properties["x-work-group"] = primaryGroup
+		}
+	}
+}
+
 // DeliveryMessage is the internal message format for queue delivery tracking.
 type DeliveryMessage struct {
 	ID          string
@@ -1233,6 +1421,68 @@ func parseMessageID(messageID string) (uint64, error) {
 	// Try parsing as just an offset
 	_, err := fmt.Sscanf(messageID, "%d", &offset)
 	return offset, err
+}
+
+func (m *Manager) offsetByTime(ctx context.Context, queueName string, ts time.Time) (uint64, error) {
+	if provider, ok := m.queueStore.(storage.TimeOffsetProvider); ok {
+		return provider.OffsetByTime(ctx, queueName, ts)
+	}
+	return m.queueStore.Head(ctx, queueName)
+}
+
+func (m *Manager) offsetBySize(ctx context.Context, queueName string, retentionBytes int64) (uint64, error) {
+	if provider, ok := m.queueStore.(storage.SizeOffsetProvider); ok {
+		return provider.OffsetBySize(ctx, queueName, retentionBytes)
+	}
+	return m.queueStore.Head(ctx, queueName)
+}
+
+func (m *Manager) computeRetentionOffset(ctx context.Context, config *types.QueueConfig) (uint64, bool) {
+	if config == nil {
+		return 0, false
+	}
+
+	var offset uint64
+	hasRetention := false
+
+	if config.Retention.RetentionTime > 0 {
+		cutoff := time.Now().Add(-config.Retention.RetentionTime)
+		if off, err := m.offsetByTime(ctx, config.Name, cutoff); err == nil {
+			if off > offset {
+				offset = off
+			}
+			hasRetention = true
+		}
+	}
+
+	if config.Retention.RetentionBytes > 0 {
+		if off, err := m.offsetBySize(ctx, config.Name, config.Retention.RetentionBytes); err == nil {
+			if off > offset {
+				offset = off
+			}
+			hasRetention = true
+		}
+	}
+
+	if config.Retention.RetentionMessages > 0 {
+		head, err := m.queueStore.Head(ctx, config.Name)
+		if err == nil {
+			tail, err := m.queueStore.Tail(ctx, config.Name)
+			if err == nil {
+				if tail > head+uint64(config.Retention.RetentionMessages) {
+					msgOffset := tail - uint64(config.Retention.RetentionMessages)
+					if msgOffset > offset {
+						offset = msgOffset
+					}
+				} else if head > offset {
+					offset = head
+				}
+				hasRetention = true
+			}
+		}
+	}
+
+	return offset, hasRetention
 }
 
 func parseSubscriptionFilter(filter string) (queueName, pattern string) {

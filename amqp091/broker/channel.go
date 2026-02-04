@@ -8,11 +8,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/absmach/fluxmq/amqp091/codec"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 )
@@ -26,6 +30,12 @@ type consumer struct {
 	groupID   string
 	noAck     bool
 	exclusive bool
+}
+
+type queueInfo struct {
+	name      string
+	queueType string
+	args      map[string]interface{}
 }
 
 // exchange represents a declared exchange (in-memory, per-connection for now).
@@ -52,7 +62,7 @@ type Channel struct {
 
 	// Exchange/queue/binding state (local to this connection for non-durable)
 	exchanges  map[string]*exchange
-	queues     map[string]bool // set of declared queue names
+	queues     map[string]*queueInfo // declared queues by name
 	bindings   []binding
 	exchangeMu sync.RWMutex
 
@@ -115,7 +125,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 		conn:      c,
 		id:        id,
 		exchanges: make(map[string]*exchange),
-		queues:    make(map[string]bool),
+		queues:    make(map[string]*queueInfo),
 		consumers: make(map[string]*consumer),
 		unacked:   make(map[uint64]*unackedDelivery),
 		flow:      true,
@@ -326,6 +336,21 @@ func (ch *Channel) completePublish() {
 		qm := ch.conn.broker.getQueueManager()
 		if qm != nil {
 			if err := qm.Publish(context.Background(), routingKey, body, props); err != nil {
+				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
+			}
+			if ch.confirmMode {
+				ch.sendPublisherAck()
+			}
+			return
+		}
+	}
+
+	// RabbitMQ-style stream queue publish: default exchange with routingKey == queue name.
+	if exchangeName == "" && ch.isStreamQueue(routingKey) {
+		qm := ch.conn.broker.getQueueManager()
+		if qm != nil {
+			queueTopic := "$queue/" + routingKey
+			if err := qm.Publish(context.Background(), queueTopic, body, props); err != nil {
 				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
 			}
 			if ch.confirmMode {
@@ -549,12 +574,26 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		return err
 	}
 
+	headers := make(map[string]interface{})
+	for k, v := range props {
+		switch k {
+		case "content-type", "content-encoding", "correlation-id", "reply-to", "message-id", "type":
+			continue
+		default:
+			headers[k] = v
+		}
+	}
+	if len(headers) == 0 {
+		headers = nil
+	}
+
 	properties := codec.BasicProperties{
 		ContentType:   props["content-type"],
 		CorrelationID: props["correlation-id"],
 		ReplyTo:       props["reply-to"],
 		MessageID:     props["message-id"],
 		Type:          props["type"],
+		Headers:       headers,
 	}
 
 	headerFrame, err := buildContentHeaderFrame(ch.id, uint64(len(payload)), properties)
@@ -769,9 +808,44 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 		m.Queue = fmt.Sprintf("amq.gen-%s-%d", ch.conn.connID, seq)
 	}
 
+	queueType := extractQueueType(m.Arguments)
+
 	ch.exchangeMu.Lock()
-	ch.queues[m.Queue] = true
+	ch.queues[m.Queue] = &queueInfo{
+		name:      m.Queue,
+		queueType: queueType,
+		args:      m.Arguments,
+	}
 	ch.exchangeMu.Unlock()
+
+	if queueType == string(qtypes.QueueTypeStream) {
+		qm := ch.conn.broker.getQueueManager()
+		if qm != nil {
+			queueTopicPattern := "$queue/" + m.Queue + "/#"
+			var cfg qtypes.QueueConfig
+			if m.Durable {
+				cfg = qtypes.DefaultQueueConfig(m.Queue, queueTopicPattern)
+			} else {
+				cfg = qtypes.DefaultEphemeralQueueConfig(m.Queue, queueTopicPattern)
+			}
+			cfg.Type = qtypes.QueueTypeStream
+			cfg.Retention = extractStreamRetention(m.Arguments)
+			if err := qm.CreateQueue(context.Background(), cfg); err != nil {
+				// If it already exists, attempt to update retention/type only.
+				if existing, err := qm.GetQueue(context.Background(), m.Queue); err == nil && existing != nil {
+					existing.Type = qtypes.QueueTypeStream
+					existing.Retention = cfg.Retention
+					if !m.Durable {
+						existing.Durable = false
+						if existing.ExpiresAfter == 0 {
+							existing.ExpiresAfter = 5 * time.Minute
+						}
+					}
+					_ = qm.UpdateQueue(context.Background(), *existing)
+				}
+			}
+		}
+	}
 
 	// Auto-bind queue to default exchange with routing key = queue name
 	ch.exchangeMu.Lock()
@@ -877,7 +951,19 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	if isQueue {
 		queueName, pattern = parseQueueFilter(queueFilter)
 	}
+
+	queueInfo := ch.getQueueInfo(queueFilter)
+	streamCursor, hasStreamOffset := extractStreamOffset(m.Arguments)
+	isStream := (queueInfo != nil && queueInfo.queueType == string(qtypes.QueueTypeStream)) || hasStreamOffset
+	if isStream && !isQueue {
+		queueName = queueFilter
+		pattern = ""
+	}
+
 	groupID := extractConsumerGroup(m.Arguments)
+	if isStream && groupID == "" {
+		groupID = tag
+	}
 
 	ch.consumersMu.Lock()
 	if _, exists := ch.consumers[tag]; exists {
@@ -900,15 +986,25 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 
 	// Subscribe to the queue via queue manager
 	qm := ch.conn.broker.getQueueManager()
-	if qm != nil && isQueue && queueName != "" {
+	if qm != nil && (isQueue || isStream) && queueName != "" {
 		clientID := PrefixedClientID(ch.conn.connID)
-		if err := qm.Subscribe(context.Background(), queueName, pattern, clientID, groupID, ""); err != nil {
+		subGroupID := groupID
+		if isStream {
+			cursor := streamCursor
+			if cursor == nil {
+				cursor = &qtypes.CursorOption{Position: qtypes.CursorLatest}
+			}
+			cursor.Mode = qtypes.GroupModeStream
+			if err := qm.SubscribeWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor); err != nil {
+				ch.conn.logger.Error("queue subscribe with cursor failed", "queue", queueName, "error", err)
+			}
+		} else if err := qm.Subscribe(context.Background(), queueName, pattern, clientID, subGroupID, ""); err != nil {
 			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", err)
 		}
 	}
 
 	// Subscribe via the topic router for pub/sub delivery (non-queue topics).
-	if !isQueue {
+	if !isQueue && !isStream {
 		connID := ch.conn.connID
 		ch.conn.broker.router.Subscribe(connID, queueFilter, 1, storage.SubscribeOptions{})
 	}
@@ -1171,4 +1267,204 @@ func extractConsumerGroup(args map[string]interface{}) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+func (ch *Channel) getQueueInfo(name string) *queueInfo {
+	ch.exchangeMu.RLock()
+	defer ch.exchangeMu.RUnlock()
+	return ch.queues[name]
+}
+
+func (ch *Channel) isStreamQueue(name string) bool {
+	if info := ch.getQueueInfo(name); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
+		return true
+	}
+	if strings.HasPrefix(name, "$queue/") {
+		base := strings.TrimPrefix(name, "$queue/")
+		if info := ch.getQueueInfo(base); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractQueueType(args map[string]interface{}) string {
+	if len(args) == 0 {
+		return string(qtypes.QueueTypeClassic)
+	}
+	val, ok := args["x-queue-type"]
+	if !ok {
+		return string(qtypes.QueueTypeClassic)
+	}
+	switch v := val.(type) {
+	case string:
+		if v == "" {
+			return string(qtypes.QueueTypeClassic)
+		}
+		return strings.ToLower(v)
+	case []byte:
+		if len(v) == 0 {
+			return string(qtypes.QueueTypeClassic)
+		}
+		return strings.ToLower(string(v))
+	default:
+		return string(qtypes.QueueTypeClassic)
+	}
+}
+
+func extractStreamRetention(args map[string]interface{}) qtypes.RetentionPolicy {
+	var policy qtypes.RetentionPolicy
+	if len(args) == 0 {
+		return policy
+	}
+
+	if val, ok := args["x-max-age"]; ok {
+		if d, ok := parseDurationArg(val); ok {
+			policy.RetentionTime = d
+		}
+	}
+	if val, ok := args["x-max-length-bytes"]; ok {
+		if n, ok := parseInt64Arg(val); ok {
+			policy.RetentionBytes = n
+		}
+	}
+	if val, ok := args["x-max-length"]; ok {
+		if n, ok := parseInt64Arg(val); ok {
+			policy.RetentionMessages = n
+		}
+	}
+
+	return policy
+}
+
+func extractStreamOffset(args map[string]interface{}) (*qtypes.CursorOption, bool) {
+	if len(args) == 0 {
+		return nil, false
+	}
+	val, ok := args["x-stream-offset"]
+	if !ok {
+		return nil, false
+	}
+
+	switch v := val.(type) {
+	case string:
+		return parseStreamOffsetString(v)
+	case []byte:
+		return parseStreamOffsetString(string(v))
+	case int:
+		return &qtypes.CursorOption{Position: qtypes.CursorOffset, Offset: uint64(v)}, true
+	case int64:
+		return &qtypes.CursorOption{Position: qtypes.CursorOffset, Offset: uint64(v)}, true
+	case uint64:
+		return &qtypes.CursorOption{Position: qtypes.CursorOffset, Offset: v}, true
+	case uint32:
+		return &qtypes.CursorOption{Position: qtypes.CursorOffset, Offset: uint64(v)}, true
+	case time.Time:
+		return &qtypes.CursorOption{Position: qtypes.CursorTimestamp, Timestamp: v}, true
+	default:
+		return nil, false
+	}
+}
+
+func parseStreamOffsetString(val string) (*qtypes.CursorOption, bool) {
+	if val == "" {
+		return nil, false
+	}
+	v := strings.ToLower(strings.TrimSpace(val))
+	switch v {
+	case "first":
+		return &qtypes.CursorOption{Position: qtypes.CursorEarliest}, true
+	case "last", "next":
+		return &qtypes.CursorOption{Position: qtypes.CursorLatest}, true
+	}
+
+	if strings.HasPrefix(v, "offset=") {
+		v = strings.TrimPrefix(v, "offset=")
+	}
+	if strings.HasPrefix(v, "timestamp=") {
+		raw := strings.TrimPrefix(v, "timestamp=")
+		if ts, ok := parseUnixTimestamp(raw); ok {
+			return &qtypes.CursorOption{Position: qtypes.CursorTimestamp, Timestamp: ts}, true
+		}
+	}
+
+	if off, err := strconv.ParseUint(v, 10, 64); err == nil {
+		return &qtypes.CursorOption{Position: qtypes.CursorOffset, Offset: off}, true
+	}
+
+	return nil, false
+}
+
+func parseUnixTimestamp(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	val, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	if val > 1e12 {
+		return time.UnixMilli(val), true
+	}
+	return time.Unix(val, 0), true
+}
+
+func parseDurationArg(val any) (time.Duration, bool) {
+	switch v := val.(type) {
+	case time.Duration:
+		return v, true
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, false
+		}
+		if d, err := time.ParseDuration(trimmed); err == nil {
+			return d, true
+		}
+		upper := strings.ToUpper(trimmed)
+		if strings.HasSuffix(upper, "D") {
+			num := strings.TrimSuffix(upper, "D")
+			if f, err := strconv.ParseFloat(num, 64); err == nil {
+				return time.Duration(f * float64(24*time.Hour)), true
+			}
+		}
+		if strings.HasSuffix(upper, "W") {
+			num := strings.TrimSuffix(upper, "W")
+			if f, err := strconv.ParseFloat(num, 64); err == nil {
+				return time.Duration(f * float64(7*24*time.Hour)), true
+			}
+		}
+	case int:
+		return time.Duration(v) * time.Second, true
+	case int64:
+		return time.Duration(v) * time.Second, true
+	case uint64:
+		return time.Duration(v) * time.Second, true
+	}
+	return 0, false
+}
+
+func parseInt64Arg(val any) (int64, bool) {
+	switch v := val.(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case uint64:
+		if v > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case string:
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			return n, true
+		}
+	case []byte:
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
 }

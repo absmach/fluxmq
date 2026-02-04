@@ -43,6 +43,7 @@ type ConsumerGroupState struct {
 	ID        string // Group identifier
 	QueueName string // Queue this group consumes from
 	Pattern   string // Subscription pattern (e.g., "sensors/#")
+	Mode      ConsumerGroupMode
 
 	// Queue cursor state (single cursor per queue, no partitions)
 	Cursor *QueueCursor
@@ -59,6 +60,14 @@ type ConsumerGroupState struct {
 	UpdatedAt time.Time
 }
 
+// ConsumerGroupMode defines how a consumer group is tracked.
+type ConsumerGroupMode string
+
+const (
+	GroupModeQueue  ConsumerGroupMode = "queue"
+	GroupModeStream ConsumerGroupMode = "stream"
+)
+
 // NewConsumerGroupState creates a new consumer group state.
 func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroupState {
 	now := time.Now()
@@ -66,6 +75,7 @@ func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroupSta
 		ID:        groupID,
 		QueueName: queueName,
 		Pattern:   pattern,
+		Mode:      GroupModeQueue,
 		Cursor: &QueueCursor{
 			Cursor:    0,
 			Committed: 0,

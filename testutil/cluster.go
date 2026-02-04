@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/server/tcp"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/stretchr/testify/require"
@@ -193,7 +194,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		store.Close()
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
-	b := broker.NewBroker(store, clust, nullLogger, nil, nil, nil, nil)
+	b := broker.NewBroker(store, clust, nullLogger, nil, nil, nil, nil, config.SessionConfig{})
 
 	// Wire broker as message handler (includes session management)
 	clust.SetMessageHandler(b)

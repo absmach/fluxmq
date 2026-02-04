@@ -21,6 +21,7 @@ var (
 	ErrConsumerNotFound  = errors.New("consumer not found")
 	ErrMessageNotPending = errors.New("message not in pending list")
 	ErrInvalidOffset     = errors.New("invalid offset")
+	ErrGroupModeMismatch = errors.New("consumer group mode mismatch")
 )
 
 // Manager handles consumer group operations including claiming,
@@ -68,10 +69,21 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 }
 
 // GetOrCreateGroup retrieves or creates a consumer group.
-func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string) (*types.ConsumerGroupState, error) {
+func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode) (*types.ConsumerGroupState, error) {
 	// Try to get existing group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err == nil {
+		if mode == "" {
+			return group, nil
+		}
+		if group.Mode == "" {
+			group.Mode = mode
+			_ = m.groupStore.UpdateConsumerGroup(ctx, group)
+			return group, nil
+		}
+		if group.Mode != mode {
+			return nil, ErrGroupModeMismatch
+		}
 		return group, nil
 	}
 
@@ -82,6 +94,9 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 
 	// Create new group
 	group = types.NewConsumerGroupState(queueName, groupID, pattern)
+	if mode != "" {
+		group.Mode = mode
+	}
 
 	if err := m.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		// Handle race condition - another process might have created it
@@ -175,6 +190,70 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 
 	if len(messages) == 0 {
 		return nil, ErrNoMessages
+	}
+
+	return messages, nil
+}
+
+// ClaimBatchStream retrieves multiple messages for a stream consumer without PEL tracking.
+// It advances the cursor once per batch for efficiency.
+func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*types.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 {
+		limit = m.config.ClaimBatchSize
+	}
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	cursor := group.GetCursor()
+	tail, err := m.queueStore.Tail(ctx, group.QueueName)
+	if err != nil {
+		return nil, err
+	}
+
+	var messages []*types.Message
+	var newCursor uint64 = cursor.Cursor
+
+	for newCursor < tail && len(messages) < limit {
+		offset := newCursor
+		newCursor++
+
+		msg, err := m.queueStore.Read(ctx, group.QueueName, offset)
+		if err != nil {
+			if err == storage.ErrOffsetOutOfRange {
+				continue
+			}
+			return nil, err
+		}
+
+		if filter != nil {
+			queueRoot := "$queue/" + group.QueueName
+			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
+			if !filter.Matches(routingKey) {
+				continue
+			}
+		}
+
+		messages = append(messages, msg)
+	}
+
+	if len(messages) == 0 {
+		return nil, ErrNoMessages
+	}
+
+	if newCursor > cursor.Cursor {
+		if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, newCursor); err != nil {
+			return nil, err
+		}
+		// Keep committed in sync for stream groups.
+		if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
+			return nil, err
+		}
 	}
 
 	return messages, nil
@@ -460,6 +539,35 @@ func (m *Manager) GetMinCommittedOffset(ctx context.Context, queueName string) (
 			minCommitted = cursor.Committed
 			first = false
 		}
+	}
+
+	return minCommitted, nil
+}
+
+// GetMinCommittedOffsetByMode returns the minimum committed offset for groups matching mode.
+// If no groups of that mode exist, returns the queue tail.
+func (m *Manager) GetMinCommittedOffsetByMode(ctx context.Context, queueName string, mode types.ConsumerGroupMode) (uint64, error) {
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	var minCommitted uint64
+	first := true
+
+	for _, group := range groups {
+		if mode != "" && group.Mode != mode {
+			continue
+		}
+		cursor := group.GetCursor()
+		if first || cursor.Committed < minCommitted {
+			minCommitted = cursor.Committed
+			first = false
+		}
+	}
+
+	if first {
+		return m.queueStore.Tail(ctx, queueName)
 	}
 
 	return minCommitted, nil

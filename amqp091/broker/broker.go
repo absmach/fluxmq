@@ -33,6 +33,9 @@ func PrefixedClientID(connID string) string {
 type QueueManager interface {
 	Start(ctx context.Context) error
 	Stop() error
+	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	UpdateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
 	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
 	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error

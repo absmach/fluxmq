@@ -15,16 +15,21 @@ var ErrInvalidConfig = errors.New("invalid queue configuration")
 type CursorPosition int
 
 const (
-	CursorDefault  CursorPosition = iota // resume from stored position
+	CursorDefault   CursorPosition = iota // resume from stored position
 	CursorEarliest                        // start from beginning
 	CursorLatest                          // start from end
 	CursorOffset                          // start from specific offset
+	CursorTimestamp                       // start from a timestamp
 )
 
 // CursorOption specifies cursor positioning for SubscribeWithCursor.
 type CursorOption struct {
 	Position CursorPosition
 	Offset   uint64 // only used when Position == CursorOffset
+	// Timestamp is used when Position == CursorTimestamp.
+	Timestamp time.Time
+	// Mode defines the consumer group mode (queue or stream).
+	Mode ConsumerGroupMode
 }
 
 // Queue constants
@@ -46,6 +51,11 @@ type QueueConfig struct {
 	Name     string
 	Topics   []string // Topic patterns that route to this queue (e.g., "sensors/#", "orders/+/created")
 	Reserved bool     // True for system queues like "mqtt" that cannot be deleted
+	Type     QueueType
+
+	// PrimaryGroup defines the consumer group whose committed offset is used
+	// to report delivery status to stream consumers.
+	PrimaryGroup string
 
 	// Durability
 	Durable                bool          // true = persists indefinitely, false = ephemeral (cleaned up when no consumers remain)
@@ -67,6 +77,14 @@ type QueueConfig struct {
 	BatchSize        int
 	HeartbeatTimeout time.Duration
 }
+
+// QueueType defines the queue behavior mode.
+type QueueType string
+
+const (
+	QueueTypeClassic QueueType = "classic"
+	QueueTypeStream  QueueType = "stream"
+)
 
 // RetryPolicy defines retry behavior for failed messages.
 type RetryPolicy struct {
@@ -134,6 +152,7 @@ func DefaultQueueConfig(name string, topics ...string) QueueConfig {
 		Name:             name,
 		Topics:           topics,
 		Reserved:         false,
+		Type:             QueueTypeClassic,
 		Durable:          true,
 		MaxMessageSize:   10 * 1024 * 1024, // 10MB
 		MaxDepth:         100000,
@@ -178,6 +197,8 @@ type QueueConfigInput struct {
 	Name           string
 	Topics         []string
 	Reserved       bool
+	Type           QueueType
+	PrimaryGroup   string
 	MaxMessageSize int64
 	MaxDepth       int64
 	MessageTTL     time.Duration
@@ -187,6 +208,7 @@ type QueueConfigInput struct {
 	Multiplier     float64
 	DLQEnabled     bool
 	DLQTopic       string
+	Retention      RetentionPolicy
 }
 
 // FromInput creates a QueueConfig from a simplified input config.
@@ -194,6 +216,11 @@ func FromInput(input QueueConfigInput) QueueConfig {
 	cfg := DefaultQueueConfig(input.Name, input.Topics...)
 	cfg.Durable = true
 	cfg.Reserved = input.Reserved
+	if input.Type != "" {
+		cfg.Type = input.Type
+	}
+	cfg.PrimaryGroup = input.PrimaryGroup
+	cfg.Retention = input.Retention
 
 	if input.MaxMessageSize > 0 {
 		cfg.MaxMessageSize = input.MaxMessageSize
@@ -253,6 +280,8 @@ func (c *QueueConfig) Validate() error {
 	case !c.Durable && c.ExpiresAfter <= 0:
 		return ErrInvalidConfig
 	case c.Reserved && !c.Durable:
+		return ErrInvalidConfig
+	case c.Type != "" && c.Type != QueueTypeClassic && c.Type != QueueTypeStream:
 		return ErrInvalidConfig
 	}
 
