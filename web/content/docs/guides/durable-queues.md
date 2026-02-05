@@ -75,6 +75,98 @@ When you subscribe to `$queue/orders/images/#`, FluxMQ treats:
 
 That pattern is applied inside the queue manager (not in the normal pub/sub router).
 
+## Wildcard Patterns and Routing Key Filtering
+
+Queue subscriptions support MQTT-style wildcards (`+` for single level, `#` for multiple levels). However, the wildcard handling is split into two stages:
+
+1. **Queue binding**: The queue itself is bound to `$queue/<name>/#` (captures all messages for that queue)
+2. **Consumer filter**: The pattern after the queue name filters messages during delivery
+
+### Example 1: Simple Queue
+
+```
+Subscribe:  $queue/orders
+Publish:    $queue/orders
+```
+
+- Queue name: `orders`
+- Consumer filter: (none)
+- All messages to `$queue/orders` are delivered
+
+### Example 2: Single-Level Routing Key
+
+```
+Subscribe:  $queue/orders/images
+Publish:    $queue/orders/images
+```
+
+- Queue name: `orders`
+- Consumer filter: `images`
+- Only messages with routing key `images` are delivered
+
+### Example 3: Multi-Level Wildcard
+
+```
+Subscribe:  $queue/orders/images/#
+Publish:    $queue/orders/images/png
+Publish:    $queue/orders/images/resize/thumbnail
+```
+
+- Queue name: `orders`
+- Consumer filter: `images/#`
+- Queue binding: `$queue/orders/#` (captures everything)
+- During delivery, filter `images/#` matches `images/png` and `images/resize/thumbnail`
+
+### Example 4: Single-Level Wildcard
+
+```
+Subscribe:  $queue/orders/+/images/#
+Publish:    $queue/orders/eu/images/resize
+Publish:    $queue/orders/us/images/png
+```
+
+- Queue name: `orders`
+- Consumer filter: `+/images/#`
+
+Flow for publish to `$queue/orders/eu/images/resize`:
+
+1. `FindMatchingQueues("$queue/orders/eu/images/resize")` matches queue `orders` (bound to `$queue/orders/#`)
+2. Message stored in queue with topic `$queue/orders/eu/images/resize`
+3. During delivery, routing key is extracted: `eu/images/resize`
+4. Filter `+/images/#` matches:
+   - `+` matches `eu`
+   - `images` matches `images`
+   - `#` matches `resize`
+5. Message delivered to consumer
+
+### Example 5: Multiple Consumer Groups with Different Filters
+
+One queue can have multiple consumer groups with different filter patterns:
+
+```
+# Group A: processes all EU orders
+Subscribe:  $queue/orders/eu/#
+            (consumer-group: "eu-processors")
+
+# Group B: processes all image-related orders
+Subscribe:  $queue/orders/+/images/#
+            (consumer-group: "image-processors")
+
+# Publish
+Publish:    $queue/orders/eu/images/resize
+```
+
+Both groups receive the message because:
+- Group A filter `eu/#` matches `eu/images/resize`
+- Group B filter `+/images/#` matches `eu/images/resize`
+
+### Key Points
+
+- The **publisher must always use the `$queue/` prefix** for messages to be routed through the queue manager
+- The queue is bound to `$queue/<name>/#` regardless of the subscription pattern
+- Wildcard filtering happens at **delivery time**, not at publish time
+- Multiple consumer groups can have different filters on the same queue
+
 ## Routing Model (How Messages Find Queues)
 
 FluxMQ uses **topic patterns on queues** to decide where a publish should be stored. This is a fan-out model: one publish can land in multiple queues if multiple patterns match.
