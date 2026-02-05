@@ -9,49 +9,51 @@ export function HeroSection() {
           {/* Left side - Content */}
           <div className="max-w-2xl">
             {/* Title with technical specs overlay */}
-            <div className="mb-8">
+            <div className="mb-14">
               <h1
                 className="text-6xl md:text-8xl font-bold mb-4 animate-fade-in"
                 style={{ lineHeight: "1.1" }}
               >
-                <span className="text-(--flux-blue)">FLUX</span>
+                <span className="text-(--flux-blue)">FLux</span>
                 <span className="text-(--flux-orange)">MQ</span>
               </h1>
-              <div className="mono text-sm md:text-base text-theme-muted mb-6 border-l-4 border-(--flux-orange) pl-4 animate-slide-up">
+              <div className="mono text-base md:text-xl text-theme-muted mb-6 border-l-4 border-(--flux-orange) pl-4 animate-slide-up">
                 <div>PROTOCOL: MQTT 3.1.1 / 5.0 | HTTP | WebSocket | CoAP</div>
                 <div>
                   THROUGHPUT: 300K-500K msg/s per node | LATENCY: &lt;10ms
                 </div>
-                <div>ARCHITECTURE: Event-Driven | Clustered | Durable Queues</div>
+                <div>
+                  ARCHITECTURE: Event-Driven | Clustered | Durable Queues
+                </div>
               </div>
             </div>
 
-            <p className="text-xl md:text-2xl mb-8 max-w-3xl leading-relaxed animate-fade-in">
-              A high-performance, multi-protocol message broker written in Go for
-              scalable IoT and event-driven architectures. Single binary. No
+            <p className="text-xl md:text-2xl mb-14 max-w-3xl leading-relaxed animate-fade-in">
+              A high-performance, multi-protocol message broker written in Go
+              for scalable IoT and event-driven architectures. Single binary. No
               external dependencies.
             </p>
 
             <div className="flex flex-wrap gap-4 animate-slide-up">
               <Link
-                href="/docs"
-                className="brutalist-border px-6 py-3 font-bold hover:bg-(--flux-orange) hover:text-white transition-colors inline-block"
-              >
-                READ DOCUMENTATION
-              </Link>
-              <a
                 href="https://github.com/absmach/fluxmq"
                 className="brutalist-border px-6 py-3 font-bold hover:bg-(--flux-blue) hover:text-white transition-colors inline-block"
                 target="_blank"
                 rel="noopener noreferrer"
               >
                 VIEW ON GITHUB →
-              </a>
+              </Link>
+              <Link
+                href="/docs"
+                className="brutalist-border px-6 py-3 font-bold hover:bg-(--flux-orange) hover:text-white transition-colors inline-block"
+              >
+                READ DOCUMENTATION
+              </Link>
             </div>
           </div>
 
           {/* Right side - Node Network Animation */}
-          <div className="flex items-center justify-center h-[50vh]">
+          <div className="hidden md:flex items-center justify-center h-[80vh]">
             <NodeNetwork />
           </div>
         </div>

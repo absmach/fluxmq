@@ -14,7 +14,7 @@ export function UseCasesSection() {
           {/* Event-Driven Systems */}
           <div className="brutalist-card p-6">
             <Activity
-              className="mb-4 text-(--flux-blue)"
+              className="mb-4 text-(--flux-orange)"
               size={36}
               strokeWidth={2}
             />
@@ -44,7 +44,7 @@ export function UseCasesSection() {
           {/* IoT & Real-Time */}
           <div className="brutalist-card p-6">
             <Cpu
-              className="mb-4 text-(--flux-orange)"
+              className="mb-4 text-(--flux-blue)"
               size={36}
               strokeWidth={2}
             />
@@ -74,7 +74,7 @@ export function UseCasesSection() {
           {/* High-Throughput Data Pipelines */}
           <div className="brutalist-card p-6">
             <Gauge
-              className="mb-4 text-(--flux-blue)"
+              className="mb-4 text-(--flux-orange)"
               size={36}
               strokeWidth={2}
             />

@@ -2,10 +2,10 @@ import { MermaidDiagram } from "@/components/mermaid-diagram";
 
 const architectureDiagram = `
 graph TD
-    A[Setup: MQTT, AMQP 1.0, AMQP 0.9.1<br/>Queue Manager, Cluster, Storage, Metrics] --> B[TCP/WS/HTTP/CoAP<br/>Servers]
+    A[Setup and configuration] --> B[TCP/WS/HTTP/CoAP<br/>Servers]
     A --> C[AMQP 1.0<br/>Server]
     A --> D[AMQP 0.9.1<br/>Server]
-    B --> E[MQTT Broker<br/>Protocol FSM]
+    B --> E[MQTT Broker]
     C --> F[AMQP Broker<br/> 1.0]
     D --> G[AMQP Broker<br/>0.9.1]
     E --> H[Queue Manager<br/>Bindings + Delivery]
@@ -62,8 +62,8 @@ export function ArchitectureSection() {
             <li className="flex items-start">
               <span className="text-(--flux-blue) mr-2 font-bold">▸</span>
               <span>
-                <strong>Storage Layer:</strong> BadgerDB for message persistence
-                and topic indexing
+                <strong>Storage:</strong> For message persistence and topic
+                indexing
               </span>
             </li>
           </ul>

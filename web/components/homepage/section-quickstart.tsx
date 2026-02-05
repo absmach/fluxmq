@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { CodeBlock } from "@/components/code-block";
+import { BookOpen, Github } from "lucide-react";
 
 export function QuickStartSection() {
   return (
@@ -68,21 +69,23 @@ storage:
             <ul className="space-y-3">
               <li>
                 <Link
-                  href="/docs"
-                  className="text---flux-blue) hover:underline font-bold text-lg"
-                >
-                  → Read the full documentation
-                </Link>
-              </li>
-              <li>
-                <a
                   href="https://github.com/absmach/fluxmq/tree/main/examples"
-                  className="text-(--flux-blue) hover:underline font-bold text-lg"
+                  className="text-(--flux-blue) hover:underline font-bold text-lg flex items-center gap-2"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  → Explore code examples on GitHub
-                </a>
+                  <Github size={20} />
+                  Explore code examples on GitHub
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/docs"
+                  className="text-(--flux-orange) hover:underline font-bold text-lg flex items-center gap-2"
+                >
+                  <BookOpen size={20} />
+                  Read the full documentation
+                </Link>
               </li>
             </ul>
           </div>
