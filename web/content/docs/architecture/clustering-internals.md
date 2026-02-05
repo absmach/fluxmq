@@ -1,0 +1,163 @@
+---
+title: Clustering Internals
+description: Embedded etcd metadata, gRPC routing, session takeover, and cluster message flow
+---
+
+# Clustering Internals
+
+**Last Updated:** 2026-02-05
+
+FluxMQ clustering is designed around one idea: keep **coordination data** consistent across nodes, and keep **payload data** fast and local wherever possible.
+
+This page explains how etcd, the inter-node transport, and the protocol brokers work together to route publishes, take over sessions, and (optionally) replicate durable queue logs.
+
+## Two Planes: Metadata vs Data
+
+In clustered mode there are two planes:
+
+- **Metadata plane (etcd)**: “who owns what”, “who is subscribed”, “who is consuming”.
+- **Data plane (gRPC transport)**: the actual routed messages and takeover payloads.
+
+```mermaid
+flowchart TB
+  subgraph Metadata Plane (etcd)
+    Own[Session ownership keys]
+    Subs[Subscription registry]
+    QCons[Queue consumer registry]
+    RIdx[Retained/will metadata]
+  end
+
+  subgraph Data Plane (gRPC transport)
+    RP[RoutePublish]
+    RQ[RouteQueueMessage]
+    TK[Takeover state transfer]
+    HF[Hybrid retained/will fetch]
+  end
+
+  Own --> TK
+  Subs --> RP
+  QCons --> RQ
+  RIdx --> HF
+```
+
+The system stays understandable if you keep this split in mind: etcd does not stream user traffic; it tells nodes where to send it.
+
+## etcd Keyspace: What Lives Where
+
+etcd is the **source of truth** for cluster metadata. FluxMQ maintains local in-memory caches (subscription and session-owner caches) to reduce etcd round trips; caches are kept up-to-date via etcd watches.
+
+Key prefixes:
+
+| Prefix | Meaning |
+| --- | --- |
+| `/mqtt/sessions/<client>/owner` | Session ownership (written with a lease so it expires on node death) |
+| `/mqtt/subscriptions/<client>/<filter>` | Subscription registry for cross-node pub/sub routing |
+| `/mqtt/queue-consumers/<queue>/<group>/<consumer>` | Queue consumer registry for cross-node queue delivery |
+| `/mqtt/retained-data/*` and `/mqtt/retained-index/*` | Hybrid retained store (small payloads replicated; large payloads indexed) |
+| `/mqtt/will-data/*` and `/mqtt/will-index/*` | Hybrid will store (same strategy as retained) |
+| `/mqtt/leader` | Cluster leader election (used for coordination and visibility) |
+
+## Session Ownership: Why It Exists
+
+MQTT sessions are stateful (inflight QoS 1/2, offline queue, subscriptions, will). In a cluster, you need a single node to be “the owner” at any time so publishes, acks, and retained/will management don’t split-brain.
+
+Ownership is stored in etcd and written with a **lease**:
+
+- If a node crashes, its lease expires and ownership keys disappear automatically.
+- Nodes cache ownership locally for fast routing, but can fall back to etcd when needed.
+
+## Session Takeover (MQTT): End-to-End Flow
+
+Takeover happens when a client reconnects to a node that is not the current owner.
+
+The goal: move session state from the old owner to the new owner, and guarantee that only one node continues the session.
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant B as Node B (new)
+  participant E as etcd
+  participant A as Node A (old)
+
+  C->>B: CONNECT (client_id=X)
+  B->>E: Get /mqtt/sessions/X/owner
+  E-->>B: owner = A
+  B->>A: TakeoverRequest(X, from=A, to=B)
+  A->>A: Capture state (subs, inflight, offline, will)
+  A->>A: Close session locally
+  A-->>B: SessionState payload
+  B->>E: Put /mqtt/sessions/X/owner = B (lease)
+  B->>B: Restore state, resume session
+  B-->>C: CONNACK
+```
+
+Important details:
+
+- The takeover request uses the gRPC transport, not etcd.
+- Ownership is updated **after** the state transfer completes (so the new owner can safely overwrite).
+- The old owner closes the session as part of preparing the state.
+
+## Pub/Sub Routing Across Nodes
+
+For “normal” pub/sub topics, the originating node does two things:
+
+1. Deliver locally to matching subscriptions.
+2. Forward to remote nodes that own sessions with matching subscriptions.
+
+The routing decision is based on the subscription registry and the session-owner map.
+
+```mermaid
+flowchart LR
+  P[Publish arrives on Node A] --> L[Local match + deliver]
+  P --> M[Match subscriptions (local cache + etcd)]
+  M --> O[Resolve owners (cache + etcd)]
+  O --> S[Send RoutePublish RPCs]
+  S --> B[Node B delivers locally]
+  S --> C[Node C delivers locally]
+```
+
+## Hybrid Retained and Will Storage
+
+Retained messages and wills need to be available cluster-wide, but replicating large payloads through etcd is expensive.
+
+FluxMQ uses a hybrid strategy (threshold configurable):
+
+- **Small payloads**: store metadata + payload in etcd (replicated to all nodes).
+- **Large payloads**: store payload in the owner’s local store; store metadata in etcd; fetch payload on-demand via gRPC.
+
+```mermaid
+flowchart TB
+  Set[Set retained/will] --> Size{Payload < threshold?}
+  Size -->|yes| EtcdFull[Put data entry in etcd]
+  Size -->|no| Local[Write payload to local store]
+  Local --> EtcdMeta[Put metadata entry in etcd]
+
+  Get[Get retained/will] --> Cache[Check local store]
+  Cache -->|hit| Done[Return]
+  Cache -->|miss| Meta[Read metadata from cache]
+  Meta -->|replicated| EtcdFetch[Use replicated data]
+  Meta -->|remote large| RpcFetch[Fetch from owner via gRPC]
+```
+
+## Durable Queues Across Nodes
+
+Queue consumers are registered cluster-wide so a node receiving a queue publish can find where consumption is happening.
+
+Two distribution styles exist (configured via `cluster.raft.distribution_mode`):
+
+- `forward`: the node that appends to the queue also delivers (or routes) messages to remote consumers.
+- `replicate`: the queue log is replicated (Raft), so each node with consumers can deliver from its local log.
+
+```mermaid
+flowchart LR
+  QP[Queue publish] --> A[Append locally (or forward to leader)]
+  A --> Mode{distribution_mode}
+  Mode -->|forward| R[RouteQueueMessage to remote nodes]
+  Mode -->|replicate| Raft[Replicate log to peers]
+  Raft --> LocalDeliver[Each node delivers locally]
+```
+
+## Configuration Entry Points
+
+- Cluster basics: `/docs/configuration/clustering`
+- Replication and tuning: `/docs/reference/configuration-reference`

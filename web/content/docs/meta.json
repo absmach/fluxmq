@@ -2,16 +2,12 @@
   "title": "Docs",
   "pages": [
     "index",
-    "architecture",
-    "broker",
-    "queue",
-    "logstorage",
-    "clustering",
+    "getting-started",
+    "concepts",
+    "guides",
     "configuration",
-    "scaling",
-    "webhooks",
-    "client",
-    "competition",
-    "roadmap"
+    "architecture",
+    "clients",
+    "reference"
   ]
 }

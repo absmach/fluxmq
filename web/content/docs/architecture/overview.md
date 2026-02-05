@@ -1,9 +1,9 @@
 ---
-title: FluxMQ Architecture
-description: Comprehensive system design overview covering layered architecture, protocol adapters, domain logic, and multi-protocol support
+title: Overview
+description: High-level system design overview covering core components and how they fit together
 ---
 
-# FluxMQ Architecture
+# Architecture Overview
 
 **Last Updated:** 2026-02-05
 
@@ -99,9 +99,8 @@ If you are debugging data persistence, start here:
 
 ## Related Docs
 
-- `docs/broker.md`
-- `docs/queue.md`
-- `docs/logstorage.md`
-- `docs/configuration.md`
-- `docs/clustering.md`
-- `docs/webhooks.md`
+- Routing internals: `/docs/architecture/routing`
+- Storage internals: `/docs/architecture/storage`
+- Clustering internals: `/docs/architecture/clustering-internals`
+- Durable queues: `/docs/guides/durable-queues`
+- Configuration reference: `/docs/reference/configuration-reference`
