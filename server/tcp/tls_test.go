@@ -83,6 +83,7 @@ func tlsHandshakeWithTimeout(conn *tls.Conn, timeout time.Duration) error {
 	case err := <-errCh:
 		return err
 	case <-time.After(timeout):
+		_ = conn.Close()
 		return errors.New("handshake timeout")
 	}
 }
@@ -120,6 +121,8 @@ func TestTLS_RequireClientCert(t *testing.T) {
 		clientTLS := LoadClientTLSConfig(t, certs, false)
 		clientTLS.ServerName = "localhost"
 		serverConn, clientConn := net.Pipe()
+		defer serverConn.Close()
+		defer clientConn.Close()
 		tlsServer := tls.Server(serverConn, serverTLS)
 		tlsClient := tls.Client(clientConn, clientTLS)
 
@@ -143,7 +146,13 @@ func TestTLS_RequireClientCert(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected connection to be rejected without client cert")
 		}
-		_ = tlsClient.Close()
+		// Ensure server side unblocks even if handshake failed mid-flight.
+		if err != nil {
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		} else {
+			_ = tlsClient.Close()
+		}
 		waitForConnections(t, server)
 	})
 

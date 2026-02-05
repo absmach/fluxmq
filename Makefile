@@ -52,7 +52,12 @@ run-debug: build
 # Run tests
 .PHONY: test
 test:
-	$(GO) test -v ./...
+	$(GO) test -short -race -failfast -timeout 3m -v ./...
+
+# Run full tests (including stress)
+.PHONY: test-full
+test-full:
+	$(GO) test -race -count=1 -v -timeout 30m ./...
 
 # Run tests with coverage
 .PHONY: test-cover

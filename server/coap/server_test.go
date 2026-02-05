@@ -217,6 +217,44 @@ func TestHandlePublish(t *testing.T) {
 		}
 	})
 
+	t.Run("non-mqtt path ok", func(t *testing.T) {
+		conn := newStubConn()
+		writer := &stubResponseWriter{conn: conn}
+
+		reqMsg := pool.NewMessage(context.Background())
+		reqMsg.MustSetPath("/test/topic")
+		reqMsg.SetBody(bytes.NewReader([]byte("payload")))
+		req := &mux.Message{Message: reqMsg}
+
+		server.handlePublish(writer, req)
+
+		if conn.last == nil {
+			t.Fatal("expected response message")
+		}
+		if conn.last.Code() != codes.Changed {
+			t.Fatalf("expected code %v, got %v", codes.Changed, conn.last.Code())
+		}
+	})
+
+	t.Run("reserved mqtt path", func(t *testing.T) {
+		conn := newStubConn()
+		writer := &stubResponseWriter{conn: conn}
+
+		reqMsg := pool.NewMessage(context.Background())
+		reqMsg.MustSetPath("/mqtt/other")
+		reqMsg.SetBody(bytes.NewReader([]byte("payload")))
+		req := &mux.Message{Message: reqMsg}
+
+		server.handlePublish(writer, req)
+
+		if conn.last == nil {
+			t.Fatal("expected response message")
+		}
+		if conn.last.Code() != codes.BadRequest {
+			t.Fatalf("expected code %v, got %v", codes.BadRequest, conn.last.Code())
+		}
+	})
+
 	t.Run("ok", func(t *testing.T) {
 		conn := newStubConn()
 		writer := &stubResponseWriter{conn: conn}

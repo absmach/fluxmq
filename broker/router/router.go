@@ -93,10 +93,11 @@ func (r *TrieRouter) Match(topic string) ([]*storage.Subscription, error) {
 	levels := strings.Split(topic, separator)
 	matched := AcquireSubscriptionSlice()
 	matchLevel(r.root, levels, 0, matched)
-	result := *matched
+	// Copy out before releasing the pooled slice to avoid data races
+	// when the pool reuses the backing array in other goroutines.
+	result := append([]*storage.Subscription(nil), (*matched)...)
 
 	// Release the pooled slice pointer back to pool
-	// The slice data itself is now referenced by 'result'
 	ReleaseSubscriptionSlice(matched)
 
 	return result, nil

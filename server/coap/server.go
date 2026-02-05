@@ -54,6 +54,7 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 
 	s.mux.Handle("/mqtt/publish/{topic}", mux.HandlerFunc(s.handlePublish))
 	s.mux.Handle("/health", mux.HandlerFunc(s.handleHealth))
+	s.mux.DefaultHandleFunc(s.handlePublish)
 
 	return s
 }
@@ -145,19 +146,41 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 
-	// if !strings.HasPrefix(path, "/mqtt/publish/") {
-	// 	s.logger.Warn("coap_publish_invalid_path", slog.String("path", path))
-	// 	s.sendResponse(w, r, codes.BadRequest, "invalid path")
-	// 	return
-	// }
+	// Normalize path to always start with "/"
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
 
-	topic := strings.TrimPrefix(path, "/mqtt/publish/")
+	const (
+		publishPrefix = "/mqtt/publish/"
+		reservedMQTT  = "/mqtt"
+		healthPath    = "/health"
+	)
+
+	switch {
+	case path == "/mqtt/publish" || path == publishPrefix:
+		s.logger.Warn("coap_publish_missing_topic")
+		s.sendResponse(w, r, codes.BadRequest, "topic is required in path")
+		return
+	case strings.HasPrefix(path, publishPrefix):
+		// Legacy path: /mqtt/publish/<topic>
+		path = "/" + strings.TrimPrefix(path, publishPrefix)
+	case path == healthPath:
+		s.logger.Warn("coap_publish_invalid_path", slog.String("path", path))
+		s.sendResponse(w, r, codes.BadRequest, "invalid path")
+		return
+	case path == reservedMQTT || strings.HasPrefix(path, reservedMQTT+"/"):
+		s.logger.Warn("coap_publish_invalid_path", slog.String("path", path))
+		s.sendResponse(w, r, codes.BadRequest, "invalid path")
+		return
+	}
+
+	topic := strings.TrimPrefix(path, "/")
 	if topic == "" {
 		s.logger.Warn("coap_publish_missing_topic")
 		s.sendResponse(w, r, codes.BadRequest, "topic is required in path")
 		return
 	}
-
 	payload, err := r.ReadBody()
 	if err != nil {
 		s.logger.Warn("coap_publish_read_body_error", slog.String("error", err.Error()))
