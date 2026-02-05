@@ -1015,6 +1015,49 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	}
 }
 
+func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.Default()
+
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   "+",
+			ProxyNodeID: "node-2",
+		},
+	})
+
+	config := DefaultConfig()
+	config.DistributionMode = DistributionReplicate
+
+	manager := NewManager(logStore, groupStore, func(ctx context.Context, clientID string, msg any) error {
+		return nil
+	}, config, logger, mockCl)
+
+	ctx := context.Background()
+	err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/test/tpc/msg",
+		Payload: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+
+	calls := mockCl.GetForwardCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 forward call, got %d", len(calls))
+	}
+
+	if calls[0].forwardToLeader {
+		t.Fatalf("expected forward-to-remote call, got forwardToLeader=%v", calls[0].forwardToLeader)
+	}
+
+	if calls[0].nodeID != "node-2" {
+		t.Fatalf("expected remote nodeID node-2, got %s", calls[0].nodeID)
+	}
+}
+
 func TestDeliverQueueMessage(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()

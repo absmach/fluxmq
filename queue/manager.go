@@ -331,8 +331,15 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 	}
 
 	// Forward to remote nodes that have consumers
-	if m.cluster != nil && m.distributionMode == DistributionForward {
-		m.forwardToRemoteNodes(ctx, publish)
+	if m.cluster != nil {
+		switch m.distributionMode {
+		case DistributionForward:
+			m.forwardToRemoteNodes(ctx, publish, false)
+		case DistributionReplicate:
+			// In replicate mode, only forward to nodes whose queues do not exist locally.
+			// This avoids duplicates while still supporting locally-created queues on remote nodes.
+			m.forwardToRemoteNodes(ctx, publish, true)
+		}
 	}
 
 	return nil
@@ -422,7 +429,7 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 }
 
 // forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
-func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest) {
+func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest, unknownOnly bool) {
 	// Get all consumers from the cluster
 	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
 	if err != nil {
@@ -431,11 +438,36 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 		return
 	}
 
+	queueExistsCache := make(map[string]bool)
+	queueExists := func(queueName string) bool {
+		if exists, ok := queueExistsCache[queueName]; ok {
+			return exists
+		}
+
+		_, err := m.queueStore.GetQueue(ctx, queueName)
+		if err == nil {
+			queueExistsCache[queueName] = true
+			return true
+		}
+		if err != storage.ErrQueueNotFound {
+			m.logger.Warn("failed to check queue existence for forwarding",
+				slog.String("queue", queueName),
+				slog.String("error", err.Error()))
+		}
+
+		queueExistsCache[queueName] = false
+		return false
+	}
+
 	// Find unique remote nodes that have consumers for queues matching this topic
 	remoteNodes := make(map[string]bool)
 	for _, c := range consumers {
 		// Skip local consumers
 		if c.ProxyNodeID == m.localNodeID {
+			continue
+		}
+
+		if unknownOnly && queueExists(c.QueueName) {
 			continue
 		}
 
