@@ -3,7 +3,6 @@ title: FluxMQ Architecture
 description: Comprehensive system design overview covering layered architecture, protocol adapters, domain logic, and multi-protocol support
 ---
 
-
 # FluxMQ Architecture
 
 ## Overview
@@ -13,6 +12,7 @@ FluxMQ runs **independent protocol brokers** (MQTT, AMQP 1.0, AMQP 0.9.1) and us
 This document focuses on the MQTT broker internals and the shared queue layer, and calls out where AMQP fits into the system.
 
 **Design Philosophy:**
+
 1. **Domain-Driven Design** - Pure business logic isolated from protocol concerns
 2. **Protocol Adapters** - Stateless handlers translate packets/requests to domain operations
 3. **Multi-Protocol Support** - MQTT transports share a broker; AMQP brokers are separate; queues provide cross-protocol durability
@@ -26,44 +26,46 @@ This document focuses on the MQTT broker internals and the shared queue layer, a
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                         cmd/main.go                          │
-│  • Creates MQTT, AMQP 1.0, AMQP 0.9.1 brokers                │
+│  • Set up MQTT, AMQP 1.0, AMQP 0.9.1 brokers                 │
 │  • Creates shared Queue Manager (bindings + delivery)        │
 │  • Wires cluster, storage, metrics, shutdown                 │
-└──────────┬──────────────┬──────────────┬──────────────┬──────┘
-           │              │              │              │
-           ▼              ▼              ▼              ▼
+└──────────┬──────────────────┬──────────────────┬─────────────┘
+           │                  │                  │
+           ▼                  ▼                  ▼
   ┌────────────────┐   ┌─────────────┐   ┌─────────────┐
   │ TCP/WS/HTTP/   │   │ AMQP 1.0    │   │ AMQP 0.9.1  │
   │ CoAP Servers   │   │ Server      │   │ Server      │
-  └──────┬─────────┘   └──────┬──────┘   └──────┬──────┘
-         │                   │                 │
-         ▼                   ▼                 ▼
+  └───────┬────────┘   └──────┬──────┘   └───────┬─────┘
+          │                   │                  │
+          ▼                   ▼                  ▼
     ┌────────────┐      ┌────────────┐     ┌────────────┐
-    │ MQTT Broker│      │ AMQP Broker│     │ AMQP091 Br.│
+    │ MQTT Broker│      │ AMQP Broker│     │ AMQP Broker│
     │ (protocol  │      │   (1.0)    │     │   (0.9.1)  │
-    │ logic/fsm) │      └──────┬─────┘     └──────┬─────┘
-    └──────┬─────┘             │                  │
-           └─────────────┬─────┴────────────┬─────┘
-                         │ queue-capable traffic
-                         ▼
-                  ┌────────────────┐
-                  │ Queue Manager  │
-                  │ (bindings +    │
-                  │ delivery)      │
-                  └──────┬─────────┘
-                         ▼
-                  ┌────────────────┐
-                  │ Log Storage    │
-                  │ + Topic Index  │
-                  └────────────────┘
+    │ logic/fsm) │      └─────┬──────┘     └─────┬──────┘
+    └──────┬─────┘            │                  │
+           └──────────────────┬──────────────────┘
+                              │ queue-capable traffic
+                              ▼
+                      ┌────────────────┐
+                      │ Queue Manager  │
+                      │ (bindings +    │
+                      │ delivery)      │
+                      └──────┬─────────┘
+                             ▼
+                      ┌────────────────┐
+                      │ Log Storage    │
+                      │ + Topic Index  │
+                      └────────────────┘
+```
 
 Key Architecture Insight:
+
 - MQTT transports (TCP/WS/HTTP/CoAP) share ONE MQTT broker
 - AMQP 1.0 and AMQP 0.9.1 each have their own broker and router
 - Brokers route queue-capable traffic to the shared Queue Manager
 - Pub/sub is protocol-local; queues are shared and topic-bound
-```
+
+````
 
 ## Layered Architecture Deep Dive
 
@@ -127,13 +129,15 @@ This layer contains all network-facing servers and protocol bridges. The MQTT tr
 3. Parses JSON request:
    ```json
    {"topic": "sensor/temp", "payload": "...", "qos": 1, "retain": false}
-   ```
+````
+
 4. **Directly calls domain layer**: `broker.Publish(msg)`
 5. Returns JSON response
 
 **Key Difference**: HTTP bridge bypasses MQTT protocol layer entirely - it translates HTTP requests directly to domain operations.
 
 **Use Cases**:
+
 - Publish from web applications without MQTT client library
 - Serverless functions (AWS Lambda, Cloud Functions)
 - REST API integrations
@@ -149,6 +153,7 @@ This layer contains all network-facing servers and protocol bridges. The MQTT tr
 **Key Files**: `server/coap/server.go`
 
 **What it does** (when fully implemented):
+
 1. CoAP server listening on UDP (default: `:5683`)
 2. Handles CoAP requests:
    - `POST /mqtt/publish/<topic>` - Publish to topic
@@ -160,6 +165,7 @@ This layer contains all network-facing servers and protocol bridges. The MQTT tr
 **Current Status**: Stub implementation - handlers defined, awaits UDP server setup
 
 **Use Cases**:
+
 - Constrained IoT devices (low power, limited bandwidth)
 - Sensor networks
 - Embedded systems without full MQTT stack
@@ -173,9 +179,11 @@ This layer contains all network-facing servers and protocol bridges. The MQTT tr
 **Responsibility**: Detect MQTT protocol version and create appropriate handler
 
 **Key Files**:
+
 - `broker/connection.go` - `HandleConnection()` function
 
 **What it does**:
+
 1. Wraps `net.Conn` in MQTT codec (`core.NewConnection`)
 2. Reads first packet (must be CONNECT)
 3. Inspects `ProtocolVersion` field:
@@ -185,6 +193,7 @@ This layer contains all network-facing servers and protocol bridges. The MQTT tr
 5. Delegates to `handler.HandleConnect(conn, connectPacket)`
 
 **Code Flow**:
+
 ```go
 func HandleConnection(broker *Broker, conn core.Connection) {
     pkt := conn.ReadPacket()
@@ -210,11 +219,13 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 **Responsibility**: Translate MQTT packets into domain operations
 
 **Key Characteristics**:
+
 - **Stateless** - No internal state, operates on session passed as parameter
 - **One per protocol version** - `V3Handler` for MQTT 3.1.1/4.0, `V5Handler` for MQTT 5.0
 - **Implements Handler interface** - Common interface for all protocol versions
 
 **Handler Interface**:
+
 ```go
 type Handler interface {
     HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
@@ -237,6 +248,7 @@ type Handler interface {
 8. **Run session loop** - After CONNECT, enter packet read loop
 
 **Example: V5Handler.HandlePublish**:
+
 ```go
 func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
     start := time.Now()
@@ -298,12 +310,14 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 **Responsibility**: Core MQTT business logic, completely protocol-agnostic
 
 **Key Characteristics**:
+
 - **Pure domain methods** - No knowledge of packets or protocols
 - **Direct instrumentation** - Logger and metrics injected via constructor
 - **Single Responsibility** - Each method does one thing
 - **Infrastructure-agnostic** - Uses interfaces for storage, routing
 
 **Constructor**:
+
 ```go
 func NewBroker(logger *slog.Logger, stats *Stats) *Broker {
     if logger == nil {
@@ -327,6 +341,7 @@ func NewBroker(logger *slog.Logger, stats *Stats) *Broker {
 **Domain Methods**:
 
 #### CreateSession
+
 Creates or retrieves a session, handles clean start logic.
 
 ```go
@@ -353,6 +368,7 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 ```
 
 #### Publish
+
 Handles retained messages and distributes to subscribers.
 
 ```go
@@ -378,6 +394,7 @@ func (b *Broker) Publish(msg Message) error {
 ```
 
 #### Subscribe
+
 Adds subscription and delivers retained messages.
 
 ```go
@@ -416,6 +433,7 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 ```
 
 **Benefits of Direct Instrumentation**:
+
 1. **Visibility** - See exactly what's logged in the source code
 2. **Performance** - No function call overhead, compiler can inline
 3. **Flexibility** - Can add context-specific attributes easily
@@ -430,18 +448,21 @@ func (b *Broker) logError(op string, err error, attrs ...any) {
 **Components**:
 
 #### Router (broker/router.go)
+
 - **Trie-based topic matching** for efficient wildcard subscriptions
 - `Subscribe(clientID, filter, qos)` - Add subscription
 - `Unsubscribe(clientID, filter)` - Remove subscription
 - `Match(topic)` - Find all subscriptions matching a topic
 
 #### Session Cache (session/cache.go)
+
 - **In-memory map** of active sessions
 - `Get(clientID)` - Retrieve session
 - `Set(clientID, session)` - Store session
 - `Delete(clientID)` - Remove session
 
 #### Storage (storage/)
+
 - **Interfaces** for persistence
 - **Memory implementation** for messages, retained, wills, subscriptions
 - **Pluggable** - Can swap for Redis, PostgreSQL, etc.
@@ -457,17 +478,20 @@ using MQTT-style topic patterns.
 **Core Components**:
 
 #### Queue Manager (queue/manager.go)
+
 - **Routing**: Matches a publish topic against queue bindings and appends to each match
 - **Consumer Groups**: Manages consumer membership and cursors per group
 - **Delivery**: Dispatches messages to protocol brokers via a single `DeliverFn`
 - **Cluster-aware**: Forwards publishes to nodes that host matching consumers
 
 #### Log Storage Adapter (logstorage/)
+
 - **Append-only log** for durable queues
 - **Topic index** to map topics → queues
 - **Config store** for queue metadata and bindings
 
 **Key Insight**:
+
 - Pub/sub is protocol-local.
 - Queues are shared and topic-bound across protocols.
 
@@ -697,12 +721,14 @@ Result: ONE message published via HTTP → delivered to ALL
 ### 1. Why No Middleware/Decorators?
 
 **Problem with middleware**:
+
 - Internal method calls bypass middleware chain
 - Performance overhead from function wrapping
 - Hidden control flow
 - Complex debugging (stack traces through wrappers)
 
 **Our solution**:
+
 - Direct instrumentation at domain layer
 - Explicit logging/metrics calls
 - Clear, linear control flow
@@ -711,22 +737,26 @@ Result: ONE message published via HTTP → delivered to ALL
 ### 2. Why Stateless Protocol Handlers?
 
 **Benefits**:
+
 - No state to manage or synchronize
 - Can create new handler per connection (cheap)
 - Easy to test (just translation logic)
 - No shared mutable state
 
 **Trade-off**:
+
 - Session is passed as parameter to each method
 - Handler needs reference to broker
 
 ### 3. Why Separate V3Handler and V5Handler?
 
 **Alternatives considered**:
+
 1. Single handler with version checks → Complex, hard to read
 2. Handler per packet type → Too granular, code duplication
 
 **Our choice**: One handler per protocol version
+
 - Each handler focuses on one protocol's quirks
 - Easy to understand and maintain
 - Clear separation of v3 vs v5 logic
@@ -735,12 +765,14 @@ Result: ONE message published via HTTP → delivered to ALL
 ### 4. Why Logger and Metrics in Broker Constructor?
 
 **Benefits**:
+
 - Dependency injection principle
 - Testable (can inject mock logger/metrics)
 - Explicit dependencies
 - No global state
 
 **Usage**:
+
 ```go
 // Production
 logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -756,6 +788,7 @@ b := broker.NewBroker(nil, nil) // Uses defaults
 ### Unit Tests
 
 **Domain Layer** (broker/broker.go):
+
 ```go
 func TestBroker_Publish(t *testing.T) {
     b := NewBroker(nil, nil) // Default logger/metrics
@@ -768,6 +801,7 @@ func TestBroker_Publish(t *testing.T) {
 ```
 
 **Protocol Handlers** (broker/v3_handler_test.go):
+
 ```go
 func TestV3Handler_HandlePublish(t *testing.T) {
     b := NewBroker(nil, nil)
@@ -813,21 +847,25 @@ func TestE2E_PublishSubscribe(t *testing.T) {
 ## Performance Characteristics
 
 ### Zero Indirection
+
 - Direct function calls, no decorators
 - Compiler can inline logging checks
 - No allocations for middleware chains
 
 ### Efficient Data Structures
+
 - **Trie-based router**: O(m) topic matching, where m = topic depth
 - **Session cache**: O(1) lookup by client ID
 - **Object pools**: Packet and buffer reuse
 
 ### Concurrency
+
 - **Fine-grained locking**: Only lock session map, not entire broker
 - **Non-blocking I/O**: Each connection runs in own goroutine
 - **No global locks**: Router and storage use internal synchronization
 
 ### Memory Efficiency
+
 - **Zero-copy packet parsing** where possible
 - **Shared topic strings** in subscriptions
 - **Bounded message queues** prevent memory exhaustion
@@ -837,6 +875,7 @@ func TestE2E_PublishSubscribe(t *testing.T) {
 ### New MQTT Version (e.g., v6)
 
 1. Create `broker/v6_handler.go`:
+
 ```go
 type V6Handler struct {
     broker *Broker
@@ -847,6 +886,7 @@ func (h *V6Handler) HandleConnect(...) { ... }
 ```
 
 2. Update `broker/connection.go`:
+
 ```go
 if v6Connect, ok := pkt.(*v6.Connect); ok {
     handler := NewV6Handler(broker)
@@ -908,6 +948,7 @@ broker.HandleConnection(broker, wsConnection)
 ```
 
 **Key Points**:
+
 - HTTP bridge: Direct domain calls, bypasses protocol layer
 - WebSocket: Implements `core.Connection`, reuses all MQTT logic
 - CoAP: Similar to HTTP, direct `broker.Publish()` calls
@@ -936,11 +977,13 @@ b.messages = NewRedisStore(redisClient)
 ### Logging Levels
 
 **Production**: `info` level
+
 - Connection events
 - Errors
 - Performance metrics
 
 **Debug**: `debug` level
+
 - Every packet
 - Domain operations
 - Performance timings
@@ -948,6 +991,7 @@ b.messages = NewRedisStore(redisClient)
 ### Metrics Collection
 
 The `Stats` type exposes:
+
 - Connection counts (current, total, disconnects)
 - Message rates (received, sent, publish)
 - Byte counts (received, sent)
@@ -970,6 +1014,7 @@ b := broker.NewBroker(logger, stats)
 ## Conclusion
 
 This architecture achieves:
+
 - ✅ **Clean separation** between transport, protocol, and domain
 - ✅ **Multi-protocol support** - MQTT transports share a broker; AMQP brokers are independent
 - ✅ **Cross-protocol durability** via the shared queue manager
@@ -978,6 +1023,7 @@ This architecture achieves:
 - ✅ **Maintainability** with clear, single-responsibility components
 
 The key insights:
+
 1. **Separate what changes (protocols) from what stays stable (domain logic)**
 2. **Protocol handlers are adapters** that translate between wire formats and domain models
 3. **MQTT transports share one broker** - messages flow across MQTT/HTTP/CoAP
@@ -993,12 +1039,14 @@ This design makes adding new protocols trivial while keeping the core broker sim
 The broker includes a comprehensive webhook system for asynchronous event notifications, enabling integrations with external services.
 
 **Key Features**:
+
 - **Non-blocking** worker pool architecture (zero broker performance impact)
 - **Circuit breaker** and retry with exponential backoff
 - **Flexible filtering** by event type and MQTT topic patterns
 - **Protocol-agnostic** design (HTTP implemented, gRPC planned)
 
 **Event Types**:
+
 - Connection events (`client.connected`, `client.disconnected`, `client.session_takeover`)
 - Message events (`message.published`, `message.delivered`, `message.retained`)
 - Subscription events (`subscription.created`, `subscription.removed`)
@@ -1015,6 +1063,7 @@ For complete webhook documentation including architecture details, configuration
 The broker supports distributed clustering for high availability and load distribution.
 
 **Key Features**:
+
 - **Embedded everything** - Single binary with embedded etcd, gRPC, and BadgerDB
 - **Session takeover** - Seamless client migration between nodes
 - **Strong consistency** - etcd Raft for session ownership and subscriptions
@@ -1022,6 +1071,7 @@ The broker supports distributed clustering for high availability and load distri
 - **Linear scalability** - Add nodes to increase capacity
 
 **Components**:
+
 - **etcd** (embedded) - Distributed coordination and metadata
 - **gRPC** - Inter-broker message routing
 - **BadgerDB** (local) - Per-node session and message persistence

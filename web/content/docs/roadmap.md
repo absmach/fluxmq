@@ -46,6 +46,7 @@ truncation only). The detailed completion checklist previously listed here was
 removed to avoid stale status. See `docs/queue.md` for current implementation notes.
 
 **Completed (2026-01-16):**
+
 - ✅ **Rate Limiting - COMPLETE:**
   - ✅ Per-IP connection rate limiting (TCP, WebSocket)
   - ✅ Per-client message rate limiting (V3/V5 handlers)
@@ -67,6 +68,7 @@ Remaining production hardening tasks:
 3. **Prometheus Endpoint (P2)** - Native `/metrics` endpoint
 
 **Deferred: Phase 2.5 Observability & Migration**
+
 - Will be implemented after Phase 0
 - Metrics, health checks, and migration tooling
 - Can be done in parallel with production usage
@@ -88,12 +90,14 @@ Core log-based queue behavior exists in-tree; remaining work includes retention 
 ### Motivation
 
 **Current Model Problems:**
+
 - Each `$queue/a/b/c` is a separate queue with independent storage
 - Wildcard subscriptions (`$queue/tasks/+`) don't work - would create literal queue named `$queue/tasks/+`
 - Delete-on-ack requires random I/O and causes fragmentation
 - Partition assignment is sticky - slow consumer blocks partition
 
 **New Model Benefits:**
+
 - Wildcard queue subscriptions work naturally (single log, filter at read time)
 - Sequential append-only writes (high throughput)
 - Work stealing enables self-healing (claim from slow consumer's PEL)
@@ -134,14 +138,14 @@ Consumer Group "workers" for $queue/tasks/#
 
 #### Key Differences from Current Model
 
-| Aspect | Current | New (Log-Based) |
-|--------|---------|-----------------|
-| Storage | Delete on ack | Append-only, truncate by retention |
-| Consumer state | Partition assignment (sticky) | Cursor + PEL per partition |
-| Delivery | Push to assigned consumer | Consumer claims from any partition |
-| Ack | Delete message | Advance committed offset, remove from PEL |
-| Failure handling | Redeliver after timeout | Work stealing (claim from other's PEL) |
-| Wildcards | Not supported | Supported via routing key filtering |
+| Aspect           | Current                       | New (Log-Based)                           |
+| ---------------- | ----------------------------- | ----------------------------------------- |
+| Storage          | Delete on ack                 | Append-only, truncate by retention        |
+| Consumer state   | Partition assignment (sticky) | Cursor + PEL per partition                |
+| Delivery         | Push to assigned consumer     | Consumer claims from any partition        |
+| Ack              | Delete message                | Advance committed offset, remove from PEL |
+| Failure handling | Redeliver after timeout       | Work stealing (claim from other's PEL)    |
+| Wildcards        | Not supported                 | Supported via routing key filtering       |
 
 ---
 
@@ -157,13 +161,13 @@ Publish to $queue/tasks/us/images → queue="$queue/tasks", routing_key="us/imag
 
 **Subscription Patterns:**
 
-| Pattern | Behavior |
-|---------|----------|
-| `$queue/tasks` | All messages (no filter) |
-| `$queue/tasks/#` | All messages (explicit wildcard) |
-| `$queue/tasks/+` | All messages (single-level wildcard) |
-| `$queue/tasks/images` | Filter: routing_key == "images" |
-| `$queue/tasks/+/png` | Filter: routing_key matches "*/png" |
+| Pattern               | Behavior                             |
+| --------------------- | ------------------------------------ |
+| `$queue/tasks`        | All messages (no filter)             |
+| `$queue/tasks/#`      | All messages (explicit wildcard)     |
+| `$queue/tasks/+`      | All messages (single-level wildcard) |
+| `$queue/tasks/images` | Filter: routing_key == "images"      |
+| `$queue/tasks/+/png`  | Filter: routing_key matches "\*/png" |
 
 **Consumer Groups per Subscription Pattern:**
 
@@ -341,6 +345,7 @@ func (state *PartitionState) advanceCommitted() {
 **Goal:** Append-only log storage with offset-based access
 
 **Tasks:**
+
 - [ ] Define `LogStore` interface (append, read by offset, truncate)
 - [ ] Implement memory-based log store (ring buffer with offset tracking)
 - [ ] Implement BadgerDB-based log store (offset as key prefix)
@@ -375,6 +380,7 @@ type LogStore interface {
 **Goal:** Cursor-based consumer groups with PEL tracking
 
 **Tasks:**
+
 - [ ] Define new `ConsumerGroup` struct with cursor and PEL per partition
 - [ ] Implement pattern-based subscription matching
 - [ ] Add routing key filter compilation (wildcard patterns)
@@ -389,6 +395,7 @@ type LogStore interface {
 **Goal:** Automatic work redistribution from slow/dead consumers
 
 **Tasks:**
+
 - [ ] Add visibility timeout configuration
 - [ ] Implement PEL scanning for timed-out entries
 - [ ] Implement claim transfer between consumers
@@ -401,6 +408,7 @@ type LogStore interface {
 **Goal:** Support `$queue/tasks/+` and `$queue/tasks/#` patterns
 
 **Tasks:**
+
 - [ ] Parse queue subscription patterns (extract queue name + filter)
 - [ ] Create consumer group per unique (queue, pattern) combination
 - [ ] Implement routing key extraction from publish topic
@@ -413,6 +421,7 @@ type LogStore interface {
 **Goal:** Integrate new model with message delivery system
 
 **Tasks:**
+
 - [ ] Update delivery workers to use claim-based model
 - [ ] Implement batch claiming for efficiency
 - [ ] Update ack/nack/reject handlers for new model
@@ -425,6 +434,7 @@ type LogStore interface {
 **Goal:** Migrate existing queues and validate new model
 
 **Tasks:**
+
 - [ ] Create migration path for existing queue data
 - [ ] Update all queue unit tests for new model
 - [ ] Add cursor/PEL persistence tests
@@ -438,14 +448,14 @@ type LogStore interface {
 
 ### Success Criteria
 
-| Criteria | Target |
-|----------|--------|
+| Criteria                    | Target                                                            |
+| --------------------------- | ----------------------------------------------------------------- |
 | Wildcard subscriptions work | `$queue/tasks/+` receives from `$queue/tasks/a`, `$queue/tasks/b` |
-| Work stealing functional | Pending messages claimed after visibility timeout |
-| No message loss | All messages delivered at least once |
-| Throughput improvement | ≥ current throughput (sequential I/O benefit) |
-| Recovery time | Cursor reload < 1 second |
-| PEL accuracy | No orphaned entries, no duplicate delivery |
+| Work stealing functional    | Pending messages claimed after visibility timeout                 |
+| No message loss             | All messages delivered at least once                              |
+| Throughput improvement      | ≥ current throughput (sequential I/O benefit)                     |
+| Recovery time               | Cursor reload < 1 second                                          |
+| PEL accuracy                | No orphaned entries, no duplicate delivery                        |
 
 ---
 
@@ -453,24 +463,24 @@ type LogStore interface {
 
 ```yaml
 queue:
-  model: log  # "log" (new) or "legacy" (current, deprecated)
+  model: log # "log" (new) or "legacy" (current, deprecated)
 
   # Log storage settings
   log:
-    segment_size: 1073741824    # 1GB per segment file
-    index_interval: 4096        # Index every N messages
+    segment_size: 1073741824 # 1GB per segment file
+    index_interval: 4096 # Index every N messages
 
   # Consumer group settings
   consumer:
-    visibility_timeout: 30s     # Time before message eligible for stealing
-    max_delivery_count: 5       # Max deliveries before DLQ
-    cursor_checkpoint_interval: 1s  # How often to persist cursors
+    visibility_timeout: 30s # Time before message eligible for stealing
+    max_delivery_count: 5 # Max deliveries before DLQ
+    cursor_checkpoint_interval: 1s # How often to persist cursors
 
   # Work stealing settings
   stealing:
     enabled: true
-    scan_interval: 5s           # How often to scan for stealable work
-    batch_size: 10              # Max messages to steal per scan
+    scan_interval: 5s # How often to scan for stealable work
+    batch_size: 10 # Max messages to steal per scan
 
   # Retention (unchanged from Phase 2.4)
   retention:
@@ -482,26 +492,26 @@ queue:
 
 ### Risks and Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Breaking change for existing queues | Provide migration tool, support legacy mode |
-| PEL memory growth | Limit PEL size, oldest entries go to DLQ |
-| Work stealing contention | Randomize steal targets, backoff on conflict |
-| Complex Raft integration | Reuse existing FSM patterns, incremental changes |
+| Risk                                | Mitigation                                       |
+| ----------------------------------- | ------------------------------------------------ |
+| Breaking change for existing queues | Provide migration tool, support legacy mode      |
+| PEL memory growth                   | Limit PEL size, oldest entries go to DLQ         |
+| Work stealing contention            | Randomize steal targets, backoff on conflict     |
+| Complex Raft integration            | Reuse existing FSM patterns, incremental changes |
 
 ---
 
 ### Estimated Effort
 
-| Sub-phase | Effort |
-|-----------|--------|
-| Q.1: Storage Layer | 1-2 weeks |
-| Q.2: Consumer Groups | 1-2 weeks |
-| Q.3: Work Stealing | 1 week |
-| Q.4: Wildcards | 1 week |
-| Q.5: Delivery Integration | 1-2 weeks |
-| Q.6: Migration & Testing | 1-2 weeks |
-| **Total** | **6-10 weeks** |
+| Sub-phase                 | Effort         |
+| ------------------------- | -------------- |
+| Q.1: Storage Layer        | 1-2 weeks      |
+| Q.2: Consumer Groups      | 1-2 weeks      |
+| Q.3: Work Stealing        | 1 week         |
+| Q.4: Wildcards            | 1 week         |
+| Q.5: Delivery Integration | 1-2 weeks      |
+| Q.6: Migration & Testing  | 1-2 weeks      |
+| **Total**                 | **6-10 weeks** |
 
 ---
 
@@ -519,12 +529,14 @@ This phase was identified through comprehensive code audit comparing against NAT
 **Priority:** P0 - Block production deployment
 
 **0.1.1 Secure Inter-Broker Communication** ✅ COMPLETE
+
 - **File:** `cluster/transport.go`
 - **Issue:** Uses `insecure.NewCredentials()` - cluster traffic is unencrypted
 - **Risk:** Man-in-the-middle attacks, data interception between nodes
 - **Fix:** Implemented mTLS for gRPC connections
 
 **Configuration:**
+
 ```yaml
 cluster:
   transport:
@@ -535,6 +547,7 @@ cluster:
 ```
 
 **Implementation:**
+
 - [x] Add cluster TLS configuration options (`config/config.go`)
 - [x] Load certificates for inter-broker mTLS auth (`cluster/transport.go`)
 - [x] Server uses `tls.RequireAndVerifyClientCert` for mutual TLS
@@ -544,12 +557,14 @@ cluster:
 - [ ] Add cluster TLS validation tests (future enhancement)
 
 **0.1.2 WebSocket Origin Validation** ✅ COMPLETE
+
 - **File:** `server/websocket/server.go`
 - **Issue:** `CheckOrigin` always returns `true` - accepts all origins
 - **Risk:** Cross-Site WebSocket Hijacking (CSWSH), CSRF attacks
 - **Fix:** Implemented configurable origin allowlist
 
 **Configuration:**
+
 ```yaml
 server:
   websocket:
@@ -557,10 +572,11 @@ server:
       allowed_origins:
         - "https://example.com"
         - "https://app.example.com"
-        - "*.example.com"  # Wildcard subdomain support
+        - "*.example.com" # Wildcard subdomain support
 ```
 
 **Implementation:**
+
 - [x] Add `websocket.*.allowed_origins` configuration option (`config/config.go`)
 - [x] Implement origin validation logic (`server/websocket/server.go`)
 - [x] Support exact match origins
@@ -570,6 +586,7 @@ server:
 - [ ] Add WebSocket security tests (future enhancement)
 
 **0.1.3 Secure Default ACL**
+
 - **File:** `broker/auth.go`
 - **Issue:** Default allows all when no authorizer configured
 - **Risk:** Unauthorized access to all topics and operations
@@ -587,6 +604,7 @@ server:
 **Status:** Completed 2026-01-16
 
 **Implementation:**
+
 - ✅ `ratelimit/ratelimit.go` - IPRateLimiter, ClientRateLimiter, Manager (~280 lines)
 - ✅ Per-IP connection rate limiting in TCP server (`server/tcp/server.go`)
 - ✅ Per-IP connection rate limiting in WebSocket server (`server/websocket/server.go`)
@@ -597,25 +615,27 @@ server:
 - ✅ 12 unit tests (`ratelimit/ratelimit_test.go`)
 
 **Configuration:**
+
 ```yaml
 ratelimit:
   enabled: true
   connection:
     enabled: true
-    rate: 1.67              # ~100 connections per minute per IP
+    rate: 1.67 # ~100 connections per minute per IP
     burst: 20
     cleanup_interval: 5m
   message:
     enabled: true
-    rate: 1000              # messages per second per client
+    rate: 1000 # messages per second per client
     burst: 100
   subscribe:
     enabled: true
-    rate: 100               # subscriptions per second per client
+    rate: 100 # subscriptions per second per client
     burst: 10
 ```
 
 **Behavior:**
+
 - Connection rate limiting: Closes connection immediately if exceeded (before MQTT handshake)
 - Message rate limiting: Returns MQTT 5.0 `QuotaExceeded` (0x97) for QoS > 0, silently drops QoS 0
 - Subscribe rate limiting: Returns `SubAckQuotaExceeded` for V5, `SubAckFailure` for V3
@@ -627,6 +647,7 @@ ratelimit:
 **Priority:** P2 - Required for production operations
 
 **0.3.1 Distributed Tracing Instrumentation**
+
 - **File:** `server/otel/tracer.go`
 - **Issue:** Tracer created but never used in message paths
 - **Risk:** No visibility into message flow, debugging blind spots
@@ -637,6 +658,7 @@ ratelimit:
 - [ ] Add span attributes (client_id, topic, qos, etc.)
 
 **0.3.2 Prometheus Metrics Endpoint**
+
 - **Issue:** Only OTLP export, no native Prometheus format
 - **Risk:** Incompatible with most monitoring stacks
 - [ ] Add `/metrics` endpoint with Prometheus format
@@ -650,10 +672,12 @@ ratelimit:
 **Priority:** P2 - Required for MQTT spec compliance
 
 **0.4.1 MaxQoS Enforcement** ✅ COMPLETE
+
 - **MQTT 5.0 Spec 3.2.2.1.4:** Server MUST announce MaxQoS in CONNACK
 - **MQTT 5.0 Spec 3.3.2-4:** Server MUST downgrade inbound publish QoS
 
 **Implementation (2026-01-14):**
+
 - ✅ Added `MaxQoS` field to Broker struct with getter/setter (`broker/broker.go`)
 - ✅ Added `max_qos` config option (`config/config.go`, default: 2)
 - ✅ CONNACK now includes MaxQoS property (`broker/v5_handler.go`)
@@ -661,12 +685,14 @@ ratelimit:
 - ✅ 6 unit tests covering config, setter, and downgrade behavior (`broker/maxqos_test.go`)
 
 **Configuration:**
+
 ```yaml
 broker:
-  max_qos: 2  # Maximum QoS level (0, 1, or 2)
+  max_qos: 2 # Maximum QoS level (0, 1, or 2)
 ```
 
 **0.4.2 Shared Subscriptions** ✅ COMPLETE
+
 - **Status:** Fully implemented with comprehensive tests
 - **Files:**
   - `topics/shared.go` - `$share/{group}/topic` parsing
@@ -691,6 +717,7 @@ broker:
 **Goal:** Modern web UI for broker management and monitoring
 
 **Dashboard Features:**
+
 - **Overview Page**
   - Connection count (current, peak, 24h graph)
   - Message throughput (publish/subscribe rates)
@@ -727,6 +754,7 @@ broker:
   - Rate limit configuration
 
 **Technical Stack:**
+
 - Backend: REST API in Go (extend existing `/api/` routes)
 - Frontend: React + TypeScript + Tailwind CSS
 - Charts: Recharts or Chart.js
@@ -734,6 +762,7 @@ broker:
 - Build: Embedded in binary via `go:embed`
 
 **Implementation Tasks:**
+
 - [ ] Create `dashboard/` directory for frontend code
 - [ ] Implement REST API endpoints for management operations
 - [ ] Build React frontend with modern UI
@@ -747,6 +776,7 @@ broker:
 - [ ] Document dashboard usage
 
 **API Endpoints:**
+
 ```
 GET  /api/v1/overview          - System overview metrics
 GET  /api/v1/clients           - List connected clients
@@ -773,6 +803,7 @@ WS   /api/v1/metrics/stream    - Real-time metrics stream
 **Goal:** Enable configuration changes without broker restart
 
 **Reloadable Configuration:**
+
 - TLS certificates (rotation without connection drops)
 - Log level (debug/info/warn/error)
 - Rate limits (connections, messages, subscriptions)
@@ -781,12 +812,14 @@ WS   /api/v1/metrics/stream    - Real-time metrics stream
 - Session expiry defaults
 
 **Non-Reloadable (Requires Restart):**
+
 - Listen addresses (TCP, WebSocket, CoAP, HTTP)
 - Storage backend type
 - Cluster node ID and etcd configuration
 - Maximum message size
 
 **Implementation:**
+
 ```go
 // Signal handler for SIGHUP
 func (b *Broker) setupSignalHandler() {
@@ -806,6 +839,7 @@ func (b *Broker) setupSignalHandler() {
 ```
 
 **Tasks:**
+
 - [ ] Add `ReloadConfig()` method to Broker
 - [ ] Implement SIGHUP handler in main.go
 - [ ] Add TLS certificate watcher for auto-rotation
@@ -816,6 +850,7 @@ func (b *Broker) setupSignalHandler() {
 - [ ] Document which settings are hot-reloadable
 
 **0.6.2 Graceful Shutdown**
+
 - [ ] Drain connections before shutdown
 - [ ] Wait for inflight messages to complete
 - [ ] Transfer sessions to other nodes (clustered mode)
@@ -825,22 +860,23 @@ func (b *Broker) setupSignalHandler() {
 
 ### Phase 0 Success Criteria
 
-| Task | Priority | Status |
-|------|----------|--------|
-| Inter-broker TLS | P0 Critical | ✅ Complete |
-| WebSocket origin validation | P0 Critical | ✅ Complete |
-| Secure default ACL | P0 Critical | 📋 Planned |
-| Rate limiting | P1 High | ✅ Complete |
-| CoAP with DTLS/mDTLS | P1 High | ✅ Complete |
-| Distributed tracing | P2 Medium | 📋 Planned |
-| Prometheus endpoint | P2 Medium | 📋 Planned |
-| MaxQoS enforcement | P2 Medium | ✅ Complete |
-| Shared subscriptions | P2 Medium | ✅ Complete |
-| Management dashboard | P3 Enhancement | 📋 Planned |
-| Hot config reload | P3 Enhancement | 📋 Planned |
-| Graceful shutdown | P3 Enhancement | 📋 Planned |
+| Task                        | Priority       | Status      |
+| --------------------------- | -------------- | ----------- |
+| Inter-broker TLS            | P0 Critical    | ✅ Complete |
+| WebSocket origin validation | P0 Critical    | ✅ Complete |
+| Secure default ACL          | P0 Critical    | 📋 Planned  |
+| Rate limiting               | P1 High        | ✅ Complete |
+| CoAP with DTLS/mDTLS        | P1 High        | ✅ Complete |
+| Distributed tracing         | P2 Medium      | 📋 Planned  |
+| Prometheus endpoint         | P2 Medium      | 📋 Planned  |
+| MaxQoS enforcement          | P2 Medium      | ✅ Complete |
+| Shared subscriptions        | P2 Medium      | ✅ Complete |
+| Management dashboard        | P3 Enhancement | 📋 Planned  |
+| Hot config reload           | P3 Enhancement | 📋 Planned  |
+| Graceful shutdown           | P3 Enhancement | 📋 Planned  |
 
 **Blocking Production:**
+
 - P0 tasks MUST be complete before production deployment
 - P1 tasks SHOULD be complete before production deployment
 - P2/P3 tasks can be deployed incrementally
@@ -853,11 +889,11 @@ func (b *Broker) setupSignalHandler() {
 
 ### Summary
 
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Latency | 220 μs/op | 67 μs/op | 3.27x faster |
-| Memory | 424 KB/op | 177 B/op | 2,456x less |
-| Throughput | 4.6K msg/s | 14.9K msg/s | 3.24x more |
+| Metric     | Before     | After       | Improvement  |
+| ---------- | ---------- | ----------- | ------------ |
+| Latency    | 220 μs/op  | 67 μs/op    | 3.27x faster |
+| Memory     | 424 KB/op  | 177 B/op    | 2,456x less  |
+| Throughput | 4.6K msg/s | 14.9K msg/s | 3.24x more   |
 
 **Key optimizations:** Object pooling for messages/packets, router match pooling, zero-copy buffers.
 
@@ -872,9 +908,14 @@ func (b *Broker) setupSignalHandler() {
 ### Current Implementation Notes
 
 - Single Raft group shared by all queues (`queue/raft/manager.go`)
-- Append operations go through Raft only on the leader; non-leader appends are local
+- Append operations go through Raft only on the leader; non-leader behavior is configurable (`write_policy`)
 - Ack/Nack/Reject, cursor/PEL updates, and retention truncation are not replicated
 - Benchmarks and failover tests for the Raft layer are not present in-tree
+
+### Planned (Phase 2.x)
+
+- Replicate consumer state (cursor/PEL/ACK/NACK/REJECT) through Raft
+- Replicate retention truncation through Raft
 
 ### Configuration Example
 
@@ -888,6 +929,8 @@ cluster:
     sync_mode: true
     min_in_sync_replicas: 2
     ack_timeout: 5s
+    write_policy: "forward"
+    distribution_mode: "replicate"
     bind_addr: "127.0.0.1:7100"
     data_dir: "/tmp/fluxmq/raft"
     peers:
@@ -907,6 +950,7 @@ cluster:
 **Status:** Planned to start after Phase 2 completion
 
 **Prerequisites:**
+
 - Queue Raft benchmarks and failover tests in tree
 - Queue observability metrics in place
 
@@ -991,38 +1035,38 @@ While the current `queue/storage/log` implementation is durable and feature-rich
 
 ### 3.5.1: Implement Segment Write Buffer
 
-*   **Goal:** Reduce `write` syscalls to improve I/O efficiency.
-*   **Tasks:**
-    *   [ ] Activate and utilize the `writeBuf` in the `Segment` struct.
-    *   [ ] Modify `Segment.Append` to write to the in-memory buffer.
-    *   [ ] Flush the buffer to disk when it's full or when `Sync` is called.
-    *   [ ] Add benchmarks to validate throughput improvement.
+- **Goal:** Reduce `write` syscalls to improve I/O efficiency.
+- **Tasks:**
+  - [ ] Activate and utilize the `writeBuf` in the `Segment` struct.
+  - [ ] Modify `Segment.Append` to write to the in-memory buffer.
+  - [ ] Flush the buffer to disk when it's full or when `Sync` is called.
+  - [ ] Add benchmarks to validate throughput improvement.
 
 ### 3.5.2: Improve `Store` Lock Granularity
 
-*   **Goal:** Eliminate the global lock on the main `Store` to allow concurrent operations on different queues.
-*   **Tasks:**
-    *   [ ] Analyze trade-offs between `sync.Map` and a custom sharded map with per-shard locks.
-    *   [ ] Replace the single `RWMutex` in `store.go` with a sharded map (`[256]struct { sync.RWMutex; ... }`).
-    *   [ ] Update all access to `store.queues` and `store.consumers` to use the sharded lock mechanism.
-    *   [ ] Add concurrency tests to verify thread safety and measure contention reduction.
+- **Goal:** Eliminate the global lock on the main `Store` to allow concurrent operations on different queues.
+- **Tasks:**
+  - [ ] Analyze trade-offs between `sync.Map` and a custom sharded map with per-shard locks.
+  - [ ] Replace the single `RWMutex` in `store.go` with a sharded map (`[256]struct { sync.RWMutex; ... }`).
+  - [ ] Update all access to `store.queues` and `store.consumers` to use the sharded lock mechanism.
+  - [ ] Add concurrency tests to verify thread safety and measure contention reduction.
 
 ### 3.5.3: Decouple Appends from Disk I/O
 
-*   **Goal:** Drastically reduce append latency by making disk writes asynchronous from the client's perspective.
-*   **Tasks:**
-    *   [ ] Introduce a buffered channel for append requests in `SegmentManager`.
-    *   [ ] Create a dedicated writer goroutine that reads from the channel and performs batched writes to the segment file.
-    *   [ ] Modify the public `Append` method to be a lightweight, non-blocking send to the channel.
-    *   [ ] Update latency benchmarks to measure p99 append latency reduction.
+- **Goal:** Drastically reduce append latency by making disk writes asynchronous from the client's perspective.
+- **Tasks:**
+  - [ ] Introduce a buffered channel for append requests in `SegmentManager`.
+  - [ ] Create a dedicated writer goroutine that reads from the channel and performs batched writes to the segment file.
+  - [ ] Modify the public `Append` method to be a lightweight, non-blocking send to the channel.
+  - [ ] Update latency benchmarks to measure p99 append latency reduction.
 
 ### 3.5.4: Implement Zero-Copy Writes
 
-*   **Goal:** Reduce memory allocations and GC pressure during high-throughput writes.
-*   **Tasks:**
-    *   [ ] Introduce a `sync.Pool` for byte buffers used in batch encoding.
-    *   [ ] Modify `batch.Encode()` and `segment.Append()` to use pooled buffers.
-    *   [ ] Profile memory allocations under load to confirm reduction.
+- **Goal:** Reduce memory allocations and GC pressure during high-throughput writes.
+- **Tasks:**
+  - [ ] Introduce a `sync.Pool` for byte buffers used in batch encoding.
+  - [ ] Modify `batch.Encode()` and `segment.Append()` to use pooled buffers.
+  - [ ] Profile memory allocations under load to confirm reduction.
 
 ---
 
@@ -1050,6 +1094,7 @@ Custom Raft implementation would replace etcd with a purpose-built coordination 
 ### Architecture
 
 Use **hashicorp/raft** library + **BadgerDB** storage:
+
 - Raft consensus library (battle-tested, used in Consul/Nomad/Vault)
 - BadgerDB for Raft log and snapshots
 - Custom FSM (Finite State Machine) for MQTT operations
@@ -1058,12 +1103,14 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 ### When to Consider Custom Raft
 
 **DO NOT implement unless:**
+
 - Single cluster exceeds 5-10M clients
 - etcd becomes proven bottleneck (profiling data required)
 - Write throughput consistently exceeds 5K writes/sec
 - Storage requirements exceed 8GB coordinated state
 
 **Better alternatives first:**
+
 - Geographic sharding (multiple 3-5 node clusters)
 - Topic-based sharding (95% local routing)
 - Hybrid storage optimization (already implemented)
@@ -1086,6 +1133,7 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 ### Cluster Design (3-5 Nodes Recommended)
 
 **Components:**
+
 - **Embedded etcd** - Distributed coordination (3-5 member cluster)
 - **BadgerDB** - Local persistent storage (500GB-1TB per node)
 - **gRPC Transport** - Inter-broker communication
@@ -1093,6 +1141,7 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 - **Zero-Copy Buffers** - Reference-counted payload sharing
 
 **Capacity (5-Node Cluster):**
+
 - Concurrent connections: 250K-500K clients
 - Message throughput: 2-4M msgs/sec (with topic sharding)
 - Retained messages: 5M-10M messages
@@ -1112,23 +1161,27 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 ## Testing Strategy
 
 ### Unit Tests
+
 - Target: >85% code coverage
 - All core packages (broker, router, queue, storage)
 - Fast execution (<1 minute total)
 
 ### Integration Tests
+
 - Multi-node cluster scenarios
 - Session persistence and recovery
 - Cross-node messaging (all QoS levels)
 - Failure injection and recovery
 
 ### Performance Tests
+
 - Benchmark suite: `benchmarks/`
 - CPU/memory profiling
 - Regression testing in CI
 - Load testing for capacity planning
 
 ### E2E Tests
+
 - Real MQTT client integration
 - Network partition scenarios
 - Chaos engineering (node failures, network issues)
@@ -1141,11 +1194,13 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 ### Recommended Configuration
 
 **3-Node Cluster (Most Common):**
+
 - Connections: 150K-300K clients
 - Throughput: 1-2M msgs/sec (with topic sharding)
 - Cost: $1,200-1,500/month (cloud)
 
 **5-Node Cluster (High Scale):**
+
 - Connections: 250K-500K clients
 - Throughput: 2-4M msgs/sec (with topic sharding)
 - Cost: $2,000-2,500/month (cloud)
@@ -1167,17 +1222,20 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 ## Key Documentation
 
 ### Architecture
+
 - [`docs/architecture.md`](architecture.md) - System design overview
 - [`docs/clustering.md`](clustering.md) - Cluster coordination
 - [`docs/queue.md`](queue.md) - Durable queue system
 - [`docs/broker.md`](broker.md) - Core broker implementation
 
 ### Performance & Scaling
+
 - [`docs/scaling.md`](scaling.md) - Comprehensive scaling & performance guide
 - [`benchmarks/README.md`](../benchmarks/README.md) - Benchmark guide
 - [`docs/client.md`](client.md) - Go client library with queue support
 
 ### Operations
+
 - [`docs/configuration.md`](configuration.md) - Configuration reference
 - [`docs/webhooks.md`](webhooks.md) - Event notification system
 
@@ -1186,6 +1244,7 @@ Use **hashicorp/raft** library + **BadgerDB** storage:
 ## Overall Progress Summary
 
 Status snapshot (2026-02-03):
+
 - Phase Q: Log-based queues are in tree (consumer groups, PEL, work stealing, wildcard patterns). Remaining: retention wiring, DLQ routing, queue admin API, Raft state replication.
 - Phase 2: Raft manager exists; append-only replication on leader; consumer state not replicated; tests/benchmarks not in tree.
 - Phase 0.2 Rate limiting and CoAP DTLS/mDTLS are implemented (see sections above).
@@ -1241,12 +1300,14 @@ When working on this roadmap:
 The queue system needs architectural redesign to support wildcard subscriptions and work stealing. This is now the top priority.
 
 **Why Phase Q First:**
+
 - Current model doesn't support wildcard queue subscriptions
 - Delete-on-ack model has performance limitations
 - Work stealing enables better fault tolerance
 - This is a foundational change that other features build upon
 
 **Recommended Order within Phase Q:**
+
 1. **Q.1: Storage Layer** - Foundation for everything else
 2. **Q.2: Consumer Groups** - Core cursor/PEL mechanics
 3. **Q.3: Work Stealing** - Fault tolerance

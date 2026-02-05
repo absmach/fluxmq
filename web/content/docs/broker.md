@@ -111,6 +111,7 @@ func NewBroker(
 ```
 
 **Dependency Injection**:
+
 - `store`: Pluggable storage (memory, BadgerDB, future: PostgreSQL)
 - `clust`: Cluster coordination (nil, NoopCluster, or EtcdCluster)
 - `logger`: Structured logging (slog)
@@ -221,6 +222,7 @@ func (b *Broker) CreateSession(clientID string, opts SessionOptions) (*session.S
 ```
 
 **Key Steps**:
+
 1. Check cache for existing session
 2. Handle clean_start flag (destroy or resume)
 3. Create new session with inflight tracker and queue
@@ -308,13 +310,13 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 
 **Persistent vs Clean Sessions**:
 
-| Aspect | Clean Session | Persistent Session |
-|--------|---------------|-------------------|
-| On Connect | Destroy old | Resume old |
-| Subscriptions | Lost | Restored |
-| Offline Queue | Lost | Restored |
-| Inflight | Lost | Restored |
-| On Disconnect | Destroyed | Saved to storage |
+| Aspect            | Clean Session       | Persistent Session     |
+| ----------------- | ------------------- | ---------------------- |
+| On Connect        | Destroy old         | Resume old             |
+| Subscriptions     | Lost                | Restored               |
+| Offline Queue     | Lost                | Restored               |
+| Inflight          | Lost                | Restored               |
+| On Disconnect     | Destroyed           | Saved to storage       |
 | Cluster Ownership | Released on destroy | Released on disconnect |
 
 ## Message Routing
@@ -411,10 +413,12 @@ func (b *Broker) distribute(topic string, payload []byte, qos byte, retain bool,
 ```
 
 **Two-Phase Delivery**:
+
 1. **Local Phase**: Match topic against local router, deliver immediately
 2. **Cluster Phase**: Query etcd for remote subscribers, send via gRPC
 
 **Why Not Broadcast?**
+
 - Broadcasting to all nodes is wasteful
 - Most topics have few subscribers
 - Targeted delivery scales better
@@ -621,9 +625,10 @@ func (r *Router) matchRecursive(node *trieNode, levels []string, depth int, resu
 ```
 
 **Complexity**:
+
 - Subscribe: O(L) where L = levels in filter
-- Match: O(L * B) where B = branching factor (usually small)
-- Space: O(N * L) where N = number of subscriptions
+- Match: O(L \* B) where B = branching factor (usually small)
+- Space: O(N \* L) where N = number of subscriptions
 
 **Example Matching**:
 
@@ -645,11 +650,11 @@ Result: [sensor/living/temp, sensor/+/temp, sensor/#, #]
 
 ### QoS Levels
 
-| QoS | Guarantee | Flow |
-|-----|-----------|------|
-| 0 | At most once | PUBLISH → (done) |
-| 1 | At least once | PUBLISH → PUBACK |
-| 2 | Exactly once | PUBLISH → PUBREC → PUBREL → PUBCOMP |
+| QoS | Guarantee     | Flow                                |
+| --- | ------------- | ----------------------------------- |
+| 0   | At most once  | PUBLISH → (done)                    |
+| 1   | At least once | PUBLISH → PUBACK                    |
+| 2   | Exactly once  | PUBLISH → PUBREC → PUBREL → PUBCOMP |
 
 ### QoS 0 (Fire and Forget)
 
@@ -664,6 +669,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg Message) (uint16, erro
 ```
 
 **Characteristics**:
+
 - No acknowledgment
 - No retransmission
 - No persistence
@@ -844,6 +850,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID, topic string, pa
 ```
 
 **Flow**:
+
 1. Remote node calls `transport.SendPublish(nodeID, clientID, ...)`
 2. gRPC client sends `RoutePublish` RPC
 3. Local transport receives RPC, calls `HandlePublish()`
@@ -884,26 +891,31 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 The broker architecture provides:
 
 **Clean Separation**:
+
 - Protocol handlers translate packets
 - Broker contains pure domain logic
 - Storage and cluster are pluggable
 
 **Efficient Routing**:
+
 - Trie-based topic matching: O(L)
 - Local delivery: immediate
 - Remote delivery: targeted via etcd query
 
 **QoS Guarantees**:
+
 - QoS 0: Fire and forget
 - QoS 1: At least once, with retransmission
 - QoS 2: Exactly once, with state machine
 
 **Cluster Integration**:
+
 - Session ownership tracked in etcd
 - Subscriptions visible cluster-wide
 - Messages routed directly via gRPC
 - Seamless local/remote delivery
 
 For more details, see:
+
 - [Clustering](clustering.md) - Distributed broker design, etcd, gRPC, BadgerDB
 - [Configuration](configuration.md) - Setup and tuning

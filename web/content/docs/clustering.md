@@ -31,6 +31,7 @@ The MQTT broker implements a **shared-nothing architecture with distributed coor
 - Routes messages to remote subscribers via gRPC
 
 This design provides:
+
 - **High availability**: Clients can connect to any node
 - **Load distribution**: Sessions spread across nodes
 - **No single point of failure**: All components are embedded
@@ -39,6 +40,7 @@ This design provides:
 ### Key Insight
 
 Unlike traditional message brokers that use a shared database or message queue, this broker uses a **hybrid approach**:
+
 - **Strong consistency** (via etcd Raft): Session ownership, subscriptions
 - **Direct communication** (via gRPC): Message routing between nodes
 - **Local storage** (via BadgerDB): Session state, offline messages
@@ -46,9 +48,11 @@ Unlike traditional message brokers that use a shared database or message queue, 
 ## Design Goals
 
 ### 1. Embedded Everything
+
 **Goal**: Deploy as a single Go binary with no external dependencies.
 
 **Implementation**:
+
 - Embedded etcd server (not etcd client to external cluster)
 - Embedded gRPC server for inter-broker communication
 - Embedded BadgerDB for local persistence
@@ -56,9 +60,11 @@ Unlike traditional message brokers that use a shared database or message queue, 
 **Benefit**: Simplified operations, consistent deployment model
 
 ### 2. Automatic Coordination
+
 **Goal**: Nodes automatically discover and coordinate with each other.
 
 **Implementation**:
+
 - etcd handles leader election for background tasks
 - Automatic session ownership tracking
 - Cluster-wide subscription visibility
@@ -66,9 +72,11 @@ Unlike traditional message brokers that use a shared database or message queue, 
 **Benefit**: No manual intervention for node failures or additions
 
 ### 3. Protocol Compliance
+
 **Goal**: Full MQTT semantics in clustered mode.
 
 **Implementation**:
+
 - Session takeover across nodes
 - QoS guarantees maintained
 - Retained messages visible cluster-wide
@@ -77,9 +85,11 @@ Unlike traditional message brokers that use a shared database or message queue, 
 **Benefit**: Clients see identical behavior regardless of cluster size
 
 ### 4. Linear Scalability
+
 **Goal**: Adding nodes increases capacity proportionally.
 
 **Implementation**:
+
 - Sessions distributed across nodes
 - Messages routed directly (no broadcast storms)
 - Local topic routing (trie per node)
@@ -129,18 +139,21 @@ Unlike traditional message brokers that use a shared database or message queue, 
 ### Component Responsibilities
 
 #### 1. Broker Core
+
 - Session lifecycle management
 - Local message routing (trie-based)
 - Protocol handling (MQTT v3/v5)
 - Instrumentation (logging, metrics)
 
 **Cluster Integration**:
+
 - Registers session ownership on connect
 - Adds subscriptions to cluster on subscribe
 - Routes publishes to remote nodes
 - Implements `SessionManager` interface for session takeover callbacks
 
 **SessionManager Interface**:
+
 ```go
 type SessionManager interface {
     // GetSessionStateAndClose captures session state and closes it
@@ -156,28 +169,33 @@ type SessionManager interface {
 The broker implements this interface, allowing the cluster layer to request session state transfer during takeover operations.
 
 #### 2. etcd (Embedded)
+
 - **Raft consensus** for strong consistency
 - **Key-value store** for cluster metadata
 - **Leader election** for singleton tasks
 - **Watch API** for change notifications
 
 **Stored Data**:
+
 - Session ownership: `clientID → nodeID`
 - Subscriptions: `clientID:filter → {qos, options}`
 - Retained messages: `topic → message`
 - Will messages: `clientID → will`
 
 #### 3. gRPC Transport
+
 - **Bidirectional connections** between all nodes
 - **Protobuf serialization** for efficiency
 - **Request/response** semantics for routing
 
 **RPC Methods**:
+
 - `RoutePublish(clientID, topic, payload, qos, ...)`: Forward PUBLISH to remote subscriber
 - `TakeoverSession(clientID, fromNode, toNode)`: Migrate session between nodes with full state transfer
 
 **Session State Transfer**:
 The `TakeoverSession` RPC returns a complete `SessionState` protobuf containing:
+
 - Inflight messages (QoS 1/2 pending acknowledgments)
 - Offline queue (messages queued while disconnected)
 - Subscriptions with QoS levels
@@ -185,11 +203,13 @@ The `TakeoverSession` RPC returns a complete `SessionState` protobuf containing:
 - Session expiry interval
 
 #### 4. BadgerDB (Local)
+
 - **LSM tree storage** for high write throughput
 - **Embedded** - no server process
 - **Per-node** - each node has its own database
 
 **Stored Data**:
+
 - Session state (local only)
 - Inflight messages (QoS 1/2)
 - Offline message queue
@@ -219,11 +239,13 @@ etcd, err := embed.StartEtcd(eCfg)
 #### Raft Consensus
 
 etcd uses the Raft consensus algorithm for:
+
 - **Leader election**: One node becomes leader
 - **Log replication**: All nodes agree on operation order
 - **Strong consistency**: Reads guaranteed to see latest writes
 
 **Raft Roles**:
+
 - **Leader**: Handles all writes, replicates to followers
 - **Follower**: Replicates log, votes in elections
 - **Candidate**: Follower requesting votes during election
@@ -246,19 +268,21 @@ Client → Leader → Replicate to Majority → Commit → Respond
 #### Configuration
 
 **Bootstrap Node** (`node1.yaml`):
+
 ```yaml
 cluster:
   enabled: true
   node_id: "node1"
   etcd:
     data_dir: "/tmp/fluxmq/node1/etcd"
-    bind_addr: "127.0.0.1:2380"      # Raft peer communication
-    client_addr: "127.0.0.1:2379"    # Client API
+    bind_addr: "127.0.0.1:2380" # Raft peer communication
+    client_addr: "127.0.0.1:2379" # Client API
     initial_cluster: "node1=http://127.0.0.1:2380,node2=http://127.0.0.1:2480,node3=http://127.0.0.1:2580"
-    bootstrap: true  # cluster_state = "new"
+    bootstrap: true # cluster_state = "new"
 ```
 
 **Port Mapping**:
+
 - `bind_addr`: Raft protocol (node-to-node)
 - `client_addr`: etcd API (used by broker locally)
 
@@ -269,6 +293,7 @@ cluster:
 etcd stores data as key-value pairs with optional TTL (lease).
 
 **Session Ownership**:
+
 ```
 Key:   /mqtt/sessions/{clientID}
 Value: {"node_id": "node2", "lease_id": "7587869134..."}
@@ -276,18 +301,21 @@ TTL:   30 seconds (auto-renewed while connected)
 ```
 
 When a client connects:
+
 1. Node attempts `AcquireSession(clientID, nodeID)`
 2. etcd transaction: put if not exists
 3. Auto-renewing lease maintains ownership
 4. On disconnect, ownership released
 
 **Subscriptions**:
+
 ```
 Key:   /mqtt/subscriptions/{clientID}/{filter}
 Value: {"qos": 1, "no_local": false, ...}
 ```
 
 **Why Both Local and etcd?**
+
 - **Local router**: Fast O(log n) matching for local subscribers
 - **etcd**: Cluster-wide visibility for routing to remote nodes
 
@@ -310,15 +338,18 @@ if err == nil {
 #### Performance Considerations
 
 **Reads**:
+
 - Linearizable reads: Contact leader (slower, guaranteed latest)
 - Serializable reads: Local replica (faster, may be stale)
 
 **Writes**:
+
 - All writes go through leader
 - Require quorum (majority) to commit
 - Latency: ~1-5ms in LAN, ~10-100ms WAN
 
 **Best Practices**:
+
 - Batch small writes when possible
 - Use transactions for atomic operations
 - Keep values small (<1KB recommended)
@@ -337,6 +368,7 @@ gRPC provides the inter-broker communication layer for routing messages between 
 #### Service Definition
 
 `cluster/broker.proto`:
+
 ```protobuf
 syntax = "proto3";
 
@@ -366,6 +398,7 @@ message PublishResponse {
 #### Connection Management
 
 **Peer Discovery**:
+
 ```yaml
 cluster:
   transport:
@@ -376,6 +409,7 @@ cluster:
 ```
 
 **Connection Topology**:
+
 ```
 3-node cluster:
 
@@ -391,10 +425,12 @@ Fully connected mesh: N*(N-1)/2 connections
 #### Performance Considerations
 
 **Latency**:
+
 - LAN: ~1-2ms per RPC
 - WAN: 50-200ms depending on distance
 
 **Throughput**:
+
 - HTTP/2 multiplexing: Multiple RPCs per connection
 - Protobuf serialization: ~10x faster than JSON
 - No TLS (for now): Lower CPU overhead
@@ -404,6 +440,7 @@ Fully connected mesh: N*(N-1)/2 connections
 #### Overview
 
 BadgerDB is an embedded key-value store designed for high performance:
+
 - **LSM tree** architecture (like RocksDB, LevelDB)
 - **Embedded**: No server process, library only
 - **Written in Go**: No CGO, pure Go
@@ -428,6 +465,7 @@ Read Path:
 ```
 
 **LSM Tree Levels**:
+
 - **L0**: Recently flushed from MemTable
 - **L1-Ln**: Compacted and merged SSTables
 - **Compaction**: Merge and sort SSTables to reduce read amplification
@@ -437,6 +475,7 @@ Read Path:
 BadgerDB is a **pure key-value store** - no tables, no indexes, just `[]byte → []byte`.
 
 **Session Store**:
+
 ```
 Key:   session:{clientID}
 Value: JSON{
@@ -449,12 +488,14 @@ Value: JSON{
 ```
 
 **Message Store**:
+
 ```
 Inflight: {clientID}/inflight/{packetID} → Message
 Queue:    {clientID}/queue/{sequence}    → Message
 ```
 
 **Subscription Store**:
+
 ```
 Key:   sub:{clientID}:{filter}
 Value: JSON{qos: 1, no_local: false, ...}
@@ -475,6 +516,7 @@ for range ticker.C {
 ```
 
 **Why GC?**
+
 - Values stored separately in value log
 - Deleted/updated values leave garbage
 - GC compacts and reclaims space
@@ -482,11 +524,13 @@ for range ticker.C {
 #### Performance Characteristics
 
 **Write Performance**:
+
 - Sequential writes to WAL: ~100K writes/sec
 - MemTable flush: Batched, amortized cost
 - Async mode (SyncWrites=false): Even faster, less durable
 
 **Read Performance**:
+
 - MemTable hit: ~1-2μs
 - SSTable hit: ~10-100μs (depending on level)
 - Bloom filters reduce unnecessary reads
@@ -504,6 +548,7 @@ for range ticker.C {
 ### Metadata (Strong Consistency via etcd)
 
 **Session Ownership**
+
 ```
 Key:   /mqtt/sessions/{clientID}
 Value: {"node_id": "node2", "lease_id": "7587869134..."}
@@ -511,6 +556,7 @@ TTL:   30 seconds (auto-renewed while connected)
 ```
 
 **Subscriptions**
+
 ```
 Key:   /mqtt/subscriptions/{clientID}/{filter}
 Value: {"qos": 1, "no_local": false, ...}
@@ -566,6 +612,7 @@ Only the **elected leader** processes pending wills to avoid duplicates.
 ### Scenario: Cross-Node Publish
 
 **Setup**:
+
 - Client A connected to Node1, subscribed to `sensor/#`
 - Client B connected to Node2, subscribed to `sensor/+/temp`
 - Client C connected to Node3, publishes to `sensor/living/temp`
@@ -621,6 +668,7 @@ Only the **elected leader** processes pending wills to avoid duplicates.
 ```
 
 **Key Points**:
+
 - Message never touches etcd (subscriptions cached locally)
 - No broadcast - targeted delivery only
 - Each node independently delivers to its local clients
@@ -629,6 +677,7 @@ Only the **elected leader** processes pending wills to avoid duplicates.
 ### Scenario: Session Takeover
 
 **Setup**:
+
 - Client D connected to Node1 with `clean_start=false`
 - Client D reconnects to Node2 (same clientID)
 
@@ -685,6 +734,7 @@ Only the **elected leader** processes pending wills to avoid duplicates.
 **Implementation Status**: ✅ **FULLY IMPLEMENTED**
 
 The session takeover protocol is complete:
+
 - ✅ gRPC `TakeoverSession` RPC with `SessionState` transfer
 - ✅ `broker.GetSessionStateAndClose()` captures full session state
 - ✅ State includes inflight, queue, subscriptions, will message
@@ -699,17 +749,20 @@ The session takeover protocol is complete:
 **Scenario**: Node2 crashes while clients are connected.
 
 **Impact**:
+
 - Clients on Node2 lose connection
 - Session ownership leases expire (30s TTL)
 - Other nodes unaffected
 
 **Recovery**:
+
 1. Clients reconnect to Node1 or Node3
 2. Session ownership acquired by new node
 3. Subscriptions re-established
 4. Offline messages lost (if not persisted)
 
 **Mitigation**:
+
 - Client auto-reconnect with exponential backoff
 - Load balancer distributes connections
 - Future: Session state replication
@@ -719,26 +772,31 @@ The session takeover protocol is complete:
 **Scenario**: Network partition splits etcd cluster.
 
 **Impact**:
+
 - Minority partition: Nodes can't acquire sessions (read-only)
 - Majority partition: Continues normally
 
 **Recovery**:
+
 - Partition heals automatically
 - etcd re-synchronizes
 - Minority nodes resume operations
 
 **Design Choice**: CAP theorem - chose **CP** (Consistency + Partition tolerance)
+
 - Availability sacrificed in minority partition
 - Prevents split-brain scenarios
 
 ### Message Loss
 
 **Scenarios**:
+
 1. **QoS 0**: Best effort - may lose on any failure
 2. **QoS 1**: Persisted to BadgerDB, safe unless disk failure
 3. **QoS 2**: Two-phase commit, safe unless both nodes fail
 
 **Guarantees**:
+
 - Messages in transit during node failure: lost
 - Messages in offline queue: persisted to BadgerDB
 - Inflight messages: persisted, redelivered on reconnect
@@ -748,6 +806,7 @@ The session takeover protocol is complete:
 **Scenario**: Node receives SIGTERM (e.g., during deployment).
 
 **Process**:
+
 1. **Drain Phase**: Stop accepting new connections, wait for active sessions to disconnect
    - Configurable drain timeout (default: 30s)
    - Sessions can gracefully close
@@ -758,18 +817,21 @@ The session takeover protocol is complete:
    - Idempotent shutdown (safe to call multiple times)
 
 **Impact**:
+
 - Zero session loss in cluster mode
 - Connected clients experience brief reconnection
 - Persistent sessions preserved across shutdown
 - Offline messages retained in BadgerDB
 
 **Configuration**:
+
 ```yaml
 server:
-  shutdown_timeout: 30s  # Drain period
+  shutdown_timeout: 30s # Drain period
 ```
 
 **Recovery**:
+
 - Clients automatically reconnect to other nodes
 - Session ownership acquired by new node
 - Subscriptions and offline messages restored
@@ -779,11 +841,13 @@ server:
 ### vs. Shared Database
 
 **Traditional Approach**:
+
 - All nodes connect to PostgreSQL/MySQL
 - Sessions, subscriptions, messages in DB
 - Lock-based coordination
 
 **Our Approach**:
+
 - No shared database
 - etcd for coordination only
 - Local storage for session state
@@ -800,11 +864,13 @@ server:
 ### vs. Message Queue (Kafka/NATS)
 
 **Traditional Approach**:
+
 - Brokers publish to message queue
 - All brokers subscribe to queue
 - Queue handles message routing
 
 **Our Approach**:
+
 - Direct gRPC between brokers
 - No intermediate queue
 - Targeted delivery only
@@ -821,11 +887,13 @@ server:
 ### vs. Gossip Protocol (Consul/Memberlist)
 
 **Traditional Approach**:
+
 - Eventual consistency
 - Broadcast state updates
 - No leader
 
 **Our Approach**:
+
 - Strong consistency (etcd Raft)
 - Direct targeted communication
 - Leader election
@@ -844,27 +912,32 @@ server:
 The clustering architecture balances several concerns:
 
 **Embedded First**: All components run in single process
+
 - etcd server (not client)
 - gRPC server
 - BadgerDB storage
 
 **Hybrid Consistency**:
+
 - Strong (etcd): Session ownership, subscriptions
 - Direct (gRPC): Message routing
 - Local (BadgerDB): Session state
 
 **MQTT Compliance**:
+
 - Session takeover semantics
 - QoS guarantees
 - Retained message delivery
 - Will message processing
 
 **Scalability**:
+
 - Linear capacity scaling
 - No shared resources
 - Targeted message routing
 
 **Operational Simplicity**:
+
 - Single binary deployment
 - Automatic coordination
 - No external dependencies
@@ -872,6 +945,7 @@ The clustering architecture balances several concerns:
 ---
 
 For related documentation, see:
+
 - [Configuration Guide](configuration.md) - Cluster setup and tuning
 - [Broker & Routing](broker.md) - Message routing internals
 - [Architecture Overview](architecture.md) - Overall broker architecture

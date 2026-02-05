@@ -34,6 +34,7 @@ This document describes the durable queue system shared by the MQTT, AMQP 1.0, a
 ## Overview
 
 Queues provide durable, at-least-once delivery across protocols:
+
 - Persistent append-only storage per queue
 - Consumer groups for load-balanced delivery
 - Acknowledgments (`$ack`, `$nack`, `$reject`)
@@ -43,6 +44,7 @@ Queues provide durable, at-least-once delivery across protocols:
 - Stream queues (RabbitMQ-compatible) for event-log consumption with cursor offsets
 
 Queues are integrated with MQTT and AMQP:
+
 - MQTT uses `$queue/<name>/...` topics
 - AMQP brokers map queue operations to the same queue manager
 
@@ -93,21 +95,24 @@ Stream queues use RabbitMQ-compatible queue names and arguments:
 The `$queue/<name>` prefix remains supported for legacy queue clients.
 
 **Acknowledgment requirements**:
+
 - `message-id` and `group-id` must be provided in message properties.
 - For MQTT, these are MQTT v5 User Properties.
 - For MQTT v3, acknowledgments are not supported (no properties).
 
 **Delivery properties**:
 Queue deliveries include properties:
+
 - `message-id`
 - `group-id`
 - `queue`
 - `offset`
 
 Stream deliveries also include:
+
 - `x-stream-offset`
 - `x-stream-timestamp`
-- `x-work-acked` (based on the primary work group’s committed offset)
+- `x-work-acked` (true when this message is below the primary work group's committed offset; may lag by the auto-commit interval)
 - `x-work-committed-offset`
 - `x-work-group`
 
@@ -153,6 +158,7 @@ removed only when retention policies allow it, and only up to the safe
 truncation point for queue-mode consumers.
 
 `x-stream-offset` supports:
+
 - `first`
 - `last`
 - `next`
@@ -160,14 +166,66 @@ truncation point for queue-mode consumers.
 - `timestamp=<unix-seconds|unix-millis>`
 
 FluxMQ extensions for stream consumers:
+
 - `x-work-acked` and `x-work-committed-offset` to report delivery status for the
   configured primary work group.
 - `x-work-group` to identify the group used for status.
 - Optional `x-consumer-group` on `basic.consume` to persist a shared cursor.
   If omitted, the consumer tag is used as the stream group ID.
+- Optional `x-auto-commit=false` to disable automatic offset commits
+  (default is enabled, similar to Kafka's `enable.auto.commit=true`).
 
 Primary work group is configured per queue (see configuration section) and is
 used only for delivery status reporting; it does not affect routing.
+
+### Consumer Group Modes
+
+Consumer groups operate in one of two modes:
+
+| Mode     | Behavior                                                                  |
+| -------- | ------------------------------------------------------------------------- |
+| `queue`  | Work queue: messages removed on ack, PEL tracking, redelivery on timeout  |
+| `stream` | Log consumption: messages stay in log, cursor-based, optional auto-commit |
+
+**Mode is immutable.** Once a group is created with a mode, all consumers must use the same mode.
+
+#### Mode Mismatch Error
+
+If a consumer joins a group with a different mode, the broker returns `ErrGroupModeMismatch`.
+
+**Resolution:**
+
+- Use a different consumer group name
+- Ensure all consumers use consistent subscription options
+- Delete and recreate the group (all consumers must disconnect first)
+
+### Manual Commit for Stream Consumers
+
+By default, stream consumers auto-commit offsets as messages are delivered.
+Commits are rate-limited by `queue_manager.auto_commit_interval` (default: `5s`),
+so offsets are updated at most once per interval. For exactly-once processing,
+disable auto-commit and commit explicitly.
+
+Minimal example:
+
+```go
+autoCommit := false
+_ = client.SubscribeToStream(&StreamConsumeOptions{
+    QueueName:     "events",
+    ConsumerGroup: "my-group",
+    AutoCommit:    &autoCommit,
+}, handler)
+
+_ = client.CommitOffset("events", "my-group", lastProcessedOffset)
+```
+
+Use the same consumer group name in both calls.
+
+With manual commit:
+
+- Messages are delivered but committed offset doesn't advance automatically
+- On reconnect, delivery resumes from last committed offset
+- Use `CommitOffset()` to advance the committed position
 
 ## Model Alignment
 
@@ -186,6 +244,7 @@ Queues are backed by an **append-only log** with segments and sparse indexes.
 Each queue has a single log (no partitions).
 
 **Key properties**:
+
 - Sequential writes for high throughput
 - Offset-based reads
 - Sparse offset and time indexes (`.idx`, `.tix`)
@@ -218,6 +277,7 @@ The queue manager truncates logs to a **safe offset** that respects:
 - The queue’s retention policy (time/size/message-count)
 
 This means:
+
 - Queue-mode consumers never lose unacked data.
 - Stream consumers do not block truncation.
 - Retention keeps data available for event-log readers as configured.
@@ -229,6 +289,7 @@ This means:
 ### Package Structure
 
 **Core packages**:
+
 ```
 queue/                    - Queue manager + delivery loops
 queue/consumer/           - Consumer groups, PEL, metrics
@@ -239,6 +300,7 @@ queue/raft/               - Optional Raft replication layer
 ```
 
 **Broker integration**:
+
 ```
 mqtt/broker/publish.go    - Routes $queue/* topics and acks
 mqtt/broker/subscribe.go  - Queue subscriptions + consumer groups
@@ -264,6 +326,9 @@ Zero-copy delivery for queue messages is planned.
 Queue bindings live under `queues` in the main config:
 
 ```yaml
+queue_manager:
+  auto_commit_interval: "5s"
+
 queues:
   - name: "orders"
     topics:
@@ -285,8 +350,11 @@ queues:
 ```
 
 Notes:
+
 - If no queues are configured, a default reserved queue `mqtt` is created with topic `$queue/#`.
 - Auto-created queues are **ephemeral** and expire after the last consumer disconnects.
+- `queue_manager.auto_commit_interval` controls how often stream offsets are auto-committed.
+  Use `0s` to commit every delivery batch.
 - `message_ttl` is stored in message metadata; automatic expiration is not enforced yet.
 - `limits` and `retry` are parsed into queue configs but not enforced at runtime yet.
 - `dlq` configuration is parsed, but reject/DLQ wiring is not active in the main delivery path.
@@ -296,6 +364,7 @@ Notes:
 ## Performance & Scalability
 
 Current scaling model:
+
 - Scale horizontally with more broker nodes.
 - Use multiple queues to spread load.
 - Increase consumer counts per group to improve parallelism.
@@ -308,6 +377,7 @@ partitioned queues and per-queue retention policies.
 ## Current Progress
 
 Implemented:
+
 - Append-only log storage with segment indexing
 - Consumer groups and PEL-based redelivery
 - Ack/Nack/Reject via `$ack`, `$nack`, `$reject`
@@ -315,15 +385,18 @@ Implemented:
 - Optional Raft layer for queue storage (leader append only)
 
 Raft notes:
+
 - Only leader appends go through Raft.
-- Non-leader nodes currently append locally.
+- Non-leader write behavior is configurable via `cluster.raft.write_policy` (`local`, `reject`, `forward`).
 - Ack/Nack/Reject and consumer state are not replicated via Raft yet.
+- Cross-node distribution is configurable via `cluster.raft.distribution_mode` (`forward`, `replicate`).
 
 ---
 
 ## Missing Features & Next Steps
 
 Planned or in-progress:
+
 - Queue partitioning and ordering modes
 - Time-based and size-based retention policies
 - Enforce queue limits (max depth, max message size) and message TTL expiry
@@ -398,9 +471,11 @@ removes it from the pending list; automatic DLQ routing is planned.
 ## Troubleshooting
 
 **Queue acks fail with "message-id required"**:
+
 - Ensure you are sending `message-id` and `group-id` as properties.
 - MQTT v5 is required for properties.
 
 **Messages not delivered**:
+
 - Confirm the queue is configured and topic bindings match.
 - Verify consumers are subscribed with the correct group.
