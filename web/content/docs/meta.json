@@ -1,0 +1,17 @@
+{
+  "title": "Docs",
+  "pages": [
+    "index",
+    "architecture",
+    "broker",
+    "queue",
+    "logstorage",
+    "clustering",
+    "configuration",
+    "scaling",
+    "webhooks",
+    "client",
+    "competition",
+    "roadmap"
+  ]
+}

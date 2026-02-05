@@ -41,6 +41,35 @@ FluxMQ provides durable queues shared across MQTT, AMQP 1.0, and AMQP 0.9.1. The
               └─────────────────────────┘
 ```
 
+## Routing Model (How Messages Find Queues)
+
+FluxMQ uses **topic patterns on queues** to decide where a publish should be stored. This is a fan-out model: one publish can land in multiple queues if multiple patterns match.
+
+- Each queue has one or more topic patterns (MQTT wildcard syntax).
+- On publish, the queue manager calls `FindMatchingQueues(topic)` and appends the message to every matching queue.
+- If **no queue matches**, FluxMQ creates an **ephemeral queue** whose name and pattern equal the topic, then appends.
+- If no queues are configured at all, FluxMQ creates the **reserved** `mqtt` queue that matches `$queue/#`.
+
+```mermaid
+flowchart LR
+  P[Publish $queue/... or queue-capable AMQP] --> QM[Queue Manager]
+  QM --> Match[Match topic against queue patterns]
+  Match --> Q1[Queue A log]
+  Match --> Q2[Queue B log]
+  Match --> QN[Queue N log]
+  QM --> Deliver[Delivery loop]
+  Deliver --> Local[Local consumers (MQTT/AMQP)]
+  Deliver --> Remote[Remote consumers via cluster]
+```
+
+## Walkthrough: Queue Message Lifecycle
+
+1. Producer publishes to a `$queue/<name>/...` topic or a queue-capable AMQP address.
+2. Queue manager matches the topic against queue patterns and appends to each matching queue log.
+3. Delivery workers claim messages for consumer groups and send to local or remote consumers.
+4. Consumers ack, nack, or reject. Pending entries are updated in the PEL.
+5. Retention loop periodically truncates old segments once it is safe.
+
 ## Queue Addressing
 
 Queue topics use `$queue/<queue-name>/...`.
@@ -134,7 +163,13 @@ Retention policies can be configured per queue:
 - `max_length_bytes`
 - `max_length_messages`
 
-A background retention loop truncates logs to the safe offset based on configured limits.
+A background retention loop computes a **safe truncation offset** and truncates the queue log:
+
+- Start from the minimum committed offset across queue-mode consumer groups.
+- Apply retention limits (time/size/message count) to compute the oldest offset that should be kept.
+- Truncate the log to the lowest safe offset (segment-granular in log storage).
+
+See `docs/logstorage.md` for on-disk format and retention behavior details.
 
 ## DLQ Status
 
