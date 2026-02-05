@@ -206,3 +206,14 @@ p {
     animation: none;
   }
 }
+
+/* Fumadocs Sidebar Styling */
+#nd-sidebar [data-active="true"] {
+  color: var(--flux-orange) !important;
+  background-color: rgba(249, 163, 42, 0.1) !important;
+  border-left: 3px solid var(--flux-orange) !important;
+}
+
+a:hover {
+  color: var(--flux-blue) !important;
+}
