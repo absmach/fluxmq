@@ -699,8 +699,8 @@ cluster:
     sync_mode: true
     min_in_sync_replicas: 2
     ack_timeout: "5s"
-    write_policy: "local"
-    distribution_mode: "forward"
+    write_policy: "forward"
+    distribution_mode: "replicate"
     bind_addr: "127.0.0.1:7100"
     data_dir: "/tmp/fluxmq/raft"
     peers: {}
@@ -905,8 +905,8 @@ raft:
   sync_mode: true
   min_in_sync_replicas: 2
   ack_timeout: "5s"
-  write_policy: "local"          # local | reject | forward
-  distribution_mode: "forward"   # forward | replicate
+  write_policy: "forward"        # local | reject | forward
+  distribution_mode: "replicate" # forward | replicate
   bind_addr: "127.0.0.1:7100"
   data_dir: "/tmp/fluxmq/raft"
   peers:

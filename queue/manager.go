@@ -308,35 +308,7 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 // This is the NATS JetQueue-style "multi-queue" routing.
 // It also forwards the publish to remote nodes that have consumers for the topic.
 func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
-	// Store locally in matching queues
-	if err := m.publishLocal(ctx, publish, false); err != nil {
-		return err
-	}
-
-	// Forward to remote nodes that have consumers
-	if m.cluster != nil && m.distributionMode == DistributionForward {
-		m.forwardToRemoteNodes(ctx, publish)
-	}
-
-	return nil
-}
-
-// HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
-func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishRequest, mode types.PublishMode) error {
-	switch mode {
-	case types.PublishLocal:
-		return m.publishLocal(ctx, publish, false)
-	case types.PublishForwarded:
-		return m.publishLocal(ctx, publish, true)
-	case types.PublishNormal:
-		fallthrough
-	default:
-		return m.Publish(ctx, publish)
-	}
-}
-
-func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest, forwarded bool) error {
-	if m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() && !forwarded {
+	if m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() {
 		switch m.writePolicy {
 		case WritePolicyReject:
 			leaderAddr := m.raftManager.Leader()
@@ -353,6 +325,34 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 		}
 	}
 
+	// Store locally in matching queues
+	if err := m.publishLocal(ctx, publish); err != nil {
+		return err
+	}
+
+	// Forward to remote nodes that have consumers
+	if m.cluster != nil && m.distributionMode == DistributionForward {
+		m.forwardToRemoteNodes(ctx, publish)
+	}
+
+	return nil
+}
+
+// HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
+func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishRequest, mode types.PublishMode) error {
+	switch mode {
+	case types.PublishLocal:
+		return m.publishLocal(ctx, publish)
+	case types.PublishForwarded:
+		return m.publishLocal(ctx, publish)
+	case types.PublishNormal:
+		fallthrough
+	default:
+		return m.Publish(ctx, publish)
+	}
+}
+
+func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest) error {
 	// Find all matching queues
 	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 	if err != nil {
