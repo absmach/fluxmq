@@ -220,13 +220,49 @@ sequenceDiagram
 
 Queue topics use `$queue/<queue-name>/...`.
 
-Examples:
+### MQTT
 
 - Publish: `$queue/orders`
-- Subscribe to a pattern: `$queue/orders/#`
+- Publish with routing key: `$queue/orders/eu/images/resize`
+- Subscribe to a pattern: `$queue/orders/#` or `$queue/orders/+/images/#`
 - Ack: `$queue/orders/$ack`
 - Nack: `$queue/orders/$nack`
 - Reject: `$queue/orders/$reject`
+
+### AMQP 0.9.1
+
+AMQP 0.9.1 clients can interact with queues in multiple ways:
+
+**Direct queue publish** (default exchange with `$queue/` routing key):
+```
+exchange: "" (default)
+routing_key: "$queue/orders"
+routing_key: "$queue/orders/eu/images/resize"  # with routing key
+```
+
+**Stream queue publish** (declare queue with `x-queue-type: stream`):
+```
+exchange: "" (default)
+routing_key: "my-stream"  # queue name without $queue/ prefix
+```
+
+**Exchange-based routing** (bind queue to exchange):
+```
+queue.bind(queue="orders", exchange="my-exchange", routing_key="orders.#")
+publish(exchange="my-exchange", routing_key="orders.eu.images")
+```
+
+**Consume from queue**:
+```
+basic.consume(queue="$queue/orders/#")
+basic.consume(queue="$queue/orders/+/images/#")
+basic.consume(queue="my-stream")  # stream queue by name
+```
+
+**Acknowledgments**:
+- `basic.ack` → Ack
+- `basic.nack(requeue=true)` → Nack (retry)
+- `basic.reject(requeue=false)` → Reject (DLQ)
 
 ## Consumer Groups
 
@@ -241,7 +277,30 @@ How to set the group ID depends on the protocol:
 - MQTT v5: `consumer-group` user property on SUBSCRIBE.
 - MQTT v3: falls back to client ID (acks require MQTT v5 user properties).
 - AMQP 1.0: `consumer-group` in attach properties.
-- AMQP 0.9.1: `x-consumer-group` on `basic.consume`.
+- AMQP 0.9.1: `x-consumer-group` argument on `basic.consume`.
+
+### MQTT v5 Example
+
+```bash
+mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 \
+  -D subscribe user-property consumer-group workers
+```
+
+### AMQP 0.9.1 Example (Go)
+
+```go
+ch.Consume(
+    "$queue/orders/#",  // queue
+    "consumer-tag",     // consumer tag
+    false,              // auto-ack
+    false,              // exclusive
+    false,              // no-local
+    false,              // no-wait
+    amqp091.Table{
+        "x-consumer-group": "workers",
+    },
+)
+```
 
 ## Message Properties
 
@@ -306,19 +365,151 @@ Headers:
 
 ### Classic (Work Queue)
 
-Classic queues are optimized for “do work once” semantics:
+Classic queues are optimized for "do work once" semantics:
 
-- Messages are **claimed** and tracked in a pending list (PEL).
-- `ack` removes a message from the PEL; `nack` makes it eligible for redelivery; `reject` removes it (DLQ wiring is incomplete).
-- A visibility timeout plus work stealing prevents stuck consumers from stalling progress.
-- The safe truncation point is derived from group state (see cursor/committed below).
+- Messages are **claimed** and tracked in a Pending Entry List (PEL)
+- `ack` removes a message from the PEL; `nack` makes it eligible for redelivery; `reject` removes it (DLQ wiring is incomplete)
+- A visibility timeout plus work stealing prevents stuck consumers from stalling progress
+- The safe truncation point is derived from group state (see cursor/committed below)
+
+#### Classic Mode Delivery Flow
+
+1. Consumer requests messages via `ClaimBatch`
+2. Manager reads message from queue log at cursor position
+3. **Creates PEL entry**: `{ offset, consumerID, claimedAt, deliveryCount }`
+4. Advances cursor to next position
+5. Delivers message to consumer
+6. On `ack`: removes PEL entry, advances committed offset
+7. On `nack`: resets PEL entry for redelivery
+8. On timeout: message becomes stealable by other consumers
+
+```
+Classic Mode State:
+
+Queue Log:  [0] [1] [2] [3] [4] [5] [6] [7] ...
+                          ▲     ▲
+                          │     └── cursor (next to deliver)
+                          └── committed (safe to truncate)
+
+PEL: {
+  offset=3: { consumer: "c1", claimedAt: t1, deliveries: 1 }
+  offset=4: { consumer: "c2", claimedAt: t2, deliveries: 2 }
+  offset=5: { consumer: "c1", claimedAt: t3, deliveries: 1 }
+}
+```
 
 ### Stream
 
-Stream queues are optimized for “replay and progress” semantics:
+Stream queues are optimized for "replay and progress" semantics:
 
-- Consumption is cursor-based (read position in an append-only log).
-- Groups can auto-commit progress (default) or require explicit commits (AMQP 0.9.1).
+- Consumption is cursor-based (read position in an append-only log)
+- **No PEL tracking** - messages are simply read, not "claimed"
+- Groups can auto-commit progress (default) or require explicit commits (AMQP 0.9.1)
+
+#### Stream Mode Delivery Flow
+
+1. Consumer requests messages via `ClaimBatchStream`
+2. Manager reads messages from queue log starting at cursor position
+3. **No PEL entry created** - message is simply read
+4. Advances cursor to next position
+5. Delivers messages to consumer
+6. If `autoCommit: true`: committed offset is updated periodically
+7. If `autoCommit: false`: consumer must explicitly commit via `$queue/<name>/$commit`
+
+```
+Stream Mode State:
+
+Queue Log:  [0] [1] [2] [3] [4] [5] [6] [7] ...
+                          ▲     ▲
+                          │     └── cursor (next to read)
+                          └── committed (checkpoint)
+
+No PEL - just two offsets to track!
+```
+
+#### Why No PEL for Streams?
+
+Stream mode is designed for different use cases than classic work queues:
+
+| Aspect | Classic (PEL) | Stream (No PEL) |
+|--------|---------------|-----------------|
+| **Semantics** | Process once | Read/replay many times |
+| **Delivery guarantee** | At-least-once with ack | At-least-once with cursor |
+| **Redelivery trigger** | Visibility timeout | Consumer restart/seek |
+| **Work stealing** | Yes (steal from slow peers) | No (each consumer independent) |
+| **Memory overhead** | PEL entry per pending message | Only cursor position |
+| **Replayability** | No (acked = done) | Yes (seek to any offset) |
+
+**Classic mode** answers: "Has this message been successfully processed?"
+
+**Stream mode** answers: "Where is my read position in the log?"
+
+In stream mode, the cursor itself serves as the progress indicator. If a consumer crashes:
+- It restarts from the last committed cursor position
+- Messages between committed and actual progress are re-read
+- No per-message tracking needed - just resume from checkpoint
+
+This makes streams more efficient for high-throughput scenarios where:
+- Messages are idempotent or replayable
+- Multiple independent readers need the same data
+- You want Kafka-like log semantics
+
+#### AMQP 0.9.1 Stream Queues
+
+Declare a stream queue with retention settings:
+
+```go
+ch.QueueDeclare(
+    "my-stream",  // name
+    true,         // durable
+    false,        // auto-delete
+    false,        // exclusive
+    false,        // no-wait
+    amqp091.Table{
+        "x-queue-type":        "stream",
+        "x-max-age":           "7D",         // retain 7 days
+        "x-max-length-bytes":  1073741824,   // 1GB max
+        "x-max-length":        1000000,      // 1M messages max
+    },
+)
+```
+
+Consume with cursor positioning:
+
+```go
+ch.Consume(
+    "my-stream",    // queue name (not $queue/ prefix)
+    "consumer-tag",
+    false,          // auto-ack
+    false,          // exclusive
+    false,          // no-local
+    false,          // no-wait
+    amqp091.Table{
+        "x-consumer-group": "readers",
+        "x-stream-offset":  "first",      // "first", "last", "next", offset number, or "timestamp=..."
+        "x-auto-commit":    false,        // require manual commit
+    },
+)
+```
+
+Stream offset options:
+- `"first"` - Start from the beginning of the log
+- `"last"` or `"next"` - Start from the end (new messages only)
+- `123` (number) - Start from specific offset
+- `"offset=123"` - Same as above, string format
+- `"timestamp=1706745600000"` - Start from timestamp (unix millis)
+
+Manual commit (when `x-auto-commit: false`):
+
+```go
+// Publish to special commit topic
+ch.Publish("", "$queue/my-stream/$commit", false, false, amqp091.Publishing{
+    Headers: amqp091.Table{
+        "x-group-id": "readers",
+        "x-offset":   int64(lastProcessedOffset),
+    },
+})
+```
 
 ## Cursors, Pending Lists, and Safe Truncation
 
