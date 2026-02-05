@@ -145,8 +145,64 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Base font size improvements */
+p {
+  font-size: 1.0625rem;
+  /* 17px - slightly larger for better readability */
+  line-height: 1.7;
+}
+
 /* Remove default focus outline, add custom */
 *:focus-visible {
   outline: 2px solid var(--flux-orange);
   outline-offset: 2px;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.8s ease-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.8s ease-out;
+  animation-fill-mode: backwards;
+}
+
+.animate-slide-up:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.animate-slide-up:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+
+  .animate-fade-in,
+  .animate-slide-up {
+    animation: none;
+  }
 }

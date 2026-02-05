@@ -17,11 +17,15 @@
     "fumadocs-mdx": "14.2.6",
     "fumadocs-ui": "16.5.0",
     "lucide-react": "^0.563.0",
+    "mermaid": "^11.12.2",
     "next": "16.1.6",
+    "next-themes": "^0.4.6",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "reactflow": "^11.11.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.3.13",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/mdx": "^2.0.13",
     "@types/node": "^25.1.0",
@@ -30,8 +34,7 @@
     "postcss": "^8.5.6",
     "serve": "^14.2.5",
     "tailwindcss": "^4.1.18",
-    "typescript": "^5.9.3",
-    "@biomejs/biome": "^2.3.13"
+    "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@10.12.1+sha512.f0dda8580f0ee9481c5c79a1d927b9164f2c478e90992ad268bbb2465a736984391d6333d2c327913578b2804af33474ca554ba29c04a8b13060a717675ae3ac"
 }
