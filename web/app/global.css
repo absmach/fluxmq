@@ -1,0 +1,152 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/* FluxMQ Brand Colors - Light Theme */
+:root {
+  --flux-blue: hsl(213.64deg 58.41% 44.31%);
+  /* #2F69B3 */
+  --flux-orange: hsl(35.07deg 94.52% 57.06%);
+  /* #F9A32A */
+  --flux-bg: hsl(0 0% 100%);
+  --flux-fg: hsl(0 0% 10%);
+  --flux-border: hsl(0 0% 20%);
+  --flux-grid: hsl(0 0% 90%);
+  --flux-text: hsl(0 0% 10%);
+  --flux-text-muted: hsl(0 0% 40%);
+  --flux-bg-alt: hsl(0 0% 97%);
+}
+
+/* FluxMQ Brand Colors - Dark Theme */
+:root[class~="dark"] {
+  --flux-blue: hsl(213.64deg 70% 60%);
+  /* Brighter blue for dark mode */
+  --flux-orange: hsl(35.07deg 94.52% 57.06%);
+  /* Keep orange same */
+  --flux-bg: hsl(0 0% 10%);
+  --flux-fg: hsl(0 0% 95%);
+  --flux-border: hsl(0 0% 30%);
+  --flux-grid: hsl(0 0% 20%);
+  --flux-text: hsl(0 0% 95%);
+  --flux-text-muted: hsl(0 0% 60%);
+  --flux-bg-alt: hsl(0 0% 8%);
+}
+
+/* Technical Grid Pattern */
+.grid-pattern {
+  background-image:
+    linear-gradient(to right, var(--flux-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--flux-grid) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Brutalist Elements */
+.brutalist-border {
+  border: 2px solid var(--flux-border);
+}
+
+.brutalist-card {
+  border: 2px solid var(--flux-border);
+  background: var(--flux-bg);
+  color: var(--flux-text);
+}
+
+.brutalist-card:hover {
+  border-color: var(--flux-orange);
+}
+
+/* Code/Terminal Styling */
+.terminal {
+  background: hsl(0 0% 10%);
+  color: hsl(120 100% 80%);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  border: 2px solid var(--flux-border);
+}
+
+:root[class~="dark"] .terminal {
+  background: hsl(0 0% 5%);
+  border-color: var(--flux-border);
+}
+
+/* Accent Lines */
+.accent-line {
+  position: relative;
+}
+
+.accent-line::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  background: var(--flux-orange);
+}
+
+/* Technical Typography */
+.mono {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+/* Performance Metrics Table */
+.metrics-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.metrics-table th,
+.metrics-table td {
+  border: 1px solid var(--flux-border);
+  padding: 0.75rem 1rem;
+  text-align: left;
+}
+
+.metrics-table th {
+  background: var(--flux-fg);
+  color: var(--flux-bg);
+  font-weight: bold;
+}
+
+.metrics-table tbody {
+  background: var(--flux-bg);
+  color: var(--flux-text);
+}
+
+/* Theme-aware backgrounds */
+.bg-theme {
+  background: var(--flux-bg);
+  color: var(--flux-text);
+}
+
+.bg-theme-alt {
+  background: var(--flux-bg-alt);
+  color: var(--flux-text);
+}
+
+.bg-theme-inverse {
+  background: var(--flux-fg);
+  color: var(--flux-bg);
+}
+
+.text-theme {
+  color: var(--flux-text);
+}
+
+.text-theme-muted {
+  color: var(--flux-text-muted);
+}
+
+.border-theme {
+  border-color: var(--flux-border);
+}
+
+/* Smooth scroll for anchor links */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Remove default focus outline, add custom */
+*:focus-visible {
+  outline: 2px solid var(--flux-orange);
+  outline-offset: 2px;
+}
