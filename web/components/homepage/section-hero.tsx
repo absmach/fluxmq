@@ -18,13 +18,9 @@ export function HeroSection() {
                 <span className="text-(--flux-orange)">MQ</span>
               </h1>
               <div className="mono text-base md:text-xl text-theme-muted mb-6 border-l-4 border-(--flux-orange) pl-4 animate-slide-up">
-                <div>PROTOCOL: MQTT 3.1.1 / 5.0 | HTTP | WebSocket | CoAP</div>
-                <div>
-                  THROUGHPUT: 300K-500K msg/s per node | LATENCY: &lt;10ms
-                </div>
-                <div>
-                  ARCHITECTURE: Event-Driven | Clustered | Durable Queues
-                </div>
+                <div>open-source | high-throughput | low-latency | scalable</div>
+                <div>persistent storage | replication | MQTT v3/v5 | AMQP</div>
+                <div>security | extensibility</div>
               </div>
             </div>
 

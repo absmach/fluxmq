@@ -214,6 +214,6 @@ p {
   border-left: 3px solid var(--flux-orange) !important;
 }
 
-a:hover {
+#nd-sidebar a:hover {
   color: var(--flux-blue) !important;
 }
