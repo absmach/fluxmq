@@ -1,4 +1,4 @@
-import { Activity, Cpu, ShieldCheck } from "lucide-react";
+import { Activity, Cpu, Gauge } from "lucide-react";
 
 export function UseCasesSection() {
   return (
@@ -11,7 +11,7 @@ export function UseCasesSection() {
         </h2>
 
         <div className="grid md:grid-cols-3 gap-6">
-          {/* Event-Driven Architecture */}
+          {/* Event-Driven Systems */}
           <div className="brutalist-card p-6">
             <Activity
               className="mb-4 text-(--flux-blue)"
@@ -19,31 +19,29 @@ export function UseCasesSection() {
               strokeWidth={2}
             />
             <div className="border-b-2 border-(--flux-border) pb-4 mb-4">
-              <h3 className="text-2xl font-bold mono">
-                Event-Driven Architecture
-              </h3>
+              <h3 className="text-2xl font-bold mono">Event-Driven Systems</h3>
             </div>
             <ul className="space-y-3 text-theme-muted text-base">
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Event backbone for microservices</span>
+                <span>Decouple microservices with event streams</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>CQRS systems with durable queues</span>
+                <span>Reliable command & event pipelines (CQRS)</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Asynchronous workflows</span>
+                <span>Background jobs & asynchronous workflows</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Real-time event processing</span>
+                <span>Real-time data processing pipelines</span>
               </li>
             </ul>
           </div>
 
-          {/* IoT & Real-Time Systems */}
+          {/* IoT & Real-Time */}
           <div className="brutalist-card p-6">
             <Cpu
               className="mb-4 text-(--flux-orange)"
@@ -56,49 +54,51 @@ export function UseCasesSection() {
             <ul className="space-y-3 text-theme-muted text-base">
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Device communication (MQTT 3.1.1/5.0)</span>
+                <span>IoT device telemetry ingestion (MQTT)</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Edge computing deployments</span>
+                <span>Edge deployments with intermittent connectivity</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Browser clients via WebSocket</span>
+                <span>Live dashboards & browser updates (WebSocket)</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Constrained devices (CoAP bridge)</span>
+                <span>Constrained device messaging via protocol bridges</span>
               </li>
             </ul>
           </div>
 
-          {/* High Availability */}
+          {/* High-Throughput Data Pipelines */}
           <div className="brutalist-card p-6">
-            <ShieldCheck
+            <Gauge
               className="mb-4 text-(--flux-blue)"
               size={36}
               strokeWidth={2}
             />
             <div className="border-b-2 border-(--flux-border) pb-4 mb-4">
-              <h3 className="text-2xl font-bold mono">High Availability</h3>
+              <h3 className="text-2xl font-bold mono">
+                High-Throughput Pipelines
+              </h3>
             </div>
             <ul className="space-y-3 text-theme-muted text-base">
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Clustered deployments (3-5 nodes)</span>
+                <span>Stream millions of events per second</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Automatic failover (&lt;100ms)</span>
+                <span>Buffer traffic bursts with durable queues</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Geographic distribution</span>
+                <span>Decouple ingestion from downstream processing</span>
               </li>
               <li className="flex items-start">
                 <span className="text-(--flux-orange) mr-2 font-bold">■</span>
-                <span>Linear scalability</span>
+                <span>Power analytics & observability data streams</span>
               </li>
             </ul>
           </div>
