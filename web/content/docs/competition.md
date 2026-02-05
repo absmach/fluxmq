@@ -1,3 +1,8 @@
+---
+title: Competitive Analysis
+description: Comprehensive comparison of FluxMQ against industry solutions including EMQX, HiveMQ, Mosquitto, NATS, RabbitMQ, and Kafka
+---
+
 # Competitive Analysis: Absmach MQTT vs Industry Solutions
 
 **Last Updated:** 2026-02-03
@@ -8,40 +13,40 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 
 ## Feature Matrix
 
-| Feature                  | Absmach MQTT     | EMQX        | HiveMQ | Mosquitto  | NATS          | RabbitMQ   | Kafka           |
-| ------------------------ | ---------------- | ----------- | ------ | ---------- | ------------- | ---------- | --------------- |
+| Feature                  | Absmach MQTT                        | EMQX         | HiveMQ | Mosquitto   | NATS           | RabbitMQ    | Kafka            |
+| ------------------------ | ----------------------------------- | ------------ | ------ | ----------- | -------------- | ----------- | ---------------- |
 | **Protocol Support**     |
-| MQTT 3.1/3.1.1           | ✅                | ✅           | ✅      | ✅          | ❌             | ✅ (plugin) | ❌               |
-| MQTT 5.0                 | ✅                | ✅           | ✅      | ✅          | ❌             | ❌          | ❌               |
-| WebSocket                | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ❌               |
-| CoAP                     | ✅                | ✅ (plugin)  | ❌      | ❌          | ❌             | ❌          | ❌               |
-| HTTP Bridge              | ✅                | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
+| MQTT 3.1/3.1.1           | ✅                                  | ✅           | ✅     | ✅          | ❌             | ✅ (plugin) | ❌               |
+| MQTT 5.0                 | ✅                                  | ✅           | ✅     | ✅          | ❌             | ❌          | ❌               |
+| WebSocket                | ✅                                  | ✅           | ✅     | ✅          | ✅             | ✅          | ❌               |
+| CoAP                     | ✅                                  | ✅ (plugin)  | ❌     | ❌          | ❌             | ❌          | ❌               |
+| HTTP Bridge              | ✅                                  | ✅           | ✅     | ❌          | ✅             | ✅          | ✅               |
 | **Clustering**           |
-| Native Clustering        | ✅ (etcd)         | ✅ (Mria)    | ✅      | ❌          | ✅             | ✅          | ✅ (ZK/KRaft)    |
-| No External Dependencies | ✅                | ❌           | ✅      | N/A        | ✅             | ❌          | ❌ (until KRaft) |
-| Session Migration        | ✅                | ✅           | ✅      | N/A        | ✅             | ❌          | N/A             |
+| Native Clustering        | ✅ (etcd)                           | ✅ (Mria)    | ✅     | ❌          | ✅             | ✅          | ✅ (ZK/KRaft)    |
+| No External Dependencies | ✅                                  | ❌           | ✅     | N/A         | ✅             | ❌          | ❌ (until KRaft) |
+| Session Migration        | ✅                                  | ✅           | ✅     | N/A         | ✅             | ❌          | N/A              |
 | **Persistence**          |
-| Message Persistence      | ✅ (BadgerDB)     | ✅ (RocksDB) | ✅      | ✅ (SQLite) | ✅ (JetStream) | ✅          | ✅               |
-| Queue Replication        | ⚠️ Append-only Raft (WIP) | ✅     | ✅      | ❌          | ✅             | ✅          | ✅               |
-| Retention Policies       | ⚠️ Committed-offset truncation only | ✅ | ✅      | ❌          | ✅             | ✅          | ✅               |
+| Message Persistence      | ✅ (BadgerDB)                       | ✅ (RocksDB) | ✅     | ✅ (SQLite) | ✅ (JetStream) | ✅          | ✅               |
+| Queue Replication        | ⚠️ Append-only Raft (WIP)           | ✅           | ✅     | ❌          | ✅             | ✅          | ✅               |
+| Retention Policies       | ⚠️ Committed-offset truncation only | ✅           | ✅     | ❌          | ✅             | ✅          | ✅               |
 | **Performance**          |
-| Zero-Copy                | ✅                | ✅           | ✅      | ❌          | ✅             | ❌          | ✅               |
-| Buffer Pooling           | ✅                | ✅           | ✅      | ❌          | ✅             | ❌          | ✅               |
-| Connections/Node         | ~500K            | ~5M         | ~2M    | ~100K      | ~10M          | ~1M        | N/A             |
+| Zero-Copy                | ✅                                  | ✅           | ✅     | ❌          | ✅             | ❌          | ✅               |
+| Buffer Pooling           | ✅                                  | ✅           | ✅     | ❌          | ✅             | ❌          | ✅               |
+| Connections/Node         | ~500K                               | ~5M          | ~2M    | ~100K       | ~10M           | ~1M         | N/A              |
 | **Security**             |
-| TLS                      | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| mTLS                     | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| Auth Plugins             | ✅                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| Rate Limiting            | ✅                | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
-| RBAC                     | ⚠️ Interface only | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
+| TLS                      | ✅                                  | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
+| mTLS                     | ✅                                  | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
+| Auth Plugins             | ✅                                  | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
+| Rate Limiting            | ✅                                  | ✅           | ✅     | ❌          | ✅             | ✅          | ✅               |
+| RBAC                     | ⚠️ Interface only                   | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
 | **Observability**        |
-| Prometheus Metrics       | ❌ (OTLP only)    | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| Distributed Tracing      | ⚠️ Stub only      | ✅           | ✅      | ❌          | ✅             | ✅          | ✅               |
-| Dashboard                | ❌                | ✅           | ✅      | ❌          | ✅             | ✅          | ❌               |
+| Prometheus Metrics       | ❌ (OTLP only)                      | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
+| Distributed Tracing      | ⚠️ Stub only                        | ✅           | ✅     | ❌          | ✅             | ✅          | ✅               |
+| Dashboard                | ❌                                  | ✅           | ✅     | ❌          | ✅             | ✅          | ❌               |
 | **Operations**           |
-| Hot Config Reload        | ❌                | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| REST API                 | ⚠️ Basic          | ✅           | ✅      | ✅          | ✅             | ✅          | ✅               |
-| Rolling Upgrades         | ⚠️ Manual         | ✅           | ✅      | N/A        | ✅             | ✅          | ✅               |
+| Hot Config Reload        | ❌                                  | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
+| REST API                 | ⚠️ Basic                            | ✅           | ✅     | ✅          | ✅             | ✅          | ✅               |
+| Rolling Upgrades         | ⚠️ Manual                           | ✅           | ✅     | N/A         | ✅             | ✅          | ✅               |
 
 ---
 
@@ -131,9 +136,9 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 | License          | Apache 2.0    | Apache 2.0 (Enterprise: Commercial) |
 | Clustering       | Embedded etcd | Mria (Mnesia extension)             |
 | Max Connections  | ~500K/node    | ~5M/node                            |
-| Rule Engine      | ❌             | ✅ Full SQL-like rules               |
+| Rule Engine      | ❌            | ✅ Full SQL-like rules              |
 | Data Integration | Webhooks only | 40+ connectors                      |
-| Dashboard        | ❌             | ✅ Full-featured                     |
+| Dashboard        | ❌            | ✅ Full-featured                    |
 
 **When to choose Absmach MQTT:** Simpler deployment, Go ecosystem, no external dependencies needed.
 
@@ -155,13 +160,13 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 
 ### vs Mosquitto
 
-| Aspect      | Absmach MQTT      | Mosquitto     |
-| ----------- | ----------------- | ------------- |
-| Language    | Go                | C             |
-| Clustering  | ✅ Native          | ❌ Bridge only |
-| Persistence | BadgerDB          | SQLite/Files  |
-| Performance | Higher throughput | Lower latency |
-| Memory      | Higher baseline   | Very low      |
+| Aspect      | Absmach MQTT      | Mosquitto      |
+| ----------- | ----------------- | -------------- |
+| Language    | Go                | C              |
+| Clustering  | ✅ Native         | ❌ Bridge only |
+| Persistence | BadgerDB          | SQLite/Files   |
+| Performance | Higher throughput | Lower latency  |
+| Memory      | Higher baseline   | Very low       |
 
 **When to choose Absmach MQTT:** Clustering required, higher throughput needs.
 
@@ -195,13 +200,13 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 
 ### vs Kafka
 
-| Aspect        | Absmach MQTT     | Kafka           |
-| ------------- | ---------------- | --------------- |
-| Protocol      | MQTT             | Kafka Protocol  |
-| Message Model | Pub/Sub + Queues | Log-based       |
-| Ordering      | Per-queue (single log) | Per-partition   |
+| Aspect        | Absmach MQTT                                    | Kafka           |
+| ------------- | ----------------------------------------------- | --------------- |
+| Protocol      | MQTT                                            | Kafka Protocol  |
+| Message Model | Pub/Sub + Queues                                | Log-based       |
+| Ordering      | Per-queue (single log)                          | Per-partition   |
 | Retention     | Committed-offset truncation (time/size planned) | Log compaction  |
-| Use Case      | IoT/Real-time    | Event streaming |
+| Use Case      | IoT/Real-time                                   | Event streaming |
 
 **When to choose Absmach MQTT:** IoT devices, bidirectional communication, MQTT protocol.
 
@@ -211,14 +216,14 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 
 ## Production Readiness Assessment
 
-| Aspect              | Rating | Notes                                    |
-| ------------------- | ------ | ---------------------------------------- |
-| Code Quality        | ⭐⭐⭐⭐   | Clean architecture, low tech debt        |
-| Protocol Compliance | ⭐⭐⭐    | Good MQTT 5.0, minor gaps                |
-| Performance         | ⭐⭐⭐⭐   | Excellent optimizations                  |
-| Security            | ⭐⭐⭐    | Core fixes complete, auth plugins needed |
-| Scalability         | ⭐⭐⭐    | Good to 5M clients, ceiling beyond       |
-| Observability       | ⭐⭐⭐    | Metrics good, tracing incomplete         |
+| Aspect              | Rating   | Notes                                    |
+| ------------------- | -------- | ---------------------------------------- |
+| Code Quality        | ⭐⭐⭐⭐ | Clean architecture, low tech debt        |
+| Protocol Compliance | ⭐⭐⭐   | Good MQTT 5.0, minor gaps                |
+| Performance         | ⭐⭐⭐⭐ | Excellent optimizations                  |
+| Security            | ⭐⭐⭐   | Core fixes complete, auth plugins needed |
+| Scalability         | ⭐⭐⭐   | Good to 5M clients, ceiling beyond       |
+| Observability       | ⭐⭐⭐   | Metrics good, tracing incomplete         |
 | Operations          | ⭐⭐     | Missing hot reload, rate limiting        |
 
 ### Verdict: Conditionally Production Ready
@@ -234,20 +239,24 @@ This document provides a comprehensive comparison of the Absmach MQTT broker aga
 See [docs/roadmap.md](roadmap.md) for the full implementation plan.
 
 ### Priority 1: Critical (Phase 0.1)
+
 - ✅ Secure inter-broker TLS communication
 - ✅ WebSocket origin validation
 - Secure default ACL (deny-all)
 
 ### Priority 2: High (Phase 0.2)
+
 - Rate limiting (connections, messages, subscriptions)
 
 ### Priority 3: Medium (Phase 0.3-0.4)
+
 - Distributed tracing instrumentation
 - Prometheus metrics endpoint
 - MaxQoS enforcement
 - Complete shared subscriptions
 
 ### Priority 4: Enhancement (Phase 0.5-0.6)
+
 - Management dashboard
 - Hot configuration reload
 - Graceful shutdown improvements

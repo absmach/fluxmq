@@ -1,3 +1,8 @@
+---
+title: Client Libraries
+description: Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support, auto-reconnect, and comprehensive features
+---
+
 # Client Libraries
 
 Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support.
@@ -43,23 +48,23 @@ func main() {
         })
 
     c := client.New(opts)
-    
+
     // Connect
     if err := c.Connect(); err != nil {
         log.Fatal(err)
     }
     defer c.Disconnect()
-    
+
     // Subscribe
     if err := c.SubscribeSingle("sensors/#", 1); err != nil {
         log.Fatal(err)
     }
-    
+
     // Publish
     if err := c.Publish("sensors/temp", []byte("22.5"), 1, false); err != nil {
         log.Fatal(err)
     }
-    
+
     // Keep running
     select {}
 }
@@ -226,11 +231,13 @@ Reject/DLQ wiring in the broker is pending.
 MQTT v3 can publish and subscribe to queue topics, but acknowledgments require MQTT v5 user properties.
 
 **When to use queues instead of regular pub/sub:**
+
 - You need at-least-once processing with explicit acknowledgments
 - Multiple consumers should share the workload (consumer groups)
 - Failed messages need retry logic or dead-letter handling
 
 **Key concepts:**
+
 - **Queue**: Persistent message buffer with ordered delivery per queue (single log)
 - **Consumer Group**: Multiple consumers share messages from the same queue
 - **Acknowledgment**: Confirm success (Ack), request redelivery (Nack), or reject permanently (Reject)
@@ -259,7 +266,7 @@ err := c.SubscribeToQueue("orders", "order-processors", func(msg *client.QueueMe
     log.Printf("Message ID: %s", msg.MessageID)
     log.Printf("Group: %s", msg.GroupID)
     log.Printf("Offset: %d", msg.Offset)
-    
+
     // Process message...
     if processedOK {
         msg.Ack()  // Message removed from queue
@@ -287,6 +294,7 @@ c.AckWithGroup("orders", "msg-12345", "processors")
 c.NackWithGroup("orders", "msg-12345", "processors")
 c.RejectWithGroup("orders", "msg-12345", "processors")
 ```
+
 Note: MQTT queue acknowledgments require MQTT v5 and the broker expects
 `message-id` and `group-id` user properties on ack messages. `QueueMessage.Ack()`
 sends both when they are present on incoming messages.
@@ -322,7 +330,7 @@ func main() {
     // Subscribe to order queue with consumer group
     err := c.SubscribeToQueue("orders", "processors", func(msg *client.QueueMessage) {
         log.Printf("Order received: %s", msg.Payload)
-        
+
         // Simulate processing
         if processOrder(msg.Payload) {
             if err := msg.Ack(); err != nil {
@@ -412,18 +420,18 @@ opts.Will = &client.WillMessage{
 
 ### Common Errors
 
-| Error                | Cause                                  |
-| -------------------- | -------------------------------------- |
-| `ErrNotConnected`    | Operation attempted while disconnected |
-| `ErrNoServers`       | No broker addresses configured         |
-| `ErrEmptyClientID`   | ClientID not set                       |
-| `ErrInvalidProtocol` | Protocol version must be 4 or 5        |
-| `ErrInvalidQoS`      | QoS must be 0, 1, or 2                  |
-| `ErrInvalidTopic`    | Empty or invalid topic string          |
-| `ErrInvalidMessage`  | Message is nil or invalid              |
-| `ErrMaxInflight`     | Too many pending messages              |
-| `ErrQueueAckRequiresV5` | Queue acks require MQTT v5 user properties |
-| `ErrQueueAckMissingGroup` | `group-id` missing for queue ack |
+| Error                     | Cause                                      |
+| ------------------------- | ------------------------------------------ |
+| `ErrNotConnected`         | Operation attempted while disconnected     |
+| `ErrNoServers`            | No broker addresses configured             |
+| `ErrEmptyClientID`        | ClientID not set                           |
+| `ErrInvalidProtocol`      | Protocol version must be 4 or 5            |
+| `ErrInvalidQoS`           | QoS must be 0, 1, or 2                     |
+| `ErrInvalidTopic`         | Empty or invalid topic string              |
+| `ErrInvalidMessage`       | Message is nil or invalid                  |
+| `ErrMaxInflight`          | Too many pending messages                  |
+| `ErrQueueAckRequiresV5`   | Queue acks require MQTT v5 user properties |
+| `ErrQueueAckMissingGroup` | `group-id` missing for queue ack           |
 
 ### Handling Connection Errors
 
@@ -452,6 +460,7 @@ opts.SetStore(store)
 ```
 
 Built-in stores:
+
 - **MemoryStore** (default): In-memory, lost on restart
 
 You can implement the `MessageStore` interface to persist QoS 1/2 in-flight data.
@@ -571,6 +580,7 @@ if err := c.PublishToStream("events", []byte("hello"), nil); err != nil {
 ```
 
 Stream deliveries include:
+
 - `x-stream-offset`
 - `x-stream-timestamp`
 - `x-work-acked` / `x-work-committed-offset`
@@ -606,6 +616,7 @@ _ = c.CommitOffset("events", "my-group", lastProcessedOffset)
 Use the same consumer group name in both calls.
 
 With manual commit:
+
 - Messages are delivered but the committed offset doesn't advance automatically
 - On reconnect, delivery resumes from the last committed offset
 - Use `CommitOffset()` to advance the committed position

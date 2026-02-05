@@ -1,3 +1,8 @@
+---
+title: Scaling & Performance
+description: Comprehensive scaling guide covering capacity analysis, performance optimizations, benchmarks, topic sharding, and architecture for 100M+ clients
+---
+
 # Scaling & Performance
 
 **Last Updated:** 2026-01-07
@@ -27,11 +32,13 @@ This document consolidates all scaling, performance, and optimization informatio
 ### Answer: Yes, with modifications (6 weeks effort)
 
 **Current Bottleneck:**
+
 - 🔴 Subscription storage exceeds etcd capacity
 - 10M clients × 10 subs = 100M subscriptions × 500B = 50GB
 - etcd limit: 8GB → Won't fit
 
 **Solution: Gossip Protocol for Subscriptions**
+
 - Store subscriptions in local BadgerDB (per node)
 - Propagate changes via gossip (hashicorp/memberlist)
 - Reduces etcd to 2GB (session ownership only)
@@ -41,17 +48,17 @@ This document consolidates all scaling, performance, and optimization informatio
 
 | Resource        | Per Node | 20 Nodes        | Status |
 | --------------- | -------- | --------------- | ------ |
-| **Connections** | 500K     | 10M             | ✅ OK   |
-| **RAM**         | 15GB     | 300GB           | ✅ OK   |
-| **Disk**        | 5GB      | 100GB           | ✅ OK   |
-| **Throughput**  | 8K msg/s | 160K-500K msg/s | ✅ OK   |
+| **Connections** | 500K     | 10M             | ✅ OK  |
+| **RAM**         | 15GB     | 300GB           | ✅ OK  |
+| **Disk**        | 5GB      | 100GB           | ✅ OK  |
+| **Throughput**  | 8K msg/s | 160K-500K msg/s | ✅ OK  |
 
 ### Architecture Comparison
 
 | Approach                | Effort   | Scalability  | Risk |
 | ----------------------- | -------- | ------------ | ---- |
 | **Keep etcd (current)** | 0 weeks  | 5M clients   | Low  |
-| **etcd + Gossip** ⭐     | 6 weeks  | 10M clients  | Low  |
+| **etcd + Gossip** ⭐    | 6 weeks  | 10M clients  | Low  |
 | **Custom Raft**         | 20 weeks | 50M+ clients | High |
 
 ⭐ = Recommended for 10M client requirement
@@ -63,18 +70,21 @@ This document consolidates all scaling, performance, and optimization informatio
 ### Deployment Tiers
 
 #### Tier 1: Single Node (Development)
+
 - **Hardware:** 16-32 cores, 64-128GB RAM, 1-2TB NVMe
 - **Connections:** 100K-500K (tuned)
 - **Throughput:** 300-500K msg/s
 - **Cost:** $500-1,000/month
 
 #### Tier 2: 3-Node Cluster ⭐ RECOMMENDED
+
 - **Hardware per node:** 8-16 cores, 32-64GB RAM, 500GB-1TB SSD
 - **Connections:** 300K-1.5M (with tuning)
 - **Throughput:** 1M-2M msg/s (with topic sharding)
 - **Cost:** $1,200-1,500/month
 
 #### Tier 3: 5-Node Cluster (High Scale)
+
 - **Connections:** 500K-2.5M (with tuning)
 - **Throughput:** 2M-4M msg/s (with topic sharding)
 - **Cost:** $2,000-2,500/month
@@ -82,6 +92,7 @@ This document consolidates all scaling, performance, and optimization informatio
 ### OS Tuning for High Connections
 
 **Standard Tuning (100K-250K connections):**
+
 ```bash
 # /etc/sysctl.conf
 fs.file-max = 1000000
@@ -93,6 +104,7 @@ ulimit -n 131072
 ```
 
 **Aggressive Tuning (250K-500K connections):**
+
 ```bash
 fs.file-max = 2097152
 fs.nr_open = 2097152
@@ -110,11 +122,11 @@ ulimit -n 524288
 **Memory Requirements:**
 
 | Connections | Memory (Conservative) | Memory (Realistic) |
-|-------------|----------------------|-------------------|
-| 100K        | 800 MB               | 600 MB            |
-| 250K        | 2 GB                 | 1.5 GB            |
-| 500K        | 4 GB                 | 3 GB              |
-| 1M          | 8 GB                 | 6 GB              |
+| ----------- | --------------------- | ------------------ |
+| 100K        | 800 MB                | 600 MB             |
+| 250K        | 2 GB                  | 1.5 GB             |
+| 500K        | 4 GB                  | 3 GB               |
+| 1M          | 8 GB                  | 6 GB               |
 
 **Per-connection breakdown:** ~6-8KB total (TCP buffers 4KB + session state 2KB + Go runtime 0.5KB)
 
@@ -129,24 +141,28 @@ Comprehensive performance optimization achieved **3.3x performance improvement**
 #### Phase 1: Baseline & Profiling
 
 **Critical discovery:** 75% of CPU spent in Garbage Collection
+
 - 49.5 GB allocated in 88 seconds (560 MB/sec allocation rate)
 - 3,005 allocations per message to 1000 subscribers
 
 #### Phase 2: Object Pooling (2.98x gain)
 
 **Implemented pools for:**
+
 1. `storage.Message` - Eliminated 26.28 GB allocations
 2. `v5.Publish` packets - Eliminated 12.89 GB allocations
 3. `v5.PublishProperties` - Eliminated 9.20 GB allocations
 4. `v3.Publish` packets - Eliminated allocations for v3 clients
 
 **Results:**
+
 - Latency: 220 μs → 74 μs (2.98x faster)
 - Memory: 424 KB → 8.4 KB (50.6x reduction)
 - Allocations: 3,005 → 5 (601x reduction)
 - GC time: 75% → 54%
 
 **Implementation files:**
+
 - `storage/pool.go` - Message pooling
 - `mqtt/packets/v5/pool.go` - v5 Publish pooling
 - `mqtt/packets/v3/pool.go` - v3 Publish pooling
@@ -154,11 +170,13 @@ Comprehensive performance optimization achieved **3.3x performance improvement**
 #### Phase 3: Router Match Pooling (1.10x additional gain)
 
 **Implemented pool for subscription slices:**
+
 - Router.Match() uses pooled subscription slice
 - Pre-allocated capacity of 64 subscribers
 - Slice header reused across match operations
 
 **Results:**
+
 - Latency: 74 μs → 67 μs (1.10x faster)
 - Memory: 8.4 KB → 177 B (47x reduction)
 - Allocations: 5 → 4 (1 fewer)
@@ -168,6 +186,7 @@ Comprehensive performance optimization achieved **3.3x performance improvement**
 #### Phase 4: Mutex Profiling & Analysis
 
 **Findings:**
+
 - Total mutex contention: 231ms over entire benchmark
 - 98.88% from test cleanup (disconnect/close), not publish path
 - Actual publish path shows minimal lock contention
@@ -199,6 +218,7 @@ Pooled Objects:
 The zero-copy optimization using reference-counted buffers provides significant performance improvements:
 
 **Key Features:**
+
 - Reference-counted buffers with pooling
 - Zero allocations for message payload sharing
 - Constant memory usage independent of subscriber count
@@ -206,10 +226,10 @@ The zero-copy optimization using reference-counted buffers provides significant 
 
 **Memory Analysis:**
 
-| Approach        | Memory for 1000 subs × 64KB msg |
-|-----------------|--------------------------------|
-| Traditional     | 64 MB per message              |
-| Zero-Copy       | 64 KB + 400 KB ≈ **0.5 MB**    |
+| Approach    | Memory for 1000 subs × 64KB msg |
+| ----------- | ------------------------------- |
+| Traditional | 64 MB per message               |
+| Zero-Copy   | 64 KB + 400 KB ≈ **0.5 MB**     |
 
 **Savings: ~128x reduction**
 
@@ -257,7 +277,7 @@ go test -bench=BenchmarkMessageCopy -benchmem ./mqtt/broker
 ### Single Subscriber Performance
 
 | Message Size | Time (ns/op) | Memory (B/op) | Allocs (op) |
-|--------------|--------------|---------------|-------------|
+| ------------ | ------------ | ------------- | ----------- |
 | 100 bytes    | 539.1        | 600           | 8           |
 | 1 KB         | 545.7        | 600           | 8           |
 | 10 KB        | 654.0        | 600           | 8           |
@@ -272,16 +292,17 @@ go test -bench=BenchmarkMessagePublish_SingleSubscriber -benchmem ./mqtt/broker
 ### Multiple Subscribers Scalability
 
 | Subscribers | Time (ns/op) | Time/Sub (ns) | Memory (B/op) | Allocs/op |
-|-------------|--------------|---------------|---------------|-----------|
+| ----------- | ------------ | ------------- | ------------- | --------- |
 | 1           | 568.6        | 568.6         | 600           | 8         |
 | 10          | 2,393        | 239.3         | 4,416         | 35        |
 | 100         | 21,997       | 220.0         | 42,672        | 305       |
 | 1,000       | 240,064      | 240.1         | 424,369       | 3,005     |
 
 **Key insights:**
+
 - Near-linear scalability: ~230-240 ns per subscriber
 - Memory per subscriber: ~424 bytes (mostly overhead, not message payload)
-- Zero-copy prevents O(N*MessageSize) memory usage
+- Zero-copy prevents O(N\*MessageSize) memory usage
 
 ```bash
 go test -bench=BenchmarkMessagePublish_MultipleSubscribers -benchmem ./mqtt/broker
@@ -292,11 +313,11 @@ go test -bench=BenchmarkMessagePublish_MultipleSubscribers -benchmem ./mqtt/brok
 Publishing 256-byte messages (typical sensor data) to many subscribers:
 
 | Subscribers | Time (ns/op) | Throughput (msg/s) | Memory (B/op) |
-|-------------|--------------|-------------------|---------------|
-| 10          | 2,346        | 426,000           | 4,416         |
-| 100         | 21,538       | 46,400            | 42,672        |
-| 500         | 115,021      | 8,700             | 212,272       |
-| 1,000       | 253,930      | 3,940             | 424,370       |
+| ----------- | ------------ | ------------------ | ------------- |
+| 10          | 2,346        | 426,000            | 4,416         |
+| 100         | 21,538       | 46,400             | 42,672        |
+| 500         | 115,021      | 8,700              | 212,272       |
+| 1,000       | 253,930      | 3,940              | 424,370       |
 
 ```bash
 go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./mqtt/broker
@@ -313,6 +334,7 @@ go test -bench=BenchmarkMessagePublish_FanOut -benchmem ./mqtt/broker
 | GetWithData 64KB       | 34.2         | 0             | 0      |
 
 **Key insights:**
+
 - Extremely fast atomic reference counting (3.5 ns)
 - Pool provides consistent performance regardless of buffer size
 - Zero allocations when pool is warm
@@ -325,12 +347,12 @@ go test -bench=BenchmarkRefCountedBuffer -benchmem ./mqtt
 
 ### Router Performance
 
-| Operation            | Time       | Memory   | Allocs |
-|---------------------|------------|----------|--------|
-| Match (10K subs)    | 148 ns/op  | 143 B/op | 5      |
-| Subscribe           | 521 ns/op  | 221 B/op | 5      |
-| Unsubscribe         | 21.7 μs/op | 109 B/op | 4      |
-| Wildcard matching   | 212 ns/op  | 199 B/op | 6      |
+| Operation         | Time       | Memory   | Allocs |
+| ----------------- | ---------- | -------- | ------ |
+| Match (10K subs)  | 148 ns/op  | 143 B/op | 5      |
+| Subscribe         | 521 ns/op  | 221 B/op | 5      |
+| Unsubscribe       | 21.7 μs/op | 109 B/op | 4      |
+| Wildcard matching | 212 ns/op  | 199 B/op | 6      |
 
 📁 **Test file:** [broker/router/router_bench_test.go](broker/router/router_bench_test.go)
 
@@ -340,13 +362,13 @@ go test -bench=. -benchmem ./broker/router
 
 ### Stress Test Results
 
-| Test | Config | Result |
-|------|--------|--------|
-| **Buffer Pool Exhaustion** | 100 concurrent goroutines, 1M ops | 8.4M ops/sec, 99.95% hit rate |
-| **High Throughput** | 10K msg/s for 10s to 100 subs | Stable, <1000 B/msg overhead |
-| **Concurrent Publishers** | 10 publishers × 10K msgs | Zero errors, linear scaling |
-| **Memory Pressure** | 64KB-1MB messages to 20 subs | <100MB total |
-| **Extreme Fan-Out** | 1K msgs to 5K subs | 5M deliveries, <100 B/delivery |
+| Test                       | Config                            | Result                         |
+| -------------------------- | --------------------------------- | ------------------------------ |
+| **Buffer Pool Exhaustion** | 100 concurrent goroutines, 1M ops | 8.4M ops/sec, 99.95% hit rate  |
+| **High Throughput**        | 10K msg/s for 10s to 100 subs     | Stable, <1000 B/msg overhead   |
+| **Concurrent Publishers**  | 10 publishers × 10K msgs          | Zero errors, linear scaling    |
+| **Memory Pressure**        | 64KB-1MB messages to 20 subs      | <100MB total                   |
+| **Extreme Fan-Out**        | 1K msgs to 5K subs                | 5M deliveries, <100 B/delivery |
 
 📁 **Test file:** [mqtt/broker/message_stress_test.go](mqtt/broker/message_stress_test.go)
 
@@ -390,12 +412,12 @@ failover tests for the queue Raft layer are not currently present in-tree.
 
 ### Performance Comparison
 
-| Scenario                        | Throughput     | Latency       |
-|---------------------------------|----------------|---------------|
-| Single node                     | 500K msgs/sec  | <100μs        |
-| 20-node (no sharding)           | 600K-1M msgs/s | 1-5ms         |
-| Single shard (3 nodes)          | 1-1.5M msgs/s  | <100μs local  |
-| 20-node (7 shards, 95% local)   | **5-10M msgs/s** | <100μs local |
+| Scenario                      | Throughput       | Latency      |
+| ----------------------------- | ---------------- | ------------ |
+| Single node                   | 500K msgs/sec    | <100μs       |
+| 20-node (no sharding)         | 600K-1M msgs/s   | 1-5ms        |
+| Single shard (3 nodes)        | 1-1.5M msgs/s    | <100μs local |
+| 20-node (7 shards, 95% local) | **5-10M msgs/s** | <100μs local |
 
 ### ROI Calculation
 
@@ -413,7 +435,7 @@ Total = 6.7 × 2.5 = 16.75x vs original baseline
 
 ### HAProxy Configuration
 
-```haproxy
+```nginx
 global
     log /dev/log local0
     maxconn 50000
@@ -426,16 +448,16 @@ defaults
 
 frontend mqtt_frontend
     bind *:1883
-    
+
     # Extract shard from ClientID prefix
     tcp-request inspect-delay 5s
     tcp-request content accept if { req.len gt 0 }
-    
+
     # Route based on ClientID prefix
     use_backend mqtt_shard1 if { req.payload(0,100),lower,word(1,-) -m beg tenant1 }
     use_backend mqtt_shard2 if { req.payload(0,100),lower,word(1,-) -m beg tenant2 }
     use_backend mqtt_shard3 if { req.payload(0,100),lower,word(1,-) -m beg tenant3 }
-    
+
     default_backend mqtt_cluster
 
 backend mqtt_shard1
@@ -456,18 +478,21 @@ backend mqtt_cluster
 ### ClientID Naming Conventions
 
 **Multi-Tenant SaaS:**
+
 ```
 Format: {tenant_id}-{app}-{device_id}
 Example: acme-corp-sensor-001
 ```
 
 **IoT Platform:**
+
 ```
 Format: {device_type}-{region}-{device_id}
 Example: sensor-us-west-001
 ```
 
 **Geographic Sharding:**
+
 ```
 Format: {region}-{service}-{id}
 Example: us-east-sensor-001
@@ -475,9 +500,9 @@ Example: us-east-sensor-001
 
 ### Metrics to Monitor
 
-```promql
+```yaml
 # Local routing ratio (target: >95%)
-sum(rate(mqtt_messages_delivered_locally[5m])) 
+sum(rate(mqtt_messages_delivered_locally[5m]))
 / sum(rate(mqtt_messages_total[5m]))
 
 # Cross-node routing (target: <5%)
@@ -553,16 +578,19 @@ go test -race -run=TestStress_ConcurrentPublishers ./mqtt/broker
 ### Interpreting Results
 
 **Benchmark output format:**
+
 ```
 BenchmarkName-16    iterations    ns/op    B/op    allocs/op
 ```
 
 **Zero-copy indicators:**
+
 1. Zero allocations in payload sharing: `0 B/op, 0 allocs/op`
 2. Memory independent of subscriber count
 3. Constant time for different message sizes
 
 **CI regression checks:**
+
 ```bash
 # Fail if latency > 100 μs/op (current: 67 μs)
 # Fail if allocations > 10/op (current: 4)
@@ -593,6 +621,7 @@ benchstat baseline.txt optimized.txt
 ### Key Insight
 
 100M clients cannot be handled as "one big cluster":
+
 - Network: 200 nodes × 199 peers = 39,800 connections
 - Gossip: 200 nodes = 100x network amplification
 - etcd: Maximum 7-9 members (not 200)
@@ -651,19 +680,21 @@ benchstat baseline.txt optimized.txt
 4. **BoltDB Backend:** B+ tree with ~10x write amplification
 
 **Measured Performance (etcd v3.5, SSD):**
+
 - Small writes (100 bytes): 8K writes/sec
 - Medium writes (1KB): 5K writes/sec
 - Large writes (10KB): 1K writes/sec
 
 ### Why Can't We Make etcd Faster?
 
-| Option            | Effect                | Result                |
-| ----------------- | --------------------- | --------------------- |
+| Option            | Effect                 | Result                |
+| ----------------- | ---------------------- | --------------------- |
 | More nodes        | ❌ Doesn't help writes | Still single leader   |
-| Better hardware   | +50%                  | Still <10K writes/sec |
-| Aggressive tuning | 2-3x                  | ~15K writes/sec max   |
+| Better hardware   | +50%                   | Still <10K writes/sec |
+| Aggressive tuning | 2-3x                   | ~15K writes/sec max   |
 
 **Theoretical Maximum (aggressive tuning):**
+
 - Batching: 100 writes/batch
 - No fsync: Skip disk writes (dangerous)
 - Result: ~50K writes/sec
@@ -672,11 +703,13 @@ benchstat baseline.txt optimized.txt
 ### Alternative Architectures
 
 **1. Consistent Hashing + Gossip (Cassandra-Style)**
+
 - Linear scaling, no SPOF
 - Eventual consistency (acceptable for subscriptions)
 - Effort: 3-4 months
 
 **2. Kafka-Based Event Sourcing**
+
 - Full audit trail, scalable
 - External dependency (Kafka cluster)
 - Effort: 4-6 months
@@ -724,11 +757,13 @@ benchstat baseline.txt optimized.txt
 ### When to Build Custom Raft
 
 **Don't build if:**
+
 - Target <20M clients (gossip sufficient)
 - Timeline <6 months
 - Team <3 senior engineers
 
 **Consider if:**
+
 - Target >50M clients
 - 12+ month timeline
 - Experienced distributed systems team
