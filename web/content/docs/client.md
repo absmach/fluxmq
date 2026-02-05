@@ -15,11 +15,11 @@ currently include a dedicated AMQP 1.0 client library.
 
 - **Protocol Support:** MQTT 3.1.1 (v4) and MQTT 5.0 (v5)
 - **Auto-Reconnect:** Exponential backoff with configurable limits
-- **QoS Levels:** Full QoS 0/1/2 support with message persistence
+- **QoS Levels:** Full QoS 0/1/2 support with pluggable in-flight store (memory by default)
 - **TLS/SSL:** Secure connections with custom certificates
 - **Session Persistence:** Configurable session expiry
 - **Durable Queues:** Consumer groups and acknowledgments (DLQ wiring pending)
-- **MQTT 5.0 Features:** Topic aliases, user properties, flow control
+- **MQTT 5.0 Features:** Topic aliases, user properties (publish/receive/will), flow control
 
 ---
 
@@ -140,20 +140,24 @@ c.Publish("topic", []byte("payload"), 2, false)
 c.Publish("config/device", []byte("settings"), 1, true)
 ```
 
-### Publish with MQTT 5.0 Properties
+### MQTT 5.0 Publish Properties
+
+Use `PublishMessage` to set publish properties such as content type, response
+topic, correlation data, and user properties (MQTT 5.0 only).
 
 ```go
 msg := &client.Message{
-    Topic:            "sensors/temp",
-    Payload:          []byte("22.5"),
-    QoS:              1,
-    UserProperties:   map[string]string{"unit": "celsius"},
-    ContentType:      "text/plain",
-    ResponseTopic:    "responses/temp",
-    CorrelationData:  []byte("req-123"),
-    MessageExpiry:    3600,  // Expires in 1 hour
+    Topic:           "sensors/temp",
+    Payload:         []byte("22.5"),
+    QoS:             1,
+    ContentType:     "text/plain",
+    ResponseTopic:   "responses/temp",
+    CorrelationData: []byte("req-123"),
+    UserProperties:  map[string]string{"unit": "celsius"},
 }
-c.PublishMessage(msg)
+if err := c.PublishMessage(msg); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ---
@@ -224,6 +228,7 @@ opts.SetOnMessageV2(func(msg *client.Message) {
 
 The client supports durable queues with consumer groups and message acknowledgment.
 Reject/DLQ wiring in the broker is pending.
+MQTT v3 can publish and subscribe to queue topics, but acknowledgments require MQTT v5 user properties.
 
 **When to use queues instead of regular pub/sub:**
 
@@ -259,18 +264,16 @@ c.PublishToQueueWithOptions(&client.QueuePublishOptions{
 err := c.SubscribeToQueue("orders", "order-processors", func(msg *client.QueueMessage) {
     log.Printf("Processing order: %s", msg.Payload)
     log.Printf("Message ID: %s", msg.MessageID)
-    if msg.UserProperties != nil {
-        log.Printf("Offset: %s", msg.UserProperties["offset"])
-        log.Printf("Group: %s", msg.UserProperties["group-id"])
-    }
+    log.Printf("Group: %s", msg.GroupID)
+    log.Printf("Offset: %d", msg.Offset)
 
     // Process message...
     if processedOK {
         msg.Ack()  // Message removed from queue
     } else if shouldRetry {
-        msg.Nack() // Redelivery eligible immediately (no backoff enforcement yet)
+        msg.Nack() // Redelivery eligible (subject to broker delivery/visibility timing)
     } else {
-        msg.Reject() // Rejects message; DLQ wiring pending
+        msg.Reject() // Removes from pending; DLQ routing not wired yet
     }
 })
 ```
@@ -281,7 +284,7 @@ err := c.SubscribeToQueue("orders", "order-processors", func(msg *client.QueueMe
 | -------------- | -------------------------------------------------- |
 | `msg.Ack()`    | Message processed successfully, removed from queue |
 | `msg.Nack()`   | Processing failed, make eligible for redelivery    |
-| `msg.Reject()` | Permanent failure, DLQ wiring pending              |
+| `msg.Reject()` | Remove from pending; DLQ routing not wired yet     |
 
 ### Direct Acknowledgment
 
@@ -292,9 +295,9 @@ c.NackWithGroup("orders", "msg-12345", "processors")
 c.RejectWithGroup("orders", "msg-12345", "processors")
 ```
 
-Note: the broker expects `message-id` and `group-id` user properties on acks
-(MQTT v5). `QueueMessage.Ack()` sends both. For direct acks, use the `*WithGroup`
-helpers or provide `group-id` manually.
+Note: MQTT queue acknowledgments require MQTT v5 and the broker expects
+`message-id` and `group-id` user properties on ack messages. `QueueMessage.Ack()`
+sends both when they are present on incoming messages.
 
 ### Unsubscribe from Queue
 
@@ -384,7 +387,7 @@ SetOnServerCapabilities(func(caps *client.ServerCapabilities) {
 c.Disconnect()
 
 // With reason (MQTT 5.0)
-c.DisconnectWithReason(0x04, "Going offline")
+c.DisconnectWithReason(0x04, 0, "Going offline")
 ```
 
 ---
@@ -417,14 +420,18 @@ opts.Will = &client.WillMessage{
 
 ### Common Errors
 
-| Error                | Cause                                  |
-| -------------------- | -------------------------------------- |
-| `ErrNotConnected`    | Operation attempted while disconnected |
-| `ErrNoServers`       | No broker addresses configured         |
-| `ErrEmptyClientID`   | ClientID not set                       |
-| `ErrInvalidProtocol` | Protocol version must be 4 or 5        |
-| `ErrInvalidTopic`    | Empty or invalid topic string          |
-| `ErrMaxInflight`     | Too many pending messages              |
+| Error                     | Cause                                      |
+| ------------------------- | ------------------------------------------ |
+| `ErrNotConnected`         | Operation attempted while disconnected     |
+| `ErrNoServers`            | No broker addresses configured             |
+| `ErrEmptyClientID`        | ClientID not set                           |
+| `ErrInvalidProtocol`      | Protocol version must be 4 or 5            |
+| `ErrInvalidQoS`           | QoS must be 0, 1, or 2                     |
+| `ErrInvalidTopic`         | Empty or invalid topic string              |
+| `ErrInvalidMessage`       | Message is nil or invalid                  |
+| `ErrMaxInflight`          | Too many pending messages                  |
+| `ErrQueueAckRequiresV5`   | Queue acks require MQTT v5 user properties |
+| `ErrQueueAckMissingGroup` | `group-id` missing for queue ack           |
 
 ### Handling Connection Errors
 
@@ -445,17 +452,18 @@ if err := c.Connect(); err != nil {
 
 ## Message Store
 
-For QoS 1/2 message persistence:
+For QoS 1/2 in-flight storage:
 
 ```go
-store := client.NewFileStore("/path/to/store")
+store := client.NewMemoryStore()
 opts.SetStore(store)
 ```
 
 Built-in stores:
 
 - **MemoryStore** (default): In-memory, lost on restart
-- **FileStore**: Persistent to disk
+
+You can implement the `MessageStore` interface to persist QoS 1/2 in-flight data.
 
 ---
 
@@ -467,7 +475,9 @@ Built-in stores:
 | ConnectTimeout   | 10 seconds     |
 | WriteTimeout     | 5 seconds      |
 | AckTimeout       | 10 seconds     |
+| PingTimeout      | 5 seconds      |
 | MaxInflight      | 100            |
+| MessageChanSize  | 256            |
 | AutoReconnect    | true           |
 | ReconnectBackoff | 1 second       |
 | MaxReconnectWait | 2 minutes      |
@@ -533,11 +543,12 @@ func main() {
 
 Stream queues provide log-style consumption with cursor offsets.
 Stream queue names follow RabbitMQ conventions (no `$queue/` prefix).
-Supported offsets: `first`, `last`, `next`, `offset=<n>`, `timestamp=<unix>`.
+Offsets are passed as `x-stream-offset` strings; values like `first`, `last`,
+`next`, `offset=<n>`, `timestamp=<unix>` are interpreted by the broker.
 
 ```go
 // Declare a stream queue
-qName, err := c.DeclareStreamQueue(&amqp091.StreamQueueOptions{
+qName, err := c.DeclareStreamQueue(&amqp.StreamQueueOptions{
     Name:          "events",
     Durable:       true,
     MaxAge:        "7D",
@@ -549,10 +560,10 @@ if err != nil {
 log.Printf("stream queue: %s", qName)
 
 // Consume from the beginning
-err = c.SubscribeToStream(&amqp091.StreamConsumeOptions{
+err = c.SubscribeToStream(&amqp.StreamConsumeOptions{
     QueueName: "events",
     Offset:    "first",
-}, func(msg *amqp091.QueueMessage) {
+}, func(msg *amqp.QueueMessage) {
     if off, ok := msg.StreamOffset(); ok {
         log.Printf("offset=%d payload=%s", off, string(msg.Body))
     }
@@ -593,7 +604,7 @@ Minimal example:
 
 ```go
 autoCommit := false
-_ = c.SubscribeToStream(&amqp091.StreamConsumeOptions{
+_ = c.SubscribeToStream(&amqp.StreamConsumeOptions{
     QueueName:     "events",
     ConsumerGroup: "my-group",
     AutoCommit:    &autoCommit,
@@ -613,7 +624,7 @@ With manual commit:
 ### Pub/Sub
 
 ```go
-_ = c.Subscribe("sensors/#", func(msg *amqp091.Message) {
+_ = c.Subscribe("sensors/#", func(msg *amqp.Message) {
     log.Printf("Topic: %s Payload: %s", msg.Topic, string(msg.Body))
 })
 
