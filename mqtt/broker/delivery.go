@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
@@ -128,6 +129,7 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 		p.TopicName = msg.Topic
 		p.Payload = msg.GetPayload()
 		p.ID = msg.PacketID
+		applyPublishProperties(p.Properties, msg)
 
 		pub = p
 	default:
@@ -147,6 +149,71 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 	}
 
 	return s.WritePacket(pub)
+}
+
+func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
+	if props == nil || msg == nil {
+		return
+	}
+
+	// Prefer explicit fields; fall back to mapped properties.
+	if msg.ContentType != "" {
+		props.ContentType = msg.ContentType
+	} else if v := msg.Properties["content-type"]; v != "" {
+		props.ContentType = v
+	}
+
+	if msg.ResponseTopic != "" {
+		props.ResponseTopic = msg.ResponseTopic
+	} else if v := msg.Properties["response-topic"]; v != "" {
+		props.ResponseTopic = v
+	}
+
+	if len(msg.CorrelationData) > 0 {
+		props.CorrelationData = msg.CorrelationData
+	} else if v := msg.Properties["correlation-id"]; v != "" {
+		props.CorrelationData = []byte(v)
+	}
+
+	if msg.PayloadFormat != nil {
+		props.PayloadFormat = msg.PayloadFormat
+	} else if v := msg.Properties["payload-format"]; v != "" {
+		if n, err := strconv.ParseUint(v, 10, 8); err == nil {
+			pf := byte(n)
+			props.PayloadFormat = &pf
+		}
+	}
+
+	userProps := make(map[string]string)
+	if msg.Properties != nil {
+		for k, v := range msg.Properties {
+			if isReservedUserPropertyKey(k) {
+				continue
+			}
+			userProps[k] = v
+		}
+	}
+	if msg.UserProperties != nil {
+		for k, v := range msg.UserProperties {
+			userProps[k] = v
+		}
+	}
+
+	if len(userProps) > 0 {
+		props.User = make([]v5.User, 0, len(userProps))
+		for k, v := range userProps {
+			props.User = append(props.User, v5.User{Key: k, Value: v})
+		}
+	}
+}
+
+func isReservedUserPropertyKey(key string) bool {
+	switch key {
+	case "content-type", "response-topic", "correlation-id", "payload-format":
+		return true
+	default:
+		return false
+	}
 }
 
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.

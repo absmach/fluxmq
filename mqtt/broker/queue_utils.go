@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"strconv"
 	"strings"
 
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -92,12 +93,20 @@ func extractAllProperties(props *v5.PublishProperties) map[string]string {
 	}
 
 	// Add other MQTT v5 properties if present
+	if props.ContentType != "" {
+		result["content-type"] = props.ContentType
+	}
+
 	if props.ResponseTopic != "" {
 		result["response-topic"] = props.ResponseTopic
 	}
 
 	if props.CorrelationData != nil {
 		result["correlation-id"] = string(props.CorrelationData)
+	}
+
+	if props.PayloadFormat != nil {
+		result["payload-format"] = strconv.FormatUint(uint64(*props.PayloadFormat), 10)
 	}
 
 	return result

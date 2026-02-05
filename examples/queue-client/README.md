@@ -4,13 +4,13 @@ This directory contains example configurations and client applications for the M
 
 ## Configuration Examples
 
-| File | Description |
-|------|-------------|
-| `config.yaml` | Full broker configuration with all options |
-| `no-cluster.yaml` | Single-node mode (no clustering) |
-| `node1.yaml`, `node2.yaml`, `node3.yaml` | 3-node cluster setup |
-| `single-node-cluster.yaml` | Single-node with cluster features enabled |
-| `tls-server.yaml` | TLS/SSL configuration |
+| File                                     | Description                                |
+| ---------------------------------------- | ------------------------------------------ |
+| `config.yaml`                            | Full broker configuration with all options |
+| `no-cluster.yaml`                        | Single-node mode (no clustering)           |
+| `node1.yaml`, `node2.yaml`, `node3.yaml` | 3-node cluster setup                       |
+| `single-node-cluster.yaml`               | Single-node with cluster features enabled  |
+| `tls-server.yaml`                        | TLS/SSL configuration                      |
 
 ## Client Examples
 
@@ -29,7 +29,7 @@ A queue named `tasks/orders` receives orders from multiple MQTT publishers. Thre
 │   [MQTT]    │     │   [MQTT]    │     │   [MQTT]    │
 └──────┬──────┘     └──────┬──────┘     └──────┬──────┘
        │                   │                   │
-       │    QoS 2 PUBLISH (exactly-once)       │
+       │    QoS 1/2 PUBLISH                    │
        └───────────────────┼───────────────────┘
                            ▼
                  ┌───────────────────┐
@@ -46,24 +46,24 @@ A queue named `tasks/orders` receives orders from multiple MQTT publishers. Thre
 │ (Consumer Group 1)  │         │ (Consumer Group 2)  │
 │      [MQTT]         │         │    [AMQP 1.0]       │
 ├─────────────────────┤         ├─────────────────────┤
-│ ┌─────┐   ┌─────┐  │         │ ┌─────┐             │
-│ │ C1  │   │ C2  │  │         │ │ C1  │             │
-│ └─────┘   └─────┘  │         │ └─────┘             │
+│ ┌─────┐   ┌─────┐   │         │ ┌─────┐             │
+│ │ C1  │   │ C2  │   │         │ │ C1  │             │
+│ └─────┘   └─────┘   │         │ └─────┘             │
 │  Load balanced      │         │  Single consumer    │
 └─────────────────────┘         └─────────────────────┘
 ```
 
 #### Key Concepts Demonstrated
 
-| Concept | Description |
-|---------|-------------|
-| **Cross-Protocol Interop** | MQTT publishers, AMQP 1.0 and AMQP 0.9.1 consumers on the same queue |
-| **QoS 2 Publishing** | Exactly-once delivery from publisher to broker |
-| **Consumer Groups** | Both groups receive ALL messages (fan-out pattern) |
-| **Load Balancing** | Messages distributed across consumers within a group |
-| **AMQP Dispositions** | `AcceptMessage`, `ReleaseMessage`, `RejectMessage` for ack/nack/reject |
-| **AMQP 0.9.1 Acks** | `Ack`, `Nack`, `Reject` for processing control |
-| **MQTT Acknowledgments** | `Ack()`, `Nack()`, `Reject()` for processing control |
+| Concept                    | Description                                                            |
+| -------------------------- | ---------------------------------------------------------------------- |
+| **Cross-Protocol Interop** | MQTT publishers, AMQP 1.0 and AMQP 0.9.1 consumers on the same queue   |
+| **QoS 1/2 Publishing**     | Reliable publish with QoS guarantees                                   |
+| **Consumer Groups**        | Both groups receive ALL messages (fan-out pattern)                     |
+| **Load Balancing**         | Messages distributed across consumers within a group                   |
+| **AMQP Dispositions**      | `AcceptMessage`, `ReleaseMessage`, `RejectMessage` for ack/nack/reject |
+| **AMQP 0.9.1 Acks**        | `Ack`, `Nack`, `Reject` for processing control                         |
+| **MQTT Acknowledgments**   | `Ack()`, `Nack()`, `Reject()` for processing control                   |
 
 #### AMQP 1.0 Consumer
 
@@ -114,7 +114,7 @@ The consumer group is passed via the `x-consumer-group` argument on `basic.consu
 
 1. Start the broker:
    ```bash
-   go run ./cmd/broker/ -config examples/no-cluster.yaml
+   go run ./cmd/ --config examples/no-cluster.yaml
    ```
 
 2. Run the queue client:

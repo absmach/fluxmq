@@ -221,10 +221,20 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	var messageExpiry *uint32
 	var expiryTime time.Time
 	publishTime := time.Now()
+	var payloadFormat *byte
+	var contentType string
+	var responseTopic string
+	var correlationData []byte
 
 	if p.Properties != nil && p.Properties.MessageExpiry != nil {
 		messageExpiry = p.Properties.MessageExpiry
 		expiryTime = publishTime.Add(time.Duration(*messageExpiry) * time.Second)
+	}
+	if p.Properties != nil {
+		payloadFormat = p.Properties.PayloadFormat
+		contentType = p.Properties.ContentType
+		responseTopic = p.Properties.ResponseTopic
+		correlationData = p.Properties.CorrelationData
 	}
 
 	// Extract MQTT v5 properties for queue functionality
@@ -235,13 +245,17 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
 		msg := &storage.Message{
-			Topic:         topic,
-			QoS:           qos,
-			Retain:        retain,
-			MessageExpiry: messageExpiry,
-			Expiry:        expiryTime,
-			PublishTime:   publishTime,
-			Properties:    properties,
+			Topic:           topic,
+			QoS:             qos,
+			Retain:          retain,
+			MessageExpiry:   messageExpiry,
+			Expiry:          expiryTime,
+			PublishTime:     publishTime,
+			Properties:      properties,
+			PayloadFormat:   payloadFormat,
+			ContentType:     contentType,
+			ResponseTopic:   responseTopic,
+			CorrelationData: correlationData,
 		}
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(msg)
@@ -256,13 +270,17 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
 		msg := &storage.Message{
-			Topic:         topic,
-			QoS:           qos,
-			Retain:        retain,
-			MessageExpiry: messageExpiry,
-			Expiry:        expiryTime,
-			PublishTime:   publishTime,
-			Properties:    properties,
+			Topic:           topic,
+			QoS:             qos,
+			Retain:          retain,
+			MessageExpiry:   messageExpiry,
+			Expiry:          expiryTime,
+			PublishTime:     publishTime,
+			Properties:      properties,
+			PayloadFormat:   payloadFormat,
+			ContentType:     contentType,
+			ResponseTopic:   responseTopic,
+			CorrelationData: correlationData,
 		}
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
@@ -286,13 +304,17 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		// Publish message immediately (distribution to subscribers)
 		msg := &storage.Message{
-			Topic:         topic,
-			QoS:           qos,
-			Retain:        retain,
-			MessageExpiry: messageExpiry,
-			Expiry:        expiryTime,
-			PublishTime:   publishTime,
-			Properties:    properties,
+			Topic:           topic,
+			QoS:             qos,
+			Retain:          retain,
+			MessageExpiry:   messageExpiry,
+			Expiry:          expiryTime,
+			PublishTime:     publishTime,
+			Properties:      properties,
+			PayloadFormat:   payloadFormat,
+			ContentType:     contentType,
+			ResponseTopic:   responseTopic,
+			CorrelationData: correlationData,
 		}
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
