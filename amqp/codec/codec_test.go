@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/absmach/fluxmq/amqp091/codec"
+	"github.com/absmach/fluxmq/amqp/codec"
 )
 
 func TestReadWriteOctet(t *testing.T) {
@@ -264,8 +264,8 @@ func TestReadWriteTable(t *testing.T) {
 
 func TestConnectionMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
@@ -376,12 +376,12 @@ func TestConnectionMethods(t *testing.T) {
 		{
 			"ConnectionOpen",
 			&codec.ConnectionOpen{
-				VirtualHost: "/",
+				VirtualHost:  "/",
 				Capabilities: "",
 				Insist:       true,
 			},
 			&codec.ConnectionOpen{
-				VirtualHost: "/",
+				VirtualHost:  "/",
 				Capabilities: "",
 				Insist:       true,
 			},
@@ -512,8 +512,8 @@ func TestFieldValueTypes(t *testing.T) {
 
 func TestChannelMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
@@ -623,8 +623,8 @@ func TestChannelMethods(t *testing.T) {
 
 func TestExchangeMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
@@ -804,8 +804,8 @@ func TestExchangeMethods(t *testing.T) {
 
 func TestQueueMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
@@ -1012,8 +1012,8 @@ func TestQueueMethods(t *testing.T) {
 
 func TestBasicMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
@@ -1304,8 +1304,8 @@ func TestBasicMethods(t *testing.T) {
 
 func TestTxMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
@@ -1405,8 +1405,8 @@ func TestTxMethods(t *testing.T) {
 
 func TestConfirmMethods(t *testing.T) {
 	tests := []struct {
-		name     string
-		method   interface {
+		name   string
+		method interface {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}

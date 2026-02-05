@@ -96,7 +96,7 @@ type QueueConsumerRegistry interface {
 
 	// ForwardQueuePublish forwards a queue publish to a remote node.
 	// The remote node will store the message in its local matching queues.
-	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error
+	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error
 }
 
 type Lifecycle interface {

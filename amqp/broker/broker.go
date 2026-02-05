@@ -36,7 +36,7 @@ type QueueManager interface {
 	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
 	UpdateQueue(ctx context.Context, config qtypes.QueueConfig) error
 	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
-	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
+	Publish(ctx context.Context, publish qtypes.PublishRequest) error
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
 	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error

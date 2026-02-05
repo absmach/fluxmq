@@ -127,7 +127,11 @@ func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.Appen
 		}
 	}
 
-	if err := h.manager.Publish(ctx, msg.QueueName, msg.Value, properties); err != nil {
+	if err := h.manager.Publish(ctx, types.PublishRequest{
+		Topic:      msg.QueueName,
+		Payload:    msg.Value,
+		Properties: properties,
+	}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -153,7 +157,11 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 			}
 		}
 
-		if err := h.manager.Publish(ctx, msg.QueueName, entry.Value, properties); err != nil {
+		if err := h.manager.Publish(ctx, types.PublishRequest{
+			Topic:      msg.QueueName,
+			Payload:    entry.Value,
+			Properties: properties,
+		}); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 
@@ -189,7 +197,11 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 			}
 		}
 
-		if err := h.manager.Publish(ctx, msg.QueueName, msg.Value, properties); err != nil {
+		if err := h.manager.Publish(ctx, types.PublishRequest{
+			Topic:      msg.QueueName,
+			Payload:    msg.Value,
+			Properties: properties,
+		}); err != nil {
 			continue
 		}
 

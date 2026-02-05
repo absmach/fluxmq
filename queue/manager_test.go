@@ -7,16 +7,20 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/absmach/fluxmq/cluster"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
+	queueraft "github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+	hraft "github.com/hashicorp/raft"
 )
 
 // mockGroupStore implements storage.ConsumerGroupStore for testing.
@@ -358,7 +362,11 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	if err := mgr.Publish(context.Background(), "$queue/events/test", []byte("hello"), nil); err != nil {
+	if err := mgr.Publish(context.Background(), types.PublishRequest{
+		Topic:      "$queue/events/test",
+		Payload:    []byte("hello"),
+		Properties: nil,
+	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -427,7 +435,11 @@ func TestRetentionOffsetMessages(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := mgr.Publish(context.Background(), "$queue/events/test", []byte("msg"), nil); err != nil {
+		if err := mgr.Publish(context.Background(), types.PublishRequest{
+			Topic:      "$queue/events/test",
+			Payload:    []byte("msg"),
+			Properties: nil,
+		}); err != nil {
 			t.Fatalf("Publish failed: %v", err)
 		}
 	}
@@ -703,6 +715,9 @@ type mockCluster struct {
 	nodeID           string
 	routedMessages   []routedMessage
 	routedMessagesMu sync.Mutex
+	forwardCalls     []forwardPublishCall
+	forwardCallsMu   sync.Mutex
+	queueConsumers   []*cluster.QueueConsumerInfo
 }
 
 type routedMessage struct {
@@ -714,10 +729,19 @@ type routedMessage struct {
 	sequence  int64
 }
 
+type forwardPublishCall struct {
+	nodeID          string
+	topic           string
+	payload         []byte
+	properties      map[string]string
+	forwardToLeader bool
+}
+
 func newMockCluster(nodeID string) *mockCluster {
 	return &mockCluster{
 		nodeID:         nodeID,
 		routedMessages: make([]routedMessage, 0),
+		forwardCalls:   make([]forwardPublishCall, 0),
 	}
 }
 
@@ -743,6 +767,18 @@ func (c *mockCluster) GetRoutedMessages() []routedMessage {
 	result := make([]routedMessage, len(c.routedMessages))
 	copy(result, c.routedMessages)
 	return result
+}
+
+func (c *mockCluster) GetForwardCalls() []forwardPublishCall {
+	c.forwardCallsMu.Lock()
+	defer c.forwardCallsMu.Unlock()
+	result := make([]forwardPublishCall, len(c.forwardCalls))
+	copy(result, c.forwardCalls)
+	return result
+}
+
+func (c *mockCluster) SetQueueConsumers(consumers []*cluster.QueueConsumerInfo) {
+	c.queueConsumers = consumers
 }
 
 func (c *mockCluster) Start() error                            { return nil }
@@ -804,11 +840,64 @@ func (c *mockCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, 
 }
 
 func (c *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.QueueConsumerInfo, error) {
-	return nil, nil
+	if c.queueConsumers == nil {
+		return nil, nil
+	}
+	consumers := make([]*cluster.QueueConsumerInfo, len(c.queueConsumers))
+	copy(consumers, c.queueConsumers)
+	return consumers, nil
 }
 
-func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
+	c.forwardCallsMu.Lock()
+	defer c.forwardCallsMu.Unlock()
+	c.forwardCalls = append(c.forwardCalls, forwardPublishCall{
+		nodeID:          nodeID,
+		topic:           topic,
+		payload:         payload,
+		properties:      properties,
+		forwardToLeader: forwardToLeader,
+	})
 	return nil
+}
+
+func setUnexportedField(t *testing.T, target any, fieldName string, value any) {
+	t.Helper()
+
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		t.Fatalf("target must be a non-nil pointer")
+	}
+
+	elem := v.Elem()
+	field := elem.FieldByName(fieldName)
+	if !field.IsValid() {
+		t.Fatalf("field %q not found on %T", fieldName, target)
+	}
+
+	val := reflect.ValueOf(value)
+	if !val.IsValid() {
+		t.Fatalf("value for %q is invalid", fieldName)
+	}
+
+	if !val.Type().AssignableTo(field.Type()) {
+		t.Fatalf("cannot assign %s to %s for %q", val.Type(), field.Type(), fieldName)
+	}
+
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(val)
+}
+
+func newTestRaftManager(t *testing.T, leaderID string) *queueraft.Manager {
+	t.Helper()
+
+	rm := &queueraft.Manager{}
+	setUnexportedField(t, rm, "config", queueraft.ManagerConfig{Enabled: true})
+
+	fakeRaft := &hraft.Raft{}
+	setUnexportedField(t, fakeRaft, "leaderID", hraft.ServerID(leaderID))
+	setUnexportedField(t, rm, "raft", fakeRaft)
+
+	return rm
 }
 
 func TestCrossNodeMessageRouting(t *testing.T) {
@@ -877,6 +966,95 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 				t.Errorf("Expected routed message to client %s, got %s", remoteClientID, rm.clientID)
 			}
 		}
+	}
+}
+
+func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.Default()
+
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   "test",
+			ProxyNodeID: "node-2",
+		},
+	})
+
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyForward
+	config.DistributionMode = DistributionForward
+
+	manager := NewManager(logStore, groupStore, func(ctx context.Context, clientID string, msg any) error {
+		return nil
+	}, config, logger, mockCl)
+
+	manager.SetRaftManager(newTestRaftManager(t, "node-2"))
+
+	ctx := context.Background()
+	err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/test/msg",
+		Payload: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+
+	calls := mockCl.GetForwardCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 forward call, got %d", len(calls))
+	}
+
+	if !calls[0].forwardToLeader {
+		t.Fatalf("expected forward-to-leader call, got forwardToLeader=%v", calls[0].forwardToLeader)
+	}
+
+	if calls[0].nodeID != "node-2" {
+		t.Fatalf("expected leader nodeID node-2, got %s", calls[0].nodeID)
+	}
+}
+
+func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.Default()
+
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   "+",
+			ProxyNodeID: "node-2",
+		},
+	})
+
+	config := DefaultConfig()
+	config.DistributionMode = DistributionReplicate
+
+	manager := NewManager(logStore, groupStore, func(ctx context.Context, clientID string, msg any) error {
+		return nil
+	}, config, logger, mockCl)
+
+	ctx := context.Background()
+	err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/test/tpc/msg",
+		Payload: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+
+	calls := mockCl.GetForwardCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 forward call, got %d", len(calls))
+	}
+
+	if calls[0].forwardToLeader {
+		t.Fatalf("expected forward-to-remote call, got forwardToLeader=%v", calls[0].forwardToLeader)
+	}
+
+	if calls[0].nodeID != "node-2" {
+		t.Fatalf("expected remote nodeID node-2, got %s", calls[0].nodeID)
 	}
 }
 

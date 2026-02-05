@@ -11,11 +11,11 @@ import (
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
-	"github.com/absmach/fluxmq/server/otel"
 	"github.com/absmach/fluxmq/mqtt/session"
+	qtypes "github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/server/otel"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"go.opentelemetry.io/otel/trace"
@@ -36,7 +36,7 @@ type Notifier interface {
 type QueueManager interface {
 	Start(ctx context.Context) error
 	Stop() error
-	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
+	Publish(ctx context.Context, publish qtypes.PublishRequest) error
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
 	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error

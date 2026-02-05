@@ -699,6 +699,8 @@ cluster:
     sync_mode: true
     min_in_sync_replicas: 2
     ack_timeout: "5s"
+    write_policy: "forward"
+    distribution_mode: "replicate"
     bind_addr: "127.0.0.1:7100"
     data_dir: "/tmp/fluxmq/raft"
     peers: {}
@@ -903,6 +905,8 @@ raft:
   sync_mode: true
   min_in_sync_replicas: 2
   ack_timeout: "5s"
+  write_policy: "forward"        # local | reject | forward
+  distribution_mode: "replicate" # forward | replicate
   bind_addr: "127.0.0.1:7100"
   data_dir: "/tmp/fluxmq/raft"
   peers:
@@ -913,6 +917,12 @@ raft:
   snapshot_interval: "5m"
   snapshot_threshold: 8192
 ```
+
+Notes:
+- `write_policy` controls how non-leader nodes handle queue writes when Raft is enabled.
+  `local` keeps current behavior, `reject` returns a leader error, `forward` proxies to the leader.
+- `distribution_mode` controls how publishes reach consumers across nodes.
+  `forward` uses cluster forwarding, `replicate` relies on Raft log replication (requires Raft enabled).
 
 ## Rate Limiting Configuration
 

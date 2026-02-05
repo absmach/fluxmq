@@ -1028,7 +1028,7 @@ func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 	if c.transport == nil {
 		return "", fmt.Errorf("transport not configured")
 	}
-	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, payload, properties)
+	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, payload, properties, false, false)
 }
 
 // RouteQueueMessage sends a queue message to a remote consumer.
@@ -1219,20 +1219,13 @@ func (c *EtcdCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsum
 }
 
 // ForwardQueuePublish forwards a queue publish to a remote node.
-func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
 	if c.transport == nil {
 		return fmt.Errorf("transport not configured")
 	}
 
-	// Add special property to indicate this is a forwarded publish
-	props := make(map[string]string)
-	for k, v := range properties {
-		props[k] = v
-	}
-	props["_forward_publish"] = "true"
-
 	// Use SendEnqueueRemote with topic in queueName field
-	_, err := c.transport.SendEnqueueRemote(ctx, nodeID, topic, payload, props)
+	_, err := c.transport.SendEnqueueRemote(ctx, nodeID, topic, payload, properties, true, forwardToLeader)
 	return err
 }
 

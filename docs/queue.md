@@ -365,8 +365,9 @@ Implemented:
 
 Raft notes:
 - Only leader appends go through Raft.
-- Non-leader nodes currently append locally.
+- Non-leader write behavior is configurable via `cluster.raft.write_policy` (`local`, `reject`, `forward`).
 - Ack/Nack/Reject and consumer state are not replicated via Raft yet.
+- Cross-node distribution is configurable via `cluster.raft.distribution_mode` (`forward`, `replicate`).
 
 ---
 

@@ -282,7 +282,11 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 					props[k] = s
 				}
 			}
-			if err := qm.Publish(context.Background(), publishTopic, data, props); err != nil {
+			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+				Topic:      publishTopic,
+				Payload:    data,
+				Properties: props,
+			}); err != nil {
 				l.logger.Error("queue publish failed", "topic", publishTopic, "error", err)
 			}
 		}

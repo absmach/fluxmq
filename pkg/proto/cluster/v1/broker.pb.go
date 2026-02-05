@@ -961,12 +961,14 @@ func (x *FetchWillResponse) GetError() string {
 }
 
 type EnqueueRemoteRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
-	Properties    map[string]string      `protobuf:"bytes,3,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	QueueName        string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
+	Payload          []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
+	Properties       map[string]string      `protobuf:"bytes,3,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ForwardedPublish bool                   `protobuf:"varint,4,opt,name=forwarded_publish,json=forwardedPublish,proto3" json:"forwarded_publish,omitempty"`
+	ForwardToLeader  bool                   `protobuf:"varint,5,opt,name=forward_to_leader,json=forwardToLeader,proto3" json:"forward_to_leader,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *EnqueueRemoteRequest) Reset() {
@@ -1018,6 +1020,20 @@ func (x *EnqueueRemoteRequest) GetProperties() map[string]string {
 		return x.Properties
 	}
 	return nil
+}
+
+func (x *EnqueueRemoteRequest) GetForwardedPublish() bool {
+	if x != nil {
+		return x.ForwardedPublish
+	}
+	return false
+}
+
+func (x *EnqueueRemoteRequest) GetForwardToLeader() bool {
+	if x != nil {
+		return x.ForwardToLeader
+	}
+	return false
 }
 
 type EnqueueRemoteResponse struct {
@@ -1715,14 +1731,16 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x11FetchWillResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x128\n" +
 	"\amessage\x18\x02 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\amessage\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xe7\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xc0\x02\n" +
 	"\x14EnqueueRemoteRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12W\n" +
 	"\n" +
 	"properties\x18\x03 \x03(\v27.fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntryR\n" +
-	"properties\x1a=\n" +
+	"properties\x12+\n" +
+	"\x11forwarded_publish\x18\x04 \x01(\bR\x10forwardedPublish\x12*\n" +
+	"\x11forward_to_leader\x18\x05 \x01(\bR\x0fforwardToLeader\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"f\n" +
