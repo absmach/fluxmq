@@ -527,6 +527,53 @@ func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) er
 	return op.wait(c.opts.AckTimeout)
 }
 
+// PublishMessage sends a message with optional MQTT 5.0 publish properties.
+// For MQTT 3.1.1, publish properties are ignored.
+func (c *Client) PublishMessage(msg *Message) error {
+	if msg == nil {
+		return ErrInvalidMessage
+	}
+	if !c.state.isConnected() {
+		return ErrNotConnected
+	}
+	if msg.QoS > 2 {
+		return ErrInvalidQoS
+	}
+	if msg.Topic == "" {
+		return ErrInvalidTopic
+	}
+
+	if msg.QoS == 0 {
+		return c.sendPublish(msg, 0)
+	}
+
+	packetID := c.pending.nextPacketID()
+	if packetID == 0 {
+		return ErrMaxInflight
+	}
+
+	publishMsg := msg.Copy()
+	publishMsg.PacketID = packetID
+
+	if err := c.store.StoreOutbound(packetID, publishMsg); err != nil {
+		return err
+	}
+
+	op, err := c.pending.add(packetID, pendingPublish, publishMsg)
+	if err != nil {
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+
+	if err := c.sendPublish(publishMsg, packetID); err != nil {
+		c.pending.remove(packetID)
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+
+	return op.wait(c.opts.AckTimeout)
+}
+
 func (c *Client) sendPublish(msg *Message, packetID uint16) error {
 	c.connMu.RLock()
 	conn := c.conn
@@ -550,6 +597,38 @@ func (c *Client) sendPublish(msg *Message, packetID uint16) error {
 			TopicName: msg.Topic,
 			Payload:   msg.Payload,
 			ID:        packetID,
+		}
+
+		if msg.PayloadFormat != nil || msg.MessageExpiry != nil || msg.ContentType != "" || msg.ResponseTopic != "" || len(msg.CorrelationData) > 0 || len(msg.UserProperties) > 0 {
+			if pkt.Properties == nil {
+				pkt.Properties = &v5.PublishProperties{}
+			}
+		}
+
+		if msg.PayloadFormat != nil {
+			pkt.Properties.PayloadFormat = msg.PayloadFormat
+		}
+		if msg.MessageExpiry != nil {
+			pkt.Properties.MessageExpiry = msg.MessageExpiry
+		}
+		if msg.ContentType != "" {
+			pkt.Properties.ContentType = msg.ContentType
+		}
+		if msg.ResponseTopic != "" {
+			pkt.Properties.ResponseTopic = msg.ResponseTopic
+		}
+		if len(msg.CorrelationData) > 0 {
+			pkt.Properties.CorrelationData = msg.CorrelationData
+		}
+
+		if len(msg.UserProperties) > 0 {
+			if pkt.Properties == nil {
+				pkt.Properties = &v5.PublishProperties{}
+			}
+			pkt.Properties.User = make([]v5.User, 0, len(msg.UserProperties))
+			for k, v := range msg.UserProperties {
+				pkt.Properties.User = append(pkt.Properties.User, v5.User{Key: k, Value: v})
+			}
 		}
 
 		// Apply topic alias if available

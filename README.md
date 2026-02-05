@@ -23,13 +23,13 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 - **Event backbone for microservices** - Reliable, ordered event distribution between services with at-least-once or exactly-once delivery (QoS 1/2)
 - **CQRS systems** - Durable queues for command/event distribution with per-queue FIFO ordering
 - **Asynchronous workflows** - Decouple services with persistent message queues and ack/nack-based redelivery
-- **Real-time event processing** - High throughput (300K-500K msg/s per node) with low latency (<10ms local, ~50ms cross-node)
+- **Real-time event processing** - Low-latency pub/sub with durable queues and ordering
 
-**Why choose this over for EDA:**
+**Why choose this for EDA:**
 - ✅ Simple operations - single binary with embedded storage, no Zookeeper/KRaft
 - ✅ Multi-protocol - same broker handles MQTT, HTTP, WebSocket, CoAP
 - ✅ Per-queue FIFO ordering (single-log queues)
-- ✅ Retention via committed-offset truncation (time/size retention planned)
+- ✅ Retention policies for queue logs (time/size/message count)
 - ✅ Optional Raft layer for queue appends (WIP)
 
 **IoT & Real-Time Systems**
@@ -39,20 +39,9 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 - **Constrained devices** - CoAP bridge for resource-limited IoT hardware
 
 **High-Availability Systems**
-- **Clustered deployments** - 3-5 node clusters with automatic failover (sub-100ms session takeover)
+- **Clustered deployments** - Automatic session takeover with embedded coordination
 - **Geographic distribution** - gRPC-based cross-node routing with embedded etcd coordination
-- **Scalability** - Cluster support (3-node cluster: 1-2M msg/s, 5-node cluster: 2-4M msg/s)
-
-## ⚠️ Not Recommended For
-
-**Long-term Event Storage**
-- ❌ Event sourcing as permanent source of truth - compaction/deletion/retention policies are allowed
-- ❌ Compliance/audit trails requiring immutability - use purpose-built event stores (EventStoreDB)
-- ❌ Time-travel debugging or temporal queries - no time-range indexing
-
-**Complex Event Processing**
-- ❌ Advanced queries over events - no indexing beyond topic and offset
-- ❌ Built-in stream processing - no Kafka Streams equivalent. Consumers do event processing
+- **Scalability** - Horizontal scaling with multi-node clusters
 
 ### Event-Driven Architecture Pattern
 
@@ -110,7 +99,7 @@ FluxMQ is optimized for event-driven systems that need ordered delivery, durable
   - FIFO per queue and per consumer group (single cursor)
   - DLQ handler present (delivery path wiring pending)
   - Optional Raft layer for queue appends (WIP)
-  - Retention via committed-offset truncation (time/size retention planned)
+  - Retention policies (time/size/message count)
 
 - **Persistent Storage**
   - BadgerDB for session state and offline queues
@@ -199,68 +188,25 @@ Defaults in `examples/no-cluster.yaml`:
 
 Configuration is YAML-based. See `examples/` for starter files and `docs/configuration.md` for the full reference.
 
-## Performance
+## Benchmarks
 
-| Metric                     | Value                    |
-| -------------------------- | ------------------------ |
-| **Concurrent Connections** | 500K+ per node           |
-| **Message Throughput**     | 300K-500K msg/s per node |
-| **Latency (local)**        | <10ms                    |
-| **Latency (cross-node)**   | ~5ms                     |
-| **Session Takeover**       | <100ms                   |
-
-**With clustering and topic sharding:**
-- 3-node cluster: 1-2M msg/s
-- 5-node cluster: 2-4M msg/s
-
-See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
+Benchmark results are workload- and hardware-dependent. For reproducible numbers,
+run the benchmark scripts in `benchmarks/` and capture results on your target
+hardware. See `benchmarks/README.md` for commands and guidance.
 
 ## Documentation
 
-| Document                                 | Description                                 |
-| ---------------------------------------- | ------------------------------------------- |
-| [Architecture](docs/architecture.md)     | Detailed system design                      |
-| [Scaling & Performance](docs/scaling.md) | Capacity analysis, benchmarks, optimization |
-| [Clustering](docs/clustering.md)         | Distributed broker design                   |
+| Document                                 | Description                                       |
+| ---------------------------------------- | ------------------------------------------------- |
+| [Architecture](docs/architecture.md)     | Detailed system design                            |
+| [Scaling & Performance](docs/scaling.md) | Benchmarking and tuning guidance                  |
+| [Clustering](docs/clustering.md)         | Distributed broker design                         |
 | [Client Library](docs/client.md)         | Go MQTT and AMQP 0.9.1 clients with queue support |
-| [Broker Internals](docs/broker.md)       | Message routing, sessions                   |
-| [Durable Queues](docs/queue.md)          | Queue configuration, consumer groups        |
-| [Configuration](docs/configuration.md)   | Complete config reference                   |
-| [Webhooks](docs/webhooks.md)             | Webhook event system                        |
-| [Roadmap](docs/roadmap.md)               | Development plan                            |
-
-## Roadmap
-
-### Completed ✅
-- MQTT 3.1.1 and 5.0 support
-- TCP, WebSocket, HTTP transports
-- QoS 0/1/2, retained messages, will messages
-- Clustering with embedded etcd
-- gRPC inter-broker communication (mTLS supported)
-- BadgerDB persistent storage
-- Durable queues with consumer groups
-- Raft layer for queue appends (WIP)
-- Committed-offset truncation for queues (time/size retention planned)
-- TLS/mTLS for client and inter-broker connections
-- WebSocket origin validation
-- Shared subscriptions (MQTT 5.0)
-- MaxQoS enforcement (MQTT 5.0)
-- Performance optimization (3.3x throughput, zero-copy buffers)
-- Rate limiting (per-IP connections, per-client messages/subscriptions)
-- CoAP with UDP and DTLS/mDTLS support
-
-### In Progress 🚧
-- Secure default ACL and Auth integrations
-
-### Planned 📋
-- Management dashboard
-- Prometheus metrics endpoint
-- Distributed tracing instrumentation
-- Hot configuration reload
-- Load tests and benchmarks
-- Performance optimizations and fine-tuning
-
-See [Roadmap](docs/roadmap.md) for details.
+| [Broker Internals](docs/broker.md)       | Message routing, sessions                         |
+| [Durable Queues](docs/queue.md)          | Queue configuration, consumer groups              |
+| [Configuration](docs/configuration.md)   | Complete config reference                         |
+| [Webhooks](docs/webhooks.md)             | Webhook event system                              |
+| [Roadmap](docs/roadmap.md)               | Project planning notes                            |
 
 ## Contributing
 
