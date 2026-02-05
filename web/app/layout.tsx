@@ -3,6 +3,7 @@ import { Provider } from '@/components/provider';
 import './global.css';
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://fluxmq.absmach.eu/'),
   title: {
     default: 'FluxMQ — High-Performance Multi-Protocol Message Broker',
     template: '%s | FluxMQ',
