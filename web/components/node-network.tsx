@@ -117,8 +117,16 @@ export function NodeNetwork() {
     () => [
       // Protocols → Cluster
       edge("mqtt", "broker-a"),
+      edge("mqtt", "broker-b"),
+      edge("mqtt", "broker-c"),
+
       edge("http", "broker-b"),
+      edge("http", "broker-c"),
+
+      edge("ws", "broker-a"),
       edge("ws", "broker-b"),
+      edge("ws", "broker-c"),
+
       edge("amqp", "broker-c"),
 
       // Cluster mesh (clustering)
@@ -130,7 +138,13 @@ export function NodeNetwork() {
 
       // Cluster → Consumers
       consumerEdge("broker-a", "analytics"),
+      consumerEdge("broker-b", "analytics"),
+
+      consumerEdge("broker-a", "apps"),
       consumerEdge("broker-b", "apps"),
+      consumerEdge("broker-c", "apps"),
+
+      consumerEdge("broker-b", "services"),
       consumerEdge("broker-c", "services"),
     ],
     [],
