@@ -286,8 +286,15 @@ func (b *Broker) handleQueueAck(msg *storage.Message) error {
 
 	// Extract queue topic and message ID
 	queueTopic := extractQueueTopicFromAck(msg.Topic)
+	queueName, _ := parseQueueFilter(queueTopic)
 	messageID := ""
 	groupID := ""
+
+	if queueName == "" {
+		b.logError("queue_ack_invalid_queue_topic", fmt.Errorf("invalid queue topic %q", queueTopic),
+			slog.String("topic", msg.Topic))
+		return fmt.Errorf("invalid queue topic: %s", queueTopic)
+	}
 
 	// Extract message ID and group ID from properties
 	if msg.Properties != nil {
@@ -309,18 +316,18 @@ func (b *Broker) handleQueueAck(msg *storage.Message) error {
 
 	// Route to appropriate ack method
 	if strings.HasSuffix(msg.Topic, "/$ack") {
-		b.logOp("queue_ack", slog.String("queue", queueTopic), slog.String("message_id", messageID), slog.String("group_id", groupID))
-		return b.queueManager.Ack(ctx, queueTopic, messageID, groupID)
+		b.logOp("queue_ack", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID))
+		return b.queueManager.Ack(ctx, queueName, messageID, groupID)
 	} else if strings.HasSuffix(msg.Topic, "/$nack") {
-		b.logOp("queue_nack", slog.String("queue", queueTopic), slog.String("message_id", messageID), slog.String("group_id", groupID))
-		return b.queueManager.Nack(ctx, queueTopic, messageID, groupID)
+		b.logOp("queue_nack", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID))
+		return b.queueManager.Nack(ctx, queueName, messageID, groupID)
 	} else if strings.HasSuffix(msg.Topic, "/$reject") {
 		reason := "rejected by consumer"
 		if msg.Properties != nil && msg.Properties["reason"] != "" {
 			reason = msg.Properties["reason"]
 		}
-		b.logOp("queue_reject", slog.String("queue", queueTopic), slog.String("message_id", messageID), slog.String("group_id", groupID), slog.String("reason", reason))
-		return b.queueManager.Reject(ctx, queueTopic, messageID, groupID, reason)
+		b.logOp("queue_reject", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID), slog.String("reason", reason))
+		return b.queueManager.Reject(ctx, queueName, messageID, groupID, reason)
 	}
 
 	return fmt.Errorf("invalid queue ack topic: %s", msg.Topic)
