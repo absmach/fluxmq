@@ -14,7 +14,7 @@ export function HeroSection() {
                 className="text-6xl md:text-8xl font-bold mb-4 animate-fade-in"
                 style={{ lineHeight: "1.1" }}
               >
-                <span className="text-(--flux-blue)">FLux</span>
+                <span className="text-(--flux-blue)">Flux</span>
                 <span className="text-(--flux-orange)">MQ</span>
               </h1>
               <div className="mono text-base md:text-xl text-theme-muted mb-6 border-l-4 border-(--flux-orange) pl-4 animate-slide-up">

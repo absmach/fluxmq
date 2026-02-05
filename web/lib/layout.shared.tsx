@@ -19,7 +19,7 @@ export function baseOptions(): BaseLayoutProps {
           className="text-2xl text-center font-bold animate-fade-in"
           style={{ lineHeight: "1.1" }}
         >
-          <span className="text-(--flux-blue)">FLux</span>
+          <span className="text-(--flux-blue)">Flux</span>
           <span className="text-(--flux-orange)">MQ</span>
         </div>
       ),
