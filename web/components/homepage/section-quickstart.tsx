@@ -16,14 +16,13 @@ export function QuickStartSection() {
         </h2>
 
         <div className="max-w-4xl space-y-8">
-          {/* Build & Run */}
+          {/* Docker Compose */}
           <div>
-            <h3 className="mono font-bold mb-4 text-xl">1. BUILD & RUN</h3>
+            <h3 className="mono font-bold mb-4 text-xl">1. RUN WITH DOCKER</h3>
             <CodeBlock
               code={`git clone https://github.com/absmach/fluxmq.git
 cd fluxmq
-make build
-./build/fluxmq`}
+docker compose -f docker/compose.yaml up -d`}
             />
           </div>
 
@@ -39,32 +38,22 @@ mosquitto_pub -p 1883 -t "test/hello" -m "Hello FluxMQ"`}
             />
           </div>
 
-          {/* Configuration Example */}
+          {/* Local Build */}
           <div>
-            <h3 className="mono font-bold mb-4 text-xl">3. CONFIGURATION</h3>
+            <h3 className="mono font-bold mb-4 text-xl">3. OR BUILD LOCALLY</h3>
             <CodeBlock
-              language="yaml"
-              code={`server:
-  tcp:
-    plain:
-      addr: ":1883"
-      max_connections: 10000
-  websocket:
-    plain:
-      addr: ":8083"
-      path: "/mqtt"
-
-broker:
-  max_message_size: 1048576
-  max_retained_messages: 10000
-
-storage:
-  type: badger
-  path: "./data"`}
+              code={`git clone https://github.com/absmach/fluxmq.git
+cd fluxmq
+make build
+./build/fluxmq --config examples/no-cluster.yaml`}
             />
           </div>
 
           <div className="brutalist-border bg-theme p-8 mt-12">
+            <p className="font-bold mb-4 text-lg">
+              Defaults (MQTT TCP: :1883, AMQP 0.9.1: :5682, Data:
+              /tmp/fluxmq/data)
+            </p>
             <p className="font-bold mb-4 text-lg">Next Steps:</p>
             <ul className="space-y-3">
               <li>
