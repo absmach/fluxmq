@@ -27,12 +27,14 @@ type DeliverFn func(ctx context.Context, clientID string, msg any) error
 // Manager is the queue-based queue manager.
 // It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
-	queueStore      storage.QueueStore
-	groupStore      storage.ConsumerGroupStore
-	consumerManager *consumer.Manager
-	deliverFn       DeliverFn
-	logger          *slog.Logger
-	config          Config
+	queueStore       storage.QueueStore
+	groupStore       storage.ConsumerGroupStore
+	consumerManager  *consumer.Manager
+	deliverFn        DeliverFn
+	logger           *slog.Logger
+	config           Config
+	writePolicy      WritePolicy
+	distributionMode DistributionMode
 
 	// Raft replication manager
 	raftManager *raft.Manager
@@ -80,6 +82,10 @@ type Config struct {
 	// Retention configuration
 	RetentionCheckInterval time.Duration
 
+	// Replication/distribution configuration
+	WritePolicy      WritePolicy
+	DistributionMode DistributionMode
+
 	// Queue configurations from main config
 	QueueConfigs []types.QueueConfig
 }
@@ -99,6 +105,8 @@ func DefaultConfig() Config {
 		StealInterval:          5 * time.Second,
 		StealEnabled:           true,
 		RetentionCheckInterval: 5 * time.Minute,
+		WritePolicy:            WritePolicyLocal,
+		DistributionMode:       DistributionForward,
 	}
 }
 
@@ -127,21 +135,28 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	return &Manager{
-		queueStore:      queueStore,
-		groupStore:      groupStore,
-		consumerManager: consumerMgr,
-		deliverFn:       deliverFn,
-		logger:          logger,
-		config:          config,
-		cluster:         cl,
-		localNodeID:     localNodeID,
-		stopCh:          make(chan struct{}),
-		metrics:         metrics,
+		queueStore:       queueStore,
+		groupStore:       groupStore,
+		consumerManager:  consumerMgr,
+		deliverFn:        deliverFn,
+		logger:           logger,
+		config:           config,
+		writePolicy:      normalizeWritePolicy(config.WritePolicy),
+		distributionMode: normalizeDistributionMode(config.DistributionMode),
+		cluster:          cl,
+		localNodeID:      localNodeID,
+		stopCh:           make(chan struct{}),
+		metrics:          metrics,
 	}
 }
 
 // Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
+	if m.distributionMode == DistributionReplicate && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
+		m.logger.Warn("distribution_mode=replicate requires raft to be enabled; falling back to forward")
+		m.distributionMode = DistributionForward
+	}
+
 	// Ensure reserved queues exist
 	if err := m.ensureReservedQueues(ctx); err != nil {
 		return fmt.Errorf("failed to create reserved queues: %w", err)
@@ -292,45 +307,74 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 // Publish adds a message to all queues whose topic patterns match the topic.
 // This is the NATS JetQueue-style "multi-queue" routing.
 // It also forwards the publish to remote nodes that have consumers for the topic.
-func (m *Manager) Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
 	// Store locally in matching queues
-	if err := m.PublishLocal(ctx, topic, payload, properties); err != nil {
+	if err := m.publishLocal(ctx, publish, false); err != nil {
 		return err
 	}
 
 	// Forward to remote nodes that have consumers
-	if m.cluster != nil {
-		m.forwardToRemoteNodes(ctx, topic, payload, properties)
+	if m.cluster != nil && m.distributionMode == DistributionForward {
+		m.forwardToRemoteNodes(ctx, publish)
 	}
 
 	return nil
 }
 
-// PublishLocal stores a message in local matching queues without forwarding.
-// This is called directly when receiving forwarded publishes from other nodes.
-func (m *Manager) PublishLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+// HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
+func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishRequest, mode types.PublishMode) error {
+	switch mode {
+	case types.PublishLocal:
+		return m.publishLocal(ctx, publish, false)
+	case types.PublishForwarded:
+		return m.publishLocal(ctx, publish, true)
+	case types.PublishNormal:
+		fallthrough
+	default:
+		return m.Publish(ctx, publish)
+	}
+}
+
+func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest, forwarded bool) error {
+	if m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() && !forwarded {
+		switch m.writePolicy {
+		case WritePolicyReject:
+			leaderAddr := m.raftManager.Leader()
+			if leaderAddr == "" {
+				return fmt.Errorf("raft leader unavailable")
+			}
+			return fmt.Errorf("raft leader is at %s", leaderAddr)
+		case WritePolicyForward:
+			return m.forwardPublishToLeader(ctx, publish)
+		case WritePolicyLocal:
+			// fall through to local append
+		default:
+			// Unknown policy - default to local append for backward compatibility.
+		}
+	}
+
 	// Find all matching queues
-	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
+	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 	if err != nil {
 		return fmt.Errorf("failed to find matching queues: %w", err)
 	}
 
 	if len(queues) == 0 {
-		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", topic))
+		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", publish.Topic))
 		// Use the topic as the queue name and the topic itself as the matching pattern.
-		if _, err := m.GetOrCreateQueue(ctx, topic, topic); err != nil {
-			m.logger.Error("failed to create ephemeral queue", slog.String("topic", topic), slog.String("error", err.Error()))
+		if _, err := m.GetOrCreateQueue(ctx, publish.Topic, publish.Topic); err != nil {
+			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
 			return err
 		}
 		// After creating, find it again.
-		queues, err = m.queueStore.FindMatchingQueues(ctx, topic)
+		queues, err = m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 		if err != nil {
 			return fmt.Errorf("failed to find matching queues after creation: %w", err)
 		}
 	}
 
 	if len(queues) == 0 {
-		m.logger.Debug("no queues match topic", slog.String("topic", topic))
+		m.logger.Debug("no queues match topic", slog.String("topic", publish.Topic))
 		return nil
 	}
 
@@ -345,9 +389,9 @@ func (m *Manager) PublishLocal(ctx context.Context, topic string, payload []byte
 		// Create message for this queue
 		msg := &types.Message{
 			ID:         generateMessageID(),
-			Payload:    payload,
-			Topic:      topic,
-			Properties: properties,
+			Payload:    publish.Payload,
+			Topic:      publish.Topic,
+			Properties: publish.Properties,
 			State:      types.StateQueued,
 			CreatedAt:  time.Now(),
 			ExpiresAt:  time.Now().Add(queueConfig.MessageTTL),
@@ -363,14 +407,14 @@ func (m *Manager) PublishLocal(ctx context.Context, topic string, payload []byte
 		if err != nil {
 			m.logger.Warn("failed to append to queue",
 				slog.String("queue", queueName),
-				slog.String("topic", topic),
+				slog.String("topic", publish.Topic),
 				slog.String("error", err.Error()))
 			continue
 		}
 
 		m.logger.Debug("message published",
 			slog.String("queue", queueName),
-			slog.String("topic", topic),
+			slog.String("topic", publish.Topic),
 			slog.Uint64("offset", offset))
 	}
 
@@ -378,7 +422,7 @@ func (m *Manager) PublishLocal(ctx context.Context, topic string, payload []byte
 }
 
 // forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
-func (m *Manager) forwardToRemoteNodes(ctx context.Context, topic string, payload []byte, properties map[string]string) {
+func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest) {
 	// Get all consumers from the cluster
 	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
 	if err != nil {
@@ -397,22 +441,22 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, topic string, payloa
 
 		// Check if this consumer's queue pattern matches the topic
 		queuePattern := "$queue/" + c.QueueName + "/#"
-		if matchesTopic(queuePattern, topic) {
+		if matchesTopic(queuePattern, publish.Topic) {
 			remoteNodes[c.ProxyNodeID] = true
 		}
 	}
 
 	// Forward to each unique remote node
 	for nodeID := range remoteNodes {
-		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, topic, payload, properties); err != nil {
+		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, publish.Topic, publish.Payload, publish.Properties, false); err != nil {
 			m.logger.Warn("failed to forward publish to remote node",
 				slog.String("node", nodeID),
-				slog.String("topic", topic),
+				slog.String("topic", publish.Topic),
 				slog.String("error", err.Error()))
 		} else {
 			m.logger.Debug("forwarded publish to remote node",
 				slog.String("node", nodeID),
-				slog.String("topic", topic))
+				slog.String("topic", publish.Topic))
 		}
 	}
 }
@@ -424,7 +468,11 @@ func matchesTopic(filter, topic string) bool {
 
 // Enqueue is an alias for Publish for backward compatibility.
 func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
-	return m.Publish(ctx, topic, payload, properties)
+	return m.Publish(ctx, types.PublishRequest{
+		Topic:      topic,
+		Payload:    payload,
+		Properties: properties,
+	})
 }
 
 // --- Subscribe Operations ---
@@ -905,10 +953,23 @@ func (m *Manager) deliverMessages() {
 		}
 
 		// Also deliver to remote consumers registered in cluster
-		if m.cluster != nil {
+		if m.cluster != nil && m.distributionMode == DistributionForward {
 			m.deliverToRemoteConsumers(ctx, &queueConfig)
 		}
 	}
+}
+
+func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest) error {
+	if m.cluster == nil {
+		return fmt.Errorf("cluster not configured for leader forward")
+	}
+
+	leaderID := m.raftManager.LeaderID()
+	if leaderID == "" {
+		return fmt.Errorf("raft leader unavailable")
+	}
+
+	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
 }
 
 // deliverToRemoteConsumers delivers messages to consumers registered on remote nodes.
@@ -1548,7 +1609,11 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 
 // EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.
 func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) (string, error) {
-	err := m.Publish(ctx, topic, payload, properties)
+	err := m.Publish(ctx, types.PublishRequest{
+		Topic:      topic,
+		Payload:    payload,
+		Properties: properties,
+	})
 	if err != nil {
 		return "", err
 	}

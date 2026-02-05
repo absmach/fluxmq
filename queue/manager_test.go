@@ -358,7 +358,11 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	if err := mgr.Publish(context.Background(), "$queue/events/test", []byte("hello"), nil); err != nil {
+	if err := mgr.Publish(context.Background(), types.PublishRequest{
+		Topic:      "$queue/events/test",
+		Payload:    []byte("hello"),
+		Properties: nil,
+	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -427,7 +431,11 @@ func TestRetentionOffsetMessages(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := mgr.Publish(context.Background(), "$queue/events/test", []byte("msg"), nil); err != nil {
+		if err := mgr.Publish(context.Background(), types.PublishRequest{
+			Topic:      "$queue/events/test",
+			Payload:    []byte("msg"),
+			Properties: nil,
+		}); err != nil {
 			t.Fatalf("Publish failed: %v", err)
 		}
 	}
@@ -807,7 +815,7 @@ func (c *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.Que
 	return nil, nil
 }
 
-func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
 	return nil
 }
 

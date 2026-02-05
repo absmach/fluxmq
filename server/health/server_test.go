@@ -85,7 +85,7 @@ func (m *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.Que
 	return nil, nil
 }
 
-func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
 	return nil
 }
 

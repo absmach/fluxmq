@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -36,7 +37,11 @@ func (b *Broker) Publish(msg *storage.Message) error {
 
 		if isQueueTopic(msg.Topic) {
 			// Route to queue manager - use existing properties or nil (avoid allocation)
-			return b.queueManager.Publish(context.Background(), msg.Topic, msg.GetPayload(), msg.Properties)
+			return b.queueManager.Publish(context.Background(), types.PublishRequest{
+				Topic:      msg.Topic,
+				Payload:    msg.GetPayload(),
+				Properties: msg.Properties,
+			})
 		}
 	}
 

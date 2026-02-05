@@ -335,6 +335,8 @@ func main() {
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
 		queueCfg.AutoCommitInterval = cfg.QueueManager.AutoCommitInterval
+		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
+		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {
 			queueCfg.QueueConfigs = append(queueCfg.QueueConfigs, queueTypes.FromInput(queueTypes.QueueConfigInput{
 				Name:           qc.Name,

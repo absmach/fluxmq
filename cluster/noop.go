@@ -174,7 +174,7 @@ func (n *NoopCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsum
 	return nil, nil
 }
 
-func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string) error {
+func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
 	// Single-node: no remote nodes to forward to
 	return ErrClusterNotEnabled
 }

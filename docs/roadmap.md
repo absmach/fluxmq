@@ -867,9 +867,14 @@ func (b *Broker) setupSignalHandler() {
 ### Current Implementation Notes
 
 - Single Raft group shared by all queues (`queue/raft/manager.go`)
-- Append operations go through Raft only on the leader; non-leader appends are local
+- Append operations go through Raft only on the leader; non-leader behavior is configurable (`write_policy`)
 - Ack/Nack/Reject, cursor/PEL updates, and retention truncation are not replicated
 - Benchmarks and failover tests for the Raft layer are not present in-tree
+
+### Planned (Phase 2.x)
+
+- Replicate consumer state (cursor/PEL/ACK/NACK/REJECT) through Raft
+- Replicate retention truncation through Raft
 
 ### Configuration Example
 
@@ -883,6 +888,8 @@ cluster:
     sync_mode: true
     min_in_sync_replicas: 2
     ack_timeout: 5s
+    write_policy: "local"
+    distribution_mode: "forward"
     bind_addr: "127.0.0.1:7100"
     data_dir: "/tmp/fluxmq/raft"
     peers:

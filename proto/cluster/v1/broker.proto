@@ -158,6 +158,8 @@ message EnqueueRemoteRequest {
   string queue_name = 1;
   bytes payload = 2;
   map<string, string> properties = 3;
+  bool forwarded_publish = 4;
+  bool forward_to_leader = 5;
 }
 
 message EnqueueRemoteResponse {

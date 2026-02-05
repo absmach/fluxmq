@@ -367,7 +367,11 @@ func (ch *Channel) completePublish() {
 	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") {
 		qm := ch.conn.broker.getQueueManager()
 		if qm != nil {
-			if err := qm.Publish(context.Background(), routingKey, body, props); err != nil {
+			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+				Topic:      routingKey,
+				Payload:    body,
+				Properties: props,
+			}); err != nil {
 				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
 			}
 			if ch.confirmMode {
@@ -382,7 +386,11 @@ func (ch *Channel) completePublish() {
 		qm := ch.conn.broker.getQueueManager()
 		if qm != nil {
 			queueTopic := "$queue/" + routingKey
-			if err := qm.Publish(context.Background(), queueTopic, body, props); err != nil {
+			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+				Topic:      queueTopic,
+				Payload:    body,
+				Properties: props,
+			}); err != nil {
 				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
 			}
 			if ch.confirmMode {
@@ -412,7 +420,11 @@ func (ch *Channel) completePublish() {
 				if routingKey != "" {
 					queueTopic = queueTopic + "/" + routingKey
 				}
-				if err := qm.Publish(context.Background(), queueTopic, body, props); err != nil {
+				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+					Topic:      queueTopic,
+					Payload:    body,
+					Properties: props,
+				}); err != nil {
 					ch.conn.logger.Error("queue publish failed", "queue", b.queue, "error", err)
 				}
 			}

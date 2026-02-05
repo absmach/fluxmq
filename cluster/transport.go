@@ -18,6 +18,7 @@ import (
 	"connectrpc.com/connect"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
+	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -30,8 +31,8 @@ type QueueHandler interface {
 	// DeliverQueueMessage delivers a queue message to a local consumer.
 	DeliverQueueMessage(ctx context.Context, clientID string, msg any) error
 
-	// PublishLocal publishes a message to local matching queues (called by remote forward).
-	PublishLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) error
+	// HandleQueuePublish handles a publish with the given mode.
+	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
 }
 
 // Transport handles inter-broker communication using Connect protocol.
@@ -246,7 +247,7 @@ func (t *Transport) HasPeerConnection(nodeID string) bool {
 }
 
 // RoutePublish implements BrokerServiceHandler.RoutePublish.
-func (t *Transport) RoutePublish(ctx context.Context, req *connect.Request[clusterv1.PublishRequest]) (*connect.Response[clusterv1.PublishResponse], error) {
+func (t *Transport) RoutePublish(ctx context.Context, req *PublishReq) (*PublishResp, error) {
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.PublishResponse{
 			Success: false,
@@ -277,7 +278,7 @@ func (t *Transport) RoutePublish(ctx context.Context, req *connect.Request[clust
 }
 
 // TakeoverSession implements BrokerServiceHandler.TakeoverSession.
-func (t *Transport) TakeoverSession(ctx context.Context, req *connect.Request[clusterv1.TakeoverRequest]) (*connect.Response[clusterv1.TakeoverResponse], error) {
+func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverReq) (*TakeoverResp, error) {
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.TakeoverResponse{
 			Success: false,
@@ -300,7 +301,7 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *connect.Request[cl
 }
 
 // FetchRetained implements BrokerServiceHandler.FetchRetained.
-func (t *Transport) FetchRetained(ctx context.Context, req *connect.Request[clusterv1.FetchRetainedRequest]) (*connect.Response[clusterv1.FetchRetainedResponse], error) {
+func (t *Transport) FetchRetained(ctx context.Context, req *FetchRetainedReq) (*FetchRetainedResp, error) {
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.FetchRetainedResponse{
 			Found: false,
@@ -338,7 +339,7 @@ func (t *Transport) FetchRetained(ctx context.Context, req *connect.Request[clus
 }
 
 // FetchWill implements BrokerServiceHandler.FetchWill.
-func (t *Transport) FetchWill(ctx context.Context, req *connect.Request[clusterv1.FetchWillRequest]) (*connect.Response[clusterv1.FetchWillResponse], error) {
+func (t *Transport) FetchWill(ctx context.Context, req *FetchWillReq) (*FetchWillResp, error) {
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.FetchWillResponse{
 			Found: false,
@@ -375,7 +376,7 @@ func (t *Transport) FetchWill(ctx context.Context, req *connect.Request[clusterv
 }
 
 // EnqueueRemote implements BrokerServiceHandler.EnqueueRemote.
-func (t *Transport) EnqueueRemote(ctx context.Context, req *connect.Request[clusterv1.EnqueueRemoteRequest]) (*connect.Response[clusterv1.EnqueueRemoteResponse], error) {
+func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*EnqueueRemoteResp, error) {
 	t.mu.RLock()
 	handler := t.queueHandler
 	t.mu.RUnlock()
@@ -387,17 +388,23 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *connect.Request[clus
 		}), nil
 	}
 
+	forwardedPublish := req.Msg.ForwardedPublish
+	forwardToLeader := req.Msg.ForwardToLeader
+
 	// Check if this is a forwarded publish (topic-based) vs direct enqueue (queue-based)
-	if req.Msg.Properties != nil && req.Msg.Properties["_forward_publish"] == "true" {
-		// This is a forwarded publish - call PublishLocal with the topic
+	if forwardedPublish {
+		// This is a forwarded publish - handle with mode
 		topic := req.Msg.QueueName // topic is passed in queueName field for forwards
-		props := make(map[string]string)
-		for k, v := range req.Msg.Properties {
-			if k != "_forward_publish" {
-				props[k] = v
-			}
+		mode := queueTypes.PublishForwarded
+		if forwardToLeader {
+			mode = queueTypes.PublishNormal
 		}
-		err := handler.PublishLocal(ctx, topic, req.Msg.Payload, props)
+
+		err := handler.HandleQueuePublish(ctx, queueTypes.PublishRequest{
+			Topic:      topic,
+			Payload:    req.Msg.Payload,
+			Properties: req.Msg.Properties,
+		}, mode)
 		if err != nil {
 			return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
 				Success: false,
@@ -425,7 +432,7 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *connect.Request[clus
 }
 
 // RouteQueueMessage implements BrokerServiceHandler.RouteQueueMessage.
-func (t *Transport) RouteQueueMessage(ctx context.Context, req *connect.Request[clusterv1.RouteQueueMessageRequest]) (*connect.Response[clusterv1.RouteQueueMessageResponse], error) {
+func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessageReq) (*RouteQueueMessageResp, error) {
 	t.mu.RLock()
 	handler := t.queueHandler
 	t.mu.RUnlock()
@@ -459,7 +466,7 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *connect.Request[
 }
 
 // AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
-func (t *Transport) AppendEntries(ctx context.Context, req *connect.Request[clusterv1.AppendEntriesRequest]) (*connect.Response[clusterv1.AppendEntriesResponse], error) {
+func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*AppendEntriesResp, error) {
 	// TODO: Implement Raft consensus
 	return connect.NewResponse(&clusterv1.AppendEntriesResponse{
 		Term:    req.Msg.Term,
@@ -468,7 +475,7 @@ func (t *Transport) AppendEntries(ctx context.Context, req *connect.Request[clus
 }
 
 // RequestVote implements BrokerServiceHandler.RequestVote (Raft).
-func (t *Transport) RequestVote(ctx context.Context, req *connect.Request[clusterv1.RequestVoteRequest]) (*connect.Response[clusterv1.RequestVoteResponse], error) {
+func (t *Transport) RequestVote(ctx context.Context, req *RequestVoteReq) (*RequestVoteResp, error) {
 	// TODO: Implement Raft consensus
 	return connect.NewResponse(&clusterv1.RequestVoteResponse{
 		Term:        req.Msg.Term,
@@ -477,7 +484,7 @@ func (t *Transport) RequestVote(ctx context.Context, req *connect.Request[cluste
 }
 
 // InstallSnapshot implements BrokerServiceHandler.InstallSnapshot (Raft).
-func (t *Transport) InstallSnapshot(ctx context.Context, req *connect.Request[clusterv1.InstallSnapshotRequest]) (*connect.Response[clusterv1.InstallSnapshotResponse], error) {
+func (t *Transport) InstallSnapshot(ctx context.Context, req *InstallSnapshotReq) (*InstallSnapshotResp, error) {
 	// TODO: Implement Raft consensus
 	return connect.NewResponse(&clusterv1.InstallSnapshotResponse{
 		Term: req.Msg.Term,
@@ -619,7 +626,7 @@ func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) 
 }
 
 // SendEnqueueRemote sends an enqueue request to a peer node with retry and circuit breaker.
-func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
+func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string, forwarded, forwardToLeader bool) (string, error) {
 	var messageID string
 	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
@@ -628,9 +635,11 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 		}
 
 		req := connect.NewRequest(&clusterv1.EnqueueRemoteRequest{
-			QueueName:  queueName,
-			Payload:    payload,
-			Properties: properties,
+			QueueName:        queueName,
+			Payload:          payload,
+			Properties:       properties,
+			ForwardedPublish: forwarded,
+			ForwardToLeader:  forwardToLeader,
 		})
 
 		resp, err := client.EnqueueRemote(ctx, req)

@@ -289,9 +289,11 @@ type RaftConfig struct {
 	SyncMode          bool              `yaml:"sync_mode"`          // true=wait for quorum, false=async
 	MinInSyncReplicas int               `yaml:"min_in_sync_replicas"`
 	AckTimeout        time.Duration     `yaml:"ack_timeout"`
-	BindAddr          string            `yaml:"bind_addr"` // Base address for Raft (e.g., "127.0.0.1:7100")
-	DataDir           string            `yaml:"data_dir"`  // Directory for Raft data
-	Peers             map[string]string `yaml:"peers"`     // Map of nodeID -> raft base address
+	WritePolicy       string            `yaml:"write_policy"`      // local, reject, forward
+	DistributionMode  string            `yaml:"distribution_mode"` // forward, replicate
+	BindAddr          string            `yaml:"bind_addr"`         // Base address for Raft (e.g., "127.0.0.1:7100")
+	DataDir           string            `yaml:"data_dir"`          // Directory for Raft data
+	Peers             map[string]string `yaml:"peers"`             // Map of nodeID -> raft base address
 
 	// Raft tuning
 	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
@@ -494,6 +496,8 @@ func Default() *Config {
 				SyncMode:          true,
 				MinInSyncReplicas: 2,
 				AckTimeout:        5 * time.Second,
+				WritePolicy:       "local",
+				DistributionMode:  "forward",
 				BindAddr:          "127.0.0.1:7100",
 				DataDir:           "/tmp/fluxmq/raft",
 				Peers:             map[string]string{},
@@ -860,6 +864,21 @@ func (c *Config) Validate() error {
 			}
 			if c.Cluster.Transport.TLSCAFile == "" {
 				return fmt.Errorf("cluster.transport.tls_ca_file required when transport TLS is enabled")
+			}
+		}
+
+		if c.Cluster.Raft.WritePolicy != "" {
+			switch strings.ToLower(c.Cluster.Raft.WritePolicy) {
+			case "local", "reject", "forward":
+			default:
+				return fmt.Errorf("cluster.raft.write_policy must be one of: local, reject, forward")
+			}
+		}
+		if c.Cluster.Raft.DistributionMode != "" {
+			switch strings.ToLower(c.Cluster.Raft.DistributionMode) {
+			case "forward", "replicate":
+			default:
+				return fmt.Errorf("cluster.raft.distribution_mode must be one of: forward, replicate")
 			}
 		}
 	}

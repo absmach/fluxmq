@@ -20,7 +20,7 @@ type QueueManager interface {
 	Start(ctx context.Context) error
 	Stop() error
 	// Publish adds a message to all queues whose topic patterns match the topic.
-	Publish(ctx context.Context, topic string, payload []byte, properties map[string]string) error
+	Publish(ctx context.Context, publish types.PublishRequest) error
 	// Subscribe adds a consumer to a queue with optional pattern matching.
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
 	// SubscribeWithCursor adds a consumer with explicit cursor positioning.
