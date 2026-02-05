@@ -49,4 +49,6 @@ FluxMQ treats `$queue/<name>/...` as:
 - `name`: the durable queue name
 - everything after `name/`: the queue routing key (used for pattern matching inside the queue)
 
+For MQTT, durable queue behavior is triggered by the `$queue/` prefix. A publish to a non-`$queue/` topic uses normal pub/sub routing.
+
 Learn more in `/docs/guides/durable-queues`.

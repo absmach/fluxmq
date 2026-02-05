@@ -23,6 +23,15 @@ Queues can operate in two modes:
 - **Classic (work queue)**: messages are claimed, tracked in a pending list (PEL), and acknowledged.
 - **Stream**: consumers read sequentially with cursor-based progress (replayable log semantics).
 
+## Do MQTT Producers Need `$queue/`?
+
+Yes. In FluxMQ today, MQTT publishes are treated as durable-queue traffic only when the topic starts with `$queue/`.
+
+- Publish to `sensors/temp` goes through normal pub/sub routing (subscriptions, retained, cluster pub/sub).
+- Publish to `$queue/orders/...` goes through the queue manager (durable log + consumer groups + acks).
+
+If you configured a queue with topic bindings that match a non-`$queue/` topic, MQTT publishes to that topic will still *not* be enqueued, because the MQTT broker does not route non-`$queue/` publishes into the queue manager.
+
 ## Architecture
 
 ```
