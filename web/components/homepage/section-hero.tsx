@@ -24,7 +24,7 @@ export function HeroSection() {
               </div>
             </div>
 
-            <p className="text-xl md:text-2xl mb-14 max-w-3xl leading-relaxed animate-fade-in">
+            <p className="text-xl! md:text-2xl! mb-14 max-w-3xl leading-relaxed animate-fade-in">
               A high-performance, open source, multi-protocol message broker
               written in Go for scalable IoT and event-driven architectures.
               Single binary. No external dependencies.
