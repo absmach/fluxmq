@@ -479,15 +479,15 @@ package main
 import (
     "log"
 
-    amqp091 "github.com/absmach/fluxmq/client/amqp091"
+    "github.com/absmach/fluxmq/client/amqp"
 )
 
 func main() {
-    opts := amqp091.NewOptions().
+    opts := amqp.NewOptions().
         SetAddress("localhost:5682").
         SetCredentials("guest", "guest")
 
-    c, err := amqp091.New(opts)
+    c, err := amqp.New(opts)
     if err != nil {
         log.Fatal(err)
     }
@@ -498,7 +498,7 @@ func main() {
     defer c.Close()
 
     // Subscribe to a queue with a consumer group
-    err = c.SubscribeToQueue("tasks/orders", "order-shipper", func(msg *amqp091.QueueMessage) {
+    err = c.SubscribeToQueue("tasks/orders", "order-shipper", func(msg *amqp.QueueMessage) {
         log.Printf("Received: %s", string(msg.Body))
         _ = msg.Ack()
     })

@@ -35,7 +35,7 @@ import (
 
 	"github.com/Azure/go-amqp"
 	"github.com/absmach/fluxmq/client"
-	amqp091 "github.com/absmach/fluxmq/client/amqp091"
+	amqp091 "github.com/absmach/fluxmq/client/amqp"
 )
 
 const queueName = "tasks/orders"
