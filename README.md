@@ -236,13 +236,15 @@ See [Scaling & Performance](docs/scaling.md) for detailed benchmarks.
 - CoAP with UDP and DTLS/mDTLS support
 
 ### In Progress 🚧
-- Secure default ACL
+- Secure default ACL and Auth integrations
 
 ### Planned 📋
 - Management dashboard
 - Prometheus metrics endpoint
 - Distributed tracing instrumentation
 - Hot configuration reload
+- Load tests and benchmarks
+- Performance optimizations and fine-tuning
 
 See [Roadmap](docs/roadmap.md) for details.
 
@@ -257,9 +259,3 @@ See [Roadmap](docs/roadmap.md) for details.
 ## License
 
 Apache License 2.0 - see [LICENSE](LICENSE)
-
-## Acknowledgments
-
-- [Eclipse Paho](https://www.eclipse.org/paho/) - MQTT client libraries
-- [Mosquitto](https://mosquitto.org/) - Reference MQTT broker
-- [MQTT.org](https://mqtt.org/) - MQTT specification
