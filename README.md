@@ -163,7 +163,21 @@ MQTT transports share one broker; AMQP brokers are independent; queues provide t
 
 ## Getting Started
 
-### Quick Single-Instance Service (No Clustering)
+The simplest way to run the broker is using Docker Compose file with default config:
+
+```bash
+docker compose -f docker/compose.yaml up -d
+```
+
+To run with the config from `examples/no-cluster.yaml`,
+execute the following from the repo root so the file path resolves.
+
+```bash
+FLUXMQ_CONFIG=../examples/no-cluster.yaml \
+  docker compose -f docker/compose.yaml up -d
+```
+
+To run locally, use:
 
 ```bash
 make build
@@ -175,7 +189,7 @@ Defaults in `examples/no-cluster.yaml`:
 - AMQP 0.9.1: `:5682`
 - Data dir: `/tmp/fluxmq/data`
 
-## Docker
+## Docker build
 
 - Image: `ghcr.io/absmach/fluxmq`
 - Examples: `docker/README.md`, `docker/compose.yaml`, `docker/config.yaml`

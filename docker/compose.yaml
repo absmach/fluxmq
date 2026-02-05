@@ -10,7 +10,7 @@ services:
       - "5682:5682"   # AMQP 0.9.1
       - "8081:8081"   # Health
     volumes:
-      - ./config.yaml:/etc/fluxmq/config.yaml:ro
+      - ${FLUXMQ_CONFIG:-./config.yaml}:/etc/fluxmq/config.yaml:ro
       - fluxmq-data:/var/lib/fluxmq
     restart: unless-stopped
 
