@@ -130,6 +130,7 @@ func TestTLS_RequireClientCert(t *testing.T) {
 
 		err := tlsHandshakeWithTimeout(tlsClient, 2*time.Second)
 		if err == nil {
+			_ = tlsClient.SetDeadline(time.Now().Add(1 * time.Second))
 			connectPkt := &v3.Connect{
 				FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
 				ProtocolName:    "MQTT",
