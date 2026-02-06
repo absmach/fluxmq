@@ -20,7 +20,7 @@ Protocol listeners are configured under `server.*` in the YAML config.
 
 ## Learn More
 
-- `/docs/configuration/server`
-- `/docs/clients/mqtt`
-- `/docs/clients/websocket`
-- `/docs/clients/http`
+- [/docs/configuration/server](/docs/configuration/server)
+- [/docs/clients/mqtt](/docs/clients/mqtt)
+- [/docs/clients/websocket](/docs/clients/websocket)
+- [/docs/clients/http](/docs/clients/http)

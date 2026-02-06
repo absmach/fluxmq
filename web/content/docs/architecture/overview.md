@@ -99,8 +99,8 @@ If you are debugging data persistence, start here:
 
 ## Related Docs
 
-- Routing internals: `/docs/architecture/routing`
-- Storage internals: `/docs/architecture/storage`
-- Clustering internals: `/docs/architecture/clustering-internals`
-- Durable queues: `/docs/messaging/durable-queues`
-- Configuration reference: `/docs/reference/configuration-reference`
+- Routing internals: [/docs/architecture/routing](/docs/architecture/routing)
+- Storage internals: [/docs/architecture/storage](/docs/architecture/storage)
+- Clustering internals: [/docs/architecture/clustering-internals](/docs/architecture/clustering-internals)
+- Durable queues: [/docs/messaging/durable-queues](/docs/messaging/durable-queues)
+- Configuration reference: [/docs/reference/configuration-reference](/docs/reference/configuration-reference)

@@ -28,7 +28,7 @@ Use MQTT v5 `SUBSCRIBE` user property `consumer-group` for queue consumers:
 ```bash
 mosquitto_sub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
   -i worker-1 -q 1 -t '$queue/orders/#' -v \
-  -d subscribe user-property consumer-group workers
+  -D subscribe user-property consumer-group workers
 ```
 
 Start another worker in the same group:
@@ -105,7 +105,7 @@ mosquitto_sub -d -V mqttv5 -h localhost -p 1883 -t '$queue/orders/#' \
 
 ## Learn More
 
-- `/docs/configuration/server`
-- `/docs/messaging/publishing-messages`
-- `/docs/messaging/consuming-messages`
-- `/docs/messaging/consumer-groups`
+- [/docs/configuration/server](/docs/configuration/server)
+- [/docs/messaging/publishing-messages](/docs/messaging/publishing-messages)
+- [/docs/messaging/consuming-messages](/docs/messaging/consuming-messages)
+- [/docs/messaging/consumer-groups](/docs/messaging/consumer-groups)

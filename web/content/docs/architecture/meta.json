@@ -4,6 +4,6 @@
     "overview",
     "routing",
     "storage",
-    "clustering-internals"
+    "clustering"
   ]
 }
