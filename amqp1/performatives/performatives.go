@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/absmach/fluxmq/amqp1/types"
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // Performative descriptors.
@@ -40,20 +41,21 @@ type Open struct {
 }
 
 func (o *Open) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
-	if err := types.WriteString(&fields, o.ContainerID); err != nil {
+	if err := types.WriteString(fields, o.ContainerID); err != nil {
 		return nil, err
 	}
 	count++
 
 	if o.Hostname != "" {
-		if err := types.WriteString(&fields, o.Hostname); err != nil {
+		if err := types.WriteString(fields, o.Hostname); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -63,7 +65,7 @@ func (o *Open) Encode() ([]byte, error) {
 	if maxFrame == 0 {
 		maxFrame = uint32(DefaultMaxFrameSize)
 	}
-	if err := types.WriteUint(&fields, maxFrame); err != nil {
+	if err := types.WriteUint(fields, maxFrame); err != nil {
 		return nil, err
 	}
 	count++
@@ -72,28 +74,28 @@ func (o *Open) Encode() ([]byte, error) {
 	if channelMax == 0 {
 		channelMax = 65535
 	}
-	if err := types.WriteUshort(&fields, channelMax); err != nil {
+	if err := types.WriteUshort(fields, channelMax); err != nil {
 		return nil, err
 	}
 	count++
 
 	if o.IdleTimeOut > 0 {
-		if err := types.WriteUint(&fields, o.IdleTimeOut); err != nil {
+		if err := types.WriteUint(fields, o.IdleTimeOut); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
 	if len(o.Properties) > 0 {
-		if err := writeSymbolAnyMap(&fields, o.Properties); err != nil {
+		if err := writeSymbolAnyMap(fields, o.Properties); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -135,31 +137,32 @@ type Begin struct {
 }
 
 func (b *Begin) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	if b.RemoteChannel != nil {
-		if err := types.WriteUshort(&fields, *b.RemoteChannel); err != nil {
+		if err := types.WriteUshort(fields, *b.RemoteChannel); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
-	if err := types.WriteUint(&fields, b.NextOutgoingID); err != nil {
+	if err := types.WriteUint(fields, b.NextOutgoingID); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteUint(&fields, b.IncomingWindow); err != nil {
+	if err := types.WriteUint(fields, b.IncomingWindow); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteUint(&fields, b.OutgoingWindow); err != nil {
+	if err := types.WriteUint(fields, b.OutgoingWindow); err != nil {
 		return nil, err
 	}
 	count++
@@ -168,7 +171,7 @@ func (b *Begin) Encode() ([]byte, error) {
 	if handleMax == 0 {
 		handleMax = 4294967295
 	}
-	if err := types.WriteUint(&fields, handleMax); err != nil {
+	if err := types.WriteUint(fields, handleMax); err != nil {
 		return nil, err
 	}
 	count++
@@ -212,34 +215,35 @@ type Attach struct {
 }
 
 func (a *Attach) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	// Name (0)
-	if err := types.WriteString(&fields, a.Name); err != nil {
+	if err := types.WriteString(fields, a.Name); err != nil {
 		return nil, err
 	}
 	count++
 
 	// Handle (1)
-	if err := types.WriteUint(&fields, a.Handle); err != nil {
+	if err := types.WriteUint(fields, a.Handle); err != nil {
 		return nil, err
 	}
 	count++
 
 	// Role (2)
-	if err := types.WriteBool(&fields, a.Role); err != nil {
+	if err := types.WriteBool(fields, a.Role); err != nil {
 		return nil, err
 	}
 	count++
 
 	// SndSettleMode (3)
 	if a.SndSettleMode != nil {
-		if err := types.WriteUbyte(&fields, *a.SndSettleMode); err != nil {
+		if err := types.WriteUbyte(fields, *a.SndSettleMode); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -247,11 +251,11 @@ func (a *Attach) Encode() ([]byte, error) {
 
 	// RcvSettleMode (4)
 	if a.RcvSettleMode != nil {
-		if err := types.WriteUbyte(&fields, *a.RcvSettleMode); err != nil {
+		if err := types.WriteUbyte(fields, *a.RcvSettleMode); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -265,7 +269,7 @@ func (a *Attach) Encode() ([]byte, error) {
 		}
 		fields.Write(src)
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -279,31 +283,31 @@ func (a *Attach) Encode() ([]byte, error) {
 		}
 		fields.Write(tgt)
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
 	// Unsettled (7) - null
-	if err := types.WriteNull(&fields); err != nil {
+	if err := types.WriteNull(fields); err != nil {
 		return nil, err
 	}
 	count++
 
 	// IncompleteUnsettled (8) - null
-	if err := types.WriteNull(&fields); err != nil {
+	if err := types.WriteNull(fields); err != nil {
 		return nil, err
 	}
 	count++
 
 	// InitialDeliveryCount (9) - required for sender role
 	if !a.Role { // sender
-		if err := types.WriteUint(&fields, a.InitialDeliveryCount); err != nil {
+		if err := types.WriteUint(fields, a.InitialDeliveryCount); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -311,11 +315,11 @@ func (a *Attach) Encode() ([]byte, error) {
 
 	// MaxMessageSize (10)
 	if a.MaxMessageSize > 0 {
-		if err := types.WriteUlong(&fields, a.MaxMessageSize); err != nil {
+		if err := types.WriteUlong(fields, a.MaxMessageSize); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -324,19 +328,19 @@ func (a *Attach) Encode() ([]byte, error) {
 	// Only encode fields 11-13 if Properties is set
 	if len(a.Properties) > 0 {
 		// OfferedCapabilities (11) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// DesiredCapabilities (12) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// Properties (13)
-		if err := types.WriteStringAnyMap(&fields, a.Properties); err != nil {
+		if err := types.WriteStringAnyMap(fields, a.Properties); err != nil {
 			return nil, err
 		}
 		count++
@@ -412,14 +416,15 @@ type Flow struct {
 }
 
 func (f *Flow) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	writeOptUint32 := func(v *uint32) error {
 		if v != nil {
-			return types.WriteUint(&fields, *v)
+			return types.WriteUint(fields, *v)
 		}
-		return types.WriteNull(&fields)
+		return types.WriteNull(fields)
 	}
 
 	if err := writeOptUint32(f.NextIncomingID); err != nil {
@@ -427,17 +432,17 @@ func (f *Flow) Encode() ([]byte, error) {
 	}
 	count++
 
-	if err := types.WriteUint(&fields, f.IncomingWindow); err != nil {
+	if err := types.WriteUint(fields, f.IncomingWindow); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteUint(&fields, f.NextOutgoingID); err != nil {
+	if err := types.WriteUint(fields, f.NextOutgoingID); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteUint(&fields, f.OutgoingWindow); err != nil {
+	if err := types.WriteUint(fields, f.OutgoingWindow); err != nil {
 		return nil, err
 	}
 	count++
@@ -462,12 +467,12 @@ func (f *Flow) Encode() ([]byte, error) {
 	}
 	count++
 
-	if err := types.WriteBool(&fields, f.Drain); err != nil {
+	if err := types.WriteBool(fields, f.Drain); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteBool(&fields, f.Echo); err != nil {
+	if err := types.WriteBool(fields, f.Echo); err != nil {
 		return nil, err
 	}
 	count++
@@ -529,53 +534,54 @@ type Transfer struct {
 }
 
 func (t *Transfer) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
-	if err := types.WriteUint(&fields, t.Handle); err != nil {
+	if err := types.WriteUint(fields, t.Handle); err != nil {
 		return nil, err
 	}
 	count++
 
 	if t.DeliveryID != nil {
-		if err := types.WriteUint(&fields, *t.DeliveryID); err != nil {
+		if err := types.WriteUint(fields, *t.DeliveryID); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
 	if t.DeliveryTag != nil {
-		if err := types.WriteBinary(&fields, t.DeliveryTag); err != nil {
+		if err := types.WriteBinary(fields, t.DeliveryTag); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
 	if t.MessageFormat != nil {
-		if err := types.WriteUint(&fields, *t.MessageFormat); err != nil {
+		if err := types.WriteUint(fields, *t.MessageFormat); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
-	if err := types.WriteBool(&fields, t.Settled); err != nil {
+	if err := types.WriteBool(fields, t.Settled); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteBool(&fields, t.More); err != nil {
+	if err := types.WriteBool(fields, t.More); err != nil {
 		return nil, err
 	}
 	count++
@@ -623,31 +629,32 @@ type Disposition struct {
 }
 
 func (d *Disposition) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
-	if err := types.WriteBool(&fields, d.Role); err != nil {
+	if err := types.WriteBool(fields, d.Role); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteUint(&fields, d.First); err != nil {
+	if err := types.WriteUint(fields, d.First); err != nil {
 		return nil, err
 	}
 	count++
 
 	if d.Last != nil {
-		if err := types.WriteUint(&fields, *d.Last); err != nil {
+		if err := types.WriteUint(fields, *d.Last); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
-	if err := types.WriteBool(&fields, d.Settled); err != nil {
+	if err := types.WriteBool(fields, d.Settled); err != nil {
 		return nil, err
 	}
 	count++
@@ -659,13 +666,13 @@ func (d *Disposition) Encode() ([]byte, error) {
 		}
 		fields.Write(stateBytes)
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
-	if err := types.WriteBool(&fields, d.Batchable); err != nil {
+	if err := types.WriteBool(fields, d.Batchable); err != nil {
 		return nil, err
 	}
 	count++
@@ -707,15 +714,16 @@ type Detach struct {
 }
 
 func (d *Detach) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
-	if err := types.WriteUint(&fields, d.Handle); err != nil {
+	if err := types.WriteUint(fields, d.Handle); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteBool(&fields, d.Closed); err != nil {
+	if err := types.WriteBool(fields, d.Closed); err != nil {
 		return nil, err
 	}
 	count++
@@ -727,7 +735,7 @@ func (d *Detach) Encode() ([]byte, error) {
 		}
 		fields.Write(errBytes)
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
@@ -760,7 +768,8 @@ type End struct {
 }
 
 func (e *End) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	if e.Error != nil {
@@ -793,7 +802,8 @@ type Close struct {
 }
 
 func (c *Close) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	if c.Error != nil {
@@ -853,14 +863,17 @@ func DecodePerformative(body []byte) (uint64, any, error) {
 }
 
 func encodePerformative(descriptor uint64, fields []byte, count int) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, descriptor); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, descriptor); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, fields, count); err != nil {
+	if err := types.WriteList(buf, fields, count); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 func encodeOutcome(state any) ([]byte, error) {

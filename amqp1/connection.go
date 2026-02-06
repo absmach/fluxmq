@@ -16,6 +16,26 @@ import (
 	"github.com/absmach/fluxmq/amqp1/types"
 )
 
+var frameBufPool = sync.Pool{New: func() any { s := make([]byte, 0, 8192); return &s }}
+
+const maxPooledFrameBuf = 256 * 1024
+
+func getFrameBuf(size int) *[]byte {
+	bp := frameBufPool.Get().(*[]byte)
+	if cap(*bp) < size {
+		*bp = make([]byte, size)
+	}
+	return bp
+}
+
+func putFrameBuf(bp *[]byte) {
+	if cap(*bp) > maxPooledFrameBuf {
+		return
+	}
+	*bp = (*bp)[:0]
+	frameBufPool.Put(bp)
+}
+
 // Connection wraps a net.Conn for AMQP 1.0 frame I/O.
 type Connection struct {
 	conn         net.Conn
@@ -99,12 +119,15 @@ func (c *Connection) WriteTransfer(channel uint16, transfer *performatives.Trans
 	combined := len(perfBody) + len(payload)
 
 	if maxBody <= 0 || combined <= maxBody {
-		buf := make([]byte, combined)
-		copy(buf, perfBody)
-		copy(buf[len(perfBody):], payload)
+		buf := getFrameBuf(combined)
+		*buf = (*buf)[:combined]
+		copy(*buf, perfBody)
+		copy((*buf)[len(perfBody):], payload)
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		return frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, buf)
+		err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, *buf)
+		c.mu.Unlock()
+		putFrameBuf(buf)
+		return err
 	}
 
 	// Multi-frame: re-encode first transfer with More=true
@@ -142,12 +165,16 @@ func (c *Connection) WriteTransfer(channel uint16, transfer *performatives.Trans
 	defer c.mu.Unlock()
 
 	// First frame
-	buf := make([]byte, len(perfBody)+firstChunk)
-	copy(buf, perfBody)
-	copy(buf[len(perfBody):], payload[:firstChunk])
-	if err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, buf); err != nil {
+	size := len(perfBody) + firstChunk
+	buf := getFrameBuf(size)
+	*buf = (*buf)[:size]
+	copy(*buf, perfBody)
+	copy((*buf)[len(perfBody):], payload[:firstChunk])
+	if err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, *buf); err != nil {
+		putFrameBuf(buf)
 		return err
 	}
+	putFrameBuf(buf)
 
 	offset := firstChunk
 	remaining := len(payload) - offset
@@ -167,12 +194,16 @@ func (c *Connection) WriteTransfer(channel uint16, transfer *performatives.Trans
 			}
 		}
 
-		buf := make([]byte, len(framePerf)+chunkSize)
-		copy(buf, framePerf)
-		copy(buf[len(framePerf):], payload[offset:offset+chunkSize])
-		if err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, buf); err != nil {
+		size := len(framePerf) + chunkSize
+		fbuf := getFrameBuf(size)
+		*fbuf = (*fbuf)[:size]
+		copy(*fbuf, framePerf)
+		copy((*fbuf)[len(framePerf):], payload[offset:offset+chunkSize])
+		if err := frames.WriteFrame(c.conn, frames.FrameTypeAMQP, channel, *fbuf); err != nil {
+			putFrameBuf(fbuf)
 			return err
 		}
+		putFrameBuf(fbuf)
 
 		offset += chunkSize
 		remaining -= chunkSize
@@ -184,10 +215,14 @@ func (c *Connection) WriteTransfer(channel uint16, transfer *performatives.Trans
 // WriteTransferRaw writes a pre-encoded transfer frame with payload.
 // Does NOT handle multi-frame splitting — use WriteTransfer for that.
 func (c *Connection) WriteTransferRaw(channel uint16, perfBody []byte, payload []byte) error {
-	combined := make([]byte, len(perfBody)+len(payload))
-	copy(combined, perfBody)
-	copy(combined[len(perfBody):], payload)
-	return c.WriteFrame(frames.FrameTypeAMQP, channel, combined)
+	size := len(perfBody) + len(payload)
+	buf := getFrameBuf(size)
+	*buf = (*buf)[:size]
+	copy(*buf, perfBody)
+	copy((*buf)[len(perfBody):], payload)
+	err := c.WriteFrame(frames.FrameTypeAMQP, channel, *buf)
+	putFrameBuf(buf)
+	return err
 }
 
 // WriteSASLFrame writes a SASL frame.

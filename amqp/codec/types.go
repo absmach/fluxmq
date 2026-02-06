@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // Constants for AMQP frame types
@@ -172,7 +174,8 @@ func ReadTable(r io.Reader) (map[string]interface{}, error) {
 
 // WriteTable writes a field-table to the writer.
 func WriteTable(w io.Writer, table map[string]interface{}) error {
-	b := new(bytes.Buffer)
+	b := bufpool.Get()
+	defer bufpool.Put(b)
 	for key, value := range table {
 		if err := WriteShortStr(b, key); err != nil {
 			return err
@@ -385,7 +388,8 @@ func ReadArray(r io.Reader) ([]interface{}, error) {
 
 // WriteArray writes a field-array to the writer.
 func WriteArray(w io.Writer, arr []interface{}) error {
-	b := new(bytes.Buffer)
+	b := bufpool.Get()
+	defer bufpool.Put(b)
 	for _, value := range arr {
 		if err := WriteFieldValue(b, value); err != nil {
 			return err

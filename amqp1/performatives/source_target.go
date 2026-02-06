@@ -4,9 +4,8 @@
 package performatives
 
 import (
-	"bytes"
-
 	"github.com/absmach/fluxmq/amqp1/types"
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // Descriptors for Source and Target.
@@ -31,97 +30,101 @@ type Source struct {
 
 // Encode serializes the Source as a described list.
 func (s *Source) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	// Address (index 0)
 	if s.Address != "" {
-		if err := types.WriteString(&fields, s.Address); err != nil {
+		if err := types.WriteString(fields, s.Address); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
 	// Durable (index 1)
-	if err := types.WriteUint(&fields, s.Durable); err != nil {
+	if err := types.WriteUint(fields, s.Durable); err != nil {
 		return nil, err
 	}
 	count++
 
 	// ExpiryPolicy (index 2)
 	if s.ExpiryPolicy != "" {
-		if err := types.WriteSymbol(&fields, s.ExpiryPolicy); err != nil {
+		if err := types.WriteSymbol(fields, s.ExpiryPolicy); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteSymbol(&fields, "session-end"); err != nil {
+		if err := types.WriteSymbol(fields, "session-end"); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
 	// Timeout (index 3)
-	if err := types.WriteUint(&fields, s.Timeout); err != nil {
+	if err := types.WriteUint(fields, s.Timeout); err != nil {
 		return nil, err
 	}
 	count++
 
 	// Dynamic (index 4)
-	if err := types.WriteBool(&fields, s.Dynamic); err != nil {
+	if err := types.WriteBool(fields, s.Dynamic); err != nil {
 		return nil, err
 	}
 	count++
 
 	if len(s.Capabilities) > 0 {
 		// dynamic-node-properties (5) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// distribution-mode (6) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// filter (7) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// default-outcome (8) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// outcomes (9) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// capabilities (10)
-		if err := types.WriteSymbolArray(&fields, s.Capabilities); err != nil {
+		if err := types.WriteSymbolArray(fields, s.Capabilities); err != nil {
 			return nil, err
 		}
 		count++
 	}
 
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorSource); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorSource); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, fields.Bytes(), count); err != nil {
+	if err := types.WriteList(buf, fields.Bytes(), count); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // DecodeSource decodes a Source from list fields.
@@ -163,68 +166,72 @@ type Target struct {
 
 // Encode serializes the Target as a described list.
 func (t *Target) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	if t.Address != "" {
-		if err := types.WriteString(&fields, t.Address); err != nil {
+		if err := types.WriteString(fields, t.Address); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
-	if err := types.WriteUint(&fields, t.Durable); err != nil {
+	if err := types.WriteUint(fields, t.Durable); err != nil {
 		return nil, err
 	}
 	count++
 
 	if t.ExpiryPolicy != "" {
-		if err := types.WriteSymbol(&fields, t.ExpiryPolicy); err != nil {
+		if err := types.WriteSymbol(fields, t.ExpiryPolicy); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteSymbol(&fields, "session-end"); err != nil {
+		if err := types.WriteSymbol(fields, "session-end"); err != nil {
 			return nil, err
 		}
 	}
 	count++
 
-	if err := types.WriteUint(&fields, t.Timeout); err != nil {
+	if err := types.WriteUint(fields, t.Timeout); err != nil {
 		return nil, err
 	}
 	count++
 
-	if err := types.WriteBool(&fields, t.Dynamic); err != nil {
+	if err := types.WriteBool(fields, t.Dynamic); err != nil {
 		return nil, err
 	}
 	count++
 
 	if len(t.Capabilities) > 0 {
 		// dynamic-node-properties (5) - null
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 		count++
 
 		// capabilities (6)
-		if err := types.WriteSymbolArray(&fields, t.Capabilities); err != nil {
+		if err := types.WriteSymbolArray(fields, t.Capabilities); err != nil {
 			return nil, err
 		}
 		count++
 	}
 
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorTarget); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorTarget); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, fields.Bytes(), count); err != nil {
+	if err := types.WriteList(buf, fields.Bytes(), count); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // DecodeTarget decodes a Target from list fields.

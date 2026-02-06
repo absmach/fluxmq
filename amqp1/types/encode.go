@@ -4,11 +4,12 @@
 package types
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
+
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // WriteNull writes a null value.
@@ -324,7 +325,8 @@ func WriteSymbolArray(w io.Writer, symbols []Symbol) error {
 	if len(symbols) == 1 {
 		return WriteSymbol(w, symbols[0])
 	}
-	var elems bytes.Buffer
+	elems := bufpool.Get()
+	defer bufpool.Put(elems)
 	for _, s := range symbols {
 		b := []byte(s)
 		if len(b) <= 255 {
@@ -337,8 +339,6 @@ func WriteSymbolArray(w io.Writer, symbols []Symbol) error {
 			elems.Write(b)
 		}
 	}
-	// Use sym8 element type for short symbols, sym32 for long
-	// For simplicity, determine based on whether all symbols fit in sym8
 	allShort := true
 	for _, s := range symbols {
 		if len([]byte(s)) > 255 {
@@ -355,12 +355,13 @@ func WriteSymbolArray(w io.Writer, symbols []Symbol) error {
 
 // WriteStringAnyMap writes a map with string keys and any values.
 func WriteStringAnyMap(w io.Writer, m map[string]any) error {
-	var pairs bytes.Buffer
+	pairs := bufpool.Get()
+	defer bufpool.Put(pairs)
 	for k, v := range m {
-		if err := WriteString(&pairs, k); err != nil {
+		if err := WriteString(pairs, k); err != nil {
 			return err
 		}
-		if err := WriteAny(&pairs, v); err != nil {
+		if err := WriteAny(pairs, v); err != nil {
 			return err
 		}
 	}

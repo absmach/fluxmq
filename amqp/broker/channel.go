@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/amqp/codec"
+	"github.com/absmach/fluxmq/internal/bufpool"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
@@ -132,7 +133,7 @@ func newChannel(c *Connection, id uint16) *Channel {
 	}
 }
 
-func (ch *Channel) handleMethod(decoded interface{}) error {
+func (ch *Channel) handleMethod(decoded any) error {
 	switch m := decoded.(type) {
 	// Channel
 	case *codec.ChannelFlow:
@@ -613,7 +614,9 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		Exchange:    exchange,
 		RoutingKey:  routingKey,
 	}
-	methodFrame, err := buildMethodFrame(ch.id, deliver)
+	methodBuf := bufpool.Get()
+	defer bufpool.Put(methodBuf)
+	methodFrame, err := buildMethodFrame(methodBuf, ch.id, deliver)
 	if err != nil {
 		return err
 	}
@@ -654,7 +657,9 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		Headers:       headers,
 	}
 
-	headerFrame, err := buildContentHeaderFrame(ch.id, uint64(len(payload)), properties)
+	headerBuf := bufpool.Get()
+	defer bufpool.Put(headerBuf)
+	headerFrame, err := buildContentHeaderFrame(headerBuf, ch.id, uint64(len(payload)), properties)
 	if err != nil {
 		return err
 	}
@@ -677,12 +682,16 @@ func (ch *Channel) sendBasicReturn(method *codec.BasicPublish, header *codec.Con
 		Exchange:   normalizeExchange(method.Exchange),
 		RoutingKey: method.RoutingKey,
 	}
-	methodFrame, err := buildMethodFrame(ch.id, ret)
+	methodBuf := bufpool.Get()
+	defer bufpool.Put(methodBuf)
+	methodFrame, err := buildMethodFrame(methodBuf, ch.id, ret)
 	if err != nil {
 		ch.conn.logger.Error("failed to write basic.return", "error", err)
 		return
 	}
-	headerFrame, err := buildContentHeaderFrame(ch.id, uint64(len(body)), header.Properties)
+	headerBuf := bufpool.Get()
+	defer bufpool.Put(headerBuf)
+	headerFrame, err := buildContentHeaderFrame(headerBuf, ch.id, uint64(len(body)), header.Properties)
 	if err != nil {
 		ch.conn.logger.Error("failed to write return header", "error", err)
 		return
@@ -706,9 +715,9 @@ func (ch *Channel) sendPublisherAck() {
 	}
 }
 
-func buildMethodFrame(channel uint16, method interface{ Write(io.Writer) error }) (*codec.Frame, error) {
-	var buf bytes.Buffer
-	if err := method.Write(&buf); err != nil {
+func buildMethodFrame(buf *bytes.Buffer, channel uint16, method interface{ Write(io.Writer) error }) (*codec.Frame, error) {
+	buf.Reset()
+	if err := method.Write(buf); err != nil {
 		return nil, err
 	}
 	return &codec.Frame{
@@ -718,21 +727,21 @@ func buildMethodFrame(channel uint16, method interface{ Write(io.Writer) error }
 	}, nil
 }
 
-func buildContentHeaderFrame(channel uint16, bodySize uint64, props codec.BasicProperties) (*codec.Frame, error) {
+func buildContentHeaderFrame(buf *bytes.Buffer, channel uint16, bodySize uint64, props codec.BasicProperties) (*codec.Frame, error) {
+	buf.Reset()
 	header := &codec.ContentHeader{
 		ClassID:    codec.ClassBasic,
 		Weight:     0,
 		BodySize:   bodySize,
 		Properties: props,
 	}
-	var headerBuf bytes.Buffer
-	if err := header.WriteContentHeader(&headerBuf); err != nil {
+	if err := header.WriteContentHeader(buf); err != nil {
 		return nil, err
 	}
 	return &codec.Frame{
 		Type:    codec.FrameHeader,
 		Channel: channel,
-		Payload: headerBuf.Bytes(),
+		Payload: buf.Bytes(),
 	}, nil
 }
 

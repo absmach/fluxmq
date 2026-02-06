@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/amqp/codec"
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // AMQP 0.9.1 protocol header: "AMQP" followed by 0, 0, 9, 1.
@@ -338,8 +339,9 @@ func (c *Connection) deliverMessage(topic string, payload []byte, props map[stri
 
 // writeMethod serializes a method and sends it as a FrameMethod.
 func (c *Connection) writeMethod(channel uint16, method interface{ Write(io.Writer) error }) error {
-	var buf bytes.Buffer
-	if err := method.Write(&buf); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := method.Write(buf); err != nil {
 		return err
 	}
 	return c.writeFrame(&codec.Frame{

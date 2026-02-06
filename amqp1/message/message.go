@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/absmach/fluxmq/amqp1/types"
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // Message section descriptors.
@@ -62,51 +63,54 @@ type Message struct {
 
 // Encode serializes the message into wire format (concatenated described sections).
 func (m *Message) Encode() ([]byte, error) {
-	var buf bytes.Buffer
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
 
 	if m.Header != nil {
-		if err := encodeHeader(&buf, m.Header); err != nil {
+		if err := encodeHeader(buf, m.Header); err != nil {
 			return nil, err
 		}
 	}
 
 	if len(m.MessageAnnotations) > 0 {
-		if err := encodeAnnotations(&buf, DescriptorMessageAnnotations, m.MessageAnnotations); err != nil {
+		if err := encodeAnnotations(buf, DescriptorMessageAnnotations, m.MessageAnnotations); err != nil {
 			return nil, err
 		}
 	}
 
 	if m.Properties != nil {
-		if err := encodeProperties(&buf, m.Properties); err != nil {
+		if err := encodeProperties(buf, m.Properties); err != nil {
 			return nil, err
 		}
 	}
 
 	if len(m.ApplicationProperties) > 0 {
-		if err := encodeAppProperties(&buf, m.ApplicationProperties); err != nil {
+		if err := encodeAppProperties(buf, m.ApplicationProperties); err != nil {
 			return nil, err
 		}
 	}
 
 	for _, data := range m.Data {
-		if err := types.WriteDescriptor(&buf, DescriptorData); err != nil {
+		if err := types.WriteDescriptor(buf, DescriptorData); err != nil {
 			return nil, err
 		}
-		if err := types.WriteBinary(&buf, data); err != nil {
+		if err := types.WriteBinary(buf, data); err != nil {
 			return nil, err
 		}
 	}
 
 	if m.Value != nil {
-		if err := types.WriteDescriptor(&buf, DescriptorAMQPValue); err != nil {
+		if err := types.WriteDescriptor(buf, DescriptorAMQPValue); err != nil {
 			return nil, err
 		}
-		if err := types.WriteAny(&buf, m.Value); err != nil {
+		if err := types.WriteAny(buf, m.Value); err != nil {
 			return nil, err
 		}
 	}
 
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // Decode parses message sections from the wire format payload.
@@ -149,26 +153,27 @@ func Decode(payload []byte) (*Message, error) {
 }
 
 func encodeHeader(buf *bytes.Buffer, h *Header) error {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
-	if err := types.WriteBool(&fields, h.Durable); err != nil {
+	if err := types.WriteBool(fields, h.Durable); err != nil {
 		return err
 	}
 	count++
-	if err := types.WriteUbyte(&fields, h.Priority); err != nil {
+	if err := types.WriteUbyte(fields, h.Priority); err != nil {
 		return err
 	}
 	count++
-	if err := types.WriteUint(&fields, h.TTL); err != nil {
+	if err := types.WriteUint(fields, h.TTL); err != nil {
 		return err
 	}
 	count++
-	if err := types.WriteBool(&fields, h.FirstAcquirer); err != nil {
+	if err := types.WriteBool(fields, h.FirstAcquirer); err != nil {
 		return err
 	}
 	count++
-	if err := types.WriteUint(&fields, h.DeliveryCount); err != nil {
+	if err := types.WriteUint(fields, h.DeliveryCount); err != nil {
 		return err
 	}
 	count++
@@ -180,16 +185,17 @@ func encodeHeader(buf *bytes.Buffer, h *Header) error {
 }
 
 func encodeProperties(buf *bytes.Buffer, p *Properties) error {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	count := 0
 
 	// message-id (0)
 	if p.MessageID != nil {
-		if err := types.WriteAny(&fields, p.MessageID); err != nil {
+		if err := types.WriteAny(fields, p.MessageID); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -197,11 +203,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// user-id (1)
 	if p.UserID != nil {
-		if err := types.WriteBinary(&fields, p.UserID); err != nil {
+		if err := types.WriteBinary(fields, p.UserID); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -209,11 +215,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// to (2)
 	if p.To != "" {
-		if err := types.WriteString(&fields, p.To); err != nil {
+		if err := types.WriteString(fields, p.To); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -221,11 +227,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// subject (3)
 	if p.Subject != "" {
-		if err := types.WriteString(&fields, p.Subject); err != nil {
+		if err := types.WriteString(fields, p.Subject); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -233,11 +239,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// reply-to (4)
 	if p.ReplyTo != "" {
-		if err := types.WriteString(&fields, p.ReplyTo); err != nil {
+		if err := types.WriteString(fields, p.ReplyTo); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -245,11 +251,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// correlation-id (5)
 	if p.CorrelationID != nil {
-		if err := types.WriteAny(&fields, p.CorrelationID); err != nil {
+		if err := types.WriteAny(fields, p.CorrelationID); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -257,11 +263,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// content-type (6)
 	if p.ContentType != "" {
-		if err := types.WriteSymbol(&fields, p.ContentType); err != nil {
+		if err := types.WriteSymbol(fields, p.ContentType); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -269,11 +275,11 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 
 	// content-encoding (7)
 	if p.ContentEncoding != "" {
-		if err := types.WriteSymbol(&fields, p.ContentEncoding); err != nil {
+		if err := types.WriteSymbol(fields, p.ContentEncoding); err != nil {
 			return err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return err
 		}
 	}
@@ -286,12 +292,13 @@ func encodeProperties(buf *bytes.Buffer, p *Properties) error {
 }
 
 func encodeAnnotations(buf *bytes.Buffer, descriptor uint64, ann map[types.Symbol]any) error {
-	var pairs bytes.Buffer
+	pairs := bufpool.Get()
+	defer bufpool.Put(pairs)
 	for k, v := range ann {
-		if err := types.WriteSymbol(&pairs, k); err != nil {
+		if err := types.WriteSymbol(pairs, k); err != nil {
 			return err
 		}
-		if err := types.WriteAny(&pairs, v); err != nil {
+		if err := types.WriteAny(pairs, v); err != nil {
 			return err
 		}
 	}
@@ -302,12 +309,13 @@ func encodeAnnotations(buf *bytes.Buffer, descriptor uint64, ann map[types.Symbo
 }
 
 func encodeAppProperties(buf *bytes.Buffer, props map[string]any) error {
-	var pairs bytes.Buffer
+	pairs := bufpool.Get()
+	defer bufpool.Put(pairs)
 	for k, v := range props {
-		if err := types.WriteString(&pairs, k); err != nil {
+		if err := types.WriteString(pairs, k); err != nil {
 			return err
 		}
-		if err := types.WriteAny(&pairs, v); err != nil {
+		if err := types.WriteAny(pairs, v); err != nil {
 			return err
 		}
 	}

@@ -4,9 +4,8 @@
 package performatives
 
 import (
-	"bytes"
-
 	"github.com/absmach/fluxmq/amqp1/types"
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // Outcome descriptors.
@@ -21,14 +20,17 @@ const (
 type Accepted struct{}
 
 func (a *Accepted) Encode() ([]byte, error) {
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorAccepted); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorAccepted); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, nil, 0); err != nil {
+	if err := types.WriteList(buf, nil, 0); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // Rejected outcome with optional error.
@@ -37,7 +39,8 @@ type Rejected struct {
 }
 
 func (r *Rejected) Encode() ([]byte, error) {
-	var fields bytes.Buffer
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
 	if r.Error != nil {
 		errBytes, err := r.Error.Encode()
 		if err != nil {
@@ -45,33 +48,39 @@ func (r *Rejected) Encode() ([]byte, error) {
 		}
 		fields.Write(errBytes)
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorRejected); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorRejected); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, fields.Bytes(), 1); err != nil {
+	if err := types.WriteList(buf, fields.Bytes(), 1); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // Released outcome.
 type Released struct{}
 
 func (r *Released) Encode() ([]byte, error) {
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorReleased); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorReleased); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, nil, 0); err != nil {
+	if err := types.WriteList(buf, nil, 0); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // Modified outcome.
@@ -81,22 +90,26 @@ type Modified struct {
 }
 
 func (m *Modified) Encode() ([]byte, error) {
-	var fields bytes.Buffer
-	if err := types.WriteBool(&fields, m.DeliveryFailed); err != nil {
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
+	if err := types.WriteBool(fields, m.DeliveryFailed); err != nil {
 		return nil, err
 	}
-	if err := types.WriteBool(&fields, m.UndeliverableHere); err != nil {
+	if err := types.WriteBool(fields, m.UndeliverableHere); err != nil {
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorModified); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorModified); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, fields.Bytes(), 2); err != nil {
+	if err := types.WriteList(buf, fields.Bytes(), 2); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // DecodeOutcome decodes a disposition state from a described type.

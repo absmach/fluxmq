@@ -4,9 +4,10 @@
 package performatives
 
 import (
-	"bytes"
+	"io"
 
 	"github.com/absmach/fluxmq/amqp1/types"
+	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
 // AMQP error descriptor
@@ -56,37 +57,41 @@ type Error struct {
 
 // Encode serializes the error as a described list.
 func (e *Error) Encode() ([]byte, error) {
-	var fields bytes.Buffer
-	if err := types.WriteSymbol(&fields, e.Condition); err != nil {
+	fields := bufpool.Get()
+	defer bufpool.Put(fields)
+	if err := types.WriteSymbol(fields, e.Condition); err != nil {
 		return nil, err
 	}
 	if e.Description != "" {
-		if err := types.WriteString(&fields, e.Description); err != nil {
+		if err := types.WriteString(fields, e.Description); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 	if len(e.Info) > 0 {
-		if err := writeSymbolAnyMap(&fields, e.Info); err != nil {
+		if err := writeSymbolAnyMap(fields, e.Info); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := types.WriteNull(&fields); err != nil {
+		if err := types.WriteNull(fields); err != nil {
 			return nil, err
 		}
 	}
 
-	var buf bytes.Buffer
-	if err := types.WriteDescriptor(&buf, DescriptorError); err != nil {
+	buf := bufpool.Get()
+	defer bufpool.Put(buf)
+	if err := types.WriteDescriptor(buf, DescriptorError); err != nil {
 		return nil, err
 	}
-	if err := types.WriteList(&buf, fields.Bytes(), 3); err != nil {
+	if err := types.WriteList(buf, fields.Bytes(), 3); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }
 
 // DecodeError decodes an AMQP error from list fields.
@@ -104,13 +109,14 @@ func DecodeError(fields []any) *Error {
 	return e
 }
 
-func writeSymbolAnyMap(w *bytes.Buffer, m map[types.Symbol]any) error {
-	var pairs bytes.Buffer
+func writeSymbolAnyMap(w io.Writer, m map[types.Symbol]any) error {
+	pairs := bufpool.Get()
+	defer bufpool.Put(pairs)
 	for k, v := range m {
-		if err := types.WriteSymbol(&pairs, k); err != nil {
+		if err := types.WriteSymbol(pairs, k); err != nil {
 			return err
 		}
-		if err := types.WriteAny(&pairs, v); err != nil {
+		if err := types.WriteAny(pairs, v); err != nil {
 			return err
 		}
 	}
