@@ -22,10 +22,10 @@ type Queue interface {
 
 // queue is a queue for offline messages (QoS > 0).
 type queue struct {
-	mu           sync.Mutex
-	messages     []*storage.Message
-	maxSize      int
-	evictOnFull  bool
+	mu          sync.Mutex
+	messages    []*storage.Message
+	maxSize     int
+	evictOnFull bool
 }
 
 // NewMessageQueue creates a new message queue.

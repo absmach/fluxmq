@@ -12,9 +12,9 @@ import (
 
 // Constants for AMQP frame types
 const (
-	FrameMethod byte = 1
-	FrameHeader byte = 2
-	FrameBody   byte = 3
+	FrameMethod    byte = 1
+	FrameHeader    byte = 2
+	FrameBody      byte = 3
 	FrameHeartbeat byte = 8
 )
 
@@ -397,5 +397,3 @@ func WriteArray(w io.Writer, arr []interface{}) error {
 	_, err := w.Write(b.Bytes())
 	return err
 }
-
-

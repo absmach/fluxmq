@@ -200,8 +200,8 @@ func (cm *ConsumerManager) Stats() ConsumerManagerStats {
 	defer cm.mu.RUnlock()
 
 	stats := ConsumerManagerStats{
-		GroupCount:  len(cm.groups),
-		GroupStats:  make(map[string]ConsumerStateStats),
+		GroupCount: len(cm.groups),
+		GroupStats: make(map[string]ConsumerStateStats),
 	}
 
 	for groupID, state := range cm.groups {
@@ -333,9 +333,9 @@ func (cm *ConsumerManager) GetDeadLetterBatches(maxDeliveries int, maxPerGroup i
 
 // ShardAssignment describes which shards a node is responsible for.
 type ShardAssignment struct {
-	NodeID    string
-	GroupID   string
-	ShardIDs  []int
+	NodeID     string
+	GroupID    string
+	ShardIDs   []int
 	AssignedAt time.Time
 }
 

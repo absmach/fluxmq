@@ -13,10 +13,10 @@ import (
 // Filter represents a compiled routing key filter.
 // It matches routing keys against a subscription pattern.
 type Filter struct {
-	pattern   string         // Original pattern (e.g., "images/+/png")
-	regex     *regexp.Regexp // Compiled regex for matching
-	isExact   bool           // True if pattern has no wildcards
-	matchAll  bool           // True if pattern matches everything (# or empty)
+	pattern  string         // Original pattern (e.g., "images/+/png")
+	regex    *regexp.Regexp // Compiled regex for matching
+	isExact  bool           // True if pattern has no wildcards
+	matchAll bool           // True if pattern matches everything (# or empty)
 }
 
 // NewFilter creates a new filter from a subscription pattern.

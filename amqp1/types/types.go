@@ -42,13 +42,13 @@ const (
 	TypeSymbolLong  byte = 0xb3
 
 	// Compound types
-	TypeList0     byte = 0x45
-	TypeList8     byte = 0xc0
-	TypeList32    byte = 0xd0
-	TypeMap8      byte = 0xc1
-	TypeMap32     byte = 0xd1
-	TypeArray8    byte = 0xe0
-	TypeArray32   byte = 0xf0
+	TypeList0   byte = 0x45
+	TypeList8   byte = 0xc0
+	TypeList32  byte = 0xd0
+	TypeMap8    byte = 0xc1
+	TypeMap32   byte = 0xd1
+	TypeArray8  byte = 0xe0
+	TypeArray32 byte = 0xf0
 
 	// Described type constructor
 	TypeDescriptor byte = 0x00

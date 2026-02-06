@@ -45,8 +45,8 @@ type ConsumerStateConfig struct {
 	NumPELShards int // Number of PEL shards (default: 8)
 
 	// Batching
-	MaxBatchSize     int           // Max entries per batch operation
-	BatchFlushDelay  time.Duration // Max delay before flushing batch
+	MaxBatchSize    int           // Max entries per batch operation
+	BatchFlushDelay time.Duration // Max delay before flushing batch
 
 	// Compaction
 	CompactThreshold int // Operations before compaction (default: 10000)
@@ -185,10 +185,10 @@ type StateSnapshot struct {
 
 // PELSnapshot is the serialized PEL shard.
 type PELSnapshot struct {
-	Version uint64                    `json:"version"`
-	ShardID int                       `json:"shard_id"`
-	Entries map[uint64]*PendingEntry  `json:"entries"`
-	SavedAt int64                     `json:"saved_at"`
+	Version uint64                   `json:"version"`
+	ShardID int                      `json:"shard_id"`
+	Entries map[uint64]*PendingEntry `json:"entries"`
+	SavedAt int64                    `json:"saved_at"`
 }
 
 // load loads state from snapshots.

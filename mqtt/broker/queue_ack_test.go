@@ -18,16 +18,16 @@ type mockQueueManager struct {
 }
 
 type ackCall struct {
-	queueName  string
-	messageID  string
-	groupID    string
+	queueName string
+	messageID string
+	groupID   string
 }
 
 type rejectCall struct {
-	queueName  string
-	messageID  string
-	groupID    string
-	reason     string
+	queueName string
+	messageID string
+	groupID   string
+	reason    string
 }
 
 func (m *mockQueueManager) Start(ctx context.Context) error { return nil }
@@ -64,7 +64,9 @@ func (m *mockQueueManager) DeleteQueue(ctx context.Context, queueName string) er
 func (m *mockQueueManager) GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error) {
 	return nil, storage.ErrNotFound
 }
-func (m *mockQueueManager) ListQueues(ctx context.Context) ([]qtypes.QueueConfig, error) { return nil, nil }
+func (m *mockQueueManager) ListQueues(ctx context.Context) ([]qtypes.QueueConfig, error) {
+	return nil, nil
+}
 
 func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 	qm := &mockQueueManager{}
@@ -126,4 +128,3 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 	require.Error(t, b.handleQueueAck(msg))
 	require.Empty(t, qm.ackCalls)
 }
-

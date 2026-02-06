@@ -14,25 +14,25 @@ const (
 )
 
 const (
-	MethodConnectionStart   = 10
-	MethodConnectionStartOk = 11
-	MethodConnectionSecure  = 20
-	MethodConnectionSecureOk= 21
-	MethodConnectionTune    = 30
-	MethodConnectionTuneOk  = 31
-	MethodConnectionOpen    = 40
-	MethodConnectionOpenOk  = 41
-	MethodConnectionClose   = 50
-	MethodConnectionCloseOk = 51
+	MethodConnectionStart    = 10
+	MethodConnectionStartOk  = 11
+	MethodConnectionSecure   = 20
+	MethodConnectionSecureOk = 21
+	MethodConnectionTune     = 30
+	MethodConnectionTuneOk   = 31
+	MethodConnectionOpen     = 40
+	MethodConnectionOpenOk   = 41
+	MethodConnectionClose    = 50
+	MethodConnectionCloseOk  = 51
 )
 
 // ConnectionStart is the initial method sent by the server.
 type ConnectionStart struct {
-	VersionMajor    byte
-	VersionMinor    byte
+	VersionMajor     byte
+	VersionMinor     byte
 	ServerProperties map[string]interface{} // Actually a table
-	Mechanisms      string // Long string
-	Locales         string // Long string
+	Mechanisms       string                 // Long string
+	Locales          string                 // Long string
 }
 
 func (m *ConnectionStart) Read(r *bytes.Reader) (err error) {
@@ -79,9 +79,9 @@ func (m *ConnectionStart) Write(w io.Writer) (err error) {
 // ConnectionStartOk is sent by the client in response to ConnectionStart.
 type ConnectionStartOk struct {
 	ClientProperties map[string]interface{} // Actually a table
-	Mechanism        string // Short string
-	Response         string // Long string
-	Locale           string // Short string
+	Mechanism        string                 // Short string
+	Response         string                 // Long string
+	Locale           string                 // Short string
 }
 
 func (m *ConnectionStartOk) Read(r *bytes.Reader) (err error) {
@@ -118,8 +118,6 @@ func (m *ConnectionStartOk) Write(w io.Writer) (err error) {
 	}
 	return WriteShortStr(w, m.Locale)
 }
-
-
 
 // ConnectionSecure is sent by the server to challenge the client.
 type ConnectionSecure struct {
@@ -239,7 +237,7 @@ func (m *ConnectionTuneOk) Write(w io.Writer) (err error) {
 
 // ConnectionOpen is sent by the client to open a virtual host.
 type ConnectionOpen struct {
-	VirtualHost string // Short string
+	VirtualHost  string // Short string
 	Capabilities string // Short string - deprecated
 	Insist       bool   // Bit
 }
@@ -366,12 +364,12 @@ const (
 )
 
 const (
-	MethodChannelOpen      = 10
-	MethodChannelOpenOk    = 11
-	MethodChannelFlow      = 20
-	MethodChannelFlowOk    = 21
-	MethodChannelClose     = 40
-	MethodChannelCloseOk   = 41
+	MethodChannelOpen    = 10
+	MethodChannelOpenOk  = 11
+	MethodChannelFlow    = 20
+	MethodChannelFlowOk  = 21
+	MethodChannelClose   = 40
+	MethodChannelCloseOk = 41
 )
 
 type ChannelOpen struct {
@@ -2081,4 +2079,3 @@ func (m *TxRollbackOk) Write(w io.Writer) (err error) {
 	}
 	return nil
 }
-

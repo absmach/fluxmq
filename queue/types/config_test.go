@@ -164,8 +164,8 @@ func TestQueueConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "valid ephemeral config",
-			config: DefaultEphemeralQueueConfig("$queue/test"),
+			name:    "valid ephemeral config",
+			config:  DefaultEphemeralQueueConfig("$queue/test"),
 			wantErr: false,
 		},
 		{

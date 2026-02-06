@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
-	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/mqtt/session"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/absmach/fluxmq/topics"
