@@ -592,7 +592,7 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		ch.unacked[deliveryTag] = &unackedDelivery{
 			deliveryTag: deliveryTag,
 			routingKey:  topic,
-			queueName:   cons.queue,
+			queueName:   cons.queueName,
 			messageID:   props["message-id"],
 			groupID:     props["group-id"],
 		}
@@ -1200,7 +1200,9 @@ func (ch *Channel) ackDelivery(ud *unackedDelivery) {
 	}
 	qm := ch.conn.broker.getQueueManager()
 	if qm != nil {
-		qm.Ack(context.Background(), ud.queueName, ud.messageID, ud.groupID)
+		if err := qm.Ack(context.Background(), ud.queueName, ud.messageID, ud.groupID); err != nil {
+			ch.conn.logger.Warn("queue ack failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
+		}
 	}
 }
 
@@ -1210,7 +1212,9 @@ func (ch *Channel) nackDelivery(ud *unackedDelivery) {
 	}
 	qm := ch.conn.broker.getQueueManager()
 	if qm != nil {
-		qm.Nack(context.Background(), ud.queueName, ud.messageID, ud.groupID)
+		if err := qm.Nack(context.Background(), ud.queueName, ud.messageID, ud.groupID); err != nil {
+			ch.conn.logger.Warn("queue nack failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
+		}
 	}
 }
 
@@ -1220,7 +1224,9 @@ func (ch *Channel) rejectDelivery(ud *unackedDelivery) {
 	}
 	qm := ch.conn.broker.getQueueManager()
 	if qm != nil {
-		qm.Reject(context.Background(), ud.queueName, ud.messageID, ud.groupID, "rejected by client")
+		if err := qm.Reject(context.Background(), ud.queueName, ud.messageID, ud.groupID, "rejected by client"); err != nil {
+			ch.conn.logger.Warn("queue reject failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
+		}
 	}
 }
 
