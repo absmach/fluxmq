@@ -11,8 +11,10 @@ export function NewsletterSection() {
           </p>
 
           <form
-            action="https://absmach.us11.list-manage.com/subscribe/post?u=70b43c7181d005024187bfb31&id=0a319b6b63&f_id=002611e1f0"
+            action="https://absmach.us11.list-manage.com/subscribe/post?u=70b43c7181d005024187bfb31&amp;id=0a319b6b63&amp;f_id=00d816e1f0"
             method="post"
+            id="mc-embedded-subscribe-form"
+            name="mc-embedded-subscribe-form"
             target="_blank"
             className="max-w-md mx-auto"
           >
@@ -31,7 +33,7 @@ export function NewsletterSection() {
                 SUBSCRIBE
               </button>
             </div>
-            <input type="hidden" name="tags" value="8115259" />
+            <input type="hidden" name="tags" value="8115284" />
             <div
               style={{ position: "absolute", left: "-5000px" }}
               aria-hidden="true"
@@ -41,7 +43,6 @@ export function NewsletterSection() {
                 name="b_70b43c7181d005024187bfb31_0a319b6b63"
                 tabIndex={-1}
                 value=""
-                readOnly
               />
             </div>
             <p className="text-xs text-theme-muted mt-4 text-center">
