@@ -11,7 +11,7 @@ export function PerformanceSection() {
           </span>
         </h2>
 
-        <div className="max-w-4xl">
+        <div className="max-w-4xl mx-auto">
           <table className="metrics-table w-full mono text-sm md:text-base">
             <thead>
               <tr>

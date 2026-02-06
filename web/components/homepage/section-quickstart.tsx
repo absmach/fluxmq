@@ -15,7 +15,7 @@ export function QuickStartSection() {
           </span>
         </h2>
 
-        <div className="max-w-4xl space-y-8">
+        <div className="max-w-4xl mx-auto space-y-8">
           {/* Docker Compose */}
           <div>
             <h3 className="mono font-bold mb-4 text-xl">1. RUN WITH DOCKER</h3>
