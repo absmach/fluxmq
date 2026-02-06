@@ -18,27 +18,27 @@ In clustered mode there are two planes:
 - **Metadata plane (etcd)**: “who owns what”, “who is subscribed”, “who is consuming”.
 - **Data plane (gRPC transport)**: the actual routed messages and takeover payloads.
 
-```mermaid
+<Mermaid
+chart="
 flowchart TB
-  subgraph Metadata Plane (etcd)
+  subgraph Metadata Plane
     Own[Session ownership keys]
     Subs[Subscription registry]
     QCons[Queue consumer registry]
     RIdx[Retained/will metadata]
   end
-
-  subgraph Data Plane (gRPC transport)
+  subgraph Data Plane
     RP[RoutePublish]
     RQ[RouteQueueMessage]
     TK[Takeover state transfer]
     HF[Hybrid retained/will fetch]
   end
-
   Own --> TK
   Subs --> RP
   QCons --> RQ
-  RIdx --> HF
-```
+  RIdx --> HF"
+/>
+
 
 The system stays understandable if you keep this split in mind: etcd does not stream user traffic; it tells nodes where to send it.
 
@@ -72,13 +72,13 @@ Takeover happens when a client reconnects to a node that is not the current owne
 
 The goal: move session state from the old owner to the new owner, and guarantee that only one node continues the session.
 
-```mermaid
+<Mermaid
+chart="
 sequenceDiagram
   participant C as Client
   participant B as Node B (new)
   participant E as etcd
   participant A as Node A (old)
-
   C->>B: CONNECT (client_id=X)
   B->>E: Get /mqtt/sessions/X/owner
   E-->>B: owner = A
@@ -88,8 +88,8 @@ sequenceDiagram
   A-->>B: SessionState payload
   B->>E: Put /mqtt/sessions/X/owner = B (lease)
   B->>B: Restore state, resume session
-  B-->>C: CONNACK
-```
+  B-->>C: CONNACK"
+/>
 
 Important details:
 
@@ -106,15 +106,16 @@ For “normal” pub/sub topics, the originating node does two things:
 
 The routing decision is based on the subscription registry and the session-owner map.
 
-```mermaid
+<Mermaid
+chart="
 flowchart LR
   P[Publish arrives on Node A] --> L[Local match + deliver]
-  P --> M[Match subscriptions (local cache + etcd)]
-  M --> O[Resolve owners (cache + etcd)]
+  P --> M[Match subscriptions local cache + etcd]
+  M --> O[Resolve owners cache + etcd]
   O --> S[Send RoutePublish RPCs]
   S --> B[Node B delivers locally]
-  S --> C[Node C delivers locally]
-```
+  S --> C[Node C delivers locally]"
+/>
 
 ## Hybrid Retained and Will Storage
 
@@ -125,19 +126,19 @@ FluxMQ uses a hybrid strategy (threshold configurable):
 - **Small payloads**: store metadata + payload in etcd (replicated to all nodes).
 - **Large payloads**: store payload in the owner’s local store; store metadata in etcd; fetch payload on-demand via gRPC.
 
-```mermaid
+<Mermaid
+chart="
 flowchart TB
   Set[Set retained/will] --> Size{Payload < threshold?}
   Size -->|yes| EtcdFull[Put data entry in etcd]
   Size -->|no| Local[Write payload to local store]
   Local --> EtcdMeta[Put metadata entry in etcd]
-
   Get[Get retained/will] --> Cache[Check local store]
   Cache -->|hit| Done[Return]
   Cache -->|miss| Meta[Read metadata from cache]
   Meta -->|replicated| EtcdFetch[Use replicated data]
-  Meta -->|remote large| RpcFetch[Fetch from owner via gRPC]
-```
+  Meta -->|remote large| RpcFetch[Fetch from owner via gRPC]"
+/>
 
 ## Durable Queues Across Nodes
 
@@ -148,14 +149,15 @@ Two distribution styles exist (configured via `cluster.raft.distribution_mode`):
 - `forward`: the node that appends to the queue also delivers (or routes) messages to remote consumers.
 - `replicate`: the queue log is replicated (Raft), so each node with consumers can deliver from its local log.
 
-```mermaid
+<Mermaid
+chart="
 flowchart LR
-  QP[Queue publish] --> A[Append locally (or forward to leader)]
+  QP[Queue publish] --> A[Append locally or forward to leader]
   A --> Mode{distribution_mode}
   Mode -->|forward| R[RouteQueueMessage to remote nodes]
   Mode -->|replicate| Raft[Replicate log to peers]
-  Raft --> LocalDeliver[Each node delivers locally]
-```
+  Raft --> LocalDeliver[Each node delivers locally]"
+/>
 
 ## Configuration Entry Points
 

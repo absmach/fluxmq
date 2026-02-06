@@ -37,21 +37,21 @@ FluxMQ uses MQTT-style topics across protocols. Some topic namespaces have speci
 
 At publish time, brokers classify traffic first, then take the appropriate path:
 
-```mermaid
+<Mermaid
+chart="
 flowchart TD
   In[Incoming publish] --> Kind{Topic namespace?}
   Kind -->|$queue/.../$ack| Ack[Queue Ack/Nack/Reject]
   Kind -->|$queue/...| Q[Durable queue publish]
   Kind -->|other| PS[Normal pub/sub publish]
-
   Ack --> QM[Queue manager updates group state]
   Q --> QM2[Queue manager appends to log]
   PS --> Ret{Retain flag?}
   Ret -->|yes| RStore[Retained store]
   Ret -->|no| Route[Match subscriptions + deliver]
   RStore --> Route
-  Route --> Cluster[Forward to remote nodes if clustered]
-```
+  Route --> Cluster[Forward to remote nodes if clustered]"
+/>
 
 ## MQTT Broker
 
@@ -112,14 +112,15 @@ The broker reads `message-id` and `group-id` from MQTT v5 user properties and ap
 
 This is the actual session state model used by `mqtt/session/session.go`. The broker goes from `New` directly to `Connected` once a connection is attached. `StateConnecting` exists but is not currently set by the broker.
 
-```mermaid
+<Mermaid
+chart="
 stateDiagram-v2
   [*] --> New
   New --> Connected: CONNECT accepted
   Connected --> Disconnecting: DISCONNECT or keepalive timeout
   Disconnecting --> Disconnected: socket closed
-  Disconnected --> Connected: reconnect (resume or takeover)
-```
+  Disconnected --> Connected: reconnect (resume or takeover)"
+/>
 
 **Message Routing (MQTT)**
 
@@ -136,7 +137,8 @@ Topic matching is trie-based. Retained messages are stored and replayed on subsc
 
 ### AMQP 1.0 Connection FSM (Broker Perspective)
 
-```mermaid
+<Mermaid
+chart="
 stateDiagram-v2
   [*] --> ProtoHeader
   ProtoHeader --> SASL: SASL header received
@@ -144,21 +146,22 @@ stateDiagram-v2
   ProtoHeader --> Open: AMQP header exchange
   Open --> Active: OPEN / OPEN-OK
   Active --> Closing: CLOSE
-  Closing --> [*]
-```
+  Closing --> [*]"
+/>
 
 ### AMQP 1.0 Link FSM (Simplified)
 
 Links are the unit of subscription/publish. The broker treats a link as a queue link if the peer advertises the `queue` capability or if the address starts with `$queue/`.
 
-```mermaid
+<Mermaid
+chart="
 stateDiagram-v2
   [*] --> Attached: ATTACH
   Attached --> Active: FLOW (credit granted)
   Active --> Active: TRANSFER / DISPOSITION
   Active --> Detached: DETACH
-  Detached --> [*]
-```
+  Detached --> [*]"
+/>
 
 ## AMQP 0.9.1 Broker
 
@@ -171,7 +174,8 @@ stateDiagram-v2
 
 ### AMQP 0.9.1 Connection FSM (Handshake)
 
-```mermaid
+<Mermaid
+chart="
 stateDiagram-v2
   [*] --> ProtocolHeader
   ProtocolHeader --> Start: Connection.Start
@@ -179,22 +183,23 @@ stateDiagram-v2
   Tune --> Open: Connection.TuneOk
   Open --> Active: Connection.Open / OpenOk
   Active --> Closing: Connection.Close
-  Closing --> [*]
-```
+  Closing --> [*]"
+/>
 
 ### AMQP 0.9.1 Publish Content FSM (Channel-Level)
 
 The broker accumulates content frames in `amqp/broker/channel.go`. Any out-of-order or inconsistent frames trigger a channel close.
 
-```mermaid
+<Mermaid
+chart="
 stateDiagram-v2
   [*] --> Idle
   Idle --> Method: Basic.Publish
   Method --> Header: ContentHeader
   Header --> Body: ContentBody (one or many)
   Body --> Idle: bodySize reached
-  Method --> Idle: header.BodySize == 0
-```
+  Method --> Idle: header.BodySize == 0"
+/>
 
 **Queue Mapping (AMQP 0.9.1)**
 
@@ -207,7 +212,8 @@ AMQP 0.9.1 frames are assembled into a single publish, then routed as either:
 
 **MQTT publish path**
 
-```mermaid
+<Mermaid
+chart="
 flowchart TD
   Pub[MQTT PUBLISH] --> QueueCheck{Topic starts with $queue/ ?}
   QueueCheck -->|yes| QueueMgr[Queue manager publish]
@@ -215,8 +221,8 @@ flowchart TD
   Retained -->|yes| RetainStore[Update retained store]
   Retained -->|no| Route[Route to local subscribers]
   RetainStore --> Route
-  Route --> Cluster[RoutePublish to remote nodes]
-```
+  Route --> Cluster[RoutePublish to remote nodes]"
+/>
 
 1. Broker receives PUBLISH and checks `$queue/` topics and queue acks.
 2. Queue topics are forwarded to the queue manager (ack topics are handled separately).

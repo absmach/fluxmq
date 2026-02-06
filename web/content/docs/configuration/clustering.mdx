@@ -75,7 +75,8 @@ Controls how messages reach consumers across nodes:
 - `forward`: append on one node, then route deliveries to remote consumers via transport.
 - `replicate`: replicate the queue log via Raft so nodes with consumers can deliver from local storage.
 
-```mermaid
+<Mermaid
+chart="
 flowchart LR
   Pub[Queue publish arrives] --> LeaderCheck{Raft enabled + leader?}
   LeaderCheck -->|leader| Append[Append via Raft apply]
@@ -83,11 +84,10 @@ flowchart LR
   Policy -->|forward| Fwd[Forward to leader]
   Policy -->|reject| Err[Return error]
   Policy -->|local| Local[Append locally]
-
   Append --> Dist{distribution_mode}
   Dist -->|forward| Route[Route to remote consumers]
-  Dist -->|replicate| Repl[Replicate log to peers]
-```
+  Dist -->|replicate| Repl[Replicate log to peers]"
+/>
 
 Notes on current behavior:
 

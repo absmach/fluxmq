@@ -238,18 +238,18 @@ On the wire, the Go client maps queue operations to MQTT v5 conventions:
 - Subscribing to a queue sets the consumer group with the MQTT v5 `consumer-group` user property.
 - Acknowledgments publish to `$queue/<queue>/$ack|$nack|$reject` and attach `message-id` and `group-id` as MQTT v5 user properties.
 
-```mermaid
+<Mermaid
+chart="
 sequenceDiagram
   participant App as Your app
   participant Cli as Go client
   participant Br as FluxMQ
-
-  App->>Cli: PublishToQueue(\"orders\", payload)
+  App->>Cli: PublishToQueue(orders, payload)
   Cli->>Br: PUBLISH $queue/orders
   Br-->>Cli: Deliver message-id + group-id
   App->>Cli: msg.Ack()
-  Cli->>Br: PUBLISH $queue/orders/$ack (user props)
-```
+  Cli->>Br: PUBLISH $queue/orders/$ack (user props)"
+/>
 
 ### Publishing to Queues
 

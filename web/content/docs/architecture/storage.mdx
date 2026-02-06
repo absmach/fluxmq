@@ -52,19 +52,20 @@ If you are only dealing with durable queues, `logstorage/` is the primary place 
           ops.log
 ```
 
-```mermaid
+<Mermaid
+chart="
 flowchart TB
-  Queue["Queue Log (single partition)"] --> Segments["segments/"]
-  Segments --> Seg["<base>.seg"]
-  Seg --> Idx["<base>.idx"]
-  Seg --> Tix["<base>.tix"]
-  Queue --> Consumers["consumers/<group>/"]
-  Consumers --> State["state.json"]
-  Consumers --> PEL["pel_<n>.json"]
-  Consumers --> Ops["ops.log"]
-  Meta["config/queues.json"] --> Queue
-  GroupMeta["groups/<queue>/<group>.json"] --> Queue
-```
+  Queue[Queue Log] --> Segments[segments/]
+  Segments --> Seg[**base**.seg]
+  Seg --> Idx[**base**.idx]
+  Seg --> Tix[**base**.tix]
+  Queue --> Consumers[consumers/_group_/]
+  Consumers --> State[state.json]
+  Consumers --> PEL[pel_**n**.json]
+  Consumers --> Ops[ops.log]
+  Meta[config/queues.json] --> Queue
+  GroupMeta[groups/**queue**/**group**.json] --> Queue"
+/>
 
 ## Segment Files (`.seg`)
 

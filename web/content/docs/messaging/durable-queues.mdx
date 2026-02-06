@@ -178,7 +178,8 @@ FluxMQ uses **topic patterns on queues** to decide where a publish should be sto
 
 Ephemeral queues are a safety net, but they can be surprising if you publish before configuring queues or before consumers subscribe. In production, prefer explicit `queues:` configuration so queue names and bindings are stable.
 
-```mermaid
+<Mermaid
+chart="
 flowchart LR
   P[Publish $queue/... or queue-capable AMQP] --> QM[Queue Manager]
   QM --> Match[Match topic against queue patterns]
@@ -186,9 +187,9 @@ flowchart LR
   Match --> Q2[Queue B log]
   Match --> QN[Queue N log]
   QM --> Deliver[Delivery loop]
-  Deliver --> Local[Local consumers (MQTT/AMQP)]
-  Deliver --> Remote[Remote consumers via cluster]
-```
+  Deliver --> Local[Local consumers MQTT/AMQP]
+  Deliver --> Remote[Remote consumers via cluster]"
+/>
 
 ## Walkthrough: Queue Message Lifecycle
 
@@ -200,21 +201,21 @@ This is the “classic” (work queue) lifecycle:
 4. The broker delivers the message to the chosen consumer.
 5. The consumer acks/nacks/rejects; the queue manager updates group state and may advance the safe truncation point.
 
-```mermaid
+<Mermaid
+chart="
 sequenceDiagram
   participant P as Producer
   participant B as Broker
   participant Q as Queue Manager
   participant C as Consumer
-
   P->>B: PUBLISH $queue/orders/...
   B->>Q: Publish(topic, payload, properties)
   Q->>Q: Append to log (offset N)
   Q-->>C: Deliver (message-id=orders:N, group-id=...)
   C->>B: PUBLISH .../$ack (message-id, group-id)
   B->>Q: Ack(queue=orders, message-id, group-id)
-  Q->>Q: Remove from PEL, advance committed offset
-```
+  Q->>Q: Remove from PEL, advance committed offset"
+/>
 
 ## Queue Addressing
 
@@ -520,18 +521,18 @@ Each consumer group tracks progress using two offsets:
 
 In classic mode, `committed` is driven by the minimum pending offset in the PEL.
 
-```mermaid
+<Mermaid
+chart="
 flowchart LR
   subgraph Queue Log
     O0((0)) --> O1((1)) --> O2((2)) --> O3((3)) --> O4((4)) --> O5((5))
   end
-
-  subgraph Group State (classic)
+  subgraph Group State classic
     Cur[cursor = next to claim]
     PEL[PEL = delivered, not acked]
     Com[committed = min pending or cursor]
-  end
-```
+  end"
+/>
 
 Practical intuition:
 
