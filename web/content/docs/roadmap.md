@@ -13,14 +13,14 @@ This roadmap highlights near‑term focus areas. Ordering may change as issues a
 
 ## Focus Areas
 
-- Tests
-- Benchmarks
-- Optimizations
-- Architecture revision after the above
-- Scaling and recovery tests
-- Performance optimization and code cleanup
-- Dashboards and a basic UI with metrics
-- Improved and faster logging and telemetry
-- Extensive storage tests
+- 🧪 Tests
+- 📊 Benchmarks
+- ⚙️ Optimizations
+- 🏗️ Architecture revision after the above
+- 🔁 Scaling and recovery tests
+- 🧹 Performance optimization and code cleanup
+- 🖥️ Dashboards and a basic UI with metrics
+- 📡 Improved and faster logging and telemetry
+- 💾 Extensive storage tests
 
 For day‑to‑day progress, track open issues and PRs.
