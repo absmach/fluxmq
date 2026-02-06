@@ -45,6 +45,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
         <link rel="icon" href="/favicon.ico" sizes="any" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <meta name="apple-mobile-web-app-title" content="FluxMQ" />
         <link rel="canonical" href="https://absmach.eu/fluxmq/" />
         <script
           type="application/ld+json"
