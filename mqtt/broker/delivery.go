@@ -29,7 +29,8 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic),
 			slog.Time("expiry", msg.Expiry))
-		msg.ReleasePayload() // Drop expired message - release buffer
+		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
 		return 0, nil
 	}
 
@@ -69,7 +70,8 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 	msg.PacketID = packetID
 	// Inflight storage takes ownership - it will release when message is ACK'd or expires
 	if err := s.Inflight().Add(packetID, msg, messages.Outbound); err != nil {
-		msg.ReleasePayload() // Failed to store - release buffer
+		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
 		return 0, err
 	}
 
@@ -91,9 +93,16 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 	return packetID, nil
 }
 
-// AckMessage acknowledges a message by packet ID.
+// AckMessage acknowledges a message by packet ID and releases the buffer.
 func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
-	s.Inflight().Ack(packetID)
+	msg, err := s.Inflight().Ack(packetID)
+	if err != nil {
+		return err
+	}
+	if msg != nil {
+		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
+	}
 	return nil
 }
 

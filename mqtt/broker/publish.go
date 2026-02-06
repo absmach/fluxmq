@@ -82,8 +82,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 				})
 			}
 		} else {
-			// Set retained message - need to retain buffer for storage
-			msg.RetainPayload()
+			// Set retained message - CopyMessage internally retains the buffer
 			retainedMsg := storage.CopyMessage(msg)
 			retainedMsg.Retain = true
 			if err := b.retained.Set(ctx, msg.Topic, retainedMsg); err != nil {
@@ -229,10 +228,8 @@ func (b *Broker) distribute(msg *storage.Message) error {
 			deliverMsg.Properties = msg.Properties
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
-			// DeliverToSession takes ownership of the buffer and message
+			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
-				// Failed to deliver - release message back to pool
-				storage.ReleaseMessage(deliverMsg)
 				continue
 			}
 		} else {
@@ -256,10 +253,8 @@ func (b *Broker) distribute(msg *storage.Message) error {
 			deliverMsg.Properties = msg.Properties
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
-			// DeliverToSession takes ownership of the buffer and message
+			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
-				// Failed to deliver - release message back to pool
-				storage.ReleaseMessage(deliverMsg)
 				continue
 			}
 		}

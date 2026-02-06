@@ -302,7 +302,9 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
 
-		// Publish message immediately (distribution to subscribers)
+		// Retain buffer before Publish consumes it (for QoS 2 inflight tracking)
+		buf.Retain()
+
 		msg := &storage.Message{
 			Topic:           topic,
 			QoS:             qos,
@@ -318,11 +320,11 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		}
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
+			buf.Release()
 			return sendV5PubRec(s, packetID, v5.PubRecUnspecifiedError, "Publish failed")
 		}
 
-		// Store for QoS 2 flow tracking - retain buffer for second message
-		msg.PayloadBuf.Retain()
+		// Store for QoS 2 flow tracking using the retained buffer reference
 		storeMsg := &storage.Message{
 			Topic:         topic,
 			QoS:           2,
@@ -332,8 +334,9 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			Expiry:        expiryTime,
 			PublishTime:   publishTime,
 		}
-		storeMsg.SetPayloadFromBuffer(msg.PayloadBuf)
+		storeMsg.SetPayloadFromBuffer(buf)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
+			storeMsg.ReleasePayload()
 			return err
 		}
 
