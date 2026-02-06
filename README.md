@@ -45,7 +45,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ### Event-Driven Architecture Pattern
 
-FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and `docs/queue.md`.
+FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and [Durable Queues](https://fluxmq.absmach.eu/docs/messaging/durable-queues).
 
 ## Features
 
@@ -186,7 +186,7 @@ Defaults in `examples/no-cluster.yaml`:
 
 ## Configuration
 
-Configuration is YAML-based. See `examples/` for starter files and `docs/configuration.md` for the full reference.
+Configuration is YAML-based. See `examples/` for starter files and [Configuration Reference](https://fluxmq.absmach.eu/docs/reference/configuration-reference) for the full reference.
 
 ## Benchmarks
 
@@ -198,15 +198,15 @@ hardware. See `benchmarks/README.md` for commands and guidance.
 
 | Document                                 | Description                                       |
 | ---------------------------------------- | ------------------------------------------------- |
-| [Architecture](docs/architecture.md)     | Detailed system design                            |
-| [Scaling & Performance](docs/scaling.md) | Benchmarking and tuning guidance                  |
-| [Clustering](docs/clustering.md)         | Distributed broker design                         |
-| [Client Library](docs/client.md)         | Go MQTT and AMQP 0.9.1 clients with queue support |
-| [Broker Internals](docs/broker.md)       | Message routing, sessions                         |
-| [Durable Queues](docs/queue.md)          | Queue configuration, consumer groups              |
-| [Configuration](docs/configuration.md)   | Complete config reference                         |
-| [Webhooks](docs/webhooks.md)             | Webhook event system                              |
-| [Roadmap](docs/roadmap.md)               | Project planning notes                            |
+| [Architecture](https://fluxmq.absmach.eu/docs/architecture/overview)            | Detailed system design                            |
+| [Scaling & Performance](https://fluxmq.absmach.eu/docs/deployment/running-in-production) | Benchmarking and tuning guidance                  |
+| [Clustering](https://fluxmq.absmach.eu/docs/architecture/clustering)            | Distributed broker design                         |
+| [Client Library](https://fluxmq.absmach.eu/docs/clients/go-client)              | Go MQTT and AMQP 0.9.1 clients with queue support |
+| [Broker Internals](https://fluxmq.absmach.eu/docs/architecture/routing)         | Message routing, sessions                         |
+| [Durable Queues](https://fluxmq.absmach.eu/docs/messaging/durable-queues)       | Queue configuration, consumer groups              |
+| [Configuration](https://fluxmq.absmach.eu/docs/reference/configuration-reference) | Complete config reference                         |
+| [Webhooks](https://fluxmq.absmach.eu/docs/architecture/webhooks)                | Webhook event system                              |
+| [Roadmap](https://fluxmq.absmach.eu/docs/roadmap)                               | Project planning notes                            |
 
 ## Contributing
 

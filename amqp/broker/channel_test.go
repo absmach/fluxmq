@@ -264,6 +264,94 @@ func TestExchangeNotFoundOnPublish(t *testing.T) {
 	}
 }
 
+func TestConsumerQueueMatches(t *testing.T) {
+	ch, _ := newTestChannel(t)
+
+	tests := []struct {
+		name  string
+		cons  consumer
+		topic string
+		want  bool
+	}{
+		{
+			name: "stream queue root topic",
+			cons: consumer{
+				queue:     "demo-events",
+				queueName: "demo-events",
+				pattern:   "",
+			},
+			topic: "$queue/demo-events",
+			want:  true,
+		},
+		{
+			name: "stream queue routing key",
+			cons: consumer{
+				queue:     "demo-events",
+				queueName: "demo-events",
+				pattern:   "",
+			},
+			topic: "$queue/demo-events/user/action",
+			want:  true,
+		},
+		{
+			name: "queue filter root",
+			cons: consumer{
+				queue:     "$queue/demo-orders/#",
+				queueName: "demo-orders",
+				pattern:   "#",
+			},
+			topic: "$queue/demo-orders",
+			want:  true,
+		},
+		{
+			name: "queue filter with routing key",
+			cons: consumer{
+				queue:     "$queue/demo-orders/#",
+				queueName: "demo-orders",
+				pattern:   "#",
+			},
+			topic: "$queue/demo-orders/new",
+			want:  true,
+		},
+		{
+			name: "queue filter mismatch",
+			cons: consumer{
+				queue:     "$queue/demo-orders/#",
+				queueName: "demo-orders",
+				pattern:   "#",
+			},
+			topic: "$queue/other/new",
+			want:  false,
+		},
+		{
+			name: "plain topic fallback",
+			cons: consumer{
+				queue: "sensor/#",
+			},
+			topic: "sensor/temperature",
+			want:  true,
+		},
+		{
+			name: "plain topic mismatch",
+			cons: consumer{
+				queue: "sensor/#",
+			},
+			topic: "control/restart",
+			want:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := ch.consumerQueueMatches(&tc.cons, tc.topic)
+			if got != tc.want {
+				t.Fatalf("consumerQueueMatches() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseStreamOffsetString(t *testing.T) {
 	first, ok := parseStreamOffsetString("first")
 	if !ok || first.Position != qtypes.CursorEarliest {

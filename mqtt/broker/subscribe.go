@@ -10,6 +10,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/mqtt/session"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 )
@@ -35,6 +36,17 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 			slog.String("queue", queueName),
 			slog.String("pattern", pattern),
 			slog.String("group", groupID))
+
+		// Stream queues must use stream-mode consumer groups; otherwise reusing
+		// a group created by AMQP stream consumers causes mode mismatch errors.
+		if queueCfg, err := b.queueManager.GetQueue(ctx, queueName); err == nil &&
+			queueCfg != nil && queueCfg.Type == qtypes.QueueTypeStream {
+			cursor := &qtypes.CursorOption{
+				Position: qtypes.CursorDefault,
+				Mode:     qtypes.GroupModeStream,
+			}
+			return b.queueManager.SubscribeWithCursor(ctx, queueName, pattern, s.ID, groupID, proxyNodeID, cursor)
+		}
 
 		return b.queueManager.Subscribe(ctx, queueName, pattern, s.ID, groupID, proxyNodeID)
 	}

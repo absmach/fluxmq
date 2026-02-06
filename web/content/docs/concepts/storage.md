@@ -15,5 +15,5 @@ FluxMQ separates storage concerns into three layers:
 
 ## Learn More
 
-- `/docs/architecture/storage`
-- `/docs/architecture/clustering-internals`
+- [/docs/architecture/storage](/docs/architecture/storage)
+- [/docs/architecture/clustering-internals](/docs/architecture/clustering-internals)

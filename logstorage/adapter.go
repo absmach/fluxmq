@@ -330,11 +330,15 @@ func (a *Adapter) GetConsumerGroup(ctx context.Context, queueName, groupID strin
 		return nil, err
 	}
 
-	// Sync cursors from the log store's cursor state
-	a.syncCursorsFromStore(queueName, groupID, group)
+	// Stream groups use cursor-only semantics without PEL and keep cursor state in groupStore.
+	// Syncing from logstore can overwrite explicit stream cursor positioning.
+	if group.Mode != types.GroupModeStream {
+		// Sync cursors from the log store's cursor state.
+		a.syncCursorsFromStore(queueName, groupID, group)
 
-	// Sync PEL from the log store's PEL state
-	a.syncPELFromStore(queueName, groupID, group)
+		// Sync PEL from the log store's PEL state.
+		a.syncPELFromStore(queueName, groupID, group)
+	}
 
 	return group, nil
 }
@@ -469,7 +473,7 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 
 // UpdateCommitted updates the committed offset for a queue.
 func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
-	if err := a.store.CommitOffset(queueName, groupID, committed); err != nil {
+	if err := a.store.CommitOffset(queueName, groupID, committed); err != nil && err != ErrGroupNotFound {
 		return err
 	}
 
@@ -477,6 +481,9 @@ func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
 		c := group.GetCursor()
+		if committed > c.Cursor {
+			c.Cursor = committed
+		}
 		c.Committed = committed
 		group.UpdatedAt = time.Now()
 		a.groupStore.Save(group)

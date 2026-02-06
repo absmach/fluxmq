@@ -3,7 +3,8 @@
   "pages": [
     "overview",
     "routing",
+    "webhooks",
     "storage",
-    "clustering-internals"
+    "clustering"
   ]
 }

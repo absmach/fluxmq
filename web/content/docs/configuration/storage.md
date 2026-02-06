@@ -24,5 +24,5 @@ Queue logs are stored under:
 
 ## Learn More
 
-- `/docs/architecture/storage`
-- `/docs/reference/configuration-reference`
+- [/docs/architecture/storage](/docs/architecture/storage)
+- [/docs/reference/configuration-reference](/docs/reference/configuration-reference)

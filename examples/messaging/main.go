@@ -27,10 +27,17 @@ import (
 var (
 	mqttAddr    = flag.String("mqtt", "localhost:1883", "MQTT broker address")
 	amqp091Addr = flag.String("amqp091", "localhost:5682", "AMQP 0.9.1 broker address")
+	runID       = flag.String("run-id", "", "Optional run suffix for queue/stream names (defaults to current unix timestamp)")
 )
+
+var demoRunID string
 
 func main() {
 	flag.Parse()
+	demoRunID = *runID
+	if demoRunID == "" {
+		demoRunID = fmt.Sprintf("%d", time.Now().Unix())
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -53,6 +60,10 @@ func main() {
 	amqp091Stream(ctx)
 
 	log.Println("\nAll scenarios completed.")
+}
+
+func demoName(base string) string {
+	return fmt.Sprintf("%s-%s", base, demoRunID)
 }
 
 // --- Scenario 1: Standard MQTT pub/sub ---
@@ -117,7 +128,10 @@ func mqttPubSub(ctx context.Context) {
 // --- Scenario 2: MQTT publish to queue, AMQP 0.9.1 consume ---
 
 func mqttToAMQP091Queue(ctx context.Context) {
-	queueTopic := "$queue/demo-orders"
+	queueName := demoName("demo-orders")
+	queueTopic := "$queue/" + queueName
+	queueFilter := queueTopic + "/#"
+	consumerTag := "demo-consumer"
 	messageCount := 5
 	received := make(chan string, messageCount)
 
@@ -135,12 +149,12 @@ func mqttToAMQP091Queue(ctx context.Context) {
 	defer ch.Close()
 
 	deliveries, err := ch.Consume(
-		"$queue/demo-orders/#", // queue filter
-		"demo-consumer",        // consumer tag
-		false,                  // auto-ack off — we ack manually
-		false,                  // exclusive
-		false,                  // no-local
-		false,                  // no-wait
+		queueFilter, // queue filter
+		consumerTag, // consumer tag
+		false,       // auto-ack off — we ack manually
+		false,       // exclusive
+		false,       // no-local
+		false,       // no-wait
 		amqp091.Table{
 			"x-consumer-group": "demo-workers",
 		},
@@ -148,7 +162,7 @@ func mqttToAMQP091Queue(ctx context.Context) {
 	if err != nil {
 		log.Fatalf("AMQP 0.9.1 consume failed: %v", err)
 	}
-	log.Printf("  [AMQP 0.9.1] Consuming from queue 'demo-orders' in group 'demo-workers'")
+	log.Printf("  [AMQP 0.9.1] Consuming from queue '%s' in group 'demo-workers'", queueName)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -204,12 +218,25 @@ func mqttToAMQP091Queue(ctx context.Context) {
 	case <-ctx.Done():
 		return
 	}
+
+	// Cleanup keeps the demo repeatable and avoids backlog replay for ad-hoc subscribers.
+	if err := ch.Cancel(consumerTag, false); err != nil {
+		log.Printf("  [AMQP 0.9.1] Consumer cancel failed: %v", err)
+	}
+	if _, err := ch.QueueDelete(queueName, false, false, false); err != nil {
+		log.Printf("  [AMQP 0.9.1] Queue cleanup failed: %v", err)
+	} else {
+		log.Printf("  [AMQP 0.9.1] Deleted queue '%s' after demo", queueName)
+	}
+
+	log.Printf("  [INFO] Manual MQTT inspection topic for this run: %s", queueFilter)
 }
 
 // --- Scenario 3: AMQP 0.9.1 stream queue ---
 
 func amqp091Stream(ctx context.Context) {
-	streamName := "demo-events"
+	streamName := demoName("demo-events")
+	streamFilter := "$queue/" + streamName + "/#"
 	messageCount := 5
 
 	conn, err := amqp091.Dial(fmt.Sprintf("amqp://guest:guest@%s/", *amqp091Addr))
@@ -259,7 +286,7 @@ func amqp091Stream(ctx context.Context) {
 
 	// Consume from the beginning of the stream (replay)
 	deliveries, err := ch.Consume(
-		streamName,      // stream queue name (no $queue/ prefix)
+		streamFilter,    // stream queue filter
 		"stream-reader", // consumer tag
 		false,           // auto-ack off
 		false,           // exclusive

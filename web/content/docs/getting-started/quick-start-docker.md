@@ -40,5 +40,5 @@ docker run --rm \
 
 ## Next Steps
 
-- `/docs/getting-started/first-message`
-- `/docs/getting-started/first-durable-queue`
+- [/docs/getting-started/first-message](/docs/getting-started/first-message)
+- [/docs/getting-started/first-durable-queue](/docs/getting-started/first-durable-queue)

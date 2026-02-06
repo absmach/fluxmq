@@ -37,6 +37,26 @@ Intuition:
 - Acknowledging work removes entries from the PEL.
 - The committed offset advances when the earliest pending work is cleared.
 
+## Group Names in Logs (`group@pattern`)
+
+FluxMQ stores queue consumer groups internally as:
+
+- `<consumer-group>@<subscription-pattern>` when a pattern exists
+- `<consumer-group>` when no pattern exists
+
+This lets one logical group keep separate progress for different filters on the same queue.
+
+Examples:
+
+- Subscribe to `$queue/demo-events/#` with `consumer-group=demo-workers` -> internal group `demo-workers@#`
+- Subscribe to `$queue/demo-events/orders/+` with `consumer-group=demo-workers` -> internal group `demo-workers@orders/+`
+- Subscribe to `$queue/demo-events` (no trailing filter) with `consumer-group=demo-workers` -> internal group `demo-workers`
+
+So seeing `group=demo-events@#` in logs means:
+
+- effective group id is `demo-events`
+- subscription pattern is `#` for that queue
+
 ## Acknowledgment Semantics
 
 - **Ack**: confirms processing and allows committed offset to move forward.
@@ -45,5 +65,5 @@ Intuition:
 
 ## Learn More
 
-- `/docs/messaging/consumer-groups`
-- `/docs/messaging/durable-queues`
+- [/docs/messaging/consumer-groups](/docs/messaging/consumer-groups)
+- [/docs/messaging/durable-queues](/docs/messaging/durable-queues)

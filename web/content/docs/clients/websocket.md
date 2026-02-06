@@ -23,4 +23,4 @@ Use any MQTT-over-WebSocket client library and point it to the WebSocket URL.
 
 ## Learn More
 
-- `/docs/configuration/server`
+- [/docs/configuration/server](/docs/configuration/server)
