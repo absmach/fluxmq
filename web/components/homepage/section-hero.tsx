@@ -17,10 +17,17 @@ export function HeroSection() {
                 <span className="text-(--flux-blue)">Flux</span>
                 <span className="text-(--flux-orange)">MQ</span>
               </h1>
-              <div className="mono text-base md:text-xl text-theme-muted mb-6 border-l-4 border-(--flux-orange) pl-4 animate-slide-up">
-                <div>open-source | high-throughput | low-latency | scalable</div>
-                <div>persistent storage | replication | MQTT v3/v5 | AMQP</div>
-                <div>security | extensibility</div>
+              <div className="mono text-base md:text-xl text-theme-muted mb-6 border-l-4 border-(--flux-orange) pl-4 animate-slide-up flex flex-wrap gap-x-2">
+                <span className="whitespace-nowrap">open-source |</span>
+                <span className="whitespace-nowrap">high-throughput |</span>
+                <span className="whitespace-nowrap">low-latency |</span>
+                <span className="whitespace-nowrap">scalable |</span>
+                <span className="whitespace-nowrap">persistent storage |</span>
+                <span className="whitespace-nowrap">replication |</span>
+                <span className="whitespace-nowrap">MQTT v3/v5 |</span>
+                <span className="whitespace-nowrap">AMQP |</span>
+                <span className="whitespace-nowrap">security |</span>
+                <span className="whitespace-nowrap">extensibility</span>
               </div>
             </div>
 
