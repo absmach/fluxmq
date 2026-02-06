@@ -196,17 +196,17 @@ hardware. See `benchmarks/README.md` for commands and guidance.
 
 ## Documentation
 
-| Document                                 | Description                                       |
-| ---------------------------------------- | ------------------------------------------------- |
-| [Architecture](https://fluxmq.absmach.eu/docs/architecture/overview)            | Detailed system design                            |
+| Document                                                                                 | Description                                       |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [Architecture](https://fluxmq.absmach.eu/docs/architecture/overview)                     | Detailed system design                            |
 | [Scaling & Performance](https://fluxmq.absmach.eu/docs/deployment/running-in-production) | Benchmarking and tuning guidance                  |
-| [Clustering](https://fluxmq.absmach.eu/docs/architecture/clustering)            | Distributed broker design                         |
-| [Client Library](https://fluxmq.absmach.eu/docs/clients/go-client)              | Go MQTT and AMQP 0.9.1 clients with queue support |
-| [Broker Internals](https://fluxmq.absmach.eu/docs/architecture/routing)         | Message routing, sessions                         |
-| [Durable Queues](https://fluxmq.absmach.eu/docs/messaging/durable-queues)       | Queue configuration, consumer groups              |
-| [Configuration](https://fluxmq.absmach.eu/docs/reference/configuration-reference) | Complete config reference                         |
-| [Webhooks](https://fluxmq.absmach.eu/docs/architecture/webhooks)                | Webhook event system                              |
-| [Roadmap](https://fluxmq.absmach.eu/docs/roadmap)                               | Project planning notes                            |
+| [Clustering](https://fluxmq.absmach.eu/docs/architecture/clustering)                     | Distributed broker design                         |
+| [Client Library](https://fluxmq.absmach.eu/docs/clients/go-client)                       | Go MQTT and AMQP 0.9.1 clients with queue support |
+| [Broker Internals](https://fluxmq.absmach.eu/docs/architecture/routing)                  | Message routing, sessions                         |
+| [Durable Queues](https://fluxmq.absmach.eu/docs/messaging/durable-queues)                | Queue configuration, consumer groups              |
+| [Configuration](https://fluxmq.absmach.eu/docs/reference/configuration-reference)        | Complete config reference                         |
+| [Webhooks](https://fluxmq.absmach.eu/docs/architecture/webhooks)                         | Webhook event system                              |
+| [Roadmap](https://fluxmq.absmach.eu/docs/roadmap)                                        | Project planning notes                            |
 
 ## Contributing
 
