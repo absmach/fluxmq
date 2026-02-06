@@ -43,6 +43,7 @@ export function NewsletterSection() {
                 name="b_70b43c7181d005024187bfb31_0a319b6b63"
                 tabIndex={-1}
                 value=""
+                readOnly
               />
             </div>
             <p className="text-xs text-theme-muted mt-4 text-center">
