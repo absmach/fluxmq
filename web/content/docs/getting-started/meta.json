@@ -1,0 +1,8 @@
+{
+  "title": "Getting Started",
+  "pages": [
+    "quick-start-docker",
+    "first-message",
+    "first-durable-queue"
+  ]
+}

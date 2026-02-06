@@ -1,9 +1,9 @@
 ---
-title: FluxMQ Architecture
-description: Comprehensive system design overview covering layered architecture, protocol adapters, domain logic, and multi-protocol support
+title: Overview
+description: High-level system design overview covering core components and how they fit together
 ---
 
-# FluxMQ Architecture
+# Architecture Overview
 
 **Last Updated:** 2026-02-05
 
@@ -83,10 +83,24 @@ FluxMQ is a multi-protocol message broker built around a shared queue manager. M
 - **Queue API (Connect/gRPC)**: `server/api/`, `server/queue/`
   - Programmatic queue operations over HTTP/2 (h2c or TLS)
 
+## Storage Overview
+
+FluxMQ uses three storage layers, each optimized for a different job:
+
+1. **Broker state storage** (`storage/`): Sessions, subscriptions, retained messages, wills, and offline queues. Backed by BadgerDB or in-memory for single-node mode.
+2. **Queue log storage** (`logstorage/`): Append-only durable logs, consumer group state, and PEL tracking for queues.
+3. **Cluster metadata** (embedded etcd): Session ownership, subscriptions, queue consumer registry, and hybrid retained/will metadata.
+
+If you are debugging data persistence, start here:
+
+1. `storage/` for MQTT session and retained/will state.
+2. `logstorage/` for queue durability and retention behavior.
+3. `cluster/etcd.go` for cross-node metadata and routing.
+
 ## Related Docs
 
-- `docs/broker.md`
-- `docs/queue.md`
-- `docs/configuration.md`
-- `docs/clustering.md`
-- `docs/webhooks.md`
+- Routing internals: `/docs/architecture/routing`
+- Storage internals: `/docs/architecture/storage`
+- Clustering internals: `/docs/architecture/clustering-internals`
+- Durable queues: `/docs/messaging/durable-queues`
+- Configuration reference: `/docs/reference/configuration-reference`
