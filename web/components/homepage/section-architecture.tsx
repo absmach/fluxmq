@@ -2,10 +2,10 @@ import { MermaidDiagram } from "@/components/mermaid-diagram";
 
 const architectureDiagram = `
 graph TD
-    A[Setup and configuration] --> B[TCP/WS/HTTP/CoAP<br/>Servers]
+    A[Setup and configuration] --> B[MQTT/WS/HTTP/CoAP<br/>Servers]
     A --> C[AMQP 1.0<br/>Server]
     A --> D[AMQP 0.9.1<br/>Server]
-    B --> E[MQTT Broker]
+    B --> E[MQTT v3.1.1/v5 Broker]
     C --> F[AMQP Broker<br/> 1.0]
     D --> G[AMQP Broker<br/>0.9.1]
     E --> H[Queue Manager<br/>Bindings + Delivery]
