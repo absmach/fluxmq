@@ -17,10 +17,10 @@ If `--config` is omitted, defaults are used (see `config.Default()` in `config/c
 
 Looking for a guided walkthrough? See:
 
-- [/docs/configuration/server](/docs/configuration/server)
-- [/docs/configuration/storage](/docs/configuration/storage)
-- [/docs/configuration/clustering](/docs/configuration/clustering)
-- [/docs/configuration/security](/docs/configuration/security)
+- [Server configuration](/docs/configuration/server)
+- [Storage configuration](/docs/configuration/storage)
+- [Cluster configuration](/docs/configuration/clustering)
+- [Security configuration](/docs/configuration/security)
 
 ## Configuration Overview
 
@@ -193,7 +193,7 @@ Clustering combines:
 - **gRPC transport** (`cluster.transport`): cross-node routing (publishes, queue messages, session takeover, hybrid payload fetch).
 - **Optional Raft** (`cluster.raft`): replicates durable queue operations.
 
-For a “how it works” deep dive, see [/docs/architecture/clustering-internals](/docs/architecture/clustering-internals).
+For a “how it works” deep dive, see [Clustering internals](/docs/architecture/clustering-internals).
 
 ```yaml
 cluster:

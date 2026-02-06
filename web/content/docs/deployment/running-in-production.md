@@ -46,4 +46,4 @@ Production readiness is workload-dependent. Use the benchmark suites in `benchma
 - Enable OpenTelemetry metrics via `server.metrics_enabled` and `server.metrics_addr`.
 - Consider enabling traces only for debugging (`server.otel_traces_enabled`).
 
-For configuration details, see [/docs/reference/configuration-reference](/docs/reference/configuration-reference).
+For configuration details, see [Configuration reference](/docs/reference/configuration-reference).

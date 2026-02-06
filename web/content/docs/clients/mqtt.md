@@ -105,7 +105,7 @@ mosquitto_sub -d -V mqttv5 -h localhost -p 1883 -t '$queue/orders/#' \
 
 ## Learn More
 
-- [/docs/configuration/server](/docs/configuration/server)
-- [/docs/messaging/publishing-messages](/docs/messaging/publishing-messages)
-- [/docs/messaging/consuming-messages](/docs/messaging/consuming-messages)
-- [/docs/messaging/consumer-groups](/docs/messaging/consumer-groups)
+- [Server configuration](/docs/configuration/server)
+- [Publishing messages](/docs/messaging/publishing-messages)
+- [Consuming messages](/docs/messaging/consuming-messages)
+- [Consumer groups](/docs/messaging/consumer-groups)

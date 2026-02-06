@@ -120,4 +120,4 @@ ch.Publish("orders-exchange", "orders.eu.created", false, false, amqp091.Publish
 })
 ```
 
-See [/docs/messaging/durable-queues](/docs/messaging/durable-queues) for wildcard patterns, acknowledgments, and consumer groups.
+See [Durable queues](/docs/messaging/durable-queues) for wildcard patterns, acknowledgments, and consumer groups.

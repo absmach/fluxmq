@@ -65,5 +65,5 @@ So seeing `group=demo-events@#` in logs means:
 
 ## Learn More
 
-- [/docs/messaging/consumer-groups](/docs/messaging/consumer-groups)
-- [/docs/messaging/durable-queues](/docs/messaging/durable-queues)
+- [Consumer groups](/docs/messaging/consumer-groups)
+- [Durable queues](/docs/messaging/durable-queues)

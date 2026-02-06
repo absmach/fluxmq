@@ -160,7 +160,7 @@ ch.Consume("my-stream", "", false, false, false, false, amqp091.Table{
 })
 ```
 
-See [/docs/messaging/durable-queues#queue-types](/docs/messaging/durable-queues#queue-types) for detailed explanation of how classic and stream modes differ internally (PEL tracking, cursor management, etc.).
+See [Queue types](/docs/messaging/durable-queues#queue-types) for detailed explanation of how classic and stream modes differ internally (PEL tracking, cursor management, etc.).
 
 ## Acknowledgments
 
@@ -391,6 +391,6 @@ queue_manager:
 
 ## Learn More
 
-- [/docs/messaging/durable-queues](/docs/messaging/durable-queues) - Queue configuration and lifecycle
-- [/docs/messaging/publishing-messages](/docs/messaging/publishing-messages) - How to publish to queues
-- [/docs/messaging/consuming-messages](/docs/messaging/consuming-messages) - Subscription patterns
+- [Durable queues](/docs/messaging/durable-queues) - Queue configuration and lifecycle
+- [Publishing messages](/docs/messaging/publishing-messages) - How to publish to queues
+- [Consuming messages](/docs/messaging/consuming-messages) - Subscription patterns

@@ -131,5 +131,5 @@ d.Reject(false)  // requeue=false
 
 See:
 
-- [/docs/messaging/consumer-groups](/docs/messaging/consumer-groups)
-- [/docs/messaging/durable-queues](/docs/messaging/durable-queues)
+- [Consumer groups](/docs/messaging/consumer-groups)
+- [Durable queues](/docs/messaging/durable-queues)

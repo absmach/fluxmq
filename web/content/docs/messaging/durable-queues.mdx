@@ -566,7 +566,7 @@ A background retention loop computes a **safe truncation offset** and truncates 
 - Apply retention limits (time/size/message count) to compute the oldest offset that should be kept.
 - Truncate the log to the lowest safe offset (segment-granular in log storage).
 
-See [/docs/architecture/storage](/docs/architecture/storage) for on-disk format and retention behavior details.
+See [Storage internals](/docs/architecture/storage) for on-disk format and retention behavior details.
 
 ## Clustering and Replication Notes
 
@@ -575,7 +575,7 @@ In clustered deployments, queue behavior depends on `cluster.raft.*`:
 - `write_policy` controls how followers handle incoming queue publishes.
 - `distribution_mode` controls whether deliveries are routed (`forward`) or logs are replicated (`replicate`).
 
-See [/docs/configuration/clustering](/docs/configuration/clustering) and [/docs/architecture/clustering-internals](/docs/architecture/clustering-internals) for the full picture.
+See [Cluster configuration](/docs/configuration/clustering) and [Clustering internals](/docs/architecture/clustering-internals) for the full picture.
 
 ## DLQ Status
 

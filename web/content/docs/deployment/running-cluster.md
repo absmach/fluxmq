@@ -34,5 +34,5 @@ From the repo root:
 
 ## Learn More
 
-- [/docs/architecture/clustering-internals](/docs/architecture/clustering-internals)
-- [/docs/reference/configuration-reference](/docs/reference/configuration-reference)
+- [Clustering internals](/docs/architecture/clustering-internals)
+- [Configuration reference](/docs/reference/configuration-reference)

@@ -25,5 +25,5 @@ Each broker owns its protocol state machine, but all queue-capable traffic flows
 
 ## Learn More
 
-- [/docs/architecture/overview](/docs/architecture/overview)
-- [/docs/architecture/routing](/docs/architecture/routing)
+- [Architecture overview](/docs/architecture/overview)
+- [Routing internals](/docs/architecture/routing)

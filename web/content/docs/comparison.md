@@ -54,5 +54,5 @@ Best fit when:
 
 ## Notes
 
-- FluxMQ is still evolving. For current status of features and limitations, see [/docs/messaging/durable-queues](/docs/messaging/durable-queues), [/docs/reference/configuration-reference](/docs/reference/configuration-reference), and [/docs/roadmap](/docs/roadmap).
+- FluxMQ is still evolving. For current status of features and limitations, see [Durable queues](/docs/messaging/durable-queues), [Configuration reference](/docs/reference/configuration-reference), and [Roadmap](/docs/roadmap).
 - Benchmarking should be done on your target hardware using `benchmarks/`.

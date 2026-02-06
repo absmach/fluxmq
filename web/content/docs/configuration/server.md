@@ -41,4 +41,4 @@ server:
 
 ## Learn More
 
-- [/docs/reference/configuration-reference](/docs/reference/configuration-reference)
+- [Configuration reference](/docs/reference/configuration-reference)
