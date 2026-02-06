@@ -3,6 +3,7 @@
   "pages": [
     "overview",
     "routing",
+    "webhooks",
     "storage",
     "clustering"
   ]
