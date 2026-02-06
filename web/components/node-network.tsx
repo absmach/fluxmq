@@ -16,7 +16,7 @@ import { SmartBezierEdge } from "@tisoap/react-flow-smart-edge";
 
 const blue = "#2F69B3";
 const orange = "#F9A32A";
-const green = "#28b828";
+const green = "#5a9f5a";
 
 const nodeTypes = {
   broker: BrokerNode,
@@ -218,7 +218,7 @@ const consumerEdge = (source: string, target: string): Edge => ({
   },
   markerEnd: {
     type: MarkerType.ArrowClosed,
-    color: blue,
+    color: green,
   },
 });
 
