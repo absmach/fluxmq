@@ -51,4 +51,4 @@ FluxMQ treats `$queue/<name>/...` as:
 
 For MQTT, durable queue behavior is triggered by the `$queue/` prefix. A publish to a non-`$queue/` topic uses normal pub/sub routing.
 
-Learn more in `/docs/guides/durable-queues`.
+Learn more in `/docs/messaging/durable-queues`.

@@ -33,5 +33,5 @@ Ephemeral queues:
 
 ## Learn More
 
-- `/docs/guides/durable-queues`
+- `/docs/messaging/durable-queues`
 - `/docs/architecture/storage`

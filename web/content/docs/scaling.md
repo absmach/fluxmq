@@ -5,4 +5,4 @@ description: This page has moved
 
 # Scaling & Performance
 
-This page has moved to `/docs/guides/running-in-production`.
+This page has moved to `/docs/deployment/running-in-production`.

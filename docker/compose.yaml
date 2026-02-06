@@ -11,7 +11,7 @@ services:
       - "8081:8081"   # Health
     volumes:
       - ${FLUXMQ_CONFIG:-./config.yaml}:/etc/fluxmq/config.yaml:ro
-      - fluxmq-data:/var/lib/fluxmq
+      - fluxmq-data:/tmp/fluxmq
     restart: unless-stopped
 
 volumes:

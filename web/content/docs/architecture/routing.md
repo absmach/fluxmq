@@ -239,7 +239,7 @@ flowchart TD
 
 ## Where To Look Next
 
-- Durable queues: `/docs/guides/durable-queues`
+- Durable queues: `/docs/messaging/durable-queues`
 - Storage internals: `/docs/architecture/storage`
 - Clustering internals: `/docs/architecture/clustering-internals`
 

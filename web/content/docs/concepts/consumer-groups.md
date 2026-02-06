@@ -45,5 +45,5 @@ Intuition:
 
 ## Learn More
 
-- `/docs/guides/consumer-groups`
-- `/docs/guides/durable-queues`
+- `/docs/messaging/consumer-groups`
+- `/docs/messaging/durable-queues`

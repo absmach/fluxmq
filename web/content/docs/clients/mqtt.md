@@ -23,5 +23,5 @@ mosquitto_sub -p 1883 -t "sensors/#" -v
 ## Learn More
 
 - `/docs/configuration/server`
-- `/docs/guides/publishing-messages`
-- `/docs/guides/consuming-messages`
+- `/docs/messaging/publishing-messages`
+- `/docs/messaging/consuming-messages`

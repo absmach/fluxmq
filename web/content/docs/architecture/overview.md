@@ -102,5 +102,5 @@ If you are debugging data persistence, start here:
 - Routing internals: `/docs/architecture/routing`
 - Storage internals: `/docs/architecture/storage`
 - Clustering internals: `/docs/architecture/clustering-internals`
-- Durable queues: `/docs/guides/durable-queues`
+- Durable queues: `/docs/messaging/durable-queues`
 - Configuration reference: `/docs/reference/configuration-reference`

@@ -2,8 +2,8 @@
   "title": "Architecture",
   "pages": [
     "overview",
-    "storage",
     "routing",
+    "storage",
     "clustering-internals"
   ]
 }

@@ -35,5 +35,5 @@ Include `message-id` and `group-id` as user properties.
 
 ## Next Steps
 
-- `/docs/guides/durable-queues`
+- `/docs/messaging/durable-queues`
 - `/docs/concepts/consumer-groups`

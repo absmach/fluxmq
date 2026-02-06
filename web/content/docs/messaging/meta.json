@@ -1,11 +1,10 @@
 {
-  "title": "Guides",
+  "title": "Messaging",
   "pages": [
     "publishing-messages",
     "consuming-messages",
     "durable-queues",
     "consumer-groups",
-    "running-cluster",
-    "running-in-production"
+    "example"
   ]
 }

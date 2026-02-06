@@ -37,5 +37,5 @@ curl -sS -X POST http://localhost:8080/publish \
 
 ## Learn More
 
-- `/docs/guides/publishing-messages`
+- `/docs/messaging/publishing-messages`
 - `/docs/configuration/server`

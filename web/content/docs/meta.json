@@ -4,10 +4,11 @@
     "index",
     "getting-started",
     "concepts",
-    "guides",
-    "configuration",
     "architecture",
+    "messaging",
+    "configuration",
     "clients",
+    "deployment",
     "reference"
   ]
 }

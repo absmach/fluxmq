@@ -25,5 +25,5 @@ You should see the message appear in the subscriber terminal.
 
 ## Next Steps
 
-- `/docs/guides/publishing-messages`
-- `/docs/guides/consuming-messages`
+- `/docs/messaging/publishing-messages`
+- `/docs/messaging/consuming-messages`

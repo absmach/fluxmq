@@ -96,6 +96,6 @@ Notes on current behavior:
 
 ## Learn More
 
-- `/docs/guides/running-cluster`
+- `/docs/deployment/running-cluster`
 - `/docs/architecture/clustering-internals`
 - `/docs/reference/configuration-reference`
