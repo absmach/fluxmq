@@ -46,7 +46,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="apple-mobile-web-app-title" content="FluxMQ" />
-        <link rel="canonical" href="https://absmach.eu/fluxmq/" />
+        <link rel="canonical" href="https://fluxmq.absmach.eu/" />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
@@ -65,7 +65,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
               creator: {
                 '@type': 'Organization',
                 name: 'Abstract Machines',
-                url: 'https://absmach.eu',
+                url: 'https://www.absmach.eu',
               },
             }),
           }}
