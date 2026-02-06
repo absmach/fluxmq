@@ -1262,6 +1262,21 @@ func (ch *Channel) deliverMessage(topic string, payload []byte, props map[string
 
 // consumerQueueMatches checks if a consumer's queue matches the given topic.
 func (ch *Channel) consumerQueueMatches(cons *consumer, topic string) bool {
+	if cons.queueName != "" {
+		queueTopic := "$queue/" + cons.queueName
+		switch {
+		case topic == cons.queueName, topic == queueTopic:
+			// Empty pattern means the root queue topic.
+			return cons.pattern == "" || cons.pattern == "#"
+		case strings.HasPrefix(topic, queueTopic+"/"):
+			if cons.pattern == "" {
+				return true
+			}
+			routingKey := strings.TrimPrefix(topic, queueTopic+"/")
+			return topics.TopicMatch(cons.pattern, routingKey)
+		}
+	}
+
 	if cons.queue == topic {
 		return true
 	}

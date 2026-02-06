@@ -48,3 +48,34 @@ func TestAdapter_ReadBatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, 0)
 }
+
+func TestAdapter_StreamCursorAndCommitDoNotRegress(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+
+	cfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	cfg.Type = types.QueueTypeStream
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	group := types.NewConsumerGroupState("events", "streamers", "")
+	group.Mode = types.GroupModeStream
+	group.AutoCommit = true
+	require.NoError(t, adapter.CreateConsumerGroup(ctx, group))
+
+	require.NoError(t, adapter.UpdateCursor(ctx, "events", "streamers", 7))
+
+	got, err := adapter.GetConsumerGroup(ctx, "events", "streamers")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), got.GetCursor().Cursor)
+
+	require.NoError(t, adapter.UpdateCommitted(ctx, "events", "streamers", 7))
+
+	got, err = adapter.GetConsumerGroup(ctx, "events", "streamers")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), got.GetCursor().Cursor)
+	assert.Equal(t, uint64(7), got.GetCursor().Committed)
+}
