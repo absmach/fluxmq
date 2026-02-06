@@ -1,6 +1,6 @@
 # FluxMQ
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/absmach/fluxmq)](https://goreportcard.com/report/github.com/absmach/fluxmq)
+[![Go Report](https://goreportcard.com/badge/github.com/absmach/fluxmq)](https://goreportcard.com/report/github.com/absmach/fluxmq)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 > **Status: Experimental** — FluxMQ is not production-ready yet.
@@ -134,7 +134,7 @@ FluxMQ is optimized for event-driven systems that need ordered delivery, durable
     │ logic/fsm) │      └─────┬──────┘     └─────┬──────┘
     └──────┬─────┘            │                  │
            └──────────────────┬──────────────────┘
-                              │ queue-capable traffic
+                              │ queue manager
                               ▼
                       ┌────────────────┐
                       │ Queue Manager  │
