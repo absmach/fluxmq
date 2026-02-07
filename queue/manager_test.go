@@ -718,17 +718,19 @@ type mockCluster struct {
 	forwardCalls     []forwardPublishCall
 	forwardCallsMu   sync.Mutex
 	queueConsumers   []*cluster.QueueConsumerInfo
+	queueConsumersMu sync.RWMutex
 	registered       []*cluster.QueueConsumerInfo
 	registeredMu     sync.Mutex
 }
 
 type routedMessage struct {
-	nodeID    string
-	clientID  string
-	queueName string
-	messageID string
-	payload   []byte
-	sequence  int64
+	nodeID     string
+	clientID   string
+	queueName  string
+	messageID  string
+	payload    []byte
+	properties map[string]string
+	sequence   int64
 }
 
 type forwardPublishCall struct {
@@ -750,15 +752,20 @@ func newMockCluster(nodeID string) *mockCluster {
 func (c *mockCluster) NodeID() string { return c.nodeID }
 
 func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
+	propsCopy := make(map[string]string, len(properties))
+	for k, v := range properties {
+		propsCopy[k] = v
+	}
 	c.routedMessagesMu.Lock()
 	defer c.routedMessagesMu.Unlock()
 	c.routedMessages = append(c.routedMessages, routedMessage{
-		nodeID:    nodeID,
-		clientID:  clientID,
-		queueName: queueName,
-		messageID: messageID,
-		payload:   payload,
-		sequence:  sequence,
+		nodeID:     nodeID,
+		clientID:   clientID,
+		queueName:  queueName,
+		messageID:  messageID,
+		payload:    payload,
+		properties: propsCopy,
+		sequence:   sequence,
 	})
 	return nil
 }
@@ -780,6 +787,8 @@ func (c *mockCluster) GetForwardCalls() []forwardPublishCall {
 }
 
 func (c *mockCluster) SetQueueConsumers(consumers []*cluster.QueueConsumerInfo) {
+	c.queueConsumersMu.Lock()
+	defer c.queueConsumersMu.Unlock()
 	c.queueConsumers = consumers
 }
 
@@ -846,7 +855,21 @@ func (c *mockCluster) UnregisterQueueConsumer(ctx context.Context, queueName, gr
 }
 
 func (c *mockCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error) {
-	return nil, nil
+	c.queueConsumersMu.RLock()
+	defer c.queueConsumersMu.RUnlock()
+
+	if c.queueConsumers == nil {
+		return nil, nil
+	}
+
+	consumers := make([]*cluster.QueueConsumerInfo, 0, len(c.queueConsumers))
+	for _, consumer := range c.queueConsumers {
+		if consumer != nil && consumer.QueueName == queueName {
+			consumers = append(consumers, consumer)
+		}
+	}
+
+	return consumers, nil
 }
 
 func (c *mockCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*cluster.QueueConsumerInfo, error) {
@@ -854,6 +877,9 @@ func (c *mockCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, 
 }
 
 func (c *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.QueueConsumerInfo, error) {
+	c.queueConsumersMu.RLock()
+	defer c.queueConsumersMu.RUnlock()
+
 	if c.queueConsumers == nil {
 		return nil, nil
 	}
@@ -979,6 +1005,12 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 			if rm.clientID != remoteClientID {
 				t.Errorf("Expected routed message to client %s, got %s", remoteClientID, rm.clientID)
 			}
+			if rm.messageID == "" {
+				t.Error("Expected routed message-id to be set")
+			}
+			if rm.properties["group-id"] == "" {
+				t.Error("Expected routed message to include group-id property")
+			}
 		}
 	}
 }
@@ -1007,6 +1039,123 @@ func TestSubscribeDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	}
 	if registered[0].ProxyNodeID != "node-1" {
 		t.Fatalf("expected proxy node id node-1, got %q", registered[0].ProxyNodeID)
+	}
+}
+
+func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		mockCl,
+	)
+
+	ctx := context.Background()
+	if err := manager.Subscribe(ctx, "tasks", "", "remote-client", "workers", "node-2"); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	if err := manager.Enqueue(ctx, "$queue/tasks/new", []byte("job"), map[string]string{"custom": "value"}); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	manager.deliverMessages()
+
+	routed := mockCl.GetRoutedMessages()
+	if len(routed) != 1 {
+		t.Fatalf("expected 1 routed message, got %d", len(routed))
+	}
+
+	msg := routed[0]
+	if msg.messageID != "tasks:0" {
+		t.Fatalf("expected message-id tasks:0, got %q", msg.messageID)
+	}
+	if got := msg.properties["message-id"]; got != "tasks:0" {
+		t.Fatalf("expected properties message-id tasks:0, got %q", got)
+	}
+	if got := msg.properties["group-id"]; got != "workers" {
+		t.Fatalf("expected properties group-id workers, got %q", got)
+	}
+	if got := msg.properties["queue"]; got != "tasks" {
+		t.Fatalf("expected properties queue tasks, got %q", got)
+	}
+	if got := msg.properties["offset"]; got != "0" {
+		t.Fatalf("expected properties offset 0, got %q", got)
+	}
+}
+
+func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+
+	cfg := DefaultConfig()
+	cfg.DeliveryInterval = 5 * time.Second
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		func(ctx context.Context, clientID string, msg any) error { return nil },
+		cfg,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		mockCl,
+	)
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer manager.Stop()
+
+	ctx := context.Background()
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil && err != storage.ErrQueueAlreadyExists {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	if err := manager.Enqueue(ctx, "$queue/events/user.action", []byte("event-1"), nil); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// Simulate remote stream consumer registration that happens after publish.
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:    "events",
+			GroupID:      "demo-readers@#",
+			ConsumerID:   "remote-consumer-1",
+			ClientID:     "amqp091-conn-remote",
+			Pattern:      "#",
+			Mode:         string(types.GroupModeStream),
+			ProxyNodeID:  "node-2",
+			RegisteredAt: time.Now(),
+		},
+	})
+
+	deadline := time.After(3 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		routed := mockCl.GetRoutedMessages()
+		if len(routed) > 0 {
+			if got := routed[0].properties["x-stream-offset"]; got != "0" {
+				t.Fatalf("expected x-stream-offset=0, got %q", got)
+			}
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("expected fallback sweep to deliver backlog to remote stream consumer")
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -1157,7 +1306,7 @@ func TestDeliverQueueMessage(t *testing.T) {
 
 	msg := map[string]interface{}{
 		"id":         "msg-123",
-		"queueName":  "$queue/test",
+		"queueName":  "test",
 		"payload":    []byte("routed payload"),
 		"properties": map[string]string{"custom": "prop"},
 		"sequence":   int64(42),
@@ -1189,6 +1338,9 @@ func TestDeliverQueueMessage(t *testing.T) {
 
 	if deliveredMsg.Properties["message-id"] != "msg-123" {
 		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Properties["message-id"])
+	}
+	if deliveredMsg.Properties["queue"] != "test" {
+		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties["queue"])
 	}
 }
 

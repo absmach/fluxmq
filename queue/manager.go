@@ -54,6 +54,10 @@ type Manager struct {
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 
+	deliveryMu    sync.Mutex
+	deliverySet   map[string]struct{}
+	deliveryQueue chan string
+
 	// Metrics
 	metrics *consumer.Metrics
 }
@@ -146,6 +150,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		cluster:          cl,
 		localNodeID:      localNodeID,
 		stopCh:           make(chan struct{}),
+		deliverySet:      make(map[string]struct{}),
+		deliveryQueue:    make(chan string, 4096),
 		metrics:          metrics,
 	}
 }
@@ -164,6 +170,9 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Cleanup ephemeral queues that expired while broker was down
 	m.cleanupEphemeralQueues()
+
+	// Prime delivery for existing queues at startup.
+	m.scheduleAllQueues(ctx)
 
 	// Start delivery workers
 	m.wg.Add(1)
@@ -189,6 +198,43 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.logger.Info("queue-based queue manager started")
 	return nil
+}
+
+func (m *Manager) scheduleAllQueues(ctx context.Context) {
+	queues, err := m.queueStore.ListQueues(ctx)
+	if err != nil {
+		return
+	}
+	for _, queueConfig := range queues {
+		m.scheduleQueueDelivery(queueConfig.Name)
+	}
+}
+
+func (m *Manager) scheduleQueueDelivery(queueName string) {
+	if queueName == "" {
+		return
+	}
+
+	m.deliveryMu.Lock()
+	if _, exists := m.deliverySet[queueName]; exists {
+		m.deliveryMu.Unlock()
+		return
+	}
+	m.deliverySet[queueName] = struct{}{}
+	m.deliveryMu.Unlock()
+
+	select {
+	case m.deliveryQueue <- queueName:
+	default:
+		// Prevent a dropped enqueue from getting stuck in the dedupe set forever.
+		m.markQueueDelivered(queueName)
+	}
+}
+
+func (m *Manager) markQueueDelivered(queueName string) {
+	m.deliveryMu.Lock()
+	delete(m.deliverySet, queueName)
+	m.deliveryMu.Unlock()
 }
 
 // ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
@@ -251,6 +297,7 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
+	m.scheduleQueueDelivery(config.Name)
 
 	m.logger.Info("queue created",
 		slog.String("queue", config.Name),
@@ -289,7 +336,11 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 
 // DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
-	return m.queueStore.DeleteQueue(ctx, queueName)
+	if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
+		return err
+	}
+	m.markQueueDelivered(queueName)
+	return nil
 }
 
 // GetQueue returns the configuration for a queue.
@@ -423,6 +474,8 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 			slog.String("queue", queueName),
 			slog.String("topic", publish.Topic),
 			slog.Uint64("offset", offset))
+
+		m.scheduleQueueDelivery(queueName)
 	}
 
 	return nil
@@ -644,6 +697,8 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		slog.String("cursor", fmt.Sprintf("%d", cursor.Position)),
 		slog.String("mode", string(mode)))
 
+	m.scheduleQueueDelivery(queueName)
+
 	return nil
 }
 
@@ -714,6 +769,8 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 		slog.String("client", clientID),
 		slog.String("pattern", pattern))
 
+	m.scheduleQueueDelivery(queueName)
+
 	return nil
 }
 
@@ -755,6 +812,8 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID))
 
+	m.scheduleQueueDelivery(queueName)
+
 	return nil
 }
 
@@ -787,6 +846,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 							slog.String("error", err.Error()))
 					}
 				}
+				m.scheduleQueueDelivery(queueName)
 				return nil
 			}
 		}
@@ -820,6 +880,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 						slog.String("error", err.Error()))
 				}
 			}
+			m.scheduleQueueDelivery(queueName)
 			return nil
 		}
 
@@ -828,6 +889,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 			err := m.consumerManager.Ack(ctx, queueName, group.ID, consumerID, offset)
 			if err == nil {
 				m.metrics.RecordAck(0)
+				m.scheduleQueueDelivery(queueName)
 				return nil
 			}
 		}
@@ -846,6 +908,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 	if groupID != "" {
 		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
 			if group.Mode == types.GroupModeStream {
+				m.scheduleQueueDelivery(queueName)
 				return nil
 			}
 		}
@@ -861,6 +924,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 			continue
 		}
 		if group.Mode == types.GroupModeStream {
+			m.scheduleQueueDelivery(queueName)
 			return nil
 		}
 
@@ -868,6 +932,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 			err := m.consumerManager.Nack(ctx, queueName, group.ID, consumerID, offset)
 			if err == nil {
 				m.metrics.RecordNack()
+				m.scheduleQueueDelivery(queueName)
 				return nil
 			}
 		}
@@ -886,6 +951,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 	if groupID != "" {
 		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
 			if group.Mode == types.GroupModeStream {
+				m.scheduleQueueDelivery(queueName)
 				return nil
 			}
 		}
@@ -901,6 +967,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 			continue
 		}
 		if group.Mode == types.GroupModeStream {
+			m.scheduleQueueDelivery(queueName)
 			return nil
 		}
 
@@ -908,6 +975,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 			err := m.consumerManager.Reject(ctx, queueName, group.ID, consumerID, offset, reason)
 			if err == nil {
 				m.metrics.RecordReject()
+				m.scheduleQueueDelivery(queueName)
 				return nil
 			}
 		}
@@ -950,15 +1018,22 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 func (m *Manager) runDeliveryLoop() {
 	defer m.wg.Done()
 
-	ticker := time.NewTicker(m.config.DeliveryInterval)
+	sweepInterval := time.Second
+	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-m.stopCh:
 			return
+		case queueName := <-m.deliveryQueue:
+			m.markQueueDelivered(queueName)
+			if m.deliverQueue(context.Background(), queueName) {
+				// Continue draining while this queue still has deliverable work.
+				m.scheduleQueueDelivery(queueName)
+			}
 		case <-ticker.C:
-			m.deliverMessages()
+			m.scheduleAllQueues(context.Background())
 		}
 	}
 }
@@ -971,47 +1046,73 @@ func (m *Manager) deliverMessages() {
 		return
 	}
 
-	for _, queueConfig := range queues {
-		primaryGroup := strings.TrimSpace(queueConfig.PrimaryGroup)
-		primaryCommitted := make(map[string]uint64)
-		getPrimaryCommitted := func(pattern string) (uint64, bool) {
-			if primaryGroup == "" {
-				return 0, false
-			}
+	for i := range queues {
+		m.deliverQueueConfig(ctx, &queues[i])
+	}
+}
 
-			patternGroupID := primaryGroup
-			if pattern != "" {
-				patternGroupID = fmt.Sprintf("%s@%s", primaryGroup, pattern)
-			}
+func (m *Manager) deliverQueue(ctx context.Context, queueName string) bool {
+	if queueName == "" {
+		return false
+	}
 
-			if val, ok := primaryCommitted[patternGroupID]; ok {
-				return val, true
-			}
+	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil {
+		return false
+	}
 
-			committed, err := m.consumerManager.GetCommittedOffset(ctx, queueConfig.Name, patternGroupID)
-			if err != nil {
-				return 0, false
-			}
+	return m.deliverQueueConfig(ctx, queueConfig)
+}
 
-			primaryCommitted[patternGroupID] = committed
-			return committed, true
+func (m *Manager) deliverQueueConfig(ctx context.Context, queueConfig *types.QueueConfig) bool {
+	if queueConfig == nil {
+		return false
+	}
+
+	delivered := false
+	primaryGroup := strings.TrimSpace(queueConfig.PrimaryGroup)
+	primaryCommitted := make(map[string]uint64)
+	getPrimaryCommitted := func(pattern string) (uint64, bool) {
+		if primaryGroup == "" {
+			return 0, false
 		}
 
-		// Deliver to local consumer groups
-		groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
+		patternGroupID := primaryGroup
+		if pattern != "" {
+			patternGroupID = fmt.Sprintf("%s@%s", primaryGroup, pattern)
+		}
+
+		if val, ok := primaryCommitted[patternGroupID]; ok {
+			return val, true
+		}
+
+		committed, err := m.consumerManager.GetCommittedOffset(ctx, queueConfig.Name, patternGroupID)
 		if err != nil {
-			continue
+			return 0, false
 		}
 
+		primaryCommitted[patternGroupID] = committed
+		return committed, true
+	}
+
+	// Deliver to local consumer groups.
+	groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
+	if err == nil {
 		for _, group := range groups {
-			m.deliverToGroup(ctx, &queueConfig, group, getPrimaryCommitted)
-		}
-
-		// Also deliver to remote consumers registered in cluster
-		if m.cluster != nil && m.distributionMode == DistributionForward {
-			m.deliverToRemoteConsumers(ctx, &queueConfig)
+			if m.deliverToGroup(ctx, queueConfig, group, getPrimaryCommitted) {
+				delivered = true
+			}
 		}
 	}
+
+	// Deliver to remote consumers registered in cluster.
+	if m.cluster != nil && m.distributionMode == DistributionForward {
+		if m.deliverToRemoteConsumers(ctx, queueConfig) {
+			delivered = true
+		}
+	}
+
+	return delivered
 }
 
 func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest) error {
@@ -1029,14 +1130,14 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 
 // deliverToRemoteConsumers delivers messages to consumers registered on remote nodes.
 // This enables cross-node queue message routing.
-func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.QueueConfig) {
+func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.QueueConfig) bool {
 	// Get all consumers for this queue from the cluster
 	consumers, err := m.cluster.ListQueueConsumers(ctx, config.Name)
 	if err != nil {
 		m.logger.Debug("failed to list cluster consumers",
 			slog.String("queue", config.Name),
 			slog.String("error", err.Error()))
-		return
+		return false
 	}
 
 	// Group consumers by groupID for proper cursor management
@@ -1049,6 +1150,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 		consumersByGroup[c.GroupID] = append(consumersByGroup[c.GroupID], c)
 	}
 
+	delivered := false
 	for groupID, groupConsumers := range consumersByGroup {
 		mode := types.GroupModeQueue
 		if groupConsumers[0].Mode != "" {
@@ -1092,27 +1194,16 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 			if err != nil {
 				continue
 			}
+			if len(msgs) > 0 {
+				delivered = true
+			}
 
 			// Route each message to the remote node
 			for _, msg := range msgs {
 				payload := msg.GetPayload()
-				properties := msg.Properties
+				properties := m.createRouteProperties(msg, groupID, config.Name)
 				if group.Mode == types.GroupModeStream {
-					propsCopy := make(map[string]string, len(msg.Properties)+4)
-					for k, v := range msg.Properties {
-						propsCopy[k] = v
-					}
-					// Decorate properties for stream consumers.
-					propsCopy["x-stream-offset"] = fmt.Sprintf("%d", msg.Sequence)
-					if !msg.CreatedAt.IsZero() {
-						propsCopy["x-stream-timestamp"] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
-					}
-					if hasWorkCommitted {
-						propsCopy["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-						propsCopy["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
-						propsCopy["x-work-group"] = config.PrimaryGroup
-					}
-					properties = propsCopy
+					m.decorateStreamProperties(properties, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
 				}
 
 				err := m.cluster.RouteQueueMessage(
@@ -1120,7 +1211,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
 					config.Name,
-					msg.ID,
+					properties["message-id"],
 					payload,
 					properties,
 					int64(msg.Sequence),
@@ -1141,11 +1232,13 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 			}
 		}
 	}
+
+	return delivered
 }
 
-func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState, primaryCommitted func(pattern string) (uint64, bool)) {
+func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState, primaryCommitted func(pattern string) (uint64, bool)) bool {
 	if group.ConsumerCount() == 0 {
-		return
+		return false
 	}
 
 	// Create filter from group pattern
@@ -1157,9 +1250,10 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 	// Round-robin delivery across consumers
 	consumers := group.ConsumerIDs()
 	if len(consumers) == 0 {
-		return
+		return false
 	}
 
+	delivered := false
 	for _, consumerID := range consumers {
 		var msgs []*types.Message
 		var err error
@@ -1170,6 +1264,9 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 		}
 		if err != nil {
 			continue
+		}
+		if len(msgs) > 0 {
+			delivered = true
 		}
 
 		// Fetch fresh group state to get current consumer info
@@ -1198,14 +1295,18 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 			// Check if consumer is on a remote node
 			if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
 				// Route to remote node
+				properties := m.createRouteProperties(msg, group.ID, config.Name)
+				if group.Mode == types.GroupModeStream {
+					m.decorateStreamProperties(properties, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
+				}
 				err := m.cluster.RouteQueueMessage(
 					ctx,
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
 					config.Name,
-					msg.ID,
+					properties["message-id"],
 					msg.GetPayload(),
-					msg.Properties,
+					properties,
 					int64(msg.Sequence),
 				)
 				if err != nil {
@@ -1231,6 +1332,8 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 			}
 		}
 	}
+
+	return delivered
 }
 
 func (m *Manager) runStealLoop() {
@@ -1483,19 +1586,7 @@ func (m *Manager) untrackSubscription(clientID, filter string) {
 }
 
 func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queueName string) *brokerstorage.Message {
-	messageID := fmt.Sprintf("%s:%d", queueName, msg.Sequence)
-
-	// Create properties map with ack info
-	props := make(map[string]string)
-	if msg.Properties != nil {
-		for k, v := range msg.Properties {
-			props[k] = v
-		}
-	}
-	props["message-id"] = messageID
-	props["group-id"] = groupID
-	props["queue"] = queueName
-	props["offset"] = fmt.Sprintf("%d", msg.Sequence)
+	props := m.createRouteProperties(msg, groupID, queueName)
 
 	deliveryMsg := &brokerstorage.Message{
 		Topic:      msg.Topic,
@@ -1515,16 +1606,37 @@ func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *t
 		delivery.Properties = make(map[string]string)
 	}
 
-	delivery.Properties["x-stream-offset"] = fmt.Sprintf("%d", msg.Sequence)
+	m.decorateStreamProperties(delivery.Properties, msg, workCommitted, hasWorkCommitted, primaryGroup)
+}
+
+func (m *Manager) createRouteProperties(msg *types.Message, groupID, queueName string) map[string]string {
+	props := make(map[string]string, len(msg.Properties)+4)
+	for k, v := range msg.Properties {
+		props[k] = v
+	}
+	props["message-id"] = fmt.Sprintf("%s:%d", queueName, msg.Sequence)
+	props["group-id"] = groupID
+	props["queue"] = queueName
+	props["offset"] = fmt.Sprintf("%d", msg.Sequence)
+
+	return props
+}
+
+func (m *Manager) decorateStreamProperties(properties map[string]string, msg *types.Message, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
+	if properties == nil || msg == nil {
+		return
+	}
+
+	properties["x-stream-offset"] = fmt.Sprintf("%d", msg.Sequence)
 	if !msg.CreatedAt.IsZero() {
-		delivery.Properties["x-stream-timestamp"] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
+		properties["x-stream-timestamp"] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
 	}
 
 	if hasWorkCommitted {
-		delivery.Properties["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-		delivery.Properties["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
+		properties["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
+		properties["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
 		if primaryGroup != "" {
-			delivery.Properties["x-work-group"] = primaryGroup
+			properties["x-work-group"] = primaryGroup
 		}
 	}
 }
@@ -1695,19 +1807,42 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 	payload, _ := msgMap["payload"].([]byte)
 	properties, _ := msgMap["properties"].(map[string]string)
 	messageID, _ := msgMap["id"].(string)
-	sequence, _ := msgMap["sequence"].(int64)
-
-	if properties == nil {
-		properties = make(map[string]string)
+	var sequence int64
+	switch v := msgMap["sequence"].(type) {
+	case int64:
+		sequence = v
+	case uint64:
+		sequence = int64(v)
+	case int:
+		sequence = int64(v)
+	case float64:
+		sequence = int64(v)
 	}
-	properties["message-id"] = messageID
-	properties["queue"] = queueName
-	properties["offset"] = fmt.Sprintf("%d", sequence)
+
+	props := make(map[string]string, len(properties)+4)
+	for k, v := range properties {
+		props[k] = v
+	}
+	if messageID == "" {
+		if props["message-id"] != "" {
+			messageID = props["message-id"]
+		} else {
+			messageID = fmt.Sprintf("%s:%d", queueName, sequence)
+		}
+	}
+	props["message-id"] = messageID
+	props["queue"] = queueName
+	props["offset"] = fmt.Sprintf("%d", sequence)
+
+	topic := queueName
+	if topic != "" && !strings.HasPrefix(topic, "$queue/") {
+		topic = "$queue/" + topic
+	}
 
 	deliveryMsg := &brokerstorage.Message{
-		Topic:      queueName,
+		Topic:      topic,
 		QoS:        1,
-		Properties: properties,
+		Properties: props,
 	}
 	deliveryMsg.SetPayloadFromBytes(payload)
 
