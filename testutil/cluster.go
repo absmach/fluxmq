@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"testing"
@@ -14,8 +15,11 @@ import (
 
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
+	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/mqtt/broker"
+	"github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/server/tcp"
+	brokerstorage "github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/stretchr/testify/require"
 )
@@ -26,6 +30,23 @@ type TestCluster struct {
 	Nodes   []*TestNode
 	mu      sync.RWMutex
 	stopped bool
+}
+
+func allocateUniquePort(t *testing.T, used map[int]struct{}) int {
+	t.Helper()
+
+	for {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+
+		if _, exists := used[port]; exists {
+			continue
+		}
+		used[port] = struct{}{}
+		return port
+	}
 }
 
 // TestNode represents a single node in the test cluster.
@@ -46,6 +67,71 @@ type TestNode struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	tcpStopped chan struct{}
+	queueStore *logStorage.Adapter
+
+	queueDeliveriesMu sync.RWMutex
+	queueDeliveries   []QueueDelivery
+}
+
+// QueueDelivery captures a queue delivery observed by the test node queue manager.
+type QueueDelivery struct {
+	ClientID string
+	Message  *brokerstorage.Message
+}
+
+func cloneDeliveryMessage(msg *brokerstorage.Message) *brokerstorage.Message {
+	if msg == nil {
+		return nil
+	}
+
+	clone := &brokerstorage.Message{
+		Topic:         msg.Topic,
+		ContentType:   msg.ContentType,
+		ResponseTopic: msg.ResponseTopic,
+		QoS:           msg.QoS,
+		Retain:        msg.Retain,
+	}
+	if len(msg.Properties) > 0 {
+		clone.Properties = make(map[string]string, len(msg.Properties))
+		for k, v := range msg.Properties {
+			clone.Properties[k] = v
+		}
+	}
+	if payload := msg.GetPayload(); len(payload) > 0 {
+		clone.Payload = make([]byte, len(payload))
+		copy(clone.Payload, payload)
+	}
+
+	return clone
+}
+
+func (n *TestNode) recordQueueDelivery(clientID string, msg any) {
+	deliveryMsg, ok := msg.(*brokerstorage.Message)
+	if !ok || deliveryMsg == nil {
+		return
+	}
+
+	n.queueDeliveriesMu.Lock()
+	n.queueDeliveries = append(n.queueDeliveries, QueueDelivery{
+		ClientID: clientID,
+		Message:  cloneDeliveryMessage(deliveryMsg),
+	})
+	n.queueDeliveriesMu.Unlock()
+}
+
+// QueueDeliveries returns a snapshot of captured queue deliveries.
+func (n *TestNode) QueueDeliveries() []QueueDelivery {
+	n.queueDeliveriesMu.RLock()
+	defer n.queueDeliveriesMu.RUnlock()
+
+	out := make([]QueueDelivery, len(n.queueDeliveries))
+	for i, d := range n.queueDeliveries {
+		out[i] = QueueDelivery{
+			ClientID: d.ClientID,
+			Message:  cloneDeliveryMessage(d.Message),
+		}
+	}
+	return out
 }
 
 // NewTestCluster creates a new test cluster with the specified number of nodes.
@@ -59,18 +145,24 @@ func NewTestCluster(t *testing.T, nodeCount int) *TestCluster {
 		Nodes: make([]*TestNode, nodeCount),
 	}
 
-	// Base ports for allocation
-	// Make sure etcd client and peer port ranges don't overlap!
-	baseTCPPort := 10883  // MQTT TCP: 10883, 10884, 10885, ...
-	baseGRPCPort := 19000 // gRPC: 19000, 19001, 19002, ...
-	baseEtcdPort := 12379 // etcd client: 12379, 12380, 12381, ...
-	basePeerPort := 12390 // etcd peer: 12390, 12391, 12392, ...
+	// Allocate ports dynamically to avoid collisions across concurrent/stale test runs.
+	usedPorts := make(map[int]struct{})
+	tcpPorts := make([]int, nodeCount)
+	grpcPorts := make([]int, nodeCount)
+	etcdPorts := make([]int, nodeCount)
+	peerPorts := make([]int, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		tcpPorts[i] = allocateUniquePort(t, usedPorts)
+		grpcPorts[i] = allocateUniquePort(t, usedPorts)
+		etcdPorts[i] = allocateUniquePort(t, usedPorts)
+		peerPorts[i] = allocateUniquePort(t, usedPorts)
+	}
 
 	// Build initial cluster string for etcd
 	initialCluster := make([]string, nodeCount)
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("node-%d", i)
-		peerAddr := fmt.Sprintf("127.0.0.1:%d", basePeerPort+i)
+		peerAddr := fmt.Sprintf("127.0.0.1:%d", peerPorts[i])
 		initialCluster[i] = fmt.Sprintf("%s=http://%s", nodeID, peerAddr)
 	}
 	initialClusterStr := ""
@@ -83,7 +175,7 @@ func NewTestCluster(t *testing.T, nodeCount int) *TestCluster {
 
 	// Create nodes
 	for i := 0; i < nodeCount; i++ {
-		node := tc.createNode(i, baseTCPPort+i, baseGRPCPort+i, baseEtcdPort+i, basePeerPort+i, initialClusterStr)
+		node := tc.createNode(i, tcpPorts[i], grpcPorts[i], etcdPorts[i], peerPorts[i], initialClusterStr)
 		tc.Nodes[i] = node
 	}
 
@@ -196,6 +288,18 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 	}
 	b := broker.NewBroker(store, clust, nullLogger, nil, nil, nil, nil, config.SessionConfig{})
 
+	// Create log-backed queue manager for queue/stream integration paths.
+	queueStore, err := logStorage.NewAdapter(fmt.Sprintf("%s/queue", node.DataDir), logStorage.DefaultAdapterConfig())
+	if err != nil {
+		return fmt.Errorf("failed to create queue log storage: %w", err)
+	}
+	queueCfg := queue.DefaultConfig()
+	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+		node.recordQueueDelivery(clientID, msg)
+		return b.DeliverToSessionByID(ctx, clientID, msg)
+	}
+	qm := queue.NewManager(queueStore, queueStore, deliverFn, queueCfg, nullLogger, clust)
+
 	// Wire broker as message handler (includes session management)
 	clust.SetMessageHandler(b)
 
@@ -203,6 +307,13 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 	if err := clust.Start(); err != nil {
 		return fmt.Errorf("failed to start cluster: %w", err)
 	}
+
+	if err := b.SetQueueManager(qm); err != nil {
+		_ = queueStore.Close()
+		return fmt.Errorf("failed to set queue manager: %w", err)
+	}
+	clust.SetQueueHandler(qm)
+	node.queueStore = queueStore
 
 	// Create and start TCP server
 	tcpCfg := tcp.Config{
@@ -268,20 +379,29 @@ func (tc *TestCluster) stopNode(node *TestNode) {
 		}
 	}
 
-	// Stop cluster first
+	// Stop broker first so queue/session cleanup finishes before etcd client closes.
+	if node.Broker != nil {
+		node.Broker.Close()
+	}
+
+	// Stop cluster after broker/queue shutdown.
 	if node.Cluster != nil {
 		node.Cluster.Stop()
 	}
 
-	// Close broker
-	if node.Broker != nil {
-		node.Broker.Close()
+	if node.queueStore != nil {
+		_ = node.queueStore.Close()
+		node.queueStore = nil
 	}
 
 	// Clean up data directory
 	if node.DataDir != "" {
 		os.RemoveAll(node.DataDir)
 	}
+
+	node.queueDeliveriesMu.Lock()
+	node.queueDeliveries = nil
+	node.queueDeliveriesMu.Unlock()
 
 	tc.t.Logf("Stopped node %s", node.ID)
 }

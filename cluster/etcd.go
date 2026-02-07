@@ -6,6 +6,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -48,6 +49,8 @@ type EtcdCluster struct {
 
 	// Lease for session ownership (with auto-renewal)
 	sessionLease clientv3.LeaseID
+	leaseMu      sync.Mutex
+	leaseCancel  context.CancelFunc
 
 	// gRPC transport for inter-broker communication
 	transport *Transport
@@ -76,6 +79,9 @@ type EtcdCluster struct {
 
 	wg     sync.WaitGroup
 	stopCh chan struct{}
+
+	lifecycleCtx    context.Context
+	cancelLifecycle context.CancelFunc
 }
 
 // EtcdConfig holds embedded etcd configuration.
@@ -197,26 +203,12 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		localStore:    localStore,
 		stopCh:        make(chan struct{}),
 	}
+	c.lifecycleCtx, c.cancelLifecycle = context.WithCancel(context.Background())
 
 	// Create a lease for session ownership with auto-renewal
-	leaseResp, err := client.Grant(context.Background(), 30) // 30 second TTL
-	if err != nil {
-		return nil, fmt.Errorf("failed to create lease: %w", err)
+	if err := c.refreshSessionLease(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to create session lease: %w", err)
 	}
-	c.sessionLease = leaseResp.ID
-
-	// Keep lease alive
-	ch, err := client.KeepAlive(context.Background(), c.sessionLease)
-	if err != nil {
-		return nil, fmt.Errorf("failed to keep lease alive: %w", err)
-	}
-
-	// Consume keepalive responses in background
-	go func() {
-		for range ch {
-			// Lease kept alive
-		}
-	}()
 
 	// Initialize gRPC transport if configured
 	if cfg.TransportAddr != "" {
@@ -325,7 +317,17 @@ func (c *EtcdCluster) Start() error {
 // Stop gracefully shuts down the cluster.
 func (c *EtcdCluster) Stop() error {
 	close(c.stopCh)
+	if c.cancelLifecycle != nil {
+		c.cancelLifecycle()
+	}
 	c.wg.Wait()
+
+	c.leaseMu.Lock()
+	if c.leaseCancel != nil {
+		c.leaseCancel()
+		c.leaseCancel = nil
+	}
+	c.leaseMu.Unlock()
 
 	// Stop gRPC transport
 	if c.transport != nil {
@@ -473,7 +475,7 @@ func (c *EtcdCluster) loadRetainedCache() error {
 // watchRetained watches etcd for retained message changes and updates the local cache.
 func (c *EtcdCluster) watchRetained() {
 	for {
-		watchCh := c.client.Watch(context.Background(), retainedPrefix, clientv3.WithPrefix())
+		watchCh := c.client.Watch(c.lifecycleCtx, retainedPrefix, clientv3.WithPrefix())
 
 		for {
 			select {
@@ -481,6 +483,9 @@ func (c *EtcdCluster) watchRetained() {
 				return
 			case watchResp, ok := <-watchCh:
 				if !ok {
+					if c.lifecycleCtx.Err() != nil {
+						return
+					}
 					c.logger.Warn("retained watch channel closed, reloading cache")
 					if err := c.loadRetainedCache(); err != nil {
 						c.logger.Error("failed to reload retained messages", slog.String("error", err.Error()))
@@ -531,14 +536,20 @@ func (c *EtcdCluster) campaignLeader() {
 	// This prevents racing to campaign before the cluster is ready
 	time.Sleep(3 * time.Second)
 
-	ctx := context.Background()
+	ctx := c.lifecycleCtx
 	retryDelay := 2 * time.Second
 	maxRetryDelay := 30 * time.Second
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		c.logger.Info("Campaigning for leadership", slog.String("node_id", c.nodeID))
 
 		if err := c.election.Campaign(ctx, c.nodeID); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				return
+			}
 			c.logger.Warn("Failed to campaign for leader",
 				slog.String("node_id", c.nodeID),
 				slog.String("error", err.Error()),
@@ -556,6 +567,8 @@ func (c *EtcdCluster) campaignLeader() {
 			select {
 			case <-c.stopCh:
 				c.logger.Info("Cluster stopping, ending campaign", slog.String("node_id", c.nodeID))
+				return
+			case <-ctx.Done():
 				return
 			case <-time.After(retryDelay):
 				// Exponential backoff with max cap
@@ -597,6 +610,77 @@ func (c *EtcdCluster) recreateSessionAndElection() error {
 	return nil
 }
 
+func (c *EtcdCluster) refreshSessionLease(ctx context.Context) error {
+	c.leaseMu.Lock()
+	defer c.leaseMu.Unlock()
+	return c.refreshSessionLeaseLocked(ctx)
+}
+
+func (c *EtcdCluster) refreshSessionLeaseLocked(ctx context.Context) error {
+	leaseResp, err := c.client.Grant(ctx, 30)
+	if err != nil {
+		return fmt.Errorf("failed to create lease: %w", err)
+	}
+
+	if c.leaseCancel != nil {
+		c.leaseCancel()
+		c.leaseCancel = nil
+	}
+
+	keepAliveCtx, cancel := context.WithCancel(context.Background())
+	ch, err := c.client.KeepAlive(keepAliveCtx, leaseResp.ID)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to keep lease alive: %w", err)
+	}
+
+	c.sessionLease = leaseResp.ID
+	c.leaseCancel = cancel
+
+	go func() {
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+func isLeaseNotFoundErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "requested lease not found")
+}
+
+func (c *EtcdCluster) putWithSessionLease(ctx context.Context, key, value string) error {
+	c.leaseMu.Lock()
+	leaseID := c.sessionLease
+	c.leaseMu.Unlock()
+
+	_, err := c.client.Put(ctx, key, value, clientv3.WithLease(leaseID))
+	if err == nil {
+		return nil
+	}
+	if !isLeaseNotFoundErr(err) {
+		return err
+	}
+
+	if err := c.refreshSessionLease(ctx); err != nil {
+		return err
+	}
+
+	c.leaseMu.Lock()
+	leaseID = c.sessionLease
+	c.leaseMu.Unlock()
+	_, err = c.client.Put(ctx, key, value, clientv3.WithLease(leaseID))
+	return err
+}
+
 // AcquireSession registers this node as the owner of a session.
 // Uses a leased Put so ownership auto-expires if this node dies.
 // This is called after takeover has completed (if needed), so it's safe
@@ -604,8 +688,7 @@ func (c *EtcdCluster) recreateSessionAndElection() error {
 func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
 	key := sessionsPrefix + clientID + "/owner"
 
-	_, err := c.client.Put(ctx, key, nodeID, clientv3.WithLease(c.sessionLease))
-	if err != nil {
+	if err := c.putWithSessionLease(ctx, key, nodeID); err != nil {
 		return err
 	}
 
@@ -1117,8 +1200,7 @@ func (c *EtcdCluster) RegisterQueueConsumer(ctx context.Context, info *QueueCons
 		return fmt.Errorf("failed to marshal consumer info: %w", err)
 	}
 
-	_, err = c.client.Put(ctx, key, string(data))
-	if err != nil {
+	if err := c.putWithSessionLease(ctx, key, string(data)); err != nil {
 		return fmt.Errorf("failed to store consumer in etcd: %w", err)
 	}
 
@@ -1309,7 +1391,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 // watchSubscriptions watches etcd for subscription changes and updates the local cache.
 func (c *EtcdCluster) watchSubscriptions() {
 	for {
-		watchCh := c.client.Watch(context.Background(), subscriptionsPrefix, clientv3.WithPrefix())
+		watchCh := c.client.Watch(c.lifecycleCtx, subscriptionsPrefix, clientv3.WithPrefix())
 
 		for {
 			select {
@@ -1317,6 +1399,9 @@ func (c *EtcdCluster) watchSubscriptions() {
 				return
 			case watchResp, ok := <-watchCh:
 				if !ok {
+					if c.lifecycleCtx.Err() != nil {
+						return
+					}
 					// Watch channel closed, reload and restart
 					c.logger.Warn("subscription watch channel closed, reloading cache")
 					if err := c.loadSubscriptionCache(); err != nil {

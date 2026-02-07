@@ -12,6 +12,7 @@ export function PerformanceSection() {
         </h2>
 
         <div className="max-w-4xl mx-auto">
+          <div className="overflow-x-auto">
           <table className="metrics-table w-full mono text-sm md:text-base">
             <thead>
               <tr>
@@ -42,6 +43,7 @@ export function PerformanceSection() {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <div className="mt-8 brutalist-border bg-theme p-6">
             <h3 className="font-bold mb-4 mono text-lg">CLUSTER SCALING</h3>

@@ -133,7 +133,14 @@ func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue's configuration.
 func (a *Adapter) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
-	return a.queueStore.Save(config)
+	if err := a.queueStore.Save(config); err != nil {
+		return err
+	}
+
+	// Refresh topic index to ensure matcher reflects updated topic patterns.
+	a.topicIndex.AddQueue(config.Name, config.Topics)
+
+	return nil
 }
 
 // GetQueue retrieves a queue's configuration.

@@ -4,9 +4,12 @@
 package cluster_test
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,6 +130,89 @@ func TestCrossNode_QoS2_PublishSubscribe(t *testing.T) {
 	assert.Equal(t, "alerts/critical", msg.Topic)
 	assert.Equal(t, payload, msg.Payload)
 	assert.Equal(t, byte(2), msg.QoS)
+}
+
+// TestCrossNode_StreamReplayFromFirstOffsetAfterLateConsumer mirrors the reported cluster stream issue:
+// publish stream messages first, then attach a stream consumer at earliest offset and verify replay.
+func TestCrossNode_StreamReplayFromFirstOffsetAfterLateConsumer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cluster := testutil.NewTestCluster(t, 3)
+	defer cluster.Stop()
+
+	require.NoError(t, cluster.Start())
+	require.NoError(t, cluster.WaitForClusterReady(30*time.Second))
+
+	pubNode := cluster.GetNodeByIndex(0)
+	subNode := cluster.GetNodeByIndex(2)
+	require.NotNil(t, pubNode)
+	require.NotNil(t, subNode)
+
+	publisher := testutil.NewTestMQTTClient(t, pubNode, "stream-pub-late")
+	require.NoError(t, publisher.Connect(true))
+	defer publisher.Disconnect()
+
+	consumer := testutil.NewTestMQTTClient(t, subNode, "stream-sub-late")
+	require.NoError(t, consumer.Connect(true))
+	defer consumer.Disconnect()
+
+	pubQM := pubNode.Broker.GetQueueManager()
+	subQM := subNode.Broker.GetQueueManager()
+	require.NotNil(t, pubQM)
+	require.NotNil(t, subQM)
+
+	queueName := fmt.Sprintf("demo-events-%d", time.Now().UnixNano())
+	queueTopic := "$queue/" + queueName
+
+	ctx := context.Background()
+	queueCfg := qtypes.DefaultQueueConfig(queueName, queueTopic+"/#")
+	queueCfg.Type = qtypes.QueueTypeStream
+	require.NoError(t, pubQM.CreateQueue(ctx, queueCfg))
+
+	const messageCount = 5
+	expectedPayloads := make([][]byte, 0, messageCount)
+	for i := 1; i <= messageCount; i++ {
+		payload := []byte(fmt.Sprintf(`{"event":"user.action","seq":%d}`, i))
+		expectedPayloads = append(expectedPayloads, payload)
+		require.NoError(t, publisher.Publish(queueTopic, 1, payload, false))
+	}
+
+	// Ensure publishes land before stream consumer registration.
+	time.Sleep(300 * time.Millisecond)
+
+	cursor := &qtypes.CursorOption{
+		Position: qtypes.CursorEarliest,
+		Mode:     qtypes.GroupModeStream,
+	}
+	require.NoError(t, subQM.SubscribeWithCursor(ctx, queueName, "#", consumer.ClientID, "demo-readers", "", cursor))
+
+	msgs, err := consumer.WaitForMessages(messageCount, 12*time.Second)
+	require.NoError(t, err)
+	require.Len(t, msgs, messageCount)
+
+	for i, msg := range msgs {
+		assert.Equal(t, queueTopic, msg.Topic)
+		assert.Equal(t, expectedPayloads[i], msg.Payload)
+	}
+
+	deliveries := subNode.QueueDeliveries()
+	offsets := make([]string, 0, messageCount)
+	for _, d := range deliveries {
+		if d.ClientID != consumer.ClientID || d.Message == nil {
+			continue
+		}
+		if d.Message.Properties["queue"] != queueName {
+			continue
+		}
+		offset := d.Message.Properties["x-stream-offset"]
+		if offset != "" {
+			offsets = append(offsets, offset)
+		}
+	}
+	require.GreaterOrEqual(t, len(offsets), messageCount)
+	assert.Equal(t, []string{"0", "1", "2", "3", "4"}, offsets[:messageCount])
 }
 
 // TestCrossNode_MultipleSubscribers verifies message delivery to multiple subscribers on different nodes.
