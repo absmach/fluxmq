@@ -305,6 +305,11 @@ func main() {
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
 
+	var (
+		qm            *queue.Manager
+		queueLogStore *logStorage.Adapter
+	)
+
 	if metrics != nil {
 		amqpMetrics, err := amqp1broker.NewMetrics()
 		if err != nil {
@@ -324,12 +329,12 @@ func main() {
 		queueDir += "queue"
 
 		// Use file-based AOL storage (implements both LogStore and ConsumerGroupStore)
-		logStore, err := logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
+		queueLogStore, err = logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
 		if err != nil {
 			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
 		}
-		defer logStore.Close()
+		defer queueLogStore.Close()
 
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
@@ -372,9 +377,9 @@ func main() {
 		}
 
 		// Create log-based queue manager with wildcard support
-		qm := queue.NewManager(
-			logStore,
-			logStore,
+		qm = queue.NewManager(
+			queueLogStore,
+			queueLogStore,
 			deliverFn,
 			queueCfg,
 			logger,
@@ -399,8 +404,8 @@ func main() {
 				cfg.Cluster.NodeID,
 				cfg.Cluster.Raft.BindAddr,
 				cfg.Cluster.Raft.DataDir,
-				logStore,
-				logStore,
+				queueLogStore,
+				queueLogStore,
 				cfg.Cluster.Raft.Peers,
 				raftCfg,
 				logger,
@@ -725,32 +730,19 @@ func main() {
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 		}
 
-		// Get the queue manager from the broker and log store
-		queueManager := b.GetQueueManager()
-		if qm, ok := queueManager.(*queue.Manager); ok {
-			queueDir := cfg.Storage.BadgerDir
-			if !strings.HasSuffix(queueDir, "/") {
-				queueDir += "/"
-			}
-			queueDir += "queue"
-			logStore, err := logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
-			if err == nil {
-				defer logStore.Close()
-				apiServer := api.New(apiCfg, qm, logStore, logStore, logger)
+		if qm != nil && queueLogStore != nil {
+			apiServer := api.New(apiCfg, qm, queueLogStore, queueLogStore, logger)
 
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					slog.Info("Starting Queue API server", "address", cfg.Server.APIAddr)
-					if err := apiServer.Listen(ctx); err != nil {
-						serverErr <- err
-					}
-				}()
-			} else {
-				slog.Warn("Failed to create API server log store", "error", err)
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				slog.Info("Starting Queue API server", "address", cfg.Server.APIAddr)
+				if err := apiServer.Listen(ctx); err != nil {
+					serverErr <- err
+				}
+			}()
 		} else {
-			slog.Warn("Queue manager not available or wrong type, API server disabled")
+			slog.Warn("Queue manager or log storage not available, API server disabled")
 		}
 	}
 

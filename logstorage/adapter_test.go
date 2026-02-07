@@ -79,3 +79,32 @@ func TestAdapter_StreamCursorAndCommitDoNotRegress(t *testing.T) {
 	assert.Equal(t, uint64(7), got.GetCursor().Cursor)
 	assert.Equal(t, uint64(7), got.GetCursor().Committed)
 }
+
+func TestAdapter_UpdateQueueRefreshesTopicIndex(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	matches, err := adapter.FindMatchingQueues(ctx, "$queue/orders/new")
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "orders", matches[0])
+
+	cfg.Topics = []string{"$queue/payments/#"}
+	require.NoError(t, adapter.UpdateQueue(ctx, cfg))
+
+	matches, err = adapter.FindMatchingQueues(ctx, "$queue/orders/new")
+	require.NoError(t, err)
+	assert.Len(t, matches, 0)
+
+	matches, err = adapter.FindMatchingQueues(ctx, "$queue/payments/new")
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "orders", matches[0])
+}
