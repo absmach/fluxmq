@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/storage"
 
 	qtypes "github.com/absmach/fluxmq/queue/types"
@@ -138,6 +139,20 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 	default:
 		return fmt.Errorf("unsupported message type: %T", msg)
 	}
+}
+
+// DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP 0.9.1 client.
+func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
+	connID := strings.TrimPrefix(clientID, amqp091Prefix)
+
+	val, ok := b.connections.Load(connID)
+	if !ok {
+		return fmt.Errorf("AMQP 0.9.1 client not found: %s", connID)
+	}
+
+	c := val.(*Connection)
+	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties)
+	return nil
 }
 
 // Close gracefully shuts down the broker.

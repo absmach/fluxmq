@@ -5,7 +5,7 @@ description: Embedded etcd metadata, gRPC routing, session takeover, and cluster
 
 # Clustering
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-07
 
 FluxMQ clustering is designed around one idea: keep **coordination data** consistent across nodes, and keep **payload data** fast and local wherever possible.
 
@@ -105,6 +105,12 @@ For “normal” pub/sub topics, the originating node does two things:
 2. Forward to remote nodes that own sessions with matching subscriptions.
 
 The routing decision is based on the subscription registry and the session-owner map.
+
+Remote `RoutePublish` deliveries are dispatched to the local protocol broker by client ID namespace:
+
+- MQTT clients: no protocol prefix
+- AMQP 1.0 clients: `amqp:`
+- AMQP 0.9.1 clients: `amqp091-`
 
 <Mermaid
 chart="

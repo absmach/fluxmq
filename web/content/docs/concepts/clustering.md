@@ -19,4 +19,4 @@ Clustering enables high availability and cross-node routing. FluxMQ uses embedde
 ## Learn More
 
 - [Running a cluster](/docs/deployment/running-cluster)
-- [Clustering internals](/docs/architecture/clustering-internals)
+- [Clustering internals](/docs/architecture/clustering)

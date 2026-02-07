@@ -10,7 +10,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 ## Features
 
 - **Multi-Protocol Support** - MQTT 3.1.1/5.0, WebSocket, HTTP-MQTT Bridge, CoAP Bridge
-- **High Performance** - 300K-500K msg/s per node with zero-copy packet parsing
+- **Performance-focused** - zero-copy packet parsing and pooled allocations for high-throughput workloads
 - **Clustering** - Embedded etcd for distributed coordination, no external dependencies
 - **Durable Queues** - Consumer groups with ack/nack/reject semantics
 - **Security** - TLS/mTLS, rate limiting, pluggable auth/authz
@@ -121,14 +121,16 @@ FluxMQ uses a clean layered architecture:
   />
 </Cards>
 
-## Performance
+## Performance Notes
 
 | Metric                     | Value                    |
 | -------------------------- | ------------------------ |
-| **Concurrent Connections** | 500K+ per node           |
-| **Message Throughput**     | 300K-500K msg/s per node |
-| **Latency (local)**        | \<10ms                   |
-| **Session Takeover**       | \<100ms                  |
+| **Concurrent Connections** | Workload and hardware dependent |
+| **Message Throughput**     | Workload and hardware dependent |
+| **Latency (local)**        | Depends on QoS, fan-out, and persistence settings |
+| **Session Takeover**       | Fast-path optimized; benchmark in your target environment |
+
+See `benchmarks/README.md` in the repository for reproducible benchmark commands.
 
 ## Use Cases
 

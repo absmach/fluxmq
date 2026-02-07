@@ -102,6 +102,6 @@ If you are debugging data persistence, start here:
 - [Routing internals](/docs/architecture/routing)
 - [Webhooks](/docs/architecture/webhooks)
 - [Storage internals](/docs/architecture/storage)
-- [Clustering internals](/docs/architecture/clustering-internals)
+- [Clustering internals](/docs/architecture/clustering)
 - [Durable queues](/docs/messaging/durable-queues)
 - [Configuration reference](/docs/reference/configuration-reference)

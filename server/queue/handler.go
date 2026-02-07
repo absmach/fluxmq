@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"sort"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -82,13 +85,51 @@ func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.L
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	queues := make([]*queuev1.Queue, len(configs))
-	for i := range configs {
-		queues[i] = h.queueToProto(&configs[i])
+	filtered := make([]types.QueueConfig, 0, len(configs))
+	prefix := req.Msg.Prefix
+	for _, cfg := range configs {
+		if prefix != "" && !strings.HasPrefix(cfg.Name, prefix) {
+			continue
+		}
+		filtered = append(filtered, cfg)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Name < filtered[j].Name
+	})
+
+	start := 0
+	pageToken := req.Msg.PageToken
+	if pageToken != "" {
+		for i, cfg := range filtered {
+			if cfg.Name > pageToken {
+				start = i
+				break
+			}
+			start = len(filtered)
+		}
+	}
+
+	end := len(filtered)
+	limit := int(req.Msg.Limit)
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+
+	page := filtered[start:end]
+	queues := make([]*queuev1.Queue, len(page))
+	for i := range page {
+		queues[i] = h.queueToProto(&page[i])
+	}
+
+	nextPageToken := ""
+	if end < len(filtered) && len(page) > 0 {
+		nextPageToken = page[len(page)-1].Name
 	}
 
 	return connect.NewResponse(&queuev1.ListQueuesResponse{
-		Queues: queues,
+		Queues:        queues,
+		NextPageToken: nextPageToken,
 	}), nil
 }
 
@@ -112,7 +153,35 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(h.queueToProto(config)), nil
+	updated := *config
+	if req.Msg.Config != nil {
+		cfg := req.Msg.Config
+		if cfg.Retention != nil {
+			if cfg.Retention.MaxAge != nil {
+				maxAge := cfg.Retention.MaxAge.AsDuration()
+				updated.MessageTTL = maxAge
+				updated.Retention.RetentionTime = maxAge
+			}
+			if cfg.Retention.MaxBytes > 0 {
+				updated.Retention.RetentionBytes = int64(cfg.Retention.MaxBytes)
+			}
+			if cfg.Retention.MinMessages > 0 {
+				updated.Retention.RetentionMessages = int64(cfg.Retention.MinMessages)
+			}
+		}
+		if cfg.MaxMessageSize > 0 {
+			updated.MaxMessageSize = int64(cfg.MaxMessageSize)
+		}
+	}
+
+	if err := h.queueStore.UpdateQueue(ctx, updated); err != nil {
+		if err == storage.ErrQueueNotFound {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(h.queueToProto(&updated)), nil
 }
 
 // --- Append Operations ---
@@ -336,8 +405,45 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	tail, err := h.queueStore.Tail(ctx, msg.QueueName)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	if msg.Timestamp == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("timestamp is required"))
+	}
+
+	target := msg.Timestamp.AsTime()
+	offset := head
+	for offset < tail {
+		batch, err := h.queueStore.ReadBatch(ctx, msg.QueueName, offset, 128)
+		if err != nil {
+			if err == storage.ErrOffsetOutOfRange {
+				break
+			}
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, m := range batch {
+			if !m.CreatedAt.Before(target) {
+				return connect.NewResponse(&queuev1.SeekResponse{
+					Offset:     m.Sequence,
+					Timestamp:  timestamppb.New(m.CreatedAt),
+					ExactMatch: m.CreatedAt.Equal(target),
+				}), nil
+			}
+		}
+
+		offset = batch[len(batch)-1].Sequence + 1
+	}
+
 	return connect.NewResponse(&queuev1.SeekResponse{
-		Offset: head,
+		Offset:    tail,
+		Timestamp: timestamppb.New(target),
 	}), nil
 }
 
@@ -725,15 +831,40 @@ func (h *Handler) Truncate(ctx context.Context, req *connect.Request[queuev1.Tru
 // --- Helper Functions ---
 
 func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
+	retentionMaxAge := config.Retention.RetentionTime
+	if retentionMaxAge == 0 {
+		retentionMaxAge = config.MessageTTL
+	}
+
 	return &queuev1.Queue{
 		Name:   config.Name,
 		Topics: config.Topics,
 		Config: &queuev1.QueueConfig{
 			Retention: &queuev1.RetentionConfig{
-				MaxAge: durationpb.New(config.MessageTTL),
+				MaxAge:      durationpb.New(retentionMaxAge),
+				MaxBytes:    clampInt64ToUint64(config.Retention.RetentionBytes),
+				MinMessages: clampInt64ToUint64(config.Retention.RetentionMessages),
 			},
+			MaxMessageSize: clampInt64ToUint32(config.MaxMessageSize),
 		},
 	}
+}
+
+func clampInt64ToUint64(value int64) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(value)
+}
+
+func clampInt64ToUint32(value int64) uint32 {
+	if value <= 0 {
+		return 0
+	}
+	if value > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(value)
 }
 
 func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {

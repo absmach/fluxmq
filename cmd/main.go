@@ -57,8 +57,7 @@ func (d *messageDispatcher) DeliverToClient(ctx context.Context, clientID string
 		return d.amqp.DeliverToClusterMessage(ctx, clientID, msg)
 	}
 	if amqpbroker.IsAMQP091Client(clientID) {
-		// This method needs to be implemented in amqp091broker
-		// return d.amqp091.DeliverToClusterMessage(ctx, clientID, msg)
+		return d.amqp091.DeliverToClusterMessage(ctx, clientID, msg)
 	}
 	return d.mqtt.DeliverToClient(ctx, clientID, msg)
 }

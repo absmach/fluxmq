@@ -47,7 +47,10 @@ func main() {
             log.Printf("Received: %s -> %s", topic, string(payload))
         })
 
-    c := client.New(opts)
+    c, err := client.New(opts)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Connect
     if err := c.Connect(); err != nil {
@@ -319,6 +322,7 @@ c.UnsubscribeFromQueue("orders")
 package main
 
 import (
+    "fmt"
     "log"
     "github.com/absmach/fluxmq/client"
 )
@@ -329,7 +333,10 @@ func main() {
         SetClientID("order-processor").
         SetProtocolVersion(5)
 
-    c := client.New(opts)
+    c, err := client.New(opts)
+    if err != nil {
+        log.Fatal(err)
+    }
     if err := c.Connect(); err != nil {
         log.Fatal(err)
     }
@@ -354,7 +361,10 @@ func main() {
 
     // Publish some orders
     for i := 0; i < 10; i++ {
-        c.PublishToQueue("orders", []byte(`{"id": "`+string(rune(i))+`"}`))
+        order := fmt.Sprintf(`{"id":"%d"}`, i)
+        if err := c.PublishToQueue("orders", []byte(order)); err != nil {
+            log.Printf("publish failed: %v", err)
+        }
     }
 
     select {} // Keep running

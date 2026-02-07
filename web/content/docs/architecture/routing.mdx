@@ -5,7 +5,7 @@ description: Broker routing internals, session lifecycle, and protocol-specific 
 
 # Routing Internals
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-07
 
 FluxMQ ships three protocol brokers that share the same durable queue manager:
 
@@ -171,6 +171,7 @@ stateDiagram-v2
 - Accumulate publish content frames (method -> header -> body)
 - Route non-queue publishes through the shared router
 - Map queue publishes and consumes to the queue manager
+- Deliver cluster-routed messages to local AMQP 0.9.1 clients
 
 ### AMQP 0.9.1 Connection FSM (Handshake)
 
@@ -242,12 +243,13 @@ flowchart TD
 2. A content header and body frames are assembled into a single message.
 3. Default exchange + `$queue/` routing key goes to the queue manager.
 4. Otherwise the message is routed to local AMQP subscribers.
+5. In clustered mode, remote `RoutePublish` deliveries can target local AMQP 0.9.1 clients and are delivered through the same channel consumer path.
 
 ## Where To Look Next
 
 - [Durable queues](/docs/messaging/durable-queues)
 - [Storage internals](/docs/architecture/storage)
-- [Clustering internals](/docs/architecture/clustering-internals)
+- [Clustering internals](/docs/architecture/clustering)
 
 ## Optional Subsystems
 

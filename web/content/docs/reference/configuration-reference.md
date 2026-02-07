@@ -5,7 +5,7 @@ description: Comprehensive YAML configuration reference for server, broker, stor
 
 # Configuration Reference
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-07
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 
@@ -190,10 +190,10 @@ storage:
 Clustering combines:
 
 - **Embedded etcd** (`cluster.etcd`): metadata coordination (session ownership, subscriptions, queue consumers, retained/will metadata).
-- **gRPC transport** (`cluster.transport`): cross-node routing (publishes, queue messages, session takeover, hybrid payload fetch).
+- **gRPC transport** (`cluster.transport`): cross-node routing (publishes, queue messages, session takeover, hybrid payload fetch), including delivery to local MQTT, AMQP 1.0, and AMQP 0.9.1 clients.
 - **Optional Raft** (`cluster.raft`): replicates durable queue operations.
 
-For a “how it works” deep dive, see [Clustering internals](/docs/architecture/clustering-internals).
+For a “how it works” deep dive, see [Clustering internals](/docs/architecture/clustering).
 
 ```yaml
 cluster:

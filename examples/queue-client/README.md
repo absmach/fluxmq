@@ -20,7 +20,11 @@ Demonstrates cross-protocol queue interop between MQTT, AMQP 1.0, and AMQP 0.9.1
 
 #### Scenario: Order Processing Pipeline
 
-A queue named `tasks/orders` receives orders from multiple MQTT publishers. Three independent consumer groups process every message — two using MQTT, one using AMQP 1.0, and one using AMQP 0.9.1:
+A queue named `tasks/orders` receives orders from multiple MQTT publishers. Three independent consumer groups process every message:
+
+- `order-validators` (MQTT, 2 consumers)
+- `order-fulfillment` (AMQP 1.0, 1 consumer)
+- `order-shipper` (AMQP 0.9.1, 1 consumer)
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
@@ -38,19 +42,16 @@ A queue named `tasks/orders` receives orders from multiple MQTT publishers. Thre
                  │  (Durable Queue)  │
                  └─────────┬─────────┘
                            │
-           ┌───────────────┴───────────────┐
-           │ Fan-out to consumer groups    │
-           ▼                               ▼
-┌─────────────────────┐         ┌─────────────────────┐
-│ order-validators    │         │ order-fulfillment   │
-│ (Consumer Group 1)  │         │ (Consumer Group 2)  │
-│      [MQTT]         │         │    [AMQP 1.0]       │
-├─────────────────────┤         ├─────────────────────┤
-│ ┌─────┐   ┌─────┐   │         │ ┌─────┐             │
-│ │ C1  │   │ C2  │   │         │ │ C1  │             │
-│ └─────┘   └─────┘   │         │ └─────┘             │
-│  Load balanced      │         │  Single consumer    │
-└─────────────────────┘         └─────────────────────┘
+                       Fan-out to consumer groups
+           ┌──────────────┬───────────────┬───────────────┐
+           ▼              ▼               ▼
+┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│ order-validators │ │ order-fulfillment│ │ order-shipper    │
+│ [MQTT]           │ │ [AMQP 1.0]       │ │ [AMQP 0.9.1]     │
+├──────────────────┤ ├──────────────────┤ ├──────────────────┤
+│ C1, C2           │ │ C1               │ │ C1               │
+│ load-balanced    │ │ single consumer  │ │ single consumer  │
+└──────────────────┘ └──────────────────┘ └──────────────────┘
 ```
 
 #### Key Concepts Demonstrated
@@ -59,7 +60,7 @@ A queue named `tasks/orders` receives orders from multiple MQTT publishers. Thre
 | -------------------------- | ---------------------------------------------------------------------- |
 | **Cross-Protocol Interop** | MQTT publishers, AMQP 1.0 and AMQP 0.9.1 consumers on the same queue   |
 | **QoS 1/2 Publishing**     | Reliable publish with QoS guarantees                                   |
-| **Consumer Groups**        | Both groups receive ALL messages (fan-out pattern)                     |
+| **Consumer Groups**        | All three groups receive ALL messages (fan-out pattern)                |
 | **Load Balancing**         | Messages distributed across consumers within a group                   |
 | **AMQP Dispositions**      | `AcceptMessage`, `ReleaseMessage`, `RejectMessage` for ack/nack/reject |
 | **AMQP 0.9.1 Acks**        | `Ack`, `Nack`, `Reject` for processing control                         |
@@ -114,7 +115,7 @@ The consumer group is passed via the `x-consumer-group` argument on `basic.consu
 
 1. Start the broker:
    ```bash
-   go run ./cmd/ --config examples/no-cluster.yaml
+   go run ./cmd --config examples/no-cluster.yaml
    ```
 
 2. Run the queue client:
@@ -150,10 +151,12 @@ Starting publishers...
 
 === Statistics ===
 Messages published:              30
-Validator group processed (MQTT): 30
-Fulfillment group processed (AMQP): 30
+Validator group processed (MQTT):    30
+Fulfillment group processed (AMQP 1.0): 30-40 (depends on retries)
 Shipper group processed (AMQP 0.9.1): 30
 ```
+
+Note: AMQP 1.0 in this demo intentionally performs occasional `ReleaseMessage`/`RejectMessage` calls to demonstrate dispositions, so its processed count may differ from published count due to redelivery.
 
 #### Architecture Notes
 

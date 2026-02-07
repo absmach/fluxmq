@@ -15,7 +15,7 @@ The example uses only third-party MQTT and AMQP client libraries — no FluxMQ-s
 
 ## Prerequisites
 
-- **Go 1.21+** installed
+- **Go 1.24+** installed
 - **FluxMQ running locally** with default ports:
   - MQTT: `1883`
   - AMQP 0.9.1: `5682`
@@ -27,7 +27,7 @@ Start FluxMQ with Docker or from source:
 docker compose -f docker/compose.yaml up -d
 
 # From source
-go run ./cmd/ --config examples/no-cluster.yaml
+go run ./cmd --config examples/no-cluster.yaml
 ```
 
 See [Quick Start (Docker)](/docs/getting-started/quick-start-docker) for details.
