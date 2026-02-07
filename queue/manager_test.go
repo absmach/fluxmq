@@ -1608,3 +1608,84 @@ func TestEnqueueLocal(t *testing.T) {
 		t.Error("Expected message to be stored in mqtt queue")
 	}
 }
+
+func TestSubscriptionTrackingReferenceCounts(t *testing.T) {
+	manager := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		func(context.Context, string, any) error { return nil },
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	manager.trackSubscription("client-1", "orders", "workers@#")
+	manager.trackSubscription("client-1", "orders", "workers@#")
+
+	targets := manager.getSubscriptionTargets("client-1")
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 tracked target after duplicate subscriptions, got %d", len(targets))
+	}
+
+	manager.untrackSubscription("client-1", "orders", "workers@#")
+	targets = manager.getSubscriptionTargets("client-1")
+	if len(targets) != 1 {
+		t.Fatalf("expected tracked target to remain after first untrack, got %d", len(targets))
+	}
+
+	manager.untrackSubscription("client-1", "orders", "workers@#")
+	targets = manager.getSubscriptionTargets("client-1")
+	if len(targets) != 0 {
+		t.Fatalf("expected no tracked targets after reference count reaches zero, got %d", len(targets))
+	}
+}
+
+func TestSubscriptionTrackingPrunesStaleEntries(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ConsumerTimeout = 20 * time.Millisecond
+
+	manager := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		func(context.Context, string, any) error { return nil },
+		cfg,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	manager.trackSubscription("client-1", "orders", "workers@#")
+
+	key := manager.subscriptionRefKey("orders", "workers@#")
+	manager.subscriptionsMu.Lock()
+	manager.subscriptions["client-1"][key].lastSeen = time.Now().Add(-time.Minute)
+	manager.subscriptionsMu.Unlock()
+
+	manager.pruneStaleSubscriptions()
+
+	targets := manager.getSubscriptionTargets("client-1")
+	if len(targets) != 0 {
+		t.Fatalf("expected stale tracked target to be pruned, got %d entries", len(targets))
+	}
+}
+
+func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
+	manager := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		func(context.Context, string, any) error { return nil },
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	manager.trackSubscription("client-1", "orders", "workers@#")
+
+	if err := manager.UpdateHeartbeat(context.Background(), "client-1"); err != nil {
+		t.Fatalf("UpdateHeartbeat failed: %v", err)
+	}
+
+	targets := manager.getSubscriptionTargets("client-1")
+	if len(targets) != 0 {
+		t.Fatalf("expected stale tracked target to be removed after heartbeat update, got %d entries", len(targets))
+	}
+}

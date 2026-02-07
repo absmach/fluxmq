@@ -43,11 +43,10 @@ type Manager struct {
 	cluster     cluster.Cluster
 	localNodeID string
 
-	// Active consumer groups: queueName -> groupID -> group state
-	groups sync.Map // map[string]*sync.Map
-
-	// Subscription patterns: clientID -> []pattern
-	subscriptions sync.Map // map[string][]string
+	// Lightweight heartbeat index keyed by client/queue/group.
+	// Stores only metadata needed to route heartbeat updates.
+	subscriptionsMu sync.RWMutex
+	subscriptions   map[string]map[string]*subscriptionRef // clientID -> refKey -> ref
 
 	mu       sync.RWMutex
 	stopCh   chan struct{}
@@ -60,6 +59,19 @@ type Manager struct {
 
 	// Metrics
 	metrics *consumer.Metrics
+}
+
+type subscriptionRef struct {
+	queueName string
+	groupID   string
+	refCount  int
+	lastSeen  time.Time
+}
+
+type subscriptionTarget struct {
+	key       string
+	queueName string
+	groupID   string
 }
 
 // Config holds configuration for the queue-based queue manager.
@@ -149,6 +161,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		distributionMode: normalizeDistributionMode(config.DistributionMode),
 		cluster:          cl,
 		localNodeID:      localNodeID,
+		subscriptions:    make(map[string]map[string]*subscriptionRef),
 		stopCh:           make(chan struct{}),
 		deliverySet:      make(map[string]struct{}),
 		deliveryQueue:    make(chan string, 4096),
@@ -688,7 +701,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		}
 	}
 
-	m.trackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
+	m.trackSubscription(clientID, queueName, patternGroupID)
 
 	m.logger.Info("consumer subscribed with cursor",
 		slog.String("queue", queueName),
@@ -761,7 +774,7 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 	}
 
 	// Track subscription
-	m.trackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
+	m.trackSubscription(clientID, queueName, patternGroupID)
 
 	m.logger.Info("consumer subscribed",
 		slog.String("queue", queueName),
@@ -802,7 +815,7 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 	}
 
 	// Untrack subscription
-	m.untrackSubscription(clientID, fmt.Sprintf("%s/%s", queueName, pattern))
+	m.untrackSubscription(clientID, queueName, patternGroupID)
 
 	// Track last consumer disconnect for ephemeral queues
 	m.checkEphemeralDisconnect(ctx, queueName)
@@ -988,28 +1001,28 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 
 // UpdateHeartbeat updates the heartbeat for a consumer.
 func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
-	m.subscriptions.Range(func(key, value any) bool {
-		if key.(string) != clientID {
-			return true
+	targets := m.getSubscriptionTargets(clientID)
+	if len(targets) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	var staleKeys []string
+	for _, target := range targets {
+		err := m.consumerManager.UpdateHeartbeat(ctx, target.queueName, target.groupID, clientID)
+		if err == nil {
+			m.touchSubscription(clientID, target.key, now)
+			continue
 		}
-
-		patterns := value.([]string)
-		for _, filter := range patterns {
-			queueName, pattern := parseSubscriptionFilter(filter)
-			if queueName == "" {
-				continue
-			}
-
-			groupID := extractGroupFromClientID(clientID)
-			if pattern != "" {
-				groupID = fmt.Sprintf("%s@%s", groupID, pattern)
-			}
-
-			m.consumerManager.UpdateHeartbeat(ctx, queueName, groupID, clientID)
+		if err == storage.ErrConsumerNotFound || err == consumer.ErrConsumerNotFound {
+			staleKeys = append(staleKeys, target.key)
 		}
+	}
 
-		return true
-	})
+	if len(staleKeys) > 0 {
+		m.removeSubscriptionKeys(clientID, staleKeys)
+	}
+
 	return nil
 }
 
@@ -1364,6 +1377,7 @@ func (m *Manager) runCleanupLoop() {
 			return
 		case <-ticker.C:
 			m.cleanupStaleConsumers()
+			m.pruneStaleSubscriptions()
 		}
 	}
 }
@@ -1557,31 +1571,150 @@ func (m *Manager) runEphemeralCleanupLoop() {
 
 // --- Helper Functions ---
 
-func (m *Manager) trackSubscription(clientID, filter string) {
-	val, _ := m.subscriptions.LoadOrStore(clientID, []string{})
-	patterns := val.([]string)
-	patterns = append(patterns, filter)
-	m.subscriptions.Store(clientID, patterns)
+func (m *Manager) subscriptionRefKey(queueName, groupID string) string {
+	return queueName + "\x00" + groupID
 }
 
-func (m *Manager) untrackSubscription(clientID, filter string) {
-	val, ok := m.subscriptions.Load(clientID)
+func (m *Manager) trackSubscription(clientID, queueName, groupID string) {
+	if clientID == "" || queueName == "" || groupID == "" {
+		return
+	}
+
+	key := m.subscriptionRefKey(queueName, groupID)
+	now := time.Now()
+
+	m.subscriptionsMu.Lock()
+	defer m.subscriptionsMu.Unlock()
+
+	refs, ok := m.subscriptions[clientID]
+	if !ok {
+		refs = make(map[string]*subscriptionRef)
+		m.subscriptions[clientID] = refs
+	}
+
+	if ref, ok := refs[key]; ok {
+		ref.refCount++
+		ref.lastSeen = now
+		return
+	}
+
+	refs[key] = &subscriptionRef{
+		queueName: queueName,
+		groupID:   groupID,
+		refCount:  1,
+		lastSeen:  now,
+	}
+}
+
+func (m *Manager) untrackSubscription(clientID, queueName, groupID string) {
+	if clientID == "" || queueName == "" || groupID == "" {
+		return
+	}
+
+	key := m.subscriptionRefKey(queueName, groupID)
+
+	m.subscriptionsMu.Lock()
+	defer m.subscriptionsMu.Unlock()
+
+	refs, ok := m.subscriptions[clientID]
 	if !ok {
 		return
 	}
 
-	patterns := val.([]string)
-	newPatterns := make([]string, 0, len(patterns))
-	for _, p := range patterns {
-		if p != filter {
-			newPatterns = append(newPatterns, p)
-		}
+	ref, ok := refs[key]
+	if !ok {
+		return
 	}
 
-	if len(newPatterns) == 0 {
-		m.subscriptions.Delete(clientID)
-	} else {
-		m.subscriptions.Store(clientID, newPatterns)
+	ref.refCount--
+	if ref.refCount <= 0 {
+		delete(refs, key)
+	}
+
+	if len(refs) == 0 {
+		delete(m.subscriptions, clientID)
+	}
+}
+
+func (m *Manager) getSubscriptionTargets(clientID string) []subscriptionTarget {
+	m.subscriptionsMu.RLock()
+	defer m.subscriptionsMu.RUnlock()
+
+	refs, ok := m.subscriptions[clientID]
+	if !ok {
+		return nil
+	}
+
+	targets := make([]subscriptionTarget, 0, len(refs))
+	for key, ref := range refs {
+		targets = append(targets, subscriptionTarget{
+			key:       key,
+			queueName: ref.queueName,
+			groupID:   ref.groupID,
+		})
+	}
+
+	return targets
+}
+
+func (m *Manager) touchSubscription(clientID, key string, ts time.Time) {
+	m.subscriptionsMu.Lock()
+	defer m.subscriptionsMu.Unlock()
+
+	refs, ok := m.subscriptions[clientID]
+	if !ok {
+		return
+	}
+
+	ref, ok := refs[key]
+	if !ok {
+		return
+	}
+
+	ref.lastSeen = ts
+}
+
+func (m *Manager) removeSubscriptionKeys(clientID string, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+
+	m.subscriptionsMu.Lock()
+	defer m.subscriptionsMu.Unlock()
+
+	refs, ok := m.subscriptions[clientID]
+	if !ok {
+		return
+	}
+
+	for _, key := range keys {
+		delete(refs, key)
+	}
+
+	if len(refs) == 0 {
+		delete(m.subscriptions, clientID)
+	}
+}
+
+func (m *Manager) pruneStaleSubscriptions() {
+	maxIdle := m.config.ConsumerTimeout * 2
+	if maxIdle <= 0 {
+		maxIdle = 5 * time.Minute
+	}
+	cutoff := time.Now().Add(-maxIdle)
+
+	m.subscriptionsMu.Lock()
+	defer m.subscriptionsMu.Unlock()
+
+	for clientID, refs := range m.subscriptions {
+		for key, ref := range refs {
+			if ref.lastSeen.Before(cutoff) {
+				delete(refs, key)
+			}
+		}
+		if len(refs) == 0 {
+			delete(m.subscriptions, clientID)
+		}
 	}
 }
 
@@ -1743,15 +1876,6 @@ func (m *Manager) computeRetentionOffset(ctx context.Context, config *types.Queu
 	}
 
 	return offset, hasRetention
-}
-
-func parseSubscriptionFilter(filter string) (queueName, pattern string) {
-	for i, c := range filter {
-		if c == '/' {
-			return filter[:i], filter[i+1:]
-		}
-	}
-	return filter, ""
 }
 
 // --- Metrics ---
