@@ -3,7 +3,7 @@ import { NodeNetwork } from "@/components/node-network";
 
 export function HeroSection() {
   return (
-    <section className="relative border-b-2 border-(--flux-border) py-20 md:py-20 h-[90vh]">
+    <section className="relative border-b-2 border-(--flux-border) py-20 md:py-20 min-h-[90vh]">
       <div className="container mx-auto px-6">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           {/* Left side - Content */}
