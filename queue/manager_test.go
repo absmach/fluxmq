@@ -718,6 +718,8 @@ type mockCluster struct {
 	forwardCalls     []forwardPublishCall
 	forwardCallsMu   sync.Mutex
 	queueConsumers   []*cluster.QueueConsumerInfo
+	registered       []*cluster.QueueConsumerInfo
+	registeredMu     sync.Mutex
 }
 
 type routedMessage struct {
@@ -781,6 +783,15 @@ func (c *mockCluster) SetQueueConsumers(consumers []*cluster.QueueConsumerInfo) 
 	c.queueConsumers = consumers
 }
 
+func (c *mockCluster) GetRegisteredQueueConsumers() []*cluster.QueueConsumerInfo {
+	c.registeredMu.Lock()
+	defer c.registeredMu.Unlock()
+
+	out := make([]*cluster.QueueConsumerInfo, len(c.registered))
+	copy(out, c.registered)
+	return out
+}
+
 func (c *mockCluster) Start() error                            { return nil }
 func (c *mockCluster) Stop() error                             { return nil }
 func (c *mockCluster) IsLeader() bool                          { return true }
@@ -824,6 +835,9 @@ func (c *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 }
 
 func (c *mockCluster) RegisterQueueConsumer(ctx context.Context, info *cluster.QueueConsumerInfo) error {
+	c.registeredMu.Lock()
+	defer c.registeredMu.Unlock()
+	c.registered = append(c.registered, info)
 	return nil
 }
 
@@ -966,6 +980,64 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 				t.Errorf("Expected routed message to client %s, got %s", remoteClientID, rm.clientID)
 			}
 		}
+	}
+}
+
+func TestSubscribeDefaultsProxyNodeIDFromCluster(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		mockCl,
+	)
+
+	if err := manager.Subscribe(context.Background(), "demo-orders", "#", "amqp091-conn-1", "demo-workers", ""); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	registered := mockCl.GetRegisteredQueueConsumers()
+	if len(registered) != 1 {
+		t.Fatalf("expected 1 registered consumer, got %d", len(registered))
+	}
+	if registered[0].ProxyNodeID != "node-1" {
+		t.Fatalf("expected proxy node id node-1, got %q", registered[0].ProxyNodeID)
+	}
+}
+
+func TestSubscribeWithCursorDefaultsProxyNodeIDFromCluster(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		mockCl,
+	)
+
+	cursor := &types.CursorOption{
+		Position: types.CursorEarliest,
+		Mode:     types.GroupModeStream,
+	}
+	if err := manager.SubscribeWithCursor(context.Background(), "demo-events", "#", "amqp091-conn-1", "demo-readers", "", cursor); err != nil {
+		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	}
+
+	registered := mockCl.GetRegisteredQueueConsumers()
+	if len(registered) != 1 {
+		t.Fatalf("expected 1 registered consumer, got %d", len(registered))
+	}
+	if registered[0].ProxyNodeID != "node-1" {
+		t.Fatalf("expected proxy node id node-1, got %q", registered[0].ProxyNodeID)
 	}
 }
 
@@ -1146,6 +1218,89 @@ func TestGetOrCreateQueue_CreatesEphemeral(t *testing.T) {
 	}
 	if cfg.ExpiresAfter != 5*time.Minute {
 		t.Errorf("Expected ExpiresAfter=5m, got %v", cfg.ExpiresAfter)
+	}
+}
+
+func TestAutoQueueFromTopic(t *testing.T) {
+	tests := []struct {
+		name      string
+		topic     string
+		queueName string
+		pattern   string
+	}{
+		{
+			name:      "queue root topic",
+			topic:     "$queue/demo-events",
+			queueName: "demo-events",
+			pattern:   "$queue/demo-events/#",
+		},
+		{
+			name:      "queue nested topic",
+			topic:     "$queue/demo-events/eu/images",
+			queueName: "demo-events",
+			pattern:   "$queue/demo-events/#",
+		},
+		{
+			name:      "regular topic",
+			topic:     "sensors/temp",
+			queueName: "sensors/temp",
+			pattern:   "sensors/temp",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotQueue, gotPattern := autoQueueFromTopic(tc.topic)
+			if gotQueue != tc.queueName {
+				t.Fatalf("expected queue name %q, got %q", tc.queueName, gotQueue)
+			}
+			if gotPattern != tc.pattern {
+				t.Fatalf("expected pattern %q, got %q", tc.pattern, gotPattern)
+			}
+		})
+	}
+}
+
+func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	ctx := context.Background()
+	topic := "$queue/demo-events"
+
+	if err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   topic,
+		Payload: []byte("hello"),
+	}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	if _, err := logStore.GetQueue(ctx, "demo-events"); err != nil {
+		t.Fatalf("expected queue demo-events to exist: %v", err)
+	}
+
+	if _, err := logStore.GetQueue(ctx, topic); err != storage.ErrQueueNotFound {
+		t.Fatalf("expected queue %q to not exist, got err=%v", topic, err)
+	}
+
+	msg, err := logStore.Read(ctx, "demo-events", 0)
+	if err != nil {
+		t.Fatalf("failed to read message from auto-created queue: %v", err)
+	}
+	if msg.Topic != topic {
+		t.Fatalf("expected stored topic %q, got %q", topic, msg.Topic)
+	}
+	if string(msg.GetPayload()) != "hello" {
+		t.Fatalf("expected payload hello, got %q", string(msg.GetPayload()))
 	}
 }
 

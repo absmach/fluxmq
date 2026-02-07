@@ -368,8 +368,8 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 
 	if len(queues) == 0 {
 		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", publish.Topic))
-		// Use the topic as the queue name and the topic itself as the matching pattern.
-		if _, err := m.GetOrCreateQueue(ctx, publish.Topic, publish.Topic); err != nil {
+		queueName, queuePattern := autoQueueFromTopic(publish.Topic)
+		if _, err := m.GetOrCreateQueue(ctx, queueName, queuePattern); err != nil {
 			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
 			return err
 		}
@@ -426,6 +426,21 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 	}
 
 	return nil
+}
+
+func autoQueueFromTopic(topic string) (queueName, pattern string) {
+	if strings.HasPrefix(topic, "$queue/") {
+		rest := strings.TrimPrefix(topic, "$queue/")
+		if rest != "" {
+			parts := strings.SplitN(rest, "/", 2)
+			if parts[0] != "" {
+				queueName = parts[0]
+				return queueName, "$queue/" + queueName + "/#"
+			}
+		}
+	}
+
+	return topic, topic
 }
 
 // forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
@@ -511,6 +526,10 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 
 // SubscribeWithCursor adds a consumer with explicit cursor positioning.
 func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error {
+	if proxyNodeID == "" && m.localNodeID != "" {
+		proxyNodeID = m.localNodeID
+	}
+
 	mode := types.GroupModeQueue
 	if cursor != nil && cursor.Mode != "" {
 		mode = cursor.Mode
@@ -630,6 +649,10 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 
 // Subscribe adds a consumer to a stream with optional pattern matching.
 func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
+	if proxyNodeID == "" && m.localNodeID != "" {
+		proxyNodeID = m.localNodeID
+	}
+
 	// Ensure queue exists (auto-create if not)
 	// Use $queue/<name>/# as the topic pattern so messages published to $queue/<name>/... are captured
 	queueTopicPattern := "$queue/" + queueName + "/#"
