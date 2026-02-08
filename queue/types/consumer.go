@@ -15,10 +15,3 @@ type Consumer struct {
 	LastHeartbeat time.Time
 	ProxyNodeID   string // For cluster routing
 }
-
-// ConsumerGroup represents a group of consumers.
-type ConsumerGroup struct {
-	ID        string
-	QueueName string
-	Consumers map[string]*Consumer
-}

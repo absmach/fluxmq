@@ -20,10 +20,6 @@ const (
 	TypeRetainedMessageSet  = "message.retained"
 	TypeSubscriptionCreated = "subscription.created"
 	TypeSubscriptionRemoved = "subscription.removed"
-	TypeAuthSuccess         = "auth.success"
-	TypeAuthFailure         = "auth.failure"
-	TypePublishDenied       = "authz.publish_denied"
-	TypeSubscribeDenied     = "authz.subscribe_denied"
 )
 
 // Event is the common interface for all webhook events.
@@ -210,77 +206,3 @@ func (e SubscriptionRemoved) Wrap(brokerID string) *Envelope {
 	}
 }
 
-// AuthSuccess is emitted when a client successfully authenticates.
-type AuthSuccess struct {
-	ClientID   string `json:"client_id"`
-	RemoteAddr string `json:"remote_addr"`
-}
-
-func (e AuthSuccess) Type() string  { return TypeAuthSuccess }
-func (e AuthSuccess) Topic() string { return "" }
-func (e AuthSuccess) Wrap(brokerID string) *Envelope {
-	return &Envelope{
-		EventType: e.Type(),
-		EventID:   uuid.New().String(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		BrokerID:  brokerID,
-		Data:      e,
-	}
-}
-
-// AuthFailure is emitted when client authentication fails.
-type AuthFailure struct {
-	ClientID   string `json:"client_id"`
-	Reason     string `json:"reason"`
-	RemoteAddr string `json:"remote_addr"`
-}
-
-func (e AuthFailure) Type() string  { return TypeAuthFailure }
-func (e AuthFailure) Topic() string { return "" }
-func (e AuthFailure) Wrap(brokerID string) *Envelope {
-	return &Envelope{
-		EventType: e.Type(),
-		EventID:   uuid.New().String(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		BrokerID:  brokerID,
-		Data:      e,
-	}
-}
-
-// PublishDenied is emitted when a publish is denied by authorization.
-type PublishDenied struct {
-	ClientID     string `json:"client_id"`
-	MessageTopic string `json:"topic"`
-	Reason       string `json:"reason"`
-}
-
-func (e PublishDenied) Type() string  { return TypePublishDenied }
-func (e PublishDenied) Topic() string { return e.MessageTopic }
-func (e PublishDenied) Wrap(brokerID string) *Envelope {
-	return &Envelope{
-		EventType: e.Type(),
-		EventID:   uuid.New().String(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		BrokerID:  brokerID,
-		Data:      e,
-	}
-}
-
-// SubscribeDenied is emitted when a subscribe is denied by authorization.
-type SubscribeDenied struct {
-	ClientID    string `json:"client_id"`
-	TopicFilter string `json:"topic_filter"`
-	Reason      string `json:"reason"`
-}
-
-func (e SubscribeDenied) Type() string  { return TypeSubscribeDenied }
-func (e SubscribeDenied) Topic() string { return e.TopicFilter }
-func (e SubscribeDenied) Wrap(brokerID string) *Envelope {
-	return &Envelope{
-		EventType: e.Type(),
-		EventID:   uuid.New().String(),
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		BrokerID:  brokerID,
-		Data:      e,
-	}
-}

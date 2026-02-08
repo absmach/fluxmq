@@ -154,39 +154,6 @@ func groupKey(queueName, groupID string) string {
 	return queueName + "/" + groupID
 }
 
-// loadGroup loads a consumer group state from disk.
-func (s *ConsumerGroupStateStore) loadGroup(queueName, groupID string) (*types.ConsumerGroupState, error) {
-	data, err := os.ReadFile(s.groupPath(queueName, groupID))
-	if err != nil {
-		return nil, err
-	}
-	state, hasAutoCommit, err := decodeConsumerGroupState(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal consumer group state: %w", err)
-	}
-	if state == nil {
-		return nil, fmt.Errorf("consumer group state is empty")
-	}
-
-	// Ensure maps are initialized
-	if state.Cursor == nil {
-		state.Cursor = &types.QueueCursor{}
-	}
-	if state.Mode == "" {
-		state.Mode = types.GroupModeQueue
-	}
-	if !hasAutoCommit {
-		state.AutoCommit = true
-	}
-	if state.PEL == nil {
-		state.PEL = make(map[string][]*types.PendingEntry)
-	}
-	if state.Consumers == nil {
-		state.Consumers = make(map[string]*types.ConsumerInfo)
-	}
-
-	return state, nil
-}
 
 // Save persists a consumer group state.
 func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {

@@ -6,6 +6,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,11 @@ import (
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/config"
 	"github.com/sony/gobreaker"
+)
+
+var (
+	ErrSenderCannotBeNil                = errors.New("sender cannot be nil")
+	ErrEventMustImplementEventInterface = errors.New("event must implement events.Event interface")
 )
 
 // GenericNotifier implements webhook notifications with worker pool and circuit breaker.
@@ -55,7 +61,7 @@ func NewNotifier(cfg config.WebhookConfig, brokerID string, sender Sender, logge
 	}
 
 	if sender == nil {
-		return nil, fmt.Errorf("sender cannot be nil")
+		return nil, ErrSenderCannotBeNil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -146,7 +152,7 @@ func (n *GenericNotifier) Notify(ctx context.Context, event interface{}) error {
 	// Cast to events.Event
 	ev, ok := event.(events.Event)
 	if !ok {
-		return fmt.Errorf("event must implement events.Event interface")
+		return ErrEventMustImplementEventInterface
 	}
 
 	// Filter endpoints and queue jobs

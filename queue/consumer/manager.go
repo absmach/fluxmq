@@ -16,12 +16,13 @@ import (
 
 // Manager errors.
 var (
-	ErrNoMessages        = errors.New("no messages available")
-	ErrGroupNotFound     = errors.New("consumer group not found")
-	ErrConsumerNotFound  = errors.New("consumer not found")
-	ErrMessageNotPending = errors.New("message not in pending list")
-	ErrInvalidOffset     = errors.New("invalid offset")
-	ErrGroupModeMismatch = errors.New("consumer group mode mismatch")
+	ErrNoMessages                    = errors.New("no messages available")
+	ErrGroupNotFound                 = errors.New("consumer group not found")
+	ErrConsumerNotFound              = errors.New("consumer not found")
+	ErrMessageNotPending             = errors.New("message not in pending list")
+	ErrInvalidOffset                 = errors.New("invalid offset")
+	ErrGroupModeMismatch             = errors.New("consumer group mode mismatch")
+	ErrCommitOffsetOnlyForStreamMode = errors.New("commit offset only supported for stream groups")
 )
 
 // Manager handles consumer group operations including claiming,
@@ -552,7 +553,7 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 	}
 
 	if group.Mode != types.GroupModeStream {
-		return errors.New("commit offset only supported for stream groups")
+		return ErrCommitOffsetOnlyForStreamMode
 	}
 
 	cursor := group.GetCursor()

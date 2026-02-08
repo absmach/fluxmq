@@ -33,7 +33,6 @@ type Segment struct {
 
 	// Write buffer for batching small writes
 	writeBuf []byte
-	writePos int
 
 	// Cached batch positions for efficient lookup
 	batchPositions []batchPosition

@@ -48,7 +48,6 @@ type Manager struct {
 	subscriptionsMu sync.RWMutex
 	subscriptions   map[string]map[string]*subscriptionRef // clientID -> refKey -> ref
 
-	mu       sync.RWMutex
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -1781,7 +1780,6 @@ type DeliveryMessage struct {
 	Topic       string
 	Properties  map[string]string
 	GroupID     string
-	queueName   string
 	Offset      uint64
 	DeliveredAt time.Time
 	AckTopic    string

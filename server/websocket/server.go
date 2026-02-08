@@ -25,6 +25,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var (
+	ErrExpectedBinaryMessage       = errors.New("expected binary message")
+	ErrUnsupportedProtocolVersion  = errors.New("unsupported MQTT protocol version")
+	ErrCannotEncodeNilPacket       = errors.New("cannot encode nil packet")
+	ErrReadNotSupported            = errors.New("Read not supported on WebSocket connection")
+	ErrWriteNotSupported           = errors.New("Write not supported on WebSocket connection")
+)
+
 // IPRateLimiter is the interface for IP-based rate limiting.
 type IPRateLimiter interface {
 	Allow(addr net.Addr) bool
@@ -242,7 +250,7 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 	}
 
 	if messageType != websocket.BinaryMessage {
-		return nil, errors.New("expected binary message")
+		return nil, ErrExpectedBinaryMessage
 	}
 
 	reader := bytes.NewReader(data)
@@ -265,7 +273,7 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 	case 3, 4:
 		pkt, err = v3.ReadPacket(c.reader)
 	default:
-		err = errors.New("unsupported MQTT protocol version")
+		err = ErrUnsupportedProtocolVersion
 	}
 
 	if err != nil {
@@ -276,7 +284,7 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 
 func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
 	if pkt == nil {
-		return errors.New("cannot encode nil packet")
+		return ErrCannotEncodeNilPacket
 	}
 
 	buf := &bytes.Buffer{}
@@ -288,11 +296,11 @@ func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
 }
 
 func (c *wsConnection) Read(b []byte) (n int, err error) {
-	return 0, errors.New("Read not supported on WebSocket connection")
+	return 0, ErrReadNotSupported
 }
 
 func (c *wsConnection) Write(b []byte) (n int, err error) {
-	return 0, errors.New("Write not supported on WebSocket connection")
+	return 0, ErrWriteNotSupported
 }
 
 func (c *wsConnection) Close() error {

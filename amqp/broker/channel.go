@@ -106,7 +106,6 @@ type Channel struct {
 
 type unackedDelivery struct {
 	deliveryTag uint64
-	exchange    string
 	routingKey  string
 	queueName   string
 	messageID   string

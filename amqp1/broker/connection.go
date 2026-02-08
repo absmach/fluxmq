@@ -405,15 +405,6 @@ func (c *Connection) sendClose(amqpErr *performatives.Error) error {
 	return nil
 }
 
-// sendEnd sends an End frame with an error on the given channel.
-func (c *Connection) sendEnd(ch uint16, amqpErr *performatives.Error) error {
-	resp := &performatives.End{Error: amqpErr}
-	body, err := resp.Encode()
-	if err != nil {
-		return err
-	}
-	return c.conn.WritePerformative(ch, body)
-}
 
 func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {
 	c.sessionsMu.Lock()

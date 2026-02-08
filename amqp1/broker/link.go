@@ -12,7 +12,6 @@ import (
 
 	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/absmach/fluxmq/amqp1/performatives"
-	amqptypes "github.com/absmach/fluxmq/amqp1/types"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -530,25 +529,6 @@ func (l *Link) handleManagementTransfer(transfer *performatives.Transfer, msg *m
 	replyLink.sendAMQPMessage(resp, 0)
 }
 
-// sendDetachError sends a detach with an error condition back to the client.
-func (l *Link) sendDetachError(condition amqptypes.Symbol, description string) {
-	resp := &performatives.Detach{
-		Handle: l.handle,
-		Closed: true,
-		Error: &performatives.Error{
-			Condition:   condition,
-			Description: description,
-		},
-	}
-	body, err := resp.Encode()
-	if err != nil {
-		l.logger.Error("failed to encode detach error", "error", err)
-		return
-	}
-	if err := l.session.conn.conn.WritePerformative(l.session.localCh, body); err != nil {
-		l.logger.Error("failed to send detach error", "error", err)
-	}
-}
 
 func uint32ToBytes(v uint32) []byte {
 	return []byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}

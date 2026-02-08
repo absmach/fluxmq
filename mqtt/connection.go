@@ -15,7 +15,12 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
-var _ Connection = (*connection)(nil)
+var (
+	_ Connection = (*connection)(nil)
+
+	ErrUnsupportedProtocolVersion = errors.New("unsupported MQTT protocol version")
+	ErrCannotEncodeNilPacket      = errors.New("cannot encode nil packet")
+)
 
 // Connection represents a network connection that can read/write MQTT packets.
 // It also manages connection state and keep-alive.
@@ -84,7 +89,7 @@ func (c *connection) ReadPacket() (packets.ControlPacket, error) {
 		// v4 is MQTT 3.1.1, v3 is MQTT 3.1
 		pkt, err = v3.ReadPacket(c.reader)
 	default:
-		err = errors.New("unsupported MQTT protocol version")
+		err = ErrUnsupportedProtocolVersion
 	}
 
 	if err != nil {
@@ -95,7 +100,7 @@ func (c *connection) ReadPacket() (packets.ControlPacket, error) {
 
 func (c *connection) WritePacket(pkt packets.ControlPacket) error {
 	if pkt == nil {
-		return errors.New("cannot encode nil packet")
+		return ErrCannotEncodeNilPacket
 	}
 	return pkt.Pack(c.conn)
 }

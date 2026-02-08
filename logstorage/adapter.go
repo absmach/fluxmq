@@ -9,7 +9,6 @@ import (
 
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
-	"github.com/absmach/fluxmq/topics"
 )
 
 var (
@@ -629,7 +628,3 @@ func pendingEntryToTypes(entry *PendingEntry) *types.PendingEntry {
 	}
 }
 
-// matchTopic checks if a topic matches a topic pattern using MQTT-style wildcards.
-func matchTopic(pattern, topic string) bool {
-	return topics.TopicMatch(pattern, topic)
-}

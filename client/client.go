@@ -56,7 +56,6 @@ type Client struct {
 	reconnMu sync.Mutex
 
 	// Keep-alive
-	pingTimer    *time.Timer
 	pingStop     chan struct{}
 	lastActivity time.Time
 	activityMu   sync.Mutex

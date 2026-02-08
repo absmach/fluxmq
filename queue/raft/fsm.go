@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
@@ -88,8 +87,6 @@ type LogFSM struct {
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	logger     *slog.Logger
-
-	mu sync.RWMutex
 }
 
 // NewLogFSM creates a new FSM for queue operations.

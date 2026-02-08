@@ -73,12 +73,6 @@ func (c *StoreConfig) Apply(opts ...Option) {
 	}
 }
 
-// NewStoreWithOptions creates a new store with the given options.
-func NewStoreWithOptions(baseDir string, opts ...Option) (*Store, error) {
-	config := DefaultStoreConfig()
-	config.Apply(opts...)
-	return NewStore(baseDir, config)
-}
 
 // Compression presets
 

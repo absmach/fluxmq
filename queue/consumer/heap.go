@@ -191,7 +191,6 @@ func (h *PendingHeap) Clear() {
 // There's only one log per queue.
 type QueueHeapManager struct {
 	heap *PendingHeap
-	mu   sync.RWMutex
 }
 
 // NewQueueHeapManager creates a new queue heap manager.

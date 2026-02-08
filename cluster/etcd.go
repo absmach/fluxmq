@@ -32,7 +32,14 @@ const (
 	urlPrefix      = "http://"
 )
 
-var _ Cluster = (*EtcdCluster)(nil)
+var (
+	_ Cluster = (*EtcdCluster)(nil)
+
+	ErrEtcdServerStartTimeout     = errors.New("etcd server took too long to start")
+	ErrTransportNotConfigured     = errors.New("transport not configured")
+	ErrNoMessageHandlerConfigured = errors.New("no message handler configured")
+	ErrNoLocalStoreConfigured     = errors.New("no local store configured")
+)
 
 // EtcdCluster implements the Cluster interface using embedded etcd.
 type EtcdCluster struct {
@@ -165,7 +172,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		logger.Info("etcd server is ready", slog.String("node_id", cfg.NodeID))
 	case <-time.After(60 * time.Second):
 		e.Server.Stop()
-		return nil, fmt.Errorf("etcd server took too long to start")
+		return nil, ErrEtcdServerStartTimeout
 	}
 
 	// Create etcd client
@@ -1109,7 +1116,7 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 // EnqueueRemote sends an enqueue request to a remote node.
 func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
 	if c.transport == nil {
-		return "", fmt.Errorf("transport not configured")
+		return "", ErrTransportNotConfigured
 	}
 	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, payload, properties, false, false)
 }
@@ -1117,7 +1124,7 @@ func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 // RouteQueueMessage sends a queue message to a remote consumer.
 func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
 	if c.transport == nil {
-		return fmt.Errorf("transport not configured")
+		return ErrTransportNotConfigured
 	}
 	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, messageID, payload, properties, sequence)
 }
@@ -1137,7 +1144,7 @@ func (c *EtcdCluster) SetQueueHandler(handler QueueHandler) {
 // Delegates to the broker to deliver a message to a local client.
 func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg *Message) error {
 	if c.msgHandler == nil {
-		return fmt.Errorf("no message handler configured")
+		return ErrNoMessageHandlerConfigured
 	}
 	return c.msgHandler.DeliverToClient(ctx, clientID, msg)
 }
@@ -1146,7 +1153,7 @@ func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg 
 // Delegates to the broker to capture session state and close the session.
 func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
 	if c.msgHandler == nil {
-		return nil, fmt.Errorf("no message handler configured")
+		return nil, ErrNoMessageHandlerConfigured
 	}
 	return c.msgHandler.GetSessionStateAndClose(ctx, clientID)
 }
@@ -1155,7 +1162,7 @@ func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID stri
 // Fetches a retained message from the local BadgerDB store.
 func (c *EtcdCluster) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
 	if c.localStore == nil {
-		return nil, fmt.Errorf("no local store configured")
+		return nil, ErrNoLocalStoreConfigured
 	}
 	return c.localStore.Retained().Get(ctx, topic)
 }
@@ -1164,7 +1171,7 @@ func (c *EtcdCluster) GetRetainedMessage(ctx context.Context, topic string) (*st
 // Fetches a will message from the local BadgerDB store.
 func (c *EtcdCluster) GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error) {
 	if c.localStore == nil {
-		return nil, fmt.Errorf("no local store configured")
+		return nil, ErrNoLocalStoreConfigured
 	}
 	return c.localStore.Wills().Get(ctx, clientID)
 }
@@ -1173,7 +1180,7 @@ func (c *EtcdCluster) GetWillMessage(ctx context.Context, clientID string) (*sto
 // Called when another broker routes a PUBLISH message to this node.
 func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
 	if c.msgHandler == nil {
-		return fmt.Errorf("no message handler configured")
+		return ErrNoMessageHandlerConfigured
 	}
 
 	msg := &Message{
@@ -1303,7 +1310,7 @@ func (c *EtcdCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsum
 // ForwardQueuePublish forwards a queue publish to a remote node.
 func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
 	if c.transport == nil {
-		return fmt.Errorf("transport not configured")
+		return ErrTransportNotConfigured
 	}
 
 	// Use SendEnqueueRemote with topic in queueName field
@@ -1321,7 +1328,7 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 
 	// Check if we have a message handler
 	if c.msgHandler == nil {
-		return nil, fmt.Errorf("no message handler configured")
+		return nil, ErrNoMessageHandlerConfigured
 	}
 
 	// Get session state and close the session
