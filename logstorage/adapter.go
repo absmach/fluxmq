@@ -172,8 +172,22 @@ func (a *Adapter) FindMatchingQueues(ctx context.Context, topic string) ([]strin
 	return a.topicIndex.FindMatching(topic), nil
 }
 
+func (a *Adapter) queueConfigExists(queueName string) error {
+	if _, err := a.queueStore.Get(queueName); err != nil {
+		if err == ErrQueueNotFound {
+			return storage.ErrQueueNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 // Append adds a message to the end of a queue's log.
 func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	if err := a.queueConfigExists(queueName); err != nil {
+		return 0, err
+	}
+
 	value := msg.GetPayload()
 	key := []byte{}
 
@@ -195,6 +209,10 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error) {
 	if len(msgs) == 0 {
 		return 0, ErrEmptyBatch
+	}
+
+	if err := a.queueConfigExists(queueName); err != nil {
+		return 0, err
 	}
 
 	batch := NewBatch(0)

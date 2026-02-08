@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,8 @@ func TestAdapter_ReadBatch(t *testing.T) {
 	defer adapter.Close()
 
 	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("q1", "$queue/q1/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
 
 	msgs := []*types.Message{
 		{ID: "1", Topic: "t", Payload: []byte("a")},
@@ -47,6 +50,17 @@ func TestAdapter_ReadBatch(t *testing.T) {
 	got, err = adapter.ReadBatch(ctx, "q1", 10, 10)
 	require.NoError(t, err)
 	assert.Len(t, got, 0)
+}
+
+func TestAdapter_AppendRequiresQueueConfig(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+	_, err = adapter.Append(ctx, "missing", &types.Message{ID: "1", Topic: "$queue/missing", Payload: []byte("x")})
+	require.ErrorIs(t, err, storage.ErrQueueNotFound)
 }
 
 func TestAdapter_StreamCursorAndCommitDoNotRegress(t *testing.T) {

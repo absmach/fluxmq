@@ -153,6 +153,15 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	}
 
 	offset, err := f.queueStore.Append(ctx, op.QueueName, op.Message)
+	if err == storage.ErrQueueNotFound {
+		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
+			f.logger.Error("failed to auto-create queue for append",
+				slog.String("queue", op.QueueName),
+				slog.String("error", createErr.Error()))
+			return &ApplyResult{Error: createErr}
+		}
+		offset, err = f.queueStore.Append(ctx, op.QueueName, op.Message)
+	}
 	if err != nil {
 		f.logger.Error("failed to apply append",
 			slog.String("queue", op.QueueName),
@@ -175,6 +184,15 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
+	if err == storage.ErrQueueNotFound {
+		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
+			f.logger.Error("failed to auto-create queue for append batch",
+				slog.String("queue", op.QueueName),
+				slog.String("error", createErr.Error()))
+			return &ApplyResult{Error: createErr}
+		}
+		offset, err = f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
+	}
 	if err != nil {
 		f.logger.Error("failed to apply append batch",
 			slog.String("queue", op.QueueName),
@@ -189,6 +207,14 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 		slog.Uint64("first_offset", offset))
 
 	return &ApplyResult{Offset: offset}
+}
+
+func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {
+	cfg := types.DefaultEphemeralQueueConfig(queueName, "$queue/"+queueName+"/#")
+	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && err != storage.ErrQueueAlreadyExists {
+		return err
+	}
+	return nil
 }
 
 func (f *LogFSM) applyTruncate(ctx context.Context, op *Operation) *ApplyResult {
