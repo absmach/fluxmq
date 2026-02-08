@@ -20,8 +20,8 @@ type ConsumerGroupStateStore struct {
 	mu sync.RWMutex
 
 	dir    string
-	groups map[string]map[string]*types.ConsumerGroupState // queueName -> groupID -> state
-	dirty  map[string]bool                                 // groupKey -> dirty flag
+	groups map[string]map[string]*types.ConsumerGroup // queueName -> groupID -> state
+	dirty  map[string]bool                            // groupKey -> dirty flag
 }
 
 const consumerGroupVersion uint8 = 2
@@ -41,7 +41,7 @@ func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error
 
 	store := &ConsumerGroupStateStore{
 		dir:    dir,
-		groups: make(map[string]map[string]*types.ConsumerGroupState),
+		groups: make(map[string]map[string]*types.ConsumerGroup),
 		dirty:  make(map[string]bool),
 	}
 
@@ -52,7 +52,7 @@ func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error
 	return store, nil
 }
 
-func decodeConsumerGroupState(data []byte) (*types.ConsumerGroupState, bool, error) {
+func decodeConsumerGroupState(data []byte) (*types.ConsumerGroup, bool, error) {
 	var wrapper consumerGroupWrapper
 	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return nil, false, err
@@ -66,7 +66,7 @@ func decodeConsumerGroupState(data []byte) (*types.ConsumerGroupState, bool, err
 		return nil, false, nil
 	}
 
-	var state types.ConsumerGroupState
+	var state types.ConsumerGroup
 	if err := json.Unmarshal(rawState, &state); err != nil {
 		return nil, false, err
 	}
@@ -129,7 +129,7 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 		// Add to memory map
 		groups, ok := s.groups[state.QueueName]
 		if !ok {
-			groups = make(map[string]*types.ConsumerGroupState)
+			groups = make(map[string]*types.ConsumerGroup)
 			s.groups[state.QueueName] = groups
 		}
 		groups[state.ID] = state
@@ -154,15 +154,14 @@ func groupKey(queueName, groupID string) string {
 	return queueName + "/" + groupID
 }
 
-
 // Save persists a consumer group state.
-func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {
+func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroup) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	groups, ok := s.groups[state.QueueName]
 	if !ok {
-		groups = make(map[string]*types.ConsumerGroupState)
+		groups = make(map[string]*types.ConsumerGroup)
 		s.groups[state.QueueName] = groups
 	}
 
@@ -173,7 +172,7 @@ func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroupState) error {
 }
 
 // saveGroup saves a single group to disk (must hold lock).
-func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) error {
+func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroup) error {
 	path := s.groupPath(state.QueueName, state.ID)
 
 	dir := filepath.Dir(path)
@@ -182,9 +181,9 @@ func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) err
 	}
 
 	wrapper := struct {
-		Version uint8                     `json:"version"`
-		State   *types.ConsumerGroupState `json:"state"`
-		SavedAt int64                     `json:"saved_at"`
+		Version uint8                `json:"version"`
+		State   *types.ConsumerGroup `json:"state"`
+		SavedAt int64                `json:"saved_at"`
 	}{
 		Version: consumerGroupVersion,
 		State:   state,
@@ -213,7 +212,7 @@ func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroupState) err
 }
 
 // Get retrieves a consumer group state.
-func (s *ConsumerGroupStateStore) Get(queueName, groupID string) (*types.ConsumerGroupState, error) {
+func (s *ConsumerGroupStateStore) Get(queueName, groupID string) (*types.ConsumerGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -261,16 +260,16 @@ func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 }
 
 // List returns all consumer groups for a queue.
-func (s *ConsumerGroupStateStore) List(queueName string) ([]*types.ConsumerGroupState, error) {
+func (s *ConsumerGroupStateStore) List(queueName string) ([]*types.ConsumerGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	groups, ok := s.groups[queueName]
 	if !ok {
-		return []*types.ConsumerGroupState{}, nil
+		return []*types.ConsumerGroup{}, nil
 	}
 
-	result := make([]*types.ConsumerGroupState, 0, len(groups))
+	result := make([]*types.ConsumerGroup, 0, len(groups))
 	for _, state := range groups {
 		result = append(result, state)
 	}
@@ -279,11 +278,11 @@ func (s *ConsumerGroupStateStore) List(queueName string) ([]*types.ConsumerGroup
 }
 
 // ListAll returns all consumer groups across all queues.
-func (s *ConsumerGroupStateStore) ListAll() ([]*types.ConsumerGroupState, error) {
+func (s *ConsumerGroupStateStore) ListAll() ([]*types.ConsumerGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*types.ConsumerGroupState
+	var result []*types.ConsumerGroup
 	for _, groups := range s.groups {
 		for _, state := range groups {
 			result = append(result, state)
@@ -334,13 +333,13 @@ func (s *ConsumerGroupStateStore) Exists(queueName, groupID string) bool {
 }
 
 // CreateIfNotExists creates a consumer group if it doesn't exist.
-func (s *ConsumerGroupStateStore) CreateIfNotExists(state *types.ConsumerGroupState) error {
+func (s *ConsumerGroupStateStore) CreateIfNotExists(state *types.ConsumerGroup) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	groups, ok := s.groups[state.QueueName]
 	if !ok {
-		groups = make(map[string]*types.ConsumerGroupState)
+		groups = make(map[string]*types.ConsumerGroup)
 		s.groups[state.QueueName] = groups
 	}
 

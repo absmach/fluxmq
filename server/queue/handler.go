@@ -884,7 +884,7 @@ func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {
 	return protoMsg
 }
 
-func (h *Handler) groupToProto(group *types.ConsumerGroupState) *queuev1.ConsumerGroup {
+func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGroup {
 	consumers := make([]*queuev1.ConsumerInfo, 0, len(group.Consumers))
 	for _, c := range group.Consumers {
 		consumers = append(consumers, &queuev1.ConsumerInfo{

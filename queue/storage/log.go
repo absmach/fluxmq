@@ -73,19 +73,19 @@ type QueueStore interface {
 // ConsumerGroupStore manages cursor-based consumer groups with PEL tracking.
 type ConsumerGroupStore interface {
 	// CreateConsumerGroup creates a new consumer group for a queue.
-	CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error
+	CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error
 
 	// GetConsumerGroup retrieves a consumer group's state.
-	GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroupState, error)
+	GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroup, error)
 
 	// UpdateConsumerGroup updates a consumer group's state (cursor, PEL).
-	UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error
+	UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error
 
 	// DeleteConsumerGroup removes a consumer group.
 	DeleteConsumerGroup(ctx context.Context, queueName, groupID string) error
 
 	// ListConsumerGroups lists all consumer groups for a queue.
-	ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error)
+	ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroup, error)
 
 	// AddPendingEntry adds an entry to a consumer's PEL.
 	AddPendingEntry(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error

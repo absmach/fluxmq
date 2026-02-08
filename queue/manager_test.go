@@ -26,21 +26,21 @@ import (
 // mockGroupStore implements storage.ConsumerGroupStore for testing.
 type mockGroupStore struct {
 	mu     sync.RWMutex
-	groups map[string]map[string]*types.ConsumerGroupState // queueName -> groupID -> state
+	groups map[string]map[string]*types.ConsumerGroup // queueName -> groupID -> state
 }
 
 func newMockGroupStore() *mockGroupStore {
 	return &mockGroupStore{
-		groups: make(map[string]map[string]*types.ConsumerGroupState),
+		groups: make(map[string]map[string]*types.ConsumerGroup),
 	}
 }
 
-func (s *mockGroupStore) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
+func (s *mockGroupStore) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.groups[group.QueueName] == nil {
-		s.groups[group.QueueName] = make(map[string]*types.ConsumerGroupState)
+		s.groups[group.QueueName] = make(map[string]*types.ConsumerGroup)
 	}
 
 	if _, exists := s.groups[group.QueueName][group.ID]; exists {
@@ -51,7 +51,7 @@ func (s *mockGroupStore) CreateConsumerGroup(ctx context.Context, group *types.C
 	return nil
 }
 
-func (s *mockGroupStore) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroupState, error) {
+func (s *mockGroupStore) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -67,7 +67,7 @@ func (s *mockGroupStore) GetConsumerGroup(ctx context.Context, queueName, groupI
 	return group, nil
 }
 
-func (s *mockGroupStore) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
+func (s *mockGroupStore) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -89,11 +89,11 @@ func (s *mockGroupStore) DeleteConsumerGroup(ctx context.Context, queueName, gro
 	return nil
 }
 
-func (s *mockGroupStore) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error) {
+func (s *mockGroupStore) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var groups []*types.ConsumerGroupState
+	var groups []*types.ConsumerGroup
 	if s.groups[queueName] != nil {
 		for _, group := range s.groups[queueName] {
 			groups = append(groups, group)

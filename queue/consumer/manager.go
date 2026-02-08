@@ -77,7 +77,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 }
 
 // GetOrCreateGroup retrieves or creates a consumer group.
-func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool) (*types.ConsumerGroupState, error) {
+func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool) (*types.ConsumerGroup, error) {
 	// Try to get existing group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err == nil {
@@ -284,7 +284,7 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 }
 
 // claimFromCursor tries to claim a message from the cursor position.
-func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroupState, consumerID string, filter *Filter) (*types.Message, error) {
+func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*types.Message, error) {
 	cursor := group.GetCursor()
 
 	// Get log tail
@@ -340,7 +340,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 }
 
 // stealWork tries to steal a message from another consumer's PEL.
-func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroupState, consumerID string, filter *Filter) (*types.Message, error) {
+func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*types.Message, error) {
 	// Get stealable entries
 	stealable := group.StealableEntries(m.config.VisibilityTimeout, consumerID)
 	if len(stealable) == 0 {
@@ -481,7 +481,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID str
 }
 
 // advanceCommitted updates the committed offset to the minimum pending offset.
-func (m *Manager) advanceCommitted(ctx context.Context, group *types.ConsumerGroupState) error {
+func (m *Manager) advanceCommitted(ctx context.Context, group *types.ConsumerGroup) error {
 	cursor := group.GetCursor()
 
 	// Find minimum pending offset

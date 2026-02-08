@@ -1248,7 +1248,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 	return delivered
 }
 
-func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroupState, primaryCommitted func(pattern string) (uint64, bool)) bool {
+func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroup, primaryCommitted func(pattern string) (uint64, bool)) bool {
 	if group.ConsumerCount() == 0 {
 		return false
 	}
@@ -1730,7 +1730,7 @@ func (m *Manager) createDeliveryMessage(msg *types.Message, groupID string, queu
 	return deliveryMsg
 }
 
-func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *types.Message, _ *types.ConsumerGroupState, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
+func (m *Manager) decorateStreamDelivery(delivery *brokerstorage.Message, msg *types.Message, _ *types.ConsumerGroup, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
 	if delivery == nil || msg == nil {
 		return
 	}

@@ -70,8 +70,8 @@ type Operation struct {
 	ConsumerInfo *types.ConsumerInfo `json:"consumer_info,omitempty"`
 
 	// For OpCreateGroup
-	GroupState *types.ConsumerGroupState `json:"group_state,omitempty"`
-	Pattern    string                    `json:"pattern,omitempty"`
+	GroupState *types.ConsumerGroup `json:"group_state,omitempty"`
+	Pattern    string               `json:"pattern,omitempty"`
 }
 
 // ApplyResult holds the result of an FSM apply operation.
@@ -441,8 +441,8 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 // QueueSnapshotData holds snapshot data for a single queue.
 type QueueSnapshotData struct {
-	QueueName string                      `json:"queue_name"`
-	Groups    []*types.ConsumerGroupState `json:"groups"`
+	QueueName string                 `json:"queue_name"`
+	Groups    []*types.ConsumerGroup `json:"groups"`
 }
 
 // GlobalSnapshotData represents the serialized snapshot data for all queues.

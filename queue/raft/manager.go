@@ -435,7 +435,7 @@ func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, minOffset
 }
 
 // ApplyCreateGroup submits a create consumer group operation to Raft.
-func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroupState) error {
+func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
 	if !m.IsEnabled() {
 		return nil
 	}

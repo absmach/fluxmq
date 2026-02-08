@@ -405,7 +405,7 @@ func (s *Store) getQueueLog(queueName string) (*log, error) {
 // --- ConsumerGroupStore Implementation ---
 
 // CreateConsumerGroup creates a new consumer group for a queue.
-func (s *Store) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
+func (s *Store) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error {
 	groupsVal, exists := s.groups.Load(group.QueueName)
 	if !exists {
 		return storage.ErrQueueNotFound
@@ -422,7 +422,7 @@ func (s *Store) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGr
 }
 
 // GetConsumerGroup retrieves a consumer group's state.
-func (s *Store) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroupState, error) {
+func (s *Store) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroup, error) {
 	groupsVal, exists := s.groups.Load(queueName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
@@ -435,11 +435,11 @@ func (s *Store) GetConsumerGroup(ctx context.Context, queueName, groupID string)
 		return nil, storage.ErrConsumerNotFound
 	}
 
-	return val.(*types.ConsumerGroupState), nil
+	return val.(*types.ConsumerGroup), nil
 }
 
 // UpdateConsumerGroup updates a consumer group's state.
-func (s *Store) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
+func (s *Store) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error {
 	groupsVal, exists := s.groups.Load(group.QueueName)
 	if !exists {
 		return storage.ErrQueueNotFound
@@ -463,17 +463,17 @@ func (s *Store) DeleteConsumerGroup(ctx context.Context, queueName, groupID stri
 }
 
 // ListConsumerGroups lists all consumer groups for a queue.
-func (s *Store) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error) {
+func (s *Store) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroup, error) {
 	groupsVal, exists := s.groups.Load(queueName)
 	if !exists {
 		return nil, storage.ErrQueueNotFound
 	}
 
 	groups := groupsVal.(*sync.Map)
-	var result []*types.ConsumerGroupState
+	var result []*types.ConsumerGroup
 
 	groups.Range(func(key, value interface{}) bool {
-		result = append(result, value.(*types.ConsumerGroupState))
+		result = append(result, value.(*types.ConsumerGroup))
 		return true
 	})
 

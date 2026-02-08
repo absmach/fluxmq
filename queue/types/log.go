@@ -33,10 +33,10 @@ type ConsumerInfo struct {
 	LastHeartbeat time.Time // Last activity timestamp
 }
 
-// ConsumerGroupState represents the complete state of a consumer group.
+// ConsumerGroup represents the complete state of a consumer group.
 // This includes cursor, PEL, and consumer membership.
 // All map access is protected by an internal mutex for thread safety.
-type ConsumerGroupState struct {
+type ConsumerGroup struct {
 	mu sync.RWMutex `json:"-"`
 
 	// Identity
@@ -73,9 +73,9 @@ const (
 )
 
 // NewConsumerGroupState creates a new consumer group state.
-func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroupState {
+func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroup {
 	now := time.Now()
-	return &ConsumerGroupState{
+	return &ConsumerGroup{
 		ID:         groupID,
 		QueueName:  queueName,
 		Pattern:    pattern,
@@ -93,7 +93,7 @@ func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroupSta
 }
 
 // GetCursor returns the queue cursor, creating if needed.
-func (g *ConsumerGroupState) GetCursor() *QueueCursor {
+func (g *ConsumerGroup) GetCursor() *QueueCursor {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -107,7 +107,7 @@ func (g *ConsumerGroupState) GetCursor() *QueueCursor {
 }
 
 // ReplacePEL atomically replaces the entire PEL map.
-func (g *ConsumerGroupState) ReplacePEL(pel map[string][]*PendingEntry) {
+func (g *ConsumerGroup) ReplacePEL(pel map[string][]*PendingEntry) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -116,7 +116,7 @@ func (g *ConsumerGroupState) ReplacePEL(pel map[string][]*PendingEntry) {
 }
 
 // AddPending adds a pending entry for a consumer.
-func (g *ConsumerGroupState) AddPending(consumerID string, entry *PendingEntry) {
+func (g *ConsumerGroup) AddPending(consumerID string, entry *PendingEntry) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -125,7 +125,7 @@ func (g *ConsumerGroupState) AddPending(consumerID string, entry *PendingEntry) 
 }
 
 // RemovePending removes a pending entry for a consumer by offset.
-func (g *ConsumerGroupState) RemovePending(consumerID string, offset uint64) bool {
+func (g *ConsumerGroup) RemovePending(consumerID string, offset uint64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -145,7 +145,7 @@ func (g *ConsumerGroupState) RemovePending(consumerID string, offset uint64) boo
 }
 
 // DeleteConsumerPEL removes all pending entries for a consumer.
-func (g *ConsumerGroupState) DeleteConsumerPEL(consumerID string) {
+func (g *ConsumerGroup) DeleteConsumerPEL(consumerID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -154,7 +154,7 @@ func (g *ConsumerGroupState) DeleteConsumerPEL(consumerID string) {
 }
 
 // FindPending finds a pending entry by offset across all consumers.
-func (g *ConsumerGroupState) FindPending(offset uint64) (*PendingEntry, string) {
+func (g *ConsumerGroup) FindPending(offset uint64) (*PendingEntry, string) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -169,7 +169,7 @@ func (g *ConsumerGroupState) FindPending(offset uint64) (*PendingEntry, string) 
 }
 
 // TransferPending moves a pending entry from one consumer to another.
-func (g *ConsumerGroupState) TransferPending(offset uint64, fromConsumer, toConsumer string) bool {
+func (g *ConsumerGroup) TransferPending(offset uint64, fromConsumer, toConsumer string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -194,7 +194,7 @@ func (g *ConsumerGroupState) TransferPending(offset uint64, fromConsumer, toCons
 
 // MinPendingOffset returns the minimum offset across all PEL entries.
 // This is used to calculate the committed offset.
-func (g *ConsumerGroupState) MinPendingOffset() (uint64, bool) {
+func (g *ConsumerGroup) MinPendingOffset() (uint64, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -214,7 +214,7 @@ func (g *ConsumerGroupState) MinPendingOffset() (uint64, bool) {
 }
 
 // PendingCount returns the total number of pending entries.
-func (g *ConsumerGroupState) PendingCount() int {
+func (g *ConsumerGroup) PendingCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -226,7 +226,7 @@ func (g *ConsumerGroupState) PendingCount() int {
 }
 
 // StealableEntries returns entries that are older than the visibility timeout.
-func (g *ConsumerGroupState) StealableEntries(visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
+func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -248,7 +248,7 @@ func (g *ConsumerGroupState) StealableEntries(visibilityTimeout time.Duration, e
 }
 
 // GetConsumer returns a consumer by ID, or nil if not found.
-func (g *ConsumerGroupState) GetConsumer(consumerID string) *ConsumerInfo {
+func (g *ConsumerGroup) GetConsumer(consumerID string) *ConsumerInfo {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -256,7 +256,7 @@ func (g *ConsumerGroupState) GetConsumer(consumerID string) *ConsumerInfo {
 }
 
 // SetConsumer adds or updates a consumer.
-func (g *ConsumerGroupState) SetConsumer(consumerID string, info *ConsumerInfo) {
+func (g *ConsumerGroup) SetConsumer(consumerID string, info *ConsumerInfo) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -265,7 +265,7 @@ func (g *ConsumerGroupState) SetConsumer(consumerID string, info *ConsumerInfo) 
 }
 
 // DeleteConsumer removes a consumer by ID.
-func (g *ConsumerGroupState) DeleteConsumer(consumerID string) {
+func (g *ConsumerGroup) DeleteConsumer(consumerID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -274,7 +274,7 @@ func (g *ConsumerGroupState) DeleteConsumer(consumerID string) {
 }
 
 // ConsumerCount returns the number of consumers in the group.
-func (g *ConsumerGroupState) ConsumerCount() int {
+func (g *ConsumerGroup) ConsumerCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -282,7 +282,7 @@ func (g *ConsumerGroupState) ConsumerCount() int {
 }
 
 // ConsumerIDs returns a slice of all consumer IDs.
-func (g *ConsumerGroupState) ConsumerIDs() []string {
+func (g *ConsumerGroup) ConsumerIDs() []string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -295,7 +295,7 @@ func (g *ConsumerGroupState) ConsumerIDs() []string {
 
 // ForEachConsumer iterates over all consumers with the lock held.
 // Return false from fn to stop iteration.
-func (g *ConsumerGroupState) ForEachConsumer(fn func(id string, info *ConsumerInfo) bool) {
+func (g *ConsumerGroup) ForEachConsumer(fn func(id string, info *ConsumerInfo) bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 

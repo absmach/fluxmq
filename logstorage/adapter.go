@@ -320,7 +320,7 @@ func (a *Adapter) TotalCount(ctx context.Context, queueName string) (uint64, err
 // ConsumerGroupStore interface implementation
 
 // CreateConsumerGroup creates a new consumer group for a queue.
-func (a *Adapter) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
+func (a *Adapter) CreateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error {
 	existing, _ := a.groupStore.Get(group.QueueName, group.ID)
 	if existing != nil {
 		return storage.ErrConsumerGroupExists
@@ -330,7 +330,7 @@ func (a *Adapter) CreateConsumerGroup(ctx context.Context, group *types.Consumer
 }
 
 // GetConsumerGroup retrieves a consumer group's state.
-func (a *Adapter) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroupState, error) {
+func (a *Adapter) GetConsumerGroup(ctx context.Context, queueName, groupID string) (*types.ConsumerGroup, error) {
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err != nil {
 		return nil, err
@@ -350,7 +350,7 @@ func (a *Adapter) GetConsumerGroup(ctx context.Context, queueName, groupID strin
 }
 
 // UpdateConsumerGroup updates a consumer group's state.
-func (a *Adapter) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroupState) error {
+func (a *Adapter) UpdateConsumerGroup(ctx context.Context, group *types.ConsumerGroup) error {
 	group.UpdatedAt = time.Now()
 	return a.groupStore.Save(group)
 }
@@ -361,7 +361,7 @@ func (a *Adapter) DeleteConsumerGroup(ctx context.Context, queueName, groupID st
 }
 
 // ListConsumerGroups lists all consumer groups for a queue.
-func (a *Adapter) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroupState, error) {
+func (a *Adapter) ListConsumerGroups(ctx context.Context, queueName string) ([]*types.ConsumerGroup, error) {
 	return a.groupStore.List(queueName)
 }
 
@@ -554,7 +554,7 @@ func (a *Adapter) Sync() error {
 // Helper functions
 
 // syncCursorsFromStore syncs cursor state from the log store to the group state.
-func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.ConsumerGroupState) {
+func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.ConsumerGroup) {
 	cursorState, err := a.store.GetCursorState(queueName, groupID)
 	if err != nil {
 		return
@@ -566,7 +566,7 @@ func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.C
 }
 
 // syncPELFromStore syncs PEL state from the log store to the group state.
-func (a *Adapter) syncPELFromStore(queueName, groupID string, group *types.ConsumerGroupState) {
+func (a *Adapter) syncPELFromStore(queueName, groupID string, group *types.ConsumerGroup) {
 	allEntries, err := a.store.GetAllPending(queueName, groupID)
 	if err != nil {
 		return
@@ -627,4 +627,3 @@ func pendingEntryToTypes(entry *PendingEntry) *types.PendingEntry {
 		DeliveryCount: int(entry.DeliveryCount),
 	}
 }
-
