@@ -14,6 +14,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	"github.com/absmach/fluxmq/cluster"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
 func readBrokerFramesFrom(t *testing.T, buf *bytes.Buffer, start int) []*codec.Frame {
@@ -61,7 +62,7 @@ func TestDeliverToClusterMessage(t *testing.T) {
 	msg := &cluster.Message{
 		Topic:      "telemetry/room1",
 		Payload:    []byte("hello"),
-		Properties: map[string]string{"message-id": "m1"},
+		Properties: map[string]string{qtypes.PropMessageID: "m1"},
 	}
 	if err := b.DeliverToClusterMessage(context.Background(), PrefixedClientID(c.connID), msg); err != nil {
 		t.Fatalf("DeliverToClusterMessage failed: %v", err)

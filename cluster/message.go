@@ -13,3 +13,23 @@ type Message struct {
 	Dup        bool
 	Properties map[string]string
 }
+
+// QueueMessage is a typed envelope for cross-node queue delivery.
+// It separates queue metadata from user-defined message properties.
+type QueueMessage struct {
+	MessageID      string
+	QueueName      string
+	GroupID        string
+	Payload        []byte
+	Sequence       int64
+	UserProperties map[string]string
+
+	Stream          bool
+	StreamOffset    int64
+	StreamTimestamp int64 // Unix milliseconds
+
+	HasWorkCommitted    bool
+	WorkCommittedOffset int64
+	WorkAcked           bool
+	WorkGroup           string
+}

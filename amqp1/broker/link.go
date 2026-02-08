@@ -382,10 +382,10 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 	if !settled {
 		l.pendingMu.Lock()
 		pd := &pendingDelivery{deliveryID: deliveryID}
-		if msgID, ok := props["message-id"]; ok {
+		if msgID, ok := props[qtypes.PropMessageID]; ok {
 			pd.messageID = msgID
-			pd.queueName, _ = props["queue"]
-			pd.groupID, _ = props["group-id"]
+			pd.queueName, _ = props[qtypes.PropQueueName]
+			pd.groupID, _ = props[qtypes.PropGroupID]
 		}
 		l.pending[deliveryID] = pd
 		l.pendingMu.Unlock()
@@ -442,13 +442,13 @@ func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
 	if !settled && amqpMsg.ApplicationProperties != nil {
 		l.pendingMu.Lock()
 		pd := &pendingDelivery{deliveryID: deliveryID}
-		if msgID, ok := amqpMsg.ApplicationProperties["message-id"]; ok {
+		if msgID, ok := amqpMsg.ApplicationProperties[qtypes.PropMessageID]; ok {
 			pd.messageID, _ = msgID.(string)
 		}
-		if qn, ok := amqpMsg.ApplicationProperties["queue"]; ok {
+		if qn, ok := amqpMsg.ApplicationProperties[qtypes.PropQueueName]; ok {
 			pd.queueName, _ = qn.(string)
 		}
-		if gid, ok := amqpMsg.ApplicationProperties["group-id"]; ok {
+		if gid, ok := amqpMsg.ApplicationProperties[qtypes.PropGroupID]; ok {
 			pd.groupID, _ = gid.(string)
 		}
 		l.pending[deliveryID] = pd
@@ -528,7 +528,6 @@ func (l *Link) handleManagementTransfer(transfer *performatives.Transfer, msg *m
 
 	replyLink.sendAMQPMessage(resp, 0)
 }
-
 
 func uint32ToBytes(v uint32) []byte {
 	return []byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}

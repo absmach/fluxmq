@@ -293,8 +293,8 @@ func (b *Broker) handleQueueAck(msg *storage.Message) error {
 
 	// Extract message ID and group ID from properties
 	if msg.Properties != nil {
-		messageID = msg.Properties["message-id"]
-		groupID = msg.Properties["group-id"]
+		messageID = msg.Properties[types.PropMessageID]
+		groupID = msg.Properties[types.PropGroupID]
 	}
 
 	if messageID == "" {
@@ -318,8 +318,8 @@ func (b *Broker) handleQueueAck(msg *storage.Message) error {
 		return b.queueManager.Nack(ctx, queueName, messageID, groupID)
 	} else if strings.HasSuffix(msg.Topic, "/$reject") {
 		reason := "rejected by consumer"
-		if msg.Properties != nil && msg.Properties["reason"] != "" {
-			reason = msg.Properties["reason"]
+		if msg.Properties != nil && msg.Properties[types.PropRejectReason] != "" {
+			reason = msg.Properties[types.PropRejectReason]
 		}
 		b.logOp("queue_reject", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID), slog.String("reason", reason))
 		return b.queueManager.Reject(ctx, queueName, messageID, groupID, reason)

@@ -105,7 +105,7 @@ func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return nil, nil
 }
 
-func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
+func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error {
 	return nil
 }
 

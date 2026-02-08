@@ -110,7 +110,9 @@ func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueCon
 	}
 
 	sl := val.(*log)
+	sl.mu.RLock()
 	configCopy := sl.config
+	sl.mu.RUnlock()
 	return &configCopy, nil
 }
 
@@ -119,7 +121,10 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 	val, exists := s.logs.Load(queueName)
 	if exists {
 		sl := val.(*log)
-		if sl.config.Reserved {
+		sl.mu.RLock()
+		isReserved := sl.config.Reserved
+		sl.mu.RUnlock()
+		if isReserved {
 			return storage.ErrQueueNotFound // Cannot delete reserved queue
 		}
 	}
@@ -137,7 +142,9 @@ func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 
 	s.logs.Range(func(key, value interface{}) bool {
 		sl := value.(*log)
+		sl.mu.RLock()
 		configs = append(configs, sl.config)
+		sl.mu.RUnlock()
 		return true
 	})
 

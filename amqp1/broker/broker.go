@@ -16,6 +16,7 @@ import (
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -146,7 +147,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 				amqpMsg.ApplicationProperties[k] = v
 			}
 		}
-		if msgID, ok := props["message-id"]; ok {
+		if msgID, ok := props[qtypes.PropMessageID]; ok {
 			amqpMsg.Properties.MessageID = msgID
 		}
 

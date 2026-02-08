@@ -316,7 +316,7 @@ func (ch *Channel) completePublish() {
 		props["reply-to"] = header.Properties.ReplyTo
 	}
 	if header.Properties.MessageID != "" {
-		props["message-id"] = header.Properties.MessageID
+		props[qtypes.PropMessageID] = header.Properties.MessageID
 	}
 	if header.Properties.Type != "" {
 		props["type"] = header.Properties.Type
@@ -342,11 +342,11 @@ func (ch *Channel) completePublish() {
 				ch.conn.logger.Warn("queue commit missing queue name", "routing_key", routingKey)
 			} else {
 				headers := header.Properties.Headers
-				groupID, ok := parseStringArg(headers["x-group-id"])
+				groupID, ok := parseStringArg(headers[qtypes.PropCommitGroupID])
 				if !ok || groupID == "" {
 					ch.conn.logger.Warn("queue commit missing group id", "queue", queueName)
 				} else {
-					offsetVal, ok := headers["x-offset"]
+					offsetVal, ok := headers[qtypes.PropCommitOffset]
 					if !ok {
 						ch.conn.logger.Warn("queue commit missing offset", "queue", queueName, "group", groupID)
 					} else if n, ok := parseInt64Arg(offsetVal); !ok || n < 0 {
@@ -593,8 +593,8 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 			deliveryTag: deliveryTag,
 			routingKey:  topic,
 			queueName:   cons.queueName,
-			messageID:   props["message-id"],
-			groupID:     props["group-id"],
+			messageID:   props[qtypes.PropMessageID],
+			groupID:     props[qtypes.PropGroupID],
 		}
 		ch.unackedMu.Unlock()
 	}
@@ -623,21 +623,21 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 	headers := make(map[string]interface{})
 	for k, v := range props {
 		switch k {
-		case "content-type", "content-encoding", "correlation-id", "reply-to", "message-id", "type":
+		case "content-type", "content-encoding", "correlation-id", "reply-to", qtypes.PropMessageID, "type":
 			continue
-		case "x-stream-offset", "x-work-committed-offset":
+		case qtypes.PropStreamOffset, qtypes.PropWorkCommittedOffset:
 			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 				headers[k] = int64(n) // AMQP uses signed integers
 			} else {
 				headers[k] = v
 			}
-		case "x-stream-timestamp":
+		case qtypes.PropStreamTimestamp:
 			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 				headers[k] = n
 			} else {
 				headers[k] = v
 			}
-		case "x-work-acked":
+		case qtypes.PropWorkAcked:
 			headers[k] = v == "true"
 		default:
 			headers[k] = v
@@ -651,7 +651,7 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		ContentType:   props["content-type"],
 		CorrelationID: props["correlation-id"],
 		ReplyTo:       props["reply-to"],
-		MessageID:     props["message-id"],
+		MessageID:     props[qtypes.PropMessageID],
 		Type:          props["type"],
 		Headers:       headers,
 	}
@@ -1433,7 +1433,7 @@ func extractStreamOffset(args map[string]interface{}) (*qtypes.CursorOption, boo
 	if len(args) == 0 {
 		return nil, false
 	}
-	val, ok := args["x-stream-offset"]
+	val, ok := args[qtypes.PropStreamOffset]
 	if !ok {
 		return nil, false
 	}

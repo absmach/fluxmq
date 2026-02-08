@@ -1122,11 +1122,11 @@ func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 }
 
 // RouteQueueMessage sends a queue message to a remote consumer.
-func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
+func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
 	}
-	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, messageID, payload, properties, sequence)
+	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, msg)
 }
 
 // SetQueueHandler sets the queue handler for queue distribution operations.

@@ -184,7 +184,7 @@ func TestPrefetchBuffering(t *testing.T) {
 		noAck: false,
 	}
 
-	props := map[string]string{"message-id": "m1"}
+	props := map[string]string{qtypes.PropMessageID: "m1"}
 	ch.deliverMessage("q", []byte("one"), props)
 	ch.deliverMessage("q", []byte("two"), props)
 

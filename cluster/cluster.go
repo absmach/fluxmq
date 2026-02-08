@@ -154,7 +154,7 @@ type Cluster interface {
 	// RouteQueueMessage sends a queue message to a remote consumer.
 	// This is called in proxy mode when the worker needs to deliver a message
 	// to a consumer connected to a different node.
-	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error
+	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error
 }
 
 // MessageHandler handles message delivery and session management for the cluster.

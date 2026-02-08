@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
 )
@@ -41,12 +42,44 @@ func (m *Manager) createRouteProperties(msg *types.Message, groupID, queueName s
 	for k, v := range msg.Properties {
 		props[k] = v
 	}
-	props["message-id"] = fmt.Sprintf("%s:%d", queueName, msg.Sequence)
-	props["group-id"] = groupID
-	props["queue"] = queueName
-	props["offset"] = fmt.Sprintf("%d", msg.Sequence)
+	props[types.PropMessageID] = fmt.Sprintf("%s:%d", queueName, msg.Sequence)
+	props[types.PropGroupID] = groupID
+	props[types.PropQueueName] = queueName
+	props[types.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
 
 	return props
+}
+
+func (m *Manager) createRoutedQueueMessage(msg *types.Message, groupID, queueName string, stream bool, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) *cluster.QueueMessage {
+	userProps := make(map[string]string, len(msg.Properties))
+	for k, v := range msg.Properties {
+		userProps[k] = v
+	}
+
+	routeMsg := &cluster.QueueMessage{
+		MessageID:      fmt.Sprintf("%s:%d", queueName, msg.Sequence),
+		QueueName:      queueName,
+		GroupID:        groupID,
+		Payload:        msg.GetPayload(),
+		Sequence:       int64(msg.Sequence),
+		UserProperties: userProps,
+		Stream:         stream,
+	}
+
+	if stream {
+		routeMsg.StreamOffset = int64(msg.Sequence)
+		if !msg.CreatedAt.IsZero() {
+			routeMsg.StreamTimestamp = msg.CreatedAt.UnixMilli()
+		}
+		if hasWorkCommitted {
+			routeMsg.HasWorkCommitted = true
+			routeMsg.WorkCommittedOffset = int64(workCommitted)
+			routeMsg.WorkAcked = msg.Sequence < workCommitted
+			routeMsg.WorkGroup = primaryGroup
+		}
+	}
+
+	return routeMsg
 }
 
 func (m *Manager) decorateStreamProperties(properties map[string]string, msg *types.Message, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
@@ -54,16 +87,16 @@ func (m *Manager) decorateStreamProperties(properties map[string]string, msg *ty
 		return
 	}
 
-	properties["x-stream-offset"] = fmt.Sprintf("%d", msg.Sequence)
+	properties[types.PropStreamOffset] = fmt.Sprintf("%d", msg.Sequence)
 	if !msg.CreatedAt.IsZero() {
-		properties["x-stream-timestamp"] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
+		properties[types.PropStreamTimestamp] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
 	}
 
 	if hasWorkCommitted {
-		properties["x-work-committed-offset"] = fmt.Sprintf("%d", workCommitted)
-		properties["x-work-acked"] = strconv.FormatBool(msg.Sequence < workCommitted)
+		properties[types.PropWorkCommittedOffset] = fmt.Sprintf("%d", workCommitted)
+		properties[types.PropWorkAcked] = strconv.FormatBool(msg.Sequence < workCommitted)
 		if primaryGroup != "" {
-			properties["x-work-group"] = primaryGroup
+			properties[types.PropWorkGroup] = primaryGroup
 		}
 	}
 }

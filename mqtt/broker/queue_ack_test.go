@@ -78,8 +78,8 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 	msg := &storage.Message{
 		Topic: "$queue/orders/$ack",
 		Properties: map[string]string{
-			"message-id": "orders:42",
-			"group-id":   "workers",
+			qtypes.PropMessageID: "orders:42",
+			qtypes.PropGroupID:   "workers",
 		},
 	}
 
@@ -100,8 +100,8 @@ func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
 	msg := &storage.Message{
 		Topic: "$queue/orders/images/$nack",
 		Properties: map[string]string{
-			"message-id": "orders:1",
-			"group-id":   "workers@images/#",
+			qtypes.PropMessageID: "orders:1",
+			qtypes.PropGroupID:   "workers@images/#",
 		},
 	}
 
@@ -120,8 +120,8 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 	msg := &storage.Message{
 		Topic: "$queue/$ack",
 		Properties: map[string]string{
-			"message-id": "orders:1",
-			"group-id":   "workers",
+			qtypes.PropMessageID: "orders:1",
+			qtypes.PropGroupID:   "workers",
 		},
 	}
 

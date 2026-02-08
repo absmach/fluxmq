@@ -217,7 +217,7 @@ func (s *mockGroupStore) RegisterConsumer(ctx context.Context, queueName, groupI
 	}
 
 	group := s.groups[queueName][groupID]
-	group.Consumers[consumer.ID] = consumer
+	group.SetConsumer(consumer.ID, consumer)
 	return nil
 }
 
@@ -230,8 +230,8 @@ func (s *mockGroupStore) UnregisterConsumer(ctx context.Context, queueName, grou
 	}
 
 	group := s.groups[queueName][groupID]
-	delete(group.Consumers, consumerID)
-	delete(group.PEL, consumerID)
+	group.DeleteConsumer(consumerID)
+	group.DeleteConsumerPEL(consumerID)
 	return nil
 }
 
@@ -245,9 +245,10 @@ func (s *mockGroupStore) ListConsumers(ctx context.Context, queueName, groupID s
 
 	group := s.groups[queueName][groupID]
 	var result []*types.ConsumerInfo
-	for _, c := range group.Consumers {
+	group.ForEachConsumer(func(_ string, c *types.ConsumerInfo) bool {
 		result = append(result, c)
-	}
+		return true
+	})
 	return result, nil
 }
 
@@ -298,10 +299,11 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	groups, _ := groupStore.ListConsumerGroups(ctx, queueName)
 	t.Logf("Groups after subscribe: %v", len(groups))
 	for _, g := range groups {
-		t.Logf("  Group: %s (pattern=%s, consumers=%d)", g.ID, g.Pattern, len(g.Consumers))
-		for cid, ci := range g.Consumers {
+		t.Logf("  Group: %s (pattern=%s, consumers=%d)", g.ID, g.Pattern, g.ConsumerCount())
+		g.ForEachConsumer(func(cid string, ci *types.ConsumerInfo) bool {
 			t.Logf("    Consumer: %s (clientID=%s)", cid, ci.ClientID)
-		}
+			return true
+		})
 	}
 
 	publishTopic := "$queue/topic/test"
@@ -374,7 +376,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if got := msg.Properties["x-stream-offset"]; got != "0" {
+		if got := msg.Properties[types.PropStreamOffset]; got != "0" {
 			t.Fatalf("expected stream offset 0, got %q", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -724,13 +726,10 @@ type mockCluster struct {
 }
 
 type routedMessage struct {
-	nodeID     string
-	clientID   string
-	queueName  string
-	messageID  string
-	payload    []byte
-	properties map[string]string
-	sequence   int64
+	nodeID    string
+	clientID  string
+	queueName string
+	message   *cluster.QueueMessage
 }
 
 type forwardPublishCall struct {
@@ -751,21 +750,27 @@ func newMockCluster(nodeID string) *mockCluster {
 
 func (c *mockCluster) NodeID() string { return c.nodeID }
 
-func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
-	propsCopy := make(map[string]string, len(properties))
-	for k, v := range properties {
-		propsCopy[k] = v
+func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error {
+	var msgCopy *cluster.QueueMessage
+	if msg != nil {
+		userProps := make(map[string]string, len(msg.UserProperties))
+		for k, v := range msg.UserProperties {
+			userProps[k] = v
+		}
+		payloadCopy := make([]byte, len(msg.Payload))
+		copy(payloadCopy, msg.Payload)
+		copied := *msg
+		copied.UserProperties = userProps
+		copied.Payload = payloadCopy
+		msgCopy = &copied
 	}
 	c.routedMessagesMu.Lock()
 	defer c.routedMessagesMu.Unlock()
 	c.routedMessages = append(c.routedMessages, routedMessage{
-		nodeID:     nodeID,
-		clientID:   clientID,
-		queueName:  queueName,
-		messageID:  messageID,
-		payload:    payload,
-		properties: propsCopy,
-		sequence:   sequence,
+		nodeID:    nodeID,
+		clientID:  clientID,
+		queueName: queueName,
+		message:   msgCopy,
 	})
 	return nil
 }
@@ -1005,11 +1010,15 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 			if rm.clientID != remoteClientID {
 				t.Errorf("Expected routed message to client %s, got %s", remoteClientID, rm.clientID)
 			}
-			if rm.messageID == "" {
+			if rm.message == nil {
+				t.Error("Expected routed message payload to be set")
+				continue
+			}
+			if rm.message.MessageID == "" {
 				t.Error("Expected routed message-id to be set")
 			}
-			if rm.properties["group-id"] == "" {
-				t.Error("Expected routed message to include group-id property")
+			if rm.message.GroupID == "" {
+				t.Error("Expected routed message to include group-id")
 			}
 		}
 	}
@@ -1073,20 +1082,23 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	}
 
 	msg := routed[0]
-	if msg.messageID != "tasks:0" {
-		t.Fatalf("expected message-id tasks:0, got %q", msg.messageID)
+	if msg.message == nil {
+		t.Fatal("expected routed queue message payload")
 	}
-	if got := msg.properties["message-id"]; got != "tasks:0" {
-		t.Fatalf("expected properties message-id tasks:0, got %q", got)
+	if msg.message.MessageID != "tasks:0" {
+		t.Fatalf("expected message-id tasks:0, got %q", msg.message.MessageID)
 	}
-	if got := msg.properties["group-id"]; got != "workers" {
-		t.Fatalf("expected properties group-id workers, got %q", got)
+	if got := msg.message.GroupID; got != "workers" {
+		t.Fatalf("expected group-id workers, got %q", got)
 	}
-	if got := msg.properties["queue"]; got != "tasks" {
-		t.Fatalf("expected properties queue tasks, got %q", got)
+	if got := msg.message.QueueName; got != "tasks" {
+		t.Fatalf("expected queue tasks, got %q", got)
 	}
-	if got := msg.properties["offset"]; got != "0" {
-		t.Fatalf("expected properties offset 0, got %q", got)
+	if got := msg.message.Sequence; got != 0 {
+		t.Fatalf("expected sequence 0, got %d", got)
+	}
+	if got := msg.message.UserProperties["custom"]; got != "value" {
+		t.Fatalf("expected user property custom=value, got %q", got)
 	}
 }
 
@@ -1145,8 +1157,11 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	for {
 		routed := mockCl.GetRoutedMessages()
 		if len(routed) > 0 {
-			if got := routed[0].properties["x-stream-offset"]; got != "0" {
-				t.Fatalf("expected x-stream-offset=0, got %q", got)
+			if routed[0].message == nil {
+				t.Fatal("expected routed stream message payload")
+			}
+			if got := routed[0].message.StreamOffset; got != 0 {
+				t.Fatalf("expected stream offset=0, got %d", got)
 			}
 			return
 		}
@@ -1304,12 +1319,13 @@ func TestDeliverQueueMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := map[string]interface{}{
-		"id":         "msg-123",
-		"queueName":  "test",
-		"payload":    []byte("routed payload"),
-		"properties": map[string]string{"custom": "prop"},
-		"sequence":   int64(42),
+	msg := &cluster.QueueMessage{
+		MessageID:      "msg-123",
+		QueueName:      "test",
+		GroupID:        "workers",
+		Payload:        []byte("routed payload"),
+		Sequence:       42,
+		UserProperties: map[string]string{"custom": "prop"},
 	}
 
 	err := manager.DeliverQueueMessage(ctx, "target-client", msg)
@@ -1336,11 +1352,11 @@ func TestDeliverQueueMessage(t *testing.T) {
 		t.Errorf("Expected payload 'routed payload', got '%s'", string(deliveredMsg.GetPayload()))
 	}
 
-	if deliveredMsg.Properties["message-id"] != "msg-123" {
-		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Properties["message-id"])
+	if deliveredMsg.Properties[types.PropMessageID] != "msg-123" {
+		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Properties[types.PropMessageID])
 	}
-	if deliveredMsg.Properties["queue"] != "test" {
-		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties["queue"])
+	if deliveredMsg.Properties[types.PropQueueName] != "test" {
+		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties[types.PropQueueName])
 	}
 }
 

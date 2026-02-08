@@ -203,10 +203,10 @@ func TestCrossNode_StreamReplayFromFirstOffsetAfterLateConsumer(t *testing.T) {
 		if d.ClientID != consumer.ClientID || d.Message == nil {
 			continue
 		}
-		if d.Message.Properties["queue"] != queueName {
+		if d.Message.Properties[qtypes.PropQueueName] != queueName {
 			continue
 		}
-		offset := d.Message.Properties["x-stream-offset"]
+		offset := d.Message.Properties[qtypes.PropStreamOffset]
 		if offset != "" {
 			offsets = append(offsets, offset)
 		}

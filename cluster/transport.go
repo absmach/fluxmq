@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ type QueueHandler interface {
 	EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) (string, error)
 
 	// DeliverQueueMessage delivers a queue message to a local consumer.
-	DeliverQueueMessage(ctx context.Context, clientID string, msg any) error
+	DeliverQueueMessage(ctx context.Context, clientID string, msg *QueueMessage) error
 
 	// HandleQueuePublish handles a publish with the given mode.
 	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
@@ -444,12 +445,59 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 		}), nil
 	}
 
-	msg := map[string]interface{}{
-		"id":         req.Msg.MessageId,
-		"queueName":  req.Msg.QueueName,
-		"payload":    req.Msg.Payload,
-		"properties": req.Msg.Properties,
-		"sequence":   req.Msg.Sequence,
+	rawProps := make(map[string]string, len(req.Msg.Properties))
+	for k, v := range req.Msg.Properties {
+		rawProps[k] = v
+	}
+
+	msg := &QueueMessage{
+		MessageID:      req.Msg.MessageId,
+		QueueName:      req.Msg.QueueName,
+		Payload:        req.Msg.Payload,
+		Sequence:       req.Msg.Sequence,
+		UserProperties: make(map[string]string, len(rawProps)),
+	}
+	if msg.MessageID == "" {
+		msg.MessageID = rawProps[queueTypes.PropMessageID]
+	}
+
+	if groupID := rawProps[queueTypes.PropGroupID]; groupID != "" {
+		msg.GroupID = groupID
+	}
+	if msg.QueueName == "" {
+		if queueName := rawProps[queueTypes.PropQueueName]; queueName != "" {
+			msg.QueueName = queueName
+		}
+	}
+	if offset, ok := parseInt64Property(rawProps, queueTypes.PropOffset); ok {
+		msg.Sequence = offset
+	}
+	if streamOffset, ok := parseInt64Property(rawProps, queueTypes.PropStreamOffset); ok {
+		msg.Stream = true
+		msg.StreamOffset = streamOffset
+	}
+	if streamTs, ok := parseInt64Property(rawProps, queueTypes.PropStreamTimestamp); ok {
+		msg.Stream = true
+		msg.StreamTimestamp = streamTs
+	}
+	if committed, ok := parseInt64Property(rawProps, queueTypes.PropWorkCommittedOffset); ok {
+		msg.HasWorkCommitted = true
+		msg.WorkCommittedOffset = committed
+	}
+	if workAcked, ok := parseBoolProperty(rawProps, queueTypes.PropWorkAcked); ok {
+		msg.HasWorkCommitted = true
+		msg.WorkAcked = workAcked
+	}
+	if workGroup := rawProps[queueTypes.PropWorkGroup]; workGroup != "" {
+		msg.HasWorkCommitted = true
+		msg.WorkGroup = workGroup
+	}
+
+	for k, v := range rawProps {
+		if queueTypes.IsReservedQueueDeliveryProperty(k) {
+			continue
+		}
+		msg.UserProperties[k] = v
 	}
 
 	err := handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
@@ -658,20 +706,52 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 }
 
 // SendRouteQueueMessage sends a queue message delivery request to a peer node with retry and circuit breaker.
-func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID, queueName, messageID string, payload []byte, properties map[string]string, sequence int64) error {
+func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error {
 	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
 		}
 
+		if msg == nil {
+			return fmt.Errorf("queue message is nil")
+		}
+
+		properties := make(map[string]string, len(msg.UserProperties)+8)
+		for k, v := range msg.UserProperties {
+			properties[k] = v
+		}
+		if msg.MessageID != "" {
+			properties[queueTypes.PropMessageID] = msg.MessageID
+		}
+		if msg.GroupID != "" {
+			properties[queueTypes.PropGroupID] = msg.GroupID
+		}
+		if queueName != "" {
+			properties[queueTypes.PropQueueName] = queueName
+		}
+		properties[queueTypes.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
+		if msg.Stream {
+			properties[queueTypes.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
+			if msg.StreamTimestamp != 0 {
+				properties[queueTypes.PropStreamTimestamp] = fmt.Sprintf("%d", msg.StreamTimestamp)
+			}
+		}
+		if msg.HasWorkCommitted {
+			properties[queueTypes.PropWorkCommittedOffset] = fmt.Sprintf("%d", msg.WorkCommittedOffset)
+			properties[queueTypes.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
+			if msg.WorkGroup != "" {
+				properties[queueTypes.PropWorkGroup] = msg.WorkGroup
+			}
+		}
+
 		req := connect.NewRequest(&clusterv1.RouteQueueMessageRequest{
 			ClientId:   clientID,
 			QueueName:  queueName,
-			MessageId:  messageID,
-			Payload:    payload,
+			MessageId:  msg.MessageID,
+			Payload:    msg.Payload,
 			Properties: properties,
-			Sequence:   sequence,
+			Sequence:   msg.Sequence,
 		})
 
 		resp, err := client.RouteQueueMessage(ctx, req)
@@ -685,4 +765,28 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 
 		return nil
 	})
+}
+
+func parseInt64Property(props map[string]string, key string) (int64, bool) {
+	raw, ok := props[key]
+	if !ok || raw == "" {
+		return 0, false
+	}
+	val, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
+func parseBoolProperty(props map[string]string, key string) (bool, bool) {
+	raw, ok := props[key]
+	if !ok || raw == "" {
+		return false, false
+	}
+	val, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, false
+	}
+	return val, true
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1198,21 +1199,22 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 
 			// Route each message to the remote node
 			for _, msg := range msgs {
-				payload := msg.GetPayload()
-				properties := m.createRouteProperties(msg, groupID, config.Name)
-				if group.Mode == types.GroupModeStream {
-					m.decorateStreamProperties(properties, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
-				}
+				routeMsg := m.createRoutedQueueMessage(
+					msg,
+					groupID,
+					config.Name,
+					group.Mode == types.GroupModeStream,
+					workCommitted,
+					hasWorkCommitted,
+					config.PrimaryGroup,
+				)
 
 				err := m.cluster.RouteQueueMessage(
 					ctx,
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
 					config.Name,
-					properties["message-id"],
-					payload,
-					properties,
-					int64(msg.Sequence),
+					routeMsg,
 				)
 				if err != nil {
 					m.logger.Warn("remote queue message delivery failed",
@@ -1293,19 +1295,21 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 			// Check if consumer is on a remote node
 			if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
 				// Route to remote node
-				properties := m.createRouteProperties(msg, group.ID, config.Name)
-				if group.Mode == types.GroupModeStream {
-					m.decorateStreamProperties(properties, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
-				}
+				routeMsg := m.createRoutedQueueMessage(
+					msg,
+					group.ID,
+					config.Name,
+					group.Mode == types.GroupModeStream,
+					workCommitted,
+					hasWorkCommitted,
+					config.PrimaryGroup,
+				)
 				err := m.cluster.RouteQueueMessage(
 					ctx,
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
 					config.Name,
-					properties["message-id"],
-					msg.GetPayload(),
-					properties,
-					int64(msg.Sequence),
+					routeMsg,
 				)
 				if err != nil {
 					m.logger.Warn("queue message remote routing failed",
@@ -1585,54 +1589,53 @@ func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte
 		return "", err
 	}
 
-	if properties != nil && properties["message-id"] != "" {
-		return properties["message-id"], nil
+	if properties != nil && properties[types.PropMessageID] != "" {
+		return properties[types.PropMessageID], nil
 	}
 
 	return generateMessageID(), nil
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.
-func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg any) error {
+func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg *cluster.QueueMessage) error {
 	if m.deliverFn == nil {
 		return fmt.Errorf("no delivery function configured")
 	}
 
-	msgMap, ok := msg.(map[string]any)
-	if !ok {
-		return fmt.Errorf("invalid message type: expected map[string]any")
+	if msg == nil {
+		return fmt.Errorf("queue message is nil")
 	}
 
-	queueName, _ := msgMap["queueName"].(string)
-	payload, _ := msgMap["payload"].([]byte)
-	properties, _ := msgMap["properties"].(map[string]string)
-	messageID, _ := msgMap["id"].(string)
-	var sequence int64
-	switch v := msgMap["sequence"].(type) {
-	case int64:
-		sequence = v
-	case uint64:
-		sequence = int64(v)
-	case int:
-		sequence = int64(v)
-	case float64:
-		sequence = int64(v)
-	}
-
-	props := make(map[string]string, len(properties)+4)
-	for k, v := range properties {
+	queueName := msg.QueueName
+	props := make(map[string]string, len(msg.UserProperties)+8)
+	for k, v := range msg.UserProperties {
 		props[k] = v
 	}
+
+	messageID := msg.MessageID
 	if messageID == "" {
-		if props["message-id"] != "" {
-			messageID = props["message-id"]
-		} else {
-			messageID = fmt.Sprintf("%s:%d", queueName, sequence)
+		messageID = fmt.Sprintf("%s:%d", queueName, msg.Sequence)
+	}
+
+	props[types.PropMessageID] = messageID
+	props[types.PropGroupID] = msg.GroupID
+	props[types.PropQueueName] = queueName
+	props[types.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
+
+	if msg.Stream {
+		props[types.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
+		if msg.StreamTimestamp != 0 {
+			props[types.PropStreamTimestamp] = fmt.Sprintf("%d", msg.StreamTimestamp)
 		}
 	}
-	props["message-id"] = messageID
-	props["queue"] = queueName
-	props["offset"] = fmt.Sprintf("%d", sequence)
+
+	if msg.HasWorkCommitted {
+		props[types.PropWorkCommittedOffset] = fmt.Sprintf("%d", msg.WorkCommittedOffset)
+		props[types.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
+		if msg.WorkGroup != "" {
+			props[types.PropWorkGroup] = msg.WorkGroup
+		}
+	}
 
 	topic := queueName
 	if topic != "" && !strings.HasPrefix(topic, "$queue/") {
@@ -1644,7 +1647,7 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 		QoS:        1,
 		Properties: props,
 	}
-	deliveryMsg.SetPayloadFromBytes(payload)
+	deliveryMsg.SetPayloadFromBytes(msg.Payload)
 
 	return m.deliverFn(ctx, clientID, deliveryMsg)
 }

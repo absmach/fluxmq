@@ -31,8 +31,8 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 			return nil
 		}
 		if deliveryMsg.Properties != nil {
-			lastMessageID = deliveryMsg.Properties["message-id"]
-			lastGroupID = deliveryMsg.Properties["group-id"]
+			lastMessageID = deliveryMsg.Properties[types.PropMessageID]
+			lastGroupID = deliveryMsg.Properties[types.PropGroupID]
 		}
 		return nil
 	}
