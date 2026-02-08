@@ -47,6 +47,16 @@ type QueueManager interface {
 	ListQueues(ctx context.Context) ([]types.QueueConfig, error)
 }
 
+// StreamQueueManager extends QueueManager with stream-specific controls.
+// Used by protocol implementations that support stream retention updates and manual commits.
+type StreamQueueManager interface {
+	QueueManager
+	// UpdateQueue updates queue settings such as retention policy and queue type.
+	UpdateQueue(ctx context.Context, config types.QueueConfig) error
+	// CommitOffset commits a stream group offset when auto-commit is disabled.
+	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
+}
+
 // ClientRateLimiter defines the interface for per-client rate limiting.
 type ClientRateLimiter interface {
 	// AllowPublish checks if a publish from the given client is allowed.

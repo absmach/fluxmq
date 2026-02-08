@@ -17,6 +17,7 @@ import (
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
@@ -199,7 +200,7 @@ func main() {
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
-	var webhooks broker.Notifier
+	var webhooks corebroker.Notifier
 	if cfg.Webhook.Enabled {
 		sender := webhook.NewHTTPSender()
 

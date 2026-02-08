@@ -11,11 +11,10 @@ import (
 	"strings"
 	"sync"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/storage"
-
-	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
 const amqp091Prefix = "amqp091-"
@@ -30,35 +29,18 @@ func PrefixedClientID(connID string) string {
 	return amqp091Prefix + connID
 }
 
-// QueueManager defines the interface for durable queue-based queue management.
-type QueueManager interface {
-	Start(ctx context.Context) error
-	Stop() error
-	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
-	UpdateQueue(ctx context.Context, config qtypes.QueueConfig) error
-	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
-	Publish(ctx context.Context, publish qtypes.PublishRequest) error
-	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
-	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
-	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
-	Ack(ctx context.Context, queueName, messageID, groupID string) error
-	Nack(ctx context.Context, queueName, messageID, groupID string) error
-	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
-	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
-}
-
 // Broker is the core AMQP 0.9.1 broker.
 type Broker struct {
 	connections  sync.Map // connID -> *Connection
 	router       *router.TrieRouter
-	queueManager QueueManager
+	queueManager corebroker.StreamQueueManager
 	stats        *Stats
 	logger       *slog.Logger
 	mu           sync.RWMutex
 }
 
 // New creates a new AMQP 0.9.1 broker.
-func New(qm QueueManager, logger *slog.Logger) *Broker {
+func New(qm corebroker.StreamQueueManager, logger *slog.Logger) *Broker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -74,13 +56,13 @@ func New(qm QueueManager, logger *slog.Logger) *Broker {
 func (b *Broker) GetStats() *Stats { return b.stats }
 
 // SetQueueManager sets the queue manager for the broker.
-func (b *Broker) SetQueueManager(qm QueueManager) {
+func (b *Broker) SetQueueManager(qm corebroker.StreamQueueManager) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.queueManager = qm
 }
 
-func (b *Broker) getQueueManager() QueueManager {
+func (b *Broker) getQueueManager() corebroker.StreamQueueManager {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.queueManager

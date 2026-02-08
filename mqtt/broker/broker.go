@@ -14,7 +14,6 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/session"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/server/otel"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -25,40 +24,6 @@ const (
 	inflightPrefix = "/inflight/"
 	queuePrefix    = "/queue/"
 )
-
-// Notifier defines the interface for webhook notifications.
-type Notifier interface {
-	Notify(ctx context.Context, event interface{}) error
-	Close() error
-}
-
-// QueueManager defines the interface for durable queue-based queue management.
-type QueueManager interface {
-	Start(ctx context.Context) error
-	Stop() error
-	Publish(ctx context.Context, publish qtypes.PublishRequest) error
-	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
-	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
-	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
-	Ack(ctx context.Context, queueName, messageID, groupID string) error
-	Nack(ctx context.Context, queueName, messageID, groupID string) error
-	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
-	UpdateHeartbeat(ctx context.Context, clientID string) error
-	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
-	DeleteQueue(ctx context.Context, queueName string) error
-	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
-	ListQueues(ctx context.Context) ([]qtypes.QueueConfig, error)
-}
-
-// ClientRateLimiter defines the interface for per-client rate limiting.
-type ClientRateLimiter interface {
-	// AllowPublish checks if a publish from the given client is allowed.
-	AllowPublish(clientID string) bool
-	// AllowSubscribe checks if a subscription from the given client is allowed.
-	AllowSubscribe(clientID string) bool
-	// OnClientDisconnect cleans up rate limiters for a disconnected client.
-	OnClientDisconnect(clientID string)
-}
 
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
@@ -72,15 +37,15 @@ type Broker struct {
 	subscriptions storage.SubscriptionStore
 	retained      storage.RetainedStore
 	wills         storage.WillStore
-	cluster       cluster.Cluster // nil for single-node mode
-	queueManager  QueueManager    // nil if queue functionality disabled
+	cluster       cluster.Cluster     // nil for single-node mode
+	queueManager  broker.QueueManager // nil if queue functionality disabled
 	auth          *broker.AuthEngine
-	rateLimiter   ClientRateLimiter // nil if rate limiting disabled
+	rateLimiter   broker.ClientRateLimiter // nil if rate limiting disabled
 	logger        *slog.Logger
 	stats         *Stats
-	webhooks      Notifier      // nil if webhooks disabled
-	metrics       *otel.Metrics // nil if metrics disabled
-	tracer        trace.Tracer  // nil if tracing disabled
+	webhooks      broker.Notifier // nil if webhooks disabled
+	metrics       *otel.Metrics   // nil if metrics disabled
+	tracer        trace.Tracer    // nil if tracing disabled
 	stopCh        chan struct{}
 	shuttingDown  atomic.Bool
 	closed        atomic.Bool
@@ -102,7 +67,7 @@ type Broker struct {
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
 //   - metrics: OTel metrics instance (nil if metrics disabled)
 //   - tracer: OTel tracer (nil if tracing disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig) *Broker {
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -147,7 +112,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 
 // SetQueueManager sets the queue manager for the broker.
 // This should be called before the broker starts accepting connections.
-func (b *Broker) SetQueueManager(qm QueueManager) error {
+func (b *Broker) SetQueueManager(qm broker.QueueManager) error {
 	b.globalMu.Lock()
 	defer b.globalMu.Unlock()
 
@@ -162,7 +127,7 @@ func (b *Broker) SetQueueManager(qm QueueManager) error {
 }
 
 // GetQueueManager returns the queue manager.
-func (b *Broker) GetQueueManager() QueueManager {
+func (b *Broker) GetQueueManager() broker.QueueManager {
 	b.globalMu.Lock()
 	defer b.globalMu.Unlock()
 	return b.queueManager
@@ -184,7 +149,7 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 }
 
 // SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.
-func (b *Broker) SetClientRateLimiter(rl ClientRateLimiter) {
+func (b *Broker) SetClientRateLimiter(rl broker.ClientRateLimiter) {
 	b.rateLimiter = rl
 }
 
