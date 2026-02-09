@@ -81,6 +81,9 @@ type Config struct {
 	StealInterval time.Duration
 	StealEnabled  bool
 
+	// PEL configuration
+	MaxPELSize int
+
 	// Retention configuration
 	RetentionCheckInterval time.Duration
 
@@ -103,6 +106,7 @@ func DefaultConfig() Config {
 		DeliveryBatchSize:      100,
 		HeartbeatInterval:      10 * time.Second,
 		ConsumerTimeout:        2 * time.Minute,
+		MaxPELSize:             100_000,
 		DLQTopicPrefix:         "$dlq/",
 		StealInterval:          5 * time.Second,
 		StealEnabled:           true,
@@ -127,6 +131,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		ClaimBatchSize:     config.ClaimBatchSize,
 		StealBatchSize:     5,
 		AutoCommitInterval: config.AutoCommitInterval,
+		MaxPELSize:         config.MaxPELSize,
 	}
 
 	consumerMgr := consumer.NewManager(queueStore, groupStore, consumerCfg)
@@ -894,6 +899,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 			err := m.consumerManager.Ack(ctx, queueName, group.ID, consumerID, offset)
 			if err == nil {
 				m.metrics.RecordAck(0)
+				m.metrics.UpdatePELSize(uint64(group.PendingCount()))
 				m.scheduleQueueDelivery(queueName)
 				return nil
 			}

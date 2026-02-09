@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/absmach/fluxmq/cluster"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
+	"github.com/absmach/fluxmq/queue/consumer"
 	queueraft "github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
@@ -1736,5 +1738,67 @@ func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
 	targets := manager.getSubscriptionTargets("client-1")
 	if len(targets) != 0 {
 		t.Fatalf("expected stale tracked target to be removed after heartbeat update, got %d entries", len(targets))
+	}
+}
+
+func TestPELCapRejectsClaim(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	config := DefaultConfig()
+	config.MaxPELSize = 3
+	mgr := NewManager(logStore, groupStore, nil, config, logger, nil)
+
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("pelcap", "$queue/pelcap/#")
+	if err := mgr.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	// Publish more messages than MaxPELSize
+	for i := 0; i < 5; i++ {
+		if err := mgr.Publish(ctx, types.PublishRequest{
+			Topic:   "$queue/pelcap/test",
+			Payload: []byte("msg"),
+		}); err != nil {
+			t.Fatalf("Publish failed: %v", err)
+		}
+	}
+
+	// Set up consumer group + consumer via Subscribe
+	if err := mgr.Subscribe(ctx, "pelcap", "", "c1", "g1", ""); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Claim exactly MaxPELSize messages (should succeed)
+	msgs, err := mgr.consumerManager.ClaimBatch(ctx, "pelcap", "g1", "c1", nil, 3)
+	if err != nil {
+		t.Fatalf("ClaimBatch should succeed: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	// Next claim should fail — PEL is full, so ClaimBatch returns ErrNoMessages
+	_, err = mgr.consumerManager.ClaimBatch(ctx, "pelcap", "g1", "c1", nil, 1)
+	if err != consumer.ErrNoMessages {
+		t.Fatalf("expected ErrNoMessages (PEL full), got: %v", err)
+	}
+
+	// Ack one message to free PEL space (message ID format is queueName:offset)
+	ackID := fmt.Sprintf("pelcap:%d", msgs[0].Sequence)
+	if err := mgr.Ack(ctx, "pelcap", ackID, "g1"); err != nil {
+		t.Fatalf("Ack failed: %v", err)
+	}
+
+	// Now claim should succeed again
+	msgs2, err := mgr.consumerManager.ClaimBatch(ctx, "pelcap", "g1", "c1", nil, 1)
+	if err != nil {
+		t.Fatalf("ClaimBatch after ack should succeed: %v", err)
+	}
+	if len(msgs2) != 1 {
+		t.Fatalf("expected 1 message after ack, got %d", len(msgs2))
 	}
 }

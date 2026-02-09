@@ -23,6 +23,7 @@ var (
 	ErrInvalidOffset                 = errors.New("invalid offset")
 	ErrGroupModeMismatch             = errors.New("consumer group mode mismatch")
 	ErrCommitOffsetOnlyForStreamMode = errors.New("commit offset only supported for stream groups")
+	ErrPELFull                       = errors.New("pending entry list at capacity")
 )
 
 // Manager handles consumer group operations including claiming,
@@ -53,6 +54,11 @@ type Config struct {
 	// AutoCommitInterval controls how often stream groups auto-commit offsets.
 	// Zero means commit on every delivery batch.
 	AutoCommitInterval time.Duration
+
+	// MaxPELSize is the maximum number of pending entries per consumer group.
+	// When reached, new claims are rejected until entries are acknowledged.
+	// Zero means unlimited (not recommended for production).
+	MaxPELSize int
 }
 
 // DefaultConfig returns default manager configuration.
@@ -63,6 +69,7 @@ func DefaultConfig() Config {
 		ClaimBatchSize:     10,
 		StealBatchSize:     5,
 		AutoCommitInterval: 5 * time.Second,
+		MaxPELSize:         100_000,
 	}
 }
 
@@ -285,6 +292,14 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 
 // claimFromCursor tries to claim a message from the cursor position.
 func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*types.Message, error) {
+	// Check PEL capacity before claiming
+	if m.config.MaxPELSize > 0 {
+		pelCount := group.PendingCount()
+		if pelCount >= m.config.MaxPELSize {
+			return nil, ErrPELFull
+		}
+	}
+
 	cursor := group.GetCursor()
 
 	// Get log tail
