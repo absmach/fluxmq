@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -181,7 +182,11 @@ func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
 	if len(msg.CorrelationData) > 0 {
 		props.CorrelationData = msg.CorrelationData
 	} else if v := msg.Properties["correlation-id"]; v != "" {
-		props.CorrelationData = []byte(v)
+		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
+			props.CorrelationData = decoded
+		} else {
+			props.CorrelationData = []byte(v)
+		}
 	}
 
 	if msg.PayloadFormat != nil {

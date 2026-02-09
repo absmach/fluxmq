@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"encoding/base64"
 	"strconv"
 	"strings"
 
@@ -102,7 +103,7 @@ func extractAllProperties(props *v5.PublishProperties) map[string]string {
 	}
 
 	if props.CorrelationData != nil {
-		result["correlation-id"] = string(props.CorrelationData)
+		result["correlation-id"] = base64.StdEncoding.EncodeToString(props.CorrelationData)
 	}
 
 	if props.PayloadFormat != nil {

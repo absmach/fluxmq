@@ -6,6 +6,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"math"
@@ -310,7 +311,7 @@ func (ch *Channel) completePublish() {
 		props["content-encoding"] = header.Properties.ContentEncoding
 	}
 	if header.Properties.CorrelationID != "" {
-		props["correlation-id"] = header.Properties.CorrelationID
+		props["correlation-id"] = base64.StdEncoding.EncodeToString([]byte(header.Properties.CorrelationID))
 	}
 	if header.Properties.ReplyTo != "" {
 		props["reply-to"] = header.Properties.ReplyTo
@@ -367,15 +368,20 @@ func (ch *Channel) completePublish() {
 	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") {
 		qm := ch.conn.broker.getQueueManager()
 		if qm != nil {
-			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+			err := qm.Publish(context.Background(), qtypes.PublishRequest{
 				Topic:      routingKey,
 				Payload:    body,
 				Properties: props,
-			}); err != nil {
+			})
+			if err != nil {
 				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
 			}
 			if ch.confirmMode {
-				ch.sendPublisherAck()
+				if err != nil {
+					ch.sendPublisherNack()
+				} else {
+					ch.sendPublisherAck()
+				}
 			}
 			return
 		}
@@ -386,15 +392,20 @@ func (ch *Channel) completePublish() {
 		qm := ch.conn.broker.getQueueManager()
 		if qm != nil {
 			queueTopic := "$queue/" + routingKey
-			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+			err := qm.Publish(context.Background(), qtypes.PublishRequest{
 				Topic:      queueTopic,
 				Payload:    body,
 				Properties: props,
-			}); err != nil {
+			})
+			if err != nil {
 				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
 			}
 			if ch.confirmMode {
-				ch.sendPublisherAck()
+				if err != nil {
+					ch.sendPublisherNack()
+				} else {
+					ch.sendPublisherAck()
+				}
 			}
 			return
 		}
@@ -402,6 +413,7 @@ func (ch *Channel) completePublish() {
 
 	// Check if this targets a queue via exchange bindings
 	isQueuePublish := false
+	var publishFailed bool
 	ch.exchangeMu.RLock()
 	bindings := make([]binding, 0, len(ch.bindings))
 	for _, b := range ch.bindings {
@@ -426,6 +438,7 @@ func (ch *Channel) completePublish() {
 					Properties: props,
 				}); err != nil {
 					ch.conn.logger.Error("queue publish failed", "queue", b.queue, "error", err)
+					publishFailed = true
 				}
 			}
 			isQueuePublish = true
@@ -452,7 +465,11 @@ func (ch *Channel) completePublish() {
 
 	// Publisher confirms
 	if ch.confirmMode {
-		ch.sendPublisherAck()
+		if publishFailed {
+			ch.sendPublisherNack()
+		} else {
+			ch.sendPublisherAck()
+		}
 	}
 }
 
@@ -647,9 +664,14 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		headers = nil
 	}
 
+	correlationID := props["correlation-id"]
+	if decoded, err := base64.StdEncoding.DecodeString(correlationID); err == nil {
+		correlationID = string(decoded)
+	}
+
 	properties := codec.BasicProperties{
 		ContentType:   props["content-type"],
-		CorrelationID: props["correlation-id"],
+		CorrelationID: correlationID,
 		ReplyTo:       props["reply-to"],
 		MessageID:     props[qtypes.PropMessageID],
 		Type:          props["type"],
@@ -711,6 +733,18 @@ func (ch *Channel) sendPublisherAck() {
 	}
 	if err := ch.conn.writeMethod(ch.id, ack); err != nil {
 		ch.conn.logger.Error("failed to write publisher ack", "error", err)
+	}
+}
+
+func (ch *Channel) sendPublisherNack() {
+	seq := ch.publishSeq.Add(1)
+	nack := &codec.BasicNack{
+		DeliveryTag: seq,
+		Multiple:    false,
+		Requeue:     false,
+	}
+	if err := ch.conn.writeMethod(ch.id, nack); err != nil {
+		ch.conn.logger.Error("failed to write publisher nack", "error", err)
 	}
 }
 
