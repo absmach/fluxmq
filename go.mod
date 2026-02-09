@@ -17,13 +17,13 @@ require (
 	github.com/sony/gobreaker v1.0.0
 	go.etcd.io/etcd/client/v3 v3.5.17
 	go.etcd.io/etcd/server/v3 v3.5.17
-	go.opentelemetry.io/otel v1.39.0
+	go.opentelemetry.io/otel v1.40.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.39.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.39.0
-	go.opentelemetry.io/otel/metric v1.39.0
+	go.opentelemetry.io/otel/metric v1.40.0
 	go.opentelemetry.io/otel/sdk v1.39.0
 	go.opentelemetry.io/otel/sdk/metric v1.39.0
-	go.opentelemetry.io/otel/trace v1.39.0
+	go.opentelemetry.io/otel/trace v1.40.0
 	golang.org/x/crypto v0.44.0
 	golang.org/x/net v0.47.0
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
