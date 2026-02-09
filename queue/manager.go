@@ -225,6 +225,10 @@ func (m *Manager) scheduleQueueDelivery(queueName string) {
 	select {
 	case m.deliveryQueue <- queueName:
 	default:
+		// Channel full — delivery trigger dropped. The 1-second sweep ticker
+		// will reschedule, but there's a gap where this queue won't get delivered.
+		m.logger.Warn("delivery channel full, dropping trigger (will retry on next sweep)",
+			slog.String("queue", queueName))
 		// Prevent a dropped enqueue from getting stuck in the dedupe set forever.
 		m.markQueueDelivered(queueName)
 	}
@@ -786,8 +790,10 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 
 	// Unregister consumer locally
 	if err := m.consumerManager.UnregisterConsumer(ctx, queueName, patternGroupID, clientID); err != nil {
-		m.logger.Debug("unregister consumer error",
+		m.logger.Warn("failed to unregister consumer, may become phantom",
 			slog.String("error", err.Error()),
+			slog.String("queue", queueName),
+			slog.String("group", patternGroupID),
 			slog.String("client", clientID))
 	}
 

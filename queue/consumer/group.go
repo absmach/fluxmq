@@ -7,6 +7,7 @@ package consumer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ type GroupManager struct {
 	groups           map[string]*Group
 	consumerStore    queueStorage.ConsumerStore
 	heartbeatTimeout time.Duration
+	logger           *slog.Logger
 	ctx              context.Context
 	cancel           context.CancelFunc
 	mu               sync.RWMutex
@@ -34,6 +36,7 @@ func NewGroupManager(queueName string, consumerStore queueStorage.ConsumerStore,
 		groups:           make(map[string]*Group),
 		consumerStore:    consumerStore,
 		heartbeatTimeout: heartbeatTimeout,
+		logger:           slog.Default(),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -206,10 +209,16 @@ func (cgm *GroupManager) checkStaleConsumers() {
 		consumers := group.ListConsumers()
 		for _, consumer := range consumers {
 			if now.Sub(consumer.LastHeartbeat) > timeout {
-				// Consumer heartbeat is stale, remove it
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = cgm.RemoveConsumer(ctx, group.ID(), consumer.ID)
-				cancel() // Always cancel immediately after use to prevent context leak
+				if err := cgm.RemoveConsumer(ctx, group.ID(), consumer.ID); err != nil {
+					cgm.logger.Warn("failed to remove stale consumer, phantom consumer may persist",
+						slog.String("queue", cgm.queueName),
+						slog.String("group", group.ID()),
+						slog.String("consumer", consumer.ID),
+						slog.Duration("stale_for", now.Sub(consumer.LastHeartbeat)),
+						slog.String("error", err.Error()))
+				}
+				cancel()
 			}
 		}
 	}
