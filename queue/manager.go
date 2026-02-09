@@ -956,7 +956,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 	if groupID != "" {
 		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
 			if group.Mode == types.GroupModeStream {
-				m.scheduleQueueDelivery(queueName)
+				m.rejectStream(ctx, queueName, group, offset, reason)
 				return nil
 			}
 		}
@@ -972,7 +972,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 			continue
 		}
 		if group.Mode == types.GroupModeStream {
-			m.scheduleQueueDelivery(queueName)
+			m.rejectStream(ctx, queueName, group, offset, reason)
 			return nil
 		}
 
@@ -987,6 +987,36 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 	}
 
 	return consumer.ErrMessageNotPending
+}
+
+// rejectStream handles reject for stream-mode consumer groups.
+// Stream queues don't have PEL, so reject advances the cursor past the
+// rejected message (same as ack) to prevent infinite redelivery.
+func (m *Manager) rejectStream(ctx context.Context, queueName string, group *types.ConsumerGroup, offset uint64, reason string) {
+	cursor := group.GetCursor()
+	next := offset + 1
+	if next > cursor.Cursor {
+		if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
+			m.logger.Warn("failed to update stream cursor on reject",
+				slog.String("queue", queueName),
+				slog.String("group", group.ID),
+				slog.String("error", err.Error()))
+		}
+		if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
+			m.logger.Warn("failed to update stream committed offset on reject",
+				slog.String("queue", queueName),
+				slog.String("group", group.ID),
+				slog.String("error", err.Error()))
+		}
+	}
+
+	m.logger.Info("stream message rejected",
+		slog.String("queue", queueName),
+		slog.String("group", group.ID),
+		slog.Uint64("offset", offset),
+		slog.String("reason", reason))
+	m.metrics.RecordReject()
+	m.scheduleQueueDelivery(queueName)
 }
 
 // --- Heartbeat ---

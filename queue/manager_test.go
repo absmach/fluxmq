@@ -425,6 +425,39 @@ func TestStreamAckAdvancesCursor(t *testing.T) {
 	}
 }
 
+func TestStreamRejectAdvancesCursor(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), logger, nil)
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
+	if err := mgr.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamer", "", cursor); err != nil {
+		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	}
+
+	if err := mgr.Reject(context.Background(), "events", "events:0", "streamer", "bad message"); err != nil {
+		t.Fatalf("Reject failed: %v", err)
+	}
+
+	group, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	if err != nil {
+		t.Fatalf("GetConsumerGroup failed: %v", err)
+	}
+	if c := group.GetCursor().Cursor; c != 1 {
+		t.Fatalf("expected cursor 1 after reject, got %d", c)
+	}
+	if c := group.GetCursor().Committed; c != 1 {
+		t.Fatalf("expected committed 1 after reject, got %d", c)
+	}
+}
+
 func TestRetentionOffsetMessages(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
