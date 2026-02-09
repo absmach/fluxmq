@@ -277,6 +277,13 @@ func (c *EtcdCluster) Start() error {
 		c.watchSubscriptions()
 	}()
 
+	// Start periodic subscription cache reconciliation
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.reconcileSubscriptionCache()
+	}()
+
 	// Load retained message cache on startup
 	if err := c.loadRetainedCache(); err != nil {
 		c.logger.Warn("failed to load retained cache", slog.String("error", err.Error()))
@@ -1377,9 +1384,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 		return fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
-	c.subCacheMu.Lock()
-	defer c.subCacheMu.Unlock()
-
+	fresh := make(map[string]*storage.Subscription, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		var sub storage.Subscription
 		if err := json.Unmarshal(kv.Value, &sub); err != nil {
@@ -1388,11 +1393,45 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 		}
 
 		cacheKey := fmt.Sprintf("%s|%s", sub.ClientID, sub.Filter)
-		c.subCache[cacheKey] = &sub
+		fresh[cacheKey] = &sub
 	}
 
-	c.logger.Info("loaded subscriptions into cache", slog.Int("cache_len", len(c.subCache)))
+	c.subCacheMu.Lock()
+	prevSize := len(c.subCache)
+	c.subCache = fresh
+	c.subCacheMu.Unlock()
+
+	if staleRemoved := prevSize - len(fresh); staleRemoved > 0 {
+		c.logger.Info("subscription cache reconciled",
+			slog.Int("prev_size", prevSize),
+			slog.Int("new_size", len(fresh)),
+			slog.Int("stale_removed", staleRemoved))
+	} else {
+		c.logger.Info("loaded subscriptions into cache", slog.Int("cache_len", len(fresh)))
+	}
 	return nil
+}
+
+// reconcileSubscriptionCache periodically reloads the subscription cache from
+// etcd to evict stale entries that may have been missed by the watch (e.g. due
+// to etcd compaction, network partition, or missed delete events).
+func (c *EtcdCluster) reconcileSubscriptionCache() {
+	const reconcileInterval = 5 * time.Minute
+
+	ticker := time.NewTicker(reconcileInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			if err := c.loadSubscriptionCache(); err != nil {
+				c.logger.Error("subscription cache reconciliation failed",
+					slog.String("error", err.Error()))
+			}
+		}
+	}
 }
 
 // watchSubscriptions watches etcd for subscription changes and updates the local cache.
