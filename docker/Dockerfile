@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.24.3-alpine AS builder
+FROM golang:1.25.7-alpine AS builder
 
 WORKDIR /src
 
@@ -11,7 +11,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags "-s -w" -o /out/fluxmq ./cmd
 
-FROM alpine:3.20
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates \
     && addgroup -S fluxmq \
