@@ -852,6 +852,10 @@ func (c *mockCluster) RemoveSubscription(ctx context.Context, clientID, filter s
 	return nil
 }
 
+func (c *mockCluster) RemoveAllSubscriptions(ctx context.Context, clientID string) error {
+	return nil
+}
+
 func (c *mockCluster) GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*brokerstorage.Subscription, error) {
 	return nil, nil
 }

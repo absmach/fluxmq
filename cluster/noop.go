@@ -63,6 +63,10 @@ func (n *NoopCluster) RemoveSubscription(ctx context.Context, clientID, filter s
 	return nil
 }
 
+func (n *NoopCluster) RemoveAllSubscriptions(ctx context.Context, clientID string) error {
+	return nil
+}
+
 func (n *NoopCluster) GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*storage.Subscription, error) {
 	// Single-node: use local storage
 	return nil, ErrClusterNotEnabled

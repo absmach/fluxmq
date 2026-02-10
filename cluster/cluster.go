@@ -67,6 +67,9 @@ type SubscriptionRouter interface {
 	// RemoveSubscription removes a subscription for a client.
 	RemoveSubscription(ctx context.Context, clientID, filter string) error
 
+	// RemoveAllSubscriptions removes all subscriptions for a client in a single operation.
+	RemoveAllSubscriptions(ctx context.Context, clientID string) error
+
 	// GetSubscriptionsForClient returns all subscriptions for a specific client.
 	GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*storage.Subscription, error)
 

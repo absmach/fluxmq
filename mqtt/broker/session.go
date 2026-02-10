@@ -209,7 +209,6 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 
 	subs := s.GetSubscriptions()
 	for filter := range subs {
-		// Check if this is a shared subscription and clean up share groups
 		if topics.IsShared(filter) {
 			if b.sharedSubs.Unsubscribe(s.ID, filter) {
 				shareName, topicFilter, _ := topics.ParseShared(filter)
@@ -219,13 +218,12 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 		} else {
 			b.router.Unsubscribe(s.ID, filter)
 		}
+	}
 
-		// Remove subscription from cluster
-		if b.cluster != nil {
-			ctx := context.Background()
-			if err := b.cluster.RemoveSubscription(ctx, s.ID, filter); err != nil {
-				b.logError("cluster_remove_subscription", err, slog.String("client_id", s.ID), slog.String("filter", filter))
-			}
+	if b.cluster != nil {
+		ctx := context.Background()
+		if err := b.cluster.RemoveAllSubscriptions(ctx, s.ID); err != nil {
+			b.logError("cluster_remove_all_subscriptions", err, slog.String("client_id", s.ID))
 		}
 	}
 
