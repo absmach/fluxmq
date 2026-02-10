@@ -1,36 +1,43 @@
 ---
 title: Durable Queues
-description: Shared queue system for MQTT and AMQP with consumer groups, acknowledgments, stream queues, and append-only log storage
+description: Persistent queue system for MQTT and AMQP — durable work queues and stream queues with consumer groups, acknowledgments, and append-only log storage
 ---
 
 # Durable Queues
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-10
 
-FluxMQ provides durable queues shared across MQTT, AMQP 1.0, and AMQP 0.9.1. The queue manager is append-only with consumer groups and supports both classic work-queue semantics and stream-style consumption.
+This page covers FluxMQ's two persistent queue types: **durable queues** (work queue semantics) and **stream queues** (append-only log semantics). Both are shared across MQTT, AMQP 1.0, and AMQP 0.9.1.
+
+For an overview of all three queue types (including ephemeral queues), see [Queue Types](/docs/concepts/queues).
 
 ## Overview
 
-Durable queues are built around a simple model:
+Persistent queues are built around a simple model:
 
 - Producers publish to `$queue/<queue-name>/...`.
-- The broker appends the message to the queue’s log (durable storage).
+- The broker appends the message to the queue's log (durable storage).
 - Consumers join a **consumer group** and receive messages from that log.
-- Consumers **ack**, **nack**, or **reject** deliveries to control redelivery and truncation.
+- What happens next depends on the queue type:
 
-Queues can operate in two modes:
+|                | Durable (Classic)                                  | Stream                                     |
+| -------------- | -------------------------------------------------- | ------------------------------------------ |
+| **Ack**        | Remove from pending list, advance truncation point | Checkpoint cursor position                 |
+| **Nack**       | Redeliver the message (with backoff)               | No-op (replay via cursor seek)             |
+| **Reject**     | Discard message (future: DLQ)                      | Advance cursor past message                |
+| **Retention**  | Truncate after all groups ack                      | Time/size/count policy                     |
+| **Redelivery** | Automatic (visibility timeout + work stealing)     | Manual (consumer restarts from checkpoint) |
 
-- **Classic (work queue)**: messages are claimed, tracked in a pending list (PEL), and acknowledged.
-- **Stream**: consumers read sequentially with cursor-based progress (replayable log semantics).
+> **Design rule:** Do not overload ack semantics. "Ack" means "processed, remove it" in a durable queue and "checkpoint my position" in a stream. If you need both task processing and replay for the same data, use two queues with overlapping topic bindings.
 
 ## Do MQTT Producers Need `$queue/`?
 
-Yes. In FluxMQ today, MQTT publishes are treated as durable-queue traffic only when the topic starts with `$queue/`.
+Yes. In FluxMQ, MQTT publishes are routed to the queue manager only when the topic starts with `$queue/`.
 
 - Publish to `sensors/temp` goes through normal pub/sub routing (subscriptions, retained, cluster pub/sub).
-- Publish to `$queue/orders/...` goes through the queue manager (durable log + consumer groups + acks).
+- Publish to `$queue/orders/...` goes through the queue manager (log storage + consumer groups + acks).
 
-If you configured a queue with topic bindings that match a non-`$queue/` topic, MQTT publishes to that topic will still *not* be enqueued, because the MQTT broker does not route non-`$queue/` publishes into the queue manager.
+The `$queue/` prefix is what activates queue semantics — whether the target is an ephemeral, durable, or stream queue. If you configured a queue with topic bindings that match a non-`$queue/` topic, MQTT publishes to that topic will still *not* be enqueued, because the MQTT broker does not route non-`$queue/` publishes into the queue manager.
 
 ## Architecture
 
@@ -173,10 +180,10 @@ FluxMQ uses **topic patterns on queues** to decide where a publish should be sto
 
 - Each queue has one or more topic patterns (MQTT wildcard syntax).
 - On publish, the queue manager calls `FindMatchingQueues(topic)` and appends the message to every matching queue.
-- If **no queue matches**, FluxMQ creates an **ephemeral queue** whose name and pattern equal the topic, then appends.
+- If **no queue matches**, FluxMQ creates an **[ephemeral queue](/docs/concepts/queues#ephemeral-queue)** whose name and pattern equal the topic, then appends. Ephemeral queues are in-memory, best-effort, and cleaned up after the last consumer disconnects.
 - If no queues are configured at all, FluxMQ creates a reserved `mqtt` queue that matches `$queue/#` so queue publishes always have a landing zone.
 
-Ephemeral queues are a safety net, but they can be surprising if you publish before configuring queues or before consumers subscribe. In production, prefer explicit `queues:` configuration so queue names and bindings are stable.
+In production, prefer explicit `queues:` configuration so queue names, types, and bindings are stable. Ephemeral queues are a development convenience — they prevent silent message loss but don't provide durability or delivery guarantees. See [Queue Types](/docs/concepts/queues) for when to use each type.
 
 <Mermaid
 chart="
@@ -432,14 +439,14 @@ No PEL - just two offsets to track!
 
 Stream mode is designed for different use cases than classic work queues:
 
-| Aspect | Classic (PEL) | Stream (No PEL) |
-|--------|---------------|-----------------|
-| **Semantics** | Process once | Read/replay many times |
-| **Delivery guarantee** | At-least-once with ack | At-least-once with cursor |
-| **Redelivery trigger** | Visibility timeout | Consumer restart/seek |
-| **Work stealing** | Yes (steal from slow peers) | No (each consumer independent) |
-| **Memory overhead** | PEL entry per pending message | Only cursor position |
-| **Replayability** | No (acked = done) | Yes (seek to any offset) |
+| Aspect                 | Classic (PEL)                 | Stream (No PEL)                |
+| ---------------------- | ----------------------------- | ------------------------------ |
+| **Semantics**          | Process once                  | Read/replay many times         |
+| **Delivery guarantee** | At-least-once with ack        | At-least-once with cursor      |
+| **Redelivery trigger** | Visibility timeout            | Consumer restart/seek          |
+| **Work stealing**      | Yes (steal from slow peers)   | No (each consumer independent) |
+| **Memory overhead**    | PEL entry per pending message | Only cursor position           |
+| **Replayability**      | No (acked = done)             | Yes (seek to any offset)       |
 
 **Classic mode** answers: "Has this message been successfully processed?"
 
@@ -543,12 +550,12 @@ Practical intuition:
 
 Imagine a queue log with offsets `0..5`.
 
-| Event | Cursor | PEL | Committed |
-| --- | --- | --- | --- |
-| Group starts | 0 | empty | 0 |
-| Claims offsets 0,1 | 2 | {0,1} | 0 |
-| Acks offset 0 | 2 | {1} | 1 |
-| Acks offset 1 | 2 | empty | 2 |
+| Event              | Cursor | PEL   | Committed |
+| ------------------ | ------ | ----- | --------- |
+| Group starts       | 0      | empty | 0         |
+| Claims offsets 0,1 | 2      | {0,1} | 0         |
+| Acks offset 0      | 2      | {1}   | 1         |
+| Acks offset 1      | 2      | empty | 2         |
 
 This is why committed is the “safe truncation floor”: once everything below an offset is fully processed, the log can be truncated without breaking group semantics.
 

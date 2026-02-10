@@ -5,11 +5,11 @@ description: High-level system design overview covering core components and how 
 
 # Architecture Overview
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-10
 
 ## Overview
 
-FluxMQ is a multi-protocol message broker built around a shared queue manager. MQTT transports (TCP, WebSocket, HTTP bridge, CoAP) share one MQTT broker instance, while AMQP 1.0 and AMQP 0.9.1 use dedicated brokers. Durable queues are protocol-agnostic and provide cross-protocol routing and fan-out.
+FluxMQ is a multi-protocol message broker built around a shared queue manager. MQTT transports (TCP, WebSocket, HTTP bridge, CoAP) share one MQTT broker instance, while AMQP 1.0 and AMQP 0.9.1 use dedicated brokers. Queues are protocol-agnostic — all protocols route through the same queue manager, and delivery semantics depend on the [queue type](/docs/concepts/queues) (ephemeral, durable, or stream), not the protocol.
 
 ## High-Level View
 
@@ -36,7 +36,9 @@ FluxMQ is a multi-protocol message broker built around a shared queue manager. M
                               ▼
                       ┌────────────────┐
                       │ Queue Manager  │
-                      │ (durable logs) │
+                      │ (ephemeral,    │
+                      │  durable,      │
+                      │  stream)       │
                       └──────┬─────────┘
                              ▼
                       ┌────────────────┐
@@ -63,9 +65,10 @@ FluxMQ is a multi-protocol message broker built around a shared queue manager. M
   - `server/amqp`, `server/amqp1` for AMQP listeners
 
 - **Queue Manager**: `queue/` and `logstorage/`
-  - Append-only logs with consumer groups
-  - Queue and stream modes
-  - Ack/Nack/Reject support and retention policies
+  - Three queue types: ephemeral (in-memory, best-effort), durable (persistent work queue with PEL), stream (append-only log with cursor-based consumption)
+  - Shared routing layer — topic bindings, fan-out, consumer filters
+  - Delivery semantics depend on queue type, not protocol
+  - See [Queue Types](/docs/concepts/queues) for the full model
 
 - **Storage**: `storage/` (BadgerDB and memory backends)
   - Sessions, subscriptions, retained messages, offline queues

@@ -5,15 +5,16 @@ description: Load-balanced queue consumption and acknowledgment behavior
 
 # Consumer Groups
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-10
 
-Consumer groups are how FluxMQ turns a durable queue log into a scalable worker pool.
+Consumer groups are how FluxMQ turns a queue log into a scalable worker pool. They apply to both durable and stream queues (ephemeral queues do not use consumer groups — delivery is best-effort with no progress tracking).
 
 At a glance:
 
 - One queue can have many groups (each group has independent progress).
 - One group can have many consumers (messages are load-balanced within the group).
 - Groups track progress using offsets (cursor/committed) and, in classic mode, a pending list (PEL).
+- The group **mode** (classic or stream) determines acknowledgment semantics — see below.
 
 ## Group Modes: Classic vs Stream
 
@@ -59,9 +60,23 @@ So seeing `group=demo-events@#` in logs means:
 
 ## Acknowledgment Semantics
 
-- **Ack**: confirms processing and allows committed offset to move forward.
-- **Nack**: requests redelivery (often after a visibility timeout or via work stealing).
-- **Reject**: removes a message from pending tracking (DLQ handling is not fully wired yet).
+Ack/nack/reject mean different things depending on the queue type. Do not assume they are interchangeable.
+
+### Durable Queue (Classic Mode)
+
+- **Ack**: removes the message from the PEL and advances the committed offset. The message becomes eligible for log truncation.
+- **Nack**: resets the PEL entry so the message is redelivered (immediately stealable by other consumers).
+- **Reject**: removes from PEL without redelivery. The message is discarded (future: routes to DLQ).
+
+### Stream Queue (Stream Mode)
+
+- **Ack**: advances the committed offset (checkpoint). The message remains in the log — retention is policy-based, not ack-based.
+- **Nack**: no-op. Stream consumers replay by seeking the cursor to a previous offset, not by nacking individual messages.
+- **Reject**: advances the cursor past the message to prevent an infinite redelivery loop. The message stays in the log.
+
+### Ephemeral Queue
+
+Ephemeral queues do not use consumer groups or acknowledgments. Delivery is best-effort — messages are pushed to connected consumers and not tracked.
 
 ## Learn More
 
