@@ -49,9 +49,7 @@ type Manager struct {
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 
-	deliveryMu    sync.Mutex
-	deliverySet   map[string]struct{}
-	deliveryQueue chan string
+	delivery *DeliveryEngine
 
 	// Metrics
 	metrics *consumer.Metrics
@@ -138,6 +136,23 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		localNodeID = cl.NodeID()
 	}
 
+	distMode := normalizeDistributionMode(config.DistributionMode)
+
+	var remote RemoteRouter
+	if cl != nil {
+		remote = cl
+	}
+
+	engine := NewDeliveryEngine(
+		queueStore, groupStore, consumerMgr,
+		dt,
+		remote,
+		localNodeID,
+		distMode,
+		config.DeliveryBatchSize,
+		logger,
+	)
+
 	return &Manager{
 		queueStore:      queueStore,
 		groupStore:      groupStore,
@@ -147,13 +162,12 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		logger:           logger,
 		config:           config,
 		writePolicy:      normalizeWritePolicy(config.WritePolicy),
-		distributionMode: normalizeDistributionMode(config.DistributionMode),
+		distributionMode: distMode,
 		cluster:          cl,
 		localNodeID:      localNodeID,
 		subscriptions:    make(map[string]map[string]*subscriptionRef),
 		stopCh:           make(chan struct{}),
-		deliverySet:      make(map[string]struct{}),
-		deliveryQueue:    make(chan string, 4096),
+		delivery:         engine,
 		metrics:          metrics,
 	}
 }
@@ -174,11 +188,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.cleanupEphemeralQueues()
 
 	// Prime delivery for existing queues at startup.
-	m.scheduleAllQueues(ctx)
+	m.delivery.ScheduleAll(ctx)
 
-	// Start delivery workers
-	m.wg.Add(1)
-	go m.runDeliveryLoop()
+	// Start delivery engine
+	m.delivery.Start()
 
 	// Start work stealing if enabled
 	if m.config.StealEnabled {
@@ -202,46 +215,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) scheduleAllQueues(ctx context.Context) {
-	queues, err := m.queueStore.ListQueues(ctx)
-	if err != nil {
-		return
-	}
-	for _, queueConfig := range queues {
-		m.scheduleQueueDelivery(queueConfig.Name)
-	}
-}
-
-func (m *Manager) scheduleQueueDelivery(queueName string) {
-	if queueName == "" {
-		return
-	}
-
-	m.deliveryMu.Lock()
-	if _, exists := m.deliverySet[queueName]; exists {
-		m.deliveryMu.Unlock()
-		return
-	}
-	m.deliverySet[queueName] = struct{}{}
-	m.deliveryMu.Unlock()
-
-	select {
-	case m.deliveryQueue <- queueName:
-	default:
-		// Channel full — delivery trigger dropped. The 1-second sweep ticker
-		// will reschedule, but there's a gap where this queue won't get delivered.
-		m.logger.Warn("delivery channel full, dropping trigger (will retry on next sweep)",
-			slog.String("queue", queueName))
-		// Prevent a dropped enqueue from getting stuck in the dedupe set forever.
-		m.markQueueDelivered(queueName)
-	}
-}
-
-func (m *Manager) markQueueDelivered(queueName string) {
-	m.deliveryMu.Lock()
-	delete(m.deliverySet, queueName)
-	m.deliveryMu.Unlock()
-}
 
 // ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
 func (m *Manager) ensureReservedQueues(ctx context.Context) error {
@@ -269,6 +242,8 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 
 // Stop stops the manager and all workers.
 func (m *Manager) Stop() error {
+	m.delivery.Stop()
+
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
 	})
@@ -303,7 +278,7 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
-	m.scheduleQueueDelivery(config.Name)
+	m.delivery.Schedule(config.Name)
 
 	m.logger.Info("queue created",
 		slog.String("queue", config.Name),
@@ -345,7 +320,7 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 	if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
 		return err
 	}
-	m.markQueueDelivered(queueName)
+	m.delivery.Unschedule(queueName)
 	return nil
 }
 
@@ -481,7 +456,7 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 			slog.String("topic", publish.Topic),
 			slog.Uint64("offset", offset))
 
-		m.scheduleQueueDelivery(queueName)
+		m.delivery.Schedule(queueName)
 	}
 
 	return nil
@@ -703,7 +678,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		slog.String("cursor", fmt.Sprintf("%d", cursor.Position)),
 		slog.String("mode", string(mode)))
 
-	m.scheduleQueueDelivery(queueName)
+	m.delivery.Schedule(queueName)
 
 	return nil
 }
@@ -775,7 +750,7 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 		slog.String("client", clientID),
 		slog.String("pattern", pattern))
 
-	m.scheduleQueueDelivery(queueName)
+	m.delivery.Schedule(queueName)
 
 	return nil
 }
@@ -820,7 +795,7 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 		slog.String("group", patternGroupID),
 		slog.String("client", clientID))
 
-	m.scheduleQueueDelivery(queueName)
+	m.delivery.Schedule(queueName)
 
 	return nil
 }
@@ -854,7 +829,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 							slog.String("error", err.Error()))
 					}
 				}
-				m.scheduleQueueDelivery(queueName)
+				m.delivery.Schedule(queueName)
 				return nil
 			}
 		}
@@ -888,7 +863,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 						slog.String("error", err.Error()))
 				}
 			}
-			m.scheduleQueueDelivery(queueName)
+			m.delivery.Schedule(queueName)
 			return nil
 		}
 
@@ -898,7 +873,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 			if err == nil {
 				m.metrics.RecordAck(0)
 				m.metrics.UpdatePELSize(uint64(group.PendingCount()))
-				m.scheduleQueueDelivery(queueName)
+				m.delivery.Schedule(queueName)
 				return nil
 			}
 		}
@@ -917,7 +892,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 	if groupID != "" {
 		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
 			if group.Mode == types.GroupModeStream {
-				m.scheduleQueueDelivery(queueName)
+				m.delivery.Schedule(queueName)
 				return nil
 			}
 		}
@@ -933,7 +908,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 			continue
 		}
 		if group.Mode == types.GroupModeStream {
-			m.scheduleQueueDelivery(queueName)
+			m.delivery.Schedule(queueName)
 			return nil
 		}
 
@@ -941,7 +916,7 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 			err := m.consumerManager.Nack(ctx, queueName, group.ID, consumerID, offset)
 			if err == nil {
 				m.metrics.RecordNack()
-				m.scheduleQueueDelivery(queueName)
+				m.delivery.Schedule(queueName)
 				return nil
 			}
 		}
@@ -984,7 +959,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 			err := m.consumerManager.Reject(ctx, queueName, group.ID, consumerID, offset, reason)
 			if err == nil {
 				m.metrics.RecordReject()
-				m.scheduleQueueDelivery(queueName)
+				m.delivery.Schedule(queueName)
 				return nil
 			}
 		}
@@ -1020,7 +995,7 @@ func (m *Manager) rejectStream(ctx context.Context, queueName string, group *typ
 		slog.Uint64("offset", offset),
 		slog.String("reason", reason))
 	m.metrics.RecordReject()
-	m.scheduleQueueDelivery(queueName)
+	m.delivery.Schedule(queueName)
 }
 
 // --- Heartbeat ---
@@ -1054,104 +1029,14 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 
 // --- Background Workers ---
 
-func (m *Manager) runDeliveryLoop() {
-	defer m.wg.Done()
-
-	sweepInterval := time.Second
-	ticker := time.NewTicker(sweepInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.stopCh:
-			return
-		case queueName := <-m.deliveryQueue:
-			m.markQueueDelivered(queueName)
-			if m.deliverQueue(context.Background(), queueName) {
-				// Continue draining while this queue still has deliverable work.
-				m.scheduleQueueDelivery(queueName)
-			}
-		case <-ticker.C:
-			m.scheduleAllQueues(context.Background())
-		}
-	}
-}
-
+// deliverMessages is a thin forwarding method for test/bench compatibility.
 func (m *Manager) deliverMessages() {
-	ctx := context.Background()
-
-	queues, err := m.queueStore.ListQueues(ctx)
-	if err != nil {
-		return
-	}
-
-	for i := range queues {
-		m.deliverQueueConfig(ctx, &queues[i])
-	}
+	m.delivery.DeliverAll(context.Background())
 }
 
+// deliverQueue is a thin forwarding method for test/bench compatibility.
 func (m *Manager) deliverQueue(ctx context.Context, queueName string) bool {
-	if queueName == "" {
-		return false
-	}
-
-	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
-	if err != nil {
-		return false
-	}
-
-	return m.deliverQueueConfig(ctx, queueConfig)
-}
-
-func (m *Manager) deliverQueueConfig(ctx context.Context, queueConfig *types.QueueConfig) bool {
-	if queueConfig == nil {
-		return false
-	}
-
-	delivered := false
-	primaryGroup := strings.TrimSpace(queueConfig.PrimaryGroup)
-	primaryCommitted := make(map[string]uint64)
-	getPrimaryCommitted := func(pattern string) (uint64, bool) {
-		if primaryGroup == "" {
-			return 0, false
-		}
-
-		patternGroupID := primaryGroup
-		if pattern != "" {
-			patternGroupID = fmt.Sprintf("%s@%s", primaryGroup, pattern)
-		}
-
-		if val, ok := primaryCommitted[patternGroupID]; ok {
-			return val, true
-		}
-
-		committed, err := m.consumerManager.GetCommittedOffset(ctx, queueConfig.Name, patternGroupID)
-		if err != nil {
-			return 0, false
-		}
-
-		primaryCommitted[patternGroupID] = committed
-		return committed, true
-	}
-
-	// Deliver to local consumer groups.
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueConfig.Name)
-	if err == nil {
-		for _, group := range groups {
-			if m.deliverToGroup(ctx, queueConfig, group, getPrimaryCommitted) {
-				delivered = true
-			}
-		}
-	}
-
-	// Deliver to remote consumers registered in cluster.
-	if m.cluster != nil && m.distributionMode == DistributionForward {
-		if m.deliverToRemoteConsumers(ctx, queueConfig) {
-			delivered = true
-		}
-	}
-
-	return delivered
+	return m.delivery.DeliverQueue(ctx, queueName)
 }
 
 func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest) error {
@@ -1167,216 +1052,6 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
 }
 
-// deliverToRemoteConsumers delivers messages to consumers registered on remote nodes.
-// This enables cross-node queue message routing.
-func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.QueueConfig) bool {
-	// Get all consumers for this queue from the cluster
-	consumers, err := m.cluster.ListQueueConsumers(ctx, config.Name)
-	if err != nil {
-		m.logger.Debug("failed to list cluster consumers",
-			slog.String("queue", config.Name),
-			slog.String("error", err.Error()))
-		return false
-	}
-
-	// Group consumers by groupID for proper cursor management
-	consumersByGroup := make(map[string][]*cluster.QueueConsumerInfo)
-	for _, c := range consumers {
-		// Only process consumers on remote nodes
-		if c.ProxyNodeID == m.localNodeID {
-			continue
-		}
-		consumersByGroup[c.GroupID] = append(consumersByGroup[c.GroupID], c)
-	}
-
-	delivered := false
-	for groupID, groupConsumers := range consumersByGroup {
-		mode := types.GroupModeQueue
-		if groupConsumers[0].Mode != "" {
-			mode = types.ConsumerGroupMode(groupConsumers[0].Mode)
-		}
-		// Get or create a local consumer group state for tracking cursor (default auto-commit for remote)
-		group, err := m.consumerManager.GetOrCreateGroup(ctx, config.Name, groupID, groupConsumers[0].Pattern, mode, true)
-		if err != nil {
-			continue
-		}
-
-		// Create filter from group pattern
-		var filter *consumer.Filter
-		if group.Pattern != "" {
-			filter = consumer.NewFilter(group.Pattern)
-		}
-
-		// Round-robin across remote consumers in this group
-		var workCommitted uint64
-		var hasWorkCommitted bool
-		if group.Mode == types.GroupModeStream && config.PrimaryGroup != "" {
-			patternGroupID := config.PrimaryGroup
-			if group.Pattern != "" {
-				patternGroupID = fmt.Sprintf("%s@%s", config.PrimaryGroup, group.Pattern)
-			}
-			if committed, err := m.consumerManager.GetCommittedOffset(ctx, config.Name, patternGroupID); err == nil {
-				workCommitted = committed
-				hasWorkCommitted = true
-			}
-		}
-
-		for _, consumerInfo := range groupConsumers {
-			// Claim messages for this remote consumer
-			var msgs []*types.Message
-			var err error
-			if group.Mode == types.GroupModeStream {
-				msgs, err = m.consumerManager.ClaimBatchStream(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, m.config.DeliveryBatchSize)
-			} else {
-				msgs, err = m.consumerManager.ClaimBatch(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, m.config.DeliveryBatchSize)
-			}
-			if err != nil {
-				continue
-			}
-			if len(msgs) > 0 {
-				delivered = true
-			}
-
-			// Route each message to the remote node
-			for _, msg := range msgs {
-				routeMsg := m.createRoutedQueueMessage(
-					msg,
-					groupID,
-					config.Name,
-					group.Mode == types.GroupModeStream,
-					workCommitted,
-					hasWorkCommitted,
-					config.PrimaryGroup,
-				)
-
-				err := m.cluster.RouteQueueMessage(
-					ctx,
-					consumerInfo.ProxyNodeID,
-					consumerInfo.ClientID,
-					config.Name,
-					routeMsg,
-				)
-				if err != nil {
-					m.logger.Warn("remote queue message delivery failed",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("node", consumerInfo.ProxyNodeID),
-						slog.String("queue", config.Name),
-						slog.String("error", err.Error()))
-				} else {
-					m.logger.Debug("routed queue message to remote consumer",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("node", consumerInfo.ProxyNodeID),
-						slog.String("queue", config.Name),
-						slog.Uint64("offset", msg.Sequence))
-				}
-			}
-		}
-	}
-
-	return delivered
-}
-
-func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig, group *types.ConsumerGroup, primaryCommitted func(pattern string) (uint64, bool)) bool {
-	if group.ConsumerCount() == 0 {
-		return false
-	}
-
-	// Create filter from group pattern
-	var filter *consumer.Filter
-	if group.Pattern != "" {
-		filter = consumer.NewFilter(group.Pattern)
-	}
-
-	// Round-robin delivery across consumers
-	consumers := group.ConsumerIDs()
-	if len(consumers) == 0 {
-		return false
-	}
-
-	delivered := false
-	for _, consumerID := range consumers {
-		var msgs []*types.Message
-		var err error
-		if group.Mode == types.GroupModeStream {
-			msgs, err = m.consumerManager.ClaimBatchStream(ctx, config.Name, group.ID, consumerID, filter, m.config.DeliveryBatchSize)
-		} else {
-			msgs, err = m.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, m.config.DeliveryBatchSize)
-		}
-		if err != nil {
-			continue
-		}
-		if len(msgs) > 0 {
-			delivered = true
-		}
-
-		// Fetch fresh group state to get current consumer info
-		freshGroup, err := m.groupStore.GetConsumerGroup(ctx, config.Name, group.ID)
-		if err != nil {
-			continue
-		}
-
-		consumerInfo := freshGroup.GetConsumer(consumerID)
-		if consumerInfo == nil {
-			continue
-		}
-
-		// Update heartbeat on delivery so active consumers are never cleaned up as stale.
-		if len(msgs) > 0 {
-			m.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID)
-		}
-
-		var workCommitted uint64
-		var hasWorkCommitted bool
-		if group.Mode == types.GroupModeStream && primaryCommitted != nil {
-			workCommitted, hasWorkCommitted = primaryCommitted(group.Pattern)
-		}
-
-		for _, msg := range msgs {
-			// Check if consumer is on a remote node
-			if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
-				// Route to remote node
-				routeMsg := m.createRoutedQueueMessage(
-					msg,
-					group.ID,
-					config.Name,
-					group.Mode == types.GroupModeStream,
-					workCommitted,
-					hasWorkCommitted,
-					config.PrimaryGroup,
-				)
-				err := m.cluster.RouteQueueMessage(
-					ctx,
-					consumerInfo.ProxyNodeID,
-					consumerInfo.ClientID,
-					config.Name,
-					routeMsg,
-				)
-				if err != nil {
-					m.logger.Warn("queue message remote routing failed",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("node", consumerInfo.ProxyNodeID),
-						slog.String("topic", msg.Topic),
-						slog.String("error", err.Error()))
-				}
-			} else if m.deliveryTarget != nil {
-				// Local delivery
-				deliveryMsg := m.createDeliveryMessage(msg, group.ID, config.Name)
-				if group.Mode == types.GroupModeStream {
-					m.decorateStreamDelivery(deliveryMsg, msg, group, workCommitted, hasWorkCommitted, config.PrimaryGroup)
-				}
-
-				if err := m.deliveryTarget.Deliver(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
-					m.logger.Warn("queue message delivery failed",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("topic", msg.Topic),
-						slog.String("error", err.Error()))
-				}
-			}
-		}
-	}
-
-	return delivered
-}
 
 func (m *Manager) runStealLoop() {
 	defer m.wg.Done()
