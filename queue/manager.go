@@ -24,21 +24,19 @@ import (
 // Manager is the queue-based queue manager.
 // It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
-	queueStore       storage.QueueStore
-	groupStore       storage.ConsumerGroupStore
-	consumerManager  *consumer.Manager
-	deliveryTarget   Deliverer
-	logger           *slog.Logger
-	config           Config
-	writePolicy      WritePolicy
-	distributionMode DistributionMode
+	queueStore      storage.QueueStore
+	groupStore      storage.ConsumerGroupStore
+	consumerManager *consumer.Manager
+	deliveryTarget  Deliverer
+	logger          *slog.Logger
+	config          Config
+	writePolicy     WritePolicy
 
 	// Raft replication manager
 	raftManager *raft.Manager
 
-	// Cluster support for cross-node message routing
-	cluster     cluster.Cluster
-	localNodeID string
+	// Cluster adapter for cross-node message routing
+	clusterAdapter ClusterAdapter
 
 	// Lightweight heartbeat index keyed by client/queue/group.
 	// Stores only metadata needed to route heartbeat updates.
@@ -133,9 +131,16 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 	consumerMgr := consumer.NewManager(queueStore, groupStore, consumerCfg)
 
-	var localNodeID string
+	var ca ClusterAdapter
 	if cl != nil {
-		localNodeID = cl.NodeID()
+		ca = &clusterAdapter{
+			cluster:          cl,
+			localNodeID:      cl.NodeID(),
+			distributionMode: normalizeDistributionMode(config.DistributionMode),
+			logger:           logger,
+		}
+	} else {
+		ca = noopClusterAdapter{}
 	}
 
 	return &Manager{
@@ -144,25 +149,25 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		consumerManager: consumerMgr,
 		deliveryTarget:  dt,
 
-		logger:           logger,
-		config:           config,
-		writePolicy:      normalizeWritePolicy(config.WritePolicy),
-		distributionMode: normalizeDistributionMode(config.DistributionMode),
-		cluster:          cl,
-		localNodeID:      localNodeID,
-		subscriptions:    make(map[string]map[string]*subscriptionRef),
-		stopCh:           make(chan struct{}),
-		deliverySet:      make(map[string]struct{}),
-		deliveryQueue:    make(chan string, 4096),
-		metrics:          metrics,
+		logger:         logger,
+		config:         config,
+		writePolicy:    normalizeWritePolicy(config.WritePolicy),
+		clusterAdapter: ca,
+		subscriptions:  make(map[string]map[string]*subscriptionRef),
+		stopCh:         make(chan struct{}),
+		deliverySet:    make(map[string]struct{}),
+		deliveryQueue:  make(chan string, 4096),
+		metrics:        metrics,
 	}
 }
 
 // Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
-	if m.distributionMode == DistributionReplicate && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
+	if m.clusterAdapter.DistributionMode() == DistributionReplicate && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
 		m.logger.Warn("distribution_mode=replicate requires raft to be enabled; falling back to forward")
-		m.distributionMode = DistributionForward
+		if a, ok := m.clusterAdapter.(*clusterAdapter); ok {
+			a.distributionMode = DistributionForward
+		}
 	}
 
 	// Ensure reserved queues exist
@@ -388,16 +393,7 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 	}
 
 	// Forward to remote nodes that have consumers
-	if m.cluster != nil {
-		switch m.distributionMode {
-		case DistributionForward:
-			m.forwardToRemoteNodes(ctx, publish, false)
-		case DistributionReplicate:
-			// In replicate mode, only forward to nodes whose queues do not exist locally.
-			// This avoids duplicates while still supporting locally-created queues on remote nodes.
-			m.forwardToRemoteNodes(ctx, publish, true)
-		}
-	}
+	m.clusterAdapter.ForwardToRemoteNodes(ctx, publish, m.queueExists(ctx))
 
 	return nil
 }
@@ -502,25 +498,17 @@ func autoQueueFromTopic(topic string) (queueName, pattern string) {
 	return topic, topic
 }
 
-// forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
-func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest, unknownOnly bool) {
-	// Get all consumers from the cluster
-	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
-	if err != nil {
-		m.logger.Debug("failed to list cluster consumers for forwarding",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	queueExistsCache := make(map[string]bool)
-	queueExists := func(queueName string) bool {
-		if exists, ok := queueExistsCache[queueName]; ok {
+// queueExists returns a cached closure that checks whether a queue exists in the local store.
+func (m *Manager) queueExists(ctx context.Context) func(string) bool {
+	cache := make(map[string]bool)
+	return func(queueName string) bool {
+		if exists, ok := cache[queueName]; ok {
 			return exists
 		}
 
 		_, err := m.queueStore.GetQueue(ctx, queueName)
 		if err == nil {
-			queueExistsCache[queueName] = true
+			cache[queueName] = true
 			return true
 		}
 		if err != storage.ErrQueueNotFound {
@@ -529,41 +517,8 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 				slog.String("error", err.Error()))
 		}
 
-		queueExistsCache[queueName] = false
+		cache[queueName] = false
 		return false
-	}
-
-	// Find unique remote nodes that have consumers for queues matching this topic
-	remoteNodes := make(map[string]bool)
-	for _, c := range consumers {
-		// Skip local consumers
-		if c.ProxyNodeID == m.localNodeID {
-			continue
-		}
-
-		if unknownOnly && queueExists(c.QueueName) {
-			continue
-		}
-
-		// Check if this consumer's queue pattern matches the topic
-		queuePattern := "$queue/" + c.QueueName + "/#"
-		if matchesTopic(queuePattern, publish.Topic) {
-			remoteNodes[c.ProxyNodeID] = true
-		}
-	}
-
-	// Forward to each unique remote node
-	for nodeID := range remoteNodes {
-		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, publish.Topic, publish.Payload, publish.Properties, false); err != nil {
-			m.logger.Warn("failed to forward publish to remote node",
-				slog.String("node", nodeID),
-				slog.String("topic", publish.Topic),
-				slog.String("error", err.Error()))
-		} else {
-			m.logger.Debug("forwarded publish to remote node",
-				slog.String("node", nodeID),
-				slog.String("topic", publish.Topic))
-		}
 	}
 }
 
@@ -585,8 +540,8 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 
 // SubscribeWithCursor adds a consumer with explicit cursor positioning.
 func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error {
-	if proxyNodeID == "" && m.localNodeID != "" {
-		proxyNodeID = m.localNodeID
+	if proxyNodeID == "" {
+		proxyNodeID = m.clusterAdapter.LocalNodeID()
 	}
 
 	mode := types.GroupModeQueue
@@ -676,22 +631,20 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 	// Clear ephemeral disconnect timestamp since we now have a consumer
 	m.clearEphemeralDisconnect(ctx, queueName)
 
-	if m.cluster != nil {
-		info := &cluster.QueueConsumerInfo{
-			QueueName:    queueName,
-			GroupID:      patternGroupID,
-			ConsumerID:   clientID,
-			ClientID:     clientID,
-			Pattern:      pattern,
-			Mode:         string(mode),
-			ProxyNodeID:  proxyNodeID,
-			RegisteredAt: time.Now(),
-		}
-		if err := m.cluster.RegisterQueueConsumer(ctx, info); err != nil {
-			m.logger.Warn("failed to register consumer in cluster",
-				slog.String("error", err.Error()),
-				slog.String("client", clientID))
-		}
+	info := &cluster.QueueConsumerInfo{
+		QueueName:    queueName,
+		GroupID:      patternGroupID,
+		ConsumerID:   clientID,
+		ClientID:     clientID,
+		Pattern:      pattern,
+		Mode:         string(mode),
+		ProxyNodeID:  proxyNodeID,
+		RegisteredAt: time.Now(),
+	}
+	if err := m.clusterAdapter.RegisterConsumer(ctx, info); err != nil {
+		m.logger.Warn("failed to register consumer in cluster",
+			slog.String("error", err.Error()),
+			slog.String("client", clientID))
 	}
 
 	m.trackSubscription(clientID, queueName, patternGroupID)
@@ -710,8 +663,8 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 
 // Subscribe adds a consumer to a stream with optional pattern matching.
 func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
-	if proxyNodeID == "" && m.localNodeID != "" {
-		proxyNodeID = m.localNodeID
+	if proxyNodeID == "" {
+		proxyNodeID = m.clusterAdapter.LocalNodeID()
 	}
 
 	// Ensure queue exists (auto-create if not)
@@ -748,22 +701,20 @@ func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clie
 	m.clearEphemeralDisconnect(ctx, queueName)
 
 	// Register consumer in cluster for cross-node visibility
-	if m.cluster != nil {
-		info := &cluster.QueueConsumerInfo{
-			QueueName:    queueName,
-			GroupID:      patternGroupID,
-			ConsumerID:   clientID,
-			ClientID:     clientID,
-			Pattern:      pattern,
-			Mode:         string(types.GroupModeQueue),
-			ProxyNodeID:  proxyNodeID,
-			RegisteredAt: time.Now(),
-		}
-		if err := m.cluster.RegisterQueueConsumer(ctx, info); err != nil {
-			m.logger.Warn("failed to register consumer in cluster",
-				slog.String("error", err.Error()),
-				slog.String("client", clientID))
-		}
+	info := &cluster.QueueConsumerInfo{
+		QueueName:    queueName,
+		GroupID:      patternGroupID,
+		ConsumerID:   clientID,
+		ClientID:     clientID,
+		Pattern:      pattern,
+		Mode:         string(types.GroupModeQueue),
+		ProxyNodeID:  proxyNodeID,
+		RegisteredAt: time.Now(),
+	}
+	if err := m.clusterAdapter.RegisterConsumer(ctx, info); err != nil {
+		m.logger.Warn("failed to register consumer in cluster",
+			slog.String("error", err.Error()),
+			slog.String("client", clientID))
 	}
 
 	// Track subscription
@@ -801,12 +752,10 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 	}
 
 	// Unregister consumer from cluster
-	if m.cluster != nil {
-		if err := m.cluster.UnregisterQueueConsumer(ctx, queueName, patternGroupID, clientID); err != nil {
-			m.logger.Warn("failed to unregister consumer from cluster",
-				slog.String("error", err.Error()),
-				slog.String("client", clientID))
-		}
+	if err := m.clusterAdapter.UnregisterConsumer(ctx, queueName, patternGroupID, clientID); err != nil {
+		m.logger.Warn("failed to unregister consumer from cluster",
+			slog.String("error", err.Error()),
+			slog.String("client", clientID))
 	}
 
 	// Untrack subscription
@@ -1145,7 +1094,7 @@ func (m *Manager) deliverQueueConfig(ctx context.Context, queueConfig *types.Que
 	}
 
 	// Deliver to remote consumers registered in cluster.
-	if m.cluster != nil && m.distributionMode == DistributionForward {
+	if m.clusterAdapter.DistributionMode() == DistributionForward {
 		if m.deliverToRemoteConsumers(ctx, queueConfig) {
 			delivered = true
 		}
@@ -1155,7 +1104,7 @@ func (m *Manager) deliverQueueConfig(ctx context.Context, queueConfig *types.Que
 }
 
 func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest) error {
-	if m.cluster == nil {
+	if m.clusterAdapter.LocalNodeID() == "" {
 		return fmt.Errorf("cluster not configured for leader forward")
 	}
 
@@ -1164,14 +1113,14 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		return fmt.Errorf("raft leader unavailable")
 	}
 
-	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
+	return m.clusterAdapter.ForwardPublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
 }
 
 // deliverToRemoteConsumers delivers messages to consumers registered on remote nodes.
 // This enables cross-node queue message routing.
 func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.QueueConfig) bool {
 	// Get all consumers for this queue from the cluster
-	consumers, err := m.cluster.ListQueueConsumers(ctx, config.Name)
+	consumers, err := m.clusterAdapter.ListConsumers(ctx, config.Name)
 	if err != nil {
 		m.logger.Debug("failed to list cluster consumers",
 			slog.String("queue", config.Name),
@@ -1183,7 +1132,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 	consumersByGroup := make(map[string][]*cluster.QueueConsumerInfo)
 	for _, c := range consumers {
 		// Only process consumers on remote nodes
-		if c.ProxyNodeID == m.localNodeID {
+		if !m.clusterAdapter.IsRemote(c.ProxyNodeID) {
 			continue
 		}
 		consumersByGroup[c.GroupID] = append(consumersByGroup[c.GroupID], c)
@@ -1249,7 +1198,7 @@ func (m *Manager) deliverToRemoteConsumers(ctx context.Context, config *types.Qu
 					config.PrimaryGroup,
 				)
 
-				err := m.cluster.RouteQueueMessage(
+				err := m.clusterAdapter.RouteMessage(
 					ctx,
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
@@ -1333,7 +1282,7 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 
 		for _, msg := range msgs {
 			// Check if consumer is on a remote node
-			if m.cluster != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != m.localNodeID {
+			if m.clusterAdapter.IsRemote(consumerInfo.ProxyNodeID) {
 				// Route to remote node
 				routeMsg := m.createRoutedQueueMessage(
 					msg,
@@ -1344,7 +1293,7 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 					hasWorkCommitted,
 					config.PrimaryGroup,
 				)
-				err := m.cluster.RouteQueueMessage(
+				err := m.clusterAdapter.RouteMessage(
 					ctx,
 					consumerInfo.ProxyNodeID,
 					consumerInfo.ClientID,
