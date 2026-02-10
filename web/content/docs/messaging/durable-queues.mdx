@@ -272,6 +272,23 @@ basic.consume(queue="my-stream")  # stream queue by name
 - `basic.nack(requeue=true)` → Nack (retry)
 - `basic.reject(requeue=false)` → Reject (DLQ)
 
+#### Exchanges and Bindings Are Per-Connection
+
+> **Important difference from RabbitMQ:** In FluxMQ, AMQP 0.9.1 exchanges and bindings are **per-connection routing state**. They are not shared across connections, not visible to other clients, and not persisted to disk — even when declared as `durable`.
+
+FluxMQ's actual routing layer is topic-based: queues are matched by topic patterns, not by server-side exchange state. When an AMQP 0.9.1 client declares an exchange and binds a queue to it, the channel stores that binding locally. On publish, the channel consults its local binding table to translate `exchange + routing_key` into a `$queue/<queue>/<routing-key>` topic, then routes through the shared queue manager like any other protocol.
+
+This means:
+
+- **Client A declares an exchange and bindings → client B cannot see them.** Each connection maintains its own exchange/binding state.
+- **Exchanges don't survive reconnection.** Clients must re-declare exchanges and bindings on every new connection (which is already standard practice in most AMQP 0.9.1 client libraries).
+- **`durable: true` on exchange.declare is accepted but does not persist.** The flag is not rejected, but it has no effect — exchange state lives only in connection memory.
+- **Passive exchange.declare checks local state only.** It reports whether *this connection* has declared the exchange, not whether it exists server-wide.
+
+**Why this design**: FluxMQ routes messages through a shared topic index on queues. Exchanges are a compatibility layer that translates AMQP 0.9.1 routing concepts into FluxMQ topic semantics. Building a second server-wide routing layer for exchanges would duplicate what the queue topic index already provides.
+
+**Practical impact**: For most AMQP 0.9.1 usage patterns, this is transparent — clients typically declare exchanges and bindings on connection setup before publishing. If your application depends on exchanges being shared across connections (e.g., one client declares, another publishes), use direct `$queue/` routing keys with the default exchange instead.
+
 ## Consumer Groups
 
 Consumer groups are what turn a queue log into a scalable worker pool:
