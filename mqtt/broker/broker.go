@@ -38,7 +38,8 @@ type Broker struct {
 	retained      storage.RetainedStore
 	wills         storage.WillStore
 	cluster       cluster.Cluster     // nil for single-node mode
-	queueManager  broker.QueueManager // nil if queue functionality disabled
+	queueManager  broker.QueueManager    // nil if queue functionality disabled
+	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
 	rateLimiter   broker.ClientRateLimiter // nil if rate limiting disabled
 	logger        *slog.Logger
@@ -85,6 +86,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 	b := &Broker{
 		sessionsMap:         session.NewShardedCache(),
 		router:              r,
+		routeResolver:       broker.NewRoutingResolver(),
 		messages:            store.Messages(),
 		sessions:            store.Sessions(),
 		subscriptions:       store.Subscriptions(),

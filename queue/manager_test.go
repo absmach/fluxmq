@@ -260,21 +260,17 @@ func TestWildcardQueueSubscription(t *testing.T) {
 
 	deliveredMsgs := make(chan *brokerstorage.Message, 10)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
-			t.Logf("Delivered message to %s: topic=%s", clientID, brokerMsg.Topic)
-			deliveredMsgs <- brokerMsg
-		} else {
-			t.Errorf("Wrong message type: %T", msg)
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		t.Logf("Delivered message to %s: topic=%s", clientID, msg.Topic)
+		deliveredMsgs <- msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -344,16 +340,14 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	delivered := make(chan *brokerstorage.Message, 1)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if m, ok := msg.(*brokerstorage.Message); ok {
-			delivered <- m
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		delivered <- msg
 		return nil
-	}
+	})
 
 	cfg := DefaultConfig()
 	cfg.DeliveryBatchSize = 10
-	mgr := NewManager(logStore, groupStore, deliverFn, cfg, logger, nil)
+	mgr := NewManager(logStore, groupStore, deliveryTarget, cfg, logger, nil)
 
 	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
@@ -498,18 +492,16 @@ func TestExactQueueSubscription(t *testing.T) {
 
 	deliveredMsgs := make(chan *brokerstorage.Message, 10)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
-			deliveredMsgs <- brokerMsg
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		deliveredMsgs <- msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -545,18 +537,16 @@ func TestMultiLevelWildcard(t *testing.T) {
 
 	deliveredMsgs := make(chan *brokerstorage.Message, 10)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
-			deliveredMsgs <- brokerMsg
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		deliveredMsgs <- msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -601,18 +591,16 @@ func TestSingleLevelWildcard(t *testing.T) {
 
 	deliveredMsgs := make(chan *brokerstorage.Message, 10)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
-			deliveredMsgs <- brokerMsg
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		deliveredMsgs <- msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -677,18 +665,16 @@ func TestQueueNameWildcardSingleLevel(t *testing.T) {
 
 	deliveredMsgs := make(chan *brokerstorage.Message, 10)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
-			deliveredMsgs <- brokerMsg
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		deliveredMsgs <- msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -990,18 +976,18 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 
 	var localDeliveries []string
 	var localMu sync.Mutex
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		localMu.Lock()
 		localDeliveries = append(localDeliveries, clientID)
 		localMu.Unlock()
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, mockCl)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, mockCl)
 
 	ctx := context.Background()
 
@@ -1067,7 +1053,7 @@ func TestSubscribeDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -1094,7 +1080,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -1148,7 +1134,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
 		cfg,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -1217,7 +1203,7 @@ func TestSubscribeWithCursorDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -1257,9 +1243,9 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	config.WritePolicy = WritePolicyForward
 	config.DistributionMode = DistributionForward
 
-	manager := NewManager(logStore, groupStore, func(ctx context.Context, clientID string, msg any) error {
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		return nil
-	}, config, logger, mockCl)
+	}), config, logger, mockCl)
 
 	manager.SetRaftManager(newTestRaftManager(t, "node-2"))
 
@@ -1302,9 +1288,9 @@ func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
 	config := DefaultConfig()
 	config.DistributionMode = DistributionReplicate
 
-	manager := NewManager(logStore, groupStore, func(ctx context.Context, clientID string, msg any) error {
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		return nil
-	}, config, logger, mockCl)
+	}), config, logger, mockCl)
 
 	ctx := context.Background()
 	err := manager.Publish(ctx, types.PublishRequest{
@@ -1337,20 +1323,18 @@ func TestDeliverQueueMessage(t *testing.T) {
 	var deliveredClientID string
 	var mu sync.Mutex
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		mu.Lock()
 		defer mu.Unlock()
 		deliveredClientID = clientID
-		if m, ok := msg.(*brokerstorage.Message); ok {
-			deliveredMsg = m
-		}
+		deliveredMsg = msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -1399,11 +1383,11 @@ func TestGetOrCreateQueue_CreatesEphemeral(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error { return nil }
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil })
 	config := DefaultConfig()
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 	ctx := context.Background()
 
 	if err := manager.Start(ctx); err != nil {
@@ -1471,7 +1455,7 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		func(ctx context.Context, clientID string, msg any) error { return nil },
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -1511,12 +1495,12 @@ func TestEphemeralQueue_DisconnectAndCleanup(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error { return nil }
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil })
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 	ctx := context.Background()
 
 	if err := manager.Start(ctx); err != nil {
@@ -1569,11 +1553,11 @@ func TestCleanupEphemeralQueues(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error { return nil }
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil })
 	config := DefaultConfig()
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 	ctx := context.Background()
 
 	if err := manager.Start(ctx); err != nil {
@@ -1624,14 +1608,14 @@ func TestEnqueueLocal(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	logger := slog.Default()
 
-	manager := NewManager(logStore, groupStore, deliverFn, config, logger, nil)
+	manager := NewManager(logStore, groupStore, deliveryTarget, config, logger, nil)
 
 	ctx := context.Background()
 
@@ -1664,7 +1648,7 @@ func TestSubscriptionTrackingReferenceCounts(t *testing.T) {
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		func(context.Context, string, any) error { return nil },
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -1698,7 +1682,7 @@ func TestSubscriptionTrackingPrunesStaleEntries(t *testing.T) {
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		func(context.Context, string, any) error { return nil },
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
 		cfg,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -1723,7 +1707,7 @@ func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		func(context.Context, string, any) error { return nil },
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,

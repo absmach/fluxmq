@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/amqp/codec"
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/bufpool"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -332,83 +333,32 @@ func (ch *Channel) completePublish() {
 		topic = exchangeName + "/" + routingKey
 	}
 
-	// Stream commit: publish to $queue/<queue>/$commit with x-group-id and x-offset headers.
-	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") && strings.HasSuffix(routingKey, "/$commit") {
-		qm := ch.conn.broker.getQueueManager()
-		if qm == nil {
-			ch.conn.logger.Warn("queue commit ignored: queue manager not configured", "routing_key", routingKey)
-		} else {
-			queueName := strings.TrimSuffix(strings.TrimPrefix(routingKey, "$queue/"), "/$commit")
-			if queueName == "" {
-				ch.conn.logger.Warn("queue commit missing queue name", "routing_key", routingKey)
-			} else {
-				headers := header.Properties.Headers
-				groupID, ok := parseStringArg(headers[qtypes.PropCommitGroupID])
-				if !ok || groupID == "" {
-					ch.conn.logger.Warn("queue commit missing group id", "queue", queueName)
-				} else {
-					offsetVal, ok := headers[qtypes.PropCommitOffset]
-					if !ok {
-						ch.conn.logger.Warn("queue commit missing offset", "queue", queueName, "group", groupID)
-					} else if n, ok := parseInt64Arg(offsetVal); !ok || n < 0 {
-						ch.conn.logger.Warn("queue commit invalid offset", "queue", queueName, "group", groupID)
-					} else if err := qm.CommitOffset(context.Background(), queueName, groupID, uint64(n)); err != nil {
-						ch.conn.logger.Warn("queue commit failed", "queue", queueName, "group", groupID, "error", err)
-					}
-				}
-			}
-		}
-		if ch.confirmMode {
-			ch.sendPublisherAck()
-		}
-		return
-	}
-
-	// Direct queue publish: use $queue/ prefix on routing key with default exchange.
-	if exchangeName == "" && strings.HasPrefix(routingKey, "$queue/") {
-		qm := ch.conn.broker.getQueueManager()
-		if qm != nil {
-			err := qm.Publish(context.Background(), qtypes.PublishRequest{
-				Topic:      routingKey,
-				Payload:    body,
-				Properties: props,
-			})
-			if err != nil {
-				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
-			}
+	// Route through resolver for default-exchange queue operations.
+	resolver := ch.conn.broker.routeResolver
+	if exchangeName == "" {
+		route := resolver.Resolve(routingKey)
+		switch route.Kind {
+		case corebroker.RouteQueueCommit:
+			ch.handleQueueCommit(route, header)
 			if ch.confirmMode {
-				if err != nil {
-					ch.sendPublisherNack()
-				} else {
-					ch.sendPublisherAck()
-				}
+				ch.sendPublisherAck()
 			}
 			return
+		case corebroker.RouteQueue:
+			ch.handleQueuePublish(route.PublishTopic, body, props)
+			return
+		case corebroker.RouteQueueAck:
+			// AMQP 0.9.1 does not use ack-via-publish; skip.
+		case corebroker.RoutePubSub:
+			// Fall through to stream queue check and exchange routing below.
 		}
 	}
 
 	// RabbitMQ-style stream queue publish: default exchange with routingKey == queue name.
 	if exchangeName == "" && ch.isStreamQueue(routingKey) {
-		qm := ch.conn.broker.getQueueManager()
-		if qm != nil {
-			queueTopic := "$queue/" + routingKey
-			err := qm.Publish(context.Background(), qtypes.PublishRequest{
-				Topic:      queueTopic,
-				Payload:    body,
-				Properties: props,
-			})
-			if err != nil {
-				ch.conn.logger.Error("queue publish failed", "queue", routingKey, "error", err)
-			}
-			if ch.confirmMode {
-				if err != nil {
-					ch.sendPublisherNack()
-				} else {
-					ch.sendPublisherAck()
-				}
-			}
-			return
-		}
+		queueTopic := resolver.QueueTopic(routingKey)
+		ch.handleQueuePublish(queueTopic, body, props)
+		return
 	}
 
 	// Check if this targets a queue via exchange bindings
@@ -428,10 +378,7 @@ func (ch *Channel) completePublish() {
 			// Route to the bound queue
 			qm := ch.conn.broker.getQueueManager()
 			if qm != nil {
-				queueTopic := "$queue/" + b.queue
-				if routingKey != "" {
-					queueTopic = queueTopic + "/" + routingKey
-				}
+				queueTopic := resolver.QueueTopic(b.queue, routingKey)
 				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
 					Topic:      queueTopic,
 					Payload:    body,
@@ -921,7 +868,7 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 	if queueType == string(qtypes.QueueTypeStream) {
 		qm := ch.conn.broker.getQueueManager()
 		if qm != nil {
-			queueTopicPattern := "$queue/" + m.Queue + "/#"
+			queueTopicPattern := ch.conn.broker.routeResolver.QueueTopic(m.Queue, "#")
 			var cfg qtypes.QueueConfig
 			if m.Durable {
 				cfg = qtypes.DefaultQueueConfig(m.Queue, queueTopicPattern)
@@ -1048,11 +995,9 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	}
 
 	queueFilter := m.Queue
-	queueName, pattern := "", ""
-	isQueue := isQueueTopic(queueFilter)
-	if isQueue {
-		queueName, pattern = parseQueueFilter(queueFilter)
-	}
+	route := ch.conn.broker.routeResolver.Resolve(queueFilter)
+	isQueue := route.Kind == corebroker.RouteQueue
+	queueName, pattern := route.QueueName, route.Pattern
 
 	queueInfo := ch.getQueueInfo(queueFilter)
 	streamCursor, hasStreamOffset := extractStreamOffset(m.Arguments)
@@ -1305,10 +1250,10 @@ func (ch *Channel) deliverMessage(topic string, payload []byte, props map[string
 // consumerQueueMatches checks if a consumer's queue matches the given topic.
 func (ch *Channel) consumerQueueMatches(cons *consumer, topic string) bool {
 	if cons.queueName != "" {
-		queueTopic := "$queue/" + cons.queueName
+		resolver := ch.conn.broker.routeResolver
+		queueTopic := resolver.QueueTopic(cons.queueName)
 		switch {
 		case topic == cons.queueName, topic == queueTopic:
-			// Empty pattern means the root queue topic.
 			return cons.pattern == "" || cons.pattern == "#"
 		case strings.HasPrefix(topic, queueTopic+"/"):
 			if cons.pattern == "" {
@@ -1351,28 +1296,60 @@ func (ch *Channel) cleanup() {
 	}
 }
 
-func isQueueTopic(topic string) bool {
-	return strings.HasPrefix(topic, "$queue/")
+// handleQueuePublish publishes a message to the queue manager and handles confirm mode.
+func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[string]string) {
+	qm := ch.conn.broker.getQueueManager()
+	if qm == nil {
+		return
+	}
+	err := qm.Publish(context.Background(), qtypes.PublishRequest{
+		Topic:      queueTopic,
+		Payload:    body,
+		Properties: props,
+	})
+	if err != nil {
+		ch.conn.logger.Error("queue publish failed", "queue", queueTopic, "error", err)
+	}
+	if ch.confirmMode {
+		if err != nil {
+			ch.sendPublisherNack()
+		} else {
+			ch.sendPublisherAck()
+		}
+	}
 }
 
-func parseQueueFilter(filter string) (queueName, pattern string) {
-	if !strings.HasPrefix(filter, "$queue/") {
-		return "", ""
+// handleQueueCommit processes a stream offset commit routed via the resolver.
+func (ch *Channel) handleQueueCommit(route corebroker.RouteResult, header *codec.ContentHeader) {
+	qm := ch.conn.broker.getQueueManager()
+	if qm == nil {
+		ch.conn.logger.Warn("queue commit ignored: queue manager not configured", "queue", route.QueueName)
+		return
 	}
-
-	rest := strings.TrimPrefix(filter, "$queue/")
-	if rest == "" {
-		return "", ""
+	queueName := route.QueueName
+	if queueName == "" {
+		ch.conn.logger.Warn("queue commit missing queue name", "topic", route.PublishTopic)
+		return
 	}
-
-	parts := strings.SplitN(rest, "/", 2)
-	queueName = parts[0]
-
-	if len(parts) > 1 {
-		pattern = parts[1]
+	headers := header.Properties.Headers
+	groupID, ok := parseStringArg(headers[qtypes.PropCommitGroupID])
+	if !ok || groupID == "" {
+		ch.conn.logger.Warn("queue commit missing group id", "queue", queueName)
+		return
 	}
-
-	return queueName, pattern
+	offsetVal, ok := headers[qtypes.PropCommitOffset]
+	if !ok {
+		ch.conn.logger.Warn("queue commit missing offset", "queue", queueName, "group", groupID)
+		return
+	}
+	n, ok := parseInt64Arg(offsetVal)
+	if !ok || n < 0 {
+		ch.conn.logger.Warn("queue commit invalid offset", "queue", queueName, "group", groupID)
+		return
+	}
+	if err := qm.CommitOffset(context.Background(), queueName, groupID, uint64(n)); err != nil {
+		ch.conn.logger.Warn("queue commit failed", "queue", queueName, "group", groupID, "error", err)
+	}
 }
 
 func extractConsumerGroup(args map[string]interface{}) string {
@@ -1405,9 +1382,8 @@ func (ch *Channel) isStreamQueue(name string) bool {
 	if info := ch.getQueueInfo(name); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
 		return true
 	}
-	if strings.HasPrefix(name, "$queue/") {
-		base := strings.TrimPrefix(name, "$queue/")
-		if info := ch.getQueueInfo(base); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
+	if queueName, _ := corebroker.ParseQueueFilter(name); queueName != "" {
+		if info := ch.getQueueInfo(queueName); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
 			return true
 		}
 	}

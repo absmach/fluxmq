@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/absmach/fluxmq/broker"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/require"
@@ -69,10 +70,12 @@ func (m *mockQueueManager) ListQueues(ctx context.Context) ([]qtypes.QueueConfig
 }
 
 func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
+	resolver := broker.NewRoutingResolver()
 	qm := &mockQueueManager{}
 	b := &Broker{
-		queueManager: qm,
-		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		queueManager:  qm,
+		routeResolver: resolver,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	msg := &storage.Message{
@@ -83,7 +86,8 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, b.handleQueueAck(msg))
+	route := resolver.Resolve(msg.Topic)
+	require.NoError(t, b.handleQueueAck(msg, route))
 	require.Len(t, qm.ackCalls, 1)
 	require.Equal(t, "orders", qm.ackCalls[0].queueName)
 	require.Equal(t, "orders:42", qm.ackCalls[0].messageID)
@@ -91,10 +95,12 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 }
 
 func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
+	resolver := broker.NewRoutingResolver()
 	qm := &mockQueueManager{}
 	b := &Broker{
-		queueManager: qm,
-		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		queueManager:  qm,
+		routeResolver: resolver,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	msg := &storage.Message{
@@ -105,16 +111,19 @@ func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, b.handleQueueAck(msg))
+	route := resolver.Resolve(msg.Topic)
+	require.NoError(t, b.handleQueueAck(msg, route))
 	require.Len(t, qm.nackCalls, 1)
 	require.Equal(t, "orders", qm.nackCalls[0].queueName)
 }
 
 func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
+	resolver := broker.NewRoutingResolver()
 	qm := &mockQueueManager{}
 	b := &Broker{
-		queueManager: qm,
-		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		queueManager:  qm,
+		routeResolver: resolver,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	msg := &storage.Message{
@@ -125,6 +134,7 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 		},
 	}
 
-	require.Error(t, b.handleQueueAck(msg))
+	route := resolver.Resolve(msg.Topic)
+	require.Error(t, b.handleQueueAck(msg, route))
 	require.Empty(t, qm.ackCalls)
 }

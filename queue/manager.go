@@ -21,16 +21,13 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
-// DeliverFn is the callback for delivering messages to MQTT clients.
-type DeliverFn func(ctx context.Context, clientID string, msg any) error
-
 // Manager is the queue-based queue manager.
 // It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
 	queueStore       storage.QueueStore
 	groupStore       storage.ConsumerGroupStore
 	consumerManager  *consumer.Manager
-	deliverFn        DeliverFn
+	deliveryTarget   Deliverer
 	logger           *slog.Logger
 	config           Config
 	writePolicy      WritePolicy
@@ -118,7 +115,7 @@ func DefaultConfig() Config {
 
 // NewManager creates a new queue-based queue manager.
 // The cluster parameter is optional (nil for single-node mode).
-func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, deliverFn DeliverFn, config Config, logger *slog.Logger, cl cluster.Cluster) *Manager {
+func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, dt Deliverer, config Config, logger *slog.Logger, cl cluster.Cluster) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -142,10 +139,11 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	return &Manager{
-		queueStore:       queueStore,
-		groupStore:       groupStore,
-		consumerManager:  consumerMgr,
-		deliverFn:        deliverFn,
+		queueStore:      queueStore,
+		groupStore:      groupStore,
+		consumerManager: consumerMgr,
+		deliveryTarget:  dt,
+
 		logger:           logger,
 		config:           config,
 		writePolicy:      normalizeWritePolicy(config.WritePolicy),
@@ -1360,14 +1358,14 @@ func (m *Manager) deliverToGroup(ctx context.Context, config *types.QueueConfig,
 						slog.String("topic", msg.Topic),
 						slog.String("error", err.Error()))
 				}
-			} else if m.deliverFn != nil {
+			} else if m.deliveryTarget != nil {
 				// Local delivery
 				deliveryMsg := m.createDeliveryMessage(msg, group.ID, config.Name)
 				if group.Mode == types.GroupModeStream {
 					m.decorateStreamDelivery(deliveryMsg, msg, group, workCommitted, hasWorkCommitted, config.PrimaryGroup)
 				}
 
-				if err := m.deliverFn(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
+				if err := m.deliveryTarget.Deliver(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
 					m.logger.Warn("queue message delivery failed",
 						slog.String("client", consumerInfo.ClientID),
 						slog.String("topic", msg.Topic),
@@ -1640,7 +1638,7 @@ func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.
 func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg *cluster.QueueMessage) error {
-	if m.deliverFn == nil {
+	if m.deliveryTarget == nil {
 		return fmt.Errorf("no delivery function configured")
 	}
 
@@ -1691,5 +1689,5 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 	}
 	deliveryMsg.SetPayloadFromBytes(msg.Payload)
 
-	return m.deliverFn(ctx, clientID, deliveryMsg)
+	return m.deliveryTarget.Deliver(ctx, clientID, deliveryMsg)
 }

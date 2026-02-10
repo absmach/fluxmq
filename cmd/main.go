@@ -367,7 +367,7 @@ func main() {
 		}
 
 		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix
-		deliverFn := func(ctx context.Context, clientID string, msg any) error {
+		deliveryTarget := queue.DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *storage.Message) error {
 			if amqp1broker.IsAMQPClient(clientID) {
 				return amqpBroker.DeliverToClient(ctx, clientID, msg)
 			}
@@ -375,13 +375,13 @@ func main() {
 				return amqp091Broker.DeliverToClient(ctx, clientID, msg)
 			}
 			return b.DeliverToSessionByID(ctx, clientID, msg)
-		}
+		})
 
 		// Create log-based queue manager with wildcard support
 		qm = queue.NewManager(
 			queueLogStore,
 			queueLogStore,
-			deliverFn,
+			deliveryTarget,
 			queueCfg,
 			logger,
 			cl,

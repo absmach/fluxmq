@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/mqtt/session"
 	qtypes "github.com/absmach/fluxmq/queue/types"
@@ -20,7 +21,8 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 	b.logOp("subscribe", slog.String("client_id", s.ID), slog.String("filter", filter), slog.Int("qos", int(qos)))
 
 	// Check if this is a queue subscription
-	if b.queueManager != nil && isQueueTopic(filter) {
+	route := b.routeResolver.Resolve(filter)
+	if b.queueManager != nil && route.Kind == broker.RouteQueue {
 		ctx := context.Background()
 		groupID := opts.ConsumerGroup // ConsumerGroup from SubscribeOptions (set by handler)
 		proxyNodeID := ""
@@ -28,8 +30,7 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 			proxyNodeID = b.cluster.NodeID()
 		}
 
-		// Parse filter into queue name and pattern
-		queueName, pattern := parseQueueFilter(filter)
+		queueName, pattern := route.QueueName, route.Pattern
 
 		b.logOp("queue_subscribe",
 			slog.String("client_id", s.ID),
@@ -115,12 +116,12 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	b.logOp("unsubscribe", slog.String("client_id", s.ID), slog.String("filter", filter))
 
 	// Check if this is a queue unsubscription
-	if b.queueManager != nil && isQueueTopic(filter) {
+	unsubRoute := b.routeResolver.Resolve(filter)
+	if b.queueManager != nil && unsubRoute.Kind == broker.RouteQueue {
 		ctx := context.Background()
 		groupID := "" // Will be derived from clientID in queue manager
 
-		// Parse filter into queue name and pattern
-		queueName, pattern := parseQueueFilter(filter)
+		queueName, pattern := unsubRoute.QueueName, unsubRoute.Pattern
 
 		b.logOp("queue_unsubscribe",
 			slog.String("client_id", s.ID),

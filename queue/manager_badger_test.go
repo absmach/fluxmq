@@ -41,22 +41,18 @@ func TestWildcardQueueSubscriptionBadger(t *testing.T) {
 
 	deliveredMsgs := make(chan *brokerstorage.Message, 10)
 
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		if brokerMsg, ok := msg.(*brokerstorage.Message); ok {
-			t.Logf("Delivered message to %s: topic=%s", clientID, brokerMsg.Topic)
-			deliveredMsgs <- brokerMsg
-		} else {
-			t.Errorf("Wrong message type: %T", msg)
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		t.Logf("Delivered message to %s: topic=%s", clientID, msg.Topic)
+		deliveredMsgs <- msg
 		return nil
-	}
+	})
 
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
 
 	// Note: logStore implements both LogStore and ConsumerGroupStore
-	manager := NewManager(logStore, logStore, deliverFn, config, logger)
+	manager := NewManager(logStore, logStore, deliveryTarget, config, logger)
 
 	ctx := context.Background()
 

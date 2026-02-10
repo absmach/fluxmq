@@ -105,11 +105,11 @@ func cloneDeliveryMessage(msg *brokerstorage.Message) *brokerstorage.Message {
 	return clone
 }
 
-func (n *TestNode) recordQueueDelivery(clientID string, msg any) {
-	deliveryMsg, ok := msg.(*brokerstorage.Message)
-	if !ok || deliveryMsg == nil {
+func (n *TestNode) recordQueueDelivery(clientID string, msg *brokerstorage.Message) {
+	if msg == nil {
 		return
 	}
+	deliveryMsg := msg
 
 	n.queueDeliveriesMu.Lock()
 	n.queueDeliveries = append(n.queueDeliveries, QueueDelivery{
@@ -294,11 +294,11 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		return fmt.Errorf("failed to create queue log storage: %w", err)
 	}
 	queueCfg := queue.DefaultConfig()
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
+	deliveryTarget := queue.DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		node.recordQueueDelivery(clientID, msg)
 		return b.DeliverToSessionByID(ctx, clientID, msg)
-	}
-	qm := queue.NewManager(queueStore, queueStore, deliverFn, queueCfg, nullLogger, clust)
+	})
+	qm := queue.NewManager(queueStore, queueStore, deliveryTarget, queueCfg, nullLogger, clust)
 
 	// Wire broker as message handler (includes session management)
 	clust.SetMessageHandler(b)

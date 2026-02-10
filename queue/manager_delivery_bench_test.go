@@ -25,21 +25,17 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 
 	var lastMessageID string
 	var lastGroupID string
-	deliverFn := func(ctx context.Context, clientID string, msg any) error {
-		deliveryMsg, ok := msg.(*brokerstorage.Message)
-		if !ok {
-			return nil
-		}
-		if deliveryMsg.Properties != nil {
-			lastMessageID = deliveryMsg.Properties[types.PropMessageID]
-			lastGroupID = deliveryMsg.Properties[types.PropGroupID]
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		if msg.Properties != nil {
+			lastMessageID = msg.Properties[types.PropMessageID]
+			lastGroupID = msg.Properties[types.PropGroupID]
 		}
 		return nil
-	}
+	})
 
 	cfg := DefaultConfig()
 	cfg.DeliveryBatchSize = 1
-	mgr := NewManager(logStore, groupStore, deliverFn, cfg, logger, nil)
+	mgr := NewManager(logStore, groupStore, deliveryTarget, cfg, logger, nil)
 
 	ctx := context.Background()
 	for i := 0; i < queueCount; i++ {

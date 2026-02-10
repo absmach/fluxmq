@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -28,11 +29,13 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		b.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen))
 	}
 
+	route := b.routeResolver.Resolve(msg.Topic)
+
 	// Handle retained messages before routing — ensures queue topics also
 	// store retained state so new subscribers receive the last known value.
 	if msg.Retain {
 		if err := b.handleRetained(msg, payloadLen); err != nil {
-			if isQueueTopic(msg.Topic) {
+			if route.Kind == broker.RouteQueue {
 				b.logError("retained_store_failed", err, slog.String("topic", msg.Topic))
 			} else {
 				return err
@@ -42,19 +45,17 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		// store (for last-known-value delivery on subscribe). They are NOT
 		// enqueued — the queue handles the ordered stream of non-retained
 		// messages separately, avoiding duplicates on subscribe.
-		if isQueueTopic(msg.Topic) {
+		if route.Kind == broker.RouteQueue {
 			return nil
 		}
 	}
 
 	// Route queue topics and ack topics to queue manager
 	if b.queueManager != nil {
-		if isQueueAckTopic(msg.Topic) {
-			// Handle ack/nack/reject
-			return b.handleQueueAck(msg)
-		}
-
-		if isQueueTopic(msg.Topic) {
+		switch route.Kind {
+		case broker.RouteQueueAck:
+			return b.handleQueueAck(msg, route)
+		case broker.RouteQueue:
 			return b.queueManager.Publish(context.Background(), types.PublishRequest{
 				Topic:      msg.Topic,
 				Payload:    msg.GetPayload(),
@@ -291,22 +292,18 @@ func (b *Broker) distribute(msg *storage.Message) error {
 }
 
 // handleQueueAck handles queue acknowledgment messages ($ack, $nack, $reject).
-func (b *Broker) handleQueueAck(msg *storage.Message) error {
+func (b *Broker) handleQueueAck(msg *storage.Message, route broker.RouteResult) error {
 	ctx := context.Background()
-
-	// Extract queue topic and message ID
-	queueTopic := extractQueueTopicFromAck(msg.Topic)
-	queueName, _ := parseQueueFilter(queueTopic)
-	messageID := ""
-	groupID := ""
+	queueName := route.QueueName
 
 	if queueName == "" {
-		b.logError("queue_ack_invalid_queue_topic", fmt.Errorf("invalid queue topic %q", queueTopic),
+		b.logError("queue_ack_invalid_queue_topic", fmt.Errorf("invalid queue topic %q", route.PublishTopic),
 			slog.String("topic", msg.Topic))
-		return fmt.Errorf("invalid queue topic: %s", queueTopic)
+		return fmt.Errorf("invalid queue topic: %s", route.PublishTopic)
 	}
 
 	// Extract message ID and group ID from properties
+	var messageID, groupID string
 	if msg.Properties != nil {
 		messageID = msg.Properties[types.PropMessageID]
 		groupID = msg.Properties[types.PropGroupID]
@@ -324,23 +321,23 @@ func (b *Broker) handleQueueAck(msg *storage.Message) error {
 		return fmt.Errorf("group-id required for queue acknowledgment")
 	}
 
-	// Route to appropriate ack method
-	if strings.HasSuffix(msg.Topic, "/$ack") {
+	switch route.AckKind {
+	case broker.AckAccept:
 		b.logOp("queue_ack", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID))
 		return b.queueManager.Ack(ctx, queueName, messageID, groupID)
-	} else if strings.HasSuffix(msg.Topic, "/$nack") {
+	case broker.AckNack:
 		b.logOp("queue_nack", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID))
 		return b.queueManager.Nack(ctx, queueName, messageID, groupID)
-	} else if strings.HasSuffix(msg.Topic, "/$reject") {
+	case broker.AckReject:
 		reason := "rejected by consumer"
 		if msg.Properties != nil && msg.Properties[types.PropRejectReason] != "" {
 			reason = msg.Properties[types.PropRejectReason]
 		}
 		b.logOp("queue_reject", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID), slog.String("reason", reason))
 		return b.queueManager.Reject(ctx, queueName, messageID, groupID, reason)
+	default:
+		return fmt.Errorf("invalid queue ack topic: %s", msg.Topic)
 	}
-
-	return fmt.Errorf("invalid queue ack topic: %s", msg.Topic)
 }
 
 // GetRetainedMatching returns all retained messages matching a topic filter.

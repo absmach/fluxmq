@@ -31,12 +31,13 @@ func PrefixedClientID(connID string) string {
 
 // Broker is the core AMQP 0.9.1 broker.
 type Broker struct {
-	connections  sync.Map // connID -> *Connection
-	router       *router.TrieRouter
-	queueManager corebroker.StreamQueueManager
-	stats        *Stats
-	logger       *slog.Logger
-	mu           sync.RWMutex
+	connections   sync.Map // connID -> *Connection
+	router        *router.TrieRouter
+	routeResolver *corebroker.RoutingResolver
+	queueManager  corebroker.StreamQueueManager
+	stats         *Stats
+	logger        *slog.Logger
+	mu            sync.RWMutex
 }
 
 // New creates a new AMQP 0.9.1 broker.
@@ -45,10 +46,11 @@ func New(qm corebroker.StreamQueueManager, logger *slog.Logger) *Broker {
 		logger = slog.Default()
 	}
 	return &Broker{
-		router:       router.NewRouter(),
-		queueManager: qm,
-		stats:        NewStats(),
-		logger:       logger,
+		router:        router.NewRouter(),
+		routeResolver: corebroker.NewRoutingResolver(),
+		queueManager:  qm,
+		stats:         NewStats(),
+		logger:        logger,
 	}
 }
 

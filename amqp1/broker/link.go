@@ -7,11 +7,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 
 	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/absmach/fluxmq/amqp1/performatives"
+	corebroker "github.com/absmach/fluxmq/broker"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -89,6 +89,7 @@ func newLink(s *Session, attach *performatives.Attach) *Link {
 	}
 
 	// Detect queue via capabilities first (native AMQP addressing)
+	resolver := s.conn.broker.routeResolver
 	if isSender && attach.Source != nil && performatives.HasCapability(attach.Source.Capabilities, performatives.CapQueue) {
 		l.isQueue = true
 		l.capabilityBased = true
@@ -97,11 +98,10 @@ func newLink(s *Session, attach *performatives.Attach) *Link {
 		l.isQueue = true
 		l.capabilityBased = true
 		l.queueName = address
-	} else if strings.HasPrefix(address, "$queue/") {
+	} else if route := resolver.Resolve(address); route.Kind == corebroker.RouteQueue {
 		// Fallback: $queue/ prefix detection for backward compat
 		l.isQueue = true
-		parts := strings.SplitN(strings.TrimPrefix(address, "$queue/"), "/", 2)
-		l.queueName = parts[0]
+		l.queueName = route.QueueName
 	}
 
 	// Extract consumer group from attach properties
@@ -164,11 +164,9 @@ func (l *Link) subscribe() {
 		}
 
 		pattern := ""
-		if !l.capabilityBased && strings.HasPrefix(l.address, "$queue/") {
-			rest := strings.TrimPrefix(l.address, "$queue/")
-			parts := strings.SplitN(rest, "/", 2)
-			if len(parts) > 1 {
-				pattern = parts[1]
+		if !l.capabilityBased {
+			if _, pat := corebroker.ParseQueueFilter(l.address); pat != "" {
+				pattern = pat
 			}
 		}
 
@@ -263,16 +261,18 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 		}
 	}
 
-	if l.isQueue || strings.HasPrefix(topic, "$queue/") {
+	resolver := l.session.conn.broker.routeResolver
+	topicRoute := resolver.Resolve(topic)
+	if l.isQueue || topicRoute.Kind == corebroker.RouteQueue {
 		qm := l.session.conn.broker.getQueueManager()
 		if qm != nil {
-			// For capability-based links, construct the publish topic
 			publishTopic := topic
-			if l.capabilityBased && !strings.HasPrefix(topic, "$queue/") {
-				publishTopic = "$queue/" + l.queueName
-				if msg.Properties != nil && msg.Properties.Subject != "" {
-					publishTopic = publishTopic + "/" + msg.Properties.Subject
+			if l.capabilityBased && topicRoute.Kind != corebroker.RouteQueue {
+				subject := ""
+				if msg.Properties != nil {
+					subject = msg.Properties.Subject
 				}
+				publishTopic = resolver.QueueTopic(l.queueName, subject)
 			}
 
 			props := make(map[string]string)
