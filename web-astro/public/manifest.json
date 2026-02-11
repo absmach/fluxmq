@@ -1,0 +1,20 @@
+{
+  "name": "FluxMQ",
+  "short_name": "FluxMQ",
+  "description": "FluxMQ is a high-performance, multi-protocol message broker written in Go. Supports MQTT 3.1.1/5.0, WebSocket, HTTP and CoAP with durable queues, clustering, and event-driven architecture.",
+  "icons": [
+    {
+      "src": "/web-app-manifest-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/web-app-manifest-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "display": "standalone"
+}
