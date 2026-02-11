@@ -41,7 +41,7 @@ pnpm preview
 
 - `src/pages/index.astro`: product landing page
 - `src/components/home/*.astro`: landing page components (Astro-only, no React)
-- `src/content/docs/docs/*`: docs content shown under `/docs/*`
+- `src/content/docs/*`: docs content shown under `/docs/*`
 - `src/styles/global.css`: Tailwind entry and shared brand/component styles
 - `src/styles/starlight.css`: docs-theme overrides for Starlight
 - `astro.config.mjs`: Astro, Tailwind, Starlight, and sitemap config

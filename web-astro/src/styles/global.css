@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
 
 :root {
   --flux-blue: hsl(213.64deg 58.41% 44.31%);
@@ -45,6 +47,10 @@ body {
   font-family: Verdana, Geneva, sans-serif;
   color: var(--flux-text);
   background: var(--flux-bg);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 p {
@@ -152,56 +158,36 @@ p {
   }
 
   .nav-link {
-    @apply inline-flex text-[1.03rem] font-medium transition-colors;
-    color: color-mix(in srgb, var(--flux-text) 65%, transparent);
+    @apply inline-flex items-center gap-1 p-2 text-sm font-normal transition-colors;
+    color: var(--color-fd-muted-foreground);
   }
 
   .nav-link:hover {
-    color: var(--flux-text);
+    color: var(--color-fd-accent-foreground);
   }
 
   .nav-search-pill {
-    @apply inline-flex min-w-[252px] items-center justify-between rounded-full border px-4 py-2 text-[1.05rem] leading-none transition;
-    border-color: var(--flux-pill-border);
-    background: var(--flux-pill-bg);
-    color: var(--flux-pill-text);
-  }
-
-  .nav-search-pill:hover {
-    border-color: color-mix(in srgb, var(--flux-blue) 35%, var(--flux-pill-border));
-    color: color-mix(in srgb, var(--flux-text) 75%, transparent);
+    @apply inline-flex w-full max-w-[240px] items-center gap-2 rounded-full border bg-fd-secondary/50 p-1.5 ps-2.5 text-sm text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-accent-foreground;
   }
 
   .kbd-chip {
-    @apply inline-flex items-center justify-center rounded-md border px-1.5 py-[0.14rem] text-[0.72rem] font-semibold;
-    border-color: var(--flux-pill-border);
-    background: var(--flux-bg);
-    color: var(--flux-pill-text);
+    @apply rounded-md border bg-fd-background px-1.5;
   }
 
   .theme-toggle-pill {
-    @apply inline-flex items-center gap-0.5 rounded-full border p-[0.2rem];
-    border-color: var(--flux-pill-border);
-    background: var(--flux-pill-bg);
-  }
-
-  .theme-toggle-pill:hover {
-    border-color: color-mix(in srgb, var(--flux-orange) 45%, var(--flux-pill-border));
+    @apply inline-flex items-center rounded-full border p-1;
   }
 
   .theme-dot {
-    @apply inline-flex size-6 items-center justify-center rounded-full transition-colors;
-    color: var(--flux-pill-text);
+    @apply size-6.5 rounded-full p-1.5 text-fd-muted-foreground;
   }
 
   .theme-dot-active {
-    background: var(--flux-bg);
-    color: var(--flux-icon);
-    box-shadow: 0 0 0 1px var(--flux-pill-border);
+    @apply bg-fd-accent text-fd-accent-foreground;
   }
 
   .nav-icon-link {
-    @apply inline-flex items-center justify-center rounded-full p-1 transition-colors;
+    @apply inline-flex size-8 items-center justify-center rounded-full p-1 transition-colors;
     color: var(--flux-icon);
   }
 
@@ -336,6 +322,16 @@ p {
 }
 
 :focus-visible {
-  outline: 2px solid var(--flux-focus-ring);
+  outline: 2px solid var(--flux-orange);
   outline-offset: 2px;
+}
+
+#nd-sidebar [data-active='true'] {
+  color: var(--flux-orange) !important;
+  background-color: rgb(249 163 42 / 10%) !important;
+  border-left: 3px solid var(--flux-orange) !important;
+}
+
+#nd-sidebar a:hover {
+  color: var(--flux-blue) !important;
 }

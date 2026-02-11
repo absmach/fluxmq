@@ -1,37 +1,67 @@
-<section class="border-b-2 border-[var(--flux-border)] bg-[var(--flux-bg-alt)] py-20">
-  <div class="mx-auto w-[min(100%-2.5rem,1200px)]">
-    <div class="mx-auto max-w-[700px] text-center">
-      <h2 class="mb-2 text-3xl font-bold uppercase md:text-4xl">Subscribe to Newsletter</h2>
-      <p class="text-[var(--flux-muted)]">Stay updated with the latest FluxMQ news, updates, and announcements.</p>
+<section
+  class="border-b-2 border-[var(--flux-border)] bg-[var(--flux-bg-alt)] py-20"
+>
+  <div class="container mx-auto px-6">
+    <div class="mx-auto max-w-2xl">
+      <h2 class="mb-6 text-center text-3xl font-bold md:text-4xl">
+        SUBSCRIBE TO NEWSLETTER
+      </h2>
+      <p class="mb-8 text-center text-theme-muted">
+        Stay updated with the latest FluxMQ news, updates and announcements.
+      </p>
 
       <form
-        action="https://absmach.us11.list-manage.com/subscribe/post?u=70b43c7181d005024187bfb31&amp;id=0a319b6b63&amp;f_id=00d816e1f0"
+        action="https://absmach.us11.list-manage.com/subscribe/post?u=70b43c7181d005024187bfb31&id=0a319b6b63&f_id=00d816e1f0"
         method="post"
+        id="mc-embedded-subscribe-form"
+        name="mc-embedded-subscribe-form"
         target="_blank"
-        class="mt-6 flex flex-col border-2 border-[var(--flux-border)] bg-white sm:flex-row"
+        class="mx-auto max-w-md"
       >
-        <input
-          type="email"
-          name="EMAIL"
-          placeholder="Enter your email"
-          required
-          class="w-full flex-1 px-4 py-3 text-sm outline-none placeholder:text-[#6b6b6b] sm:text-base"
-        />
-        <button
-          type="submit"
-          class="bg-[var(--flux-orange)] px-4 py-3 text-sm font-bold uppercase tracking-wide text-black transition hover:bg-[var(--flux-blue)] hover:text-white sm:text-base"
-        >
-          Subscribe
-        </button>
+        <div class="flex gap-0">
+          <input
+            type="email"
+            name="EMAIL"
+            placeholder="Enter your email"
+            required
+            class="brutalist-border flex-1 border-r-0 px-4 py-3 focus:border-[var(--flux-orange)] focus:outline-none"
+          />
+          <button
+            type="submit"
+            class="brutalist-border bg-[var(--flux-orange)] px-6 py-3 font-bold text-white transition-colors hover:bg-[var(--flux-blue)]"
+          >
+            SUBSCRIBE
+          </button>
+        </div>
         <input type="hidden" name="tags" value="8115284" />
+        <div style="position:absolute;left:-5000px;" aria-hidden="true">
+          <input
+            type="text"
+            name="b_70b43c7181d005024187bfb31_0a319b6b63"
+            tabindex="-1"
+            value=""
+          />
+        </div>
+        <p class="mt-4 text-center text-xs text-theme-muted">
+          By subscribing, you agree to our
+          <a
+            class="underline"
+            href="https://absmach.eu/privacy/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Privacy Policy</a
+          > and
+          <a
+            class="underline"
+            href="https://absmach.eu/terms/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Terms of Service</a
+          >. You can unsubscribe at any time.
+        </p>
       </form>
-
-      <p class="mt-4 text-sm text-[var(--flux-muted)]">
-        By subscribing, you agree to our
-        <a class="underline" href="https://absmach.eu/privacy/" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
-        and
-        <a class="underline" href="https://absmach.eu/terms/" target="_blank" rel="noopener noreferrer">Terms of Service</a>.
-      </p>
     </div>
   </div>
 </section>

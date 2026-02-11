@@ -9,7 +9,7 @@ export const source = loader({
   baseUrl: '/docs',
 });
 
-const docs = import.meta.glob('/src/content/docs/docs/**/*.{md,mdx}');
+const docs = import.meta.glob('/src/content/docs/**/*.{md,mdx}');
 
 export async function getFullExport(entry: CollectionEntry<'docs'>) {
   return (await docs['/' + entry.filePath!]()) as {
@@ -28,7 +28,7 @@ async function createSource() {
   };
 
   for (const page of await getCollection('docs')) {
-    const virtualPath = path.relative('src/content/docs/docs', page.filePath!);
+    const virtualPath = path.relative('src/content/docs', page.filePath!);
 
     out.files.push({
       type: 'page',
@@ -41,7 +41,7 @@ async function createSource() {
   }
 
   for (const meta of await getCollection('meta')) {
-    const virtualPath = path.relative('src/content/docs/docs', meta.filePath!);
+    const virtualPath = path.relative('src/content/docs', meta.filePath!);
 
     out.files.push({
       type: 'meta',

@@ -1,5 +1,5 @@
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
-import { DocsPage, type DocsPageProps } from 'fumadocs-ui/layouts/docs/page';
+import { DocsBody, DocsDescription, DocsPage, type DocsPageProps, DocsTitle } from 'fumadocs-ui/layouts/docs/page';
 import type { Root } from 'fumadocs-core/page-tree';
 import type { ReactNode } from 'react';
 import { FrameworkProvider } from 'fumadocs-core/framework';
@@ -13,12 +13,16 @@ export function Docs({
   pathname,
   params,
   page,
+  title,
+  description,
 }: {
   tree: Root;
   children: ReactNode;
   pathname: string;
   params: Record<string, string | string[]>;
   page?: DocsPageProps;
+  title: string;
+  description?: string;
 }) {
   return (
     <FrameworkProvider
@@ -38,7 +42,7 @@ export function Docs({
           tree={tree}
           nav={{
             title: (
-              <span style={{ fontWeight: 800, lineHeight: 1.1, fontSize: '1.9rem' }}>
+              <span style={{ fontWeight: 800, lineHeight: 1.1, fontSize: '1.5rem' }}>
                 <span style={{ color: 'var(--flux-blue)' }}>Flux</span>
                 <span style={{ color: 'var(--flux-orange)' }}>MQ</span>
               </span>
@@ -60,7 +64,11 @@ export function Docs({
             },
           ]}
         >
-          <DocsPage {...page}>{children}</DocsPage>
+          <DocsPage {...page}>
+            <DocsTitle>{title}</DocsTitle>
+            {description ? <DocsDescription>{description}</DocsDescription> : null}
+            <DocsBody>{children}</DocsBody>
+          </DocsPage>
         </DocsLayout>
       </RootProvider>
     </FrameworkProvider>

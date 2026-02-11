@@ -2,7 +2,6 @@
 import { render, type CollectionEntry } from 'astro:content';
 import { Docs } from '@/components/docs';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
-import '@/styles/docs.css';
 import { source } from '@/lib/source';
 import Layout from '@/components/layout.astro';
 import type { TOCItemType } from 'fumadocs-core/toc';
@@ -12,10 +11,22 @@ interface Props {
 }
 
 export async function getStaticPaths() {
-  return source.getPages().map((page) => ({
+  const pages = source.getPages();
+  const paths = pages.map((page) => ({
     params: { slug: page.slugs.length > 0 ? page.slugs.join('/') : undefined },
     props: { page: page.data._raw },
   }));
+
+  // Alias the root docs page to `/docs/index` to avoid edge-case 404s in some dev/preview setups.
+  const rootPage = pages.find((page) => page.slugs.length === 0);
+  if (rootPage) {
+    paths.push({
+      params: { slug: 'index' },
+      props: { page: rootPage.data._raw },
+    });
+  }
+
+  return paths;
 }
 
 const { page } = Astro.props;
@@ -37,12 +48,10 @@ const toc: TOCItemType[] = headings.map((heading) => ({
     pathname={Astro.url.pathname}
     params={Astro.params as Record<string, string | string[]>}
     page={{ toc }}
+    title={page.data.title}
+    description={page.data.description}
     client:load
   >
-    <h1 class="text-3xl font-semibold">{page.data.title}</h1>
-    <p class="mb-8 text-lg text-fd-muted-foreground">{page.data.description}</p>
-    <div class="prose flex-1">
-      <Content components={{ ...defaultMdxComponents }} />
-    </div>
+    <Content components={{ ...defaultMdxComponents }} />
   </Docs>
 </Layout>

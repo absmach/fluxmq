@@ -12,12 +12,16 @@
   "dependencies": {
     "@astrojs/mdx": "^4.3.13",
     "@astrojs/react": "^4.4.2",
-    "@orama/orama": "^3.1.18",
     "@astrojs/sitemap": "^3.0.0",
+    "@orama/orama": "^3.1.18",
     "@tailwindcss/vite": "^4.1.18",
+    "@tisoap/react-flow-smart-edge": "^4.0.1",
+    "@xyflow/react": "^12.10.0",
     "astro": "^5.5.0",
     "fumadocs-core": "^16.5.0",
     "fumadocs-ui": "^16.5.0",
+    "lucide-react": "^0.563.0",
+    "mermaid": "^11.12.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18"

@@ -6,14 +6,40 @@ interface Props {
 const { code } = Astro.props;
 ---
 
-<div class="code-panel">
+<div class="relative terminal mb-4 p-6 group" data-code-panel>
   <button
-    class="absolute top-2 right-2 border-2 border-[#3c3c3c] bg-[#191b1d] px-2 py-1 text-xs font-semibold text-white transition hover:border-[var(--flux-orange)] hover:bg-[var(--flux-orange)] hover:text-black"
+    class="absolute top-4 right-4 p-2 hover:bg-(--flux-orange) hover:text-white transition-colors brutalist-border opacity-70 group-hover:opacity-100"
     type="button"
     data-copy-btn
     aria-label="Copy command"
   >
-    Copy
+    <svg
+      class="size-4"
+      data-copy-icon
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+    <svg
+      class="hidden size-4"
+      data-check-icon
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20 6 9 17l-5-5"></path>
+    </svg>
   </button>
-  <pre><code>{code}</code></pre>
+  <pre class="overflow-x-auto"><code class="text-sm md:text-base">{code}</code></pre>
 </div>

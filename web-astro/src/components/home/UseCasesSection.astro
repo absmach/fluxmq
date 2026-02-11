@@ -1,51 +1,42 @@
+---
+import { Activity, Cpu, Gauge } from 'lucide-react';
+---
+
 <section id="use-cases" class="border-b-2 border-[var(--flux-border)] py-20">
-  <div class="mx-auto w-[min(100%-2.5rem,1200px)]">
+  <div class="container mx-auto px-6">
     <h2 class="mb-12 text-4xl font-bold md:text-5xl">
       <span class="border-l-4 border-[var(--flux-orange)] pl-4">USE CASES</span>
     </h2>
 
     <div class="grid gap-6 md:grid-cols-3">
       <article class="brutalist-card p-6">
-        <div class="mb-4 inline-flex size-9 items-center justify-center rounded-sm border-2 border-[var(--flux-orange)] text-[var(--flux-orange)]">
-          <svg class="size-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 12h4l2-6 4 12 2-6h4"></path>
-          </svg>
-        </div>
+        <Activity className="mb-4 text-(--flux-orange)" size={36} strokeWidth={2} />
         <div class="mb-4 border-b-2 border-[var(--flux-border)] pb-4">
           <h3 class="mono text-2xl font-bold">Event-Driven Systems</h3>
         </div>
         <ul class="space-y-3 text-base text-theme-muted">
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Decouple microservices with event streams</span></li>
-          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Reliable command and event pipelines (CQRS)</span></li>
-          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Background jobs and asynchronous workflows</span></li>
+          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Reliable command & event pipelines (CQRS)</span></li>
+          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Background jobs & asynchronous workflows</span></li>
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Real-time data processing pipelines</span></li>
         </ul>
       </article>
 
       <article class="brutalist-card p-6">
-        <div class="mb-4 inline-flex size-9 items-center justify-center rounded-sm border-2 border-[var(--flux-blue)] text-[var(--flux-blue)]">
-          <svg class="size-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-            <path d="M9 9h6v6H9z"></path>
-          </svg>
-        </div>
+        <Cpu className="mb-4 text-(--flux-blue)" size={36} strokeWidth={2} />
         <div class="mb-4 border-b-2 border-[var(--flux-border)] pb-4">
           <h3 class="mono text-2xl font-bold">IoT & Real-Time</h3>
         </div>
         <ul class="space-y-3 text-base text-theme-muted">
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>IoT device telemetry ingestion (MQTT)</span></li>
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Edge deployments with intermittent connectivity</span></li>
-          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Live dashboards and browser updates (WebSocket)</span></li>
+          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Live dashboards & browser updates (WebSocket)</span></li>
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Constrained device messaging via protocol bridges</span></li>
         </ul>
       </article>
 
       <article class="brutalist-card p-6">
-        <div class="mb-4 inline-flex size-9 items-center justify-center rounded-sm border-2 border-[var(--flux-orange)] text-[var(--flux-orange)]">
-          <svg class="size-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 18h16M6 18V9M12 18V5M18 18v-7"></path>
-          </svg>
-        </div>
+        <Gauge className="mb-4 text-(--flux-orange)" size={36} strokeWidth={2} />
         <div class="mb-4 border-b-2 border-[var(--flux-border)] pb-4">
           <h3 class="mono text-2xl font-bold">High-Throughput Pipelines</h3>
         </div>
@@ -53,7 +44,7 @@
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Stream millions of events per second</span></li>
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Buffer traffic bursts with durable queues</span></li>
           <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Decouple ingestion from downstream processing</span></li>
-          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Power analytics and observability data streams</span></li>
+          <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-orange)]">■</span><span>Power analytics & observability data streams</span></li>
         </ul>
       </article>
     </div>

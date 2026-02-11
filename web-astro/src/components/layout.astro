@@ -1,4 +1,5 @@
 ---
+import '../styles/global.css';
 import { ClientRouter } from 'astro:transitions';
 ---
 
@@ -18,7 +19,12 @@ import { ClientRouter } from 'astro:transitions';
       })();
     </script>
   </head>
-  <body class="flex min-h-screen flex-col" transition:persist transition:animate="none" transition:name="page-layout">
+  <body
+    class="bg-theme text-[var(--flux-text)] flex min-h-screen flex-col"
+    transition:persist
+    transition:animate="none"
+    transition:name="page-layout"
+  >
     <slot />
   </body>
 </html>

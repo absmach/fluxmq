@@ -1,5 +1,6 @@
 ---
 import CodePanel from './CodePanel.astro';
+import { BookOpen } from 'lucide-react';
 
 const dockerSnippet = `git clone https://github.com/absmach/fluxmq.git
 cd fluxmq
@@ -18,44 +19,48 @@ make build
 ---
 
 <section id="quick-start" class="border-b-2 border-[var(--flux-border)] py-20">
-  <div class="mx-auto w-[min(100%-2.5rem,1200px)]">
-    <h2 class="mb-8 text-[clamp(2rem,4vw,3rem)] leading-tight font-bold uppercase tracking-[0.03em]">
-      <span class="border-l-[5px] border-[var(--flux-orange)] pl-3">Quick Start</span>
+  <div class="container mx-auto px-6">
+    <h2 class="mb-12 text-4xl font-bold md:text-5xl">
+      <span class="border-l-4 border-[var(--flux-orange)] pl-4">QUICK START</span>
     </h2>
 
-    <div class="space-y-8">
+    <div class="mx-auto max-w-4xl space-y-8">
       <div>
-        <h3 class="mono mb-3 text-xl font-bold">1. Run with Docker</h3>
+        <h3 class="mono mb-4 text-xl font-bold">1. RUN WITH DOCKER</h3>
         <CodePanel code={dockerSnippet} />
       </div>
 
       <div>
-        <h3 class="mono mb-3 text-xl font-bold">2. Test with MQTT</h3>
+        <h3 class="mono mb-4 text-xl font-bold">2. TEST WITH MQTT</h3>
         <CodePanel code={mqttSnippet} />
       </div>
 
       <div>
-        <h3 class="mono mb-3 text-xl font-bold">3. Or Build Locally</h3>
+        <h3 class="mono mb-4 text-xl font-bold">3. OR BUILD LOCALLY</h3>
         <CodePanel code={localSnippet} />
       </div>
 
-      <div class="cluster-box">
-        <p class="mono text-sm md:text-base"><strong>Defaults:</strong> MQTT TCP :1883, AMQP 0.9.1 :5682, Data /tmp/fluxmq/data</p>
-        <p class="mono mt-3"><strong>Next Steps:</strong></p>
-        <ul class="mt-2 list-none space-y-2 p-0">
+      <div class="brutalist-border bg-theme mt-12 p-8">
+        <p class="mb-4 text-lg font-bold">Defaults (MQTT TCP: :1883, AMQP 0.9.1: :5682, Data: /tmp/fluxmq/data)</p>
+        <p class="mb-4 text-lg font-bold">Next Steps:</p>
+        <ul class="space-y-3">
           <li>
             <a
-              class="font-bold text-[var(--flux-blue)] hover:text-[var(--flux-orange)]"
+              class="flex items-center gap-2 text-lg font-bold text-[var(--flux-blue)] hover:underline"
               href="https://github.com/absmach/fluxmq/tree/main/examples"
               target="_blank"
               rel="noopener noreferrer"
             >
-              Explore code examples on GitHub
+              <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+              </svg>
+              <span>Explore code examples on GitHub</span>
             </a>
           </li>
           <li>
-            <a class="font-bold text-[var(--flux-blue)] hover:text-[var(--flux-orange)]" href="/docs/">
-              Read the full documentation
+            <a class="flex items-center gap-2 text-lg font-bold text-[var(--flux-orange)] hover:underline" href="/docs">
+              <BookOpen size={20} />
+              <span>Read the full documentation</span>
             </a>
           </li>
         </ul>
@@ -67,16 +72,24 @@ make build
     const copyButtons = document.querySelectorAll('[data-copy-btn]');
     for (const button of copyButtons) {
       button.addEventListener('click', async () => {
-        const panel = button.closest('.code-panel');
+        const panel = button.closest('[data-code-panel]');
         const code = panel?.querySelector('code')?.textContent ?? '';
 
         if (!code) return;
 
         await navigator.clipboard.writeText(code);
-        const original = button.textContent;
-        button.textContent = 'Copied';
+        const copyIcon = button.querySelector('[data-copy-icon]');
+        const checkIcon = button.querySelector('[data-check-icon]');
+        if (copyIcon && checkIcon) {
+          copyIcon.classList.add('hidden');
+          checkIcon.classList.remove('hidden');
+        }
+
         window.setTimeout(() => {
-          button.textContent = original;
+          if (copyIcon && checkIcon) {
+            checkIcon.classList.add('hidden');
+            copyIcon.classList.remove('hidden');
+          }
         }, 1600);
       });
     }

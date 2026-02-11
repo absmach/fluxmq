@@ -1,48 +1,65 @@
-<section id="architecture" class="border-b-2 border-theme bg-theme-alt py-20">
-  <div class="mx-auto w-[min(100%-2.5rem,1200px)]">
-    <h2 class="mb-12 text-4xl font-bold md:text-5xl">
-      <span class="border-l-4 border-[var(--flux-orange)] pl-4">ARCHITECTURE</span>
+---
+import { MermaidDiagram } from "./MermaidDiagram";
+
+const architectureDiagram = `
+graph TD
+    A[Setup and configuration] --> B[MQTT/WS/HTTP/CoAP<br/>Servers]
+    A --> C[AMQP 1.0<br/>Server]
+    A --> D[AMQP 0.9.1<br/>Server]
+    B --> E[MQTT v3.1.1/v5 Broker]
+    C --> F[AMQP Broker<br/> 1.0]
+    D --> G[AMQP Broker<br/>0.9.1]
+    E --> H[Queue Manager<br/>Bindings + Delivery]
+    F --> H
+    G --> H
+    H --> I[Log Storage<br/>+ Topic Index]
+
+    style A fill:#2F69B3,stroke:#000000,stroke-width:2px,color:#ffffff
+    style H fill:#F9A32A,stroke:#000000,stroke-width:2px,color:#000000
+    style I fill:#2F69B3,stroke:#000000,stroke-width:2px,color:#ffffff
+`;
+---
+
+<section id="architecture" class="py-20 border-b-2 border-theme bg-theme-alt">
+  <div class="container mx-auto px-6">
+    <h2 class="text-4xl md:text-5xl font-bold mb-12">
+      <span class="border-l-4 border-(--flux-orange) pl-4">ARCHITECTURE</span>
     </h2>
 
-    <div class="mx-auto max-w-4xl">
-      <div class="brutalist-border bg-theme overflow-x-auto p-6">
-        <svg viewBox="0 0 880 370" class="min-w-[760px]" role="img" aria-label="FluxMQ architecture diagram">
-          <g font-family="JetBrains Mono, ui-monospace, monospace" font-size="13" font-weight="700">
-            <rect x="335" y="20" width="210" height="48" rx="8" fill="#2f69b3" stroke="#1f1f1f" stroke-width="2"></rect>
-            <text x="440" y="49" text-anchor="middle" fill="#fff">Setup and configuration</text>
-
-            <rect x="70" y="110" width="220" height="52" rx="8" fill="#fafafa" stroke="#1f1f1f" stroke-width="2"></rect>
-            <rect x="330" y="110" width="220" height="52" rx="8" fill="#fafafa" stroke="#1f1f1f" stroke-width="2"></rect>
-            <rect x="590" y="110" width="220" height="52" rx="8" fill="#fafafa" stroke="#1f1f1f" stroke-width="2"></rect>
-            <text x="180" y="142" text-anchor="middle" fill="#101010">TCP/WS/HTTP/CoAP Servers</text>
-            <text x="440" y="142" text-anchor="middle" fill="#101010">AMQP 1.0 Server</text>
-            <text x="700" y="142" text-anchor="middle" fill="#101010">AMQP 0.9.1 Server</text>
-
-            <rect x="70" y="200" width="220" height="52" rx="8" fill="#fafafa" stroke="#1f1f1f" stroke-width="2"></rect>
-            <rect x="330" y="200" width="220" height="52" rx="8" fill="#fafafa" stroke="#1f1f1f" stroke-width="2"></rect>
-            <rect x="590" y="200" width="220" height="52" rx="8" fill="#fafafa" stroke="#1f1f1f" stroke-width="2"></rect>
-            <text x="180" y="232" text-anchor="middle" fill="#101010">MQTT Broker</text>
-            <text x="440" y="232" text-anchor="middle" fill="#101010">AMQP Broker 1.0</text>
-            <text x="700" y="232" text-anchor="middle" fill="#101010">AMQP Broker 0.9.1</text>
-
-            <rect x="315" y="290" width="250" height="52" rx="8" fill="#f9a32a" stroke="#1f1f1f" stroke-width="2"></rect>
-            <text x="440" y="322" text-anchor="middle" fill="#101010">Queue Manager (Bindings + Delivery)</text>
-
-            <path d="M440 70 L440 104" stroke="#2f69b3" stroke-width="2"></path>
-            <path d="M180 162 L180 194M440 162 L440 194M700 162 L700 194" stroke="#2f69b3" stroke-width="2"></path>
-            <path d="M180 252 L180 280 L315 280M440 252 L440 290M700 252 L700 280 L565 280" stroke="#2f69b3" stroke-width="2"></path>
-          </g>
-        </svg>
-      </div>
+    <div class="max-w-4xl mx-auto">
+      <MermaidDiagram chart={architectureDiagram} client:load />
     </div>
 
-    <div class="brutalist-border bg-theme mx-auto mt-12 max-w-3xl p-6">
-      <h3 class="mono mb-4 text-lg font-bold">KEY COMPONENTS</h3>
-      <ul class="space-y-3 text-base text-theme-muted">
-        <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-blue)]">▸</span><span><strong>Transport Layer:</strong> Multi-protocol servers (MQTT, AMQP 1.0, AMQP 0.9.1, CoAP, HTTP, WebSocket)</span></li>
-        <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-blue)]">▸</span><span><strong>Protocol Brokers:</strong> FSM-based protocol handlers with zero-copy parsing</span></li>
-        <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-blue)]">▸</span><span><strong>Queue Manager:</strong> Durable queue bindings with FIFO, priority, and topic-based delivery</span></li>
-        <li class="flex items-start"><span class="mr-2 font-bold text-[var(--flux-blue)]">▸</span><span><strong>Storage:</strong> Persistence for messages and topic indexing</span></li>
+    <div class="mt-12 max-w-3xl mx-auto brutalist-border bg-theme p-6">
+      <h3 class="font-bold mono text-lg mb-4">KEY COMPONENTS</h3>
+      <ul class="space-y-3 text-theme-muted text-base">
+        <li class="flex items-start">
+          <span class="text-(--flux-blue) mr-2 font-bold">▸</span>
+          <span>
+            <strong>Transport Layer:</strong> Multi-protocol servers (MQTT, AMQP 1.0,
+            AMQP 0.9.1, CoAP, HTTP, WebSocket)
+          </span>
+        </li>
+        <li class="flex items-start">
+          <span class="text-(--flux-blue) mr-2 font-bold">▸</span>
+          <span>
+            <strong>Protocol Brokers:</strong> FSM-based protocol handlers with zero-copy
+            parsing
+          </span>
+        </li>
+        <li class="flex items-start">
+          <span class="text-(--flux-blue) mr-2 font-bold">▸</span>
+          <span>
+            <strong>Queue Manager:</strong> Durable queue bindings with FIFO, priority,
+            and topic-based delivery
+          </span>
+        </li>
+        <li class="flex items-start">
+          <span class="text-(--flux-blue) mr-2 font-bold">▸</span>
+          <span>
+            <strong>Storage:</strong> For message persistence and topic indexing
+          </span>
+        </li>
       </ul>
     </div>
   </div>

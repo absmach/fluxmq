@@ -1,7 +1,7 @@
 ---
-import '../styles/global.css';
-import '../styles/fumadocs-search.css';
-import HomeSearchBridge from '@/components/HomeSearchBridge';
+import "../styles/global.css";
+import "../styles/fumadocs-search.css";
+import HomeSearchBridge from "@/components/HomeSearchBridge";
 
 interface Props {
   title?: string;
@@ -9,9 +9,8 @@ interface Props {
 }
 
 const {
-  title = 'FluxMQ - High-Performance Multi-Protocol Message Broker',
-  description =
-    'FluxMQ is a high-performance, multi-protocol message broker written in Go. Supports MQTT, WebSocket, HTTP and CoAP with durable queues and clustering.',
+  title = "FluxMQ - High-Performance Multi-Protocol Message Broker",
+  description = "FluxMQ is a high-performance, multi-protocol message broker written in Go. Supports MQTT, WebSocket, HTTP and CoAP with durable queues and clustering.",
 } = Astro.props;
 ---
 
@@ -34,195 +33,353 @@ const {
     <link rel="canonical" href="https://absmach.eu/fluxmq/" />
     <script is:inline>
       (() => {
-        const THEME_KEY = 'theme';
+        const THEME_KEY = "theme";
         const stored = localStorage.getItem(THEME_KEY);
-        const mode = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
-        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        const resolved = mode === 'system' ? preferred : mode;
+        const mode =
+          stored === "light" || stored === "dark" || stored === "system"
+            ? stored
+            : "system";
+        const preferred = window.matchMedia("(prefers-color-scheme: light)")
+          .matches
+          ? "light"
+          : "dark";
+        const resolved = mode === "system" ? preferred : mode;
         document.documentElement.dataset.theme = resolved;
-        document.documentElement.classList.toggle('dark', resolved === 'dark');
+        document.documentElement.classList.toggle("dark", resolved === "dark");
       })();
     </script>
   </head>
-  <body class="flex min-h-screen flex-col bg-theme text-[var(--flux-text)]">
-    <HomeSearchBridge client:only="react" />
+  <body class="flex flex-col min-h-screen text-[var(--flux-text)]">
+    <main class="flex flex-1 flex-col [--fd-layout-width:1400px]">
+      <HomeSearchBridge client:only="react" />
 
-    <header class="site-header z-50">
-      <nav class="mx-auto flex min-h-[64px] w-[min(100%-2.5rem,1360px)] items-center gap-4" aria-label="Main navigation">
-        <a class="animate-fade-in text-2xl font-bold md:text-[2.45rem]" style="line-height:1.1" href="/" aria-label="FluxMQ home">
-          <span class="text-[var(--flux-blue)]">Flux</span><span class="text-[var(--flux-orange)]">MQ</span>
-        </a>
-
-        <button
-          class="inline-flex rounded-md border border-[var(--flux-pill-border)] bg-[var(--flux-pill-bg)] px-3 py-2 text-sm font-semibold text-[var(--flux-text)] md:hidden"
-          type="button"
-          aria-expanded="false"
-          aria-controls="site-menu"
-          data-menu-toggle
-        >
-          Menu
-        </button>
-
-        <ul
-          id="site-menu"
-          class="absolute left-0 right-0 top-[63px] hidden flex-col items-start gap-4 border-b border-[var(--flux-header-border)] bg-[var(--flux-header-bg)] px-5 py-4 text-[0.95rem] font-normal md:static md:top-0 md:flex md:min-w-0 md:flex-1 md:flex-row md:items-center md:gap-7 md:border-0 md:bg-transparent md:p-0 md:pl-8"
-          data-menu
-        >
-          <li><a class="nav-link" href="/#features">Features</a></li>
-          <li><a class="nav-link" href="/#performance">Performance</a></li>
-          <li><a class="nav-link" href="/#use-cases">Use Cases</a></li>
-          <li><a class="nav-link" href="/#architecture">Architecture</a></li>
-          <li><a class="nav-link" href="/#quick-start">Quick Start</a></li>
-          <li><a class="nav-link" href="/docs/">Documentation</a></li>
-          <li class="md:hidden"><a class="nav-link" href="https://github.com/absmach/fluxmq" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-        </ul>
-
-        <div class="ml-auto hidden items-center gap-2 md:flex">
-          <button type="button" class="nav-search-pill" aria-label="Search docs" data-search-trigger>
-            <span class="inline-flex items-center gap-2">
-              <svg class="size-4" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"></circle>
-                <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
-              </svg>
-              <span>Search</span>
-            </span>
-            <span class="inline-flex items-center gap-1">
-              <kbd class="kbd-chip" data-shortcut-mod>Ctrl</kbd>
-              <kbd class="kbd-chip">K</kbd>
-            </span>
-          </button>
-
-          <button type="button" class="theme-toggle-pill" aria-label="Toggle theme" data-theme-toggle>
-            <span class="theme-dot" data-theme-sun aria-hidden="true">
-              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
-                <circle cx="10" cy="10" r="3.2" stroke="currentColor" stroke-width="1.6"></circle>
-                <path d="M10 2v2.2M10 15.8V18M2 10h2.2M15.8 10H18M4.6 4.6l1.5 1.5M13.9 13.9l1.5 1.5M15.4 4.6l-1.5 1.5M6.1 13.9l-1.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
-              </svg>
-            </span>
-            <span class="theme-dot" data-theme-moon aria-hidden="true">
-              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
-                <path d="M13.8 13.9A6.2 6.2 0 0 1 6 6.2a6.7 6.7 0 1 0 7.8 7.7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
-              </svg>
-            </span>
-          </button>
-
+      <header id="nd-nav" class="sticky h-14 top-0 z-40" aria-label="Main">
+        <div class="backdrop-blur-lg border-b transition-colors *:mx-auto *:max-w-(--fd-layout-width) bg-fd-background/80">
+          <div style="position:relative">
+            <nav class="flex h-14 w-full items-center px-4" aria-label="Main navigation">
           <a
-            class="nav-icon-link"
-            href="https://github.com/absmach/fluxmq"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="FluxMQ GitHub repository"
+            class="animate-fade-in text-2xl font-bold"
+            style="line-height:1.1"
+            href="/"
+            aria-label="FluxMQ home"
           >
-            <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12 .5C5.65.5.5 5.66.5 12.03c0 5.1 3.3 9.43 7.88 10.96.58.11.79-.25.79-.57 0-.28-.01-1.04-.02-2.04-3.2.7-3.88-1.55-3.88-1.55-.53-1.35-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.15.08 1.76 1.2 1.76 1.2 1.03 1.76 2.7 1.25 3.37.96.1-.75.4-1.25.72-1.54-2.56-.29-5.26-1.29-5.26-5.74 0-1.27.46-2.3 1.2-3.11-.12-.29-.52-1.46.12-3.04 0 0 .98-.32 3.2 1.19a11.1 11.1 0 0 1 5.82 0c2.22-1.51 3.2-1.19 3.2-1.19.64 1.58.24 2.75.12 3.04.75.81 1.2 1.84 1.2 3.11 0 4.46-2.7 5.44-5.28 5.73.42.36.78 1.06.78 2.14 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56A11.54 11.54 0 0 0 23.5 12.03C23.5 5.66 18.35.5 12 .5Z" />
-            </svg>
+            <span class="text-[var(--flux-blue)]">Flux</span><span
+              class="text-[var(--flux-orange)]">MQ</span
+            >
           </a>
-        </div>
 
-        <div class="ml-auto flex items-center gap-2 md:hidden">
-          <button type="button" class="theme-toggle-pill" aria-label="Toggle theme" data-theme-toggle>
-            <span class="theme-dot" data-theme-sun aria-hidden="true">
-              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
-                <circle cx="10" cy="10" r="3.2" stroke="currentColor" stroke-width="1.6"></circle>
-                <path d="M10 2v2.2M10 15.8V18M2 10h2.2M15.8 10H18M4.6 4.6l1.5 1.5M13.9 13.9l1.5 1.5M15.4 4.6l-1.5 1.5M6.1 13.9l-1.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
-              </svg>
-            </span>
-            <span class="theme-dot" data-theme-moon aria-hidden="true">
-              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
-                <path d="M13.8 13.9A6.2 6.2 0 0 1 6 6.2a6.7 6.7 0 1 0 7.8 7.7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
-              </svg>
-            </span>
-          </button>
-          <a
-            class="nav-icon-link"
-            href="https://github.com/absmach/fluxmq"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="FluxMQ GitHub repository"
-          >
-            <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12 .5C5.65.5.5 5.66.5 12.03c0 5.1 3.3 9.43 7.88 10.96.58.11.79-.25.79-.57 0-.28-.01-1.04-.02-2.04-3.2.7-3.88-1.55-3.88-1.55-.53-1.35-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.15.08 1.76 1.2 1.76 1.2 1.03 1.76 2.7 1.25 3.37.96.1-.75.4-1.25.72-1.54-2.56-.29-5.26-1.29-5.26-5.74 0-1.27.46-2.3 1.2-3.11-.12-.29-.52-1.46.12-3.04 0 0 .98-.32 3.2 1.19a11.1 11.1 0 0 1 5.82 0c2.22-1.51 3.2-1.19 3.2-1.19.64 1.58.24 2.75.12 3.04.75.81 1.2 1.84 1.2 3.11 0 4.46-2.7 5.44-5.28 5.73.42.36.78 1.06.78 2.14 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56A11.54 11.54 0 0 0 23.5 12.03C23.5 5.66 18.35.5 12 .5Z" />
-            </svg>
-          </a>
-        </div>
-      </nav>
-    </header>
+            <button
+              class="inline-flex rounded-md border border-[var(--flux-pill-border)] bg-[var(--flux-pill-bg)] px-3 py-2 text-sm font-semibold text-[var(--flux-text)] sm:hidden"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-menu"
+              data-menu-toggle
+            >
+              Menu
+            </button>
 
-    <main>
+            <ul class="flex flex-row items-center gap-2 px-6 max-sm:hidden">
+              <li class="list-none text-sm">
+                <a class="[&_svg]:size-4 inline-flex items-center gap-1 p-2 text-fd-muted-foreground transition-colors hover:text-fd-accent-foreground data-[active=true]:text-fd-primary" data-active="false" data-radix-collection-item="" href="/#features">Features</a>
+              </li>
+              <li class="list-none text-sm">
+                <a class="[&_svg]:size-4 inline-flex items-center gap-1 p-2 text-fd-muted-foreground transition-colors hover:text-fd-accent-foreground data-[active=true]:text-fd-primary" data-active="false" data-radix-collection-item="" href="/#performance">Performance</a>
+              </li>
+              <li class="list-none text-sm">
+                <a class="[&_svg]:size-4 inline-flex items-center gap-1 p-2 text-fd-muted-foreground transition-colors hover:text-fd-accent-foreground data-[active=true]:text-fd-primary" data-active="false" data-radix-collection-item="" href="/#use-cases">Use Cases</a>
+              </li>
+              <li class="list-none text-sm">
+                <a class="[&_svg]:size-4 inline-flex items-center gap-1 p-2 text-fd-muted-foreground transition-colors hover:text-fd-accent-foreground data-[active=true]:text-fd-primary" data-active="false" data-radix-collection-item="" href="/#architecture">Architecture</a>
+              </li>
+              <li class="list-none text-sm">
+                <a class="[&_svg]:size-4 inline-flex items-center gap-1 p-2 text-fd-muted-foreground transition-colors hover:text-fd-accent-foreground data-[active=true]:text-fd-primary" data-active="false" data-radix-collection-item="" href="/#quick-start">Quick Start</a>
+              </li>
+              <li class="list-none text-sm">
+                <a class="[&_svg]:size-4 inline-flex items-center gap-1 p-2 text-fd-muted-foreground transition-colors hover:text-fd-accent-foreground data-[active=true]:text-fd-primary" data-active="false" data-radix-collection-item="" href="/docs">Documentation</a>
+              </li>
+            </ul>
+
+            <ul
+              id="site-menu"
+              class="absolute left-0 right-0 top-[55px] hidden flex-col items-start gap-4 border-b border-[var(--flux-header-border)] bg-[var(--flux-header-bg)] px-5 py-4 text-[0.95rem] font-normal sm:hidden"
+              data-menu
+            >
+              <li><a class="nav-link" href="/#features">Features</a></li>
+              <li><a class="nav-link" href="/#performance">Performance</a></li>
+              <li><a class="nav-link" href="/#use-cases">Use Cases</a></li>
+              <li><a class="nav-link" href="/#architecture">Architecture</a></li>
+              <li><a class="nav-link" href="/#quick-start">Quick Start</a></li>
+              <li><a class="nav-link" href="/docs">Documentation</a></li>
+              <li>
+                <a
+                  class="nav-link"
+                  href="https://github.com/absmach/fluxmq"
+                  target="_blank"
+                  rel="noopener noreferrer">GitHub</a>
+              </li>
+            </ul>
+
+            <div class="flex flex-row items-center justify-end gap-1.5 flex-1 max-lg:hidden">
+            <button
+              type="button"
+              data-search-full=""
+              data-search-trigger
+              class="inline-flex items-center gap-2 border bg-fd-secondary/50 p-1.5 text-sm text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-accent-foreground w-full rounded-full ps-2.5 max-w-[240px]"
+              aria-label="Search docs"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="lucide lucide-search size-4"
+                aria-hidden="true"
+              >
+                <path d="m21 21-4.34-4.34"></path>
+                <circle cx="11" cy="11" r="8"></circle>
+              </svg>
+              Search
+              <div class="ms-auto inline-flex gap-0.5">
+                <kbd
+                  class="rounded-md border bg-fd-background px-1.5"
+                  data-shortcut-mod>Ctrl</kbd
+                >
+                <kbd class="rounded-md border bg-fd-background px-1.5">K</kbd>
+              </div>
+            </button>
+
+            <button
+              class="inline-flex items-center rounded-full border p-1"
+              aria-label="Toggle Theme"
+              data-theme-toggle
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="lucide lucide-sun size-6.5 rounded-full p-1.5 text-fd-muted-foreground"
+                aria-hidden="true"
+                data-theme-sun
+              >
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v2"></path>
+                <path d="M12 20v2"></path>
+                <path d="m4.93 4.93 1.41 1.41"></path>
+                <path d="m17.66 17.66 1.41 1.41"></path>
+                <path d="M2 12h2"></path>
+                <path d="M20 12h2"></path>
+                <path d="m6.34 17.66-1.41 1.41"></path>
+                <path d="m19.07 4.93-1.41 1.41"></path>
+              </svg>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="lucide lucide-moon size-6.5 rounded-full p-1.5 text-fd-muted-foreground"
+                aria-hidden="true"
+                data-theme-moon
+              >
+                <path
+                  d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"
+                ></path>
+              </svg>
+            </button>
+
+            <ul class="flex flex-row gap-2 items-center empty:hidden">
+              <li class="list-none -mx-1 first:ms-0 last:me-0">
+                <a
+                  href="https://github.com/absmach/fluxmq"
+                  rel="noreferrer noopener"
+                  target="_blank"
+                  aria-label="github"
+                  class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors duration-100 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fd-ring hover:bg-fd-accent hover:text-fd-accent-foreground p-1.5 [&_svg]:size-5"
+                >
+                  <svg role="img" viewBox="0 0 24 24" fill="currentColor">
+                    <path
+                      d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+                    ></path>
+                  </svg>
+                </a>
+              </li>
+            </ul>
+            </div>
+
+            <div class="ml-auto flex items-center gap-2 md:hidden">
+            <button
+              type="button"
+              class="theme-toggle-pill"
+              aria-label="Toggle theme"
+              data-theme-toggle
+            >
+              <span class="theme-dot" data-theme-sun aria-hidden="true">
+                <svg
+                  class="size-full"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v2"></path>
+                  <path d="M12 20v2"></path>
+                  <path d="m4.93 4.93 1.41 1.41"></path>
+                  <path d="m17.66 17.66 1.41 1.41"></path>
+                  <path d="M2 12h2"></path>
+                  <path d="M20 12h2"></path>
+                  <path d="m6.34 17.66-1.41 1.41"></path>
+                  <path d="m19.07 4.93-1.41 1.41"></path>
+                </svg>
+              </span>
+              <span class="theme-dot" data-theme-moon aria-hidden="true">
+                <svg
+                  class="size-full"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"
+                  ></path>
+                </svg>
+              </span>
+            </button>
+            <a
+              class="nav-icon-link"
+              href="https://github.com/absmach/fluxmq"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="FluxMQ GitHub repository"
+            >
+              <svg
+                class="size-5"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12 .5C5.65.5.5 5.66.5 12.03c0 5.1 3.3 9.43 7.88 10.96.58.11.79-.25.79-.57 0-.28-.01-1.04-.02-2.04-3.2.7-3.88-1.55-3.88-1.55-.53-1.35-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.15.08 1.76 1.2 1.76 1.2 1.03 1.76 2.7 1.25 3.37.96.1-.75.4-1.25.72-1.54-2.56-.29-5.26-1.29-5.26-5.74 0-1.27.46-2.3 1.2-3.11-.12-.29-.52-1.46.12-3.04 0 0 .98-.32 3.2 1.19a11.1 11.1 0 0 1 5.82 0c2.22-1.51 3.2-1.19 3.2-1.19.64 1.58.24 2.75.12 3.04.75.81 1.2 1.84 1.2 3.11 0 4.46-2.7 5.44-5.28 5.73.42.36.78 1.06.78 2.14 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56A11.54 11.54 0 0 0 23.5 12.03C23.5 5.66 18.35.5 12 .5Z"
+                ></path>
+              </svg>
+            </a>
+            </div>
+            </nav>
+          </div>
+          <div class="flex w-full justify-center"></div>
+        </div>
+      </header>
+
       <slot />
     </main>
 
     <script is:inline>
-      const THEME_KEY = 'theme';
+      const THEME_KEY = "theme";
 
       const setTheme = (mode) => {
-        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        const resolved = mode === 'system' ? preferred : mode;
+        const preferred = window.matchMedia("(prefers-color-scheme: light)")
+          .matches
+          ? "light"
+          : "dark";
+        const resolved = mode === "system" ? preferred : mode;
         document.documentElement.dataset.theme = resolved;
-        document.documentElement.classList.toggle('dark', resolved === 'dark');
+        document.documentElement.classList.toggle("dark", resolved === "dark");
         localStorage.setItem(THEME_KEY, mode);
         updateThemeIcons(resolved);
       };
 
       const updateThemeIcons = (resolved) => {
-        document.querySelectorAll('[data-theme-sun]').forEach((sun) => {
-          sun.classList.toggle('theme-dot-active', resolved === 'light');
+        document.querySelectorAll("[data-theme-sun]").forEach((sun) => {
+          sun.classList.toggle("theme-dot-active", resolved === "light");
         });
-        document.querySelectorAll('[data-theme-moon]').forEach((moon) => {
-          moon.classList.toggle('theme-dot-active', resolved === 'dark');
+        document.querySelectorAll("[data-theme-moon]").forEach((moon) => {
+          moon.classList.toggle("theme-dot-active", resolved === "dark");
         });
       };
 
-      document.querySelectorAll('[data-theme-toggle]').forEach((toggleTheme) => {
-        const current = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-        updateThemeIcons(current);
+      document
+        .querySelectorAll("[data-theme-toggle]")
+        .forEach((toggleTheme) => {
+          const current =
+            document.documentElement.dataset.theme === "dark"
+              ? "dark"
+              : "light";
+          updateThemeIcons(current);
 
-        toggleTheme.addEventListener('click', () => {
-          const active = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-          const next = active === 'dark' ? 'light' : 'dark';
-          setTheme(next);
+          toggleTheme.addEventListener("click", () => {
+            const active =
+              document.documentElement.dataset.theme === "dark"
+                ? "dark"
+                : "light";
+            const next = active === "dark" ? "light" : "dark";
+            setTheme(next);
+          });
         });
-      });
 
       const openSearch = () => {
-        if (typeof window.__fluxmqOpenSearch === 'function') {
+        if (typeof window.__fluxmqOpenSearch === "function") {
           window.__fluxmqOpenSearch();
           return;
         }
 
-        window.dispatchEvent(new CustomEvent('fluxmq:open-search'));
+        window.dispatchEvent(new CustomEvent("fluxmq:open-search"));
       };
 
-      const searchTrigger = document.querySelector('[data-search-trigger]');
+      const searchTrigger = document.querySelector("[data-search-trigger]");
       if (searchTrigger) {
-        searchTrigger.addEventListener('click', openSearch);
+        searchTrigger.addEventListener("click", openSearch);
       }
 
-      const shortcutMod = document.querySelector('[data-shortcut-mod]');
+      const shortcutMod = document.querySelector("[data-shortcut-mod]");
       if (shortcutMod && /(Mac|iPhone|iPad|iPod)/i.test(navigator.userAgent)) {
-        shortcutMod.textContent = '⌘';
+        shortcutMod.textContent = "⌘";
       }
 
-      window.addEventListener('keydown', (event) => {
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      window.addEventListener("keydown", (event) => {
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          event.key.toLowerCase() === "k"
+        ) {
           event.preventDefault();
           openSearch();
         }
       });
 
-      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
-        const stored = localStorage.getItem(THEME_KEY);
-        if (!stored || stored === 'system') setTheme('system');
-      });
+      window
+        .matchMedia("(prefers-color-scheme: light)")
+        .addEventListener("change", () => {
+          const stored = localStorage.getItem(THEME_KEY);
+          if (!stored || stored === "system") setTheme("system");
+        });
 
-      const toggle = document.querySelector('[data-menu-toggle]');
-      const menu = document.querySelector('[data-menu]');
+      const toggle = document.querySelector("[data-menu-toggle]");
+      const menu = document.querySelector("[data-menu]");
       if (toggle && menu) {
-        toggle.addEventListener('click', () => {
-          const expanded = toggle.getAttribute('aria-expanded') === 'true';
-          toggle.setAttribute('aria-expanded', String(!expanded));
-          menu.classList.toggle('hidden', expanded);
-          menu.classList.toggle('flex', !expanded);
+        toggle.addEventListener("click", () => {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          toggle.setAttribute("aria-expanded", String(!expanded));
+          menu.classList.toggle("hidden", expanded);
+          menu.classList.toggle("flex", !expanded);
         });
       }
     </script>
