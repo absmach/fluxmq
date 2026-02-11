@@ -2,9 +2,12 @@
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
 
+/* FluxMQ Brand Colors - Light Theme */
 :root {
   --flux-blue: hsl(213.64deg 58.41% 44.31%);
+  /* #2F69B3 */
   --flux-orange: hsl(35.07deg 94.52% 57.06%);
+  /* #F9A32A */
   --flux-bg: hsl(0 0% 100%);
   --flux-fg: hsl(0 0% 10%);
   --flux-border: hsl(0 0% 20%);
@@ -25,7 +28,9 @@
 :root[class~='dark'],
 :root[data-theme='dark'] {
   --flux-blue: hsl(213.64deg 70% 60%);
+  /* Brighter blue for dark mode */
   --flux-orange: hsl(35.07deg 94.52% 57.06%);
+  /* Keep orange same */
   --flux-bg: hsl(0 0% 10%);
   --flux-fg: hsl(0 0% 95%);
   --flux-border: hsl(0 0% 30%);
@@ -69,6 +74,7 @@ p {
   background-size: 20px 20px;
 }
 
+/* Brutalist Elements */
 .brutalist-border {
   border: 2px solid var(--flux-border);
 }
@@ -83,6 +89,7 @@ p {
   border-color: var(--flux-orange);
 }
 
+/* Code/Terminal Styling */
 .terminal {
   background: hsl(0 0% 10%);
   color: hsl(120 100% 80%);
@@ -90,11 +97,12 @@ p {
   border: 2px solid var(--flux-border);
 }
 
-:root[class~='dark'] .terminal,
-:root[data-theme='dark'] .terminal {
+:root[class~="dark"] .terminal {
   background: hsl(0 0% 5%);
+  border-color: var(--flux-border);
 }
 
+/* Accent Lines */
 .accent-line {
   position: relative;
 }
@@ -109,6 +117,12 @@ p {
   background: var(--flux-orange);
 }
 
+/* Technical Typography */
+.mono {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+/* Performance Metrics Table */
 .metrics-table {
   border-collapse: separate;
   border-spacing: 0;
@@ -124,7 +138,7 @@ p {
 .metrics-table th {
   background: var(--flux-fg);
   color: var(--flux-bg);
-  font-weight: 700;
+  font-weight: bold;
 }
 
 .metrics-table tbody {
@@ -132,6 +146,7 @@ p {
   color: var(--flux-text);
 }
 
+/* Theme-aware backgrounds */
 .bg-theme {
   background: var(--flux-bg);
   color: var(--flux-text);
@@ -139,6 +154,15 @@ p {
 
 .bg-theme-alt {
   background: var(--flux-bg-alt);
+  color: var(--flux-text);
+}
+
+.bg-theme-inverse {
+  background: var(--flux-fg);
+  color: var(--flux-bg);
+}
+
+.text-theme {
   color: var(--flux-text);
 }
 
@@ -150,155 +174,25 @@ p {
   border-color: var(--flux-border);
 }
 
-@layer components {
-  .site-header {
-    border-top: 6px solid hsl(0 0% 22%);
-    border-bottom: 1px solid var(--flux-header-border);
-    background: var(--flux-header-bg);
-  }
-
-  .nav-link {
-    @apply inline-flex items-center gap-1 p-2 text-sm font-normal transition-colors;
-    color: var(--color-fd-muted-foreground);
-  }
-
-  .nav-link:hover {
-    color: var(--color-fd-accent-foreground);
-  }
-
-  .nav-search-pill {
-    @apply inline-flex w-full max-w-[240px] items-center gap-2 rounded-full border bg-fd-secondary/50 p-1.5 ps-2.5 text-sm text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-accent-foreground;
-  }
-
-  .kbd-chip {
-    @apply rounded-md border bg-fd-background px-1.5;
-  }
-
-  .theme-toggle-pill {
-    @apply inline-flex items-center rounded-full border p-1;
-  }
-
-  .theme-dot {
-    @apply size-6.5 rounded-full p-1.5 text-fd-muted-foreground;
-  }
-
-  .theme-dot-active {
-    @apply bg-fd-accent text-fd-accent-foreground;
-  }
-
-  .nav-icon-link {
-    @apply inline-flex size-8 items-center justify-center rounded-full p-1 transition-colors;
-    color: var(--flux-icon);
-  }
-
-  .nav-icon-link:hover {
-    color: var(--flux-orange);
-  }
-
-  .feature-card {
-    @apply border-2 bg-[var(--flux-bg)] p-5;
-    border-color: var(--flux-border);
-    color: var(--flux-text);
-  }
-
-  .feature-card:hover {
-    border-color: var(--flux-orange);
-  }
-
-  .feature-card h3 {
-    @apply mb-3 text-xl font-bold;
-  }
-
-  .feature-card p {
-    color: var(--flux-text-muted);
-  }
-
-  .bullet-list {
-    list-style-type: square;
-    @apply space-y-1.5 pl-5;
-    color: var(--flux-text-muted);
-  }
-
-  .cluster-box {
-    @apply border-2 p-5;
-    border-color: var(--flux-border);
-    background: var(--flux-bg);
-    color: var(--flux-text);
-  }
-
-  .metric-head {
-    @apply border px-3 py-3 text-left text-sm font-bold uppercase md:text-base;
-    border-color: var(--flux-border);
-    background: var(--flux-fg);
-    color: var(--flux-bg);
-  }
-
-  .metric-cell {
-    @apply border px-3 py-3 text-sm md:text-base;
-    border-color: var(--flux-border);
-  }
-
-  .code-panel {
-    @apply relative border-2;
-    border-color: var(--flux-border);
-    background: hsl(0 0% 10%);
-    color: hsl(120 100% 80%);
-    font-family: 'JetBrains Mono', 'Courier New', monospace;
-  }
-
-  .code-panel pre {
-    @apply m-0 overflow-x-auto p-4;
-  }
-
-  .code-panel code {
-    @apply text-[0.95rem] whitespace-pre;
-    font-family: 'JetBrains Mono', 'Courier New', monospace;
-  }
+/* Smooth scroll for anchor links */
+html {
+  scroll-behavior: smooth;
 }
 
-.network-dash line {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-dasharray: 8 10;
-  animation: network-dash 10s linear infinite;
+/* Base font size improvements */
+p {
+  font-size: 1.0625rem;
+  /* 17px - slightly larger for better readability */
+  line-height: 1.7;
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.8s ease-out;
+/* Remove default focus outline, add custom */
+*:focus-visible {
+  outline: 2px solid var(--flux-orange);
+  outline-offset: 2px;
 }
 
-.animate-slide-up {
-  animation: slideUp 0.8s ease-out;
-  animation-fill-mode: backwards;
-}
-
-.animate-slide-up:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.animate-slide-up:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .network-dash line,
-  .animate-fade-in,
-  .animate-slide-up {
-    animation: none;
-  }
-}
-
-@keyframes network-dash {
-  from {
-    stroke-dashoffset: 0;
-  }
-
-  to {
-    stroke-dashoffset: -420;
-  }
-}
-
+/* Animations */
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -321,17 +215,78 @@ p {
   }
 }
 
-:focus-visible {
-  outline: 2px solid var(--flux-orange);
-  outline-offset: 2px;
+.animate-fade-in {
+  animation: fadeIn 0.8s ease-out;
 }
 
-#nd-sidebar [data-active='true'] {
+.animate-slide-up {
+  animation: slideUp 0.8s ease-out;
+  animation-fill-mode: backwards;
+}
+
+.animate-slide-up:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.animate-slide-up:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+
+  .animate-fade-in,
+  .animate-slide-up {
+    animation: none;
+  }
+}
+
+/* Fumadocs Sidebar Styling */
+#nd-sidebar [data-active="true"] {
   color: var(--flux-orange) !important;
-  background-color: rgb(249 163 42 / 10%) !important;
+  background-color: rgba(249, 163, 42, 0.1) !important;
   border-left: 3px solid var(--flux-orange) !important;
 }
 
 #nd-sidebar a:hover {
   color: var(--flux-blue) !important;
+}
+/* Astro only injects MDX component mappings for .mdx entries.
+ * Plain .md entries keep raw <pre class="shiki"> output, so normalize it
+ * to match Fumadocs code block layout. */
+.prose pre.shiki {
+  @apply my-4 overflow-auto rounded-xl border;
+  box-shadow: none;
+  background-color: var(--shiki-light-bg);
+}
+
+.dark .prose pre.shiki,
+:root[data-theme='dark'] .prose pre.shiki {
+  background-color: var(--shiki-light-bg);
+}
+
+.prose pre.shiki code {
+  @apply min-w-full w-max;
+  display: flex;
+  flex-direction: column;
+}
+
+.dark .prose pre.shiki code span,
+:root[data-theme='dark'] .prose pre.shiki code span {
+  color: var(--shiki-light) !important;
+}
+
+.prose pre.shiki code .line {
+  display: block;
+}
+
+/* Prevent inline-code prose styles from leaking into fenced code blocks. */
+.prose pre > code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  display: block;
 }

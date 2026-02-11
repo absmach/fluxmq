@@ -17,6 +17,17 @@ export default defineConfig({
   site,
   base: process.env.FQ_BASE_PATH ?? '/',
   output: 'static',
+  markdown: {
+    syntaxHighlight: false,
+
+    remarkPlugins: [
+      remarkHeading,
+      remarkCodeTab,
+      remarkNpm,
+      [remarkStructure, { exportAs: "structuredData" }],
+    ],
+    rehypePlugins: [rehypeCode],
+  },
   integrations: [
     sitemap(),
     react(),
