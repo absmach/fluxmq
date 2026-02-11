@@ -1,0 +1,230 @@
+---
+import '../styles/global.css';
+import '../styles/fumadocs-search.css';
+import HomeSearchBridge from '@/components/HomeSearchBridge';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'FluxMQ - High-Performance Multi-Protocol Message Broker',
+  description =
+    'FluxMQ is a high-performance, multi-protocol message broker written in Go. Supports MQTT, WebSocket, HTTP and CoAP with durable queues and clustering.',
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="/og-image.png" />
+    <link rel="icon" href="/logo.png" />
+    <link rel="canonical" href="https://absmach.eu/fluxmq/" />
+    <script is:inline>
+      (() => {
+        const THEME_KEY = 'theme';
+        const stored = localStorage.getItem(THEME_KEY);
+        const mode = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        const resolved = mode === 'system' ? preferred : mode;
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.classList.toggle('dark', resolved === 'dark');
+      })();
+    </script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-theme text-[var(--flux-text)]">
+    <HomeSearchBridge client:only="react" />
+
+    <header class="site-header z-50">
+      <nav class="mx-auto flex min-h-[64px] w-[min(100%-2.5rem,1360px)] items-center gap-4" aria-label="Main navigation">
+        <a class="animate-fade-in text-2xl font-bold md:text-[2.45rem]" style="line-height:1.1" href="/" aria-label="FluxMQ home">
+          <span class="text-[var(--flux-blue)]">Flux</span><span class="text-[var(--flux-orange)]">MQ</span>
+        </a>
+
+        <button
+          class="inline-flex rounded-md border border-[var(--flux-pill-border)] bg-[var(--flux-pill-bg)] px-3 py-2 text-sm font-semibold text-[var(--flux-text)] md:hidden"
+          type="button"
+          aria-expanded="false"
+          aria-controls="site-menu"
+          data-menu-toggle
+        >
+          Menu
+        </button>
+
+        <ul
+          id="site-menu"
+          class="absolute left-0 right-0 top-[63px] hidden flex-col items-start gap-4 border-b border-[var(--flux-header-border)] bg-[var(--flux-header-bg)] px-5 py-4 text-[0.95rem] font-normal md:static md:top-0 md:flex md:min-w-0 md:flex-1 md:flex-row md:items-center md:gap-7 md:border-0 md:bg-transparent md:p-0 md:pl-8"
+          data-menu
+        >
+          <li><a class="nav-link" href="/#features">Features</a></li>
+          <li><a class="nav-link" href="/#performance">Performance</a></li>
+          <li><a class="nav-link" href="/#use-cases">Use Cases</a></li>
+          <li><a class="nav-link" href="/#architecture">Architecture</a></li>
+          <li><a class="nav-link" href="/#quick-start">Quick Start</a></li>
+          <li><a class="nav-link" href="/docs/">Documentation</a></li>
+          <li class="md:hidden"><a class="nav-link" href="https://github.com/absmach/fluxmq" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+        </ul>
+
+        <div class="ml-auto hidden items-center gap-2 md:flex">
+          <button type="button" class="nav-search-pill" aria-label="Search docs" data-search-trigger>
+            <span class="inline-flex items-center gap-2">
+              <svg class="size-4" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"></circle>
+                <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+              <span>Search</span>
+            </span>
+            <span class="inline-flex items-center gap-1">
+              <kbd class="kbd-chip" data-shortcut-mod>Ctrl</kbd>
+              <kbd class="kbd-chip">K</kbd>
+            </span>
+          </button>
+
+          <button type="button" class="theme-toggle-pill" aria-label="Toggle theme" data-theme-toggle>
+            <span class="theme-dot" data-theme-sun aria-hidden="true">
+              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="10" r="3.2" stroke="currentColor" stroke-width="1.6"></circle>
+                <path d="M10 2v2.2M10 15.8V18M2 10h2.2M15.8 10H18M4.6 4.6l1.5 1.5M13.9 13.9l1.5 1.5M15.4 4.6l-1.5 1.5M6.1 13.9l-1.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
+              </svg>
+            </span>
+            <span class="theme-dot" data-theme-moon aria-hidden="true">
+              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
+                <path d="M13.8 13.9A6.2 6.2 0 0 1 6 6.2a6.7 6.7 0 1 0 7.8 7.7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+              </svg>
+            </span>
+          </button>
+
+          <a
+            class="nav-icon-link"
+            href="https://github.com/absmach/fluxmq"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="FluxMQ GitHub repository"
+          >
+            <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.65.5.5 5.66.5 12.03c0 5.1 3.3 9.43 7.88 10.96.58.11.79-.25.79-.57 0-.28-.01-1.04-.02-2.04-3.2.7-3.88-1.55-3.88-1.55-.53-1.35-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.15.08 1.76 1.2 1.76 1.2 1.03 1.76 2.7 1.25 3.37.96.1-.75.4-1.25.72-1.54-2.56-.29-5.26-1.29-5.26-5.74 0-1.27.46-2.3 1.2-3.11-.12-.29-.52-1.46.12-3.04 0 0 .98-.32 3.2 1.19a11.1 11.1 0 0 1 5.82 0c2.22-1.51 3.2-1.19 3.2-1.19.64 1.58.24 2.75.12 3.04.75.81 1.2 1.84 1.2 3.11 0 4.46-2.7 5.44-5.28 5.73.42.36.78 1.06.78 2.14 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56A11.54 11.54 0 0 0 23.5 12.03C23.5 5.66 18.35.5 12 .5Z" />
+            </svg>
+          </a>
+        </div>
+
+        <div class="ml-auto flex items-center gap-2 md:hidden">
+          <button type="button" class="theme-toggle-pill" aria-label="Toggle theme" data-theme-toggle>
+            <span class="theme-dot" data-theme-sun aria-hidden="true">
+              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="10" r="3.2" stroke="currentColor" stroke-width="1.6"></circle>
+                <path d="M10 2v2.2M10 15.8V18M2 10h2.2M15.8 10H18M4.6 4.6l1.5 1.5M13.9 13.9l1.5 1.5M15.4 4.6l-1.5 1.5M6.1 13.9l-1.5 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path>
+              </svg>
+            </span>
+            <span class="theme-dot" data-theme-moon aria-hidden="true">
+              <svg class="size-3.5" viewBox="0 0 20 20" fill="none">
+                <path d="M13.8 13.9A6.2 6.2 0 0 1 6 6.2a6.7 6.7 0 1 0 7.8 7.7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+              </svg>
+            </span>
+          </button>
+          <a
+            class="nav-icon-link"
+            href="https://github.com/absmach/fluxmq"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="FluxMQ GitHub repository"
+          >
+            <svg class="size-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.65.5.5 5.66.5 12.03c0 5.1 3.3 9.43 7.88 10.96.58.11.79-.25.79-.57 0-.28-.01-1.04-.02-2.04-3.2.7-3.88-1.55-3.88-1.55-.53-1.35-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.15.08 1.76 1.2 1.76 1.2 1.03 1.76 2.7 1.25 3.37.96.1-.75.4-1.25.72-1.54-2.56-.29-5.26-1.29-5.26-5.74 0-1.27.46-2.3 1.2-3.11-.12-.29-.52-1.46.12-3.04 0 0 .98-.32 3.2 1.19a11.1 11.1 0 0 1 5.82 0c2.22-1.51 3.2-1.19 3.2-1.19.64 1.58.24 2.75.12 3.04.75.81 1.2 1.84 1.2 3.11 0 4.46-2.7 5.44-5.28 5.73.42.36.78 1.06.78 2.14 0 1.54-.01 2.78-.01 3.16 0 .31.21.68.8.56A11.54 11.54 0 0 0 23.5 12.03C23.5 5.66 18.35.5 12 .5Z" />
+            </svg>
+          </a>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <slot />
+    </main>
+
+    <script is:inline>
+      const THEME_KEY = 'theme';
+
+      const setTheme = (mode) => {
+        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        const resolved = mode === 'system' ? preferred : mode;
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.classList.toggle('dark', resolved === 'dark');
+        localStorage.setItem(THEME_KEY, mode);
+        updateThemeIcons(resolved);
+      };
+
+      const updateThemeIcons = (resolved) => {
+        document.querySelectorAll('[data-theme-sun]').forEach((sun) => {
+          sun.classList.toggle('theme-dot-active', resolved === 'light');
+        });
+        document.querySelectorAll('[data-theme-moon]').forEach((moon) => {
+          moon.classList.toggle('theme-dot-active', resolved === 'dark');
+        });
+      };
+
+      document.querySelectorAll('[data-theme-toggle]').forEach((toggleTheme) => {
+        const current = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+        updateThemeIcons(current);
+
+        toggleTheme.addEventListener('click', () => {
+          const active = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+          const next = active === 'dark' ? 'light' : 'dark';
+          setTheme(next);
+        });
+      });
+
+      const openSearch = () => {
+        if (typeof window.__fluxmqOpenSearch === 'function') {
+          window.__fluxmqOpenSearch();
+          return;
+        }
+
+        window.dispatchEvent(new CustomEvent('fluxmq:open-search'));
+      };
+
+      const searchTrigger = document.querySelector('[data-search-trigger]');
+      if (searchTrigger) {
+        searchTrigger.addEventListener('click', openSearch);
+      }
+
+      const shortcutMod = document.querySelector('[data-shortcut-mod]');
+      if (shortcutMod && /(Mac|iPhone|iPad|iPod)/i.test(navigator.userAgent)) {
+        shortcutMod.textContent = '⌘';
+      }
+
+      window.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+          event.preventDefault();
+          openSearch();
+        }
+      });
+
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+        const stored = localStorage.getItem(THEME_KEY);
+        if (!stored || stored === 'system') setTheme('system');
+      });
+
+      const toggle = document.querySelector('[data-menu-toggle]');
+      const menu = document.querySelector('[data-menu]');
+      if (toggle && menu) {
+        toggle.addEventListener('click', () => {
+          const expanded = toggle.getAttribute('aria-expanded') === 'true';
+          toggle.setAttribute('aria-expanded', String(!expanded));
+          menu.classList.toggle('hidden', expanded);
+          menu.classList.toggle('flex', !expanded);
+        });
+      }
+    </script>
+  </body>
+</html>

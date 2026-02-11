@@ -1,0 +1,48 @@
+---
+import HeroNetwork from './HeroNetwork.astro';
+---
+
+<section class="relative h-[90vh] border-b-2 border-[var(--flux-border)] py-20 md:py-20">
+  <div class="mx-auto w-[min(100%-2.5rem,1200px)]">
+    <div class="grid items-center gap-12 md:grid-cols-2">
+      <div class="max-w-2xl">
+        <div class="mb-14">
+          <h1 class="animate-fade-in mb-4 text-6xl font-bold md:text-8xl" style="line-height:1.1">
+            <span class="text-[var(--flux-blue)]">Flux</span><span class="text-[var(--flux-orange)]">MQ</span>
+          </h1>
+          <div class="mono animate-slide-up mb-6 border-l-4 border-[var(--flux-orange)] pl-4 text-base text-theme-muted md:text-xl">
+            <div>open-source | high-throughput | low-latency | scalable</div>
+            <div>persistent storage | replication | MQTT v3/v5 | AMQP</div>
+            <div>security | extensibility</div>
+          </div>
+        </div>
+
+        <p class="animate-fade-in mb-14 max-w-3xl text-xl leading-relaxed md:text-2xl">
+          A high-performance, open source, multi-protocol message broker written in Go for scalable IoT and
+          event-driven architectures. Single binary. No external dependencies.
+        </p>
+
+        <div class="animate-slide-up flex flex-wrap gap-4">
+          <a
+            class="brutalist-border inline-block px-6 py-3 font-bold transition-colors hover:bg-[var(--flux-blue)] hover:text-white"
+            href="https://github.com/absmach/fluxmq"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            VIEW ON GITHUB →
+          </a>
+          <a
+            class="brutalist-border inline-block px-6 py-3 font-bold transition-colors hover:bg-[var(--flux-orange)] hover:text-white"
+            href="/docs/"
+          >
+            READ DOCUMENTATION
+          </a>
+        </div>
+      </div>
+
+      <div class="hidden h-[80vh] items-center justify-center md:flex">
+        <HeroNetwork />
+      </div>
+    </div>
+  </div>
+</section>

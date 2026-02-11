@@ -1,0 +1,49 @@
+<section id="performance" class="border-b-2 border-theme bg-theme-alt py-20">
+  <div class="mx-auto w-[min(100%-2.5rem,1200px)]">
+    <h2 class="mb-12 text-4xl font-bold md:text-5xl">
+      <span class="border-l-4 border-[var(--flux-orange)] pl-4">PERFORMANCE</span>
+    </h2>
+
+    <div class="max-w-4xl">
+      <table class="metrics-table mono w-full text-sm md:text-base">
+        <thead>
+          <tr>
+            <th>METRIC</th>
+            <th>VALUE</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Concurrent Connections</td>
+            <td class="font-bold">500K+ per node</td>
+          </tr>
+          <tr>
+            <td>Message Throughput</td>
+            <td class="font-bold">300K-500K msg/s per node</td>
+          </tr>
+          <tr>
+            <td>Latency (local)</td>
+            <td class="font-bold">&lt;10ms</td>
+          </tr>
+          <tr>
+            <td>Latency (cross-node)</td>
+            <td class="font-bold">~5ms</td>
+          </tr>
+          <tr>
+            <td>Session Takeover</td>
+            <td class="font-bold">&lt;100ms</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="brutalist-border bg-theme mt-8 p-6">
+        <h3 class="mono mb-4 text-lg font-bold">CLUSTER SCALING</h3>
+        <ul class="mono space-y-2 text-sm">
+          <li class="border-l-4 border-[var(--flux-blue)] pl-4"><strong>3-node cluster:</strong> 1-2M msg/s</li>
+          <li class="border-l-4 border-[var(--flux-blue)] pl-4"><strong>5-node cluster:</strong> 2-4M msg/s</li>
+          <li class="border-l-4 border-[var(--flux-blue)] pl-4"><strong>Scaling:</strong> Linear with topic sharding</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,124 @@
+---
+title: FluxMQ Documentation
+description: Welcome to FluxMQ - a high-performance, multi-protocol message broker with MQTT, WebSocket, HTTP, and CoAP support
+---
+
+# FluxMQ
+
+A high-performance, multi-protocol message broker written in Go designed for scalability, extensibility, and protocol diversity. Supports MQTT 3.1.1 and 5.0 over TCP and WebSocket, plus HTTP-MQTT and CoAP bridges for IoT integration.
+
+## Features
+
+- **Multi-Protocol Support** - MQTT 3.1.1/5.0, WebSocket, HTTP-MQTT Bridge, CoAP Bridge
+- **High Performance** - 300K-500K msg/s per node with zero-copy packet parsing
+- **Clustering** - Embedded etcd for distributed coordination, no external dependencies
+- **Durable Queues** - Consumer groups with ack/nack/reject semantics
+- **Security** - TLS/mTLS, rate limiting, authentication plugins
+- **Observability** - OpenTelemetry metrics, structured logging, webhook notifications
+
+## Quick Start
+
+### Build & Run
+
+```bash
+# Clone and build
+git clone https://github.com/absmach/fluxmq.git
+cd fluxmq
+make build
+
+# Run single node
+./build/fluxmq
+
+# Run with configuration
+./build/fluxmq --config config.yaml
+```
+
+### Test with MQTT Client
+
+```bash
+# Subscribe
+mosquitto_sub -p 1883 -t "test/#" -v
+
+# Publish
+mosquitto_pub -p 1883 -t "test/hello" -m "Hello FluxMQ"
+```
+
+### Basic Configuration
+
+```yaml
+server:
+  tcp:
+    plain:
+      addr: ":1883"
+  websocket:
+    plain:
+      addr: ":8083"
+      path: "/mqtt"
+  http:
+    plain:
+      addr: ":8080"
+
+broker:
+  max_message_size: 1048576
+  max_retained_messages: 10000
+
+storage:
+  type: badger
+  badger_dir: "./data"
+
+log:
+  level: info
+```
+
+## Architecture Overview
+
+FluxMQ uses a clean layered architecture:
+
+- **Transport Layer** - TCP, WebSocket, HTTP, CoAP servers
+- **Protocol Layer** - MQTT 3.1.1/5.0 packet handling
+- **Domain Layer** - Protocol-agnostic broker logic
+- **Storage Layer** - BadgerDB for persistence, etcd for clustering
+
+## Documentation
+
+- [Architecture](/docs/architecture): System design and component overview
+- [Configuration](/docs/configuration): Complete configuration reference
+- [Clustering](/docs/clustering): Distributed broker setup
+- [Client Libraries](/docs/client): Go MQTT and AMQP clients
+- [Durable Queues](/docs/queue): Queue system with consumer groups
+- [Webhooks](/docs/webhooks): Event notification system
+
+## Performance
+
+| Metric                     | Value                    |
+| -------------------------- | ------------------------ |
+| **Concurrent Connections** | 500K+ per node           |
+| **Message Throughput**     | 300K-500K msg/s per node |
+| **Latency (local)**        | \<10ms                   |
+| **Session Takeover**       | \<100ms                  |
+
+## Use Cases
+
+**Event-Driven Architectures**
+
+- Event backbone for microservices
+- CQRS systems with durable queues
+- Real-time event processing
+
+**IoT & Real-Time Systems**
+
+- Device communication via MQTT
+- Browser clients via WebSocket
+- Edge computing deployments
+
+**High-Availability Systems**
+
+- Clustered deployments (3-5 nodes)
+- Geographic distribution
+- Linear scaling
+
+## Getting Help
+
+- **GitHub**: [github.com/absmach/fluxmq](https://github.com/absmach/fluxmq)
+- **Issues**: Report bugs and request features
+- **Discussions**: Community support and questions

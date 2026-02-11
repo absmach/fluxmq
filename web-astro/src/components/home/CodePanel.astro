@@ -1,0 +1,19 @@
+---
+interface Props {
+  code: string;
+}
+
+const { code } = Astro.props;
+---
+
+<div class="code-panel">
+  <button
+    class="absolute top-2 right-2 border-2 border-[#3c3c3c] bg-[#191b1d] px-2 py-1 text-xs font-semibold text-white transition hover:border-[var(--flux-orange)] hover:bg-[var(--flux-orange)] hover:text-black"
+    type="button"
+    data-copy-btn
+    aria-label="Copy command"
+  >
+    Copy
+  </button>
+  <pre><code>{code}</code></pre>
+</div>

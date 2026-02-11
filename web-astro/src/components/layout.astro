@@ -1,0 +1,24 @@
+---
+import { ClientRouter } from 'astro:transitions';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <ClientRouter />
+    <script is:inline>
+      (() => {
+        const stored = localStorage.getItem('theme');
+        const mode = stored === 'light' || stored === 'dark' ? stored : null;
+        const resolved =
+          mode ?? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.classList.toggle('dark', resolved === 'dark');
+        document.documentElement.dataset.theme = resolved;
+      })();
+    </script>
+  </head>
+  <body class="flex min-h-screen flex-col" transition:persist transition:animate="none" transition:name="page-layout">
+    <slot />
+  </body>
+</html>

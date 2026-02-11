@@ -1,0 +1,26 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Page Not Found | FluxMQ" description="The page you requested was not found.">
+  <section class="border-b-2 border-[var(--flux-border)] py-24">
+    <div class="mx-auto w-[min(100%-2.5rem,900px)]">
+      <h1 class="text-4xl font-extrabold md:text-6xl">404</h1>
+      <p class="mt-4 text-lg text-[var(--flux-muted)]">The page you requested could not be found.</p>
+      <div class="mt-8 flex flex-wrap gap-3">
+        <a
+          class="inline-block border-2 border-[var(--flux-border)] px-4 py-3 text-sm font-bold uppercase tracking-[0.02em] transition hover:bg-[var(--flux-blue)] hover:text-white"
+          href="/"
+        >
+          Go to Home
+        </a>
+        <a
+          class="inline-block border-2 border-[var(--flux-border)] px-4 py-3 text-sm font-bold uppercase tracking-[0.02em] transition hover:bg-[var(--flux-orange)] hover:text-black"
+          href="/docs/"
+        >
+          Open Docs
+        </a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

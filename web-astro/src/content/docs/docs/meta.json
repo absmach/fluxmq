@@ -1,0 +1,20 @@
+{
+  "root": true,
+  "pages": [
+    "---Overview---",
+    "index",
+    "roadmap",
+    "---Core Concepts---",
+    "architecture",
+    "broker",
+    "queue",
+    "clustering",
+    "---Operations---",
+    "configuration",
+    "scaling",
+    "webhooks",
+    "---Reference---",
+    "client",
+    "competition"
+  ]
+}
