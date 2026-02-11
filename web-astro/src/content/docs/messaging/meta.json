@@ -1,0 +1,10 @@
+{
+  "title": "Messaging",
+  "pages": [
+    "publishing-messages",
+    "consuming-messages",
+    "durable-queues",
+    "consumer-groups",
+    "example"
+  ]
+}

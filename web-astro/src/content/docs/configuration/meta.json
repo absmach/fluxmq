@@ -1,0 +1,9 @@
+{
+  "title": "Configuration",
+  "pages": [
+    "server",
+    "storage",
+    "clustering",
+    "security"
+  ]
+}

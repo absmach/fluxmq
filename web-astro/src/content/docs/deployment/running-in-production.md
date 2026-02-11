@@ -1,13 +1,13 @@
 ---
-title: Scaling & Performance
-description: Comprehensive scaling guide covering capacity analysis, performance optimizations, benchmarks, topic sharding, and architecture for 100M+ clients
+title: Running in Production
+description: Production checklist covering performance, scaling, observability, and operational safety
 ---
 
-# Scaling & Performance
+# Running in Production
 
 **Last Updated:** 2026-02-05
 
-Performance and scaling are workload-dependent. Use the benchmark suites in `benchmarks/` and validate on your target hardware and network before making production commitments.
+Production readiness is workload-dependent. Use the benchmark suites in `benchmarks/` and validate on your target hardware and network before making production commitments.
 
 ## Benchmarking
 
@@ -35,4 +35,15 @@ Performance and scaling are workload-dependent. Use the benchmark suites in `ben
 - Use multiple nodes to improve availability and distribute connections.
 - Queue replication is optional and configured via `cluster.raft`.
 
-For configuration details, see `docs/configuration.md`.
+## Security Basics
+
+- Prefer TLS/mTLS listeners in `server.*.tls` and `server.*.mtls`.
+- If you enable inter-broker transport TLS, configure `cluster.transport.tls_*`.
+- Use `ratelimit.*` to protect against connection and message floods.
+
+## Observability
+
+- Enable OpenTelemetry metrics via `server.metrics_enabled` and `server.metrics_addr`.
+- Consider enabling traces only for debugging (`server.otel_traces_enabled`).
+
+For configuration details, see [Configuration reference](/docs/reference/configuration-reference).

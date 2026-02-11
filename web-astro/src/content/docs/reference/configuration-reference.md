@@ -1,11 +1,11 @@
 ---
-title: Configuration Guide
-description: Comprehensive configuration reference for server transports, broker settings, clustering, storage, security, and operational features
+title: Configuration Reference
+description: Comprehensive YAML configuration reference for server, broker, storage, clustering, and operational settings
 ---
 
-# Configuration Guide
+# Configuration Reference
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-07
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 
@@ -14,6 +14,13 @@ FluxMQ uses a single YAML configuration file. Start the broker with:
 ```
 
 If `--config` is omitted, defaults are used (see `config.Default()` in `config/config.go`).
+
+Looking for a guided walkthrough? See:
+
+- [Server configuration](/docs/configuration/server)
+- [Storage configuration](/docs/configuration/storage)
+- [Cluster configuration](/docs/configuration/clustering)
+- [Security configuration](/docs/configuration/security)
 
 ## Configuration Overview
 
@@ -180,6 +187,14 @@ storage:
 
 ## Cluster
 
+Clustering combines:
+
+- **Embedded etcd** (`cluster.etcd`): metadata coordination (session ownership, subscriptions, queue consumers, retained/will metadata).
+- **gRPC transport** (`cluster.transport`): cross-node routing (publishes, queue messages, session takeover, hybrid payload fetch), including delivery to local MQTT, AMQP 1.0, and AMQP 0.9.1 clients.
+- **Optional Raft** (`cluster.raft`): replicates durable queue operations.
+
+For a “how it works” deep dive, see [Clustering internals](/docs/architecture/clustering).
+
 ```yaml
 cluster:
   enabled: false
@@ -217,6 +232,25 @@ cluster:
     snapshot_interval: "5m"
     snapshot_threshold: 8192
 ```
+
+### Raft Behavior (What The Knobs Mean)
+
+Two Raft fields control most real-world behavior for queues:
+
+- `cluster.raft.write_policy`: follower behavior when receiving a queue publish (`forward` is usually the best default).
+- `cluster.raft.distribution_mode`: cross-node delivery strategy (`forward` routes deliveries; `replicate` relies on the replicated log).
+
+Other fields affect durability and timing:
+
+- `sync_mode`: if true, a queue publish waits for the Raft apply to complete (bounded by `ack_timeout`).
+- `ack_timeout`: how long the leader waits for an apply to finish in sync mode.
+- `heartbeat_timeout`, `election_timeout`: Raft stability knobs (failover sensitivity vs churn).
+- `snapshot_interval`, `snapshot_threshold`: storage/compaction knobs for the Raft log.
+
+Notes on current implementation:
+
+- FluxMQ currently runs a single Raft group for all queues. Group membership comes from the configured peer list (and the local node).
+- `replication_factor` and `min_in_sync_replicas` are accepted in config but do not currently limit membership or override Raft quorum rules.
 
 ## Webhooks
 

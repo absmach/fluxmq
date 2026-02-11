@@ -1,9 +1,9 @@
 ---
-title: Client Library
-description: Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support, auto-reconnect, and comprehensive features
+title: Go Client
+description: Pure Go client library for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support
 ---
 
-# Client Library
+# Go Client
 
 Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support.
 Note: FluxMQ also exposes AMQP 1.0 server support, but this repository does not
@@ -47,7 +47,10 @@ func main() {
             log.Printf("Received: %s -> %s", topic, string(payload))
         })
 
-    c := client.New(opts)
+    c, err := client.New(opts)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Connect
     if err := c.Connect(); err != nil {
@@ -230,15 +233,26 @@ The client supports durable queues with consumer groups and message acknowledgme
 Reject/DLQ wiring in the broker is pending.
 MQTT v3 can publish and subscribe to queue topics, but acknowledgments require MQTT v5 user properties.
 
-**When to use queues instead of regular pub/sub:**
-- You need at-least-once processing with explicit acknowledgments
-- Multiple consumers should share the workload (consumer groups)
-- Failed messages need retry logic or dead-letter handling
+Use queues when you want “workers processing a durable backlog” rather than “everyone who is subscribed gets a copy”.
 
-**Key concepts:**
-- **Queue**: Persistent message buffer with ordered delivery per queue (single log)
-- **Consumer Group**: Multiple consumers share messages from the same queue
-- **Acknowledgment**: Confirm success (Ack), request redelivery (Nack), or reject permanently (Reject)
+On the wire, the Go client maps queue operations to MQTT v5 conventions:
+
+- Publishing to queue `orders` becomes a publish to topic `$queue/orders`.
+- Subscribing to a queue sets the consumer group with the MQTT v5 `consumer-group` user property.
+- Acknowledgments publish to `$queue/<queue>/$ack|$nack|$reject` and attach `message-id` and `group-id` as MQTT v5 user properties.
+
+<Mermaid
+chart="
+sequenceDiagram
+  participant App as Your app
+  participant Cli as Go client
+  participant Br as FluxMQ
+  App->>Cli: PublishToQueue(orders, payload)
+  Cli->>Br: PUBLISH $queue/orders
+  Br-->>Cli: Deliver message-id + group-id
+  App->>Cli: msg.Ack()
+  Cli->>Br: PUBLISH $queue/orders/$ack (user props)"
+/>
 
 ### Publishing to Queues
 
@@ -308,6 +322,7 @@ c.UnsubscribeFromQueue("orders")
 package main
 
 import (
+    "fmt"
     "log"
     "github.com/absmach/fluxmq/client"
 )
@@ -318,7 +333,10 @@ func main() {
         SetClientID("order-processor").
         SetProtocolVersion(5)
 
-    c := client.New(opts)
+    c, err := client.New(opts)
+    if err != nil {
+        log.Fatal(err)
+    }
     if err := c.Connect(); err != nil {
         log.Fatal(err)
     }
@@ -343,7 +361,10 @@ func main() {
 
     // Publish some orders
     for i := 0; i < 10; i++ {
-        c.PublishToQueue("orders", []byte(`{"id": "`+string(rune(i))+`"}`))
+        order := fmt.Sprintf(`{"id":"%d"}`, i)
+        if err := c.PublishToQueue("orders", []byte(order)); err != nil {
+            log.Printf("publish failed: %v", err)
+        }
     }
 
     select {} // Keep running

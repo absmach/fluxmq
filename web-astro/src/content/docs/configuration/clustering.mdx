@@ -1,0 +1,101 @@
+---
+title: Clustering
+description: Configure embedded etcd, transport, and optional Raft replication
+---
+
+# Clustering Configuration
+
+**Last Updated:** 2026-02-05
+
+Clustering has three building blocks:
+
+- **Embedded etcd**: cluster metadata (ownership, subscriptions, consumer registry).
+- **Inter-node transport (gRPC)**: routing publishes, queue deliveries, and session takeover.
+- **Optional Raft**: replicates durable queue operations.
+
+```yaml
+cluster:
+  enabled: true
+  node_id: "broker-1"
+
+  etcd:
+    data_dir: "/tmp/fluxmq/etcd"
+    bind_addr: "0.0.0.0:2380"
+    client_addr: "0.0.0.0:2379"
+    initial_cluster: "broker-1=http://0.0.0.0:2380"
+    bootstrap: true
+    hybrid_retained_size_threshold: 1024
+
+  transport:
+    bind_addr: "0.0.0.0:7948"
+    peers: {}
+
+  raft:
+    enabled: false
+    write_policy: "forward"
+    distribution_mode: "forward"
+```
+
+## etcd (Metadata Plane)
+
+`cluster.etcd` configures the embedded etcd member running inside each broker node.
+
+`hybrid_retained_size_threshold` controls the retained/will hybrid strategy:
+
+- Messages smaller than the threshold are replicated via etcd (metadata + payload).
+- Larger messages store only metadata in etcd; the payload stays on the owner node and is fetched via transport when needed.
+
+## Transport (Data Plane)
+
+`cluster.transport` configures the gRPC transport used for:
+
+- Pub/sub routing across nodes.
+- Queue distribution (forwarding publishes and routing queue deliveries).
+- Session takeover state transfer.
+- Hybrid retained/will payload fetch (large payloads).
+
+## Raft (Queue Replication)
+
+Raft affects durable queues only. If `cluster.raft.enabled` is true, FluxMQ starts a single Raft group that replicates queue operations (appends and consumer-group state changes).
+
+Two settings determine cluster queue behavior:
+
+### `write_policy`
+
+Controls what happens when a node that is *not* the Raft leader receives a queue publish:
+
+- `forward`: forward the publish to the leader (recommended).
+- `reject`: reject the publish on followers (clients must retry against the leader).
+- `local`: append locally without redirect (no durability guarantees across nodes).
+
+### `distribution_mode`
+
+Controls how messages reach consumers across nodes:
+
+- `forward`: append on one node, then route deliveries to remote consumers via transport.
+- `replicate`: replicate the queue log via Raft so nodes with consumers can deliver from local storage.
+
+<Mermaid
+chart="
+flowchart LR
+  Pub[Queue publish arrives] --> LeaderCheck{Raft enabled + leader?}
+  LeaderCheck -->|leader| Append[Append via Raft apply]
+  LeaderCheck -->|follower| Policy{write_policy}
+  Policy -->|forward| Fwd[Forward to leader]
+  Policy -->|reject| Err[Return error]
+  Policy -->|local| Local[Append locally]
+  Append --> Dist{distribution_mode}
+  Dist -->|forward| Route[Route to remote consumers]
+  Dist -->|replicate| Repl[Replicate log to peers]"
+/>
+
+Notes on current behavior:
+
+- Raft membership is derived from the configured peer list (and the local node). `replication_factor` is accepted in config, but does not currently limit membership.
+- `min_in_sync_replicas` is accepted in config, but Raft quorum rules still ultimately govern commit behavior.
+
+## Learn More
+
+- [Running a cluster](/docs/deployment/running-cluster)
+- [Clustering internals](/docs/architecture/clustering)
+- [Configuration reference](/docs/reference/configuration-reference)

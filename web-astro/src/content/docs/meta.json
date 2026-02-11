@@ -1,0 +1,16 @@
+{
+  "title": "Docs",
+  "pages": [
+    "index",
+    "getting-started",
+    "concepts",
+    "architecture",
+    "messaging",
+    "configuration",
+    "clients",
+    "deployment",
+    "comparison",
+    "roadmap",
+    "reference"
+  ]
+}

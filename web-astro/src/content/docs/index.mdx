@@ -10,13 +10,15 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 ## Features
 
 - **Multi-Protocol Support** - MQTT 3.1.1/5.0, WebSocket, HTTP-MQTT Bridge, CoAP Bridge
-- **High Performance** - 300K-500K msg/s per node with zero-copy packet parsing
+- **Performance-focused** - zero-copy packet parsing and pooled allocations for high-throughput workloads
 - **Clustering** - Embedded etcd for distributed coordination, no external dependencies
 - **Durable Queues** - Consumer groups with ack/nack/reject semantics
-- **Security** - TLS/mTLS, rate limiting, authentication plugins
+- **Security** - TLS/mTLS, rate limiting, pluggable auth/authz
 - **Observability** - OpenTelemetry metrics, structured logging, webhook notifications
 
 ## Quick Start
+
+Prefer Docker? See [Quick Start (Docker)](/docs/getting-started/quick-start-docker).
 
 ### Build & Run
 
@@ -83,45 +85,52 @@ FluxMQ uses a clean layered architecture:
 
 <Cards>
   <Card
+    title="Getting Started"
+    href="/docs/getting-started/quick-start-docker"
+    description="Quick start, first message, first queue"
+  />
+  <Card
+    title="Concepts"
+    href="/docs/concepts/broker"
+    description="Broker, topics, queues, consumer groups"
+  /> 
+  <Card
     title="Architecture"
-    href="/docs/architecture"
-    description="System design and component overview"
+    href="/docs/architecture/overview"
+    description="Overview, routing, storage, clustering internals"
+  />
+  <Card
+    title="Messaging"
+    href="/docs/messaging/publishing-messages"
+    description="Publishing, consuming, queues, streams, and protocol interop"
   />
   <Card
     title="Configuration"
-    href="/docs/configuration"
-    description="Complete configuration reference"
+    href="/docs/configuration/server"
+    description="Server, storage, clustering, security"
   />
   <Card
-    title="Clustering"
-    href="/docs/clustering"
-    description="Distributed broker setup"
+    title="Clients"
+    href="/docs/clients/mqtt"
+    description="MQTT, HTTP, Go client, WebSocket"
   />
   <Card
-    title="Client Libraries"
-    href="/docs/client"
-    description="Go MQTT and AMQP clients"
-  />
-  <Card
-    title="Durable Queues"
-    href="/docs/queue"
-    description="Queue system with consumer groups"
-  />
-  <Card
-    title="Webhooks"
-    href="/docs/webhooks"
-    description="Event notification system"
+    title="Reference"
+    href="/docs/reference/configuration-reference"
+    description="Configuration, CLI, protocol summary"
   />
 </Cards>
 
-## Performance
+## Performance Notes
 
 | Metric                     | Value                    |
 | -------------------------- | ------------------------ |
-| **Concurrent Connections** | 500K+ per node           |
-| **Message Throughput**     | 300K-500K msg/s per node |
-| **Latency (local)**        | \<10ms                   |
-| **Session Takeover**       | \<100ms                  |
+| **Concurrent Connections** | Workload and hardware dependent |
+| **Message Throughput**     | Workload and hardware dependent |
+| **Latency (local)**        | Depends on QoS, fan-out, and persistence settings |
+| **Session Takeover**       | Fast-path optimized; benchmark in your target environment |
+
+See `benchmarks/README.md` in the repository for reproducible benchmark commands.
 
 ## Use Cases
 

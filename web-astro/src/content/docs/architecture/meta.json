@@ -1,0 +1,10 @@
+{
+  "title": "Architecture",
+  "pages": [
+    "overview",
+    "routing",
+    "webhooks",
+    "storage",
+    "clustering"
+  ]
+}
