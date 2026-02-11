@@ -1,0 +1,11 @@
+---
+import MermaidClient from "@/components/mdx/MermaidClient";
+
+interface Props {
+  chart: string;
+}
+
+const { chart } = Astro.props;
+---
+
+<MermaidClient chart={chart} client:load />

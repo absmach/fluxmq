@@ -1,19 +1,20 @@
 ---
-import { render, type CollectionEntry } from 'astro:content';
-import { Docs } from '@/components/docs';
-import defaultMdxComponents from 'fumadocs-ui/mdx';
-import { source } from '@/lib/source';
-import Layout from '@/components/layout.astro';
-import type { TOCItemType } from 'fumadocs-core/toc';
+import { render, type CollectionEntry } from "astro:content";
+import { Docs } from "@/components/docs";
+import defaultMdxComponents from "fumadocs-ui/mdx";
+import { source } from "@/lib/source";
+import Layout from "@/components/layout.astro";
+import type { TOCItemType } from "fumadocs-core/toc";
+import Mermaid from "../../components/mdx/Mermaid.astro";
 
 interface Props {
-  page: CollectionEntry<'docs'>;
+  page: CollectionEntry<"docs">;
 }
 
 export async function getStaticPaths() {
   const pages = source.getPages();
   const paths = pages.map((page) => ({
-    params: { slug: page.slugs.length > 0 ? page.slugs.join('/') : undefined },
+    params: { slug: page.slugs.length > 0 ? page.slugs.join("/") : undefined },
     props: { page: page.data._raw },
   }));
 
@@ -21,7 +22,7 @@ export async function getStaticPaths() {
   const rootPage = pages.find((page) => page.slugs.length === 0);
   if (rootPage) {
     paths.push({
-      params: { slug: 'index' },
+      params: { slug: "index" },
       props: { page: rootPage.data._raw },
     });
   }
@@ -52,6 +53,6 @@ const toc: TOCItemType[] = headings.map((heading) => ({
     description={page.data.description}
     client:load
   >
-    <Content components={{ ...defaultMdxComponents }} />
+    <Content components={{ ...defaultMdxComponents, Mermaid }} />
   </Docs>
 </Layout>
