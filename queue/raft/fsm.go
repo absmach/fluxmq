@@ -508,30 +508,39 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 	ctx := context.Background()
 
 	// Restore queue configs and consumer groups
-	for _, queueData := range snapshot.Queues {
-		if queueData.QueueConfig != nil {
-			if err := f.queueStore.CreateQueue(ctx, *queueData.QueueConfig); err != nil {
+	for _, q := range snapshot.Queues {
+		if q.QueueConfig != nil {
+			if err := f.queueStore.CreateQueue(ctx, *q.QueueConfig); err != nil {
 				if err == storage.ErrQueueAlreadyExists {
-					if updateErr := f.queueStore.UpdateQueue(ctx, *queueData.QueueConfig); updateErr != nil {
+					if updateErr := f.queueStore.UpdateQueue(ctx, *q.QueueConfig); updateErr != nil {
 						f.logger.Error("failed to restore queue config",
-							slog.String("queue", queueData.QueueName),
+							slog.String("queue", q.QueueName),
 							slog.String("error", updateErr.Error()))
 						return updateErr
 					}
 				} else {
 					f.logger.Error("failed to restore queue config",
-						slog.String("queue", queueData.QueueName),
+						slog.String("queue", q.QueueName),
 						slog.String("error", err.Error()))
 					return err
 				}
 			}
+		} else if q.QueueName != "" {
+			// Pre-upgrade snapshot without QueueConfig — ensure the queue
+			// exists so consumer groups below don't become orphaned.
+			if err := f.ensureQueueExists(ctx, q.QueueName); err != nil {
+				f.logger.Error("failed to ensure queue for legacy snapshot entry",
+					slog.String("queue", q.QueueName),
+					slog.String("error", err.Error()))
+				return err
+			}
 		}
 
-		for _, group := range queueData.Groups {
+		for _, group := range q.Groups {
 			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 				if err != storage.ErrConsumerGroupExists {
 					f.logger.Error("failed to restore consumer group",
-						slog.String("queue", queueData.QueueName),
+						slog.String("queue", q.QueueName),
 						slog.String("group", group.ID),
 						slog.String("error", err.Error()))
 					return err

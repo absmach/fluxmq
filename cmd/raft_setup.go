@@ -224,6 +224,7 @@ type raftGroupProvisioner struct {
 
 	mu           sync.Mutex
 	managers     map[string]*qraft.Manager
+	inflight     map[string]chan struct{} // closed when provisioning completes (success or failure)
 	usedBind     map[string]string
 	bindByGroup  map[string]string
 	staticGroups map[string]struct{}
@@ -264,6 +265,7 @@ func newRaftGroupProvisioner(
 		groupStore:   groupStore,
 		logger:       logger,
 		managers:     managers,
+		inflight:     make(map[string]chan struct{}),
 		usedBind:     usedBind,
 		bindByGroup:  bindByGroup,
 		staticGroups: staticGroups,
@@ -276,53 +278,90 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 		gid = qraft.DefaultGroupID
 	}
 
-	p.mu.Lock()
-	if manager, ok := p.managers[gid]; ok && manager != nil {
-		p.mu.Unlock()
-		return manager, nil
-	}
+	for {
+		p.mu.Lock()
 
-	// Hold the lock during config resolution and slot reservation to prevent
-	// two goroutines from racing to create the same group.
-	groupCfg, configured := p.raftCfg.Groups[gid]
-	if configured && groupCfg.Enabled != nil && !*groupCfg.Enabled {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("raft group %q is disabled", gid)
-	}
-	if !configured && !p.raftCfg.AutoProvisionGroups {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("raft group %q is not configured and auto_provision_groups is disabled", gid)
-	}
+		// Fast path: already provisioned.
+		if manager, ok := p.managers[gid]; ok && manager != nil {
+			p.mu.Unlock()
+			return manager, nil
+		}
 
-	if !configured {
-		derived, err := p.deriveAutoGroupConfig(gid)
+		// Another goroutine is provisioning this group — wait for it.
+		if ch, ok := p.inflight[gid]; ok {
+			p.mu.Unlock()
+			<-ch
+			continue // re-check managers after wakeup
+		}
+
+		// This goroutine wins: resolve config and reserve the slot.
+		groupCfg, configured := p.raftCfg.Groups[gid]
+		if configured && groupCfg.Enabled != nil && !*groupCfg.Enabled {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("raft group %q is disabled", gid)
+		}
+		if !configured && !p.raftCfg.AutoProvisionGroups {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("raft group %q is not configured and auto_provision_groups is disabled", gid)
+		}
+
+		if !configured {
+			derived, err := p.deriveAutoGroupConfig(gid)
+			if err != nil {
+				p.mu.Unlock()
+				return nil, err
+			}
+			groupCfg = derived
+		}
+
+		runtime, err := resolveRaftGroupRuntime(gid, p.raftCfg, groupCfg, false)
 		if err != nil {
 			p.mu.Unlock()
 			return nil, err
 		}
-		groupCfg = derived
-	}
 
-	runtime, err := resolveRaftGroupRuntime(gid, p.raftCfg, groupCfg, false)
-	if err != nil {
+		if existingGroup, ok := p.usedBind[runtime.BindAddr]; ok && existingGroup != gid {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("raft group %q bind_addr %q collides with group %q", gid, runtime.BindAddr, existingGroup)
+		}
+
+		// Reserve bind address and mark provisioning in-flight.
+		done := make(chan struct{})
+		p.inflight[gid] = done
+		p.usedBind[runtime.BindAddr] = gid
+		p.bindByGroup[gid] = runtime.BindAddr
 		p.mu.Unlock()
-		return nil, err
-	}
 
-	if existingGroup, ok := p.usedBind[runtime.BindAddr]; ok && existingGroup != gid {
+		manager, startErr := p.startManager(ctx, gid, runtime)
+
+		p.mu.Lock()
+		delete(p.inflight, gid)
+		if startErr != nil {
+			// Roll back bind reservation only — no manager was stored.
+			if p.usedBind[runtime.BindAddr] == gid {
+				delete(p.usedBind, runtime.BindAddr)
+			}
+			delete(p.bindByGroup, gid)
+			close(done)
+			p.mu.Unlock()
+			return nil, startErr
+		}
+		p.managers[gid] = manager
+		close(done)
 		p.mu.Unlock()
-		return nil, fmt.Errorf("raft group %q bind_addr %q collides with group %q", gid, runtime.BindAddr, existingGroup)
+
+		p.logger.Info("dynamically provisioned raft group",
+			slog.String("group", gid),
+			slog.String("bind_addr", runtime.BindAddr),
+			slog.String("data_dir", runtime.DataDir))
+
+		return manager, nil
 	}
+}
 
-	// Reserve the slot so concurrent callers see a placeholder and wait.
-	p.managers[gid] = nil
-	p.usedBind[runtime.BindAddr] = gid
-	p.bindByGroup[gid] = runtime.BindAddr
-	p.mu.Unlock()
-
+func (p *raftGroupProvisioner) startManager(ctx context.Context, gid string, runtime raftGroupRuntime) (*qraft.Manager, error) {
 	groupLogger := p.logger.With(slog.String("raft_group", gid))
 	if p.queueStore == nil || p.groupStore == nil {
-		p.cleanupReservation(gid, runtime.BindAddr)
 		return nil, fmt.Errorf("cannot provision raft group %q: queue/group stores are not configured", gid)
 	}
 	manager := qraft.NewManager(
@@ -337,33 +376,10 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 	)
 
 	if err := manager.Start(ctx); err != nil {
-		p.cleanupReservation(gid, runtime.BindAddr)
 		return nil, fmt.Errorf("failed to start raft group %q: %w", gid, err)
 	}
 
-	p.mu.Lock()
-	p.managers[gid] = manager
-	p.mu.Unlock()
-
-	p.logger.Info("dynamically provisioned raft group",
-		slog.String("group", gid),
-		slog.String("bind_addr", runtime.BindAddr),
-		slog.String("data_dir", runtime.DataDir))
-
 	return manager, nil
-}
-
-// cleanupReservation removes a placeholder reservation when manager.Start() fails.
-func (p *raftGroupProvisioner) cleanupReservation(gid, bindAddr string) {
-	p.mu.Lock()
-	if p.managers[gid] == nil {
-		delete(p.managers, gid)
-	}
-	if bindAddr != "" && p.usedBind[bindAddr] == gid {
-		delete(p.usedBind, bindAddr)
-	}
-	delete(p.bindByGroup, gid)
-	p.mu.Unlock()
 }
 
 func (p *raftGroupProvisioner) TryReleaseGroup(_ context.Context, groupID string) (bool, error) {

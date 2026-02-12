@@ -135,6 +135,9 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	raftGroupStore := newRaftGroupStore(groupStore)
+	if logger != nil {
+		raftGroupStore.SetLogger(logger)
+	}
 	consumerMgr := consumer.NewManager(queueStore, raftGroupStore, consumerCfg)
 
 	var localNodeID string
@@ -373,11 +376,6 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 
 	shouldReplicate := (replicatedNow || replicatedNext) && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled()
 	if shouldReplicate {
-		if replicatedNext {
-			if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
-				return err
-			}
-		}
 		if err := m.raftCoordinator.ApplyUpdateQueue(ctx, config); err != nil {
 			return err
 		}
@@ -385,22 +383,19 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 		if err := m.queueStore.UpdateQueue(ctx, config); err != nil && err != storage.ErrQueueNotFound {
 			return err
 		}
-		// EnsureQueue already updated the coordinator's queue→group mapping,
-		// but we still need to handle the case where replication was just
-		// disabled (replicatedNow=true, replicatedNext=false).
-		if !replicatedNext {
-			if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
-				return err
-			}
-		}
 	} else {
 		if err := m.queueStore.UpdateQueue(ctx, config); err != nil {
 			return err
 		}
-		if m.raftCoordinator != nil {
-			if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
-				return err
-			}
+	}
+
+	// Always sync the coordinator's queue→group mapping. UpdateQueue on the
+	// coordinator captures the previous group before overwriting, so it can
+	// release dynamic groups that are no longer referenced by any queue
+	// (e.g. group A→B migration, or replication being disabled).
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
+			return err
 		}
 	}
 
