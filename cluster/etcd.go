@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/broker/router"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -73,11 +74,18 @@ type EtcdCluster struct {
 	// Local subscription cache for fast topic matching
 	subCache   map[string]*storage.Subscription // key: clientID|filter
 	clientSubs map[string][]string              // clientID → []cacheKey (reverse index)
+	subTrie    *router.TrieRouter
 	subCacheMu sync.RWMutex
 
 	// Local session owner cache to avoid etcd roundtrips in RoutePublish
 	ownerCache   map[string]string // clientID -> nodeID
 	ownerCacheMu sync.RWMutex
+
+	// Local queue consumer cache for fast queue delivery/routing lookups.
+	queueConsumersAll     map[string]*QueueConsumerInfo                       // key: queue|group|consumer
+	queueConsumersByQueue map[string]map[string]*QueueConsumerInfo            // queue -> key -> info
+	queueConsumersByGroup map[string]map[string]map[string]*QueueConsumerInfo // queue -> group -> key -> info
+	queueConsumersCacheMu sync.RWMutex
 
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
 	retainedCache   map[string]*storage.Message // key: topic
@@ -201,19 +209,23 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	election := concurrency.NewElection(s, electionPrefix)
 
 	c := &EtcdCluster{
-		nodeID:        cfg.NodeID,
-		config:        cfg,
-		etcd:          e,
-		client:        client,
-		election:      election,
-		session:       s,
-		logger:        logger,
-		subCache:      make(map[string]*storage.Subscription),
-		clientSubs:    make(map[string][]string),
-		ownerCache:    make(map[string]string),
-		retainedCache: make(map[string]*storage.Message),
-		localStore:    localStore,
-		stopCh:        make(chan struct{}),
+		nodeID:                cfg.NodeID,
+		config:                cfg,
+		etcd:                  e,
+		client:                client,
+		election:              election,
+		session:               s,
+		logger:                logger,
+		subCache:              make(map[string]*storage.Subscription),
+		clientSubs:            make(map[string][]string),
+		subTrie:               router.NewRouter(),
+		ownerCache:            make(map[string]string),
+		queueConsumersAll:     make(map[string]*QueueConsumerInfo),
+		queueConsumersByQueue: make(map[string]map[string]*QueueConsumerInfo),
+		queueConsumersByGroup: make(map[string]map[string]map[string]*QueueConsumerInfo),
+		retainedCache:         make(map[string]*storage.Message),
+		localStore:            localStore,
+		stopCh:                make(chan struct{}),
 	}
 	c.lifecycleCtx, c.cancelLifecycle = context.WithCancel(context.Background())
 
@@ -275,6 +287,11 @@ func (c *EtcdCluster) Start() error {
 		c.logger.Warn("failed to load session owner cache", slog.String("error", err.Error()))
 	}
 
+	// Load existing queue consumers into cache
+	if err := c.loadQueueConsumerCache(); err != nil {
+		c.logger.Warn("failed to load queue consumer cache", slog.String("error", err.Error()))
+	}
+
 	// Start watching for subscription changes
 	c.wg.Add(1)
 	go func() {
@@ -287,6 +304,13 @@ func (c *EtcdCluster) Start() error {
 	go func() {
 		defer c.wg.Done()
 		c.reconcileSubscriptionCache()
+	}()
+
+	// Start watching for queue consumer changes
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.watchQueueConsumers()
 	}()
 
 	// Load retained message cache on startup
@@ -961,17 +985,13 @@ func (c *EtcdCluster) GetSubscriptionsForClient(ctx context.Context, clientID st
 // Optimized: uses local cache for fast lookup.
 func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error) {
 	c.subCacheMu.RLock()
-	defer c.subCacheMu.RUnlock()
-
-	var matched []*storage.Subscription
-	for _, sub := range c.subCache {
-		// Check if topic matches the subscription filter
-		if topicMatchesFilter(topic, sub.Filter) {
-			matched = append(matched, sub)
-		}
+	subTrie := c.subTrie
+	c.subCacheMu.RUnlock()
+	if subTrie == nil {
+		return nil, nil
 	}
 
-	return matched, nil
+	return subTrie.Match(topic)
 }
 
 // Retained returns the cluster-wide retained message store.
@@ -1328,6 +1348,7 @@ func (c *EtcdCluster) RegisterQueueConsumer(ctx context.Context, info *QueueCons
 	if err := c.putWithSessionLease(ctx, key, string(data)); err != nil {
 		return fmt.Errorf("failed to store consumer in etcd: %w", err)
 	}
+	c.upsertQueueConsumerCache(info)
 
 	c.logger.Debug("registered queue consumer in cluster",
 		slog.String("queue", info.QueueName),
@@ -1346,6 +1367,7 @@ func (c *EtcdCluster) UnregisterQueueConsumer(ctx context.Context, queueName, gr
 	if err != nil {
 		return fmt.Errorf("failed to delete consumer from etcd: %w", err)
 	}
+	c.removeQueueConsumerCache(queueName, groupID, consumerID)
 
 	c.logger.Debug("unregistered queue consumer from cluster",
 		slog.String("queue", queueName),
@@ -1355,25 +1377,221 @@ func (c *EtcdCluster) UnregisterQueueConsumer(ctx context.Context, queueName, gr
 	return nil
 }
 
-// ListQueueConsumers returns all consumers for a queue across all nodes.
-func (c *EtcdCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*QueueConsumerInfo, error) {
-	prefix := fmt.Sprintf("%s%s/", queueConsumersPrefix, queueName)
+func cloneQueueConsumerInfo(info *QueueConsumerInfo) *QueueConsumerInfo {
+	if info == nil {
+		return nil
+	}
+	copy := *info
+	return &copy
+}
 
-	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list queue consumers: %w", err)
+func queueConsumerCacheKey(queueName, groupID, consumerID string) string {
+	return queueName + "\x1f" + groupID + "\x1f" + consumerID
+}
+
+func parseQueueConsumerKey(key string) (queueName, groupID, consumerID string, ok bool) {
+	trimmed := strings.TrimPrefix(key, queueConsumersPrefix)
+	if trimmed == key || trimmed == "" {
+		return "", "", "", false
 	}
 
-	var consumers []*QueueConsumerInfo
+	firstSep := strings.Index(trimmed, "/")
+	lastSep := strings.LastIndex(trimmed, "/")
+	if firstSep <= 0 || lastSep <= firstSep || lastSep >= len(trimmed)-1 {
+		return "", "", "", false
+	}
+
+	return trimmed[:firstSep], trimmed[firstSep+1 : lastSep], trimmed[lastSep+1:], true
+}
+
+func (c *EtcdCluster) upsertQueueConsumerCache(info *QueueConsumerInfo) {
+	if info == nil {
+		return
+	}
+
+	consumerCopy := *info
+	cacheKey := queueConsumerCacheKey(consumerCopy.QueueName, consumerCopy.GroupID, consumerCopy.ConsumerID)
+
+	c.queueConsumersCacheMu.Lock()
+	defer c.queueConsumersCacheMu.Unlock()
+
+	c.queueConsumersAll[cacheKey] = &consumerCopy
+
+	byQueue := c.queueConsumersByQueue[consumerCopy.QueueName]
+	if byQueue == nil {
+		byQueue = make(map[string]*QueueConsumerInfo)
+		c.queueConsumersByQueue[consumerCopy.QueueName] = byQueue
+	}
+	byQueue[cacheKey] = &consumerCopy
+
+	byGroup := c.queueConsumersByGroup[consumerCopy.QueueName]
+	if byGroup == nil {
+		byGroup = make(map[string]map[string]*QueueConsumerInfo)
+		c.queueConsumersByGroup[consumerCopy.QueueName] = byGroup
+	}
+	groupConsumers := byGroup[consumerCopy.GroupID]
+	if groupConsumers == nil {
+		groupConsumers = make(map[string]*QueueConsumerInfo)
+		byGroup[consumerCopy.GroupID] = groupConsumers
+	}
+	groupConsumers[cacheKey] = &consumerCopy
+}
+
+func (c *EtcdCluster) removeQueueConsumerCache(queueName, groupID, consumerID string) {
+	cacheKey := queueConsumerCacheKey(queueName, groupID, consumerID)
+
+	c.queueConsumersCacheMu.Lock()
+	defer c.queueConsumersCacheMu.Unlock()
+
+	delete(c.queueConsumersAll, cacheKey)
+
+	if byQueue, ok := c.queueConsumersByQueue[queueName]; ok {
+		delete(byQueue, cacheKey)
+		if len(byQueue) == 0 {
+			delete(c.queueConsumersByQueue, queueName)
+		}
+	}
+
+	if byGroup, ok := c.queueConsumersByGroup[queueName]; ok {
+		if groupConsumers, ok := byGroup[groupID]; ok {
+			delete(groupConsumers, cacheKey)
+			if len(groupConsumers) == 0 {
+				delete(byGroup, groupID)
+			}
+		}
+		if len(byGroup) == 0 {
+			delete(c.queueConsumersByGroup, queueName)
+		}
+	}
+}
+
+func (c *EtcdCluster) loadQueueConsumerCache() error {
+	ctx := context.Background()
+	resp, err := c.client.Get(ctx, queueConsumersPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load queue consumers: %w", err)
+	}
+
+	freshAll := make(map[string]*QueueConsumerInfo)
+	freshByQueue := make(map[string]map[string]*QueueConsumerInfo)
+	freshByGroup := make(map[string]map[string]map[string]*QueueConsumerInfo)
+
 	for _, kv := range resp.Kvs {
 		var info QueueConsumerInfo
 		if err := json.Unmarshal(kv.Value, &info); err != nil {
-			c.logger.Warn("failed to unmarshal consumer info",
+			c.logger.Warn("failed to unmarshal queue consumer info during cache load",
 				slog.String("key", string(kv.Key)),
 				slog.String("error", err.Error()))
 			continue
 		}
-		consumers = append(consumers, &info)
+
+		cacheKey := queueConsumerCacheKey(info.QueueName, info.GroupID, info.ConsumerID)
+		infoPtr := new(QueueConsumerInfo)
+		*infoPtr = info
+		freshAll[cacheKey] = infoPtr
+
+		byQueue := freshByQueue[info.QueueName]
+		if byQueue == nil {
+			byQueue = make(map[string]*QueueConsumerInfo)
+			freshByQueue[info.QueueName] = byQueue
+		}
+		byQueue[cacheKey] = infoPtr
+
+		byGroup := freshByGroup[info.QueueName]
+		if byGroup == nil {
+			byGroup = make(map[string]map[string]*QueueConsumerInfo)
+			freshByGroup[info.QueueName] = byGroup
+		}
+		groupConsumers := byGroup[info.GroupID]
+		if groupConsumers == nil {
+			groupConsumers = make(map[string]*QueueConsumerInfo)
+			byGroup[info.GroupID] = groupConsumers
+		}
+		groupConsumers[cacheKey] = infoPtr
+	}
+
+	c.queueConsumersCacheMu.Lock()
+	c.queueConsumersAll = freshAll
+	c.queueConsumersByQueue = freshByQueue
+	c.queueConsumersByGroup = freshByGroup
+	c.queueConsumersCacheMu.Unlock()
+
+	c.logger.Info("loaded queue consumers into cache", slog.Int("cache_len", len(freshAll)))
+	return nil
+}
+
+func (c *EtcdCluster) watchQueueConsumers() {
+	for {
+		watchCh := c.client.Watch(c.lifecycleCtx, queueConsumersPrefix, clientv3.WithPrefix())
+
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case watchResp, ok := <-watchCh:
+				if !ok {
+					if c.lifecycleCtx.Err() != nil {
+						return
+					}
+					c.logger.Warn("queue consumer watch channel closed, reloading cache")
+					if err := c.loadQueueConsumerCache(); err != nil {
+						c.logger.Error("failed to reload queue consumer cache", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+				if watchResp.Err() != nil {
+					c.logger.Error("queue consumer watch error", slog.String("error", watchResp.Err().Error()))
+					if err := c.loadQueueConsumerCache(); err != nil {
+						c.logger.Error("failed to reload queue consumer cache", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+
+				for _, event := range watchResp.Events {
+					switch event.Type {
+					case clientv3.EventTypePut:
+						var info QueueConsumerInfo
+						if err := json.Unmarshal(event.Kv.Value, &info); err != nil {
+							c.logger.Warn("failed to unmarshal queue consumer info in watch",
+								slog.String("key", string(event.Kv.Key)),
+								slog.String("error", err.Error()))
+							continue
+						}
+						c.upsertQueueConsumerCache(&info)
+					case clientv3.EventTypeDelete:
+						queueName, groupID, consumerID, ok := parseQueueConsumerKey(string(event.Kv.Key))
+						if !ok {
+							c.logger.Warn("failed to parse queue consumer key in watch",
+								slog.String("key", string(event.Kv.Key)))
+							continue
+						}
+						c.removeQueueConsumerCache(queueName, groupID, consumerID)
+					}
+				}
+			}
+		}
+	restart:
+		select {
+		case <-c.stopCh:
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// ListQueueConsumers returns all consumers for a queue across all nodes.
+func (c *EtcdCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*QueueConsumerInfo, error) {
+	c.queueConsumersCacheMu.RLock()
+	defer c.queueConsumersCacheMu.RUnlock()
+
+	byQueue, ok := c.queueConsumersByQueue[queueName]
+	if !ok || len(byQueue) == 0 {
+		return nil, nil
+	}
+
+	consumers := make([]*QueueConsumerInfo, 0, len(byQueue))
+	for _, info := range byQueue {
+		consumers = append(consumers, cloneQueueConsumerInfo(info))
 	}
 
 	return consumers, nil
@@ -1381,23 +1599,21 @@ func (c *EtcdCluster) ListQueueConsumers(ctx context.Context, queueName string) 
 
 // ListQueueConsumersByGroup returns all consumers for a specific group.
 func (c *EtcdCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*QueueConsumerInfo, error) {
-	prefix := fmt.Sprintf("%s%s/%s/", queueConsumersPrefix, queueName, groupID)
+	c.queueConsumersCacheMu.RLock()
+	defer c.queueConsumersCacheMu.RUnlock()
 
-	resp, err := c.client.Get(ctx, prefix, clientv3.WithPrefix())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list queue consumers: %w", err)
+	byQueue, ok := c.queueConsumersByGroup[queueName]
+	if !ok {
+		return nil, nil
+	}
+	byGroup, ok := byQueue[groupID]
+	if !ok || len(byGroup) == 0 {
+		return nil, nil
 	}
 
-	var consumers []*QueueConsumerInfo
-	for _, kv := range resp.Kvs {
-		var info QueueConsumerInfo
-		if err := json.Unmarshal(kv.Value, &info); err != nil {
-			c.logger.Warn("failed to unmarshal consumer info",
-				slog.String("key", string(kv.Key)),
-				slog.String("error", err.Error()))
-			continue
-		}
-		consumers = append(consumers, &info)
+	consumers := make([]*QueueConsumerInfo, 0, len(byGroup))
+	for _, info := range byGroup {
+		consumers = append(consumers, cloneQueueConsumerInfo(info))
 	}
 
 	return consumers, nil
@@ -1405,21 +1621,16 @@ func (c *EtcdCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, 
 
 // ListAllQueueConsumers returns all queue consumers across all queues.
 func (c *EtcdCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsumerInfo, error) {
-	resp, err := c.client.Get(ctx, queueConsumersPrefix, clientv3.WithPrefix())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list all queue consumers: %w", err)
+	c.queueConsumersCacheMu.RLock()
+	defer c.queueConsumersCacheMu.RUnlock()
+
+	if len(c.queueConsumersAll) == 0 {
+		return nil, nil
 	}
 
-	var consumers []*QueueConsumerInfo
-	for _, kv := range resp.Kvs {
-		var info QueueConsumerInfo
-		if err := json.Unmarshal(kv.Value, &info); err != nil {
-			c.logger.Warn("failed to unmarshal consumer info",
-				slog.String("key", string(kv.Key)),
-				slog.String("error", err.Error()))
-			continue
-		}
-		consumers = append(consumers, &info)
+	consumers := make([]*QueueConsumerInfo, 0, len(c.queueConsumersAll))
+	for _, info := range c.queueConsumersAll {
+		consumers = append(consumers, cloneQueueConsumerInfo(info))
 	}
 
 	return consumers, nil
@@ -1506,6 +1717,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 
 	fresh := make(map[string]*storage.Subscription)
 	freshClientSubs := make(map[string][]string)
+	freshTrie := router.NewRouter()
 
 	for _, kv := range resp.Kvs {
 		clientID := strings.TrimPrefix(string(kv.Key), subscriptionsPrefix)
@@ -1518,9 +1730,17 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 		}
 
 		for i := range subs {
-			cacheKey := subs[i].ClientID + "|" + subs[i].Filter
-			fresh[cacheKey] = &subs[i]
+			subPtr := new(storage.Subscription)
+			*subPtr = subs[i]
+			cacheKey := subPtr.ClientID + "|" + subPtr.Filter
+			fresh[cacheKey] = subPtr
 			freshClientSubs[clientID] = append(freshClientSubs[clientID], cacheKey)
+			if err := freshTrie.Subscribe(subPtr.ClientID, subPtr.Filter, subPtr.QoS, subPtr.Options); err != nil {
+				c.logger.Warn("failed to index subscription in trie",
+					slog.String("client_id", subPtr.ClientID),
+					slog.String("filter", subPtr.Filter),
+					slog.String("error", err.Error()))
+			}
 		}
 	}
 
@@ -1528,6 +1748,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 	prevSize := len(c.subCache)
 	c.subCache = fresh
 	c.clientSubs = freshClientSubs
+	c.subTrie = freshTrie
 	c.subCacheMu.Unlock()
 
 	if staleRemoved := prevSize - len(fresh); staleRemoved > 0 {
@@ -1597,6 +1818,9 @@ func (c *EtcdCluster) watchSubscriptions() {
 
 					// Purge all existing cache entries for this client
 					for _, ck := range c.clientSubs[clientID] {
+						if prevSub, ok := c.subCache[ck]; ok {
+							_ = c.subTrie.Unsubscribe(prevSub.ClientID, prevSub.Filter)
+						}
 						delete(c.subCache, ck)
 					}
 					delete(c.clientSubs, clientID)
@@ -1611,9 +1835,17 @@ func (c *EtcdCluster) watchSubscriptions() {
 
 						keys := make([]string, 0, len(subs))
 						for i := range subs {
-							ck := subs[i].ClientID + "|" + subs[i].Filter
-							c.subCache[ck] = &subs[i]
+							subPtr := new(storage.Subscription)
+							*subPtr = subs[i]
+							ck := subPtr.ClientID + "|" + subPtr.Filter
+							c.subCache[ck] = subPtr
 							keys = append(keys, ck)
+							if err := c.subTrie.Subscribe(subPtr.ClientID, subPtr.Filter, subPtr.QoS, subPtr.Options); err != nil {
+								c.logger.Warn("failed to index subscription in trie",
+									slog.String("client_id", subPtr.ClientID),
+									slog.String("filter", subPtr.Filter),
+									slog.String("error", err.Error()))
+							}
 						}
 						c.clientSubs[clientID] = keys
 					}
