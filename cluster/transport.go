@@ -283,6 +283,62 @@ func (t *Transport) RoutePublish(ctx context.Context, req *PublishReq) (*Publish
 	}), nil
 }
 
+// RoutePublishBatch implements BrokerServiceHandler.RoutePublishBatch.
+func (t *Transport) RoutePublishBatch(ctx context.Context, req *PublishBatchReq) (*PublishBatchResp, error) {
+	if t.handler == nil {
+		return connect.NewResponse(&clusterv1.PublishBatchResponse{
+			Success: false,
+			Error:   "no handler configured",
+		}), nil
+	}
+
+	var (
+		delivered uint32
+		failures  []*clusterv1.PublishBatchError
+	)
+
+	for idx, m := range req.Msg.Messages {
+		if m == nil {
+			failures = append(failures, &clusterv1.PublishBatchError{
+				Index: uint32(idx),
+				Error: "message is nil",
+			})
+			continue
+		}
+
+		msg := &Message{
+			Topic:      m.Topic,
+			Payload:    m.Payload,
+			QoS:        byte(m.Qos),
+			Retain:     m.Retain,
+			Dup:        m.Dup,
+			Properties: m.Properties,
+		}
+
+		if err := t.handler.DeliverToClient(ctx, m.ClientId, msg); err != nil {
+			failures = append(failures, &clusterv1.PublishBatchError{
+				Index:    uint32(idx),
+				ClientId: m.ClientId,
+				Error:    err.Error(),
+			})
+			continue
+		}
+		delivered++
+	}
+
+	success := len(failures) == 0
+	resp := &clusterv1.PublishBatchResponse{
+		Success:   success,
+		Delivered: delivered,
+		Failures:  failures,
+	}
+	if !success {
+		resp.Error = "one or more publish deliveries failed"
+	}
+
+	return connect.NewResponse(resp), nil
+}
+
 // TakeoverSession implements BrokerServiceHandler.TakeoverSession.
 func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverReq) (*TakeoverResp, error) {
 	if t.handler == nil {
@@ -450,60 +506,7 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 		}), nil
 	}
 
-	rawProps := make(map[string]string, len(req.Msg.Properties))
-	for k, v := range req.Msg.Properties {
-		rawProps[k] = v
-	}
-
-	msg := &QueueMessage{
-		MessageID:      req.Msg.MessageId,
-		QueueName:      req.Msg.QueueName,
-		Payload:        req.Msg.Payload,
-		Sequence:       req.Msg.Sequence,
-		UserProperties: make(map[string]string, len(rawProps)),
-	}
-	if msg.MessageID == "" {
-		msg.MessageID = rawProps[queueTypes.PropMessageID]
-	}
-
-	if groupID := rawProps[queueTypes.PropGroupID]; groupID != "" {
-		msg.GroupID = groupID
-	}
-	if msg.QueueName == "" {
-		if queueName := rawProps[queueTypes.PropQueueName]; queueName != "" {
-			msg.QueueName = queueName
-		}
-	}
-	if offset, ok := parseInt64Property(rawProps, queueTypes.PropOffset); ok {
-		msg.Sequence = offset
-	}
-	if streamOffset, ok := parseInt64Property(rawProps, queueTypes.PropStreamOffset); ok {
-		msg.Stream = true
-		msg.StreamOffset = streamOffset
-	}
-	if streamTs, ok := parseInt64Property(rawProps, queueTypes.PropStreamTimestamp); ok {
-		msg.Stream = true
-		msg.StreamTimestamp = streamTs
-	}
-	if committed, ok := parseInt64Property(rawProps, queueTypes.PropWorkCommittedOffset); ok {
-		msg.HasWorkCommitted = true
-		msg.WorkCommittedOffset = committed
-	}
-	if workAcked, ok := parseBoolProperty(rawProps, queueTypes.PropWorkAcked); ok {
-		msg.HasWorkCommitted = true
-		msg.WorkAcked = workAcked
-	}
-	if workGroup := rawProps[queueTypes.PropWorkGroup]; workGroup != "" {
-		msg.HasWorkCommitted = true
-		msg.WorkGroup = workGroup
-	}
-
-	for k, v := range rawProps {
-		if queueTypes.IsReservedQueueDeliveryProperty(k) {
-			continue
-		}
-		msg.UserProperties[k] = v
-	}
+	msg := decodeRouteQueueMessage(req.Msg)
 
 	err := handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
 	if err != nil {
@@ -516,6 +519,58 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 	return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
 		Success: true,
 	}), nil
+}
+
+// RouteQueueBatch implements BrokerServiceHandler.RouteQueueBatch.
+func (t *Transport) RouteQueueBatch(ctx context.Context, req *RouteQueueBatchReq) (*RouteQueueBatchResp, error) {
+	t.mu.RLock()
+	handler := t.queueHandler
+	t.mu.RUnlock()
+
+	if handler == nil {
+		return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+			Success: false,
+			Error:   "no queue handler configured",
+		}), nil
+	}
+
+	var (
+		delivered uint32
+		failures  []*clusterv1.RouteQueueBatchError
+	)
+
+	for idx, wire := range req.Msg.Messages {
+		if wire == nil {
+			failures = append(failures, &clusterv1.RouteQueueBatchError{
+				Index: uint32(idx),
+				Error: "message is nil",
+			})
+			continue
+		}
+
+		msg := decodeRouteQueueMessage(wire)
+		if err := handler.DeliverQueueMessage(ctx, wire.ClientId, msg); err != nil {
+			failures = append(failures, &clusterv1.RouteQueueBatchError{
+				Index:     uint32(idx),
+				ClientId:  wire.ClientId,
+				QueueName: wire.QueueName,
+				Error:     err.Error(),
+			})
+			continue
+		}
+		delivered++
+	}
+
+	success := len(failures) == 0
+	resp := &clusterv1.RouteQueueBatchResponse{
+		Success:   success,
+		Delivered: delivered,
+		Failures:  failures,
+	}
+	if !success {
+		resp.Error = "one or more queue deliveries failed"
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ForwardGroupOp implements BrokerServiceHandler.ForwardGroupOp.
@@ -747,42 +802,7 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 			return fmt.Errorf("queue message is nil")
 		}
 
-		properties := make(map[string]string, len(msg.UserProperties)+8)
-		for k, v := range msg.UserProperties {
-			properties[k] = v
-		}
-		if msg.MessageID != "" {
-			properties[queueTypes.PropMessageID] = msg.MessageID
-		}
-		if msg.GroupID != "" {
-			properties[queueTypes.PropGroupID] = msg.GroupID
-		}
-		if queueName != "" {
-			properties[queueTypes.PropQueueName] = queueName
-		}
-		properties[queueTypes.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
-		if msg.Stream {
-			properties[queueTypes.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
-			if msg.StreamTimestamp != 0 {
-				properties[queueTypes.PropStreamTimestamp] = fmt.Sprintf("%d", msg.StreamTimestamp)
-			}
-		}
-		if msg.HasWorkCommitted {
-			properties[queueTypes.PropWorkCommittedOffset] = fmt.Sprintf("%d", msg.WorkCommittedOffset)
-			properties[queueTypes.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
-			if msg.WorkGroup != "" {
-				properties[queueTypes.PropWorkGroup] = msg.WorkGroup
-			}
-		}
-
-		req := connect.NewRequest(&clusterv1.RouteQueueMessageRequest{
-			ClientId:   clientID,
-			QueueName:  queueName,
-			MessageId:  msg.MessageID,
-			Payload:    msg.Payload,
-			Properties: properties,
-			Sequence:   msg.Sequence,
-		})
+		req := connect.NewRequest(encodeRouteQueueMessage(clientID, queueName, msg))
 
 		resp, err := client.RouteQueueMessage(ctx, req)
 		if err != nil {
@@ -793,6 +813,69 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 			return fmt.Errorf("route queue message failed: %s", resp.Msg.Error)
 		}
 
+		return nil
+	})
+}
+
+// SendPublishBatch sends multiple publish deliveries to a peer node in one RPC.
+func (t *Transport) SendPublishBatch(ctx context.Context, nodeID string, messages []*clusterv1.PublishRequest) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
+
+		req := connect.NewRequest(&clusterv1.PublishBatchRequest{
+			Messages: messages,
+		})
+		resp, err := client.RoutePublishBatch(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+		if !resp.Msg.Success {
+			return fmt.Errorf("publish batch failed: %s", resp.Msg.Error)
+		}
+		return nil
+	})
+}
+
+// SendRouteQueueBatch sends multiple queue deliveries to a peer node in one RPC.
+func (t *Transport) SendRouteQueueBatch(ctx context.Context, nodeID string, deliveries []QueueDelivery) error {
+	if len(deliveries) == 0 {
+		return nil
+	}
+
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
+
+		wireMsgs := make([]*clusterv1.RouteQueueMessageRequest, 0, len(deliveries))
+		for _, delivery := range deliveries {
+			if delivery.Message == nil {
+				continue
+			}
+			wireMsgs = append(wireMsgs, encodeRouteQueueMessage(delivery.ClientID, delivery.QueueName, delivery.Message))
+		}
+		if len(wireMsgs) == 0 {
+			return nil
+		}
+
+		req := connect.NewRequest(&clusterv1.RouteQueueBatchRequest{
+			Messages: wireMsgs,
+		})
+		resp, err := client.RouteQueueBatch(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+		if !resp.Msg.Success {
+			return fmt.Errorf("route queue batch failed: %s", resp.Msg.Error)
+		}
 		return nil
 	})
 }
@@ -833,6 +916,104 @@ func parseInt64Property(props map[string]string, key string) (int64, bool) {
 		return 0, false
 	}
 	return val, true
+}
+
+func encodeRouteQueueMessage(clientID, queueName string, msg *QueueMessage) *clusterv1.RouteQueueMessageRequest {
+	properties := make(map[string]string, len(msg.UserProperties)+8)
+	for k, v := range msg.UserProperties {
+		properties[k] = v
+	}
+	if msg.MessageID != "" {
+		properties[queueTypes.PropMessageID] = msg.MessageID
+	}
+	if msg.GroupID != "" {
+		properties[queueTypes.PropGroupID] = msg.GroupID
+	}
+	if queueName != "" {
+		properties[queueTypes.PropQueueName] = queueName
+	}
+	properties[queueTypes.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
+	if msg.Stream {
+		properties[queueTypes.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
+		if msg.StreamTimestamp != 0 {
+			properties[queueTypes.PropStreamTimestamp] = fmt.Sprintf("%d", msg.StreamTimestamp)
+		}
+	}
+	if msg.HasWorkCommitted {
+		properties[queueTypes.PropWorkCommittedOffset] = fmt.Sprintf("%d", msg.WorkCommittedOffset)
+		properties[queueTypes.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
+		if msg.WorkGroup != "" {
+			properties[queueTypes.PropWorkGroup] = msg.WorkGroup
+		}
+	}
+
+	return &clusterv1.RouteQueueMessageRequest{
+		ClientId:   clientID,
+		QueueName:  queueName,
+		MessageId:  msg.MessageID,
+		Payload:    msg.Payload,
+		Properties: properties,
+		Sequence:   msg.Sequence,
+	}
+}
+
+func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) *QueueMessage {
+	rawProps := make(map[string]string, len(wire.Properties))
+	for k, v := range wire.Properties {
+		rawProps[k] = v
+	}
+
+	msg := &QueueMessage{
+		MessageID:      wire.MessageId,
+		QueueName:      wire.QueueName,
+		Payload:        wire.Payload,
+		Sequence:       wire.Sequence,
+		UserProperties: make(map[string]string, len(rawProps)),
+	}
+	if msg.MessageID == "" {
+		msg.MessageID = rawProps[queueTypes.PropMessageID]
+	}
+
+	if groupID := rawProps[queueTypes.PropGroupID]; groupID != "" {
+		msg.GroupID = groupID
+	}
+	if msg.QueueName == "" {
+		if queueName := rawProps[queueTypes.PropQueueName]; queueName != "" {
+			msg.QueueName = queueName
+		}
+	}
+	if offset, ok := parseInt64Property(rawProps, queueTypes.PropOffset); ok {
+		msg.Sequence = offset
+	}
+	if streamOffset, ok := parseInt64Property(rawProps, queueTypes.PropStreamOffset); ok {
+		msg.Stream = true
+		msg.StreamOffset = streamOffset
+	}
+	if streamTs, ok := parseInt64Property(rawProps, queueTypes.PropStreamTimestamp); ok {
+		msg.Stream = true
+		msg.StreamTimestamp = streamTs
+	}
+	if committed, ok := parseInt64Property(rawProps, queueTypes.PropWorkCommittedOffset); ok {
+		msg.HasWorkCommitted = true
+		msg.WorkCommittedOffset = committed
+	}
+	if workAcked, ok := parseBoolProperty(rawProps, queueTypes.PropWorkAcked); ok {
+		msg.HasWorkCommitted = true
+		msg.WorkAcked = workAcked
+	}
+	if workGroup := rawProps[queueTypes.PropWorkGroup]; workGroup != "" {
+		msg.HasWorkCommitted = true
+		msg.WorkGroup = workGroup
+	}
+
+	for k, v := range rawProps {
+		if queueTypes.IsReservedQueueDeliveryProperty(k) {
+			continue
+		}
+		msg.UserProperties[k] = v
+	}
+
+	return msg
 }
 
 func parseBoolProperty(props map[string]string, key string) (bool, bool) {

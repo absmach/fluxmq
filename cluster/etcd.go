@@ -1203,14 +1203,25 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	}
 
 	for nodeID, clientIDs := range nodeClients {
+		batch := make([]*clusterv1.PublishRequest, 0, len(clientIDs))
 		for _, clientID := range clientIDs {
-			err := c.transport.SendPublish(ctx, nodeID, clientID, topic, payload, qos, retain, false, properties)
-			if err != nil {
-				c.logger.Warn("failed to route publish",
-					slog.String("client_id", clientID),
-					slog.String("node_id", nodeID),
-					slog.String("error", err.Error()))
-			}
+			batch = append(batch, &clusterv1.PublishRequest{
+				ClientId:   clientID,
+				Topic:      topic,
+				Payload:    payload,
+				Qos:        uint32(qos),
+				Retain:     retain,
+				Dup:        false,
+				Properties: properties,
+			})
+		}
+
+		err := c.transport.SendPublishBatch(ctx, nodeID, batch)
+		if err != nil {
+			c.logger.Warn("failed to route publish batch",
+				slog.String("node_id", nodeID),
+				slog.Int("client_count", len(clientIDs)),
+				slog.String("error", err.Error()))
 		}
 	}
 
@@ -1265,6 +1276,14 @@ func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, q
 		return ErrTransportNotConfigured
 	}
 	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, msg)
+}
+
+// RouteQueueBatch sends multiple queue messages to a remote node.
+func (c *EtcdCluster) RouteQueueBatch(ctx context.Context, nodeID string, deliveries []QueueDelivery) error {
+	if c.transport == nil {
+		return ErrTransportNotConfigured
+	}
+	return c.transport.SendRouteQueueBatch(ctx, nodeID, deliveries)
 }
 
 // SetQueueHandler sets the queue handler for queue distribution operations.

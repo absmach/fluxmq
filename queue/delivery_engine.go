@@ -26,19 +26,23 @@ type RemoteRouter interface {
 	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error
 }
 
+type RemoteBatchRouter interface {
+	RouteQueueBatch(ctx context.Context, nodeID string, deliveries []cluster.QueueDelivery) error
+}
+
 // DeliveryEngine claims messages from queues and routes them to local or
 // remote consumers. It owns the scheduling loop and delivery state; the
 // Manager delegates all delivery work here.
 type DeliveryEngine struct {
-	queueStore      storage.QueueStore
-	groupStore      storage.ConsumerGroupStore
-	consumerManager *consumer.Manager
-	local           Deliverer
-	remote          RemoteRouter // nil for single-node
-	localNodeID     string
+	queueStore       storage.QueueStore
+	groupStore       storage.ConsumerGroupStore
+	consumerManager  *consumer.Manager
+	local            Deliverer
+	remote           RemoteRouter // nil for single-node
+	localNodeID      string
 	distributionMode DistributionMode
-	batchSize       int
-	logger          *slog.Logger
+	batchSize        int
+	logger           *slog.Logger
 
 	mu       sync.Mutex
 	enqueued map[string]struct{}
@@ -283,30 +287,9 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 
 		for _, msg := range msgs {
 			if e.remote != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != e.localNodeID {
-				routeMsg := createRoutedQueueMessage(
-					msg,
-					group.ID,
-					config.Name,
-					group.Mode == types.GroupModeStream,
-					workCommitted,
-					hasWorkCommitted,
-					config.PrimaryGroup,
-				)
-				err := e.remote.RouteQueueMessage(
-					ctx,
-					consumerInfo.ProxyNodeID,
-					consumerInfo.ClientID,
-					config.Name,
-					routeMsg,
-				)
-				if err != nil {
-					e.logger.Warn("queue message remote routing failed",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("node", consumerInfo.ProxyNodeID),
-						slog.String("topic", msg.Topic),
-						slog.String("error", err.Error()))
-				}
-			} else if e.local != nil {
+				continue
+			}
+			if e.local != nil {
 				deliveryMsg := createDeliveryMessage(msg, group.ID, config.Name)
 				if group.Mode == types.GroupModeStream {
 					decorateStreamDelivery(deliveryMsg, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
@@ -318,6 +301,33 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 						slog.String("topic", msg.Topic),
 						slog.String("error", err.Error()))
 				}
+			}
+		}
+
+		if e.remote != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != e.localNodeID && len(msgs) > 0 {
+			deliveries := make([]cluster.QueueDelivery, 0, len(msgs))
+			for _, msg := range msgs {
+				deliveries = append(deliveries, cluster.QueueDelivery{
+					ClientID:  consumerInfo.ClientID,
+					QueueName: config.Name,
+					Message: createRoutedQueueMessage(
+						msg,
+						group.ID,
+						config.Name,
+						group.Mode == types.GroupModeStream,
+						workCommitted,
+						hasWorkCommitted,
+						config.PrimaryGroup,
+					),
+				})
+			}
+			if err := e.routeRemoteBatch(ctx, consumerInfo.ProxyNodeID, deliveries); err != nil {
+				e.logger.Warn("queue message remote routing failed",
+					slog.String("client", consumerInfo.ClientID),
+					slog.String("node", consumerInfo.ProxyNodeID),
+					slog.String("queue", config.Name),
+					slog.Int("batch_size", len(deliveries)),
+					slog.String("error", err.Error()))
 			}
 		}
 	}
@@ -386,42 +396,67 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 				delivered = true
 			}
 
-			for _, msg := range msgs {
-				routeMsg := createRoutedQueueMessage(
-					msg,
-					groupID,
-					config.Name,
-					group.Mode == types.GroupModeStream,
-					workCommitted,
-					hasWorkCommitted,
-					config.PrimaryGroup,
-				)
+			if len(msgs) == 0 {
+				continue
+			}
 
-				err := e.remote.RouteQueueMessage(
-					ctx,
-					consumerInfo.ProxyNodeID,
-					consumerInfo.ClientID,
-					config.Name,
-					routeMsg,
-				)
-				if err != nil {
-					e.logger.Warn("remote queue message delivery failed",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("node", consumerInfo.ProxyNodeID),
-						slog.String("queue", config.Name),
-						slog.String("error", err.Error()))
-				} else {
-					e.logger.Debug("routed queue message to remote consumer",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("node", consumerInfo.ProxyNodeID),
-						slog.String("queue", config.Name),
-						slog.Uint64("offset", msg.Sequence))
-				}
+			deliveries := make([]cluster.QueueDelivery, 0, len(msgs))
+			for _, msg := range msgs {
+				deliveries = append(deliveries, cluster.QueueDelivery{
+					ClientID:  consumerInfo.ClientID,
+					QueueName: config.Name,
+					Message: createRoutedQueueMessage(
+						msg,
+						groupID,
+						config.Name,
+						group.Mode == types.GroupModeStream,
+						workCommitted,
+						hasWorkCommitted,
+						config.PrimaryGroup,
+					),
+				})
+			}
+
+			if err := e.routeRemoteBatch(ctx, consumerInfo.ProxyNodeID, deliveries); err != nil {
+				e.logger.Warn("remote queue message delivery failed",
+					slog.String("client", consumerInfo.ClientID),
+					slog.String("node", consumerInfo.ProxyNodeID),
+					slog.String("queue", config.Name),
+					slog.String("error", err.Error()))
+			} else {
+				e.logger.Debug("routed queue message batch to remote consumer",
+					slog.String("client", consumerInfo.ClientID),
+					slog.String("node", consumerInfo.ProxyNodeID),
+					slog.String("queue", config.Name),
+					slog.Int("batch_size", len(deliveries)),
+					slog.Uint64("last_offset", msgs[len(msgs)-1].Sequence))
 			}
 		}
 	}
 
 	return delivered
+}
+
+func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, deliveries []cluster.QueueDelivery) error {
+	if len(deliveries) == 0 {
+		return nil
+	}
+	if batchRouter, ok := e.remote.(RemoteBatchRouter); ok {
+		if err := batchRouter.RouteQueueBatch(ctx, nodeID, deliveries); err == nil {
+			return nil
+		}
+		// Fall back to single message RPC if batch routing fails.
+	}
+
+	for _, delivery := range deliveries {
+		if delivery.Message == nil {
+			continue
+		}
+		if err := e.remote.RouteQueueMessage(ctx, nodeID, delivery.ClientID, delivery.QueueName, delivery.Message); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- Message building helpers (stateless) ---

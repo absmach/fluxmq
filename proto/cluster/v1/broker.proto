@@ -11,6 +11,9 @@ service BrokerService {
   // RoutePublish forwards a PUBLISH packet to the broker that owns the target session.
   rpc RoutePublish(PublishRequest) returns (PublishResponse);
 
+  // RoutePublishBatch forwards multiple PUBLISH packets in one RPC.
+  rpc RoutePublishBatch(PublishBatchRequest) returns (PublishBatchResponse);
+
   // TakeoverSession migrates a session from one broker to another.
   rpc TakeoverSession(TakeoverRequest) returns (TakeoverResponse);
 
@@ -25,6 +28,9 @@ service BrokerService {
 
   // RouteQueueMessage delivers a queue message to a consumer on a different node.
   rpc RouteQueueMessage(RouteQueueMessageRequest) returns (RouteQueueMessageResponse);
+
+  // RouteQueueBatch delivers multiple queue messages in one RPC.
+  rpc RouteQueueBatch(RouteQueueBatchRequest) returns (RouteQueueBatchResponse);
 
   // Raft RPCs for queue replication
 
@@ -60,6 +66,23 @@ message PublishRequest {
 message PublishResponse {
   bool success = 1;
   string error = 2;
+}
+
+message PublishBatchRequest {
+  repeated PublishRequest messages = 1;
+}
+
+message PublishBatchError {
+  uint32 index = 1;
+  string client_id = 2;
+  string error = 3;
+}
+
+message PublishBatchResponse {
+  bool success = 1;
+  string error = 2;
+  uint32 delivered = 3;
+  repeated PublishBatchError failures = 4;
 }
 
 // =============================================================================
@@ -185,6 +208,24 @@ message RouteQueueMessageRequest {
 message RouteQueueMessageResponse {
   bool success = 1;
   string error = 2;
+}
+
+message RouteQueueBatchRequest {
+  repeated RouteQueueMessageRequest messages = 1;
+}
+
+message RouteQueueBatchError {
+  uint32 index = 1;
+  string client_id = 2;
+  string queue_name = 3;
+  string error = 4;
+}
+
+message RouteQueueBatchResponse {
+  bool success = 1;
+  string error = 2;
+  uint32 delivered = 3;
+  repeated RouteQueueBatchError failures = 4;
 }
 
 // =============================================================================
