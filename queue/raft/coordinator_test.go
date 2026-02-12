@@ -37,6 +37,32 @@ func (m *mockReplicator) ApplyAppendWithOptions(_ context.Context, queueName str
 	m.appendQueues = append(m.appendQueues, queueName)
 	return m.offset, nil
 }
+func (m *mockReplicator) ApplyTruncate(context.Context, string, uint64) error { return nil }
+func (m *mockReplicator) ApplyCreateGroup(context.Context, string, *types.ConsumerGroup) error {
+	return nil
+}
+func (m *mockReplicator) ApplyDeleteGroup(context.Context, string, string) error { return nil }
+func (m *mockReplicator) ApplyUpdateCursor(context.Context, string, string, uint64) error {
+	return nil
+}
+func (m *mockReplicator) ApplyUpdateCommitted(context.Context, string, string, uint64) error {
+	return nil
+}
+func (m *mockReplicator) ApplyAddPending(context.Context, string, string, *types.PendingEntry) error {
+	return nil
+}
+func (m *mockReplicator) ApplyRemovePending(context.Context, string, string, string, uint64) error {
+	return nil
+}
+func (m *mockReplicator) ApplyTransferPending(context.Context, string, string, uint64, string, string) error {
+	return nil
+}
+func (m *mockReplicator) ApplyRegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
+	return nil
+}
+func (m *mockReplicator) ApplyUnregisterConsumer(context.Context, string, string, string) error {
+	return nil
+}
 
 func TestLogicalGroupCoordinatorQueueAssignments(t *testing.T) {
 	coordinator := NewLogicalGroupCoordinator(&mockReplicator{enabled: true}, nil)
@@ -49,6 +75,9 @@ func TestLogicalGroupCoordinatorQueueAssignments(t *testing.T) {
 	if err := coordinator.EnsureQueue(ctx, cfg); err != nil {
 		t.Fatalf("EnsureQueue failed: %v", err)
 	}
+	if !coordinator.IsQueueReplicated("orders") {
+		t.Fatalf("expected queue to be marked replicated")
+	}
 	if got := coordinator.GroupForQueue("orders"); got != "hot" {
 		t.Fatalf("unexpected queue group after ensure: got %q", got)
 	}
@@ -56,6 +85,9 @@ func TestLogicalGroupCoordinatorQueueAssignments(t *testing.T) {
 	cfg.Replication.Enabled = false
 	if err := coordinator.UpdateQueue(ctx, cfg); err != nil {
 		t.Fatalf("UpdateQueue failed: %v", err)
+	}
+	if coordinator.IsQueueReplicated("orders") {
+		t.Fatalf("expected queue replication marker to be removed")
 	}
 	if got := coordinator.GroupForQueue("orders"); got != DefaultGroupID {
 		t.Fatalf("unexpected queue group after disabling replication: got %q", got)

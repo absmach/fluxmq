@@ -26,10 +26,21 @@ const (
 type QueueCoordinator interface {
 	Stop() error
 	IsEnabled() bool
+	IsQueueReplicated(queueName string) bool
 	IsLeaderForQueue(queueName string) bool
 	LeaderForQueue(queueName string) string
 	LeaderIDForQueue(queueName string) string
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
+	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
+	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
+	ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error
+	ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error
+	ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error
+	ApplyAddPending(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error
+	ApplyRemovePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error
+	ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
+	ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error
+	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 	EnsureQueue(ctx context.Context, cfg types.QueueConfig) error
 	UpdateQueue(ctx context.Context, cfg types.QueueConfig) error
 	DeleteQueue(ctx context.Context, queueName string) error
@@ -44,6 +55,16 @@ type GroupReplicator interface {
 	Leader() string
 	LeaderID() string
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
+	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
+	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
+	ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error
+	ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error
+	ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error
+	ApplyAddPending(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error
+	ApplyRemovePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error
+	ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
+	ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error
+	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 }
 
 // LogicalGroupCoordinator maps queues to logical Raft groups.
@@ -105,6 +126,15 @@ func (c *LogicalGroupCoordinator) GroupForQueue(queueName string) string {
 	}
 
 	return c.defaultGroup
+}
+
+// IsQueueReplicated reports whether queue currently has replication enabled.
+func (c *LogicalGroupCoordinator) IsQueueReplicated(queueName string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	_, ok := c.queueGroups[queueName]
+	return ok
 }
 
 func (c *LogicalGroupCoordinator) ensureQueueAssignment(cfg types.QueueConfig) {
@@ -206,6 +236,86 @@ func (c *LogicalGroupCoordinator) ApplyAppendWithOptions(ctx context.Context, qu
 		return 0, fmt.Errorf("no raft replicator configured for queue %q", queueName)
 	}
 	return replicator.ApplyAppendWithOptions(ctx, queueName, msg, opts)
+}
+
+func (c *LogicalGroupCoordinator) ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyTruncate(ctx, queueName, minOffset)
+}
+
+func (c *LogicalGroupCoordinator) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyCreateGroup(ctx, queueName, group)
+}
+
+func (c *LogicalGroupCoordinator) ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyDeleteGroup(ctx, queueName, groupID)
+}
+
+func (c *LogicalGroupCoordinator) ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyUpdateCursor(ctx, queueName, groupID, cursor)
+}
+
+func (c *LogicalGroupCoordinator) ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyUpdateCommitted(ctx, queueName, groupID, committed)
+}
+
+func (c *LogicalGroupCoordinator) ApplyAddPending(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyAddPending(ctx, queueName, groupID, entry)
+}
+
+func (c *LogicalGroupCoordinator) ApplyRemovePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyRemovePending(ctx, queueName, groupID, consumerID, offset)
+}
+
+func (c *LogicalGroupCoordinator) ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyTransferPending(ctx, queueName, groupID, offset, fromConsumer, toConsumer)
+}
+
+func (c *LogicalGroupCoordinator) ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyRegisterConsumer(ctx, queueName, groupID, consumer)
+}
+
+func (c *LogicalGroupCoordinator) ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyUnregisterConsumer(ctx, queueName, groupID, consumerID)
 }
 
 // Stop shuts down all unique registered replicators.

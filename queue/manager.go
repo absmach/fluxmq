@@ -26,6 +26,7 @@ import (
 type Manager struct {
 	queueStore       storage.QueueStore
 	groupStore       storage.ConsumerGroupStore
+	raftGroupStore   *raftAwareGroupStore
 	consumerManager  *consumer.Manager
 	deliveryTarget   Deliverer
 	logger           *slog.Logger
@@ -133,7 +134,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		MaxPELSize:         config.MaxPELSize,
 	}
 
-	consumerMgr := consumer.NewManager(queueStore, groupStore, consumerCfg)
+	raftGroupStore := newRaftAwareGroupStore(groupStore)
+	consumerMgr := consumer.NewManager(queueStore, raftGroupStore, consumerCfg)
 
 	var localNodeID string
 	if cl != nil {
@@ -148,7 +150,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	engine := NewDeliveryEngine(
-		queueStore, groupStore, consumerMgr,
+		queueStore, raftGroupStore, consumerMgr,
 		dt,
 		remote,
 		localNodeID,
@@ -159,7 +161,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 	return &Manager{
 		queueStore:      queueStore,
-		groupStore:      groupStore,
+		groupStore:      raftGroupStore,
+		raftGroupStore:  raftGroupStore,
 		consumerManager: consumerMgr,
 		deliveryTarget:  dt,
 
@@ -272,12 +275,18 @@ func (m *Manager) Stop() error {
 // SetRaftManager sets the Raft replication manager.
 func (m *Manager) SetRaftManager(rm *raft.Manager) {
 	m.raftCoordinator = raft.NewLogicalGroupCoordinator(rm, m.logger)
+	if m.raftGroupStore != nil {
+		m.raftGroupStore.SetCoordinator(m.raftCoordinator)
+	}
 	m.raftManager = rm
 }
 
 // SetRaftCoordinator sets queue-aware Raft coordinator.
 func (m *Manager) SetRaftCoordinator(rc raft.QueueCoordinator) {
 	m.raftCoordinator = rc
+	if m.raftGroupStore != nil {
+		m.raftGroupStore.SetCoordinator(rc)
+	}
 }
 
 // GetRaftManager returns the Raft replication manager.
@@ -383,44 +392,54 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 
 	hasReplicated := false
 	allReplicated := true
+	localTargets := make([]queuePublishTarget, 0, len(targets))
+	forwardTargets := make(map[string][]string)
 	for _, target := range targets {
 		replicated := target.config != nil && target.config.Replication.Enabled
 		hasReplicated = hasReplicated || replicated
 		allReplicated = allReplicated && replicated
+
+		if !replicated || m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
+			localTargets = append(localTargets, target)
+			continue
+		}
+
+		if m.raftCoordinator.IsLeaderForQueue(target.name) {
+			localTargets = append(localTargets, target)
+			continue
+		}
+
+		switch m.writePolicy {
+		case WritePolicyReject:
+			leaderAddr := m.raftCoordinator.LeaderForQueue(target.name)
+			if leaderAddr == "" {
+				return fmt.Errorf("raft leader unavailable")
+			}
+			return fmt.Errorf("raft leader is at %s", leaderAddr)
+		case WritePolicyForward:
+			leaderID := m.raftCoordinator.LeaderIDForQueue(target.name)
+			if leaderID == "" {
+				return fmt.Errorf("raft leader unavailable")
+			}
+			forwardTargets[leaderID] = append(forwardTargets[leaderID], target.name)
+		case WritePolicyLocal:
+			localTargets = append(localTargets, target)
+		default:
+			// Unknown policy - default to local append for backward compatibility.
+			localTargets = append(localTargets, target)
+		}
 	}
 
-	if hasReplicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
-		leaderQueue := ""
-		for _, target := range targets {
-			if target.config == nil || !target.config.Replication.Enabled {
-				continue
-			}
-			if !m.raftCoordinator.IsLeaderForQueue(target.name) {
-				leaderQueue = target.name
-				break
-			}
-		}
-		if leaderQueue != "" {
-			switch m.writePolicy {
-			case WritePolicyReject:
-				leaderAddr := m.raftCoordinator.LeaderForQueue(leaderQueue)
-				if leaderAddr == "" {
-					return fmt.Errorf("raft leader unavailable")
-				}
-				return fmt.Errorf("raft leader is at %s", leaderAddr)
-			case WritePolicyForward:
-				return m.forwardPublishToLeader(ctx, publish, leaderQueue)
-			case WritePolicyLocal:
-				// fall through to local append
-			default:
-				// Unknown policy - default to local append for backward compatibility.
-			}
-		}
-	}
-
-	// Store locally in matching queues
-	if err := m.publishLocalToTargets(ctx, publish, targets); err != nil {
+	// Store locally in queues handled by this node.
+	if err := m.publishLocalToTargets(ctx, publish, localTargets); err != nil {
 		return err
+	}
+
+	// Forward leader-owned queue targets to appropriate remote leaders.
+	for leaderID, targetQueues := range forwardTargets {
+		if err := m.forwardPublishToLeader(ctx, publish, leaderID, targetQueues); err != nil {
+			return err
+		}
 	}
 
 	// Forward to remote nodes that have consumers
@@ -464,6 +483,25 @@ type queuePublishTarget struct {
 }
 
 func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.PublishRequest) ([]queuePublishTarget, error) {
+	forcedTargets := parseForwardTargetQueues(publish.Properties)
+	if len(forcedTargets) > 0 {
+		targets := make([]queuePublishTarget, 0, len(forcedTargets))
+		for _, queueName := range forcedTargets {
+			queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
+			if err != nil {
+				m.logger.Warn("failed to resolve forced queue target",
+					slog.String("queue", queueName),
+					slog.String("error", err.Error()))
+				continue
+			}
+			targets = append(targets, queuePublishTarget{
+				name:   queueName,
+				config: queueConfig,
+			})
+		}
+		return targets, nil
+	}
+
 	// Find all matching queues
 	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 	if err != nil {
@@ -501,6 +539,8 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 }
 
 func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
+	cleanProps := clonePublishPropertiesWithoutForwardingMeta(publish.Properties)
+
 	for _, target := range targets {
 		queueName := target.name
 		queueConfig := target.config
@@ -513,7 +553,7 @@ func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.Publi
 			ID:         generateMessageID(),
 			Payload:    publish.Payload,
 			Topic:      publish.Topic,
-			Properties: publish.Properties,
+			Properties: cleanProps,
 			State:      types.StateQueued,
 			CreatedAt:  time.Now(),
 			ExpiresAt:  time.Now().Add(queueConfig.MessageTTL),
@@ -1135,7 +1175,7 @@ func (m *Manager) deliverQueue(ctx context.Context, queueName string) bool {
 	return m.delivery.DeliverQueue(ctx, queueName)
 }
 
-func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest, queueName string) error {
+func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest, leaderID string, targetQueues []string) error {
 	if m.cluster == nil {
 		return fmt.Errorf("cluster not configured for leader forward")
 	}
@@ -1144,12 +1184,60 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		return fmt.Errorf("raft coordinator unavailable")
 	}
 
-	leaderID := m.raftCoordinator.LeaderIDForQueue(queueName)
 	if leaderID == "" {
 		return fmt.Errorf("raft leader unavailable")
 	}
 
-	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
+	props := clonePublishPropertiesWithoutForwardingMeta(publish.Properties)
+	if len(targetQueues) > 0 {
+		if props == nil {
+			props = make(map[string]string, 1)
+		}
+		props[types.PropForwardTargetQueues] = strings.Join(targetQueues, ",")
+	}
+
+	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, props, true)
+}
+
+func parseForwardTargetQueues(properties map[string]string) []string {
+	if len(properties) == 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(properties[types.PropForwardTargetQueues])
+	if raw == "" {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 4)
+	for _, token := range strings.Split(raw, ",") {
+		queueName := strings.TrimSpace(token)
+		if queueName == "" {
+			continue
+		}
+		if _, ok := seen[queueName]; ok {
+			continue
+		}
+		seen[queueName] = struct{}{}
+		out = append(out, queueName)
+	}
+
+	return out
+}
+
+func clonePublishPropertiesWithoutForwardingMeta(properties map[string]string) map[string]string {
+	if len(properties) == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, len(properties))
+	for k, v := range properties {
+		if k == types.PropForwardTargetQueues {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func (m *Manager) runStealLoop() {
@@ -1249,10 +1337,16 @@ func (m *Manager) processRetention() {
 			}
 		}
 
-		// Truncate log up to the safe offset
-		if err := m.queueStore.Truncate(ctx, queueConfig.Name, truncateOffset); err != nil {
+		// Truncate log up to the safe offset.
+		var truncateErr error
+		if queueConfig.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+			truncateErr = m.raftCoordinator.ApplyTruncate(ctx, queueConfig.Name, truncateOffset)
+		} else {
+			truncateErr = m.queueStore.Truncate(ctx, queueConfig.Name, truncateOffset)
+		}
+		if truncateErr != nil {
 			m.logger.Debug("truncation error",
-				slog.String("error", err.Error()),
+				slog.String("error", truncateErr.Error()),
 				slog.String("queue", queueConfig.Name))
 		}
 	}

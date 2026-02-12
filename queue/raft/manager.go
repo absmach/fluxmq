@@ -485,6 +485,30 @@ func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group 
 	return nil
 }
 
+// ApplyDeleteGroup submits a delete consumer group operation to Raft.
+func (m *Manager) ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	op := &Operation{
+		Type:      OpDeleteGroup,
+		QueueName: queueName,
+		GroupID:   groupID,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
 // ApplyUpdateCursor submits a cursor update operation to Raft.
 func (m *Manager) ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
 	if !m.IsEnabled() {
@@ -496,6 +520,31 @@ func (m *Manager) ApplyUpdateCursor(ctx context.Context, queueName, groupID stri
 		QueueName: queueName,
 		GroupID:   groupID,
 		Cursor:    cursor,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
+// ApplyUpdateCommitted submits a committed-offset update operation to Raft.
+func (m *Manager) ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	op := &Operation{
+		Type:      OpUpdateCommitted,
+		QueueName: queueName,
+		GroupID:   groupID,
+		Committed: committed,
 	}
 
 	result, err := m.Apply(ctx, op)
@@ -547,6 +596,33 @@ func (m *Manager) ApplyRemovePending(ctx context.Context, queueName, groupID, co
 		GroupID:    groupID,
 		ConsumerID: consumerID,
 		Offset:     offset,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
+// ApplyTransferPending submits a pending transfer operation to Raft.
+func (m *Manager) ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	op := &Operation{
+		Type:         OpTransferPending,
+		QueueName:    queueName,
+		GroupID:      groupID,
+		Offset:       offset,
+		FromConsumer: fromConsumer,
+		ToConsumer:   toConsumer,
 	}
 
 	result, err := m.Apply(ctx, op)

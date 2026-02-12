@@ -972,16 +972,26 @@ func newTestRaftManager(t *testing.T, leaderID string) *queueraft.Manager {
 
 type mockQueueCoordinator struct {
 	enabled           bool
+	replicatedByQueue map[string]bool
 	leaderByQueue     map[string]bool
 	leaderAddrByQueue map[string]string
 	leaderIDByQueue   map[string]string
 
 	appendCalls []string
+	createCalls []string
+	cursorCalls []string
+	commitCalls []string
 }
 
 func (m *mockQueueCoordinator) Stop() error { return nil }
 func (m *mockQueueCoordinator) IsEnabled() bool {
 	return m.enabled
+}
+func (m *mockQueueCoordinator) IsQueueReplicated(queueName string) bool {
+	if m.replicatedByQueue == nil {
+		return false
+	}
+	return m.replicatedByQueue[queueName]
 }
 func (m *mockQueueCoordinator) IsLeaderForQueue(queueName string) bool {
 	if m.leaderByQueue == nil {
@@ -1007,6 +1017,39 @@ func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *types.Message, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
+}
+func (m *mockQueueCoordinator) ApplyTruncate(_ context.Context, _ string, _ uint64) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyCreateGroup(_ context.Context, queueName string, group *types.ConsumerGroup) error {
+	m.createCalls = append(m.createCalls, queueName+"/"+group.ID)
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyDeleteGroup(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyUpdateCursor(_ context.Context, queueName, groupID string, cursor uint64) error {
+	m.cursorCalls = append(m.cursorCalls, fmt.Sprintf("%s/%s/%d", queueName, groupID, cursor))
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyUpdateCommitted(_ context.Context, queueName, groupID string, committed uint64) error {
+	m.commitCalls = append(m.commitCalls, fmt.Sprintf("%s/%s/%d", queueName, groupID, committed))
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyAddPending(_ context.Context, _ string, _ string, _ *types.PendingEntry) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyRemovePending(_ context.Context, _ string, _ string, _ string, _ uint64) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyTransferPending(_ context.Context, _ string, _ string, _ uint64, _ string, _ string) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyRegisterConsumer(_ context.Context, _ string, _ string, _ *types.ConsumerInfo) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyUnregisterConsumer(_ context.Context, _ string, _ string, _ string) error {
+	return nil
 }
 func (m *mockQueueCoordinator) EnsureQueue(_ context.Context, _ types.QueueConfig) error { return nil }
 func (m *mockQueueCoordinator) UpdateQueue(_ context.Context, _ types.QueueConfig) error { return nil }
@@ -1341,6 +1384,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 
 	coordinator := &mockQueueCoordinator{
 		enabled:           true,
+		replicatedByQueue: map[string]bool{"hot-events": true},
 		leaderByQueue:     map[string]bool{"hot-events": false},
 		leaderIDByQueue:   map[string]string{"hot-events": "node-2"},
 		leaderAddrByQueue: map[string]string{"hot-events": "127.0.0.1:8200"},
@@ -1372,6 +1416,157 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 	}
 	if calls[0].nodeID != "node-2" {
 		t.Fatalf("expected leader nodeID node-2, got %s", calls[0].nodeID)
+	}
+}
+
+func TestSubscribeWithCursorReplicatedQueueRoutesStateThroughCoordinator(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	manager := NewManager(
+		logStore,
+		groupStore,
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		slog.Default(),
+		nil,
+	)
+
+	coordinator := &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{"orders": true},
+		leaderByQueue:     map[string]bool{"orders": true},
+	}
+	manager.SetRaftCoordinator(coordinator)
+
+	ctx := context.Background()
+	replicated := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	replicated.Replication.Enabled = true
+	if err := manager.CreateQueue(ctx, replicated); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	cursor := &types.CursorOption{
+		Position: types.CursorEarliest,
+		Mode:     types.GroupModeStream,
+	}
+	if err := manager.SubscribeWithCursor(ctx, "orders", "#", "client-1", "", "", cursor); err != nil {
+		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	}
+
+	if len(coordinator.createCalls) == 0 {
+		t.Fatalf("expected replicated CreateGroup call")
+	}
+	if len(coordinator.cursorCalls) == 0 {
+		t.Fatalf("expected replicated UpdateCursor call")
+	}
+}
+
+func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.Default()
+
+	mockCl := newMockCluster("node-1")
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyForward
+	config.DistributionMode = DistributionForward
+
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		return nil
+	}), config, logger, mockCl)
+
+	coordinator := &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{"q1": true, "q2": true},
+		leaderByQueue:     map[string]bool{"q1": false, "q2": false},
+		leaderIDByQueue:   map[string]string{"q1": "node-2", "q2": "node-3"},
+		leaderAddrByQueue: map[string]string{"q1": "127.0.0.1:8200", "q2": "127.0.0.1:8300"},
+	}
+	manager.SetRaftCoordinator(coordinator)
+
+	ctx := context.Background()
+	q1 := types.DefaultQueueConfig("q1", "shared/#")
+	q1.Replication.Enabled = true
+	q2 := types.DefaultQueueConfig("q2", "shared/#")
+	q2.Replication.Enabled = true
+	if err := manager.CreateQueue(ctx, q1); err != nil {
+		t.Fatalf("CreateQueue q1 failed: %v", err)
+	}
+	if err := manager.CreateQueue(ctx, q2); err != nil {
+		t.Fatalf("CreateQueue q2 failed: %v", err)
+	}
+
+	if err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   "shared/topic",
+		Payload: []byte("hello"),
+	}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	calls := mockCl.GetForwardCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 forward calls, got %d", len(calls))
+	}
+
+	seenTarget := map[string]bool{}
+	for _, call := range calls {
+		if !call.forwardToLeader {
+			t.Fatalf("expected forward-to-leader call")
+		}
+		target := call.properties[types.PropForwardTargetQueues]
+		if target == "" {
+			t.Fatalf("expected target queues metadata")
+		}
+		seenTarget[target] = true
+	}
+
+	if !seenTarget["q1"] || !seenTarget["q2"] {
+		t.Fatalf("expected forwarded target sets for q1 and q2, got %#v", seenTarget)
+	}
+}
+
+func TestPublishForcedTargetsProperty(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	manager := NewManager(
+		logStore,
+		groupStore,
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		slog.Default(),
+		nil,
+	)
+
+	ctx := context.Background()
+	if err := manager.CreateQueue(ctx, types.DefaultQueueConfig("q1", "shared/#")); err != nil {
+		t.Fatalf("CreateQueue q1 failed: %v", err)
+	}
+	if err := manager.CreateQueue(ctx, types.DefaultQueueConfig("q2", "shared/#")); err != nil {
+		t.Fatalf("CreateQueue q2 failed: %v", err)
+	}
+
+	if err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   "shared/topic",
+		Payload: []byte("hello"),
+		Properties: map[string]string{
+			types.PropForwardTargetQueues: "q1",
+		},
+	}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	q1Count, _ := logStore.Count(ctx, "q1")
+	q2Count, _ := logStore.Count(ctx, "q2")
+	if q1Count != 1 || q2Count != 0 {
+		t.Fatalf("unexpected forced target routing counts: q1=%d q2=%d", q1Count, q2Count)
+	}
+
+	msg, err := logStore.Read(ctx, "q1", 0)
+	if err != nil {
+		t.Fatalf("Read q1 message failed: %v", err)
+	}
+	if _, ok := msg.Properties[types.PropForwardTargetQueues]; ok {
+		t.Fatalf("forwarding metadata must not be persisted in message properties")
 	}
 }
 
