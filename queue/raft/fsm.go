@@ -464,10 +464,12 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 		return nil, fmt.Errorf("failed to list queues: %w", err)
 	}
 
-	// Collect all queue data
+	// Collect all queue data including configs
 	var queueSnapshots []QueueSnapshotData
 	for _, queueCfg := range queues {
 		queueName := queueCfg.Name
+		cfgCopy := queueCfg
+
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueName)
 		if err != nil {
 			f.logger.Warn("failed to list consumer groups for queue",
@@ -477,8 +479,9 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 		}
 
 		queueSnapshots = append(queueSnapshots, QueueSnapshotData{
-			QueueName: queueName,
-			Groups:    groups,
+			QueueName:   queueName,
+			QueueConfig: &cfgCopy,
+			Groups:      groups,
 		})
 	}
 
@@ -504,8 +507,26 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 	ctx := context.Background()
 
-	// Restore consumer groups for each stream
+	// Restore queue configs and consumer groups
 	for _, queueData := range snapshot.Queues {
+		if queueData.QueueConfig != nil {
+			if err := f.queueStore.CreateQueue(ctx, *queueData.QueueConfig); err != nil {
+				if err == storage.ErrQueueAlreadyExists {
+					if updateErr := f.queueStore.UpdateQueue(ctx, *queueData.QueueConfig); updateErr != nil {
+						f.logger.Error("failed to restore queue config",
+							slog.String("queue", queueData.QueueName),
+							slog.String("error", updateErr.Error()))
+						return updateErr
+					}
+				} else {
+					f.logger.Error("failed to restore queue config",
+						slog.String("queue", queueData.QueueName),
+						slog.String("error", err.Error()))
+					return err
+				}
+			}
+		}
+
 		for _, group := range queueData.Groups {
 			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 				if err != storage.ErrConsumerGroupExists {
@@ -527,8 +548,9 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 // QueueSnapshotData holds snapshot data for a single queue.
 type QueueSnapshotData struct {
-	QueueName string                 `json:"queue_name"`
-	Groups    []*types.ConsumerGroup `json:"groups"`
+	QueueName   string                 `json:"queue_name"`
+	QueueConfig *types.QueueConfig     `json:"queue_config,omitempty"`
+	Groups      []*types.ConsumerGroup `json:"groups"`
 }
 
 // GlobalSnapshotData represents the serialized snapshot data for all queues.

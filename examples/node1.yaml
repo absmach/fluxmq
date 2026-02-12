@@ -129,7 +129,7 @@ queues:
     reserved: true
     replication:
       enabled: true
-      group: "default"
+      group: "default"             # uses the base raft group
       replication_factor: 3
       mode: "sync"
       min_in_sync_replicas: 2
@@ -139,8 +139,21 @@ queues:
       - "$queue/hot-events/#"
     replication:
       enabled: true
-      group: "hot"
+      group: "hot"                 # uses the statically-configured "hot" group above
       replication_factor: 3
       mode: "sync"
       min_in_sync_replicas: 2
       ack_timeout: "5s"
+  # This queue references a group not listed under cluster.raft.groups.
+  # Because auto_provision_groups is true, the broker will dynamically
+  # create a dedicated Raft group with ports derived from the base bind_addr.
+  - name: "audit-log"
+    topics:
+      - "$queue/audit/#"
+    replication:
+      enabled: true
+      group: "audit"               # auto-provisioned at startup
+      replication_factor: 3
+      mode: "async"
+      min_in_sync_replicas: 1
+      ack_timeout: "10s"

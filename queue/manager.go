@@ -26,7 +26,7 @@ import (
 type Manager struct {
 	queueStore       storage.QueueStore
 	groupStore       storage.ConsumerGroupStore
-	raftGroupStore   *raftAwareGroupStore
+	raftGroupStore   *raftGroupStore
 	consumerManager  *consumer.Manager
 	deliveryTarget   Deliverer
 	logger           *slog.Logger
@@ -134,7 +134,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		MaxPELSize:         config.MaxPELSize,
 	}
 
-	raftGroupStore := newRaftAwareGroupStore(groupStore)
+	raftGroupStore := newRaftGroupStore(groupStore)
 	consumerMgr := consumer.NewManager(queueStore, raftGroupStore, consumerCfg)
 
 	var localNodeID string
@@ -385,17 +385,25 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 		if err := m.queueStore.UpdateQueue(ctx, config); err != nil && err != storage.ErrQueueNotFound {
 			return err
 		}
+		// EnsureQueue already updated the coordinator's queue→group mapping,
+		// but we still need to handle the case where replication was just
+		// disabled (replicatedNow=true, replicatedNext=false).
+		if !replicatedNext {
+			if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
+				return err
+			}
+		}
 	} else {
 		if err := m.queueStore.UpdateQueue(ctx, config); err != nil {
 			return err
 		}
-	}
-
-	if m.raftCoordinator != nil {
-		if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
-			return err
+		if m.raftCoordinator != nil {
+			if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
+				return err
+			}
 		}
 	}
+
 	return nil
 }
 

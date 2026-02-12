@@ -577,13 +577,13 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	consumer := group.GetConsumer(msg.ConsumerId)
-	if consumer == nil {
+	c := group.GetConsumer(msg.ConsumerId)
+	if c == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("consumer not found"))
 	}
 
-	consumer.LastHeartbeat = time.Now()
-	if err := h.groupStore.UpdateConsumerGroup(ctx, group); err != nil {
+	c.LastHeartbeat = time.Now()
+	if err := h.groupStore.RegisterConsumer(ctx, msg.QueueName, msg.GroupId, c); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 

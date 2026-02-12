@@ -144,3 +144,13 @@ queues:
       mode: "sync"
       min_in_sync_replicas: 2
       ack_timeout: "5s"
+  - name: "audit-log"
+    topics:
+      - "$queue/audit/#"
+    replication:
+      enabled: true
+      group: "audit"               # auto-provisioned at startup
+      replication_factor: 3
+      mode: "async"
+      min_in_sync_replicas: 1
+      ack_timeout: "10s"

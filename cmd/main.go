@@ -455,11 +455,10 @@ func main() {
 				os.Exit(1)
 			}
 
-			if defaultRaftManager != nil {
-				qm.SetRaftManager(defaultRaftManager)
-			}
 			if raftCoordinator != nil {
 				qm.SetRaftCoordinator(raftCoordinator)
+			} else if defaultRaftManager != nil {
+				qm.SetRaftManager(defaultRaftManager)
 			}
 
 			groupIDs := make([]string, 0, len(groupRuntimes))

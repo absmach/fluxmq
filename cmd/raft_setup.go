@@ -281,19 +281,23 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 		p.mu.Unlock()
 		return manager, nil
 	}
-	p.mu.Unlock()
 
+	// Hold the lock during config resolution and slot reservation to prevent
+	// two goroutines from racing to create the same group.
 	groupCfg, configured := p.raftCfg.Groups[gid]
 	if configured && groupCfg.Enabled != nil && !*groupCfg.Enabled {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("raft group %q is disabled", gid)
 	}
 	if !configured && !p.raftCfg.AutoProvisionGroups {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("raft group %q is not configured and auto_provision_groups is disabled", gid)
 	}
 
 	if !configured {
 		derived, err := p.deriveAutoGroupConfig(gid)
 		if err != nil {
+			p.mu.Unlock()
 			return nil, err
 		}
 		groupCfg = derived
@@ -301,22 +305,24 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 
 	runtime, err := resolveRaftGroupRuntime(gid, p.raftCfg, groupCfg, false)
 	if err != nil {
+		p.mu.Unlock()
 		return nil, err
 	}
 
-	p.mu.Lock()
-	if manager, ok := p.managers[gid]; ok && manager != nil {
-		p.mu.Unlock()
-		return manager, nil
-	}
 	if existingGroup, ok := p.usedBind[runtime.BindAddr]; ok && existingGroup != gid {
 		p.mu.Unlock()
 		return nil, fmt.Errorf("raft group %q bind_addr %q collides with group %q", gid, runtime.BindAddr, existingGroup)
 	}
+
+	// Reserve the slot so concurrent callers see a placeholder and wait.
+	p.managers[gid] = nil
+	p.usedBind[runtime.BindAddr] = gid
+	p.bindByGroup[gid] = runtime.BindAddr
 	p.mu.Unlock()
 
 	groupLogger := p.logger.With(slog.String("raft_group", gid))
 	if p.queueStore == nil || p.groupStore == nil {
+		p.cleanupReservation(gid, runtime.BindAddr)
 		return nil, fmt.Errorf("cannot provision raft group %q: queue/group stores are not configured", gid)
 	}
 	manager := qraft.NewManager(
@@ -331,19 +337,13 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 	)
 
 	if err := manager.Start(ctx); err != nil {
+		p.cleanupReservation(gid, runtime.BindAddr)
 		return nil, fmt.Errorf("failed to start raft group %q: %w", gid, err)
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if existing, ok := p.managers[gid]; ok && existing != nil {
-		_ = manager.Stop()
-		return existing, nil
-	}
 	p.managers[gid] = manager
-	p.usedBind[runtime.BindAddr] = gid
-	p.bindByGroup[gid] = runtime.BindAddr
+	p.mu.Unlock()
 
 	p.logger.Info("dynamically provisioned raft group",
 		slog.String("group", gid),
@@ -351,6 +351,19 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 		slog.String("data_dir", runtime.DataDir))
 
 	return manager, nil
+}
+
+// cleanupReservation removes a placeholder reservation when manager.Start() fails.
+func (p *raftGroupProvisioner) cleanupReservation(gid, bindAddr string) {
+	p.mu.Lock()
+	if p.managers[gid] == nil {
+		delete(p.managers, gid)
+	}
+	if bindAddr != "" && p.usedBind[bindAddr] == gid {
+		delete(p.usedBind, bindAddr)
+	}
+	delete(p.bindByGroup, gid)
+	p.mu.Unlock()
 }
 
 func (p *raftGroupProvisioner) TryReleaseGroup(_ context.Context, groupID string) (bool, error) {
@@ -398,6 +411,8 @@ func (p *raftGroupProvisioner) TryReleaseGroup(_ context.Context, groupID string
 	return true, nil
 }
 
+// deriveAutoGroupConfig derives a RaftGroupConfig by hashing the group ID to
+// produce a deterministic port offset. Caller must hold p.mu.
 func (p *raftGroupProvisioner) deriveAutoGroupConfig(groupID string) (config.RaftGroupConfig, error) {
 	baseBind := strings.TrimSpace(p.raftCfg.BindAddr)
 	if baseBind == "" {
@@ -421,10 +436,7 @@ func (p *raftGroupProvisioner) deriveAutoGroupConfig(groupID string) (config.Raf
 			return config.RaftGroupConfig{}, fmt.Errorf("cannot derive peers for group %q: %w", groupID, err)
 		}
 
-		p.mu.Lock()
-		_, used := p.usedBind[bindAddr]
-		p.mu.Unlock()
-		if used {
+		if _, used := p.usedBind[bindAddr]; used {
 			continue
 		}
 
@@ -440,7 +452,9 @@ func (p *raftGroupProvisioner) deriveAutoGroupConfig(groupID string) (config.Raf
 func portOffsetForGroup(groupID string) int {
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(groupID))
-	return int(hasher.Sum32()%20000) + 1000
+	// Range [10000, 20000) keeps derived ports well above typical static
+	// group ports (8xxx) and below 65535 for base ports up to ~45000.
+	return int(hasher.Sum32()%10000) + 10000
 }
 
 func addPortOffset(addr string, offset int) (string, error) {
