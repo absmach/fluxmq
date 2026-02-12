@@ -36,6 +36,11 @@ service BrokerService {
 
   // InstallSnapshot is invoked by leader to transfer snapshot to a follower.
   rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+
+  // ForwardGroupOp forwards a consumer group mutation from a follower to the
+  // Raft leader for the queue's replication group. The leader applies the
+  // operation through its coordinator so it goes through Raft consensus.
+  rpc ForwardGroupOp(ForwardGroupOpRequest) returns (ForwardGroupOpResponse);
 }
 
 // =============================================================================
@@ -227,4 +232,20 @@ message InstallSnapshotRequest {
 
 message InstallSnapshotResponse {
   uint64 term = 1;
+}
+
+// =============================================================================
+// Consumer Group Operation Forwarding
+// =============================================================================
+
+// ForwardGroupOpRequest carries a consumer group mutation from a follower
+// to the Raft leader. op_data is a JSON-encoded raft.Operation struct.
+message ForwardGroupOpRequest {
+  string queue_name = 1;
+  bytes op_data = 2;
+}
+
+message ForwardGroupOpResponse {
+  bool success = 1;
+  string error = 2;
 }

@@ -931,6 +931,10 @@ func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	return nil
 }
 
+func (c *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+	return nil
+}
+
 func setUnexportedField(t *testing.T, target any, fieldName string, value any) {
 	t.Helper()
 
@@ -1030,6 +1034,9 @@ func (m *mockQueueCoordinator) ApplyTruncate(_ context.Context, _ string, _ uint
 }
 func (m *mockQueueCoordinator) ApplyCreateGroup(_ context.Context, queueName string, group *types.ConsumerGroup) error {
 	m.createCalls = append(m.createCalls, queueName+"/"+group.ID)
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyUpdateGroup(_ context.Context, _ string, _ *types.ConsumerGroup) error {
 	return nil
 }
 func (m *mockQueueCoordinator) ApplyDeleteGroup(_ context.Context, _ string, _ string) error {

@@ -183,6 +183,11 @@ func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	return ErrClusterNotEnabled
 }
 
+func (n *NoopCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+	// Single-node: no remote nodes to forward to
+	return ErrClusterNotEnabled
+}
+
 // Leadership - always leader in single-node
 
 func (n *NoopCluster) IsLeader() bool {

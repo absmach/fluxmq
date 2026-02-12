@@ -62,6 +62,9 @@ const (
 	// BrokerServiceInstallSnapshotProcedure is the fully-qualified name of the BrokerService's
 	// InstallSnapshot RPC.
 	BrokerServiceInstallSnapshotProcedure = "/fluxmq.cluster.v1.BrokerService/InstallSnapshot"
+	// BrokerServiceForwardGroupOpProcedure is the fully-qualified name of the BrokerService's
+	// ForwardGroupOp RPC.
+	BrokerServiceForwardGroupOpProcedure = "/fluxmq.cluster.v1.BrokerService/ForwardGroupOp"
 )
 
 // BrokerServiceClient is a client for the fluxmq.cluster.v1.BrokerService service.
@@ -84,6 +87,10 @@ type BrokerServiceClient interface {
 	RequestVote(context.Context, *connect.Request[v1.RequestVoteRequest]) (*connect.Response[v1.RequestVoteResponse], error)
 	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
 	InstallSnapshot(context.Context, *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error)
+	// ForwardGroupOp forwards a consumer group mutation from a follower to the
+	// Raft leader for the queue's replication group. The leader applies the
+	// operation through its coordinator so it goes through Raft consensus.
+	ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error)
 }
 
 // NewBrokerServiceClient constructs a client for the fluxmq.cluster.v1.BrokerService service. By
@@ -151,6 +158,12 @@ func NewBrokerServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(brokerServiceMethods.ByName("InstallSnapshot")),
 			connect.WithClientOptions(opts...),
 		),
+		forwardGroupOp: connect.NewClient[v1.ForwardGroupOpRequest, v1.ForwardGroupOpResponse](
+			httpClient,
+			baseURL+BrokerServiceForwardGroupOpProcedure,
+			connect.WithSchema(brokerServiceMethods.ByName("ForwardGroupOp")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -165,6 +178,7 @@ type brokerServiceClient struct {
 	appendEntries     *connect.Client[v1.AppendEntriesRequest, v1.AppendEntriesResponse]
 	requestVote       *connect.Client[v1.RequestVoteRequest, v1.RequestVoteResponse]
 	installSnapshot   *connect.Client[v1.InstallSnapshotRequest, v1.InstallSnapshotResponse]
+	forwardGroupOp    *connect.Client[v1.ForwardGroupOpRequest, v1.ForwardGroupOpResponse]
 }
 
 // RoutePublish calls fluxmq.cluster.v1.BrokerService.RoutePublish.
@@ -212,6 +226,11 @@ func (c *brokerServiceClient) InstallSnapshot(ctx context.Context, req *connect.
 	return c.installSnapshot.CallUnary(ctx, req)
 }
 
+// ForwardGroupOp calls fluxmq.cluster.v1.BrokerService.ForwardGroupOp.
+func (c *brokerServiceClient) ForwardGroupOp(ctx context.Context, req *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error) {
+	return c.forwardGroupOp.CallUnary(ctx, req)
+}
+
 // BrokerServiceHandler is an implementation of the fluxmq.cluster.v1.BrokerService service.
 type BrokerServiceHandler interface {
 	// RoutePublish forwards a PUBLISH packet to the broker that owns the target session.
@@ -232,6 +251,10 @@ type BrokerServiceHandler interface {
 	RequestVote(context.Context, *connect.Request[v1.RequestVoteRequest]) (*connect.Response[v1.RequestVoteResponse], error)
 	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
 	InstallSnapshot(context.Context, *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error)
+	// ForwardGroupOp forwards a consumer group mutation from a follower to the
+	// Raft leader for the queue's replication group. The leader applies the
+	// operation through its coordinator so it goes through Raft consensus.
+	ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error)
 }
 
 // NewBrokerServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -295,6 +318,12 @@ func NewBrokerServiceHandler(svc BrokerServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(brokerServiceMethods.ByName("InstallSnapshot")),
 		connect.WithHandlerOptions(opts...),
 	)
+	brokerServiceForwardGroupOpHandler := connect.NewUnaryHandler(
+		BrokerServiceForwardGroupOpProcedure,
+		svc.ForwardGroupOp,
+		connect.WithSchema(brokerServiceMethods.ByName("ForwardGroupOp")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/fluxmq.cluster.v1.BrokerService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BrokerServiceRoutePublishProcedure:
@@ -315,6 +344,8 @@ func NewBrokerServiceHandler(svc BrokerServiceHandler, opts ...connect.HandlerOp
 			brokerServiceRequestVoteHandler.ServeHTTP(w, r)
 		case BrokerServiceInstallSnapshotProcedure:
 			brokerServiceInstallSnapshotHandler.ServeHTTP(w, r)
+		case BrokerServiceForwardGroupOpProcedure:
+			brokerServiceForwardGroupOpHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -358,4 +389,8 @@ func (UnimplementedBrokerServiceHandler) RequestVote(context.Context, *connect.R
 
 func (UnimplementedBrokerServiceHandler) InstallSnapshot(context.Context, *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.InstallSnapshot is not implemented"))
+}
+
+func (UnimplementedBrokerServiceHandler) ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.ForwardGroupOp is not implemented"))
 }

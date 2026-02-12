@@ -27,4 +27,6 @@ type (
 	RequestVoteResp       = connect.Response[clusterv1.RequestVoteResponse]
 	InstallSnapshotReq    = connect.Request[clusterv1.InstallSnapshotRequest]
 	InstallSnapshotResp   = connect.Response[clusterv1.InstallSnapshotResponse]
+	ForwardGroupOpReq     = connect.Request[clusterv1.ForwardGroupOpRequest]
+	ForwardGroupOpResp    = connect.Response[clusterv1.ForwardGroupOpResponse]
 )

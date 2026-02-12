@@ -1436,6 +1436,15 @@ func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	return err
 }
 
+// ForwardGroupOp forwards a consumer group operation to a remote node.
+func (c *EtcdCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+	if c.transport == nil {
+		return ErrTransportNotConfigured
+	}
+
+	return c.transport.SendForwardGroupOp(ctx, nodeID, queueName, opData)
+}
+
 // HandleTakeover implements TransportHandler.HandleTakeover.
 // Called when another broker requests to take over a session from this node.
 func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, toNode string, state *clusterv1.SessionState) (*clusterv1.SessionState, error) {

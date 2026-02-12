@@ -555,6 +555,31 @@ func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group 
 	return nil
 }
 
+// ApplyUpdateGroup submits a full consumer group state update operation to Raft.
+func (m *Manager) ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	op := &Operation{
+		Type:       OpUpdateGroup,
+		QueueName:  queueName,
+		GroupID:    group.ID,
+		GroupState: group,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
 // ApplyDeleteGroup submits a delete consumer group operation to Raft.
 func (m *Manager) ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error {
 	if !m.IsEnabled() {

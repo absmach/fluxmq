@@ -1648,6 +1648,112 @@ func (x *InstallSnapshotResponse) GetTerm() uint64 {
 	return 0
 }
 
+// ForwardGroupOpRequest carries a consumer group mutation from a follower
+// to the Raft leader. op_data is a JSON-encoded raft.Operation struct.
+type ForwardGroupOpRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
+	OpData        []byte                 `protobuf:"bytes,2,opt,name=op_data,json=opData,proto3" json:"op_data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardGroupOpRequest) Reset() {
+	*x = ForwardGroupOpRequest{}
+	mi := &file_cluster_v1_broker_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardGroupOpRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardGroupOpRequest) ProtoMessage() {}
+
+func (x *ForwardGroupOpRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cluster_v1_broker_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardGroupOpRequest.ProtoReflect.Descriptor instead.
+func (*ForwardGroupOpRequest) Descriptor() ([]byte, []int) {
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ForwardGroupOpRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *ForwardGroupOpRequest) GetOpData() []byte {
+	if x != nil {
+		return x.OpData
+	}
+	return nil
+}
+
+type ForwardGroupOpResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardGroupOpResponse) Reset() {
+	*x = ForwardGroupOpResponse{}
+	mi := &file_cluster_v1_broker_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardGroupOpResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardGroupOpResponse) ProtoMessage() {}
+
+func (x *ForwardGroupOpResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cluster_v1_broker_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardGroupOpResponse.ProtoReflect.Descriptor instead.
+func (*ForwardGroupOpResponse) Descriptor() ([]byte, []int) {
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ForwardGroupOpResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ForwardGroupOpResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_cluster_v1_broker_proto protoreflect.FileDescriptor
 
 const file_cluster_v1_broker_proto_rawDesc = "" +
@@ -1799,7 +1905,14 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x04data\x18\x06 \x01(\fR\x04data\x12\x12\n" +
 	"\x04done\x18\a \x01(\bR\x04done\"-\n" +
 	"\x17InstallSnapshotResponse\x12\x12\n" +
-	"\x04term\x18\x01 \x01(\x04R\x04term2\xfe\x06\n" +
+	"\x04term\x18\x01 \x01(\x04R\x04term\"O\n" +
+	"\x15ForwardGroupOpRequest\x12\x1d\n" +
+	"\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x17\n" +
+	"\aop_data\x18\x02 \x01(\fR\x06opData\"H\n" +
+	"\x16ForwardGroupOpResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xe5\a\n" +
 	"\rBrokerService\x12U\n" +
 	"\fRoutePublish\x12!.fluxmq.cluster.v1.PublishRequest\x1a\".fluxmq.cluster.v1.PublishResponse\x12Z\n" +
 	"\x0fTakeoverSession\x12\".fluxmq.cluster.v1.TakeoverRequest\x1a#.fluxmq.cluster.v1.TakeoverResponse\x12b\n" +
@@ -1809,7 +1922,8 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x11RouteQueueMessage\x12+.fluxmq.cluster.v1.RouteQueueMessageRequest\x1a,.fluxmq.cluster.v1.RouteQueueMessageResponse\x12b\n" +
 	"\rAppendEntries\x12'.fluxmq.cluster.v1.AppendEntriesRequest\x1a(.fluxmq.cluster.v1.AppendEntriesResponse\x12\\\n" +
 	"\vRequestVote\x12%.fluxmq.cluster.v1.RequestVoteRequest\x1a&.fluxmq.cluster.v1.RequestVoteResponse\x12h\n" +
-	"\x0fInstallSnapshot\x12).fluxmq.cluster.v1.InstallSnapshotRequest\x1a*.fluxmq.cluster.v1.InstallSnapshotResponseB\xc4\x01\n" +
+	"\x0fInstallSnapshot\x12).fluxmq.cluster.v1.InstallSnapshotRequest\x1a*.fluxmq.cluster.v1.InstallSnapshotResponse\x12e\n" +
+	"\x0eForwardGroupOp\x12(.fluxmq.cluster.v1.ForwardGroupOpRequest\x1a).fluxmq.cluster.v1.ForwardGroupOpResponseB\xc4\x01\n" +
 	"\x15com.fluxmq.cluster.v1B\vBrokerProtoP\x01Z8github.com/absmach/fluxmq/pkg/proto/cluster/v1;clusterv1\xa2\x02\x03FCX\xaa\x02\x11Fluxmq.Cluster.V1\xca\x02\x11Fluxmq\\Cluster\\V1\xe2\x02\x1dFluxmq\\Cluster\\V1\\GPBMetadata\xea\x02\x13Fluxmq::Cluster::V1b\x06proto3"
 
 var (
@@ -1824,7 +1938,7 @@ func file_cluster_v1_broker_proto_rawDescGZIP() []byte {
 	return file_cluster_v1_broker_proto_rawDescData
 }
 
-var file_cluster_v1_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_cluster_v1_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_cluster_v1_broker_proto_goTypes = []any{
 	(*PublishRequest)(nil),            // 0: fluxmq.cluster.v1.PublishRequest
 	(*PublishResponse)(nil),           // 1: fluxmq.cluster.v1.PublishResponse
@@ -1850,23 +1964,25 @@ var file_cluster_v1_broker_proto_goTypes = []any{
 	(*RequestVoteResponse)(nil),       // 21: fluxmq.cluster.v1.RequestVoteResponse
 	(*InstallSnapshotRequest)(nil),    // 22: fluxmq.cluster.v1.InstallSnapshotRequest
 	(*InstallSnapshotResponse)(nil),   // 23: fluxmq.cluster.v1.InstallSnapshotResponse
-	nil,                               // 24: fluxmq.cluster.v1.PublishRequest.PropertiesEntry
-	nil,                               // 25: fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
-	nil,                               // 26: fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
-	nil,                               // 27: fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
+	(*ForwardGroupOpRequest)(nil),     // 24: fluxmq.cluster.v1.ForwardGroupOpRequest
+	(*ForwardGroupOpResponse)(nil),    // 25: fluxmq.cluster.v1.ForwardGroupOpResponse
+	nil,                               // 26: fluxmq.cluster.v1.PublishRequest.PropertiesEntry
+	nil,                               // 27: fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
+	nil,                               // 28: fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
+	nil,                               // 29: fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
 }
 var file_cluster_v1_broker_proto_depIdxs = []int32{
-	24, // 0: fluxmq.cluster.v1.PublishRequest.properties:type_name -> fluxmq.cluster.v1.PublishRequest.PropertiesEntry
+	26, // 0: fluxmq.cluster.v1.PublishRequest.properties:type_name -> fluxmq.cluster.v1.PublishRequest.PropertiesEntry
 	4,  // 1: fluxmq.cluster.v1.TakeoverResponse.session_state:type_name -> fluxmq.cluster.v1.SessionState
 	5,  // 2: fluxmq.cluster.v1.SessionState.inflight_messages:type_name -> fluxmq.cluster.v1.InflightMessage
 	6,  // 3: fluxmq.cluster.v1.SessionState.queued_messages:type_name -> fluxmq.cluster.v1.QueuedMessage
 	7,  // 4: fluxmq.cluster.v1.SessionState.subscriptions:type_name -> fluxmq.cluster.v1.Subscription
 	8,  // 5: fluxmq.cluster.v1.SessionState.will:type_name -> fluxmq.cluster.v1.WillMessage
 	11, // 6: fluxmq.cluster.v1.FetchRetainedResponse.message:type_name -> fluxmq.cluster.v1.RetainedMessage
-	25, // 7: fluxmq.cluster.v1.RetainedMessage.properties:type_name -> fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
+	27, // 7: fluxmq.cluster.v1.RetainedMessage.properties:type_name -> fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
 	8,  // 8: fluxmq.cluster.v1.FetchWillResponse.message:type_name -> fluxmq.cluster.v1.WillMessage
-	26, // 9: fluxmq.cluster.v1.EnqueueRemoteRequest.properties:type_name -> fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
-	27, // 10: fluxmq.cluster.v1.RouteQueueMessageRequest.properties:type_name -> fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
+	28, // 9: fluxmq.cluster.v1.EnqueueRemoteRequest.properties:type_name -> fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
+	29, // 10: fluxmq.cluster.v1.RouteQueueMessageRequest.properties:type_name -> fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
 	0,  // 11: fluxmq.cluster.v1.BrokerService.RoutePublish:input_type -> fluxmq.cluster.v1.PublishRequest
 	2,  // 12: fluxmq.cluster.v1.BrokerService.TakeoverSession:input_type -> fluxmq.cluster.v1.TakeoverRequest
 	9,  // 13: fluxmq.cluster.v1.BrokerService.FetchRetained:input_type -> fluxmq.cluster.v1.FetchRetainedRequest
@@ -1876,17 +1992,19 @@ var file_cluster_v1_broker_proto_depIdxs = []int32{
 	18, // 17: fluxmq.cluster.v1.BrokerService.AppendEntries:input_type -> fluxmq.cluster.v1.AppendEntriesRequest
 	20, // 18: fluxmq.cluster.v1.BrokerService.RequestVote:input_type -> fluxmq.cluster.v1.RequestVoteRequest
 	22, // 19: fluxmq.cluster.v1.BrokerService.InstallSnapshot:input_type -> fluxmq.cluster.v1.InstallSnapshotRequest
-	1,  // 20: fluxmq.cluster.v1.BrokerService.RoutePublish:output_type -> fluxmq.cluster.v1.PublishResponse
-	3,  // 21: fluxmq.cluster.v1.BrokerService.TakeoverSession:output_type -> fluxmq.cluster.v1.TakeoverResponse
-	10, // 22: fluxmq.cluster.v1.BrokerService.FetchRetained:output_type -> fluxmq.cluster.v1.FetchRetainedResponse
-	13, // 23: fluxmq.cluster.v1.BrokerService.FetchWill:output_type -> fluxmq.cluster.v1.FetchWillResponse
-	15, // 24: fluxmq.cluster.v1.BrokerService.EnqueueRemote:output_type -> fluxmq.cluster.v1.EnqueueRemoteResponse
-	17, // 25: fluxmq.cluster.v1.BrokerService.RouteQueueMessage:output_type -> fluxmq.cluster.v1.RouteQueueMessageResponse
-	19, // 26: fluxmq.cluster.v1.BrokerService.AppendEntries:output_type -> fluxmq.cluster.v1.AppendEntriesResponse
-	21, // 27: fluxmq.cluster.v1.BrokerService.RequestVote:output_type -> fluxmq.cluster.v1.RequestVoteResponse
-	23, // 28: fluxmq.cluster.v1.BrokerService.InstallSnapshot:output_type -> fluxmq.cluster.v1.InstallSnapshotResponse
-	20, // [20:29] is the sub-list for method output_type
-	11, // [11:20] is the sub-list for method input_type
+	24, // 20: fluxmq.cluster.v1.BrokerService.ForwardGroupOp:input_type -> fluxmq.cluster.v1.ForwardGroupOpRequest
+	1,  // 21: fluxmq.cluster.v1.BrokerService.RoutePublish:output_type -> fluxmq.cluster.v1.PublishResponse
+	3,  // 22: fluxmq.cluster.v1.BrokerService.TakeoverSession:output_type -> fluxmq.cluster.v1.TakeoverResponse
+	10, // 23: fluxmq.cluster.v1.BrokerService.FetchRetained:output_type -> fluxmq.cluster.v1.FetchRetainedResponse
+	13, // 24: fluxmq.cluster.v1.BrokerService.FetchWill:output_type -> fluxmq.cluster.v1.FetchWillResponse
+	15, // 25: fluxmq.cluster.v1.BrokerService.EnqueueRemote:output_type -> fluxmq.cluster.v1.EnqueueRemoteResponse
+	17, // 26: fluxmq.cluster.v1.BrokerService.RouteQueueMessage:output_type -> fluxmq.cluster.v1.RouteQueueMessageResponse
+	19, // 27: fluxmq.cluster.v1.BrokerService.AppendEntries:output_type -> fluxmq.cluster.v1.AppendEntriesResponse
+	21, // 28: fluxmq.cluster.v1.BrokerService.RequestVote:output_type -> fluxmq.cluster.v1.RequestVoteResponse
+	23, // 29: fluxmq.cluster.v1.BrokerService.InstallSnapshot:output_type -> fluxmq.cluster.v1.InstallSnapshotResponse
+	25, // 30: fluxmq.cluster.v1.BrokerService.ForwardGroupOp:output_type -> fluxmq.cluster.v1.ForwardGroupOpResponse
+	21, // [21:31] is the sub-list for method output_type
+	11, // [11:21] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
 	11, // [11:11] is the sub-list for extension extendee
 	0,  // [0:11] is the sub-list for field type_name
@@ -1903,7 +2021,7 @@ func file_cluster_v1_broker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cluster_v1_broker_proto_rawDesc), len(file_cluster_v1_broker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -70,6 +70,9 @@ func (m *mockReplicator) ApplyTruncate(context.Context, string, uint64) error { 
 func (m *mockReplicator) ApplyCreateGroup(context.Context, string, *types.ConsumerGroup) error {
 	return nil
 }
+func (m *mockReplicator) ApplyUpdateGroup(context.Context, string, *types.ConsumerGroup) error {
+	return nil
+}
 func (m *mockReplicator) ApplyDeleteGroup(context.Context, string, string) error { return nil }
 func (m *mockReplicator) ApplyUpdateCursor(context.Context, string, string, uint64) error {
 	return nil

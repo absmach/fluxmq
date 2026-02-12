@@ -36,6 +36,7 @@ type QueueCoordinator interface {
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
 	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
+	ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
 	ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error
 	ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error
 	ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error
@@ -63,6 +64,7 @@ type GroupReplicator interface {
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
 	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
+	ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
 	ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error
 	ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error
 	ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error
@@ -373,6 +375,14 @@ func (c *LogicalGroupCoordinator) ApplyCreateGroup(ctx context.Context, queueNam
 		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
 	}
 	return replicator.ApplyCreateGroup(ctx, queueName, group)
+}
+
+func (c *LogicalGroupCoordinator) ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyUpdateGroup(ctx, queueName, group)
 }
 
 func (c *LogicalGroupCoordinator) ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error {

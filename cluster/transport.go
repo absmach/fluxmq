@@ -34,6 +34,11 @@ type QueueHandler interface {
 
 	// HandleQueuePublish handles a publish with the given mode.
 	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
+
+	// HandleForwardedGroupOp applies a consumer group mutation that was
+	// forwarded from a follower. The opData is a JSON-encoded raft.Operation.
+	// This node is expected to be the Raft leader for the queue's group.
+	HandleForwardedGroupOp(ctx context.Context, queueName string, opData []byte) error
 }
 
 // Transport handles inter-broker communication using Connect protocol.
@@ -513,6 +518,31 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 	}), nil
 }
 
+// ForwardGroupOp implements BrokerServiceHandler.ForwardGroupOp.
+func (t *Transport) ForwardGroupOp(ctx context.Context, req *ForwardGroupOpReq) (*ForwardGroupOpResp, error) {
+	t.mu.RLock()
+	handler := t.queueHandler
+	t.mu.RUnlock()
+
+	if handler == nil {
+		return connect.NewResponse(&clusterv1.ForwardGroupOpResponse{
+			Success: false,
+			Error:   "no queue handler configured",
+		}), nil
+	}
+
+	if err := handler.HandleForwardedGroupOp(ctx, req.Msg.QueueName, req.Msg.OpData); err != nil {
+		return connect.NewResponse(&clusterv1.ForwardGroupOpResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
+
+	return connect.NewResponse(&clusterv1.ForwardGroupOpResponse{
+		Success: true,
+	}), nil
+}
+
 // AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
 func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*AppendEntriesResp, error) {
 	// TODO: Implement Raft consensus
@@ -761,6 +791,32 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 
 		if !resp.Msg.Success {
 			return fmt.Errorf("route queue message failed: %s", resp.Msg.Error)
+		}
+
+		return nil
+	})
+}
+
+// SendForwardGroupOp forwards a consumer group operation to a peer node with retry and circuit breaker.
+func (t *Transport) SendForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
+
+		req := connect.NewRequest(&clusterv1.ForwardGroupOpRequest{
+			QueueName: queueName,
+			OpData:    opData,
+		})
+
+		resp, err := client.ForwardGroupOp(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+
+		if !resp.Msg.Success {
+			return fmt.Errorf("forward group op failed: %s", resp.Msg.Error)
 		}
 
 		return nil

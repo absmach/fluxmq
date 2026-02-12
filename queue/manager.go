@@ -138,6 +138,9 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	if logger != nil {
 		raftGroupStore.SetLogger(logger)
 	}
+	if cl != nil {
+		raftGroupStore.SetForwarder(cl)
+	}
 	consumerMgr := consumer.NewManager(queueStore, raftGroupStore, consumerCfg)
 
 	var localNodeID string
@@ -1656,4 +1659,50 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 	deliveryMsg.SetPayloadFromBytes(msg.Payload)
 
 	return m.deliveryTarget.Deliver(ctx, clientID, deliveryMsg)
+}
+
+// HandleForwardedGroupOp implements cluster.QueueHandler.HandleForwardedGroupOp.
+// It decodes a raft.Operation and applies it through the local coordinator.
+func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, opData []byte) error {
+	if m.raftCoordinator == nil {
+		return fmt.Errorf("raft coordinator not available")
+	}
+
+	var op raft.Operation
+	if err := raft.DecodeOperation(opData, &op); err != nil {
+		return fmt.Errorf("failed to decode forwarded group op: %w", err)
+	}
+
+	if op.QueueName != queueName {
+		return fmt.Errorf("queue name mismatch: request=%q op=%q", queueName, op.QueueName)
+	}
+
+	return m.applyGroupOp(ctx, &op)
+}
+
+func (m *Manager) applyGroupOp(ctx context.Context, op *raft.Operation) error {
+	switch op.Type {
+	case raft.OpCreateGroup:
+		return m.raftCoordinator.ApplyCreateGroup(ctx, op.QueueName, op.GroupState)
+	case raft.OpUpdateGroup:
+		return m.raftCoordinator.ApplyUpdateGroup(ctx, op.QueueName, op.GroupState)
+	case raft.OpDeleteGroup:
+		return m.raftCoordinator.ApplyDeleteGroup(ctx, op.QueueName, op.GroupID)
+	case raft.OpUpdateCursor:
+		return m.raftCoordinator.ApplyUpdateCursor(ctx, op.QueueName, op.GroupID, op.Cursor)
+	case raft.OpUpdateCommitted:
+		return m.raftCoordinator.ApplyUpdateCommitted(ctx, op.QueueName, op.GroupID, op.Committed)
+	case raft.OpAddPending:
+		return m.raftCoordinator.ApplyAddPending(ctx, op.QueueName, op.GroupID, op.PendingEntry)
+	case raft.OpRemovePending:
+		return m.raftCoordinator.ApplyRemovePending(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
+	case raft.OpTransferPending:
+		return m.raftCoordinator.ApplyTransferPending(ctx, op.QueueName, op.GroupID, op.Offset, op.FromConsumer, op.ToConsumer)
+	case raft.OpRegisterConsumer:
+		return m.raftCoordinator.ApplyRegisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerInfo)
+	case raft.OpUnregisterConsumer:
+		return m.raftCoordinator.ApplyUnregisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerID)
+	default:
+		return fmt.Errorf("unsupported forwarded group op type: %d", op.Type)
+	}
 }

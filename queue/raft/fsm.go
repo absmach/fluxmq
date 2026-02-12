@@ -40,6 +40,10 @@ const (
 	OpCreateQueue
 	OpUpdateQueue
 	OpDeleteQueue
+
+	// Full consumer group state update. Appended at the end to keep existing
+	// OpType numeric values stable across upgrades.
+	OpUpdateGroup
 )
 
 // Operation represents a queue operation to be replicated via Raft.
@@ -74,12 +78,22 @@ type Operation struct {
 	// For OpRegisterConsumer
 	ConsumerInfo *types.ConsumerInfo `json:"consumer_info,omitempty"`
 
-	// For OpCreateGroup
+	// For OpCreateGroup, OpUpdateGroup
 	GroupState *types.ConsumerGroup `json:"group_state,omitempty"`
 	Pattern    string               `json:"pattern,omitempty"`
 
 	// For OpCreateQueue, OpUpdateQueue
 	QueueConfig *types.QueueConfig `json:"queue_config,omitempty"`
+}
+
+// EncodeOperation serializes an Operation to JSON for transmission over the wire.
+func EncodeOperation(op *Operation) ([]byte, error) {
+	return json.Marshal(op)
+}
+
+// DecodeOperation deserializes JSON bytes into an Operation.
+func DecodeOperation(data []byte, op *Operation) error {
+	return json.Unmarshal(data, op)
 }
 
 // ApplyResult holds the result of an FSM apply operation.
@@ -136,6 +150,8 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 		return f.applyTruncate(ctx, &op)
 	case OpCreateGroup:
 		return f.applyCreateGroup(ctx, &op)
+	case OpUpdateGroup:
+		return f.applyUpdateGroup(ctx, &op)
 	case OpDeleteGroup:
 		return f.applyDeleteGroup(ctx, &op)
 	case OpUpdateCursor:
@@ -326,6 +342,27 @@ func (f *LogFSM) applyDeleteGroup(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	f.logger.Debug("applied delete group",
+		slog.String("queue", op.QueueName),
+		slog.String("group", op.GroupID))
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyUpdateGroup(ctx context.Context, op *Operation) *ApplyResult {
+	if op.GroupState == nil {
+		return &ApplyResult{Error: fmt.Errorf("nil group state in update group operation")}
+	}
+
+	err := f.groupStore.UpdateConsumerGroup(ctx, op.GroupState)
+	if err != nil {
+		f.logger.Error("failed to apply update group",
+			slog.String("queue", op.QueueName),
+			slog.String("group", op.GroupID),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	f.logger.Debug("applied update group",
 		slog.String("queue", op.QueueName),
 		slog.String("group", op.GroupID))
 
