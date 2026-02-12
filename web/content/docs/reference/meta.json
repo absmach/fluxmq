@@ -2,6 +2,7 @@
   "title": "Reference",
   "pages": [
     "configuration-reference",
+    "queue-service",
     "cli-reference",
     "protocol-reference"
   ]

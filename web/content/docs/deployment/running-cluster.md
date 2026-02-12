@@ -5,7 +5,7 @@ description: Start a multi-node FluxMQ cluster with embedded etcd and transport 
 
 # Running Cluster
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-12
 
 FluxMQ clustering uses embedded etcd for metadata and gRPC transport for routing. The repo includes working 3-node examples.
 
@@ -18,6 +18,18 @@ From the repo root:
 ./build/fluxmq --config examples/node2.yaml
 ./build/fluxmq --config examples/node3.yaml
 ```
+
+## Quick Start With Make
+
+If you prefer, the repo Makefile has shortcuts that run the same example configs:
+
+```bash
+make run-node1
+make run-node2
+make run-node3
+```
+
+The 3-node example configs also demonstrate per-queue Raft replication groups, including an auto-provisioned group when `cluster.raft.auto_provision_groups` is enabled.
 
 ## Key Cluster Settings
 

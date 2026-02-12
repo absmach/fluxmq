@@ -5,7 +5,7 @@ description: Persistent queue system for MQTT and AMQP — durable work queues a
 
 # Durable Queues
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 2026-02-12
 
 This page covers FluxMQ's two persistent queue types: **durable queues** (work queue semantics) and **stream queues** (append-only log semantics). Both are shared across MQTT, AMQP 1.0, and AMQP 0.9.1.
 
@@ -599,11 +599,44 @@ In clustered deployments, queue behavior depends on `cluster.raft.*`:
 - `write_policy` controls how followers handle incoming queue publishes.
 - `distribution_mode` controls whether deliveries are routed (`forward`) or logs are replicated (`replicate`).
 
+### Enabling replication per queue
+
+Replication is configured per queue under `queues[].replication`.
+
+```yaml
+queues:
+  - name: "orders"
+    topics: ["$queue/orders/#"]
+    type: "classic"
+
+    replication:
+      enabled: true
+      group: "default"          # optional (empty = default)
+      mode: "sync"              # sync or async
+      ack_timeout: "5s"         # applies to sync mode
+      replication_factor: 3
+      min_in_sync_replicas: 2
+```
+
+Behavior summary:
+
+- With replication enabled, appends and consumer-group mutations are leader-owned and replicated.
+- With `write_policy=forward`, clients may publish to any node and followers forward to the leader.
+- With `mode=sync`, publish latency increases because the leader waits for commit (bounded by `ack_timeout`).
+
+### Raft groups (sharding)
+
+`replication.group` lets you assign a queue to a specific Raft replication group (a shard).
+
+Use groups to isolate hot queues or to spread leadership across nodes. Keep the number of groups modest: each group is a Raft instance with background overhead.
+
+See [Queue Replication Groups (Raft)](/docs/architecture/raft-groups) for the model and tradeoffs.
+
 See [Cluster configuration](/docs/configuration/clustering) and [Clustering internals](/docs/architecture/clustering) for the full picture.
 
 ## DLQ Status
 
-A DLQ handler exists in `queue/consumer/dlq.go`, but the main delivery path does not automatically move rejected or expired messages into a DLQ yet. `Reject` currently removes the message from the pending list without pushing it to a DLQ.
+DLQ support is partial: the main delivery path does not automatically move rejected or expired messages into a DLQ yet. `Reject` currently removes the message from the pending list without pushing it to a DLQ.
 
 ## Configuration
 
@@ -618,6 +651,14 @@ queues:
     topics: ["$queue/orders/#"]
     type: "classic"               # classic or stream
     primary_group: ""             # optional for stream status
+
+    replication:
+      enabled: false
+      group: ""
+      mode: "sync"
+      ack_timeout: "5s"
+      replication_factor: 3
+      min_in_sync_replicas: 2
 
     limits:
       max_message_size: 10485760

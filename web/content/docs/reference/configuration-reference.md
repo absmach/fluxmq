@@ -218,6 +218,7 @@ cluster:
 
   raft:
     enabled: false
+    auto_provision_groups: false
     replication_factor: 3
     sync_mode: true
     min_in_sync_replicas: 2
@@ -231,6 +232,18 @@ cluster:
     election_timeout: "3s"
     snapshot_interval: "5m"
     snapshot_threshold: 8192
+
+    # Optional per-group Raft runtimes for sharding.
+    # The key "default" overrides the base group above.
+    groups:
+      default:
+        bind_addr: "127.0.0.1:7100"
+        data_dir: "/tmp/fluxmq/raft"
+        peers: {}
+      hot:
+        bind_addr: "127.0.0.1:7200"
+        data_dir: "/tmp/fluxmq/raft/groups/hot"
+        peers: {}
 ```
 
 ### Raft Behavior (What The Knobs Mean)
