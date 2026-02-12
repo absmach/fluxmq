@@ -16,6 +16,7 @@ import (
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
 	"github.com/absmach/fluxmq/queue"
+	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -559,6 +560,17 @@ func (h *Handler) LeaveGroup(ctx context.Context, req *connect.Request[queuev1.L
 
 func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.HeartbeatRequest]) (*connect.Response[queuev1.HeartbeatResponse], error) {
 	msg := req.Msg
+	if h.manager != nil {
+		if err := h.manager.UpdateConsumerHeartbeat(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId); err != nil {
+			if err == storage.ErrConsumerNotFound || err == consumer.ErrConsumerNotFound {
+				return nil, connect.NewError(connect.CodeNotFound, err)
+			}
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		return connect.NewResponse(&queuev1.HeartbeatResponse{
+			ShouldRejoin: false,
+		}), nil
+	}
 
 	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
 	if err != nil {
@@ -571,6 +583,9 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 	}
 
 	consumer.LastHeartbeat = time.Now()
+	if err := h.groupStore.UpdateConsumerGroup(ctx, group); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 
 	return connect.NewResponse(&queuev1.HeartbeatResponse{
 		ShouldRejoin: false,

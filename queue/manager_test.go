@@ -2036,6 +2036,57 @@ func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
 	}
 }
 
+func TestUpdateConsumerHeartbeat(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	manager := NewManager(
+		logStore,
+		groupStore,
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	ctx := context.Background()
+	queueCfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("orders", "workers", "")
+	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("CreateConsumerGroup failed: %v", err)
+	}
+
+	before := time.Now().Add(-time.Hour)
+	info := &types.ConsumerInfo{
+		ID:            "consumer-1",
+		ClientID:      "consumer-1",
+		RegisteredAt:  before,
+		LastHeartbeat: before,
+	}
+	if err := groupStore.RegisterConsumer(ctx, "orders", "workers", info); err != nil {
+		t.Fatalf("RegisterConsumer failed: %v", err)
+	}
+
+	if err := manager.UpdateConsumerHeartbeat(ctx, "orders", "workers", "consumer-1"); err != nil {
+		t.Fatalf("UpdateConsumerHeartbeat failed: %v", err)
+	}
+
+	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", "workers")
+	if err != nil {
+		t.Fatalf("GetConsumerGroup failed: %v", err)
+	}
+	updated := updatedGroup.GetConsumer("consumer-1")
+	if updated == nil {
+		t.Fatalf("expected consumer to exist")
+	}
+	if !updated.LastHeartbeat.After(before) {
+		t.Fatalf("expected heartbeat to advance, got %v <= %v", updated.LastHeartbeat, before)
+	}
+}
+
 func TestPELCapRejectsClaim(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()

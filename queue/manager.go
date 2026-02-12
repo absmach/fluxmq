@@ -1248,6 +1248,16 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 	return nil
 }
 
+// UpdateConsumerHeartbeat updates heartbeat for a specific consumer membership.
+func (m *Manager) UpdateConsumerHeartbeat(ctx context.Context, queueName, groupID, consumerID string) error {
+	if err := m.consumerManager.UpdateHeartbeat(ctx, queueName, groupID, consumerID); err != nil {
+		return err
+	}
+
+	m.touchSubscription(consumerID, m.subscriptionRefKey(queueName, groupID), time.Now())
+	return nil
+}
+
 // --- Background Workers ---
 
 // deliverMessages is a thin forwarding method for test/bench compatibility.

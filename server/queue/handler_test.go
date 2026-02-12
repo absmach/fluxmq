@@ -6,6 +6,7 @@ package queue
 import (
 	"context"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -228,6 +229,128 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	if got := createResp.Msg.Config.GetReplication().GetGroup(); got != "jobs-raft" {
 		t.Fatalf("unexpected response replication group: %q", got)
 	}
+}
+
+func TestHeartbeatUsesManagerPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	queueStore := memlog.New()
+	groupStore := newStatefulGroupStore()
+	manager := queuepkg.NewManager(queueStore, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+	h := NewHandler(manager, nil, nil, nil)
+
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	if err := manager.CreateQueue(ctx, cfg); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("orders", "workers", "")
+	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	before := time.Now().Add(-time.Hour)
+	consumer := &types.ConsumerInfo{
+		ID:            "consumer-1",
+		ClientID:      "consumer-1",
+		RegisteredAt:  before,
+		LastHeartbeat: before,
+	}
+	if err := groupStore.RegisterConsumer(ctx, "orders", "workers", consumer); err != nil {
+		t.Fatalf("register consumer: %v", err)
+	}
+
+	_, err := h.Heartbeat(ctx, connect.NewRequest(&queuev1.HeartbeatRequest{
+		QueueName:  "orders",
+		GroupId:    "workers",
+		ConsumerId: "consumer-1",
+	}))
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+
+	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", "workers")
+	if err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	updatedConsumer := updatedGroup.GetConsumer("consumer-1")
+	if updatedConsumer == nil {
+		t.Fatalf("expected consumer to exist")
+	}
+	if !updatedConsumer.LastHeartbeat.After(before) {
+		t.Fatalf("expected heartbeat to advance, got %v <= %v", updatedConsumer.LastHeartbeat, before)
+	}
+}
+
+type statefulGroupStore struct {
+	noopGroupStore
+
+	mu     sync.RWMutex
+	groups map[string]map[string]*types.ConsumerGroup
+}
+
+func newStatefulGroupStore() *statefulGroupStore {
+	return &statefulGroupStore{
+		groups: make(map[string]map[string]*types.ConsumerGroup),
+	}
+}
+
+func (s *statefulGroupStore) CreateConsumerGroup(_ context.Context, group *types.ConsumerGroup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.groups[group.QueueName] == nil {
+		s.groups[group.QueueName] = make(map[string]*types.ConsumerGroup)
+	}
+	if _, exists := s.groups[group.QueueName][group.ID]; exists {
+		return qstorage.ErrConsumerGroupExists
+	}
+	s.groups[group.QueueName][group.ID] = group
+	return nil
+}
+
+func (s *statefulGroupStore) GetConsumerGroup(_ context.Context, queueName, groupID string) (*types.ConsumerGroup, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	groups, ok := s.groups[queueName]
+	if !ok {
+		return nil, qstorage.ErrConsumerNotFound
+	}
+	group, ok := groups[groupID]
+	if !ok {
+		return nil, qstorage.ErrConsumerNotFound
+	}
+	return group, nil
+}
+
+func (s *statefulGroupStore) UpdateConsumerGroup(_ context.Context, group *types.ConsumerGroup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.groups[group.QueueName] == nil {
+		s.groups[group.QueueName] = make(map[string]*types.ConsumerGroup)
+	}
+	s.groups[group.QueueName][group.ID] = group
+	return nil
+}
+
+func (s *statefulGroupStore) RegisterConsumer(_ context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	groups, ok := s.groups[queueName]
+	if !ok {
+		return qstorage.ErrConsumerNotFound
+	}
+	group, ok := groups[groupID]
+	if !ok {
+		return qstorage.ErrConsumerNotFound
+	}
+
+	group.SetConsumer(consumer.ID, consumer)
+	return nil
 }
 
 type noopGroupStore struct{}
