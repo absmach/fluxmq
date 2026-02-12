@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,57 @@ func TestBuildRaftGroupRuntimesRejectsDuplicateBind(t *testing.T) {
 		t.Fatalf("expected duplicate bind address error")
 	}
 	if !strings.Contains(err.Error(), "share bind_addr") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRaftGroupProvisionerDerivesAutoGroupEndpoints(t *testing.T) {
+	raftCfg := config.RaftConfig{
+		Enabled:             true,
+		AutoProvisionGroups: true,
+		ReplicationFactor:   3,
+		MinInSyncReplicas:   2,
+		AckTimeout:          5 * time.Second,
+		BindAddr:            "127.0.0.1:7100",
+		DataDir:             "/tmp/fluxmq/raft",
+		Peers: map[string]string{
+			"node2": "127.0.0.1:7200",
+		},
+	}
+
+	p := newRaftGroupProvisioner("node1", raftCfg, nil, nil, nil, nil, nil)
+	derived, err := p.deriveAutoGroupConfig("hot")
+	if err != nil {
+		t.Fatalf("deriveAutoGroupConfig failed: %v", err)
+	}
+	if derived.BindAddr == raftCfg.BindAddr {
+		t.Fatalf("expected derived bind addr to differ from base")
+	}
+	if len(derived.Peers) != 1 {
+		t.Fatalf("expected 1 derived peer, got %d", len(derived.Peers))
+	}
+}
+
+func TestRaftGroupProvisionerRejectsUnknownWhenAutoProvisionDisabled(t *testing.T) {
+	raftCfg := config.RaftConfig{
+		Enabled:             true,
+		AutoProvisionGroups: false,
+		ReplicationFactor:   3,
+		MinInSyncReplicas:   2,
+		AckTimeout:          5 * time.Second,
+		BindAddr:            "127.0.0.1:7100",
+		DataDir:             "/tmp/fluxmq/raft",
+	}
+
+	p := newRaftGroupProvisioner("node1", raftCfg, nil, nil, map[string]*qraft.Manager{
+		qraft.DefaultGroupID: {},
+	}, nil, nil)
+
+	_, err := p.GetOrCreateGroup(context.Background(), "hot")
+	if err == nil {
+		t.Fatalf("expected unknown group error")
+	}
+	if !strings.Contains(err.Error(), "auto_provision_groups is disabled") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

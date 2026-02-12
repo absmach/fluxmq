@@ -186,6 +186,10 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.distributionMode = DistributionForward
 	}
 
+	if err := m.syncQueueReplicationAssignments(ctx); err != nil {
+		return fmt.Errorf("failed to sync queue replication assignments: %w", err)
+	}
+
 	// Ensure reserved queues exist
 	if err := m.ensureReservedQueues(ctx); err != nil {
 		return fmt.Errorf("failed to create reserved queues: %w", err)
@@ -219,6 +223,25 @@ func (m *Manager) Start(ctx context.Context) error {
 	go m.runEphemeralCleanupLoop()
 
 	m.logger.Info("queue-based queue manager started")
+	return nil
+}
+
+func (m *Manager) syncQueueReplicationAssignments(ctx context.Context) error {
+	if m.raftCoordinator == nil {
+		return nil
+	}
+
+	queues, err := m.queueStore.ListQueues(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, queueCfg := range queues {
+		if err := m.raftCoordinator.EnsureQueue(ctx, queueCfg); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -298,12 +321,25 @@ func (m *Manager) GetRaftManager() *raft.Manager {
 
 // CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
-		return err
-	}
-	if m.raftCoordinator != nil {
+	if config.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
 		if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
 			return err
+		}
+		if err := m.raftCoordinator.ApplyCreateQueue(ctx, config); err != nil {
+			return err
+		}
+		// Ensure local immediate visibility even with async apply/mocks.
+		if err := m.queueStore.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
+			return err
+		}
+	} else {
+		if err := m.queueStore.CreateQueue(ctx, config); err != nil {
+			return err
+		}
+		if m.raftCoordinator != nil {
+			if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
+				return err
+			}
 		}
 	}
 	m.delivery.Schedule(config.Name)
@@ -317,9 +353,34 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue.
 func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
-	if err := m.queueStore.UpdateQueue(ctx, config); err != nil {
+	current, err := m.queueStore.GetQueue(ctx, config.Name)
+	if err != nil {
 		return err
 	}
+
+	replicatedNow := current.Replication.Enabled
+	replicatedNext := config.Replication.Enabled
+
+	shouldReplicate := (replicatedNow || replicatedNext) && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled()
+	if shouldReplicate {
+		if replicatedNext {
+			if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
+				return err
+			}
+		}
+		if err := m.raftCoordinator.ApplyUpdateQueue(ctx, config); err != nil {
+			return err
+		}
+		// Keep local view in sync immediately.
+		if err := m.queueStore.UpdateQueue(ctx, config); err != nil && err != storage.ErrQueueNotFound {
+			return err
+		}
+	} else {
+		if err := m.queueStore.UpdateQueue(ctx, config); err != nil {
+			return err
+		}
+	}
+
 	if m.raftCoordinator != nil {
 		if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
 			return err
@@ -353,9 +414,25 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 
 // DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
-	if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
+	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil {
 		return err
 	}
+
+	if queueCfg.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+		if err := m.raftCoordinator.ApplyDeleteQueue(ctx, queueName); err != nil {
+			return err
+		}
+		// Ensure local deletion even with async apply/mocks.
+		if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil && err != storage.ErrQueueNotFound {
+			return err
+		}
+	} else {
+		if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
+			return err
+		}
+	}
+
 	if m.raftCoordinator != nil {
 		if err := m.raftCoordinator.DeleteQueue(ctx, queueName); err != nil {
 			return err
@@ -390,13 +467,11 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		return nil
 	}
 
-	hasReplicated := false
 	allReplicated := true
 	localTargets := make([]queuePublishTarget, 0, len(targets))
 	forwardTargets := make(map[string][]string)
 	for _, target := range targets {
 		replicated := target.config != nil && target.config.Replication.Enabled
-		hasReplicated = hasReplicated || replicated
 		allReplicated = allReplicated && replicated
 
 		if !replicated || m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
@@ -719,7 +794,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 	}
 	if mode == types.GroupModeStream && queueCfg != nil && queueCfg.Type != types.QueueTypeStream {
 		queueCfg.Type = types.QueueTypeStream
-		if err := m.queueStore.UpdateQueue(ctx, *queueCfg); err != nil {
+		if err := m.UpdateQueue(ctx, *queueCfg); err != nil {
 			m.logger.Warn("failed to update stream queue config",
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
@@ -1366,7 +1441,7 @@ func (m *Manager) checkEphemeralDisconnect(ctx context.Context, queueName string
 	}
 
 	config.LastConsumerDisconnect = time.Now()
-	if err := m.queueStore.UpdateQueue(ctx, *config); err != nil {
+	if err := m.UpdateQueue(ctx, *config); err != nil {
 		m.logger.Warn("failed to update ephemeral queue disconnect time",
 			slog.String("queue", queueName),
 			slog.String("error", err.Error()))
@@ -1385,7 +1460,7 @@ func (m *Manager) clearEphemeralDisconnect(ctx context.Context, queueName string
 	}
 
 	config.LastConsumerDisconnect = time.Time{}
-	if err := m.queueStore.UpdateQueue(ctx, *config); err != nil {
+	if err := m.UpdateQueue(ctx, *config); err != nil {
 		m.logger.Warn("failed to clear ephemeral queue disconnect time",
 			slog.String("queue", queueName),
 			slog.String("error", err.Error()))
@@ -1437,7 +1512,7 @@ func (m *Manager) cleanupEphemeralQueues() {
 			}
 		}
 
-		if err := m.queueStore.DeleteQueue(ctx, q.Name); err != nil {
+		if err := m.DeleteQueue(ctx, q.Name); err != nil {
 			m.logger.Warn("failed to delete expired ephemeral queue",
 				slog.String("queue", q.Name),
 				slog.String("error", err.Error()))

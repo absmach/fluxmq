@@ -301,16 +301,17 @@ type ClusterConfig struct {
 
 // RaftConfig holds Raft replication configuration for queue data.
 type RaftConfig struct {
-	Enabled           bool              `yaml:"enabled"`
-	ReplicationFactor int               `yaml:"replication_factor"` // Number of replicas per partition (default: 3)
-	SyncMode          bool              `yaml:"sync_mode"`          // true=wait for quorum, false=async
-	MinInSyncReplicas int               `yaml:"min_in_sync_replicas"`
-	AckTimeout        time.Duration     `yaml:"ack_timeout"`
-	WritePolicy       string            `yaml:"write_policy"`      // local, reject, forward
-	DistributionMode  string            `yaml:"distribution_mode"` // forward, replicate
-	BindAddr          string            `yaml:"bind_addr"`         // Base address for Raft (e.g., "127.0.0.1:7100")
-	DataDir           string            `yaml:"data_dir"`          // Directory for Raft data
-	Peers             map[string]string `yaml:"peers"`             // Map of nodeID -> raft base address
+	Enabled             bool              `yaml:"enabled"`
+	AutoProvisionGroups bool              `yaml:"auto_provision_groups"` // Dynamically provision groups not listed in `groups`
+	ReplicationFactor   int               `yaml:"replication_factor"`    // Number of replicas per partition (default: 3)
+	SyncMode            bool              `yaml:"sync_mode"`             // true=wait for quorum, false=async
+	MinInSyncReplicas   int               `yaml:"min_in_sync_replicas"`
+	AckTimeout          time.Duration     `yaml:"ack_timeout"`
+	WritePolicy         string            `yaml:"write_policy"`      // local, reject, forward
+	DistributionMode    string            `yaml:"distribution_mode"` // forward, replicate
+	BindAddr            string            `yaml:"bind_addr"`         // Base address for Raft (e.g., "127.0.0.1:7100")
+	DataDir             string            `yaml:"data_dir"`          // Directory for Raft data
+	Peers               map[string]string `yaml:"peers"`             // Map of nodeID -> raft base address
 
 	// Raft tuning
 	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
@@ -534,20 +535,21 @@ func Default() *Config {
 				BindAddr: "0.0.0.0:7948",
 			},
 			Raft: RaftConfig{
-				Enabled:           false, // Disabled by default
-				ReplicationFactor: 3,
-				SyncMode:          true,
-				MinInSyncReplicas: 2,
-				AckTimeout:        5 * time.Second,
-				WritePolicy:       "forward",
-				DistributionMode:  "replicate",
-				BindAddr:          "127.0.0.1:7100",
-				DataDir:           "/tmp/fluxmq/raft",
-				Peers:             map[string]string{},
-				HeartbeatTimeout:  1 * time.Second,
-				ElectionTimeout:   3 * time.Second,
-				SnapshotInterval:  5 * time.Minute,
-				SnapshotThreshold: 8192,
+				Enabled:             false, // Disabled by default
+				AutoProvisionGroups: true,
+				ReplicationFactor:   3,
+				SyncMode:            true,
+				MinInSyncReplicas:   2,
+				AckTimeout:          5 * time.Second,
+				WritePolicy:         "forward",
+				DistributionMode:    "replicate",
+				BindAddr:            "127.0.0.1:7100",
+				DataDir:             "/tmp/fluxmq/raft",
+				Peers:               map[string]string{},
+				HeartbeatTimeout:    1 * time.Second,
+				ElectionTimeout:     3 * time.Second,
+				SnapshotInterval:    5 * time.Minute,
+				SnapshotThreshold:   8192,
 			},
 		},
 		Webhook: WebhookConfig{
@@ -1051,6 +1053,19 @@ func (c *Config) Validate() error {
 			if q.Replication.Group != "" && strings.TrimSpace(q.Replication.Group) == "" {
 				return fmt.Errorf("queues[%d].replication.group cannot be only whitespace", i)
 			}
+
+			if c.Cluster.Enabled && c.Cluster.Raft.Enabled && !c.Cluster.Raft.AutoProvisionGroups {
+				groupID := strings.TrimSpace(q.Replication.Group)
+				if groupID == "" {
+					groupID = "default"
+				}
+				if groupID != "default" {
+					if _, ok := c.Cluster.Raft.Groups[groupID]; !ok {
+						return fmt.Errorf("queues[%d].replication.group '%s' is not configured under cluster.raft.groups and auto_provision_groups is disabled", i, groupID)
+					}
+				}
+			}
+
 			if q.Replication.ReplicationFactor < 1 || q.Replication.ReplicationFactor > 10 {
 				return fmt.Errorf("queues[%d].replication.replication_factor must be between 1 and 10", i)
 			}

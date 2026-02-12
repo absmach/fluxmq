@@ -21,6 +21,17 @@ type mockReplicator struct {
 	appendQueues []string
 }
 
+type mockProvisioner struct {
+	replicators map[string]GroupReplicator
+}
+
+func (m *mockProvisioner) GetOrCreateGroup(_ context.Context, groupID string) (GroupReplicator, error) {
+	if replicator, ok := m.replicators[groupID]; ok {
+		return replicator, nil
+	}
+	return nil, nil
+}
+
 func (m *mockReplicator) Stop() error {
 	m.stopCalls++
 	return nil
@@ -32,6 +43,9 @@ func (m *mockReplicator) Leader() string  { return m.leaderAddr }
 func (m *mockReplicator) LeaderID() string {
 	return m.leaderID
 }
+func (m *mockReplicator) ApplyCreateQueue(context.Context, types.QueueConfig) error { return nil }
+func (m *mockReplicator) ApplyUpdateQueue(context.Context, types.QueueConfig) error { return nil }
+func (m *mockReplicator) ApplyDeleteQueue(context.Context, string) error            { return nil }
 
 func (m *mockReplicator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *types.Message, _ ApplyOptions) (uint64, error) {
 	m.appendQueues = append(m.appendQueues, queueName)
@@ -67,6 +81,7 @@ func (m *mockReplicator) ApplyUnregisterConsumer(context.Context, string, string
 func TestLogicalGroupCoordinatorQueueAssignments(t *testing.T) {
 	coordinator := NewLogicalGroupCoordinator(&mockReplicator{enabled: true}, nil)
 	ctx := context.Background()
+	coordinator.RegisterGroup("hot", &mockReplicator{enabled: true})
 
 	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
 	cfg.Replication.Enabled = true
@@ -98,6 +113,42 @@ func TestLogicalGroupCoordinatorQueueAssignments(t *testing.T) {
 	}
 	if got := coordinator.GroupForQueue("orders"); got != DefaultGroupID {
 		t.Fatalf("unexpected queue group after delete: got %q", got)
+	}
+}
+
+func TestLogicalGroupCoordinatorRejectsUnknownGroupWithoutProvisioner(t *testing.T) {
+	coordinator := NewLogicalGroupCoordinator(&mockReplicator{enabled: true}, nil)
+
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	cfg.Replication.Enabled = true
+	cfg.Replication.Group = "hot"
+
+	if err := coordinator.EnsureQueue(context.Background(), cfg); err == nil {
+		t.Fatalf("expected unknown group error")
+	}
+}
+
+func TestLogicalGroupCoordinatorProvisionerCreatesMissingGroup(t *testing.T) {
+	hotReplicator := &mockReplicator{enabled: true, leader: true}
+	provisioner := &mockProvisioner{
+		replicators: map[string]GroupReplicator{
+			"hot": hotReplicator,
+		},
+	}
+	coordinator := NewLogicalGroupCoordinatorWithProvisioner(&mockReplicator{enabled: true}, provisioner, nil)
+
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	cfg.Replication.Enabled = true
+	cfg.Replication.Group = "hot"
+
+	if err := coordinator.EnsureQueue(context.Background(), cfg); err != nil {
+		t.Fatalf("EnsureQueue failed: %v", err)
+	}
+	if !coordinator.IsQueueReplicated("orders") {
+		t.Fatalf("expected queue replication marker")
+	}
+	if !coordinator.IsLeaderForQueue("orders") {
+		t.Fatalf("expected provisioned hot group to be leader")
 	}
 }
 

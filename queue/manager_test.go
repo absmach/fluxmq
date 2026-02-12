@@ -1014,6 +1014,13 @@ func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 	}
 	return m.leaderIDByQueue[queueName]
 }
+func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, _ types.QueueConfig) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, _ types.QueueConfig) error {
+	return nil
+}
+func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error { return nil }
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *types.Message, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
@@ -1336,7 +1343,13 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 		return nil
 	}), config, logger, mockCl)
 
-	manager.SetRaftManager(newTestRaftManager(t, "node-2"))
+	manager.SetRaftCoordinator(&mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{"test": true},
+		leaderByQueue:     map[string]bool{"test": false},
+		leaderIDByQueue:   map[string]string{"test": "node-2"},
+		leaderAddrByQueue: map[string]string{"test": "127.0.0.1:7200"},
+	})
 
 	ctx := context.Background()
 	replicated := types.DefaultQueueConfig("test", "$queue/test/#")

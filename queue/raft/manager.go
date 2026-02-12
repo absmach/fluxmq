@@ -436,6 +436,76 @@ func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, 
 	return 0, nil
 }
 
+// ApplyCreateQueue submits a create queue config operation to Raft.
+func (m *Manager) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	cfgCopy := cfg
+	op := &Operation{
+		Type:        OpCreateQueue,
+		QueueName:   cfg.Name,
+		QueueConfig: &cfgCopy,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
+// ApplyUpdateQueue submits an update queue config operation to Raft.
+func (m *Manager) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	cfgCopy := cfg
+	op := &Operation{
+		Type:        OpUpdateQueue,
+		QueueName:   cfg.Name,
+		QueueConfig: &cfgCopy,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
+// ApplyDeleteQueue submits a delete queue config operation to Raft.
+func (m *Manager) ApplyDeleteQueue(ctx context.Context, queueName string) error {
+	if !m.IsEnabled() {
+		return nil
+	}
+
+	op := &Operation{
+		Type:      OpDeleteQueue,
+		QueueName: queueName,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
 // ApplyTruncate submits a truncate operation to Raft.
 func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error {
 	if !m.IsEnabled() {

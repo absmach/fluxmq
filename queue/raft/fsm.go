@@ -35,6 +35,11 @@ const (
 	OpTransferPending
 	OpRegisterConsumer
 	OpUnregisterConsumer
+
+	// Queue config operations
+	OpCreateQueue
+	OpUpdateQueue
+	OpDeleteQueue
 )
 
 // Operation represents a queue operation to be replicated via Raft.
@@ -72,6 +77,9 @@ type Operation struct {
 	// For OpCreateGroup
 	GroupState *types.ConsumerGroup `json:"group_state,omitempty"`
 	Pattern    string               `json:"pattern,omitempty"`
+
+	// For OpCreateQueue, OpUpdateQueue
+	QueueConfig *types.QueueConfig `json:"queue_config,omitempty"`
 }
 
 // ApplyResult holds the result of an FSM apply operation.
@@ -114,6 +122,12 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 	ctx := context.Background()
 
 	switch op.Type {
+	case OpCreateQueue:
+		return f.applyCreateQueue(ctx, &op)
+	case OpUpdateQueue:
+		return f.applyUpdateQueue(ctx, &op)
+	case OpDeleteQueue:
+		return f.applyDeleteQueue(ctx, &op)
 	case OpAppend:
 		return f.applyAppend(ctx, &op)
 	case OpAppendBatch:
@@ -145,6 +159,52 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 			slog.Int("op_type", int(op.Type)))
 		return &ApplyResult{Error: err}
 	}
+}
+
+func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResult {
+	if op.QueueConfig == nil {
+		return &ApplyResult{Error: fmt.Errorf("nil queue config in create queue operation")}
+	}
+
+	err := f.queueStore.CreateQueue(ctx, *op.QueueConfig)
+	if err != nil && err != storage.ErrQueueAlreadyExists {
+		f.logger.Error("failed to apply create queue",
+			slog.String("queue", op.QueueConfig.Name),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyUpdateQueue(ctx context.Context, op *Operation) *ApplyResult {
+	if op.QueueConfig == nil {
+		return &ApplyResult{Error: fmt.Errorf("nil queue config in update queue operation")}
+	}
+
+	if err := f.queueStore.UpdateQueue(ctx, *op.QueueConfig); err != nil {
+		f.logger.Error("failed to apply update queue",
+			slog.String("queue", op.QueueConfig.Name),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResult {
+	if op.QueueName == "" {
+		return &ApplyResult{Error: fmt.Errorf("empty queue name in delete queue operation")}
+	}
+
+	if err := f.queueStore.DeleteQueue(ctx, op.QueueName); err != nil && err != storage.ErrQueueNotFound {
+		f.logger.Error("failed to apply delete queue",
+			slog.String("queue", op.QueueName),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	return &ApplyResult{}
 }
 
 func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {

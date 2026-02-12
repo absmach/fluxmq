@@ -120,6 +120,28 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "queue group must exist when auto provision disabled",
+			modify: func(c *Config) {
+				c.Cluster.Raft.Enabled = true
+				c.Cluster.Raft.AutoProvisionGroups = false
+				c.Queues = []QueueConfig{
+					{
+						Name:   "hot-events",
+						Topics: []string{"$queue/hot-events/#"},
+						Replication: QueueReplication{
+							Enabled:           true,
+							Group:             "hot",
+							ReplicationFactor: 3,
+							Mode:              "sync",
+							MinInSyncReplicas: 2,
+							AckTimeout:        5 * time.Second,
+						},
+					},
+				}
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

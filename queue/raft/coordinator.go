@@ -30,6 +30,9 @@ type QueueCoordinator interface {
 	IsLeaderForQueue(queueName string) bool
 	LeaderForQueue(queueName string) string
 	LeaderIDForQueue(queueName string) string
+	ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error
+	ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error
+	ApplyDeleteQueue(ctx context.Context, queueName string) error
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
 	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
@@ -54,6 +57,9 @@ type GroupReplicator interface {
 	IsLeader() bool
 	Leader() string
 	LeaderID() string
+	ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error
+	ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error
+	ApplyDeleteQueue(ctx context.Context, queueName string) error
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
 	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
@@ -67,6 +73,11 @@ type GroupReplicator interface {
 	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 }
 
+// GroupProvisioner can lazily create/register group replicators on demand.
+type GroupProvisioner interface {
+	GetOrCreateGroup(ctx context.Context, groupID string) (GroupReplicator, error)
+}
+
 // LogicalGroupCoordinator maps queues to logical Raft groups.
 //
 // Unknown groups fall back to the default replicator so callers can assign
@@ -76,6 +87,7 @@ type LogicalGroupCoordinator struct {
 
 	defaultGroup      string
 	defaultReplicator GroupReplicator
+	provisioner       GroupProvisioner
 
 	mu           sync.RWMutex
 	groupMembers map[string]GroupReplicator
@@ -85,6 +97,12 @@ type LogicalGroupCoordinator struct {
 // NewLogicalGroupCoordinator creates a queue coordinator with one default
 // underlying replicator.
 func NewLogicalGroupCoordinator(defaultReplicator GroupReplicator, logger *slog.Logger) *LogicalGroupCoordinator {
+	return NewLogicalGroupCoordinatorWithProvisioner(defaultReplicator, nil, logger)
+}
+
+// NewLogicalGroupCoordinatorWithProvisioner creates a queue coordinator that
+// can lazily provision group replicators when queues reference unknown groups.
+func NewLogicalGroupCoordinatorWithProvisioner(defaultReplicator GroupReplicator, provisioner GroupProvisioner, logger *slog.Logger) *LogicalGroupCoordinator {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -93,6 +111,7 @@ func NewLogicalGroupCoordinator(defaultReplicator GroupReplicator, logger *slog.
 		logger:            logger,
 		defaultGroup:      DefaultGroupID,
 		defaultReplicator: defaultReplicator,
+		provisioner:       provisioner,
 		groupMembers:      make(map[string]GroupReplicator),
 		queueGroups:       make(map[string]string),
 	}
@@ -146,8 +165,47 @@ func (c *LogicalGroupCoordinator) ensureQueueAssignment(cfg types.QueueConfig) {
 	c.queueGroups[cfg.Name] = normalizeGroupID(cfg.Replication.Group)
 }
 
+func (c *LogicalGroupCoordinator) ensureGroup(ctx context.Context, groupID string) (GroupReplicator, error) {
+	gid := normalizeGroupID(groupID)
+
+	c.mu.RLock()
+	if replicator, ok := c.groupMembers[gid]; ok && replicator != nil {
+		c.mu.RUnlock()
+		return replicator, nil
+	}
+	c.mu.RUnlock()
+
+	if c.provisioner == nil {
+		return nil, fmt.Errorf("raft group %q is not configured", gid)
+	}
+
+	replicator, err := c.provisioner.GetOrCreateGroup(ctx, gid)
+	if err != nil {
+		return nil, err
+	}
+	if replicator == nil {
+		return nil, fmt.Errorf("raft group %q provisioner returned nil replicator", gid)
+	}
+
+	c.mu.Lock()
+	if existing, ok := c.groupMembers[gid]; ok && existing != nil {
+		c.mu.Unlock()
+		return existing, nil
+	}
+	c.groupMembers[gid] = replicator
+	c.mu.Unlock()
+
+	return replicator, nil
+}
+
 // EnsureQueue syncs queue->group mapping on queue create/bootstrap.
-func (c *LogicalGroupCoordinator) EnsureQueue(_ context.Context, cfg types.QueueConfig) error {
+func (c *LogicalGroupCoordinator) EnsureQueue(ctx context.Context, cfg types.QueueConfig) error {
+	if cfg.Replication.Enabled {
+		if _, err := c.ensureGroup(ctx, cfg.Replication.Group); err != nil {
+			return err
+		}
+	}
+
 	c.mu.Lock()
 	c.ensureQueueAssignment(cfg)
 	c.mu.Unlock()
@@ -156,7 +214,13 @@ func (c *LogicalGroupCoordinator) EnsureQueue(_ context.Context, cfg types.Queue
 }
 
 // UpdateQueue syncs queue->group mapping on queue updates.
-func (c *LogicalGroupCoordinator) UpdateQueue(_ context.Context, cfg types.QueueConfig) error {
+func (c *LogicalGroupCoordinator) UpdateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	if cfg.Replication.Enabled {
+		if _, err := c.ensureGroup(ctx, cfg.Replication.Group); err != nil {
+			return err
+		}
+	}
+
 	c.mu.Lock()
 	c.ensureQueueAssignment(cfg)
 	c.mu.Unlock()
@@ -186,6 +250,38 @@ func (c *LogicalGroupCoordinator) replicatorForQueue(queueName string) GroupRepl
 	}
 
 	return c.defaultReplicator
+}
+
+func (c *LogicalGroupCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	replicator, err := c.ensureGroup(ctx, cfg.Replication.Group)
+	if err != nil {
+		return err
+	}
+	return replicator.ApplyCreateQueue(ctx, cfg)
+}
+
+func (c *LogicalGroupCoordinator) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	if cfg.Replication.Enabled {
+		replicator, err := c.ensureGroup(ctx, cfg.Replication.Group)
+		if err != nil {
+			return err
+		}
+		return replicator.ApplyUpdateQueue(ctx, cfg)
+	}
+
+	replicator := c.replicatorForQueue(cfg.Name)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", cfg.Name)
+	}
+	return replicator.ApplyUpdateQueue(ctx, cfg)
+}
+
+func (c *LogicalGroupCoordinator) ApplyDeleteQueue(ctx context.Context, queueName string) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyDeleteQueue(ctx, queueName)
 }
 
 // IsEnabled reports whether any configured replicator is enabled.
