@@ -107,6 +107,7 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_ASYNC,
 				MinInSyncReplicas: 2,
 				AckTimeout:        durationpb.New(2 * time.Second),
+				Group:             "hot-path",
 			},
 		},
 	}))
@@ -149,6 +150,9 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	if updated.Replication.AckTimeout != 2*time.Second {
 		t.Fatalf("unexpected ack timeout: got %s", updated.Replication.AckTimeout)
 	}
+	if updated.Replication.Group != "hot-path" {
+		t.Fatalf("unexpected replication group: got %q", updated.Replication.Group)
+	}
 
 	if got := updateResp.Msg.Config.GetRetention().GetMaxAge().AsDuration(); got != retention {
 		t.Fatalf("response retention mismatch: got %v want %v", got, retention)
@@ -158,6 +162,9 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	}
 	if got := updateResp.Msg.Config.GetReplication().GetMode(); got != queuev1.ReplicationMode_REPLICATION_MODE_ASYNC {
 		t.Fatalf("response replication mode mismatch: got %v", got)
+	}
+	if got := updateResp.Msg.Config.GetReplication().GetGroup(); got != "hot-path" {
+		t.Fatalf("response replication group mismatch: got %q", got)
 	}
 }
 
@@ -180,6 +187,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_SYNC,
 				MinInSyncReplicas: 3,
 				AckTimeout:        durationpb.New(4 * time.Second),
+				Group:             "jobs-raft",
 			},
 		},
 	}))
@@ -207,12 +215,18 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	if stored.Replication.AckTimeout != 4*time.Second {
 		t.Fatalf("unexpected ack timeout: %s", stored.Replication.AckTimeout)
 	}
+	if stored.Replication.Group != "jobs-raft" {
+		t.Fatalf("unexpected replication group: %q", stored.Replication.Group)
+	}
 
 	if got := createResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
 		t.Fatalf("expected replication in create response")
 	}
 	if got := createResp.Msg.Config.GetReplication().GetReplicationFactor(); got != 5 {
 		t.Fatalf("unexpected response replication factor: %d", got)
+	}
+	if got := createResp.Msg.Config.GetReplication().GetGroup(); got != "jobs-raft" {
+		t.Fatalf("unexpected response replication group: %q", got)
 	}
 }
 

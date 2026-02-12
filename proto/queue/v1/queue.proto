@@ -272,6 +272,9 @@ message ReplicationConfig {
 
   // Optional per-queue Raft snapshot threshold override.
   uint64 snapshot_threshold = 9;
+
+  // Logical Raft group identifier for this queue (empty = default).
+  string group = 10;
 }
 
 message QueueState {

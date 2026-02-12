@@ -72,6 +72,7 @@ type QueueRetention struct {
 // QueueReplication defines per-queue replication settings.
 type QueueReplication struct {
 	Enabled           bool          `yaml:"enabled"`
+	Group             string        `yaml:"group"`
 	ReplicationFactor int           `yaml:"replication_factor"`
 	Mode              string        `yaml:"mode"` // sync, async
 	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
@@ -312,6 +313,32 @@ type RaftConfig struct {
 	Peers             map[string]string `yaml:"peers"`             // Map of nodeID -> raft base address
 
 	// Raft tuning
+	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
+	ElectionTimeout   time.Duration `yaml:"election_timeout"`
+	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
+	SnapshotThreshold uint64        `yaml:"snapshot_threshold"`
+
+	// Optional per-group overrides for true multi-group replication.
+	// The key "default" overrides the base group above.
+	Groups map[string]RaftGroupConfig `yaml:"groups"`
+}
+
+// RaftGroupConfig defines overrides for an individual Raft replication group.
+type RaftGroupConfig struct {
+	Enabled *bool `yaml:"enabled"`
+
+	// Group network/storage endpoints.
+	BindAddr string            `yaml:"bind_addr"` // Raft bind address for this group
+	DataDir  string            `yaml:"data_dir"`  // Data dir for this group
+	Peers    map[string]string `yaml:"peers"`     // nodeID -> raft bind address for this group
+
+	// Optional per-group replication behavior overrides (zero/nil = inherit base RaftConfig).
+	ReplicationFactor int           `yaml:"replication_factor"`
+	SyncMode          *bool         `yaml:"sync_mode"`
+	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
+	AckTimeout        time.Duration `yaml:"ack_timeout"`
+
+	// Optional per-group Raft tuning overrides.
 	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
 	ElectionTimeout   time.Duration `yaml:"election_timeout"`
 	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
@@ -904,6 +931,62 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("cluster.raft.distribution_mode must be one of: forward, replicate")
 			}
 		}
+
+		if c.Cluster.Raft.Enabled {
+			if strings.TrimSpace(c.Cluster.Raft.BindAddr) == "" {
+				return fmt.Errorf("cluster.raft.bind_addr required when raft is enabled")
+			}
+			if strings.TrimSpace(c.Cluster.Raft.DataDir) == "" {
+				return fmt.Errorf("cluster.raft.data_dir required when raft is enabled")
+			}
+			if c.Cluster.Raft.ReplicationFactor < 1 || c.Cluster.Raft.ReplicationFactor > 10 {
+				return fmt.Errorf("cluster.raft.replication_factor must be between 1 and 10")
+			}
+			if c.Cluster.Raft.MinInSyncReplicas < 1 || c.Cluster.Raft.MinInSyncReplicas > c.Cluster.Raft.ReplicationFactor {
+				return fmt.Errorf("cluster.raft.min_in_sync_replicas must be between 1 and replication_factor")
+			}
+			if c.Cluster.Raft.AckTimeout <= 0 {
+				return fmt.Errorf("cluster.raft.ack_timeout must be > 0")
+			}
+
+			for groupID, groupCfg := range c.Cluster.Raft.Groups {
+				gid := strings.TrimSpace(groupID)
+				if gid == "" {
+					return fmt.Errorf("cluster.raft.groups key cannot be empty")
+				}
+
+				groupEnabled := true
+				if groupCfg.Enabled != nil {
+					groupEnabled = *groupCfg.Enabled
+				}
+				if !groupEnabled {
+					continue
+				}
+
+				// Non-default groups must define dedicated endpoints.
+				if gid != "default" && strings.TrimSpace(groupCfg.BindAddr) == "" {
+					return fmt.Errorf("cluster.raft.groups.%s.bind_addr required for non-default group", gid)
+				}
+				if gid != "default" && len(groupCfg.Peers) == 0 {
+					return fmt.Errorf("cluster.raft.groups.%s.peers required for non-default group", gid)
+				}
+
+				if groupCfg.ReplicationFactor < 0 || groupCfg.ReplicationFactor > 10 {
+					return fmt.Errorf("cluster.raft.groups.%s.replication_factor must be between 0 and 10", gid)
+				}
+				effectiveRF := c.Cluster.Raft.ReplicationFactor
+				if groupCfg.ReplicationFactor > 0 {
+					effectiveRF = groupCfg.ReplicationFactor
+				}
+
+				if groupCfg.MinInSyncReplicas < 0 || groupCfg.MinInSyncReplicas > effectiveRF {
+					return fmt.Errorf("cluster.raft.groups.%s.min_in_sync_replicas must be between 0 and effective replication_factor", gid)
+				}
+				if groupCfg.AckTimeout < 0 {
+					return fmt.Errorf("cluster.raft.groups.%s.ack_timeout must be >= 0", gid)
+				}
+			}
+		}
 	}
 
 	// Webhook validation (only if enabled)
@@ -965,6 +1048,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("queues[%d].topics cannot be empty", i)
 		}
 		if q.Replication.Enabled {
+			if q.Replication.Group != "" && strings.TrimSpace(q.Replication.Group) == "" {
+				return fmt.Errorf("queues[%d].replication.group cannot be only whitespace", i)
+			}
 			if q.Replication.ReplicationFactor < 1 || q.Replication.ReplicationFactor > 10 {
 				return fmt.Errorf("queues[%d].replication.replication_factor must be between 1 and 10", i)
 			}

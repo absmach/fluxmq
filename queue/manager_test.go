@@ -970,6 +970,48 @@ func newTestRaftManager(t *testing.T, leaderID string) *queueraft.Manager {
 	return rm
 }
 
+type mockQueueCoordinator struct {
+	enabled           bool
+	leaderByQueue     map[string]bool
+	leaderAddrByQueue map[string]string
+	leaderIDByQueue   map[string]string
+
+	appendCalls []string
+}
+
+func (m *mockQueueCoordinator) Stop() error { return nil }
+func (m *mockQueueCoordinator) IsEnabled() bool {
+	return m.enabled
+}
+func (m *mockQueueCoordinator) IsLeaderForQueue(queueName string) bool {
+	if m.leaderByQueue == nil {
+		return false
+	}
+	if leader, ok := m.leaderByQueue[queueName]; ok {
+		return leader
+	}
+	return false
+}
+func (m *mockQueueCoordinator) LeaderForQueue(queueName string) string {
+	if m.leaderAddrByQueue == nil {
+		return ""
+	}
+	return m.leaderAddrByQueue[queueName]
+}
+func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
+	if m.leaderIDByQueue == nil {
+		return ""
+	}
+	return m.leaderIDByQueue[queueName]
+}
+func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *types.Message, _ queueraft.ApplyOptions) (uint64, error) {
+	m.appendCalls = append(m.appendCalls, queueName)
+	return 1, nil
+}
+func (m *mockQueueCoordinator) EnsureQueue(_ context.Context, _ types.QueueConfig) error { return nil }
+func (m *mockQueueCoordinator) UpdateQueue(_ context.Context, _ types.QueueConfig) error { return nil }
+func (m *mockQueueCoordinator) DeleteQueue(_ context.Context, _ string) error            { return nil }
+
 func TestCrossNodeMessageRouting(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
@@ -1277,6 +1319,57 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 		t.Fatalf("expected forward-to-leader call, got forwardToLeader=%v", calls[0].forwardToLeader)
 	}
 
+	if calls[0].nodeID != "node-2" {
+		t.Fatalf("expected leader nodeID node-2, got %s", calls[0].nodeID)
+	}
+}
+
+func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.Default()
+
+	mockCl := newMockCluster("node-1")
+
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyForward
+	config.DistributionMode = DistributionForward
+
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		return nil
+	}), config, logger, mockCl)
+
+	coordinator := &mockQueueCoordinator{
+		enabled:           true,
+		leaderByQueue:     map[string]bool{"hot-events": false},
+		leaderIDByQueue:   map[string]string{"hot-events": "node-2"},
+		leaderAddrByQueue: map[string]string{"hot-events": "127.0.0.1:8200"},
+	}
+	manager.SetRaftCoordinator(coordinator)
+
+	ctx := context.Background()
+	replicated := types.DefaultQueueConfig("hot-events", "$queue/hot-events/#")
+	replicated.Replication.Enabled = true
+	replicated.Replication.Group = "hot"
+	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	err := manager.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/hot-events/msg",
+		Payload: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("Publish returned error: %v", err)
+	}
+
+	calls := mockCl.GetForwardCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 forward call, got %d", len(calls))
+	}
+	if !calls[0].forwardToLeader {
+		t.Fatalf("expected forward-to-leader call, got forwardToLeader=%v", calls[0].forwardToLeader)
+	}
 	if calls[0].nodeID != "node-2" {
 		t.Fatalf("expected leader nodeID node-2, got %s", calls[0].nodeID)
 	}

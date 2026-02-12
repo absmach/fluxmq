@@ -730,8 +730,10 @@ type ReplicationConfig struct {
 	SnapshotInterval *durationpb.Duration `protobuf:"bytes,8,opt,name=snapshot_interval,json=snapshotInterval,proto3" json:"snapshot_interval,omitempty"`
 	// Optional per-queue Raft snapshot threshold override.
 	SnapshotThreshold uint64 `protobuf:"varint,9,opt,name=snapshot_threshold,json=snapshotThreshold,proto3" json:"snapshot_threshold,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Logical Raft group identifier for this queue (empty = default).
+	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReplicationConfig) Reset() {
@@ -825,6 +827,13 @@ func (x *ReplicationConfig) GetSnapshotThreshold() uint64 {
 		return x.SnapshotThreshold
 	}
 	return 0
+}
+
+func (x *ReplicationConfig) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
 }
 
 type QueueState struct {
@@ -4150,7 +4159,7 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\rSegmentConfig\x12\x19\n" +
 	"\bmax_size\x18\x01 \x01(\x04R\amaxSize\x122\n" +
 	"\amax_age\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x06maxAge\x12%\n" +
-	"\x0eindex_interval\x18\x03 \x01(\rR\rindexInterval\"\x84\x04\n" +
+	"\x0eindex_interval\x18\x03 \x01(\rR\rindexInterval\"\x9a\x04\n" +
 	"\x11ReplicationConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12-\n" +
 	"\x12replication_factor\x18\x02 \x01(\rR\x11replicationFactor\x124\n" +
@@ -4161,7 +4170,9 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x11heartbeat_timeout\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\x10heartbeatTimeout\x12D\n" +
 	"\x10election_timeout\x18\a \x01(\v2\x19.google.protobuf.DurationR\x0felectionTimeout\x12F\n" +
 	"\x11snapshot_interval\x18\b \x01(\v2\x19.google.protobuf.DurationR\x10snapshotInterval\x12-\n" +
-	"\x12snapshot_threshold\x18\t \x01(\x04R\x11snapshotThreshold\"\x8c\x02\n" +
+	"\x12snapshot_threshold\x18\t \x01(\x04R\x11snapshotThreshold\x12\x14\n" +
+	"\x05group\x18\n" +
+	" \x01(\tR\x05group\"\x8c\x02\n" +
 	"\n" +
 	"QueueState\x12%\n" +
 	"\x0etotal_messages\x18\x01 \x01(\x04R\rtotalMessages\x12\x1f\n" +

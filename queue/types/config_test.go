@@ -22,6 +22,16 @@ func TestQueueConfig_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "replication group whitespace invalid",
+			config: func() QueueConfig {
+				cfg := DefaultQueueConfig("$queue/test")
+				cfg.Replication.Enabled = true
+				cfg.Replication.Group = "   "
+				return cfg
+			}(),
+			wantErr: true,
+		},
+		{
 			name: "empty name",
 			config: QueueConfig{
 				Name: "",

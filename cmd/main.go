@@ -26,7 +26,6 @@ import (
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
-	"github.com/absmach/fluxmq/queue/raft"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
@@ -354,6 +353,7 @@ func main() {
 					replication.Mode = queueTypes.ReplicationSync
 				}
 
+				replication.Group = qc.Replication.Group
 				replication.ReplicationFactor = qc.Replication.ReplicationFactor
 				if replication.ReplicationFactor == 0 {
 					replication.ReplicationFactor = cfg.Cluster.Raft.ReplicationFactor
@@ -441,43 +441,36 @@ func main() {
 			cl,
 		)
 
-		// Initialize Raft replication if enabled
+		// Initialize queue Raft replication if enabled (default + optional per-group managers).
 		if cfg.Cluster.Enabled && cfg.Cluster.Raft.Enabled {
-			raftCfg := raft.ManagerConfig{
-				Enabled:           true,
-				ReplicationFactor: cfg.Cluster.Raft.ReplicationFactor,
-				SyncMode:          cfg.Cluster.Raft.SyncMode,
-				MinInSyncReplicas: cfg.Cluster.Raft.MinInSyncReplicas,
-				AckTimeout:        cfg.Cluster.Raft.AckTimeout,
-				HeartbeatTimeout:  cfg.Cluster.Raft.HeartbeatTimeout,
-				ElectionTimeout:   cfg.Cluster.Raft.ElectionTimeout,
-				SnapshotInterval:  cfg.Cluster.Raft.SnapshotInterval,
-				SnapshotThreshold: cfg.Cluster.Raft.SnapshotThreshold,
-			}
-
-			raftManager := raft.NewManager(
+			raftCoordinator, defaultRaftManager, groupRuntimes, err := startQueueRaftCoordinator(
 				cfg.Cluster.NodeID,
-				cfg.Cluster.Raft.BindAddr,
-				cfg.Cluster.Raft.DataDir,
+				cfg.Cluster.Raft,
 				queueLogStore,
 				queueLogStore,
-				cfg.Cluster.Raft.Peers,
-				raftCfg,
 				logger,
 			)
-
-			if err := raftManager.Start(context.Background()); err != nil {
+			if err != nil {
 				slog.Error("Failed to start Raft manager", "error", err)
 				os.Exit(1)
 			}
 
-			qm.SetRaftManager(raftManager)
+			if defaultRaftManager != nil {
+				qm.SetRaftManager(defaultRaftManager)
+			}
+			if raftCoordinator != nil {
+				qm.SetRaftCoordinator(raftCoordinator)
+			}
+
+			groupIDs := make([]string, 0, len(groupRuntimes))
+			for _, runtime := range groupRuntimes {
+				groupIDs = append(groupIDs, runtime.GroupID)
+			}
 
 			slog.Info("Raft replication enabled",
 				slog.String("node_id", cfg.Cluster.NodeID),
-				slog.String("bind_addr", cfg.Cluster.Raft.BindAddr),
-				slog.Int("replication_factor", cfg.Cluster.Raft.ReplicationFactor),
-				slog.Bool("sync_mode", cfg.Cluster.Raft.SyncMode))
+				slog.Int("group_count", len(groupRuntimes)),
+				slog.Any("groups", groupIDs))
 		}
 
 		if err := b.SetQueueManager(qm); err != nil {

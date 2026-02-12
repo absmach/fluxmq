@@ -33,7 +33,11 @@ type Manager struct {
 	writePolicy      WritePolicy
 	distributionMode DistributionMode
 
-	// Raft replication manager
+	// Raft replication coordinator (queue -> raft group routing).
+	raftCoordinator raft.QueueCoordinator
+
+	// Legacy access to the underlying single-group raft manager.
+	// Kept for compatibility with existing call sites/tests.
 	raftManager *raft.Manager
 
 	// Cluster support for cross-node message routing
@@ -174,7 +178,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 // Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
-	if m.distributionMode == DistributionReplicate && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
+	if m.distributionMode == DistributionReplicate && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
 		m.logger.Warn("distribution_mode=replicate requires raft to be enabled; falling back to forward")
 		m.distributionMode = DistributionForward
 	}
@@ -229,6 +233,11 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 				return err
 			}
 		}
+		if m.raftCoordinator != nil {
+			if err := m.raftCoordinator.EnsureQueue(ctx, cfg); err != nil {
+				return err
+			}
+		}
 
 		m.logger.Info("queue ready",
 			slog.String("queue", cfg.Name),
@@ -250,8 +259,8 @@ func (m *Manager) Stop() error {
 	m.wg.Wait()
 
 	// Stop Raft manager if enabled
-	if m.raftManager != nil {
-		if err := m.raftManager.Stop(); err != nil {
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.Stop(); err != nil {
 			m.logger.Error("failed to stop raft manager", slog.String("error", err.Error()))
 		}
 	}
@@ -262,7 +271,13 @@ func (m *Manager) Stop() error {
 
 // SetRaftManager sets the Raft replication manager.
 func (m *Manager) SetRaftManager(rm *raft.Manager) {
+	m.raftCoordinator = raft.NewLogicalGroupCoordinator(rm, m.logger)
 	m.raftManager = rm
+}
+
+// SetRaftCoordinator sets queue-aware Raft coordinator.
+func (m *Manager) SetRaftCoordinator(rc raft.QueueCoordinator) {
+	m.raftCoordinator = rc
 }
 
 // GetRaftManager returns the Raft replication manager.
@@ -277,6 +292,11 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
 		return err
 	}
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
+			return err
+		}
+	}
 	m.delivery.Schedule(config.Name)
 
 	m.logger.Info("queue created",
@@ -288,7 +308,15 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue.
 func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
-	return m.queueStore.UpdateQueue(ctx, config)
+	if err := m.queueStore.UpdateQueue(ctx, config); err != nil {
+		return err
+	}
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetOrCreateQueue gets or creates a queue with default configuration.
@@ -318,6 +346,11 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 	if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
 		return err
+	}
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.DeleteQueue(ctx, queueName); err != nil {
+			return err
+		}
 	}
 	m.delivery.Unschedule(queueName)
 	return nil
@@ -356,20 +389,32 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		allReplicated = allReplicated && replicated
 	}
 
-	if hasReplicated && m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() {
-		switch m.writePolicy {
-		case WritePolicyReject:
-			leaderAddr := m.raftManager.Leader()
-			if leaderAddr == "" {
-				return fmt.Errorf("raft leader unavailable")
+	if hasReplicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+		leaderQueue := ""
+		for _, target := range targets {
+			if target.config == nil || !target.config.Replication.Enabled {
+				continue
 			}
-			return fmt.Errorf("raft leader is at %s", leaderAddr)
-		case WritePolicyForward:
-			return m.forwardPublishToLeader(ctx, publish)
-		case WritePolicyLocal:
-			// fall through to local append
-		default:
-			// Unknown policy - default to local append for backward compatibility.
+			if !m.raftCoordinator.IsLeaderForQueue(target.name) {
+				leaderQueue = target.name
+				break
+			}
+		}
+		if leaderQueue != "" {
+			switch m.writePolicy {
+			case WritePolicyReject:
+				leaderAddr := m.raftCoordinator.LeaderForQueue(leaderQueue)
+				if leaderAddr == "" {
+					return fmt.Errorf("raft leader unavailable")
+				}
+				return fmt.Errorf("raft leader is at %s", leaderAddr)
+			case WritePolicyForward:
+				return m.forwardPublishToLeader(ctx, publish, leaderQueue)
+			case WritePolicyLocal:
+				// fall through to local append
+			default:
+				// Unknown policy - default to local append for backward compatibility.
+			}
 		}
 	}
 
@@ -480,14 +525,14 @@ func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.Publi
 		)
 
 		replicated := queueConfig.Replication.Enabled
-		if replicated && m.raftManager != nil && m.raftManager.IsEnabled() {
+		if replicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
 			syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
-			offset, err = m.raftManager.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
+			offset, err = m.raftCoordinator.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
 				SyncMode:   &syncMode,
 				AckTimeout: queueConfig.Replication.AckTimeout,
 			})
 		} else {
-			if replicated && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
+			if replicated && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
 				m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
 					slog.String("queue", queueName))
 			}
@@ -1090,12 +1135,16 @@ func (m *Manager) deliverQueue(ctx context.Context, queueName string) bool {
 	return m.delivery.DeliverQueue(ctx, queueName)
 }
 
-func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest) error {
+func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest, queueName string) error {
 	if m.cluster == nil {
 		return fmt.Errorf("cluster not configured for leader forward")
 	}
 
-	leaderID := m.raftManager.LeaderID()
+	if m.raftCoordinator == nil {
+		return fmt.Errorf("raft coordinator unavailable")
+	}
+
+	leaderID := m.raftCoordinator.LeaderIDForQueue(queueName)
 	if leaderID == "" {
 		return fmt.Errorf("raft leader unavailable")
 	}

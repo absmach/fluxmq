@@ -826,6 +826,7 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 		Mode:              replicationModeToProto(config.Replication.Mode),
 		MinInSyncReplicas: clampIntToUint32(config.Replication.MinInSyncReplicas),
 		AckTimeout:        durationpb.New(config.Replication.AckTimeout),
+		Group:             config.Replication.Group,
 	}
 	if config.Replication.HeartbeatTimeout > 0 {
 		replication.HeartbeatTimeout = durationpb.New(config.Replication.HeartbeatTimeout)
@@ -909,6 +910,7 @@ func applyQueueConfigUpdateFromProto(config *types.QueueConfig, cfg *queuev1.Que
 		if cfg.Replication.SnapshotThreshold > 0 {
 			replication.SnapshotThreshold = cfg.Replication.SnapshotThreshold
 		}
+		replication.Group = strings.TrimSpace(cfg.Replication.Group)
 
 		config.Replication = replication
 	}

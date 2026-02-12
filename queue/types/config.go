@@ -5,6 +5,7 @@ package types
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -109,6 +110,7 @@ type DLQConfig struct {
 // ReplicationConfig defines Raft-based replication for queues.
 type ReplicationConfig struct {
 	Enabled           bool
+	Group             string          // Logical Raft group ID for this queue (empty = default)
 	ReplicationFactor int             // Number of replicas (default: 3)
 	Mode              ReplicationMode // sync or async
 	MinInSyncReplicas int             // Min replicas that must ACK (default: 2)
@@ -303,6 +305,8 @@ func (c *QueueConfig) Validate() error {
 		case c.Replication.Mode != ReplicationSync && c.Replication.Mode != ReplicationAsync:
 			return ErrInvalidConfig
 		case c.Replication.AckTimeout <= 0:
+			return ErrInvalidConfig
+		case c.Replication.Group != "" && strings.TrimSpace(c.Replication.Group) == "":
 			return ErrInvalidConfig
 		}
 	}

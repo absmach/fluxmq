@@ -88,6 +88,38 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid raft groups config",
+			modify: func(c *Config) {
+				c.Cluster.Raft.Enabled = true
+				c.Cluster.Raft.Groups = map[string]RaftGroupConfig{
+					"hot": {
+						BindAddr: "127.0.0.1:8100",
+						DataDir:  "/tmp/fluxmq/raft-hot",
+						Peers: map[string]string{
+							"broker-1": "127.0.0.1:8100",
+						},
+						ReplicationFactor: 3,
+						MinInSyncReplicas: 2,
+					},
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid raft group missing bind addr",
+			modify: func(c *Config) {
+				c.Cluster.Raft.Enabled = true
+				c.Cluster.Raft.Groups = map[string]RaftGroupConfig{
+					"hot": {
+						Peers: map[string]string{
+							"broker-1": "127.0.0.1:8100",
+						},
+					},
+				}
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
