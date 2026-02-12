@@ -317,6 +317,16 @@ func (m *Manager) GetRaftManager() *raft.Manager {
 	return m.raftManager
 }
 
+// QueueStore returns the queue store used by the manager.
+func (m *Manager) QueueStore() storage.QueueStore {
+	return m.queueStore
+}
+
+// GroupStore returns the consumer group store used by the manager.
+func (m *Manager) GroupStore() storage.ConsumerGroupStore {
+	return m.groupStore
+}
+
 // --- Queue Operations ---
 
 // CreateQueue creates a new queue.

@@ -779,7 +779,7 @@ func main() {
 		}
 
 		if qm != nil && queueLogStore != nil {
-			apiServer := api.New(apiCfg, qm, queueLogStore, queueLogStore, logger)
+			apiServer := api.New(apiCfg, qm, qm.QueueStore(), qm.GroupStore(), logger)
 
 			wg.Add(1)
 			go func() {

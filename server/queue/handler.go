@@ -38,6 +38,15 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if manager != nil {
+		if queueStore == nil {
+			queueStore = manager.QueueStore()
+		}
+		if groupStore == nil {
+			groupStore = manager.GroupStore()
+		}
+	}
+
 	return &Handler{
 		manager:    manager,
 		queueStore: queueStore,
@@ -156,6 +165,23 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 	updated := *config
 	if req.Msg.Config != nil {
 		applyQueueConfigUpdateFromProto(&updated, req.Msg.Config)
+	}
+
+	if h.manager != nil {
+		if err := h.manager.UpdateQueue(ctx, updated); err != nil {
+			if err == storage.ErrQueueNotFound {
+				return nil, connect.NewError(connect.CodeNotFound, err)
+			}
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		current, err := h.queueStore.GetQueue(ctx, updated.Name)
+		if err != nil {
+			if err == storage.ErrQueueNotFound {
+				return nil, connect.NewError(connect.CodeNotFound, err)
+			}
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		return connect.NewResponse(h.queueToProto(current)), nil
 	}
 
 	if err := h.queueStore.UpdateQueue(ctx, updated); err != nil {
@@ -633,6 +659,19 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 	msg := req.Msg
 
 	var success int32
+	if h.manager != nil {
+		for _, offset := range msg.Offsets {
+			messageID := fmt.Sprintf("%s:%d", msg.QueueName, offset)
+			if err := h.manager.Ack(ctx, msg.QueueName, messageID, msg.GroupId); err == nil {
+				success++
+			}
+		}
+
+		return connect.NewResponse(&queuev1.AckResponse{
+			AckedCount: uint32(success),
+		}), nil
+	}
+
 	var maxOffset uint64
 	for _, offset := range msg.Offsets {
 		err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
@@ -655,6 +694,14 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 
 func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackRequest]) (*connect.Response[emptypb.Empty], error) {
 	msg := req.Msg
+
+	if h.manager != nil {
+		for _, offset := range msg.Offsets {
+			messageID := fmt.Sprintf("%s:%d", msg.QueueName, offset)
+			_ = h.manager.Nack(ctx, msg.QueueName, messageID, msg.GroupId)
+		}
+		return connect.NewResponse(&emptypb.Empty{}), nil
+	}
 
 	for _, offset := range msg.Offsets {
 		h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
@@ -696,9 +743,9 @@ func (h *Handler) Claim(ctx context.Context, req *connect.Request[queuev1.ClaimR
 				continue
 			}
 
-			entry.ConsumerID = msg.ConsumerId
-			entry.ClaimedAt = time.Now()
-			entry.DeliveryCount++
+			if err := h.groupStore.TransferPendingEntry(ctx, msg.QueueName, msg.GroupId, entry.Offset, entry.ConsumerID, msg.ConsumerId); err != nil {
+				continue
+			}
 
 			claimed = append(claimed, h.messageToProto(m))
 			if len(claimed) >= limit {
