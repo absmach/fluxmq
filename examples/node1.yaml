@@ -110,3 +110,15 @@ log:
 
 queue_manager:
   auto_commit_interval: 5s
+
+queues:
+  - name: "mqtt"
+    topics:
+      - "$queue/#"
+    reserved: true
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: "sync"
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"

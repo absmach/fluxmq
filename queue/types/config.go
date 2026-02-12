@@ -213,6 +213,7 @@ type QueueConfigInput struct {
 	DLQEnabled     bool
 	DLQTopic       string
 	Retention      RetentionPolicy
+	Replication    ReplicationConfig
 }
 
 // FromInput creates a QueueConfig from a simplified input config.
@@ -225,6 +226,9 @@ func FromInput(input QueueConfigInput) QueueConfig {
 	}
 	cfg.PrimaryGroup = input.PrimaryGroup
 	cfg.Retention = input.Retention
+	if input.Replication.Enabled {
+		cfg.Replication = input.Replication
+	}
 
 	if input.MaxMessageSize > 0 {
 		cfg.MaxMessageSize = input.MaxMessageSize

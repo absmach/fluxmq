@@ -29,15 +29,16 @@ type Config struct {
 
 // QueueConfig defines configuration for a persistent queue.
 type QueueConfig struct {
-	Name         string         `yaml:"name"`
-	Topics       []string       `yaml:"topics"`
-	Reserved     bool           `yaml:"reserved"`
-	Type         string         `yaml:"type"`
-	PrimaryGroup string         `yaml:"primary_group"`
-	Retention    QueueRetention `yaml:"retention"`
-	Limits       QueueLimits    `yaml:"limits"`
-	Retry        QueueRetry     `yaml:"retry"`
-	DLQ          QueueDLQ       `yaml:"dlq"`
+	Name         string           `yaml:"name"`
+	Topics       []string         `yaml:"topics"`
+	Reserved     bool             `yaml:"reserved"`
+	Type         string           `yaml:"type"`
+	PrimaryGroup string           `yaml:"primary_group"`
+	Retention    QueueRetention   `yaml:"retention"`
+	Limits       QueueLimits      `yaml:"limits"`
+	Retry        QueueRetry       `yaml:"retry"`
+	DLQ          QueueDLQ         `yaml:"dlq"`
+	Replication  QueueReplication `yaml:"replication"`
 }
 
 // QueueLimits defines resource limits for a queue.
@@ -66,6 +67,21 @@ type QueueRetention struct {
 	MaxAge            time.Duration `yaml:"max_age"`
 	MaxLengthBytes    int64         `yaml:"max_length_bytes"`
 	MaxLengthMessages int64         `yaml:"max_length_messages"`
+}
+
+// QueueReplication defines per-queue replication settings.
+type QueueReplication struct {
+	Enabled           bool          `yaml:"enabled"`
+	ReplicationFactor int           `yaml:"replication_factor"`
+	Mode              string        `yaml:"mode"` // sync, async
+	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
+	AckTimeout        time.Duration `yaml:"ack_timeout"`
+
+	// Optional per-queue Raft tuning overrides (zero = use cluster defaults).
+	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
+	ElectionTimeout   time.Duration `yaml:"election_timeout"`
+	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
+	SnapshotThreshold uint64        `yaml:"snapshot_threshold"`
 }
 
 // QueueManagerConfig defines runtime behavior for the queue manager.
@@ -570,6 +586,13 @@ func Default() *Config {
 				DLQ: QueueDLQ{
 					Enabled: true,
 				},
+				Replication: QueueReplication{
+					Enabled:           false,
+					ReplicationFactor: 3,
+					Mode:              "sync",
+					MinInSyncReplicas: 2,
+					AckTimeout:        5 * time.Second,
+				},
 			},
 		},
 	}
@@ -940,6 +963,22 @@ func (c *Config) Validate() error {
 		seenQueues[q.Name] = true
 		if len(q.Topics) == 0 {
 			return fmt.Errorf("queues[%d].topics cannot be empty", i)
+		}
+		if q.Replication.Enabled {
+			if q.Replication.ReplicationFactor < 1 || q.Replication.ReplicationFactor > 10 {
+				return fmt.Errorf("queues[%d].replication.replication_factor must be between 1 and 10", i)
+			}
+			if q.Replication.MinInSyncReplicas < 1 || q.Replication.MinInSyncReplicas > q.Replication.ReplicationFactor {
+				return fmt.Errorf("queues[%d].replication.min_in_sync_replicas must be between 1 and replication_factor", i)
+			}
+			switch strings.ToLower(q.Replication.Mode) {
+			case "sync", "async":
+			default:
+				return fmt.Errorf("queues[%d].replication.mode must be one of: sync, async", i)
+			}
+			if q.Replication.AckTimeout <= 0 {
+				return fmt.Errorf("queues[%d].replication.ack_timeout must be > 0", i)
+			}
 		}
 	}
 

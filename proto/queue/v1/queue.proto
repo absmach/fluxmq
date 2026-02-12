@@ -218,6 +218,9 @@ message QueueConfig {
 
   // Segment configuration.
   SegmentConfig segment = 4;
+
+  // Queue replication policy.
+  ReplicationConfig replication = 5;
 }
 
 message RetentionConfig {
@@ -242,6 +245,35 @@ message SegmentConfig {
   uint32 index_interval = 3;
 }
 
+message ReplicationConfig {
+  // Enable queue replication.
+  bool enabled = 1;
+
+  // Number of replicas in the replication group.
+  uint32 replication_factor = 2;
+
+  // Replication acknowledgment mode.
+  ReplicationMode mode = 3;
+
+  // Minimum replicas that must acknowledge.
+  uint32 min_in_sync_replicas = 4;
+
+  // Timeout for synchronous replication acknowledgment.
+  google.protobuf.Duration ack_timeout = 5;
+
+  // Optional per-queue Raft heartbeat timeout override.
+  google.protobuf.Duration heartbeat_timeout = 6;
+
+  // Optional per-queue Raft election timeout override.
+  google.protobuf.Duration election_timeout = 7;
+
+  // Optional per-queue Raft snapshot interval override.
+  google.protobuf.Duration snapshot_interval = 8;
+
+  // Optional per-queue Raft snapshot threshold override.
+  uint64 snapshot_threshold = 9;
+}
+
 message QueueState {
   // Total messages in the queue.
   uint64 total_messages = 1;
@@ -264,6 +296,12 @@ enum CompressionType {
   COMPRESSION_TYPE_NONE = 1;
   COMPRESSION_TYPE_S2 = 2;
   COMPRESSION_TYPE_ZSTD = 3;
+}
+
+enum ReplicationMode {
+  REPLICATION_MODE_UNSPECIFIED = 0;
+  REPLICATION_MODE_SYNC = 1;
+  REPLICATION_MODE_ASYNC = 2;
 }
 
 // QueueInfo contains metadata about a queue.

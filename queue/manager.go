@@ -215,7 +215,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-
 // ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
 func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 	// If no queue configs provided, use the default mqtt queue
@@ -340,7 +339,24 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 // This is the NATS JetQueue-style "multi-queue" routing.
 // It also forwards the publish to remote nodes that have consumers for the topic.
 func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
-	if m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() {
+	targets, err := m.resolvePublishTargets(ctx, publish)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		m.logger.Debug("no queues match topic", slog.String("topic", publish.Topic))
+		return nil
+	}
+
+	hasReplicated := false
+	allReplicated := true
+	for _, target := range targets {
+		replicated := target.config != nil && target.config.Replication.Enabled
+		hasReplicated = hasReplicated || replicated
+		allReplicated = allReplicated && replicated
+	}
+
+	if hasReplicated && m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() {
 		switch m.writePolicy {
 		case WritePolicyReject:
 			leaderAddr := m.raftManager.Leader()
@@ -358,20 +374,18 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 	}
 
 	// Store locally in matching queues
-	if err := m.publishLocal(ctx, publish); err != nil {
+	if err := m.publishLocalToTargets(ctx, publish, targets); err != nil {
 		return err
 	}
 
 	// Forward to remote nodes that have consumers
 	if m.cluster != nil {
-		switch m.distributionMode {
-		case DistributionForward:
-			m.forwardToRemoteNodes(ctx, publish, false)
-		case DistributionReplicate:
-			// In replicate mode, only forward to nodes whose queues do not exist locally.
-			// This avoids duplicates while still supporting locally-created queues on remote nodes.
-			m.forwardToRemoteNodes(ctx, publish, true)
+		unknownOnly := allReplicated
+		if m.distributionMode == DistributionReplicate {
+			// Legacy explicit replicate mode remains stronger than per-queue inference.
+			unknownOnly = true
 		}
+		m.forwardToRemoteNodes(ctx, publish, unknownOnly)
 	}
 
 	return nil
@@ -392,10 +406,23 @@ func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishR
 }
 
 func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest) error {
+	targets, err := m.resolvePublishTargets(ctx, publish)
+	if err != nil {
+		return err
+	}
+	return m.publishLocalToTargets(ctx, publish, targets)
+}
+
+type queuePublishTarget struct {
+	name   string
+	config *types.QueueConfig
+}
+
+func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.PublishRequest) ([]queuePublishTarget, error) {
 	// Find all matching queues
 	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 	if err != nil {
-		return fmt.Errorf("failed to find matching queues: %w", err)
+		return nil, fmt.Errorf("failed to find matching queues: %w", err)
 	}
 
 	if len(queues) == 0 {
@@ -403,25 +430,36 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 		queueName, queuePattern := autoQueueFromTopic(publish.Topic)
 		if _, err := m.GetOrCreateQueue(ctx, queueName, queuePattern); err != nil {
 			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
-			return err
+			return nil, err
 		}
 		// After creating, find it again.
 		queues, err = m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 		if err != nil {
-			return fmt.Errorf("failed to find matching queues after creation: %w", err)
+			return nil, fmt.Errorf("failed to find matching queues after creation: %w", err)
 		}
 	}
 
-	if len(queues) == 0 {
-		m.logger.Debug("no queues match topic", slog.String("topic", publish.Topic))
-		return nil
-	}
-
-	// Append to each matching queue
+	targets := make([]queuePublishTarget, 0, len(queues))
 	for _, queueName := range queues {
 		queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 		if err != nil {
 			m.logger.Warn("failed to get queue config", slog.String("queue", queueName), slog.String("error", err.Error()))
+			continue
+		}
+		targets = append(targets, queuePublishTarget{
+			name:   queueName,
+			config: queueConfig,
+		})
+	}
+
+	return targets, nil
+}
+
+func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
+	for _, target := range targets {
+		queueName := target.name
+		queueConfig := target.config
+		if queueConfig == nil {
 			continue
 		}
 
@@ -436,10 +474,23 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 			ExpiresAt:  time.Now().Add(queueConfig.MessageTTL),
 		}
 
-		var offset uint64
-		if m.raftManager != nil && m.raftManager.IsEnabled() && m.raftManager.IsLeader() {
-			offset, err = m.raftManager.ApplyAppend(ctx, queueName, msg)
+		var (
+			offset uint64
+			err    error
+		)
+
+		replicated := queueConfig.Replication.Enabled
+		if replicated && m.raftManager != nil && m.raftManager.IsEnabled() {
+			syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
+			offset, err = m.raftManager.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
+				SyncMode:   &syncMode,
+				AckTimeout: queueConfig.Replication.AckTimeout,
+			})
 		} else {
+			if replicated && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
+				m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
+					slog.String("queue", queueName))
+			}
 			offset, err = m.queueStore.Append(ctx, queueName, msg)
 		}
 
@@ -1051,7 +1102,6 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 
 	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
 }
-
 
 func (m *Manager) runStealLoop() {
 	defer m.wg.Done()

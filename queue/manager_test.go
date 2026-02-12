@@ -1254,6 +1254,12 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	manager.SetRaftManager(newTestRaftManager(t, "node-2"))
 
 	ctx := context.Background()
+	replicated := types.DefaultQueueConfig("test", "$queue/test/#")
+	replicated.Replication.Enabled = true
+	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
 	err := manager.Publish(ctx, types.PublishRequest{
 		Topic:   "$queue/test/msg",
 		Payload: []byte("hello"),

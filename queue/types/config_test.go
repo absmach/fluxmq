@@ -246,3 +246,24 @@ func TestFromInput_Durable(t *testing.T) {
 	config := FromInput(input)
 	assert.True(t, config.Durable)
 }
+
+func TestFromInput_Replication(t *testing.T) {
+	input := QueueConfigInput{
+		Name:   "test",
+		Topics: []string{"#"},
+		Replication: ReplicationConfig{
+			Enabled:           true,
+			ReplicationFactor: 5,
+			Mode:              ReplicationAsync,
+			MinInSyncReplicas: 3,
+			AckTimeout:        2 * time.Second,
+		},
+	}
+
+	config := FromInput(input)
+	assert.True(t, config.Replication.Enabled)
+	assert.Equal(t, 5, config.Replication.ReplicationFactor)
+	assert.Equal(t, ReplicationAsync, config.Replication.Mode)
+	assert.Equal(t, 3, config.Replication.MinInSyncReplicas)
+	assert.Equal(t, 2*time.Second, config.Replication.AckTimeout)
+}

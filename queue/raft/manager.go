@@ -62,6 +62,12 @@ type ManagerConfig struct {
 	SnapshotThreshold uint64
 }
 
+// ApplyOptions allows per-operation overrides of Raft apply behavior.
+type ApplyOptions struct {
+	SyncMode   *bool
+	AckTimeout time.Duration
+}
+
 // DefaultManagerConfig returns default manager configuration.
 func DefaultManagerConfig() ManagerConfig {
 	return ManagerConfig{
@@ -336,6 +342,11 @@ func (m *Manager) LeaderID() string {
 
 // Apply submits an operation to Raft for replication.
 func (m *Manager) Apply(ctx context.Context, op *Operation) (*ApplyResult, error) {
+	return m.ApplyWithOptions(ctx, op, ApplyOptions{})
+}
+
+// ApplyWithOptions submits an operation to Raft with per-call behavior overrides.
+func (m *Manager) ApplyWithOptions(ctx context.Context, op *Operation, opts ApplyOptions) (*ApplyResult, error) {
 	if !m.IsEnabled() {
 		return nil, nil
 	}
@@ -355,9 +366,19 @@ func (m *Manager) Apply(ctx context.Context, op *Operation) (*ApplyResult, error
 		return nil, fmt.Errorf("failed to marshal operation: %w", err)
 	}
 
-	future := m.raft.Apply(data, m.config.AckTimeout)
+	ackTimeout := m.config.AckTimeout
+	if opts.AckTimeout > 0 {
+		ackTimeout = opts.AckTimeout
+	}
 
-	if m.config.SyncMode {
+	future := m.raft.Apply(data, ackTimeout)
+
+	syncMode := m.config.SyncMode
+	if opts.SyncMode != nil {
+		syncMode = *opts.SyncMode
+	}
+
+	if syncMode {
 		if err := future.Error(); err != nil {
 			return nil, fmt.Errorf("raft apply failed: %w", err)
 		}
@@ -384,6 +405,11 @@ func (m *Manager) Apply(ctx context.Context, op *Operation) (*ApplyResult, error
 
 // ApplyAppend submits an append operation to Raft.
 func (m *Manager) ApplyAppend(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	return m.ApplyAppendWithOptions(ctx, queueName, msg, ApplyOptions{})
+}
+
+// ApplyAppendWithOptions submits an append operation to Raft with per-call options.
+func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error) {
 	if !m.IsEnabled() {
 		return 0, nil
 	}
@@ -394,7 +420,7 @@ func (m *Manager) ApplyAppend(ctx context.Context, queueName string, msg *types.
 		Message:   msg,
 	}
 
-	result, err := m.Apply(ctx, op)
+	result, err := m.ApplyWithOptions(ctx, op, opts)
 	if err != nil {
 		return 0, err
 	}

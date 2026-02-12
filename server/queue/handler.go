@@ -50,14 +50,14 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.CreateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	msg := req.Msg
 
-	config := types.QueueConfig{
-		Name:       msg.Name,
-		Topics:     []string{msg.Name}, // Default subject matches queue name
-		MessageTTL: 7 * 24 * time.Hour,
+	topics := msg.Topics
+	if len(topics) == 0 {
+		topics = []string{msg.Name}
 	}
 
-	if msg.Config != nil && msg.Config.Retention != nil && msg.Config.Retention.MaxAge != nil {
-		config.MessageTTL = msg.Config.Retention.MaxAge.AsDuration()
+	config := types.DefaultQueueConfig(msg.Name, topics...)
+	if msg.Config != nil {
+		applyQueueConfigUpdateFromProto(&config, msg.Config)
 	}
 
 	if err := h.manager.CreateQueue(ctx, config); err != nil {
@@ -155,23 +155,7 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 
 	updated := *config
 	if req.Msg.Config != nil {
-		cfg := req.Msg.Config
-		if cfg.Retention != nil {
-			if cfg.Retention.MaxAge != nil {
-				maxAge := cfg.Retention.MaxAge.AsDuration()
-				updated.MessageTTL = maxAge
-				updated.Retention.RetentionTime = maxAge
-			}
-			if cfg.Retention.MaxBytes > 0 {
-				updated.Retention.RetentionBytes = int64(cfg.Retention.MaxBytes)
-			}
-			if cfg.Retention.MinMessages > 0 {
-				updated.Retention.RetentionMessages = int64(cfg.Retention.MinMessages)
-			}
-		}
-		if cfg.MaxMessageSize > 0 {
-			updated.MaxMessageSize = int64(cfg.MaxMessageSize)
-		}
+		applyQueueConfigUpdateFromProto(&updated, req.Msg.Config)
 	}
 
 	if err := h.queueStore.UpdateQueue(ctx, updated); err != nil {
@@ -836,6 +820,24 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 		retentionMaxAge = config.MessageTTL
 	}
 
+	replication := &queuev1.ReplicationConfig{
+		Enabled:           config.Replication.Enabled,
+		ReplicationFactor: clampIntToUint32(config.Replication.ReplicationFactor),
+		Mode:              replicationModeToProto(config.Replication.Mode),
+		MinInSyncReplicas: clampIntToUint32(config.Replication.MinInSyncReplicas),
+		AckTimeout:        durationpb.New(config.Replication.AckTimeout),
+	}
+	if config.Replication.HeartbeatTimeout > 0 {
+		replication.HeartbeatTimeout = durationpb.New(config.Replication.HeartbeatTimeout)
+	}
+	if config.Replication.ElectionTimeout > 0 {
+		replication.ElectionTimeout = durationpb.New(config.Replication.ElectionTimeout)
+	}
+	if config.Replication.SnapshotInterval > 0 {
+		replication.SnapshotInterval = durationpb.New(config.Replication.SnapshotInterval)
+	}
+	replication.SnapshotThreshold = config.Replication.SnapshotThreshold
+
 	return &queuev1.Queue{
 		Name:   config.Name,
 		Topics: config.Topics,
@@ -846,7 +848,69 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 				MinMessages: clampInt64ToUint64(config.Retention.RetentionMessages),
 			},
 			MaxMessageSize: clampInt64ToUint32(config.MaxMessageSize),
+			Replication:    replication,
 		},
+	}
+}
+
+func applyQueueConfigUpdateFromProto(config *types.QueueConfig, cfg *queuev1.QueueConfig) {
+	if config == nil || cfg == nil {
+		return
+	}
+
+	if cfg.Retention != nil {
+		if cfg.Retention.MaxAge != nil {
+			maxAge := cfg.Retention.MaxAge.AsDuration()
+			config.MessageTTL = maxAge
+			config.Retention.RetentionTime = maxAge
+		}
+		if cfg.Retention.MaxBytes > 0 {
+			config.Retention.RetentionBytes = int64(cfg.Retention.MaxBytes)
+		}
+		if cfg.Retention.MinMessages > 0 {
+			config.Retention.RetentionMessages = int64(cfg.Retention.MinMessages)
+		}
+	}
+
+	if cfg.MaxMessageSize > 0 {
+		config.MaxMessageSize = int64(cfg.MaxMessageSize)
+	}
+
+	if cfg.Replication != nil {
+		replication := config.Replication
+		replication.Enabled = cfg.Replication.Enabled
+
+		if cfg.Replication.ReplicationFactor > 0 {
+			replication.ReplicationFactor = int(cfg.Replication.ReplicationFactor)
+		}
+		if cfg.Replication.MinInSyncReplicas > 0 {
+			replication.MinInSyncReplicas = int(cfg.Replication.MinInSyncReplicas)
+		}
+		if cfg.Replication.AckTimeout != nil {
+			replication.AckTimeout = cfg.Replication.AckTimeout.AsDuration()
+		}
+
+		switch cfg.Replication.Mode {
+		case queuev1.ReplicationMode_REPLICATION_MODE_ASYNC:
+			replication.Mode = types.ReplicationAsync
+		case queuev1.ReplicationMode_REPLICATION_MODE_SYNC:
+			replication.Mode = types.ReplicationSync
+		}
+
+		if cfg.Replication.HeartbeatTimeout != nil {
+			replication.HeartbeatTimeout = cfg.Replication.HeartbeatTimeout.AsDuration()
+		}
+		if cfg.Replication.ElectionTimeout != nil {
+			replication.ElectionTimeout = cfg.Replication.ElectionTimeout.AsDuration()
+		}
+		if cfg.Replication.SnapshotInterval != nil {
+			replication.SnapshotInterval = cfg.Replication.SnapshotInterval.AsDuration()
+		}
+		if cfg.Replication.SnapshotThreshold > 0 {
+			replication.SnapshotThreshold = cfg.Replication.SnapshotThreshold
+		}
+
+		config.Replication = replication
 	}
 }
 
@@ -865,6 +929,27 @@ func clampInt64ToUint32(value int64) uint32 {
 		return math.MaxUint32
 	}
 	return uint32(value)
+}
+
+func clampIntToUint32(value int) uint32 {
+	if value <= 0 {
+		return 0
+	}
+	if value > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(value)
+}
+
+func replicationModeToProto(mode types.ReplicationMode) queuev1.ReplicationMode {
+	switch mode {
+	case types.ReplicationAsync:
+		return queuev1.ReplicationMode_REPLICATION_MODE_ASYNC
+	case types.ReplicationSync:
+		fallthrough
+	default:
+		return queuev1.ReplicationMode_REPLICATION_MODE_SYNC
+	}
 }
 
 func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {

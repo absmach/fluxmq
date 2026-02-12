@@ -11,6 +11,8 @@ import (
 
 	"connectrpc.com/connect"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
+	queuepkg "github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -99,6 +101,13 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 				MinMessages: 10,
 			},
 			MaxMessageSize: 4096,
+			Replication: &queuev1.ReplicationConfig{
+				Enabled:           true,
+				ReplicationFactor: 3,
+				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_ASYNC,
+				MinInSyncReplicas: 2,
+				AckTimeout:        durationpb.New(2 * time.Second),
+			},
 		},
 	}))
 	if err != nil {
@@ -125,10 +134,134 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	if updated.MaxMessageSize != 4096 {
 		t.Fatalf("unexpected max message size: got %d", updated.MaxMessageSize)
 	}
+	if !updated.Replication.Enabled {
+		t.Fatalf("expected replication enabled")
+	}
+	if updated.Replication.ReplicationFactor != 3 {
+		t.Fatalf("unexpected replication factor: got %d", updated.Replication.ReplicationFactor)
+	}
+	if updated.Replication.Mode != types.ReplicationAsync {
+		t.Fatalf("unexpected replication mode: got %s", updated.Replication.Mode)
+	}
+	if updated.Replication.MinInSyncReplicas != 2 {
+		t.Fatalf("unexpected min ISR: got %d", updated.Replication.MinInSyncReplicas)
+	}
+	if updated.Replication.AckTimeout != 2*time.Second {
+		t.Fatalf("unexpected ack timeout: got %s", updated.Replication.AckTimeout)
+	}
 
 	if got := updateResp.Msg.Config.GetRetention().GetMaxAge().AsDuration(); got != retention {
 		t.Fatalf("response retention mismatch: got %v want %v", got, retention)
 	}
+	if got := updateResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
+		t.Fatalf("expected replication in response")
+	}
+	if got := updateResp.Msg.Config.GetReplication().GetMode(); got != queuev1.ReplicationMode_REPLICATION_MODE_ASYNC {
+		t.Fatalf("response replication mode mismatch: got %v", got)
+	}
+}
+
+func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := memlog.New()
+	groupStore := noopGroupStore{}
+	manager := queuepkg.NewManager(store, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+	h := NewHandler(manager, store, groupStore, nil)
+
+	createResp, err := h.CreateQueue(ctx, connect.NewRequest(&queuev1.CreateQueueRequest{
+		Name:   "jobs",
+		Topics: []string{"$queue/jobs/#"},
+		Config: &queuev1.QueueConfig{
+			Replication: &queuev1.ReplicationConfig{
+				Enabled:           true,
+				ReplicationFactor: 5,
+				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_SYNC,
+				MinInSyncReplicas: 3,
+				AckTimeout:        durationpb.New(4 * time.Second),
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	stored, err := store.GetQueue(ctx, "jobs")
+	if err != nil {
+		t.Fatalf("get queue: %v", err)
+	}
+
+	if !stored.Replication.Enabled {
+		t.Fatalf("expected replication enabled")
+	}
+	if stored.Replication.ReplicationFactor != 5 {
+		t.Fatalf("unexpected replication factor: %d", stored.Replication.ReplicationFactor)
+	}
+	if stored.Replication.Mode != types.ReplicationSync {
+		t.Fatalf("unexpected replication mode: %s", stored.Replication.Mode)
+	}
+	if stored.Replication.MinInSyncReplicas != 3 {
+		t.Fatalf("unexpected min ISR: %d", stored.Replication.MinInSyncReplicas)
+	}
+	if stored.Replication.AckTimeout != 4*time.Second {
+		t.Fatalf("unexpected ack timeout: %s", stored.Replication.AckTimeout)
+	}
+
+	if got := createResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
+		t.Fatalf("expected replication in create response")
+	}
+	if got := createResp.Msg.Config.GetReplication().GetReplicationFactor(); got != 5 {
+		t.Fatalf("unexpected response replication factor: %d", got)
+	}
+}
+
+type noopGroupStore struct{}
+
+func (noopGroupStore) CreateConsumerGroup(context.Context, *types.ConsumerGroup) error {
+	return nil
+}
+func (noopGroupStore) GetConsumerGroup(context.Context, string, string) (*types.ConsumerGroup, error) {
+	return nil, qstorage.ErrConsumerNotFound
+}
+func (noopGroupStore) UpdateConsumerGroup(context.Context, *types.ConsumerGroup) error {
+	return nil
+}
+func (noopGroupStore) DeleteConsumerGroup(context.Context, string, string) error {
+	return nil
+}
+func (noopGroupStore) ListConsumerGroups(context.Context, string) ([]*types.ConsumerGroup, error) {
+	return nil, nil
+}
+func (noopGroupStore) AddPendingEntry(context.Context, string, string, *types.PendingEntry) error {
+	return nil
+}
+func (noopGroupStore) RemovePendingEntry(context.Context, string, string, string, uint64) error {
+	return nil
+}
+func (noopGroupStore) GetPendingEntries(context.Context, string, string, string) ([]*types.PendingEntry, error) {
+	return nil, nil
+}
+func (noopGroupStore) GetAllPendingEntries(context.Context, string, string) ([]*types.PendingEntry, error) {
+	return nil, nil
+}
+func (noopGroupStore) TransferPendingEntry(context.Context, string, string, uint64, string, string) error {
+	return nil
+}
+func (noopGroupStore) UpdateCursor(context.Context, string, string, uint64) error {
+	return nil
+}
+func (noopGroupStore) UpdateCommitted(context.Context, string, string, uint64) error {
+	return nil
+}
+func (noopGroupStore) RegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
+	return nil
+}
+func (noopGroupStore) UnregisterConsumer(context.Context, string, string, string) error {
+	return nil
+}
+func (noopGroupStore) ListConsumers(context.Context, string, string) ([]*types.ConsumerInfo, error) {
+	return nil, nil
 }
 
 func TestSeekToTimestamp(t *testing.T) {

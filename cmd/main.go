@@ -343,6 +343,59 @@ func main() {
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {
+			replication := queueTypes.ReplicationConfig{}
+			if qc.Replication.Enabled {
+				replication = queueTypes.ReplicationConfig{
+					Enabled: qc.Replication.Enabled,
+				}
+				if strings.EqualFold(qc.Replication.Mode, "async") {
+					replication.Mode = queueTypes.ReplicationAsync
+				} else {
+					replication.Mode = queueTypes.ReplicationSync
+				}
+
+				replication.ReplicationFactor = qc.Replication.ReplicationFactor
+				if replication.ReplicationFactor == 0 {
+					replication.ReplicationFactor = cfg.Cluster.Raft.ReplicationFactor
+					if replication.ReplicationFactor == 0 {
+						replication.ReplicationFactor = 3
+					}
+				}
+
+				replication.MinInSyncReplicas = qc.Replication.MinInSyncReplicas
+				if replication.MinInSyncReplicas == 0 {
+					replication.MinInSyncReplicas = cfg.Cluster.Raft.MinInSyncReplicas
+					if replication.MinInSyncReplicas == 0 {
+						replication.MinInSyncReplicas = 2
+					}
+				}
+
+				replication.AckTimeout = qc.Replication.AckTimeout
+				if replication.AckTimeout <= 0 {
+					replication.AckTimeout = cfg.Cluster.Raft.AckTimeout
+					if replication.AckTimeout <= 0 {
+						replication.AckTimeout = 5 * time.Second
+					}
+				}
+
+				replication.HeartbeatTimeout = qc.Replication.HeartbeatTimeout
+				if replication.HeartbeatTimeout <= 0 {
+					replication.HeartbeatTimeout = cfg.Cluster.Raft.HeartbeatTimeout
+				}
+				replication.ElectionTimeout = qc.Replication.ElectionTimeout
+				if replication.ElectionTimeout <= 0 {
+					replication.ElectionTimeout = cfg.Cluster.Raft.ElectionTimeout
+				}
+				replication.SnapshotInterval = qc.Replication.SnapshotInterval
+				if replication.SnapshotInterval <= 0 {
+					replication.SnapshotInterval = cfg.Cluster.Raft.SnapshotInterval
+				}
+				replication.SnapshotThreshold = qc.Replication.SnapshotThreshold
+				if replication.SnapshotThreshold == 0 {
+					replication.SnapshotThreshold = cfg.Cluster.Raft.SnapshotThreshold
+				}
+			}
+
 			queueCfg.QueueConfigs = append(queueCfg.QueueConfigs, queueTypes.FromInput(queueTypes.QueueConfigInput{
 				Name:           qc.Name,
 				Topics:         qc.Topics,
@@ -363,6 +416,7 @@ func main() {
 					RetentionBytes:    qc.Retention.MaxLengthBytes,
 					RetentionMessages: qc.Retention.MaxLengthMessages,
 				},
+				Replication: replication,
 			}))
 		}
 
