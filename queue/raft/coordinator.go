@@ -76,6 +76,7 @@ type GroupReplicator interface {
 // GroupProvisioner can lazily create/register group replicators on demand.
 type GroupProvisioner interface {
 	GetOrCreateGroup(ctx context.Context, groupID string) (GroupReplicator, error)
+	TryReleaseGroup(ctx context.Context, groupID string) (bool, error)
 }
 
 // LogicalGroupCoordinator maps queues to logical Raft groups.
@@ -221,18 +222,42 @@ func (c *LogicalGroupCoordinator) UpdateQueue(ctx context.Context, cfg types.Que
 		}
 	}
 
+	var previousGroup string
+	var hadPrevious bool
+	var newGroup string
+	var hasNew bool
+
 	c.mu.Lock()
+	previousGroup, hadPrevious = c.queueGroups[cfg.Name]
 	c.ensureQueueAssignment(cfg)
+	newGroup, hasNew = c.queueGroups[cfg.Name]
 	c.mu.Unlock()
+
+	if hadPrevious && (!hasNew || normalizeGroupID(previousGroup) != normalizeGroupID(newGroup)) {
+		if err := c.maybeReleaseGroup(ctx, previousGroup); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
 // DeleteQueue removes queue->group mapping on queue deletion.
-func (c *LogicalGroupCoordinator) DeleteQueue(_ context.Context, queueName string) error {
+func (c *LogicalGroupCoordinator) DeleteQueue(ctx context.Context, queueName string) error {
+	var previousGroup string
+	var hadPrevious bool
+
 	c.mu.Lock()
+	previousGroup, hadPrevious = c.queueGroups[queueName]
 	delete(c.queueGroups, queueName)
 	c.mu.Unlock()
+
+	if hadPrevious {
+		if err := c.maybeReleaseGroup(ctx, previousGroup); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -440,4 +465,47 @@ func normalizeGroupID(groupID string) string {
 		return DefaultGroupID
 	}
 	return strings.TrimSpace(groupID)
+}
+
+func (c *LogicalGroupCoordinator) maybeReleaseGroup(ctx context.Context, groupID string) error {
+	gid := normalizeGroupID(groupID)
+	if gid == c.defaultGroup {
+		return nil
+	}
+	if c.provisioner == nil {
+		return nil
+	}
+
+	c.mu.RLock()
+	for _, qgid := range c.queueGroups {
+		if normalizeGroupID(qgid) == gid {
+			c.mu.RUnlock()
+			return nil
+		}
+	}
+	_, exists := c.groupMembers[gid]
+	c.mu.RUnlock()
+	if !exists {
+		return nil
+	}
+
+	released, err := c.provisioner.TryReleaseGroup(ctx, gid)
+	if err != nil {
+		return err
+	}
+	if !released {
+		return nil
+	}
+
+	c.mu.Lock()
+	for _, qgid := range c.queueGroups {
+		if normalizeGroupID(qgid) == gid {
+			c.mu.Unlock()
+			return nil
+		}
+	}
+	delete(c.groupMembers, gid)
+	c.mu.Unlock()
+
+	return nil
 }

@@ -222,9 +222,11 @@ type raftGroupProvisioner struct {
 	groupStore qstorage.ConsumerGroupStore
 	logger     *slog.Logger
 
-	mu       sync.Mutex
-	managers map[string]*qraft.Manager
-	usedBind map[string]string
+	mu           sync.Mutex
+	managers     map[string]*qraft.Manager
+	usedBind     map[string]string
+	bindByGroup  map[string]string
+	staticGroups map[string]struct{}
 }
 
 func newRaftGroupProvisioner(
@@ -241,23 +243,30 @@ func newRaftGroupProvisioner(
 	}
 
 	usedBind := make(map[string]string, len(runtimes))
+	bindByGroup := make(map[string]string, len(runtimes))
+	staticGroups := make(map[string]struct{}, len(runtimes)+len(started))
 	for _, rt := range runtimes {
 		usedBind[rt.BindAddr] = rt.GroupID
+		bindByGroup[rt.GroupID] = rt.BindAddr
+		staticGroups[rt.GroupID] = struct{}{}
 	}
 
 	managers := make(map[string]*qraft.Manager, len(started))
 	for groupID, manager := range started {
 		managers[groupID] = manager
+		staticGroups[groupID] = struct{}{}
 	}
 
 	return &raftGroupProvisioner{
-		nodeID:     nodeID,
-		raftCfg:    raftCfg,
-		queueStore: queueStore,
-		groupStore: groupStore,
-		logger:     logger,
-		managers:   managers,
-		usedBind:   usedBind,
+		nodeID:       nodeID,
+		raftCfg:      raftCfg,
+		queueStore:   queueStore,
+		groupStore:   groupStore,
+		logger:       logger,
+		managers:     managers,
+		usedBind:     usedBind,
+		bindByGroup:  bindByGroup,
+		staticGroups: staticGroups,
 	}
 }
 
@@ -334,6 +343,7 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 	}
 	p.managers[gid] = manager
 	p.usedBind[runtime.BindAddr] = gid
+	p.bindByGroup[gid] = runtime.BindAddr
 
 	p.logger.Info("dynamically provisioned raft group",
 		slog.String("group", gid),
@@ -341,6 +351,51 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 		slog.String("data_dir", runtime.DataDir))
 
 	return manager, nil
+}
+
+func (p *raftGroupProvisioner) TryReleaseGroup(_ context.Context, groupID string) (bool, error) {
+	gid := strings.TrimSpace(groupID)
+	if gid == "" {
+		gid = qraft.DefaultGroupID
+	}
+
+	p.mu.Lock()
+	if _, static := p.staticGroups[gid]; static {
+		p.mu.Unlock()
+		return false, nil
+	}
+	manager, exists := p.managers[gid]
+	if !exists {
+		p.mu.Unlock()
+		return false, nil
+	}
+	bindAddr := p.bindByGroup[gid]
+	p.mu.Unlock()
+
+	if manager != nil {
+		if err := manager.Stop(); err != nil {
+			return false, fmt.Errorf("failed to stop raft group %q: %w", gid, err)
+		}
+	}
+
+	p.mu.Lock()
+	current, ok := p.managers[gid]
+	if !ok || current != manager {
+		p.mu.Unlock()
+		return false, nil
+	}
+	delete(p.managers, gid)
+	delete(p.bindByGroup, gid)
+	if bindAddr != "" && p.usedBind[bindAddr] == gid {
+		delete(p.usedBind, bindAddr)
+	}
+	p.mu.Unlock()
+
+	p.logger.Info("released raft group",
+		slog.String("group", gid),
+		slog.String("bind_addr", bindAddr))
+
+	return true, nil
 }
 
 func (p *raftGroupProvisioner) deriveAutoGroupConfig(groupID string) (config.RaftGroupConfig, error) {

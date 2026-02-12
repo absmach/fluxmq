@@ -163,3 +163,72 @@ func TestRaftGroupProvisionerRejectsUnknownWhenAutoProvisionDisabled(t *testing.
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestRaftGroupProvisionerTryReleaseGroupSkipsStaticGroups(t *testing.T) {
+	p := newRaftGroupProvisioner(
+		"node1",
+		config.RaftConfig{},
+		nil,
+		nil,
+		map[string]*qraft.Manager{
+			qraft.DefaultGroupID: {},
+			"hot":                {},
+		},
+		[]raftGroupRuntime{
+			{GroupID: qraft.DefaultGroupID, BindAddr: "127.0.0.1:7100"},
+			{GroupID: "hot", BindAddr: "127.0.0.1:8100"},
+		},
+		nil,
+	)
+
+	released, err := p.TryReleaseGroup(context.Background(), "hot")
+	if err != nil {
+		t.Fatalf("TryReleaseGroup failed: %v", err)
+	}
+	if released {
+		t.Fatalf("expected static group release to be skipped")
+	}
+	if _, ok := p.managers["hot"]; !ok {
+		t.Fatalf("expected static group manager to remain")
+	}
+	if got := p.usedBind["127.0.0.1:8100"]; got != "hot" {
+		t.Fatalf("expected static bind mapping to remain, got %q", got)
+	}
+}
+
+func TestRaftGroupProvisionerTryReleaseGroupRemovesDynamicTracking(t *testing.T) {
+	p := newRaftGroupProvisioner(
+		"node1",
+		config.RaftConfig{},
+		nil,
+		nil,
+		map[string]*qraft.Manager{
+			qraft.DefaultGroupID: {},
+		},
+		[]raftGroupRuntime{
+			{GroupID: qraft.DefaultGroupID, BindAddr: "127.0.0.1:7100"},
+		},
+		nil,
+	)
+
+	p.managers["dynamic"] = nil
+	p.bindByGroup["dynamic"] = "127.0.0.1:9100"
+	p.usedBind["127.0.0.1:9100"] = "dynamic"
+
+	released, err := p.TryReleaseGroup(context.Background(), "dynamic")
+	if err != nil {
+		t.Fatalf("TryReleaseGroup failed: %v", err)
+	}
+	if !released {
+		t.Fatalf("expected dynamic group to be released")
+	}
+	if _, ok := p.managers["dynamic"]; ok {
+		t.Fatalf("expected dynamic manager to be removed")
+	}
+	if _, ok := p.bindByGroup["dynamic"]; ok {
+		t.Fatalf("expected dynamic bind-by-group mapping to be removed")
+	}
+	if _, ok := p.usedBind["127.0.0.1:9100"]; ok {
+		t.Fatalf("expected dynamic bind mapping to be removed")
+	}
+}

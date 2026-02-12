@@ -22,7 +22,10 @@ type mockReplicator struct {
 }
 
 type mockProvisioner struct {
-	replicators map[string]GroupReplicator
+	replicators  map[string]GroupReplicator
+	keepGroups   map[string]bool
+	releaseCalls []string
+	releaseErr   error
 }
 
 func (m *mockProvisioner) GetOrCreateGroup(_ context.Context, groupID string) (GroupReplicator, error) {
@@ -30,6 +33,18 @@ func (m *mockProvisioner) GetOrCreateGroup(_ context.Context, groupID string) (G
 		return replicator, nil
 	}
 	return nil, nil
+}
+
+func (m *mockProvisioner) TryReleaseGroup(_ context.Context, groupID string) (bool, error) {
+	m.releaseCalls = append(m.releaseCalls, groupID)
+	if m.releaseErr != nil {
+		return false, m.releaseErr
+	}
+	if m.keepGroups != nil && m.keepGroups[groupID] {
+		return false, nil
+	}
+	delete(m.replicators, groupID)
+	return true, nil
 }
 
 func (m *mockReplicator) Stop() error {
@@ -198,5 +213,76 @@ func TestLogicalGroupCoordinatorRoutesByQueueGroup(t *testing.T) {
 
 	if coordinator.IsLeaderForQueue("other") {
 		t.Fatalf("expected default group non-leader for unmatched queue")
+	}
+}
+
+func TestLogicalGroupCoordinatorReleasesDynamicGroupWhenLastQueueDeleted(t *testing.T) {
+	provisioner := &mockProvisioner{
+		replicators: map[string]GroupReplicator{
+			"hot": &mockReplicator{enabled: true},
+		},
+	}
+	coordinator := NewLogicalGroupCoordinatorWithProvisioner(&mockReplicator{enabled: true}, provisioner, nil)
+	ctx := context.Background()
+
+	queueA := types.DefaultQueueConfig("orders-a", "$queue/orders-a/#")
+	queueA.Replication.Enabled = true
+	queueA.Replication.Group = "hot"
+	if err := coordinator.EnsureQueue(ctx, queueA); err != nil {
+		t.Fatalf("EnsureQueue orders-a failed: %v", err)
+	}
+
+	queueB := types.DefaultQueueConfig("orders-b", "$queue/orders-b/#")
+	queueB.Replication.Enabled = true
+	queueB.Replication.Group = "hot"
+	if err := coordinator.EnsureQueue(ctx, queueB); err != nil {
+		t.Fatalf("EnsureQueue orders-b failed: %v", err)
+	}
+
+	if err := coordinator.DeleteQueue(ctx, "orders-a"); err != nil {
+		t.Fatalf("DeleteQueue orders-a failed: %v", err)
+	}
+	if len(provisioner.releaseCalls) != 0 {
+		t.Fatalf("expected no release while one queue still uses the group")
+	}
+
+	if err := coordinator.DeleteQueue(ctx, "orders-b"); err != nil {
+		t.Fatalf("DeleteQueue orders-b failed: %v", err)
+	}
+	if len(provisioner.releaseCalls) != 1 || provisioner.releaseCalls[0] != "hot" {
+		t.Fatalf("expected one release call for hot group, got %v", provisioner.releaseCalls)
+	}
+	if _, ok := coordinator.groupMembers["hot"]; ok {
+		t.Fatalf("expected hot group member to be removed after release")
+	}
+}
+
+func TestLogicalGroupCoordinatorKeepsStaticGroupRegisteredOnQueueRemoval(t *testing.T) {
+	provisioner := &mockProvisioner{
+		replicators: map[string]GroupReplicator{
+			"hot": &mockReplicator{enabled: true},
+		},
+		keepGroups: map[string]bool{
+			"hot": true,
+		},
+	}
+	coordinator := NewLogicalGroupCoordinatorWithProvisioner(&mockReplicator{enabled: true}, provisioner, nil)
+	ctx := context.Background()
+
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	cfg.Replication.Enabled = true
+	cfg.Replication.Group = "hot"
+	if err := coordinator.EnsureQueue(ctx, cfg); err != nil {
+		t.Fatalf("EnsureQueue failed: %v", err)
+	}
+
+	if err := coordinator.DeleteQueue(ctx, "orders"); err != nil {
+		t.Fatalf("DeleteQueue failed: %v", err)
+	}
+	if len(provisioner.releaseCalls) != 1 || provisioner.releaseCalls[0] != "hot" {
+		t.Fatalf("expected release attempt for hot group, got %v", provisioner.releaseCalls)
+	}
+	if _, ok := coordinator.groupMembers["hot"]; !ok {
+		t.Fatalf("expected hot group member to remain for non-releasable group")
 	}
 }
