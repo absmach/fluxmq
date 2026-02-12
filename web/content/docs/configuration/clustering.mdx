@@ -5,7 +5,7 @@ description: Configure embedded etcd, transport, and optional Raft replication
 
 # Clustering Configuration
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-12
 
 Clustering has three building blocks:
 
@@ -56,7 +56,7 @@ cluster:
 
 ## Raft (Queue Replication)
 
-Raft affects durable queues only. If `cluster.raft.enabled` is true, FluxMQ starts a single Raft group that replicates queue operations (appends and consumer-group state changes).
+Raft affects durable queues only. If `cluster.raft.enabled` is true, FluxMQ starts one or more Raft replication groups. Queues can be assigned to a specific group (sharding), otherwise they use the default group.
 
 Two settings determine cluster queue behavior:
 
@@ -93,6 +93,14 @@ Notes on current behavior:
 
 - Raft membership is derived from the configured peer list (and the local node). `replication_factor` is accepted in config, but does not currently limit membership.
 - `min_in_sync_replicas` is accepted in config, but Raft quorum rules still ultimately govern commit behavior.
+
+### Replication groups
+
+Replication groups are configured under `cluster.raft.groups`. The key `default` is the base group used when a queue does not specify `replication.group`.
+
+If `cluster.raft.auto_provision_groups` is enabled, the broker can dynamically start groups that are referenced by queues but not listed under `cluster.raft.groups`.
+
+For the conceptual model and tradeoffs, see [Queue Replication Groups (Raft)](/docs/architecture/raft-groups).
 
 ## Learn More
 

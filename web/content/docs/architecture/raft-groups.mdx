@@ -1,0 +1,82 @@
+---
+title: Queue Replication Groups (Raft)
+description: How queues map to Raft groups, what guarantees you get, and how to tune performance
+---
+
+# Queue Replication Groups (Raft)
+
+**Last Updated:** 2026-02-12
+
+FluxMQ can replicate durable and stream queues using Raft. Replication is not “one big cluster toggle” for all queues. Instead, each queue can be assigned to a **replication group**.
+
+A replication group is a shard: an independent Raft domain with its own leader election, log, snapshots, and timing knobs.
+
+## What A Replication Group Means
+
+- A replicated queue belongs to exactly one replication group.
+- Each group has exactly one leader at a time.
+- Writes to replicated queues are leader-owned.
+- Consumer progress (cursor/committed offsets) and work-queue state (PEL, acks, transfers) are replicated in the same group as the queue.
+
+If you do nothing, queues use the **default** replication group.
+
+## Why You Want Multiple Groups
+
+Multiple groups let you trade off isolation and overhead:
+
+- **Isolation:** hot queues can be placed in their own group so they don’t contend with unrelated queues.
+- **Shard parallelism:** separate groups can commit in parallel (different leaders on different nodes).
+- **Operational control:** different groups can use different timeouts, ack behavior, and snapshot settings.
+
+The cost is overhead: every group is a Raft instance with heartbeats, elections, and snapshots.
+
+## Assignment: Per-Queue Group Selection
+
+You assign a queue to a group in the queue replication config:
+
+- `replication.enabled: true`
+- `replication.group: "<group-id>"`
+
+If `replication.group` is empty, the queue uses the default group.
+
+## Auto-Provisioning (Optional)
+
+FluxMQ can dynamically start groups that are not explicitly listed in config.
+
+When `cluster.raft.auto_provision_groups` is enabled:
+
+- A queue can reference a group that does not exist yet.
+- The broker will create the group runtime on first use.
+- The derived runtime must still produce unique network endpoints and data directories.
+
+If `auto_provision_groups` is disabled, referencing an unknown group is a configuration error.
+
+## Delivery Model vs Replication Model
+
+Replication decides **how state is stored and agreed upon**. Delivery decides **how bytes reach connected consumers**.
+
+Two modes matter in practice:
+
+- `distribution_mode=forward`: one node reads from the log and routes deliveries to consumers on other nodes.
+- `distribution_mode=replicate`: the log is replicated, so nodes can deliver from their local copy.
+
+Both modes preserve the same queue semantics; they trade off network and IO patterns.
+
+## Guarantees (What You Can Rely On)
+
+- **Replicated queues:** appends and consumer-group mutations are processed through the group leader and replicated by Raft.
+- **At-least-once delivery:** if a consumer fails after receiving a message but before ack, it can be redelivered.
+- **Strict progress under replication:** acknowledgments and cursor updates are part of replicated state. If the leader is unreachable, these operations fail rather than being applied locally.
+
+## Performance Notes
+
+- Non-leader writes may add an extra hop (client -> follower -> leader) when `write_policy=forward`.
+- `sync_mode=true` increases publish latency because the leader waits for the Raft apply to complete (bounded by `ack_timeout`).
+- More groups can improve throughput for mixed workloads, but too many groups increases background overhead.
+
+As a rule of thumb: start with a small number of groups (for example, one default group plus a “hot” group), then increase only if you see contention.
+
+## Configuration Entry Points
+
+- [Cluster configuration](/docs/configuration/clustering)
+- [Configuration reference](/docs/reference/configuration-reference)
