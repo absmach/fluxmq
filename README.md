@@ -114,38 +114,76 @@ FluxMQ is optimized for event-driven systems that need ordered delivery, durable
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  • Set up MQTT, AMQP 1.0, AMQP 0.9.1 brokers                 │
-│  • Creates shared Queue Manager (bindings + delivery)        │
-│  • Wires cluster, storage, metrics, shutdown                 │
-└──────────┬──────────────────┬──────────────────┬─────────────┘
-           │                  │                  │
-           ▼                  ▼                  ▼
-  ┌────────────────┐   ┌─────────────┐   ┌─────────────┐
-  │ TCP/WS/HTTP/   │   │ AMQP 1.0    │   │ AMQP 0.9.1  │
-  │ CoAP Servers   │   │ Server      │   │ Server      │
-  └───────┬────────┘   └──────┬──────┘   └───────┬─────┘
-          │                   │                  │
-          ▼                   ▼                  ▼
-    ┌────────────┐      ┌────────────┐     ┌────────────┐
-    │ MQTT Broker│      │ AMQP Broker│     │ AMQP Broker│
-    │ (protocol  │      │   (1.0)    │     │   (0.9.1)  │
-    │ logic/fsm) │      └─────┬──────┘     └─────┬──────┘
-    └──────┬─────┘            │                  │
-           └──────────────────┬──────────────────┘
-                              │ queue manager
-                              ▼
-                      ┌────────────────┐
-                      │ Queue Manager  │
-                      │ (bindings +    │
-                      │ delivery)      │
-                      └──────┬─────────┘
-                             ▼
-                      ┌────────────────┐
-                      │ Log Storage    │
-                      │ + Topic Index  │
-                      └────────────────┘
+```mermaid
+flowchart TB
+
+%% Edge / Transport
+EDGE["TCP/UDP + TLS/mTLS + Load Balancing + Rate Limiting"]
+
+%% Protocol servers
+S1["TCP/WS/HTTP/CoAP Servers"]
+S2["AMQP Server"]
+S3["New Protocol Server"]
+
+EDGE --> S1
+EDGE --> S2
+EDGE -.-> S3
+
+%% Auth
+A1["Auth + extensions"]
+A2["Auth + extensions"]
+A3["Auth + extensions"]
+
+S1 --> A1
+S2 --> A2
+S3 -.-> A3
+
+%% Brokers
+B1["MQTT Broker"]
+B2["AMQP Broker"]
+B3["New Protocol Broker"]
+
+A1 --> B1
+A2 --> B2
+A3 -.-> B3
+
+%% Cluster
+C1["Cluster"]
+C2["Cluster"]
+C3["Cluster"]
+
+B1 --- C1
+B2 --- C2
+B3 --- C3
+
+%% Routing resolvers
+R1["Routing Resolver"]
+R2["Routing Resolver"]
+R3["Routing Resolver"]
+
+B1 --- R1
+B2 --- R2
+B3 --- R3
+
+%% Shared queue core
+subgraph Queue
+    DE["Delivery engine"]
+
+    EQ["Ephemeral Queue"]
+    DQ["Durable Queue"]
+    REP["Replication"]
+    LS["Log Storage"]
+
+    DE --> EQ
+    DE --> DQ
+    DQ --> LS
+    DQ --- REP
+end
+
+%% Bridge to core
+R1 --> DE
+R2 --> DE
+R3 -.-> DE
 ```
 
 MQTT transports share one broker; AMQP brokers are independent; queues provide the shared durability and cross-protocol fan-out layer.
