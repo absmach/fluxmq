@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package raft
 
 import (
 	"context"
@@ -17,27 +17,26 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
-	qraft "github.com/absmach/fluxmq/queue/raft"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 )
 
-type raftGroupRuntime struct {
+type RaftGroupRuntime struct {
 	GroupID string
 
 	BindAddr string
 	DataDir  string
 	Peers    map[string]string
 
-	ManagerConfig qraft.ManagerConfig
+	ManagerConfig ManagerConfig
 }
 
-func startQueueRaftCoordinator(
+func StartQueueCoordinator(
 	nodeID string,
 	raftCfg config.RaftConfig,
 	queueStore qstorage.QueueStore,
 	groupStore qstorage.ConsumerGroupStore,
 	logger *slog.Logger,
-) (qraft.QueueCoordinator, *qraft.Manager, []raftGroupRuntime, error) {
+) (QueueCoordinator, *Manager, []RaftGroupRuntime, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -50,8 +49,8 @@ func startQueueRaftCoordinator(
 		return nil, nil, nil, nil
 	}
 
-	started := make(map[string]*qraft.Manager, len(runtimes))
-	startedList := make([]*qraft.Manager, 0, len(runtimes))
+	started := make(map[string]*Manager, len(runtimes))
+	startedList := make([]*Manager, 0, len(runtimes))
 	stopStarted := func() {
 		for _, rm := range startedList {
 			_ = rm.Stop()
@@ -60,7 +59,7 @@ func startQueueRaftCoordinator(
 
 	for _, runtime := range runtimes {
 		groupLogger := logger.With(slog.String("raft_group", runtime.GroupID))
-		rm := qraft.NewManager(
+		rm := NewManager(
 			nodeID,
 			runtime.BindAddr,
 			runtime.DataDir,
@@ -80,16 +79,16 @@ func startQueueRaftCoordinator(
 		startedList = append(startedList, rm)
 	}
 
-	defaultManager := started[qraft.DefaultGroupID]
+	defaultManager := started[DefaultGroupID]
 	if defaultManager == nil {
 		stopStarted()
-		return nil, nil, nil, fmt.Errorf("default raft group %q must be configured", qraft.DefaultGroupID)
+		return nil, nil, nil, fmt.Errorf("default raft group %q must be configured", DefaultGroupID)
 	}
 
 	provisioner := newRaftGroupProvisioner(nodeID, raftCfg, queueStore, groupStore, started, runtimes, logger)
-	coordinator := qraft.NewLogicalGroupCoordinatorWithProvisioner(defaultManager, provisioner, logger)
+	coordinator := NewLogicalGroupCoordinatorWithProvisioner(defaultManager, provisioner, logger)
 	for groupID, manager := range started {
-		if groupID == qraft.DefaultGroupID {
+		if groupID == DefaultGroupID {
 			continue
 		}
 		coordinator.RegisterGroup(groupID, manager)
@@ -98,19 +97,19 @@ func startQueueRaftCoordinator(
 	return coordinator, defaultManager, runtimes, nil
 }
 
-func buildRaftGroupRuntimes(raftCfg config.RaftConfig) ([]raftGroupRuntime, error) {
+func buildRaftGroupRuntimes(raftCfg config.RaftConfig) ([]RaftGroupRuntime, error) {
 	if !raftCfg.Enabled {
 		return nil, nil
 	}
 
-	defaultOverride, hasDefaultOverride := raftCfg.Groups[qraft.DefaultGroupID]
+	defaultOverride, hasDefaultOverride := raftCfg.Groups[DefaultGroupID]
 	if hasDefaultOverride && defaultOverride.Enabled != nil && !*defaultOverride.Enabled {
-		return nil, fmt.Errorf("cluster.raft.groups.%s.enabled cannot be false when raft is enabled", qraft.DefaultGroupID)
+		return nil, fmt.Errorf("cluster.raft.groups.%s.enabled cannot be false when raft is enabled", DefaultGroupID)
 	}
 
-	runtimes := make([]raftGroupRuntime, 0, len(raftCfg.Groups)+1)
+	runtimes := make([]RaftGroupRuntime, 0, len(raftCfg.Groups)+1)
 
-	defaultRuntime, err := resolveRaftGroupRuntime(qraft.DefaultGroupID, raftCfg, defaultOverride, true)
+	defaultRuntime, err := resolveRaftGroupRuntime(DefaultGroupID, raftCfg, defaultOverride, true)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +117,7 @@ func buildRaftGroupRuntimes(raftCfg config.RaftConfig) ([]raftGroupRuntime, erro
 
 	groupIDs := make([]string, 0, len(raftCfg.Groups))
 	for groupID := range raftCfg.Groups {
-		if groupID == qraft.DefaultGroupID {
+		if groupID == DefaultGroupID {
 			continue
 		}
 		groupIDs = append(groupIDs, groupID)
@@ -154,10 +153,10 @@ func resolveRaftGroupRuntime(
 	base config.RaftConfig,
 	override config.RaftGroupConfig,
 	allowBaseEndpoints bool,
-) (raftGroupRuntime, error) {
+) (RaftGroupRuntime, error) {
 	normalizedGroupID := strings.TrimSpace(groupID)
 	if normalizedGroupID == "" {
-		return raftGroupRuntime{}, fmt.Errorf("raft group id cannot be empty")
+		return RaftGroupRuntime{}, fmt.Errorf("raft group id cannot be empty")
 	}
 
 	bindAddr := strings.TrimSpace(override.BindAddr)
@@ -165,7 +164,7 @@ func resolveRaftGroupRuntime(
 		bindAddr = strings.TrimSpace(base.BindAddr)
 	}
 	if bindAddr == "" {
-		return raftGroupRuntime{}, fmt.Errorf("cluster.raft.groups.%s.bind_addr is required", normalizedGroupID)
+		return RaftGroupRuntime{}, fmt.Errorf("cluster.raft.groups.%s.bind_addr is required", normalizedGroupID)
 	}
 
 	dataDir := strings.TrimSpace(override.DataDir)
@@ -178,7 +177,7 @@ func resolveRaftGroupRuntime(
 		}
 	}
 	if dataDir == "" {
-		return raftGroupRuntime{}, fmt.Errorf("cluster.raft.groups.%s.data_dir is required", normalizedGroupID)
+		return RaftGroupRuntime{}, fmt.Errorf("cluster.raft.groups.%s.data_dir is required", normalizedGroupID)
 	}
 
 	peers := copyPeers(override.Peers)
@@ -186,7 +185,7 @@ func resolveRaftGroupRuntime(
 		peers = copyPeers(base.Peers)
 	}
 	if len(peers) == 0 && !allowBaseEndpoints {
-		return raftGroupRuntime{}, fmt.Errorf("cluster.raft.groups.%s.peers is required", normalizedGroupID)
+		return RaftGroupRuntime{}, fmt.Errorf("cluster.raft.groups.%s.peers is required", normalizedGroupID)
 	}
 
 	syncMode := base.SyncMode
@@ -194,12 +193,12 @@ func resolveRaftGroupRuntime(
 		syncMode = *override.SyncMode
 	}
 
-	runtime := raftGroupRuntime{
+	runtime := RaftGroupRuntime{
 		GroupID:  normalizedGroupID,
 		BindAddr: bindAddr,
 		DataDir:  dataDir,
 		Peers:    peers,
-		ManagerConfig: qraft.ManagerConfig{
+		ManagerConfig: ManagerConfig{
 			Enabled:           true,
 			ReplicationFactor: coalesceInt(override.ReplicationFactor, base.ReplicationFactor, 3),
 			SyncMode:          syncMode,
@@ -223,7 +222,7 @@ type raftGroupProvisioner struct {
 	logger     *slog.Logger
 
 	mu           sync.Mutex
-	managers     map[string]*qraft.Manager
+	managers     map[string]*Manager
 	inflight     map[string]chan struct{} // closed when provisioning completes (success or failure)
 	usedBind     map[string]string
 	bindByGroup  map[string]string
@@ -235,8 +234,8 @@ func newRaftGroupProvisioner(
 	raftCfg config.RaftConfig,
 	queueStore qstorage.QueueStore,
 	groupStore qstorage.ConsumerGroupStore,
-	started map[string]*qraft.Manager,
-	runtimes []raftGroupRuntime,
+	started map[string]*Manager,
+	runtimes []RaftGroupRuntime,
 	logger *slog.Logger,
 ) *raftGroupProvisioner {
 	if logger == nil {
@@ -252,7 +251,7 @@ func newRaftGroupProvisioner(
 		staticGroups[rt.GroupID] = struct{}{}
 	}
 
-	managers := make(map[string]*qraft.Manager, len(started))
+	managers := make(map[string]*Manager, len(started))
 	for groupID, manager := range started {
 		managers[groupID] = manager
 		staticGroups[groupID] = struct{}{}
@@ -272,10 +271,10 @@ func newRaftGroupProvisioner(
 	}
 }
 
-func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID string) (qraft.GroupReplicator, error) {
+func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID string) (GroupReplicator, error) {
 	gid := strings.TrimSpace(groupID)
 	if gid == "" {
-		gid = qraft.DefaultGroupID
+		gid = DefaultGroupID
 	}
 
 	for {
@@ -359,12 +358,12 @@ func (p *raftGroupProvisioner) GetOrCreateGroup(ctx context.Context, groupID str
 	}
 }
 
-func (p *raftGroupProvisioner) startManager(ctx context.Context, gid string, runtime raftGroupRuntime) (*qraft.Manager, error) {
+func (p *raftGroupProvisioner) startManager(ctx context.Context, gid string, runtime RaftGroupRuntime) (*Manager, error) {
 	groupLogger := p.logger.With(slog.String("raft_group", gid))
 	if p.queueStore == nil || p.groupStore == nil {
 		return nil, fmt.Errorf("cannot provision raft group %q: queue/group stores are not configured", gid)
 	}
-	manager := qraft.NewManager(
+	manager := NewManager(
 		p.nodeID,
 		runtime.BindAddr,
 		runtime.DataDir,
@@ -385,7 +384,7 @@ func (p *raftGroupProvisioner) startManager(ctx context.Context, gid string, run
 func (p *raftGroupProvisioner) TryReleaseGroup(_ context.Context, groupID string) (bool, error) {
 	gid := strings.TrimSpace(groupID)
 	if gid == "" {
-		gid = qraft.DefaultGroupID
+		gid = DefaultGroupID
 	}
 
 	p.mu.Lock()

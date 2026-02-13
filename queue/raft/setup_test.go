@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package main
+package raft
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
-	qraft "github.com/absmach/fluxmq/queue/raft"
 )
 
 func TestBuildRaftGroupRuntimes(t *testing.T) {
@@ -61,7 +60,7 @@ func TestBuildRaftGroupRuntimes(t *testing.T) {
 	)
 	for _, rt := range runtimes {
 		switch rt.GroupID {
-		case qraft.DefaultGroupID:
+		case DefaultGroupID:
 			foundDefault = true
 			if rt.BindAddr != "127.0.0.1:7100" {
 				t.Fatalf("unexpected default bind addr: %q", rt.BindAddr)
@@ -151,8 +150,8 @@ func TestRaftGroupProvisionerRejectsUnknownWhenAutoProvisionDisabled(t *testing.
 		DataDir:             "/tmp/fluxmq/raft",
 	}
 
-	p := newRaftGroupProvisioner("node1", raftCfg, nil, nil, map[string]*qraft.Manager{
-		qraft.DefaultGroupID: {},
+	p := newRaftGroupProvisioner("node1", raftCfg, nil, nil, map[string]*Manager{
+		DefaultGroupID: {},
 	}, nil, nil)
 
 	_, err := p.GetOrCreateGroup(context.Background(), "hot")
@@ -170,12 +169,12 @@ func TestRaftGroupProvisionerTryReleaseGroupSkipsStaticGroups(t *testing.T) {
 		config.RaftConfig{},
 		nil,
 		nil,
-		map[string]*qraft.Manager{
-			qraft.DefaultGroupID: {},
-			"hot":                {},
+		map[string]*Manager{
+			DefaultGroupID: {},
+			"hot":          {},
 		},
-		[]raftGroupRuntime{
-			{GroupID: qraft.DefaultGroupID, BindAddr: "127.0.0.1:7100"},
+		[]RaftGroupRuntime{
+			{GroupID: DefaultGroupID, BindAddr: "127.0.0.1:7100"},
 			{GroupID: "hot", BindAddr: "127.0.0.1:8100"},
 		},
 		nil,
@@ -202,11 +201,11 @@ func TestRaftGroupProvisionerTryReleaseGroupRemovesDynamicTracking(t *testing.T)
 		config.RaftConfig{},
 		nil,
 		nil,
-		map[string]*qraft.Manager{
-			qraft.DefaultGroupID: {},
+		map[string]*Manager{
+			DefaultGroupID: {},
 		},
-		[]raftGroupRuntime{
-			{GroupID: qraft.DefaultGroupID, BindAddr: "127.0.0.1:7100"},
+		[]RaftGroupRuntime{
+			{GroupID: DefaultGroupID, BindAddr: "127.0.0.1:7100"},
 		},
 		nil,
 	)

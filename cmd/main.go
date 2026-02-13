@@ -26,6 +26,7 @@ import (
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
+	qraft "github.com/absmach/fluxmq/queue/raft"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
@@ -445,7 +446,7 @@ func main() {
 
 		// Initialize queue Raft replication if enabled (default + optional per-group managers).
 		if cfg.Cluster.Enabled && cfg.Cluster.Raft.Enabled {
-			raftCoordinator, defaultRaftManager, groupRuntimes, err := startQueueRaftCoordinator(
+			raftCoordinator, defaultRaftManager, groupRuntimes, err := qraft.StartQueueCoordinator(
 				cfg.Cluster.NodeID,
 				cfg.Cluster.Raft,
 				queueLogStore,
