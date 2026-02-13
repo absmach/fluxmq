@@ -11,6 +11,7 @@ var (
 	ErrNoServers       = errors.New("no servers configured")
 	ErrEmptyClientID   = errors.New("client ID cannot be empty")
 	ErrInvalidProtocol = errors.New("invalid protocol version (must be 4 or 5)")
+	ErrNilOptions      = errors.New("options cannot be nil")
 
 	// Connection errors.
 	ErrNotConnected     = errors.New("client not connected")
@@ -18,6 +19,7 @@ var (
 	ErrConnectFailed    = errors.New("connection failed")
 	ErrConnectRejected  = errors.New("connection rejected by broker")
 	ErrConnectTimeout   = errors.New("connection timeout")
+	ErrPingTimeout      = errors.New("ping response timeout")
 
 	// Operation errors.
 	ErrTimeout              = errors.New("operation timed out")
@@ -25,6 +27,7 @@ var (
 	ErrConnectionLost       = errors.New("connection lost")
 	ErrClientClosed         = errors.New("client has been closed")
 	ErrInvalidMessage       = errors.New("invalid message")
+	ErrInvalidSubscribeOpt  = errors.New("invalid subscribe option")
 	ErrInvalidQoS           = errors.New("invalid QoS level (must be 0, 1, or 2)")
 	ErrInvalidTopic         = errors.New("invalid topic")
 	ErrSubscribeFailed      = errors.New("subscription failed")

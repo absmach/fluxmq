@@ -6,6 +6,8 @@ package client
 import (
 	"testing"
 	"time"
+
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
 func TestNewClient(t *testing.T) {
@@ -55,6 +57,13 @@ func TestNewClientValidation(t *testing.T) {
 				t.Errorf("expected error %v, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestNewClientNilOptions(t *testing.T) {
+	_, err := New(nil)
+	if err != ErrNilOptions {
+		t.Fatalf("expected ErrNilOptions, got %v", err)
 	}
 }
 
@@ -129,6 +138,22 @@ func TestClientSubscribeValidation(t *testing.T) {
 	err := client.Subscribe(map[string]byte{})
 	if err != ErrInvalidTopic {
 		t.Errorf("Subscribe with empty topics should fail with ErrInvalidTopic, got: %v", err)
+	}
+}
+
+func TestClientSubscribeWithOptionsValidation(t *testing.T) {
+	opts := NewOptions().SetClientID("test-client").SetProtocolVersion(5)
+	client, _ := New(opts)
+	client.state.set(StateConnected)
+
+	err := client.SubscribeWithOptions(nil)
+	if err != ErrInvalidSubscribeOpt {
+		t.Fatalf("expected ErrInvalidSubscribeOpt, got %v", err)
+	}
+
+	err = client.SubscribeWithOptions(&SubscribeOption{Topic: "test/topic", QoS: 1, RetainHandling: 3})
+	if err != ErrInvalidSubscribeOpt {
+		t.Fatalf("expected ErrInvalidSubscribeOpt for retain handling, got %v", err)
 	}
 }
 
@@ -238,5 +263,29 @@ func TestConnAckCodeError(t *testing.T) {
 	err := code.Error()
 	if err != "bad username or password" {
 		t.Errorf("Error() = %s, want 'bad username or password'", err)
+	}
+}
+
+func TestHandleSubAckV5FailureCodes(t *testing.T) {
+	opts := NewOptions().SetClientID("test-client").SetProtocolVersion(5)
+	client, err := New(opts)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	packetID := uint16(10)
+	op, err := client.pending.add(packetID, pendingSubscribe, nil)
+	if err != nil {
+		t.Fatalf("pending add failed: %v", err)
+	}
+
+	reasonCodes := []byte{v5.SubAckNotAuthorized}
+	client.handleSubAck(&v5.SubAck{
+		ID:          packetID,
+		ReasonCodes: &reasonCodes,
+	})
+
+	if err := op.wait(100 * time.Millisecond); err != ErrSubscribeFailed {
+		t.Fatalf("expected ErrSubscribeFailed, got %v", err)
 	}
 }

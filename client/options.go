@@ -153,9 +153,21 @@ func (o *Options) SetConnectTimeout(d time.Duration) *Options {
 	return o
 }
 
+// SetWriteTimeout sets the write timeout.
+func (o *Options) SetWriteTimeout(d time.Duration) *Options {
+	o.WriteTimeout = d
+	return o
+}
+
 // SetAckTimeout sets the acknowledgment timeout.
 func (o *Options) SetAckTimeout(d time.Duration) *Options {
 	o.AckTimeout = d
+	return o
+}
+
+// SetPingTimeout sets timeout waiting for PINGRESP.
+func (o *Options) SetPingTimeout(d time.Duration) *Options {
+	o.PingTimeout = d
 	return o
 }
 
@@ -226,9 +238,33 @@ func (o *Options) SetAutoReconnect(enable bool) *Options {
 	return o
 }
 
+// SetReconnectBackoff sets initial reconnect delay.
+func (o *Options) SetReconnectBackoff(d time.Duration) *Options {
+	o.ReconnectBackoff = d
+	return o
+}
+
+// SetMaxReconnectWait sets maximum reconnect delay.
+func (o *Options) SetMaxReconnectWait(d time.Duration) *Options {
+	o.MaxReconnectWait = d
+	return o
+}
+
 // SetMaxInflight sets the maximum number of inflight messages.
 func (o *Options) SetMaxInflight(max int) *Options {
 	o.MaxInflight = max
+	return o
+}
+
+// SetMessageChanSize sets internal message dispatch channel size.
+func (o *Options) SetMessageChanSize(size int) *Options {
+	o.MessageChanSize = size
+	return o
+}
+
+// SetOrderMatters controls whether message callback ordering is preserved.
+func (o *Options) SetOrderMatters(orderMatters bool) *Options {
+	o.OrderMatters = orderMatters
 	return o
 }
 
@@ -289,6 +325,18 @@ func (o *Options) Validate() error {
 	}
 	if o.MaxInflight <= 0 {
 		o.MaxInflight = DefaultMaxInflight
+	}
+	if o.MessageChanSize <= 0 {
+		o.MessageChanSize = DefaultMessageChanSize
+	}
+	if o.PingTimeout <= 0 {
+		o.PingTimeout = DefaultPingTimeout
+	}
+	if o.ReconnectBackoff <= 0 {
+		o.ReconnectBackoff = DefaultReconnectMin
+	}
+	if o.MaxReconnectWait <= 0 {
+		o.MaxReconnectWait = DefaultReconnectMax
 	}
 	return nil
 }

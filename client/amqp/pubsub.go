@@ -105,7 +105,7 @@ func (c *Client) Publish(topic string, payload []byte) error {
 // PublishWithOptions publishes a message with optional properties and routing control.
 func (c *Client) PublishWithOptions(opts *PublishOptions) error {
 	if opts == nil {
-		return ErrInvalidTopic
+		return ErrNilOptions
 	}
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -118,6 +118,14 @@ func (c *Client) PublishWithOptions(opts *PublishOptions) error {
 	}
 	if routingKey == "" {
 		return ErrInvalidTopic
+	}
+	if opts.Mandatory {
+		c.notifyMu.RLock()
+		hasReturnHandler := c.onReturn != nil
+		c.notifyMu.RUnlock()
+		if !hasReturnHandler {
+			return ErrNoReturnHandler
+		}
 	}
 
 	publishing := amqp091.Publishing{
@@ -142,7 +150,10 @@ func (c *Client) SubscribeWithOptions(opts *SubscribeOptions, handler MessageHan
 	if !c.connected.Load() {
 		return ErrNotConnected
 	}
-	if opts == nil || opts.Topic == "" {
+	if opts == nil {
+		return ErrNilOptions
+	}
+	if opts.Topic == "" {
 		return ErrInvalidTopic
 	}
 	if handler == nil {

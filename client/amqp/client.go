@@ -22,6 +22,11 @@ type Client struct {
 
 	chMu sync.Mutex
 
+	notifyMu              sync.RWMutex
+	onReturn              func(amqp091.Return)
+	onPublishConfirmation func(amqp091.Confirmation)
+	publisherConfirms     atomic.Bool
+
 	subsMu    sync.Mutex
 	queueSubs map[string]*queueSubscription
 	topicSubs map[string]*topicSubscription
@@ -156,12 +161,21 @@ func (c *Client) connectOnce() error {
 		}
 	}
 
+	if c.publisherConfirms.Load() {
+		if err := ch.Confirm(false); err != nil {
+			_ = ch.Close()
+			_ = conn.Close()
+			return err
+		}
+	}
+
 	c.connMu.Lock()
 	c.conn = conn
 	c.ch = ch
 	c.connMu.Unlock()
 
 	c.connected.Store(true)
+	c.startNotificationListeners(ch)
 	c.watchClose(conn, ch)
 
 	if c.opts.OnConnect != nil {
@@ -169,6 +183,47 @@ func (c *Client) connectOnce() error {
 	}
 
 	return nil
+}
+
+func (c *Client) startNotificationListeners(ch *amqp091.Channel) {
+	c.notifyMu.RLock()
+	returnHandler := c.onReturn
+	confirmHandler := c.onPublishConfirmation
+	c.notifyMu.RUnlock()
+
+	if returnHandler != nil {
+		returns := ch.NotifyReturn(make(chan amqp091.Return, 32))
+		go func() {
+			for {
+				select {
+				case ret, ok := <-returns:
+					if !ok {
+						return
+					}
+					returnHandler(ret)
+				case <-c.stopCh:
+					return
+				}
+			}
+		}()
+	}
+
+	if confirmHandler != nil && c.publisherConfirms.Load() {
+		confirms := ch.NotifyPublish(make(chan amqp091.Confirmation, 64))
+		go func() {
+			for {
+				select {
+				case confirm, ok := <-confirms:
+					if !ok {
+						return
+					}
+					confirmHandler(confirm)
+				case <-c.stopCh:
+					return
+				}
+			}
+		}()
+	}
 }
 
 func (c *Client) watchClose(conn *amqp091.Connection, ch *amqp091.Channel) {

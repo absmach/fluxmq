@@ -28,6 +28,16 @@ func TestQueuePublishOptions(t *testing.T) {
 	assert.Equal(t, byte(1), opts.QoS)
 }
 
+func TestPublishToQueueWithNilOptions(t *testing.T) {
+	opts := NewOptions().SetClientID("test-client")
+	client, err := New(opts)
+	require.NoError(t, err)
+	client.state.set(StateConnected)
+
+	err = client.PublishToQueueWithOptions(nil)
+	assert.Equal(t, ErrInvalidMessage, err)
+}
+
 func TestQueueMessage_Ack(t *testing.T) {
 	opts := NewOptions().SetClientID("test-client")
 	client, err := New(opts)
