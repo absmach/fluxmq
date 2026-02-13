@@ -87,6 +87,11 @@ type EtcdCluster struct {
 	queueConsumersByGroup map[string]map[string]map[string]*QueueConsumerInfo // queue -> group -> key -> info
 	queueConsumersCacheMu sync.RWMutex
 
+	routeBatchMaxSize  int
+	routeBatchMaxDelay time.Duration
+	publishBatcher     *nodeBatcher[*clusterv1.PublishRequest]
+	queueBatcher       *nodeBatcher[QueueDelivery]
+
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
 	retainedCache   map[string]*storage.Message // key: topic
 	retainedCacheMu sync.RWMutex
@@ -115,6 +120,8 @@ type EtcdConfig struct {
 	PeerTransports              map[string]string
 	Bootstrap                   bool
 	HybridRetainedSizeThreshold int // Size threshold in bytes for hybrid retained storage (default 1024)
+	RouteBatchMaxSize           int
+	RouteBatchMaxDelay          time.Duration
 
 	// Transport TLS configuration
 	TransportTLS *TransportTLSConfig
@@ -229,6 +236,19 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	}
 	c.lifecycleCtx, c.cancelLifecycle = context.WithCancel(context.Background())
 
+	const (
+		defaultRouteBatchMaxSize  = 256
+		defaultRouteBatchMaxDelay = 5 * time.Millisecond
+	)
+	c.routeBatchMaxSize = cfg.RouteBatchMaxSize
+	if c.routeBatchMaxSize <= 0 {
+		c.routeBatchMaxSize = defaultRouteBatchMaxSize
+	}
+	c.routeBatchMaxDelay = cfg.RouteBatchMaxDelay
+	if c.routeBatchMaxDelay <= 0 {
+		c.routeBatchMaxDelay = defaultRouteBatchMaxDelay
+	}
+
 	// Create a lease for session ownership with auto-renewal
 	if err := c.refreshSessionLease(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to create session lease: %w", err)
@@ -244,6 +264,29 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 			return nil, fmt.Errorf("failed to create transport: %w", err)
 		}
 		c.transport = transport
+	}
+
+	if c.transport != nil {
+		c.publishBatcher = newNodeBatcher[*clusterv1.PublishRequest](
+			c.routeBatchMaxSize,
+			c.routeBatchMaxDelay,
+			c.stopCh,
+			logger.With(slog.String("batcher", "publish")),
+			"publish",
+			func(ctx context.Context, nodeID string, items []*clusterv1.PublishRequest) error {
+				return c.transport.SendPublishBatch(ctx, nodeID, items)
+			},
+		)
+		c.queueBatcher = newNodeBatcher[QueueDelivery](
+			c.routeBatchMaxSize,
+			c.routeBatchMaxDelay,
+			c.stopCh,
+			logger.With(slog.String("batcher", "queue")),
+			"queue",
+			func(ctx context.Context, nodeID string, items []QueueDelivery) error {
+				return c.transport.SendRouteQueueBatch(ctx, nodeID, items)
+			},
+		)
 	}
 
 	// Initialize hybrid retained store
@@ -1216,7 +1259,12 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 			})
 		}
 
-		err := c.transport.SendPublishBatch(ctx, nodeID, batch)
+		var err error
+		if c.publishBatcher != nil {
+			err = c.publishBatcher.Enqueue(ctx, nodeID, batch)
+		} else {
+			err = c.transport.SendPublishBatch(ctx, nodeID, batch)
+		}
 		if err != nil {
 			c.logger.Warn("failed to route publish batch",
 				slog.String("node_id", nodeID),
@@ -1282,6 +1330,9 @@ func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, q
 func (c *EtcdCluster) RouteQueueBatch(ctx context.Context, nodeID string, deliveries []QueueDelivery) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
+	}
+	if c.queueBatcher != nil {
+		return c.queueBatcher.Enqueue(ctx, nodeID, deliveries)
 	}
 	return c.transport.SendRouteQueueBatch(ctx, nodeID, deliveries)
 }

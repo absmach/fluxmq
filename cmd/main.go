@@ -173,6 +173,8 @@ func main() {
 			TransportAddr:               cfg.Cluster.Transport.BindAddr,
 			PeerTransports:              cfg.Cluster.Transport.Peers,
 			HybridRetainedSizeThreshold: cfg.Cluster.Etcd.HybridRetainedSizeThreshold,
+			RouteBatchMaxSize:           cfg.Cluster.Transport.RouteBatchMaxSize,
+			RouteBatchMaxDelay:          cfg.Cluster.Transport.RouteBatchMaxDelay,
 			TransportTLS:                transportTLS,
 		}
 

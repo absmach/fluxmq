@@ -366,6 +366,12 @@ type TransportConfig struct {
 	BindAddr string            `yaml:"bind_addr"` // gRPC address (e.g., "0.0.0.0:7948")
 	Peers    map[string]string `yaml:"peers"`     // Map of nodeID -> transport address for peers
 
+	// Inter-node routing batch policy.
+	// route_batch_max_size controls flush size.
+	// route_batch_max_delay controls max wait before flushing a partial batch.
+	RouteBatchMaxSize  int           `yaml:"route_batch_max_size"`
+	RouteBatchMaxDelay time.Duration `yaml:"route_batch_max_delay"`
+
 	// TLS configuration for inter-broker communication
 	TLSEnabled  bool   `yaml:"tls_enabled"`   // Enable TLS for gRPC transport
 	TLSCertFile string `yaml:"tls_cert_file"` // Server certificate file
@@ -533,6 +539,9 @@ func Default() *Config {
 			},
 			Transport: TransportConfig{
 				BindAddr: "0.0.0.0:7948",
+				// Keep batches modest by default and latency low.
+				RouteBatchMaxSize:  256,
+				RouteBatchMaxDelay: 5 * time.Millisecond,
 			},
 			Raft: RaftConfig{
 				Enabled:             false, // Disabled by default
@@ -904,6 +913,12 @@ func (c *Config) Validate() error {
 		}
 		if c.Cluster.Transport.BindAddr == "" {
 			return fmt.Errorf("cluster.transport.bind_addr required when clustering is enabled")
+		}
+		if c.Cluster.Transport.RouteBatchMaxSize < 0 {
+			return fmt.Errorf("cluster.transport.route_batch_max_size must be >= 0")
+		}
+		if c.Cluster.Transport.RouteBatchMaxDelay < 0 {
+			return fmt.Errorf("cluster.transport.route_batch_max_delay must be >= 0")
 		}
 
 		// Transport TLS validation
