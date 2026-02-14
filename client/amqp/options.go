@@ -61,6 +61,12 @@ func NewOptions() *Options {
 	}
 }
 
+// SetURL sets a full AMQP URL and overrides Address/Credentials/Vhost.
+func (o *Options) SetURL(rawURL string) *Options {
+	o.URL = rawURL
+	return o
+}
+
 // SetAddress sets the broker address (host:port).
 func (o *Options) SetAddress(addr string) *Options {
 	o.Address = addr

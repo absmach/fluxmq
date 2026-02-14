@@ -64,6 +64,14 @@ func (qm *QueueMessage) Reject() error {
 	return qm.client.RejectWithGroup(qm.queueName, qm.MessageID, qm.GroupID)
 }
 
+// RejectWithReason rejects the message and provides a broker-visible reason.
+func (qm *QueueMessage) RejectWithReason(reason string) error {
+	if qm.client == nil {
+		return fmt.Errorf("cannot reject: client not set")
+	}
+	return qm.client.RejectWithGroupReason(qm.queueName, qm.MessageID, qm.GroupID, reason)
+}
+
 // queueSubscription tracks a queue subscription and its handler.
 type queueSubscription struct {
 	queueName     string
@@ -166,6 +174,9 @@ func (c *Client) PublishToQueue(queueName string, payload []byte) error {
 func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
 	if !c.state.isConnected() {
 		return ErrNotConnected
+	}
+	if opts == nil {
+		return ErrInvalidMessage
 	}
 	if opts.QueueName == "" {
 		return ErrInvalidTopic
@@ -396,36 +407,46 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 
 // Ack acknowledges successful processing of a queue message.
 func (c *Client) Ack(queueName, messageID string) error {
-	return c.sendQueueAck(queueName, messageID, "", "$ack")
+	return c.sendQueueAck(queueName, messageID, "", "$ack", "")
 }
 
 // Nack negatively acknowledges a queue message, triggering retry.
 func (c *Client) Nack(queueName, messageID string) error {
-	return c.sendQueueAck(queueName, messageID, "", "$nack")
+	return c.sendQueueAck(queueName, messageID, "", "$nack", "")
 }
 
 // Reject rejects a queue message, sending it to the dead-letter queue.
 func (c *Client) Reject(queueName, messageID string) error {
-	return c.sendQueueAck(queueName, messageID, "", "$reject")
+	return c.sendQueueAck(queueName, messageID, "", "$reject", "")
+}
+
+// RejectWithReason rejects a queue message with a broker-visible reason.
+func (c *Client) RejectWithReason(queueName, messageID, reason string) error {
+	return c.sendQueueAck(queueName, messageID, "", "$reject", reason)
 }
 
 // AckWithGroup acknowledges a queue message with an explicit consumer group.
 func (c *Client) AckWithGroup(queueName, messageID, groupID string) error {
-	return c.sendQueueAck(queueName, messageID, groupID, "$ack")
+	return c.sendQueueAck(queueName, messageID, groupID, "$ack", "")
 }
 
 // NackWithGroup negatively acknowledges a queue message with an explicit consumer group.
 func (c *Client) NackWithGroup(queueName, messageID, groupID string) error {
-	return c.sendQueueAck(queueName, messageID, groupID, "$nack")
+	return c.sendQueueAck(queueName, messageID, groupID, "$nack", "")
 }
 
 // RejectWithGroup rejects a queue message with an explicit consumer group.
 func (c *Client) RejectWithGroup(queueName, messageID, groupID string) error {
-	return c.sendQueueAck(queueName, messageID, groupID, "$reject")
+	return c.sendQueueAck(queueName, messageID, groupID, "$reject", "")
+}
+
+// RejectWithGroupReason rejects a queue message with explicit group and reason.
+func (c *Client) RejectWithGroupReason(queueName, messageID, groupID, reason string) error {
+	return c.sendQueueAck(queueName, messageID, groupID, "$reject", reason)
 }
 
 // sendQueueAck sends an acknowledgment for a queue message.
-func (c *Client) sendQueueAck(queueName, messageID, groupID, ackType string) error {
+func (c *Client) sendQueueAck(queueName, messageID, groupID, ackType, reason string) error {
 	if !c.state.isConnected() {
 		return ErrNotConnected
 	}
@@ -462,6 +483,9 @@ func (c *Client) sendQueueAck(queueName, messageID, groupID, ackType string) err
 	userProps := map[string]string{
 		"message-id": messageID,
 		"group-id":   groupID,
+	}
+	if reason != "" && ackType == "$reject" {
+		userProps["reason"] = reason
 	}
 	return c.publishWithUserProperties(ackTopic, nil, 1, false, userProps)
 }

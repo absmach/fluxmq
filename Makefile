@@ -54,6 +54,22 @@ run-debug: build
 test:
 	$(GO) test -short -race -failfast -timeout 3m -v ./...
 
+# Run client package unit tests (MQTT + AMQP 0.9.1 client packages).
+.PHONY: test-client
+test-client:
+	# No containers required.
+	$(GO) test ./client/... -count=1
+
+# Run client integration tests (currently AMQP integration tests with RabbitMQ).
+.PHONY: test-client-integration
+test-client-integration:
+	# Requires Docker daemon access.
+	# Uses tests tagged with `integration` in client/amqp/rabbitmq_integration_test.go.
+	# Optional override: FLUXMQ_AMQP_TEST_IMAGE=rabbitmq:3.13-alpine
+	# Optional override: FLUXMQ_AMQP_TEST_URL=amqp://guest:guest@127.0.0.1:5672/
+	# Optional override: FLUXMQ_AMQP_TEST_HOST=<docker-host-ip-or-name>
+	$(GO) test ./client/... -tags=integration -run RabbitMQ -count=1 -v -timeout 10m
+
 # Run full tests (including stress)
 .PHONY: test-full
 test-full:
@@ -205,6 +221,8 @@ help:
 	@echo ""
 	@echo "Testing Targets:"
 	@echo "  test               Run all tests"
+	@echo "  test-client        Run MQTT/AMQP client package unit tests"
+	@echo "  test-client-integration Run client integration tests (Docker-backed RabbitMQ)"
 	@echo "  test-cover         Run tests with coverage report"
 	@echo "  lint               Run golangci-lint"
 	@echo ""

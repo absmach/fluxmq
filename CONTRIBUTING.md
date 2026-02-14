@@ -84,3 +84,27 @@ git push origin fmq-[issue-number]
 
 [Open a Pull Request](https://help.github.com/articles/using-pull-requests/) with a clear title
 and detailed description.
+
+## Testing client packages
+
+The Go client packages include MQTT and AMQP 0.9.1 behavior tests.
+
+- Run client unit tests:
+
+```
+make test-client
+```
+
+- Run AMQP client integration tests (Docker-backed RabbitMQ):
+
+```
+make test-client-integration
+```
+
+Notes:
+
+- AMQP integration tests are tagged with `integration` and live in `client/amqp/rabbitmq_integration_test.go`.
+- Docker image can be overridden with `FLUXMQ_AMQP_TEST_IMAGE`.
+- Broker URL can be overridden with `FLUXMQ_AMQP_TEST_URL` (useful when RabbitMQ is already running outside test-managed containers).
+- Host used for Docker-published ports can be overridden with `FLUXMQ_AMQP_TEST_HOST` (useful with remote Docker contexts).
+- MQTT client behavior/reconnect/dispatcher tests live in `client/client_behavior_test.go`.

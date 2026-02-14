@@ -144,7 +144,7 @@ func (c *Client) PublishToQueue(queueName string, payload []byte) error {
 // The queueName should NOT include the "$queue/" prefix - it will be added automatically.
 func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
 	if opts == nil {
-		return ErrInvalidQueueName
+		return ErrNilOptions
 	}
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -189,7 +189,7 @@ func (c *Client) DeclareStreamQueue(opts *StreamQueueOptions) (string, error) {
 		return "", ErrNotConnected
 	}
 	if opts == nil {
-		return "", ErrInvalidQueueName
+		return "", ErrNilOptions
 	}
 
 	args := amqp091.Table{
@@ -274,7 +274,10 @@ func (c *Client) SubscribeToStream(opts *StreamConsumeOptions, handler QueueMess
 	if !c.connected.Load() {
 		return ErrNotConnected
 	}
-	if opts == nil || opts.QueueName == "" {
+	if opts == nil {
+		return ErrNilOptions
+	}
+	if opts.QueueName == "" {
 		return ErrInvalidQueueName
 	}
 	if handler == nil {
