@@ -1,51 +1,70 @@
 import Link from "next/link";
+import Image from "next/image";
+import Logo from "@/public/abstract-machines.svg";
 
 export function FooterSection() {
   return (
     <footer className="py-12 bg-theme-alt">
       <div className="container mx-auto px-6">
-        <div className="grid md:grid-cols-4 gap-8">
+        <div className="grid md:grid-cols-4 gap-12 items-start">
           {/* About */}
           <div>
-            <h3 className="font-bold mb-4 text-lg">ABOUT</h3>
-            <p className="text-sm leading-relaxed">
-              FluxMQ is developed by Abstract Machines, an IoT infrastructure
-              and security company located in Paris.
+            <Link
+              href="https://absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
+              target="_blank"
+            >
+              <Image
+                src={Logo}
+                alt="Magistrala"
+                height={120}
+                width={120}
+                className="invert dark:invert-0 mb-4"
+              />
+            </Link>
+            <p className="text-muted-foreground leading-relaxed mb-5">
+              Abstract Machines, creators of FluxMQ, builds secure,
+              open-source infrastructure for distributed cloud and edge systems.
             </p>
           </div>
 
           {/* Products */}
           <div>
             <h3 className="font-bold mb-4 text-lg">PRODUCTS</h3>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-4 text-sm">
               <li>
                 <a
-                  href="https://magistrala.absmach.eu"
+                  href="https://magistrala.absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
-                  rel="noopener noreferrer"
                 >
                   Magistrala
                 </a>
               </li>
               <li>
                 <a
-                  href="https://absmach.eu/supermq/"
+                  href="https://absmach.eu/supermq/?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
-                  rel="noopener noreferrer"
                 >
                   SuperMQ
                 </a>
               </li>
               <li>
                 <a
-                  href="https://absmach.eu/propeller/"
+                  href="https://propeller.absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
-                  rel="noopener noreferrer"
                 >
                   Propeller
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://hardware.absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
+                  className="hover:text-(--flux-orange)"
+                  target="_blank"
+                >
+                  Hardware
                 </a>
               </li>
             </ul>
@@ -54,7 +73,7 @@ export function FooterSection() {
           {/* Resources */}
           <div>
             <h3 className="font-bold mb-4 text-lg">RESOURCES</h3>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-4 text-sm">
               <li>
                 <Link href="/docs" className="hover:text-(--flux-orange)">
                   Documentation
@@ -62,7 +81,7 @@ export function FooterSection() {
               </li>
               <li>
                 <a
-                  href="https://github.com/absmach/fluxmq"
+                  href="https://github.com/absmach/fluxmq?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -72,7 +91,7 @@ export function FooterSection() {
               </li>
               <li>
                 <a
-                  href="https://absmach.eu/blog/"
+                  href="https://absmach.eu/blog/?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -86,7 +105,7 @@ export function FooterSection() {
           {/* Contact */}
           <div>
             <h3 className="font-bold mb-4 text-lg">CONTACT</h3>
-            <ul className="space-y-2 text-sm">
+            <ul className="space-y-4 text-sm">
               <li>
                 <a
                   href="mailto:info@absmach.eu"
@@ -97,7 +116,7 @@ export function FooterSection() {
               </li>
               <li>
                 <a
-                  href="https://github.com/absmach"
+                  href="https://github.com/absmach?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -107,7 +126,7 @@ export function FooterSection() {
               </li>
               <li>
                 <a
-                  href="https://twitter.com/absmach"
+                  href="https://twitter.com/absmach?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -117,7 +136,7 @@ export function FooterSection() {
               </li>
               <li>
                 <a
-                  href="https://www.linkedin.com/company/abstract-machines"
+                  href="https://www.linkedin.com/company/abstract-machines?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
                   rel="noopener noreferrer"
