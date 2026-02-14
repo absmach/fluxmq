@@ -26,7 +26,7 @@ import (
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
-	"github.com/absmach/fluxmq/queue/raft"
+	qraft "github.com/absmach/fluxmq/queue/raft"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
@@ -174,6 +174,8 @@ func main() {
 			TransportAddr:               cfg.Cluster.Transport.BindAddr,
 			PeerTransports:              cfg.Cluster.Transport.Peers,
 			HybridRetainedSizeThreshold: cfg.Cluster.Etcd.HybridRetainedSizeThreshold,
+			RouteBatchMaxSize:           cfg.Cluster.Transport.RouteBatchMaxSize,
+			RouteBatchMaxDelay:          cfg.Cluster.Transport.RouteBatchMaxDelay,
 			TransportTLS:                transportTLS,
 		}
 
@@ -343,6 +345,60 @@ func main() {
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {
+			replication := queueTypes.ReplicationConfig{}
+			if qc.Replication.Enabled {
+				replication = queueTypes.ReplicationConfig{
+					Enabled: qc.Replication.Enabled,
+				}
+				if strings.EqualFold(qc.Replication.Mode, "async") {
+					replication.Mode = queueTypes.ReplicationAsync
+				} else {
+					replication.Mode = queueTypes.ReplicationSync
+				}
+
+				replication.Group = qc.Replication.Group
+				replication.ReplicationFactor = qc.Replication.ReplicationFactor
+				if replication.ReplicationFactor == 0 {
+					replication.ReplicationFactor = cfg.Cluster.Raft.ReplicationFactor
+					if replication.ReplicationFactor == 0 {
+						replication.ReplicationFactor = 3
+					}
+				}
+
+				replication.MinInSyncReplicas = qc.Replication.MinInSyncReplicas
+				if replication.MinInSyncReplicas == 0 {
+					replication.MinInSyncReplicas = cfg.Cluster.Raft.MinInSyncReplicas
+					if replication.MinInSyncReplicas == 0 {
+						replication.MinInSyncReplicas = 2
+					}
+				}
+
+				replication.AckTimeout = qc.Replication.AckTimeout
+				if replication.AckTimeout <= 0 {
+					replication.AckTimeout = cfg.Cluster.Raft.AckTimeout
+					if replication.AckTimeout <= 0 {
+						replication.AckTimeout = 5 * time.Second
+					}
+				}
+
+				replication.HeartbeatTimeout = qc.Replication.HeartbeatTimeout
+				if replication.HeartbeatTimeout <= 0 {
+					replication.HeartbeatTimeout = cfg.Cluster.Raft.HeartbeatTimeout
+				}
+				replication.ElectionTimeout = qc.Replication.ElectionTimeout
+				if replication.ElectionTimeout <= 0 {
+					replication.ElectionTimeout = cfg.Cluster.Raft.ElectionTimeout
+				}
+				replication.SnapshotInterval = qc.Replication.SnapshotInterval
+				if replication.SnapshotInterval <= 0 {
+					replication.SnapshotInterval = cfg.Cluster.Raft.SnapshotInterval
+				}
+				replication.SnapshotThreshold = qc.Replication.SnapshotThreshold
+				if replication.SnapshotThreshold == 0 {
+					replication.SnapshotThreshold = cfg.Cluster.Raft.SnapshotThreshold
+				}
+			}
+
 			queueCfg.QueueConfigs = append(queueCfg.QueueConfigs, queueTypes.FromInput(queueTypes.QueueConfigInput{
 				Name:           qc.Name,
 				Topics:         qc.Topics,
@@ -363,6 +419,7 @@ func main() {
 					RetentionBytes:    qc.Retention.MaxLengthBytes,
 					RetentionMessages: qc.Retention.MaxLengthMessages,
 				},
+				Replication: replication,
 			}))
 		}
 
@@ -387,43 +444,35 @@ func main() {
 			cl,
 		)
 
-		// Initialize Raft replication if enabled
+		// Initialize queue Raft replication if enabled (default + optional per-group managers).
 		if cfg.Cluster.Enabled && cfg.Cluster.Raft.Enabled {
-			raftCfg := raft.ManagerConfig{
-				Enabled:           true,
-				ReplicationFactor: cfg.Cluster.Raft.ReplicationFactor,
-				SyncMode:          cfg.Cluster.Raft.SyncMode,
-				MinInSyncReplicas: cfg.Cluster.Raft.MinInSyncReplicas,
-				AckTimeout:        cfg.Cluster.Raft.AckTimeout,
-				HeartbeatTimeout:  cfg.Cluster.Raft.HeartbeatTimeout,
-				ElectionTimeout:   cfg.Cluster.Raft.ElectionTimeout,
-				SnapshotInterval:  cfg.Cluster.Raft.SnapshotInterval,
-				SnapshotThreshold: cfg.Cluster.Raft.SnapshotThreshold,
-			}
-
-			raftManager := raft.NewManager(
+			raftCoordinator, defaultRaftManager, groupRuntimes, err := qraft.StartQueueCoordinator(
 				cfg.Cluster.NodeID,
-				cfg.Cluster.Raft.BindAddr,
-				cfg.Cluster.Raft.DataDir,
+				cfg.Cluster.Raft,
 				queueLogStore,
 				queueLogStore,
-				cfg.Cluster.Raft.Peers,
-				raftCfg,
 				logger,
 			)
-
-			if err := raftManager.Start(context.Background()); err != nil {
+			if err != nil {
 				slog.Error("Failed to start Raft manager", "error", err)
 				os.Exit(1)
 			}
 
-			qm.SetRaftManager(raftManager)
+			if raftCoordinator != nil {
+				qm.SetRaftCoordinator(raftCoordinator)
+			} else if defaultRaftManager != nil {
+				qm.SetRaftManager(defaultRaftManager)
+			}
+
+			groupIDs := make([]string, 0, len(groupRuntimes))
+			for _, runtime := range groupRuntimes {
+				groupIDs = append(groupIDs, runtime.GroupID)
+			}
 
 			slog.Info("Raft replication enabled",
 				slog.String("node_id", cfg.Cluster.NodeID),
-				slog.String("bind_addr", cfg.Cluster.Raft.BindAddr),
-				slog.Int("replication_factor", cfg.Cluster.Raft.ReplicationFactor),
-				slog.Bool("sync_mode", cfg.Cluster.Raft.SyncMode))
+				slog.Int("group_count", len(groupRuntimes)),
+				slog.Any("groups", groupIDs))
 		}
 
 		if err := b.SetQueueManager(qm); err != nil {
@@ -732,7 +781,7 @@ func main() {
 		}
 
 		if qm != nil && queueLogStore != nil {
-			apiServer := api.New(apiCfg, qm, queueLogStore, queueLogStore, logger)
+			apiServer := api.New(apiCfg, qm, qm.QueueStore(), qm.GroupStore(), logger)
 
 			wg.Add(1)
 			go func() {

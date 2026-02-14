@@ -33,3 +33,11 @@ type QueueMessage struct {
 	WorkAcked           bool
 	WorkGroup           string
 }
+
+// QueueDelivery pairs a queue message envelope with its target local client.
+// Used for batched cross-node queue delivery.
+type QueueDelivery struct {
+	ClientID  string
+	QueueName string
+	Message   *QueueMessage
+}

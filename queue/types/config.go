@@ -5,6 +5,7 @@ package types
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -109,6 +110,7 @@ type DLQConfig struct {
 // ReplicationConfig defines Raft-based replication for queues.
 type ReplicationConfig struct {
 	Enabled           bool
+	Group             string          // Logical Raft group ID for this queue (empty = default)
 	ReplicationFactor int             // Number of replicas (default: 3)
 	Mode              ReplicationMode // sync or async
 	MinInSyncReplicas int             // Min replicas that must ACK (default: 2)
@@ -213,6 +215,7 @@ type QueueConfigInput struct {
 	DLQEnabled     bool
 	DLQTopic       string
 	Retention      RetentionPolicy
+	Replication    ReplicationConfig
 }
 
 // FromInput creates a QueueConfig from a simplified input config.
@@ -225,6 +228,9 @@ func FromInput(input QueueConfigInput) QueueConfig {
 	}
 	cfg.PrimaryGroup = input.PrimaryGroup
 	cfg.Retention = input.Retention
+	if input.Replication.Enabled {
+		cfg.Replication = input.Replication
+	}
 
 	if input.MaxMessageSize > 0 {
 		cfg.MaxMessageSize = input.MaxMessageSize
@@ -299,6 +305,8 @@ func (c *QueueConfig) Validate() error {
 		case c.Replication.Mode != ReplicationSync && c.Replication.Mode != ReplicationAsync:
 			return ErrInvalidConfig
 		case c.Replication.AckTimeout <= 0:
+			return ErrInvalidConfig
+		case c.Replication.Group != "" && strings.TrimSpace(c.Replication.Group) == "":
 			return ErrInvalidConfig
 		}
 	}

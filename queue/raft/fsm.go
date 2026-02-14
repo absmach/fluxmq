@@ -35,6 +35,15 @@ const (
 	OpTransferPending
 	OpRegisterConsumer
 	OpUnregisterConsumer
+
+	// Queue config operations
+	OpCreateQueue
+	OpUpdateQueue
+	OpDeleteQueue
+
+	// Full consumer group state update. Appended at the end to keep existing
+	// OpType numeric values stable across upgrades.
+	OpUpdateGroup
 )
 
 // Operation represents a queue operation to be replicated via Raft.
@@ -69,9 +78,22 @@ type Operation struct {
 	// For OpRegisterConsumer
 	ConsumerInfo *types.ConsumerInfo `json:"consumer_info,omitempty"`
 
-	// For OpCreateGroup
+	// For OpCreateGroup, OpUpdateGroup
 	GroupState *types.ConsumerGroup `json:"group_state,omitempty"`
 	Pattern    string               `json:"pattern,omitempty"`
+
+	// For OpCreateQueue, OpUpdateQueue
+	QueueConfig *types.QueueConfig `json:"queue_config,omitempty"`
+}
+
+// EncodeOperation serializes an Operation to JSON for transmission over the wire.
+func EncodeOperation(op *Operation) ([]byte, error) {
+	return json.Marshal(op)
+}
+
+// DecodeOperation deserializes JSON bytes into an Operation.
+func DecodeOperation(data []byte, op *Operation) error {
+	return json.Unmarshal(data, op)
 }
 
 // ApplyResult holds the result of an FSM apply operation.
@@ -114,6 +136,12 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 	ctx := context.Background()
 
 	switch op.Type {
+	case OpCreateQueue:
+		return f.applyCreateQueue(ctx, &op)
+	case OpUpdateQueue:
+		return f.applyUpdateQueue(ctx, &op)
+	case OpDeleteQueue:
+		return f.applyDeleteQueue(ctx, &op)
 	case OpAppend:
 		return f.applyAppend(ctx, &op)
 	case OpAppendBatch:
@@ -122,6 +150,8 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 		return f.applyTruncate(ctx, &op)
 	case OpCreateGroup:
 		return f.applyCreateGroup(ctx, &op)
+	case OpUpdateGroup:
+		return f.applyUpdateGroup(ctx, &op)
 	case OpDeleteGroup:
 		return f.applyDeleteGroup(ctx, &op)
 	case OpUpdateCursor:
@@ -145,6 +175,52 @@ func (f *LogFSM) Apply(l *raft.Log) interface{} {
 			slog.Int("op_type", int(op.Type)))
 		return &ApplyResult{Error: err}
 	}
+}
+
+func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResult {
+	if op.QueueConfig == nil {
+		return &ApplyResult{Error: fmt.Errorf("nil queue config in create queue operation")}
+	}
+
+	err := f.queueStore.CreateQueue(ctx, *op.QueueConfig)
+	if err != nil && err != storage.ErrQueueAlreadyExists {
+		f.logger.Error("failed to apply create queue",
+			slog.String("queue", op.QueueConfig.Name),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyUpdateQueue(ctx context.Context, op *Operation) *ApplyResult {
+	if op.QueueConfig == nil {
+		return &ApplyResult{Error: fmt.Errorf("nil queue config in update queue operation")}
+	}
+
+	if err := f.queueStore.UpdateQueue(ctx, *op.QueueConfig); err != nil {
+		f.logger.Error("failed to apply update queue",
+			slog.String("queue", op.QueueConfig.Name),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResult {
+	if op.QueueName == "" {
+		return &ApplyResult{Error: fmt.Errorf("empty queue name in delete queue operation")}
+	}
+
+	if err := f.queueStore.DeleteQueue(ctx, op.QueueName); err != nil && err != storage.ErrQueueNotFound {
+		f.logger.Error("failed to apply delete queue",
+			slog.String("queue", op.QueueName),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	return &ApplyResult{}
 }
 
 func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
@@ -266,6 +342,27 @@ func (f *LogFSM) applyDeleteGroup(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	f.logger.Debug("applied delete group",
+		slog.String("queue", op.QueueName),
+		slog.String("group", op.GroupID))
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyUpdateGroup(ctx context.Context, op *Operation) *ApplyResult {
+	if op.GroupState == nil {
+		return &ApplyResult{Error: fmt.Errorf("nil group state in update group operation")}
+	}
+
+	err := f.groupStore.UpdateConsumerGroup(ctx, op.GroupState)
+	if err != nil {
+		f.logger.Error("failed to apply update group",
+			slog.String("queue", op.QueueName),
+			slog.String("group", op.GroupID),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	f.logger.Debug("applied update group",
 		slog.String("queue", op.QueueName),
 		slog.String("group", op.GroupID))
 
@@ -404,10 +501,12 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 		return nil, fmt.Errorf("failed to list queues: %w", err)
 	}
 
-	// Collect all queue data
+	// Collect all queue data including configs
 	var queueSnapshots []QueueSnapshotData
 	for _, queueCfg := range queues {
 		queueName := queueCfg.Name
+		cfgCopy := queueCfg
+
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueName)
 		if err != nil {
 			f.logger.Warn("failed to list consumer groups for queue",
@@ -417,8 +516,9 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 		}
 
 		queueSnapshots = append(queueSnapshots, QueueSnapshotData{
-			QueueName: queueName,
-			Groups:    groups,
+			QueueName:   queueName,
+			QueueConfig: &cfgCopy,
+			Groups:      groups,
 		})
 	}
 
@@ -444,13 +544,40 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 	ctx := context.Background()
 
-	// Restore consumer groups for each stream
-	for _, queueData := range snapshot.Queues {
-		for _, group := range queueData.Groups {
+	// Restore queue configs and consumer groups
+	for _, q := range snapshot.Queues {
+		if q.QueueConfig != nil {
+			if err := f.queueStore.CreateQueue(ctx, *q.QueueConfig); err != nil {
+				if err == storage.ErrQueueAlreadyExists {
+					if updateErr := f.queueStore.UpdateQueue(ctx, *q.QueueConfig); updateErr != nil {
+						f.logger.Error("failed to restore queue config",
+							slog.String("queue", q.QueueName),
+							slog.String("error", updateErr.Error()))
+						return updateErr
+					}
+				} else {
+					f.logger.Error("failed to restore queue config",
+						slog.String("queue", q.QueueName),
+						slog.String("error", err.Error()))
+					return err
+				}
+			}
+		} else if q.QueueName != "" {
+			// Pre-upgrade snapshot without QueueConfig — ensure the queue
+			// exists so consumer groups below don't become orphaned.
+			if err := f.ensureQueueExists(ctx, q.QueueName); err != nil {
+				f.logger.Error("failed to ensure queue for legacy snapshot entry",
+					slog.String("queue", q.QueueName),
+					slog.String("error", err.Error()))
+				return err
+			}
+		}
+
+		for _, group := range q.Groups {
 			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 				if err != storage.ErrConsumerGroupExists {
 					f.logger.Error("failed to restore consumer group",
-						slog.String("queue", queueData.QueueName),
+						slog.String("queue", q.QueueName),
 						slog.String("group", group.ID),
 						slog.String("error", err.Error()))
 					return err
@@ -467,8 +594,9 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 // QueueSnapshotData holds snapshot data for a single queue.
 type QueueSnapshotData struct {
-	QueueName string                 `json:"queue_name"`
-	Groups    []*types.ConsumerGroup `json:"groups"`
+	QueueName   string                 `json:"queue_name"`
+	QueueConfig *types.QueueConfig     `json:"queue_config,omitempty"`
+	Groups      []*types.ConsumerGroup `json:"groups"`
 }
 
 // GlobalSnapshotData represents the serialized snapshot data for all queues.

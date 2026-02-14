@@ -26,6 +26,7 @@ import (
 type Manager struct {
 	queueStore       storage.QueueStore
 	groupStore       storage.ConsumerGroupStore
+	raftGroupStore   *raftGroupStore
 	consumerManager  *consumer.Manager
 	deliveryTarget   Deliverer
 	logger           *slog.Logger
@@ -33,7 +34,11 @@ type Manager struct {
 	writePolicy      WritePolicy
 	distributionMode DistributionMode
 
-	// Raft replication manager
+	// Raft replication coordinator (queue -> raft group routing).
+	raftCoordinator raft.QueueCoordinator
+
+	// Legacy access to the underlying single-group raft manager.
+	// Kept for compatibility with existing call sites/tests.
 	raftManager *raft.Manager
 
 	// Cluster support for cross-node message routing
@@ -129,7 +134,14 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		MaxPELSize:         config.MaxPELSize,
 	}
 
-	consumerMgr := consumer.NewManager(queueStore, groupStore, consumerCfg)
+	raftGroupStore := newRaftGroupStore(groupStore)
+	if logger != nil {
+		raftGroupStore.SetLogger(logger)
+	}
+	if cl != nil {
+		raftGroupStore.SetForwarder(cl)
+	}
+	consumerMgr := consumer.NewManager(queueStore, raftGroupStore, consumerCfg)
 
 	var localNodeID string
 	if cl != nil {
@@ -144,7 +156,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	engine := NewDeliveryEngine(
-		queueStore, groupStore, consumerMgr,
+		queueStore, raftGroupStore, consumerMgr,
 		dt,
 		remote,
 		localNodeID,
@@ -155,7 +167,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 	return &Manager{
 		queueStore:      queueStore,
-		groupStore:      groupStore,
+		groupStore:      raftGroupStore,
+		raftGroupStore:  raftGroupStore,
 		consumerManager: consumerMgr,
 		deliveryTarget:  dt,
 
@@ -174,9 +187,13 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 // Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
-	if m.distributionMode == DistributionReplicate && (m.raftManager == nil || !m.raftManager.IsEnabled()) {
+	if m.distributionMode == DistributionReplicate && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
 		m.logger.Warn("distribution_mode=replicate requires raft to be enabled; falling back to forward")
 		m.distributionMode = DistributionForward
+	}
+
+	if err := m.syncQueueReplicationAssignments(ctx); err != nil {
+		return fmt.Errorf("failed to sync queue replication assignments: %w", err)
 	}
 
 	// Ensure reserved queues exist
@@ -215,6 +232,24 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
+func (m *Manager) syncQueueReplicationAssignments(ctx context.Context) error {
+	if m.raftCoordinator == nil {
+		return nil
+	}
+
+	queues, err := m.queueStore.ListQueues(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, queueCfg := range queues {
+		if err := m.raftCoordinator.EnsureQueue(ctx, queueCfg); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 
 // ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
 func (m *Manager) ensureReservedQueues(ctx context.Context) error {
@@ -227,6 +262,11 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 	for _, cfg := range configs {
 		if err := m.queueStore.CreateQueue(ctx, cfg); err != nil {
 			if err != storage.ErrQueueAlreadyExists {
+				return err
+			}
+		}
+		if m.raftCoordinator != nil {
+			if err := m.raftCoordinator.EnsureQueue(ctx, cfg); err != nil {
 				return err
 			}
 		}
@@ -251,8 +291,8 @@ func (m *Manager) Stop() error {
 	m.wg.Wait()
 
 	// Stop Raft manager if enabled
-	if m.raftManager != nil {
-		if err := m.raftManager.Stop(); err != nil {
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.Stop(); err != nil {
 			m.logger.Error("failed to stop raft manager", slog.String("error", err.Error()))
 		}
 	}
@@ -263,7 +303,19 @@ func (m *Manager) Stop() error {
 
 // SetRaftManager sets the Raft replication manager.
 func (m *Manager) SetRaftManager(rm *raft.Manager) {
+	m.raftCoordinator = raft.NewLogicalGroupCoordinator(rm, m.logger)
+	if m.raftGroupStore != nil {
+		m.raftGroupStore.SetCoordinator(m.raftCoordinator)
+	}
 	m.raftManager = rm
+}
+
+// SetRaftCoordinator sets queue-aware Raft coordinator.
+func (m *Manager) SetRaftCoordinator(rc raft.QueueCoordinator) {
+	m.raftCoordinator = rc
+	if m.raftGroupStore != nil {
+		m.raftGroupStore.SetCoordinator(rc)
+	}
 }
 
 // GetRaftManager returns the Raft replication manager.
@@ -271,12 +323,40 @@ func (m *Manager) GetRaftManager() *raft.Manager {
 	return m.raftManager
 }
 
+// QueueStore returns the queue store used by the manager.
+func (m *Manager) QueueStore() storage.QueueStore {
+	return m.queueStore
+}
+
+// GroupStore returns the consumer group store used by the manager.
+func (m *Manager) GroupStore() storage.ConsumerGroupStore {
+	return m.groupStore
+}
+
 // --- Queue Operations ---
 
 // CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	if err := m.queueStore.CreateQueue(ctx, config); err != nil {
-		return err
+	if config.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+		if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
+			return err
+		}
+		if err := m.raftCoordinator.ApplyCreateQueue(ctx, config); err != nil {
+			return err
+		}
+		// Ensure local immediate visibility even with async apply/mocks.
+		if err := m.queueStore.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
+			return err
+		}
+	} else {
+		if err := m.queueStore.CreateQueue(ctx, config); err != nil {
+			return err
+		}
+		if m.raftCoordinator != nil {
+			if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
+				return err
+			}
+		}
 	}
 	m.delivery.Schedule(config.Name)
 
@@ -289,7 +369,40 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue.
 func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
-	return m.queueStore.UpdateQueue(ctx, config)
+	current, err := m.queueStore.GetQueue(ctx, config.Name)
+	if err != nil {
+		return err
+	}
+
+	replicatedNow := current.Replication.Enabled
+	replicatedNext := config.Replication.Enabled
+
+	shouldReplicate := (replicatedNow || replicatedNext) && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled()
+	if shouldReplicate {
+		if err := m.raftCoordinator.ApplyUpdateQueue(ctx, config); err != nil {
+			return err
+		}
+		// Keep local view in sync immediately.
+		if err := m.queueStore.UpdateQueue(ctx, config); err != nil && err != storage.ErrQueueNotFound {
+			return err
+		}
+	} else {
+		if err := m.queueStore.UpdateQueue(ctx, config); err != nil {
+			return err
+		}
+	}
+
+	// Always sync the coordinator's queue→group mapping. UpdateQueue on the
+	// coordinator captures the previous group before overwriting, so it can
+	// release dynamic groups that are no longer referenced by any queue
+	// (e.g. group A→B migration, or replication being disabled).
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GetOrCreateQueue gets or creates a queue with default configuration.
@@ -317,8 +430,29 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 
 // DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
-	if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
+	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil {
 		return err
+	}
+
+	if queueCfg.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+		if err := m.raftCoordinator.ApplyDeleteQueue(ctx, queueName); err != nil {
+			return err
+		}
+		// Ensure local deletion even with async apply/mocks.
+		if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil && err != storage.ErrQueueNotFound {
+			return err
+		}
+	} else {
+		if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil {
+			return err
+		}
+	}
+
+	if m.raftCoordinator != nil {
+		if err := m.raftCoordinator.DeleteQueue(ctx, queueName); err != nil {
+			return err
+		}
 	}
 	m.delivery.Unschedule(queueName)
 	return nil
@@ -340,38 +474,73 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 // This is the NATS JetQueue-style "multi-queue" routing.
 // It also forwards the publish to remote nodes that have consumers for the topic.
 func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
-	if m.raftManager != nil && m.raftManager.IsEnabled() && !m.raftManager.IsLeader() {
+	targets, err := m.resolvePublishTargets(ctx, publish)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		m.logger.Debug("no queues match topic", slog.String("topic", publish.Topic))
+		return nil
+	}
+
+	allReplicated := true
+	localTargets := make([]queuePublishTarget, 0, len(targets))
+	forwardTargets := make(map[string][]string)
+	for _, target := range targets {
+		replicated := target.config != nil && target.config.Replication.Enabled
+		allReplicated = allReplicated && replicated
+
+		if !replicated || m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
+			localTargets = append(localTargets, target)
+			continue
+		}
+
+		if m.raftCoordinator.IsLeaderForQueue(target.name) {
+			localTargets = append(localTargets, target)
+			continue
+		}
+
 		switch m.writePolicy {
 		case WritePolicyReject:
-			leaderAddr := m.raftManager.Leader()
+			leaderAddr := m.raftCoordinator.LeaderForQueue(target.name)
 			if leaderAddr == "" {
 				return fmt.Errorf("raft leader unavailable")
 			}
 			return fmt.Errorf("raft leader is at %s", leaderAddr)
 		case WritePolicyForward:
-			return m.forwardPublishToLeader(ctx, publish)
+			leaderID := m.raftCoordinator.LeaderIDForQueue(target.name)
+			if leaderID == "" {
+				return fmt.Errorf("raft leader unavailable")
+			}
+			forwardTargets[leaderID] = append(forwardTargets[leaderID], target.name)
 		case WritePolicyLocal:
-			// fall through to local append
+			localTargets = append(localTargets, target)
 		default:
 			// Unknown policy - default to local append for backward compatibility.
+			localTargets = append(localTargets, target)
 		}
 	}
 
-	// Store locally in matching queues
-	if err := m.publishLocal(ctx, publish); err != nil {
+	// Store locally in queues handled by this node.
+	if err := m.publishLocalToTargets(ctx, publish, localTargets); err != nil {
 		return err
+	}
+
+	// Forward leader-owned queue targets to appropriate remote leaders.
+	for leaderID, targetQueues := range forwardTargets {
+		if err := m.forwardPublishToLeader(ctx, publish, leaderID, targetQueues); err != nil {
+			return err
+		}
 	}
 
 	// Forward to remote nodes that have consumers
 	if m.cluster != nil {
-		switch m.distributionMode {
-		case DistributionForward:
-			m.forwardToRemoteNodes(ctx, publish, false)
-		case DistributionReplicate:
-			// In replicate mode, only forward to nodes whose queues do not exist locally.
-			// This avoids duplicates while still supporting locally-created queues on remote nodes.
-			m.forwardToRemoteNodes(ctx, publish, true)
+		unknownOnly := allReplicated
+		if m.distributionMode == DistributionReplicate {
+			// Legacy explicit replicate mode remains stronger than per-queue inference.
+			unknownOnly = true
 		}
+		m.forwardToRemoteNodes(ctx, publish, unknownOnly)
 	}
 
 	return nil
@@ -392,10 +561,42 @@ func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishR
 }
 
 func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest) error {
+	targets, err := m.resolvePublishTargets(ctx, publish)
+	if err != nil {
+		return err
+	}
+	return m.publishLocalToTargets(ctx, publish, targets)
+}
+
+type queuePublishTarget struct {
+	name   string
+	config *types.QueueConfig
+}
+
+func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.PublishRequest) ([]queuePublishTarget, error) {
+	forcedTargets := parseForwardTargetQueues(publish.Properties)
+	if len(forcedTargets) > 0 {
+		targets := make([]queuePublishTarget, 0, len(forcedTargets))
+		for _, queueName := range forcedTargets {
+			queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
+			if err != nil {
+				m.logger.Warn("failed to resolve forced queue target",
+					slog.String("queue", queueName),
+					slog.String("error", err.Error()))
+				continue
+			}
+			targets = append(targets, queuePublishTarget{
+				name:   queueName,
+				config: queueConfig,
+			})
+		}
+		return targets, nil
+	}
+
 	// Find all matching queues
 	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 	if err != nil {
-		return fmt.Errorf("failed to find matching queues: %w", err)
+		return nil, fmt.Errorf("failed to find matching queues: %w", err)
 	}
 
 	if len(queues) == 0 {
@@ -403,25 +604,38 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 		queueName, queuePattern := autoQueueFromTopic(publish.Topic)
 		if _, err := m.GetOrCreateQueue(ctx, queueName, queuePattern); err != nil {
 			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
-			return err
+			return nil, err
 		}
 		// After creating, find it again.
 		queues, err = m.queueStore.FindMatchingQueues(ctx, publish.Topic)
 		if err != nil {
-			return fmt.Errorf("failed to find matching queues after creation: %w", err)
+			return nil, fmt.Errorf("failed to find matching queues after creation: %w", err)
 		}
 	}
 
-	if len(queues) == 0 {
-		m.logger.Debug("no queues match topic", slog.String("topic", publish.Topic))
-		return nil
-	}
-
-	// Append to each matching queue
+	targets := make([]queuePublishTarget, 0, len(queues))
 	for _, queueName := range queues {
 		queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 		if err != nil {
 			m.logger.Warn("failed to get queue config", slog.String("queue", queueName), slog.String("error", err.Error()))
+			continue
+		}
+		targets = append(targets, queuePublishTarget{
+			name:   queueName,
+			config: queueConfig,
+		})
+	}
+
+	return targets, nil
+}
+
+func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
+	cleanProps := clonePublishPropertiesWithoutForwardingMeta(publish.Properties)
+
+	for _, target := range targets {
+		queueName := target.name
+		queueConfig := target.config
+		if queueConfig == nil {
 			continue
 		}
 
@@ -430,16 +644,29 @@ func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest
 			ID:         generateMessageID(),
 			Payload:    publish.Payload,
 			Topic:      publish.Topic,
-			Properties: publish.Properties,
+			Properties: cleanProps,
 			State:      types.StateQueued,
 			CreatedAt:  time.Now(),
 			ExpiresAt:  time.Now().Add(queueConfig.MessageTTL),
 		}
 
-		var offset uint64
-		if m.raftManager != nil && m.raftManager.IsEnabled() && m.raftManager.IsLeader() {
-			offset, err = m.raftManager.ApplyAppend(ctx, queueName, msg)
+		var (
+			offset uint64
+			err    error
+		)
+
+		replicated := queueConfig.Replication.Enabled
+		if replicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+			syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
+			offset, err = m.raftCoordinator.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
+				SyncMode:   &syncMode,
+				AckTimeout: queueConfig.Replication.AckTimeout,
+			})
 		} else {
+			if replicated && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
+				m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
+					slog.String("queue", queueName))
+			}
 			offset, err = m.queueStore.Append(ctx, queueName, msg)
 		}
 
@@ -583,7 +810,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 	}
 	if mode == types.GroupModeStream && queueCfg != nil && queueCfg.Type != types.QueueTypeStream {
 		queueCfg.Type = types.QueueTypeStream
-		if err := m.queueStore.UpdateQueue(ctx, *queueCfg); err != nil {
+		if err := m.UpdateQueue(ctx, *queueCfg); err != nil {
 			m.logger.Warn("failed to update stream queue config",
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
@@ -1027,6 +1254,16 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 	return nil
 }
 
+// UpdateConsumerHeartbeat updates heartbeat for a specific consumer membership.
+func (m *Manager) UpdateConsumerHeartbeat(ctx context.Context, queueName, groupID, consumerID string) error {
+	if err := m.consumerManager.UpdateHeartbeat(ctx, queueName, groupID, consumerID); err != nil {
+		return err
+	}
+
+	m.touchSubscription(consumerID, m.subscriptionRefKey(queueName, groupID), time.Now())
+	return nil
+}
+
 // --- Background Workers ---
 
 // deliverMessages is a thin forwarding method for test/bench compatibility.
@@ -1039,19 +1276,70 @@ func (m *Manager) deliverQueue(ctx context.Context, queueName string) bool {
 	return m.delivery.DeliverQueue(ctx, queueName)
 }
 
-func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest) error {
+func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest, leaderID string, targetQueues []string) error {
 	if m.cluster == nil {
 		return fmt.Errorf("cluster not configured for leader forward")
 	}
 
-	leaderID := m.raftManager.LeaderID()
+	if m.raftCoordinator == nil {
+		return fmt.Errorf("raft coordinator unavailable")
+	}
+
 	if leaderID == "" {
 		return fmt.Errorf("raft leader unavailable")
 	}
 
-	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, publish.Properties, true)
+	props := clonePublishPropertiesWithoutForwardingMeta(publish.Properties)
+	if len(targetQueues) > 0 {
+		if props == nil {
+			props = make(map[string]string, 1)
+		}
+		props[types.PropForwardTargetQueues] = strings.Join(targetQueues, ",")
+	}
+
+	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, props, true)
 }
 
+func parseForwardTargetQueues(properties map[string]string) []string {
+	if len(properties) == 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(properties[types.PropForwardTargetQueues])
+	if raw == "" {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 4)
+	for _, token := range strings.Split(raw, ",") {
+		queueName := strings.TrimSpace(token)
+		if queueName == "" {
+			continue
+		}
+		if _, ok := seen[queueName]; ok {
+			continue
+		}
+		seen[queueName] = struct{}{}
+		out = append(out, queueName)
+	}
+
+	return out
+}
+
+func clonePublishPropertiesWithoutForwardingMeta(properties map[string]string) map[string]string {
+	if len(properties) == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, len(properties))
+	for k, v := range properties {
+		if k == types.PropForwardTargetQueues {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
 
 func (m *Manager) runStealLoop() {
 	defer m.wg.Done()
@@ -1150,10 +1438,16 @@ func (m *Manager) processRetention() {
 			}
 		}
 
-		// Truncate log up to the safe offset
-		if err := m.queueStore.Truncate(ctx, queueConfig.Name, truncateOffset); err != nil {
+		// Truncate log up to the safe offset.
+		var truncateErr error
+		if queueConfig.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+			truncateErr = m.raftCoordinator.ApplyTruncate(ctx, queueConfig.Name, truncateOffset)
+		} else {
+			truncateErr = m.queueStore.Truncate(ctx, queueConfig.Name, truncateOffset)
+		}
+		if truncateErr != nil {
 			m.logger.Debug("truncation error",
-				slog.String("error", err.Error()),
+				slog.String("error", truncateErr.Error()),
 				slog.String("queue", queueConfig.Name))
 		}
 	}
@@ -1173,7 +1467,7 @@ func (m *Manager) checkEphemeralDisconnect(ctx context.Context, queueName string
 	}
 
 	config.LastConsumerDisconnect = time.Now()
-	if err := m.queueStore.UpdateQueue(ctx, *config); err != nil {
+	if err := m.UpdateQueue(ctx, *config); err != nil {
 		m.logger.Warn("failed to update ephemeral queue disconnect time",
 			slog.String("queue", queueName),
 			slog.String("error", err.Error()))
@@ -1192,7 +1486,7 @@ func (m *Manager) clearEphemeralDisconnect(ctx context.Context, queueName string
 	}
 
 	config.LastConsumerDisconnect = time.Time{}
-	if err := m.queueStore.UpdateQueue(ctx, *config); err != nil {
+	if err := m.UpdateQueue(ctx, *config); err != nil {
 		m.logger.Warn("failed to clear ephemeral queue disconnect time",
 			slog.String("queue", queueName),
 			slog.String("error", err.Error()))
@@ -1244,7 +1538,7 @@ func (m *Manager) cleanupEphemeralQueues() {
 			}
 		}
 
-		if err := m.queueStore.DeleteQueue(ctx, q.Name); err != nil {
+		if err := m.DeleteQueue(ctx, q.Name); err != nil {
 			m.logger.Warn("failed to delete expired ephemeral queue",
 				slog.String("queue", q.Name),
 				slog.String("error", err.Error()))
@@ -1365,4 +1659,50 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 	deliveryMsg.SetPayloadFromBytes(msg.Payload)
 
 	return m.deliveryTarget.Deliver(ctx, clientID, deliveryMsg)
+}
+
+// HandleForwardedGroupOp implements cluster.QueueHandler.HandleForwardedGroupOp.
+// It decodes a raft.Operation and applies it through the local coordinator.
+func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, opData []byte) error {
+	if m.raftCoordinator == nil {
+		return fmt.Errorf("raft coordinator not available")
+	}
+
+	var op raft.Operation
+	if err := raft.DecodeOperation(opData, &op); err != nil {
+		return fmt.Errorf("failed to decode forwarded group op: %w", err)
+	}
+
+	if op.QueueName != queueName {
+		return fmt.Errorf("queue name mismatch: request=%q op=%q", queueName, op.QueueName)
+	}
+
+	return m.applyGroupOp(ctx, &op)
+}
+
+func (m *Manager) applyGroupOp(ctx context.Context, op *raft.Operation) error {
+	switch op.Type {
+	case raft.OpCreateGroup:
+		return m.raftCoordinator.ApplyCreateGroup(ctx, op.QueueName, op.GroupState)
+	case raft.OpUpdateGroup:
+		return m.raftCoordinator.ApplyUpdateGroup(ctx, op.QueueName, op.GroupState)
+	case raft.OpDeleteGroup:
+		return m.raftCoordinator.ApplyDeleteGroup(ctx, op.QueueName, op.GroupID)
+	case raft.OpUpdateCursor:
+		return m.raftCoordinator.ApplyUpdateCursor(ctx, op.QueueName, op.GroupID, op.Cursor)
+	case raft.OpUpdateCommitted:
+		return m.raftCoordinator.ApplyUpdateCommitted(ctx, op.QueueName, op.GroupID, op.Committed)
+	case raft.OpAddPending:
+		return m.raftCoordinator.ApplyAddPending(ctx, op.QueueName, op.GroupID, op.PendingEntry)
+	case raft.OpRemovePending:
+		return m.raftCoordinator.ApplyRemovePending(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
+	case raft.OpTransferPending:
+		return m.raftCoordinator.ApplyTransferPending(ctx, op.QueueName, op.GroupID, op.Offset, op.FromConsumer, op.ToConsumer)
+	case raft.OpRegisterConsumer:
+		return m.raftCoordinator.ApplyRegisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerInfo)
+	case raft.OpUnregisterConsumer:
+		return m.raftCoordinator.ApplyUnregisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerID)
+	default:
+		return fmt.Errorf("unsupported forwarded group op type: %d", op.Type)
+	}
 }

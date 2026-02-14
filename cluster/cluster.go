@@ -100,6 +100,10 @@ type QueueConsumerRegistry interface {
 	// ForwardQueuePublish forwards a queue publish to a remote node.
 	// The remote node will store the message in its local matching queues.
 	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error
+
+	// ForwardGroupOp forwards a consumer group mutation to the Raft leader
+	// node for the given queue. opData is a JSON-encoded raft.Operation.
+	ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error
 }
 
 type Lifecycle interface {

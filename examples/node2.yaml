@@ -88,6 +88,7 @@ cluster:
 
   raft:
     enabled: true
+    auto_provision_groups: true
     replication_factor: 3
     sync_mode: true
     min_in_sync_replicas: 2
@@ -103,6 +104,16 @@ cluster:
     election_timeout: "3s"
     snapshot_interval: "5m"
     snapshot_threshold: 8192
+    groups:
+      hot:
+        bind_addr: "127.0.0.1:8200"
+        data_dir: "/tmp/fluxmq/node2/raft-hot"
+        peers:
+          node1: "127.0.0.1:8100"
+          node3: "127.0.0.1:8300"
+        replication_factor: 3
+        min_in_sync_replicas: 2
+        ack_timeout: "5s"
 
 log:
   level: "debug"
@@ -110,3 +121,36 @@ log:
 
 queue_manager:
   auto_commit_interval: 5s
+
+queues:
+  - name: "mqtt"
+    topics:
+      - "$queue/#"
+    reserved: true
+    replication:
+      enabled: true
+      group: "default"
+      replication_factor: 3
+      mode: "sync"
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+  - name: "hot-events"
+    topics:
+      - "$queue/hot-events/#"
+    replication:
+      enabled: true
+      group: "hot"
+      replication_factor: 3
+      mode: "sync"
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+  - name: "audit-log"
+    topics:
+      - "$queue/audit/#"
+    replication:
+      enabled: true
+      group: "audit"               # auto-provisioned at startup
+      replication_factor: 3
+      mode: "async"
+      min_in_sync_replicas: 1
+      ack_timeout: "10s"

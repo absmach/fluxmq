@@ -25,6 +25,9 @@ const (
 
 	// Queue reject metadata.
 	PropRejectReason = "reason"
+
+	// Internal queue forwarding metadata.
+	PropForwardTargetQueues = "x-queue-forward-targets"
 )
 
 // IsReservedQueueDeliveryProperty returns true for keys managed by queue routing.
@@ -32,7 +35,8 @@ func IsReservedQueueDeliveryProperty(key string) bool {
 	switch key {
 	case PropMessageID, PropGroupID, PropQueueName, PropOffset,
 		PropStreamOffset, PropStreamTimestamp,
-		PropWorkCommittedOffset, PropWorkAcked, PropWorkGroup:
+		PropWorkCommittedOffset, PropWorkAcked, PropWorkGroup,
+		PropForwardTargetQueues:
 		return true
 	default:
 		return false

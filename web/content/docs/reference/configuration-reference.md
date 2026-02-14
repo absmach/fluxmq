@@ -218,6 +218,7 @@ cluster:
 
   raft:
     enabled: false
+    auto_provision_groups: false
     replication_factor: 3
     sync_mode: true
     min_in_sync_replicas: 2
@@ -231,6 +232,18 @@ cluster:
     election_timeout: "3s"
     snapshot_interval: "5m"
     snapshot_threshold: 8192
+
+    # Optional per-group Raft runtimes for sharding.
+    # The key "default" overrides the base group above.
+    groups:
+      default:
+        bind_addr: "127.0.0.1:7100"
+        data_dir: "/tmp/fluxmq/raft"
+        peers: {}
+      hot:
+        bind_addr: "127.0.0.1:7200"
+        data_dir: "/tmp/fluxmq/raft/groups/hot"
+        peers: {}
 ```
 
 ### Raft Behavior (What The Knobs Mean)
@@ -249,8 +262,18 @@ Other fields affect durability and timing:
 
 Notes on current implementation:
 
-- FluxMQ currently runs a single Raft group for all queues. Group membership comes from the configured peer list (and the local node).
-- `replication_factor` and `min_in_sync_replicas` are accepted in config but do not currently limit membership or override Raft quorum rules.
+- FluxMQ supports multiple Raft replication groups. Queues can be assigned to a group via `queues[].replication.group` (empty means the default group).
+- Group membership still comes from the configured peer list(s). `replication_factor` and `min_in_sync_replicas` are accepted in config but do not currently limit membership or override Raft quorum rules.
+
+### Raft Groups (Per-Queue Sharding)
+
+Use `cluster.raft.groups` to configure multiple independent replication groups.
+
+Key rules:
+
+- A `default` group is always required when Raft is enabled.
+- Non-default groups must define their own `bind_addr` and `peers` (and typically a dedicated `data_dir`).
+- If `cluster.raft.auto_provision_groups` is `true`, groups referenced by queues can be created on demand using derived defaults.
 
 ## Webhooks
 

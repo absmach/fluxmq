@@ -5,6 +5,7 @@
     "routing",
     "webhooks",
     "storage",
+    "raft-groups",
     "clustering"
   ]
 }

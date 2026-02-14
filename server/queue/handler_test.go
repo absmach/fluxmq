@@ -6,11 +6,14 @@ package queue
 import (
 	"context"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
+	queuepkg "github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -99,6 +102,14 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 				MinMessages: 10,
 			},
 			MaxMessageSize: 4096,
+			Replication: &queuev1.ReplicationConfig{
+				Enabled:           true,
+				ReplicationFactor: 3,
+				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_ASYNC,
+				MinInSyncReplicas: 2,
+				AckTimeout:        durationpb.New(2 * time.Second),
+				Group:             "hot-path",
+			},
 		},
 	}))
 	if err != nil {
@@ -125,10 +136,269 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	if updated.MaxMessageSize != 4096 {
 		t.Fatalf("unexpected max message size: got %d", updated.MaxMessageSize)
 	}
+	if !updated.Replication.Enabled {
+		t.Fatalf("expected replication enabled")
+	}
+	if updated.Replication.ReplicationFactor != 3 {
+		t.Fatalf("unexpected replication factor: got %d", updated.Replication.ReplicationFactor)
+	}
+	if updated.Replication.Mode != types.ReplicationAsync {
+		t.Fatalf("unexpected replication mode: got %s", updated.Replication.Mode)
+	}
+	if updated.Replication.MinInSyncReplicas != 2 {
+		t.Fatalf("unexpected min ISR: got %d", updated.Replication.MinInSyncReplicas)
+	}
+	if updated.Replication.AckTimeout != 2*time.Second {
+		t.Fatalf("unexpected ack timeout: got %s", updated.Replication.AckTimeout)
+	}
+	if updated.Replication.Group != "hot-path" {
+		t.Fatalf("unexpected replication group: got %q", updated.Replication.Group)
+	}
 
 	if got := updateResp.Msg.Config.GetRetention().GetMaxAge().AsDuration(); got != retention {
 		t.Fatalf("response retention mismatch: got %v want %v", got, retention)
 	}
+	if got := updateResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
+		t.Fatalf("expected replication in response")
+	}
+	if got := updateResp.Msg.Config.GetReplication().GetMode(); got != queuev1.ReplicationMode_REPLICATION_MODE_ASYNC {
+		t.Fatalf("response replication mode mismatch: got %v", got)
+	}
+	if got := updateResp.Msg.Config.GetReplication().GetGroup(); got != "hot-path" {
+		t.Fatalf("response replication group mismatch: got %q", got)
+	}
+}
+
+func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := memlog.New()
+	groupStore := noopGroupStore{}
+	manager := queuepkg.NewManager(store, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+	h := NewHandler(manager, store, groupStore, nil)
+
+	createResp, err := h.CreateQueue(ctx, connect.NewRequest(&queuev1.CreateQueueRequest{
+		Name:   "jobs",
+		Topics: []string{"$queue/jobs/#"},
+		Config: &queuev1.QueueConfig{
+			Replication: &queuev1.ReplicationConfig{
+				Enabled:           true,
+				ReplicationFactor: 5,
+				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_SYNC,
+				MinInSyncReplicas: 3,
+				AckTimeout:        durationpb.New(4 * time.Second),
+				Group:             "jobs-raft",
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	stored, err := store.GetQueue(ctx, "jobs")
+	if err != nil {
+		t.Fatalf("get queue: %v", err)
+	}
+
+	if !stored.Replication.Enabled {
+		t.Fatalf("expected replication enabled")
+	}
+	if stored.Replication.ReplicationFactor != 5 {
+		t.Fatalf("unexpected replication factor: %d", stored.Replication.ReplicationFactor)
+	}
+	if stored.Replication.Mode != types.ReplicationSync {
+		t.Fatalf("unexpected replication mode: %s", stored.Replication.Mode)
+	}
+	if stored.Replication.MinInSyncReplicas != 3 {
+		t.Fatalf("unexpected min ISR: %d", stored.Replication.MinInSyncReplicas)
+	}
+	if stored.Replication.AckTimeout != 4*time.Second {
+		t.Fatalf("unexpected ack timeout: %s", stored.Replication.AckTimeout)
+	}
+	if stored.Replication.Group != "jobs-raft" {
+		t.Fatalf("unexpected replication group: %q", stored.Replication.Group)
+	}
+
+	if got := createResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
+		t.Fatalf("expected replication in create response")
+	}
+	if got := createResp.Msg.Config.GetReplication().GetReplicationFactor(); got != 5 {
+		t.Fatalf("unexpected response replication factor: %d", got)
+	}
+	if got := createResp.Msg.Config.GetReplication().GetGroup(); got != "jobs-raft" {
+		t.Fatalf("unexpected response replication group: %q", got)
+	}
+}
+
+func TestHeartbeatUsesManagerPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	queueStore := memlog.New()
+	groupStore := newStatefulGroupStore()
+	manager := queuepkg.NewManager(queueStore, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+	h := NewHandler(manager, nil, nil, nil)
+
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	if err := manager.CreateQueue(ctx, cfg); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("orders", "workers", "")
+	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	before := time.Now().Add(-time.Hour)
+	consumer := &types.ConsumerInfo{
+		ID:            "consumer-1",
+		ClientID:      "consumer-1",
+		RegisteredAt:  before,
+		LastHeartbeat: before,
+	}
+	if err := groupStore.RegisterConsumer(ctx, "orders", "workers", consumer); err != nil {
+		t.Fatalf("register consumer: %v", err)
+	}
+
+	_, err := h.Heartbeat(ctx, connect.NewRequest(&queuev1.HeartbeatRequest{
+		QueueName:  "orders",
+		GroupId:    "workers",
+		ConsumerId: "consumer-1",
+	}))
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+
+	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", "workers")
+	if err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	updatedConsumer := updatedGroup.GetConsumer("consumer-1")
+	if updatedConsumer == nil {
+		t.Fatalf("expected consumer to exist")
+	}
+	if !updatedConsumer.LastHeartbeat.After(before) {
+		t.Fatalf("expected heartbeat to advance, got %v <= %v", updatedConsumer.LastHeartbeat, before)
+	}
+}
+
+type statefulGroupStore struct {
+	noopGroupStore
+
+	mu     sync.RWMutex
+	groups map[string]map[string]*types.ConsumerGroup
+}
+
+func newStatefulGroupStore() *statefulGroupStore {
+	return &statefulGroupStore{
+		groups: make(map[string]map[string]*types.ConsumerGroup),
+	}
+}
+
+func (s *statefulGroupStore) CreateConsumerGroup(_ context.Context, group *types.ConsumerGroup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.groups[group.QueueName] == nil {
+		s.groups[group.QueueName] = make(map[string]*types.ConsumerGroup)
+	}
+	if _, exists := s.groups[group.QueueName][group.ID]; exists {
+		return qstorage.ErrConsumerGroupExists
+	}
+	s.groups[group.QueueName][group.ID] = group
+	return nil
+}
+
+func (s *statefulGroupStore) GetConsumerGroup(_ context.Context, queueName, groupID string) (*types.ConsumerGroup, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	groups, ok := s.groups[queueName]
+	if !ok {
+		return nil, qstorage.ErrConsumerNotFound
+	}
+	group, ok := groups[groupID]
+	if !ok {
+		return nil, qstorage.ErrConsumerNotFound
+	}
+	return group, nil
+}
+
+func (s *statefulGroupStore) UpdateConsumerGroup(_ context.Context, group *types.ConsumerGroup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.groups[group.QueueName] == nil {
+		s.groups[group.QueueName] = make(map[string]*types.ConsumerGroup)
+	}
+	s.groups[group.QueueName][group.ID] = group
+	return nil
+}
+
+func (s *statefulGroupStore) RegisterConsumer(_ context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	groups, ok := s.groups[queueName]
+	if !ok {
+		return qstorage.ErrConsumerNotFound
+	}
+	group, ok := groups[groupID]
+	if !ok {
+		return qstorage.ErrConsumerNotFound
+	}
+
+	group.SetConsumer(consumer.ID, consumer)
+	return nil
+}
+
+type noopGroupStore struct{}
+
+func (noopGroupStore) CreateConsumerGroup(context.Context, *types.ConsumerGroup) error {
+	return nil
+}
+func (noopGroupStore) GetConsumerGroup(context.Context, string, string) (*types.ConsumerGroup, error) {
+	return nil, qstorage.ErrConsumerNotFound
+}
+func (noopGroupStore) UpdateConsumerGroup(context.Context, *types.ConsumerGroup) error {
+	return nil
+}
+func (noopGroupStore) DeleteConsumerGroup(context.Context, string, string) error {
+	return nil
+}
+func (noopGroupStore) ListConsumerGroups(context.Context, string) ([]*types.ConsumerGroup, error) {
+	return nil, nil
+}
+func (noopGroupStore) AddPendingEntry(context.Context, string, string, *types.PendingEntry) error {
+	return nil
+}
+func (noopGroupStore) RemovePendingEntry(context.Context, string, string, string, uint64) error {
+	return nil
+}
+func (noopGroupStore) GetPendingEntries(context.Context, string, string, string) ([]*types.PendingEntry, error) {
+	return nil, nil
+}
+func (noopGroupStore) GetAllPendingEntries(context.Context, string, string) ([]*types.PendingEntry, error) {
+	return nil, nil
+}
+func (noopGroupStore) TransferPendingEntry(context.Context, string, string, uint64, string, string) error {
+	return nil
+}
+func (noopGroupStore) UpdateCursor(context.Context, string, string, uint64) error {
+	return nil
+}
+func (noopGroupStore) UpdateCommitted(context.Context, string, string, uint64) error {
+	return nil
+}
+func (noopGroupStore) RegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
+	return nil
+}
+func (noopGroupStore) UnregisterConsumer(context.Context, string, string, string) error {
+	return nil
+}
+func (noopGroupStore) ListConsumers(context.Context, string, string) ([]*types.ConsumerInfo, error) {
+	return nil, nil
 }
 
 func TestSeekToTimestamp(t *testing.T) {

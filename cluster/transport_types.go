@@ -11,6 +11,8 @@ import (
 type (
 	PublishReq            = connect.Request[clusterv1.PublishRequest]
 	PublishResp           = connect.Response[clusterv1.PublishResponse]
+	PublishBatchReq       = connect.Request[clusterv1.PublishBatchRequest]
+	PublishBatchResp      = connect.Response[clusterv1.PublishBatchResponse]
 	TakeoverReq           = connect.Request[clusterv1.TakeoverRequest]
 	TakeoverResp          = connect.Response[clusterv1.TakeoverResponse]
 	FetchRetainedReq      = connect.Request[clusterv1.FetchRetainedRequest]
@@ -21,10 +23,14 @@ type (
 	EnqueueRemoteResp     = connect.Response[clusterv1.EnqueueRemoteResponse]
 	RouteQueueMessageReq  = connect.Request[clusterv1.RouteQueueMessageRequest]
 	RouteQueueMessageResp = connect.Response[clusterv1.RouteQueueMessageResponse]
+	RouteQueueBatchReq    = connect.Request[clusterv1.RouteQueueBatchRequest]
+	RouteQueueBatchResp   = connect.Response[clusterv1.RouteQueueBatchResponse]
 	AppendEntriesReq      = connect.Request[clusterv1.AppendEntriesRequest]
 	AppendEntriesResp     = connect.Response[clusterv1.AppendEntriesResponse]
 	RequestVoteReq        = connect.Request[clusterv1.RequestVoteRequest]
 	RequestVoteResp       = connect.Response[clusterv1.RequestVoteResponse]
 	InstallSnapshotReq    = connect.Request[clusterv1.InstallSnapshotRequest]
 	InstallSnapshotResp   = connect.Response[clusterv1.InstallSnapshotResponse]
+	ForwardGroupOpReq     = connect.Request[clusterv1.ForwardGroupOpRequest]
+	ForwardGroupOpResp    = connect.Response[clusterv1.ForwardGroupOpResponse]
 )

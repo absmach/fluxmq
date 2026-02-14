@@ -16,6 +16,7 @@ import (
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
 	"github.com/absmach/fluxmq/queue"
+	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -38,6 +39,15 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if manager != nil {
+		if queueStore == nil {
+			queueStore = manager.QueueStore()
+		}
+		if groupStore == nil {
+			groupStore = manager.GroupStore()
+		}
+	}
+
 	return &Handler{
 		manager:    manager,
 		queueStore: queueStore,
@@ -50,14 +60,14 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.CreateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	msg := req.Msg
 
-	config := types.QueueConfig{
-		Name:       msg.Name,
-		Topics:     []string{msg.Name}, // Default subject matches queue name
-		MessageTTL: 7 * 24 * time.Hour,
+	topics := msg.Topics
+	if len(topics) == 0 {
+		topics = []string{msg.Name}
 	}
 
-	if msg.Config != nil && msg.Config.Retention != nil && msg.Config.Retention.MaxAge != nil {
-		config.MessageTTL = msg.Config.Retention.MaxAge.AsDuration()
+	config := types.DefaultQueueConfig(msg.Name, topics...)
+	if msg.Config != nil {
+		applyQueueConfigUpdateFromProto(&config, msg.Config)
 	}
 
 	if err := h.manager.CreateQueue(ctx, config); err != nil {
@@ -155,23 +165,24 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 
 	updated := *config
 	if req.Msg.Config != nil {
-		cfg := req.Msg.Config
-		if cfg.Retention != nil {
-			if cfg.Retention.MaxAge != nil {
-				maxAge := cfg.Retention.MaxAge.AsDuration()
-				updated.MessageTTL = maxAge
-				updated.Retention.RetentionTime = maxAge
+		applyQueueConfigUpdateFromProto(&updated, req.Msg.Config)
+	}
+
+	if h.manager != nil {
+		if err := h.manager.UpdateQueue(ctx, updated); err != nil {
+			if err == storage.ErrQueueNotFound {
+				return nil, connect.NewError(connect.CodeNotFound, err)
 			}
-			if cfg.Retention.MaxBytes > 0 {
-				updated.Retention.RetentionBytes = int64(cfg.Retention.MaxBytes)
-			}
-			if cfg.Retention.MinMessages > 0 {
-				updated.Retention.RetentionMessages = int64(cfg.Retention.MinMessages)
-			}
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
-		if cfg.MaxMessageSize > 0 {
-			updated.MaxMessageSize = int64(cfg.MaxMessageSize)
+		current, err := h.queueStore.GetQueue(ctx, updated.Name)
+		if err != nil {
+			if err == storage.ErrQueueNotFound {
+				return nil, connect.NewError(connect.CodeNotFound, err)
+			}
+			return nil, connect.NewError(connect.CodeInternal, err)
 		}
+		return connect.NewResponse(h.queueToProto(current)), nil
 	}
 
 	if err := h.queueStore.UpdateQueue(ctx, updated); err != nil {
@@ -549,18 +560,32 @@ func (h *Handler) LeaveGroup(ctx context.Context, req *connect.Request[queuev1.L
 
 func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.HeartbeatRequest]) (*connect.Response[queuev1.HeartbeatResponse], error) {
 	msg := req.Msg
+	if h.manager != nil {
+		if err := h.manager.UpdateConsumerHeartbeat(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId); err != nil {
+			if err == storage.ErrConsumerNotFound || err == consumer.ErrConsumerNotFound {
+				return nil, connect.NewError(connect.CodeNotFound, err)
+			}
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		return connect.NewResponse(&queuev1.HeartbeatResponse{
+			ShouldRejoin: false,
+		}), nil
+	}
 
 	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	consumer := group.GetConsumer(msg.ConsumerId)
-	if consumer == nil {
+	c := group.GetConsumer(msg.ConsumerId)
+	if c == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("consumer not found"))
 	}
 
-	consumer.LastHeartbeat = time.Now()
+	c.LastHeartbeat = time.Now()
+	if err := h.groupStore.RegisterConsumer(ctx, msg.QueueName, msg.GroupId, c); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 
 	return connect.NewResponse(&queuev1.HeartbeatResponse{
 		ShouldRejoin: false,
@@ -649,6 +674,19 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 	msg := req.Msg
 
 	var success int32
+	if h.manager != nil {
+		for _, offset := range msg.Offsets {
+			messageID := fmt.Sprintf("%s:%d", msg.QueueName, offset)
+			if err := h.manager.Ack(ctx, msg.QueueName, messageID, msg.GroupId); err == nil {
+				success++
+			}
+		}
+
+		return connect.NewResponse(&queuev1.AckResponse{
+			AckedCount: uint32(success),
+		}), nil
+	}
+
 	var maxOffset uint64
 	for _, offset := range msg.Offsets {
 		err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
@@ -671,6 +709,14 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 
 func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackRequest]) (*connect.Response[emptypb.Empty], error) {
 	msg := req.Msg
+
+	if h.manager != nil {
+		for _, offset := range msg.Offsets {
+			messageID := fmt.Sprintf("%s:%d", msg.QueueName, offset)
+			_ = h.manager.Nack(ctx, msg.QueueName, messageID, msg.GroupId)
+		}
+		return connect.NewResponse(&emptypb.Empty{}), nil
+	}
 
 	for _, offset := range msg.Offsets {
 		h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
@@ -712,9 +758,9 @@ func (h *Handler) Claim(ctx context.Context, req *connect.Request[queuev1.ClaimR
 				continue
 			}
 
-			entry.ConsumerID = msg.ConsumerId
-			entry.ClaimedAt = time.Now()
-			entry.DeliveryCount++
+			if err := h.groupStore.TransferPendingEntry(ctx, msg.QueueName, msg.GroupId, entry.Offset, entry.ConsumerID, msg.ConsumerId); err != nil {
+				continue
+			}
 
 			claimed = append(claimed, h.messageToProto(m))
 			if len(claimed) >= limit {
@@ -836,6 +882,25 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 		retentionMaxAge = config.MessageTTL
 	}
 
+	replication := &queuev1.ReplicationConfig{
+		Enabled:           config.Replication.Enabled,
+		ReplicationFactor: clampIntToUint32(config.Replication.ReplicationFactor),
+		Mode:              replicationModeToProto(config.Replication.Mode),
+		MinInSyncReplicas: clampIntToUint32(config.Replication.MinInSyncReplicas),
+		AckTimeout:        durationpb.New(config.Replication.AckTimeout),
+		Group:             config.Replication.Group,
+	}
+	if config.Replication.HeartbeatTimeout > 0 {
+		replication.HeartbeatTimeout = durationpb.New(config.Replication.HeartbeatTimeout)
+	}
+	if config.Replication.ElectionTimeout > 0 {
+		replication.ElectionTimeout = durationpb.New(config.Replication.ElectionTimeout)
+	}
+	if config.Replication.SnapshotInterval > 0 {
+		replication.SnapshotInterval = durationpb.New(config.Replication.SnapshotInterval)
+	}
+	replication.SnapshotThreshold = config.Replication.SnapshotThreshold
+
 	return &queuev1.Queue{
 		Name:   config.Name,
 		Topics: config.Topics,
@@ -846,7 +911,70 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 				MinMessages: clampInt64ToUint64(config.Retention.RetentionMessages),
 			},
 			MaxMessageSize: clampInt64ToUint32(config.MaxMessageSize),
+			Replication:    replication,
 		},
+	}
+}
+
+func applyQueueConfigUpdateFromProto(config *types.QueueConfig, cfg *queuev1.QueueConfig) {
+	if config == nil || cfg == nil {
+		return
+	}
+
+	if cfg.Retention != nil {
+		if cfg.Retention.MaxAge != nil {
+			maxAge := cfg.Retention.MaxAge.AsDuration()
+			config.MessageTTL = maxAge
+			config.Retention.RetentionTime = maxAge
+		}
+		if cfg.Retention.MaxBytes > 0 {
+			config.Retention.RetentionBytes = int64(cfg.Retention.MaxBytes)
+		}
+		if cfg.Retention.MinMessages > 0 {
+			config.Retention.RetentionMessages = int64(cfg.Retention.MinMessages)
+		}
+	}
+
+	if cfg.MaxMessageSize > 0 {
+		config.MaxMessageSize = int64(cfg.MaxMessageSize)
+	}
+
+	if cfg.Replication != nil {
+		replication := config.Replication
+		replication.Enabled = cfg.Replication.Enabled
+
+		if cfg.Replication.ReplicationFactor > 0 {
+			replication.ReplicationFactor = int(cfg.Replication.ReplicationFactor)
+		}
+		if cfg.Replication.MinInSyncReplicas > 0 {
+			replication.MinInSyncReplicas = int(cfg.Replication.MinInSyncReplicas)
+		}
+		if cfg.Replication.AckTimeout != nil {
+			replication.AckTimeout = cfg.Replication.AckTimeout.AsDuration()
+		}
+
+		switch cfg.Replication.Mode {
+		case queuev1.ReplicationMode_REPLICATION_MODE_ASYNC:
+			replication.Mode = types.ReplicationAsync
+		case queuev1.ReplicationMode_REPLICATION_MODE_SYNC:
+			replication.Mode = types.ReplicationSync
+		}
+
+		if cfg.Replication.HeartbeatTimeout != nil {
+			replication.HeartbeatTimeout = cfg.Replication.HeartbeatTimeout.AsDuration()
+		}
+		if cfg.Replication.ElectionTimeout != nil {
+			replication.ElectionTimeout = cfg.Replication.ElectionTimeout.AsDuration()
+		}
+		if cfg.Replication.SnapshotInterval != nil {
+			replication.SnapshotInterval = cfg.Replication.SnapshotInterval.AsDuration()
+		}
+		if cfg.Replication.SnapshotThreshold > 0 {
+			replication.SnapshotThreshold = cfg.Replication.SnapshotThreshold
+		}
+		replication.Group = strings.TrimSpace(cfg.Replication.Group)
+
+		config.Replication = replication
 	}
 }
 
@@ -865,6 +993,27 @@ func clampInt64ToUint32(value int64) uint32 {
 		return math.MaxUint32
 	}
 	return uint32(value)
+}
+
+func clampIntToUint32(value int) uint32 {
+	if value <= 0 {
+		return 0
+	}
+	if value > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(value)
+}
+
+func replicationModeToProto(mode types.ReplicationMode) queuev1.ReplicationMode {
+	switch mode {
+	case types.ReplicationAsync:
+		return queuev1.ReplicationMode_REPLICATION_MODE_ASYNC
+	case types.ReplicationSync:
+		fallthrough
+	default:
+		return queuev1.ReplicationMode_REPLICATION_MODE_SYNC
+	}
 }
 
 func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {

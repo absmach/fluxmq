@@ -29,15 +29,16 @@ type Config struct {
 
 // QueueConfig defines configuration for a persistent queue.
 type QueueConfig struct {
-	Name         string         `yaml:"name"`
-	Topics       []string       `yaml:"topics"`
-	Reserved     bool           `yaml:"reserved"`
-	Type         string         `yaml:"type"`
-	PrimaryGroup string         `yaml:"primary_group"`
-	Retention    QueueRetention `yaml:"retention"`
-	Limits       QueueLimits    `yaml:"limits"`
-	Retry        QueueRetry     `yaml:"retry"`
-	DLQ          QueueDLQ       `yaml:"dlq"`
+	Name         string           `yaml:"name"`
+	Topics       []string         `yaml:"topics"`
+	Reserved     bool             `yaml:"reserved"`
+	Type         string           `yaml:"type"`
+	PrimaryGroup string           `yaml:"primary_group"`
+	Retention    QueueRetention   `yaml:"retention"`
+	Limits       QueueLimits      `yaml:"limits"`
+	Retry        QueueRetry       `yaml:"retry"`
+	DLQ          QueueDLQ         `yaml:"dlq"`
+	Replication  QueueReplication `yaml:"replication"`
 }
 
 // QueueLimits defines resource limits for a queue.
@@ -66,6 +67,22 @@ type QueueRetention struct {
 	MaxAge            time.Duration `yaml:"max_age"`
 	MaxLengthBytes    int64         `yaml:"max_length_bytes"`
 	MaxLengthMessages int64         `yaml:"max_length_messages"`
+}
+
+// QueueReplication defines per-queue replication settings.
+type QueueReplication struct {
+	Enabled           bool          `yaml:"enabled"`
+	Group             string        `yaml:"group"`
+	ReplicationFactor int           `yaml:"replication_factor"`
+	Mode              string        `yaml:"mode"` // sync, async
+	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
+	AckTimeout        time.Duration `yaml:"ack_timeout"`
+
+	// Optional per-queue Raft tuning overrides (zero = use cluster defaults).
+	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
+	ElectionTimeout   time.Duration `yaml:"election_timeout"`
+	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
+	SnapshotThreshold uint64        `yaml:"snapshot_threshold"`
 }
 
 // QueueManagerConfig defines runtime behavior for the queue manager.
@@ -284,18 +301,45 @@ type ClusterConfig struct {
 
 // RaftConfig holds Raft replication configuration for queue data.
 type RaftConfig struct {
-	Enabled           bool              `yaml:"enabled"`
-	ReplicationFactor int               `yaml:"replication_factor"` // Number of replicas per partition (default: 3)
-	SyncMode          bool              `yaml:"sync_mode"`          // true=wait for quorum, false=async
-	MinInSyncReplicas int               `yaml:"min_in_sync_replicas"`
-	AckTimeout        time.Duration     `yaml:"ack_timeout"`
-	WritePolicy       string            `yaml:"write_policy"`      // local, reject, forward
-	DistributionMode  string            `yaml:"distribution_mode"` // forward, replicate
-	BindAddr          string            `yaml:"bind_addr"`         // Base address for Raft (e.g., "127.0.0.1:7100")
-	DataDir           string            `yaml:"data_dir"`          // Directory for Raft data
-	Peers             map[string]string `yaml:"peers"`             // Map of nodeID -> raft base address
+	Enabled             bool              `yaml:"enabled"`
+	AutoProvisionGroups bool              `yaml:"auto_provision_groups"` // Dynamically provision groups not listed in `groups`
+	ReplicationFactor   int               `yaml:"replication_factor"`    // Number of replicas per partition (default: 3)
+	SyncMode            bool              `yaml:"sync_mode"`             // true=wait for quorum, false=async
+	MinInSyncReplicas   int               `yaml:"min_in_sync_replicas"`
+	AckTimeout          time.Duration     `yaml:"ack_timeout"`
+	WritePolicy         string            `yaml:"write_policy"`      // local, reject, forward
+	DistributionMode    string            `yaml:"distribution_mode"` // forward, replicate
+	BindAddr            string            `yaml:"bind_addr"`         // Base address for Raft (e.g., "127.0.0.1:7100")
+	DataDir             string            `yaml:"data_dir"`          // Directory for Raft data
+	Peers               map[string]string `yaml:"peers"`             // Map of nodeID -> raft base address
 
 	// Raft tuning
+	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
+	ElectionTimeout   time.Duration `yaml:"election_timeout"`
+	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
+	SnapshotThreshold uint64        `yaml:"snapshot_threshold"`
+
+	// Optional per-group overrides for true multi-group replication.
+	// The key "default" overrides the base group above.
+	Groups map[string]RaftGroupConfig `yaml:"groups"`
+}
+
+// RaftGroupConfig defines overrides for an individual Raft replication group.
+type RaftGroupConfig struct {
+	Enabled *bool `yaml:"enabled"`
+
+	// Group network/storage endpoints.
+	BindAddr string            `yaml:"bind_addr"` // Raft bind address for this group
+	DataDir  string            `yaml:"data_dir"`  // Data dir for this group
+	Peers    map[string]string `yaml:"peers"`     // nodeID -> raft bind address for this group
+
+	// Optional per-group replication behavior overrides (zero/nil = inherit base RaftConfig).
+	ReplicationFactor int           `yaml:"replication_factor"`
+	SyncMode          *bool         `yaml:"sync_mode"`
+	MinInSyncReplicas int           `yaml:"min_in_sync_replicas"`
+	AckTimeout        time.Duration `yaml:"ack_timeout"`
+
+	// Optional per-group Raft tuning overrides.
 	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
 	ElectionTimeout   time.Duration `yaml:"election_timeout"`
 	SnapshotInterval  time.Duration `yaml:"snapshot_interval"`
@@ -321,6 +365,12 @@ type EtcdConfig struct {
 type TransportConfig struct {
 	BindAddr string            `yaml:"bind_addr"` // gRPC address (e.g., "0.0.0.0:7948")
 	Peers    map[string]string `yaml:"peers"`     // Map of nodeID -> transport address for peers
+
+	// Inter-node routing batch policy.
+	// route_batch_max_size controls flush size.
+	// route_batch_max_delay controls max wait before flushing a partial batch.
+	RouteBatchMaxSize  int           `yaml:"route_batch_max_size"`
+	RouteBatchMaxDelay time.Duration `yaml:"route_batch_max_delay"`
 
 	// TLS configuration for inter-broker communication
 	TLSEnabled  bool   `yaml:"tls_enabled"`   // Enable TLS for gRPC transport
@@ -489,22 +539,26 @@ func Default() *Config {
 			},
 			Transport: TransportConfig{
 				BindAddr: "0.0.0.0:7948",
+				// Keep batches modest by default and latency low.
+				RouteBatchMaxSize:  256,
+				RouteBatchMaxDelay: 5 * time.Millisecond,
 			},
 			Raft: RaftConfig{
-				Enabled:           false, // Disabled by default
-				ReplicationFactor: 3,
-				SyncMode:          true,
-				MinInSyncReplicas: 2,
-				AckTimeout:        5 * time.Second,
-				WritePolicy:       "forward",
-				DistributionMode:  "replicate",
-				BindAddr:          "127.0.0.1:7100",
-				DataDir:           "/tmp/fluxmq/raft",
-				Peers:             map[string]string{},
-				HeartbeatTimeout:  1 * time.Second,
-				ElectionTimeout:   3 * time.Second,
-				SnapshotInterval:  5 * time.Minute,
-				SnapshotThreshold: 8192,
+				Enabled:             false, // Disabled by default
+				AutoProvisionGroups: true,
+				ReplicationFactor:   3,
+				SyncMode:            true,
+				MinInSyncReplicas:   2,
+				AckTimeout:          5 * time.Second,
+				WritePolicy:         "forward",
+				DistributionMode:    "replicate",
+				BindAddr:            "127.0.0.1:7100",
+				DataDir:             "/tmp/fluxmq/raft",
+				Peers:               map[string]string{},
+				HeartbeatTimeout:    1 * time.Second,
+				ElectionTimeout:     3 * time.Second,
+				SnapshotInterval:    5 * time.Minute,
+				SnapshotThreshold:   8192,
 			},
 		},
 		Webhook: WebhookConfig{
@@ -569,6 +623,13 @@ func Default() *Config {
 				},
 				DLQ: QueueDLQ{
 					Enabled: true,
+				},
+				Replication: QueueReplication{
+					Enabled:           false,
+					ReplicationFactor: 3,
+					Mode:              "sync",
+					MinInSyncReplicas: 2,
+					AckTimeout:        5 * time.Second,
 				},
 			},
 		},
@@ -853,6 +914,12 @@ func (c *Config) Validate() error {
 		if c.Cluster.Transport.BindAddr == "" {
 			return fmt.Errorf("cluster.transport.bind_addr required when clustering is enabled")
 		}
+		if c.Cluster.Transport.RouteBatchMaxSize < 0 {
+			return fmt.Errorf("cluster.transport.route_batch_max_size must be >= 0")
+		}
+		if c.Cluster.Transport.RouteBatchMaxDelay < 0 {
+			return fmt.Errorf("cluster.transport.route_batch_max_delay must be >= 0")
+		}
 
 		// Transport TLS validation
 		if c.Cluster.Transport.TLSEnabled {
@@ -879,6 +946,62 @@ func (c *Config) Validate() error {
 			case "forward", "replicate":
 			default:
 				return fmt.Errorf("cluster.raft.distribution_mode must be one of: forward, replicate")
+			}
+		}
+
+		if c.Cluster.Raft.Enabled {
+			if strings.TrimSpace(c.Cluster.Raft.BindAddr) == "" {
+				return fmt.Errorf("cluster.raft.bind_addr required when raft is enabled")
+			}
+			if strings.TrimSpace(c.Cluster.Raft.DataDir) == "" {
+				return fmt.Errorf("cluster.raft.data_dir required when raft is enabled")
+			}
+			if c.Cluster.Raft.ReplicationFactor < 1 || c.Cluster.Raft.ReplicationFactor > 10 {
+				return fmt.Errorf("cluster.raft.replication_factor must be between 1 and 10")
+			}
+			if c.Cluster.Raft.MinInSyncReplicas < 1 || c.Cluster.Raft.MinInSyncReplicas > c.Cluster.Raft.ReplicationFactor {
+				return fmt.Errorf("cluster.raft.min_in_sync_replicas must be between 1 and replication_factor")
+			}
+			if c.Cluster.Raft.AckTimeout <= 0 {
+				return fmt.Errorf("cluster.raft.ack_timeout must be > 0")
+			}
+
+			for groupID, groupCfg := range c.Cluster.Raft.Groups {
+				gid := strings.TrimSpace(groupID)
+				if gid == "" {
+					return fmt.Errorf("cluster.raft.groups key cannot be empty")
+				}
+
+				groupEnabled := true
+				if groupCfg.Enabled != nil {
+					groupEnabled = *groupCfg.Enabled
+				}
+				if !groupEnabled {
+					continue
+				}
+
+				// Non-default groups must define dedicated endpoints.
+				if gid != "default" && strings.TrimSpace(groupCfg.BindAddr) == "" {
+					return fmt.Errorf("cluster.raft.groups.%s.bind_addr required for non-default group", gid)
+				}
+				if gid != "default" && len(groupCfg.Peers) == 0 {
+					return fmt.Errorf("cluster.raft.groups.%s.peers required for non-default group", gid)
+				}
+
+				if groupCfg.ReplicationFactor < 0 || groupCfg.ReplicationFactor > 10 {
+					return fmt.Errorf("cluster.raft.groups.%s.replication_factor must be between 0 and 10", gid)
+				}
+				effectiveRF := c.Cluster.Raft.ReplicationFactor
+				if groupCfg.ReplicationFactor > 0 {
+					effectiveRF = groupCfg.ReplicationFactor
+				}
+
+				if groupCfg.MinInSyncReplicas < 0 || groupCfg.MinInSyncReplicas > effectiveRF {
+					return fmt.Errorf("cluster.raft.groups.%s.min_in_sync_replicas must be between 0 and effective replication_factor", gid)
+				}
+				if groupCfg.AckTimeout < 0 {
+					return fmt.Errorf("cluster.raft.groups.%s.ack_timeout must be >= 0", gid)
+				}
 			}
 		}
 	}
@@ -940,6 +1063,38 @@ func (c *Config) Validate() error {
 		seenQueues[q.Name] = true
 		if len(q.Topics) == 0 {
 			return fmt.Errorf("queues[%d].topics cannot be empty", i)
+		}
+		if q.Replication.Enabled {
+			if q.Replication.Group != "" && strings.TrimSpace(q.Replication.Group) == "" {
+				return fmt.Errorf("queues[%d].replication.group cannot be only whitespace", i)
+			}
+
+			if c.Cluster.Enabled && c.Cluster.Raft.Enabled && !c.Cluster.Raft.AutoProvisionGroups {
+				groupID := strings.TrimSpace(q.Replication.Group)
+				if groupID == "" {
+					groupID = "default"
+				}
+				if groupID != "default" {
+					if _, ok := c.Cluster.Raft.Groups[groupID]; !ok {
+						return fmt.Errorf("queues[%d].replication.group '%s' is not configured under cluster.raft.groups and auto_provision_groups is disabled", i, groupID)
+					}
+				}
+			}
+
+			if q.Replication.ReplicationFactor < 1 || q.Replication.ReplicationFactor > 10 {
+				return fmt.Errorf("queues[%d].replication.replication_factor must be between 1 and 10", i)
+			}
+			if q.Replication.MinInSyncReplicas < 1 || q.Replication.MinInSyncReplicas > q.Replication.ReplicationFactor {
+				return fmt.Errorf("queues[%d].replication.min_in_sync_replicas must be between 1 and replication_factor", i)
+			}
+			switch strings.ToLower(q.Replication.Mode) {
+			case "sync", "async":
+			default:
+				return fmt.Errorf("queues[%d].replication.mode must be one of: sync, async", i)
+			}
+			if q.Replication.AckTimeout <= 0 {
+				return fmt.Errorf("queues[%d].replication.ack_timeout must be > 0", i)
+			}
 		}
 	}
 

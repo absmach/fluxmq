@@ -5,7 +5,7 @@ description: Embedded etcd metadata, gRPC routing, session takeover, and cluster
 
 # Clustering
 
-**Last Updated:** 2026-02-07
+**Last Updated:** 2026-02-12
 
 FluxMQ clustering is designed around one idea: keep **coordination data** consistent across nodes, and keep **payload data** fast and local wherever possible.
 
@@ -48,14 +48,14 @@ etcd is the **source of truth** for cluster metadata. FluxMQ maintains local in-
 
 Key prefixes:
 
-| Prefix | Meaning |
-| --- | --- |
-| `/mqtt/sessions/<client>/owner` | Session ownership (written with a lease so it expires on node death) |
-| `/mqtt/subscriptions/<client>/<filter>` | Subscription registry for cross-node pub/sub routing |
-| `/mqtt/queue-consumers/<queue>/<group>/<consumer>` | Queue consumer registry for cross-node queue delivery |
+| Prefix                                               | Meaning                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| `/mqtt/sessions/<client>/owner`                      | Session ownership (written with a lease so it expires on node death)      |
+| `/mqtt/subscriptions/<client>/<filter>`              | Subscription registry for cross-node pub/sub routing                      |
+| `/mqtt/queue-consumers/<queue>/<group>/<consumer>`   | Queue consumer registry for cross-node queue delivery                     |
 | `/mqtt/retained-data/*` and `/mqtt/retained-index/*` | Hybrid retained store (small payloads replicated; large payloads indexed) |
-| `/mqtt/will-data/*` and `/mqtt/will-index/*` | Hybrid will store (same strategy as retained) |
-| `/mqtt/leader` | Cluster leader election (used for coordination and visibility) |
+| `/mqtt/will-data/*` and `/mqtt/will-index/*`         | Hybrid will store (same strategy as retained)                             |
+| `/mqtt/leader`                                       | Cluster leader election (used for coordination and visibility)            |
 
 ## Session Ownership: Why It Exists
 
@@ -164,6 +164,80 @@ flowchart LR
   Mode -->|replicate| Raft[Replicate log to peers]
   Raft --> LocalDeliver[Each node delivers locally]"
 />
+
+## Queue Flow: Storage vs Real-Time Delivery
+
+For replicated queues, FluxMQ intentionally separates:
+
+- **Storage path (durable):** publish -> append to queue log (Raft for replicated queues)
+- **Delivery path (real-time):** claim from log -> deliver to connected consumers (local or remote)
+
+This keeps durability decisions in one path and transport fanout in another.
+
+### Scenario: Producer on node A, consumer connected on node B (B is not queue leader)
+
+Assume queue replication is enabled and `cluster.raft.write_policy=forward`.
+
+<Mermaid
+chart="
+sequenceDiagram
+  participant P as Producer
+  participant A as Node A (any node)
+  participant L as Queue leader
+  participant B as Node B (consumer connected)
+  P->>A: Publish to $queue/...
+  A->>L: Forward publish (if not leader)
+  L->>L: Append via Raft (durable)
+  L->>L: Claim from log + group state
+  L->>B: Route delivery (if consumer is on B)
+  B-->>B: Deliver to live connection"
+/>
+
+### What Gets Stored vs What Gets Routed
+
+- The queue log and consumer-group progress are **stored** (and replicated when enabled).
+- Deliveries to live consumers are **routed** (they are not persisted as “delivery events”).
+
+### Acks, Cursors, and Consistency
+
+For replicated queues:
+
+- Acks, cursor updates, and PEL changes are leader-owned and replicated.
+- If a client is connected to a non-leader node, the mutation is forwarded to the leader.
+- If the leader is unreachable, the mutation fails rather than being applied locally.
+
+This keeps failover behavior predictable: on leadership change, the new leader’s state matches what was committed.
+
+### Performance Summary
+
+- `write_policy=forward` adds an extra hop on non-leader publishes.
+- `sync_mode=true` increases publish latency (leader waits for commit up to `ack_timeout`).
+- `distribution_mode=forward` increases cross-node delivery traffic.
+- `distribution_mode=replicate` increases cross-node replication traffic (but can make delivery more local).
+
+### Choosing `distribution_mode`: Forward vs Replicate
+
+Both modes preserve the same queue semantics (consumer groups, ack/nack/reject, retry). The difference is primarily **where delivery happens** and **which network traffic you pay for**.
+
+
+| **Mode**                     | `forward`                                                                                                         | `replicate`                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Where delivery happens**   | The node that appends also delivers, routing to remote consumers as needed                                        | Nodes deliver from their local replicated log                                                               |
+| **What crosses the network** | Per-message delivery traffic (leader -> consumer’s node)                                                          | Replication traffic (Raft log + snapshots)                                                                  |
+| **Typical benefits**         | Simple operationally; good when most consumers are local to the leader; avoids replicating logs just for delivery | More local delivery; scales better when consumers are spread across nodes; reduces per-message routing load |
+| **Typical costs**            | More cross-node traffic when consumers are spread out; delivery depends on transport health to consumer nodes     | More background overhead (replication, snapshots); delivery can lag behind replication during spikes        |
+| **Best when**                | Consumers are concentrated on one node/zone; you want minimal replication overhead                                | Consumers are distributed; you want to minimize cross-node delivery fan-gout                                |
+
+
+
+Practical guidance:
+
+- Start with `forward` unless you have a clear need for `replicate`.
+- Prefer `replicate` for high fan-out queue consumption across many nodes.
+- Measure: the right choice depends on your workload shape (publish rate, consumer placement, and payload sizes).
+
+For multi-queue workloads, use replication groups to shard hot queues and reduce contention.
+See [Queue Replication Groups (Raft)](/docs/architecture/raft-groups).
 
 ## Configuration Entry Points
 

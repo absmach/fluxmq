@@ -201,6 +201,7 @@ help:
 	@echo "  run-node3          Run third node of 3-node cluster"
 	@echo ""
 	@echo "  NOTE: For 3-node cluster, run node1, node2, and node3 in separate terminals"
+	@echo "  NOTE: examples/node{1,2,3}.yaml include per-queue Raft replication groups (including an auto-provisioned group)"
 	@echo ""
 	@echo "Testing Targets:"
 	@echo "  test               Run all tests"

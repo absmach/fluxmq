@@ -651,7 +651,7 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consu
 	}
 
 	consumer.LastHeartbeat = time.Now()
-	return m.groupStore.UpdateConsumerGroup(ctx, group)
+	return m.groupStore.RegisterConsumer(ctx, queueName, groupID, consumer)
 }
 
 // CleanupStaleConsumers removes consumers that haven't sent a heartbeat within the timeout.
