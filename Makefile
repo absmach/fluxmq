@@ -10,6 +10,7 @@ LDFLAGS := -s -w
 GOFLAGS := -trimpath
 DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
 DOCKER_IMAGE_GIT := ghcr.io/absmach/fluxmq:$(shell git describe --tags --always --dirty)
+PERF_SCRIPT_DIR := tests/perf/scripts
 
 
 # Default target
@@ -138,6 +139,47 @@ bench-report:
 	@echo ""
 	@echo "Benchmark results saved to $(BUILD_DIR)/benchmark-results.txt"
 
+# Performance suites (scripts under tests/perf/scripts)
+.PHONY: perf-smoke
+perf-smoke:
+	bash $(PERF_SCRIPT_DIR)/run_smoke.sh
+
+.PHONY: perf-load
+perf-load:
+	bash $(PERF_SCRIPT_DIR)/run_load.sh
+
+.PHONY: perf-soak
+perf-soak:
+	bash $(PERF_SCRIPT_DIR)/run_soak.sh
+
+.PHONY: perf-compare
+perf-compare:
+	@if [ -z "$(BASELINE)" ]; then \
+		echo "Usage: make perf-compare BASELINE=<baseline-bench-file> [CANDIDATE=<candidate-bench-file>]"; \
+		exit 1; \
+	fi
+	bash $(PERF_SCRIPT_DIR)/compare_bench.sh "$(BASELINE)" "$(CANDIDATE)"
+
+.PHONY: perf-cluster-up
+perf-cluster-up:
+	bash $(PERF_SCRIPT_DIR)/cluster_up.sh
+
+.PHONY: perf-cluster-down
+perf-cluster-down:
+	bash $(PERF_SCRIPT_DIR)/cluster_down.sh
+
+.PHONY: perf-cluster-reset
+perf-cluster-reset:
+	bash $(PERF_SCRIPT_DIR)/cluster_reset.sh
+
+.PHONY: perf-cluster-ps
+perf-cluster-ps:
+	bash $(PERF_SCRIPT_DIR)/cluster_ps.sh
+
+.PHONY: perf-cluster-logs
+perf-cluster-logs:
+	bash $(PERF_SCRIPT_DIR)/cluster_logs.sh $(SERVICE)
+
 # Run linter
 .PHONY: lint
 lint:
@@ -231,6 +273,16 @@ help:
 	@echo "  bench-broker       Run broker benchmarks only"
 	@echo "  bench-zerocopy     Run zero-copy vs legacy comparison"
 	@echo "  bench-report       Generate benchmark report to $(BUILD_DIR)/"
+	@echo "  perf-smoke         Run quick perf smoke suite (tests + short benchmarks)"
+	@echo "  perf-load          Run medium perf load suite"
+	@echo "  perf-soak          Run long-running soak suite"
+	@echo "  perf-compare       Compare benchmark files with benchstat"
+	@echo "                     Usage: make perf-compare BASELINE=<file> [CANDIDATE=<file>]"
+	@echo "  perf-cluster-up    Start 3-node perf cluster in Docker Compose"
+	@echo "  perf-cluster-down  Stop perf cluster containers"
+	@echo "  perf-cluster-reset Stop cluster and remove volumes"
+	@echo "  perf-cluster-ps    Show perf cluster container status"
+	@echo "  perf-cluster-logs  Show cluster logs (optional SERVICE=node1|node2|node3)"
 	@echo ""
 	@echo "Stress Test Targets:"
 	@echo "  stress             Run all stress tests (~30 min)"

@@ -1,0 +1,66 @@
+server:
+  tcp:
+    plain:
+      addr: ":1883"
+    tls: {}
+    mtls: {}
+  websocket:
+    plain:
+      addr: ""
+    tls:
+      addr: ""
+    mtls:
+      addr: ""
+  http:
+    plain:
+      addr: ""
+    tls:
+      addr: ""
+    mtls:
+      addr: ""
+  coap:
+    plain:
+      addr: ""
+    dtls:
+      addr: ""
+    mdtls:
+      addr: ""
+  amqp:
+    plain:
+      addr: ":5672"
+    tls: {}
+    mtls: {}
+  amqp091:
+    plain:
+      addr: ":5682"
+    tls: {}
+    mtls: {}
+  health_enabled: true
+  health_addr: ":8081"
+  shutdown_timeout: "30s"
+
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/fluxmq/data"
+
+cluster:
+  enabled: true
+  node_id: "node3"
+  etcd:
+    data_dir: "/var/lib/fluxmq/etcd"
+    bind_addr: "node3:2380"
+    client_addr: "node3:2379"
+    initial_cluster: "node1=http://node1:2380,node2=http://node2:2380,node3=http://node3:2380"
+    bootstrap: true
+  transport:
+    bind_addr: "node3:7948"
+    peers:
+      node1: "node1:7948"
+      node2: "node2:7948"
+  raft:
+    enabled: false
+
+log:
+  level: "info"
+  format: "text"
+
