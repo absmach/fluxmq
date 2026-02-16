@@ -140,17 +140,13 @@ bench-report:
 	@echo "Benchmark results saved to $(BUILD_DIR)/benchmark-results.txt"
 
 # Performance suites (scripts under tests/perf/scripts)
-.PHONY: perf-smoke
-perf-smoke:
-	bash $(PERF_SCRIPT_DIR)/run_smoke.sh
+.PHONY: perf-suite
+perf-suite:
+	bash $(PERF_SCRIPT_DIR)/run_suite.sh
 
-.PHONY: perf-load
-perf-load:
-	bash $(PERF_SCRIPT_DIR)/run_load.sh
-
-.PHONY: perf-soak
-perf-soak:
-	bash $(PERF_SCRIPT_DIR)/run_soak.sh
+.PHONY: perf-cleanup
+perf-cleanup:
+	bash $(PERF_SCRIPT_DIR)/cleanup.sh
 
 .PHONY: perf-compare
 perf-compare:
@@ -294,9 +290,9 @@ help:
 	@echo "  bench-broker       Run broker benchmarks only"
 	@echo "  bench-zerocopy     Run zero-copy vs legacy comparison"
 	@echo "  bench-report       Generate benchmark report to $(BUILD_DIR)/"
-	@echo "  perf-smoke         Run quick perf smoke suite (tests + short benchmarks)"
-	@echo "  perf-load          Run medium perf load suite"
-	@echo "  perf-soak          Run long-running soak suite"
+	@echo "  perf-suite         Run configurable real-client performance suite"
+	@echo "                     Config via PERF_SUITE / PERF_SCENARIOS / PERF_* knobs (see tests/perf/README.md)"
+	@echo "  perf-cleanup       Reset perf cluster state and remove suite result files"
 	@echo "  perf-compare       Compare benchmark files with benchstat"
 	@echo "                     Usage: make perf-compare BASELINE=<file> [CANDIDATE=<file>]"
 	@echo "  perf-cluster-up    Start 3-node perf cluster in Docker Compose"

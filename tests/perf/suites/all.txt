@@ -1,0 +1,10 @@
+# Default end-to-end suite
+mqtt-fanin
+mqtt-fanout
+mqtt-substorm
+amqp-fanin
+amqp-fanout
+queue-fanin
+queue-fanout
+bridge-queue-mqtt-amqp
+bridge-queue-amqp-mqtt

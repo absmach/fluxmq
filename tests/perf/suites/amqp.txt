@@ -1,0 +1,3 @@
+# AMQP 0.9.1 topic suite
+amqp-fanin
+amqp-fanout
