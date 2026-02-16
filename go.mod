@@ -9,7 +9,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/hashicorp/raft v1.7.1
+	github.com/hashicorp/raft v1.7.3
 	github.com/klauspost/compress v1.18.4
 	github.com/pion/dtls/v3 v3.1.2
 	github.com/plgd-dev/go-coap/v3 v3.4.1
@@ -55,6 +55,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/hashicorp/go-hclog v1.6.2 // indirect
 	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
+	github.com/hashicorp/go-metrics v0.5.4 // indirect
 	github.com/hashicorp/go-msgpack/v2 v2.1.2 // indirect
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
