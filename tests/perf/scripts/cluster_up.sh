@@ -10,7 +10,6 @@ source "$SCRIPT_DIR/common.sh"
 
 require_cmd docker
 
-PERF_CLUSTER_BUILD="${PERF_CLUSTER_BUILD:-1}"
 PERF_CLUSTER_WAIT_READY="${PERF_CLUSTER_WAIT_READY:-1}"
 PERF_CLUSTER_READY_TIMEOUT="${PERF_CLUSTER_READY_TIMEOUT:-180}"
 LOG_FILE="$RESULTS_DIR/cluster_up_${TIMESTAMP}.log"
@@ -20,11 +19,7 @@ log_info "Compose: $COMPOSE_FILE"
 log_info "Log file: $LOG_FILE"
 write_header "$LOG_FILE"
 
-if [[ "$PERF_CLUSTER_BUILD" == "1" ]]; then
-	run_and_log "$LOG_FILE" compose up -d
-else
-	run_and_log "$LOG_FILE" compose up -d
-fi
+run_and_log "$LOG_FILE" compose up -d
 
 if [[ "$PERF_CLUSTER_WAIT_READY" != "1" ]]; then
 	log_warn "Skipping readiness wait (PERF_CLUSTER_WAIT_READY=$PERF_CLUSTER_WAIT_READY)"
@@ -42,9 +37,17 @@ deadline=$(( "$(date +%s)" + PERF_CLUSTER_READY_TIMEOUT ))
 ports=(18081 18082 18083)
 
 while [[ "$(date +%s)" -lt "$deadline" ]]; do
+	ps_out="$(compose ps)"
+	if echo "$ps_out" | grep -Eq 'Restarting|Exited|Dead'; then
+		log_error "Perf cluster contains non-running services"
+		echo "$ps_out" | tee -a "$LOG_FILE"
+		run_and_log "$LOG_FILE" compose logs --tail=200
+		exit 1
+	fi
+
 	all_ready=1
 	for port in "${ports[@]}"; do
-		if ! curl -fsS "http://127.0.0.1:${port}/ready" | grep -q '"status":"ready"'; then
+		if ! curl -fsS "http://127.0.0.1:${port}/ready" 2>/dev/null | grep -q '"status":"ready"'; then
 			all_ready=0
 			break
 		fi
@@ -60,5 +63,5 @@ done
 
 log_error "Timed out waiting for perf cluster readiness after ${PERF_CLUSTER_READY_TIMEOUT}s"
 run_and_log "$LOG_FILE" compose ps
+run_and_log "$LOG_FILE" compose logs --tail=200
 exit 1
-

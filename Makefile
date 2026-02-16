@@ -180,6 +180,22 @@ perf-cluster-ps:
 perf-cluster-logs:
 	bash $(PERF_SCRIPT_DIR)/cluster_logs.sh $(SERVICE)
 
+# 3-node Docker Compose cluster (shared with perf scripts)
+.PHONY: run-cluster
+run-cluster: perf-cluster-up
+
+.PHONY: run-cluster-down
+run-cluster-down: perf-cluster-down
+
+.PHONY: run-cluster-clean
+run-cluster-clean: perf-cluster-reset
+
+.PHONY: run-cluster-ps
+run-cluster-ps: perf-cluster-ps
+
+.PHONY: run-cluster-logs
+run-cluster-logs: perf-cluster-logs
+
 # Run linter
 .PHONY: lint
 lint:
@@ -257,6 +273,11 @@ help:
 	@echo "  run-node1          Run first node of 3-node cluster (bootstrap)"
 	@echo "  run-node2          Run second node of 3-node cluster"
 	@echo "  run-node3          Run third node of 3-node cluster"
+	@echo "  run-cluster        Start Docker Compose 3-node cluster (docker/docker-compose-cluster.yaml)"
+	@echo "  run-cluster-down   Stop Docker Compose cluster containers"
+	@echo "  run-cluster-clean  Stop cluster and remove mapped volumes"
+	@echo "  run-cluster-ps     Show cluster container status"
+	@echo "  run-cluster-logs   Show cluster logs (optional SERVICE=node1|node2|node3)"
 	@echo ""
 	@echo "  NOTE: For 3-node cluster, run node1, node2, and node3 in separate terminals"
 	@echo "  NOTE: examples/node{1,2,3}.yaml include per-queue Raft replication groups (including an auto-provisioned group)"
