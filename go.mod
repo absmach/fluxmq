@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/raft v1.7.1
 	github.com/klauspost/compress v1.18.3
 	github.com/pion/dtls/v3 v3.0.10
-	github.com/plgd-dev/go-coap/v3 v3.4.1
+	github.com/plgd-dev/go-coap/v3 v3.4.2
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/sony/gobreaker v1.0.0
 	go.etcd.io/etcd/client/v3 v3.6.7
