@@ -89,7 +89,7 @@ type EtcdCluster struct {
 
 	routeBatchMaxSize  int
 	routeBatchMaxDelay time.Duration
-	publishBatcher     *nodeBatcher[*clusterv1.PublishRequest]
+	forwardBatcher     *nodeBatcher[*clusterv1.ForwardPublishRequest]
 	queueBatcher       *nodeBatcher[QueueDelivery]
 
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
@@ -267,16 +267,6 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	}
 
 	if c.transport != nil {
-		c.publishBatcher = newNodeBatcher[*clusterv1.PublishRequest](
-			c.routeBatchMaxSize,
-			c.routeBatchMaxDelay,
-			c.stopCh,
-			logger.With(slog.String("batcher", "publish")),
-			"publish",
-			func(ctx context.Context, nodeID string, items []*clusterv1.PublishRequest) error {
-				return c.transport.SendPublishBatch(ctx, nodeID, items)
-			},
-		)
 		c.queueBatcher = newNodeBatcher[QueueDelivery](
 			c.routeBatchMaxSize,
 			c.routeBatchMaxDelay,
@@ -1206,22 +1196,42 @@ func (c *EtcdCluster) SetMessageHandler(handler MessageHandler) {
 	c.msgHandler = handler
 }
 
+// SetForwardPublishHandler sets the handler for topic-based forward publish RPCs
+// and initializes the forward batcher for batching outbound ForwardPublish messages.
+func (c *EtcdCluster) SetForwardPublishHandler(handler ForwardPublishHandler) {
+	if c.transport != nil {
+		c.transport.SetForwardPublishHandler(handler)
+
+		c.forwardBatcher = newNodeBatcher(
+			c.routeBatchMaxSize,
+			c.routeBatchMaxDelay,
+			c.stopCh,
+			c.logger.With(slog.String("batcher", "forward-publish")),
+			"forward-publish",
+			func(ctx context.Context, nodeID string, items []*clusterv1.ForwardPublishRequest) error {
+				return c.transport.SendForwardPublishBatch(ctx, nodeID, items)
+			},
+		)
+	}
+}
+
 // RoutePublish routes a publish to interested nodes with matching subscriptions.
+// It sends one ForwardPublishRequest per remote node (topic-based fan-out).
+// The receiving node performs its own local subscription match and delivery.
 func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
 	if c.transport == nil {
-		// No transport configured, messages only delivered locally
 		return nil
 	}
 
-	// Get all subscriptions matching this topic
+	// Match cluster trie to find any remote subscribers
 	subs, err := c.GetSubscribersForTopic(ctx, topic)
 	if err != nil {
 		return fmt.Errorf("failed to get subscribers: %w", err)
 	}
 
-	// Batch subscribers by owner node using local cache, with etcd fallback for misses
+	// Collect unique remote node IDs
+	remoteNodes := make(map[string]struct{})
 	c.ownerCacheMu.RLock()
-	nodeClients := make(map[string][]string) // nodeID -> []clientIDs
 	var cacheMisses []string
 	for _, sub := range subs {
 		nodeID, ok := c.ownerCache[sub.ClientID]
@@ -1229,10 +1239,9 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 			cacheMisses = append(cacheMisses, sub.ClientID)
 			continue
 		}
-		if nodeID == c.nodeID {
-			continue
+		if nodeID != c.nodeID {
+			remoteNodes[nodeID] = struct{}{}
 		}
-		nodeClients[nodeID] = append(nodeClients[nodeID], sub.ClientID)
 	}
 	c.ownerCacheMu.RUnlock()
 
@@ -1242,33 +1251,33 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		if err != nil || nodeID == "" || nodeID == c.nodeID {
 			continue
 		}
-		nodeClients[nodeID] = append(nodeClients[nodeID], clientID)
+		remoteNodes[nodeID] = struct{}{}
 	}
 
-	for nodeID, clientIDs := range nodeClients {
-		batch := make([]*clusterv1.PublishRequest, 0, len(clientIDs))
-		for _, clientID := range clientIDs {
-			batch = append(batch, &clusterv1.PublishRequest{
-				ClientId:   clientID,
-				Topic:      topic,
-				Payload:    payload,
-				Qos:        uint32(qos),
-				Retain:     retain,
-				Dup:        false,
-				Properties: properties,
-			})
-		}
+	if len(remoteNodes) == 0 {
+		return nil
+	}
 
+	// Send one ForwardPublish per remote node
+	msg := &clusterv1.ForwardPublishRequest{
+		Topic:      topic,
+		Payload:    payload,
+		Qos:        uint32(qos),
+		Retain:     retain,
+		Properties: properties,
+	}
+
+	for nodeID := range remoteNodes {
 		var err error
-		if c.publishBatcher != nil {
-			err = c.publishBatcher.Enqueue(ctx, nodeID, batch)
+		if c.forwardBatcher != nil {
+			err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
 		} else {
-			err = c.transport.SendPublishBatch(ctx, nodeID, batch)
+			err = c.transport.SendForwardPublishBatch(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
 		}
 		if err != nil {
-			c.logger.Warn("failed to route publish batch",
+			c.logger.Warn("failed to forward publish",
 				slog.String("node_id", nodeID),
-				slog.Int("client_count", len(clientIDs)),
+				slog.String("topic", topic),
 				slog.String("error", err.Error()))
 		}
 	}

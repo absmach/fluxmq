@@ -164,6 +164,12 @@ type Cluster interface {
 	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error
 }
 
+// ForwardPublishHandler handles topic-based message forwarding from remote nodes.
+// The receiving node matches its own local subscriptions and delivers to them.
+type ForwardPublishHandler interface {
+	ForwardPublish(ctx context.Context, msg *Message) error
+}
+
 // MessageHandler handles message delivery and session management for the cluster.
 // This interface is implemented by the broker to handle cluster operations:
 // - Delivering messages routed from other nodes

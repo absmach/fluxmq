@@ -12,6 +12,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -188,7 +189,27 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 
 // distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(msg *storage.Message) error {
-	// Deliver to local subscribers
+	if err := b.distributeLocal(msg); err != nil {
+		return err
+	}
+
+	// Route to remote subscribers in cluster
+	if b.cluster != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
+		payload := msg.GetPayload()
+		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.QoS, false, msg.Properties); err != nil {
+			b.logError("cluster_route_publish", err, slog.String("topic", msg.Topic))
+		}
+	}
+
+	return nil
+}
+
+// distributeLocal delivers a message to all matching local subscribers without cluster routing.
+func (b *Broker) distributeLocal(msg *storage.Message) error {
 	matched, err := b.router.Match(msg.Topic)
 	if err != nil {
 		return err
@@ -276,19 +297,22 @@ func (b *Broker) distribute(msg *storage.Message) error {
 		}
 	}
 
-	// Route to remote subscribers in cluster
-	if b.cluster != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
-		payload := msg.GetPayload()
-		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.QoS, false, msg.Properties); err != nil {
-			b.logError("cluster_route_publish", err, slog.String("topic", msg.Topic))
-		}
-	}
-
 	return nil
+}
+
+// ForwardPublish handles a forwarded publish from a remote cluster node.
+// It converts the cluster message to a storage message and delivers locally.
+func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+	storeMsg := storage.AcquireMessage()
+	storeMsg.Topic = msg.Topic
+	storeMsg.QoS = msg.QoS
+	storeMsg.Retain = msg.Retain
+	storeMsg.Properties = msg.Properties
+	storeMsg.SetPayloadFromBytes(msg.Payload)
+
+	err := b.distributeLocal(storeMsg)
+	storeMsg.ReleasePayload()
+	return err
 }
 
 // handleQueueAck handles queue acknowledgment messages ($ack, $nack, $reject).

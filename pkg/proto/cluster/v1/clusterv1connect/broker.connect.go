@@ -71,6 +71,9 @@ const (
 	// BrokerServiceForwardGroupOpProcedure is the fully-qualified name of the BrokerService's
 	// ForwardGroupOp RPC.
 	BrokerServiceForwardGroupOpProcedure = "/fluxmq.cluster.v1.BrokerService/ForwardGroupOp"
+	// BrokerServiceForwardPublishBatchProcedure is the fully-qualified name of the BrokerService's
+	// ForwardPublishBatch RPC.
+	BrokerServiceForwardPublishBatchProcedure = "/fluxmq.cluster.v1.BrokerService/ForwardPublishBatch"
 )
 
 // BrokerServiceClient is a client for the fluxmq.cluster.v1.BrokerService service.
@@ -101,6 +104,10 @@ type BrokerServiceClient interface {
 	// Raft leader for the queue's replication group. The leader applies the
 	// operation through its coordinator so it goes through Raft consensus.
 	ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error)
+	// ForwardPublishBatch forwards messages to a node for local fan-out.
+	// The receiving node matches its own local subscriptions and delivers.
+	// This replaces per-subscriber routing with per-node routing.
+	ForwardPublishBatch(context.Context, *connect.Request[v1.ForwardPublishBatchRequest]) (*connect.Response[v1.ForwardPublishBatchResponse], error)
 }
 
 // NewBrokerServiceClient constructs a client for the fluxmq.cluster.v1.BrokerService service. By
@@ -186,23 +193,30 @@ func NewBrokerServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(brokerServiceMethods.ByName("ForwardGroupOp")),
 			connect.WithClientOptions(opts...),
 		),
+		forwardPublishBatch: connect.NewClient[v1.ForwardPublishBatchRequest, v1.ForwardPublishBatchResponse](
+			httpClient,
+			baseURL+BrokerServiceForwardPublishBatchProcedure,
+			connect.WithSchema(brokerServiceMethods.ByName("ForwardPublishBatch")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // brokerServiceClient implements BrokerServiceClient.
 type brokerServiceClient struct {
-	routePublish      *connect.Client[v1.PublishRequest, v1.PublishResponse]
-	routePublishBatch *connect.Client[v1.PublishBatchRequest, v1.PublishBatchResponse]
-	takeoverSession   *connect.Client[v1.TakeoverRequest, v1.TakeoverResponse]
-	fetchRetained     *connect.Client[v1.FetchRetainedRequest, v1.FetchRetainedResponse]
-	fetchWill         *connect.Client[v1.FetchWillRequest, v1.FetchWillResponse]
-	enqueueRemote     *connect.Client[v1.EnqueueRemoteRequest, v1.EnqueueRemoteResponse]
-	routeQueueMessage *connect.Client[v1.RouteQueueMessageRequest, v1.RouteQueueMessageResponse]
-	routeQueueBatch   *connect.Client[v1.RouteQueueBatchRequest, v1.RouteQueueBatchResponse]
-	appendEntries     *connect.Client[v1.AppendEntriesRequest, v1.AppendEntriesResponse]
-	requestVote       *connect.Client[v1.RequestVoteRequest, v1.RequestVoteResponse]
-	installSnapshot   *connect.Client[v1.InstallSnapshotRequest, v1.InstallSnapshotResponse]
-	forwardGroupOp    *connect.Client[v1.ForwardGroupOpRequest, v1.ForwardGroupOpResponse]
+	routePublish        *connect.Client[v1.PublishRequest, v1.PublishResponse]
+	routePublishBatch   *connect.Client[v1.PublishBatchRequest, v1.PublishBatchResponse]
+	takeoverSession     *connect.Client[v1.TakeoverRequest, v1.TakeoverResponse]
+	fetchRetained       *connect.Client[v1.FetchRetainedRequest, v1.FetchRetainedResponse]
+	fetchWill           *connect.Client[v1.FetchWillRequest, v1.FetchWillResponse]
+	enqueueRemote       *connect.Client[v1.EnqueueRemoteRequest, v1.EnqueueRemoteResponse]
+	routeQueueMessage   *connect.Client[v1.RouteQueueMessageRequest, v1.RouteQueueMessageResponse]
+	routeQueueBatch     *connect.Client[v1.RouteQueueBatchRequest, v1.RouteQueueBatchResponse]
+	appendEntries       *connect.Client[v1.AppendEntriesRequest, v1.AppendEntriesResponse]
+	requestVote         *connect.Client[v1.RequestVoteRequest, v1.RequestVoteResponse]
+	installSnapshot     *connect.Client[v1.InstallSnapshotRequest, v1.InstallSnapshotResponse]
+	forwardGroupOp      *connect.Client[v1.ForwardGroupOpRequest, v1.ForwardGroupOpResponse]
+	forwardPublishBatch *connect.Client[v1.ForwardPublishBatchRequest, v1.ForwardPublishBatchResponse]
 }
 
 // RoutePublish calls fluxmq.cluster.v1.BrokerService.RoutePublish.
@@ -265,6 +279,11 @@ func (c *brokerServiceClient) ForwardGroupOp(ctx context.Context, req *connect.R
 	return c.forwardGroupOp.CallUnary(ctx, req)
 }
 
+// ForwardPublishBatch calls fluxmq.cluster.v1.BrokerService.ForwardPublishBatch.
+func (c *brokerServiceClient) ForwardPublishBatch(ctx context.Context, req *connect.Request[v1.ForwardPublishBatchRequest]) (*connect.Response[v1.ForwardPublishBatchResponse], error) {
+	return c.forwardPublishBatch.CallUnary(ctx, req)
+}
+
 // BrokerServiceHandler is an implementation of the fluxmq.cluster.v1.BrokerService service.
 type BrokerServiceHandler interface {
 	// RoutePublish forwards a PUBLISH packet to the broker that owns the target session.
@@ -293,6 +312,10 @@ type BrokerServiceHandler interface {
 	// Raft leader for the queue's replication group. The leader applies the
 	// operation through its coordinator so it goes through Raft consensus.
 	ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error)
+	// ForwardPublishBatch forwards messages to a node for local fan-out.
+	// The receiving node matches its own local subscriptions and delivers.
+	// This replaces per-subscriber routing with per-node routing.
+	ForwardPublishBatch(context.Context, *connect.Request[v1.ForwardPublishBatchRequest]) (*connect.Response[v1.ForwardPublishBatchResponse], error)
 }
 
 // NewBrokerServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -374,6 +397,12 @@ func NewBrokerServiceHandler(svc BrokerServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(brokerServiceMethods.ByName("ForwardGroupOp")),
 		connect.WithHandlerOptions(opts...),
 	)
+	brokerServiceForwardPublishBatchHandler := connect.NewUnaryHandler(
+		BrokerServiceForwardPublishBatchProcedure,
+		svc.ForwardPublishBatch,
+		connect.WithSchema(brokerServiceMethods.ByName("ForwardPublishBatch")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/fluxmq.cluster.v1.BrokerService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BrokerServiceRoutePublishProcedure:
@@ -400,6 +429,8 @@ func NewBrokerServiceHandler(svc BrokerServiceHandler, opts ...connect.HandlerOp
 			brokerServiceInstallSnapshotHandler.ServeHTTP(w, r)
 		case BrokerServiceForwardGroupOpProcedure:
 			brokerServiceForwardGroupOpHandler.ServeHTTP(w, r)
+		case BrokerServiceForwardPublishBatchProcedure:
+			brokerServiceForwardPublishBatchHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -455,4 +486,8 @@ func (UnimplementedBrokerServiceHandler) InstallSnapshot(context.Context, *conne
 
 func (UnimplementedBrokerServiceHandler) ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.ForwardGroupOp is not implemented"))
+}
+
+func (UnimplementedBrokerServiceHandler) ForwardPublishBatch(context.Context, *connect.Request[v1.ForwardPublishBatchRequest]) (*connect.Response[v1.ForwardPublishBatchResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.ForwardPublishBatch is not implemented"))
 }

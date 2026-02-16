@@ -104,6 +104,26 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 	}
 }
 
+// ForwardPublish handles a forwarded publish from a remote cluster node.
+// It matches local AMQP 0.9.1 subscriptions and delivers without re-routing to the cluster.
+func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+	subs, err := b.router.Match(msg.Topic)
+	if err != nil {
+		return err
+	}
+
+	for _, sub := range subs {
+		val, ok := b.connections.Load(sub.ClientID)
+		if !ok {
+			continue
+		}
+		c := val.(*Connection)
+		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties)
+	}
+
+	return nil
+}
+
 // DeliverToClient delivers a queue message to a specific AMQP 0.9.1 client.
 func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) error {
 	connID := strings.TrimPrefix(clientID, amqp091Prefix)

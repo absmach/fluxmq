@@ -47,6 +47,11 @@ service BrokerService {
   // Raft leader for the queue's replication group. The leader applies the
   // operation through its coordinator so it goes through Raft consensus.
   rpc ForwardGroupOp(ForwardGroupOpRequest) returns (ForwardGroupOpResponse);
+
+  // ForwardPublishBatch forwards messages to a node for local fan-out.
+  // The receiving node matches its own local subscriptions and delivers.
+  // This replaces per-subscriber routing with per-node routing.
+  rpc ForwardPublishBatch(ForwardPublishBatchRequest) returns (ForwardPublishBatchResponse);
 }
 
 // =============================================================================
@@ -289,4 +294,26 @@ message ForwardGroupOpRequest {
 message ForwardGroupOpResponse {
   bool success = 1;
   string error = 2;
+}
+
+// =============================================================================
+// Topic-Based Forward Publish (per-node fan-out)
+// =============================================================================
+
+message ForwardPublishRequest {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+  map<string, string> properties = 5;
+}
+
+message ForwardPublishBatchRequest {
+  repeated ForwardPublishRequest messages = 1;
+}
+
+message ForwardPublishBatchResponse {
+  bool success = 1;
+  string error = 2;
+  uint32 delivered = 3;
 }

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"log/slog"
 	"os"
@@ -61,6 +62,20 @@ func (d *messageDispatcher) DeliverToClient(ctx context.Context, clientID string
 		return d.amqp091.DeliverToClusterMessage(ctx, clientID, msg)
 	}
 	return d.mqtt.DeliverToClient(ctx, clientID, msg)
+}
+
+func (d *messageDispatcher) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+	var errs []error
+	if err := d.mqtt.(*broker.Broker).ForwardPublish(ctx, msg); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.amqp.ForwardPublish(ctx, msg); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.amqp091.ForwardPublish(ctx, msg); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func (d *messageDispatcher) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
@@ -495,10 +510,11 @@ func main() {
 	// Set cluster on AMQP broker for cross-node pub/sub routing
 	amqpBroker.SetCluster(cl)
 
-	// Set message handler on cluster if it's an etcd cluster
-	// MessageHandler interface now includes both message routing and session management
+	// Set message handler and forward publish handler on cluster if it's an etcd cluster
 	if etcdCluster != nil {
-		etcdCluster.SetMessageHandler(&messageDispatcher{mqtt: b, amqp: amqpBroker, amqp091: amqp091Broker})
+		dispatcher := &messageDispatcher{mqtt: b, amqp: amqpBroker, amqp091: amqp091Broker}
+		etcdCluster.SetMessageHandler(dispatcher)
+		etcdCluster.SetForwardPublishHandler(dispatcher)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

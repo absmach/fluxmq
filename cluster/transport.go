@@ -43,19 +43,20 @@ type QueueHandler interface {
 
 // Transport handles inter-broker communication using Connect protocol.
 type Transport struct {
-	mu           sync.RWMutex
-	nodeID       string
-	bindAddr     string
-	httpServer   *http.Server
-	listener     net.Listener
-	peerClients  map[string]clusterv1connect.BrokerServiceClient
-	breakers     *peerBreakers
-	logger       *slog.Logger
-	handler      MessageHandler
-	queueHandler QueueHandler
-	stopCh       chan struct{}
-	tlsConfig    *TransportTLSConfig
-	httpClient   *http.Client
+	mu             sync.RWMutex
+	nodeID         string
+	bindAddr       string
+	httpServer     *http.Server
+	listener       net.Listener
+	peerClients    map[string]clusterv1connect.BrokerServiceClient
+	breakers       *peerBreakers
+	logger         *slog.Logger
+	handler        MessageHandler
+	queueHandler   QueueHandler
+	forwardHandler ForwardPublishHandler
+	stopCh         chan struct{}
+	tlsConfig      *TransportTLSConfig
+	httpClient     *http.Client
 }
 
 // NewTransport creates a new Connect transport.
@@ -598,6 +599,48 @@ func (t *Transport) ForwardGroupOp(ctx context.Context, req *ForwardGroupOpReq) 
 	}), nil
 }
 
+// ForwardPublishBatch implements BrokerServiceHandler.ForwardPublishBatch.
+func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublishBatchReq) (*ForwardPublishBatchResp, error) {
+	t.mu.RLock()
+	handler := t.forwardHandler
+	t.mu.RUnlock()
+
+	if handler == nil {
+		return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
+			Success: false,
+			Error:   "no forward publish handler configured",
+		}), nil
+	}
+
+	var delivered uint32
+	for _, m := range req.Msg.Messages {
+		if m == nil {
+			continue
+		}
+
+		msg := &Message{
+			Topic:      m.Topic,
+			Payload:    m.Payload,
+			QoS:        byte(m.Qos),
+			Retain:     m.Retain,
+			Properties: m.Properties,
+		}
+
+		if err := handler.ForwardPublish(ctx, msg); err != nil {
+			t.logger.Warn("forward publish delivery failed",
+				slog.String("topic", m.Topic),
+				slog.String("error", err.Error()))
+			continue
+		}
+		delivered++
+	}
+
+	return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
+		Success:   true,
+		Delivered: delivered,
+	}), nil
+}
+
 // AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
 func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*AppendEntriesResp, error) {
 	// TODO: Implement Raft consensus
@@ -629,6 +672,13 @@ func (t *Transport) SetQueueHandler(handler QueueHandler) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.queueHandler = handler
+}
+
+// SetForwardPublishHandler sets the handler for topic-based forward publish RPCs.
+func (t *Transport) SetForwardPublishHandler(handler ForwardPublishHandler) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.forwardHandler = handler
 }
 
 // SendPublish sends a PUBLISH message to a specific peer node with retry and circuit breaker.
@@ -902,6 +952,32 @@ func (t *Transport) SendForwardGroupOp(ctx context.Context, nodeID, queueName st
 			return fmt.Errorf("forward group op failed: %s", resp.Msg.Error)
 		}
 
+		return nil
+	})
+}
+
+// SendForwardPublishBatch sends a batch of topic-based forward publish messages to a peer node.
+func (t *Transport) SendForwardPublishBatch(ctx context.Context, nodeID string, messages []*clusterv1.ForwardPublishRequest) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+		client, err := t.GetPeerClient(nodeID)
+		if err != nil {
+			return err
+		}
+
+		req := connect.NewRequest(&clusterv1.ForwardPublishBatchRequest{
+			Messages: messages,
+		})
+		resp, err := client.ForwardPublishBatch(ctx, req)
+		if err != nil {
+			return fmt.Errorf("connect call failed: %w", err)
+		}
+		if !resp.Msg.Success {
+			return fmt.Errorf("forward publish batch failed: %s", resp.Msg.Error)
+		}
 		return nil
 	})
 }
