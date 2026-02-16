@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"flag"
 	"log/slog"
 	"os"
@@ -22,9 +21,9 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/internal/wiring"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/mqtt/broker"
-	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
 	qraft "github.com/absmach/fluxmq/queue/raft"
@@ -46,49 +45,6 @@ import (
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
-
-// messageDispatcher routes cluster-delivered messages to the appropriate protocol broker.
-type messageDispatcher struct {
-	mqtt    cluster.MessageHandler
-	amqp    *amqp1broker.Broker
-	amqp091 *amqpbroker.Broker
-}
-
-func (d *messageDispatcher) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
-	if amqp1broker.IsAMQPClient(clientID) {
-		return d.amqp.DeliverToClusterMessage(ctx, clientID, msg)
-	}
-	if amqpbroker.IsAMQP091Client(clientID) {
-		return d.amqp091.DeliverToClusterMessage(ctx, clientID, msg)
-	}
-	return d.mqtt.DeliverToClient(ctx, clientID, msg)
-}
-
-func (d *messageDispatcher) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
-	var errs []error
-	if err := d.mqtt.(*broker.Broker).ForwardPublish(ctx, msg); err != nil {
-		errs = append(errs, err)
-	}
-	if err := d.amqp.ForwardPublish(ctx, msg); err != nil {
-		errs = append(errs, err)
-	}
-	if err := d.amqp091.ForwardPublish(ctx, msg); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
-}
-
-func (d *messageDispatcher) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
-	return d.mqtt.GetSessionStateAndClose(ctx, clientID)
-}
-
-func (d *messageDispatcher) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
-	return d.mqtt.GetRetainedMessage(ctx, topic)
-}
-
-func (d *messageDispatcher) GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error) {
-	return d.mqtt.GetWillMessage(ctx, clientID)
-}
 
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
@@ -512,7 +468,7 @@ func main() {
 
 	// Set message handler and forward publish handler on cluster if it's an etcd cluster
 	if etcdCluster != nil {
-		dispatcher := &messageDispatcher{mqtt: b, amqp: amqpBroker, amqp091: amqp091Broker}
+		dispatcher := wiring.NewMessageDispatcher(b, amqpBroker, amqp091Broker)
 		etcdCluster.SetMessageHandler(dispatcher)
 		etcdCluster.SetForwardPublishHandler(dispatcher)
 	}

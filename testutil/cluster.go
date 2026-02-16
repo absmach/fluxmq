@@ -302,6 +302,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 
 	// Wire broker as message handler (includes session management)
 	clust.SetMessageHandler(b)
+	clust.SetForwardPublishHandler(b)
 
 	// Start cluster (begins leader election, subscription cache, etc.)
 	if err := clust.Start(); err != nil {

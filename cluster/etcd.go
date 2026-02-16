@@ -1267,6 +1267,7 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		Properties: properties,
 	}
 
+	var errs []error
 	for nodeID := range remoteNodes {
 		var err error
 		if c.forwardBatcher != nil {
@@ -1279,10 +1280,11 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 				slog.String("node_id", nodeID),
 				slog.String("topic", topic),
 				slog.String("error", err.Error()))
+			errs = append(errs, fmt.Errorf("forward publish to node %s failed: %w", nodeID, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // TakeoverSession initiates session takeover from one node to another.

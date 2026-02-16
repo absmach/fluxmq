@@ -306,14 +306,23 @@ message ForwardPublishRequest {
   uint32 qos = 3;
   bool retain = 4;
   map<string, string> properties = 5;
+  // NOTE: Deduplication across retries is not implemented yet.
+  // A future dedup_key field can be added for idempotent forwarding.
 }
 
 message ForwardPublishBatchRequest {
   repeated ForwardPublishRequest messages = 1;
 }
 
+message ForwardPublishBatchError {
+  uint32 index = 1;
+  string topic = 2;
+  string error = 3;
+}
+
 message ForwardPublishBatchResponse {
   bool success = 1;
   string error = 2;
   uint32 delivered = 3;
+  repeated ForwardPublishBatchError failures = 4;
 }

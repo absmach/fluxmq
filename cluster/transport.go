@@ -612,9 +612,16 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 		}), nil
 	}
 
-	var delivered uint32
-	for _, m := range req.Msg.Messages {
+	var (
+		delivered uint32
+		failures  []*clusterv1.ForwardPublishBatchError
+	)
+	for idx, m := range req.Msg.Messages {
 		if m == nil {
+			failures = append(failures, &clusterv1.ForwardPublishBatchError{
+				Index: uint32(idx),
+				Error: "message is nil",
+			})
 			continue
 		}
 
@@ -630,15 +637,26 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 			t.logger.Warn("forward publish delivery failed",
 				slog.String("topic", m.Topic),
 				slog.String("error", err.Error()))
+			failures = append(failures, &clusterv1.ForwardPublishBatchError{
+				Index: uint32(idx),
+				Topic: m.Topic,
+				Error: err.Error(),
+			})
 			continue
 		}
 		delivered++
 	}
 
-	return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
-		Success:   true,
+	success := len(failures) == 0
+	resp := &clusterv1.ForwardPublishBatchResponse{
+		Success:   success,
 		Delivered: delivered,
-	}), nil
+		Failures:  failures,
+	}
+	if !success {
+		resp.Error = "one or more forward publish deliveries failed"
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
@@ -976,7 +994,21 @@ func (t *Transport) SendForwardPublishBatch(ctx context.Context, nodeID string, 
 			return fmt.Errorf("connect call failed: %w", err)
 		}
 		if !resp.Msg.Success {
-			return fmt.Errorf("forward publish batch failed: %s", resp.Msg.Error)
+			errMsg := resp.Msg.Error
+			if len(resp.Msg.Failures) > 0 {
+				first := resp.Msg.Failures[0]
+				detail := fmt.Sprintf("%d failures (first: index=%d topic=%q error=%q)",
+					len(resp.Msg.Failures), first.Index, first.Topic, first.Error)
+				if errMsg == "" {
+					errMsg = detail
+				} else {
+					errMsg = fmt.Sprintf("%s: %s", errMsg, detail)
+				}
+			}
+			if errMsg == "" {
+				errMsg = "unknown error"
+			}
+			return fmt.Errorf("forward publish batch failed: %s", errMsg)
 		}
 		return nil
 	})
