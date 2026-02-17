@@ -119,3 +119,52 @@ func TestParseQueueConsumerKeyWithSlashesInGroup(t *testing.T) {
 		t.Fatalf("unexpected consumerID: %q", consumerID)
 	}
 }
+
+func TestParseSessionOwnerKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		clientID string
+		ok       bool
+	}{
+		{
+			name:     "valid key",
+			key:      sessionsPrefix + "client-1/owner",
+			clientID: "client-1",
+			ok:       true,
+		},
+		{
+			name:     "client id with slash",
+			key:      sessionsPrefix + "tenant/a/client-1/owner",
+			clientID: "tenant/a/client-1",
+			ok:       true,
+		},
+		{
+			name: "missing owner suffix",
+			key:  sessionsPrefix + "client-1",
+			ok:   false,
+		},
+		{
+			name: "missing client id",
+			key:  sessionsPrefix + "/owner",
+			ok:   false,
+		},
+		{
+			name: "wrong prefix",
+			key:  "/other/client-1/owner",
+			ok:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clientID, ok := parseSessionOwnerKey(tc.key)
+			if ok != tc.ok {
+				t.Fatalf("expected ok=%t, got %t", tc.ok, ok)
+			}
+			if clientID != tc.clientID {
+				t.Fatalf("expected clientID=%q, got %q", tc.clientID, clientID)
+			}
+		})
+	}
+}
