@@ -39,6 +39,16 @@ The 3-node example configs also demonstrate per-queue Raft replication groups, i
 - `cluster.transport.*`: gRPC transport for routing
 - `cluster.raft.*`: optional queue replication
 
+### Transport Tuning
+
+The transport batches outbound messages per remote node. Relevant knobs:
+
+- `route_batch_max_size` (default `256`): flush threshold in messages.
+- `route_batch_max_delay` (default `5ms`): max wait before flushing a partial batch.
+- `route_batch_flush_workers` (default `4`): concurrent flush goroutines per remote node. Increase for high-latency links; set to `1` for strict ordering.
+
+See the [configuration reference](/docs/reference/configuration-reference#transport-batching) for details.
+
 ## Bootstrap Rules
 
 - Set `cluster.etcd.bootstrap: true` only on the first node.
