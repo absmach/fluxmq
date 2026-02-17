@@ -1,3 +1,5 @@
 # Queue behavior suite
 queue-fanin
 queue-fanout
+mqtt-consumer-groups
+amqp091-consumer-groups

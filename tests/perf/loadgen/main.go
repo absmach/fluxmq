@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,12 @@ var allScenarios = []string{
 	"mqtt-substorm",
 	"queue-fanin",
 	"queue-fanout",
+	"mqtt-consumer-groups",
+	"mqtt-shared-subscriptions",
+	"mqtt-last-will",
+	"amqp091-consumer-groups",
+	"amqp091-stream-cursor",
+	"amqp091-retention-policies",
 	"bridge-queue-mqtt-amqp",
 	"bridge-queue-amqp-mqtt",
 }
@@ -229,6 +236,18 @@ func runScenario(ctx context.Context, cfg runConfig) (scenarioResult, error) {
 		return runQueueFanin(ctx, cfg)
 	case "queue-fanout":
 		return runQueueFanout(ctx, cfg)
+	case "mqtt-consumer-groups":
+		return runMQTTConsumerGroups(ctx, cfg, "mqtt-consumer-groups")
+	case "mqtt-shared-subscriptions":
+		return runMQTTSharedSubscriptions(ctx, cfg)
+	case "mqtt-last-will":
+		return runMQTTLastWill(ctx, cfg)
+	case "amqp091-consumer-groups":
+		return runAMQP091ConsumerGroups(ctx, cfg)
+	case "amqp091-stream-cursor":
+		return runAMQP091StreamCursor(ctx, cfg)
+	case "amqp091-retention-policies":
+		return runAMQP091RetentionPolicies(ctx, cfg)
 	case "bridge-queue-mqtt-amqp":
 		return runBridgeQueueMQTTToAMQP(ctx, cfg)
 	case "bridge-queue-amqp-mqtt":
@@ -697,11 +716,12 @@ func runQueueFanout(ctx context.Context, cfg runConfig) (scenarioResult, error) 
 
 	allConsumers := make([]*mqttclient.Client, 0, workload.Groups*workload.ConsumersPerGroup)
 	for g := 0; g < workload.Groups; g++ {
+		gid := g
 		groupName := fmt.Sprintf("group-%d", g+1)
 		consumers, err := connectMQTTQueueConsumers(cfg.MQTTAddrs, "queue-fanout", runID+int64(g), workload.ConsumersPerGroup, queueName, groupName, func(_ int, msg *mqttclient.QueueMessage) {
 			msgID := extractMsgID(msg.Payload)
-			if groupSeen[g].add(msgID) {
-				groupCounters[g].Add(1)
+			if groupSeen[gid].add(msgID) {
+				groupCounters[gid].Add(1)
 			}
 			if err := msg.Ack(); err != nil {
 				errCount.Add(1)
@@ -928,6 +948,781 @@ func runBridgeQueueAMQPToMQTT(ctx context.Context, cfg runConfig) (scenarioResul
 	res.Pass = res.DeliveryRatio >= cfg.QueueMinRatio
 	if !res.Pass {
 		res.Notes = fmt.Sprintf("bridge queue amqp->mqtt ratio %.4f below min %.4f", res.DeliveryRatio, cfg.QueueMinRatio)
+	}
+
+	return res, nil
+}
+
+func runMQTTConsumerGroups(ctx context.Context, cfg runConfig, scenarioName string) (scenarioResult, error) {
+	res := scenarioResult{
+		Scenario:     scenarioName,
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+	}
+
+	type queueFanoutWorkload struct {
+		Publishers           int
+		Groups               int
+		ConsumersPerGroup    int
+		MessagesPerPublisher int
+	}
+
+	workload := func() queueFanoutWorkload {
+		w := queueFanoutWorkload{Publishers: 80, Groups: 3, ConsumersPerGroup: 40, MessagesPerPublisher: messagesByPayloadBytes(cfg.PayloadBytes, 25, 10, 3)}
+		if cfg.Publishers > 0 {
+			w.Publishers = cfg.Publishers
+		}
+		if cfg.ConsumerGroups > 0 {
+			w.Groups = cfg.ConsumerGroups
+		}
+		if cfg.ConsumersPerGroup > 0 {
+			w.ConsumersPerGroup = cfg.ConsumersPerGroup
+		} else if cfg.Subscribers > 0 {
+			if w.Groups <= 0 {
+				w.Groups = 1
+			}
+			w.ConsumersPerGroup = maxInt(1, cfg.Subscribers/w.Groups)
+		}
+		if cfg.MessagesPerPublisher > 0 {
+			w.MessagesPerPublisher = cfg.MessagesPerPublisher
+		}
+		return w
+	}()
+
+	res.Publishers = workload.Publishers
+	res.ConsumerGroups = workload.Groups
+	res.ConsumersPerGroup = workload.ConsumersPerGroup
+	res.Subscribers = workload.Groups * workload.ConsumersPerGroup
+
+	runID := time.Now().UnixNano()
+	queueName := fmt.Sprintf("perf-%s-%d", strings.ReplaceAll(scenarioName, "_", "-"), runID)
+
+	var errCount atomic.Int64
+	groupCounters := make([]*atomic.Int64, workload.Groups)
+	groupSeen := make([]*deduper, workload.Groups)
+	for i := 0; i < workload.Groups; i++ {
+		groupCounters[i] = &atomic.Int64{}
+		groupSeen[i] = newDeduper()
+	}
+
+	allConsumers := make([]*mqttclient.Client, 0, workload.Groups*workload.ConsumersPerGroup)
+	for g := 0; g < workload.Groups; g++ {
+		gid := g
+		groupName := fmt.Sprintf("group-%d", g+1)
+		consumers, err := connectMQTTQueueConsumers(cfg.MQTTAddrs, scenarioName, runID+int64(g), workload.ConsumersPerGroup, queueName, groupName, func(_ int, msg *mqttclient.QueueMessage) {
+			msgID := extractMsgID(msg.Payload)
+			if groupSeen[gid].add(msgID) {
+				groupCounters[gid].Add(1)
+			}
+			if err := msg.Ack(); err != nil {
+				errCount.Add(1)
+			}
+		})
+		if err != nil {
+			disconnectMQTTClients(allConsumers)
+			return res, err
+		}
+		allConsumers = append(allConsumers, consumers...)
+	}
+	defer disconnectMQTTClients(allConsumers)
+
+	time.Sleep(500 * time.Millisecond)
+
+	published := runMQTTQueuePublishers(ctx, mqttQueuePublishParams{
+		Addrs:                cfg.MQTTAddrs,
+		Scenario:             scenarioName,
+		RunID:                runID,
+		QueueName:            queueName,
+		Publishers:           workload.Publishers,
+		MessagesPerPublisher: workload.MessagesPerPublisher,
+		PayloadSize:          cfg.PayloadBytes,
+		PublishInterval:      cfg.PublishInterval,
+		ErrCount:             &errCount,
+	})
+
+	deadline := time.Now().Add(cfg.DrainTimeout)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for _, c := range groupCounters {
+			if c.Load() < published {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	var totalReceived int64
+	allGroupsReady := true
+	for _, c := range groupCounters {
+		count := c.Load()
+		totalReceived += count
+		if count < published {
+			allGroupsReady = false
+		}
+	}
+
+	res.Published = published
+	res.Expected = published * int64(workload.Groups)
+	res.Received = totalReceived
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+	res.Pass = allGroupsReady && res.DeliveryRatio >= cfg.QueueMinRatio
+	if !res.Pass {
+		res.Notes = fmt.Sprintf("%s ratio %.4f below min %.4f or some groups lagged", scenarioName, res.DeliveryRatio, cfg.QueueMinRatio)
+	}
+
+	return res, nil
+}
+
+func runAMQP091ConsumerGroups(ctx context.Context, cfg runConfig) (scenarioResult, error) {
+	res := scenarioResult{
+		Scenario:     "amqp091-consumer-groups",
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+	}
+
+	type workload struct {
+		Publishers           int
+		Groups               int
+		ConsumersPerGroup    int
+		MessagesPerPublisher int
+	}
+
+	w := workload{Publishers: 80, Groups: 3, ConsumersPerGroup: 40, MessagesPerPublisher: messagesByPayloadBytes(cfg.PayloadBytes, 25, 10, 3)}
+	if cfg.Publishers > 0 {
+		w.Publishers = cfg.Publishers
+	}
+	if cfg.ConsumerGroups > 0 {
+		w.Groups = cfg.ConsumerGroups
+	}
+	if cfg.ConsumersPerGroup > 0 {
+		w.ConsumersPerGroup = cfg.ConsumersPerGroup
+	} else if cfg.Subscribers > 0 {
+		if w.Groups <= 0 {
+			w.Groups = 1
+		}
+		w.ConsumersPerGroup = maxInt(1, cfg.Subscribers/w.Groups)
+	}
+	if cfg.MessagesPerPublisher > 0 {
+		w.MessagesPerPublisher = cfg.MessagesPerPublisher
+	}
+
+	res.Publishers = w.Publishers
+	res.ConsumerGroups = w.Groups
+	res.ConsumersPerGroup = w.ConsumersPerGroup
+	res.Subscribers = w.Groups * w.ConsumersPerGroup
+
+	runID := time.Now().UnixNano()
+	queueName := fmt.Sprintf("perf-amqp091-consumer-groups-%d", runID)
+
+	var errCount atomic.Int64
+	groupCounters := make([]*atomic.Int64, w.Groups)
+	groupSeen := make([]*deduper, w.Groups)
+	for i := 0; i < w.Groups; i++ {
+		groupCounters[i] = &atomic.Int64{}
+		groupSeen[i] = newDeduper()
+	}
+
+	allConsumers := make([]*amqpclient.Client, 0, w.Groups*w.ConsumersPerGroup)
+	for g := 0; g < w.Groups; g++ {
+		gid := g
+		groupName := fmt.Sprintf("group-%d", g+1)
+		consumers, err := connectAMQPQueueConsumers(cfg.AMQPAddrs, "amqp091-consumer-groups", runID+int64(g), w.ConsumersPerGroup, queueName, groupName, func(_ int, msg *amqpclient.QueueMessage) {
+			msgID := extractMsgID(msg.Body)
+			if groupSeen[gid].add(msgID) {
+				groupCounters[gid].Add(1)
+			}
+			if err := msg.Ack(); err != nil {
+				errCount.Add(1)
+			}
+		})
+		if err != nil {
+			closeAMQPClients(allConsumers)
+			return res, err
+		}
+		allConsumers = append(allConsumers, consumers...)
+	}
+	defer closeAMQPClients(allConsumers)
+
+	time.Sleep(500 * time.Millisecond)
+
+	published := runAMQPQueuePublishers(ctx, amqpQueuePublishParams{
+		Addrs:                cfg.AMQPAddrs,
+		Scenario:             "amqp091-consumer-groups",
+		RunID:                runID,
+		QueueName:            queueName,
+		Publishers:           w.Publishers,
+		MessagesPerPublisher: w.MessagesPerPublisher,
+		PayloadSize:          cfg.PayloadBytes,
+		PublishInterval:      cfg.PublishInterval,
+		ErrCount:             &errCount,
+	})
+
+	deadline := time.Now().Add(cfg.DrainTimeout)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for _, c := range groupCounters {
+			if c.Load() < published {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	var totalReceived int64
+	allGroupsReady := true
+	for _, c := range groupCounters {
+		count := c.Load()
+		totalReceived += count
+		if count < published {
+			allGroupsReady = false
+		}
+	}
+
+	res.Published = published
+	res.Expected = published * int64(w.Groups)
+	res.Received = totalReceived
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+	res.Pass = allGroupsReady && res.DeliveryRatio >= cfg.QueueMinRatio
+	if !res.Pass {
+		res.Notes = fmt.Sprintf("amqp091 consumer groups ratio %.4f below min %.4f or some groups lagged", res.DeliveryRatio, cfg.QueueMinRatio)
+	}
+
+	return res, nil
+}
+
+func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioResult, error) {
+	res := scenarioResult{
+		Scenario:     "mqtt-shared-subscriptions",
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+	}
+
+	type workload struct {
+		Publishers           int
+		Groups               int
+		ConsumersPerGroup    int
+		MessagesPerPublisher int
+	}
+
+	w := workload{Publishers: 60, Groups: 3, ConsumersPerGroup: 24, MessagesPerPublisher: messagesByPayloadBytes(cfg.PayloadBytes, 30, 12, 4)}
+	if cfg.Publishers > 0 {
+		w.Publishers = cfg.Publishers
+	}
+	if cfg.ConsumerGroups > 0 {
+		w.Groups = cfg.ConsumerGroups
+	}
+	if cfg.ConsumersPerGroup > 0 {
+		w.ConsumersPerGroup = cfg.ConsumersPerGroup
+	} else if cfg.Subscribers > 0 {
+		if w.Groups <= 0 {
+			w.Groups = 1
+		}
+		w.ConsumersPerGroup = maxInt(1, cfg.Subscribers/w.Groups)
+	}
+	if cfg.MessagesPerPublisher > 0 {
+		w.MessagesPerPublisher = cfg.MessagesPerPublisher
+	}
+
+	res.Publishers = w.Publishers
+	res.ConsumerGroups = w.Groups
+	res.ConsumersPerGroup = w.ConsumersPerGroup
+	res.Subscribers = w.Groups * w.ConsumersPerGroup
+
+	runID := time.Now().UnixNano()
+	topic := fmt.Sprintf("perf/topic/mqtt-shared-subscriptions/%d", runID)
+
+	var errCount atomic.Int64
+	groupCounters := make([]*atomic.Int64, w.Groups)
+	groupSeen := make([]*deduper, w.Groups)
+	for i := 0; i < w.Groups; i++ {
+		groupCounters[i] = &atomic.Int64{}
+		groupSeen[i] = newDeduper()
+	}
+
+	allConsumers := make([]*mqttclient.Client, 0, w.Groups*w.ConsumersPerGroup)
+	for g := 0; g < w.Groups; g++ {
+		gid := g
+		groupName := fmt.Sprintf("group-%d", g+1)
+		filter := fmt.Sprintf("$share/%s/%s", groupName, topic)
+		for i := 0; i < w.ConsumersPerGroup; i++ {
+			addr := cfg.MQTTAddrs[(g*w.ConsumersPerGroup+i)%len(cfg.MQTTAddrs)]
+			clientID := fmt.Sprintf("mqtt-shared-sub-g%d-c%d-%d", g, i, runID)
+			client, err := connectMQTTClient(addr, clientID, func(msg *mqttclient.Message) {
+				msgID := extractMsgID(msg.Payload)
+				if groupSeen[gid].add(msgID) {
+					groupCounters[gid].Add(1)
+				}
+			})
+			if err != nil {
+				disconnectMQTTClients(allConsumers)
+				return res, fmt.Errorf("failed to connect shared subscriber %s: %w", clientID, err)
+			}
+			if err := client.SubscribeSingle(filter, 1); err != nil {
+				_ = client.Disconnect()
+				disconnectMQTTClients(allConsumers)
+				return res, fmt.Errorf("failed to subscribe %s to %q: %w", clientID, filter, err)
+			}
+			allConsumers = append(allConsumers, client)
+		}
+	}
+	defer disconnectMQTTClients(allConsumers)
+
+	time.Sleep(500 * time.Millisecond)
+
+	published := runMQTTPublishers(ctx, mqttPublishParams{
+		Addrs:                cfg.MQTTAddrs,
+		Scenario:             "mqtt-shared-subscriptions",
+		RunID:                runID,
+		Publishers:           w.Publishers,
+		MessagesPerPublisher: w.MessagesPerPublisher,
+		PayloadSize:          cfg.PayloadBytes,
+		PublishInterval:      cfg.PublishInterval,
+		TopicFor: func(_ int, _ int) string {
+			return topic
+		},
+		ErrCount: &errCount,
+	})
+
+	deadline := time.Now().Add(cfg.DrainTimeout)
+	for time.Now().Before(deadline) {
+		allReady := true
+		for _, c := range groupCounters {
+			if c.Load() < published {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	var totalReceived int64
+	allGroupsReady := true
+	for _, c := range groupCounters {
+		count := c.Load()
+		totalReceived += count
+		if count < published {
+			allGroupsReady = false
+		}
+	}
+
+	res.Published = published
+	res.Expected = published * int64(w.Groups)
+	res.Received = totalReceived
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+	res.Pass = allGroupsReady && res.DeliveryRatio >= cfg.QueueMinRatio
+	if !res.Pass {
+		res.Notes = fmt.Sprintf("shared subscription ratio %.4f below min %.4f or some groups lagged", res.DeliveryRatio, cfg.QueueMinRatio)
+	}
+
+	return res, nil
+}
+
+func runMQTTLastWill(_ context.Context, cfg runConfig) (scenarioResult, error) {
+	res := scenarioResult{
+		Scenario:     "mqtt-last-will",
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+	}
+
+	type workload struct {
+		WillPublishers int
+		Subscribers    int
+	}
+
+	w := workload{WillPublishers: 80, Subscribers: 40}
+	if cfg.Publishers > 0 {
+		w.WillPublishers = cfg.Publishers
+	}
+	if cfg.Subscribers > 0 {
+		w.Subscribers = cfg.Subscribers
+	}
+
+	res.Publishers = w.WillPublishers
+	res.Subscribers = w.Subscribers
+
+	runID := time.Now().UnixNano()
+	willTopic := fmt.Sprintf("perf/topic/mqtt-last-will/%d", runID)
+
+	var errCount atomic.Int64
+	var received atomic.Int64
+	seen := newDeduper()
+
+	subs, err := connectMQTTSubscribers(cfg.MQTTAddrs, "mqtt-last-will-sub", runID, w.Subscribers, func(subID int, _ string, msg *mqttclient.Message) {
+		msgID := extractMsgID(msg.Payload)
+		if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
+			received.Add(1)
+		}
+	})
+	if err != nil {
+		return res, err
+	}
+	defer disconnectMQTTClients(subs)
+
+	for i, sub := range subs {
+		if err := sub.SubscribeSingle(willTopic, 1); err != nil {
+			errCount.Add(1)
+			return res, fmt.Errorf("subscriber %d failed to subscribe %q: %w", i, willTopic, err)
+		}
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	willClients := make([]*mqttclient.Client, 0, w.WillPublishers)
+	for i := 0; i < w.WillPublishers; i++ {
+		addr := cfg.MQTTAddrs[i%len(cfg.MQTTAddrs)]
+		clientID := fmt.Sprintf("mqtt-last-will-pub-%d-%d", runID, i)
+		msgID := fmt.Sprintf("mqtt-last-will-%d", i)
+		payload := makePayload(msgID, cfg.PayloadBytes)
+		client, err := connectMQTTClientWithCustomizer(addr, clientID, nil, func(opts *mqttclient.Options) {
+			opts.SetWill(willTopic, payload, 1, false)
+			opts.SetAutoReconnect(false)
+		})
+		if err != nil {
+			errCount.Add(1)
+			continue
+		}
+		willClients = append(willClients, client)
+	}
+
+	for _, client := range willClients {
+		// Close socket without DISCONNECT so broker emits last-will.
+		if err := client.Close(); err != nil {
+			errCount.Add(1)
+		}
+	}
+
+	res.Publishers = len(willClients)
+	res.Published = int64(len(willClients))
+	res.Expected = int64(len(willClients) * w.Subscribers)
+
+	_ = waitForAtLeast(&received, res.Expected, cfg.DrainTimeout)
+
+	res.Received = received.Load()
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+	res.Pass = res.DeliveryRatio >= cfg.MinRatio
+	if !res.Pass {
+		res.Notes = fmt.Sprintf("last-will delivery ratio %.4f below min %.4f", res.DeliveryRatio, cfg.MinRatio)
+	}
+
+	return res, nil
+}
+
+func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult, error) {
+	res := scenarioResult{
+		Scenario:     "amqp091-stream-cursor",
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+		Subscribers:  2,
+	}
+
+	type workload struct {
+		Publishers           int
+		MessagesPerPublisher int
+	}
+
+	w := workload{Publishers: 20, MessagesPerPublisher: messagesByPayloadBytes(cfg.PayloadBytes, 80, 30, 10)}
+	if cfg.Publishers > 0 {
+		w.Publishers = cfg.Publishers
+	}
+	if cfg.MessagesPerPublisher > 0 {
+		w.MessagesPerPublisher = cfg.MessagesPerPublisher
+	}
+	res.Publishers = w.Publishers
+
+	runID := time.Now().UnixNano()
+	streamName := fmt.Sprintf("perf-stream-cursor-%d", runID)
+
+	var errCount atomic.Int64
+	admin, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	if err != nil {
+		return res, err
+	}
+	defer admin.Close()
+
+	_, err = admin.DeclareStreamQueue(&amqpclient.StreamQueueOptions{
+		Name:              streamName,
+		Durable:           true,
+		MaxLengthMessages: int64(maxInt(256, w.Publishers*w.MessagesPerPublisher*2)),
+	})
+	if err != nil {
+		return res, fmt.Errorf("declare stream %s failed: %w", streamName, err)
+	}
+
+	published := runAMQPStreamPublishers(ctx, amqpStreamPublishParams{
+		Addrs:                cfg.AMQPAddrs,
+		Scenario:             "amqp091-stream-cursor",
+		RunID:                runID,
+		StreamName:           streamName,
+		Publishers:           w.Publishers,
+		MessagesPerPublisher: w.MessagesPerPublisher,
+		PayloadSize:          cfg.PayloadBytes,
+		PublishInterval:      cfg.PublishInterval,
+		ErrCount:             &errCount,
+	})
+
+	readerFirst, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	if err != nil {
+		return res, err
+	}
+	defer readerFirst.Close()
+
+	var firstReceived atomic.Int64
+	firstSeen := newDeduper()
+	var offsetsMu sync.Mutex
+	offsets := make([]uint64, 0, maxInt(0, int(published)))
+
+	err = readerFirst.SubscribeToStream(&amqpclient.StreamConsumeOptions{
+		QueueName:     streamName,
+		ConsumerGroup: fmt.Sprintf("cursor-first-%d", runID),
+		Offset:        "first",
+		AutoAck:       false,
+	}, func(msg *amqpclient.QueueMessage) {
+		msgID := extractMsgID(msg.Body)
+		if firstSeen.add(msgID) {
+			firstReceived.Add(1)
+			if off, ok := msg.StreamOffset(); ok {
+				offsetsMu.Lock()
+				offsets = append(offsets, off)
+				offsetsMu.Unlock()
+			}
+		}
+		if err := msg.Ack(); err != nil {
+			errCount.Add(1)
+		}
+	})
+	if err != nil {
+		return res, fmt.Errorf("subscribe stream first failed: %w", err)
+	}
+
+	_ = waitForAtLeast(&firstReceived, published, cfg.DrainTimeout)
+	_ = readerFirst.UnsubscribeFromStream(streamName)
+
+	firstCount := firstReceived.Load()
+	offsetsMu.Lock()
+	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+	offsetsCopy := append([]uint64(nil), offsets...)
+	offsetsMu.Unlock()
+
+	if len(offsetsCopy) == 0 {
+		res.Published = published
+		res.Expected = published
+		res.Received = firstCount
+		res.Errors = errCount.Load()
+		res.Pass = false
+		res.Notes = "stream cursor phase collected no offsets"
+		return res, nil
+	}
+
+	cursorOffset := offsetsCopy[len(offsetsCopy)/2]
+	var expectedTail int64
+	for _, off := range offsetsCopy {
+		if off >= cursorOffset {
+			expectedTail++
+		}
+	}
+
+	readerCursor, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	if err != nil {
+		return res, err
+	}
+	defer readerCursor.Close()
+
+	var cursorReceived atomic.Int64
+	cursorSeen := newDeduper()
+	err = readerCursor.SubscribeToStream(&amqpclient.StreamConsumeOptions{
+		QueueName:     streamName,
+		ConsumerGroup: fmt.Sprintf("cursor-tail-%d", runID),
+		Offset:        fmt.Sprintf("offset=%d", cursorOffset),
+		AutoAck:       false,
+	}, func(msg *amqpclient.QueueMessage) {
+		msgID := extractMsgID(msg.Body)
+		if cursorSeen.add(msgID) {
+			cursorReceived.Add(1)
+		}
+		if err := msg.Ack(); err != nil {
+			errCount.Add(1)
+		}
+	})
+	if err != nil {
+		return res, fmt.Errorf("subscribe stream cursor failed: %w", err)
+	}
+
+	_ = waitForAtLeast(&cursorReceived, expectedTail, cfg.DrainTimeout)
+	_ = readerCursor.UnsubscribeFromStream(streamName)
+
+	tailCount := cursorReceived.Load()
+	res.Published = published
+	res.Expected = published + expectedTail
+	res.Received = firstCount + tailCount
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+
+	firstOK := ratio(firstCount, published) >= cfg.QueueMinRatio
+	tailOK := ratio(tailCount, expectedTail) >= cfg.QueueMinRatio
+	res.Pass = firstOK && tailOK
+	res.Notes = fmt.Sprintf("cursor_offset=%d first_phase=%d/%d tail_phase=%d/%d", cursorOffset, firstCount, published, tailCount, expectedTail)
+	if !res.Pass {
+		res.Notes = res.Notes + fmt.Sprintf("; cursor scenario below min %.4f", cfg.QueueMinRatio)
+	}
+
+	return res, nil
+}
+
+func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioResult, error) {
+	res := scenarioResult{
+		Scenario:     "amqp091-retention-policies",
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+		Subscribers:  1,
+	}
+
+	type workload struct {
+		Publishers           int
+		MessagesPerPublisher int
+		MaxRetainedMessages  int
+	}
+
+	w := workload{
+		Publishers:           12,
+		MessagesPerPublisher: messagesByPayloadBytes(cfg.PayloadBytes, 120, 50, 16),
+		MaxRetainedMessages:  200,
+	}
+	if cfg.Publishers > 0 {
+		w.Publishers = cfg.Publishers
+	}
+	if cfg.MessagesPerPublisher > 0 {
+		w.MessagesPerPublisher = cfg.MessagesPerPublisher
+	}
+	res.Publishers = w.Publishers
+
+	runID := time.Now().UnixNano()
+	streamName := fmt.Sprintf("perf-retention-policy-%d", runID)
+
+	var errCount atomic.Int64
+	admin, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	if err != nil {
+		return res, err
+	}
+	defer admin.Close()
+
+	_, err = admin.DeclareStreamQueue(&amqpclient.StreamQueueOptions{
+		Name:              streamName,
+		Durable:           true,
+		MaxLengthMessages: int64(w.MaxRetainedMessages),
+	})
+	if err != nil {
+		return res, fmt.Errorf("declare retention stream %s failed: %w", streamName, err)
+	}
+
+	var ordMu sync.Mutex
+	publishedOrdinals := make([]int, 0, w.Publishers*w.MessagesPerPublisher)
+	published := runAMQPStreamPublishers(ctx, amqpStreamPublishParams{
+		Addrs:                cfg.AMQPAddrs,
+		Scenario:             "amqp091-retention-policies",
+		RunID:                runID,
+		StreamName:           streamName,
+		Publishers:           w.Publishers,
+		MessagesPerPublisher: w.MessagesPerPublisher,
+		PayloadSize:          cfg.PayloadBytes,
+		PublishInterval:      cfg.PublishInterval,
+		MsgIDFor: func(pubIdx, msgIdx int) string {
+			return fmt.Sprintf("ret-%08d", pubIdx*w.MessagesPerPublisher+msgIdx)
+		},
+		OnPublished: func(msgID string) {
+			ord, ok := parseRetentionOrdinal(msgID)
+			if !ok {
+				return
+			}
+			ordMu.Lock()
+			publishedOrdinals = append(publishedOrdinals, ord)
+			ordMu.Unlock()
+		},
+		ErrCount: &errCount,
+	})
+
+	ordMu.Lock()
+	sort.Ints(publishedOrdinals)
+	publishedSnapshot := append([]int(nil), publishedOrdinals...)
+	ordMu.Unlock()
+
+	expectedRetained := minInt(len(publishedSnapshot), w.MaxRetainedMessages)
+	expectedTail := make(map[int]struct{}, expectedRetained)
+	for i := len(publishedSnapshot) - expectedRetained; i < len(publishedSnapshot); i++ {
+		if i >= 0 {
+			expectedTail[publishedSnapshot[i]] = struct{}{}
+		}
+	}
+
+	reader, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	if err != nil {
+		return res, err
+	}
+	defer reader.Close()
+
+	var receivedUnique atomic.Int64
+	seen := newDeduper()
+	var readMu sync.Mutex
+	readOrdinals := make(map[int]struct{}, expectedRetained)
+
+	err = reader.SubscribeToStream(&amqpclient.StreamConsumeOptions{
+		QueueName:     streamName,
+		ConsumerGroup: fmt.Sprintf("retention-read-%d", runID),
+		Offset:        "first",
+		AutoAck:       false,
+	}, func(msg *amqpclient.QueueMessage) {
+		msgID := extractMsgID(msg.Body)
+		if seen.add(msgID) {
+			receivedUnique.Add(1)
+			if ord, ok := parseRetentionOrdinal(msgID); ok {
+				readMu.Lock()
+				readOrdinals[ord] = struct{}{}
+				readMu.Unlock()
+			}
+		}
+		if err := msg.Ack(); err != nil {
+			errCount.Add(1)
+		}
+	})
+	if err != nil {
+		return res, fmt.Errorf("subscribe retention stream failed: %w", err)
+	}
+
+	waitForCounterIdle(&receivedUnique, 1200*time.Millisecond, minDuration(cfg.DrainTimeout, 12*time.Second))
+	_ = reader.UnsubscribeFromStream(streamName)
+
+	readMu.Lock()
+	missingTail := 0
+	for ord := range expectedTail {
+		if _, ok := readOrdinals[ord]; !ok {
+			missingTail++
+		}
+	}
+	readMu.Unlock()
+
+	res.Published = published
+	res.Expected = int64(expectedRetained)
+	res.Received = receivedUnique.Load()
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+	res.Pass = missingTail == 0 && int(res.Received) <= expectedRetained && res.DeliveryRatio >= cfg.QueueMinRatio
+	res.Notes = fmt.Sprintf("retention_limit=%d missing_tail=%d", expectedRetained, missingTail)
+	if !res.Pass {
+		res.Notes = res.Notes + fmt.Sprintf("; retention policy check failed (min ratio %.4f)", cfg.QueueMinRatio)
 	}
 
 	return res, nil
@@ -1271,7 +2066,77 @@ func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) 
 	return published.Load()
 }
 
+type amqpStreamPublishParams struct {
+	Addrs                []string
+	Scenario             string
+	RunID                int64
+	StreamName           string
+	Publishers           int
+	MessagesPerPublisher int
+	PayloadSize          int
+	PublishInterval      time.Duration
+	MsgIDFor             func(pubIdx, msgIdx int) string
+	OnPublished          func(msgID string)
+	ErrCount             *atomic.Int64
+}
+
+func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams) int64 {
+	pubClients := make([]*amqpclient.Client, 0, params.Publishers)
+	for i := 0; i < params.Publishers; i++ {
+		addr := params.Addrs[i%len(params.Addrs)]
+		client, err := connectAMQPClient(addr)
+		if err != nil {
+			if params.ErrCount != nil {
+				params.ErrCount.Add(1)
+			}
+			continue
+		}
+		pubClients = append(pubClients, client)
+	}
+	defer closeAMQPClients(pubClients)
+
+	var published atomic.Int64
+	var wg sync.WaitGroup
+	for pubIdx, c := range pubClients {
+		wg.Add(1)
+		go func(idx int, client *amqpclient.Client) {
+			defer wg.Done()
+			for msgIdx := 0; msgIdx < params.MessagesPerPublisher; msgIdx++ {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				msgID := fmt.Sprintf("%s-as-%d-%d", params.Scenario, idx, msgIdx)
+				if params.MsgIDFor != nil {
+					msgID = params.MsgIDFor(idx, msgIdx)
+				}
+				payload := makePayload(msgID, params.PayloadSize)
+				if err := client.PublishToStream(params.StreamName, payload, nil); err != nil {
+					if params.ErrCount != nil {
+						params.ErrCount.Add(1)
+					}
+					continue
+				}
+				published.Add(1)
+				if params.OnPublished != nil {
+					params.OnPublished(msgID)
+				}
+				if params.PublishInterval > 0 {
+					time.Sleep(params.PublishInterval)
+				}
+			}
+		}(pubIdx, c)
+	}
+	wg.Wait()
+	return published.Load()
+}
+
 func connectMQTTClient(addr, clientID string, onMessage func(msg *mqttclient.Message)) (*mqttclient.Client, error) {
+	return connectMQTTClientWithCustomizer(addr, clientID, onMessage, nil)
+}
+
+func connectMQTTClientWithCustomizer(addr, clientID string, onMessage func(msg *mqttclient.Message), customize func(opts *mqttclient.Options)) (*mqttclient.Client, error) {
 	opts := mqttclient.NewOptions().
 		SetServers(addr).
 		SetClientID(clientID).
@@ -1285,6 +2150,9 @@ func connectMQTTClient(addr, clientID string, onMessage func(msg *mqttclient.Mes
 
 	if onMessage != nil {
 		opts.SetOnMessageV2(onMessage)
+	}
+	if customize != nil {
+		customize(opts)
 	}
 
 	c, err := mqttclient.New(opts)
@@ -1371,6 +2239,18 @@ func scenarioDescription(scenario string) string {
 		return "Many publishers feeding one queue consumer group."
 	case "queue-fanout":
 		return "One queue fanout to multiple consumer groups."
+	case "mqtt-consumer-groups":
+		return "MQTT queue fanout with multiple consumer groups and concurrent workers."
+	case "mqtt-shared-subscriptions":
+		return "MQTT shared subscriptions ($share/group/topic) with per-group load balancing."
+	case "mqtt-last-will":
+		return "MQTT last-will delivery after abrupt client disconnect."
+	case "amqp091-consumer-groups":
+		return "AMQP 0.9.1 queue fanout to multiple consumer groups."
+	case "amqp091-stream-cursor":
+		return "AMQP 0.9.1 stream read with first-pass consume and cursor-based tail replay."
+	case "amqp091-retention-policies":
+		return "AMQP 0.9.1 stream retention policy verification (max retained messages)."
 	case "bridge-queue-mqtt-amqp":
 		return "MQTT queue producers, AMQP queue consumers."
 	case "bridge-queue-amqp-mqtt":
@@ -1395,6 +2275,20 @@ func payloadSizeFromLabel(label string) (int, error) {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
 		return a
 	}
 	return b
@@ -1427,6 +2321,25 @@ func waitForAtLeast(counter *atomic.Int64, target int64, timeout time.Duration) 
 	return counter.Load() >= target
 }
 
+func waitForCounterIdle(counter *atomic.Int64, idleWindow, timeout time.Duration) int64 {
+	deadline := time.Now().Add(timeout)
+	lastVal := counter.Load()
+	lastChange := time.Now()
+
+	for time.Now().Before(deadline) {
+		current := counter.Load()
+		if current != lastVal {
+			lastVal = current
+			lastChange = time.Now()
+		}
+		if time.Since(lastChange) >= idleWindow {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return counter.Load()
+}
+
 func makePayload(msgID string, size int) []byte {
 	prefix := msgID + "|"
 	if size <= len(prefix) {
@@ -1452,6 +2365,18 @@ func extractMsgID(payload []byte) string {
 		return string(payload)
 	}
 	return string(payload[:idx])
+}
+
+func parseRetentionOrdinal(msgID string) (int, bool) {
+	if !strings.HasPrefix(msgID, "ret-") {
+		return 0, false
+	}
+	v := strings.TrimPrefix(msgID, "ret-")
+	ord, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return ord, true
 }
 
 func ratio(received, expected int64) float64 {
