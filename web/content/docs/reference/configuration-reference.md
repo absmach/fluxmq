@@ -132,7 +132,7 @@ session:
   max_sessions: 10000
   default_expiry_interval: 300
   max_offline_queue_size: 1000
-  max_inflight_messages: 100
+  max_inflight_messages: 256
   offline_queue_policy: "evict"   # evict or reject
 ```
 
@@ -214,6 +214,7 @@ cluster:
     route_batch_max_size: 256
     route_batch_max_delay: "5ms"
     route_batch_flush_workers: 4
+    route_publish_timeout: "15s"
     tls_enabled: false
     tls_cert_file: ""
     tls_key_file: ""
@@ -253,11 +254,12 @@ cluster:
 
 The gRPC transport batches outbound messages per remote node before flushing them over the wire. Three settings control this behavior:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `route_batch_max_size` | `256` | Maximum number of messages collected before a batch is flushed. |
-| `route_batch_max_delay` | `5ms` | Maximum time to wait for more messages before flushing a partial batch. |
-| `route_batch_flush_workers` | `4` | Number of concurrent flush goroutines per remote node. |
+| Setting                     | Default | Description                                                              |
+| --------------------------- | ------- | ------------------------------------------------------------------------ |
+| `route_batch_max_size`      | `256`   | Maximum number of messages collected before a batch is flushed.          |
+| `route_batch_max_delay`     | `5ms`   | Maximum time to wait for more messages before flushing a partial batch.  |
+| `route_batch_flush_workers` | `4`     | Number of concurrent flush goroutines per remote node.                   |
+| `route_publish_timeout`     | `15s`   | Maximum time for a cross-cluster publish to complete, including retries. |
 
 `route_batch_flush_workers` controls how many gRPC calls can be in-flight simultaneously for a single remote node. A single collector goroutine still assembles batches (no contention), but each assembled batch is handed to one of the flush workers for the actual network call. Increasing this value improves throughput when gRPC round-trips are slow (e.g. cross-region links), at the cost of more goroutines. Setting it to `1` restores strictly sequential flushing.
 
