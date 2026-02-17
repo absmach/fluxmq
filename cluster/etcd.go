@@ -92,8 +92,8 @@ type EtcdCluster struct {
 	routeBatchMaxSize      int
 	routeBatchMaxDelay     time.Duration
 	routeBatchFlushWorkers int
-	forwardBatcher     *nodeBatcher[*clusterv1.ForwardPublishRequest]
-	queueBatcher       *nodeBatcher[QueueDelivery]
+	forwardBatcher         *nodeBatcher[*clusterv1.ForwardPublishRequest]
+	queueBatcher           *nodeBatcher[QueueDelivery]
 
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
 	retainedCache   map[string]*storage.Message // key: topic

@@ -24,17 +24,17 @@ const clientIDPrefix = "amqp:"
 
 // Broker manages AMQP 1.0 connections and message routing.
 type Broker struct {
-	connections   sync.Map // containerID -> *Connection
-	router        *router.TrieRouter
-	routeResolver *broker.RoutingResolver
-	queueManager  broker.QueueManager
-	cluster              cluster.Cluster
-	auth                 *broker.AuthEngine
-	stats                *Stats
-	metrics              *Metrics // nil if OTel disabled
-	logger               *slog.Logger
-	routePublishTimeout  time.Duration
-	mu                   sync.RWMutex
+	connections         sync.Map // containerID -> *Connection
+	router              *router.TrieRouter
+	routeResolver       *broker.RoutingResolver
+	queueManager        broker.QueueManager
+	cluster             cluster.Cluster
+	auth                *broker.AuthEngine
+	stats               *Stats
+	metrics             *Metrics // nil if OTel disabled
+	logger              *slog.Logger
+	routePublishTimeout time.Duration
+	mu                  sync.RWMutex
 }
 
 // New creates a new AMQP broker.

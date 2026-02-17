@@ -38,8 +38,8 @@ type Broker struct {
 	subscriptions storage.SubscriptionStore
 	retained      storage.RetainedStore
 	wills         storage.WillStore
-	cluster       cluster.Cluster     // nil for single-node mode
-	queueManager  broker.QueueManager    // nil if queue functionality disabled
+	cluster       cluster.Cluster         // nil for single-node mode
+	queueManager  broker.QueueManager     // nil if queue functionality disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
 	rateLimiter   broker.ClientRateLimiter // nil if rate limiting disabled
@@ -56,10 +56,10 @@ type Broker struct {
 	// Maximum QoS level supported by this broker (0, 1, or 2)
 	maxQoS byte
 	// Offline queue settings
-	maxOfflineQueueSize  int
-	offlineQueueEvict    bool
-	maxInflightMessages  int
-	routePublishTimeout  time.Duration
+	maxOfflineQueueSize int
+	offlineQueueEvict   bool
+	maxInflightMessages int
+	routePublishTimeout time.Duration
 }
 
 // NewBroker creates a new broker instance.

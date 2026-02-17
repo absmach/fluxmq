@@ -73,7 +73,6 @@ func (c *StoreConfig) Apply(opts ...Option) {
 	}
 }
 
-
 // Compression presets
 
 // FastCompression returns options for fast compression (S2 - default).

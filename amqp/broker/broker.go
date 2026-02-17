@@ -32,15 +32,15 @@ func PrefixedClientID(connID string) string {
 
 // Broker is the core AMQP 0.9.1 broker.
 type Broker struct {
-	connections          sync.Map // connID -> *Connection
-	router               *router.TrieRouter
-	routeResolver        *corebroker.RoutingResolver
-	queueManager         corebroker.StreamQueueManager
-	cluster              cluster.Cluster
-	routePublishTimeout  time.Duration
-	stats                *Stats
-	logger               *slog.Logger
-	mu                   sync.RWMutex
+	connections         sync.Map // connID -> *Connection
+	router              *router.TrieRouter
+	routeResolver       *corebroker.RoutingResolver
+	queueManager        corebroker.StreamQueueManager
+	cluster             cluster.Cluster
+	routePublishTimeout time.Duration
+	stats               *Stats
+	logger              *slog.Logger
+	mu                  sync.RWMutex
 }
 
 // New creates a new AMQP 0.9.1 broker.

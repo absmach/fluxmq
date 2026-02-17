@@ -405,7 +405,6 @@ func (c *Connection) sendClose(amqpErr *performatives.Error) error {
 	return nil
 }
 
-
 func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {
 	c.sessionsMu.Lock()
 	s := c.sessions[ch]

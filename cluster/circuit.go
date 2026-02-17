@@ -16,8 +16,8 @@ const (
 	circuitOpen     = 1
 	circuitHalfOpen = 2
 
-	failureThreshold = 5
-	resetTimeout     = 10 * time.Second
+	failureThreshold  = 5
+	resetTimeout      = 10 * time.Second
 	maxRetries        = 5
 	retryBaseDelay    = 250 * time.Millisecond
 	maxPartialRetries = 5
