@@ -891,7 +891,36 @@ func (t *Transport) SendPublishBatch(ctx context.Context, nodeID string, message
 		return nil
 	}
 
-	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+	remaining := messages
+	for attempt := range maxPartialRetries {
+		failed, err := t.sendPublishBatchOnce(ctx, nodeID, remaining)
+		if err != nil {
+			return err
+		}
+		if len(failed) == 0 {
+			return nil
+		}
+		remaining = failed
+		if attempt < maxPartialRetries-1 {
+			t.logger.Warn("publish batch partial failure, retrying failed subset",
+				slog.String("node_id", nodeID),
+				slog.Int("failed", len(failed)),
+				slog.Int("attempt", attempt+1))
+		}
+	}
+
+	t.logger.Warn("publish batch partial failure after retries",
+		slog.String("node_id", nodeID),
+		slog.Int("remaining_failures", len(remaining)))
+	return nil
+}
+
+func (t *Transport) sendPublishBatchOnce(
+	ctx context.Context, nodeID string, messages []*clusterv1.PublishRequest,
+) ([]*clusterv1.PublishRequest, error) {
+	var failedMsgs []*clusterv1.PublishRequest
+
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
@@ -904,11 +933,23 @@ func (t *Transport) SendPublishBatch(ctx context.Context, nodeID string, message
 		if err != nil {
 			return fmt.Errorf("connect call failed: %w", err)
 		}
-		if !resp.Msg.Success {
-			return fmt.Errorf("publish batch failed: %s", resp.Msg.Error)
+
+		failedMsgs = nil
+		if !resp.Msg.Success && len(resp.Msg.Failures) > 0 {
+			failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
+			for _, f := range resp.Msg.Failures {
+				failedIdx[f.Index] = struct{}{}
+			}
+			for i, m := range messages {
+				if _, ok := failedIdx[uint32(i)]; ok {
+					failedMsgs = append(failedMsgs, m)
+				}
+			}
 		}
 		return nil
 	})
+
+	return failedMsgs, err
 }
 
 // SendRouteQueueBatch sends multiple queue deliveries to a peer node in one RPC.
@@ -917,7 +958,36 @@ func (t *Transport) SendRouteQueueBatch(ctx context.Context, nodeID string, deli
 		return nil
 	}
 
-	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+	remaining := deliveries
+	for attempt := range maxPartialRetries {
+		failed, err := t.sendRouteQueueBatchOnce(ctx, nodeID, remaining)
+		if err != nil {
+			return err
+		}
+		if len(failed) == 0 {
+			return nil
+		}
+		remaining = failed
+		if attempt < maxPartialRetries-1 {
+			t.logger.Warn("route queue batch partial failure, retrying failed subset",
+				slog.String("node_id", nodeID),
+				slog.Int("failed", len(failed)),
+				slog.Int("attempt", attempt+1))
+		}
+	}
+
+	t.logger.Warn("route queue batch partial failure after retries",
+		slog.String("node_id", nodeID),
+		slog.Int("remaining_failures", len(remaining)))
+	return nil
+}
+
+func (t *Transport) sendRouteQueueBatchOnce(
+	ctx context.Context, nodeID string, deliveries []QueueDelivery,
+) ([]QueueDelivery, error) {
+	var failedDeliveries []QueueDelivery
+
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
@@ -941,11 +1011,23 @@ func (t *Transport) SendRouteQueueBatch(ctx context.Context, nodeID string, deli
 		if err != nil {
 			return fmt.Errorf("connect call failed: %w", err)
 		}
-		if !resp.Msg.Success {
-			return fmt.Errorf("route queue batch failed: %s", resp.Msg.Error)
+
+		failedDeliveries = nil
+		if !resp.Msg.Success && len(resp.Msg.Failures) > 0 {
+			failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
+			for _, f := range resp.Msg.Failures {
+				failedIdx[f.Index] = struct{}{}
+			}
+			for i, d := range deliveries {
+				if _, ok := failedIdx[uint32(i)]; ok {
+					failedDeliveries = append(failedDeliveries, d)
+				}
+			}
 		}
 		return nil
 	})
+
+	return failedDeliveries, err
 }
 
 // SendForwardGroupOp forwards a consumer group operation to a peer node with retry and circuit breaker.
@@ -975,12 +1057,44 @@ func (t *Transport) SendForwardGroupOp(ctx context.Context, nodeID, queueName st
 }
 
 // SendForwardPublishBatch sends a batch of topic-based forward publish messages to a peer node.
+// Transport errors are retried by the circuit breaker. Partial delivery failures
+// (some messages delivered, some not) are retried with only the failed subset to
+// avoid re-delivering already-delivered messages.
 func (t *Transport) SendForwardPublishBatch(ctx context.Context, nodeID string, messages []*clusterv1.ForwardPublishRequest) error {
 	if len(messages) == 0 {
 		return nil
 	}
 
-	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+	remaining := messages
+	for attempt := range maxPartialRetries {
+		failed, err := t.sendForwardPublishBatchOnce(ctx, nodeID, remaining)
+		if err != nil {
+			return err
+		}
+		if len(failed) == 0 {
+			return nil
+		}
+		remaining = failed
+		if attempt < maxPartialRetries-1 {
+			t.logger.Warn("forward publish batch partial failure, retrying failed subset",
+				slog.String("node_id", nodeID),
+				slog.Int("failed", len(failed)),
+				slog.Int("attempt", attempt+1))
+		}
+	}
+
+	t.logger.Warn("forward publish batch partial failure after retries",
+		slog.String("node_id", nodeID),
+		slog.Int("remaining_failures", len(remaining)))
+	return nil
+}
+
+func (t *Transport) sendForwardPublishBatchOnce(
+	ctx context.Context, nodeID string, messages []*clusterv1.ForwardPublishRequest,
+) ([]*clusterv1.ForwardPublishRequest, error) {
+	var failedMsgs []*clusterv1.ForwardPublishRequest
+
+	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
@@ -993,25 +1107,25 @@ func (t *Transport) SendForwardPublishBatch(ctx context.Context, nodeID string, 
 		if err != nil {
 			return fmt.Errorf("connect call failed: %w", err)
 		}
-		if !resp.Msg.Success {
-			errMsg := resp.Msg.Error
-			if len(resp.Msg.Failures) > 0 {
-				first := resp.Msg.Failures[0]
-				detail := fmt.Sprintf("%d failures (first: index=%d topic=%q error=%q)",
-					len(resp.Msg.Failures), first.Index, first.Topic, first.Error)
-				if errMsg == "" {
-					errMsg = detail
-				} else {
-					errMsg = fmt.Sprintf("%s: %s", errMsg, detail)
+
+		// RPC succeeded. Extract any per-message failures so the caller
+		// can retry only the failed subset — never the whole batch.
+		failedMsgs = nil
+		if !resp.Msg.Success && len(resp.Msg.Failures) > 0 {
+			failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
+			for _, f := range resp.Msg.Failures {
+				failedIdx[f.Index] = struct{}{}
+			}
+			for i, m := range messages {
+				if _, ok := failedIdx[uint32(i)]; ok {
+					failedMsgs = append(failedMsgs, m)
 				}
 			}
-			if errMsg == "" {
-				errMsg = "unknown error"
-			}
-			return fmt.Errorf("forward publish batch failed: %s", errMsg)
 		}
 		return nil
 	})
+
+	return failedMsgs, err
 }
 
 func parseInt64Property(props map[string]string, key string) (int64, bool) {
