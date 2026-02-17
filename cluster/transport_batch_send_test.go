@@ -162,14 +162,56 @@ func TestSendForwardPublishBatch_ExhaustsPartialRetries(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "fail/always"}}
+	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "fail/always", Qos: 0}}
 	err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs)
-	// Partial failures don't return an error — they log a warning
 	if err != nil {
-		t.Fatalf("expected nil error (partial failures are logged), got: %v", err)
+		t.Fatalf("expected nil error for QoS 0 best-effort retries, got: %v", err)
 	}
 	if c := callCount.Load(); int(c) != maxPartialRetries {
 		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)
+	}
+}
+
+func TestSendForwardPublishBatch_ExhaustsPartialRetries_QoS1ReturnsError(t *testing.T) {
+	var callCount atomic.Int32
+
+	mock := &mockBrokerClient{
+		forwardPublishBatchFn: func(_ context.Context, req *connect.Request[clusterv1.ForwardPublishBatchRequest]) (*connect.Response[clusterv1.ForwardPublishBatchResponse], error) {
+			callCount.Add(1)
+			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
+				Success: false,
+				Error:   "always fails",
+				Failures: []*clusterv1.ForwardPublishBatchError{
+					{Index: 0, Error: "persistent error"},
+				},
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "fail/always", Qos: 1}}
+	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err == nil {
+		t.Fatal("expected error for QoS > 0 after exhausted partial retries")
+	}
+	if c := callCount.Load(); int(c) != maxPartialRetries {
+		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)
+	}
+}
+
+func TestSendForwardPublishBatch_FailedWithoutIndexedFailures(t *testing.T) {
+	mock := &mockBrokerClient{
+		forwardPublishBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.ForwardPublishBatchRequest]) (*connect.Response[clusterv1.ForwardPublishBatchResponse], error) {
+			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
+				Success: false,
+				Error:   "no forward publish handler configured",
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "a/b", Qos: 1}}
+	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err == nil {
+		t.Fatal("expected error when response is unsuccessful without indexed failures")
 	}
 }
 
@@ -265,6 +307,73 @@ func TestSendPublishBatch_TransportError(t *testing.T) {
 	}
 }
 
+func TestSendPublishBatch_ExhaustsPartialRetries_QoS0BestEffort(t *testing.T) {
+	var callCount atomic.Int32
+	mock := &mockBrokerClient{
+		routePublishBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.PublishBatchRequest]) (*connect.Response[clusterv1.PublishBatchResponse], error) {
+			callCount.Add(1)
+			return connect.NewResponse(&clusterv1.PublishBatchResponse{
+				Success: false,
+				Error:   "always fails",
+				Failures: []*clusterv1.PublishBatchError{
+					{Index: 0, ClientId: "c1", Error: "persistent"},
+				},
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a", Qos: 0}}
+	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err != nil {
+		t.Fatalf("expected nil error for QoS 0 best-effort retries, got: %v", err)
+	}
+	if c := callCount.Load(); int(c) != maxPartialRetries {
+		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)
+	}
+}
+
+func TestSendPublishBatch_ExhaustsPartialRetries_QoS1ReturnsError(t *testing.T) {
+	var callCount atomic.Int32
+	mock := &mockBrokerClient{
+		routePublishBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.PublishBatchRequest]) (*connect.Response[clusterv1.PublishBatchResponse], error) {
+			callCount.Add(1)
+			return connect.NewResponse(&clusterv1.PublishBatchResponse{
+				Success: false,
+				Error:   "always fails",
+				Failures: []*clusterv1.PublishBatchError{
+					{Index: 0, ClientId: "c1", Error: "persistent"},
+				},
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a", Qos: 1}}
+	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err == nil {
+		t.Fatal("expected error for QoS > 0 after exhausted partial retries")
+	}
+	if c := callCount.Load(); int(c) != maxPartialRetries {
+		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)
+	}
+}
+
+func TestSendPublishBatch_FailedWithoutIndexedFailures(t *testing.T) {
+	mock := &mockBrokerClient{
+		routePublishBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.PublishBatchRequest]) (*connect.Response[clusterv1.PublishBatchResponse], error) {
+			return connect.NewResponse(&clusterv1.PublishBatchResponse{
+				Success: false,
+				Error:   "no handler configured",
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a", Qos: 1}}
+	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err == nil {
+		t.Fatal("expected error when response is unsuccessful without indexed failures")
+	}
+}
+
 // --- SendRouteQueueBatch tests ---
 
 func TestSendRouteQueueBatch_AllSucceed(t *testing.T) {
@@ -352,6 +461,104 @@ func TestSendRouteQueueBatch_TransportError(t *testing.T) {
 	}
 	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err == nil {
 		t.Fatal("expected transport error to propagate")
+	}
+}
+
+func TestSendRouteQueueBatch_ExhaustsPartialRetriesReturnsError(t *testing.T) {
+	var callCount atomic.Int32
+	mock := &mockBrokerClient{
+		routeQueueBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {
+			callCount.Add(1)
+			return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+				Success: false,
+				Error:   "always fails",
+				Failures: []*clusterv1.RouteQueueBatchError{
+					{Index: 0, ClientId: "c1", QueueName: "q1", Error: "persistent"},
+				},
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	deliveries := []QueueDelivery{
+		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+	}
+	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err == nil {
+		t.Fatal("expected error after exhausted partial retries")
+	}
+	if c := callCount.Load(); int(c) != maxPartialRetries {
+		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)
+	}
+}
+
+func TestSendRouteQueueBatch_FailedWithoutIndexedFailures(t *testing.T) {
+	mock := &mockBrokerClient{
+		routeQueueBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {
+			return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+				Success: false,
+				Error:   "no queue handler configured",
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	deliveries := []QueueDelivery{
+		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+	}
+	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err == nil {
+		t.Fatal("expected error when response is unsuccessful without indexed failures")
+	}
+}
+
+func TestSendRouteQueueBatch_PartialFailureWithNilDeliveryRetriesCorrectSubset(t *testing.T) {
+	var callCount atomic.Int32
+	mock := &mockBrokerClient{
+		routeQueueBatchFn: func(_ context.Context, req *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {
+			call := callCount.Add(1)
+
+			switch call {
+			case 1:
+				if len(req.Msg.Messages) != 2 {
+					t.Errorf("call 1: expected 2 wire messages, got %d", len(req.Msg.Messages))
+				}
+				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+					Success: false,
+					Error:   "partial",
+					Failures: []*clusterv1.RouteQueueBatchError{
+						{Index: 0, ClientId: "c1", QueueName: "q1", Error: "transient"},
+					},
+				}), nil
+			case 2:
+				if len(req.Msg.Messages) != 1 {
+					t.Errorf("call 2: expected 1 wire message, got %d", len(req.Msg.Messages))
+				}
+				if len(req.Msg.Messages) == 1 && req.Msg.Messages[0].ClientId != "c1" {
+					t.Errorf("call 2: expected retry for client c1, got %s", req.Msg.Messages[0].ClientId)
+				}
+				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+					Success: true,
+				}), nil
+			default:
+				t.Errorf("unexpected call %d", call)
+				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+					Success: true,
+				}), nil
+			}
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	deliveries := []QueueDelivery{
+		{ClientID: "nil", QueueName: "q0", Message: nil},
+		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+		{ClientID: "c2", QueueName: "q2", Message: &QueueMessage{MessageID: "m2", Payload: []byte("2")}},
+	}
+
+	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c := callCount.Load(); c != 2 {
+		t.Fatalf("expected 2 RPC calls, got %d", c)
 	}
 }
 

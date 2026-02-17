@@ -912,7 +912,11 @@ func (t *Transport) SendPublishBatch(ctx context.Context, nodeID string, message
 	t.logger.Warn("publish batch partial failure after retries",
 		slog.String("node_id", nodeID),
 		slog.Int("remaining_failures", len(remaining)))
-	return nil
+	if allPublishBatchQoS0(remaining) {
+		return nil
+	}
+
+	return fmt.Errorf("publish batch failed after %d retries: %d messages still failing", maxPartialRetries, len(remaining))
 }
 
 func (t *Transport) sendPublishBatchOnce(
@@ -935,16 +939,34 @@ func (t *Transport) sendPublishBatchOnce(
 		}
 
 		failedMsgs = nil
-		if !resp.Msg.Success && len(resp.Msg.Failures) > 0 {
-			failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
-			for _, f := range resp.Msg.Failures {
-				failedIdx[f.Index] = struct{}{}
+		if resp.Msg.Success {
+			if len(resp.Msg.Failures) > 0 {
+				return fmt.Errorf("publish batch response marked success with %d failures", len(resp.Msg.Failures))
 			}
-			for i, m := range messages {
-				if _, ok := failedIdx[uint32(i)]; ok {
-					failedMsgs = append(failedMsgs, m)
-				}
+			return nil
+		}
+
+		if len(resp.Msg.Failures) == 0 {
+			if resp.Msg.Error == "" {
+				return fmt.Errorf("publish batch failed: unknown error")
 			}
+			return fmt.Errorf("publish batch failed: %s", resp.Msg.Error)
+		}
+
+		failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
+		for _, f := range resp.Msg.Failures {
+			if int(f.Index) >= len(messages) {
+				return fmt.Errorf("publish batch response has invalid failure index %d for batch size %d", f.Index, len(messages))
+			}
+			failedIdx[f.Index] = struct{}{}
+		}
+		for i, m := range messages {
+			if _, ok := failedIdx[uint32(i)]; ok {
+				failedMsgs = append(failedMsgs, m)
+			}
+		}
+		if len(failedMsgs) == 0 {
+			return fmt.Errorf("publish batch reported failures but none matched the request batch")
 		}
 		return nil
 	})
@@ -979,7 +1001,7 @@ func (t *Transport) SendRouteQueueBatch(ctx context.Context, nodeID string, deli
 	t.logger.Warn("route queue batch partial failure after retries",
 		slog.String("node_id", nodeID),
 		slog.Int("remaining_failures", len(remaining)))
-	return nil
+	return fmt.Errorf("route queue batch failed after %d retries: %d deliveries still failing", maxPartialRetries, len(remaining))
 }
 
 func (t *Transport) sendRouteQueueBatchOnce(
@@ -994,11 +1016,13 @@ func (t *Transport) sendRouteQueueBatchOnce(
 		}
 
 		wireMsgs := make([]*clusterv1.RouteQueueMessageRequest, 0, len(deliveries))
-		for _, delivery := range deliveries {
+		wireToDelivery := make([]int, 0, len(deliveries))
+		for i, delivery := range deliveries {
 			if delivery.Message == nil {
 				continue
 			}
 			wireMsgs = append(wireMsgs, encodeRouteQueueMessage(delivery.ClientID, delivery.QueueName, delivery.Message))
+			wireToDelivery = append(wireToDelivery, i)
 		}
 		if len(wireMsgs) == 0 {
 			return nil
@@ -1013,16 +1037,34 @@ func (t *Transport) sendRouteQueueBatchOnce(
 		}
 
 		failedDeliveries = nil
-		if !resp.Msg.Success && len(resp.Msg.Failures) > 0 {
-			failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
-			for _, f := range resp.Msg.Failures {
-				failedIdx[f.Index] = struct{}{}
+		if resp.Msg.Success {
+			if len(resp.Msg.Failures) > 0 {
+				return fmt.Errorf("route queue batch response marked success with %d failures", len(resp.Msg.Failures))
 			}
-			for i, d := range deliveries {
-				if _, ok := failedIdx[uint32(i)]; ok {
-					failedDeliveries = append(failedDeliveries, d)
-				}
+			return nil
+		}
+
+		if len(resp.Msg.Failures) == 0 {
+			if resp.Msg.Error == "" {
+				return fmt.Errorf("route queue batch failed: unknown error")
 			}
+			return fmt.Errorf("route queue batch failed: %s", resp.Msg.Error)
+		}
+
+		seen := make(map[int]struct{}, len(resp.Msg.Failures))
+		for _, f := range resp.Msg.Failures {
+			if int(f.Index) >= len(wireToDelivery) {
+				return fmt.Errorf("route queue batch response has invalid failure index %d for wire batch size %d", f.Index, len(wireToDelivery))
+			}
+			deliveryIdx := wireToDelivery[f.Index]
+			if _, ok := seen[deliveryIdx]; ok {
+				continue
+			}
+			seen[deliveryIdx] = struct{}{}
+			failedDeliveries = append(failedDeliveries, deliveries[deliveryIdx])
+		}
+		if len(failedDeliveries) == 0 {
+			return fmt.Errorf("route queue batch reported failures but none matched the request batch")
 		}
 		return nil
 	})
@@ -1086,7 +1128,11 @@ func (t *Transport) SendForwardPublishBatch(ctx context.Context, nodeID string, 
 	t.logger.Warn("forward publish batch partial failure after retries",
 		slog.String("node_id", nodeID),
 		slog.Int("remaining_failures", len(remaining)))
-	return nil
+	if allForwardPublishBatchQoS0(remaining) {
+		return nil
+	}
+
+	return fmt.Errorf("forward publish batch failed after %d retries: %d messages still failing", maxPartialRetries, len(remaining))
 }
 
 func (t *Transport) sendForwardPublishBatchOnce(
@@ -1111,16 +1157,34 @@ func (t *Transport) sendForwardPublishBatchOnce(
 		// RPC succeeded. Extract any per-message failures so the caller
 		// can retry only the failed subset — never the whole batch.
 		failedMsgs = nil
-		if !resp.Msg.Success && len(resp.Msg.Failures) > 0 {
-			failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
-			for _, f := range resp.Msg.Failures {
-				failedIdx[f.Index] = struct{}{}
+		if resp.Msg.Success {
+			if len(resp.Msg.Failures) > 0 {
+				return fmt.Errorf("forward publish batch response marked success with %d failures", len(resp.Msg.Failures))
 			}
-			for i, m := range messages {
-				if _, ok := failedIdx[uint32(i)]; ok {
-					failedMsgs = append(failedMsgs, m)
-				}
+			return nil
+		}
+
+		if len(resp.Msg.Failures) == 0 {
+			if resp.Msg.Error == "" {
+				return fmt.Errorf("forward publish batch failed: unknown error")
 			}
+			return fmt.Errorf("forward publish batch failed: %s", resp.Msg.Error)
+		}
+
+		failedIdx := make(map[uint32]struct{}, len(resp.Msg.Failures))
+		for _, f := range resp.Msg.Failures {
+			if int(f.Index) >= len(messages) {
+				return fmt.Errorf("forward publish batch response has invalid failure index %d for batch size %d", f.Index, len(messages))
+			}
+			failedIdx[f.Index] = struct{}{}
+		}
+		for i, m := range messages {
+			if _, ok := failedIdx[uint32(i)]; ok {
+				failedMsgs = append(failedMsgs, m)
+			}
+		}
+		if len(failedMsgs) == 0 {
+			return fmt.Errorf("forward publish batch reported failures but none matched the request batch")
 		}
 		return nil
 	})
@@ -1138,6 +1202,32 @@ func parseInt64Property(props map[string]string, key string) (int64, bool) {
 		return 0, false
 	}
 	return val, true
+}
+
+func allPublishBatchQoS0(messages []*clusterv1.PublishRequest) bool {
+	if len(messages) == 0 {
+		return false
+	}
+
+	for _, msg := range messages {
+		if msg == nil || msg.Qos != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func allForwardPublishBatchQoS0(messages []*clusterv1.ForwardPublishRequest) bool {
+	if len(messages) == 0 {
+		return false
+	}
+
+	for _, msg := range messages {
+		if msg == nil || msg.Qos != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeRouteQueueMessage(clientID, queueName string, msg *QueueMessage) *clusterv1.RouteQueueMessageRequest {
