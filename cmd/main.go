@@ -464,8 +464,11 @@ func main() {
 		slog.Info("Log-based queue initialized", "storage", "file", "dir", queueDir)
 	}
 
-	// Set cluster on AMQP broker for cross-node pub/sub routing
+	// Set cluster on AMQP brokers for cross-node pub/sub routing
 	amqpBroker.SetCluster(cl)
+	amqpBroker.SetRoutePublishTimeout(cfg.Cluster.Transport.RoutePublishTimeout)
+	amqp091Broker.SetCluster(cl)
+	amqp091Broker.SetRoutePublishTimeout(cfg.Cluster.Transport.RoutePublishTimeout)
 
 	// Set message handler and forward publish handler on cluster if it's an etcd cluster
 	if etcdCluster != nil {

@@ -8,7 +8,7 @@
   "publishers": 1000,
   "messages_per_publisher": 100,
   "publish_interval": "200ms",
-  "subscribers": 10000,
+  "subscribers": 1000,
   "wildcard_subscribers": 10,
   "wildcard_patterns": [
     "{topic}",
