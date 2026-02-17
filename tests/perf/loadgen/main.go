@@ -10,7 +10,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +60,29 @@ type runConfig struct {
 	PublishInterval      time.Duration
 }
 
+type topicScenarioConfig struct {
+	Name                 string   `json:"name"`
+	Description          string   `json:"description,omitempty"`
+	Pattern              string   `json:"pattern"` // fanin | fanout
+	Flow                 string   `json:"flow,omitempty"`
+	PublisherProtocol    string   `json:"publisher_protocol,omitempty"`  // mqtt | amqp
+	SubscriberProtocol   string   `json:"subscriber_protocol,omitempty"` // mqtt | amqp
+	Publishers           int      `json:"publishers"`
+	MessagesPerPublisher int      `json:"messages_per_publisher"`
+	PublishInterval      string   `json:"publish_interval,omitempty"`
+	Topic                string   `json:"topic,omitempty"`
+	TopicCount           int      `json:"topic_count,omitempty"`
+	Subscribers          int      `json:"subscribers"`
+	QoS                  *int     `json:"qos,omitempty"`
+	WildcardSubscribers  int      `json:"wildcard_subscribers,omitempty"`
+	WildcardPatterns     []string `json:"wildcard_patterns,omitempty"`
+
+	resolvedPublishInterval time.Duration
+	resolvedPublisherProto  string
+	resolvedSubscriberProto string
+	resolvedQoS             byte
+}
+
 type scenarioResult struct {
 	Timestamp         string  `json:"timestamp"`
 	Scenario          string  `json:"scenario"`
@@ -86,6 +111,11 @@ type deduper struct {
 	mu   sync.Mutex
 	seen map[string]struct{}
 }
+
+const (
+	publisherNodeOffset  = 0
+	subscriberNodeOffset = 1
+)
 
 func newDeduper() *deduper {
 	return &deduper{seen: make(map[string]struct{})}
@@ -166,8 +196,13 @@ func sumAtomicCounters(counters []*atomic.Int64) int64 {
 	return total
 }
 
+func addrByOffset(addrs []string, idx, offset int) string {
+	return addrs[(idx+offset)%len(addrs)]
+}
+
 func main() {
 	scenarioFlag := flag.String("scenario", "", "Scenario to run")
+	scenarioConfigFlag := flag.String("scenario-config", "", "Path to JSON config for configurable fanin/fanout topic scenario")
 	payloadFlag := flag.String("payload", "small", "Payload preset: small|medium|large")
 	payloadBytesFlag := flag.Int("payload-bytes", 0, "Payload size in bytes (overrides -payload)")
 	mqttFlag := flag.String("mqtt-addrs", "127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885", "Comma-separated MQTT broker addresses")
@@ -189,11 +224,12 @@ func main() {
 		for _, sc := range allScenarios {
 			fmt.Println(sc)
 		}
+		fmt.Println("config-topic (via -scenario-config <file>)")
 		return
 	}
 
-	if *scenarioFlag == "" {
-		exitErr(errors.New("-scenario is required (use -list-scenarios to inspect options)"))
+	if *scenarioFlag == "" && *scenarioConfigFlag == "" {
+		exitErr(errors.New("one of -scenario or -scenario-config is required (use -list-scenarios to inspect options)"))
 	}
 
 	payloadLabel := strings.ToLower(*payloadFlag)
@@ -239,9 +275,29 @@ func main() {
 	start := time.Now()
 	ctx := context.Background()
 
-	res, err := runScenario(ctx, cfg)
+	var (
+		res      scenarioResult
+		err      error
+		cfgTopic topicScenarioConfig
+	)
+	if *scenarioConfigFlag != "" {
+		cfgTopic, err = loadTopicScenarioConfig(*scenarioConfigFlag)
+		if err != nil {
+			exitErr(err)
+		}
+		res, err = runConfiguredTopicScenario(ctx, cfg, cfgTopic)
+	} else {
+		res, err = runScenario(ctx, cfg)
+	}
 	if res.Description == "" {
-		res.Description = scenarioDescription(cfg.Scenario)
+		if *scenarioConfigFlag != "" {
+			res.Description = cfgTopic.Description
+			if res.Description == "" {
+				res.Description = "Config-driven fanin/fanout topic scenario."
+			}
+		} else {
+			res.Description = scenarioDescription(cfg.Scenario)
+		}
 	}
 	res.DurationMS = time.Since(start).Milliseconds()
 	res.Timestamp = time.Now().UTC().Format(time.RFC3339)
@@ -320,6 +376,340 @@ func runScenario(ctx context.Context, cfg runConfig) (scenarioResult, error) {
 	default:
 		return scenarioResult{}, fmt.Errorf("unsupported scenario %q; valid: %s", cfg.Scenario, strings.Join(allScenarios, ", "))
 	}
+}
+
+func loadTopicScenarioConfig(path string) (topicScenarioConfig, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return topicScenarioConfig{}, fmt.Errorf("failed to read scenario config %s: %w", path, err)
+	}
+
+	var cfg topicScenarioConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return topicScenarioConfig{}, fmt.Errorf("failed to parse scenario config %s: %w", path, err)
+	}
+
+	return normalizeTopicScenarioConfig(cfg, path)
+}
+
+func normalizeTopicScenarioConfig(cfg topicScenarioConfig, path string) (topicScenarioConfig, error) {
+	cfg.Name = strings.TrimSpace(cfg.Name)
+	if cfg.Name == "" {
+		base := filepath.Base(path)
+		cfg.Name = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+
+	cfg.Pattern = strings.ToLower(strings.TrimSpace(cfg.Pattern))
+	if cfg.Pattern != "fanin" && cfg.Pattern != "fanout" {
+		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid pattern %q (use fanin|fanout)", cfg.Name, cfg.Pattern)
+	}
+
+	flow := strings.ToLower(strings.TrimSpace(cfg.Flow))
+	pubProto := strings.ToLower(strings.TrimSpace(cfg.PublisherProtocol))
+	subProto := strings.ToLower(strings.TrimSpace(cfg.SubscriberProtocol))
+	if flow != "" {
+		parts := strings.Split(flow, "-")
+		if len(parts) != 2 {
+			return topicScenarioConfig{}, fmt.Errorf("config %q has invalid flow %q (use mqtt-mqtt|mqtt-amqp|amqp-mqtt|amqp-amqp)", cfg.Name, cfg.Flow)
+		}
+		if pubProto == "" {
+			pubProto = parts[0]
+		} else if pubProto != parts[0] {
+			return topicScenarioConfig{}, fmt.Errorf("config %q publisher_protocol=%q conflicts with flow=%q", cfg.Name, cfg.PublisherProtocol, cfg.Flow)
+		}
+		if subProto == "" {
+			subProto = parts[1]
+		} else if subProto != parts[1] {
+			return topicScenarioConfig{}, fmt.Errorf("config %q subscriber_protocol=%q conflicts with flow=%q", cfg.Name, cfg.SubscriberProtocol, cfg.Flow)
+		}
+	}
+	if pubProto == "" || subProto == "" {
+		return topicScenarioConfig{}, fmt.Errorf("config %q must define flow or both publisher_protocol/subscriber_protocol", cfg.Name)
+	}
+	if pubProto != "mqtt" && pubProto != "amqp" {
+		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid publisher protocol %q (use mqtt|amqp)", cfg.Name, pubProto)
+	}
+	if subProto != "mqtt" && subProto != "amqp" {
+		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid subscriber protocol %q (use mqtt|amqp)", cfg.Name, subProto)
+	}
+
+	if cfg.Publishers <= 0 {
+		return topicScenarioConfig{}, fmt.Errorf("config %q must set publishers > 0", cfg.Name)
+	}
+	if cfg.MessagesPerPublisher <= 0 {
+		return topicScenarioConfig{}, fmt.Errorf("config %q must set messages_per_publisher > 0", cfg.Name)
+	}
+	if cfg.Subscribers <= 0 {
+		return topicScenarioConfig{}, fmt.Errorf("config %q must set subscribers > 0", cfg.Name)
+	}
+	if cfg.WildcardSubscribers < 0 {
+		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid wildcard_subscribers=%d", cfg.Name, cfg.WildcardSubscribers)
+	}
+	if cfg.WildcardSubscribers > cfg.Subscribers {
+		cfg.WildcardSubscribers = cfg.Subscribers
+	}
+
+	if cfg.Pattern == "fanin" {
+		cfg.TopicCount = 1
+	} else if cfg.TopicCount <= 0 {
+		cfg.TopicCount = maxInt(4, minInt(64, cfg.Subscribers))
+	}
+
+	cfg.Topic = strings.TrimSpace(cfg.Topic)
+	if cfg.Topic == "" {
+		cfg.Topic = fmt.Sprintf("perf/topic/config/%s", strings.ReplaceAll(cfg.Name, " ", "-"))
+	}
+	cfg.Topic = strings.TrimSuffix(cfg.Topic, "/")
+	if cfg.Topic == "" {
+		return topicScenarioConfig{}, fmt.Errorf("config %q resolved to empty topic", cfg.Name)
+	}
+
+	if cfg.PublishInterval != "" {
+		d, err := time.ParseDuration(cfg.PublishInterval)
+		if err != nil {
+			return topicScenarioConfig{}, fmt.Errorf("config %q has invalid publish_interval %q: %w", cfg.Name, cfg.PublishInterval, err)
+		}
+		cfg.resolvedPublishInterval = d
+	}
+
+	qos := 1
+	if cfg.QoS != nil {
+		if *cfg.QoS < 0 || *cfg.QoS > 2 {
+			return topicScenarioConfig{}, fmt.Errorf("config %q has invalid qos=%d (use 0|1|2)", cfg.Name, *cfg.QoS)
+		}
+		qos = *cfg.QoS
+	}
+
+	cfg.resolvedPublisherProto = pubProto
+	cfg.resolvedSubscriberProto = subProto
+	cfg.resolvedQoS = byte(qos)
+	cfg.Flow = pubProto + "-" + subProto
+	return cfg, nil
+}
+
+func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScenarioConfig) (scenarioResult, error) {
+	if cfg.Publishers > 0 {
+		sc.Publishers = cfg.Publishers
+	}
+	if cfg.MessagesPerPublisher > 0 {
+		sc.MessagesPerPublisher = cfg.MessagesPerPublisher
+	}
+	if cfg.Subscribers > 0 {
+		sc.Subscribers = cfg.Subscribers
+		if sc.WildcardSubscribers > sc.Subscribers {
+			sc.WildcardSubscribers = sc.Subscribers
+		}
+	}
+	if cfg.PublishInterval > 0 {
+		sc.resolvedPublishInterval = cfg.PublishInterval
+	}
+
+	res := scenarioResult{
+		Scenario:     sc.Name,
+		Description:  sc.Description,
+		PayloadLabel: cfg.PayloadLabel,
+		PayloadBytes: cfg.PayloadBytes,
+		Publishers:   sc.Publishers,
+		Subscribers:  sc.Subscribers,
+	}
+
+	runID := time.Now().UnixNano()
+	baseTopic := strings.ReplaceAll(sc.Topic, "{run_id}", fmt.Sprintf("%d", runID))
+	if baseTopic == "" {
+		baseTopic = fmt.Sprintf("perf/topic/config/%s/%d", strings.ReplaceAll(sc.Name, " ", "-"), runID)
+	}
+	topicSet := buildConfiguredTopicSet(sc.Pattern, baseTopic, sc.TopicCount)
+	filters := buildConfiguredSubscriberFilters(sc, baseTopic, topicSet, runID)
+	matchCounts := buildTopicMatchCounts(topicSet, filters)
+
+	var sent atomic.Int64
+	var received atomic.Int64
+	var expected atomic.Int64
+	var errCount atomic.Int64
+	seen := newDeduper()
+
+	stopReport := startPeriodicStatusReport(sc.Name, func() int64 { return sent.Load() }, func() int64 { return received.Load() })
+	defer stopReport()
+
+	switch sc.resolvedSubscriberProto {
+	case "mqtt":
+		subs, err := connectMQTTSubscribers(cfg.MQTTAddrs, sc.Name, runID, sc.Subscribers, func(subID int, _ string, msg *mqttclient.Message) {
+			if !isCountablePayload(msg.Payload) {
+				return
+			}
+			msgID := extractMsgID(msg.Payload)
+			if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
+				received.Add(1)
+			}
+		})
+		if err != nil {
+			return res, err
+		}
+		defer disconnectMQTTClients(subs)
+
+		for i, sub := range subs {
+			if err := sub.SubscribeSingle(filters[i], sc.resolvedQoS); err != nil {
+				errCount.Add(1)
+				return res, fmt.Errorf("subscriber %d failed to subscribe %q: %w", i, filters[i], err)
+			}
+		}
+	case "amqp":
+		subs, err := connectAMQPTopicSubscribersWithFilters(cfg.AMQPAddrs, sc.Name, runID, filters, func(subID int, msg *amqpclient.Message) {
+			if isCountablePayload(msg.Body) {
+				msgID := extractMsgID(msg.Body)
+				if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
+					received.Add(1)
+				}
+			}
+			if err := msg.Ack(); err != nil {
+				errCount.Add(1)
+			}
+		})
+		if err != nil {
+			return res, err
+		}
+		defer closeAMQPClients(subs)
+	default:
+		return res, fmt.Errorf("unsupported subscriber protocol %q", sc.resolvedSubscriberProto)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	topicFor := func(pubIdx, msgIdx int) string {
+		if sc.Pattern == "fanin" {
+			return topicSet[0]
+		}
+		return topicSet[(pubIdx+msgIdx)%len(topicSet)]
+	}
+	onPublished := func(topic string) {
+		expected.Add(matchCounts[topic])
+	}
+
+	var published int64
+	switch sc.resolvedPublisherProto {
+	case "mqtt":
+		published = runMQTTPublishers(ctx, mqttPublishParams{
+			Addrs:                cfg.MQTTAddrs,
+			Scenario:             sc.Name,
+			RunID:                runID,
+			Publishers:           sc.Publishers,
+			MessagesPerPublisher: sc.MessagesPerPublisher,
+			PayloadSize:          cfg.PayloadBytes,
+			PublishInterval:      resolvedPublishInterval(cfg.PublishInterval, sc.resolvedPublishInterval),
+			TopicFor:             topicFor,
+			OnPublished:          onPublished,
+			ErrCount:             &errCount,
+			PublishedCounter:     &sent,
+			QoS:                  sc.resolvedQoS,
+		})
+	case "amqp":
+		published = runAMQPTopicPublishers(ctx, amqpTopicPublishParams{
+			Addrs:                cfg.AMQPAddrs,
+			Scenario:             sc.Name,
+			RunID:                runID,
+			Publishers:           sc.Publishers,
+			MessagesPerPublisher: sc.MessagesPerPublisher,
+			PayloadSize:          cfg.PayloadBytes,
+			PublishInterval:      resolvedPublishInterval(cfg.PublishInterval, sc.resolvedPublishInterval),
+			TopicFor:             topicFor,
+			OnPublished:          onPublished,
+			ErrCount:             &errCount,
+			PublishedCounter:     &sent,
+		})
+	default:
+		return res, fmt.Errorf("unsupported publisher protocol %q", sc.resolvedPublisherProto)
+	}
+
+	_ = waitForAtLeast(&received, expected.Load(), cfg.DrainTimeout)
+
+	res.Published = published
+	res.Expected = expected.Load()
+	res.Received = received.Load()
+	res.Errors = errCount.Load()
+	res.DeliveryRatio = ratio(res.Received, res.Expected)
+	res.Pass = res.DeliveryRatio >= cfg.MinRatio
+	res.Notes = fmt.Sprintf("config pattern=%s flow=%s topics=%d wildcard_subscribers=%d qos=%d", sc.Pattern, sc.Flow, len(topicSet), sc.WildcardSubscribers, sc.resolvedQoS)
+	if sc.resolvedPublisherProto != "mqtt" && sc.resolvedSubscriberProto != "mqtt" {
+		res.Notes = res.Notes + "; qos applies to MQTT only"
+	}
+	if !res.Pass {
+		res.Notes = res.Notes + fmt.Sprintf("; delivery ratio %.4f below min %.4f", res.DeliveryRatio, cfg.MinRatio)
+	}
+
+	return res, nil
+}
+
+func resolvedPublishInterval(flagValue, cfgValue time.Duration) time.Duration {
+	if cfgValue > 0 {
+		return cfgValue
+	}
+	return flagValue
+}
+
+func buildConfiguredTopicSet(pattern, baseTopic string, topicCount int) []string {
+	if pattern == "fanin" {
+		return []string{baseTopic}
+	}
+	out := make([]string, 0, topicCount)
+	for i := 0; i < topicCount; i++ {
+		out = append(out, fmt.Sprintf("%s/t/%03d", baseTopic, i))
+	}
+	return out
+}
+
+func buildConfiguredSubscriberFilters(sc topicScenarioConfig, baseTopic string, topicSet []string, seed int64) []string {
+	filters := make([]string, sc.Subscribers)
+	for i := 0; i < sc.Subscribers; i++ {
+		if sc.Pattern == "fanin" {
+			filters[i] = topicSet[0]
+		} else {
+			filters[i] = topicSet[i%len(topicSet)]
+		}
+	}
+
+	if sc.WildcardSubscribers <= 0 {
+		return filters
+	}
+
+	patterns := sc.WildcardPatterns
+	if len(patterns) == 0 {
+		if sc.Pattern == "fanin" {
+			patterns = []string{
+				"{topic}",
+				"{base}/#",
+			}
+		} else {
+			patterns = []string{
+				"{base}/t/+",
+				"{base}/#",
+			}
+		}
+	}
+
+	rng := rand.New(rand.NewSource(seed))
+	perm := rng.Perm(sc.Subscribers)
+	for i := 0; i < sc.WildcardSubscribers; i++ {
+		idx := perm[i]
+		p := patterns[i%len(patterns)]
+		p = strings.ReplaceAll(p, "{base}", baseTopic)
+		p = strings.ReplaceAll(p, "{topic}", filters[idx])
+		filters[idx] = p
+	}
+	return filters
+}
+
+func buildTopicMatchCounts(topicSet, filters []string) map[string]int64 {
+	matchCounts := make(map[string]int64, len(topicSet))
+	for _, topic := range topicSet {
+		var count int64
+		for _, filter := range filters {
+			if topics.TopicMatch(filter, topic) {
+				count++
+			}
+		}
+		matchCounts[topic] = count
+	}
+	return matchCounts
 }
 
 type topicWorkload struct {
@@ -402,6 +792,7 @@ func runMQTTTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 		},
 		ErrCount:         &errCount,
 		PublishedCounter: &sent,
+		QoS:              1,
 	})
 
 	expected := published * int64(workload.Subscribers)
@@ -431,9 +822,7 @@ func runAMQPTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 
 	runID := time.Now().UnixNano()
 	topic := fmt.Sprintf("perf/topic/%s/%d", scenarioName, runID)
-	// AMQP 0.9.1 non-queue pub/sub in this architecture is broker-local.
-	// Keep publishers/subscribers on the same AMQP endpoint for deterministic fan-in/fan-out expectations.
-	topicAddrs := []string{cfg.AMQPAddrs[0]}
+	topicAddrs := cfg.AMQPAddrs
 
 	var received atomic.Int64
 	var sent atomic.Int64
@@ -641,6 +1030,7 @@ func runMQTTSubscriptionStorm(ctx context.Context, cfg runConfig) (scenarioResul
 		},
 		ErrCount:         &errCount,
 		PublishedCounter: &sent,
+		QoS:              1,
 	})
 
 	close(stopChurn)
@@ -1377,7 +1767,7 @@ func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioRes
 		groupName := fmt.Sprintf("group-%d", g+1)
 		filter := fmt.Sprintf("$share/%s/%s", groupName, topic)
 		for i := 0; i < w.ConsumersPerGroup; i++ {
-			addr := cfg.MQTTAddrs[(g*w.ConsumersPerGroup+i)%len(cfg.MQTTAddrs)]
+			addr := addrByOffset(cfg.MQTTAddrs, g*w.ConsumersPerGroup+i, subscriberNodeOffset)
 			clientID := fmt.Sprintf("mqtt-shared-sub-g%d-c%d-%d", g, i, runID)
 			client, err := connectMQTTClient(addr, clientID, func(msg *mqttclient.Message) {
 				if isCountablePayload(msg.Payload) {
@@ -1416,6 +1806,7 @@ func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioRes
 		},
 		ErrCount:         &errCount,
 		PublishedCounter: &sent,
+		QoS:              1,
 	})
 
 	deadline := time.Now().Add(cfg.DrainTimeout)
@@ -1513,7 +1904,7 @@ func runMQTTLastWill(_ context.Context, cfg runConfig) (scenarioResult, error) {
 
 	willClients := make([]*mqttclient.Client, 0, w.WillPublishers)
 	for i := 0; i < w.WillPublishers; i++ {
-		addr := cfg.MQTTAddrs[i%len(cfg.MQTTAddrs)]
+		addr := addrByOffset(cfg.MQTTAddrs, i, publisherNodeOffset)
 		clientID := fmt.Sprintf("mqtt-last-will-pub-%d-%d", runID, i)
 		msgID := fmt.Sprintf("mqtt-last-will-%d", i)
 		payload := makePayload(msgID, cfg.PayloadBytes)
@@ -1587,7 +1978,7 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		return firstReceived.Load() + cursorReceived.Load()
 	})
 	defer stopReport()
-	admin, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	admin, err := connectAMQPClient(addrByOffset(cfg.AMQPAddrs, 0, publisherNodeOffset))
 	if err != nil {
 		return res, err
 	}
@@ -1615,7 +2006,7 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		PublishedCounter:     &sent,
 	})
 
-	readerFirst, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	readerFirst, err := connectAMQPClient(addrByOffset(cfg.AMQPAddrs, 0, subscriberNodeOffset))
 	if err != nil {
 		return res, err
 	}
@@ -1677,7 +2068,7 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		}
 	}
 
-	readerCursor, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	readerCursor, err := connectAMQPClient(addrByOffset(cfg.AMQPAddrs, 1, subscriberNodeOffset))
 	if err != nil {
 		return res, err
 	}
@@ -1760,7 +2151,7 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 	var receivedUnique atomic.Int64
 	stopReport := startPeriodicStatusReport("amqp091-retention-policies", func() int64 { return sent.Load() }, func() int64 { return receivedUnique.Load() })
 	defer stopReport()
-	admin, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	admin, err := connectAMQPClient(addrByOffset(cfg.AMQPAddrs, 0, publisherNodeOffset))
 	if err != nil {
 		return res, err
 	}
@@ -1815,7 +2206,7 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 		}
 	}
 
-	reader, err := connectAMQPClient(cfg.AMQPAddrs[0])
+	reader, err := connectAMQPClient(addrByOffset(cfg.AMQPAddrs, 0, subscriberNodeOffset))
 	if err != nil {
 		return res, err
 	}
@@ -1879,7 +2270,7 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 func connectMQTTSubscribers(addrs []string, scenario string, runID int64, count int, onMessage func(subID int, subName string, msg *mqttclient.Message)) ([]*mqttclient.Client, error) {
 	clients := make([]*mqttclient.Client, 0, count)
 	for i := 0; i < count; i++ {
-		addr := addrs[i%len(addrs)]
+		addr := addrByOffset(addrs, i, subscriberNodeOffset)
 		clientID := fmt.Sprintf("%s-sub-%d-%d", scenario, runID, i)
 		sid := i
 		sname := clientID
@@ -1900,7 +2291,7 @@ func connectMQTTSubscribers(addrs []string, scenario string, runID int64, count 
 func connectMQTTQueueConsumers(addrs []string, scenario string, runID int64, count int, queueName, group string, handler func(consumerID int, msg *mqttclient.QueueMessage)) ([]*mqttclient.Client, error) {
 	clients := make([]*mqttclient.Client, 0, count)
 	for i := 0; i < count; i++ {
-		addr := addrs[i%len(addrs)]
+		addr := addrByOffset(addrs, i, subscriberNodeOffset)
 		clientID := fmt.Sprintf("%s-qc-%d-%d", scenario, runID, i)
 		cid := i
 		client, err := connectMQTTClient(addr, clientID, nil)
@@ -1923,7 +2314,7 @@ func connectMQTTQueueConsumers(addrs []string, scenario string, runID int64, cou
 func connectAMQPTopicSubscribers(addrs []string, scenario string, runID int64, count int, topic string, handler func(subID int, msg *amqpclient.Message)) ([]*amqpclient.Client, error) {
 	clients := make([]*amqpclient.Client, 0, count)
 	for i := 0; i < count; i++ {
-		addr := addrs[i%len(addrs)]
+		addr := addrByOffset(addrs, i, subscriberNodeOffset)
 		cid := i
 		client, err := connectAMQPClient(addr)
 		if err != nil {
@@ -1943,10 +2334,33 @@ func connectAMQPTopicSubscribers(addrs []string, scenario string, runID int64, c
 	return clients, nil
 }
 
+func connectAMQPTopicSubscribersWithFilters(addrs []string, scenario string, runID int64, filters []string, handler func(subID int, msg *amqpclient.Message)) ([]*amqpclient.Client, error) {
+	clients := make([]*amqpclient.Client, 0, len(filters))
+	for i, filter := range filters {
+		addr := addrByOffset(addrs, i, subscriberNodeOffset)
+		cid := i
+		client, err := connectAMQPClient(addr)
+		if err != nil {
+			closeAMQPClients(clients)
+			return nil, fmt.Errorf("failed to connect AMQP subscriber %d to %s: %w", i, addr, err)
+		}
+		subOpts := &amqpclient.SubscribeOptions{Topic: filter, AutoAck: false}
+		if err := client.SubscribeWithOptions(subOpts, func(msg *amqpclient.Message) {
+			handler(cid, msg)
+		}); err != nil {
+			_ = client.Close()
+			closeAMQPClients(clients)
+			return nil, fmt.Errorf("failed AMQP subscribe for scenario=%s run=%d filter=%q: %w", scenario, runID, filter, err)
+		}
+		clients = append(clients, client)
+	}
+	return clients, nil
+}
+
 func connectAMQPQueueConsumers(addrs []string, scenario string, runID int64, count int, queueName, group string, handler func(consumerID int, msg *amqpclient.QueueMessage)) ([]*amqpclient.Client, error) {
 	clients := make([]*amqpclient.Client, 0, count)
 	for i := 0; i < count; i++ {
-		addr := addrs[i%len(addrs)]
+		addr := addrByOffset(addrs, i, subscriberNodeOffset)
 		cid := i
 		client, err := connectAMQPClient(addr)
 		if err != nil {
@@ -1977,12 +2391,13 @@ type mqttPublishParams struct {
 	OnPublished          func(topic string)
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
+	QoS                  byte
 }
 
 func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 	pubClients := make([]*mqttclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
-		addr := params.Addrs[i%len(params.Addrs)]
+		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
 		clientID := fmt.Sprintf("%s-pub-%d-%d", params.Scenario, params.RunID, i)
 		client, err := connectMQTTClient(addr, clientID, nil)
 		if err != nil {
@@ -1999,6 +2414,10 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 	if counter == nil {
 		counter = &atomic.Int64{}
 	}
+	qos := params.QoS
+	if qos > 2 {
+		qos = 1
+	}
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
@@ -2013,7 +2432,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 				topic := params.TopicFor(idx, msgIdx)
 				msgID := fmt.Sprintf("%s-%d-%d", params.Scenario, idx, msgIdx)
 				payload := makePayload(msgID, params.PayloadSize)
-				if err := client.Publish(topic, payload, 1, false); err != nil {
+				if err := client.Publish(topic, payload, qos, false); err != nil {
 					if params.ErrCount != nil {
 						params.ErrCount.Add(1)
 					}
@@ -2049,7 +2468,7 @@ type mqttQueuePublishParams struct {
 func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) int64 {
 	pubClients := make([]*mqttclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
-		addr := params.Addrs[i%len(params.Addrs)]
+		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
 		clientID := fmt.Sprintf("%s-qpub-%d-%d", params.Scenario, params.RunID, i)
 		client, err := connectMQTTClient(addr, clientID, nil)
 		if err != nil {
@@ -2110,6 +2529,7 @@ type amqpTopicPublishParams struct {
 	PayloadSize          int
 	PublishInterval      time.Duration
 	TopicFor             func(pubIdx, msgIdx int) string
+	OnPublished          func(topic string)
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
 }
@@ -2117,7 +2537,7 @@ type amqpTopicPublishParams struct {
 func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) int64 {
 	pubClients := make([]*amqpclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
-		addr := params.Addrs[i%len(params.Addrs)]
+		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
 		client, err := connectAMQPClient(addr)
 		if err != nil {
 			if params.ErrCount != nil {
@@ -2154,6 +2574,9 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 					continue
 				}
 				counter.Add(1)
+				if params.OnPublished != nil {
+					params.OnPublished(topic)
+				}
 				if params.PublishInterval > 0 {
 					time.Sleep(params.PublishInterval)
 				}
@@ -2180,7 +2603,7 @@ type amqpQueuePublishParams struct {
 func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) int64 {
 	pubClients := make([]*amqpclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
-		addr := params.Addrs[i%len(params.Addrs)]
+		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
 		client, err := connectAMQPClient(addr)
 		if err != nil {
 			if params.ErrCount != nil {
@@ -2248,7 +2671,7 @@ type amqpStreamPublishParams struct {
 func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams) int64 {
 	pubClients := make([]*amqpclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
-		addr := params.Addrs[i%len(params.Addrs)]
+		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
 		client, err := connectAMQPClient(addr)
 		if err != nil {
 			if params.ErrCount != nil {

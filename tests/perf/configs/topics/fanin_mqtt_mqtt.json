@@ -1,0 +1,17 @@
+{
+  "name": "topic-fanin-mqtt-mqtt",
+  "description": "Config-driven topic fan-in: MQTT publishers to MQTT subscribers.",
+  "pattern": "fanin",
+  "flow": "mqtt-mqtt",
+  "topic": "perf/topic/config/fanin/mqtt-mqtt/{run_id}",
+  "qos": 1,
+  "publishers": 300,
+  "messages_per_publisher": 300,
+  "publish_interval": "2ms",
+  "subscribers": 80,
+  "wildcard_subscribers": 8,
+  "wildcard_patterns": [
+    "{topic}",
+    "{base}/#"
+  ]
+}

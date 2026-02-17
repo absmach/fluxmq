@@ -1,0 +1,16 @@
+{
+  "name": "topic-fanin-amqp-amqp",
+  "description": "Config-driven topic fan-in: AMQP publishers to AMQP subscribers.",
+  "pattern": "fanin",
+  "flow": "amqp-amqp",
+  "topic": "perf/topic/config/fanin/amqp-amqp/{run_id}",
+  "publishers": 240,
+  "messages_per_publisher": 260,
+  "publish_interval": "3ms",
+  "subscribers": 70,
+  "wildcard_subscribers": 6,
+  "wildcard_patterns": [
+    "{topic}",
+    "{base}/#"
+  ]
+}

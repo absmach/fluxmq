@@ -1,7 +1,7 @@
 # MQTT topic + churn suite
-mqtt-fanin
+# mqtt-fanin
 mqtt-fanout
-mqtt-substorm
-mqtt-shared-subscriptions
-mqtt-last-will
-mqtt-consumer-groups
+# mqtt-substorm
+# mqtt-shared-subscriptions
+# mqtt-last-will
+# mqtt-consumer-groups

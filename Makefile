@@ -11,6 +11,7 @@ GOFLAGS := -trimpath
 DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
 DOCKER_IMAGE_GIT := ghcr.io/absmach/fluxmq:$(shell git describe --tags --always --dirty)
 PERF_SCRIPT_DIR := tests/perf/scripts
+PERF_SCENARIO_CONFIG ?= $(CONFIG)
 
 
 # Default target
@@ -142,7 +143,96 @@ bench-report:
 # Performance suites (scripts under tests/perf/scripts)
 .PHONY: perf-suite
 perf-suite:
-	bash $(PERF_SCRIPT_DIR)/run_suite.sh
+	@bash -lc 'set -euo pipefail; \
+		if [[ -z "$${PERF_SCENARIO_CONFIGS:-}" ]]; then \
+			echo "Usage: make perf-suite PERF_SCENARIO_CONFIGS=<cfg1.json,cfg2.json,...> [PERF_MESSAGE_SIZES=small,medium,large|PERF_MESSAGE_SIZE_BYTES=<n>] [PERF_* overrides]"; \
+			exit 1; \
+		fi; \
+		timestamp="$$(date +%Y%m%d_%H%M%S)"; \
+		results_dir="$${PERF_RESULTS_DIR:-tests/perf/results}"; \
+		mkdir -p "$$results_dir"; \
+		json_file="$$results_dir/clients_suite_configs_$${timestamp}.jsonl"; \
+		log_file="$$results_dir/clients_suite_configs_$${timestamp}.log"; \
+		mqtt_addrs="$${PERF_MQTT_ADDRS:-127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885}"; \
+		amqp_addrs="$${PERF_AMQP_ADDRS:-127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684}"; \
+		min_ratio="$${PERF_MIN_RATIO:-0.95}"; \
+		queue_min_ratio="$${PERF_QUEUE_MIN_RATIO:-0.99}"; \
+		drain_timeout="$${PERF_DRAIN_TIMEOUT:-45s}"; \
+		if [[ "$${PERF_SKIP_READY_CHECK:-0}" != "1" ]]; then \
+			for port in 18081 18082 18083; do \
+				if ! curl -fsS "http://127.0.0.1:$${port}/ready" 2>/dev/null | grep -q "\"status\":\"ready\""; then \
+					echo "Cluster readiness check failed on port $$port. Start cluster with: make run-cluster"; \
+					exit 1; \
+				fi; \
+			done; \
+		fi; \
+		IFS=, read -r -a configs <<< "$${PERF_SCENARIO_CONFIGS}"; \
+		if [[ -n "$${PERF_MESSAGE_SIZE_BYTES:-}" ]]; then \
+			IFS=, read -r -a sizes <<< "$${PERF_MESSAGE_SIZE_BYTES}"; \
+		else \
+			IFS=, read -r -a sizes <<< "$${PERF_MESSAGE_SIZES:-small,medium,large}"; \
+		fi; \
+		total=0; fail=0; \
+		for cfg in "$${configs[@]}"; do \
+			cfg="$$(echo "$$cfg" | xargs)"; \
+			[[ -z "$$cfg" ]] && continue; \
+			for size in "$${sizes[@]}"; do \
+				size="$$(echo "$$size" | xargs)"; \
+				[[ -z "$$size" ]] && continue; \
+				total=$$((total+1)); \
+				cmd=(go run ./tests/perf/loadgen \
+					-scenario-config "$$cfg" \
+					-mqtt-addrs "$$mqtt_addrs" \
+					-amqp-addrs "$$amqp_addrs" \
+					-min-ratio "$$min_ratio" \
+					-queue-min-ratio "$$queue_min_ratio" \
+					-drain-timeout "$$drain_timeout" \
+					-json-out "$$json_file"); \
+				if [[ "$$size" =~ ^[0-9]+$$ ]]; then cmd+=( -payload-bytes "$$size" ); else cmd+=( -payload "$$size" ); fi; \
+				if [[ -n "$${PERF_PUBLISHERS:-}" ]]; then cmd+=( -publishers "$${PERF_PUBLISHERS}" ); fi; \
+				if [[ -n "$${PERF_SUBSCRIBERS:-}" ]]; then cmd+=( -subscribers "$${PERF_SUBSCRIBERS}" ); fi; \
+				if [[ -n "$${PERF_MESSAGES_PER_PUBLISHER:-}" ]]; then cmd+=( -messages-per-publisher "$${PERF_MESSAGES_PER_PUBLISHER}" ); fi; \
+				if [[ -n "$${PERF_PUBLISH_INTERVAL:-}" ]]; then cmd+=( -publish-interval "$${PERF_PUBLISH_INTERVAL}" ); fi; \
+				echo ">> $${cmd[*]}" | tee -a "$$log_file"; \
+				if ! "$${cmd[@]}" 2>&1 | tee -a "$$log_file"; then \
+					fail=$$((fail+1)); \
+				fi; \
+			done; \
+		done; \
+		if [[ $$total -eq 0 ]]; then \
+			echo "No config scenarios were executed (check PERF_SCENARIO_CONFIGS)"; \
+			exit 1; \
+		fi; \
+		echo "Results JSONL: $$json_file"; \
+		echo "Log file: $$log_file"; \
+		if [[ $$fail -gt 0 ]]; then \
+			echo "Suite finished with failures: $$fail/$$total"; \
+			exit 1; \
+		fi; \
+		echo "Suite finished successfully: $$total/$$total"'
+
+.PHONY: run-perf
+run-perf:
+	@if [ -z "$(PERF_SCENARIO_CONFIG)" ]; then \
+		echo "Usage: make run-perf PERF_SCENARIO_CONFIG=<path-to-config.json> [or CONFIG=<path>] [PERF_PAYLOAD=small|medium|large|PERF_PAYLOAD_BYTES=<bytes>] [PERF_PUBLISHERS=<n>] [PERF_SUBSCRIBERS=<n>] [PERF_MESSAGES_PER_PUBLISHER=<n>] [PERF_PUBLISH_INTERVAL=<duration>]"; \
+		exit 1; \
+	fi
+	@bash -lc 'set -euo pipefail; \
+		cmd=(go run ./tests/perf/loadgen \
+			-scenario-config "$(PERF_SCENARIO_CONFIG)" \
+			-mqtt-addrs "$${PERF_MQTT_ADDRS:-127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885}" \
+			-amqp-addrs "$${PERF_AMQP_ADDRS:-127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684}" \
+			-min-ratio "$${PERF_MIN_RATIO:-0.95}" \
+			-queue-min-ratio "$${PERF_QUEUE_MIN_RATIO:-0.99}" \
+			-drain-timeout "$${PERF_DRAIN_TIMEOUT:-45s}"); \
+		if [[ -n "$${PERF_PAYLOAD_BYTES:-}" ]]; then cmd+=( -payload-bytes "$${PERF_PAYLOAD_BYTES}" ); else cmd+=( -payload "$${PERF_PAYLOAD:-small}" ); fi; \
+		if [[ -n "$${PERF_PUBLISHERS:-}" ]]; then cmd+=( -publishers "$${PERF_PUBLISHERS}" ); fi; \
+		if [[ -n "$${PERF_SUBSCRIBERS:-}" ]]; then cmd+=( -subscribers "$${PERF_SUBSCRIBERS}" ); fi; \
+		if [[ -n "$${PERF_MESSAGES_PER_PUBLISHER:-}" ]]; then cmd+=( -messages-per-publisher "$${PERF_MESSAGES_PER_PUBLISHER}" ); fi; \
+		if [[ -n "$${PERF_PUBLISH_INTERVAL:-}" ]]; then cmd+=( -publish-interval "$${PERF_PUBLISH_INTERVAL}" ); fi; \
+		if [[ -n "$${PERF_JSON_OUT:-}" ]]; then cmd+=( -json-out "$${PERF_JSON_OUT}" ); fi; \
+		echo ">> $${cmd[*]}"; \
+		"$${cmd[@]}"'
 
 .PHONY: perf-cleanup
 perf-cleanup:
@@ -291,7 +381,9 @@ help:
 	@echo "  bench-zerocopy     Run zero-copy vs legacy comparison"
 	@echo "  bench-report       Generate benchmark report to $(BUILD_DIR)/"
 	@echo "  perf-suite         Run configurable real-client performance suite"
-	@echo "                     Config via PERF_SUITE / PERF_SCENARIOS / PERF_* knobs (see tests/perf/README.md)"
+	@echo "                     Config via PERF_SCENARIO_CONFIGS / PERF_* knobs (see tests/perf/README.md)"
+	@echo "  run-perf           Run one config-driven perf scenario"
+	@echo "                     Usage: make run-perf PERF_SCENARIO_CONFIG=<config.json> (or CONFIG=<config.json>)"
 	@echo "  perf-cleanup       Reset perf cluster state and remove suite result files"
 	@echo "  perf-compare       Compare benchmark files with benchstat"
 	@echo "                     Usage: make perf-compare BASELINE=<file> [CANDIDATE=<file>]"

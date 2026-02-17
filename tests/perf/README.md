@@ -1,6 +1,6 @@
 # Performance Test Suites
 
-Performance tests are organized as suite files in `tests/perf/suites` and run with one entrypoint: `make perf-suite`.
+Performance tests are config-driven (`tests/perf/configs/topics/*.json`) and run with `make run-perf` (single config) or `make perf-suite` (list of configs).
 
 This setup runs real MQTT and AMQP 0.9.1 clients against the 3-node Docker Compose cluster and writes machine-readable JSONL results plus human-readable logs.
 
@@ -12,8 +12,8 @@ AMQP 1.0 is intentionally out of scope for this test collection.
 # 1) Start 3-node cluster
 make run-cluster
 
-# 2) Run default suite (tests/perf/suites/all.txt)
-make perf-suite
+# 2) Run one config-driven scenario
+make run-perf CONFIG=tests/perf/configs/topics/fanout_mqtt_amqp.json
 
 # 3) Cleanup cluster state and generated result files
 make perf-cleanup
@@ -32,11 +32,10 @@ make perf-cleanup
 
 ## Directory layout
 
-- runner script: `tests/perf/scripts/run_suite.sh`
 - cleanup script: `tests/perf/scripts/cleanup.sh`
 - scenario implementation: `tests/perf/loadgen/main.go`
+- config presets (topic fan-in/fan-out): `tests/perf/configs/topics/*.json`
 - result table formatter: `tests/perf/report/main.go`
-- suite definitions: `tests/perf/suites/*.txt`
 - output artifacts: `tests/perf/results/`
 
 ## Cluster setup and validation
@@ -56,32 +55,82 @@ Set `PERF_SKIP_READY_CHECK=1` only when you intentionally want to bypass readine
 
 ## Running test suites
 
-Default suite:
+Config suite:
 
 ```bash
+PERF_SCENARIO_CONFIGS=tests/perf/configs/topics/fanin_mqtt_mqtt.json,tests/perf/configs/topics/fanout_mqtt_amqp.json \
 make perf-suite
 ```
 
-Specific suite file by name:
+## Config-driven topic fan-in/fan-out
+
+For simpler scenario tuning, `loadgen` supports JSON config files for topic fan-in/fan-out runs:
 
 ```bash
-PERF_SUITE=mqtt make perf-suite
-PERF_SUITE=amqp make perf-suite
-PERF_SUITE=queue make perf-suite
-PERF_SUITE=bridge make perf-suite
+go run ./tests/perf/loadgen \
+  -scenario-config tests/perf/configs/topics/fanout_mqtt_amqp.json \
+  -payload medium
 ```
 
-Custom suite file path:
+Equivalent Make target:
 
 ```bash
-PERF_SUITE_FILE=tests/perf/suites/mqtt.txt make perf-suite
+make run-perf PERF_SCENARIO_CONFIG=tests/perf/configs/topics/fanout_mqtt_amqp.json
 ```
 
-Direct scenario list (overrides suite file):
+More `run-perf` examples:
 
 ```bash
-PERF_SCENARIOS=mqtt-fanin,mqtt-shared-subscriptions,mqtt-last-will make perf-suite
+# Same as above, using CONFIG alias
+make run-perf CONFIG=tests/perf/configs/topics/fanout_mqtt_amqp.json
+
+# Override publishers/subscribers/rate knobs from CLI
+make run-perf \
+  CONFIG=tests/perf/configs/topics/fanin_mqtt_mqtt.json \
+  PERF_PUBLISHERS=5000 \
+  PERF_SUBSCRIBERS=100 \
+  PERF_MESSAGES_PER_PUBLISHER=600 \
+  PERF_PUBLISH_INTERVAL=100ms
+
+# Use explicit payload bytes and write JSON result line
+make run-perf \
+  CONFIG=tests/perf/configs/topics/fanout_amqp_mqtt.json \
+  PERF_PAYLOAD_BYTES=2048 \
+  PERF_JSON_OUT=tests/perf/results/manual_run.jsonl
 ```
+
+You can also run config scenarios through the suite runner:
+
+```bash
+PERF_SCENARIO_CONFIGS=tests/perf/configs/topics/fanin_mqtt_mqtt.json,tests/perf/configs/topics/fanout_mqtt_amqp.json \
+PERF_MESSAGE_SIZES=small \
+make perf-suite
+```
+
+Config files included:
+
+- `tests/perf/configs/topics/fanin_mqtt_mqtt.json`
+- `tests/perf/configs/topics/fanin_amqp_amqp.json`
+- `tests/perf/configs/topics/fanout_mqtt_amqp.json`
+- `tests/perf/configs/topics/fanout_amqp_mqtt.json`
+
+Supported JSON fields:
+
+- `name`
+- `description`
+- `pattern` (`fanin` or `fanout`)
+- `flow` (`mqtt-mqtt`, `mqtt-amqp`, `amqp-mqtt`, `amqp-amqp`)
+- `topic` (supports `{run_id}` placeholder)
+- `qos` (`0|1|2`, MQTT side only)
+- `publishers`
+- `messages_per_publisher`
+- `publish_interval` (Go duration, e.g. `100ms`)
+- `subscribers`
+- `topic_count` (fan-out)
+- `wildcard_subscribers` (randomly picked subscriber count)
+- `wildcard_patterns` (supports `{base}` and `{topic}`)
+
+CLI overrides (`-publishers`, `-subscribers`, `-messages-per-publisher`, `-publish-interval`) still apply on top of config values.
 
 ## Scenario matrix
 
@@ -116,6 +165,9 @@ For each scenario run, output includes:
 - sent/received throughput in messages per second
 - delivery ratio, error count, pass/fail
 
+Client placement uses configured cluster endpoints with role-aware distribution:
+publishers start from one node set and subscribers/consumers are offset to other nodes when available, so routing paths are exercised.
+
 Artifacts in `tests/perf/results`:
 
 - `clients_suite_<suite>_<timestamp>.log`
@@ -129,25 +181,21 @@ Set variables inline before `make perf-suite`.
 
 | Variable                      | Default                                           | Description                                              |
 | ----------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
-| `PERF_SUITE`                  | `all`                                             | Suite name from `tests/perf/suites/<name>.txt`           |
-| `PERF_SUITE_FILE`             | derived from `PERF_SUITE`                         | Explicit suite file path                                 |
-| `PERF_SCENARIOS`              | empty                                             | Comma-separated scenario list; overrides suite file      |
-| `PERF_MESSAGE_SIZES`          | `small,medium,large`                              | Preset size matrix                                       |
-| `PERF_MESSAGE_SIZE_BYTES`     | empty                                             | Exact payload bytes (single size)                        |
-| `PERF_PUBLISHERS`             | scenario default                                  | Override concurrent publishers                           |
-| `PERF_SUBSCRIBERS`            | scenario default                                  | Override concurrent subscribers/consumers                |
-| `PERF_CONSUMER_GROUPS`        | scenario default                                  | Override consumer group count                            |
-| `PERF_CONSUMERS_PER_GROUP`    | scenario default                                  | Override consumers per group                             |
-| `PERF_MESSAGES_PER_PUBLISHER` | scenario default                                  | Override per-publisher message count                     |
-| `PERF_PUBLISH_INTERVAL`       | `0`                                               | Delay between publishes per publisher (for rate shaping) |
-| `PERF_MQTT_ADDRS`             | `127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885` | MQTT endpoints                                           |
-| `PERF_AMQP_ADDRS`             | `127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684` | AMQP 0.9.1 endpoints                                     |
-| `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for non-queue topic scenarios             |
-| `PERF_QUEUE_MIN_RATIO`        | `0.99`                                            | Pass threshold for queue/bridge/stream scenarios         |
-| `PERF_DRAIN_TIMEOUT`          | `45s`                                             | Max wait for subscribers/consumers to drain              |
-| `PERF_SKIP_READY_CHECK`       | `0`                                               | Skip readiness probes when set to `1`                    |
-| `PERF_CLUSTER_NETWORK_NAME`   | `fluxmq-local-net`                                | Local Docker network name used by cluster compose        |
-| `PERF_CLUSTER_NETWORK_SUBNET` | `10.247.0.0/24`                                   | Subnet used when auto-creating the cluster network       |
+| `PERF_SCENARIO_CONFIGS`       | empty                                             | Comma-separated config JSON paths for `make perf-suite` |
+| `PERF_MESSAGE_SIZES`          | `small,medium,large`                              | Preset payload size matrix                               |
+| `PERF_MESSAGE_SIZE_BYTES`     | empty                                             | Exact payload bytes (single or comma list)              |
+| `PERF_PUBLISHERS`             | config value                                      | Override concurrent publishers                           |
+| `PERF_SUBSCRIBERS`            | config value                                      | Override concurrent subscribers/consumers                |
+| `PERF_MESSAGES_PER_PUBLISHER` | config value                                      | Override per-publisher message count                     |
+| `PERF_PUBLISH_INTERVAL`       | config value                                      | Delay between publishes per publisher                    |
+| `PERF_MQTT_ADDRS`             | `127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885` | MQTT endpoints                                                               |
+| `PERF_AMQP_ADDRS`             | `127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684` | AMQP 0.9.1 endpoints                                                         |
+| `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for non-queue topic scenarios                                 |
+| `PERF_QUEUE_MIN_RATIO`        | `0.99`                                            | Pass threshold for queue/bridge/stream scenarios                             |
+| `PERF_DRAIN_TIMEOUT`          | `45s`                                             | Max wait for subscribers/consumers to drain                                  |
+| `PERF_SKIP_READY_CHECK`       | `0`                                               | Skip readiness probes when set to `1`                                        |
+| `PERF_CLUSTER_NETWORK_NAME`   | `fluxmq-local-net`                                | Local Docker network name used by cluster compose                            |
+| `PERF_CLUSTER_NETWORK_SUBNET` | `10.247.0.0/24`                                   | Subnet used when auto-creating the cluster network                           |
 
 ## Example env configs and runs
 
