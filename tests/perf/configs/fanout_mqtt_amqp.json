@@ -14,5 +14,7 @@
   "wildcard_patterns": [
     "{base}/t/+",
     "{base}/#"
-  ]
+  ],
+  "drain_timeout": "45s",
+  "payload_bytes": 256
 }

@@ -4,6 +4,7 @@
   "pattern": "fanin",
   "flow": "amqp-amqp",
   "topic": "perf/topic/config/fanin/amqp-amqp/{run_id}",
+  "qos": 1,
   "publishers": 240,
   "messages_per_publisher": 260,
   "publish_interval": "3ms",
@@ -12,5 +13,7 @@
   "wildcard_patterns": [
     "{topic}",
     "{base}/#"
-  ]
+  ],
+  "drain_timeout": "45s",
+  "payload_bytes": 256
 }

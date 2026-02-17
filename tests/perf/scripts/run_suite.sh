@@ -32,7 +32,7 @@ JSON_FILE="$RESULTS_DIR/clients_suite_configs_${TIMESTAMP}.jsonl"
 
 if [[ -z "$SCENARIO_CONFIGS_RAW" ]]; then
 	log_error "PERF_SCENARIO_CONFIGS is required for perf-suite"
-	log_error "Example: PERF_SCENARIO_CONFIGS=tests/perf/configs/topics/fanin_mqtt_mqtt.json make perf-suite"
+	log_error "Example: PERF_SCENARIO_CONFIGS=tests/perf/configs/fanin_mqtt_mqtt.json make perf-suite"
 	exit 1
 fi
 

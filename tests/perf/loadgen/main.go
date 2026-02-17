@@ -47,6 +47,7 @@ type runConfig struct {
 	Scenario             string
 	PayloadLabel         string
 	PayloadBytes         int
+	PayloadFromCLI       bool
 	MQTTAddrs            []string
 	AMQPAddrs            []string
 	MinRatio             float64
@@ -76,8 +77,11 @@ type topicScenarioConfig struct {
 	QoS                  *int     `json:"qos,omitempty"`
 	WildcardSubscribers  int      `json:"wildcard_subscribers,omitempty"`
 	WildcardPatterns     []string `json:"wildcard_patterns,omitempty"`
+	DrainTimeout         string   `json:"drain_timeout,omitempty"`
+	PayloadBytes         int      `json:"payload_bytes,omitempty"`
 
 	resolvedPublishInterval time.Duration
+	resolvedDrainTimeout    time.Duration
 	resolvedPublisherProto  string
 	resolvedSubscriberProto string
 	resolvedQoS             byte
@@ -234,7 +238,8 @@ func main() {
 
 	payloadLabel := strings.ToLower(*payloadFlag)
 	payloadBytes := 0
-	if *payloadBytesFlag > 0 {
+	payloadFromCLI := *payloadBytesFlag > 0
+	if payloadFromCLI {
 		payloadBytes = *payloadBytesFlag
 		payloadLabel = fmt.Sprintf("%dB", payloadBytes)
 	} else {
@@ -259,6 +264,7 @@ func main() {
 		Scenario:             *scenarioFlag,
 		PayloadLabel:         payloadLabel,
 		PayloadBytes:         payloadBytes,
+		PayloadFromCLI:       payloadFromCLI,
 		MQTTAddrs:            mqttAddrs,
 		AMQPAddrs:            amqpAddrs,
 		MinRatio:             *minRatioFlag,
@@ -472,6 +478,14 @@ func normalizeTopicScenarioConfig(cfg topicScenarioConfig, path string) (topicSc
 		cfg.resolvedPublishInterval = d
 	}
 
+	if cfg.DrainTimeout != "" {
+		d, err := time.ParseDuration(cfg.DrainTimeout)
+		if err != nil {
+			return topicScenarioConfig{}, fmt.Errorf("config %q has invalid drain_timeout %q: %w", cfg.Name, cfg.DrainTimeout, err)
+		}
+		cfg.resolvedDrainTimeout = d
+	}
+
 	qos := 1
 	if cfg.QoS != nil {
 		if *cfg.QoS < 0 || *cfg.QoS > 2 {
@@ -502,6 +516,13 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	}
 	if cfg.PublishInterval > 0 {
 		sc.resolvedPublishInterval = cfg.PublishInterval
+	}
+	if sc.resolvedDrainTimeout > 0 {
+		cfg.DrainTimeout = sc.resolvedDrainTimeout
+	}
+	if !cfg.PayloadFromCLI && sc.PayloadBytes > 0 {
+		cfg.PayloadBytes = sc.PayloadBytes
+		cfg.PayloadLabel = fmt.Sprintf("%dB", sc.PayloadBytes)
 	}
 
 	res := scenarioResult{
