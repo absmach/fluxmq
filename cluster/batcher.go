@@ -82,6 +82,29 @@ func (b *nodeBatcher[T]) Enqueue(ctx context.Context, nodeID string, items []T) 
 	}
 }
 
+// EnqueueAsync enqueues a batch request and returns once the worker accepts it.
+// It does not wait for flush completion.
+func (b *nodeBatcher[T]) EnqueueAsync(ctx context.Context, nodeID string, items []T) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	req := batchRequest[T]{
+		items:  items,
+		result: make(chan error, 1),
+	}
+	worker := b.worker(nodeID)
+
+	select {
+	case worker <- req:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.stopCh:
+		return errBatcherStopped
+	}
+}
+
 func (b *nodeBatcher[T]) worker(nodeID string) chan batchRequest[T] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -90,7 +113,11 @@ func (b *nodeBatcher[T]) worker(nodeID string) chan batchRequest[T] {
 		return ch
 	}
 
-	ch := make(chan batchRequest[T], b.maxSize*4)
+	queueCap := b.maxSize * 64
+	if queueCap < 1024 {
+		queueCap = 1024
+	}
+	ch := make(chan batchRequest[T], queueCap)
 	b.workers[nodeID] = ch
 
 	go b.runWorker(nodeID, ch)

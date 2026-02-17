@@ -1294,7 +1294,11 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	for nodeID := range remoteNodes {
 		var err error
 		if c.forwardBatcher != nil {
-			err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			if qos == 0 {
+				err = c.forwardBatcher.EnqueueAsync(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			} else {
+				err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			}
 		} else {
 			err = c.transport.SendForwardPublishBatch(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
 		}
