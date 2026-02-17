@@ -101,6 +101,71 @@ func (d *deduper) add(key string) bool {
 	return true
 }
 
+func startPeriodicStatusReport(scenario string, sentFn, receivedFn func() int64) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	start := time.Now()
+
+	go func() {
+		defer close(done)
+
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		var prevSent int64
+		var prevReceived int64
+
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				sent := sentFn()
+				received := receivedFn()
+				sentDelta := sent - prevSent
+				receivedDelta := received - prevReceived
+				if sentDelta < 0 {
+					sentDelta = 0
+				}
+				if receivedDelta < 0 {
+					receivedDelta = 0
+				}
+
+				fmt.Printf("progress scenario=%s elapsed=%s sent=%d received=%d mps_sent_10s=%.2f mps_recv_10s=%.2f\n",
+					scenario,
+					time.Since(start).Truncate(time.Millisecond),
+					sent,
+					received,
+					float64(sentDelta)/10.0,
+					float64(receivedDelta)/10.0,
+				)
+
+				prevSent = sent
+				prevReceived = received
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stop)
+			<-done
+		})
+	}
+}
+
+func sumAtomicCounters(counters []*atomic.Int64) int64 {
+	var total int64
+	for _, c := range counters {
+		if c == nil {
+			continue
+		}
+		total += c.Load()
+	}
+	return total
+}
+
 func main() {
 	scenarioFlag := flag.String("scenario", "", "Scenario to run")
 	payloadFlag := flag.String("payload", "small", "Payload preset: small|medium|large")
@@ -300,10 +365,15 @@ func runMQTTTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 	topic := fmt.Sprintf("perf/topic/%s/%d", scenarioName, runID)
 
 	var received atomic.Int64
+	var sent atomic.Int64
 	var errCount atomic.Int64
+	stopReport := startPeriodicStatusReport(scenarioName, func() int64 { return sent.Load() }, func() int64 { return received.Load() })
+	defer stopReport()
 
-	subs, err := connectMQTTSubscribers(cfg.MQTTAddrs, scenarioName, runID, workload.Subscribers, func(_ int, _ string, _ *mqttclient.Message) {
-		received.Add(1)
+	subs, err := connectMQTTSubscribers(cfg.MQTTAddrs, scenarioName, runID, workload.Subscribers, func(_ int, _ string, msg *mqttclient.Message) {
+		if isCountablePayload(msg.Payload) {
+			received.Add(1)
+		}
 	})
 	if err != nil {
 		return res, err
@@ -330,7 +400,8 @@ func runMQTTTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 		TopicFor: func(_ int, _ int) string {
 			return topic
 		},
-		ErrCount: &errCount,
+		ErrCount:         &errCount,
+		PublishedCounter: &sent,
 	})
 
 	expected := published * int64(workload.Subscribers)
@@ -365,13 +436,18 @@ func runAMQPTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 	topicAddrs := []string{cfg.AMQPAddrs[0]}
 
 	var received atomic.Int64
+	var sent atomic.Int64
 	var errCount atomic.Int64
 	dedup := newDeduper()
+	stopReport := startPeriodicStatusReport(scenarioName, func() int64 { return sent.Load() }, func() int64 { return received.Load() })
+	defer stopReport()
 
 	subs, err := connectAMQPTopicSubscribers(topicAddrs, scenarioName, runID, workload.Subscribers, topic, func(subID int, msg *amqpclient.Message) {
-		msgID := extractMsgID(msg.Body)
-		if dedup.add(fmt.Sprintf("%d:%s", subID, msgID)) {
-			received.Add(1)
+		if isCountablePayload(msg.Body) {
+			msgID := extractMsgID(msg.Body)
+			if dedup.add(fmt.Sprintf("%d:%s", subID, msgID)) {
+				received.Add(1)
+			}
 		}
 		if err := msg.Ack(); err != nil {
 			errCount.Add(1)
@@ -395,7 +471,8 @@ func runAMQPTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 		TopicFor: func(_ int, _ int) string {
 			return topic
 		},
-		ErrCount: &errCount,
+		ErrCount:         &errCount,
+		PublishedCounter: &sent,
 	})
 
 	expected := published * int64(workload.Subscribers)
@@ -463,13 +540,18 @@ func runMQTTSubscriptionStorm(ctx context.Context, cfg runConfig) (scenarioResul
 
 	stableFilters := make([]string, 0, workload.StableSubscribers)
 	var stableReceived atomic.Int64
+	var sent atomic.Int64
 	var expected atomic.Int64
 	var errCount atomic.Int64
 	var subOps atomic.Int64
 	var unsubOps atomic.Int64
+	stopReport := startPeriodicStatusReport("mqtt-substorm", func() int64 { return sent.Load() }, func() int64 { return stableReceived.Load() })
+	defer stopReport()
 
-	stableSubs, err := connectMQTTSubscribers(cfg.MQTTAddrs, "mqtt-substorm-stable", runID, workload.StableSubscribers, func(_ int, _ string, _ *mqttclient.Message) {
-		stableReceived.Add(1)
+	stableSubs, err := connectMQTTSubscribers(cfg.MQTTAddrs, "mqtt-substorm-stable", runID, workload.StableSubscribers, func(_ int, _ string, msg *mqttclient.Message) {
+		if isCountablePayload(msg.Payload) {
+			stableReceived.Add(1)
+		}
 	})
 	if err != nil {
 		return res, err
@@ -557,7 +639,8 @@ func runMQTTSubscriptionStorm(ctx context.Context, cfg runConfig) (scenarioResul
 			}
 			expected.Add(matches)
 		},
-		ErrCount: &errCount,
+		ErrCount:         &errCount,
+		PublishedCounter: &sent,
 	})
 
 	close(stopChurn)
@@ -616,13 +699,18 @@ func runQueueFanin(ctx context.Context, cfg runConfig) (scenarioResult, error) {
 	group := "workers"
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	var receivedUnique atomic.Int64
 	seen := newDeduper()
+	stopReport := startPeriodicStatusReport("queue-fanin", func() int64 { return sent.Load() }, func() int64 { return receivedUnique.Load() })
+	defer stopReport()
 
 	consumers, err := connectMQTTQueueConsumers(cfg.MQTTAddrs, "queue-fanin", runID, workload.Consumers, queueName, group, func(_ int, msg *mqttclient.QueueMessage) {
-		msgID := extractMsgID(msg.Payload)
-		if seen.add(msgID) {
-			receivedUnique.Add(1)
+		if isCountablePayload(msg.Payload) {
+			msgID := extractMsgID(msg.Payload)
+			if seen.add(msgID) {
+				receivedUnique.Add(1)
+			}
 		}
 		if err := msg.Ack(); err != nil {
 			errCount.Add(1)
@@ -645,6 +733,7 @@ func runQueueFanin(ctx context.Context, cfg runConfig) (scenarioResult, error) {
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	_ = waitForAtLeast(&receivedUnique, published, cfg.DrainTimeout)
@@ -707,21 +796,26 @@ func runQueueFanout(ctx context.Context, cfg runConfig) (scenarioResult, error) 
 	queueName := fmt.Sprintf("perf-queue-fanout-%d", runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	groupCounters := make([]*atomic.Int64, workload.Groups)
 	groupSeen := make([]*deduper, workload.Groups)
 	for i := 0; i < workload.Groups; i++ {
 		groupCounters[i] = &atomic.Int64{}
 		groupSeen[i] = newDeduper()
 	}
+	stopReport := startPeriodicStatusReport("queue-fanout", func() int64 { return sent.Load() }, func() int64 { return sumAtomicCounters(groupCounters) })
+	defer stopReport()
 
 	allConsumers := make([]*mqttclient.Client, 0, workload.Groups*workload.ConsumersPerGroup)
 	for g := 0; g < workload.Groups; g++ {
 		gid := g
 		groupName := fmt.Sprintf("group-%d", g+1)
 		consumers, err := connectMQTTQueueConsumers(cfg.MQTTAddrs, "queue-fanout", runID+int64(g), workload.ConsumersPerGroup, queueName, groupName, func(_ int, msg *mqttclient.QueueMessage) {
-			msgID := extractMsgID(msg.Payload)
-			if groupSeen[gid].add(msgID) {
-				groupCounters[gid].Add(1)
+			if isCountablePayload(msg.Payload) {
+				msgID := extractMsgID(msg.Payload)
+				if groupSeen[gid].add(msgID) {
+					groupCounters[gid].Add(1)
+				}
 			}
 			if err := msg.Ack(); err != nil {
 				errCount.Add(1)
@@ -747,6 +841,7 @@ func runQueueFanout(ctx context.Context, cfg runConfig) (scenarioResult, error) 
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	deadline := time.Now().Add(cfg.DrainTimeout)
@@ -824,13 +919,18 @@ func runBridgeQueueMQTTToAMQP(ctx context.Context, cfg runConfig) (scenarioResul
 	groupName := "bridge-workers"
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	var received atomic.Int64
 	seen := newDeduper()
+	stopReport := startPeriodicStatusReport("bridge-queue-mqtt-amqp", func() int64 { return sent.Load() }, func() int64 { return received.Load() })
+	defer stopReport()
 
 	amqpConsumers, err := connectAMQPQueueConsumers(cfg.AMQPAddrs, "bridge-queue-mqtt-amqp", runID, workload.AMQPConsumers, queueName, groupName, func(_ int, msg *amqpclient.QueueMessage) {
-		msgID := extractMsgID(msg.Body)
-		if seen.add(msgID) {
-			received.Add(1)
+		if isCountablePayload(msg.Body) {
+			msgID := extractMsgID(msg.Body)
+			if seen.add(msgID) {
+				received.Add(1)
+			}
 		}
 		if err := msg.Ack(); err != nil {
 			errCount.Add(1)
@@ -853,6 +953,7 @@ func runBridgeQueueMQTTToAMQP(ctx context.Context, cfg runConfig) (scenarioResul
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	_ = waitForAtLeast(&received, published, cfg.DrainTimeout)
@@ -907,13 +1008,18 @@ func runBridgeQueueAMQPToMQTT(ctx context.Context, cfg runConfig) (scenarioResul
 	groupName := "bridge-workers"
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	var received atomic.Int64
 	seen := newDeduper()
+	stopReport := startPeriodicStatusReport("bridge-queue-amqp-mqtt", func() int64 { return sent.Load() }, func() int64 { return received.Load() })
+	defer stopReport()
 
 	mqttConsumers, err := connectMQTTQueueConsumers(cfg.MQTTAddrs, "bridge-queue-amqp-mqtt", runID, workload.MQTTConsumers, queueName, groupName, func(_ int, msg *mqttclient.QueueMessage) {
-		msgID := extractMsgID(msg.Payload)
-		if seen.add(msgID) {
-			received.Add(1)
+		if isCountablePayload(msg.Payload) {
+			msgID := extractMsgID(msg.Payload)
+			if seen.add(msgID) {
+				received.Add(1)
+			}
 		}
 		if err := msg.Ack(); err != nil {
 			errCount.Add(1)
@@ -936,6 +1042,7 @@ func runBridgeQueueAMQPToMQTT(ctx context.Context, cfg runConfig) (scenarioResul
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	_ = waitForAtLeast(&received, published, cfg.DrainTimeout)
@@ -998,21 +1105,26 @@ func runMQTTConsumerGroups(ctx context.Context, cfg runConfig, scenarioName stri
 	queueName := fmt.Sprintf("perf-%s-%d", strings.ReplaceAll(scenarioName, "_", "-"), runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	groupCounters := make([]*atomic.Int64, workload.Groups)
 	groupSeen := make([]*deduper, workload.Groups)
 	for i := 0; i < workload.Groups; i++ {
 		groupCounters[i] = &atomic.Int64{}
 		groupSeen[i] = newDeduper()
 	}
+	stopReport := startPeriodicStatusReport(scenarioName, func() int64 { return sent.Load() }, func() int64 { return sumAtomicCounters(groupCounters) })
+	defer stopReport()
 
 	allConsumers := make([]*mqttclient.Client, 0, workload.Groups*workload.ConsumersPerGroup)
 	for g := 0; g < workload.Groups; g++ {
 		gid := g
 		groupName := fmt.Sprintf("group-%d", g+1)
 		consumers, err := connectMQTTQueueConsumers(cfg.MQTTAddrs, scenarioName, runID+int64(g), workload.ConsumersPerGroup, queueName, groupName, func(_ int, msg *mqttclient.QueueMessage) {
-			msgID := extractMsgID(msg.Payload)
-			if groupSeen[gid].add(msgID) {
-				groupCounters[gid].Add(1)
+			if isCountablePayload(msg.Payload) {
+				msgID := extractMsgID(msg.Payload)
+				if groupSeen[gid].add(msgID) {
+					groupCounters[gid].Add(1)
+				}
 			}
 			if err := msg.Ack(); err != nil {
 				errCount.Add(1)
@@ -1038,6 +1150,7 @@ func runMQTTConsumerGroups(ctx context.Context, cfg runConfig, scenarioName stri
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	deadline := time.Now().Add(cfg.DrainTimeout)
@@ -1120,21 +1233,26 @@ func runAMQP091ConsumerGroups(ctx context.Context, cfg runConfig) (scenarioResul
 	queueName := fmt.Sprintf("perf-amqp091-consumer-groups-%d", runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	groupCounters := make([]*atomic.Int64, w.Groups)
 	groupSeen := make([]*deduper, w.Groups)
 	for i := 0; i < w.Groups; i++ {
 		groupCounters[i] = &atomic.Int64{}
 		groupSeen[i] = newDeduper()
 	}
+	stopReport := startPeriodicStatusReport("amqp091-consumer-groups", func() int64 { return sent.Load() }, func() int64 { return sumAtomicCounters(groupCounters) })
+	defer stopReport()
 
 	allConsumers := make([]*amqpclient.Client, 0, w.Groups*w.ConsumersPerGroup)
 	for g := 0; g < w.Groups; g++ {
 		gid := g
 		groupName := fmt.Sprintf("group-%d", g+1)
 		consumers, err := connectAMQPQueueConsumers(cfg.AMQPAddrs, "amqp091-consumer-groups", runID+int64(g), w.ConsumersPerGroup, queueName, groupName, func(_ int, msg *amqpclient.QueueMessage) {
-			msgID := extractMsgID(msg.Body)
-			if groupSeen[gid].add(msgID) {
-				groupCounters[gid].Add(1)
+			if isCountablePayload(msg.Body) {
+				msgID := extractMsgID(msg.Body)
+				if groupSeen[gid].add(msgID) {
+					groupCounters[gid].Add(1)
+				}
 			}
 			if err := msg.Ack(); err != nil {
 				errCount.Add(1)
@@ -1160,6 +1278,7 @@ func runAMQP091ConsumerGroups(ctx context.Context, cfg runConfig) (scenarioResul
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	deadline := time.Now().Add(cfg.DrainTimeout)
@@ -1242,12 +1361,15 @@ func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioRes
 	topic := fmt.Sprintf("perf/topic/mqtt-shared-subscriptions/%d", runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	groupCounters := make([]*atomic.Int64, w.Groups)
 	groupSeen := make([]*deduper, w.Groups)
 	for i := 0; i < w.Groups; i++ {
 		groupCounters[i] = &atomic.Int64{}
 		groupSeen[i] = newDeduper()
 	}
+	stopReport := startPeriodicStatusReport("mqtt-shared-subscriptions", func() int64 { return sent.Load() }, func() int64 { return sumAtomicCounters(groupCounters) })
+	defer stopReport()
 
 	allConsumers := make([]*mqttclient.Client, 0, w.Groups*w.ConsumersPerGroup)
 	for g := 0; g < w.Groups; g++ {
@@ -1258,9 +1380,11 @@ func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioRes
 			addr := cfg.MQTTAddrs[(g*w.ConsumersPerGroup+i)%len(cfg.MQTTAddrs)]
 			clientID := fmt.Sprintf("mqtt-shared-sub-g%d-c%d-%d", g, i, runID)
 			client, err := connectMQTTClient(addr, clientID, func(msg *mqttclient.Message) {
-				msgID := extractMsgID(msg.Payload)
-				if groupSeen[gid].add(msgID) {
-					groupCounters[gid].Add(1)
+				if isCountablePayload(msg.Payload) {
+					msgID := extractMsgID(msg.Payload)
+					if groupSeen[gid].add(msgID) {
+						groupCounters[gid].Add(1)
+					}
 				}
 			})
 			if err != nil {
@@ -1290,7 +1414,8 @@ func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioRes
 		TopicFor: func(_ int, _ int) string {
 			return topic
 		},
-		ErrCount: &errCount,
+		ErrCount:         &errCount,
+		PublishedCounter: &sent,
 	})
 
 	deadline := time.Now().Add(cfg.DrainTimeout)
@@ -1358,13 +1483,18 @@ func runMQTTLastWill(_ context.Context, cfg runConfig) (scenarioResult, error) {
 	willTopic := fmt.Sprintf("perf/topic/mqtt-last-will/%d", runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
 	var received atomic.Int64
 	seen := newDeduper()
+	stopReport := startPeriodicStatusReport("mqtt-last-will", func() int64 { return sent.Load() }, func() int64 { return received.Load() })
+	defer stopReport()
 
 	subs, err := connectMQTTSubscribers(cfg.MQTTAddrs, "mqtt-last-will-sub", runID, w.Subscribers, func(subID int, _ string, msg *mqttclient.Message) {
-		msgID := extractMsgID(msg.Payload)
-		if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
-			received.Add(1)
+		if isCountablePayload(msg.Payload) {
+			msgID := extractMsgID(msg.Payload)
+			if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
+				received.Add(1)
+			}
 		}
 	})
 	if err != nil {
@@ -1402,12 +1532,14 @@ func runMQTTLastWill(_ context.Context, cfg runConfig) (scenarioResult, error) {
 		// Close socket without DISCONNECT so broker emits last-will.
 		if err := client.Close(); err != nil {
 			errCount.Add(1)
+			continue
 		}
+		sent.Add(1)
 	}
 
 	res.Publishers = len(willClients)
-	res.Published = int64(len(willClients))
-	res.Expected = int64(len(willClients) * w.Subscribers)
+	res.Published = sent.Load()
+	res.Expected = res.Published * int64(w.Subscribers)
 
 	_ = waitForAtLeast(&received, res.Expected, cfg.DrainTimeout)
 
@@ -1448,6 +1580,13 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 	streamName := fmt.Sprintf("perf-stream-cursor-%d", runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
+	var firstReceived atomic.Int64
+	var cursorReceived atomic.Int64
+	stopReport := startPeriodicStatusReport("amqp091-stream-cursor", func() int64 { return sent.Load() }, func() int64 {
+		return firstReceived.Load() + cursorReceived.Load()
+	})
+	defer stopReport()
 	admin, err := connectAMQPClient(cfg.AMQPAddrs[0])
 	if err != nil {
 		return res, err
@@ -1473,6 +1612,7 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
 		ErrCount:             &errCount,
+		PublishedCounter:     &sent,
 	})
 
 	readerFirst, err := connectAMQPClient(cfg.AMQPAddrs[0])
@@ -1481,7 +1621,6 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 	}
 	defer readerFirst.Close()
 
-	var firstReceived atomic.Int64
 	firstSeen := newDeduper()
 	var offsetsMu sync.Mutex
 	offsets := make([]uint64, 0, maxInt(0, int(published)))
@@ -1492,13 +1631,15 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		Offset:        "first",
 		AutoAck:       false,
 	}, func(msg *amqpclient.QueueMessage) {
-		msgID := extractMsgID(msg.Body)
-		if firstSeen.add(msgID) {
-			firstReceived.Add(1)
-			if off, ok := msg.StreamOffset(); ok {
-				offsetsMu.Lock()
-				offsets = append(offsets, off)
-				offsetsMu.Unlock()
+		if isCountablePayload(msg.Body) {
+			msgID := extractMsgID(msg.Body)
+			if firstSeen.add(msgID) {
+				firstReceived.Add(1)
+				if off, ok := msg.StreamOffset(); ok {
+					offsetsMu.Lock()
+					offsets = append(offsets, off)
+					offsetsMu.Unlock()
+				}
 			}
 		}
 		if err := msg.Ack(); err != nil {
@@ -1542,7 +1683,6 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 	}
 	defer readerCursor.Close()
 
-	var cursorReceived atomic.Int64
 	cursorSeen := newDeduper()
 	err = readerCursor.SubscribeToStream(&amqpclient.StreamConsumeOptions{
 		QueueName:     streamName,
@@ -1550,9 +1690,11 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		Offset:        fmt.Sprintf("offset=%d", cursorOffset),
 		AutoAck:       false,
 	}, func(msg *amqpclient.QueueMessage) {
-		msgID := extractMsgID(msg.Body)
-		if cursorSeen.add(msgID) {
-			cursorReceived.Add(1)
+		if isCountablePayload(msg.Body) {
+			msgID := extractMsgID(msg.Body)
+			if cursorSeen.add(msgID) {
+				cursorReceived.Add(1)
+			}
 		}
 		if err := msg.Ack(); err != nil {
 			errCount.Add(1)
@@ -1614,6 +1756,10 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 	streamName := fmt.Sprintf("perf-retention-policy-%d", runID)
 
 	var errCount atomic.Int64
+	var sent atomic.Int64
+	var receivedUnique atomic.Int64
+	stopReport := startPeriodicStatusReport("amqp091-retention-policies", func() int64 { return sent.Load() }, func() int64 { return receivedUnique.Load() })
+	defer stopReport()
 	admin, err := connectAMQPClient(cfg.AMQPAddrs[0])
 	if err != nil {
 		return res, err
@@ -1652,7 +1798,8 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 			publishedOrdinals = append(publishedOrdinals, ord)
 			ordMu.Unlock()
 		},
-		ErrCount: &errCount,
+		ErrCount:         &errCount,
+		PublishedCounter: &sent,
 	})
 
 	ordMu.Lock()
@@ -1674,7 +1821,6 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 	}
 	defer reader.Close()
 
-	var receivedUnique atomic.Int64
 	seen := newDeduper()
 	var readMu sync.Mutex
 	readOrdinals := make(map[int]struct{}, expectedRetained)
@@ -1685,13 +1831,15 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 		Offset:        "first",
 		AutoAck:       false,
 	}, func(msg *amqpclient.QueueMessage) {
-		msgID := extractMsgID(msg.Body)
-		if seen.add(msgID) {
-			receivedUnique.Add(1)
-			if ord, ok := parseRetentionOrdinal(msgID); ok {
-				readMu.Lock()
-				readOrdinals[ord] = struct{}{}
-				readMu.Unlock()
+		if isCountablePayload(msg.Body) {
+			msgID := extractMsgID(msg.Body)
+			if seen.add(msgID) {
+				receivedUnique.Add(1)
+				if ord, ok := parseRetentionOrdinal(msgID); ok {
+					readMu.Lock()
+					readOrdinals[ord] = struct{}{}
+					readMu.Unlock()
+				}
 			}
 		}
 		if err := msg.Ack(); err != nil {
@@ -1828,6 +1976,7 @@ type mqttPublishParams struct {
 	TopicFor             func(pubIdx, msgIdx int) string
 	OnPublished          func(topic string)
 	ErrCount             *atomic.Int64
+	PublishedCounter     *atomic.Int64
 }
 
 func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
@@ -1846,7 +1995,10 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 	}
 	defer disconnectMQTTClients(pubClients)
 
-	var published atomic.Int64
+	counter := params.PublishedCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
@@ -1867,7 +2019,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 					}
 					continue
 				}
-				published.Add(1)
+				counter.Add(1)
 				if params.OnPublished != nil {
 					params.OnPublished(topic)
 				}
@@ -1878,7 +2030,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 		}(pubIdx, c)
 	}
 	wg.Wait()
-	return published.Load()
+	return counter.Load()
 }
 
 type mqttQueuePublishParams struct {
@@ -1891,6 +2043,7 @@ type mqttQueuePublishParams struct {
 	PayloadSize          int
 	PublishInterval      time.Duration
 	ErrCount             *atomic.Int64
+	PublishedCounter     *atomic.Int64
 }
 
 func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) int64 {
@@ -1909,7 +2062,10 @@ func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) 
 	}
 	defer disconnectMQTTClients(pubClients)
 
-	var published atomic.Int64
+	counter := params.PublishedCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
@@ -1934,7 +2090,7 @@ func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) 
 					}
 					continue
 				}
-				published.Add(1)
+				counter.Add(1)
 				if params.PublishInterval > 0 {
 					time.Sleep(params.PublishInterval)
 				}
@@ -1942,7 +2098,7 @@ func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) 
 		}(pubIdx, c)
 	}
 	wg.Wait()
-	return published.Load()
+	return counter.Load()
 }
 
 type amqpTopicPublishParams struct {
@@ -1955,6 +2111,7 @@ type amqpTopicPublishParams struct {
 	PublishInterval      time.Duration
 	TopicFor             func(pubIdx, msgIdx int) string
 	ErrCount             *atomic.Int64
+	PublishedCounter     *atomic.Int64
 }
 
 func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) int64 {
@@ -1972,7 +2129,10 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 	}
 	defer closeAMQPClients(pubClients)
 
-	var published atomic.Int64
+	counter := params.PublishedCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
@@ -1993,7 +2153,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 					}
 					continue
 				}
-				published.Add(1)
+				counter.Add(1)
 				if params.PublishInterval > 0 {
 					time.Sleep(params.PublishInterval)
 				}
@@ -2001,7 +2161,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 		}(pubIdx, c)
 	}
 	wg.Wait()
-	return published.Load()
+	return counter.Load()
 }
 
 type amqpQueuePublishParams struct {
@@ -2014,6 +2174,7 @@ type amqpQueuePublishParams struct {
 	PayloadSize          int
 	PublishInterval      time.Duration
 	ErrCount             *atomic.Int64
+	PublishedCounter     *atomic.Int64
 }
 
 func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) int64 {
@@ -2031,7 +2192,10 @@ func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) 
 	}
 	defer closeAMQPClients(pubClients)
 
-	var published atomic.Int64
+	counter := params.PublishedCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
@@ -2055,7 +2219,7 @@ func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) 
 					}
 					continue
 				}
-				published.Add(1)
+				counter.Add(1)
 				if params.PublishInterval > 0 {
 					time.Sleep(params.PublishInterval)
 				}
@@ -2063,7 +2227,7 @@ func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) 
 		}(pubIdx, c)
 	}
 	wg.Wait()
-	return published.Load()
+	return counter.Load()
 }
 
 type amqpStreamPublishParams struct {
@@ -2078,6 +2242,7 @@ type amqpStreamPublishParams struct {
 	MsgIDFor             func(pubIdx, msgIdx int) string
 	OnPublished          func(msgID string)
 	ErrCount             *atomic.Int64
+	PublishedCounter     *atomic.Int64
 }
 
 func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams) int64 {
@@ -2095,7 +2260,10 @@ func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams
 	}
 	defer closeAMQPClients(pubClients)
 
-	var published atomic.Int64
+	counter := params.PublishedCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
@@ -2118,7 +2286,7 @@ func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams
 					}
 					continue
 				}
-				published.Add(1)
+				counter.Add(1)
 				if params.OnPublished != nil {
 					params.OnPublished(msgID)
 				}
@@ -2129,7 +2297,7 @@ func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams
 		}(pubIdx, c)
 	}
 	wg.Wait()
-	return published.Load()
+	return counter.Load()
 }
 
 func connectMQTTClient(addr, clientID string, onMessage func(msg *mqttclient.Message)) (*mqttclient.Client, error) {
@@ -2365,6 +2533,10 @@ func extractMsgID(payload []byte) string {
 		return string(payload)
 	}
 	return string(payload[:idx])
+}
+
+func isCountablePayload(payload []byte) bool {
+	return bytes.IndexByte(payload, '|') > 0
 }
 
 func parseRetentionOrdinal(msgID string) (int, bool) {
