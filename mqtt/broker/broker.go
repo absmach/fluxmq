@@ -58,6 +58,7 @@ type Broker struct {
 	// Offline queue settings
 	maxOfflineQueueSize  int
 	offlineQueueEvict    bool
+	maxInflightMessages  int
 	routePublishTimeout  time.Duration
 }
 
@@ -105,6 +106,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		maxQoS:              2, // Default to QoS 2 (highest)
 		maxOfflineQueueSize: sessionCfg.MaxOfflineQueueSize,
 		offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
+		maxInflightMessages: sessionCfg.MaxInflightMessages,
 		routePublishTimeout: transportCfg.RoutePublishTimeout,
 	}
 

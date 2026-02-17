@@ -74,10 +74,16 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		return existing, false, nil
 	}
 
-	const serverReceiveMaximum = 256
+	serverReceiveMax := b.maxInflightMessages
+	if serverReceiveMax <= 0 {
+		serverReceiveMax = 256
+	}
+	if serverReceiveMax > 65535 {
+		serverReceiveMax = 65535
+	}
 	receiveMax := opts.ReceiveMaximum
-	if receiveMax == 0 || receiveMax > serverReceiveMaximum {
-		receiveMax = serverReceiveMaximum
+	if receiveMax == 0 || int(receiveMax) > serverReceiveMax {
+		receiveMax = uint16(serverReceiveMax)
 	}
 	inflight := messages.NewInflightTracker(int(receiveMax))
 	offlineQueue := messages.NewMessageQueue(b.maxOfflineQueueSize, b.offlineQueueEvict)

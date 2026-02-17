@@ -86,7 +86,7 @@ session:
   max_sessions: 10000
   default_expiry_interval: 300
   max_offline_queue_size: 1000
-  max_inflight_messages: 100
+  max_inflight_messages: 1000
   offline_queue_policy: "evict"
 
 log:
@@ -116,6 +116,7 @@ cluster:
     route_batch_max_size: 256
     route_batch_max_delay: 50ms
     route_batch_flush_workers: 8
+    route_publish_timeout: 15s
     tls_enabled: false
     tls_cert_file: ""
     tls_key_file: ""

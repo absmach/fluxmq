@@ -524,7 +524,7 @@ func Default() *Config {
 			MaxSessions:           10000,
 			DefaultExpiryInterval: 300, // 5 minutes
 			MaxOfflineQueueSize:   1000,
-			MaxInflightMessages:   100,
+			MaxInflightMessages:   256,
 			OfflineQueuePolicy:    "evict",
 		},
 		Log: LogConfig{
