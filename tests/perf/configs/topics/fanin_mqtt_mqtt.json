@@ -5,11 +5,11 @@
   "flow": "mqtt-mqtt",
   "topic": "perf/topic/config/fanin/mqtt-mqtt/{run_id}",
   "qos": 1,
-  "publishers": 300,
-  "messages_per_publisher": 300,
-  "publish_interval": "2ms",
-  "subscribers": 80,
-  "wildcard_subscribers": 8,
+  "publishers": 1000,
+  "messages_per_publisher": 100,
+  "publish_interval": "200ms",
+  "subscribers": 10000,
+  "wildcard_subscribers": 10,
   "wildcard_patterns": [
     "{topic}",
     "{base}/#"

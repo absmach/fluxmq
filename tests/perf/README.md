@@ -32,6 +32,7 @@ make perf-cleanup
 
 ## Directory layout
 
+- runner script: `tests/perf/scripts/run_suite.sh`
 - cleanup script: `tests/perf/scripts/cleanup.sh`
 - scenario implementation: `tests/perf/loadgen/main.go`
 - config presets (topic fan-in/fan-out): `tests/perf/configs/topics/*.json`
@@ -170,8 +171,8 @@ publishers start from one node set and subscribers/consumers are offset to other
 
 Artifacts in `tests/perf/results`:
 
-- `clients_suite_<suite>_<timestamp>.log`
-- `clients_suite_<suite>_<timestamp>.jsonl`
+- `clients_suite_configs_<timestamp>.log`
+- `clients_suite_configs_<timestamp>.jsonl`
 
 At the end of suite execution, a summary table is printed from JSONL via `tests/perf/report/main.go`.
 
@@ -199,110 +200,30 @@ Set variables inline before `make perf-suite`.
 
 ## Example env configs and runs
 
-Use one of these profiles, then run `make perf-suite`.
-
-### Example 1: MQTT throughput profile
-
-```bash
-export PERF_SUITE=mqtt
-export PERF_MESSAGE_SIZES=small,medium
-export PERF_PUBLISHERS=180
-export PERF_SUBSCRIBERS=120
-export PERF_MESSAGES_PER_PUBLISHER=500
-export PERF_PUBLISH_INTERVAL=1ms
-export PERF_DRAIN_TIMEOUT=60s
-
-make perf-suite
-```
-
-### Example 2: Queue and consumer-group profile
-
-```bash
-export PERF_SCENARIOS=mqtt-consumer-groups,amqp091-consumer-groups,queue-fanout
-export PERF_MESSAGE_SIZE_BYTES=4096
-export PERF_PUBLISHERS=220
-export PERF_CONSUMER_GROUPS=6
-export PERF_CONSUMERS_PER_GROUP=32
-export PERF_MESSAGES_PER_PUBLISHER=450
-export PERF_PUBLISH_INTERVAL=2ms
-export PERF_QUEUE_MIN_RATIO=0.99
-
-make perf-suite
-```
-
-### Example 3: AMQP 0.9.1 stream cursor and retention profile
-
-```bash
-export PERF_SCENARIOS=amqp091-stream-cursor,amqp091-retention-policies
-export PERF_MESSAGE_SIZE_BYTES=2048
-export PERF_PUBLISHERS=80
-export PERF_MESSAGES_PER_PUBLISHER=700
-export PERF_PUBLISH_INTERVAL=1ms
-export PERF_DRAIN_TIMEOUT=75s
-export PERF_MIN_RATIO=0.95
-export PERF_QUEUE_MIN_RATIO=0.99
-
-make perf-suite
-```
-
-### One-shot run without exporting
-
-```bash
-PERF_SCENARIOS=mqtt-shared-subscriptions,mqtt-last-will \
-PERF_MESSAGE_SIZE_BYTES=1024 \
-PERF_PUBLISHERS=140 \
-PERF_CONSUMER_GROUPS=4 \
-PERF_CONSUMERS_PER_GROUP=36 \
-PERF_MESSAGES_PER_PUBLISHER=350 \
-PERF_PUBLISH_INTERVAL=2ms \
-make perf-suite
-```
-
-## Setup and run examples
+### Example 1: single config run
 
 ```bash
 make run-cluster
+make run-perf CONFIG=tests/perf/configs/topics/fanout_mqtt_amqp.json
+```
 
-# MQTT shared subscriptions with explicit concurrency and rate shaping.
-PERF_SCENARIOS=mqtt-shared-subscriptions \
-PERF_MESSAGE_SIZE_BYTES=1024 \
-PERF_PUBLISHERS=150 \
-PERF_CONSUMER_GROUPS=4 \
-PERF_CONSUMERS_PER_GROUP=40 \
-PERF_MESSAGES_PER_PUBLISHER=400 \
-PERF_PUBLISH_INTERVAL=2ms \
-make perf-suite
+### Example 2: single config with high-load overrides
 
-# MQTT last will under client disconnect pressure.
-PERF_SCENARIOS=mqtt-last-will \
+```bash
+make run-perf \
+  CONFIG=tests/perf/configs/topics/fanin_mqtt_mqtt.json \
+  PERF_PUBLISHERS=5000 \
+  PERF_SUBSCRIBERS=100 \
+  PERF_MESSAGES_PER_PUBLISHER=600 \
+  PERF_PUBLISH_INTERVAL=100ms \
+  PERF_DRAIN_TIMEOUT=120s
+```
+
+### Example 3: config suite run (multiple config files)
+
+```bash
+PERF_SCENARIO_CONFIGS=tests/perf/configs/topics/fanin_mqtt_mqtt.json,tests/perf/configs/topics/fanout_mqtt_amqp.json \
 PERF_MESSAGE_SIZES=small \
-PERF_PUBLISHERS=120 \
-PERF_SUBSCRIBERS=60 \
-make perf-suite
-
-# AMQP 0.9.1 cursor replay from a stream offset.
-PERF_SCENARIOS=amqp091-stream-cursor \
-PERF_MESSAGE_SIZE_BYTES=2048 \
-PERF_PUBLISHERS=60 \
-PERF_MESSAGES_PER_PUBLISHER=300 \
-PERF_PUBLISH_INTERVAL=1ms \
-make perf-suite
-
-# AMQP 0.9.1 retention policy validation.
-PERF_SCENARIOS=amqp091-retention-policies \
-PERF_MESSAGE_SIZES=medium \
-PERF_PUBLISHERS=80 \
-PERF_MESSAGES_PER_PUBLISHER=600 \
-make perf-suite
-
-# Queue and consumer-group focused run.
-PERF_SCENARIOS=mqtt-consumer-groups,amqp091-consumer-groups,queue-fanout \
-PERF_MESSAGE_SIZE_BYTES=4096 \
-PERF_PUBLISHERS=200 \
-PERF_CONSUMER_GROUPS=6 \
-PERF_CONSUMERS_PER_GROUP=30 \
-PERF_MESSAGES_PER_PUBLISHER=500 \
-PERF_PUBLISH_INTERVAL=2ms \
 make perf-suite
 
 make perf-cleanup
