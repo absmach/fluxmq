@@ -56,10 +56,8 @@ services:
 
 networks:
   cluster_net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.247.0.0/24
+    external: true
+    name: fluxmq-local-net
 
 volumes:
   fluxmq-cluster-node1-data:

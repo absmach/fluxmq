@@ -12,13 +12,33 @@ require_cmd docker
 
 PERF_CLUSTER_WAIT_READY="${PERF_CLUSTER_WAIT_READY:-1}"
 PERF_CLUSTER_READY_TIMEOUT="${PERF_CLUSTER_READY_TIMEOUT:-180}"
+PERF_CLUSTER_NETWORK_NAME="${PERF_CLUSTER_NETWORK_NAME:-fluxmq-local-net}"
+PERF_CLUSTER_NETWORK_SUBNET="${PERF_CLUSTER_NETWORK_SUBNET:-10.247.0.0/24}"
 LOG_FILE="$RESULTS_DIR/cluster_up_${TIMESTAMP}.log"
+
+ensure_cluster_network() {
+	if ! docker network inspect "$PERF_CLUSTER_NETWORK_NAME" >/dev/null 2>&1; then
+		log_info "Creating local network: $PERF_CLUSTER_NETWORK_NAME ($PERF_CLUSTER_NETWORK_SUBNET)"
+		run_and_log "$LOG_FILE" docker network create \
+			--driver bridge \
+			--subnet "$PERF_CLUSTER_NETWORK_SUBNET" \
+			"$PERF_CLUSTER_NETWORK_NAME"
+		return
+	fi
+
+	existing_subnet="$(docker network inspect "$PERF_CLUSTER_NETWORK_NAME" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)"
+	if [[ -n "$existing_subnet" && "$existing_subnet" != "$PERF_CLUSTER_NETWORK_SUBNET" ]]; then
+		log_warn "Network $PERF_CLUSTER_NETWORK_NAME subnet is $existing_subnet (expected $PERF_CLUSTER_NETWORK_SUBNET)"
+	fi
+	log_info "Using local network: $PERF_CLUSTER_NETWORK_NAME"
+}
 
 log_info "Bringing up perf cluster"
 log_info "Compose: $COMPOSE_FILE"
 log_info "Log file: $LOG_FILE"
 write_header "$LOG_FILE"
 
+ensure_cluster_network
 run_and_log "$LOG_FILE" compose up -d
 
 if [[ "$PERF_CLUSTER_WAIT_READY" != "1" ]]; then

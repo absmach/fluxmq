@@ -24,6 +24,7 @@ make perf-cleanup
 - Go toolchain available in PATH
 - Docker + Docker Compose plugin available
 - `make`, `bash`, `curl`
+- Shared Docker bridge network `fluxmq-local-net` (auto-created by `make run-cluster`)
 - Local ports available:
   - MQTT: `11883`, `11884`, `11885`
   - AMQP 0.9.1: `15682`, `15683`, `15684`
@@ -45,6 +46,7 @@ make perf-cleanup
 2. Optional status checks:
    - `make run-cluster-ps`
    - `make run-cluster-logs SERVICE=node1`
+   - direct container endpoints on `fluxmq-local-net`: `node1`/`10.247.0.11`, `node2`/`10.247.0.12`, `node3`/`10.247.0.13`
 3. Readiness checks used by perf runner:
    - `http://127.0.0.1:18081/ready`
    - `http://127.0.0.1:18082/ready`
@@ -144,6 +146,8 @@ Set variables inline before `make perf-suite`.
 | `PERF_QUEUE_MIN_RATIO`        | `0.99`                                            | Pass threshold for queue/bridge/stream scenarios         |
 | `PERF_DRAIN_TIMEOUT`          | `45s`                                             | Max wait for subscribers/consumers to drain              |
 | `PERF_SKIP_READY_CHECK`       | `0`                                               | Skip readiness probes when set to `1`                    |
+| `PERF_CLUSTER_NETWORK_NAME`   | `fluxmq-local-net`                                | Local Docker network name used by cluster compose        |
+| `PERF_CLUSTER_NETWORK_SUBNET` | `10.247.0.0/24`                                   | Subnet used when auto-creating the cluster network       |
 
 ## Example env configs and runs
 
