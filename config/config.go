@@ -376,6 +376,10 @@ type TransportConfig struct {
 	RouteBatchMaxDelay     time.Duration `yaml:"route_batch_max_delay"`
 	RouteBatchFlushWorkers int           `yaml:"route_batch_flush_workers"`
 
+	// RoutePublishTimeout is the maximum time to wait for a cross-cluster
+	// publish to complete (including retries). Zero uses the default (15s).
+	RoutePublishTimeout time.Duration `yaml:"route_publish_timeout"`
+
 	// TLS configuration for inter-broker communication
 	TLSEnabled  bool   `yaml:"tls_enabled"`   // Enable TLS for gRPC transport
 	TLSCertFile string `yaml:"tls_cert_file"` // Server certificate file
@@ -547,6 +551,7 @@ func Default() *Config {
 				RouteBatchMaxSize:      256,
 				RouteBatchMaxDelay:     5 * time.Millisecond,
 				RouteBatchFlushWorkers: 4,
+				RoutePublishTimeout:    15 * time.Second,
 			},
 			Raft: RaftConfig{
 				Enabled:             false, // Disabled by default

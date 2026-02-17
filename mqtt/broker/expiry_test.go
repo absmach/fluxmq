@@ -22,7 +22,7 @@ func TestMessageExpiry_ImmediateDelivery(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 
@@ -50,7 +50,7 @@ func TestMessageExpiry_ExpiredMessage(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 
@@ -78,7 +78,7 @@ func TestMessageExpiry_V5Handler(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	handler := NewV5Handler(b)
@@ -108,7 +108,7 @@ func TestMessageExpiry_NoExpiry(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 
@@ -133,7 +133,7 @@ func TestMessageExpiry_RemainingTime(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 
@@ -195,7 +195,7 @@ func TestMessageExpiry_RetainedMessage(t *testing.T) {
 	store := memory.New()
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	// Create broker without cluster (nil cluster) to use local storage
-	b := NewBroker(store, nil, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, nil, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Create retained message with expiry
 	expiry := uint32(60)

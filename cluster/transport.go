@@ -1122,6 +1122,14 @@ func (t *Transport) SendForwardPublishBatch(ctx context.Context, nodeID string, 
 				slog.String("node_id", nodeID),
 				slog.Int("failed", len(failed)),
 				slog.Int("attempt", attempt+1))
+
+			// Exponential backoff gives the receiving node time to drain inflight messages.
+			delay := retryBaseDelay << attempt
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
 		}
 	}
 

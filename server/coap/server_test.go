@@ -121,7 +121,7 @@ func TestNew(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{})
+	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 	defer b.Close()
 
 	cfg := Config{
@@ -165,7 +165,7 @@ func TestHandleHealth(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{})
+	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 	defer b.Close()
 
 	server := New(Config{}, b, slog.Default())
@@ -194,7 +194,7 @@ func TestHandlePublish(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{})
+	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 	defer b.Close()
 
 	server := New(Config{}, b, slog.Default())

@@ -18,9 +18,9 @@ const (
 
 	failureThreshold = 5
 	resetTimeout     = 10 * time.Second
-	maxRetries        = 3
-	retryBaseDelay    = 100 * time.Millisecond
-	maxPartialRetries = 3
+	maxRetries        = 5
+	retryBaseDelay    = 250 * time.Millisecond
+	maxPartialRetries = 5
 )
 
 // circuitBreaker implements a simple per-peer circuit breaker.

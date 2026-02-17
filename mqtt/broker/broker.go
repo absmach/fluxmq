@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
@@ -55,8 +56,9 @@ type Broker struct {
 	// Maximum QoS level supported by this broker (0, 1, or 2)
 	maxQoS byte
 	// Offline queue settings
-	maxOfflineQueueSize int
-	offlineQueueEvict   bool
+	maxOfflineQueueSize  int
+	offlineQueueEvict    bool
+	routePublishTimeout  time.Duration
 }
 
 // NewBroker creates a new broker instance.
@@ -68,7 +70,7 @@ type Broker struct {
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
 //   - metrics: OTel metrics instance (nil if metrics disabled)
 //   - tracer: OTel tracer (nil if tracing disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig) *Broker {
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig, transportCfg config.TransportConfig) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -103,6 +105,7 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		maxQoS:              2, // Default to QoS 2 (highest)
 		maxOfflineQueueSize: sessionCfg.MaxOfflineQueueSize,
 		offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
+		routePublishTimeout: transportCfg.RoutePublishTimeout,
 	}
 
 	b.wg.Add(2)
