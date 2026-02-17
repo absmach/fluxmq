@@ -147,6 +147,7 @@ func main() {
 			HybridRetainedSizeThreshold: cfg.Cluster.Etcd.HybridRetainedSizeThreshold,
 			RouteBatchMaxSize:           cfg.Cluster.Transport.RouteBatchMaxSize,
 			RouteBatchMaxDelay:          cfg.Cluster.Transport.RouteBatchMaxDelay,
+			RouteBatchFlushWorkers:      cfg.Cluster.Transport.RouteBatchFlushWorkers,
 			TransportTLS:                transportTLS,
 		}
 

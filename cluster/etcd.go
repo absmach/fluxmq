@@ -34,6 +34,8 @@ const (
 	electionPrefix       = "/leader"
 
 	urlPrefix = "http://"
+
+	defaultRouteBatchFlushWorkers = 4
 )
 
 var (
@@ -87,8 +89,9 @@ type EtcdCluster struct {
 	queueConsumersByGroup map[string]map[string]map[string]*QueueConsumerInfo // queue -> group -> key -> info
 	queueConsumersCacheMu sync.RWMutex
 
-	routeBatchMaxSize  int
-	routeBatchMaxDelay time.Duration
+	routeBatchMaxSize      int
+	routeBatchMaxDelay     time.Duration
+	routeBatchFlushWorkers int
 	forwardBatcher     *nodeBatcher[*clusterv1.ForwardPublishRequest]
 	queueBatcher       *nodeBatcher[QueueDelivery]
 
@@ -122,6 +125,7 @@ type EtcdConfig struct {
 	HybridRetainedSizeThreshold int // Size threshold in bytes for hybrid retained storage (default 1024)
 	RouteBatchMaxSize           int
 	RouteBatchMaxDelay          time.Duration
+	RouteBatchFlushWorkers      int
 
 	// Transport TLS configuration
 	TransportTLS *TransportTLSConfig
@@ -248,6 +252,10 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	if c.routeBatchMaxDelay <= 0 {
 		c.routeBatchMaxDelay = defaultRouteBatchMaxDelay
 	}
+	c.routeBatchFlushWorkers = cfg.RouteBatchFlushWorkers
+	if c.routeBatchFlushWorkers <= 0 {
+		c.routeBatchFlushWorkers = defaultRouteBatchFlushWorkers
+	}
 
 	// Create a lease for session ownership with auto-renewal
 	if err := c.refreshSessionLease(context.Background()); err != nil {
@@ -270,6 +278,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		c.queueBatcher = newNodeBatcher[QueueDelivery](
 			c.routeBatchMaxSize,
 			c.routeBatchMaxDelay,
+			c.routeBatchFlushWorkers,
 			c.stopCh,
 			logger.With(slog.String("batcher", "queue")),
 			"queue",
@@ -1219,6 +1228,7 @@ func (c *EtcdCluster) SetForwardPublishHandler(handler ForwardPublishHandler) {
 		c.forwardBatcher = newNodeBatcher(
 			c.routeBatchMaxSize,
 			c.routeBatchMaxDelay,
+			c.routeBatchFlushWorkers,
 			c.stopCh,
 			c.logger.With(slog.String("batcher", "forward-publish")),
 			"forward-publish",

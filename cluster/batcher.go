@@ -13,6 +13,8 @@ import (
 
 var errBatcherStopped = errors.New("batcher stopped")
 
+const flushResultTimeout = 35 * time.Second
+
 type batchRequest[T any] struct {
 	items  []T
 	result chan error
@@ -20,12 +22,13 @@ type batchRequest[T any] struct {
 
 // nodeBatcher batches items per remote node and flushes on max size or max delay.
 type nodeBatcher[T any] struct {
-	name     string
-	maxSize  int
-	maxDelay time.Duration
-	stopCh   <-chan struct{}
-	logger   *slog.Logger
-	sendFn   func(ctx context.Context, nodeID string, items []T) error
+	name         string
+	maxSize      int
+	maxDelay     time.Duration
+	flushWorkers int
+	stopCh       <-chan struct{}
+	logger       *slog.Logger
+	sendFn       func(ctx context.Context, nodeID string, items []T) error
 
 	mu      sync.Mutex
 	workers map[string]chan batchRequest[T]
@@ -34,6 +37,7 @@ type nodeBatcher[T any] struct {
 func newNodeBatcher[T any](
 	maxSize int,
 	maxDelay time.Duration,
+	flushWorkers int,
 	stopCh <-chan struct{},
 	logger *slog.Logger,
 	name string,
@@ -42,14 +46,18 @@ func newNodeBatcher[T any](
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if flushWorkers < 1 {
+		flushWorkers = 1
+	}
 	return &nodeBatcher[T]{
-		name:     name,
-		maxSize:  maxSize,
-		maxDelay: maxDelay,
-		stopCh:   stopCh,
-		logger:   logger,
-		sendFn:   sendFn,
-		workers:  make(map[string]chan batchRequest[T]),
+		name:         name,
+		maxSize:      maxSize,
+		maxDelay:     maxDelay,
+		flushWorkers: flushWorkers,
+		stopCh:       stopCh,
+		logger:       logger,
+		sendFn:       sendFn,
+		workers:      make(map[string]chan batchRequest[T]),
 	}
 }
 
@@ -72,11 +80,13 @@ func (b *nodeBatcher[T]) Enqueue(ctx context.Context, nodeID string, items []T) 
 		return errBatcherStopped
 	}
 
+	timer := time.NewTimer(flushResultTimeout)
+	defer timer.Stop()
 	select {
 	case err := <-req.result:
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-timer.C:
+		return context.DeadlineExceeded
 	case <-b.stopCh:
 		return errBatcherStopped
 	}
@@ -125,6 +135,8 @@ func (b *nodeBatcher[T]) worker(nodeID string) chan batchRequest[T] {
 }
 
 func (b *nodeBatcher[T]) runWorker(nodeID string, ch <-chan batchRequest[T]) {
+	sem := make(chan struct{}, b.flushWorkers)
+
 	for {
 		select {
 		case <-b.stopCh:
@@ -164,8 +176,19 @@ func (b *nodeBatcher[T]) runWorker(nodeID string, ch <-chan batchRequest[T]) {
 				}
 			}
 
-			err := b.flush(nodeID, items)
-			b.completeAll(pending, err)
+			// Acquire a flush slot (blocks if all flushers are busy).
+			select {
+			case sem <- struct{}{}:
+			case <-b.stopCh:
+				b.completeAll(pending, errBatcherStopped)
+				return
+			}
+
+			go func(items []T, pending []batchRequest[T]) {
+				defer func() { <-sem }()
+				err := b.flush(nodeID, items)
+				b.completeAll(pending, err)
+			}(items, pending)
 		}
 	}
 }

@@ -48,6 +48,7 @@ func setupRoutePublishCluster(t *testing.T, stopCh chan struct{}, sendFn func(ct
 	c.forwardBatcher = newNodeBatcher(
 		1,
 		5*time.Millisecond,
+		1,
 		stopCh,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		"test-forward",
@@ -191,6 +192,7 @@ func TestRoutePublishNoRemoteNodesSkipsForwarding(t *testing.T) {
 	c.forwardBatcher = newNodeBatcher(
 		1,
 		time.Second,
+		1,
 		stopCh,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		"test-forward",

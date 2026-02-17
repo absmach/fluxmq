@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -24,6 +25,7 @@ func TestNodeBatcherFlushBySize(t *testing.T) {
 	b := newNodeBatcher[int](
 		3,
 		100*time.Millisecond,
+		1,
 		stopCh,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		"test",
@@ -76,6 +78,7 @@ func TestNodeBatcherFlushByDelay(t *testing.T) {
 	b := newNodeBatcher[int](
 		10,
 		delay,
+		1,
 		stopCh,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		"test",
@@ -121,6 +124,7 @@ func TestNodeBatcherChunksOversizedFlush(t *testing.T) {
 	b := newNodeBatcher[int](
 		3,
 		100*time.Millisecond,
+		1,
 		stopCh,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		"test",
@@ -146,5 +150,83 @@ func TestNodeBatcherChunksOversizedFlush(t *testing.T) {
 	}
 	if len(calls[0]) != 3 || len(calls[1]) != 3 || len(calls[2]) != 1 {
 		t.Fatalf("unexpected chunk sizes: %d, %d, %d", len(calls[0]), len(calls[1]), len(calls[2]))
+	}
+}
+
+func TestNodeBatcherConcurrentFlush(t *testing.T) {
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
+	const workers = 4
+	var maxConcurrent atomic.Int32
+	var current atomic.Int32
+
+	b := newNodeBatcher[int](
+		1,
+		time.Millisecond,
+		workers,
+		stopCh,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test",
+		func(_ context.Context, _ string, items []int) error {
+			c := current.Add(1)
+			for {
+				old := maxConcurrent.Load()
+				if c <= old || maxConcurrent.CompareAndSwap(old, c) {
+					break
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+			current.Add(-1)
+			return nil
+		},
+	)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers*2; i++ {
+		wg.Add(1)
+		go func(v int) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = b.Enqueue(ctx, "node-a", []int{v})
+		}(i)
+	}
+	wg.Wait()
+
+	mc := maxConcurrent.Load()
+	if mc < 2 {
+		t.Fatalf("expected at least 2 concurrent flushes, got %d", mc)
+	}
+	if mc > int32(workers) {
+		t.Fatalf("expected at most %d concurrent flushes, got %d", workers, mc)
+	}
+}
+
+func TestNodeBatcherDetachedResultWait(t *testing.T) {
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
+	flushDelay := 100 * time.Millisecond
+	b := newNodeBatcher[int](
+		1,
+		time.Millisecond,
+		1,
+		stopCh,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test",
+		func(_ context.Context, _ string, items []int) error {
+			time.Sleep(flushDelay)
+			return nil
+		},
+	)
+
+	// Caller context expires quickly, but flush completes within the detached timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := b.Enqueue(ctx, "node-a", []int{1})
+	if err != nil {
+		t.Fatalf("expected nil error with detached result-wait, got %v", err)
 	}
 }
