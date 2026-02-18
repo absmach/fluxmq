@@ -223,27 +223,12 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		s.Inflight().MarkReceived(packetID)
 
-		// Zero-copy: Create ref-counted buffer from payload
+		// Store message for distribution at PUBREL (Method B: commit on PUBREL).
+		// This means PUBREC is sent immediately without blocking on subscriber fan-out.
 		buf := core.GetBufferWithData(payload)
-
-		// Retain buffer before Publish consumes it (for QoS 2 inflight tracking)
-		buf.Retain()
-
-		msg := &storage.Message{
-			Topic:  topic,
-			QoS:    qos,
-			Retain: retain,
-		}
-		msg.SetPayloadFromBuffer(buf)
-		if err := h.broker.Publish(msg); err != nil {
-			buf.Release()
-			return err
-		}
-
-		// Store for QoS 2 flow tracking using the retained buffer reference
 		storeMsg := &storage.Message{
 			Topic:    topic,
-			QoS:      2,
+			QoS:      qos,
 			Retain:   retain,
 			PacketID: packetID,
 		}
@@ -302,9 +287,21 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	packetID := p.ID
 
-	// Message was already published when PUBLISH was received
-	// PUBREL just confirms the handshake for QoS 2
-	h.broker.AckMessage(s, packetID)
+	// Distribute stored message now that publisher has committed with PUBREL.
+	msg, err := s.Inflight().Ack(packetID)
+	if err != nil {
+		h.broker.logger.Warn("v3_pubrel_unknown_packet",
+			slog.String("client_id", s.ID),
+			slog.Int("packet_id", int(packetID)))
+	} else if msg != nil {
+		if err := h.broker.Publish(msg); err != nil {
+			h.broker.logError("v3_pubrel_publish", err,
+				slog.String("client_id", s.ID),
+				slog.String("topic", msg.Topic))
+		}
+		storage.ReleaseMessage(msg)
+	}
+
 	s.Inflight().ClearReceived(packetID)
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
