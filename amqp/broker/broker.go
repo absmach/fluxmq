@@ -18,16 +18,14 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
-const amqp091Prefix = "amqp091-"
-
 // IsAMQP091Client checks if a client ID belongs to an AMQP 0.9.1 client.
 func IsAMQP091Client(clientID string) bool {
-	return strings.HasPrefix(clientID, amqp091Prefix)
+	return corebroker.IsAMQP091Client(clientID)
 }
 
 // PrefixedClientID returns a client ID with the AMQP 0.9.1 prefix.
 func PrefixedClientID(connID string) string {
-	return amqp091Prefix + connID
+	return corebroker.PrefixedAMQP091ClientID(connID)
 }
 
 // Broker is the core AMQP 0.9.1 broker.
@@ -37,6 +35,7 @@ type Broker struct {
 	routeResolver       *corebroker.RoutingResolver
 	queueManager        corebroker.StreamQueueManager
 	cluster             cluster.Cluster
+	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration
 	stats               *Stats
 	logger              *slog.Logger
@@ -86,6 +85,29 @@ func (b *Broker) getCluster() cluster.Cluster {
 	return b.cluster
 }
 
+// SetCrossDeliver sets the local cross-protocol pub/sub delivery callback.
+func (b *Broker) SetCrossDeliver(fn corebroker.CrossDeliverFunc) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.crossDeliver = fn
+}
+
+func (b *Broker) getCrossDeliver() corebroker.CrossDeliverFunc {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.crossDeliver
+}
+
+// SetRouter swaps the broker router. Must be called before accepting connections.
+func (b *Broker) SetRouter(r *router.TrieRouter) {
+	if r == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.router = r
+}
+
 // SetRoutePublishTimeout sets the timeout for cross-cluster publish routing.
 func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
 	b.mu.Lock()
@@ -119,12 +141,19 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 	}
 
 	for _, sub := range subs {
-		val, ok := b.connections.Load(sub.ClientID)
-		if !ok {
+		if IsAMQP091Client(sub.ClientID) {
+			connID := strings.TrimPrefix(sub.ClientID, corebroker.AMQP091ClientPrefix)
+			val, ok := b.connections.Load(connID)
+			if !ok {
+				continue
+			}
+			c := val.(*Connection)
+			c.deliverMessage(topic, payload, props)
 			continue
 		}
-		c := val.(*Connection)
-		c.deliverMessage(topic, payload, props)
+		if fn := b.getCrossDeliver(); fn != nil {
+			fn(sub.ClientID, topic, payload, sub.QoS, props)
+		}
 	}
 
 	if cl := b.getCluster(); cl != nil {
@@ -152,7 +181,11 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	}
 
 	for _, sub := range subs {
-		val, ok := b.connections.Load(sub.ClientID)
+		if !IsAMQP091Client(sub.ClientID) {
+			continue
+		}
+		connID := strings.TrimPrefix(sub.ClientID, corebroker.AMQP091ClientPrefix)
+		val, ok := b.connections.Load(connID)
 		if !ok {
 			continue
 		}
@@ -165,7 +198,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 
 // DeliverToClient delivers a queue message to a specific AMQP 0.9.1 client.
 func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) error {
-	connID := strings.TrimPrefix(clientID, amqp091Prefix)
+	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 
 	val, ok := b.connections.Load(connID)
 	if !ok {
@@ -186,7 +219,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 
 // DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP 0.9.1 client.
 func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
-	connID := strings.TrimPrefix(clientID, amqp091Prefix)
+	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 
 	val, ok := b.connections.Load(connID)
 	if !ok {
@@ -207,4 +240,14 @@ func (b *Broker) Close() error {
 	})
 	b.logger.Info("AMQP 0.9.1 broker shut down")
 	return nil
+}
+
+// LocalDeliverPubSub delivers a local pub/sub message to an AMQP 0.9.1 client.
+func (b *Broker) LocalDeliverPubSub(clientID string, topic string, payload []byte, _ byte, props map[string]string) {
+	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
+	val, ok := b.connections.Load(connID)
+	if !ok {
+		return
+	}
+	val.(*Connection).deliverMessage(topic, payload, props)
 }

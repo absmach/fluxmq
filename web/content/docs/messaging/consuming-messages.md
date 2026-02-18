@@ -5,7 +5,7 @@ description: Subscribe with MQTT and receive messages from topics or queues
 
 # Consuming Messages
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-18
 
 ## MQTT Subscribe
 
@@ -18,6 +18,15 @@ Use QoS 1 or 2 when you need delivery guarantees:
 ```bash
 mosquitto_sub -p 1883 -t "sensors/#" -q 1 -v
 ```
+
+## AMQP 0.9.1 Pub/Sub Consumption
+
+For non-queue pub/sub (`basic.consume` without `$queue/...`), AMQP filters are translated to canonical MQTT form:
+
+- `user.*.created` -> `user/+/created`
+- `sensor.#` -> `sensor/#`
+
+This means MQTT and AMQP 0.9.1 local subscribers can match the same published topics.
 
 ## Queue Consumption
 

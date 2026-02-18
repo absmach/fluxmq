@@ -18,6 +18,7 @@ import (
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
@@ -280,6 +281,11 @@ func main() {
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
 
+	// Shared local pub/sub router (MQTT + AMQP 0.9.1).
+	sharedRouter := router.NewRouter()
+	b.SetRouter(sharedRouter)
+	amqp091Broker.SetRouter(sharedRouter)
+
 	var (
 		qm            *queue.Manager
 		queueLogStore *logStorage.Adapter
@@ -455,6 +461,28 @@ func main() {
 		// Set queue manager on AMQP broker
 		amqpBroker.SetQueueManager(qm)
 		amqp091Broker.SetQueueManager(qm)
+
+		// Local pub/sub dispatcher: routes to AMQP 0.9.1 or MQTT based on client ID.
+		crossDeliver := corebroker.CrossDeliverFunc(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+			if amqpbroker.IsAMQP091Client(clientID) {
+				amqp091Broker.LocalDeliverPubSub(clientID, topic, payload, qos, props)
+				return
+			}
+			s := b.Get(clientID)
+			if s == nil {
+				return
+			}
+			msg := storage.AcquireMessage()
+			msg.Topic = topic
+			msg.QoS = qos
+			msg.Properties = props
+			msg.SetPayloadFromBytes(payload)
+			if _, err := b.DeliverToSession(s, msg); err != nil {
+				slog.Debug("cross-deliver to MQTT session failed", "client_id", clientID, "topic", topic, "error", err)
+			}
+		})
+		b.SetCrossDeliver(crossDeliver)
+		amqp091Broker.SetCrossDeliver(crossDeliver)
 
 		// Set queue handler on cluster for cross-node message routing
 		if etcdCluster != nil {

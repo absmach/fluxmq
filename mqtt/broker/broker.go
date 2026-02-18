@@ -40,6 +40,7 @@ type Broker struct {
 	wills         storage.WillStore
 	cluster       cluster.Cluster         // nil for single-node mode
 	queueManager  broker.QueueManager     // nil if queue functionality disabled
+	crossDeliver  broker.CrossDeliverFunc // nil if cross-protocol local pub/sub disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
 	rateLimiter   broker.ClientRateLimiter // nil if rate limiting disabled
@@ -131,6 +132,20 @@ func (b *Broker) SetQueueManager(qm broker.QueueManager) error {
 	}
 
 	return nil
+}
+
+// SetRouter sets the topic router used for local pub/sub matching.
+// It should be configured before the broker starts accepting connections.
+func (b *Broker) SetRouter(r Router) {
+	if r == nil {
+		return
+	}
+	b.router = r
+}
+
+// SetCrossDeliver sets the local cross-protocol pub/sub delivery callback.
+func (b *Broker) SetCrossDeliver(fn broker.CrossDeliverFunc) {
+	b.crossDeliver = fn
 }
 
 // GetQueueManager returns the queue manager.

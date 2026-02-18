@@ -5,9 +5,17 @@ description: Topic names, filters, and wildcard matching rules
 
 # Topics
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-18
 
 FluxMQ uses MQTT-style topics across protocols. Topics are hierarchical strings separated by `/`.
+
+For AMQP 0.9.1 pub/sub (default exchange path), filters and routing keys are translated at the protocol boundary:
+
+| AMQP 0.9.1 | MQTT canonical |
+| --- | --- |
+| `.` | `/` |
+| `*` | `+` |
+| `#` | `#` |
 
 ## Topic Examples
 

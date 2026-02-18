@@ -6,6 +6,7 @@ package broker
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,6 +87,12 @@ func (c *Connection) run() error {
 	c.connID = c.conn.RemoteAddr().String()
 	c.broker.registerConnection(c.connID, c)
 	c.broker.stats.IncrementConnections()
+	if cl := c.broker.getCluster(); cl != nil {
+		clientID := PrefixedClientID(c.connID)
+		if err := cl.AcquireSession(context.Background(), clientID, cl.NodeID()); err != nil {
+			c.logger.Warn("AMQP 0.9.1 acquire session ownership failed", "client_id", clientID, "error", err)
+		}
+	}
 	c.logger.Info("AMQP 0.9.1 connection opened", "remote", c.connID)
 
 	if c.heartbeat > 0 {
@@ -453,6 +460,17 @@ func (c *Connection) cleanup() {
 	}
 
 	c.broker.stats.DecrementConnections()
+	if c.connID != "" {
+		if cl := c.broker.getCluster(); cl != nil {
+			clientID := PrefixedClientID(c.connID)
+			if err := cl.RemoveAllSubscriptions(context.Background(), clientID); err != nil {
+				c.logger.Warn("AMQP 0.9.1 remove all subscriptions failed", "client_id", clientID, "error", err)
+			}
+			if err := cl.ReleaseSession(context.Background(), clientID); err != nil {
+				c.logger.Warn("AMQP 0.9.1 release session ownership failed", "client_id", clientID, "error", err)
+			}
+		}
+	}
 	c.broker.unregisterConnection(c.connID)
 	c.conn.Close()
 	c.logger.Info("AMQP 0.9.1 connection closed", "remote", c.connID)

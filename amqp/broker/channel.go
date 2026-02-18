@@ -26,13 +26,14 @@ import (
 
 // consumer represents a Basic.Consume subscription on a channel.
 type consumer struct {
-	tag       string
-	queue     string
-	queueName string
-	pattern   string
-	groupID   string
-	noAck     bool
-	exclusive bool
+	tag        string
+	queue      string
+	mqttFilter string
+	queueName  string
+	pattern    string
+	groupID    string
+	noAck      bool
+	exclusive  bool
 }
 
 type queueInfo struct {
@@ -393,12 +394,16 @@ func (ch *Channel) completePublish() {
 	}
 
 	if !isQueuePublish {
+		pubsubTopic := topic
+		if exchangeName == "" {
+			pubsubTopic = topics.AMQPTopicToMQTT(topic)
+		}
 		// Publish to the topic-based router (pub/sub)
 		if method.Mandatory {
-			subs, err := ch.conn.broker.router.Match(topic)
+			subs, err := ch.conn.broker.router.Match(pubsubTopic)
 			if err != nil || len(subs) == 0 {
 				if err != nil {
-					ch.conn.logger.Error("router match failed", "topic", topic, "error", err)
+					ch.conn.logger.Error("router match failed", "topic", pubsubTopic, "error", err)
 				}
 				ch.sendBasicReturn(method, header, body)
 				if ch.confirmMode {
@@ -407,7 +412,7 @@ func (ch *Channel) completePublish() {
 				return
 			}
 		}
-		if err := ch.conn.broker.Publish(topic, body, props); err != nil {
+		if err := ch.conn.broker.Publish(pubsubTopic, body, props); err != nil {
 			publishFailed = true
 		}
 	}
@@ -567,7 +572,9 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 
 	exchange := ""
 	routingKey := topic
-	if idx := strings.Index(topic, "/"); idx >= 0 {
+	if cons.queueName == "" {
+		routingKey = topics.MQTTTopicToAMQP(topic)
+	} else if idx := strings.Index(topic, "/"); idx >= 0 {
 		exchange = topic[:idx]
 		routingKey = topic[idx+1:]
 	}
@@ -1000,6 +1007,10 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	route := ch.conn.broker.routeResolver.Resolve(queueFilter)
 	isQueue := route.Kind == corebroker.RouteQueue
 	queueName, pattern := route.QueueName, route.Pattern
+	mqttFilter := ""
+	if !isQueue {
+		mqttFilter = topics.AMQPFilterToMQTT(queueFilter)
+	}
 
 	queueInfo := ch.getQueueInfo(queueFilter)
 	streamCursor, hasStreamOffset := extractStreamOffset(m.Arguments)
@@ -1021,13 +1032,14 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 			fmt.Sprintf("consumer tag %q already exists", tag), codec.ClassBasic, codec.MethodBasicConsume)
 	}
 	ch.consumers[tag] = &consumer{
-		tag:       tag,
-		queue:     queueFilter,
-		queueName: queueName,
-		pattern:   pattern,
-		groupID:   groupID,
-		noAck:     m.NoAck,
-		exclusive: m.Exclusive,
+		tag:        tag,
+		queue:      queueFilter,
+		mqttFilter: mqttFilter,
+		queueName:  queueName,
+		pattern:    pattern,
+		groupID:    groupID,
+		noAck:      m.NoAck,
+		exclusive:  m.Exclusive,
 	}
 	ch.consumersMu.Unlock()
 
@@ -1057,8 +1069,15 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 
 	// Subscribe via the topic router for pub/sub delivery (non-queue topics).
 	if !isQueue && !isStream {
-		connID := ch.conn.connID
-		ch.conn.broker.router.Subscribe(connID, queueFilter, 1, storage.SubscribeOptions{})
+		clientID := PrefixedClientID(ch.conn.connID)
+		if err := ch.conn.broker.router.Subscribe(clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
+			ch.conn.logger.Error("pubsub subscribe failed", "filter", queueFilter, "mqtt_filter", mqttFilter, "error", err)
+		}
+		if cl := ch.conn.broker.getCluster(); cl != nil {
+			if err := cl.AddSubscription(context.Background(), clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
+				ch.conn.logger.Error("cluster add subscription failed", "filter", queueFilter, "mqtt_filter", mqttFilter, "error", err)
+			}
+		}
 	}
 
 	if !m.NoWait {
@@ -1084,7 +1103,19 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 		}
 
 		if cons.queueName == "" {
-			ch.conn.broker.router.Unsubscribe(ch.conn.connID, cons.queue)
+			clientID := PrefixedClientID(ch.conn.connID)
+			if cons.mqttFilter == "" {
+				ch.conn.logger.Warn("pubsub unsubscribe skipped: missing canonical filter", "consumer_tag", cons.tag)
+			} else {
+				if err := ch.conn.broker.router.Unsubscribe(clientID, cons.mqttFilter); err != nil {
+					ch.conn.logger.Warn("pubsub unsubscribe failed", "mqtt_filter", cons.mqttFilter, "error", err)
+				}
+				if cl := ch.conn.broker.getCluster(); cl != nil {
+					if err := cl.RemoveSubscription(context.Background(), clientID, cons.mqttFilter); err != nil {
+						ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
+					}
+				}
+			}
 		}
 	}
 
@@ -1266,10 +1297,13 @@ func (ch *Channel) consumerQueueMatches(cons *consumer, topic string) bool {
 		}
 	}
 
-	if cons.queue == topic {
+	if cons.mqttFilter == "" {
+		return false
+	}
+	if cons.mqttFilter == topic {
 		return true
 	}
-	return topics.TopicMatch(cons.queue, topic)
+	return topics.TopicMatch(cons.mqttFilter, topic)
 }
 
 // cleanup releases all resources held by this channel.
@@ -1293,7 +1327,18 @@ func (ch *Channel) cleanup() {
 			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID)
 		}
 		if cons.queueName == "" {
-			ch.conn.broker.router.Unsubscribe(ch.conn.connID, cons.queue)
+			if cons.mqttFilter == "" {
+				ch.conn.logger.Warn("pubsub unsubscribe skipped: missing canonical filter", "consumer_tag", cons.tag)
+				continue
+			}
+			if err := ch.conn.broker.router.Unsubscribe(clientID, cons.mqttFilter); err != nil {
+				ch.conn.logger.Warn("pubsub unsubscribe failed", "mqtt_filter", cons.mqttFilter, "error", err)
+			}
+			if cl := ch.conn.broker.getCluster(); cl != nil {
+				if err := cl.RemoveSubscription(context.Background(), clientID, cons.mqttFilter); err != nil {
+					ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
+				}
+			}
 		}
 	}
 }

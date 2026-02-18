@@ -179,9 +179,10 @@ func TestPrefetchBuffering(t *testing.T) {
 	ch, buf := newTestChannel(t)
 	ch.prefetchCount = 1
 	ch.consumers["ctag"] = &consumer{
-		tag:   "ctag",
-		queue: "q",
-		noAck: false,
+		tag:        "ctag",
+		queue:      "q",
+		mqttFilter: "q",
+		noAck:      false,
 	}
 
 	props := map[string]string{qtypes.PropMessageID: "m1"}
@@ -210,9 +211,10 @@ func TestChannelFlowQueueing(t *testing.T) {
 	ch, buf := newTestChannel(t)
 	ch.flow = false
 	ch.consumers["ctag"] = &consumer{
-		tag:   "ctag",
-		queue: "q",
-		noAck: true,
+		tag:        "ctag",
+		queue:      "q",
+		mqttFilter: "q",
+		noAck:      true,
 	}
 
 	ch.deliverMessage("q", []byte("one"), map[string]string{})
@@ -324,9 +326,10 @@ func TestConsumerQueueMatches(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "plain topic fallback",
+			name: "plain topic match",
 			cons: consumer{
-				queue: "sensor/#",
+				queue:      "sensor/#",
+				mqttFilter: "sensor/#",
 			},
 			topic: "sensor/temperature",
 			want:  true,
@@ -334,7 +337,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "plain topic mismatch",
 			cons: consumer{
-				queue: "sensor/#",
+				queue:      "sensor/#",
+				mqttFilter: "sensor/#",
 			},
 			topic: "control/restart",
 			want:  false,

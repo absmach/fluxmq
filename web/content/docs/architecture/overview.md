@@ -5,11 +5,11 @@ description: High-level system design overview covering core components and how 
 
 # Architecture Overview
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 2026-02-18
 
 ## Overview
 
-FluxMQ is a multi-protocol message broker built around a shared queue manager. MQTT transports (TCP, WebSocket, HTTP bridge, CoAP) share one MQTT broker instance, while AMQP 1.0 and AMQP 0.9.1 use dedicated brokers. Queues are protocol-agnostic — all protocols route through the same queue manager, and delivery semantics depend on the [queue type](/docs/concepts/queues) (ephemeral, durable, or stream), not the protocol.
+FluxMQ is a multi-protocol message broker built around a shared queue manager. MQTT transports (TCP, WebSocket, HTTP bridge, CoAP) share one MQTT broker instance, while AMQP 1.0 and AMQP 0.9.1 use dedicated brokers. MQTT and AMQP 0.9.1 pub/sub share a local topic router for same-node interoperability. Queues are protocol-agnostic — all protocols route through the same queue manager, and delivery semantics depend on the [queue type](/docs/concepts/queues) (ephemeral, durable, or stream), not the protocol.
 
 ## High-Level View
 

@@ -5,7 +5,7 @@ description: Publish via MQTT or HTTP, including queue and retained messages
 
 # Publishing Messages
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-18
 
 ## MQTT Publish
 
@@ -70,6 +70,14 @@ ch.Publish(
     },
 )
 ```
+
+When publishing to pub/sub topics through the default exchange, AMQP routing keys are normalized to FluxMQ's canonical MQTT topic form:
+
+- `.` becomes `/`
+- `*` becomes `+` (for filters)
+- `#` remains `#`
+
+This allows local MQTT and AMQP 0.9.1 pub/sub interoperability on the same topic namespace.
 
 ### Publishing to Queues
 

@@ -217,6 +217,12 @@ func (b *Broker) distribute(msg *storage.Message) error {
 
 // distributeLocal delivers a message to all matching local subscribers without cluster routing.
 func (b *Broker) distributeLocal(msg *storage.Message) error {
+	return b.distributeLocalScoped(msg, true)
+}
+
+// distributeLocalScoped delivers a message to local subscribers.
+// allowCross controls whether cross-protocol delivery callbacks may run.
+func (b *Broker) distributeLocalScoped(msg *storage.Message, allowCross bool) error {
 	matched, err := b.router.Match(msg.Topic)
 	if err != nil {
 		return err
@@ -284,6 +290,12 @@ func (b *Broker) distributeLocal(msg *storage.Message) error {
 				continue
 			}
 		} else {
+			if broker.IsAMQP091Client(clientID) {
+				if allowCross && b.crossDeliver != nil {
+					b.crossDeliver(clientID, msg.Topic, msg.GetPayload(), sub.QoS, msg.Properties)
+				}
+				continue
+			}
 			// Normal subscription
 			s := b.sessionsMap.Get(clientID)
 			if s == nil {
@@ -331,7 +343,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	err := b.distributeLocal(storeMsg)
+	err := b.distributeLocalScoped(storeMsg, false)
 	storeMsg.ReleasePayload()
 	return err
 }
