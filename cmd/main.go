@@ -540,13 +540,15 @@ func main() {
 		}
 
 		tcpCfg := tcp.Config{
-			Address:         slot.cfg.Addr,
-			TLSConfig:       tlsCfg,
-			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			MaxConnections:  slot.cfg.MaxConnections,
-			ReadTimeout:     slot.cfg.ReadTimeout,
-			WriteTimeout:    slot.cfg.WriteTimeout,
-			Logger:          logger,
+			Address:          slot.cfg.Addr,
+			TLSConfig:        tlsCfg,
+			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
+			MaxConnections:   slot.cfg.MaxConnections,
+			ReadTimeout:      slot.cfg.ReadTimeout,
+			WriteTimeout:     slot.cfg.WriteTimeout,
+			SendQueueSize:    cfg.Session.MaxSendQueueSize,
+			DisconnectOnFull: cfg.Session.DisconnectOnFull,
+			Logger:           logger,
 		}
 		if rateLimitManager != nil {
 			tcpCfg.IPRateLimiter = rateLimitManager

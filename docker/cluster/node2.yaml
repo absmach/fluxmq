@@ -87,6 +87,7 @@ session:
   default_expiry_interval: 300
   max_offline_queue_size: 1000
   max_inflight_messages: 1000
+  max_send_queue_size: 1000
   offline_queue_policy: "evict"
 
 log:

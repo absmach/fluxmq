@@ -235,6 +235,11 @@ func (s *Session) ProcessRetries() {
 
 // WritePacket writes a packet to the connection.
 func (s *Session) WritePacket(pkt packets.ControlPacket) error {
+	return s.WriteControlPacket(pkt, nil)
+}
+
+// WriteControlPacket writes a control packet to the connection.
+func (s *Session) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
@@ -242,7 +247,19 @@ func (s *Session) WritePacket(pkt packets.ControlPacket) error {
 	if conn == nil {
 		return ErrNotConnected
 	}
-	return conn.WritePacket(pkt)
+	return conn.WriteControlPacket(pkt, onSent)
+}
+
+// WriteDataPacket writes a data packet (PUBLISH path) to the connection.
+func (s *Session) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	s.mu.RLock()
+	conn := s.conn
+	s.mu.RUnlock()
+
+	if conn == nil {
+		return ErrNotConnected
+	}
+	return conn.WriteDataPacket(pkt, onSent)
 }
 
 // ReadPacket reads a packet from the connection.

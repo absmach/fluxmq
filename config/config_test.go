@@ -28,6 +28,12 @@ func TestDefault(t *testing.T) {
 	if cfg.Session.MaxSessions != 10000 {
 		t.Errorf("expected max sessions 10000, got %d", cfg.Session.MaxSessions)
 	}
+	if cfg.Session.MaxSendQueueSize != 0 {
+		t.Errorf("expected max send queue size 0, got %d", cfg.Session.MaxSendQueueSize)
+	}
+	if cfg.Session.DisconnectOnFull {
+		t.Error("expected disconnect_on_full default false")
+	}
 
 	// Test log defaults
 	if cfg.Log.Level != "info" {
@@ -139,6 +145,13 @@ func TestValidate(t *testing.T) {
 						},
 					},
 				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative max send queue size",
+			modify: func(c *Config) {
+				c.Session.MaxSendQueueSize = -1
 			},
 			wantErr: true,
 		},

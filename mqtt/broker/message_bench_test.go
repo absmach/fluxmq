@@ -457,6 +457,20 @@ func (m *mockBenchConn) ReadPacket() (packets.ControlPacket, error) {
 }
 
 func (m *mockBenchConn) WritePacket(pkt packets.ControlPacket) error {
+	return m.WriteControlPacket(pkt, nil)
+}
+
+func (m *mockBenchConn) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
+	if onSent != nil {
+		onSent()
+	}
+	return nil
+}
+
+func (m *mockBenchConn) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	if onSent != nil {
+		onSent()
+	}
 	return nil
 }
 

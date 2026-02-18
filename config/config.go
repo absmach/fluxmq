@@ -267,6 +267,14 @@ type SessionConfig struct {
 
 	// Offline queue eviction policy: "evict" (drop oldest) or "reject" (reject new)
 	OfflineQueuePolicy string `yaml:"offline_queue_policy"`
+
+	// MaxSendQueueSize controls per-connection outbound send queue depth.
+	// 0 keeps synchronous writes; values > 0 enable asynchronous send queues.
+	MaxSendQueueSize int `yaml:"max_send_queue_size"`
+
+	// DisconnectOnFull controls behavior when send queue is full in async mode.
+	// false blocks the producer (backpressure), true disconnects the slow client.
+	DisconnectOnFull bool `yaml:"disconnect_on_full"`
 }
 
 // LogConfig holds logging configuration.
@@ -526,6 +534,8 @@ func Default() *Config {
 			MaxOfflineQueueSize:   1000,
 			MaxInflightMessages:   256,
 			OfflineQueuePolicy:    "evict",
+			MaxSendQueueSize:      0,
+			DisconnectOnFull:      false,
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -877,6 +887,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Session.OfflineQueuePolicy != "evict" && c.Session.OfflineQueuePolicy != "reject" {
 		return fmt.Errorf("session.offline_queue_policy must be 'evict' or 'reject'")
+	}
+	if c.Session.MaxSendQueueSize < 0 {
+		return fmt.Errorf("session.max_send_queue_size cannot be negative")
 	}
 
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

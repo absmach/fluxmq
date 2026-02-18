@@ -49,7 +49,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 	}
 
 	if msg.QoS == 0 {
-		err := b.DeliverMessage(s, msg)
+		err := b.DeliverMessage(s, msg, nil)
 		if err == nil {
 			// Webhook: message delivered (QoS 0)
 			if b.webhooks != nil {
@@ -76,7 +76,10 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 		return 0, err
 	}
 
-	if err := b.DeliverMessage(s, msg); err != nil {
+	onSent := func() {
+		s.Inflight().MarkSent(packetID)
+	}
+	if err := b.DeliverMessage(s, msg, onSent); err != nil {
 		// Delivery failed, but message is in inflight so buffer stays (will be retried)
 		return packetID, err
 	}
@@ -108,16 +111,17 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 }
 
 // DeliverMessage sends a message packet to the session's connection.
-func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error {
+func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent func()) error {
 	b.stats.IncrementPublishSent()
 	b.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
 	var pub packets.ControlPacket
+	var releasePub func()
 
 	switch s.Version {
 	case 5:
 		p := v5.AcquirePublish()
-		defer v5.ReleasePublish(p)
+		releasePub = func() { v5.ReleasePublish(p) }
 
 		// Calculate remaining message expiry interval
 		if msg.MessageExpiry != nil && !msg.Expiry.IsZero() {
@@ -144,7 +148,7 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 		pub = p
 	default:
 		p := v3.AcquirePublish()
-		defer v3.ReleasePublish(p)
+		releasePub = func() { v3.ReleasePublish(p) }
 
 		p.FixedHeader = packets.FixedHeader{
 			PacketType: packets.PublishType,
@@ -158,7 +162,25 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message) error 
 		pub = p
 	}
 
-	return s.WritePacket(pub)
+	// Wrap onSent to release the pooled packet after the wire write completes.
+	// In async mode, DeliverMessage returns before sendLoop writes the packet,
+	// so we must not release via defer — the packet must stay alive until Pack() is done.
+	var wrappedOnSent func()
+	if onSent != nil {
+		wrappedOnSent = func() {
+			onSent()
+			releasePub()
+		}
+	} else {
+		wrappedOnSent = releasePub
+	}
+
+	err := s.WriteDataPacket(pub, wrappedOnSent)
+	if err != nil {
+		// WriteDataPacket failed without enqueuing; release immediately.
+		releasePub()
+	}
+	return err
 }
 
 func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {

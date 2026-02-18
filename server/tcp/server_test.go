@@ -243,4 +243,27 @@ func TestDefaultConfigApplied(t *testing.T) {
 	if server.config.TCPKeepAlive == 0 {
 		t.Fatal("expected default TCPKeepAlive to be set")
 	}
+	if server.config.SendQueueSize != 0 {
+		t.Fatalf("expected default SendQueueSize to be 0, got %d", server.config.SendQueueSize)
+	}
+	if server.config.DisconnectOnFull {
+		t.Fatal("expected default DisconnectOnFull to be false")
+	}
+}
+
+func TestSendQueueConfigApplied(t *testing.T) {
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	defer b.Close()
+
+	server := New(Config{
+		SendQueueSize:    64,
+		DisconnectOnFull: true,
+	}, b)
+
+	if server.config.SendQueueSize != 64 {
+		t.Fatalf("expected SendQueueSize 64, got %d", server.config.SendQueueSize)
+	}
+	if !server.config.DisconnectOnFull {
+		t.Fatal("expected DisconnectOnFull=true")
+	}
 }

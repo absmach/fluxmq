@@ -50,6 +50,7 @@ type Inflight interface {
 	UpdateState(packetID uint16, state InflightState) error
 	ClearReceived(packetID uint16)
 	GetExpired(expiry time.Duration) []*InflightMessage
+	MarkSent(packetID uint16)
 	MarkRetry(packetID uint16) error
 	GetAll() []*InflightMessage
 	CleanupExpiredReceived(olderThan time.Duration)
@@ -87,10 +88,11 @@ func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Directio
 	}
 
 	t.messages[packetID] = &InflightMessage{
-		PacketID:  packetID,
-		Message:   msg,
-		State:     StatePublishSent,
-		SentAt:    time.Now(),
+		PacketID: packetID,
+		Message:  msg,
+		State:    StatePublishSent,
+		// SentAt is intentionally set only after successful socket write.
+		SentAt:    time.Time{},
 		Retries:   0,
 		Direction: direction,
 	}
@@ -163,12 +165,25 @@ func (t *inflight) GetExpired(timeout time.Duration) []*InflightMessage {
 	var expired []*InflightMessage
 
 	for _, msg := range t.messages {
+		if msg.SentAt.IsZero() {
+			continue
+		}
 		if now.Sub(msg.SentAt) >= timeout {
 			cp := *msg
 			expired = append(expired, &cp)
 		}
 	}
 	return expired
+}
+
+// MarkSent marks a message as successfully written to the connection.
+func (t *inflight) MarkSent(packetID uint16) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if msg, ok := t.messages[packetID]; ok {
+		msg.SentAt = time.Now()
+	}
 }
 
 // MarkRetry marks a message as retried and updates sent time.

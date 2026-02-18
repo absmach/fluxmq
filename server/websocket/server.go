@@ -228,6 +228,7 @@ type wsConnection struct {
 	reader       io.Reader
 	version      int
 	mu           sync.RWMutex
+	writeMu      sync.Mutex
 	closed       bool
 	lastActivity time.Time
 	onDisconnect func(graceful bool)
@@ -283,6 +284,18 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 }
 
 func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
+	return c.WriteControlPacket(pkt, nil)
+}
+
+func (c *wsConnection) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
+	return c.writePacket(pkt, onSent)
+}
+
+func (c *wsConnection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	return c.writePacket(pkt, onSent)
+}
+
+func (c *wsConnection) writePacket(pkt packets.ControlPacket, onSent func()) error {
 	if pkt == nil {
 		return ErrCannotEncodeNilPacket
 	}
@@ -292,7 +305,17 @@ func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
 		return err
 	}
 
-	return c.ws.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	c.writeMu.Lock()
+	err := c.ws.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	c.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	if onSent != nil {
+		onSent()
+	}
+	return nil
 }
 
 func (c *wsConnection) Read(b []byte) (n int, err error) {

@@ -133,6 +133,8 @@ session:
   default_expiry_interval: 300
   max_offline_queue_size: 1000
   max_inflight_messages: 256
+  max_send_queue_size: 0           # 0 = synchronous writes, >0 = async buffered sends
+  disconnect_on_full: false        # when async queue is full: false=block, true=disconnect client
   offline_queue_policy: "evict"   # evict or reject
 ```
 

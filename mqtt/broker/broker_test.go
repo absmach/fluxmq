@@ -27,7 +27,22 @@ type mockConnection struct {
 }
 
 func (m *mockConnection) WritePacket(p packets.ControlPacket) error {
+	return m.WriteControlPacket(p, nil)
+}
+
+func (m *mockConnection) WriteControlPacket(p packets.ControlPacket, onSent func()) error {
 	m.packets = append(m.packets, p)
+	if onSent != nil {
+		onSent()
+	}
+	return nil
+}
+
+func (m *mockConnection) WriteDataPacket(p packets.ControlPacket, onSent func()) error {
+	m.packets = append(m.packets, p)
+	if onSent != nil {
+		onSent()
+	}
 	return nil
 }
 

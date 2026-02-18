@@ -27,18 +27,20 @@ type IPRateLimiter interface {
 
 // Config holds the TCP server configuration.
 type Config struct {
-	Address         string
-	TLSConfig       *tls.Config
-	Logger          *slog.Logger
-	ShutdownTimeout time.Duration
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	TCPKeepAlive    time.Duration
-	MaxConnections  int
-	BufferSize      int
-	DisableNoDelay  bool
-	IPRateLimiter   IPRateLimiter // Optional IP-based rate limiter
+	Address          string
+	TLSConfig        *tls.Config
+	Logger           *slog.Logger
+	ShutdownTimeout  time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	TCPKeepAlive     time.Duration
+	MaxConnections   int
+	BufferSize       int
+	DisableNoDelay   bool
+	IPRateLimiter    IPRateLimiter // Optional IP-based rate limiter
+	SendQueueSize    int
+	DisconnectOnFull bool
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
@@ -225,8 +227,8 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 		s.config.Logger.Debug("TLS handshake successful")
 	}
 
-	// core.NewConnection now accepts any net.Conn (TCP or TLS)
-	hc := core.NewConnection(conn)
+	// core.NewConnection accepts any net.Conn (TCP or TLS)
+	hc := core.NewConnection(conn, s.config.SendQueueSize, s.config.DisconnectOnFull)
 	broker.HandleConnection(s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",

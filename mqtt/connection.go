@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -15,11 +16,14 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
+const controlBurst = 32
+
 var (
 	_ Connection = (*connection)(nil)
 
 	ErrUnsupportedProtocolVersion = errors.New("unsupported MQTT protocol version")
 	ErrCannotEncodeNilPacket      = errors.New("cannot encode nil packet")
+	ErrSendQueueFull              = errors.New("send queue full: client disconnected")
 )
 
 // Connection represents a network connection that can read/write MQTT packets.
@@ -36,10 +40,18 @@ type Connection interface {
 // PacketWriter is an interface for writing packets.
 type PacketWriter interface {
 	WritePacket(pkt packets.ControlPacket) error
+	WriteControlPacket(pkt packets.ControlPacket, onSent func()) error
+	WriteDataPacket(pkt packets.ControlPacket, onSent func()) error
 }
 
 type PacketReader interface {
 	ReadPacket() (packets.ControlPacket, error)
+}
+
+// sendItem is queued for asynchronous socket writes.
+type sendItem struct {
+	pkt    packets.ControlPacket
+	onSent func()
 }
 
 // connection wraps a net.Conn and provides MQTT packet-level I/O with state management.
@@ -50,18 +62,43 @@ type connection struct {
 
 	mu sync.RWMutex
 
+	sendMu           sync.Mutex
+	controlCh        chan sendItem
+	dataCh           chan sendItem
+	closeCh          chan struct{}
+	closeOnce        sync.Once
+	sendWg           sync.WaitGroup
+	disconnectOnFull bool
+	closed           atomic.Bool
+
 	lastActivity time.Time
 
 	onDisconnect func(graceful bool)
 }
 
 // NewConnection creates a new MQTT connection wrapping a network connection.
-// Accepts any net.Conn including *net.TCPConn and *tls.Conn.
-func NewConnection(conn net.Conn) Connection {
-	return &connection{
-		conn:   conn,
-		reader: conn,
+// queueSize <= 0 keeps synchronous writes; queueSize > 0 enables asynchronous queued writes.
+func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool) Connection {
+	c := &connection{
+		conn:             conn,
+		reader:           conn,
+		disconnectOnFull: disconnectOnFull,
 	}
+
+	if queueSize > 0 {
+		controlCap := queueSize / 4
+		if controlCap < 1 {
+			controlCap = 1
+		}
+		c.controlCh = make(chan sendItem, controlCap)
+		c.dataCh = make(chan sendItem, queueSize)
+		c.closeCh = make(chan struct{})
+
+		c.sendWg.Add(1)
+		go c.sendLoop()
+	}
+
+	return c
 }
 
 // ReadPacket reads the next MQTT packet from the connection.
@@ -99,10 +136,163 @@ func (c *connection) ReadPacket() (packets.ControlPacket, error) {
 }
 
 func (c *connection) WritePacket(pkt packets.ControlPacket) error {
+	return c.WriteControlPacket(pkt, nil)
+}
+
+func (c *connection) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
 	if pkt == nil {
 		return ErrCannotEncodeNilPacket
 	}
-	return pkt.Pack(c.conn)
+
+	if c.controlCh == nil {
+		return c.writeSync(pkt, onSent)
+	}
+
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
+
+	item := sendItem{pkt: pkt, onSent: onSent}
+	select {
+	case c.controlCh <- item:
+		return nil
+	case <-c.closeCh:
+		return net.ErrClosed
+	}
+}
+
+func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	if pkt == nil {
+		return ErrCannotEncodeNilPacket
+	}
+
+	if c.dataCh == nil {
+		return c.writeSync(pkt, onSent)
+	}
+
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
+
+	item := sendItem{pkt: pkt, onSent: onSent}
+	if c.disconnectOnFull {
+		select {
+		case c.dataCh <- item:
+			return nil
+		case <-c.closeCh:
+			return net.ErrClosed
+		default:
+			c.markClosed()
+			_ = c.conn.Close()
+			return ErrSendQueueFull
+		}
+	}
+
+	select {
+	case c.dataCh <- item:
+		return nil
+	case <-c.closeCh:
+		return net.ErrClosed
+	}
+}
+
+func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
+
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
+
+	if err := pkt.Pack(c.conn); err != nil {
+		return err
+	}
+	if onSent != nil {
+		onSent()
+	}
+	return nil
+}
+
+func (c *connection) sendLoop() {
+	defer c.sendWg.Done()
+
+	for {
+		controlCount := 0
+
+		for draining := true; draining && controlCount < controlBurst; {
+			select {
+			case <-c.closeCh:
+				return
+			case item := <-c.controlCh:
+				if !c.doWrite(item) {
+					return
+				}
+				controlCount++
+			default:
+				draining = false
+			}
+		}
+
+		if controlCount == controlBurst {
+			select {
+			case <-c.closeCh:
+				return
+			case item := <-c.dataCh:
+				if !c.doWrite(item) {
+					return
+				}
+			default:
+			}
+			continue
+		}
+
+		select {
+		case <-c.closeCh:
+			return
+		case item := <-c.controlCh:
+			if !c.doWrite(item) {
+				return
+			}
+		default:
+			select {
+			case <-c.closeCh:
+				return
+			case item := <-c.controlCh:
+				if !c.doWrite(item) {
+					return
+				}
+			case item := <-c.dataCh:
+				if !c.doWrite(item) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func (c *connection) doWrite(item sendItem) bool {
+	if err := item.pkt.Pack(c.conn); err != nil {
+		c.markClosed()
+		_ = c.conn.Close()
+		return false
+	}
+	if item.onSent != nil {
+		item.onSent()
+	}
+	return true
+}
+
+func (c *connection) markClosed() {
+	c.closed.Store(true)
+	if c.closeCh != nil {
+		c.closeOnce.Do(func() {
+			close(c.closeCh)
+		})
+	}
 }
 
 func (c *connection) Read(b []byte) (n int, err error) {
@@ -114,7 +304,12 @@ func (c *connection) Write(b []byte) (n int, err error) {
 }
 
 func (c *connection) Close() error {
-	return c.conn.Close()
+	c.markClosed()
+	err := c.conn.Close()
+	if c.controlCh != nil {
+		c.sendWg.Wait()
+	}
+	return err
 }
 
 func (c *connection) LocalAddr() net.Addr {

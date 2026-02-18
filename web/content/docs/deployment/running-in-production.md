@@ -21,6 +21,7 @@ Production readiness is workload-dependent. Use the benchmark suites in `benchma
 - `session.max_sessions`: cap active MQTT sessions
 - `broker.max_message_size`: limit payload size
 - `session.max_offline_queue_size` and `session.max_inflight_messages`: control per-client memory usage
+- `session.max_send_queue_size` and `session.disconnect_on_full`: tune slow-subscriber behavior under fan-out
 - `queues.*.limits`: bound queue depth, message size, and TTL
 
 ## OS and Runtime Considerations

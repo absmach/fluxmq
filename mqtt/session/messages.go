@@ -13,6 +13,7 @@ import (
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
+	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
 
@@ -46,11 +47,12 @@ const RetryTimeout = 20 * time.Second
 func (h *msgHandler) ProcessRetries(writer core.PacketWriter) {
 	expired := h.inflight.GetExpired(RetryTimeout)
 	for _, inflight := range expired {
-		if err := h.resendMessage(writer, inflight); err != nil {
-			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
+		if inflight.Direction != messages.Outbound {
 			continue
 		}
-		h.inflight.MarkRetry(inflight.PacketID)
+		if err := h.resendMessage(writer, inflight); err != nil {
+			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
+		}
 	}
 
 	h.inflight.CleanupExpiredReceived(30 * time.Minute)
@@ -120,33 +122,62 @@ func (h *msgHandler) ClearAliases() {
 
 func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage) error {
 	msg := inflight.Message
+	if msg == nil {
+		return nil
+	}
 
-	var pkt packets.ControlPacket
-	if h.version == packets.V5 {
-		pkt = &v5.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        msg.QoS,
-				Retain:     msg.Retain,
-				Dup:        true,
-			},
-			TopicName: msg.Topic,
-			Payload:   msg.Payload,
-			ID:        inflight.PacketID,
-		}
-	} else {
-		pkt = &v3.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        msg.QoS,
-				Retain:     msg.Retain,
-				Dup:        true,
-			},
-			TopicName: msg.Topic,
-			Payload:   msg.Payload,
-			ID:        inflight.PacketID,
+	onSent := func() {
+		if err := h.inflight.MarkRetry(inflight.PacketID); err != nil {
+			slog.Debug("Failed to mark retry", "packet_id", inflight.PacketID, "error", err)
 		}
 	}
 
-	return writer.WritePacket(pkt)
+	if msg.QoS == 2 && inflight.State == messages.StatePubRecReceived {
+		rel := h.newPubRelPacket(inflight.PacketID)
+		return writer.WriteControlPacket(rel, onSent)
+	}
+
+	pub := h.newPublishPacket(msg, inflight.PacketID)
+	return writer.WriteDataPacket(pub, onSent)
+}
+
+func (h *msgHandler) newPublishPacket(msg *storage.Message, packetID uint16) packets.ControlPacket {
+	payload := msg.GetPayload()
+	if h.version == packets.V5 {
+		return &v5.Publish{
+			FixedHeader: packets.FixedHeader{
+				PacketType: packets.PublishType,
+				QoS:        msg.QoS,
+				Retain:     msg.Retain,
+				Dup:        true,
+			},
+			TopicName: msg.Topic,
+			Payload:   payload,
+			ID:        packetID,
+		}
+	}
+	return &v3.Publish{
+		FixedHeader: packets.FixedHeader{
+			PacketType: packets.PublishType,
+			QoS:        msg.QoS,
+			Retain:     msg.Retain,
+			Dup:        true,
+		},
+		TopicName: msg.Topic,
+		Payload:   payload,
+		ID:        packetID,
+	}
+}
+
+func (h *msgHandler) newPubRelPacket(packetID uint16) packets.ControlPacket {
+	if h.version == packets.V5 {
+		return &v5.PubRel{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+			ID:          packetID,
+		}
+	}
+	return &v3.PubRel{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+		ID:          packetID,
+	}
 }
