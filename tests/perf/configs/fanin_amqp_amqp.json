@@ -5,15 +5,15 @@
   "flow": "amqp-amqp",
   "topic": "perf/topic/config/fanin/amqp-amqp/{run_id}",
   "qos": 1,
-  "publishers": 240,
-  "messages_per_publisher": 260,
-  "publish_interval": "3ms",
-  "subscribers": 70,
-  "wildcard_subscribers": 6,
+  "publishers": 200,
+  "messages_per_publisher": 100,
+  "publish_interval": "100ms",
+  "subscribers": 200,
+  "wildcard_subscribers": 20,
   "wildcard_patterns": [
     "{topic}",
     "{base}/#"
   ],
   "drain_timeout": "45s",
-  "payload_bytes": 256
+  "payload_bytes": 4096
 }
