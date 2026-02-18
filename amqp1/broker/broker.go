@@ -24,16 +24,17 @@ const clientIDPrefix = "amqp:"
 
 // Broker manages AMQP 1.0 connections and message routing.
 type Broker struct {
-	connections   sync.Map // containerID -> *Connection
-	router        *router.TrieRouter
-	routeResolver *broker.RoutingResolver
-	queueManager  broker.QueueManager
-	cluster       cluster.Cluster
-	auth          *broker.AuthEngine
-	stats         *Stats
-	metrics       *Metrics // nil if OTel disabled
-	logger        *slog.Logger
-	mu            sync.RWMutex
+	connections         sync.Map // containerID -> *Connection
+	router              *router.TrieRouter
+	routeResolver       *broker.RoutingResolver
+	queueManager        broker.QueueManager
+	cluster             cluster.Cluster
+	auth                *broker.AuthEngine
+	stats               *Stats
+	metrics             *Metrics // nil if OTel disabled
+	logger              *slog.Logger
+	routePublishTimeout time.Duration
+	mu                  sync.RWMutex
 }
 
 // New creates a new AMQP broker.
@@ -108,7 +109,11 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 	}
 
 	if cl := b.getCluster(); cl != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		timeout := b.routePublishTimeout
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		if err := cl.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
 			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
@@ -185,6 +190,13 @@ func (b *Broker) SetCluster(cl cluster.Cluster) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.cluster = cl
+}
+
+// SetRoutePublishTimeout sets the timeout for cross-cluster publish routing.
+func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.routePublishTimeout = d
 }
 
 // DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP client.

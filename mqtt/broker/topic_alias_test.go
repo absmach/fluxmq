@@ -23,7 +23,7 @@ func testLogger() *slog.Logger {
 func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
-	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Create session with TopicAliasMax = 10
 	s, _, err := b.CreateSession("test-client", 5, session.Options{
@@ -112,7 +112,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 func TestTopicAlias_MultipleAliases(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
-	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, err := b.CreateSession("test-client", 5, session.Options{
 		CleanStart: true,
@@ -179,7 +179,7 @@ func TestTopicAlias_MultipleAliases(t *testing.T) {
 func TestTopicAlias_UpdateExisting(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
-	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	s, _, err := b.CreateSession("test-client", 5, session.Options{
 		CleanStart: true,
@@ -233,7 +233,7 @@ func TestTopicAlias_UpdateExisting(t *testing.T) {
 func TestTopicAlias_SessionIsolation(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
-	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, testLogger(), nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Create two sessions
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})

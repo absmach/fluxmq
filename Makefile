@@ -10,6 +10,8 @@ LDFLAGS := -s -w
 GOFLAGS := -trimpath
 DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
 DOCKER_IMAGE_GIT := ghcr.io/absmach/fluxmq:$(shell git describe --tags --always --dirty)
+PERF_SCRIPT_DIR := tests/perf/scripts
+PERF_SCENARIO_CONFIG ?= $(CONFIG)
 
 
 # Default target
@@ -138,6 +140,82 @@ bench-report:
 	@echo ""
 	@echo "Benchmark results saved to $(BUILD_DIR)/benchmark-results.txt"
 
+# Performance suites (scripts under tests/perf/scripts)
+.PHONY: perf-suite
+perf-suite:
+	bash $(PERF_SCRIPT_DIR)/run_suite.sh
+
+.PHONY: run-perf
+run-perf:
+	@if [ -z "$(PERF_SCENARIO_CONFIG)" ]; then \
+		echo "Usage: make run-perf PERF_SCENARIO_CONFIG=<path-to-config.json> [or CONFIG=<path>] [PERF_PAYLOAD=small|medium|large|PERF_PAYLOAD_BYTES=<bytes>] [PERF_PUBLISHERS=<n>] [PERF_SUBSCRIBERS=<n>] [PERF_MESSAGES_PER_PUBLISHER=<n>] [PERF_PUBLISH_INTERVAL=<duration>]"; \
+		exit 1; \
+	fi
+	@bash -lc 'set -euo pipefail; \
+		cmd=(go run ./tests/perf/loadgen \
+			-scenario-config "$(PERF_SCENARIO_CONFIG)" \
+			-mqtt-addrs "$${PERF_MQTT_ADDRS:-127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885}" \
+			-amqp-addrs "$${PERF_AMQP_ADDRS:-127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684}" \
+			-min-ratio "$${PERF_MIN_RATIO:-0.95}" \
+			-queue-min-ratio "$${PERF_QUEUE_MIN_RATIO:-0.99}" \
+			-drain-timeout "$${PERF_DRAIN_TIMEOUT:-45s}"); \
+		if [[ -n "$${PERF_PAYLOAD_BYTES:-}" ]]; then cmd+=( -payload-bytes "$${PERF_PAYLOAD_BYTES}" ); else cmd+=( -payload "$${PERF_PAYLOAD:-small}" ); fi; \
+		if [[ -n "$${PERF_PUBLISHERS:-}" ]]; then cmd+=( -publishers "$${PERF_PUBLISHERS}" ); fi; \
+		if [[ -n "$${PERF_SUBSCRIBERS:-}" ]]; then cmd+=( -subscribers "$${PERF_SUBSCRIBERS}" ); fi; \
+		if [[ -n "$${PERF_MESSAGES_PER_PUBLISHER:-}" ]]; then cmd+=( -messages-per-publisher "$${PERF_MESSAGES_PER_PUBLISHER}" ); fi; \
+		if [[ -n "$${PERF_PUBLISH_INTERVAL:-}" ]]; then cmd+=( -publish-interval "$${PERF_PUBLISH_INTERVAL}" ); fi; \
+		if [[ -n "$${PERF_JSON_OUT:-}" ]]; then cmd+=( -json-out "$${PERF_JSON_OUT}" ); fi; \
+		echo ">> $${cmd[*]}"; \
+		"$${cmd[@]}"'
+
+.PHONY: perf-cleanup
+perf-cleanup:
+	bash $(PERF_SCRIPT_DIR)/cleanup.sh
+
+.PHONY: perf-compare
+perf-compare:
+	@if [ -z "$(BASELINE)" ]; then \
+		echo "Usage: make perf-compare BASELINE=<baseline-bench-file> [CANDIDATE=<candidate-bench-file>]"; \
+		exit 1; \
+	fi
+	bash $(PERF_SCRIPT_DIR)/compare_bench.sh "$(BASELINE)" "$(CANDIDATE)"
+
+.PHONY: perf-cluster-up
+perf-cluster-up:
+	bash $(PERF_SCRIPT_DIR)/cluster_up.sh
+
+.PHONY: perf-cluster-down
+perf-cluster-down:
+	bash $(PERF_SCRIPT_DIR)/cluster_down.sh
+
+.PHONY: perf-cluster-reset
+perf-cluster-reset:
+	bash $(PERF_SCRIPT_DIR)/cluster_reset.sh
+
+.PHONY: perf-cluster-ps
+perf-cluster-ps:
+	bash $(PERF_SCRIPT_DIR)/cluster_ps.sh
+
+.PHONY: perf-cluster-logs
+perf-cluster-logs:
+	bash $(PERF_SCRIPT_DIR)/cluster_logs.sh $(SERVICE)
+
+# 3-node Docker Compose cluster (shared with perf scripts)
+.PHONY: run-cluster
+run-cluster: perf-cluster-up
+
+.PHONY: run-cluster-down
+run-cluster-down: perf-cluster-down
+
+.PHONY: run-cluster-clean
+run-cluster-clean: perf-cluster-reset
+
+.PHONY: run-cluster-ps
+run-cluster-ps: perf-cluster-ps
+
+.PHONY: run-cluster-logs
+run-cluster-logs: perf-cluster-logs
+
 # Run linter
 .PHONY: lint
 lint:
@@ -215,6 +293,11 @@ help:
 	@echo "  run-node1          Run first node of 3-node cluster (bootstrap)"
 	@echo "  run-node2          Run second node of 3-node cluster"
 	@echo "  run-node3          Run third node of 3-node cluster"
+	@echo "  run-cluster        Start Docker Compose 3-node cluster (docker/docker-compose-cluster.yaml)"
+	@echo "  run-cluster-down   Stop Docker Compose cluster containers"
+	@echo "  run-cluster-clean  Stop cluster and remove mapped volumes"
+	@echo "  run-cluster-ps     Show cluster container status"
+	@echo "  run-cluster-logs   Show cluster logs (optional SERVICE=node1|node2|node3)"
 	@echo ""
 	@echo "  NOTE: For 3-node cluster, run node1, node2, and node3 in separate terminals"
 	@echo "  NOTE: examples/node{1,2,3}.yaml include per-queue Raft replication groups (including an auto-provisioned group)"
@@ -231,6 +314,18 @@ help:
 	@echo "  bench-broker       Run broker benchmarks only"
 	@echo "  bench-zerocopy     Run zero-copy vs legacy comparison"
 	@echo "  bench-report       Generate benchmark report to $(BUILD_DIR)/"
+	@echo "  perf-suite         Run configurable real-client performance suite"
+	@echo "                     Config via PERF_SCENARIO_CONFIGS / PERF_* knobs (see tests/perf/README.md)"
+	@echo "  run-perf           Run one config-driven perf scenario"
+	@echo "                     Usage: make run-perf PERF_SCENARIO_CONFIG=<config.json> (or CONFIG=<config.json>)"
+	@echo "  perf-cleanup       Reset perf cluster state and remove suite result files"
+	@echo "  perf-compare       Compare benchmark files with benchstat"
+	@echo "                     Usage: make perf-compare BASELINE=<file> [CANDIDATE=<file>]"
+	@echo "  perf-cluster-up    Start 3-node perf cluster in Docker Compose"
+	@echo "  perf-cluster-down  Stop perf cluster containers"
+	@echo "  perf-cluster-reset Stop cluster and remove volumes"
+	@echo "  perf-cluster-ps    Show perf cluster container status"
+	@echo "  perf-cluster-logs  Show cluster logs (optional SERVICE=node1|node2|node3)"
 	@echo ""
 	@echo "Stress Test Targets:"
 	@echo "  stress             Run all stress tests (~30 min)"

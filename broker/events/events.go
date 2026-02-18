@@ -205,4 +205,3 @@ func (e SubscriptionRemoved) Wrap(brokerID string) *Envelope {
 		Data:      e,
 	}
 }
-

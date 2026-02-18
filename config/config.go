@@ -369,8 +369,16 @@ type TransportConfig struct {
 	// Inter-node routing batch policy.
 	// route_batch_max_size controls flush size.
 	// route_batch_max_delay controls max wait before flushing a partial batch.
-	RouteBatchMaxSize  int           `yaml:"route_batch_max_size"`
-	RouteBatchMaxDelay time.Duration `yaml:"route_batch_max_delay"`
+	// route_batch_flush_workers controls the number of concurrent flush
+	// goroutines per remote node. Higher values increase throughput when
+	// gRPC calls are slow but use more goroutines. Default: 4.
+	RouteBatchMaxSize      int           `yaml:"route_batch_max_size"`
+	RouteBatchMaxDelay     time.Duration `yaml:"route_batch_max_delay"`
+	RouteBatchFlushWorkers int           `yaml:"route_batch_flush_workers"`
+
+	// RoutePublishTimeout is the maximum time to wait for a cross-cluster
+	// publish to complete (including retries). Zero uses the default (15s).
+	RoutePublishTimeout time.Duration `yaml:"route_publish_timeout"`
 
 	// TLS configuration for inter-broker communication
 	TLSEnabled  bool   `yaml:"tls_enabled"`   // Enable TLS for gRPC transport
@@ -516,7 +524,7 @@ func Default() *Config {
 			MaxSessions:           10000,
 			DefaultExpiryInterval: 300, // 5 minutes
 			MaxOfflineQueueSize:   1000,
-			MaxInflightMessages:   100,
+			MaxInflightMessages:   256,
 			OfflineQueuePolicy:    "evict",
 		},
 		Log: LogConfig{
@@ -540,8 +548,10 @@ func Default() *Config {
 			Transport: TransportConfig{
 				BindAddr: "0.0.0.0:7948",
 				// Keep batches modest by default and latency low.
-				RouteBatchMaxSize:  256,
-				RouteBatchMaxDelay: 5 * time.Millisecond,
+				RouteBatchMaxSize:      256,
+				RouteBatchMaxDelay:     5 * time.Millisecond,
+				RouteBatchFlushWorkers: 4,
+				RoutePublishTimeout:    15 * time.Second,
 			},
 			Raft: RaftConfig{
 				Enabled:             false, // Disabled by default
@@ -919,6 +929,9 @@ func (c *Config) Validate() error {
 		}
 		if c.Cluster.Transport.RouteBatchMaxDelay < 0 {
 			return fmt.Errorf("cluster.transport.route_batch_max_delay must be >= 0")
+		}
+		if c.Cluster.Transport.RouteBatchFlushWorkers < 0 {
+			return fmt.Errorf("cluster.transport.route_batch_flush_workers must be >= 0")
 		}
 
 		// Transport TLS validation

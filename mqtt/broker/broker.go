@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
@@ -37,8 +38,8 @@ type Broker struct {
 	subscriptions storage.SubscriptionStore
 	retained      storage.RetainedStore
 	wills         storage.WillStore
-	cluster       cluster.Cluster     // nil for single-node mode
-	queueManager  broker.QueueManager    // nil if queue functionality disabled
+	cluster       cluster.Cluster         // nil for single-node mode
+	queueManager  broker.QueueManager     // nil if queue functionality disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
 	rateLimiter   broker.ClientRateLimiter // nil if rate limiting disabled
@@ -57,6 +58,8 @@ type Broker struct {
 	// Offline queue settings
 	maxOfflineQueueSize int
 	offlineQueueEvict   bool
+	maxInflightMessages int
+	routePublishTimeout time.Duration
 }
 
 // NewBroker creates a new broker instance.
@@ -68,7 +71,7 @@ type Broker struct {
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
 //   - metrics: OTel metrics instance (nil if metrics disabled)
 //   - tracer: OTel tracer (nil if tracing disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig) *Broker {
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig, transportCfg config.TransportConfig) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -103,6 +106,8 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		maxQoS:              2, // Default to QoS 2 (highest)
 		maxOfflineQueueSize: sessionCfg.MaxOfflineQueueSize,
 		offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
+		maxInflightMessages: sessionCfg.MaxInflightMessages,
+		routePublishTimeout: transportCfg.RoutePublishTimeout,
 	}
 
 	b.wg.Add(2)

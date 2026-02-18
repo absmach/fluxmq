@@ -65,7 +65,7 @@ func (m *mockConnection) LocalAddr() net.Addr {
 
 func TestBroker_HandleV5Connect(t *testing.T) {
 	t.Log("Creating broker")
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 	defer b.Close()
 
 	conn := &mockConnection{}

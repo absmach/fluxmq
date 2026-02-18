@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
@@ -31,13 +32,15 @@ func PrefixedClientID(connID string) string {
 
 // Broker is the core AMQP 0.9.1 broker.
 type Broker struct {
-	connections   sync.Map // connID -> *Connection
-	router        *router.TrieRouter
-	routeResolver *corebroker.RoutingResolver
-	queueManager  corebroker.StreamQueueManager
-	stats         *Stats
-	logger        *slog.Logger
-	mu            sync.RWMutex
+	connections         sync.Map // connID -> *Connection
+	router              *router.TrieRouter
+	routeResolver       *corebroker.RoutingResolver
+	queueManager        corebroker.StreamQueueManager
+	cluster             cluster.Cluster
+	routePublishTimeout time.Duration
+	stats               *Stats
+	logger              *slog.Logger
+	mu                  sync.RWMutex
 }
 
 // New creates a new AMQP 0.9.1 broker.
@@ -70,6 +73,26 @@ func (b *Broker) getQueueManager() corebroker.StreamQueueManager {
 	return b.queueManager
 }
 
+// SetCluster sets the cluster reference for cross-node pub/sub routing.
+func (b *Broker) SetCluster(cl cluster.Cluster) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.cluster = cl
+}
+
+func (b *Broker) getCluster() cluster.Cluster {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cluster
+}
+
+// SetRoutePublishTimeout sets the timeout for cross-cluster publish routing.
+func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.routePublishTimeout = d
+}
+
 // HandleConnection handles a new raw TCP connection through the full AMQP 0.9.1 lifecycle.
 func (b *Broker) HandleConnection(netConn net.Conn) {
 	c := newConnection(b, netConn)
@@ -86,12 +109,13 @@ func (b *Broker) unregisterConnection(connID string) {
 	b.connections.Delete(connID)
 }
 
-// Publish routes a message to local AMQP 0.9.1 subscribers via the router.
-func (b *Broker) Publish(topic string, payload []byte, props map[string]string) {
+// Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.
+// It returns an error if cluster routing fails, so callers in confirm mode can NACK.
+func (b *Broker) Publish(topic string, payload []byte, props map[string]string) error {
 	subs, err := b.router.Match(topic)
 	if err != nil {
 		b.logger.Error("router match failed", "topic", topic, "error", err)
-		return
+		return err
 	}
 
 	for _, sub := range subs {
@@ -102,6 +126,21 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 		c := val.(*Connection)
 		c.deliverMessage(topic, payload, props)
 	}
+
+	if cl := b.getCluster(); cl != nil {
+		timeout := b.routePublishTimeout
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := cl.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
+			b.logger.Error("AMQP 0.9.1 cluster route publish failed", "topic", topic, "error", err)
+			return fmt.Errorf("cluster route publish: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.

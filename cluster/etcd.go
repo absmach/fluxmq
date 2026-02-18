@@ -34,6 +34,8 @@ const (
 	electionPrefix       = "/leader"
 
 	urlPrefix = "http://"
+
+	defaultRouteBatchFlushWorkers = 4
 )
 
 var (
@@ -87,10 +89,11 @@ type EtcdCluster struct {
 	queueConsumersByGroup map[string]map[string]map[string]*QueueConsumerInfo // queue -> group -> key -> info
 	queueConsumersCacheMu sync.RWMutex
 
-	routeBatchMaxSize  int
-	routeBatchMaxDelay time.Duration
-	forwardBatcher     *nodeBatcher[*clusterv1.ForwardPublishRequest]
-	queueBatcher       *nodeBatcher[QueueDelivery]
+	routeBatchMaxSize      int
+	routeBatchMaxDelay     time.Duration
+	routeBatchFlushWorkers int
+	forwardBatcher         *nodeBatcher[*clusterv1.ForwardPublishRequest]
+	queueBatcher           *nodeBatcher[QueueDelivery]
 
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
 	retainedCache   map[string]*storage.Message // key: topic
@@ -122,6 +125,7 @@ type EtcdConfig struct {
 	HybridRetainedSizeThreshold int // Size threshold in bytes for hybrid retained storage (default 1024)
 	RouteBatchMaxSize           int
 	RouteBatchMaxDelay          time.Duration
+	RouteBatchFlushWorkers      int
 
 	// Transport TLS configuration
 	TransportTLS *TransportTLSConfig
@@ -248,6 +252,10 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	if c.routeBatchMaxDelay <= 0 {
 		c.routeBatchMaxDelay = defaultRouteBatchMaxDelay
 	}
+	c.routeBatchFlushWorkers = cfg.RouteBatchFlushWorkers
+	if c.routeBatchFlushWorkers <= 0 {
+		c.routeBatchFlushWorkers = defaultRouteBatchFlushWorkers
+	}
 
 	// Create a lease for session ownership with auto-renewal
 	if err := c.refreshSessionLease(context.Background()); err != nil {
@@ -270,6 +278,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		c.queueBatcher = newNodeBatcher[QueueDelivery](
 			c.routeBatchMaxSize,
 			c.routeBatchMaxDelay,
+			c.routeBatchFlushWorkers,
 			c.stopCh,
 			logger.With(slog.String("batcher", "queue")),
 			"queue",
@@ -324,6 +333,20 @@ func (c *EtcdCluster) Start() error {
 	if err := c.loadQueueConsumerCache(); err != nil {
 		c.logger.Warn("failed to load queue consumer cache", slog.String("error", err.Error()))
 	}
+
+	// Start watching for session owner changes
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.watchSessionOwners()
+	}()
+
+	// Start periodic session owner cache reconciliation
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.reconcileSessionOwnerCache()
+	}()
 
 	// Start watching for subscription changes
 	c.wg.Add(1)
@@ -1205,6 +1228,7 @@ func (c *EtcdCluster) SetForwardPublishHandler(handler ForwardPublishHandler) {
 		c.forwardBatcher = newNodeBatcher(
 			c.routeBatchMaxSize,
 			c.routeBatchMaxDelay,
+			c.routeBatchFlushWorkers,
 			c.stopCh,
 			c.logger.With(slog.String("batcher", "forward-publish")),
 			"forward-publish",
@@ -1232,11 +1256,11 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	// Collect unique remote node IDs
 	remoteNodes := make(map[string]struct{})
 	c.ownerCacheMu.RLock()
-	var cacheMisses []string
+	cacheMisses := make(map[string]struct{})
 	for _, sub := range subs {
 		nodeID, ok := c.ownerCache[sub.ClientID]
 		if !ok {
-			cacheMisses = append(cacheMisses, sub.ClientID)
+			cacheMisses[sub.ClientID] = struct{}{}
 			continue
 		}
 		if nodeID != c.nodeID {
@@ -1246,9 +1270,18 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	c.ownerCacheMu.RUnlock()
 
 	// Fallback to etcd for cache misses
-	for _, clientID := range cacheMisses {
+	for clientID := range cacheMisses {
+		if ctx.Err() != nil {
+			break
+		}
 		nodeID, _, err := c.GetSessionOwner(ctx, clientID)
-		if err != nil || nodeID == "" || nodeID == c.nodeID {
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				break
+			}
+			continue
+		}
+		if nodeID == "" || nodeID == c.nodeID {
 			continue
 		}
 		remoteNodes[nodeID] = struct{}{}
@@ -1271,7 +1304,11 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	for nodeID := range remoteNodes {
 		var err error
 		if c.forwardBatcher != nil {
-			err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			if qos == 0 {
+				err = c.forwardBatcher.EnqueueAsync(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			} else {
+				err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			}
 		} else {
 			err = c.transport.SendForwardPublishBatch(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
 		}
@@ -1763,7 +1800,19 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 	return sessionState, nil
 }
 
-// loadSubscriptionCache loads all subscriptions from etcd into the local cache.
+func parseSessionOwnerKey(key string) (clientID string, ok bool) {
+	if !strings.HasPrefix(key, sessionsPrefix) || !strings.HasSuffix(key, "/owner") {
+		return "", false
+	}
+	clientID = strings.TrimPrefix(key, sessionsPrefix)
+	clientID = strings.TrimSuffix(clientID, "/owner")
+	if clientID == "" {
+		return "", false
+	}
+	return clientID, true
+}
+
+// loadSessionOwnerCache loads all session owners from etcd into the local cache.
 func (c *EtcdCluster) loadSessionOwnerCache() error {
 	ctx := context.Background()
 	resp, err := c.client.Get(ctx, sessionsPrefix, clientv3.WithPrefix())
@@ -1771,22 +1820,104 @@ func (c *EtcdCluster) loadSessionOwnerCache() error {
 		return fmt.Errorf("failed to load session owners: %w", err)
 	}
 
-	c.ownerCacheMu.Lock()
-	defer c.ownerCacheMu.Unlock()
-
+	fresh := make(map[string]string)
 	for _, kv := range resp.Kvs {
-		key := string(kv.Key)
-		if !strings.HasSuffix(key, "/owner") {
+		clientID, ok := parseSessionOwnerKey(string(kv.Key))
+		if !ok {
 			continue
 		}
-		// Key format: /mqtt/sessions/{clientID}/owner
-		clientID := strings.TrimPrefix(key, sessionsPrefix)
-		clientID = strings.TrimSuffix(clientID, "/owner")
-		c.ownerCache[clientID] = string(kv.Value)
+		fresh[clientID] = string(kv.Value)
 	}
 
-	c.logger.Info("loaded session owners into cache", slog.Int("cache_len", len(c.ownerCache)))
+	c.ownerCacheMu.Lock()
+	prevSize := len(c.ownerCache)
+	c.ownerCache = fresh
+	c.ownerCacheMu.Unlock()
+
+	if staleRemoved := prevSize - len(fresh); staleRemoved > 0 {
+		c.logger.Info("session owner cache reconciled",
+			slog.Int("prev_size", prevSize),
+			slog.Int("new_size", len(fresh)),
+			slog.Int("stale_removed", staleRemoved))
+	} else {
+		c.logger.Info("loaded session owners into cache", slog.Int("cache_len", len(fresh)))
+	}
 	return nil
+}
+
+// reconcileSessionOwnerCache periodically reloads session owners from etcd.
+func (c *EtcdCluster) reconcileSessionOwnerCache() {
+	const reconcileInterval = 5 * time.Minute
+
+	ticker := time.NewTicker(reconcileInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			if err := c.loadSessionOwnerCache(); err != nil {
+				c.logger.Error("session owner cache reconciliation failed",
+					slog.String("error", err.Error()))
+			}
+		}
+	}
+}
+
+// watchSessionOwners watches etcd for session owner changes and updates the local cache.
+func (c *EtcdCluster) watchSessionOwners() {
+	for {
+		watchCh := c.client.Watch(c.lifecycleCtx, sessionsPrefix, clientv3.WithPrefix())
+
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case watchResp, ok := <-watchCh:
+				if !ok {
+					if c.lifecycleCtx.Err() != nil {
+						return
+					}
+					c.logger.Warn("session owner watch channel closed, reloading cache")
+					if err := c.loadSessionOwnerCache(); err != nil {
+						c.logger.Error("failed to reload session owners", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+				if watchResp.Err() != nil {
+					c.logger.Error("session owner watch error", slog.String("error", watchResp.Err().Error()))
+					if err := c.loadSessionOwnerCache(); err != nil {
+						c.logger.Error("failed to reload session owners", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+
+				c.ownerCacheMu.Lock()
+				for _, event := range watchResp.Events {
+					if event.Kv == nil {
+						continue
+					}
+					clientID, ok := parseSessionOwnerKey(string(event.Kv.Key))
+					if !ok {
+						continue
+					}
+					if event.Type == clientv3.EventTypeDelete {
+						delete(c.ownerCache, clientID)
+						continue
+					}
+					c.ownerCache[clientID] = string(event.Kv.Value)
+				}
+				c.ownerCacheMu.Unlock()
+			}
+		}
+	restart:
+		select {
+		case <-c.stopCh:
+			return
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func (c *EtcdCluster) loadSubscriptionCache() error {

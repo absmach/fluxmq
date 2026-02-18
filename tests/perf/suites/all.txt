@@ -1,0 +1,16 @@
+# Default end-to-end suite
+mqtt-fanin
+mqtt-fanout
+mqtt-substorm
+mqtt-shared-subscriptions
+mqtt-last-will
+mqtt-consumer-groups
+amqp-fanin
+amqp-fanout
+amqp091-consumer-groups
+amqp091-stream-cursor
+amqp091-retention-policies
+queue-fanin
+queue-fanout
+bridge-queue-mqtt-amqp
+bridge-queue-amqp-mqtt

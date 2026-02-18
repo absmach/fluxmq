@@ -45,7 +45,7 @@ session:
   max_sessions: 10000
   default_expiry_interval: 300  # 5 minutes
   max_offline_queue_size: 1000
-  max_inflight_messages: 100
+  max_inflight_messages: 1000
 
 storage:
   type: "badger"

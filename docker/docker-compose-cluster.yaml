@@ -1,0 +1,65 @@
+services:
+  node1:
+    image: ghcr.io/absmach/fluxmq:latest
+    command: ["-config", "/etc/fluxmq/config.yaml"]
+    user: "0:0"
+    volumes:
+      - ./cluster/node1.yaml:/etc/fluxmq/config.yaml:ro
+      - fluxmq-cluster-node1-data:/data
+    ports:
+      - "11883:1883" # MQTT
+      - "15672:5672" # AMQP 1.0
+      - "15682:5682" # AMQP 0.9.1
+      - "18081:8081" # Health
+    networks:
+      cluster_net:
+        ipv4_address: 10.247.0.11
+    restart: unless-stopped
+
+  node2:
+    image: ghcr.io/absmach/fluxmq:latest
+    command: ["-config", "/etc/fluxmq/config.yaml"]
+    user: "0:0"
+    volumes:
+      - ./cluster/node2.yaml:/etc/fluxmq/config.yaml:ro
+      - fluxmq-cluster-node2-data:/data
+    ports:
+      - "11884:1883" # MQTT
+      - "15673:5672" # AMQP 1.0
+      - "15683:5682" # AMQP 0.9.1
+      - "18082:8081" # Health
+    networks:
+      cluster_net:
+        ipv4_address: 10.247.0.12
+    restart: unless-stopped
+    depends_on:
+      - node1
+
+  node3:
+    image: ghcr.io/absmach/fluxmq:latest
+    command: ["-config", "/etc/fluxmq/config.yaml"]
+    user: "0:0"
+    volumes:
+      - ./cluster/node3.yaml:/etc/fluxmq/config.yaml:ro
+      - fluxmq-cluster-node3-data:/data
+    ports:
+      - "11885:1883" # MQTT
+      - "15674:5672" # AMQP 1.0
+      - "15684:5682" # AMQP 0.9.1
+      - "18083:8081" # Health
+    networks:
+      cluster_net:
+        ipv4_address: 10.247.0.13
+    restart: unless-stopped
+    depends_on:
+      - node1
+
+networks:
+  cluster_net:
+    external: true
+    name: fluxmq-local-net
+
+volumes:
+  fluxmq-cluster-node1-data:
+  fluxmq-cluster-node2-data:
+  fluxmq-cluster-node3-data:

@@ -22,7 +22,7 @@ func TestMaxQoS_DefaultValue(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	if got := b.MaxQoS(); got != 2 {
 		t.Errorf("Default MaxQoS() = %d, want 2", got)
@@ -33,7 +33,7 @@ func TestMaxQoS_SetValue(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	tests := []struct {
 		name    string
@@ -61,7 +61,7 @@ func TestMaxQoS_V5Handler_Downgrade_QoS2to0(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Set max QoS to 0 - any QoS 1 or 2 will be downgraded to 0
 	b.SetMaxQoS(0)
@@ -92,7 +92,7 @@ func TestMaxQoS_V5Handler_Downgrade_QoS1to0(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Set max QoS to 0
 	b.SetMaxQoS(0)
@@ -121,7 +121,7 @@ func TestMaxQoS_V5Handler_NoDowngrade(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Set max QoS to 2 (no downgrade needed for QoS 0)
 	b.SetMaxQoS(2)
@@ -148,7 +148,7 @@ func TestMaxQoS_V3Handler_Downgrade(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test")
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{})
+	b := NewBroker(store, cl, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
 
 	// Set max QoS to 0
 	b.SetMaxQoS(0)

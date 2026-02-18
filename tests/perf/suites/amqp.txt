@@ -1,0 +1,6 @@
+# AMQP 0.9.1 suite (topic + queue + stream)
+amqp-fanin
+amqp-fanout
+amqp091-consumer-groups
+amqp091-stream-cursor
+amqp091-retention-policies

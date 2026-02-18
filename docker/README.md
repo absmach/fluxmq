@@ -34,3 +34,20 @@ Use `docker/compose.yaml`:
 ```bash
 docker compose -f docker/compose.yaml up -d
 ```
+
+## 3-Node Cluster Compose
+
+Use `docker/docker-compose-cluster.yaml`:
+
+```bash
+make run-cluster
+```
+
+Useful lifecycle commands:
+
+```bash
+make run-cluster-ps
+make run-cluster-logs
+make run-cluster-down
+make run-cluster-clean
+```

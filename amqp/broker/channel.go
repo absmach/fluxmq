@@ -407,7 +407,9 @@ func (ch *Channel) completePublish() {
 				return
 			}
 		}
-		ch.conn.broker.Publish(topic, body, props)
+		if err := ch.conn.broker.Publish(topic, body, props); err != nil {
+			publishFailed = true
+		}
 	}
 
 	// Publisher confirms

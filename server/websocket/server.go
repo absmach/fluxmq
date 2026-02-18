@@ -26,11 +26,11 @@ import (
 )
 
 var (
-	ErrExpectedBinaryMessage       = errors.New("expected binary message")
-	ErrUnsupportedProtocolVersion  = errors.New("unsupported MQTT protocol version")
-	ErrCannotEncodeNilPacket       = errors.New("cannot encode nil packet")
-	ErrReadNotSupported            = errors.New("Read not supported on WebSocket connection")
-	ErrWriteNotSupported           = errors.New("Write not supported on WebSocket connection")
+	ErrExpectedBinaryMessage      = errors.New("expected binary message")
+	ErrUnsupportedProtocolVersion = errors.New("unsupported MQTT protocol version")
+	ErrCannotEncodeNilPacket      = errors.New("cannot encode nil packet")
+	ErrReadNotSupported           = errors.New("Read not supported on WebSocket connection")
+	ErrWriteNotSupported          = errors.New("Write not supported on WebSocket connection")
 )
 
 // IPRateLimiter is the interface for IP-based rate limiting.

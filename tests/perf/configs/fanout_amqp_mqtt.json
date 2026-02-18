@@ -1,0 +1,20 @@
+{
+  "name": "topic-fanout-amqp-mqtt",
+  "description": "Config-driven topic fan-out: AMQP publishers to MQTT subscribers across many topics.",
+  "pattern": "fanout",
+  "flow": "amqp-mqtt",
+  "topic": "perf/topic/config/fanout/amqp-mqtt/{run_id}",
+  "qos": 1,
+  "topic_count": 40,
+  "publishers": 280,
+  "messages_per_publisher": 220,
+  "publish_interval": "100ms",
+  "subscribers": 100,
+  "wildcard_subscribers": 20,
+  "wildcard_patterns": [
+    "{base}/t/+",
+    "{base}/#"
+  ],
+  "drain_timeout": "45s",
+  "payload_bytes": 2048
+}

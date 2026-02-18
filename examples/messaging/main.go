@@ -25,8 +25,8 @@ import (
 )
 
 var (
-	mqttAddr    = flag.String("mqtt", "localhost:1883", "MQTT broker address")
-	amqp091Addr = flag.String("amqp091", "localhost:5682", "AMQP 0.9.1 broker address")
+	mqttAddr    = flag.String("mqtt", "localhost:11883", "MQTT broker address")
+	amqp091Addr = flag.String("amqp091", "localhost:15684", "AMQP 0.9.1 broker address")
 	runID       = flag.String("run-id", "", "Optional run suffix for queue/stream names (defaults to current unix timestamp)")
 )
 

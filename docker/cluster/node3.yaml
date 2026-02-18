@@ -1,0 +1,213 @@
+server:
+  tcp:
+    plain:
+      addr: ":1883"
+      max_connections: 10000
+      read_timeout: 60s
+      write_timeout: 60s
+    tls:
+      addr: ""
+      max_connections: 10000
+      read_timeout: 60s
+      write_timeout: 60s
+    mtls:
+      addr: ""
+      max_connections: 10000
+      read_timeout: 60s
+      write_timeout: 60s
+  websocket:
+    plain:
+      addr: ""
+      path: "/mqtt"
+      allowed_origins: []
+    tls:
+      addr: ""
+      path: "/mqtt"
+      allowed_origins: []
+    mtls:
+      addr: ""
+      path: "/mqtt"
+      allowed_origins: []
+  http:
+    plain:
+      addr: ""
+    tls:
+      addr: ""
+    mtls:
+      addr: ""
+  coap:
+    plain:
+      addr: ""
+    dtls:
+      addr: ""
+    mdtls:
+      addr: ""
+  amqp:
+    plain:
+      addr: ":5672"
+      max_connections: 10000
+    tls:
+      addr: ""
+      max_connections: 10000
+    mtls:
+      addr: ""
+      max_connections: 10000
+  amqp091:
+    plain:
+      addr: ":5682"
+      max_connections: 10000
+    tls:
+      addr: ""
+      max_connections: 10000
+    mtls:
+      addr: ""
+      max_connections: 10000
+  health_addr: ":8081"
+  metrics_addr: "localhost:4317"
+  shutdown_timeout: 30s
+  health_enabled: true
+  metrics_enabled: false
+  otel_service_name: "fluxmq"
+  otel_service_version: "1.0.0"
+  otel_traces_enabled: false
+  otel_metrics_enabled: true
+  otel_trace_sample_rate: 0.1
+  api_enabled: false
+  api_addr: ""
+
+broker:
+  max_message_size: 1048576
+  max_retained_messages: 10000
+  retry_interval: 20s
+  max_retries: 0
+  max_qos: 2
+
+session:
+  max_sessions: 10000
+  default_expiry_interval: 300
+  max_offline_queue_size: 1000
+  max_inflight_messages: 1000
+  offline_queue_policy: "evict"
+
+log:
+  level: "info"
+  format: "text"
+
+storage:
+  type: "badger"
+  badger_dir: "/data/node3/data"
+  sync_writes: false
+
+cluster:
+  enabled: true
+  node_id: "node3"
+  etcd:
+    data_dir: "/data/node3/etcd"
+    bind_addr: "10.247.0.13:2380"
+    client_addr: "10.247.0.13:2379"
+    initial_cluster: "node1=http://10.247.0.11:2380,node2=http://10.247.0.12:2380,node3=http://10.247.0.13:2380"
+    bootstrap: true
+    hybrid_retained_size_threshold: 1024
+  transport:
+    bind_addr: "10.247.0.13:7948"
+    peers:
+      node1: "10.247.0.11:7948"
+      node2: "10.247.0.12:7948"
+    route_batch_max_size: 256
+    route_batch_max_delay: 50ms
+    route_batch_flush_workers: 8
+    route_publish_timeout: 15s
+    tls_enabled: false
+    tls_cert_file: ""
+    tls_key_file: ""
+    tls_ca_file: ""
+  raft:
+    enabled: false
+    auto_provision_groups: true
+    replication_factor: 3
+    sync_mode: true
+    min_in_sync_replicas: 2
+    ack_timeout: 5s
+    write_policy: "forward"
+    distribution_mode: "replicate"
+    bind_addr: "127.0.0.1:7100"
+    data_dir: "/tmp/fluxmq/raft"
+    peers: {}
+    heartbeat_timeout: 1s
+    election_timeout: 3s
+    snapshot_interval: 5m
+    snapshot_threshold: 8192
+    groups: {}
+
+webhook:
+  enabled: false
+  queue_size: 10000
+  drop_policy: "oldest"
+  workers: 5
+  include_payload: false
+  shutdown_timeout: 30s
+  defaults:
+    timeout: 5s
+    retry:
+      max_attempts: 3
+      initial_interval: 1s
+      max_interval: 30s
+      multiplier: 2.0
+    circuit_breaker:
+      failure_threshold: 5
+      reset_timeout: 60s
+  endpoints: []
+
+# ratelimit:
+#   enabled: false
+#   connection:
+#     enabled: true
+#     rate: 1.6666666666666667
+#     burst: 20
+#     cleanup_interval: 5m
+#   message:
+#     enabled: true
+#     rate: 1000
+#     burst: 100
+#   subscribe:
+#     enabled: true
+#     rate: 100
+#     burst: 10
+
+queue_manager:
+  auto_commit_interval: 5s
+
+queues:
+  - name: "mqtt"
+    topics:
+      - "$queue/#"
+    reserved: true
+    type: ""
+    primary_group: ""
+    retention:
+      max_age: 0s
+      max_length_bytes: 0
+      max_length_messages: 0
+    limits:
+      max_message_size: 10485760
+      max_depth: 100000
+      message_ttl: 168h
+    retry:
+      max_retries: 10
+      initial_backoff: 5s
+      max_backoff: 5m
+      multiplier: 2.0
+    dlq:
+      enabled: true
+      topic: ""
+    replication:
+      enabled: false
+      group: ""
+      replication_factor: 3
+      mode: "sync"
+      min_in_sync_replicas: 2
+      ack_timeout: 5s
+      heartbeat_timeout: 0s
+      election_timeout: 0s
+      snapshot_interval: 0s
+      snapshot_threshold: 0

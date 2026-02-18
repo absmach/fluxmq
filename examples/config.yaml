@@ -70,7 +70,7 @@ session:
   max_offline_queue_size: 1000
 
   # Maximum inflight messages per session (QoS 1/2)
-  max_inflight_messages: 100
+  max_inflight_messages: 1000
 
 # Logging Configuration
 log:

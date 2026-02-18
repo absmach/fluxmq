@@ -16,10 +16,11 @@ const (
 	circuitOpen     = 1
 	circuitHalfOpen = 2
 
-	failureThreshold = 5
-	resetTimeout     = 10 * time.Second
-	maxRetries       = 3
-	retryBaseDelay   = 100 * time.Millisecond
+	failureThreshold  = 5
+	resetTimeout      = 10 * time.Second
+	maxRetries        = 5
+	retryBaseDelay    = 250 * time.Millisecond
+	maxPartialRetries = 5
 )
 
 // circuitBreaker implements a simple per-peer circuit breaker.

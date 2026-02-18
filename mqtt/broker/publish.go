@@ -195,13 +195,20 @@ func (b *Broker) distribute(msg *storage.Message) error {
 
 	// Route to remote subscribers in cluster
 	if b.cluster != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		timeout := b.routePublishTimeout
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
 		payload := msg.GetPayload()
 		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.QoS, false, msg.Properties); err != nil {
 			b.logError("cluster_route_publish", err, slog.String("topic", msg.Topic))
+			if msg.QoS > 0 {
+				return fmt.Errorf("cluster route publish: %w", err)
+			}
 		}
 	}
 
@@ -267,6 +274,13 @@ func (b *Broker) distributeLocal(msg *storage.Message) error {
 
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
+				if deliverQoS > 0 {
+					b.logger.Warn("failed to deliver QoS message",
+						slog.String("client_id", selectedClientID),
+						slog.String("topic", msg.Topic),
+						slog.Uint64("qos", uint64(deliverQoS)),
+						slog.String("error", err.Error()))
+				}
 				continue
 			}
 		} else {
@@ -292,6 +306,13 @@ func (b *Broker) distributeLocal(msg *storage.Message) error {
 
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
+				if deliverQoS > 0 {
+					b.logger.Warn("failed to deliver QoS message",
+						slog.String("client_id", clientID),
+						slog.String("topic", msg.Topic),
+						slog.Uint64("qos", uint64(deliverQoS)),
+						slog.String("error", err.Error()))
+				}
 				continue
 			}
 		}
