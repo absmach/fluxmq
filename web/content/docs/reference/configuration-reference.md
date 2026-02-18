@@ -5,7 +5,7 @@ description: Comprehensive YAML configuration reference for server, broker, stor
 
 # Configuration Reference
 
-**Last Updated:** 2026-02-07
+**Last Updated:** 2026-02-18
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 
@@ -77,12 +77,14 @@ server:
   amqp:
     plain:
       addr: ":5672"
+      max_connections: 10000
     tls: {}
     mtls: {}
 
   amqp091:
     plain:
       addr: ":5682"
+      max_connections: 10000
     tls: {}
     mtls: {}
 
@@ -90,28 +92,59 @@ server:
   health_addr: ":8081"
 
   metrics_enabled: false
-  metrics_addr: "localhost:4317"   # OTLP endpoint
+  metrics_addr: "localhost:4317" # OTLP endpoint
 
   otel_service_name: "fluxmq"
-  otel_service_version: "dev"
+  otel_service_version: "1.0.0"
   otel_metrics_enabled: true
   otel_traces_enabled: false
   otel_trace_sample_rate: 0.1
 
   api_enabled: false
-  api_addr: ":9090"                 # Queue API (Connect/gRPC)
+  api_addr: "" # Queue API (Connect/gRPC)
 
   shutdown_timeout: "30s"
 ```
 
-### TLS/DTLS Settings
+### Listener Fields
+
+These apply to listener blocks (for example `server.tcp.plain`, `server.amqp091.tls`, and so on).
+
+| Field | Description |
+|---|---|
+| `addr` | Listener bind address (`"<host>:<port>"` or `":<port>"`). Empty string disables that listener. |
+| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap. Applies to TCP/AMQP/AMQP091 listeners. |
+| `read_timeout` | Read timeout for TCP listeners (`time.Duration`). |
+| `write_timeout` | Write timeout for TCP listeners (`time.Duration`). |
+| `path` | HTTP path for MQTT-over-WebSocket endpoint. |
+| `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production. |
+
+### Server Runtime / Telemetry Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `health_enabled` | `true` | Enables `/health` endpoint. |
+| `health_addr` | `:8081` | Health endpoint bind address. |
+| `metrics_enabled` | `false` | Enables OpenTelemetry exporters. |
+| `metrics_addr` | `localhost:4317` | OTLP endpoint address (collector target). |
+| `otel_service_name` | `fluxmq` | Telemetry service name. |
+| `otel_service_version` | `1.0.0` | Telemetry service version tag. |
+| `otel_metrics_enabled` | `true` | Enables OTel metrics export. |
+| `otel_traces_enabled` | `false` | Enables OTel traces export. |
+| `otel_trace_sample_rate` | `0.1` | Trace sampling ratio in `[0.0, 1.0]`. |
+| `api_enabled` | `false` | Enables queue API server (Connect/gRPC). |
+| `api_addr` | `""` | API bind address when `api_enabled=true`. |
+| `shutdown_timeout` | `30s` | Graceful server shutdown timeout. |
+
+### TLS / DTLS Settings
 
 TLS fields are shared across `tls`, `mtls`, `dtls`, and `mdtls` blocks via `pkg/tls` config:
 
 - `cert_file`, `key_file`
-- `ca_file` (client CA) and `server_ca_file`
-- `client_auth` (e.g., `require`, `verify_if_given`)
-- `min_version`, `cipher_suites`, `prefer_server_cipher_suites`
+- `ca_file` (client CA), `server_ca_file`
+- `client_auth` (`none`, `request`, `require_any`, `verify_if_given`, `require`)
+- `min_version` (`tls1.0`, `tls1.1`, `tls1.2`, `tls1.3`)
+- `cipher_suites`, `prefer_server_cipher_suites`
 - `ocsp`, `crl` (advanced verification)
 
 ## Broker
@@ -129,13 +162,19 @@ broker:
 
 | Field | Default | Description |
 |---|---|---|
-| `max_message_size` | `1048576` | Maximum PUBLISH payload size in bytes. |
+| `max_message_size` | `1048576` | Maximum PUBLISH payload size in bytes (`>= 1024`). |
 | `max_retained_messages` | `10000` | Cap on retained messages in the store. |
-| `retry_interval` | `20s` | QoS 1/2 retry interval for unacknowledged outbound messages. |
-| `max_retries` | `0` | Maximum retries before dropping; 0 = unlimited. |
-| `max_qos` | `2` | Maximum QoS the broker accepts from publishers (0, 1, or 2). |
-| `async_fan_out` | `false` | When `true`, sends PUBCOMP immediately after PUBREL and dispatches subscriber fan-out to a worker pool. Improves throughput for high fan-out workloads. See [Fan-out modes](#fan-out-modes). |
-| `fan_out_workers` | `0` | Number of goroutines in the async fan-out pool. `0` = `GOMAXPROCS`. |
+| `retry_interval` | `20s` | QoS 1/2 retry interval for unacknowledged outbound messages (`>= 1s`). |
+| `max_retries` | `0` | Maximum retries before dropping; `0` = unlimited. |
+| `max_qos` | `2` | Maximum QoS accepted from publishers (`0`, `1`, or `2`). |
+| `async_fan_out` | `false` | When `true`, sends PUBCOMP immediately after PUBREL and dispatches fan-out to a worker pool. |
+| `fan_out_workers` | `0` | Async fan-out worker count; `0` = `GOMAXPROCS`. |
+
+### Fan-out Modes
+
+- `async_fan_out: false` (default): publisher acknowledgment and subscriber fan-out stay coupled.
+- `async_fan_out: true`: publisher PUBCOMP is sent earlier; subscriber fan-out runs in background workers.
+- `fan_out_workers`: tune worker pool size for high fan-out workloads.
 
 ## Session
 
@@ -145,31 +184,40 @@ session:
   default_expiry_interval: 300
   max_offline_queue_size: 1000
   max_inflight_messages: 256
-  max_send_queue_size: 0           # 0 = synchronous writes, >0 = async buffered sends
-  disconnect_on_full: false        # when async queue is full: false=block, true=disconnect client
-  offline_queue_policy: "evict"   # evict or reject
-  inflight_overflow: 0            # 0 = backpressure, 1 = pending queue
-  pending_queue_size: 1000        # per-subscriber buffer depth when inflight_overflow=1
+  max_send_queue_size: 0         # 0 = synchronous writes, >0 = async buffered sends
+  disconnect_on_full: false      # when async queue is full: false=block, true=disconnect client
+  offline_queue_policy: "evict" # evict or reject
+  inflight_overflow: 0           # 0 = backpressure, 1 = pending queue
+  pending_queue_size: 1000       # per-subscriber buffer depth when inflight_overflow=1
 ```
 
 | Field | Default | Description |
 |---|---|---|
-| `max_sessions` | `10000` | Maximum concurrent sessions. |
-| `default_expiry_interval` | `300` | Session expiry interval in seconds when the client does not set one. |
-| `max_offline_queue_size` | `1000` | Maximum QoS 1/2 messages buffered for a disconnected client. |
+| `max_sessions` | `10000` | Maximum concurrent sessions (`>= 1`). |
+| `default_expiry_interval` | `300` | Session expiry interval in seconds when client does not set one. |
+| `max_offline_queue_size` | `1000` | Maximum QoS 1/2 messages buffered for a disconnected client (`>= 10`). |
 | `max_inflight_messages` | `256` | Per-session inflight window size (unacknowledged outbound messages). |
 | `max_send_queue_size` | `0` | Per-connection async send queue depth. `0` = synchronous writes. |
-| `disconnect_on_full` | `false` | When the async send queue is full: `false` = block, `true` = disconnect client. |
-| `offline_queue_policy` | `evict` | `evict` drops the oldest message when full; `reject` drops the new message. |
-| `inflight_overflow` | `0` | Behavior when the inflight window is full. `0` = backpressure (block until ACK); `1` = pending queue (buffer per subscriber, drain on ACK). See [Inflight overflow](#inflight-overflow). |
-| `pending_queue_size` | `1000` | Per-subscriber pending queue depth when `inflight_overflow=1`. QoS>0 messages spill to the offline queue on disconnect. |
+| `disconnect_on_full` | `false` | Async send queue full behavior: `false` = block/backpressure, `true` = disconnect client. |
+| `offline_queue_policy` | `evict` | `evict` drops oldest when full; `reject` drops newest incoming message. |
+| `inflight_overflow` | `0` | Inflight full behavior: `0` = backpressure; `1` = per-subscriber pending queue. |
+| `pending_queue_size` | `1000` | Pending queue depth when `inflight_overflow=1` (must be `>= 1`). |
+
+### Inflight Overflow
+
+- `inflight_overflow: 0` (backpressure): delivery waits for ACK window to free.
+- `inflight_overflow: 1` (pending queue): overflow is buffered per subscriber and drained as ACKs arrive.
 
 ## Queue Manager
 
 ```yaml
 queue_manager:
-  auto_commit_interval: "5s"      # Stream groups auto-commit cadence
+  auto_commit_interval: "5s"
 ```
+
+| Field | Default | Description |
+|---|---|---|
+| `auto_commit_interval` | `5s` | Stream-group auto-commit cadence. `0` means commit on every delivery batch. |
 
 ## Queues
 
@@ -182,6 +230,11 @@ queues:
     reserved: true
     type: "classic"               # classic or stream
     primary_group: ""             # stream status reporting
+
+    retention:
+      max_age: "0s"               # 0 = unlimited
+      max_length_bytes: 0          # 0 = unlimited
+      max_length_messages: 0       # 0 = unlimited
 
     limits:
       max_message_size: 10485760
@@ -198,11 +251,75 @@ queues:
       enabled: true
       topic: ""                    # optional override
 
-    retention:
-      max_age: "168h"
-      max_length_bytes: 0
-      max_length_messages: 0
+    replication:
+      enabled: false
+      group: ""
+      replication_factor: 3
+      mode: "sync"                 # sync or async
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+      heartbeat_timeout: "0s"      # 0 = inherit group/default
+      election_timeout: "0s"       # 0 = inherit group/default
+      snapshot_interval: "0s"      # 0 = inherit group/default
+      snapshot_threshold: 0         # 0 = inherit group/default
 ```
+
+### Queue Fields
+
+| Field | Description |
+|---|---|
+| `name` | Unique queue name. |
+| `topics` | Topic filters routed into this queue (must be non-empty). |
+| `reserved` | Marks system-managed/builtin queue definitions. |
+| `type` | Queue mode: `classic` or `stream`. Empty value falls back to default mode. |
+| `primary_group` | For stream queues: consumer group used for status reporting. |
+
+### `queues[].retention`
+
+| Field | Description |
+|---|---|
+| `max_age` | Time retention limit. `0s` disables age-based retention. |
+| `max_length_bytes` | Byte-size retention cap. `0` means unlimited. |
+| `max_length_messages` | Message-count retention cap. `0` means unlimited. |
+
+### `queues[].limits`
+
+| Field | Description |
+|---|---|
+| `max_message_size` | Queue-level max payload size in bytes. |
+| `max_depth` | Max queued message count. |
+| `message_ttl` | Per-message TTL in queue. |
+
+### `queues[].retry`
+
+| Field | Description |
+|---|---|
+| `max_retries` | Max delivery retries per message (`>= 0`). |
+| `initial_backoff` | Initial retry delay. |
+| `max_backoff` | Maximum retry delay. |
+| `multiplier` | Exponential backoff multiplier (`>= 1.0`). |
+
+### `queues[].dlq`
+
+| Field | Description |
+|---|---|
+| `enabled` | Enables dead-letter queue routing for exhausted messages. |
+| `topic` | Optional DLQ topic override; empty uses generated/default topic. |
+
+### `queues[].replication`
+
+| Field | Description |
+|---|---|
+| `enabled` | Enables per-queue Raft replication. |
+| `group` | Raft group ID for this queue. Empty means `default`. |
+| `replication_factor` | Number of replicas (`1..10` when enabled). |
+| `mode` | `sync` or `async`. |
+| `min_in_sync_replicas` | Minimum replicas required to ACK (`1..replication_factor`). |
+| `ack_timeout` | Timeout for sync replication acknowledgments (`> 0`). |
+| `heartbeat_timeout` | Optional per-queue heartbeat override. `0` inherits cluster/group value. |
+| `election_timeout` | Optional per-queue election timeout override. `0` inherits cluster/group value. |
+| `snapshot_interval` | Optional per-queue snapshot interval override. `0` inherits cluster/group value. |
+| `snapshot_threshold` | Optional per-queue snapshot threshold override. `0` inherits cluster/group value. |
 
 ## Storage
 
@@ -212,6 +329,12 @@ storage:
   badger_dir: "/tmp/fluxmq/data"
   sync_writes: false
 ```
+
+| Field | Default | Description |
+|---|---|---|
+| `type` | `badger` | Storage backend: `memory` or `badger`. |
+| `badger_dir` | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`). |
+| `sync_writes` | `false` | If `true`, fsync-like durability on write path; if `false`, better throughput. |
 
 ## Cluster
 
@@ -225,7 +348,7 @@ For a “how it works” deep dive, see [Clustering internals](/docs/architectur
 
 ```yaml
 cluster:
-  enabled: false
+  enabled: true
   node_id: "broker-1"
 
   etcd:
@@ -250,7 +373,7 @@ cluster:
 
   raft:
     enabled: false
-    auto_provision_groups: false
+    auto_provision_groups: true
     replication_factor: 3
     sync_mode: true
     min_in_sync_replicas: 2
@@ -265,8 +388,6 @@ cluster:
     snapshot_interval: "5m"
     snapshot_threshold: 8192
 
-    # Optional per-group Raft runtimes for sharding.
-    # The key "default" overrides the base group above.
     groups:
       default:
         bind_addr: "127.0.0.1:7100"
@@ -278,49 +399,105 @@ cluster:
         peers: {}
 ```
 
+### Cluster Root Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enables clustering features. Use `false` for standalone deployments. |
+| `node_id` | `broker-1` | Unique node identifier in the cluster. |
+
+### `cluster.etcd`
+
+| Field | Description |
+|---|---|
+| `data_dir` | Local etcd data directory. |
+| `bind_addr` | etcd peer address (`:2380`) for member replication. |
+| `client_addr` | etcd client address (`:2379`) used by broker components. |
+| `initial_cluster` | Comma-separated cluster map (`name=http://host:2380,...`). |
+| `bootstrap` | `true` when bootstrapping new cluster; `false` when joining existing cluster. |
+| `hybrid_retained_size_threshold` | Payload size threshold for retained/will hybrid storage strategy. |
+
+### `cluster.transport`
+
+| Field | Default | Description |
+|---|---|---|
+| `bind_addr` | `0.0.0.0:7948` | Inter-node gRPC transport bind address. |
+| `peers` | `{}` | Map of `node_id -> transport address`. |
+| `route_batch_max_size` | `256` | Flush batch after this many queued messages (`>= 0`). |
+| `route_batch_max_delay` | `5ms` | Flush partial batch after this delay (`>= 0`). |
+| `route_batch_flush_workers` | `4` | Concurrent flush workers per remote node (`>= 0`). |
+| `route_publish_timeout` | `15s` | Max time for cross-node publish operation (`0` uses default). |
+| `tls_enabled` | `false` | Enables mTLS/TLS for transport gRPC channel. |
+| `tls_cert_file` | `""` | Required when `tls_enabled=true`. |
+| `tls_key_file` | `""` | Required when `tls_enabled=true`. |
+| `tls_ca_file` | `""` | Required when `tls_enabled=true`. |
+
+### `cluster.raft`
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enables queue Raft replication engine. |
+| `auto_provision_groups` | `true` | Allows dynamic creation of queue-referenced groups not listed under `groups`. |
+| `replication_factor` | `3` | Target replica count (`1..10` when enabled). |
+| `sync_mode` | `true` | `true` waits for apply/commit path; `false` returns earlier (async path). |
+| `min_in_sync_replicas` | `2` | Minimum in-sync replicas required for sync behavior. |
+| `ack_timeout` | `5s` | Timeout for sync commit/apply acknowledgments. |
+| `write_policy` | `forward` | Follower write behavior: `local`, `reject`, `forward`. |
+| `distribution_mode` | `replicate` | Cross-node delivery strategy: `forward` or `replicate`. |
+| `bind_addr` | `127.0.0.1:7100` | Base Raft bind address for default group runtime. |
+| `data_dir` | `/tmp/fluxmq/raft` | Base Raft data directory. |
+| `peers` | `{}` | Map of `node_id -> raft address`. |
+| `heartbeat_timeout` | `1s` | Raft heartbeat interval/tick. |
+| `election_timeout` | `3s` | Raft election timeout. |
+| `snapshot_interval` | `5m` | Snapshot interval. |
+| `snapshot_threshold` | `8192` | Snapshot threshold in log entries. |
+| `groups` | `{}` | Optional per-group overrides (`default`, `hot`, etc.). |
+
+### `cluster.raft.groups.<group_id>`
+
+| Field | Description |
+|---|---|
+| `enabled` | Optional group enable switch. If omitted, inherits enabled behavior. |
+| `bind_addr` | Group-specific Raft bind address (required for non-default groups). |
+| `data_dir` | Group-specific data directory. |
+| `peers` | Group-specific peer map (`node_id -> raft address`; required for non-default groups). |
+| `replication_factor` | Optional override for this group. `0` inherits base value. |
+| `sync_mode` | Optional per-group sync-mode override. |
+| `min_in_sync_replicas` | Optional per-group ISR override. `0` inherits base value. |
+| `ack_timeout` | Optional per-group ack timeout override. `0` inherits base value. |
+| `heartbeat_timeout` | Optional per-group heartbeat override. `0` inherits base value. |
+| `election_timeout` | Optional per-group election timeout override. `0` inherits base value. |
+| `snapshot_interval` | Optional per-group snapshot interval override. `0` inherits base value. |
+| `snapshot_threshold` | Optional per-group snapshot threshold override. `0` inherits base value. |
+
 ### Transport Batching
 
-The gRPC transport batches outbound messages per remote node before flushing them over the wire. Three settings control this behavior:
+The gRPC transport batches outbound messages per remote node before flushing them over the wire.
 
-| Setting                     | Default | Description                                                              |
-| --------------------------- | ------- | ------------------------------------------------------------------------ |
-| `route_batch_max_size`      | `256`   | Maximum number of messages collected before a batch is flushed.          |
-| `route_batch_max_delay`     | `5ms`   | Maximum time to wait for more messages before flushing a partial batch.  |
-| `route_batch_flush_workers` | `4`     | Number of concurrent flush goroutines per remote node.                   |
-| `route_publish_timeout`     | `15s`   | Maximum time for a cross-cluster publish to complete, including retries. |
-
-`route_batch_flush_workers` controls how many gRPC calls can be in-flight simultaneously for a single remote node. A single collector goroutine still assembles batches (no contention), but each assembled batch is handed to one of the flush workers for the actual network call. Increasing this value improves throughput when gRPC round-trips are slow (e.g. cross-region links), at the cost of more goroutines. Setting it to `1` restores strictly sequential flushing.
-
-> **Note:** With multiple flush workers, batches for the same node may complete out of order. This is acceptable for MQTT QoS 1 (at-least-once) since ordering is not guaranteed across independent publish operations.
+| Setting | Default | Description |
+|---|---|---|
+| `route_batch_max_size` | `256` | Maximum number of messages collected before flush. |
+| `route_batch_max_delay` | `5ms` | Maximum wait before flushing partial batch. |
+| `route_batch_flush_workers` | `4` | Concurrent flush goroutines per remote node. |
+| `route_publish_timeout` | `15s` | Maximum time for cross-cluster publish completion. |
 
 ### Raft Behavior (What The Knobs Mean)
 
-Two Raft fields control most real-world behavior for queues:
+Two fields control most queue behavior tradeoffs:
 
-- `cluster.raft.write_policy`: follower behavior when receiving a queue publish (`forward` is usually the best default).
-- `cluster.raft.distribution_mode`: cross-node delivery strategy (`forward` routes deliveries; `replicate` relies on the replicated log).
+- `cluster.raft.write_policy`: behavior on follower writes.
+- `cluster.raft.distribution_mode`: how deliveries are routed across nodes.
 
-Other fields affect durability and timing:
+Other durability and timing fields:
 
-- `sync_mode`: if true, a queue publish waits for the Raft apply to complete (bounded by `ack_timeout`).
-- `ack_timeout`: how long the leader waits for an apply to finish in sync mode.
-- `heartbeat_timeout`, `election_timeout`: Raft stability knobs (failover sensitivity vs churn).
-- `snapshot_interval`, `snapshot_threshold`: storage/compaction knobs for the Raft log.
+- `sync_mode`, `ack_timeout`
+- `heartbeat_timeout`, `election_timeout`
+- `snapshot_interval`, `snapshot_threshold`
 
-Notes on current implementation:
+Implementation notes:
 
-- FluxMQ supports multiple Raft replication groups. Queues can be assigned to a group via `queues[].replication.group` (empty means the default group).
-- Group membership still comes from the configured peer list(s). `replication_factor` and `min_in_sync_replicas` are accepted in config but do not currently limit membership or override Raft quorum rules.
-
-### Raft Groups (Per-Queue Sharding)
-
-Use `cluster.raft.groups` to configure multiple independent replication groups.
-
-Key rules:
-
-- A `default` group is always required when Raft is enabled.
-- Non-default groups must define their own `bind_addr` and `peers` (and typically a dedicated `data_dir`).
-- If `cluster.raft.auto_provision_groups` is `true`, groups referenced by queues can be created on demand using derived defaults.
+- FluxMQ supports multiple Raft replication groups; queues choose group via `queues[].replication.group`.
+- Group membership comes from peer configuration. `replication_factor` and `min_in_sync_replicas` are validated and used by policy logic, but do not replace Raft quorum mechanics.
 
 ## Webhooks
 
@@ -328,7 +505,7 @@ Key rules:
 webhook:
   enabled: false
   queue_size: 10000
-  drop_policy: "oldest"          # oldest or newest
+  drop_policy: "oldest" # oldest or newest
   workers: 5
   include_payload: false
   shutdown_timeout: "30s"
@@ -355,7 +532,57 @@ webhook:
       timeout: "10s"
 ```
 
-Only `http` endpoints are supported at the moment.
+Only `http` endpoints are currently supported.
+
+### Webhook Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enables webhook event delivery. |
+| `queue_size` | `10000` | In-memory webhook queue depth (`>= 100` when enabled). |
+| `drop_policy` | `oldest` | Queue full behavior: `oldest` or `newest`. |
+| `workers` | `5` | Concurrent webhook workers (`>= 1`). |
+| `include_payload` | `false` | Includes message payload in webhook body. |
+| `shutdown_timeout` | `30s` | Graceful drain timeout during shutdown. |
+| `defaults` | — | Default delivery settings applied to endpoints. |
+| `endpoints` | `[]` | List of webhook endpoint configs. |
+
+### `webhook.defaults`
+
+| Field | Description |
+|---|---|
+| `timeout` | Default endpoint timeout. |
+| `retry` | Retry policy defaults. |
+| `circuit_breaker` | Circuit breaker defaults. |
+
+### `webhook.defaults.retry`
+
+| Field | Description |
+|---|---|
+| `max_attempts` | Max delivery attempts (`>= 1`). |
+| `initial_interval` | Initial retry delay. |
+| `max_interval` | Max retry delay. |
+| `multiplier` | Exponential backoff multiplier (`>= 1.0`). |
+
+### `webhook.defaults.circuit_breaker`
+
+| Field | Description |
+|---|---|
+| `failure_threshold` | Failures before opening breaker (`>= 1`). |
+| `reset_timeout` | Time before half-open probe/reset. |
+
+### `webhook.endpoints[]`
+
+| Field | Description |
+|---|---|
+| `name` | Unique endpoint identifier. |
+| `type` | Endpoint type. Currently only `http` is supported. |
+| `url` | Target endpoint URL. |
+| `events` | Event-type filter. Empty means all events. |
+| `topic_filters` | Topic filter list for message events. Empty means all topics. |
+| `headers` | Static headers attached to webhook requests. |
+| `timeout` | Optional endpoint-specific timeout override. |
+| `retry` | Optional endpoint-specific retry override. |
 
 ## Rate Limiting
 
@@ -380,6 +607,20 @@ ratelimit:
     burst: 10
 ```
 
+| Field | Description |
+|---|---|
+| `enabled` | Global rate-limit feature switch. |
+| `connection.enabled` | Enables per-IP connection rate limiting. |
+| `connection.rate` | Allowed connection attempts per second per IP. |
+| `connection.burst` | Token-bucket burst allowance for connection limiter. |
+| `connection.cleanup_interval` | Cleanup interval for stale connection limiter entries. |
+| `message.enabled` | Enables per-client publish/message limiter. |
+| `message.rate` | Allowed messages per second per client. |
+| `message.burst` | Token-bucket burst for message limiter. |
+| `subscribe.enabled` | Enables per-client subscribe limiter. |
+| `subscribe.rate` | Allowed subscribe operations per second per client. |
+| `subscribe.burst` | Token-bucket burst for subscribe limiter. |
+
 ## Logging
 
 ```yaml
@@ -387,3 +628,8 @@ log:
   level: "info"   # debug, info, warn, error
   format: "text"  # text or json
 ```
+
+| Field | Default | Description |
+|---|---|---|
+| `level` | `info` | Log level: `debug`, `info`, `warn`, `error`. |
+| `format` | `text` | Log format: `text` or `json`. |

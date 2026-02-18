@@ -5,7 +5,7 @@ description: Configure listeners, WebSocket path, health checks, and OpenTelemet
 
 # Server Configuration
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-18
 
 `server` controls network listeners and telemetry endpoints. Example:
 
@@ -37,7 +37,21 @@ server:
   otel_metrics_enabled: true
   otel_traces_enabled: false
   otel_trace_sample_rate: 0.1
+
+  api_enabled: false
+  api_addr: ""
 ```
+
+## Key Fields
+
+- Listener families: `tcp`, `websocket`, `http`, `coap`, `amqp`, `amqp091`.
+- Listener addresses: `addr` (empty disables the specific listener).
+- Listener limits/timeouts: `max_connections`, `read_timeout`, `write_timeout`.
+- WebSocket specifics: `path`, `allowed_origins`.
+- Health/observability: `health_enabled`, `health_addr`, `metrics_enabled`, `metrics_addr`.
+- OpenTelemetry identity/tuning: `otel_service_name`, `otel_service_version`, `otel_metrics_enabled`, `otel_traces_enabled`, `otel_trace_sample_rate`.
+- Queue API server: `api_enabled`, `api_addr`.
+- Graceful shutdown: `shutdown_timeout`.
 
 ## Learn More
 

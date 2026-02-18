@@ -5,7 +5,7 @@ description: Configure embedded etcd, transport, and optional Raft replication
 
 # Clustering Configuration
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 
 Clustering has three building blocks:
 
@@ -29,11 +29,17 @@ cluster:
   transport:
     bind_addr: "0.0.0.0:7948"
     peers: {}
+    route_batch_max_size: 256
+    route_batch_max_delay: "5ms"
+    route_batch_flush_workers: 4
+    route_publish_timeout: "15s"
+    tls_enabled: false
 
   raft:
     enabled: false
+    auto_provision_groups: true
     write_policy: "forward"
-    distribution_mode: "forward"
+    distribution_mode: "replicate"
 ```
 
 ## etcd (Metadata Plane)
@@ -93,6 +99,12 @@ Notes on current behavior:
 
 - Raft membership is derived from the configured peer list (and the local node). `replication_factor` is accepted in config, but does not currently limit membership.
 - `min_in_sync_replicas` is accepted in config, but Raft quorum rules still ultimately govern commit behavior.
+
+## Full Field Coverage
+
+The complete field-by-field reference (including `cluster.transport` TLS files, all batching knobs, and `cluster.raft.groups` per-group overrides) is documented in:
+
+- [Configuration reference](/docs/reference/configuration-reference)
 
 ### Replication groups
 
