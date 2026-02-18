@@ -191,11 +191,6 @@ func (b *Broker) Close() error {
 	close(b.stopCh)
 	b.wg.Wait()
 
-	// Stop async fan-out pool before closing sessions so in-flight distributions complete.
-	if b.fanOutPool != nil {
-		b.fanOutPool.Close()
-	}
-
 	// Close webhook notifier if enabled
 	if b.webhooks != nil {
 		if err := b.webhooks.Close(); err != nil {
@@ -221,5 +216,11 @@ func (b *Broker) Close() error {
 			b.persistOfflineQueue(s)
 		}
 	})
+
+	// Drain and stop async fan-out workers after sessions are closed.
+	if b.fanOutPool != nil {
+		b.fanOutPool.Close()
+	}
+
 	return nil
 }

@@ -69,7 +69,18 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 
 	// Backpressure mode: acquire an inflight slot before proceeding.
 	// Blocks until an ACK frees a slot; no-op when deliverSlots is nil.
-	s.AcquireDeliverSlot()
+	if !s.AcquireDeliverSlot() {
+		// Session disconnected while waiting for a slot.
+		if msg.QoS > 0 {
+			err := s.OfflineQueue().Enqueue(msg)
+			msg.ReleasePayload()
+			storage.ReleaseMessage(msg)
+			return 0, err
+		}
+		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
+		return 0, nil
+	}
 
 	packetID := s.NextPacketID()
 	msg.PacketID = packetID

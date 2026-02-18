@@ -88,6 +88,10 @@ type Session struct {
 	// Non-nil only when InflightOverflow == InflightOverflowQueue.
 	// Drained into inflight as ACKs arrive; spilled to offline on disconnect.
 	pendingCh chan pendingItem
+
+	// deliverStop is closed when the session disconnects to unblock goroutines
+	// waiting in AcquireDeliverSlot.
+	deliverStop chan struct{}
 }
 
 // Options holds options for creating a new session.
@@ -142,17 +146,19 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		sharedSubAvailable:   true,
 		maxQoS:               2,
 		requestProblemInfo:   true,
+		deliverStop:          make(chan struct{}),
 	}
 
-	inflightCap := sessionCfg.MaxInflightMessages
-	if inflightCap <= 0 {
-		inflightCap = 256
-	}
+	inflightCap := int(receiveMax)
 
 	switch sessionCfg.InflightOverflow {
 	case config.InflightOverflowBackpressure:
 		slots := make(chan struct{}, inflightCap)
-		for range inflightCap {
+		used := len(inflight.GetAll())
+		if used > inflightCap {
+			used = inflightCap
+		}
+		for range inflightCap - used {
 			slots <- struct{}{}
 		}
 		s.deliverSlots = slots
@@ -175,6 +181,11 @@ func (s *Session) Connect(c core.Connection) error {
 	s.conn = c
 	s.state = StateConnected
 	s.connectedAt = time.Now()
+	select {
+	case <-s.deliverStop:
+		s.deliverStop = make(chan struct{})
+	default:
+	}
 
 	c.SetKeepAlive(s.KeepAlive)
 
@@ -187,10 +198,23 @@ func (s *Session) Connect(c core.Connection) error {
 }
 
 // AcquireDeliverSlot blocks until an inflight slot is available.
+// Returns false if the session disconnects while waiting.
 // Only meaningful when deliverSlots is non-nil (backpressure mode).
-func (s *Session) AcquireDeliverSlot() {
-	if s.deliverSlots != nil {
-		<-s.deliverSlots
+func (s *Session) AcquireDeliverSlot() bool {
+	s.mu.RLock()
+	slots := s.deliverSlots
+	stop := s.deliverStop
+	s.mu.RUnlock()
+
+	if slots == nil {
+		return true
+	}
+
+	select {
+	case <-slots:
+		return true
+	case <-stop:
+		return false
 	}
 }
 
@@ -253,7 +277,10 @@ func (s *Session) drainPendingToOffline() {
 				if err := s.OfflineQueue().Enqueue(item.msg); err != nil {
 					item.msg.ReleasePayload()
 					storage.ReleaseMessage(item.msg)
+					continue
 				}
+				item.msg.ReleasePayload()
+				storage.ReleaseMessage(item.msg)
 			} else {
 				item.msg.ReleasePayload()
 				storage.ReleaseMessage(item.msg)
@@ -274,6 +301,11 @@ func (s *Session) Disconnect(graceful bool) error {
 	}
 
 	s.state = StateDisconnecting
+	select {
+	case <-s.deliverStop:
+	default:
+		close(s.deliverStop)
+	}
 
 	if s.conn != nil {
 		// Cache info before closing

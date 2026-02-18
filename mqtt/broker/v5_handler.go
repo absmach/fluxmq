@@ -392,17 +392,8 @@ func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 	}
 
 	if h.broker.asyncFanOut {
-		// Send PUBCOMP immediately so the publisher can pipeline the next message,
-		// then dispatch fan-out to the worker pool.
-		if writeErr := s.WritePacket(comp); writeErr != nil {
-			if msg != nil {
-				msg.ReleasePayload()
-				storage.ReleaseMessage(msg)
-			}
-			return writeErr
-		}
 		if msg != nil {
-			h.broker.fanOutPool.Submit(func() {
+			submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
 				if err := h.broker.Publish(msg); err != nil {
 					h.broker.logError("v5_pubrel_publish", err,
 						slog.String("client_id", s.ID),
@@ -410,8 +401,16 @@ func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 				}
 				storage.ReleaseMessage(msg)
 			})
+			if !submitted {
+				if err := h.broker.Publish(msg); err != nil {
+					h.broker.logError("v5_pubrel_publish", err,
+						slog.String("client_id", s.ID),
+						slog.String("topic", msg.Topic))
+				}
+				storage.ReleaseMessage(msg)
+			}
 		}
-		return nil
+		return s.WritePacket(comp)
 	}
 
 	// Synchronous path: distribute before PUBCOMP (default).

@@ -12,8 +12,11 @@ import (
 // Each task is a func() that calls distribute() for one published message.
 // The pool owns its goroutines and stops them cleanly via Close().
 type fanOutPool struct {
-	tasks chan func()
-	wg    sync.WaitGroup
+	tasks     chan func()
+	wg        sync.WaitGroup
+	mu        sync.RWMutex
+	closeOnce sync.Once
+	closed    bool
 }
 
 func newFanOutPool(workers int) *fanOutPool {
@@ -38,15 +41,28 @@ func (p *fanOutPool) run() {
 	}
 }
 
-// Submit enqueues a fan-out task. It blocks only when all workers are busy
-// and the task buffer is full, which provides back-pressure to the PUBREL
-// handler without dropping messages.
-func (p *fanOutPool) Submit(fn func()) {
+// Submit enqueues a fan-out task.
+// Returns false when the pool is closed.
+func (p *fanOutPool) Submit(fn func()) bool {
+	if fn == nil {
+		return true
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return false
+	}
 	p.tasks <- fn
+	return true
 }
 
 // Close drains queued tasks and waits for all workers to finish.
 func (p *fanOutPool) Close() {
-	close(p.tasks)
-	p.wg.Wait()
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		close(p.tasks)
+		p.mu.Unlock()
+		p.wg.Wait()
+	})
 }
