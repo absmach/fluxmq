@@ -137,7 +137,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	// Override receive maximum with normalized value
 	opts.ReceiveMaximum = receiveMax
 
-	s := session.New(clientID, version, opts, inflight, offlineQueue)
+	s := session.New(clientID, version, opts, inflight, offlineQueue, b.sessionCfg)
 
 	// Restore subscriptions from takeover state or storage
 	if takeoverState != nil {

@@ -413,7 +413,7 @@ func BenchmarkMessageCopy_ZeroCopy(b *testing.B) {
 func createBenchBroker(tb testing.TB) *Broker {
 	tb.Helper()
 
-	broker := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	broker := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	return broker
 }
 

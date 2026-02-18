@@ -22,7 +22,7 @@ func TestBroker_Shutdown_NoSessions(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 
 	ctx := context.Background()
 	err := broker.Shutdown(ctx, 5*time.Second)
@@ -35,7 +35,7 @@ func TestBroker_Shutdown_ImmediateWithNoSessions(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 
 	ctx := context.Background()
 	start := time.Now()
@@ -54,7 +54,7 @@ func TestBroker_Shutdown_ContextCancelled(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -76,7 +76,7 @@ func TestBroker_Close_Idempotent(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 
 	// First close should succeed
 	err := broker.Close()
@@ -93,7 +93,7 @@ func TestBroker_Shutdown_SetsFlag(t *testing.T) {
 	logger := slog.Default()
 	stats := NewStats()
 
-	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	broker := NewBroker(store, cl, logger, stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 
 	// Initially not shutting down
 	assert.False(t, broker.shuttingDown.Load())

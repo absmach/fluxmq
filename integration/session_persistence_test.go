@@ -41,7 +41,7 @@ func startBroker(t *testing.T, dataDir string, tcpPort int) *testBrokerInstance 
 	require.NoError(t, err)
 
 	nullLogger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
-	b := broker.NewBroker(store, nil, nullLogger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(store, nil, nullLogger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 
 	tcpAddr := fmt.Sprintf("127.0.0.1:%d", tcpPort)
 	tcpCfg := tcp.Config{

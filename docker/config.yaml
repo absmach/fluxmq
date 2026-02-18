@@ -6,5 +6,23 @@ storage:
   type: "badger"
   badger_dir: "/var/lib/fluxmq/data"
 
+broker:
+  # async_fan_out decouples subscriber distribution from the publisher PUBREL/PUBCOMP handshake.
+  # When enabled, PUBCOMP is sent immediately after PUBREL and fan-out runs in a bounded worker pool,
+  # increasing throughput for high fan-out workloads (many subscribers per topic).
+  # Default: false (synchronous fan-out, PUBCOMP sent after all subscribers are notified).
+  async_fan_out: false
+  # fan_out_workers is the size of the async fan-out worker pool. 0 = GOMAXPROCS.
+  fan_out_workers: 0
+
+session:
+  # inflight_overflow controls behavior when a subscriber's inflight window is full.
+  # 0 = backpressure: block the delivering goroutine until an ACK frees a slot.
+  # 1 = pending queue: buffer overflow messages per-subscriber; drain as ACKs arrive.
+  #     QoS>0 pending messages spill to the offline queue on disconnect.
+  inflight_overflow: 0
+  # pending_queue_size is the per-subscriber buffer depth when inflight_overflow=1.
+  pending_queue_size: 1000
+
 log:
   level: "info"

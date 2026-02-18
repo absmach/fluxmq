@@ -17,7 +17,7 @@ import (
 )
 
 func TestDeliverToSession_MarkSentAfterWireWrite(t *testing.T) {
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	s, _, err := b.CreateSession("test-client", 4, session.Options{CleanStart: true, ReceiveMaximum: 10})

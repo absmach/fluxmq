@@ -293,19 +293,45 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 		h.broker.logger.Warn("v3_pubrel_unknown_packet",
 			slog.String("client_id", s.ID),
 			slog.Int("packet_id", int(packetID)))
-	} else if msg != nil {
+	}
+	s.Inflight().ClearReceived(packetID)
+
+	comp := &v3.PubComp{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
+		ID:          packetID,
+	}
+
+	if h.broker.asyncFanOut {
+		// Send PUBCOMP immediately so the publisher can pipeline the next message,
+		// then dispatch fan-out to the worker pool.
+		if writeErr := s.WritePacket(comp); writeErr != nil {
+			if msg != nil {
+				msg.ReleasePayload()
+				storage.ReleaseMessage(msg)
+			}
+			return writeErr
+		}
+		if msg != nil {
+			h.broker.fanOutPool.Submit(func() {
+				if err := h.broker.Publish(msg); err != nil {
+					h.broker.logError("v3_pubrel_publish", err,
+						slog.String("client_id", s.ID),
+						slog.String("topic", msg.Topic))
+				}
+				storage.ReleaseMessage(msg)
+			})
+		}
+		return nil
+	}
+
+	// Synchronous path: distribute before PUBCOMP (default).
+	if msg != nil {
 		if err := h.broker.Publish(msg); err != nil {
 			h.broker.logError("v3_pubrel_publish", err,
 				slog.String("client_id", s.ID),
 				slog.String("topic", msg.Topic))
 		}
 		storage.ReleaseMessage(msg)
-	}
-
-	s.Inflight().ClearReceived(packetID)
-	comp := &v3.PubComp{
-		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
-		ID:          packetID,
 	}
 	return s.WritePacket(comp)
 }

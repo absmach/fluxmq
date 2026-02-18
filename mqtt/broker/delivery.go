@@ -67,10 +67,21 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 		return 0, err
 	}
 
+	// Backpressure mode: acquire an inflight slot before proceeding.
+	// Blocks until an ACK frees a slot; no-op when deliverSlots is nil.
+	s.AcquireDeliverSlot()
+
 	packetID := s.NextPacketID()
 	msg.PacketID = packetID
 	// Inflight storage takes ownership - it will release when message is ACK'd or expires
 	if err := s.Inflight().Add(packetID, msg, messages.Outbound); err != nil {
+		// Inflight is full (pending queue mode or unexpected). Try the pending queue.
+		s.ReleaseDeliverSlot()
+		if s.TryEnqueuePending(msg, nil) {
+			// Deferred delivery; packet ID assigned at drain time.
+			return 0, nil
+		}
+		// Both inflight and pending queue are full — drop with error.
 		msg.ReleasePayload()
 		storage.ReleaseMessage(msg)
 		return 0, err
@@ -107,6 +118,15 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 		msg.ReleasePayload()
 		storage.ReleaseMessage(msg)
 	}
+
+	// Return the inflight slot (backpressure mode) and pull through one pending
+	// message (pending queue mode) to keep the pipeline full.
+	s.ReleaseDeliverSlot()
+	s.DrainOnePending(func(pending *storage.Message, _ func()) error {
+		_, err := b.DeliverToSession(s, pending)
+		return err
+	})
+
 	return nil
 }
 

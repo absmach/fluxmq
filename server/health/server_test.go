@@ -134,7 +134,7 @@ func (m *mockCluster) Nodes() []cluster.NodeInfo {
 }
 
 func TestAddrWithoutListener(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	server := New(Config{}, b, nil, slog.Default())
@@ -144,7 +144,7 @@ func TestAddrWithoutListener(t *testing.T) {
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	server := New(Config{}, b, nil, slog.Default())
@@ -219,7 +219,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "single node mode - ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{}),
 			cluster:        nil,
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
@@ -227,7 +227,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "cluster not initialized - not ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{}),
 			cluster:        &mockCluster{nodeID: ""},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusServiceUnavailable,
@@ -236,7 +236,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "cluster initialized - ready",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{}),
 			cluster:        &mockCluster{nodeID: "node-1", isLeader: true},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
@@ -244,7 +244,7 @@ func TestReadyEndpoint(t *testing.T) {
 		},
 		{
 			name:           "POST request not allowed",
-			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}),
+			broker:         broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{}),
 			cluster:        nil,
 			method:         http.MethodPost,
 			expectedStatus: http.StatusMethodNotAllowed,
@@ -338,7 +338,7 @@ func TestClusterStatusEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+			b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 			defer b.Close()
 
 			server := New(Config{}, b, tt.cluster, slog.Default())
@@ -384,7 +384,7 @@ func TestClusterStatusEndpoint(t *testing.T) {
 }
 
 func TestContentTypeHeaders(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	server := New(Config{}, b, nil, slog.Default())

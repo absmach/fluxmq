@@ -21,7 +21,7 @@ import (
 func newTestBroker(t *testing.T) *broker.Broker {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	b := broker.NewBroker(nil, nil, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	t.Cleanup(func() { _ = b.Close() })
 	return b
 }

@@ -14,7 +14,7 @@ import (
 )
 
 func TestPublishCrossDeliverToAMQP091(t *testing.T) {
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	amqpClientID := corebroker.PrefixedAMQP091ClientID("conn-1")
@@ -59,7 +59,7 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 }
 
 func TestForwardPublishDoesNotCrossDeliverToAMQP091(t *testing.T) {
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	amqpClientID := corebroker.PrefixedAMQP091ClientID("conn-1")

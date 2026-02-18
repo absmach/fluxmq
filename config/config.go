@@ -234,6 +234,22 @@ type AMQP091Config struct {
 	MTLS  AMQP091ListenerConfig `yaml:"mtls"`
 }
 
+// InflightOverflowMode controls what happens when a session's inflight window is full.
+type InflightOverflowMode int
+
+const (
+	// InflightOverflowBackpressure blocks the caller until a slot opens.
+	// In sync fan-out mode this stalls the publisher's read loop.
+	// In async fan-out mode this stalls the pool worker for that subscriber while
+	// other workers continue, providing natural flow control.
+	InflightOverflowBackpressure InflightOverflowMode = iota
+
+	// InflightOverflowQueue buffers excess messages in a per-session pending queue.
+	// The pool worker moves on immediately; the subscriber drains the queue as ACKs arrive.
+	// On disconnect, pending messages are promoted to the offline queue (QoS > 0 only).
+	InflightOverflowQueue
+)
+
 // BrokerConfig holds broker-specific settings.
 type BrokerConfig struct {
 	// Maximum message size in bytes
@@ -249,6 +265,19 @@ type BrokerConfig struct {
 	// Maximum QoS level supported (0, 1, or 2). Default: 2
 	// Server will downgrade publish QoS to this level per MQTT 5.0 spec
 	MaxQoS int `yaml:"max_qos"`
+
+	// AsyncFanOut decouples subscriber distribution from the publisher handshake.
+	// When true, PUBCOMP is sent to the publisher immediately after PUBREL is
+	// processed and message ownership is confirmed; fan-out to subscribers runs
+	// in a bounded worker pool. This prevents slow or numerous subscribers from
+	// blocking publisher throughput.
+	// When false (default), PUBCOMP is sent only after all local subscribers have
+	// been queued, preserving strict ordering between publisher ack and delivery.
+	AsyncFanOut bool `yaml:"async_fan_out"`
+
+	// FanOutWorkers is the number of goroutines in the async fan-out pool.
+	// 0 (default) uses GOMAXPROCS. Only effective when AsyncFanOut is true.
+	FanOutWorkers int `yaml:"fan_out_workers"`
 }
 
 // SessionConfig holds session management settings.
@@ -275,6 +304,17 @@ type SessionConfig struct {
 	// DisconnectOnFull controls behavior when send queue is full in async mode.
 	// false blocks the producer (backpressure), true disconnects the slow client.
 	DisconnectOnFull bool `yaml:"disconnect_on_full"`
+
+	// InflightOverflow controls what happens when a subscriber's inflight window
+	// (bounded by ReceiveMaximum) is full during fan-out.
+	// 0 (InflightOverflowBackpressure, default): block the caller until a slot opens.
+	// 1 (InflightOverflowQueue): overflow into a per-session bounded pending queue;
+	//   the subscriber drains it as ACKs arrive.
+	InflightOverflow InflightOverflowMode `yaml:"inflight_overflow"`
+
+	// PendingQueueSize is the per-session pending message queue capacity.
+	// Only used when InflightOverflow is InflightOverflowQueue. Default: 1000.
+	PendingQueueSize int `yaml:"pending_queue_size"`
 }
 
 // LogConfig holds logging configuration.
@@ -527,6 +567,8 @@ func Default() *Config {
 			RetryInterval:       20 * time.Second,
 			MaxRetries:          0, // Infinite retries
 			MaxQoS:              2, // Support all QoS levels
+			AsyncFanOut:         false,
+			FanOutWorkers:       0, // 0 = GOMAXPROCS
 		},
 		Session: SessionConfig{
 			MaxSessions:           10000,
@@ -536,6 +578,8 @@ func Default() *Config {
 			OfflineQueuePolicy:    "evict",
 			MaxSendQueueSize:      0,
 			DisconnectOnFull:      false,
+			InflightOverflow:      InflightOverflowBackpressure,
+			PendingQueueSize:      1000,
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -890,6 +934,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Session.MaxSendQueueSize < 0 {
 		return fmt.Errorf("session.max_send_queue_size cannot be negative")
+	}
+	if c.Session.InflightOverflow != InflightOverflowBackpressure && c.Session.InflightOverflow != InflightOverflowQueue {
+		return fmt.Errorf("session.inflight_overflow must be 0 (backpressure) or 1 (queue)")
+	}
+	if c.Session.InflightOverflow == InflightOverflowQueue && c.Session.PendingQueueSize < 1 {
+		return fmt.Errorf("session.pending_queue_size must be at least 1 when inflight_overflow is queue")
+	}
+	if c.Broker.FanOutWorkers < 0 {
+		return fmt.Errorf("broker.fan_out_workers cannot be negative")
 	}
 
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

@@ -61,6 +61,11 @@ type Broker struct {
 	offlineQueueEvict   bool
 	maxInflightMessages int
 	routePublishTimeout time.Duration
+	// Fan-out settings
+	fanOutPool  *fanOutPool // non-nil only when AsyncFanOut is true
+	asyncFanOut bool
+	// Stored for session creation
+	sessionCfg config.SessionConfig
 }
 
 // NewBroker creates a new broker instance.
@@ -72,7 +77,7 @@ type Broker struct {
 //   - webhooks: Webhook notifier (nil if webhooks disabled)
 //   - metrics: OTel metrics instance (nil if metrics disabled)
 //   - tracer: OTel tracer (nil if tracing disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig, transportCfg config.TransportConfig) *Broker {
+func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig, transportCfg config.TransportConfig, brokerCfg config.BrokerConfig) *Broker {
 	if store == nil {
 		// Fallback to memory storage if none provided
 		store = memory.New()
@@ -109,6 +114,12 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 		offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
 		maxInflightMessages: sessionCfg.MaxInflightMessages,
 		routePublishTimeout: transportCfg.RoutePublishTimeout,
+		asyncFanOut:         brokerCfg.AsyncFanOut,
+		sessionCfg:          sessionCfg,
+	}
+
+	if brokerCfg.AsyncFanOut {
+		b.fanOutPool = newFanOutPool(brokerCfg.FanOutWorkers)
 	}
 
 	b.wg.Add(2)

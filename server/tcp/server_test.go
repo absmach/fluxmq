@@ -83,7 +83,7 @@ func (c *trackingConn) Close() error {
 }
 
 func TestServerStartStop(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	cfg := Config{
@@ -109,7 +109,7 @@ func TestServerStartStop(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	cfg := Config{
@@ -143,7 +143,7 @@ func TestShutdown(t *testing.T) {
 }
 
 func TestConnectionLimit(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	maxConns := 1
@@ -177,7 +177,7 @@ func TestConnectionLimit(t *testing.T) {
 }
 
 func TestConcurrentConnections(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	cfg := Config{
@@ -220,7 +220,7 @@ func TestConcurrentConnections(t *testing.T) {
 }
 
 func TestDefaultConfigApplied(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	server := New(Config{}, b)
@@ -252,7 +252,7 @@ func TestDefaultConfigApplied(t *testing.T) {
 }
 
 func TestSendQueueConfigApplied(t *testing.T) {
-	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{})
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
 	defer b.Close()
 
 	server := New(Config{

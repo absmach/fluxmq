@@ -7,11 +7,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/config"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
+
+// pendingItem holds a message that overflowed the inflight window and is
+// waiting for an inflight slot to open before being sent on the wire.
+type pendingItem struct {
+	msg    *storage.Message
+	onSent func()
+}
 
 // State represents the session state.
 type State int
@@ -70,6 +78,16 @@ type Session struct {
 	retainAvailable      bool
 	wildcardSubAvailable bool
 	sharedSubAvailable   bool
+
+	// deliverSlots is a semaphore with capacity == inflight window size.
+	// Non-nil only when InflightOverflow == InflightOverflowBackpressure.
+	// Callers acquire a slot before adding to inflight; release on ACK.
+	deliverSlots chan struct{}
+
+	// pendingCh buffers messages that exceeded the inflight window.
+	// Non-nil only when InflightOverflow == InflightOverflowQueue.
+	// Drained into inflight as ACKs arrive; spilled to offline on disconnect.
+	pendingCh chan pendingItem
 }
 
 // Options holds options for creating a new session.
@@ -97,7 +115,7 @@ func DefaultOptions() Options {
 
 // New creates a new session with injected dependencies.
 // The inflight tracker and offline queue should be created and restored by the Manager.
-func New(clientID string, version byte, opts Options, inflight messages.Inflight, offlineQueue messages.Queue) *Session {
+func New(clientID string, version byte, opts Options, inflight messages.Inflight, offlineQueue messages.Queue, sessionCfg config.SessionConfig) *Session {
 	receiveMax := opts.ReceiveMaximum
 	if receiveMax == 0 {
 		receiveMax = 65535
@@ -126,6 +144,26 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		requestProblemInfo:   true,
 	}
 
+	inflightCap := sessionCfg.MaxInflightMessages
+	if inflightCap <= 0 {
+		inflightCap = 256
+	}
+
+	switch sessionCfg.InflightOverflow {
+	case config.InflightOverflowBackpressure:
+		slots := make(chan struct{}, inflightCap)
+		for range inflightCap {
+			slots <- struct{}{}
+		}
+		s.deliverSlots = slots
+	case config.InflightOverflowQueue:
+		pendingCap := sessionCfg.PendingQueueSize
+		if pendingCap <= 0 {
+			pendingCap = 1000
+		}
+		s.pendingCh = make(chan pendingItem, pendingCap)
+	}
+
 	return s
 }
 
@@ -146,6 +184,84 @@ func (s *Session) Connect(c core.Connection) error {
 	})
 
 	return nil
+}
+
+// AcquireDeliverSlot blocks until an inflight slot is available.
+// Only meaningful when deliverSlots is non-nil (backpressure mode).
+func (s *Session) AcquireDeliverSlot() {
+	if s.deliverSlots != nil {
+		<-s.deliverSlots
+	}
+}
+
+// ReleaseDeliverSlot returns an inflight slot, potentially unblocking a waiting sender.
+// Only meaningful when deliverSlots is non-nil (backpressure mode).
+func (s *Session) ReleaseDeliverSlot() {
+	if s.deliverSlots == nil {
+		return
+	}
+	select {
+	case s.deliverSlots <- struct{}{}:
+	default:
+		// Channel is full — this can happen if ReleaseDeliverSlot is called
+		// more times than AcquireDeliverSlot (e.g. on session reset). Safe to ignore.
+	}
+}
+
+// TryEnqueuePending attempts to push an overflow item into the pending queue.
+// Returns true on success, false if the pending queue is also full (caller drops).
+// Only meaningful when pendingCh is non-nil (pending queue mode).
+func (s *Session) TryEnqueuePending(msg *storage.Message, onSent func()) bool {
+	if s.pendingCh == nil {
+		return false
+	}
+	select {
+	case s.pendingCh <- pendingItem{msg: msg, onSent: onSent}:
+		return true
+	default:
+		return false
+	}
+}
+
+// DrainOnePending moves one pending item into the inflight tracker and sends it.
+// Called from ACK handlers to refill the pipeline after a slot opens.
+// Returns without action if there is nothing pending or the session is disconnected.
+func (s *Session) DrainOnePending(deliver func(msg *storage.Message, onSent func()) error) {
+	if s.pendingCh == nil {
+		return
+	}
+	select {
+	case item := <-s.pendingCh:
+		if err := deliver(item.msg, item.onSent); err != nil {
+			item.msg.ReleasePayload()
+			storage.ReleaseMessage(item.msg)
+		}
+	default:
+	}
+}
+
+// drainPendingToOffline moves all remaining pending messages to the offline queue.
+// Called on disconnect so QoS > 0 pending messages are preserved.
+func (s *Session) drainPendingToOffline() {
+	if s.pendingCh == nil {
+		return
+	}
+	for {
+		select {
+		case item := <-s.pendingCh:
+			if item.msg.QoS > 0 {
+				if err := s.OfflineQueue().Enqueue(item.msg); err != nil {
+					item.msg.ReleasePayload()
+					storage.ReleaseMessage(item.msg)
+				}
+			} else {
+				item.msg.ReleasePayload()
+				storage.ReleaseMessage(item.msg)
+			}
+		default:
+			return
+		}
+	}
 }
 
 // Disconnect disconnects the session.
@@ -173,6 +289,10 @@ func (s *Session) Disconnect(graceful bool) error {
 	if graceful {
 		s.Will = nil
 	}
+
+	// Move any pending (overflow) messages to the offline queue so they
+	// survive the disconnect and are delivered on next reconnect.
+	s.drainPendingToOffline()
 
 	s.msgHandler.ClearAliases()
 

@@ -123,7 +123,19 @@ broker:
   retry_interval: "20s"
   max_retries: 0
   max_qos: 2
+  async_fan_out: false    # true = send PUBCOMP immediately, fan-out in worker pool
+  fan_out_workers: 0      # worker pool size; 0 = GOMAXPROCS
 ```
+
+| Field | Default | Description |
+|---|---|---|
+| `max_message_size` | `1048576` | Maximum PUBLISH payload size in bytes. |
+| `max_retained_messages` | `10000` | Cap on retained messages in the store. |
+| `retry_interval` | `20s` | QoS 1/2 retry interval for unacknowledged outbound messages. |
+| `max_retries` | `0` | Maximum retries before dropping; 0 = unlimited. |
+| `max_qos` | `2` | Maximum QoS the broker accepts from publishers (0, 1, or 2). |
+| `async_fan_out` | `false` | When `true`, sends PUBCOMP immediately after PUBREL and dispatches subscriber fan-out to a worker pool. Improves throughput for high fan-out workloads. See [Fan-out modes](#fan-out-modes). |
+| `fan_out_workers` | `0` | Number of goroutines in the async fan-out pool. `0` = `GOMAXPROCS`. |
 
 ## Session
 
@@ -136,7 +148,21 @@ session:
   max_send_queue_size: 0           # 0 = synchronous writes, >0 = async buffered sends
   disconnect_on_full: false        # when async queue is full: false=block, true=disconnect client
   offline_queue_policy: "evict"   # evict or reject
+  inflight_overflow: 0            # 0 = backpressure, 1 = pending queue
+  pending_queue_size: 1000        # per-subscriber buffer depth when inflight_overflow=1
 ```
+
+| Field | Default | Description |
+|---|---|---|
+| `max_sessions` | `10000` | Maximum concurrent sessions. |
+| `default_expiry_interval` | `300` | Session expiry interval in seconds when the client does not set one. |
+| `max_offline_queue_size` | `1000` | Maximum QoS 1/2 messages buffered for a disconnected client. |
+| `max_inflight_messages` | `256` | Per-session inflight window size (unacknowledged outbound messages). |
+| `max_send_queue_size` | `0` | Per-connection async send queue depth. `0` = synchronous writes. |
+| `disconnect_on_full` | `false` | When the async send queue is full: `false` = block, `true` = disconnect client. |
+| `offline_queue_policy` | `evict` | `evict` drops the oldest message when full; `reject` drops the new message. |
+| `inflight_overflow` | `0` | Behavior when the inflight window is full. `0` = backpressure (block until ACK); `1` = pending queue (buffer per subscriber, drain on ACK). See [Inflight overflow](#inflight-overflow). |
+| `pending_queue_size` | `1000` | Per-subscriber pending queue depth when `inflight_overflow=1`. QoS>0 messages spill to the offline queue on disconnect. |
 
 ## Queue Manager
 
