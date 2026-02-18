@@ -281,10 +281,11 @@ func main() {
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
 
-	// Shared local pub/sub router (MQTT + AMQP 0.9.1).
+	// Shared local pub/sub router (MQTT + AMQP 0.9.1 + AMQP 1.0).
 	sharedRouter := router.NewRouter()
 	b.SetRouter(sharedRouter)
 	amqp091Broker.SetRouter(sharedRouter)
+	amqpBroker.SetRouter(sharedRouter)
 
 	var (
 		qm            *queue.Manager
@@ -462,28 +463,6 @@ func main() {
 		amqpBroker.SetQueueManager(qm)
 		amqp091Broker.SetQueueManager(qm)
 
-		// Local pub/sub dispatcher: routes to AMQP 0.9.1 or MQTT based on client ID.
-		crossDeliver := corebroker.CrossDeliverFunc(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
-			if amqpbroker.IsAMQP091Client(clientID) {
-				amqp091Broker.LocalDeliverPubSub(clientID, topic, payload, qos, props)
-				return
-			}
-			s := b.Get(clientID)
-			if s == nil {
-				return
-			}
-			msg := storage.AcquireMessage()
-			msg.Topic = topic
-			msg.QoS = qos
-			msg.Properties = props
-			msg.SetPayloadFromBytes(payload)
-			if _, err := b.DeliverToSession(s, msg); err != nil {
-				slog.Debug("cross-deliver to MQTT session failed", "client_id", clientID, "topic", topic, "error", err)
-			}
-		})
-		b.SetCrossDeliver(crossDeliver)
-		amqp091Broker.SetCrossDeliver(crossDeliver)
-
 		// Set queue handler on cluster for cross-node message routing
 		if etcdCluster != nil {
 			etcdCluster.SetQueueHandler(qm)
@@ -491,6 +470,35 @@ func main() {
 
 		slog.Info("Log-based queue initialized", "storage", "file", "dir", queueDir)
 	}
+
+	// Local pub/sub dispatcher: routes pub/sub messages to the correct protocol broker
+	// based on client ID prefix. Must live outside the queue block so it is always wired
+	// even when the queue manager is not configured.
+	crossDeliver := corebroker.CrossDeliverFunc(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+		if amqp1broker.IsAMQPClient(clientID) {
+			amqpBroker.LocalDeliverPubSub(clientID, topic, payload, qos, props)
+			return
+		}
+		if amqpbroker.IsAMQP091Client(clientID) {
+			amqp091Broker.LocalDeliverPubSub(clientID, topic, payload, qos, props)
+			return
+		}
+		s := b.Get(clientID)
+		if s == nil {
+			return
+		}
+		msg := storage.AcquireMessage()
+		msg.Topic = topic
+		msg.QoS = qos
+		msg.Properties = props
+		msg.SetPayloadFromBytes(payload)
+		if _, err := b.DeliverToSession(s, msg); err != nil {
+			slog.Debug("cross-deliver to MQTT session failed", "client_id", clientID, "topic", topic, "error", err)
+		}
+	})
+	b.SetCrossDeliver(crossDeliver)
+	amqp091Broker.SetCrossDeliver(crossDeliver)
+	amqpBroker.SetCrossDeliver(crossDeliver)
 
 	// Set cluster on AMQP brokers for cross-node pub/sub routing
 	amqpBroker.SetCluster(cl)

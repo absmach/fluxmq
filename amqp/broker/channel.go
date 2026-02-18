@@ -377,7 +377,7 @@ func (ch *Channel) completePublish() {
 	for _, b := range bindings {
 		if ch.routingKeyMatches(b.routingKey, routingKey, exchangeName) {
 			// Route to the bound queue
-			qm := ch.conn.broker.getQueueManager()
+			qm := ch.conn.broker.queueManager
 			if qm != nil {
 				queueTopic := resolver.QueueTopic(b.queue, routingKey)
 				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
@@ -875,7 +875,7 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 	ch.exchangeMu.Unlock()
 
 	if queueType == string(qtypes.QueueTypeStream) {
-		qm := ch.conn.broker.getQueueManager()
+		qm := ch.conn.broker.queueManager
 		if qm != nil {
 			queueTopicPattern := ch.conn.broker.routeResolver.QueueTopic(m.Queue, "#")
 			var cfg qtypes.QueueConfig
@@ -977,7 +977,7 @@ func (ch *Channel) handleQueueDelete(m *codec.QueueDelete) error {
 	ch.exchangeMu.Unlock()
 
 	// Unsubscribe from queue manager
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm != nil {
 		clientID := PrefixedClientID(ch.conn.connID)
 		qm.Unsubscribe(context.Background(), m.Queue, "", clientID, "")
@@ -1046,7 +1046,7 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	ch.conn.broker.stats.IncrementConsumers()
 
 	// Subscribe to the queue via queue manager
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm != nil && (isQueue || isStream) && queueName != "" {
 		clientID := PrefixedClientID(ch.conn.connID)
 		subGroupID := groupID
@@ -1073,7 +1073,7 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		if err := ch.conn.broker.router.Subscribe(clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
 			ch.conn.logger.Error("pubsub subscribe failed", "filter", queueFilter, "mqtt_filter", mqttFilter, "error", err)
 		}
-		if cl := ch.conn.broker.getCluster(); cl != nil {
+		if cl := ch.conn.broker.cluster; cl != nil {
 			if err := cl.AddSubscription(context.Background(), clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
 				ch.conn.logger.Error("cluster add subscription failed", "filter", queueFilter, "mqtt_filter", mqttFilter, "error", err)
 			}
@@ -1096,7 +1096,7 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 		ch.conn.broker.stats.DecrementConsumers()
 
 		// Unsubscribe from queue manager
-		qm := ch.conn.broker.getQueueManager()
+		qm := ch.conn.broker.queueManager
 		if qm != nil && cons.queueName != "" {
 			clientID := PrefixedClientID(ch.conn.connID)
 			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID)
@@ -1110,7 +1110,7 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 				if err := ch.conn.broker.router.Unsubscribe(clientID, cons.mqttFilter); err != nil {
 					ch.conn.logger.Warn("pubsub unsubscribe failed", "mqtt_filter", cons.mqttFilter, "error", err)
 				}
-				if cl := ch.conn.broker.getCluster(); cl != nil {
+				if cl := ch.conn.broker.cluster; cl != nil {
 					if err := cl.RemoveSubscription(context.Background(), clientID, cons.mqttFilter); err != nil {
 						ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
 					}
@@ -1218,7 +1218,7 @@ func (ch *Channel) ackDelivery(ud *unackedDelivery) {
 	if ud.messageID == "" {
 		return
 	}
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm != nil {
 		if err := qm.Ack(context.Background(), ud.queueName, ud.messageID, ud.groupID); err != nil {
 			ch.conn.logger.Warn("queue ack failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
@@ -1230,7 +1230,7 @@ func (ch *Channel) nackDelivery(ud *unackedDelivery) {
 	if ud.messageID == "" {
 		return
 	}
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm != nil {
 		if err := qm.Nack(context.Background(), ud.queueName, ud.messageID, ud.groupID); err != nil {
 			ch.conn.logger.Warn("queue nack failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
@@ -1242,7 +1242,7 @@ func (ch *Channel) rejectDelivery(ud *unackedDelivery) {
 	if ud.messageID == "" {
 		return
 	}
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm != nil {
 		if err := qm.Reject(context.Background(), ud.queueName, ud.messageID, ud.groupID, "rejected by client"); err != nil {
 			ch.conn.logger.Warn("queue reject failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
@@ -1318,7 +1318,7 @@ func (ch *Channel) cleanup() {
 	ch.consumers = make(map[string]*consumer)
 	ch.consumersMu.Unlock()
 
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	clientID := PrefixedClientID(ch.conn.connID)
 
 	for _, cons := range consumers {
@@ -1334,7 +1334,7 @@ func (ch *Channel) cleanup() {
 			if err := ch.conn.broker.router.Unsubscribe(clientID, cons.mqttFilter); err != nil {
 				ch.conn.logger.Warn("pubsub unsubscribe failed", "mqtt_filter", cons.mqttFilter, "error", err)
 			}
-			if cl := ch.conn.broker.getCluster(); cl != nil {
+			if cl := ch.conn.broker.cluster; cl != nil {
 				if err := cl.RemoveSubscription(context.Background(), clientID, cons.mqttFilter); err != nil {
 					ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
 				}
@@ -1345,7 +1345,7 @@ func (ch *Channel) cleanup() {
 
 // handleQueuePublish publishes a message to the queue manager and handles confirm mode.
 func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[string]string) {
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm == nil {
 		return
 	}
@@ -1368,7 +1368,7 @@ func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[
 
 // handleQueueCommit processes a stream offset commit routed via the resolver.
 func (ch *Channel) handleQueueCommit(route corebroker.RouteResult, header *codec.ContentHeader) {
-	qm := ch.conn.broker.getQueueManager()
+	qm := ch.conn.broker.queueManager
 	if qm == nil {
 		ch.conn.logger.Warn("queue commit ignored: queue manager not configured", "queue", route.QueueName)
 		return

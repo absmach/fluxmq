@@ -39,7 +39,6 @@ type Broker struct {
 	routePublishTimeout time.Duration
 	stats               *Stats
 	logger              *slog.Logger
-	mu                  sync.RWMutex
 }
 
 // New creates a new AMQP 0.9.1 broker.
@@ -61,41 +60,17 @@ func (b *Broker) GetStats() *Stats { return b.stats }
 
 // SetQueueManager sets the queue manager for the broker.
 func (b *Broker) SetQueueManager(qm corebroker.StreamQueueManager) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.queueManager = qm
-}
-
-func (b *Broker) getQueueManager() corebroker.StreamQueueManager {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.queueManager
 }
 
 // SetCluster sets the cluster reference for cross-node pub/sub routing.
 func (b *Broker) SetCluster(cl cluster.Cluster) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.cluster = cl
-}
-
-func (b *Broker) getCluster() cluster.Cluster {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.cluster
 }
 
 // SetCrossDeliver sets the local cross-protocol pub/sub delivery callback.
 func (b *Broker) SetCrossDeliver(fn corebroker.CrossDeliverFunc) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.crossDeliver = fn
-}
-
-func (b *Broker) getCrossDeliver() corebroker.CrossDeliverFunc {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.crossDeliver
 }
 
 // SetRouter swaps the broker router. Must be called before accepting connections.
@@ -103,15 +78,11 @@ func (b *Broker) SetRouter(r *router.TrieRouter) {
 	if r == nil {
 		return
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.router = r
 }
 
 // SetRoutePublishTimeout sets the timeout for cross-cluster publish routing.
 func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.routePublishTimeout = d
 }
 
@@ -151,12 +122,12 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 			c.deliverMessage(topic, payload, props)
 			continue
 		}
-		if fn := b.getCrossDeliver(); fn != nil {
-			fn(sub.ClientID, topic, payload, sub.QoS, props)
+		if b.crossDeliver != nil {
+			b.crossDeliver(sub.ClientID, topic, payload, sub.QoS, props)
 		}
 	}
 
-	if cl := b.getCluster(); cl != nil {
+	if cl := b.cluster; cl != nil {
 		timeout := b.routePublishTimeout
 		if timeout <= 0 {
 			timeout = 15 * time.Second

@@ -101,7 +101,7 @@ func (c *Connection) run() error {
 
 	c.broker.registerConnection(c.containerID, c)
 	c.broker.stats.IncrementConnections()
-	if m := c.broker.getMetrics(); m != nil {
+	if m := c.broker.metrics; m != nil {
 		m.RecordConnection()
 	}
 	c.logger.Info("AMQP connection opened", "container_id", c.containerID, "remote", c.conn.RemoteAddr())
@@ -154,11 +154,11 @@ func (c *Connection) handleSASL() error {
 			c.conn.WriteSASLFrame(body)
 			return fmt.Errorf("PLAIN auth failed: %w", err)
 		}
-		if auth := c.broker.getAuth(); auth != nil {
+		if auth := c.broker.auth; auth != nil {
 			ok, authErr := auth.Authenticate(username, username, password)
 			if authErr != nil || !ok {
 				c.broker.stats.IncrementAuthErrors()
-				if m := c.broker.getMetrics(); m != nil {
+				if m := c.broker.metrics; m != nil {
 					m.RecordError("auth")
 				}
 				outcome := &sasl.Outcome{Code: sasl.CodeAuth}
@@ -371,7 +371,7 @@ func (c *Connection) handleBegin(ch uint16, begin *performatives.Begin) error {
 	c.sessions[ch] = s
 
 	c.broker.stats.IncrementSessions()
-	if m := c.broker.getMetrics(); m != nil {
+	if m := c.broker.metrics; m != nil {
 		m.RecordSessionOpened()
 	}
 
@@ -414,7 +414,7 @@ func (c *Connection) handleEnd(ch uint16, end *performatives.End) error {
 	if s != nil {
 		s.cleanup()
 		c.broker.stats.DecrementSessions()
-		if m := c.broker.getMetrics(); m != nil {
+		if m := c.broker.metrics; m != nil {
 			m.RecordSessionClosed()
 		}
 	}
@@ -476,7 +476,7 @@ func (c *Connection) close(amqpErr *performatives.Error) {
 func (c *Connection) cleanup() {
 	c.close(nil)
 	c.broker.stats.DecrementConnections()
-	if m := c.broker.getMetrics(); m != nil {
+	if m := c.broker.metrics; m != nil {
 		m.RecordDisconnection()
 	}
 	c.broker.unregisterConnection(c.containerID)

@@ -13,32 +13,30 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/amqp1/message"
-	"github.com/absmach/fluxmq/broker"
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
 
-const clientIDPrefix = "amqp:"
-
 // Broker manages AMQP 1.0 connections and message routing.
 type Broker struct {
 	connections         sync.Map // containerID -> *Connection
 	router              *router.TrieRouter
-	routeResolver       *broker.RoutingResolver
-	queueManager        broker.QueueManager
+	routeResolver       *corebroker.RoutingResolver
+	queueManager        corebroker.QueueManager
 	cluster             cluster.Cluster
-	auth                *broker.AuthEngine
+	auth                *corebroker.AuthEngine
+	crossDeliver        corebroker.CrossDeliverFunc
 	stats               *Stats
 	metrics             *Metrics // nil if OTel disabled
 	logger              *slog.Logger
 	routePublishTimeout time.Duration
-	mu                  sync.RWMutex
 }
 
 // New creates a new AMQP broker.
-func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
+func New(qm corebroker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -47,7 +45,7 @@ func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
 	}
 	return &Broker{
 		router:        router.NewRouter(),
-		routeResolver: broker.NewRoutingResolver(),
+		routeResolver: corebroker.NewRoutingResolver(),
 		queueManager:  qm,
 		stats:         stats,
 		logger:        logger,
@@ -56,15 +54,7 @@ func New(qm broker.QueueManager, stats *Stats, logger *slog.Logger) *Broker {
 
 // SetMetrics sets the OTel metrics instance.
 func (b *Broker) SetMetrics(m *Metrics) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.metrics = m
-}
-
-func (b *Broker) getMetrics() *Metrics {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.metrics
 }
 
 // GetStats returns the broker's stats.
@@ -90,7 +80,8 @@ func (b *Broker) unregisterConnection(containerID string) {
 	b.connections.Delete(containerID)
 }
 
-// Publish routes a message to AMQP subscribers via the router and cluster.
+// Publish routes a message to all subscribers via the shared router.
+// AMQP 1.0 subscribers are delivered locally; others via the cross-deliver callback.
 func (b *Broker) Publish(topic string, payload []byte, props map[string]string) {
 	subs, err := b.router.Match(topic)
 	if err != nil {
@@ -99,16 +90,22 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 	}
 
 	for _, sub := range subs {
-		containerID := sub.ClientID
-		val, ok := b.connections.Load(containerID)
-		if !ok {
-			continue
+		if corebroker.IsAMQP1Client(sub.ClientID) {
+			containerID := strings.TrimPrefix(sub.ClientID, corebroker.AMQP1ClientPrefix)
+			val, ok := b.connections.Load(containerID)
+			if !ok {
+				continue
+			}
+			c := val.(*Connection)
+			c.deliverMessage(topic, payload, props, sub.QoS)
+		} else {
+			if b.crossDeliver != nil {
+				b.crossDeliver(sub.ClientID, topic, payload, sub.QoS, props)
+			}
 		}
-		c := val.(*Connection)
-		c.deliverMessage(topic, payload, props, sub.QoS)
 	}
 
-	if cl := b.getCluster(); cl != nil {
+	if cl := b.cluster; cl != nil {
 		timeout := b.routePublishTimeout
 		if timeout <= 0 {
 			timeout = 15 * time.Second
@@ -122,7 +119,7 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 }
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.
-// It matches local AMQP subscriptions and delivers without re-routing to the cluster.
+// It delivers only to local AMQP 1.0 subscribers without re-routing to the cluster.
 func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
 	subs, err := b.router.Match(msg.Topic)
 	if err != nil {
@@ -130,7 +127,11 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	}
 
 	for _, sub := range subs {
-		val, ok := b.connections.Load(sub.ClientID)
+		if !corebroker.IsAMQP1Client(sub.ClientID) {
+			continue
+		}
+		containerID := strings.TrimPrefix(sub.ClientID, corebroker.AMQP1ClientPrefix)
+		val, ok := b.connections.Load(containerID)
 		if !ok {
 			continue
 		}
@@ -141,11 +142,23 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	return nil
 }
 
+// LocalDeliverPubSub delivers a pub/sub message to a specific local AMQP 1.0 connection.
+// Called by the cross-deliver callback from other protocol brokers.
+func (b *Broker) LocalDeliverPubSub(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
+	val, ok := b.connections.Load(containerID)
+	if !ok {
+		return
+	}
+	c := val.(*Connection)
+	c.deliverMessage(topic, payload, props, qos)
+}
+
 // DeliverToClient delivers a queue message to a specific AMQP client.
 // clientID must have the "amqp:" prefix already stripped.
 func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) error {
 	// Strip the amqp: prefix to get the container ID
-	containerID := strings.TrimPrefix(clientID, clientIDPrefix)
+	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
 
 	val, ok := b.connections.Load(containerID)
 	if !ok {
@@ -187,21 +200,17 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 
 // SetCluster sets the cluster reference for cross-node pub/sub routing.
 func (b *Broker) SetCluster(cl cluster.Cluster) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.cluster = cl
 }
 
 // SetRoutePublishTimeout sets the timeout for cross-cluster publish routing.
 func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.routePublishTimeout = d
 }
 
 // DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP client.
 func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
-	containerID := strings.TrimPrefix(clientID, clientIDPrefix)
+	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
 	val, ok := b.connections.Load(containerID)
 	if !ok {
 		return fmt.Errorf("AMQP client not found: %s", containerID)
@@ -212,35 +221,26 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 }
 
 // SetQueueManager sets the queue manager for the AMQP broker.
-func (b *Broker) SetQueueManager(qm broker.QueueManager) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *Broker) SetQueueManager(qm corebroker.QueueManager) {
 	b.queueManager = qm
 }
 
 // SetAuthEngine sets the authentication and authorization engine.
-func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *Broker) SetAuthEngine(auth *corebroker.AuthEngine) {
 	b.auth = auth
 }
 
-func (b *Broker) getCluster() cluster.Cluster {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.cluster
+// SetRouter replaces the router used for local pub/sub matching.
+// Must be called before the broker starts accepting connections.
+func (b *Broker) SetRouter(r *router.TrieRouter) {
+	b.router = r
 }
 
-func (b *Broker) getAuth() *broker.AuthEngine {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.auth
-}
-
-func (b *Broker) getQueueManager() broker.QueueManager {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.queueManager
+// SetCrossDeliver sets the callback invoked to deliver pub/sub messages to
+// other-protocol clients that share the same router.
+// Must be called before the broker starts accepting connections.
+func (b *Broker) SetCrossDeliver(fn corebroker.CrossDeliverFunc) {
+	b.crossDeliver = fn
 }
 
 // Close shuts down the broker and all connections.
@@ -252,12 +252,12 @@ func (b *Broker) Close() {
 	})
 }
 
-// PrefixedClientID returns a client ID with the AMQP prefix for use in the QueueManager.
+// PrefixedClientID returns a client ID with the AMQP 1.0 prefix.
 func PrefixedClientID(containerID string) string {
-	return clientIDPrefix + containerID
+	return corebroker.PrefixedAMQP1ClientID(containerID)
 }
 
-// IsAMQPClient checks if a client ID belongs to an AMQP client.
+// IsAMQPClient checks if a client ID belongs to an AMQP 1.0 client.
 func IsAMQPClient(clientID string) bool {
-	return strings.HasPrefix(clientID, clientIDPrefix)
+	return corebroker.IsAMQP1Client(clientID)
 }

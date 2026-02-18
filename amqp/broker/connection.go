@@ -87,7 +87,7 @@ func (c *Connection) run() error {
 	c.connID = c.conn.RemoteAddr().String()
 	c.broker.registerConnection(c.connID, c)
 	c.broker.stats.IncrementConnections()
-	if cl := c.broker.getCluster(); cl != nil {
+	if cl := c.broker.cluster; cl != nil {
 		clientID := PrefixedClientID(c.connID)
 		if err := cl.AcquireSession(context.Background(), clientID, cl.NodeID()); err != nil {
 			c.logger.Warn("AMQP 0.9.1 acquire session ownership failed", "client_id", clientID, "error", err)
@@ -461,7 +461,7 @@ func (c *Connection) cleanup() {
 
 	c.broker.stats.DecrementConnections()
 	if c.connID != "" {
-		if cl := c.broker.getCluster(); cl != nil {
+		if cl := c.broker.cluster; cl != nil {
 			clientID := PrefixedClientID(c.connID)
 			if err := cl.RemoveAllSubscriptions(context.Background(), clientID); err != nil {
 				c.logger.Warn("AMQP 0.9.1 remove all subscriptions failed", "client_id", clientID, "error", err)

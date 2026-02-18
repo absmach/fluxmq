@@ -29,7 +29,7 @@ const (
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	sessionLocks  keyLock
-	globalMu      sync.Mutex // protects lifecycle (Close, SetQueueManager, transferActiveSessions, expireSessions)
+	globalMu      sync.Mutex // protects lifecycle (Close, transferActiveSessions, expireSessions)
 	wg            sync.WaitGroup
 	sessionsMap   session.Cache
 	router        Router
@@ -119,23 +119,17 @@ func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, sta
 }
 
 // SetQueueManager sets the queue manager for the broker.
-// This should be called before the broker starts accepting connections.
+// Must be called before the broker starts accepting connections.
 func (b *Broker) SetQueueManager(qm broker.QueueManager) error {
-	b.globalMu.Lock()
-	defer b.globalMu.Unlock()
-
 	b.queueManager = qm
-
-	// Start queue manager
 	if qm != nil {
 		return qm.Start(context.Background())
 	}
-
 	return nil
 }
 
 // SetRouter sets the topic router used for local pub/sub matching.
-// It should be configured before the broker starts accepting connections.
+// Must be called before the broker starts accepting connections.
 func (b *Broker) SetRouter(r Router) {
 	if r == nil {
 		return
@@ -144,14 +138,13 @@ func (b *Broker) SetRouter(r Router) {
 }
 
 // SetCrossDeliver sets the local cross-protocol pub/sub delivery callback.
+// Must be called before the broker starts accepting connections.
 func (b *Broker) SetCrossDeliver(fn broker.CrossDeliverFunc) {
 	b.crossDeliver = fn
 }
 
 // GetQueueManager returns the queue manager.
 func (b *Broker) GetQueueManager() broker.QueueManager {
-	b.globalMu.Lock()
-	defer b.globalMu.Unlock()
 	return b.queueManager
 }
 

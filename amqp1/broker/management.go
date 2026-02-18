@@ -69,7 +69,7 @@ func (h *managementHandler) handleCreate(ctx context.Context, req *message.Messa
 		return h.errorResponse(req, statusError, "name is required for CREATE")
 	}
 
-	qm := h.broker.getQueueManager()
+	qm := h.broker.queueManager
 	if qm == nil {
 		return h.errorResponse(req, statusError, "queue manager not available")
 	}
@@ -103,7 +103,7 @@ func (h *managementHandler) handleDelete(ctx context.Context, req *message.Messa
 		return h.errorResponse(req, statusError, "name is required for DELETE")
 	}
 
-	qm := h.broker.getQueueManager()
+	qm := h.broker.queueManager
 	if qm == nil {
 		return h.errorResponse(req, statusError, "queue manager not available")
 	}
@@ -131,7 +131,7 @@ func (h *managementHandler) handleRead(ctx context.Context, req *message.Message
 		return h.errorResponse(req, statusError, "name is required for READ")
 	}
 
-	qm := h.broker.getQueueManager()
+	qm := h.broker.queueManager
 	if qm == nil {
 		return h.errorResponse(req, statusError, "queue manager not available")
 	}
@@ -156,7 +156,7 @@ func (h *managementHandler) handleRead(ctx context.Context, req *message.Message
 }
 
 func (h *managementHandler) handleQuery(ctx context.Context, req *message.Message) *message.Message {
-	qm := h.broker.getQueueManager()
+	qm := h.broker.queueManager
 	if qm == nil {
 		return h.errorResponse(req, statusError, "queue manager not available")
 	}

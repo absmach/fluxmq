@@ -290,7 +290,7 @@ func (b *Broker) distributeLocalScoped(msg *storage.Message, allowCross bool) er
 				continue
 			}
 		} else {
-			if broker.IsAMQP091Client(clientID) {
+			if broker.IsAMQP091Client(clientID) || broker.IsAMQP1Client(clientID) {
 				if allowCross && b.crossDeliver != nil {
 					b.crossDeliver(clientID, msg.Topic, msg.GetPayload(), sub.QoS, msg.Properties)
 				}

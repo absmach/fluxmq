@@ -175,7 +175,7 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 	s.linksMu.Unlock()
 
 	s.conn.broker.stats.IncrementLinks()
-	if m := s.conn.broker.getMetrics(); m != nil {
+	if m := s.conn.broker.metrics; m != nil {
 		m.RecordLinkAttached()
 	}
 
@@ -223,7 +223,7 @@ func (s *Session) handleAttach(attach *performatives.Attach) error {
 	} else if attach.Role { // client is receiver -> we are sender
 		link.subscribe()
 		s.conn.broker.stats.IncrementSubscriptions()
-		if m := s.conn.broker.getMetrics(); m != nil {
+		if m := s.conn.broker.metrics; m != nil {
 			m.RecordSubscriptionAdded()
 		}
 	} else {
@@ -275,7 +275,7 @@ func (s *Session) handleTransfer(transfer *performatives.Transfer, payload []byt
 	if !s.trackIncomingTransfer(transfer.DeliveryID) {
 		s.conn.logger.Warn("incoming transfer exceeds window, dropping")
 		s.conn.broker.stats.IncrementProtocolErrors()
-		if m := s.conn.broker.getMetrics(); m != nil {
+		if m := s.conn.broker.metrics; m != nil {
 			m.RecordError("window_exceeded")
 		}
 		return
@@ -310,12 +310,12 @@ func (s *Session) handleDetach(detach *performatives.Detach) {
 	if link != nil {
 		link.detach()
 		s.conn.broker.stats.DecrementLinks()
-		if m := s.conn.broker.getMetrics(); m != nil {
+		if m := s.conn.broker.metrics; m != nil {
 			m.RecordLinkDetached()
 		}
 		if link.isSender {
 			s.conn.broker.stats.DecrementSubscriptions()
-			if m := s.conn.broker.getMetrics(); m != nil {
+			if m := s.conn.broker.metrics; m != nil {
 				m.RecordSubscriptionRemoved()
 			}
 		}

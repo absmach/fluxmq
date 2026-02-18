@@ -14,6 +14,7 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // Link represents an AMQP link (sender or receiver from the broker's perspective).
@@ -145,7 +146,7 @@ func parseCursor(val any) *qtypes.CursorOption {
 // subscribe registers this link with the router or queue manager.
 func (l *Link) subscribe() {
 	// Check subscribe authorization
-	auth := l.session.conn.broker.getAuth()
+	auth := l.session.conn.broker.auth
 	if auth != nil {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		if !auth.CanSubscribe(clientID, l.address) {
@@ -157,7 +158,7 @@ func (l *Link) subscribe() {
 	if l.isQueue {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()
-		qm := l.session.conn.broker.getQueueManager()
+		qm := l.session.conn.broker.queueManager
 		if qm == nil {
 			l.logger.Warn("queue manager not available for subscription", "address", l.address)
 			return
@@ -180,17 +181,19 @@ func (l *Link) subscribe() {
 			}
 		}
 	} else {
-		// Regular pub/sub via the AMQP router
+		// Regular pub/sub via the shared router.
+		// Translate AMQP address (dot-separated, * wildcard) to MQTT filter (slash-separated, + wildcard).
+		mqttFilter := topics.AMQPFilterToMQTT(l.address)
+		clientID := PrefixedClientID(l.session.conn.containerID)
 		l.session.conn.broker.router.Subscribe(
-			l.session.conn.containerID,
-			l.address,
+			clientID,
+			mqttFilter,
 			1, // default QoS
 			storage.SubscribeOptions{},
 		)
 
-		if cl := l.session.conn.broker.getCluster(); cl != nil {
-			clientID := PrefixedClientID(l.session.conn.containerID)
-			if err := cl.AddSubscription(context.Background(), clientID, l.address, 1, storage.SubscribeOptions{}); err != nil {
+		if cl := l.session.conn.broker.cluster; cl != nil {
+			if err := cl.AddSubscription(context.Background(), clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
 				l.logger.Error("cluster add subscription failed", "address", l.address, "error", err)
 			}
 		}
@@ -202,16 +205,17 @@ func (l *Link) detach() {
 	if l.isQueue {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()
-		qm := l.session.conn.broker.getQueueManager()
+		qm := l.session.conn.broker.queueManager
 		if qm != nil {
 			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup)
 		}
 	} else if l.isSender {
-		l.session.conn.broker.router.Unsubscribe(l.session.conn.containerID, l.address)
+		mqttFilter := topics.AMQPFilterToMQTT(l.address)
+		clientID := PrefixedClientID(l.session.conn.containerID)
+		l.session.conn.broker.router.Unsubscribe(clientID, mqttFilter)
 
-		if cl := l.session.conn.broker.getCluster(); cl != nil {
-			clientID := PrefixedClientID(l.session.conn.containerID)
-			if err := cl.RemoveSubscription(context.Background(), clientID, l.address); err != nil {
+		if cl := l.session.conn.broker.cluster; cl != nil {
+			if err := cl.RemoveSubscription(context.Background(), clientID, mqttFilter); err != nil {
 				l.logger.Error("cluster remove subscription failed", "address", l.address, "error", err)
 			}
 		}
@@ -235,7 +239,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 
 	l.session.conn.broker.stats.IncrementMessagesReceived()
 	l.session.conn.broker.stats.AddBytesReceived(uint64(len(payload)))
-	if m := l.session.conn.broker.getMetrics(); m != nil {
+	if m := l.session.conn.broker.metrics; m != nil {
 		m.RecordMessageReceived(int64(len(payload)))
 	}
 
@@ -252,7 +256,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	}
 
 	// Check publish authorization
-	auth := l.session.conn.broker.getAuth()
+	auth := l.session.conn.broker.auth
 	if auth != nil {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		if !auth.CanPublish(clientID, topic) {
@@ -264,7 +268,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	resolver := l.session.conn.broker.routeResolver
 	topicRoute := resolver.Resolve(topic)
 	if l.isQueue || topicRoute.Kind == corebroker.RouteQueue {
-		qm := l.session.conn.broker.getQueueManager()
+		qm := l.session.conn.broker.queueManager
 		if qm != nil {
 			publishTopic := topic
 			if l.capabilityBased && topicRoute.Kind != corebroker.RouteQueue {
@@ -290,14 +294,15 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 			}
 		}
 	} else {
-		// Publish to AMQP router (pub/sub)
+		// Publish to shared router (pub/sub).
+		// Translate AMQP routing key (dot-separated) to MQTT topic (slash-separated).
 		props := make(map[string]string)
 		for k, v := range msg.ApplicationProperties {
 			if s, ok := v.(string); ok {
 				props[k] = s
 			}
 		}
-		l.session.conn.broker.Publish(topic, data, props)
+		l.session.conn.broker.Publish(topics.AMQPTopicToMQTT(topic), data, props)
 	}
 
 	// Settle if pre-settled by sender
@@ -374,7 +379,7 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 
 	l.session.conn.broker.stats.IncrementMessagesSent()
 	l.session.conn.broker.stats.AddBytesSent(uint64(len(msgBytes)))
-	if m := l.session.conn.broker.getMetrics(); m != nil {
+	if m := l.session.conn.broker.metrics; m != nil {
 		m.RecordMessageSent(int64(len(msgBytes)))
 	}
 
@@ -435,7 +440,7 @@ func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
 
 	l.session.conn.broker.stats.IncrementMessagesSent()
 	l.session.conn.broker.stats.AddBytesSent(uint64(len(msgBytes)))
-	if m := l.session.conn.broker.getMetrics(); m != nil {
+	if m := l.session.conn.broker.metrics; m != nil {
 		m.RecordMessageSent(int64(len(msgBytes)))
 	}
 
@@ -467,7 +472,7 @@ func (l *Link) handleDisposition(disp *performatives.Disposition) {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
 
-	qm := l.session.conn.broker.getQueueManager()
+	qm := l.session.conn.broker.queueManager
 
 	for id := first; id <= last; id++ {
 		pd, ok := l.pending[id]
