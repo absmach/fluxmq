@@ -4,15 +4,17 @@
   "pattern": "fanin",
   "flow": "mqtt-mqtt",
   "topic": "perf/topic/config/fanin/mqtt-mqtt/{run_id}",
-  "qos": 1,
-  "publishers": 300,
+  "qos": 2,
+  "publishers": 1000,
   "messages_per_publisher": 100,
-  "publish_interval": "500ms",
+  "publish_interval": "5s",
+  "publish_jitter": "2s",
   "subscribers": 1000,
-  "wildcard_subscribers": 10,
+  "wildcard_subscribers": 100,
   "wildcard_patterns": [
     "{topic}",
     "{base}/#"
   ],
-  "drain_timeout": "2m"
+  "payload_bytes": 4096,
+  "drain_timeout": "5m"
 }

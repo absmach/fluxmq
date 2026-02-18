@@ -92,7 +92,8 @@ make run-perf \
   PERF_PUBLISHERS=5000 \
   PERF_SUBSCRIBERS=100 \
   PERF_MESSAGES_PER_PUBLISHER=600 \
-  PERF_PUBLISH_INTERVAL=100ms
+  PERF_PUBLISH_INTERVAL=100ms \
+  PERF_PUBLISH_JITTER=25ms
 
 # Use explicit payload bytes and write JSON result line
 make run-perf \
@@ -127,6 +128,7 @@ Supported JSON fields:
 - `publishers`
 - `messages_per_publisher`
 - `publish_interval` (Go duration, e.g. `100ms`)
+- `publish_jitter` (Go duration; per-publisher random jitter for cadence and initial start stagger)
 - `subscribers`
 - `topic_count` (fan-out)
 - `wildcard_subscribers` (randomly picked subscriber count)
@@ -192,6 +194,7 @@ Set variables inline before `make perf-suite`.
 | `PERF_SUBSCRIBERS`            | config value                                      | Override concurrent subscribers/consumers               |
 | `PERF_MESSAGES_PER_PUBLISHER` | config value                                      | Override per-publisher message count                    |
 | `PERF_PUBLISH_INTERVAL`       | config value                                      | Delay between publishes per publisher                   |
+| `PERF_PUBLISH_JITTER`         | `0`                                               | Random per-publisher cadence jitter (`+/- duration`)    |
 | `PERF_MQTT_ADDRS`             | `127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885` | MQTT endpoints                                          |
 | `PERF_AMQP_ADDRS`             | `127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684` | AMQP 0.9.1 endpoints                                    |
 | `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for non-queue topic scenarios            |
@@ -219,6 +222,7 @@ make run-perf \
   PERF_SUBSCRIBERS=100 \
   PERF_MESSAGES_PER_PUBLISHER=600 \
   PERF_PUBLISH_INTERVAL=100ms \
+  PERF_PUBLISH_JITTER=25ms \
   PERF_DRAIN_TIMEOUT=120s
 ```
 

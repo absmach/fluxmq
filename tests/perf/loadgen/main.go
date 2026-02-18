@@ -59,6 +59,7 @@ type runConfig struct {
 	ConsumersPerGroup    int
 	MessagesPerPublisher int
 	PublishInterval      time.Duration
+	PublishJitter        time.Duration
 }
 
 type topicScenarioConfig struct {
@@ -71,6 +72,7 @@ type topicScenarioConfig struct {
 	Publishers           int      `json:"publishers"`
 	MessagesPerPublisher int      `json:"messages_per_publisher"`
 	PublishInterval      string   `json:"publish_interval,omitempty"`
+	PublishJitter        string   `json:"publish_jitter,omitempty"`
 	Topic                string   `json:"topic,omitempty"`
 	TopicCount           int      `json:"topic_count,omitempty"`
 	Subscribers          int      `json:"subscribers"`
@@ -81,6 +83,7 @@ type topicScenarioConfig struct {
 	PayloadBytes         int      `json:"payload_bytes,omitempty"`
 
 	resolvedPublishInterval time.Duration
+	resolvedPublishJitter   time.Duration
 	resolvedDrainTimeout    time.Duration
 	resolvedPublisherProto  string
 	resolvedSubscriberProto string
@@ -217,6 +220,7 @@ func main() {
 	consumersPerGroupFlag := flag.Int("consumers-per-group", 0, "Override consumers per consumer group")
 	messagesPerPublisherFlag := flag.Int("messages-per-publisher", 0, "Override messages each publisher sends")
 	publishIntervalFlag := flag.Duration("publish-interval", 0, "Pause between each publish per publisher (e.g. 5ms)")
+	publishJitterFlag := flag.Duration("publish-jitter", 0, "Per-publisher random jitter for publish cadence (uniform +/- duration) plus initial start stagger (0..duration)")
 	minRatioFlag := flag.Float64("min-ratio", 0.95, "Minimum delivery ratio for non-queue topic scenarios")
 	queueMinRatioFlag := flag.Float64("queue-min-ratio", 0.99, "Minimum delivery ratio for queue/bridge-queue scenarios")
 	drainTimeoutFlag := flag.Duration("drain-timeout", 45*time.Second, "Max wait time for message drain after publishers finish")
@@ -276,6 +280,7 @@ func main() {
 		ConsumersPerGroup:    *consumersPerGroupFlag,
 		MessagesPerPublisher: *messagesPerPublisherFlag,
 		PublishInterval:      *publishIntervalFlag,
+		PublishJitter:        *publishJitterFlag,
 	}
 
 	start := time.Now()
@@ -477,6 +482,13 @@ func normalizeTopicScenarioConfig(cfg topicScenarioConfig, path string) (topicSc
 		}
 		cfg.resolvedPublishInterval = d
 	}
+	if cfg.PublishJitter != "" {
+		d, err := time.ParseDuration(cfg.PublishJitter)
+		if err != nil {
+			return topicScenarioConfig{}, fmt.Errorf("config %q has invalid publish_jitter %q: %w", cfg.Name, cfg.PublishJitter, err)
+		}
+		cfg.resolvedPublishJitter = d
+	}
 
 	if cfg.DrainTimeout != "" {
 		d, err := time.ParseDuration(cfg.DrainTimeout)
@@ -516,6 +528,9 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	}
 	if cfg.PublishInterval > 0 {
 		sc.resolvedPublishInterval = cfg.PublishInterval
+	}
+	if cfg.PublishJitter > 0 {
+		sc.resolvedPublishJitter = cfg.PublishJitter
 	}
 	if sc.resolvedDrainTimeout > 0 {
 		cfg.DrainTimeout = sc.resolvedDrainTimeout
@@ -617,6 +632,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 			MessagesPerPublisher: sc.MessagesPerPublisher,
 			PayloadSize:          cfg.PayloadBytes,
 			PublishInterval:      resolvedPublishInterval(cfg.PublishInterval, sc.resolvedPublishInterval),
+			PublishJitter:        resolvedPublishJitter(cfg.PublishJitter, sc.resolvedPublishJitter),
 			TopicFor:             topicFor,
 			OnPublished:          onPublished,
 			ErrCount:             &errCount,
@@ -632,6 +648,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 			MessagesPerPublisher: sc.MessagesPerPublisher,
 			PayloadSize:          cfg.PayloadBytes,
 			PublishInterval:      resolvedPublishInterval(cfg.PublishInterval, sc.resolvedPublishInterval),
+			PublishJitter:        resolvedPublishJitter(cfg.PublishJitter, sc.resolvedPublishJitter),
 			TopicFor:             topicFor,
 			OnPublished:          onPublished,
 			ErrCount:             &errCount,
@@ -661,6 +678,13 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 }
 
 func resolvedPublishInterval(flagValue, cfgValue time.Duration) time.Duration {
+	if cfgValue > 0 {
+		return cfgValue
+	}
+	return flagValue
+}
+
+func resolvedPublishJitter(flagValue, cfgValue time.Duration) time.Duration {
 	if cfgValue > 0 {
 		return cfgValue
 	}
@@ -808,6 +832,7 @@ func runMQTTTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		TopicFor: func(_ int, _ int) string {
 			return topic
 		},
@@ -878,6 +903,7 @@ func runAMQPTopicScenario(ctx context.Context, cfg runConfig, scenarioName strin
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		TopicFor: func(_ int, _ int) string {
 			return topic
 		},
@@ -1037,6 +1063,7 @@ func runMQTTSubscriptionStorm(ctx context.Context, cfg runConfig) (scenarioResul
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		TopicFor: func(pubIdx, msgIdx int) string {
 			return stormTopics[(pubIdx*97+msgIdx)%len(stormTopics)]
 		},
@@ -1143,6 +1170,7 @@ func runQueueFanin(ctx context.Context, cfg runConfig) (scenarioResult, error) {
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -1251,6 +1279,7 @@ func runQueueFanout(ctx context.Context, cfg runConfig) (scenarioResult, error) 
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -1363,6 +1392,7 @@ func runBridgeQueueMQTTToAMQP(ctx context.Context, cfg runConfig) (scenarioResul
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -1452,6 +1482,7 @@ func runBridgeQueueAMQPToMQTT(ctx context.Context, cfg runConfig) (scenarioResul
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -1560,6 +1591,7 @@ func runMQTTConsumerGroups(ctx context.Context, cfg runConfig, scenarioName stri
 		MessagesPerPublisher: workload.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -1688,6 +1720,7 @@ func runAMQP091ConsumerGroups(ctx context.Context, cfg runConfig) (scenarioResul
 		MessagesPerPublisher: w.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -1822,6 +1855,7 @@ func runMQTTSharedSubscriptions(ctx context.Context, cfg runConfig) (scenarioRes
 		MessagesPerPublisher: w.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		TopicFor: func(_ int, _ int) string {
 			return topic
 		},
@@ -2023,6 +2057,7 @@ func runAMQP091StreamCursor(ctx context.Context, cfg runConfig) (scenarioResult,
 		MessagesPerPublisher: w.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		ErrCount:             &errCount,
 		PublishedCounter:     &sent,
 	})
@@ -2198,6 +2233,7 @@ func runAMQP091RetentionPolicies(ctx context.Context, cfg runConfig) (scenarioRe
 		MessagesPerPublisher: w.MessagesPerPublisher,
 		PayloadSize:          cfg.PayloadBytes,
 		PublishInterval:      cfg.PublishInterval,
+		PublishJitter:        cfg.PublishJitter,
 		MsgIDFor: func(pubIdx, msgIdx int) string {
 			return fmt.Sprintf("ret-%08d", pubIdx*w.MessagesPerPublisher+msgIdx)
 		},
@@ -2408,11 +2444,53 @@ type mqttPublishParams struct {
 	MessagesPerPublisher int
 	PayloadSize          int
 	PublishInterval      time.Duration
+	PublishJitter        time.Duration
 	TopicFor             func(pubIdx, msgIdx int) string
 	OnPublished          func(topic string)
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
 	QoS                  byte
+}
+
+func newPublishRNG(runID int64, publisherIdx int) *rand.Rand {
+	seed := runID + int64(publisherIdx+1)*104729
+	return rand.New(rand.NewSource(seed))
+}
+
+func initialPublishDelay(jitter time.Duration, rng *rand.Rand) time.Duration {
+	if jitter <= 0 || rng == nil {
+		return 0
+	}
+	return time.Duration(rng.Int63n(int64(jitter) + 1))
+}
+
+func jitteredPublishInterval(base, jitter time.Duration, rng *rand.Rand) time.Duration {
+	if base < 0 {
+		base = 0
+	}
+	if jitter <= 0 || rng == nil {
+		return base
+	}
+	delta := time.Duration(rng.Int63n(int64(jitter)*2+1)) - jitter
+	next := base + delta
+	if next < 0 {
+		return 0
+	}
+	return next
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
@@ -2444,6 +2522,11 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 		wg.Add(1)
 		go func(idx int, client *mqttclient.Client) {
 			defer wg.Done()
+			rng := newPublishRNG(params.RunID, idx)
+			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
+				return
+			}
+
 			for msgIdx := 0; msgIdx < params.MessagesPerPublisher; msgIdx++ {
 				select {
 				case <-ctx.Done():
@@ -2463,8 +2546,8 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 				if params.OnPublished != nil {
 					params.OnPublished(topic)
 				}
-				if params.PublishInterval > 0 {
-					time.Sleep(params.PublishInterval)
+				if !sleepWithContext(ctx, jitteredPublishInterval(params.PublishInterval, params.PublishJitter, rng)) {
+					return
 				}
 			}
 		}(pubIdx, c)
@@ -2482,6 +2565,7 @@ type mqttQueuePublishParams struct {
 	MessagesPerPublisher int
 	PayloadSize          int
 	PublishInterval      time.Duration
+	PublishJitter        time.Duration
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
 }
@@ -2511,6 +2595,11 @@ func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) 
 		wg.Add(1)
 		go func(idx int, client *mqttclient.Client) {
 			defer wg.Done()
+			rng := newPublishRNG(params.RunID, idx)
+			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
+				return
+			}
+
 			for msgIdx := 0; msgIdx < params.MessagesPerPublisher; msgIdx++ {
 				select {
 				case <-ctx.Done():
@@ -2531,8 +2620,8 @@ func runMQTTQueuePublishers(ctx context.Context, params mqttQueuePublishParams) 
 					continue
 				}
 				counter.Add(1)
-				if params.PublishInterval > 0 {
-					time.Sleep(params.PublishInterval)
+				if !sleepWithContext(ctx, jitteredPublishInterval(params.PublishInterval, params.PublishJitter, rng)) {
+					return
 				}
 			}
 		}(pubIdx, c)
@@ -2549,6 +2638,7 @@ type amqpTopicPublishParams struct {
 	MessagesPerPublisher int
 	PayloadSize          int
 	PublishInterval      time.Duration
+	PublishJitter        time.Duration
 	TopicFor             func(pubIdx, msgIdx int) string
 	OnPublished          func(topic string)
 	ErrCount             *atomic.Int64
@@ -2579,6 +2669,11 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 		wg.Add(1)
 		go func(idx int, client *amqpclient.Client) {
 			defer wg.Done()
+			rng := newPublishRNG(params.RunID, idx)
+			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
+				return
+			}
+
 			for msgIdx := 0; msgIdx < params.MessagesPerPublisher; msgIdx++ {
 				select {
 				case <-ctx.Done():
@@ -2598,8 +2693,8 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 				if params.OnPublished != nil {
 					params.OnPublished(topic)
 				}
-				if params.PublishInterval > 0 {
-					time.Sleep(params.PublishInterval)
+				if !sleepWithContext(ctx, jitteredPublishInterval(params.PublishInterval, params.PublishJitter, rng)) {
+					return
 				}
 			}
 		}(pubIdx, c)
@@ -2617,6 +2712,7 @@ type amqpQueuePublishParams struct {
 	MessagesPerPublisher int
 	PayloadSize          int
 	PublishInterval      time.Duration
+	PublishJitter        time.Duration
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
 }
@@ -2645,6 +2741,11 @@ func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) 
 		wg.Add(1)
 		go func(idx int, client *amqpclient.Client) {
 			defer wg.Done()
+			rng := newPublishRNG(params.RunID, idx)
+			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
+				return
+			}
+
 			for msgIdx := 0; msgIdx < params.MessagesPerPublisher; msgIdx++ {
 				select {
 				case <-ctx.Done():
@@ -2664,8 +2765,8 @@ func runAMQPQueuePublishers(ctx context.Context, params amqpQueuePublishParams) 
 					continue
 				}
 				counter.Add(1)
-				if params.PublishInterval > 0 {
-					time.Sleep(params.PublishInterval)
+				if !sleepWithContext(ctx, jitteredPublishInterval(params.PublishInterval, params.PublishJitter, rng)) {
+					return
 				}
 			}
 		}(pubIdx, c)
@@ -2683,6 +2784,7 @@ type amqpStreamPublishParams struct {
 	MessagesPerPublisher int
 	PayloadSize          int
 	PublishInterval      time.Duration
+	PublishJitter        time.Duration
 	MsgIDFor             func(pubIdx, msgIdx int) string
 	OnPublished          func(msgID string)
 	ErrCount             *atomic.Int64
@@ -2713,6 +2815,11 @@ func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams
 		wg.Add(1)
 		go func(idx int, client *amqpclient.Client) {
 			defer wg.Done()
+			rng := newPublishRNG(params.RunID, idx)
+			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
+				return
+			}
+
 			for msgIdx := 0; msgIdx < params.MessagesPerPublisher; msgIdx++ {
 				select {
 				case <-ctx.Done():
@@ -2734,8 +2841,8 @@ func runAMQPStreamPublishers(ctx context.Context, params amqpStreamPublishParams
 				if params.OnPublished != nil {
 					params.OnPublished(msgID)
 				}
-				if params.PublishInterval > 0 {
-					time.Sleep(params.PublishInterval)
+				if !sleepWithContext(ctx, jitteredPublishInterval(params.PublishInterval, params.PublishJitter, rng)) {
+					return
 				}
 			}
 		}(pubIdx, c)

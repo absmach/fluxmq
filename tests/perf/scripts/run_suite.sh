@@ -26,6 +26,7 @@ PUBLISHERS="${PERF_PUBLISHERS:-}"
 SUBSCRIBERS="${PERF_SUBSCRIBERS:-}"
 MESSAGES_PER_PUBLISHER="${PERF_MESSAGES_PER_PUBLISHER:-}"
 PUBLISH_INTERVAL="${PERF_PUBLISH_INTERVAL:-}"
+PUBLISH_JITTER="${PERF_PUBLISH_JITTER:-}"
 
 LOG_FILE="$RESULTS_DIR/clients_suite_configs_${TIMESTAMP}.log"
 JSON_FILE="$RESULTS_DIR/clients_suite_configs_${TIMESTAMP}.jsonl"
@@ -102,6 +103,7 @@ for scenario_config in "${SCENARIO_CONFIGS[@]}"; do
 			if [[ -n "$SUBSCRIBERS" ]]; then cmd+=( -subscribers "$SUBSCRIBERS" ); fi
 			if [[ -n "$MESSAGES_PER_PUBLISHER" ]]; then cmd+=( -messages-per-publisher "$MESSAGES_PER_PUBLISHER" ); fi
 			if [[ -n "$PUBLISH_INTERVAL" ]]; then cmd+=( -publish-interval "$PUBLISH_INTERVAL" ); fi
+			if [[ -n "$PUBLISH_JITTER" ]]; then cmd+=( -publish-jitter "$PUBLISH_JITTER" ); fi
 
 			echo ">> ${cmd[*]}" | tee -a "$LOG_FILE"
 			"${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"
