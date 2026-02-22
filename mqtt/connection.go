@@ -4,6 +4,7 @@
 package mqtt
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net"
@@ -58,11 +59,16 @@ type sendItem struct {
 	onSent func()
 }
 
+// sendBufSize is the size of the bufio.Writer used by the sendLoop
+// to coalesce multiple packets into fewer syscalls.
+const sendBufSize = 32 * 1024
+
 // connection wraps a net.Conn and provides MQTT packet-level I/O with state management.
 type connection struct {
 	conn    net.Conn
 	reader  io.Reader
-	version int // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
+	writer  *bufio.Writer // buffered writer for sendLoop; nil in sync mode
+	version int           // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
 
 	mu sync.RWMutex
 
@@ -75,7 +81,7 @@ type connection struct {
 	disconnectOnFull bool
 	closed           atomic.Bool
 
-	lastActivity time.Time
+	lastActivity atomic.Int64 // UnixNano timestamp; updated lock-free by Touch()
 
 	onDisconnect func(graceful bool)
 }
@@ -97,6 +103,7 @@ func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool) Connecti
 		c.controlCh = make(chan sendItem, controlCap)
 		c.dataCh = make(chan sendItem, queueSize)
 		c.closeCh = make(chan struct{})
+		c.writer = bufio.NewWriterSize(conn, sendBufSize)
 
 		c.sendWg.Add(1)
 		go c.sendLoop()
@@ -107,8 +114,6 @@ func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool) Connecti
 
 // ReadPacket reads the next MQTT packet from the connection.
 func (c *connection) ReadPacket() (packets.ControlPacket, error) {
-	c.Touch()
-
 	if c.version == 0 {
 		// Detect protocol version from the first packet (CONNECT)
 		ver, restored, err := packets.DetectProtocolVersion(c.reader)
@@ -251,70 +256,138 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 
 func (c *connection) sendLoop() {
 	defer c.sendWg.Done()
+	w := c.writer
+	// Reusable slice for onSent callbacks; fired after flush.
+	var pending []func()
 
 	for {
-		controlCount := 0
+		didWork := false
 
+		// Phase 1: Drain pending control packets (up to burst limit).
+		controlCount := 0
 		for draining := true; draining && controlCount < controlBurst; {
 			select {
 			case <-c.closeCh:
 				return
 			case item := <-c.controlCh:
-				if !c.doWrite(item) {
+				if !c.doPack(w, item, &pending) {
 					return
 				}
+				didWork = true
 				controlCount++
 			default:
 				draining = false
 			}
 		}
 
+		// Phase 2: Process one data packet to prevent starvation.
 		if controlCount == controlBurst {
 			select {
 			case <-c.closeCh:
 				return
 			case item := <-c.dataCh:
-				if !c.doWrite(item) {
+				if !c.doPack(w, item, &pending) {
 					return
 				}
+				didWork = true
 			default:
+			}
+			if !c.flushAndNotify(w, &pending) {
+				return
 			}
 			continue
 		}
 
+		// Phase 3: Re-check control channel, then pack at most one data packet.
+		// This prevents speculative packing of multiple data packets ahead of
+		// control packets that arrive while the socket is blocked.
+		packedData := false
+		for {
+			select {
+			case item := <-c.controlCh:
+				if !c.doPack(w, item, &pending) {
+					return
+				}
+				didWork = true
+				continue
+			default:
+			}
+			if packedData {
+				goto flush
+			}
+			select {
+			case item := <-c.dataCh:
+				if !c.doPack(w, item, &pending) {
+					return
+				}
+				didWork = true
+				packedData = true
+			default:
+				goto flush
+			}
+		}
+	flush:
+		if !c.flushAndNotify(w, &pending) {
+			return
+		}
+		if didWork {
+			// Start a fresh scheduling cycle so control packets are checked
+			// first again before taking another blocking read.
+			continue
+		}
+
+		// Phase 4: Block until the next item arrives.
 		select {
 		case <-c.closeCh:
 			return
 		case item := <-c.controlCh:
-			if !c.doWrite(item) {
+			if !c.doPack(w, item, &pending) {
 				return
 			}
-		default:
-			select {
-			case <-c.closeCh:
+		case item := <-c.dataCh:
+			if !c.doPack(w, item, &pending) {
 				return
-			case item := <-c.controlCh:
-				if !c.doWrite(item) {
-					return
-				}
-			case item := <-c.dataCh:
-				if !c.doWrite(item) {
-					return
-				}
 			}
+		}
+		// Flush immediately after a blocking receive. This preserves control
+		// priority: once one item is taken from an idle loop, we write it out
+		// before potentially packing additional queued data.
+		if !c.flushAndNotify(w, &pending) {
+			return
 		}
 	}
 }
 
-func (c *connection) doWrite(item sendItem) bool {
-	if err := item.pkt.Pack(c.conn); err != nil {
+// doPack serialises a packet into the buffered writer. onSent callbacks are
+// deferred into pending and fired after the batch is flushed to the socket.
+func (c *connection) doPack(w *bufio.Writer, item sendItem, pending *[]func()) bool {
+	if err := item.pkt.Pack(w); err != nil {
 		c.markClosed()
 		_ = c.conn.Close()
 		return false
 	}
 	if item.onSent != nil {
-		item.onSent()
+		*pending = append(*pending, item.onSent)
 	}
+	return true
+}
+
+// flushAndNotify flushes the buffered writer to the socket, then fires all
+// deferred onSent callbacks. If the flush fails the callbacks are discarded
+// (the connection is closing; inflight messages will be retried on reconnect).
+func (c *connection) flushAndNotify(w *bufio.Writer, pending *[]func()) bool {
+	if w.Buffered() > 0 {
+		if err := w.Flush(); err != nil {
+			*pending = (*pending)[:0]
+			c.markClosed()
+			_ = c.conn.Close()
+			return false
+		}
+	}
+	for _, fn := range *pending {
+		fn()
+	}
+	*pending = (*pending)[:0]
 	return true
 }
 
@@ -387,7 +460,5 @@ func (c *connection) SetOnDisconnect(fn func(graceful bool)) {
 }
 
 func (c *connection) Touch() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.lastActivity = time.Now()
+	c.lastActivity.Store(time.Now().UnixNano())
 }

@@ -18,6 +18,8 @@ import (
 )
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.
+// Publish always releases msg's payload buffer before returning; callers must not
+// use the payload afterwards.
 func (b *Broker) Publish(msg *storage.Message) error {
 	b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
 	b.stats.IncrementPublishReceived()
@@ -39,6 +41,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 			if route.Kind == broker.RouteQueue {
 				b.logError("retained_store_failed", err, slog.String("topic", msg.Topic))
 			} else {
+				msg.ReleasePayload()
 				return err
 			}
 		}
@@ -47,6 +50,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		// enqueued — the queue handles the ordered stream of non-retained
 		// messages separately, avoiding duplicates on subscribe.
 		if route.Kind == broker.RouteQueue {
+			msg.ReleasePayload()
 			return nil
 		}
 	}
@@ -55,11 +59,18 @@ func (b *Broker) Publish(msg *storage.Message) error {
 	if b.queueManager != nil {
 		switch route.Kind {
 		case broker.RouteQueueAck:
+			msg.ReleasePayload()
 			return b.handleQueueAck(msg, route)
 		case broker.RouteQueue:
+			// Copy payload: the queue manager stores the slice by reference,
+			// so it must outlive the RefCountedBuffer.
+			src := msg.GetPayload()
+			payloadCopy := make([]byte, len(src))
+			copy(payloadCopy, src)
+			msg.ReleasePayload()
 			return b.queueManager.Publish(context.Background(), types.PublishRequest{
 				Topic:      msg.Topic,
-				Payload:    msg.GetPayload(),
+				Payload:    payloadCopy,
 				Properties: msg.Properties,
 			})
 		}

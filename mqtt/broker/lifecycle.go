@@ -27,6 +27,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 	}
 
 	lastActivity := time.Now()
+	lastRetryCheck := time.Now()
 
 	for {
 		// Calculate read deadline: minimum of keep-alive and retry check interval
@@ -54,6 +55,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 				}
 				// Just a retry check interval timeout - process retries and continue
 				s.ProcessRetries()
+				lastRetryCheck = time.Now()
 				continue
 			}
 
@@ -72,8 +74,12 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 		b.stats.IncrementMessagesReceived()
 		s.Touch()
 
-		// Also process retries after receiving a packet (opportunistic)
-		s.ProcessRetries()
+		// Throttled retry check: under sustained traffic the read loop never
+		// times out, so we check retries here but at most once per interval.
+		if time.Since(lastRetryCheck) >= retryCheckInterval {
+			s.ProcessRetries()
+			lastRetryCheck = time.Now()
+		}
 
 		if err := dispatchPacket(handler, s, pkt); err != nil {
 			if err == io.EOF {

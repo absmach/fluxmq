@@ -242,23 +242,22 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
-		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
-		msg := &storage.Message{
-			Topic:           topic,
-			QoS:             qos,
-			Retain:          retain,
-			MessageExpiry:   messageExpiry,
-			Expiry:          expiryTime,
-			PublishTime:     publishTime,
-			Properties:      properties,
-			PayloadFormat:   payloadFormat,
-			ContentType:     contentType,
-			ResponseTopic:   responseTopic,
-			CorrelationData: correlationData,
-		}
+		msg := storage.AcquireMessage()
+		msg.Topic = topic
+		msg.QoS = qos
+		msg.Retain = retain
+		msg.MessageExpiry = messageExpiry
+		msg.Expiry = expiryTime
+		msg.PublishTime = publishTime
+		msg.Properties = properties
+		msg.PayloadFormat = payloadFormat
+		msg.ContentType = contentType
+		msg.ResponseTopic = responseTopic
+		msg.CorrelationData = correlationData
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(msg)
+		storage.ReleaseMessage(msg)
 		h.broker.logger.Debug("v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -267,25 +266,25 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return err
 
 	case 1:
-		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
-		msg := &storage.Message{
-			Topic:           topic,
-			QoS:             qos,
-			Retain:          retain,
-			MessageExpiry:   messageExpiry,
-			Expiry:          expiryTime,
-			PublishTime:     publishTime,
-			Properties:      properties,
-			PayloadFormat:   payloadFormat,
-			ContentType:     contentType,
-			ResponseTopic:   responseTopic,
-			CorrelationData: correlationData,
-		}
+		msg := storage.AcquireMessage()
+		msg.Topic = topic
+		msg.QoS = qos
+		msg.Retain = retain
+		msg.MessageExpiry = messageExpiry
+		msg.Expiry = expiryTime
+		msg.PublishTime = publishTime
+		msg.Properties = properties
+		msg.PayloadFormat = payloadFormat
+		msg.ContentType = contentType
+		msg.ResponseTopic = responseTopic
+		msg.CorrelationData = correlationData
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
+			storage.ReleaseMessage(msg)
 			return sendV5PubAck(s, packetID, v5.PubAckUnspecifiedError, "Unspecified error")
 		}
+		storage.ReleaseMessage(msg)
 		h.broker.logger.Debug("v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -299,26 +298,24 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		s.Inflight().MarkReceived(packetID)
 
-		// Store message for distribution at PUBREL (Method B: commit on PUBREL).
-		// This means PUBREC is sent immediately without blocking on subscriber fan-out.
 		buf := core.GetBufferWithData(payload)
-		storeMsg := &storage.Message{
-			Topic:           topic,
-			QoS:             qos,
-			Retain:          retain,
-			PacketID:        packetID,
-			MessageExpiry:   messageExpiry,
-			Expiry:          expiryTime,
-			PublishTime:     publishTime,
-			Properties:      properties,
-			PayloadFormat:   payloadFormat,
-			ContentType:     contentType,
-			ResponseTopic:   responseTopic,
-			CorrelationData: correlationData,
-		}
+		storeMsg := storage.AcquireMessage()
+		storeMsg.Topic = topic
+		storeMsg.QoS = qos
+		storeMsg.Retain = retain
+		storeMsg.PacketID = packetID
+		storeMsg.MessageExpiry = messageExpiry
+		storeMsg.Expiry = expiryTime
+		storeMsg.PublishTime = publishTime
+		storeMsg.Properties = properties
+		storeMsg.PayloadFormat = payloadFormat
+		storeMsg.ContentType = contentType
+		storeMsg.ResponseTopic = responseTopic
+		storeMsg.CorrelationData = correlationData
 		storeMsg.SetPayloadFromBuffer(buf)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			storeMsg.ReleasePayload()
+			storage.ReleaseMessage(storeMsg)
 			return err
 		}
 

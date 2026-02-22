@@ -4,7 +4,6 @@
 package session
 
 import (
-	"hash/fnv"
 	"sync"
 	"sync/atomic"
 )
@@ -62,9 +61,13 @@ func NewShardedCache() *ShardedCache {
 }
 
 func (c *ShardedCache) shard(key string) *cacheShard {
-	h := fnv.New32a()
-	h.Write([]byte(key))
-	return &c.shards[h.Sum32()%numShards]
+	// Inline FNV-1a to avoid heap-allocating a hash.Hash32 on every call.
+	h := uint32(2166136261)
+	for i := 0; i < len(key); i++ {
+		h ^= uint32(key[i])
+		h *= 16777619
+	}
+	return &c.shards[h%numShards]
 }
 
 // Get retrieves a session by client ID.

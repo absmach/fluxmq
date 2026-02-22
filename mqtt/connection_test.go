@@ -367,7 +367,7 @@ func TestAsyncConnectionWriteAfterCloseReturnsClosed(t *testing.T) {
 	assert.True(t, errors.Is(err, net.ErrClosed))
 }
 
-func TestAsyncConnectionCallbackRunsAfterWrite(t *testing.T) {
+func TestAsyncConnectionCallbackRunsAfterFlush(t *testing.T) {
 	rc := newRecordingConn(true)
 	conn := core.NewConnection(rc, 4, false)
 
@@ -376,9 +376,10 @@ func TestAsyncConnectionCallbackRunsAfterWrite(t *testing.T) {
 		called <- struct{}{}
 	}))
 
+	// Callback must not fire before the data is flushed to the socket.
 	select {
 	case <-called:
-		t.Fatal("callback fired before wire write")
+		t.Fatal("callback fired before flush")
 	case <-time.After(100 * time.Millisecond):
 	}
 
@@ -388,7 +389,7 @@ func TestAsyncConnectionCallbackRunsAfterWrite(t *testing.T) {
 	select {
 	case <-called:
 	case <-time.After(2 * time.Second):
-		t.Fatal("callback did not fire after write")
+		t.Fatal("callback did not fire after flush")
 	}
 }
 
@@ -518,10 +519,41 @@ func (c *recordingConn) Write(b []byte) (int, error) {
 		return 0, net.ErrClosed
 	}
 
-	cp := make([]byte, len(b))
-	copy(cp, b)
-	c.writes <- cp
+	// Split coalesced bytes into individual MQTT packets so tests
+	// can inspect ordering regardless of bufio.Writer batching.
+	data := b
+	for len(data) > 0 {
+		pktLen := mqttPacketLen(data)
+		if pktLen <= 0 || pktLen > len(data) {
+			cp := make([]byte, len(data))
+			copy(cp, data)
+			c.writes <- cp
+			break
+		}
+		cp := make([]byte, pktLen)
+		copy(cp, data[:pktLen])
+		c.writes <- cp
+		data = data[pktLen:]
+	}
 	return len(b), nil
+}
+
+// mqttPacketLen returns the total length of the first MQTT packet in b
+// (fixed header + remaining length + payload), or -1 if incomplete.
+func mqttPacketLen(b []byte) int {
+	if len(b) < 2 {
+		return -1
+	}
+	multiplier := 1
+	remaining := 0
+	for i := 1; i < len(b) && i <= 4; i++ {
+		remaining += int(b[i]&0x7F) * multiplier
+		multiplier *= 128
+		if b[i]&0x80 == 0 {
+			return i + 1 + remaining
+		}
+	}
+	return -1
 }
 
 func (c *recordingConn) Close() error {

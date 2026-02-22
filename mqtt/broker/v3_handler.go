@@ -178,15 +178,14 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	switch qos {
 	case 0:
-		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
-		msg := &storage.Message{
-			Topic:  topic,
-			QoS:    qos,
-			Retain: retain,
-		}
+		msg := storage.AcquireMessage()
+		msg.Topic = topic
+		msg.QoS = qos
+		msg.Retain = retain
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(msg)
+		storage.ReleaseMessage(msg)
 		h.broker.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -195,17 +194,17 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return err
 
 	case 1:
-		// Zero-copy: Create ref-counted buffer from payload
 		buf := core.GetBufferWithData(payload)
-		msg := &storage.Message{
-			Topic:  topic,
-			QoS:    qos,
-			Retain: retain,
-		}
+		msg := storage.AcquireMessage()
+		msg.Topic = topic
+		msg.QoS = qos
+		msg.Retain = retain
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(msg); err != nil {
+			storage.ReleaseMessage(msg)
 			return err
 		}
+		storage.ReleaseMessage(msg)
 		h.broker.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -223,18 +222,16 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 		s.Inflight().MarkReceived(packetID)
 
-		// Store message for distribution at PUBREL (Method B: commit on PUBREL).
-		// This means PUBREC is sent immediately without blocking on subscriber fan-out.
 		buf := core.GetBufferWithData(payload)
-		storeMsg := &storage.Message{
-			Topic:    topic,
-			QoS:      qos,
-			Retain:   retain,
-			PacketID: packetID,
-		}
+		storeMsg := storage.AcquireMessage()
+		storeMsg.Topic = topic
+		storeMsg.QoS = qos
+		storeMsg.Retain = retain
+		storeMsg.PacketID = packetID
 		storeMsg.SetPayloadFromBuffer(buf)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			storeMsg.ReleasePayload()
+			storage.ReleaseMessage(storeMsg)
 			return err
 		}
 
