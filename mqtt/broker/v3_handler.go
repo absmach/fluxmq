@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
+	"github.com/absmach/fluxmq/topics"
 )
 
 var _ Handler = (*V3Handler)(nil)
@@ -41,6 +43,17 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		slog.String("remote_addr", conn.RemoteAddr().String()),
 		slog.String("client_id", p.ClientID),
 	)
+
+	if err := p.Validate(); err != nil {
+		h.broker.stats.IncrementProtocolErrors()
+		code := byte(v3.ConnAckIdentifierRejected)
+		if errors.Is(err, v3.ErrInvalidProtocolName) {
+			code = v3.ConnAckUnacceptableProtocol
+		}
+		sendV3ConnAck(conn, false, code)
+		conn.Close()
+		return ErrProtocolViolation
+	}
 
 	clientID := p.ClientID
 	cleanStart := p.CleanSession
@@ -78,6 +91,12 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	var will *storage.WillMessage
 	if p.WillFlag {
+		if err := topics.ValidateTopicName(p.WillTopic); err != nil {
+			h.broker.stats.IncrementProtocolErrors()
+			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
+			conn.Close()
+			return ErrTopicInvalid
+		}
 		// Note: Will payload is stored as []byte in storage.WillMessage
 		// TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
@@ -161,6 +180,13 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	packetID := p.ID
 	dup := p.FixedHeader.Dup
 
+	if err := topics.ValidateTopicName(topic); err != nil {
+		h.broker.logger.Warn("v3_publish_invalid_topic",
+			slog.String("client_id", s.ID),
+			slog.String("topic", topic))
+		return ErrTopicInvalid
+	}
+
 	// Downgrade QoS if it exceeds server's maximum
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
 		h.broker.logger.Debug("v3_publish_qos_downgrade",
@@ -181,6 +207,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		msg := storage.AcquireMessage()
 		msg.Topic = topic
+		msg.PublisherID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.SetPayloadFromBuffer(buf)
@@ -197,6 +224,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		msg := storage.AcquireMessage()
 		msg.Topic = topic
+		msg.PublisherID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.SetPayloadFromBuffer(buf)
@@ -225,6 +253,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		storeMsg := storage.AcquireMessage()
 		storeMsg.Topic = topic
+		storeMsg.PublisherID = s.ID
 		storeMsg.QoS = qos
 		storeMsg.Retain = retain
 		storeMsg.PacketID = packetID
@@ -357,6 +386,15 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, t := range p.Topics {
+		if err := topics.ValidateTopicFilter(t.Name); err != nil {
+			reasonCodes[i] = v3.SubAckFailure
+			continue
+		}
+		if t.QoS > 2 {
+			reasonCodes[i] = v3.SubAckFailure
+			continue
+		}
+
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Name) {
 			h.broker.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v3.SubAckFailure
@@ -373,21 +411,25 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		}
 
 		opts := storage.SubscribeOptions{}
+		grantedQoS := t.QoS
+		if maxQoS := h.broker.MaxQoS(); grantedQoS > maxQoS {
+			grantedQoS = maxQoS
+		}
 
-		if err := h.broker.subscribe(s, t.Name, t.QoS, opts); err != nil {
+		if err := h.broker.subscribe(s, t.Name, grantedQoS, opts); err != nil {
 			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
 
-		reasonCodes[i] = t.QoS
+		reasonCodes[i] = grantedQoS
 
 		// Send retained messages matching the subscription filter
 		retained, err := h.broker.GetRetainedMatching(t.Name)
 		if err == nil {
 			for _, msg := range retained {
 				deliverQoS := msg.QoS
-				if t.QoS < deliverQoS {
-					deliverQoS = t.QoS
+				if grantedQoS < deliverQoS {
+					deliverQoS = grantedQoS
 				}
 				deliverMsg := &storage.Message{
 					Topic:  msg.Topic,

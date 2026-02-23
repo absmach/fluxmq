@@ -51,6 +51,7 @@ func (m *Message) Reset() {
 
 	// Clear string fields
 	m.Topic = ""
+	m.PublisherID = ""
 	m.ContentType = ""
 	m.ResponseTopic = ""
 

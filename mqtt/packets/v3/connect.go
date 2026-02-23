@@ -4,11 +4,17 @@
 package v3
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/absmach/fluxmq/mqtt/codec"
 	"github.com/absmach/fluxmq/mqtt/packets"
+)
+
+var (
+	ErrInvalidConnectFlags = errors.New("invalid connect flags")
+	ErrInvalidProtocolName = errors.New("invalid protocol name")
 )
 
 // Connect represents the MQTT V3.1.1 CONNECT packet.
@@ -149,4 +155,34 @@ func (c *Connect) Pack(w io.Writer) error {
 
 func (c *Connect) Details() packets.Details {
 	return packets.Details{Type: packets.ConnectType}
+}
+
+// Validate checks CONNECT semantic constraints for MQTT v3/v3.1.1.
+func (c *Connect) Validate() error {
+	if c.PasswordFlag && !c.UsernameFlag {
+		return ErrInvalidConnectFlags
+	}
+	if c.ReservedBit != 0 {
+		return ErrInvalidConnectFlags
+	}
+	if c.WillQoS > 2 {
+		return ErrInvalidConnectFlags
+	}
+	if !c.WillFlag && (c.WillQoS != 0 || c.WillRetain) {
+		return ErrInvalidConnectFlags
+	}
+	switch c.ProtocolVersion {
+	case 3:
+		if c.ProtocolName != "MQIsdp" {
+			return ErrInvalidProtocolName
+		}
+	case 4:
+		if c.ProtocolName != "MQTT" {
+			return ErrInvalidProtocolName
+		}
+	default:
+		return ErrInvalidProtocolName
+	}
+
+	return nil
 }

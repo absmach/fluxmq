@@ -15,6 +15,7 @@ import (
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
+	"github.com/absmach/fluxmq/topics"
 )
 
 const (
@@ -47,6 +48,13 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		slog.String("remote_addr", conn.RemoteAddr().String()),
 		slog.String("client_id", p.ClientID),
 	)
+
+	if rc := p.Validate(); rc != v5.Accepted {
+		h.broker.stats.IncrementProtocolErrors()
+		sendV5ConnAck(conn, false, mapV5ConnectValidationReason(rc), nil)
+		conn.Close()
+		return ErrProtocolViolation
+	}
 
 	clientID := p.ClientID
 	cleanStart := p.CleanStart
@@ -84,6 +92,12 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	var will *storage.WillMessage
 	if p.WillFlag {
+		if err := topics.ValidateTopicName(p.WillTopic); err != nil {
+			h.broker.stats.IncrementProtocolErrors()
+			sendV5ConnAck(conn, false, v5.ConnAckTopicNameInvalid, nil)
+			conn.Close()
+			return ErrTopicInvalid
+		}
 		// Note: Will payload is stored as []byte in storage.WillMessage
 		// TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
@@ -168,7 +182,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			slog.String("topic", p.TopicName))
 		// Return QuotaExceeded for QoS > 0, silently drop for QoS 0
 		if p.FixedHeader.QoS > 0 {
-			return sendV5PubAck(s, p.ID, v5.PubAckQuotaExceeded, "Rate limit exceeded")
+			return sendV5PublishError(s, p.FixedHeader.QoS, p.ID, v5.PubAckQuotaExceeded, "Rate limit exceeded", nil)
 		}
 		return nil
 	}
@@ -199,12 +213,12 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	if p.Properties != nil && p.Properties.TopicAlias != nil {
 		alias := *p.Properties.TopicAlias
 		if alias > s.TopicAliasMax {
-			return sendV5PubAck(s, packetID, v5.PubAckTopicNameInvalid, "Topic alias invalid")
+			return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic alias invalid", ErrTopicInvalid)
 		}
 		if topic == "" {
 			resolvedTopic, ok := s.ResolveInboundAlias(alias)
 			if !ok {
-				return sendV5PubAck(s, packetID, v5.PubAckTopicNameInvalid, "Topic alias not established")
+				return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic alias not established", ErrTopicInvalid)
 			}
 			topic = resolvedTopic
 		} else {
@@ -212,9 +226,13 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		}
 	}
 
+	if err := topics.ValidateTopicName(topic); err != nil {
+		return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic name invalid", ErrTopicInvalid)
+	}
+
 	if h.broker.auth != nil && !h.broker.auth.CanPublish(s.ID, topic) {
 		h.broker.stats.IncrementAuthzErrors()
-		return sendV5PubAck(s, packetID, v5.PubAckNotAuthorized, "Not authorized")
+		return sendV5PublishError(s, qos, packetID, v5.PubAckNotAuthorized, "Not authorized", nil)
 	}
 
 	// Extract message expiry interval if present
@@ -245,6 +263,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		msg := storage.AcquireMessage()
 		msg.Topic = topic
+		msg.PublisherID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.MessageExpiry = messageExpiry
@@ -269,6 +288,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		msg := storage.AcquireMessage()
 		msg.Topic = topic
+		msg.PublisherID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.MessageExpiry = messageExpiry
@@ -301,6 +321,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		storeMsg := storage.AcquireMessage()
 		storeMsg.Topic = topic
+		storeMsg.PublisherID = s.ID
 		storeMsg.QoS = qos
 		storeMsg.Retain = retain
 		storeMsg.PacketID = packetID
@@ -444,9 +465,19 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 	h.broker.logger.Info("v5_subscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Opts)))
 
 	packetID := p.ID
+	existingSubs := s.GetSubscriptions()
 
 	reasonCodes := make([]byte, len(p.Opts))
 	for i, t := range p.Opts {
+		if err := topics.ValidateTopicFilter(t.Topic); err != nil {
+			reasonCodes[i] = v5.SubAckTopicFilterInvalid
+			continue
+		}
+		if t.MaxQoS > 2 {
+			reasonCodes[i] = v5.SubAckTopicFilterInvalid
+			continue
+		}
+
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Topic) {
 			h.broker.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v5.SubAckNotAuthorized
@@ -478,6 +509,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 
 		// Extract consumer group from subscription properties
 		consumerGroup := extractConsumerGroup(s.ID, p.Properties)
+		_, wasSubscribed := existingSubs[t.Topic]
 
 		opts := storage.SubscribeOptions{
 			NoLocal:           noLocal,
@@ -485,36 +517,50 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			RetainHandling:    retainHandling,
 			ConsumerGroup:     consumerGroup,
 		}
+		grantedQoS := t.MaxQoS
+		if maxQoS := h.broker.MaxQoS(); grantedQoS > maxQoS {
+			grantedQoS = maxQoS
+		}
 
-		if err := h.broker.subscribe(s, t.Topic, t.MaxQoS, opts); err != nil {
+		if err := h.broker.subscribe(s, t.Topic, grantedQoS, opts); err != nil {
 			reasonCodes[i] = v5.SubAckImplementationSpecificError
 			continue
 		}
+		existingSubs[t.Topic] = opts
 
-		reasonCodes[i] = t.MaxQoS
+		reasonCodes[i] = grantedQoS
 
-		// Send retained messages matching the subscription filter
-		retained, err := h.broker.GetRetainedMatching(t.Topic)
-		if err == nil {
-			for _, msg := range retained {
-				deliverQoS := msg.QoS
-				if t.MaxQoS < deliverQoS {
-					deliverQoS = t.MaxQoS
+		sendRetained := true
+		switch retainHandling {
+		case 1:
+			sendRetained = !wasSubscribed
+		case 2:
+			sendRetained = false
+		}
+		if sendRetained {
+			// Send retained messages matching the subscription filter
+			retained, err := h.broker.GetRetainedMatching(t.Topic)
+			if err == nil {
+				for _, msg := range retained {
+					deliverQoS := msg.QoS
+					if grantedQoS < deliverQoS {
+						deliverQoS = grantedQoS
+					}
+					deliverMsg := &storage.Message{
+						Topic:  msg.Topic,
+						QoS:    deliverQoS,
+						Retain: true,
+					}
+					// Zero-copy: Share buffer from retained message if available
+					if msg.PayloadBuf != nil {
+						msg.PayloadBuf.Retain()
+						deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
+					} else {
+						// Legacy fallback for messages without PayloadBuf
+						deliverMsg.SetPayloadFromBytes(msg.Payload)
+					}
+					h.broker.DeliverToSession(s, deliverMsg)
 				}
-				deliverMsg := &storage.Message{
-					Topic:  msg.Topic,
-					QoS:    deliverQoS,
-					Retain: true,
-				}
-				// Zero-copy: Share buffer from retained message if available
-				if msg.PayloadBuf != nil {
-					msg.PayloadBuf.Retain()
-					deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
-				} else {
-					// Legacy fallback for messages without PayloadBuf
-					deliverMsg.SetPayloadFromBytes(msg.Payload)
-				}
-				h.broker.DeliverToSession(s, deliverMsg)
 			}
 		}
 	}
@@ -636,6 +682,37 @@ func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessi
 	}
 
 	return conn.WritePacket(ack)
+}
+
+func mapV5ConnectValidationReason(code byte) byte {
+	switch code {
+	case v5.ErrRefusedBadProtocolVersion:
+		return v5.ConnAckUnsupportedProtocolVersion
+	case v5.ErrRefusedIDRejected:
+		return v5.ConnAckInvalidClientID
+	case v5.ErrRefusedBadUsernameOrPassword:
+		return v5.ConnAckBadUsernameOrPassword
+	case v5.ErrRefusedNotAuthorized:
+		return v5.ConnAckNotAuthorized
+	case v5.ErrProtocolViolation:
+		return v5.ConnAckProtocolError
+	default:
+		return v5.ConnAckMalformedPacket
+	}
+}
+
+func sendV5PublishError(s *session.Session, qos byte, packetID uint16, reasonCode byte, reasonString string, qos0Err error) error {
+	switch qos {
+	case 1:
+		return sendV5PubAck(s, packetID, reasonCode, reasonString)
+	case 2:
+		return sendV5PubRec(s, packetID, reasonCode, reasonString)
+	default:
+		if qos0Err != nil {
+			return qos0Err
+		}
+		return nil
+	}
 }
 
 func sendV5PubAck(s *session.Session, packetID uint16, reasonCode byte, reasonString string) error {

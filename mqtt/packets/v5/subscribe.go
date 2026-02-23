@@ -41,10 +41,10 @@ type SubOption struct {
 func (s *SubOption) Encode() []byte {
 	var flag byte
 	flag |= s.MaxQoS & 0x03
-	if s.NoLocal != nil {
+	if s.NoLocal != nil && *s.NoLocal {
 		flag |= 1 << 2
 	}
-	if s.RetainAsPublished != nil {
+	if s.RetainAsPublished != nil && *s.RetainAsPublished {
 		flag |= 1 << 3
 	}
 	if s.RetainHandling != nil {
@@ -65,10 +65,19 @@ func (s *SubOption) Unpack(r io.Reader) error {
 	s.Topic = topic
 	flags := b[0]
 	s.MaxQoS = flags & 0x03
+	if s.MaxQoS > 2 {
+		return fmt.Errorf("invalid subscribe option qos: %d", s.MaxQoS)
+	}
 	// MQTT 5.0 subscription options
 	noLocal := (flags & (1 << 2)) != 0
 	retainAsPublished := (flags & (1 << 3)) != 0
 	rh := (flags >> 4) & 0x03
+	if rh > 2 {
+		return fmt.Errorf("invalid retain handling value: %d", rh)
+	}
+	if flags&(1<<6) != 0 || flags&(1<<7) != 0 {
+		return fmt.Errorf("invalid subscribe option reserved bits set: %08b", flags)
+	}
 	s.NoLocal = &noLocal
 	s.RetainAsPublished = &retainAsPublished
 	s.RetainHandling = &rh

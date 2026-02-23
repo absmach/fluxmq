@@ -34,7 +34,7 @@ func (s *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 	defer s.mu.Unlock()
 
 	// Empty payload means delete
-	if msg == nil || len(msg.Payload) == 0 {
+	if msg == nil || len(msg.GetPayload()) == 0 {
 		delete(s.data, topic)
 		return nil
 	}

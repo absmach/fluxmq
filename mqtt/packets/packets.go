@@ -13,6 +13,7 @@ import (
 
 // ErrFailRemaining indicates remaining data does not match the size of sent data.
 var ErrFailRemaining = errors.New("remaining data length does not match data size")
+var ErrInvalidFixedHeader = errors.New("invalid fixed header flags")
 
 // Protocol version constants.
 const (
@@ -134,6 +135,9 @@ func (fh *FixedHeader) Decode(typeAndFlags byte, r io.Reader) error {
 	fh.Dup = (typeAndFlags>>3)&0x01 > 0
 	fh.QoS = (typeAndFlags >> 1) & 0x03
 	fh.Retain = typeAndFlags&0x01 > 0
+	if err := fh.validateFlags(); err != nil {
+		return err
+	}
 
 	var err error
 	fh.RemainingLength, err = codec.DecodeVBI(r)
@@ -151,6 +155,9 @@ func (fh *FixedHeader) DecodeFromBytes(data []byte) (int, error) {
 	fh.Dup = (data[0]>>3)&0x01 > 0
 	fh.QoS = (data[0] >> 1) & 0x03
 	fh.Retain = data[0]&0x01 > 0
+	if err := fh.validateFlags(); err != nil {
+		return 0, err
+	}
 
 	// Decode remaining length (VBI)
 	var vbi uint32
@@ -170,4 +177,29 @@ func (fh *FixedHeader) DecodeFromBytes(data []byte) (int, error) {
 		multiplier += 7
 	}
 	return 0, codec.ErrMalformedVBI
+}
+
+func (fh FixedHeader) validateFlags() error {
+	if fh.PacketType < ConnectType || fh.PacketType > AuthType {
+		return ErrInvalidFixedHeader
+	}
+
+	switch fh.PacketType {
+	case PublishType:
+		if fh.QoS > 2 {
+			return ErrInvalidQoS
+		}
+	case PubRelType, SubscribeType, UnsubscribeType:
+		// Fixed flags must be 0010 (QoS=1, Dup=false, Retain=false).
+		if fh.QoS != 1 || fh.Dup || fh.Retain {
+			return ErrInvalidFixedHeader
+		}
+	default:
+		// All other packet types require flags 0000.
+		if fh.Dup || fh.QoS != 0 || fh.Retain {
+			return ErrInvalidFixedHeader
+		}
+	}
+
+	return nil
 }

@@ -28,3 +28,33 @@ func TestValidateTopicName(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateTopicFilter(t *testing.T) {
+	tests := []struct {
+		filter  string
+		wantErr bool
+	}{
+		{"valid/topic", false},
+		{"sensor/+/temp", false},
+		{"sensor/#", false},
+		{"#", false},
+		{"+", false},
+		{"$share/group/sensor/+/temp", false},
+		{"", true},
+		{"sensor/#/tail", true},
+		{"sensor/te+st", true},
+		{"sensor/te#st", true},
+		{"$share//sensor/#", true},
+		{"$share/group/", true},
+		{"$share/", true},
+		{"$share/gr+oup/sensor/#", true},
+		{"null\u0000char", true},
+		{string([]byte{0xFF, 0xFE}), true}, // Invalid UTF-8
+	}
+
+	for _, tt := range tests {
+		if err := topics.ValidateTopicFilter(tt.filter); (err != nil) != tt.wantErr {
+			t.Errorf("ValidateTopicFilter(%q) error = %v, wantErr %v", tt.filter, err, tt.wantErr)
+		}
+	}
+}

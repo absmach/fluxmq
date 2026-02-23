@@ -117,10 +117,11 @@ func (b *Broker) PublishWill(clientID string) error {
 
 	// Create message from will (will payload is []byte, not RefCountedBuffer)
 	msg := &storage.Message{
-		Topic:      will.Topic,
-		QoS:        will.QoS,
-		Retain:     will.Retain,
-		Properties: will.Properties,
+		Topic:       will.Topic,
+		PublisherID: will.ClientID,
+		QoS:         will.QoS,
+		Retain:      will.Retain,
+		Properties:  will.Properties,
 	}
 	msg.SetPayloadFromBytes(will.Payload)
 
@@ -301,6 +302,9 @@ func (b *Broker) distributeLocalScoped(msg *storage.Message, allowCross bool) er
 				continue
 			}
 		} else {
+			if sub.Options.NoLocal && clientID == msg.PublisherID {
+				continue
+			}
 			if broker.IsAMQP091Client(clientID) || broker.IsAMQP1Client(clientID) {
 				if allowCross && b.crossDeliver != nil {
 					b.crossDeliver(clientID, msg.Topic, msg.GetPayload(), sub.QoS, msg.Properties)
@@ -323,7 +327,7 @@ func (b *Broker) distributeLocalScoped(msg *storage.Message, allowCross bool) er
 			deliverMsg := storage.AcquireMessage()
 			deliverMsg.Topic = msg.Topic
 			deliverMsg.QoS = deliverQoS
-			deliverMsg.Retain = false // Don't retain during distribution
+			deliverMsg.Retain = msg.Retain && sub.Options.RetainAsPublished
 			deliverMsg.Properties = msg.Properties
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
@@ -440,10 +444,11 @@ func (b *Broker) triggerWills() {
 
 		// Create message from will (will payload is []byte, not RefCountedBuffer)
 		msg := &storage.Message{
-			Topic:      will.Topic,
-			QoS:        will.QoS,
-			Retain:     will.Retain,
-			Properties: will.Properties,
+			Topic:       will.Topic,
+			PublisherID: will.ClientID,
+			QoS:         will.QoS,
+			Retain:      will.Retain,
+			Properties:  will.Properties,
 		}
 		msg.SetPayloadFromBytes(will.Payload)
 

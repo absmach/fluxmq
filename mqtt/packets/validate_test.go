@@ -4,6 +4,7 @@
 package packets_test
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -245,4 +246,30 @@ func TestKeepAliveValues(t *testing.T) {
 			assert.LessOrEqual(t, tc.keepAlive, uint16(65535))
 		})
 	}
+}
+
+func TestFixedHeaderValidation(t *testing.T) {
+	t.Run("invalid subscribe flags", func(t *testing.T) {
+		var fh packets.FixedHeader
+		err := fh.Decode(0x80, bytes.NewReader([]byte{0}))
+		assert.ErrorIs(t, err, packets.ErrInvalidFixedHeader)
+	})
+
+	t.Run("invalid publish qos 3", func(t *testing.T) {
+		var fh packets.FixedHeader
+		err := fh.Decode(0x36, bytes.NewReader([]byte{0}))
+		assert.ErrorIs(t, err, packets.ErrInvalidQoS)
+	})
+
+	t.Run("invalid pingreq flags", func(t *testing.T) {
+		var fh packets.FixedHeader
+		err := fh.Decode(0xC1, bytes.NewReader([]byte{0}))
+		assert.ErrorIs(t, err, packets.ErrInvalidFixedHeader)
+	})
+
+	t.Run("valid subscribe flags", func(t *testing.T) {
+		var fh packets.FixedHeader
+		err := fh.Decode(0x82, bytes.NewReader([]byte{0}))
+		assert.NoError(t, err)
+	})
 }

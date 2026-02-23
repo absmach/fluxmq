@@ -56,6 +56,12 @@ func (r *TrieRouter) Subscribe(clientID string, filter string, qos byte, opts st
 		}
 		n = child
 	}
+	for i, existing := range n.subs {
+		if existing.ClientID == clientID {
+			n.subs[i] = sub
+			return nil
+		}
+	}
 	n.subs = append(n.subs, sub)
 	return nil
 }
