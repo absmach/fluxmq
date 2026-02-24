@@ -1482,13 +1482,13 @@ func (c *Client) sendPubRel(packetID uint16) {
 
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.PubRel{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType},
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,
 		}
 		pkt.Pack(conn)
 	} else {
 		pkt := &v3.PubRel{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType},
+			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,
 		}
 		pkt.Pack(conn)
