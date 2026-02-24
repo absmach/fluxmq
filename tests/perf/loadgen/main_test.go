@@ -98,3 +98,66 @@ func TestJitteredPublishIntervalFloorsToZero(t *testing.T) {
 		}
 	}
 }
+
+func TestShuffledAddrsDeterministicAndPermutation(t *testing.T) {
+	in := []string{"n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8"}
+	orig := strings.Join(in, ",")
+
+	a := shuffledAddrs(in, 123, mqttPublisherSeedSalt)
+	b := shuffledAddrs(in, 123, mqttPublisherSeedSalt)
+	if strings.Join(a, ",") != strings.Join(b, ",") {
+		t.Fatalf("shuffle should be deterministic for same runID and salt: %v vs %v", a, b)
+	}
+	if strings.Join(in, ",") != orig {
+		t.Fatalf("input addrs mutated: got %v want %s", in, orig)
+	}
+
+	c := shuffledAddrs(in, 124, mqttPublisherSeedSalt)
+	if strings.Join(a, ",") == strings.Join(c, ",") {
+		t.Fatalf("expected different order for different runIDs: %v", a)
+	}
+
+	want := make(map[string]int, len(in))
+	have := make(map[string]int, len(in))
+	for _, addr := range in {
+		want[addr]++
+	}
+	for _, addr := range a {
+		have[addr]++
+	}
+	if len(a) != len(in) {
+		t.Fatalf("shuffled length mismatch: got %d want %d", len(a), len(in))
+	}
+	for addr, count := range want {
+		if have[addr] != count {
+			t.Fatalf("shuffled addrs not a permutation, addr=%s got=%d want=%d", addr, have[addr], count)
+		}
+	}
+}
+
+func TestAddrByOffsetBalancedAfterShuffle(t *testing.T) {
+	addrs := shuffledAddrs([]string{"node1", "node2", "node3"}, 999, amqpPublisherSeedSalt)
+	counts := map[string]int{
+		"node1": 0,
+		"node2": 0,
+		"node3": 0,
+	}
+
+	const clients = 100
+	for i := 0; i < clients; i++ {
+		counts[addrByOffset(addrs, i, publisherNodeOffset)]++
+	}
+
+	min, max := clients, 0
+	for _, c := range counts {
+		if c < min {
+			min = c
+		}
+		if c > max {
+			max = c
+		}
+	}
+	if max-min > 1 {
+		t.Fatalf("unbalanced assignment after shuffle: counts=%v", counts)
+	}
+}

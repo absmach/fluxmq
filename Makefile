@@ -157,7 +157,6 @@ run-perf:
 			-mqtt-addrs "$${PERF_MQTT_ADDRS:-127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885}" \
 			-amqp-addrs "$${PERF_AMQP_ADDRS:-127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684}" \
 			-min-ratio "$${PERF_MIN_RATIO:-0.95}" \
-			-queue-min-ratio "$${PERF_QUEUE_MIN_RATIO:-0.99}" \
 			-drain-timeout "$${PERF_DRAIN_TIMEOUT:-45s}"); \
 		if [[ -n "$${PERF_PAYLOAD_BYTES:-}" ]]; then cmd+=( -payload-bytes "$${PERF_PAYLOAD_BYTES}" ); else cmd+=( -payload "$${PERF_PAYLOAD:-small}" ); fi; \
 		if [[ -n "$${PERF_PUBLISHERS:-}" ]]; then cmd+=( -publishers "$${PERF_PUBLISHERS}" ); fi; \

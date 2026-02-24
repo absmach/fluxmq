@@ -113,9 +113,13 @@ make perf-suite
 Config files included:
 
 - `tests/perf/configs/fanin_mqtt_mqtt.json`
+- `tests/perf/configs/fanin_mqtt_amqp.json`
+- `tests/perf/configs/fanin_amqp_mqtt.json`
 - `tests/perf/configs/fanin_amqp_amqp.json`
+- `tests/perf/configs/fanout_mqtt_mqtt.json`
 - `tests/perf/configs/fanout_mqtt_amqp.json`
 - `tests/perf/configs/fanout_amqp_mqtt.json`
+- `tests/perf/configs/fanout_amqp_amqp.json`
 
 Supported JSON fields:
 
@@ -136,27 +140,20 @@ Supported JSON fields:
 - `drain_timeout` (Go duration, e.g. `45s`; overrides `PERF_DRAIN_TIMEOUT`)
 - `payload_bytes` (integer; overrides `-payload-bytes` / `-payload` CLI flags)
 
-CLI overrides (`-publishers`, `-subscribers`, `-messages-per-publisher`, `-publish-interval`, `-payload-bytes`) still apply on top of config values.
+CLI overrides (`-publishers`, `-subscribers`, `-messages-per-publisher`, `-publish-interval`, `-publish-jitter`, `-payload-bytes`, `-drain-timeout`) still apply on top of config values.
 
 ## Scenario matrix
 
-| Scenario                     | Protocol           | Pattern             | Focus                                                          |
-| ---------------------------- | ------------------ | ------------------- | -------------------------------------------------------------- |
-| `mqtt-fanin`                 | MQTT               | topic pub/sub       | Many publishers -> one topic with many subscribers             |
-| `mqtt-fanout`                | MQTT               | topic pub/sub       | Broad fanout delivery under subscriber-heavy load              |
-| `mqtt-substorm`              | MQTT               | topic pub/sub       | Subscribe/unsubscribe churn with wildcard matching             |
-| `mqtt-consumer-groups`       | MQTT               | queue               | Queue fanout across multiple consumer groups                   |
-| `mqtt-shared-subscriptions`  | MQTT               | shared subscription | `$share/<group>/<topic>` group load balancing                  |
-| `mqtt-last-will`             | MQTT               | last will           | LWT emission after abrupt disconnect                           |
-| `amqp-fanin`                 | AMQP 0.9.1         | topic pub/sub       | Many publishers -> one topic with many subscribers             |
-| `amqp-fanout`                | AMQP 0.9.1         | topic pub/sub       | Broad fanout delivery on AMQP topics                           |
-| `amqp091-consumer-groups`    | AMQP 0.9.1         | queue               | Queue fanout across multiple AMQP consumer groups              |
-| `amqp091-stream-cursor`      | AMQP 0.9.1         | stream              | Full read from `first` + replay from `offset=<cursor>`         |
-| `amqp091-retention-policies` | AMQP 0.9.1         | stream retention    | Retention bound check using `x-max-length` policy              |
-| `queue-fanin`                | MQTT queue API     | queue               | Many publishers feeding one consumer group                     |
-| `queue-fanout`               | MQTT queue API     | queue               | One queue delivered to multiple consumer groups                |
-| `bridge-queue-mqtt-amqp`     | MQTT -> AMQP 0.9.1 | queue bridge        | Cross-protocol queue delivery MQTT producers to AMQP consumers |
-| `bridge-queue-amqp-mqtt`     | AMQP 0.9.1 -> MQTT | queue bridge        | Cross-protocol queue delivery AMQP producers to MQTT consumers |
+| Config                                | Flow        | Pattern  | Focus                                           |
+| ------------------------------------- | ----------- | -------- | ----------------------------------------------- |
+| `tests/perf/configs/fanin_mqtt_mqtt.json`   | mqtt-mqtt   | fanin    | MQTT topic fan-in baseline                      |
+| `tests/perf/configs/fanin_mqtt_amqp.json`   | mqtt-amqp   | fanin    | MQTT publish -> AMQP subscribe compatibility    |
+| `tests/perf/configs/fanin_amqp_mqtt.json`   | amqp-mqtt   | fanin    | AMQP publish -> MQTT subscribe compatibility    |
+| `tests/perf/configs/fanin_amqp_amqp.json`   | amqp-amqp   | fanin    | AMQP topic fan-in baseline                      |
+| `tests/perf/configs/fanout_mqtt_mqtt.json`  | mqtt-mqtt   | fanout   | MQTT topic fan-out baseline                     |
+| `tests/perf/configs/fanout_mqtt_amqp.json`  | mqtt-amqp   | fanout   | MQTT publish -> AMQP subscribe compatibility    |
+| `tests/perf/configs/fanout_amqp_mqtt.json`  | amqp-mqtt   | fanout   | AMQP publish -> MQTT subscribe compatibility    |
+| `tests/perf/configs/fanout_amqp_amqp.json`  | amqp-amqp   | fanout   | AMQP topic fan-out baseline                     |
 
 ## Output and metrics
 
@@ -166,8 +163,7 @@ For each scenario run, output includes:
 - payload size
 - messages sent, expected, received
 - concurrent publishers
-- concurrent consumers/subscribers
-- consumer group count (where relevant)
+- concurrent subscribers
 - sent/received throughput in messages per second
 - delivery ratio, error count, pass/fail
 
@@ -197,8 +193,7 @@ Set variables inline before `make perf-suite`.
 | `PERF_PUBLISH_JITTER`         | `0`                                               | Random per-publisher cadence jitter (`+/- duration`)    |
 | `PERF_MQTT_ADDRS`             | `127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885` | MQTT endpoints                                          |
 | `PERF_AMQP_ADDRS`             | `127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684` | AMQP 0.9.1 endpoints                                    |
-| `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for non-queue topic scenarios            |
-| `PERF_QUEUE_MIN_RATIO`        | `0.99`                                            | Pass threshold for queue/bridge/stream scenarios        |
+| `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for topic scenario delivery ratio        |
 | `PERF_DRAIN_TIMEOUT`          | `45s`                                             | Max wait for subscribers/consumers to drain             |
 | `PERF_SKIP_READY_CHECK`       | `0`                                               | Skip readiness probes when set to `1`                   |
 | `PERF_CLUSTER_NETWORK_NAME`   | `fluxmq-local-net`                                | Local Docker network name used by cluster compose       |

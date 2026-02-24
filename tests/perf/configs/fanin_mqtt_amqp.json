@@ -1,0 +1,20 @@
+{
+  "name": "topic-fanin-mqtt-amqp",
+  "description": "Config-driven topic fan-in: MQTT publishers to AMQP subscribers.",
+  "pattern": "fanin",
+  "flow": "mqtt-amqp",
+  "topic": "perf/topic/config/fanin/mqtt-amqp/{run_id}",
+  "qos": 1,
+  "publishers": 100,
+  "messages_per_publisher": 100,
+  "publish_interval": "200ms",
+  "publish_jitter": "2s",
+  "subscribers": 100,
+  "wildcard_subscribers": 10,
+  "wildcard_patterns": [
+    "{topic}",
+    "{base}/#"
+  ],
+  "payload_bytes": 4096,
+  "drain_timeout": "5m"
+}

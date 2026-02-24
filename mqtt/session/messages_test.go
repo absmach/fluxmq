@@ -155,9 +155,9 @@ func (w *mockWriter) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()
 }
 
 type fakeInflight struct {
-	expired                 []*messages.InflightMessage
-	retryCalls              []uint16
-	deliveryAttemptedCalls  []uint16
+	expired                []*messages.InflightMessage
+	retryCalls             []uint16
+	deliveryAttemptedCalls []uint16
 }
 
 func (f *fakeInflight) Add(packetID uint16, msg *storage.Message, direction messages.Direction) error {

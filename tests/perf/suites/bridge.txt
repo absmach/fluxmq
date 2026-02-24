@@ -1,3 +1,0 @@
-# Cross-protocol queue bridge suite
-bridge-queue-mqtt-amqp
-bridge-queue-amqp-mqtt
