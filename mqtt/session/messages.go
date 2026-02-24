@@ -138,43 +138,49 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 		return writer.WriteControlPacket(rel, onSent)
 	}
 
-	pub := h.newPublishPacket(msg, inflight.PacketID)
-	err := writer.TryWriteDataPacket(pub, onSent)
+	pub, releasePub := h.acquirePublishPacket(msg, inflight.PacketID)
+	wrappedOnSent := func() {
+		onSent()
+		releasePub()
+	}
+	err := writer.TryWriteDataPacket(pub, wrappedOnSent)
 	if errors.Is(err, core.ErrSendQueueFull) {
-		// Reset the backoff timer so this message doesn't fire on every
-		// ProcessRetries call while the queue remains full.
+		releasePub()
 		h.inflight.MarkDeliveryAttempted(inflight.PacketID)
 		return nil
+	}
+	if err != nil {
+		releasePub()
 	}
 	return err
 }
 
-func (h *msgHandler) newPublishPacket(msg *storage.Message, packetID uint16) packets.ControlPacket {
+func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16) (packets.ControlPacket, func()) {
 	payload := msg.GetPayload()
 	if h.version == packets.V5 {
-		return &v5.Publish{
-			FixedHeader: packets.FixedHeader{
-				PacketType: packets.PublishType,
-				QoS:        msg.QoS,
-				Retain:     msg.Retain,
-				Dup:        true,
-			},
-			TopicName: msg.Topic,
-			Payload:   payload,
-			ID:        packetID,
-		}
-	}
-	return &v3.Publish{
-		FixedHeader: packets.FixedHeader{
+		p := v5.AcquirePublish()
+		p.FixedHeader = packets.FixedHeader{
 			PacketType: packets.PublishType,
 			QoS:        msg.QoS,
 			Retain:     msg.Retain,
 			Dup:        true,
-		},
-		TopicName: msg.Topic,
-		Payload:   payload,
-		ID:        packetID,
+		}
+		p.TopicName = msg.Topic
+		p.Payload = payload
+		p.ID = packetID
+		return p, func() { v5.ReleasePublish(p) }
 	}
+	p := v3.AcquirePublish()
+	p.FixedHeader = packets.FixedHeader{
+		PacketType: packets.PublishType,
+		QoS:        msg.QoS,
+		Retain:     msg.Retain,
+		Dup:        true,
+	}
+	p.TopicName = msg.Topic
+	p.Payload = payload
+	p.ID = packetID
+	return p, func() { v3.ReleasePublish(p) }
 }
 
 func (h *msgHandler) newPubRelPacket(packetID uint16) packets.ControlPacket {

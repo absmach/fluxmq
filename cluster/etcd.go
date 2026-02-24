@@ -1254,12 +1254,15 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	}
 
 	// Collect unique remote node IDs
-	remoteNodes := make(map[string]struct{})
+	remoteNodes := make(map[string]struct{}, len(subs))
 	c.ownerCacheMu.RLock()
-	cacheMisses := make(map[string]struct{})
+	var cacheMisses map[string]struct{}
 	for _, sub := range subs {
 		nodeID, ok := c.ownerCache[sub.ClientID]
 		if !ok {
+			if cacheMisses == nil {
+				cacheMisses = make(map[string]struct{})
+			}
 			cacheMisses[sub.ClientID] = struct{}{}
 			continue
 		}
@@ -1270,21 +1273,23 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 	c.ownerCacheMu.RUnlock()
 
 	// Fallback to etcd for cache misses
-	for clientID := range cacheMisses {
-		if ctx.Err() != nil {
-			break
-		}
-		nodeID, _, err := c.GetSessionOwner(ctx, clientID)
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if len(cacheMisses) > 0 {
+		for clientID := range cacheMisses {
+			if ctx.Err() != nil {
 				break
 			}
-			continue
+			nodeID, _, err := c.GetSessionOwner(ctx, clientID)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					break
+				}
+				continue
+			}
+			if nodeID == "" || nodeID == c.nodeID {
+				continue
+			}
+			remoteNodes[nodeID] = struct{}{}
 		}
-		if nodeID == "" || nodeID == c.nodeID {
-			continue
-		}
-		remoteNodes[nodeID] = struct{}{}
 	}
 
 	if len(remoteNodes) == 0 {

@@ -101,9 +101,9 @@ func (r *TrieRouter) Match(topic string) ([]*storage.Subscription, error) {
 	matchLevel(r.root, levels, 0, matched)
 	// Copy out before releasing the pooled slice to avoid data races
 	// when the pool reuses the backing array in other goroutines.
-	result := append([]*storage.Subscription(nil), (*matched)...)
+	result := make([]*storage.Subscription, len(*matched))
+	copy(result, *matched)
 
-	// Release the pooled slice pointer back to pool
 	ReleaseSubscriptionSlice(matched)
 
 	return result, nil

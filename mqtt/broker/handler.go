@@ -4,7 +4,9 @@
 package broker
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -26,6 +28,18 @@ var (
 	ErrInvalidPacketType = errors.New("invalid packet type")
 	ErrSessionNotFound   = errors.New("session not found")
 )
+
+const queueHeartbeatUpdateMinInterval = time.Second
+
+func maybeUpdateQueueHeartbeat(b *Broker, s *session.Session) {
+	if b.queueManager == nil {
+		return
+	}
+	if !s.ShouldUpdateHeartbeat(time.Now(), queueHeartbeatUpdateMinInterval) {
+		return
+	}
+	go b.queueManager.UpdateHeartbeat(context.Background(), s.ID)
+}
 
 // Handler is the interface for packet handlers (V3, V5, etc).
 type Handler interface {

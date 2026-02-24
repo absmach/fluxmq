@@ -4,7 +4,6 @@
 package broker
 
 import (
-	"context"
 	"io"
 	"log/slog"
 	"time"
@@ -465,7 +464,6 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 	h.broker.logger.Info("v5_subscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Opts)))
 
 	packetID := p.ID
-	existingSubs := s.GetSubscriptions()
 
 	reasonCodes := make([]byte, len(p.Opts))
 	for i, t := range p.Opts {
@@ -509,7 +507,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 
 		// Extract consumer group from subscription properties
 		consumerGroup := extractConsumerGroup(s.ID, p.Properties)
-		_, wasSubscribed := existingSubs[t.Topic]
+		wasSubscribed := s.HasSubscription(t.Topic)
 
 		opts := storage.SubscribeOptions{
 			NoLocal:           noLocal,
@@ -526,8 +524,6 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			reasonCodes[i] = v5.SubAckImplementationSpecificError
 			continue
 		}
-		existingSubs[t.Topic] = opts
-
 		reasonCodes[i] = grantedQoS
 
 		sendRetained := true
@@ -615,10 +611,9 @@ func (h *V5Handler) HandlePingReq(s *session.Session) error {
 	h.broker.logger.Debug("v5_pingreq", slog.String("client_id", s.ID))
 
 	// Update heartbeat for queue consumers
-	// Fire and forget - don't block PINGRESP on this
-	if h.broker.queueManager != nil {
-		go h.broker.queueManager.UpdateHeartbeat(context.Background(), s.ID)
-	}
+	// Fire and forget - don't block PINGRESP on this.
+	// Updates are interval-limited to avoid goroutine storms under ping floods.
+	maybeUpdateQueueHeartbeat(h.broker, s)
 
 	resp := &v5.PingResp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},

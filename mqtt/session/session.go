@@ -5,6 +5,7 @@ package session
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/absmach/fluxmq/config"
@@ -92,6 +93,10 @@ type Session struct {
 	// deliverStop is closed when the session disconnects to unblock goroutines
 	// waiting in AcquireDeliverSlot.
 	deliverStop chan struct{}
+
+	// lastHeartbeatUpdate tracks the last queue heartbeat update emitted
+	// from PINGREQ handling. Accessed atomically to avoid lock contention.
+	lastHeartbeatUpdate int64
 }
 
 // Options holds options for creating a new session.
@@ -350,6 +355,14 @@ func (s *Session) IsConnected() bool {
 	return s.state == StateConnected && s.conn != nil
 }
 
+// GetDisconnectedAt returns when the session was disconnected.
+// Cheaper than Info() when only the disconnect timestamp is needed.
+func (s *Session) GetDisconnectedAt() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.disconnectedAt
+}
+
 // Conn returns the current connection (may be nil).
 func (s *Session) Conn() core.Connection {
 	s.mu.RLock()
@@ -481,6 +494,35 @@ func (s *Session) GetSubscriptions() map[string]storage.SubscribeOptions {
 		result[k] = v
 	}
 	return result
+}
+
+// HasSubscription reports whether a filter is already tracked for the session.
+func (s *Session) HasSubscription(filter string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.subscriptions[filter]
+	return ok
+}
+
+// ShouldUpdateHeartbeat applies a minimum interval between queue heartbeat updates.
+// It returns true when the caller should emit a heartbeat update.
+func (s *Session) ShouldUpdateHeartbeat(now time.Time, minInterval time.Duration) bool {
+	if minInterval <= 0 {
+		return true
+	}
+
+	nowNano := now.UnixNano()
+	minDelta := minInterval.Nanoseconds()
+
+	for {
+		last := atomic.LoadInt64(&s.lastHeartbeatUpdate)
+		if last != 0 && nowNano-last < minDelta {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&s.lastHeartbeatUpdate, last, nowNano) {
+			return true
+		}
+	}
 }
 
 // SetTopicAlias sets a topic alias for outbound use.

@@ -40,8 +40,7 @@ func (b *Broker) expireSessions() {
 		}
 
 		if s.ExpiryInterval > 0 {
-			info := s.Info()
-			expiryTime := info.DisconnectedAt.Add(time.Duration(s.ExpiryInterval) * time.Second)
+			expiryTime := s.GetDisconnectedAt().Add(time.Duration(s.ExpiryInterval) * time.Second)
 			if now.After(expiryTime) {
 				toDelete = append(toDelete, s.ID)
 			}

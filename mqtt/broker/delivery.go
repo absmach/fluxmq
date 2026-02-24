@@ -262,24 +262,29 @@ func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
 		}
 	}
 
-	userProps := make(map[string]string)
+	// Build User properties slice directly without intermediate map.
+	// Skip entirely when no properties exist (common case).
+	var userCount int
 	if msg.Properties != nil {
-		for k, v := range msg.Properties {
-			if isReservedUserPropertyKey(k) {
-				continue
+		for k := range msg.Properties {
+			if !isReservedUserPropertyKey(k) {
+				userCount++
 			}
-			userProps[k] = v
 		}
 	}
-	if msg.UserProperties != nil {
-		for k, v := range msg.UserProperties {
-			userProps[k] = v
-		}
-	}
+	userCount += len(msg.UserProperties)
 
-	if len(userProps) > 0 {
-		props.User = make([]v5.User, 0, len(userProps))
-		for k, v := range userProps {
+	if userCount > 0 {
+		props.User = make([]v5.User, 0, userCount)
+		if msg.Properties != nil {
+			for k, v := range msg.Properties {
+				if isReservedUserPropertyKey(k) {
+					continue
+				}
+				props.User = append(props.User, v5.User{Key: k, Value: v})
+			}
+		}
+		for k, v := range msg.UserProperties {
 			props.User = append(props.User, v5.User{Key: k, Value: v})
 		}
 	}
