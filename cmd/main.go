@@ -73,7 +73,11 @@ func main() {
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
 	}
-	logger := slog.New(handler)
+	nodeID := strings.TrimSpace(cfg.Cluster.NodeID)
+	if nodeID == "" {
+		nodeID = "single-node"
+	}
+	logger := slog.New(handler).With("local_node_id", nodeID)
 	slog.SetDefault(logger)
 
 	slog.Info("Starting MQTT broker", "version", "0.1.0")
