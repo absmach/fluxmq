@@ -220,7 +220,7 @@ Defaults in `examples/no-cluster.yaml`:
 
 - Image: `ghcr.io/absmach/fluxmq`
 - Examples: `deployments/docker/README.md`, `deployments/docker/compose.yaml`, `deployments/docker/config.yaml`
-- Build local images: `make docker` (latest) or `make docker-latest` (git tag/sha)
+- Build local image: `make docker`
 
 ## Configuration
 

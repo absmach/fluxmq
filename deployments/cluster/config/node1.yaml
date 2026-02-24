@@ -5,6 +5,13 @@ server:
       max_connections: 10000
       read_timeout: 60s
       write_timeout: 60s
+  websocket:
+    plain:
+      addr: "127.0.0.1:8883"
+      path: "/mqtt"
+  http:
+    plain:
+      addr: "127.0.0.1:8090"
   amqp:
     plain:
       addr: "127.0.0.1:5672"

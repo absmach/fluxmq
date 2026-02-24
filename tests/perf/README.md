@@ -11,13 +11,18 @@ AMQP 1.0 is intentionally out of scope for this test collection.
 ```bash
 # 1) Start 3-node cluster (pick one)
 make cluster-up      # local processes
-make docker-up       # docker with host networking
+make docker-cluster-up       # docker with host networking
 
 # 2) Run one config-driven scenario
 make run-perf CONFIG=tests/perf/configs/fanout_mqtt_amqp.json
 
 # 3) Cleanup result files
 make perf-cleanup
+
+# 4) Stop cluster and optionally remove /tmp/fluxmq data
+make cluster-down            # local mode
+make docker-cluster-down     # docker mode
+make clean-data              # optional
 ```
 
 ## Prerequisites
@@ -25,10 +30,21 @@ make perf-cleanup
 - Go toolchain available in PATH
 - `make`, `bash`, `curl`
 - For Docker mode: Docker + Docker Compose plugin
-- Local ports available:
-  - MQTT: `1883`, `1884`, `1885`
-  - AMQP 0.9.1: `5682`, `5683`, `5684`
-  - Health: `8081`, `8082`, `8083`
+- Local ports available (see full port map below)
+
+### Cluster port map
+
+| Service      | Node 1 | Node 2 | Node 3 |
+|--------------|--------|--------|--------|
+| MQTT         | 1883   | 1884   | 1885   |
+| WebSocket    | 8883   | 8884   | 8885   |
+| HTTP         | 8090   | 8091   | 8092   |
+| AMQP 1.0     | 5672   | 5673   | 5674   |
+| AMQP 0.9.1   | 5682   | 5683   | 5684   |
+| Health       | 8081   | 8082   | 8083   |
+| etcd peer    | 2380   | 2381   | 2382   |
+| etcd client  | 2379   | 2389   | 2399   |
+| gRPC transport | 7948 | 7949   | 7950   |
 
 ## Directory layout
 
@@ -43,7 +59,7 @@ make perf-cleanup
 ## Cluster setup and validation
 
 1. Start cluster:
-   - `make cluster-up` (local) or `make docker-up` (Docker)
+   - `make cluster-up` (local) or `make docker-cluster-up` (Docker)
 2. Readiness checks used by perf runner:
    - `http://127.0.0.1:8081/ready`
    - `http://127.0.0.1:8082/ready`
@@ -228,3 +244,16 @@ make perf-cleanup
 ## Cleanup
 
 `make perf-cleanup` removes suite log and JSONL files from the results directory.
+
+Cluster teardown:
+
+```bash
+# local
+make cluster-down
+
+# docker
+make docker-cluster-down
+
+# optional: remove /tmp/fluxmq data
+make clean-data
+```

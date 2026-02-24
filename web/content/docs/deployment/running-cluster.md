@@ -24,8 +24,8 @@ make cluster-down    # graceful stop
 ### Docker (host networking)
 
 ```bash
-make docker-up       # start 3-node Docker cluster, wait for health checks
-make docker-down     # stop containers
+make docker-cluster-up       # start 3-node Docker cluster, wait for health checks
+make docker-cluster-down     # stop containers
 ```
 
 ### Manual (per node)
@@ -36,6 +36,20 @@ make build
 ./build/fluxmq -config deployments/cluster/config/node2.yaml &
 ./build/fluxmq -config deployments/cluster/config/node3.yaml &
 ```
+
+## Cluster Port Map
+
+| Service      | Node 1 | Node 2 | Node 3 |
+|--------------|--------|--------|--------|
+| MQTT         | 1883   | 1884   | 1885   |
+| WebSocket    | 8883   | 8884   | 8885   |
+| HTTP         | 8090   | 8091   | 8092   |
+| AMQP 1.0     | 5672   | 5673   | 5674   |
+| AMQP 0.9.1   | 5682   | 5683   | 5684   |
+| Health       | 8081   | 8082   | 8083   |
+| etcd peer    | 2380   | 2381   | 2382   |
+| etcd client  | 2379   | 2389   | 2399   |
+| gRPC transport | 7948 | 7949   | 7950   |
 
 ## Key Cluster Settings
 

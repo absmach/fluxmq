@@ -2,6 +2,7 @@ services:
   node1:
     image: ghcr.io/absmach/fluxmq:latest
     command: ["-config", "/etc/fluxmq/config.yaml"]
+    user: "0:0"
     network_mode: host
     volumes:
       - ./config/node1.yaml:/etc/fluxmq/config.yaml:ro
@@ -11,6 +12,7 @@ services:
   node2:
     image: ghcr.io/absmach/fluxmq:latest
     command: ["-config", "/etc/fluxmq/config.yaml"]
+    user: "0:0"
     network_mode: host
     volumes:
       - ./config/node2.yaml:/etc/fluxmq/config.yaml:ro
@@ -22,6 +24,7 @@ services:
   node3:
     image: ghcr.io/absmach/fluxmq:latest
     command: ["-config", "/etc/fluxmq/config.yaml"]
+    user: "0:0"
     network_mode: host
     volumes:
       - ./config/node3.yaml:/etc/fluxmq/config.yaml:ro

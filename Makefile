@@ -9,7 +9,6 @@ GO := go
 LDFLAGS := -s -w
 GOFLAGS := -trimpath
 DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
-DOCKER_IMAGE_GIT := ghcr.io/absmach/fluxmq:$(shell git describe --tags --always --dirty)
 PERF_SCRIPT_DIR := tests/perf/scripts
 PERF_SCENARIO_CONFIG ?= $(CONFIG)
 DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
@@ -31,11 +30,6 @@ $(BUILD_DIR)/$(BINARY): cmd/main.go $(shell find . -name '*.go' -not -path './bu
 .PHONY: docker
 docker:
 	docker build -f deployments/docker/Dockerfile -t $(DOCKER_IMAGE_LATEST) .
-
-# Build Docker image tagged with the current git tag/sha
-.PHONY: docker-latest
-docker-latest:
-	docker build -f deployments/docker/Dockerfile -t $(DOCKER_IMAGE_GIT) .
 
 # Run the broker (uses default configuration)
 .PHONY: run
@@ -64,8 +58,8 @@ cluster-down:
 
 # --- Cluster (docker) ---
 
-.PHONY: docker-up
-docker-up:
+.PHONY: docker-cluster-up
+docker-cluster-up:
 	@docker compose -f $(DEPLOY_COMPOSE) up -d
 	@echo "Waiting for health endpoints..."
 	@for port in 8081 8082 8083; do \
@@ -85,8 +79,8 @@ docker-up:
 		fi; \
 	done
 
-.PHONY: docker-down
-docker-down:
+.PHONY: docker-cluster-down
+docker-cluster-down:
 	docker compose -f $(DEPLOY_COMPOSE) down
 
 # --- Tests ---
@@ -239,15 +233,6 @@ clean:
 clean-data:
 	rm -rf /tmp/fluxmq
 
-.PHONY: clean-docker
-clean-docker:
-	docker compose -f $(DEPLOY_COMPOSE) down --remove-orphans
-
-.PHONY: clean-docker-data
-clean-docker-data:
-	docker compose -f $(DEPLOY_COMPOSE) down -v --remove-orphans
-	rm -rf /tmp/fluxmq
-
 # --- Utilities ---
 
 .PHONY: lint
@@ -284,7 +269,6 @@ help:
 	@echo "Build:"
 	@echo "  build              Build the broker binary to $(BUILD_DIR)/$(BINARY)"
 	@echo "  docker             Build Docker image ($(DOCKER_IMAGE_LATEST))"
-	@echo "  docker-latest      Build Docker image tagged with git sha"
 	@echo ""
 	@echo "Run (single node):"
 	@echo "  run                Build and run with default config"
@@ -298,8 +282,8 @@ help:
 	@echo "  cluster-down       Gracefully stop local cluster"
 	@echo ""
 	@echo "Cluster (docker):"
-	@echo "  docker-up          Start 3-node Docker cluster (host networking)"
-	@echo "  docker-down        Stop Docker cluster"
+	@echo "  docker-cluster-up      Start 3-node Docker cluster (host networking)"
+	@echo "  docker-cluster-down    Stop Docker cluster"
 	@echo ""
 	@echo "Tests:"
 	@echo "  test               Run all tests (short, with race detector)"
@@ -336,8 +320,6 @@ help:
 	@echo "Cleanup:"
 	@echo "  clean              Remove build artifacts"
 	@echo "  clean-data         Remove all /tmp/fluxmq data directories"
-	@echo "  clean-docker       Stop Docker cluster containers"
-	@echo "  clean-docker-data  Stop Docker cluster + remove volumes + data"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  fmt                Format code"

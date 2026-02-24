@@ -48,7 +48,7 @@ write_header "$LOG_FILE"
 if [[ "$SKIP_READY_CHECK" != "1" ]]; then
 	for port in 8081 8082 8083; do
 		if ! curl -fsS "http://127.0.0.1:${port}/ready" 2>/dev/null | grep -q '"status":"ready"'; then
-			log_error "Cluster readiness check failed on port $port. Start cluster with: make cluster-up (or make docker-up)"
+			log_error "Cluster readiness check failed on port $port. Start cluster with: make cluster-up (or make docker-cluster-up)"
 			exit 1
 		fi
 	done
