@@ -5,15 +5,15 @@
   "flow": "amqp-amqp",
   "topic": "perf/topic/config/fanout/amqp-amqp/{run_id}",
   "topic_count": 48,
-  "publishers": 100,
-  "messages_per_publisher": 50,
+  "publishers": 200,
+  "messages_per_publisher": 100,
   "publish_interval": "50ms",
-  "subscribers": 200,
+  "subscribers": 250,
   "wildcard_subscribers": 20,
   "wildcard_patterns": [
     "{base}/t/+",
     "{base}/#"
   ],
-  "drain_timeout": "2m",
-  "payload_bytes": 1024
+  "drain_timeout": "30s",
+  "payload_bytes": 4096
 }

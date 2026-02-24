@@ -21,7 +21,7 @@ docker run --rm \
   -p 5672:5672 \
   -p 5682:5682 \
   -p 8081:8081 \
-  -v "$(pwd)/docker/config.yaml:/etc/fluxmq/config.yaml:ro" \
+  -v "$(pwd)/deployments/docker/config.yaml:/etc/fluxmq/config.yaml:ro" \
   -v fluxmq-data:/var/lib/fluxmq \
   ghcr.io/absmach/fluxmq:latest \
   --config /etc/fluxmq/config.yaml
@@ -29,25 +29,23 @@ docker run --rm \
 
 ## Docker Compose
 
-Use `docker/compose.yaml`:
+Use `deployments/docker/compose.yaml`:
 
 ```bash
-docker compose -f docker/compose.yaml up -d
+docker compose -f deployments/docker/compose.yaml up -d
 ```
 
-## 3-Node Cluster Compose
+## 3-Node Cluster
 
-Use `docker/docker-compose-cluster.yaml`:
-
-```bash
-make run-cluster
-```
-
-Useful lifecycle commands:
+See `deployments/cluster/` directory for cluster configs. Both local and Docker
+use the same config files (`deployments/cluster/config/node{1,2,3}.yaml`).
 
 ```bash
-make run-cluster-ps
-make run-cluster-logs
-make run-cluster-down
-make run-cluster-clean
+# Local processes
+make cluster-up
+make cluster-down
+
+# Docker (host networking)
+make docker-up
+make docker-down
 ```

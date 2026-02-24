@@ -6,15 +6,15 @@
   "topic": "perf/topic/config/fanout/amqp-mqtt/{run_id}",
   "qos": 1,
   "topic_count": 40,
-  "publishers": 280,
-  "messages_per_publisher": 220,
+  "publishers": 300,
+  "messages_per_publisher": 250,
   "publish_interval": "100ms",
-  "subscribers": 100,
+  "subscribers": 200,
   "wildcard_subscribers": 20,
   "wildcard_patterns": [
     "{base}/t/+",
     "{base}/#"
   ],
   "drain_timeout": "45s",
-  "payload_bytes": 2048
+  "payload_bytes": 4096
 }

@@ -15,8 +15,8 @@ SCENARIO_CONFIGS_RAW="${PERF_SCENARIO_CONFIGS:-}"
 SIZES_RAW="${PERF_MESSAGE_SIZES:-small,medium,large}"
 MESSAGE_SIZE_BYTES="${PERF_MESSAGE_SIZE_BYTES:-}"
 
-MQTT_ADDRS="${PERF_MQTT_ADDRS:-127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885}"
-AMQP_ADDRS="${PERF_AMQP_ADDRS:-127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684}"
+MQTT_ADDRS="${PERF_MQTT_ADDRS:-127.0.0.1:1883,127.0.0.1:1884,127.0.0.1:1885}"
+AMQP_ADDRS="${PERF_AMQP_ADDRS:-127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684}"
 MIN_RATIO="${PERF_MIN_RATIO:-0.95}"
 DRAIN_TIMEOUT="${PERF_DRAIN_TIMEOUT:-45s}"
 SKIP_READY_CHECK="${PERF_SKIP_READY_CHECK:-0}"
@@ -46,9 +46,9 @@ log_info "Result JSONL: $JSON_FILE"
 write_header "$LOG_FILE"
 
 if [[ "$SKIP_READY_CHECK" != "1" ]]; then
-	for port in 18081 18082 18083; do
+	for port in 8081 8082 8083; do
 		if ! curl -fsS "http://127.0.0.1:${port}/ready" 2>/dev/null | grep -q '"status":"ready"'; then
-			log_error "Cluster readiness check failed on port $port. Start cluster with: make run-cluster"
+			log_error "Cluster readiness check failed on port $port. Start cluster with: make cluster-up (or make docker-up)"
 			exit 1
 		fi
 	done

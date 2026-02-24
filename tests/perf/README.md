@@ -2,33 +2,33 @@
 
 Performance tests are config-driven (`tests/perf/configs/*.json`) and run with `make run-perf` (single config) or `make perf-suite` (list of configs).
 
-This setup runs real MQTT and AMQP 0.9.1 clients against the 3-node Docker Compose cluster and writes machine-readable JSONL results plus human-readable logs.
+This setup runs real MQTT and AMQP 0.9.1 clients against a 3-node cluster (local or Docker) and writes machine-readable JSONL results plus human-readable logs.
 
 AMQP 1.0 is intentionally out of scope for this test collection.
 
 ## Quick start
 
 ```bash
-# 1) Start 3-node cluster
-make run-cluster
+# 1) Start 3-node cluster (pick one)
+make cluster-up      # local processes
+make docker-up       # docker with host networking
 
 # 2) Run one config-driven scenario
 make run-perf CONFIG=tests/perf/configs/fanout_mqtt_amqp.json
 
-# 3) Cleanup cluster state and generated result files
+# 3) Cleanup result files
 make perf-cleanup
 ```
 
 ## Prerequisites
 
 - Go toolchain available in PATH
-- Docker + Docker Compose plugin available
 - `make`, `bash`, `curl`
-- Shared Docker bridge network `fluxmq-local-net` (auto-created by `make run-cluster`)
+- For Docker mode: Docker + Docker Compose plugin
 - Local ports available:
-  - MQTT: `11883`, `11884`, `11885`
-  - AMQP 0.9.1: `15682`, `15683`, `15684`
-  - readiness endpoints: `18081`, `18082`, `18083`
+  - MQTT: `1883`, `1884`, `1885`
+  - AMQP 0.9.1: `5682`, `5683`, `5684`
+  - Health: `8081`, `8082`, `8083`
 
 ## Directory layout
 
@@ -43,15 +43,11 @@ make perf-cleanup
 ## Cluster setup and validation
 
 1. Start cluster:
-   - `make run-cluster`
-2. Optional status checks:
-   - `make run-cluster-ps`
-   - `make run-cluster-logs SERVICE=node1`
-   - direct container endpoints on `fluxmq-local-net`: `node1`/`10.247.0.11`, `node2`/`10.247.0.12`, `node3`/`10.247.0.13`
-3. Readiness checks used by perf runner:
-   - `http://127.0.0.1:18081/ready`
-   - `http://127.0.0.1:18082/ready`
-   - `http://127.0.0.1:18083/ready`
+   - `make cluster-up` (local) or `make docker-up` (Docker)
+2. Readiness checks used by perf runner:
+   - `http://127.0.0.1:8081/ready`
+   - `http://127.0.0.1:8082/ready`
+   - `http://127.0.0.1:8083/ready`
 
 Set `PERF_SKIP_READY_CHECK=1` only when you intentionally want to bypass readiness probing.
 
@@ -191,20 +187,18 @@ Set variables inline before `make perf-suite`.
 | `PERF_MESSAGES_PER_PUBLISHER` | config value                                      | Override per-publisher message count                    |
 | `PERF_PUBLISH_INTERVAL`       | config value                                      | Delay between publishes per publisher                   |
 | `PERF_PUBLISH_JITTER`         | `0`                                               | Random per-publisher cadence jitter (`+/- duration`)    |
-| `PERF_MQTT_ADDRS`             | `127.0.0.1:11883,127.0.0.1:11884,127.0.0.1:11885` | MQTT endpoints                                          |
-| `PERF_AMQP_ADDRS`             | `127.0.0.1:15682,127.0.0.1:15683,127.0.0.1:15684` | AMQP 0.9.1 endpoints                                    |
+| `PERF_MQTT_ADDRS`             | `127.0.0.1:1883,127.0.0.1:1884,127.0.0.1:1885`   | MQTT endpoints                                          |
+| `PERF_AMQP_ADDRS`             | `127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684`   | AMQP 0.9.1 endpoints                                    |
 | `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for topic scenario delivery ratio        |
 | `PERF_DRAIN_TIMEOUT`          | `45s`                                             | Max wait for subscribers/consumers to drain             |
 | `PERF_SKIP_READY_CHECK`       | `0`                                               | Skip readiness probes when set to `1`                   |
-| `PERF_CLUSTER_NETWORK_NAME`   | `fluxmq-local-net`                                | Local Docker network name used by cluster compose       |
-| `PERF_CLUSTER_NETWORK_SUBNET` | `10.247.0.0/24`                                   | Subnet used when auto-creating the cluster network      |
 
 ## Example env configs and runs
 
 ### Example 1: single config run
 
 ```bash
-make run-cluster
+make cluster-up
 make run-perf CONFIG=tests/perf/configs/fanout_mqtt_amqp.json
 ```
 
@@ -233,17 +227,4 @@ make perf-cleanup
 
 ## Cleanup
 
-`make perf-cleanup` supports:
-
-- `PERF_CLEAN_RESET_CLUSTER=1` (default): reset containers and mapped volumes
-- `PERF_CLEAN_RESULTS=1` (default): remove suite logs and JSONL files
-
-Examples:
-
-```bash
-# remove only result files, keep cluster running
-PERF_CLEAN_RESET_CLUSTER=0 PERF_CLEAN_RESULTS=1 make perf-cleanup
-
-# reset cluster state, keep result files
-PERF_CLEAN_RESET_CLUSTER=1 PERF_CLEAN_RESULTS=0 make perf-cleanup
-```
+`make perf-cleanup` removes suite log and JSONL files from the results directory.

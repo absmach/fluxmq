@@ -9,27 +9,33 @@ description: Start a multi-node FluxMQ cluster with embedded etcd and transport 
 
 FluxMQ clustering uses embedded etcd for metadata and gRPC transport for routing. The repo includes working 3-node examples.
 
-## Use the Example Configs
+## Quick Start
 
-From the repo root:
+The repo includes shared 3-node cluster configs in `deployments/cluster/config/`.
+Both local processes and Docker use the same YAML files.
 
-```bash
-./build/fluxmq --config examples/node1.yaml
-./build/fluxmq --config examples/node2.yaml
-./build/fluxmq --config examples/node3.yaml
-```
-
-## Quick Start With Make
-
-If you prefer, the repo Makefile has shortcuts that run the same example configs:
+### Local processes
 
 ```bash
-make run-node1
-make run-node2
-make run-node3
+make cluster-up      # build + start 3 nodes, wait for health checks
+make cluster-down    # graceful stop
 ```
 
-The 3-node example configs also demonstrate per-queue Raft replication groups, including an auto-provisioned group when `cluster.raft.auto_provision_groups` is enabled.
+### Docker (host networking)
+
+```bash
+make docker-up       # start 3-node Docker cluster, wait for health checks
+make docker-down     # stop containers
+```
+
+### Manual (per node)
+
+```bash
+make build
+./build/fluxmq -config deployments/cluster/config/node1.yaml &
+./build/fluxmq -config deployments/cluster/config/node2.yaml &
+./build/fluxmq -config deployments/cluster/config/node3.yaml &
+```
 
 ## Key Cluster Settings
 

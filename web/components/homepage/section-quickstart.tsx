@@ -22,7 +22,7 @@ export function QuickStartSection() {
             <CodeBlock
               code={`git clone https://github.com/absmach/fluxmq.git
 cd fluxmq
-docker compose -f docker/compose.yaml up -d`}
+docker compose -f deployments/docker/compose.yaml up -d`}
             />
           </div>
 

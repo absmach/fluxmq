@@ -24,7 +24,7 @@ Start FluxMQ with Docker or from source:
 
 ```bash
 # Docker
-docker compose -f docker/compose.yaml up -d
+docker compose -f deployments/docker/compose.yaml up -d
 
 # From source
 go run ./cmd --config examples/no-cluster.yaml

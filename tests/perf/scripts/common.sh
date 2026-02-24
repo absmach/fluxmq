@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PERF_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$PERF_ROOT/../.." && pwd)"
 RESULTS_DIR="${PERF_RESULTS_DIR:-$PERF_ROOT/results}"
-COMPOSE_FILE="${PERF_COMPOSE_FILE:-$PROJECT_ROOT/docker/docker-compose-cluster.yaml}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
 RED='\033[0;31m'
@@ -40,27 +39,6 @@ require_cmd() {
 		log_error "Missing required command: $1"
 		exit 1
 	fi
-}
-
-ensure_compose_file() {
-	if [[ ! -f "$COMPOSE_FILE" ]]; then
-		log_error "Compose file not found: $COMPOSE_FILE"
-		exit 1
-	fi
-}
-
-compose() {
-	ensure_compose_file
-	if docker compose version >/dev/null 2>&1; then
-		docker compose -f "$COMPOSE_FILE" "$@"
-		return
-	fi
-	if command -v docker-compose >/dev/null 2>&1; then
-		docker-compose -f "$COMPOSE_FILE" "$@"
-		return
-	fi
-	log_error "Docker Compose is not available (docker compose / docker-compose)"
-	exit 1
 }
 
 write_header() {

@@ -1,0 +1,31 @@
+services:
+  node1:
+    image: ghcr.io/absmach/fluxmq:latest
+    command: ["-config", "/etc/fluxmq/config.yaml"]
+    network_mode: host
+    volumes:
+      - ./config/node1.yaml:/etc/fluxmq/config.yaml:ro
+      - /tmp/fluxmq/node1:/tmp/fluxmq/node1
+    restart: unless-stopped
+
+  node2:
+    image: ghcr.io/absmach/fluxmq:latest
+    command: ["-config", "/etc/fluxmq/config.yaml"]
+    network_mode: host
+    volumes:
+      - ./config/node2.yaml:/etc/fluxmq/config.yaml:ro
+      - /tmp/fluxmq/node2:/tmp/fluxmq/node2
+    restart: unless-stopped
+    depends_on:
+      - node1
+
+  node3:
+    image: ghcr.io/absmach/fluxmq:latest
+    command: ["-config", "/etc/fluxmq/config.yaml"]
+    network_mode: host
+    volumes:
+      - ./config/node3.yaml:/etc/fluxmq/config.yaml:ro
+      - /tmp/fluxmq/node3:/tmp/fluxmq/node3
+    restart: unless-stopped
+    depends_on:
+      - node1

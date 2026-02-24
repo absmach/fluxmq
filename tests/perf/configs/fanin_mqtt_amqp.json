@@ -5,16 +5,16 @@
   "flow": "mqtt-amqp",
   "topic": "perf/topic/config/fanin/mqtt-amqp/{run_id}",
   "qos": 1,
-  "publishers": 100,
+  "publishers": 200,
   "messages_per_publisher": 100,
   "publish_interval": "200ms",
   "publish_jitter": "2s",
-  "subscribers": 100,
+  "subscribers": 250,
   "wildcard_subscribers": 10,
   "wildcard_patterns": [
     "{topic}",
     "{base}/#"
   ],
   "payload_bytes": 4096,
-  "drain_timeout": "5m"
+  "drain_timeout": "30s"
 }
