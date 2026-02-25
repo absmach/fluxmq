@@ -96,7 +96,8 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	}
 
 	s.upgrader = websocket.Upgrader{
-		CheckOrigin: s.checkOrigin,
+		CheckOrigin:  s.checkOrigin,
+		Subprotocols: []string{"mqtt"},
 	}
 
 	mux := http.NewServeMux()
@@ -233,6 +234,8 @@ type wsConnection struct {
 	closed       bool
 	lastActivity time.Time
 	onDisconnect func(graceful bool)
+	pingStop     chan struct{}
+	pingOnce     sync.Once
 }
 
 func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion int) core.Connection {
@@ -341,6 +344,11 @@ func (c *wsConnection) Close() error {
 	}
 
 	c.closed = true
+	c.pingOnce.Do(func() {
+		if c.pingStop != nil {
+			close(c.pingStop)
+		}
+	})
 	if c.onDisconnect != nil {
 		c.onDisconnect(false)
 	}
@@ -372,8 +380,39 @@ func (c *wsConnection) SetDeadline(t time.Time) error {
 }
 
 func (c *wsConnection) SetKeepAlive(d time.Duration) error {
-	// WebSocket has its own ping/pong mechanism
-	// We can enable it if needed
+	if d <= 0 {
+		return nil
+	}
+
+	c.pingStop = make(chan struct{})
+
+	c.ws.SetPongHandler(func(string) error {
+		c.Touch()
+		return c.ws.SetReadDeadline(time.Now().Add(d + d/2))
+	})
+
+	pingInterval := d / 2
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.pingStop:
+				return
+			case <-ticker.C:
+				c.writeMu.Lock()
+				err := c.ws.WriteControl(
+					websocket.PingMessage, nil,
+					time.Now().Add(10*time.Second),
+				)
+				c.writeMu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	return nil
 }
 
