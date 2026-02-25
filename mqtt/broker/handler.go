@@ -82,6 +82,7 @@ type Router interface {
 	Subscribe(clientID string, filter string, qos byte, opts storage.SubscribeOptions) error
 	Unsubscribe(clientID string, filter string) error
 	Match(topic string) ([]*storage.Subscription, error)
+	MatchInto(topic string, matched *[]*storage.Subscription) error
 }
 
 // Authenticator validates client credentials.

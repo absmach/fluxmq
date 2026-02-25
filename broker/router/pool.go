@@ -55,15 +55,15 @@ var subscriptionSlicePool = sync.Pool{
 	},
 }
 
-// acquireSubscriptionSlice gets a subscription slice from the pool.
+// AcquireSubscriptionSlice gets a subscription slice from the pool.
 // The returned slice must be returned via ReleaseSubscriptionSlice when done.
-func acquireSubscriptionSlice() *[]*storage.Subscription {
+func AcquireSubscriptionSlice() *[]*storage.Subscription {
 	return subscriptionSlicePool.Get().(*[]*storage.Subscription)
 }
 
-// releaseSubscriptionSlice returns a subscription slice to the pool after resetting it.
+// ReleaseSubscriptionSlice returns a subscription slice to the pool after resetting it.
 // The slice must not be used after calling this function.
-func releaseSubscriptionSlice(s *[]*storage.Subscription) {
+func ReleaseSubscriptionSlice(s *[]*storage.Subscription) {
 	if s == nil {
 		return
 	}

@@ -93,20 +93,31 @@ func (r *TrieRouter) Unsubscribe(clientID string, filter string) error {
 
 // Match returns all subscriptions that match the topic name.
 func (r *TrieRouter) Match(topic string) ([]*storage.Subscription, error) {
+	matched := AcquireSubscriptionSlice()
+	if err := r.MatchInto(topic, matched); err != nil {
+		ReleaseSubscriptionSlice(matched)
+		return nil, err
+	}
+
+	result := make([]*storage.Subscription, len(*matched))
+	copy(result, *matched)
+	ReleaseSubscriptionSlice(matched)
+
+	return result, nil
+}
+
+// MatchInto populates the provided slice with all subscriptions matching the topic.
+// The caller owns the slice and must release it when done.
+func (r *TrieRouter) MatchInto(topic string, matched *[]*storage.Subscription) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	levelsPtr := acquireTopicLevels()
 	levelsPtr = splitTopic(topic, levelsPtr)
-	matched := acquireSubscriptionSlice()
 	matchLevel(r.root, *levelsPtr, 0, matched)
 	releaseTopicLevels(levelsPtr)
 
-	result := make([]*storage.Subscription, len(*matched))
-	copy(result, *matched)
-	releaseSubscriptionSlice(matched)
-
-	return result, nil
+	return nil
 }
 
 func matchLevel(n *node, levels []string, index int, matched *[]*storage.Subscription) {

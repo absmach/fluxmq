@@ -12,6 +12,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -21,7 +22,9 @@ import (
 // Publish always releases msg's payload buffer before returning; callers must not
 // use the payload afterwards.
 func (b *Broker) Publish(msg *storage.Message) error {
-	b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
+	if b.logger.Enabled(context.Background(), slog.LevelDebug) {
+		b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
+	}
 	b.stats.IncrementPublishReceived()
 
 	payloadLen := len(msg.GetPayload())
@@ -235,15 +238,17 @@ func (b *Broker) distributeLocal(msg *storage.Message) error {
 // distributeLocalScoped delivers a message to local subscribers.
 // allowCross controls whether cross-protocol delivery callbacks may run.
 func (b *Broker) distributeLocalScoped(msg *storage.Message, allowCross bool) error {
-	matched, err := b.router.Match(msg.Topic)
-	if err != nil {
+	matched := router.AcquireSubscriptionSlice()
+	defer router.ReleaseSubscriptionSlice(matched)
+
+	if err := b.router.MatchInto(msg.Topic, matched); err != nil {
 		return err
 	}
 
 	// Track which share groups have already received the message (lazy init)
 	var deliveredGroups map[string]bool
 
-	for _, sub := range matched {
+	for _, sub := range *matched {
 		clientID := sub.ClientID
 
 		// Check if this is a shared subscription
