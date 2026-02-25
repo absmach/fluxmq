@@ -265,8 +265,10 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 	}
 
 	if err := pkt.Pack(c.conn); err != nil {
+		pkt.Release()
 		return err
 	}
+	pkt.Release()
 	if onSent != nil {
 		onSent()
 	}
@@ -381,10 +383,12 @@ func (c *connection) sendLoop() {
 // deferred into pending and fired after the batch is flushed to the socket.
 func (c *connection) doPack(w *bufio.Writer, item sendItem, pending *[]func()) bool {
 	if err := item.pkt.Pack(w); err != nil {
+		item.pkt.Release()
 		c.markClosed()
 		_ = c.conn.Close()
 		return false
 	}
+	item.pkt.Release()
 	if item.onSent != nil {
 		*pending = append(*pending, item.onSent)
 	}

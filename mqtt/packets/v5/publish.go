@@ -165,6 +165,10 @@ func (pkt *Publish) Type() byte {
 	return PublishType
 }
 
+func (pkt *Publish) Release() {
+	ReleasePublish(pkt)
+}
+
 func (pkt *Publish) Encode() []byte {
 	ret := codec.EncodeBytes([]byte(pkt.TopicName))
 	if pkt.QoS > 0 {

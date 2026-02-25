@@ -75,6 +75,11 @@ type ControlPacket interface {
 	// Type returns the packet type constant.
 	Type() byte
 
+	// Release returns the packet to its pool (if pooled).
+	// The send loop calls this after Pack() completes.
+	// No-op for non-pooled packet types.
+	Release()
+
 	// String returns a human-readable representation.
 	String() string
 }
@@ -109,6 +114,10 @@ type Resetter interface {
 type User struct {
 	Key, Value string
 }
+
+// Release is a no-op for FixedHeader. Packet types that use pooling (e.g. Publish)
+// override this with their own implementation that returns the packet to its pool.
+func (fh FixedHeader) Release() {}
 
 // String returns a human-readable representation of the fixed header.
 func (fh FixedHeader) String() string {

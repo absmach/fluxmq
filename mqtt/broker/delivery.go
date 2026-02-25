@@ -158,12 +158,10 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent
 	b.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
 	var pub packets.ControlPacket
-	var releasePub func()
 
 	switch s.Version {
 	case 5:
 		p := v5.AcquirePublish()
-		releasePub = func() { v5.ReleasePublish(p) }
 
 		// Calculate remaining message expiry interval
 		if msg.MessageExpiry != nil && !msg.Expiry.IsZero() {
@@ -174,7 +172,6 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent
 				remainingSec := uint32(remaining.Seconds())
 				p.Properties.MessageExpiry = &remainingSec
 			}
-			// If remaining <= 0, don't include expiry (message should have been filtered already)
 		}
 
 		p.FixedHeader = packets.FixedHeader{
@@ -190,7 +187,6 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent
 		pub = p
 	default:
 		p := v3.AcquirePublish()
-		releasePub = func() { v3.ReleasePublish(p) }
 
 		p.FixedHeader = packets.FixedHeader{
 			PacketType: packets.PublishType,
@@ -204,23 +200,12 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent
 		pub = p
 	}
 
-	// Wrap onSent to release the pooled packet after the wire write completes.
-	// In async mode, DeliverMessage returns before sendLoop writes the packet,
-	// so we must not release via defer — the packet must stay alive until Pack() is done.
-	var wrappedOnSent func()
-	if onSent != nil {
-		wrappedOnSent = func() {
-			onSent()
-			releasePub()
-		}
-	} else {
-		wrappedOnSent = releasePub
-	}
-
-	err := s.TryWriteDataPacket(pub, wrappedOnSent)
+	// The send loop calls pub.Release() after Pack() completes.
+	// onSent carries only application-level callbacks (e.g. MarkSent).
+	err := s.TryWriteDataPacket(pub, onSent)
 	if err != nil {
 		// TryWriteDataPacket failed without enqueuing; release immediately.
-		releasePub()
+		pub.Release()
 	}
 	return err
 }

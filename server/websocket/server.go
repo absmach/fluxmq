@@ -311,8 +311,10 @@ func (c *wsConnection) writePacket(pkt packets.ControlPacket, onSent func()) err
 
 	buf := &bytes.Buffer{}
 	if err := pkt.Pack(buf); err != nil {
+		pkt.Release()
 		return err
 	}
+	pkt.Release()
 
 	c.writeMu.Lock()
 	err := c.ws.WriteMessage(websocket.BinaryMessage, buf.Bytes())

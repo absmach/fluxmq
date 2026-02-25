@@ -27,6 +27,10 @@ func (p *Publish) Type() byte {
 	return packets.PublishType
 }
 
+func (p *Publish) Release() {
+	ReleasePublish(p)
+}
+
 func (p *Publish) Encode() []byte {
 	var body []byte
 	body = append(body, codec.EncodeString(p.TopicName)...)

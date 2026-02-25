@@ -138,24 +138,20 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 		return writer.WriteControlPacket(rel, onSent)
 	}
 
-	pub, releasePub := h.acquirePublishPacket(msg, inflight.PacketID)
-	wrappedOnSent := func() {
-		onSent()
-		releasePub()
-	}
-	err := writer.TryWriteDataPacket(pub, wrappedOnSent)
+	pub := h.acquirePublishPacket(msg, inflight.PacketID)
+	err := writer.TryWriteDataPacket(pub, onSent)
 	if errors.Is(err, core.ErrSendQueueFull) {
-		releasePub()
+		pub.Release()
 		h.inflight.MarkDeliveryAttempted(inflight.PacketID)
 		return nil
 	}
 	if err != nil {
-		releasePub()
+		pub.Release()
 	}
 	return err
 }
 
-func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16) (packets.ControlPacket, func()) {
+func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16) packets.ControlPacket {
 	payload := msg.GetPayload()
 	if h.version == packets.V5 {
 		p := v5.AcquirePublish()
@@ -168,7 +164,7 @@ func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16)
 		p.TopicName = msg.Topic
 		p.Payload = payload
 		p.ID = packetID
-		return p, func() { v5.ReleasePublish(p) }
+		return p
 	}
 	p := v3.AcquirePublish()
 	p.FixedHeader = packets.FixedHeader{
@@ -180,7 +176,7 @@ func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16)
 	p.TopicName = msg.Topic
 	p.Payload = payload
 	p.ID = packetID
-	return p, func() { v3.ReleasePublish(p) }
+	return p
 }
 
 func (h *msgHandler) newPubRelPacket(packetID uint16) packets.ControlPacket {

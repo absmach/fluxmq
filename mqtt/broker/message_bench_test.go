@@ -461,6 +461,7 @@ func (m *mockBenchConn) WritePacket(pkt packets.ControlPacket) error {
 }
 
 func (m *mockBenchConn) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
+	pkt.Release()
 	if onSent != nil {
 		onSent()
 	}
@@ -468,6 +469,7 @@ func (m *mockBenchConn) WriteControlPacket(pkt packets.ControlPacket, onSent fun
 }
 
 func (m *mockBenchConn) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	pkt.Release()
 	if onSent != nil {
 		onSent()
 	}
