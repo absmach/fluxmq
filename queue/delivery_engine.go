@@ -489,10 +489,10 @@ func createRouteProperties(msg *types.Message, groupID, queueName string) map[st
 	for k, v := range msg.Properties {
 		props[k] = v
 	}
-	props[types.PropMessageID] = fmt.Sprintf("%s:%d", queueName, msg.Sequence)
+	props[types.PropMessageID] = queueName + ":" + strconv.FormatUint(msg.Sequence, 10)
 	props[types.PropGroupID] = groupID
 	props[types.PropQueueName] = queueName
-	props[types.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
+	props[types.PropOffset] = strconv.FormatUint(msg.Sequence, 10)
 
 	return props
 }
@@ -504,7 +504,7 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 	}
 
 	routeMsg := &cluster.QueueMessage{
-		MessageID:      fmt.Sprintf("%s:%d", queueName, msg.Sequence),
+		MessageID:      queueName + ":" + strconv.FormatUint(msg.Sequence, 10),
 		QueueName:      queueName,
 		GroupID:        groupID,
 		Payload:        msg.GetPayload(),
@@ -534,13 +534,13 @@ func decorateStreamProperties(properties map[string]string, msg *types.Message, 
 		return
 	}
 
-	properties[types.PropStreamOffset] = fmt.Sprintf("%d", msg.Sequence)
+	properties[types.PropStreamOffset] = strconv.FormatUint(msg.Sequence, 10)
 	if !msg.CreatedAt.IsZero() {
-		properties[types.PropStreamTimestamp] = fmt.Sprintf("%d", msg.CreatedAt.UnixMilli())
+		properties[types.PropStreamTimestamp] = strconv.FormatInt(msg.CreatedAt.UnixMilli(), 10)
 	}
 
 	if hasWorkCommitted {
-		properties[types.PropWorkCommittedOffset] = fmt.Sprintf("%d", workCommitted)
+		properties[types.PropWorkCommittedOffset] = strconv.FormatUint(workCommitted, 10)
 		properties[types.PropWorkAcked] = strconv.FormatBool(msg.Sequence < workCommitted)
 		if primaryGroup != "" {
 			properties[types.PropWorkGroup] = primaryGroup

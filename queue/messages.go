@@ -4,7 +4,8 @@
 package queue
 
 import (
-	"fmt"
+	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,20 +32,18 @@ func extractGroupFromClientID(clientID string) string {
 	return clientID
 }
 
+var messageIDCounter atomic.Uint64
+
 func generateMessageID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return strconv.FormatUint(messageIDCounter.Add(1), 10)
 }
 
 func parseMessageID(messageID string) (uint64, error) {
-	var offset uint64
 	// Format: queueName:offset (we only need the offset)
 	for i := len(messageID) - 1; i >= 0; i-- {
 		if messageID[i] == ':' {
-			_, err := fmt.Sscanf(messageID[i+1:], "%d", &offset)
-			return offset, err
+			return strconv.ParseUint(messageID[i+1:], 10, 64)
 		}
 	}
-	// Try parsing as just an offset
-	_, err := fmt.Sscanf(messageID, "%d", &offset)
-	return offset, err
+	return strconv.ParseUint(messageID, 10, 64)
 }

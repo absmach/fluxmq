@@ -1291,10 +1291,14 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 
 	props := cloneWithoutForwardingMeta(publish.Properties)
 	if len(targetQueues) > 0 {
-		if props == nil {
-			props = make(map[string]string, 1)
+		// Need a writable map — cloneWithoutForwardingMeta may have returned
+		// the original when no forwarding key was present.
+		writable := make(map[string]string, len(props)+1)
+		for k, v := range props {
+			writable[k] = v
 		}
-		props[types.PropForwardTargetQueues] = strings.Join(targetQueues, ",")
+		writable[types.PropForwardTargetQueues] = strings.Join(targetQueues, ",")
+		props = writable
 	}
 
 	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, props, true)
@@ -1330,8 +1334,10 @@ func cloneWithoutForwardingMeta(properties map[string]string) map[string]string 
 	if len(properties) == 0 {
 		return nil
 	}
-
-	out := make(map[string]string, len(properties))
+	if _, has := properties[types.PropForwardTargetQueues]; !has {
+		return properties
+	}
+	out := make(map[string]string, len(properties)-1)
 	for k, v := range properties {
 		if k == types.PropForwardTargetQueues {
 			continue
@@ -1623,23 +1629,23 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 
 	messageID := msg.MessageID
 	if messageID == "" {
-		messageID = fmt.Sprintf("%s:%d", queueName, msg.Sequence)
+		messageID = queueName + ":" + strconv.FormatInt(msg.Sequence, 10)
 	}
 
 	props[types.PropMessageID] = messageID
 	props[types.PropGroupID] = msg.GroupID
 	props[types.PropQueueName] = queueName
-	props[types.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
+	props[types.PropOffset] = strconv.FormatInt(msg.Sequence, 10)
 
 	if msg.Stream {
-		props[types.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
+		props[types.PropStreamOffset] = strconv.FormatInt(msg.StreamOffset, 10)
 		if msg.StreamTimestamp != 0 {
-			props[types.PropStreamTimestamp] = fmt.Sprintf("%d", msg.StreamTimestamp)
+			props[types.PropStreamTimestamp] = strconv.FormatInt(msg.StreamTimestamp, 10)
 		}
 	}
 
 	if msg.HasWorkCommitted {
-		props[types.PropWorkCommittedOffset] = fmt.Sprintf("%d", msg.WorkCommittedOffset)
+		props[types.PropWorkCommittedOffset] = strconv.FormatInt(msg.WorkCommittedOffset, 10)
 		props[types.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
 		if msg.WorkGroup != "" {
 			props[types.PropWorkGroup] = msg.WorkGroup
