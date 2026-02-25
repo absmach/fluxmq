@@ -96,15 +96,15 @@ func (r *TrieRouter) Match(topic string) ([]*storage.Subscription, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	levels := strings.Split(topic, separator)
-	matched := AcquireSubscriptionSlice()
-	matchLevel(r.root, levels, 0, matched)
-	// Copy out before releasing the pooled slice to avoid data races
-	// when the pool reuses the backing array in other goroutines.
+	levelsPtr := acquireTopicLevels()
+	levelsPtr = splitTopic(topic, levelsPtr)
+	matched := acquireSubscriptionSlice()
+	matchLevel(r.root, *levelsPtr, 0, matched)
+	releaseTopicLevels(levelsPtr)
+
 	result := make([]*storage.Subscription, len(*matched))
 	copy(result, *matched)
-
-	ReleaseSubscriptionSlice(matched)
+	releaseSubscriptionSlice(matched)
 
 	return result, nil
 }

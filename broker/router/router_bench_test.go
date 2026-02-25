@@ -145,6 +145,30 @@ func BenchmarkRouter_Match_DeepHierarchy(b *testing.B) {
 	})
 }
 
+// Benchmark: Very deep topic hierarchy (exceeds pooled slice capacity of 16)
+
+func BenchmarkRouter_Match_VeryDeepHierarchy(b *testing.B) {
+	r := NewRouter()
+
+	// 20-segment topics — forces pool slice growth beyond initial cap
+	for i := 0; i < 100; i++ {
+		topic := fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/%d", i)
+		_ = r.Subscribe(fmt.Sprintf("client%d", i), topic, 1, storage.SubscribeOptions{})
+	}
+
+	_ = r.Subscribe("wildcard", "a/b/c/d/e/f/g/h/#", 1, storage.SubscribeOptions{})
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			topic := fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/%d", i%100)
+			_, _ = r.Match(topic)
+			i++
+		}
+	})
+}
+
 // Benchmark: Unsubscribe operation
 
 func BenchmarkRouter_Unsubscribe(b *testing.B) {

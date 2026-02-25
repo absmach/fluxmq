@@ -630,7 +630,7 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 }
 
 func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
-	cleanProps := clonePublishPropertiesWithoutForwardingMeta(publish.Properties)
+	cleanProps := cloneWithoutForwardingMeta(publish.Properties)
 
 	for _, target := range targets {
 		queueName := target.name
@@ -1289,7 +1289,7 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		return fmt.Errorf("raft leader unavailable")
 	}
 
-	props := clonePublishPropertiesWithoutForwardingMeta(publish.Properties)
+	props := cloneWithoutForwardingMeta(publish.Properties)
 	if len(targetQueues) > 0 {
 		if props == nil {
 			props = make(map[string]string, 1)
@@ -1326,7 +1326,7 @@ func parseForwardTargetQueues(properties map[string]string) []string {
 	return out
 }
 
-func clonePublishPropertiesWithoutForwardingMeta(properties map[string]string) map[string]string {
+func cloneWithoutForwardingMeta(properties map[string]string) map[string]string {
 	if len(properties) == 0 {
 		return nil
 	}
