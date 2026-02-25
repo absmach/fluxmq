@@ -23,7 +23,7 @@ type pendingOp struct {
 	opType    pendingType
 	done      chan struct{}
 	err       error
-	result    interface{} // For SUBACK return codes, etc.
+	result    any // For SUBACK return codes, etc.
 	created   time.Time
 	message   *Message // For QoS 1/2 retransmission
 	qos2State int      // 0: waiting PUBREC, 1: waiting PUBCOMP

@@ -552,7 +552,12 @@ func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) er
 		return err
 	}
 
-	return op.wait(c.opts.AckTimeout)
+	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+	return nil
 }
 
 // PublishMessage sends a message with optional MQTT 5.0 publish properties.
@@ -599,7 +604,12 @@ func (c *Client) PublishMessage(msg *Message) error {
 		return err
 	}
 
-	return op.wait(c.opts.AckTimeout)
+	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+	return nil
 }
 
 // PublishAsync publishes in a background goroutine and returns a completion token.
@@ -749,6 +759,7 @@ func (c *Client) subscribe(topics map[string]byte, remember bool) error {
 	}
 
 	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
 		return err
 	}
 
@@ -810,6 +821,7 @@ func (c *Client) subscribeWithOptions(opts []*SubscribeOption, remember bool) er
 	}
 
 	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
 		return err
 	}
 
@@ -954,6 +966,7 @@ func (c *Client) Unsubscribe(topics ...string) error {
 	}
 
 	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
 		return err
 	}
 

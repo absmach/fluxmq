@@ -241,7 +241,12 @@ func (c *Client) publishWithUserProperties(topic string, payload []byte, qos byt
 		return err
 	}
 
-	return op.wait(c.opts.AckTimeout)
+	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+	return nil
 }
 
 // sendPublishV5 sends a PUBLISH packet with user properties (MQTT v5 only).
@@ -354,7 +359,11 @@ func (c *Client) subscribeWithUserProperties(topic string, qos byte, userProps m
 		return err
 	}
 
-	return op.wait(c.opts.AckTimeout)
+	if err := op.wait(c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
+		return err
+	}
+	return nil
 }
 
 // sendSubscribeWithUserProps sends a SUBSCRIBE packet with user properties (MQTT v5).

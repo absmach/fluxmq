@@ -42,7 +42,7 @@ broker:
   retry_interval: 20s
   max_retries: 0
   max_qos: 2
-  async_fan_out: true
+  async_fan_out: false
   fan_out_workers: 0
 
 session:
