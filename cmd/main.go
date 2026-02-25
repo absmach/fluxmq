@@ -24,6 +24,7 @@ import (
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/internal/wiring"
 	logStorage "github.com/absmach/fluxmq/logstorage"
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
@@ -46,6 +47,17 @@ import (
 	oteltrace "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+func protocolVersionForMode(mode string) int {
+	switch config.NormalizeProtocolMode(mode) {
+	case config.ProtocolModeV3:
+		return core.ProtocolV3
+	case config.ProtocolModeV5:
+		return core.ProtocolV5
+	default:
+		return core.ProtocolAuto
+	}
+}
 
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
@@ -77,12 +89,14 @@ func main() {
 	if nodeID == "" {
 		nodeID = "single-node"
 	}
+
 	logger := slog.New(handler).With("local_node_id", nodeID)
 	slog.SetDefault(logger)
 
 	slog.Info("Starting MQTT broker", "version", "0.1.0")
 	slog.Info("Configuration loaded",
-		"tcp_plain_listener", cfg.Server.TCP.Plain.Addr,
+		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
+		"tcp_v5_listener", cfg.Server.TCP.V5.Addr,
 		"tcp_tls_listener", cfg.Server.TCP.TLS.Addr,
 		"tcp_mtls_listener", cfg.Server.TCP.MTLS.Addr,
 		"ws_plain_listener", cfg.Server.WebSocket.Plain.Addr,
@@ -527,7 +541,8 @@ func main() {
 		name string
 		cfg  config.TCPListenerConfig
 	}{
-		{name: "plain", cfg: cfg.Server.TCP.Plain},
+		{name: "v3", cfg: cfg.Server.TCP.V3},
+		{name: "v5", cfg: cfg.Server.TCP.V5},
 		{name: "tls", cfg: cfg.Server.TCP.TLS},
 		{name: "mtls", cfg: cfg.Server.TCP.MTLS},
 	}
@@ -552,6 +567,7 @@ func main() {
 			WriteTimeout:     slot.cfg.WriteTimeout,
 			SendQueueSize:    cfg.Session.MaxSendQueueSize,
 			DisconnectOnFull: cfg.Session.DisconnectOnFull,
+			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
 			Logger:           logger,
 		}
 		if rateLimitManager != nil {
@@ -560,13 +576,13 @@ func main() {
 		tcpServer := tcp.New(tcpCfg, b)
 
 		wg.Add(1)
-		go func(name, addr string, server *tcp.Server) {
+		go func(name, addr, protocol string, server *tcp.Server) {
 			defer wg.Done()
-			slog.Info("Starting TCP server", "mode", name, "address", addr)
+			slog.Info("Starting TCP server", "mode", name, "address", addr, "protocol", config.NormalizeProtocolMode(protocol))
 			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}(slot.name, slot.cfg.Addr, tcpServer)
+		}(slot.name, slot.cfg.Addr, slot.cfg.Protocol, tcpServer)
 	}
 
 	wsSlots := []struct {
@@ -594,6 +610,7 @@ func main() {
 			Path:            slot.cfg.Path,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			TLSConfig:       tlsCfg,
+			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
 			AllowedOrigins:  slot.cfg.AllowedOrigins,
 		}
 		if rateLimitManager != nil {
@@ -603,13 +620,13 @@ func main() {
 		wsServer := websocket.New(wsCfg, b, logger)
 
 		wg.Add(1)
-		go func(name, addr, path string, server *websocket.Server) {
+		go func(name, addr, path, protocol string, server *websocket.Server) {
 			defer wg.Done()
-			slog.Info("Starting WebSocket server", "mode", name, "address", addr, "path", path)
+			slog.Info("Starting WebSocket server", "mode", name, "address", addr, "path", path, "protocol", config.NormalizeProtocolMode(protocol))
 			if err := server.Listen(ctx); err != nil {
 				serverErr <- err
 			}
-		}(slot.name, slot.cfg.Addr, slot.cfg.Path, wsServer)
+		}(slot.name, slot.cfg.Addr, slot.cfg.Path, slot.cfg.Protocol, wsServer)
 	}
 
 	httpSlots := []struct {

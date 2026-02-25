@@ -5,7 +5,7 @@ description: Start a multi-node FluxMQ cluster with embedded etcd and transport 
 
 # Running Cluster
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-25
 
 FluxMQ clustering uses embedded etcd for metadata and gRPC transport for routing. The repo includes working 3-node examples.
 
@@ -41,7 +41,8 @@ make build
 
 | Service      | Node 1 | Node 2 | Node 3 |
 |--------------|--------|--------|--------|
-| MQTT         | 1883   | 1884   | 1885   |
+| MQTT v3      | 1883   | 1885   | 1887   |
+| MQTT v5      | 1884   | 1886   | 1888   |
 | WebSocket    | 8883   | 8884   | 8885   |
 | HTTP         | 8090   | 8091   | 8092   |
 | AMQP 1.0     | 5672   | 5673   | 5674   |
@@ -50,6 +51,10 @@ make build
 | etcd peer    | 2380   | 2381   | 2382   |
 | etcd client  | 2379   | 2389   | 2399   |
 | gRPC transport | 7948 | 7949   | 7950   |
+
+Local cluster configs use dedicated listeners on each node:
+- `server.tcp.v3` for MQTT 3.1.1
+- `server.tcp.v5` for MQTT 5.0
 
 ## Key Cluster Settings
 

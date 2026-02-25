@@ -15,7 +15,8 @@ SCENARIO_CONFIGS_RAW="${PERF_SCENARIO_CONFIGS:-}"
 SIZES_RAW="${PERF_MESSAGE_SIZES:-small,medium,large}"
 MESSAGE_SIZE_BYTES="${PERF_MESSAGE_SIZE_BYTES:-}"
 
-MQTT_ADDRS="${PERF_MQTT_ADDRS:-127.0.0.1:1883,127.0.0.1:1884,127.0.0.1:1885}"
+MQTT_V3_ADDRS="${PERF_MQTT_V3_ADDRS:-127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887}"
+MQTT_V5_ADDRS="${PERF_MQTT_V5_ADDRS:-127.0.0.1:1884,127.0.0.1:1886,127.0.0.1:1888}"
 AMQP_ADDRS="${PERF_AMQP_ADDRS:-127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684}"
 MIN_RATIO="${PERF_MIN_RATIO:-0.95}"
 DRAIN_TIMEOUT="${PERF_DRAIN_TIMEOUT:-45s}"
@@ -39,7 +40,8 @@ fi
 log_info "Starting config-driven load test suite"
 log_info "Scenario configs: $SCENARIO_CONFIGS_RAW"
 log_info "Message sizes: ${MESSAGE_SIZE_BYTES:-$SIZES_RAW}"
-log_info "MQTT addrs: $MQTT_ADDRS"
+log_info "MQTT v3 addrs: $MQTT_V3_ADDRS"
+log_info "MQTT v5 addrs: $MQTT_V5_ADDRS"
 log_info "AMQP addrs: $AMQP_ADDRS"
 log_info "Log file: $LOG_FILE"
 log_info "Result JSONL: $JSON_FILE"
@@ -83,11 +85,12 @@ for scenario_config in "${SCENARIO_CONFIGS[@]}"; do
 		set +e
 		(
 			cd "$PROJECT_ROOT"
-			cmd=(go run ./tests/perf/loadgen
-				-scenario-config "$scenario_config"
-				-mqtt-addrs "$MQTT_ADDRS"
-				-amqp-addrs "$AMQP_ADDRS"
-				-min-ratio "$MIN_RATIO"
+				cmd=(go run ./tests/perf/loadgen
+					-scenario-config "$scenario_config"
+					-mqtt-v3-addrs "$MQTT_V3_ADDRS"
+					-mqtt-v5-addrs "$MQTT_V5_ADDRS"
+					-amqp-addrs "$AMQP_ADDRS"
+					-min-ratio "$MIN_RATIO"
 				-drain-timeout "$DRAIN_TIMEOUT"
 				-json-out "$JSON_FILE")
 

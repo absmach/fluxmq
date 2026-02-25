@@ -5,19 +5,24 @@ description: Configure listeners, WebSocket path, health checks, and OpenTelemet
 
 # Server Configuration
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-02-25
 
 `server` controls network listeners and telemetry endpoints. Example:
 
 ```yaml
 server:
   tcp:
-    plain:
+    v3:
       addr: ":1883"
+      protocol: "v3"
+    v5:
+      addr: ":1884"
+      protocol: "v5"
   websocket:
     plain:
       addr: ":8083"
       path: "/mqtt"
+      protocol: "auto" # auto | v3 | v5
   http:
     plain:
       addr: ":8080"
@@ -46,6 +51,7 @@ server:
 
 - Listener families: `tcp`, `websocket`, `http`, `coap`, `amqp`, `amqp091`.
 - Listener addresses: `addr` (empty disables the specific listener).
+- MQTT parser mode per listener: TCP `v3`/`v5` listeners are protocol-pinned; WebSocket listeners can use `protocol` (`auto`, `v3`, `v5`).
 - Listener limits/timeouts: `max_connections`, `read_timeout`, `write_timeout`.
 - WebSocket specifics: `path`, `allowed_origins`.
 - Health/observability: `health_enabled`, `health_addr`, `metrics_enabled`, `metrics_addr`.

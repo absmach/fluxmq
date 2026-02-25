@@ -12,11 +12,23 @@ func TestDefault(t *testing.T) {
 	cfg := Default()
 
 	// Test server defaults
-	if cfg.Server.TCP.Plain.Addr != ":1883" {
-		t.Errorf("expected default TCP addr :1883, got %s", cfg.Server.TCP.Plain.Addr)
+	if cfg.Server.TCP.V3.Addr != ":1883" {
+		t.Errorf("expected default TCP v3 addr :1883, got %s", cfg.Server.TCP.V3.Addr)
 	}
-	if cfg.Server.TCP.Plain.MaxConnections != 10000 {
-		t.Errorf("expected default max connections 10000, got %d", cfg.Server.TCP.Plain.MaxConnections)
+	if cfg.Server.TCP.V5.Addr != ":1884" {
+		t.Errorf("expected default TCP v5 addr :1884, got %s", cfg.Server.TCP.V5.Addr)
+	}
+	if cfg.Server.TCP.V3.MaxConnections != 10000 {
+		t.Errorf("expected default max connections 10000, got %d", cfg.Server.TCP.V3.MaxConnections)
+	}
+	if cfg.Server.TCP.V3.Protocol != ProtocolModeV3 {
+		t.Errorf("expected default TCP v3 protocol %q, got %q", ProtocolModeV3, cfg.Server.TCP.V3.Protocol)
+	}
+	if cfg.Server.TCP.V5.Protocol != ProtocolModeV5 {
+		t.Errorf("expected default TCP v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.TCP.V5.Protocol)
+	}
+	if cfg.Server.WebSocket.Plain.Protocol != ProtocolModeAuto {
+		t.Errorf("expected default WebSocket protocol %q, got %q", ProtocolModeAuto, cfg.Server.WebSocket.Plain.Protocol)
 	}
 
 	// Test broker defaults
@@ -55,7 +67,8 @@ func TestValidate(t *testing.T) {
 		{
 			name: "no MQTT listeners configured",
 			modify: func(c *Config) {
-				c.Server.TCP.Plain.Addr = ""
+				c.Server.TCP.V3.Addr = ""
+				c.Server.TCP.V5.Addr = ""
 				c.Server.TCP.TLS.Addr = ""
 				c.Server.TCP.MTLS.Addr = ""
 				c.Server.WebSocket.Plain.Addr = ""
@@ -84,6 +97,20 @@ func TestValidate(t *testing.T) {
 			name: "invalid log level",
 			modify: func(c *Config) {
 				c.Log.Level = "invalid"
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid tcp protocol mode",
+			modify: func(c *Config) {
+				c.Server.TCP.V3.Protocol = "v4"
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid websocket protocol mode",
+			modify: func(c *Config) {
+				c.Server.WebSocket.Plain.Protocol = "mqtt5"
 			},
 			wantErr: true,
 		},
@@ -179,8 +206,11 @@ func TestLoadNonExistent(t *testing.T) {
 		t.Fatal("Load() should return a default config, got nil")
 	}
 
-	if cfg.Server.TCP.Plain.Addr != ":1883" {
-		t.Errorf("expected default config, got TCP addr %s", cfg.Server.TCP.Plain.Addr)
+	if cfg.Server.TCP.V3.Addr != ":1883" {
+		t.Errorf("expected default config, got TCP v3 addr %s", cfg.Server.TCP.V3.Addr)
+	}
+	if cfg.Server.TCP.V5.Addr != ":1884" {
+		t.Errorf("expected default config, got TCP v5 addr %s", cfg.Server.TCP.V5.Addr)
 	}
 }
 
@@ -189,7 +219,8 @@ func TestSaveLoad(t *testing.T) {
 
 	// Create custom config
 	cfg := Default()
-	cfg.Server.TCP.Plain.Addr = ":8883"
+	cfg.Server.TCP.V3.Addr = ":2883"
+	cfg.Server.TCP.V5.Addr = ":2884"
 	cfg.Broker.RetryInterval = 30 * time.Second
 	cfg.Log.Level = "debug"
 
@@ -205,13 +236,38 @@ func TestSaveLoad(t *testing.T) {
 	}
 
 	// Verify
-	if loaded.Server.TCP.Plain.Addr != ":8883" {
-		t.Errorf("expected TCP addr :8883, got %s", loaded.Server.TCP.Plain.Addr)
+	if loaded.Server.TCP.V3.Addr != ":2883" {
+		t.Errorf("expected TCP v3 addr :2883, got %s", loaded.Server.TCP.V3.Addr)
+	}
+	if loaded.Server.TCP.V5.Addr != ":2884" {
+		t.Errorf("expected TCP v5 addr :2884, got %s", loaded.Server.TCP.V5.Addr)
 	}
 	if loaded.Broker.RetryInterval != 30*time.Second {
 		t.Errorf("expected retry interval 30s, got %v", loaded.Broker.RetryInterval)
 	}
 	if loaded.Log.Level != "debug" {
 		t.Errorf("expected log level debug, got %s", loaded.Log.Level)
+	}
+}
+
+func TestNormalizeProtocolMode(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty defaults to auto", in: "", want: ProtocolModeAuto},
+		{name: "mixed case v3", in: "V3", want: ProtocolModeV3},
+		{name: "mixed case v5", in: "V5", want: ProtocolModeV5},
+		{name: "spaces around auto", in: " auto ", want: ProtocolModeAuto},
+		{name: "unknown preserved normalized", in: " MQTT ", want: "mqtt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeProtocolMode(tt.in); got != tt.want {
+				t.Fatalf("NormalizeProtocolMode(%q)=%q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

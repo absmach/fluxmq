@@ -50,8 +50,10 @@ mosquitto_pub -p 1883 -t "test/hello" -m "Hello FluxMQ"
 ```yaml
 server:
   tcp:
-    plain:
+    v3:
       addr: ":1883"
+    v5:
+      addr: ":1884"
   websocket:
     plain:
       addr: ":8083"

@@ -36,7 +36,8 @@ make clean-data              # optional
 
 | Service      | Node 1 | Node 2 | Node 3 |
 |--------------|--------|--------|--------|
-| MQTT         | 1883   | 1884   | 1885   |
+| MQTT v3      | 1883   | 1885   | 1887   |
+| MQTT v5      | 1884   | 1886   | 1888   |
 | WebSocket    | 8883   | 8884   | 8885   |
 | HTTP         | 8090   | 8091   | 8092   |
 | AMQP 1.0     | 5672   | 5673   | 5674   |
@@ -179,8 +180,8 @@ For each scenario run, output includes:
 - sent/received throughput in messages per second
 - delivery ratio, error count, pass/fail
 
-Client placement uses configured cluster endpoints with role-aware distribution:
-publishers start from one node set and subscribers/consumers are offset to other nodes when available, so routing paths are exercised.
+Client placement uses configured cluster endpoints with role-aware distribution.
+For MQTT clients, loadgen mixes MQTT v3 and v5 connections randomly (using `PERF_MQTT_V3_ADDRS` and `PERF_MQTT_V5_ADDRS`) so both listener families are exercised.
 
 Artifacts in `tests/perf/results`:
 
@@ -203,7 +204,8 @@ Set variables inline before `make perf-suite`.
 | `PERF_MESSAGES_PER_PUBLISHER` | config value                                      | Override per-publisher message count                    |
 | `PERF_PUBLISH_INTERVAL`       | config value                                      | Delay between publishes per publisher                   |
 | `PERF_PUBLISH_JITTER`         | `0`                                               | Random per-publisher cadence jitter (`+/- duration`)    |
-| `PERF_MQTT_ADDRS`             | `127.0.0.1:1883,127.0.0.1:1884,127.0.0.1:1885`   | MQTT endpoints                                          |
+| `PERF_MQTT_V3_ADDRS`          | `127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887`   | MQTT v3 endpoints                                       |
+| `PERF_MQTT_V5_ADDRS`          | `127.0.0.1:1884,127.0.0.1:1886,127.0.0.1:1888`   | MQTT v5 endpoints                                       |
 | `PERF_AMQP_ADDRS`             | `127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684`   | AMQP 0.9.1 endpoints                                    |
 | `PERF_MIN_RATIO`              | `0.95`                                            | Pass threshold for topic scenario delivery ratio        |
 | `PERF_DRAIN_TIMEOUT`          | `45s`                                             | Max wait for subscribers/consumers to drain             |

@@ -1,4 +1,13 @@
 # Minimal single-instance configuration for Docker
+server:
+  tcp:
+    v3:
+      addr: ":1883"
+      protocol: "v3"
+    v5:
+      addr: ":1884"
+      protocol: "v5"
+
 cluster:
   enabled: false
 

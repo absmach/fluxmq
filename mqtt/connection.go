@@ -27,6 +27,15 @@ var (
 	ErrSendQueueFull              = errors.New("send queue full")
 )
 
+const (
+	// ProtocolAuto enables protocol detection from the first CONNECT packet.
+	ProtocolAuto = 0
+	// ProtocolV3 forces MQTT v3/v3.1.1 packet decoding.
+	ProtocolV3 = 4
+	// ProtocolV5 forces MQTT v5 packet decoding.
+	ProtocolV5 = 5
+)
+
 // Connection represents a network connection that can read/write MQTT packets.
 // It also manages connection state and keep-alive.
 type Connection interface {
@@ -89,9 +98,16 @@ type connection struct {
 // NewConnection creates a new MQTT connection wrapping a network connection.
 // queueSize <= 0 keeps synchronous writes; queueSize > 0 enables asynchronous queued writes.
 func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool) Connection {
+	return NewConnectionWithVersion(conn, queueSize, disconnectOnFull, ProtocolAuto)
+}
+
+// NewConnectionWithVersion creates a new MQTT connection with an optional forced protocol version.
+// version = ProtocolAuto enables detection; ProtocolV3 or ProtocolV5 force decoding mode.
+func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull bool, version int) Connection {
 	c := &connection{
 		conn:             conn,
 		reader:           conn,
+		version:          version,
 		disconnectOnFull: disconnectOnFull,
 	}
 
@@ -141,6 +157,9 @@ func (c *connection) ReadPacket() (packets.ControlPacket, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	c.reader = c.conn
+
 	return pkt, nil
 }
 

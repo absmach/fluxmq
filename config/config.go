@@ -13,6 +13,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// MQTT listener protocol modes.
+	ProtocolModeAuto = "auto"
+	ProtocolModeV3   = "v3"
+	ProtocolModeV5   = "v5"
+)
+
 // Config holds all configuration for the MQTT broker.
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
@@ -155,20 +162,23 @@ type TCPListenerConfig struct {
 	MaxConnections int            `yaml:"max_connections"`
 	ReadTimeout    time.Duration  `yaml:"read_timeout"`
 	WriteTimeout   time.Duration  `yaml:"write_timeout"`
+	Protocol       string         `yaml:"protocol"`
 	TLS            mqtttls.Config `yaml:",inline"`
 }
 
 // TCPConfig groups TCP listeners by mode.
 type TCPConfig struct {
-	Plain TCPListenerConfig `yaml:"plain"`
-	TLS   TCPListenerConfig `yaml:"tls"`
-	MTLS  TCPListenerConfig `yaml:"mtls"`
+	V3   TCPListenerConfig `yaml:"v3"`
+	V5   TCPListenerConfig `yaml:"v5"`
+	TLS  TCPListenerConfig `yaml:"tls"`
+	MTLS TCPListenerConfig `yaml:"mtls"`
 }
 
 // WSListenerConfig holds WebSocket listener configuration.
 type WSListenerConfig struct {
 	Addr           string         `yaml:"addr"`
 	Path           string         `yaml:"path"`
+	Protocol       string         `yaml:"protocol"`
 	AllowedOrigins []string       `yaml:"allowed_origins"`
 	TLS            mqtttls.Config `yaml:",inline"`
 }
@@ -485,33 +495,46 @@ func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
 			TCP: TCPConfig{
-				Plain: TCPListenerConfig{
+				V3: TCPListenerConfig{
 					Addr:           ":1883",
 					MaxConnections: 10000,
 					ReadTimeout:    60 * time.Second,
 					WriteTimeout:   60 * time.Second,
+					Protocol:       ProtocolModeV3,
+				},
+				V5: TCPListenerConfig{
+					Addr:           ":1884",
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
+					Protocol:       ProtocolModeV5,
 				},
 				TLS: TCPListenerConfig{
 					MaxConnections: 10000,
 					ReadTimeout:    60 * time.Second,
 					WriteTimeout:   60 * time.Second,
+					Protocol:       ProtocolModeAuto,
 				},
 				MTLS: TCPListenerConfig{
 					MaxConnections: 10000,
 					ReadTimeout:    60 * time.Second,
 					WriteTimeout:   60 * time.Second,
+					Protocol:       ProtocolModeAuto,
 				},
 			},
 			WebSocket: WebSocketConfig{
 				Plain: WSListenerConfig{
-					Addr: ":8083",
-					Path: "/mqtt",
+					Addr:     ":8083",
+					Path:     "/mqtt",
+					Protocol: ProtocolModeAuto,
 				},
 				TLS: WSListenerConfig{
-					Path: "/mqtt",
+					Path:     "/mqtt",
+					Protocol: ProtocolModeAuto,
 				},
 				MTLS: WSListenerConfig{
-					Path: "/mqtt",
+					Path:     "/mqtt",
+					Protocol: ProtocolModeAuto,
 				},
 			},
 			HTTP: HTTPConfig{
@@ -733,10 +756,13 @@ func (c *Config) Validate() error {
 		name              string
 		cfg               TCPListenerConfig
 		requireClientAuth bool
+		requireTLS        bool
+		fixedProtocol     string
 	}{
-		{name: "plain", cfg: c.Server.TCP.Plain, requireClientAuth: false},
-		{name: "tls", cfg: c.Server.TCP.TLS, requireClientAuth: false},
-		{name: "mtls", cfg: c.Server.TCP.MTLS, requireClientAuth: true},
+		{name: "v3", cfg: c.Server.TCP.V3, fixedProtocol: ProtocolModeV3},
+		{name: "v5", cfg: c.Server.TCP.V5, fixedProtocol: ProtocolModeV5},
+		{name: "tls", cfg: c.Server.TCP.TLS, requireClientAuth: false, requireTLS: true},
+		{name: "mtls", cfg: c.Server.TCP.MTLS, requireClientAuth: true, requireTLS: true},
 	}
 
 	wsSlots := []struct {
@@ -762,9 +788,16 @@ func (c *Config) Validate() error {
 	hasMQTTListener := false
 
 	for _, slot := range tcpSlots {
+		if err := validateListenerProtocol("server.tcp."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
+			return err
+		}
+		mode := NormalizeProtocolMode(slot.cfg.Protocol)
+		if slot.fixedProtocol != "" && mode != slot.fixedProtocol {
+			return fmt.Errorf("server.tcp.%s.protocol must be %q", slot.name, slot.fixedProtocol)
+		}
 		if !hasAddr(slot.cfg.Addr) {
-			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
-				return fmt.Errorf("server.tcp.%s TLS fields are not supported for plain listeners", slot.name)
+			if tlsConfigured(slot.cfg.TLS) && !slot.requireTLS {
+				return fmt.Errorf("server.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
 			}
 			continue
 		}
@@ -773,17 +806,19 @@ func (c *Config) Validate() error {
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
 		}
-		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.tcp.%s TLS fields are not supported for plain listeners", slot.name)
-		}
-		if slot.name != "plain" {
+		if slot.requireTLS {
 			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
+		} else if tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
 		}
 	}
 
 	for _, slot := range wsSlots {
+		if err := validateListenerProtocol("server.websocket."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
+			return err
+		}
 		if !hasAddr(slot.cfg.Addr) {
 			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
 				return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
@@ -1191,6 +1226,29 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 		return fmt.Errorf("%s.ca_file required", prefix)
 	}
 	return nil
+}
+
+// NormalizeProtocolMode normalizes and defaults MQTT listener protocol mode.
+func NormalizeProtocolMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ProtocolModeAuto:
+		return ProtocolModeAuto
+	case ProtocolModeV3:
+		return ProtocolModeV3
+	case ProtocolModeV5:
+		return ProtocolModeV5
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+}
+
+func validateListenerProtocol(field, mode string) error {
+	switch NormalizeProtocolMode(mode) {
+	case ProtocolModeAuto, ProtocolModeV3, ProtocolModeV5:
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of: auto, v3, v5", field)
+	}
 }
 
 func tlsConfigured(cfg mqtttls.Config) bool {

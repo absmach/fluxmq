@@ -5,7 +5,7 @@ description: Comprehensive YAML configuration reference for server, broker, stor
 
 # Configuration Reference
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-02-25
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 
@@ -46,11 +46,18 @@ Durations use Go duration strings like `5s`, `1m`, `24h`.
 ```yaml
 server:
   tcp:
-    plain:
+    v3:
       addr: ":1883"
       max_connections: 10000
       read_timeout: "60s"
       write_timeout: "60s"
+      protocol: "v3"
+    v5:
+      addr: ":1884"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      protocol: "v5"
     tls: {}
     mtls: {}
 
@@ -58,6 +65,7 @@ server:
     plain:
       addr: ":8083"
       path: "/mqtt"
+      protocol: "auto" # auto | v3 | v5
       allowed_origins: ["https://app.example.com"]
     tls: {}
     mtls: {}
@@ -108,7 +116,7 @@ server:
 
 ### Listener Fields
 
-These apply to listener blocks (for example `server.tcp.plain`, `server.amqp091.tls`, and so on).
+These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.plain`, `server.amqp091.tls`, and so on).
 
 | Field | Description |
 |---|---|
@@ -116,6 +124,7 @@ These apply to listener blocks (for example `server.tcp.plain`, `server.amqp091.
 | `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap. Applies to TCP/AMQP/AMQP091 listeners. |
 | `read_timeout` | Read timeout for TCP listeners (`time.Duration`). |
 | `write_timeout` | Write timeout for TCP listeners (`time.Duration`). |
+| `protocol` | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
 | `path` | HTTP path for MQTT-over-WebSocket endpoint. |
 | `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production. |
 

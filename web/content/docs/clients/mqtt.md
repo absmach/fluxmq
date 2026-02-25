@@ -5,7 +5,7 @@ description: Connect using MQTT 3.1.1 or 5.0 over TCP
 
 # MQTT
 
-**Last Updated:** 2026-02-06
+**Last Updated:** 2026-02-25
 
 FluxMQ supports MQTT 3.1.1 and MQTT 5.0 over TCP.
 
@@ -26,7 +26,7 @@ mosquitto_pub -h localhost -p 1883 -t "sensors/temp" -m "22.5" -q 1
 Use MQTT v5 `SUBSCRIBE` user property `consumer-group` for queue consumers:
 
 ```bash
-mosquitto_sub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
+mosquitto_sub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -i worker-1 -q 1 -t '$queue/orders/#' -v \
   -D subscribe user-property consumer-group workers
 ```
@@ -34,7 +34,7 @@ mosquitto_sub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
 Start another worker in the same group:
 
 ```bash
-mosquitto_sub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
+mosquitto_sub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -i worker-2 -q 1 -t '$queue/orders/#' -v \
   -D subscribe user-property consumer-group workers
 ```
@@ -42,7 +42,7 @@ mosquitto_sub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
 Publish messages to the queue:
 
 ```bash
-mosquitto_pub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
+mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders' -m '{"id":"order-1"}' -q 1
 ```
 
@@ -53,19 +53,19 @@ To ack (or nack/reject), publish to queue ack topics with MQTT v5 user propertie
 
 ```bash
 # Ack
-mosquitto_pub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
+mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders/$ack' -m '' \
   -D publish user-property message-id 'orders:42' \
   -D publish user-property group-id 'workers'
 
 # Nack (retry)
-mosquitto_pub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
+mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders/$nack' -m '' \
   -D publish user-property message-id 'orders:42' \
   -D publish user-property group-id 'workers'
 
 # Reject (no retry)
-mosquitto_pub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
+mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders/$reject' -m '' \
   -D publish user-property message-id 'orders:42' \
   -D publish user-property group-id 'workers' \
@@ -92,6 +92,7 @@ mosquitto_pub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
 - Queue consumer groups require MQTT v5 (`-V mqttv5`) if you want explicit `consumer-group` assignment.
 - Reusing the same consumer group with different queue filters creates distinct internal groups per filter (`group@pattern` in logs).
 - TLS and mTLS listeners are configured via `server.tcp.tls` and `server.tcp.mtls`.
+- Listener protocol mode can be pinned per TCP/WebSocket listener via `protocol: auto|v3|v5`.
 - Shared subscriptions are supported.
 
 ## CLI Tip
@@ -99,7 +100,7 @@ mosquitto_pub -V mqttv5 -h localhost -p 1883 -u usr -P pwd \
 To inspect SUBSCRIBE/PUBLISH packets and reason codes during troubleshooting, add `-d`:
 
 ```bash
-mosquitto_sub -d -V mqttv5 -h localhost -p 1883 -t '$queue/orders/#' \
+mosquitto_sub -d -V mqttv5 -h localhost -p 1884 -t '$queue/orders/#' \
   -D subscribe user-property consumer-group workers
 ```
 

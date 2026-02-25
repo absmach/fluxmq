@@ -17,7 +17,7 @@ Production readiness is workload-dependent. Use the benchmark suites in `benchma
 
 ## Practical Tuning Levers
 
-- `server.tcp.plain.max_connections`: protect the broker from excess concurrent connections
+- `server.tcp.v3.max_connections` / `server.tcp.v5.max_connections`: protect the broker from excess concurrent connections
 - `session.max_sessions`: cap active MQTT sessions
 - `broker.max_message_size`: limit payload size
 - `session.max_offline_queue_size` and `session.max_inflight_messages`: control per-client memory usage

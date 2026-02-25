@@ -3,7 +3,8 @@ services:
     image: ghcr.io/absmach/fluxmq:latest
     command: ["--config", "/etc/fluxmq/config.yaml"]
     ports:
-      - "1883:1883"   # MQTT
+      - "1883:1883"   # MQTT v3
+      - "1884:1884"   # MQTT v5
       - "8083:8083"   # MQTT over WebSocket
       - "8080:8080"   # HTTP bridge
       - "5672:5672"   # AMQP 1.0

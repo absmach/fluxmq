@@ -80,7 +80,7 @@ Use the `consumer-group` user property on SUBSCRIBE:
 
 ```bash
 # Join consumer group "workers"
-mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group workers
 ```
 
@@ -179,17 +179,17 @@ Publish to ack/nack/reject topics with required properties:
 
 ```bash
 # Acknowledge
-mosquitto_pub -p 1883 -t '$queue/orders/$ack' -m '' \
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/$ack' -m '' \
   -D publish user-property message-id "orders:42" \
   -D publish user-property group-id "workers"
 
 # Negative acknowledge (retry)
-mosquitto_pub -p 1883 -t '$queue/orders/$nack' -m '' \
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/$nack' -m '' \
   -D publish user-property message-id "orders:42" \
   -D publish user-property group-id "workers"
 
 # Reject (no retry, future: DLQ)
-mosquitto_pub -p 1883 -t '$queue/orders/$reject' -m '' \
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/$reject' -m '' \
   -D publish user-property message-id "orders:42" \
   -D publish user-property group-id "workers" \
   -D publish user-property reason "invalid payload"
@@ -253,21 +253,21 @@ Three workers process orders with load balancing:
 
 ```bash
 # Terminal 1: Worker 1
-mosquitto_sub -p 1883 -i worker-1 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -i worker-1 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group workers
 
 # Terminal 2: Worker 2
-mosquitto_sub -p 1883 -i worker-2 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -i worker-2 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group workers
 
 # Terminal 3: Worker 3
-mosquitto_sub -p 1883 -i worker-3 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -i worker-3 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group workers
 
 # Terminal 4: Publish orders
-mosquitto_pub -p 1883 -t '$queue/orders' -m 'order-1'
-mosquitto_pub -p 1883 -t '$queue/orders' -m 'order-2'
-mosquitto_pub -p 1883 -t '$queue/orders' -m 'order-3'
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders' -m 'order-1'
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders' -m 'order-2'
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders' -m 'order-3'
 # Each worker receives one order
 ```
 
@@ -277,19 +277,19 @@ Same messages go to different groups for different purposes:
 
 ```bash
 # Group 1: Process orders
-mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group processors
 
 # Group 2: Audit logging
-mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group audit
 
 # Group 3: Analytics
-mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group analytics
 
 # Publish - all three groups receive this message
-mosquitto_pub -p 1883 -t '$queue/orders' -m 'order-1'
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders' -m 'order-1'
 ```
 
 ### Example 3: Filtered Consumption
@@ -298,19 +298,19 @@ Different consumers handle different message types:
 
 ```bash
 # EU order processors
-mosquitto_sub -p 1883 -t '$queue/orders/eu/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/eu/#' -q 1 \
   -D subscribe user-property consumer-group eu-processors
 
 # US order processors
-mosquitto_sub -p 1883 -t '$queue/orders/us/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/us/#' -q 1 \
   -D subscribe user-property consumer-group us-processors
 
 # Image processors (any region)
-mosquitto_sub -p 1883 -t '$queue/orders/+/images/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/+/images/#' -q 1 \
   -D subscribe user-property consumer-group image-processors
 
 # Publish
-mosquitto_pub -p 1883 -t '$queue/orders/eu/images/resize' -m 'photo.png'
+mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/eu/images/resize' -m 'photo.png'
 # → eu-processors receives it (matches eu/#)
 # → image-processors receives it (matches +/images/#)
 # → us-processors does NOT receive it

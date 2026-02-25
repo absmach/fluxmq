@@ -5,7 +5,7 @@ description: Run FluxMQ with Docker Compose or docker run using the provided con
 
 # Quick Start (Docker)
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-25
 
 ## Option 1: Docker Compose (Recommended)
 
@@ -27,6 +27,7 @@ FLUXMQ_CONFIG=../examples/no-cluster.yaml \
 ```bash
 docker run --rm \
   -p 1883:1883 \
+  -p 1884:1884 \
   -p 8083:8083 \
   -p 8080:8080 \
   -p 5672:5672 \
@@ -37,6 +38,10 @@ docker run --rm \
   ghcr.io/absmach/fluxmq:latest \
   --config /etc/fluxmq/config.yaml
 ```
+
+The default Docker config uses dedicated TCP listeners:
+- `1883/tcp`: MQTT v3 (`server.tcp.v3`)
+- `1884/tcp`: MQTT v5 (`server.tcp.v5`)
 
 ## Next Steps
 

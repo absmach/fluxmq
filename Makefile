@@ -24,7 +24,7 @@ build: $(BUILD_DIR)/$(BINARY)
 
 $(BUILD_DIR)/$(BINARY): cmd/main.go $(shell find . -name '*.go' -not -path './build/*')
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd
+	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)"  -gcflags="all=-N -l" -o $(BUILD_DIR)/$(BINARY) ./cmd
 
 # Build Docker image (latest tag)
 .PHONY: docker
@@ -187,7 +187,8 @@ run-perf:
 	@bash -lc 'set -euo pipefail; \
 		cmd=(go run ./tests/perf/loadgen \
 			-scenario-config "$(PERF_SCENARIO_CONFIG)" \
-			-mqtt-addrs "$${PERF_MQTT_ADDRS:-127.0.0.1:1883,127.0.0.1:1884,127.0.0.1:1885}" \
+			-mqtt-v3-addrs "$${PERF_MQTT_V3_ADDRS:-127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887}" \
+			-mqtt-v5-addrs "$${PERF_MQTT_V5_ADDRS:-127.0.0.1:1884,127.0.0.1:1886,127.0.0.1:1888}" \
 			-amqp-addrs "$${PERF_AMQP_ADDRS:-127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684}" \
 			-min-ratio "$${PERF_MIN_RATIO:-0.95}" \
 			-drain-timeout "$${PERF_DRAIN_TIMEOUT:-45s}"); \

@@ -91,6 +91,82 @@ func TestConnectionReadPacketV5(t *testing.T) {
 	assert.Equal(t, v5.V5, connect.ProtocolVersion)
 }
 
+func TestConnectionReadPacketForcedV3(t *testing.T) {
+	serverConn, clientConn := createMockTCPConnection(t)
+
+	conn := core.NewConnectionWithVersion(serverConn, 0, false, core.ProtocolV3)
+
+	go func() {
+		connect := &v3.Connect{
+			FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
+			ProtocolName:    "MQTT",
+			ProtocolVersion: 4,
+			CleanSession:    true,
+			KeepAlive:       60,
+			ClientID:        "forced-v3-client",
+		}
+		_, _ = clientConn.Write(connect.Encode())
+	}()
+
+	pkt, err := conn.ReadPacket()
+	require.NoError(t, err)
+	require.NotNil(t, pkt)
+
+	connect, ok := pkt.(*v3.Connect)
+	require.True(t, ok)
+	assert.Equal(t, "forced-v3-client", connect.ClientID)
+	assert.Equal(t, byte(4), connect.ProtocolVersion)
+}
+
+func TestConnectionReadPacketForcedV5(t *testing.T) {
+	serverConn, clientConn := createMockTCPConnection(t)
+
+	conn := core.NewConnectionWithVersion(serverConn, 0, false, core.ProtocolV5)
+
+	go func() {
+		connect := &v5.Connect{
+			FixedHeader:     v5.FixedHeader{PacketType: v5.ConnectType},
+			ProtocolName:    "MQTT",
+			ProtocolVersion: v5.V5,
+			CleanStart:      true,
+			KeepAlive:       60,
+			ClientID:        "forced-v5-client",
+		}
+		_, _ = clientConn.Write(connect.Encode())
+	}()
+
+	pkt, err := conn.ReadPacket()
+	require.NoError(t, err)
+	require.NotNil(t, pkt)
+
+	connect, ok := pkt.(*v5.Connect)
+	require.True(t, ok)
+	assert.Equal(t, "forced-v5-client", connect.ClientID)
+	assert.Equal(t, v5.V5, connect.ProtocolVersion)
+}
+
+func TestConnectionReadPacketForcedV5WithV3PayloadErrors(t *testing.T) {
+	serverConn, clientConn := createMockTCPConnection(t)
+
+	conn := core.NewConnectionWithVersion(serverConn, 0, false, core.ProtocolV5)
+
+	go func() {
+		connect := &v3.Connect{
+			FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
+			ProtocolName:    "MQTT",
+			ProtocolVersion: 4,
+			CleanSession:    true,
+			KeepAlive:       60,
+			ClientID:        "mismatch-client",
+		}
+		_, _ = clientConn.Write(connect.Encode())
+		_ = clientConn.Close()
+	}()
+
+	_, err := conn.ReadPacket()
+	require.Error(t, err)
+}
+
 func TestConnectionWritePacket(t *testing.T) {
 	serverConn, clientConn := createMockTCPConnection(t)
 

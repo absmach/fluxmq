@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 )
 
@@ -265,5 +266,18 @@ func TestSendQueueConfigApplied(t *testing.T) {
 	}
 	if !server.config.DisconnectOnFull {
 		t.Fatal("expected DisconnectOnFull=true")
+	}
+}
+
+func TestProtocolVersionConfigApplied(t *testing.T) {
+	b := broker.NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	defer b.Close()
+
+	server := New(Config{
+		ProtocolVersion: core.ProtocolV5,
+	}, b)
+
+	if server.config.ProtocolVersion != core.ProtocolV5 {
+		t.Fatalf("expected ProtocolVersion %d, got %d", core.ProtocolV5, server.config.ProtocolVersion)
 	}
 }

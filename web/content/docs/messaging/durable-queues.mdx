@@ -307,7 +307,7 @@ How to set the group ID depends on the protocol:
 ### MQTT v5 Example
 
 ```bash
-mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/#' -q 1 \
   -D subscribe user-property consumer-group workers
 ```
 

@@ -41,6 +41,7 @@ type Config struct {
 	IPRateLimiter    IPRateLimiter // Optional IP-based rate limiter
 	SendQueueSize    int
 	DisconnectOnFull bool
+	ProtocolVersion  int
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
@@ -228,7 +229,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	}
 
 	// core.NewConnection accepts any net.Conn (TCP or TLS)
-	hc := core.NewConnection(conn, s.config.SendQueueSize, s.config.DisconnectOnFull)
+	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion)
 	broker.HandleConnection(s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",

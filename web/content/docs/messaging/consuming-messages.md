@@ -55,7 +55,7 @@ mosquitto_sub -p 1883 -t '$queue/orders/+/images/#' -q 1 -v
 
 ```bash
 # Join consumer group "workers" for load balancing
-mosquitto_sub -p 1883 -t '$queue/orders/#' -q 1 -v \
+mosquitto_sub -V mqttv5 -p 1884 -t '$queue/orders/#' -q 1 -v \
   -D subscribe user-property consumer-group workers
 ```
 

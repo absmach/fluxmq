@@ -40,7 +40,7 @@ import (
 func main() {
     // Create client with options
     opts := client.NewOptions().
-        SetServers("localhost:1883").
+        SetServers("localhost:1884").
         SetClientID("my-client").
         SetProtocolVersion(5).
         SetOnMessage(func(topic string, payload []byte, qos byte) {
@@ -329,7 +329,7 @@ import (
 
 func main() {
     opts := client.NewOptions().
-        SetServers("localhost:1883").
+        SetServers("localhost:1884").
         SetClientID("order-processor").
         SetProtocolVersion(5)
 
