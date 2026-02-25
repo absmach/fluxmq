@@ -5,7 +5,6 @@ package queue
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -200,7 +199,7 @@ func (e *DeliveryEngine) deliverQueueConfig(ctx context.Context, queueConfig *ty
 
 		patternGroupID := primaryGroup
 		if pattern != "" {
-			patternGroupID = fmt.Sprintf("%s@%s", primaryGroup, pattern)
+			patternGroupID = primaryGroup + "@" + pattern
 		}
 
 		if val, ok := primaryCommitted[patternGroupID]; ok {
@@ -373,7 +372,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 		if group.Mode == types.GroupModeStream && config.PrimaryGroup != "" {
 			patternGroupID := config.PrimaryGroup
 			if group.Pattern != "" {
-				patternGroupID = fmt.Sprintf("%s@%s", config.PrimaryGroup, group.Pattern)
+				patternGroupID = config.PrimaryGroup + "@" + group.Pattern
 			}
 			if committed, err := e.consumerManager.GetCommittedOffset(ctx, config.Name, patternGroupID); err == nil {
 				workCommitted = committed
