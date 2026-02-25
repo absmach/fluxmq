@@ -116,7 +116,7 @@ server:
 
 ### Listener Fields
 
-These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.plain`, `server.amqp091.tls`, and so on).
+These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on).
 
 | Field | Description |
 |---|---|

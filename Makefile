@@ -24,7 +24,7 @@ build: $(BUILD_DIR)/$(BINARY)
 
 $(BUILD_DIR)/$(BINARY): cmd/main.go $(shell find . -name '*.go' -not -path './build/*')
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)"  -gcflags="all=-N -l" -o $(BUILD_DIR)/$(BINARY) ./cmd
+	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd
 
 # Build Docker image (latest tag)
 .PHONY: docker

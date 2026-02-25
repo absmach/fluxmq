@@ -99,7 +99,8 @@ func main() {
 		"tcp_v5_listener", cfg.Server.TCP.V5.Addr,
 		"tcp_tls_listener", cfg.Server.TCP.TLS.Addr,
 		"tcp_mtls_listener", cfg.Server.TCP.MTLS.Addr,
-		"ws_plain_listener", cfg.Server.WebSocket.Plain.Addr,
+		"ws_v3_listener", cfg.Server.WebSocket.V3.Addr,
+		"ws_v5_listener", cfg.Server.WebSocket.V5.Addr,
 		"ws_tls_listener", cfg.Server.WebSocket.TLS.Addr,
 		"ws_mtls_listener", cfg.Server.WebSocket.MTLS.Addr,
 		"http_plain_listener", cfg.Server.HTTP.Plain.Addr,
@@ -589,7 +590,8 @@ func main() {
 		name string
 		cfg  config.WSListenerConfig
 	}{
-		{name: "plain", cfg: cfg.Server.WebSocket.Plain},
+		{name: "v3", cfg: cfg.Server.WebSocket.V3},
+		{name: "v5", cfg: cfg.Server.WebSocket.V5},
 		{name: "tls", cfg: cfg.Server.WebSocket.TLS},
 		{name: "mtls", cfg: cfg.Server.WebSocket.MTLS},
 	}

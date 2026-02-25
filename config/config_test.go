@@ -27,8 +27,11 @@ func TestDefault(t *testing.T) {
 	if cfg.Server.TCP.V5.Protocol != ProtocolModeV5 {
 		t.Errorf("expected default TCP v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.TCP.V5.Protocol)
 	}
-	if cfg.Server.WebSocket.Plain.Protocol != ProtocolModeAuto {
-		t.Errorf("expected default WebSocket protocol %q, got %q", ProtocolModeAuto, cfg.Server.WebSocket.Plain.Protocol)
+	if cfg.Server.WebSocket.V3.Protocol != ProtocolModeV3 {
+		t.Errorf("expected default WebSocket v3 protocol %q, got %q", ProtocolModeV3, cfg.Server.WebSocket.V3.Protocol)
+	}
+	if cfg.Server.WebSocket.V5.Protocol != ProtocolModeV5 {
+		t.Errorf("expected default WebSocket v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.WebSocket.V5.Protocol)
 	}
 
 	// Test broker defaults
@@ -71,7 +74,8 @@ func TestValidate(t *testing.T) {
 				c.Server.TCP.V5.Addr = ""
 				c.Server.TCP.TLS.Addr = ""
 				c.Server.TCP.MTLS.Addr = ""
-				c.Server.WebSocket.Plain.Addr = ""
+				c.Server.WebSocket.V3.Addr = ""
+				c.Server.WebSocket.V5.Addr = ""
 				c.Server.WebSocket.TLS.Addr = ""
 				c.Server.WebSocket.MTLS.Addr = ""
 			},
@@ -110,7 +114,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid websocket protocol mode",
 			modify: func(c *Config) {
-				c.Server.WebSocket.Plain.Protocol = "mqtt5"
+				c.Server.WebSocket.V3.Protocol = "mqtt5"
 			},
 			wantErr: true,
 		},
@@ -260,7 +264,7 @@ func TestNormalizeProtocolMode(t *testing.T) {
 		{name: "mixed case v3", in: "V3", want: ProtocolModeV3},
 		{name: "mixed case v5", in: "V5", want: ProtocolModeV5},
 		{name: "spaces around auto", in: " auto ", want: ProtocolModeAuto},
-		{name: "unknown preserved normalized", in: " MQTT ", want: "mqtt"},
+		{name: "unknown defaults to auto", in: " MQTT ", want: ProtocolModeAuto},
 	}
 
 	for _, tt := range tests {

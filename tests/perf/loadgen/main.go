@@ -28,7 +28,8 @@ type runConfig struct {
 	PayloadLabel         string
 	PayloadBytes         int
 	PayloadFromCLI       bool
-	MQTTAddrs            []string
+	MQTTV3Addrs          []string
+	MQTTV5Addrs          []string
 	AMQPAddrs            []string
 	MinRatio             float64
 	DrainTimeout         time.Duration
@@ -91,6 +92,11 @@ type scenarioResult struct {
 type deduper struct {
 	mu   sync.Mutex
 	seen map[string]struct{}
+}
+
+type mqttEndpoint struct {
+	Addr            string
+	ProtocolVersion byte
 }
 
 const (
@@ -185,11 +191,34 @@ func shuffledAddrs(addrs []string, runID, salt int64) []string {
 	return out
 }
 
+func shuffledMQTTEndpoints(v3Addrs, v5Addrs []string, runID, salt int64) []mqttEndpoint {
+	out := make([]mqttEndpoint, 0, len(v3Addrs)+len(v5Addrs))
+	for _, addr := range v3Addrs {
+		out = append(out, mqttEndpoint{Addr: addr, ProtocolVersion: 4})
+	}
+	for _, addr := range v5Addrs {
+		out = append(out, mqttEndpoint{Addr: addr, ProtocolVersion: 5})
+	}
+	if len(out) < 2 {
+		return out
+	}
+	rng := rand.New(rand.NewSource(runID + salt*7919))
+	rng.Shuffle(len(out), func(i, j int) {
+		out[i], out[j] = out[j], out[i]
+	})
+	return out
+}
+
+func mqttEndpointByOffset(endpoints []mqttEndpoint, idx, offset int) mqttEndpoint {
+	return endpoints[(idx+offset)%len(endpoints)]
+}
+
 func main() {
 	scenarioConfigFlag := flag.String("scenario-config", "", "Path to JSON config for fanin/fanout scenario")
 	payloadFlag := flag.String("payload", "small", "Payload preset: small|medium|large")
 	payloadBytesFlag := flag.Int("payload-bytes", 0, "Payload size in bytes (overrides -payload)")
-	mqttFlag := flag.String("mqtt-addrs", "127.0.0.1:1883,127.0.0.1:1884,127.0.0.1:1885", "Comma-separated MQTT broker addresses")
+	mqttV3Flag := flag.String("mqtt-v3-addrs", "127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887", "Comma-separated MQTT v3 broker addresses")
+	mqttV5Flag := flag.String("mqtt-v5-addrs", "127.0.0.1:1884,127.0.0.1:1886,127.0.0.1:1888", "Comma-separated MQTT v5 broker addresses")
 	amqpFlag := flag.String("amqp-addrs", "127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684", "Comma-separated AMQP 0.9.1 broker addresses")
 	publishersFlag := flag.Int("publishers", 0, "Override concurrent publishers")
 	subscribersFlag := flag.Int("subscribers", 0, "Override concurrent subscribers")
@@ -239,9 +268,13 @@ func main() {
 		}
 	}
 
-	mqttAddrs := parseAddrList(*mqttFlag)
-	if len(mqttAddrs) == 0 {
-		exitErr(errors.New("no MQTT addresses configured"))
+	mqttV3Addrs := parseAddrList(*mqttV3Flag)
+	if len(mqttV3Addrs) == 0 {
+		exitErr(errors.New("no MQTT v3 addresses configured"))
+	}
+	mqttV5Addrs := parseAddrList(*mqttV5Flag)
+	if len(mqttV5Addrs) == 0 {
+		exitErr(errors.New("no MQTT v5 addresses configured"))
 	}
 
 	amqpAddrs := parseAddrList(*amqpFlag)
@@ -254,7 +287,8 @@ func main() {
 		PayloadLabel:         payloadLabel,
 		PayloadBytes:         payloadBytes,
 		PayloadFromCLI:       payloadFromCLI,
-		MQTTAddrs:            mqttAddrs,
+		MQTTV3Addrs:          mqttV3Addrs,
+		MQTTV5Addrs:          mqttV5Addrs,
 		AMQPAddrs:            amqpAddrs,
 		MinRatio:             *minRatioFlag,
 		DrainTimeout:         *drainTimeoutFlag,
@@ -478,8 +512,8 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	}
 
 	runID := time.Now().UnixNano()
-	mqttPublisherAddrs := shuffledAddrs(cfg.MQTTAddrs, runID, mqttPublisherSeedSalt)
-	mqttSubscriberAddrs := shuffledAddrs(cfg.MQTTAddrs, runID, mqttSubscriberSeedSalt)
+	mqttPublisherEndpoints := shuffledMQTTEndpoints(cfg.MQTTV3Addrs, cfg.MQTTV5Addrs, runID, mqttPublisherSeedSalt)
+	mqttSubscriberEndpoints := shuffledMQTTEndpoints(cfg.MQTTV3Addrs, cfg.MQTTV5Addrs, runID, mqttSubscriberSeedSalt)
 	amqpPublisherAddrs := shuffledAddrs(cfg.AMQPAddrs, runID, amqpPublisherSeedSalt)
 	amqpSubscriberAddrs := shuffledAddrs(cfg.AMQPAddrs, runID, amqpSubscriberSeedSalt)
 
@@ -504,7 +538,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 
 	switch sc.resolvedSubscriberProto {
 	case "mqtt":
-		subs, err := connectMQTTSubscribers(mqttSubscriberAddrs, sc.Name, runID, sc.Subscribers, func(subID int, _ string, msg *mqttclient.Message) {
+		subs, err := connectMQTTSubscribers(mqttSubscriberEndpoints, sc.Name, runID, sc.Subscribers, func(subID int, _ string, msg *mqttclient.Message) {
 			if !isCountablePayload(msg.Payload) {
 				return
 			}
@@ -564,7 +598,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	switch sc.resolvedPublisherProto {
 	case "mqtt":
 		published = runMQTTPublishers(ctx, mqttPublishParams{
-			Addrs:                mqttPublisherAddrs,
+			Endpoints:            mqttPublisherEndpoints,
 			Scenario:             sc.Name,
 			RunID:                runID,
 			Publishers:           sc.Publishers,
@@ -703,21 +737,21 @@ func buildTopicMatchCounts(topicSet, filters []string) map[string]int64 {
 	return matchCounts
 }
 
-func connectMQTTSubscribers(addrs []string, scenario string, runID int64, count int, onMessage func(subID int, subName string, msg *mqttclient.Message)) ([]*mqttclient.Client, error) {
+func connectMQTTSubscribers(endpoints []mqttEndpoint, scenario string, runID int64, count int, onMessage func(subID int, subName string, msg *mqttclient.Message)) ([]*mqttclient.Client, error) {
 	clients := make([]*mqttclient.Client, 0, count)
 	for i := 0; i < count; i++ {
-		addr := addrByOffset(addrs, i, subscriberNodeOffset)
+		endpoint := mqttEndpointByOffset(endpoints, i, subscriberNodeOffset)
 		clientID := fmt.Sprintf("%s-sub-%d-%d", scenario, runID, i)
 		sid := i
 		sname := clientID
-		client, err := connectMQTTClient(addr, clientID, func(msg *mqttclient.Message) {
+		client, err := connectMQTTClient(endpoint.Addr, endpoint.ProtocolVersion, clientID, func(msg *mqttclient.Message) {
 			if onMessage != nil {
 				onMessage(sid, sname, msg)
 			}
 		})
 		if err != nil {
 			disconnectMQTTClients(clients)
-			return nil, fmt.Errorf("failed to connect MQTT subscriber %s to %s: %w", clientID, addr, err)
+			return nil, fmt.Errorf("failed to connect MQTT subscriber %s to %s (v%d): %w", clientID, endpoint.Addr, endpoint.ProtocolVersion, err)
 		}
 		clients = append(clients, client)
 	}
@@ -748,7 +782,7 @@ func connectAMQPTopicSubscribersWithFilters(addrs []string, scenario string, run
 }
 
 type mqttPublishParams struct {
-	Addrs                []string
+	Endpoints            []mqttEndpoint
 	Scenario             string
 	RunID                int64
 	Publishers           int
@@ -808,9 +842,9 @@ func sleepWithContext(ctx context.Context, d time.Duration) bool {
 func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 	pubClients := make([]*mqttclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
-		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
+		endpoint := mqttEndpointByOffset(params.Endpoints, i, publisherNodeOffset)
 		clientID := fmt.Sprintf("%s-pub-%d-%d", params.Scenario, params.RunID, i)
-		client, err := connectMQTTClient(addr, clientID, nil)
+		client, err := connectMQTTClient(endpoint.Addr, endpoint.ProtocolVersion, clientID, nil)
 		if err != nil {
 			if params.ErrCount != nil {
 				params.ErrCount.Add(1)
@@ -948,11 +982,14 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 	return counter.Load()
 }
 
-func connectMQTTClient(addr, clientID string, onMessage func(msg *mqttclient.Message)) (*mqttclient.Client, error) {
+func connectMQTTClient(addr string, protocolVersion byte, clientID string, onMessage func(msg *mqttclient.Message)) (*mqttclient.Client, error) {
+	if protocolVersion != 4 && protocolVersion != 5 {
+		return nil, fmt.Errorf("unsupported MQTT protocol version %d", protocolVersion)
+	}
 	opts := mqttclient.NewOptions().
 		SetServers(addr).
 		SetClientID(clientID).
-		SetProtocolVersion(5).
+		SetProtocolVersion(protocolVersion).
 		SetCleanSession(true).
 		SetKeepAlive(20 * time.Second).
 		SetConnectTimeout(8 * time.Second).

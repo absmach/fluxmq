@@ -161,3 +161,37 @@ func TestAddrByOffsetBalancedAfterShuffle(t *testing.T) {
 		t.Fatalf("unbalanced assignment after shuffle: counts=%v", counts)
 	}
 }
+
+func TestShuffledMQTTEndpointsDeterministicAndMixed(t *testing.T) {
+	v3 := []string{"n1:1883", "n2:1885", "n3:1887"}
+	v5 := []string{"n1:1884", "n2:1886", "n3:1888"}
+
+	a := shuffledMQTTEndpoints(v3, v5, 1234, mqttPublisherSeedSalt)
+	b := shuffledMQTTEndpoints(v3, v5, 1234, mqttPublisherSeedSalt)
+	if len(a) != len(v3)+len(v5) {
+		t.Fatalf("unexpected endpoint count: got %d want %d", len(a), len(v3)+len(v5))
+	}
+	if len(b) != len(a) {
+		t.Fatalf("unexpected deterministic length mismatch: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("expected deterministic ordering for same seed, mismatch at %d: %v vs %v", i, a[i], b[i])
+		}
+	}
+
+	var v3Count, v5Count int
+	for _, ep := range a {
+		switch ep.ProtocolVersion {
+		case 4:
+			v3Count++
+		case 5:
+			v5Count++
+		default:
+			t.Fatalf("unexpected protocol version: %d", ep.ProtocolVersion)
+		}
+	}
+	if v3Count != len(v3) || v5Count != len(v5) {
+		t.Fatalf("unexpected protocol split: v3=%d v5=%d", v3Count, v5Count)
+	}
+}

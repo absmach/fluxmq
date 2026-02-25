@@ -13,10 +13,14 @@ server:
       read_timeout: 60s
       write_timeout: 60s
   websocket:
-    plain:
-      addr: "127.0.0.1:8885"
+    v3:
+      addr: "127.0.0.1:8887"
       path: "/mqtt"
       protocol: "v3"
+    v5:
+      addr: "127.0.0.1:8888"
+      path: "/mqtt"
+      protocol: "v5"
   http:
     plain:
       addr: "127.0.0.1:8092"

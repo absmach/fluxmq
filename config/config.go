@@ -185,9 +185,10 @@ type WSListenerConfig struct {
 
 // WebSocketConfig groups WebSocket listeners by mode.
 type WebSocketConfig struct {
-	Plain WSListenerConfig `yaml:"plain"`
-	TLS   WSListenerConfig `yaml:"tls"`
-	MTLS  WSListenerConfig `yaml:"mtls"`
+	V3   WSListenerConfig `yaml:"v3"`
+	V5   WSListenerConfig `yaml:"v5"`
+	TLS  WSListenerConfig `yaml:"tls"`
+	MTLS WSListenerConfig `yaml:"mtls"`
 }
 
 // HTTPListenerConfig holds HTTP listener configuration.
@@ -523,10 +524,15 @@ func Default() *Config {
 				},
 			},
 			WebSocket: WebSocketConfig{
-				Plain: WSListenerConfig{
+				V3: WSListenerConfig{
 					Addr:     ":8083",
 					Path:     "/mqtt",
-					Protocol: ProtocolModeAuto,
+					Protocol: ProtocolModeV3,
+				},
+				V5: WSListenerConfig{
+					Addr:     ":8084",
+					Path:     "/mqtt",
+					Protocol: ProtocolModeV5,
 				},
 				TLS: WSListenerConfig{
 					Path:     "/mqtt",
@@ -768,11 +774,14 @@ func (c *Config) Validate() error {
 	wsSlots := []struct {
 		name              string
 		cfg               WSListenerConfig
+		requireTLS        bool
 		requireClientAuth bool
+		fixedProtocol     string
 	}{
-		{name: "plain", cfg: c.Server.WebSocket.Plain, requireClientAuth: false},
-		{name: "tls", cfg: c.Server.WebSocket.TLS, requireClientAuth: false},
-		{name: "mtls", cfg: c.Server.WebSocket.MTLS, requireClientAuth: true},
+		{name: "v3", cfg: c.Server.WebSocket.V3, fixedProtocol: ProtocolModeV3},
+		{name: "v5", cfg: c.Server.WebSocket.V5, fixedProtocol: ProtocolModeV5},
+		{name: "tls", cfg: c.Server.WebSocket.TLS, requireTLS: true},
+		{name: "mtls", cfg: c.Server.WebSocket.MTLS, requireTLS: true, requireClientAuth: true},
 	}
 
 	httpSlots := []struct {
@@ -819,21 +828,24 @@ func (c *Config) Validate() error {
 		if err := validateListenerProtocol("server.websocket."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
 			return err
 		}
+		mode := NormalizeProtocolMode(slot.cfg.Protocol)
+		if slot.fixedProtocol != "" && mode != slot.fixedProtocol {
+			return fmt.Errorf("server.websocket.%s.protocol must be %q", slot.name, slot.fixedProtocol)
+		}
 		if !hasAddr(slot.cfg.Addr) {
-			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
-				return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
+			if tlsConfigured(slot.cfg.TLS) && !slot.requireTLS {
+				return fmt.Errorf("server.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
 			}
 			continue
 		}
 
 		hasMQTTListener = true
-		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.websocket.%s TLS fields are not supported for plain listeners", slot.name)
-		}
-		if slot.name != "plain" {
+		if slot.requireTLS {
 			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
+		} else if tlsConfigured(slot.cfg.TLS) {
+			return fmt.Errorf("server.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
 		}
 	}
 
@@ -1238,7 +1250,7 @@ func NormalizeProtocolMode(mode string) string {
 	case ProtocolModeV5:
 		return ProtocolModeV5
 	default:
-		return strings.ToLower(strings.TrimSpace(mode))
+		return ProtocolModeAuto
 	}
 }
 

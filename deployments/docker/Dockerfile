@@ -24,6 +24,6 @@ COPY --from=builder /out/fluxmq /usr/local/bin/fluxmq
 USER fluxmq
 WORKDIR /var/lib/fluxmq
 
-EXPOSE 1883 1884 8080 8081 8083 5672 5682 5683
+EXPOSE 1883 1884 8080 8081 8083 8084 5672 5682 5683
 
 ENTRYPOINT ["/usr/local/bin/fluxmq"]

@@ -5,7 +5,8 @@ services:
     ports:
       - "1883:1883"   # MQTT v3
       - "1884:1884"   # MQTT v5
-      - "8083:8083"   # MQTT over WebSocket
+      - "8083:8083"   # MQTT v3 over WebSocket
+      - "8084:8084"   # MQTT v5 over WebSocket
       - "8080:8080"   # HTTP bridge
       - "5672:5672"   # AMQP 1.0
       - "5682:5682"   # AMQP 0.9.1

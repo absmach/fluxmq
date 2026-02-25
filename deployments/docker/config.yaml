@@ -7,6 +7,15 @@ server:
     v5:
       addr: ":1884"
       protocol: "v5"
+  websocket:
+    v3:
+      addr: ":8083"
+      path: "/mqtt"
+      protocol: "v3"
+    v5:
+      addr: ":8084"
+      path: "/mqtt"
+      protocol: "v5"
 
 cluster:
   enabled: false
