@@ -204,7 +204,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 
 // distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(msg *storage.Message) error {
-	if err := b.distributeLocal(msg); err != nil {
+	if err := b.distributeLocal(msg, true); err != nil {
 		return err
 	}
 
@@ -230,14 +230,9 @@ func (b *Broker) distribute(msg *storage.Message) error {
 	return nil
 }
 
-// distributeLocal delivers a message to all matching local subscribers without cluster routing.
-func (b *Broker) distributeLocal(msg *storage.Message) error {
-	return b.distributeLocalScoped(msg, true)
-}
-
-// distributeLocalScoped delivers a message to local subscribers.
+// distributeLocal delivers a message to local subscribers.
 // allowCross controls whether cross-protocol delivery callbacks may run.
-func (b *Broker) distributeLocalScoped(msg *storage.Message, allowCross bool) error {
+func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
 	matched := router.AcquireSubscriptionSlice()
 	defer router.ReleaseSubscriptionSlice(matched)
 
@@ -363,7 +358,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	err := b.distributeLocalScoped(storeMsg, false)
+	err := b.distributeLocal(storeMsg, false)
 	storeMsg.ReleasePayload()
 	return err
 }
