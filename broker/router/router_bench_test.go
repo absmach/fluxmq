@@ -26,8 +26,10 @@ func BenchmarkRouter_Match_10000Subs(b *testing.B) {
 
 func benchmarkRouterMatch(b *testing.B, r *TrieRouter, numSubs int) {
 	// Setup: add subscriptions
+	topics := make([]string, numSubs)
 	for i := 0; i < numSubs; i++ {
 		topic := fmt.Sprintf("sensor/room%d/temperature", i)
+		topics[i] = topic
 		_ = r.Subscribe(fmt.Sprintf("client%d", i), topic, 1, storage.SubscribeOptions{})
 	}
 
@@ -39,8 +41,7 @@ func benchmarkRouterMatch(b *testing.B, r *TrieRouter, numSubs int) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			topic := fmt.Sprintf("sensor/room%d/temperature", i%numSubs)
-			_, _ = r.Match(topic)
+			_, _ = r.Match(topics[i%numSubs])
 			i++
 		}
 	})
@@ -67,8 +68,10 @@ func BenchmarkRouter_Mixed_90Read_10Write(b *testing.B) {
 	r := NewRouter()
 
 	// Pre-populate
+	topics := make([]string, 1000)
 	for i := 0; i < 1000; i++ {
 		topic := fmt.Sprintf("sensor/room%d/temperature", i)
+		topics[i] = topic
 		_ = r.Subscribe(fmt.Sprintf("client%d", i), topic, 1, storage.SubscribeOptions{})
 	}
 
@@ -79,12 +82,11 @@ func BenchmarkRouter_Mixed_90Read_10Write(b *testing.B) {
 			if i%10 == 0 {
 				// 10% writes
 				clientID := fmt.Sprintf("client%d", i)
-				topic := fmt.Sprintf("sensor/room%d/temperature", i%1000)
+				topic := topics[i%len(topics)]
 				_ = r.Subscribe(clientID, topic, 1, storage.SubscribeOptions{})
 			} else {
 				// 90% reads
-				topic := fmt.Sprintf("sensor/room%d/temperature", i%1000)
-				_, _ = r.Match(topic)
+				_, _ = r.Match(topics[i%len(topics)])
 			}
 			i++
 		}
@@ -104,8 +106,10 @@ func BenchmarkRouter_Match_Wildcards(b *testing.B) {
 	_ = r.Subscribe("client5", "#", 1, storage.SubscribeOptions{})
 
 	// Add some exact matches too
+	topics := make([]string, 100)
 	for i := 0; i < 100; i++ {
 		topic := fmt.Sprintf("sensor/room%d/temperature", i)
+		topics[i] = topic
 		_ = r.Subscribe(fmt.Sprintf("client%d", i+10), topic, 1, storage.SubscribeOptions{})
 	}
 
@@ -113,8 +117,7 @@ func BenchmarkRouter_Match_Wildcards(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			topic := fmt.Sprintf("sensor/room%d/temperature", i%100)
-			_, _ = r.Match(topic)
+			_, _ = r.Match(topics[i%len(topics)])
 			i++
 		}
 	})
@@ -126,8 +129,10 @@ func BenchmarkRouter_Match_DeepHierarchy(b *testing.B) {
 	r := NewRouter()
 
 	// Subscribe to deep topics
+	topics := make([]string, 100)
 	for i := 0; i < 100; i++ {
 		topic := fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/%d", i)
+		topics[i] = topic
 		_ = r.Subscribe(fmt.Sprintf("client%d", i), topic, 1, storage.SubscribeOptions{})
 	}
 
@@ -138,8 +143,7 @@ func BenchmarkRouter_Match_DeepHierarchy(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			topic := fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/%d", i%100)
-			_, _ = r.Match(topic)
+			_, _ = r.Match(topics[i%len(topics)])
 			i++
 		}
 	})
@@ -151,8 +155,10 @@ func BenchmarkRouter_Match_VeryDeepHierarchy(b *testing.B) {
 	r := NewRouter()
 
 	// 20-segment topics — forces pool slice growth beyond initial cap
+	topics := make([]string, 100)
 	for i := 0; i < 100; i++ {
 		topic := fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/%d", i)
+		topics[i] = topic
 		_ = r.Subscribe(fmt.Sprintf("client%d", i), topic, 1, storage.SubscribeOptions{})
 	}
 
@@ -162,8 +168,7 @@ func BenchmarkRouter_Match_VeryDeepHierarchy(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			topic := fmt.Sprintf("a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/%d", i%100)
-			_, _ = r.Match(topic)
+			_, _ = r.Match(topics[i%len(topics)])
 			i++
 		}
 	})
@@ -198,8 +203,12 @@ func BenchmarkRouter_Realistic_95Read_5Write(b *testing.B) {
 	r := NewRouter()
 
 	// Pre-populate with typical subscription count
+	topics := make([]string, 1000)
 	for i := 0; i < 10000; i++ {
 		topic := fmt.Sprintf("sensor/room%d/temperature", i%1000)
+		if i < 1000 {
+			topics[i] = topic
+		}
 		_ = r.Subscribe(fmt.Sprintf("client%d", i), topic, 1, storage.SubscribeOptions{})
 	}
 
@@ -214,12 +223,11 @@ func BenchmarkRouter_Realistic_95Read_5Write(b *testing.B) {
 			if i%20 == 0 {
 				// 5% writes
 				clientID := fmt.Sprintf("client%d", i)
-				topic := fmt.Sprintf("sensor/room%d/temperature", i%1000)
+				topic := topics[i%len(topics)]
 				_ = r.Subscribe(clientID, topic, 1, storage.SubscribeOptions{})
 			} else {
 				// 95% reads
-				topic := fmt.Sprintf("sensor/room%d/temperature", i%1000)
-				_, _ = r.Match(topic)
+				_, _ = r.Match(topics[i%len(topics)])
 			}
 			i++
 		}

@@ -290,6 +290,117 @@ func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 	}
 }
 
+// BenchmarkMessagePublish_WildcardHeavy stresses wildcard matching and shared subscription dedup.
+func BenchmarkMessagePublish_WildcardHeavy(b *testing.B) {
+	broker := createBenchBroker(b)
+	defer broker.Close()
+
+	const (
+		exactSubs    = 1000
+		sharedSubs   = 20
+		wildcardSubs = 10
+	)
+
+	// Exact subscribers.
+	topics := make([]string, exactSubs)
+	for i := 0; i < exactSubs; i++ {
+		topic := fmt.Sprintf("sensors/room%d/temperature", i)
+		topics[i] = topic
+		sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
+		broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+	}
+
+	// Wildcard subscribers.
+	for i := 0; i < wildcardSubs; i++ {
+		sub := createBenchSession(b, broker, fmt.Sprintf("wild-%d", i))
+		switch i % 4 {
+		case 0:
+			broker.subscribe(sub, "sensors/+/temperature", 0, storage.SubscribeOptions{})
+		case 1:
+			broker.subscribe(sub, "sensors/#", 0, storage.SubscribeOptions{})
+		case 2:
+			broker.subscribe(sub, "+/room+/temperature", 0, storage.SubscribeOptions{})
+		default:
+			broker.subscribe(sub, "sensors/+/+", 0, storage.SubscribeOptions{})
+		}
+	}
+
+	// Shared subscription group (forces dedup per publish).
+	for i := 0; i < sharedSubs; i++ {
+		sub := createBenchSession(b, broker, fmt.Sprintf("shared-%d", i))
+		broker.subscribe(sub, "$share/group1/sensors/+/temperature", 0, storage.SubscribeOptions{})
+	}
+
+	payload := make([]byte, 256)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		msg := &storage.Message{
+			Topic: topics[i%len(topics)],
+			QoS:   0,
+		}
+		msg.SetPayloadFromBytes(payload)
+		broker.Publish(msg)
+	}
+}
+
+// BenchmarkMessagePublish_WithChurn mixes publish with subscribe/unsubscribe churn.
+func BenchmarkMessagePublish_WithChurn(b *testing.B) {
+	broker := createBenchBroker(b)
+	defer broker.Close()
+
+	const (
+		baseSubs  = 200
+		churnSubs = 50
+	)
+
+	// Base subscribers.
+	topics := make([]string, baseSubs)
+	for i := 0; i < baseSubs; i++ {
+		topic := fmt.Sprintf("devices/%d/state", i)
+		topics[i] = topic
+		sub := createBenchSession(b, broker, fmt.Sprintf("base-%d", i))
+		broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+	}
+
+	// Churn sessions reused across subscribe/unsubscribe.
+	churnSessions := make([]*session.Session, churnSubs)
+	for i := 0; i < churnSubs; i++ {
+		churnSessions[i] = createBenchSession(b, broker, fmt.Sprintf("churn-%d", i))
+	}
+
+	payload := make([]byte, 256)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		if i%20 == 0 {
+			// 5% churn: subscribe + unsubscribe on a rotating topic.
+			idx := (i / 20) % churnSubs
+			topic := topics[idx%len(topics)]
+			_ = broker.subscribe(churnSessions[idx], topic, 0, storage.SubscribeOptions{})
+			_ = broker.Unsubscribe(churnSessions[idx].ID, topic)
+			continue
+		}
+
+		msg := &storage.Message{
+			Topic: topics[i%len(topics)],
+			QoS:   0,
+		}
+		msg.SetPayloadFromBytes(payload)
+		broker.Publish(msg)
+	}
+}
+
 // BenchmarkMessageDistribute benchmarks the distribute function directly.
 func BenchmarkMessageDistribute(b *testing.B) {
 	broker := createBenchBroker(b)

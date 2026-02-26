@@ -29,6 +29,7 @@ Production readiness is workload-dependent. Use the benchmark suites in `benchma
 - Ensure file descriptor limits are high enough for your target connection count.
 - Tune TCP keepalive and timeouts based on your workload (IoT vs low-latency systems).
 - Measure with production-like TLS settings if TLS is enabled in production.
+- For Go runtime and GC tuning (`GOGC`, `GOMEMLIMIT`), see [Performance Tuning](/docs/deployment/performance-tuning).
 
 ## Cluster Scaling
 
