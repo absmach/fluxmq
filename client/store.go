@@ -115,8 +115,8 @@ func (s *MemoryStore) DeleteInbound(packetID uint16) error {
 func (s *MemoryStore) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.outbound = make(map[uint16]*Message)
-	s.inbound = make(map[uint16]*Message)
+	clear(s.outbound)
+	clear(s.inbound)
 	return nil
 }
 

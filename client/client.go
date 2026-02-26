@@ -66,9 +66,10 @@ type Client struct {
 	lastPingSent time.Time
 
 	// Message dispatching
-	msgCh      chan *Message
-	msgStop    chan struct{}
-	dispatchWg sync.WaitGroup
+	msgCh       chan *Message
+	msgOverflow chan *Message
+	msgStop     chan struct{}
+	dispatchWg  sync.WaitGroup
 
 	// Server index for round-robin
 	serverIdx int
@@ -1095,6 +1096,8 @@ func (c *Client) handlePacket(pkt packets.ControlPacket) {
 		c.waitingPing = false
 		c.lastPingSent = time.Time{}
 		c.pingMu.Unlock()
+	case packets.DisconnectType:
+		c.handleServerDisconnect(pkt)
 	}
 }
 
@@ -1197,7 +1200,13 @@ func (c *Client) deliverMessage(msg *Message) {
 	select {
 	case c.msgCh <- msg:
 	default:
-		go c.handleDeliveredMessage(msg)
+		// Primary channel full, try overflow channel
+		select {
+		case c.msgOverflow <- msg:
+		default:
+			// Both channels full — fall back to direct handling without blocking.
+			go c.handleDeliveredMessage(msg)
+		}
 	}
 }
 
@@ -1229,6 +1238,7 @@ func (c *Client) startDispatcher() {
 	}
 
 	c.msgCh = make(chan *Message, size)
+	c.msgOverflow = make(chan *Message, size)
 	c.msgStop = make(chan struct{})
 
 	workers := 1
@@ -1255,6 +1265,11 @@ func (c *Client) startDispatcher() {
 						return
 					}
 					c.handleDeliveredMessage(msg)
+				case msg, ok := <-c.msgOverflow:
+					if !ok {
+						return
+					}
+					c.handleDeliveredMessage(msg)
 				}
 			}
 		}()
@@ -1269,6 +1284,10 @@ func (c *Client) stopDispatcher() {
 	if c.msgCh != nil {
 		close(c.msgCh)
 		c.msgCh = nil
+	}
+	if c.msgOverflow != nil {
+		close(c.msgOverflow)
+		c.msgOverflow = nil
 	}
 	c.dispatchWg.Wait()
 }
@@ -1530,6 +1549,20 @@ func (c *Client) sendPubComp(packetID uint16) {
 		}
 		pkt.Pack(conn)
 	}
+}
+
+func (c *Client) handleServerDisconnect(pkt packets.ControlPacket) {
+	if c.opts.ProtocolVersion != 5 {
+		return
+	}
+
+	d := pkt.(*v5.Disconnect)
+	reason := fmt.Sprintf("server disconnect: reason code 0x%02X", d.ReasonCode)
+	if d.Properties != nil && d.Properties.ReasonString != "" {
+		reason += " (" + d.Properties.ReasonString + ")"
+	}
+
+	c.handleConnectionLost(fmt.Errorf("%w: %s", ErrConnectionLost, reason))
 }
 
 func (c *Client) handleConnectionLost(err error) {

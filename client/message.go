@@ -3,7 +3,10 @@
 
 package client
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Message represents an MQTT message.
 type Message struct {
@@ -99,6 +102,7 @@ type Token interface {
 
 // token is the default Token implementation.
 type token struct {
+	mu   sync.Mutex
 	done chan struct{}
 	err  error
 }
@@ -112,22 +116,30 @@ func newToken() *token {
 
 // complete signals the token as done.
 func (t *token) complete(err error) {
+	t.mu.Lock()
 	t.err = err
+	t.mu.Unlock()
 	close(t.done)
 }
 
 // Wait blocks until the operation completes.
 func (t *token) Wait() error {
 	<-t.done
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.err
 }
 
 // WaitTimeout blocks until the operation completes or times out.
 func (t *token) WaitTimeout(timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-t.done:
+		t.mu.Lock()
+		defer t.mu.Unlock()
 		return t.err
-	case <-time.After(timeout):
+	case <-timer.C:
 		return ErrTimeout
 	}
 }
@@ -139,6 +151,8 @@ func (t *token) Done() <-chan struct{} {
 
 // Error returns the operation error (may be nil).
 func (t *token) Error() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.err
 }
 

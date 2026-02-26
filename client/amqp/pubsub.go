@@ -57,8 +57,8 @@ func (m *Message) withChannelLock(fn func() error) error {
 	if m.client == nil {
 		return fn()
 	}
-	m.client.chMu.Lock()
-	defer m.client.chMu.Unlock()
+	m.client.subChMu.Lock()
+	defer m.client.subChMu.Unlock()
 	return fn()
 }
 
@@ -216,8 +216,8 @@ func (c *Client) Unsubscribe(topic string) error {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.Cancel(sub.consumerTag, false)
 }
 
@@ -227,7 +227,7 @@ func (c *Client) subscribeTopic(sub *topicSubscription) error {
 		return err
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	deliveries, err := ch.Consume(
 		sub.topicFilter,
 		sub.consumerTag,
@@ -237,7 +237,7 @@ func (c *Client) subscribeTopic(sub *topicSubscription) error {
 		sub.noWait,
 		sub.arguments,
 	)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	if err != nil {
 		return err
 	}

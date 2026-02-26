@@ -400,7 +400,9 @@ func (a *Adapter) AddPendingEntry(ctx context.Context, queueName, groupID string
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
 		group.AddPending(entry.ConsumerID, entry)
-		a.groupStore.Save(group)
+		if err := a.groupStore.Save(group); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -419,7 +421,9 @@ func (a *Adapter) RemovePendingEntry(ctx context.Context, queueName, groupID, co
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
 		group.RemovePending(consumerID, offset)
-		a.groupStore.Save(group)
+		if err := a.groupStore.Save(group); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -471,7 +475,9 @@ func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID s
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
 		group.TransferPending(offset, fromConsumer, toConsumer)
-		a.groupStore.Save(group)
+		if err := a.groupStore.Save(group); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -489,7 +495,9 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 		c := group.GetCursor()
 		c.Cursor = cursor
 		group.UpdatedAt = time.Now()
-		a.groupStore.Save(group)
+		if err := a.groupStore.Save(group); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -510,7 +518,9 @@ func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string
 		}
 		c.Committed = committed
 		group.UpdatedAt = time.Now()
-		a.groupStore.Save(group)
+		if err := a.groupStore.Save(group); err != nil {
+			return err
+		}
 	}
 
 	return nil

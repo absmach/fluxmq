@@ -13,19 +13,28 @@ import (
 )
 
 // Client is a minimal AMQP 0.9.1 client with queue and pub/sub support.
+// It uses separate channels for publishing and consuming so that a
+// channel-level exception from a publish does not kill active consumers.
 type Client struct {
 	opts *Options
 
 	conn   *amqp091.Connection
-	ch     *amqp091.Channel
 	connMu sync.RWMutex
 
-	chMu sync.Mutex
+	// Publishing channel — isolated from consumer channel
+	pubCh   *amqp091.Channel
+	pubChMu sync.Mutex
+
+	// Consuming / admin channel
+	subCh   *amqp091.Channel
+	subChMu sync.Mutex
 
 	notifyMu              sync.RWMutex
 	onReturn              func(amqp091.Return)
 	onPublishConfirmation func(amqp091.Confirmation)
 	publisherConfirms     atomic.Bool
+	returnListenerStarted  atomic.Bool
+	confirmListenerStarted atomic.Bool
 
 	subsMu    sync.Mutex
 	queueSubs map[string]*queueSubscription
@@ -104,12 +113,13 @@ func (c *Client) IsConnected() bool {
 	return c.connected.Load()
 }
 
-func (c *Client) channel() (*amqp091.Channel, error) {
+// pubChannel returns the publishing channel.
+func (c *Client) pubChannel() (*amqp091.Channel, error) {
 	if !c.connected.Load() {
 		return nil, ErrNotConnected
 	}
 	c.connMu.RLock()
-	ch := c.ch
+	ch := c.pubCh
 	c.connMu.RUnlock()
 	if ch == nil {
 		return nil, ErrNotConnected
@@ -117,14 +127,33 @@ func (c *Client) channel() (*amqp091.Channel, error) {
 	return ch, nil
 }
 
+// subChannel returns the consuming/admin channel.
+func (c *Client) subChannel() (*amqp091.Channel, error) {
+	if !c.connected.Load() {
+		return nil, ErrNotConnected
+	}
+	c.connMu.RLock()
+	ch := c.subCh
+	c.connMu.RUnlock()
+	if ch == nil {
+		return nil, ErrNotConnected
+	}
+	return ch, nil
+}
+
+// channel returns the consuming/admin channel (backward-compatible alias).
+func (c *Client) channel() (*amqp091.Channel, error) {
+	return c.subChannel()
+}
+
 func (c *Client) publish(exchange, routingKey string, msg amqp091.Publishing, mandatory, immediate bool) error {
-	ch, err := c.channel()
+	ch, err := c.pubChannel()
 	if err != nil {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.pubChMu.Lock()
+	defer c.pubChMu.Unlock()
 
 	return ch.Publish(exchange, routingKey, mandatory, immediate, msg)
 }
@@ -147,23 +176,34 @@ func (c *Client) connectOnce() error {
 		return err
 	}
 
-	ch, err := conn.Channel()
+	// Create publishing channel
+	pubCh, err := conn.Channel()
 	if err != nil {
 		_ = conn.Close()
 		return err
 	}
 
+	// Create consuming/admin channel
+	subCh, err := conn.Channel()
+	if err != nil {
+		_ = pubCh.Close()
+		_ = conn.Close()
+		return err
+	}
+
 	if c.opts.PrefetchCount > 0 || c.opts.PrefetchSize > 0 {
-		if err := ch.Qos(c.opts.PrefetchCount, c.opts.PrefetchSize, false); err != nil {
-			_ = ch.Close()
+		if err := subCh.Qos(c.opts.PrefetchCount, c.opts.PrefetchSize, false); err != nil {
+			_ = pubCh.Close()
+			_ = subCh.Close()
 			_ = conn.Close()
 			return err
 		}
 	}
 
 	if c.publisherConfirms.Load() {
-		if err := ch.Confirm(false); err != nil {
-			_ = ch.Close()
+		if err := pubCh.Confirm(false); err != nil {
+			_ = pubCh.Close()
+			_ = subCh.Close()
 			_ = conn.Close()
 			return err
 		}
@@ -171,12 +211,13 @@ func (c *Client) connectOnce() error {
 
 	c.connMu.Lock()
 	c.conn = conn
-	c.ch = ch
+	c.pubCh = pubCh
+	c.subCh = subCh
 	c.connMu.Unlock()
 
 	c.connected.Store(true)
-	c.startNotificationListeners(ch)
-	c.watchClose(conn, ch)
+	c.startNotificationListeners(pubCh)
+	c.watchClose(conn, pubCh, subCh)
 
 	if c.opts.OnConnect != nil {
 		go c.opts.OnConnect()
@@ -185,14 +226,14 @@ func (c *Client) connectOnce() error {
 	return nil
 }
 
-func (c *Client) startNotificationListeners(ch *amqp091.Channel) {
+func (c *Client) startNotificationListeners(pubCh *amqp091.Channel) {
 	c.notifyMu.RLock()
 	returnHandler := c.onReturn
 	confirmHandler := c.onPublishConfirmation
 	c.notifyMu.RUnlock()
 
-	if returnHandler != nil {
-		returns := ch.NotifyReturn(make(chan amqp091.Return, 32))
+	if returnHandler != nil && c.returnListenerStarted.CompareAndSwap(false, true) {
+		returns := pubCh.NotifyReturn(make(chan amqp091.Return, 32))
 		go func() {
 			for {
 				select {
@@ -208,8 +249,8 @@ func (c *Client) startNotificationListeners(ch *amqp091.Channel) {
 		}()
 	}
 
-	if confirmHandler != nil && c.publisherConfirms.Load() {
-		confirms := ch.NotifyPublish(make(chan amqp091.Confirmation, 64))
+	if confirmHandler != nil && c.publisherConfirms.Load() && c.confirmListenerStarted.CompareAndSwap(false, true) {
+		confirms := pubCh.NotifyPublish(make(chan amqp091.Confirmation, 64))
 		go func() {
 			for {
 				select {
@@ -226,15 +267,18 @@ func (c *Client) startNotificationListeners(ch *amqp091.Channel) {
 	}
 }
 
-func (c *Client) watchClose(conn *amqp091.Connection, ch *amqp091.Channel) {
+func (c *Client) watchClose(conn *amqp091.Connection, pubCh, subCh *amqp091.Channel) {
 	connClose := conn.NotifyClose(make(chan *amqp091.Error, 1))
-	chClose := ch.NotifyClose(make(chan *amqp091.Error, 1))
+	pubChClose := pubCh.NotifyClose(make(chan *amqp091.Error, 1))
+	subChClose := subCh.NotifyClose(make(chan *amqp091.Error, 1))
 
 	go func() {
 		select {
 		case err := <-connClose:
 			c.handleDisconnect(err)
-		case err := <-chClose:
+		case err := <-pubChClose:
+			c.handleDisconnect(err)
+		case err := <-subChClose:
 			c.handleDisconnect(err)
 		case <-c.stopCh:
 			return
@@ -343,12 +387,19 @@ func (c *Client) resubscribeAll() error {
 }
 
 func (c *Client) cleanupConn() {
+	c.returnListenerStarted.Store(false)
+	c.confirmListenerStarted.Store(false)
+
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 
-	if c.ch != nil {
-		_ = c.ch.Close()
-		c.ch = nil
+	if c.pubCh != nil {
+		_ = c.pubCh.Close()
+		c.pubCh = nil
+	}
+	if c.subCh != nil {
+		_ = c.subCh.Close()
+		c.subCh = nil
 	}
 	if c.conn != nil {
 		_ = c.conn.Close()

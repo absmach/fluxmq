@@ -177,10 +177,12 @@ func (ps *pendingStore) count() int {
 
 // wait waits for a pending operation to complete with timeout.
 func (op *pendingOp) wait(timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-op.done:
 		return op.err
-	case <-time.After(timeout):
+	case <-timer.C:
 		return ErrTimeout
 	}
 }

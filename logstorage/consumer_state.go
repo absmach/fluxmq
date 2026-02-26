@@ -247,6 +247,7 @@ const (
 	OpClaim
 	OpClaimBatch
 	OpAdvanceFloor
+	OpSetCursor
 )
 
 // Operation represents an operation in the log.
@@ -309,6 +310,8 @@ func (cs *ConsumerState) applyOp(op *Operation) {
 		}
 	case OpAdvanceFloor:
 		cs.applyAdvanceFloor(op.Offset)
+	case OpSetCursor:
+		cs.applySetCursor(op.Offset, op.Timestamp)
 	}
 }
 
@@ -595,6 +598,26 @@ func (cs *ConsumerState) GetGroupState() *GroupState {
 		CreatedAt: cs.state.CreatedAt,
 		UpdatedAt: cs.state.UpdatedAt,
 	}
+}
+
+// SetCursor sets the cursor position for the consumer group.
+func (cs *ConsumerState) SetCursor(cursor uint64) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	ts := time.Now().UnixMilli()
+	cs.applySetCursor(cursor, ts)
+
+	return cs.writeOp(&Operation{
+		Type:      OpSetCursor,
+		Offset:    cursor,
+		Timestamp: ts,
+	})
+}
+
+func (cs *ConsumerState) applySetCursor(cursor uint64, ts int64) {
+	cs.state.Cursor = cursor
+	cs.state.UpdatedAt = ts
 }
 
 // GetPending returns a pending entry.

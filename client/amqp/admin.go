@@ -37,8 +37,8 @@ func (c *Client) DeclareExchange(opts *ExchangeDeclareOptions) error {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.ExchangeDeclare(
 		opts.Name,
 		opts.Kind,
@@ -61,8 +61,8 @@ func (c *Client) DeleteExchange(name string, ifUnused, noWait bool) error {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.ExchangeDelete(name, ifUnused, noWait)
 }
 
@@ -77,8 +77,8 @@ func (c *Client) BindExchange(destination, key, source string, noWait bool, args
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.ExchangeBind(destination, key, source, noWait, args)
 }
 
@@ -93,8 +93,8 @@ func (c *Client) UnbindExchange(destination, key, source string, noWait bool, ar
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.ExchangeUnbind(destination, key, source, noWait, args)
 }
 
@@ -109,7 +109,7 @@ func (c *Client) DeclareQueue(opts *QueueDeclareOptions) (string, error) {
 		return "", err
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	q, err := ch.QueueDeclare(
 		opts.Name,
 		opts.Durable,
@@ -118,7 +118,7 @@ func (c *Client) DeclareQueue(opts *QueueDeclareOptions) (string, error) {
 		opts.NoWait,
 		opts.Arguments,
 	)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	if err != nil {
 		return "", err
 	}
@@ -137,9 +137,9 @@ func (c *Client) DeleteQueue(name string, ifUnused, ifEmpty, noWait bool) (int, 
 		return 0, err
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	count, err := ch.QueueDelete(name, ifUnused, ifEmpty, noWait)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	return count, err
 }
 
@@ -154,9 +154,9 @@ func (c *Client) PurgeQueue(name string, noWait bool) (int, error) {
 		return 0, err
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	count, err := ch.QueuePurge(name, noWait)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	return count, err
 }
 
@@ -171,8 +171,8 @@ func (c *Client) BindQueue(queue, key, exchange string, noWait bool, args amqp09
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.QueueBind(queue, key, exchange, noWait, args)
 }
 
@@ -187,8 +187,8 @@ func (c *Client) UnbindQueue(queue, key, exchange string, args amqp091.Table) er
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.QueueUnbind(queue, key, exchange, args)
 }
 
@@ -199,7 +199,7 @@ func (c *Client) SetQoS(count, size int, global bool) error {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.Qos(count, size, global)
 }

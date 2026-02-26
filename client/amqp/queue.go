@@ -108,8 +108,8 @@ func (qm *QueueMessage) withChannelLock(fn func() error) error {
 	if qm.client == nil {
 		return fn()
 	}
-	qm.client.chMu.Lock()
-	defer qm.client.chMu.Unlock()
+	qm.client.subChMu.Lock()
+	defer qm.client.subChMu.Unlock()
 	return fn()
 }
 
@@ -210,7 +210,7 @@ func (c *Client) DeclareStreamQueue(opts *StreamQueueOptions) (string, error) {
 		return "", err
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	q, err := ch.QueueDeclare(
 		opts.Name,
 		opts.Durable,
@@ -219,7 +219,7 @@ func (c *Client) DeclareStreamQueue(opts *StreamQueueOptions) (string, error) {
 		opts.NoWait,
 		args,
 	)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	if err != nil {
 		return "", err
 	}
@@ -340,8 +340,8 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.Cancel(sub.consumerTag, false)
 }
 
@@ -365,8 +365,8 @@ func (c *Client) UnsubscribeFromStream(queueName string) error {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.subChMu.Lock()
+	defer c.subChMu.Unlock()
 	return ch.Cancel(sub.consumerTag, false)
 }
 
@@ -377,13 +377,13 @@ func (c *Client) CommitOffset(queueName, groupID string, offset uint64) error {
 		return ErrNotConnected
 	}
 
-	ch, err := c.channel()
+	ch, err := c.pubChannel()
 	if err != nil {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.pubChMu.Lock()
+	defer c.pubChMu.Unlock()
 
 	// Send commit via publish to a special commit topic
 	return ch.Publish("", "$queue/"+queueName+"/$commit", false, false, amqp091.Publishing{
@@ -405,7 +405,7 @@ func (c *Client) subscribeQueue(sub *queueSubscription) error {
 		args["x-consumer-group"] = sub.consumerGroup
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	deliveries, err := ch.Consume(
 		sub.queueTopic,
 		sub.consumerTag,
@@ -415,7 +415,7 @@ func (c *Client) subscribeQueue(sub *queueSubscription) error {
 		false, // no-wait
 		args,
 	)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -474,7 +474,7 @@ func (c *Client) subscribeStream(sub *queueSubscription, opts *StreamConsumeOpti
 		noWait = opts.NoWait
 	}
 
-	c.chMu.Lock()
+	c.subChMu.Lock()
 	deliveries, err := ch.Consume(
 		sub.queueTopic,
 		sub.consumerTag,
@@ -484,7 +484,7 @@ func (c *Client) subscribeStream(sub *queueSubscription, opts *StreamConsumeOpti
 		noWait,
 		args,
 	)
-	c.chMu.Unlock()
+	c.subChMu.Unlock()
 	if err != nil {
 		return err
 	}

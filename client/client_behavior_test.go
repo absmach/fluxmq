@@ -270,19 +270,15 @@ func TestDeliverMessageOrderMattersBlocksWhenChannelFull(t *testing.T) {
 }
 
 func TestDeliverMessageOrderMattersFalseFallsBackWithoutBlocking(t *testing.T) {
-	delivered := make(chan *Message, 1)
-
 	c := &Client{
 		opts: NewOptions().
-			SetOrderMatters(false).
-			SetOnMessageV2(func(msg *Message) {
-				delivered <- msg
-			}),
+			SetOrderMatters(false),
 		state:     newStateManager(),
 		queueSubs: newQueueSubscriptions(),
 	}
 
 	c.msgCh = make(chan *Message, 1)
+	c.msgOverflow = make(chan *Message, 1)
 	c.msgCh <- &Message{Topic: "prefill"}
 
 	start := time.Now()
@@ -290,11 +286,11 @@ func TestDeliverMessageOrderMattersFalseFallsBackWithoutBlocking(t *testing.T) {
 	assert.Less(t, time.Since(start), 50*time.Millisecond, "deliverMessage should not block when OrderMatters=false")
 
 	select {
-	case msg := <-delivered:
+	case msg := <-c.msgOverflow:
 		require.NotNil(t, msg)
 		assert.Equal(t, "fallback", msg.Topic)
 	case <-time.After(250 * time.Millisecond):
-		t.Fatal("expected direct fallback delivery when message channel is full")
+		t.Fatal("expected overflow delivery when message channel is full")
 	}
 }
 

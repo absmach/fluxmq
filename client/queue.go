@@ -115,6 +115,8 @@ type queueAckInfo struct {
 	expires time.Time
 }
 
+const maxAckCacheEntries = 10000
+
 type queueAckCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
@@ -133,11 +135,34 @@ func (c *queueAckCache) set(messageID, groupID string) {
 		return
 	}
 
+	now := time.Now()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Evict expired entries when cache reaches size limit
+	if len(c.entries) >= maxAckCacheEntries {
+		for id, entry := range c.entries {
+			if entry.expires.Before(now) {
+				delete(c.entries, id)
+			}
+		}
+		// If still at limit after eviction, drop an arbitrary half
+		if len(c.entries) >= maxAckCacheEntries {
+			count := 0
+			for id := range c.entries {
+				delete(c.entries, id)
+				count++
+				if count >= len(c.entries)/2 {
+					break
+				}
+			}
+		}
+	}
+
 	c.entries[messageID] = queueAckInfo{
 		groupID: groupID,
-		expires: time.Now().Add(c.ttl),
+		expires: now.Add(c.ttl),
 	}
 }
 
@@ -380,7 +405,7 @@ func (c *Client) sendSubscribeWithUserProps(packetID uint16, topic string, qos b
 	defer conn.SetWriteDeadline(timeZero)
 
 	pkt := &v5.Subscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: qos},
+		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 		ID:          packetID,
 		Opts: []v5.SubOption{
 			{Topic: topic, MaxQoS: qos},

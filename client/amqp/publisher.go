@@ -16,7 +16,7 @@ func (c *Client) SetReturnHandler(handler func(amqp091.Return)) {
 	c.notifyMu.Unlock()
 
 	if handler != nil {
-		if ch, err := c.channel(); err == nil {
+		if ch, err := c.pubChannel(); err == nil {
 			c.startNotificationListeners(ch)
 		}
 	}
@@ -29,7 +29,7 @@ func (c *Client) SetPublishConfirmHandler(handler func(amqp091.Confirmation)) {
 	c.notifyMu.Unlock()
 
 	if handler != nil {
-		if ch, err := c.channel(); err == nil {
+		if ch, err := c.pubChannel(); err == nil {
 			c.startNotificationListeners(ch)
 		}
 	}
@@ -39,13 +39,13 @@ func (c *Client) SetPublishConfirmHandler(handler func(amqp091.Confirmation)) {
 func (c *Client) EnablePublisherConfirms() error {
 	c.publisherConfirms.Store(true)
 
-	ch, err := c.channel()
+	ch, err := c.pubChannel()
 	if err != nil {
 		return err
 	}
 
-	c.chMu.Lock()
-	defer c.chMu.Unlock()
+	c.pubChMu.Lock()
+	defer c.pubChMu.Unlock()
 	if err := ch.Confirm(false); err != nil {
 		return err
 	}
@@ -63,17 +63,14 @@ func (c *Client) PublishWithConfirm(opts *PublishOptions, timeout time.Duration)
 		return ErrNotConnected
 	}
 
-	ch, err := c.channel()
-	if err != nil {
+	if err := c.EnablePublisherConfirms(); err != nil {
 		return err
 	}
 
-	c.chMu.Lock()
-	if err := ch.Confirm(false); err != nil {
-		c.chMu.Unlock()
+	ch, err := c.pubChannel()
+	if err != nil {
 		return err
 	}
-	c.publisherConfirms.Store(true)
 
 	exchange := opts.Exchange
 	routingKey := opts.RoutingKey
@@ -81,7 +78,6 @@ func (c *Client) PublishWithConfirm(opts *PublishOptions, timeout time.Duration)
 		routingKey = opts.Topic
 	}
 	if routingKey == "" {
-		c.chMu.Unlock()
 		return ErrInvalidTopic
 	}
 
@@ -91,16 +87,20 @@ func (c *Client) PublishWithConfirm(opts *PublishOptions, timeout time.Duration)
 	}
 	applyProperties(&publishing, opts.Properties)
 
+	c.pubChMu.Lock()
 	confirmCh := ch.NotifyPublish(make(chan amqp091.Confirmation, 1))
 	if err := ch.Publish(exchange, routingKey, opts.Mandatory, opts.Immediate, publishing); err != nil {
-		c.chMu.Unlock()
+		c.pubChMu.Unlock()
 		return err
 	}
-	c.chMu.Unlock()
+	c.pubChMu.Unlock()
 
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	select {
 	case confirm, ok := <-confirmCh:
@@ -108,7 +108,7 @@ func (c *Client) PublishWithConfirm(opts *PublishOptions, timeout time.Duration)
 			return ErrPublisherConfirm
 		}
 		return nil
-	case <-time.After(timeout):
+	case <-timer.C:
 		return ErrTimeout
 	}
 }

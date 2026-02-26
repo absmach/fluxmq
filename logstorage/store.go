@@ -894,11 +894,19 @@ type QueueStats struct {
 
 // Legacy compatibility methods (map to new JetStream-style API)
 
-// SetCursor sets the cursor for a consumer group (creates delivery if needed).
+// SetCursor sets the cursor for a consumer group.
 func (s *Store) SetCursor(queueName, groupID string, cursor uint64) error {
-	// In JetStream model, cursor is advanced by Deliver operations
-	// This is a legacy compatibility method
-	return nil
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state, err := cm.GetOrCreate(groupID)
+	if err != nil {
+		return err
+	}
+
+	return state.SetCursor(cursor)
 }
 
 // CommitOffset commits an offset for a consumer group.
