@@ -11,6 +11,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -54,9 +55,10 @@ type Client struct {
 	qos2IncomingMu sync.Mutex
 
 	// Lifecycle
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	reconnMu sync.Mutex
+	lifecycleMu sync.Mutex
+	stopCh      chan struct{}
+	doneCh      chan struct{}
+	reconnMu    sync.Mutex
 
 	// Keep-alive
 	pingStop     chan struct{}
@@ -74,6 +76,9 @@ type Client struct {
 
 	// Server index for round-robin
 	serverIdx int
+
+	// Cleanup guard to keep teardown idempotent under concurrent lifecycle calls.
+	cleanupInProgress uint32
 }
 
 // New creates a new MQTT client with the given options.
@@ -105,6 +110,9 @@ func New(opts *Options) (*Client, error) {
 
 // Connect establishes a connection to the broker.
 func (c *Client) Connect() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+
 	if c.state.isClosed() {
 		return ErrClientClosed
 	}
@@ -115,11 +123,25 @@ func (c *Client) Connect() error {
 
 	err := c.doConnect()
 	if err != nil {
-		c.state.set(StateDisconnected)
+		if !c.state.isClosed() {
+			c.state.set(StateDisconnected)
+		}
 		return err
 	}
 
-	c.state.set(StateConnected)
+	// If another goroutine closed the client while connecting, do not transition to connected.
+	if !c.state.transition(StateConnecting, StateConnected) {
+		c.connMu.Lock()
+		if c.conn != nil {
+			c.conn.Close()
+			c.conn = nil
+		}
+		c.connMu.Unlock()
+		if c.state.isClosed() {
+			return ErrClientClosed
+		}
+		return ErrConnectionLost
+	}
 
 	// Start background goroutines
 	c.stopCh = make(chan struct{})
@@ -420,14 +442,19 @@ func (c *Client) Disconnect() error {
 //   - sessionExpiry: Update session expiry interval (0 = use current value, ignored if 0)
 //   - reasonString: Human-readable reason (empty = no reason string)
 func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) error {
+	c.lifecycleMu.Lock()
 	if !c.state.transition(StateConnected, StateDisconnecting) {
+		c.lifecycleMu.Unlock()
 		return nil
 	}
+	c.lifecycleMu.Unlock()
 
 	c.stopKeepAlive()
 	c.sendDisconnectWithReason(reasonCode, sessionExpiry, reasonString)
 	c.cleanup(nil)
-	c.state.set(StateDisconnected)
+	c.lifecycleMu.Lock()
+	c.state.transition(StateDisconnecting, StateDisconnected)
+	c.lifecycleMu.Unlock()
 
 	return nil
 }
@@ -473,7 +500,10 @@ func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32,
 
 // Close permanently closes the client.
 func (c *Client) Close() error {
+	c.lifecycleMu.Lock()
 	c.state.set(StateClosed)
+	c.lifecycleMu.Unlock()
+
 	c.stopKeepAlive()
 	c.cleanup(ErrClientClosed)
 	if c.store != nil {
@@ -483,23 +513,32 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) cleanup(err error) {
-	// Stop read loop
+	if !atomic.CompareAndSwapUint32(&c.cleanupInProgress, 0, 1) {
+		return
+	}
+	defer atomic.StoreUint32(&c.cleanupInProgress, 0)
+
+	// Signal read loop first.
 	if c.stopCh != nil {
 		close(c.stopCh)
-		<-c.doneCh
-		c.stopCh = nil
-		c.doneCh = nil
 	}
 
-	c.stopDispatcher()
-
-	// Close connection
+	// Close connection before waiting on doneCh so a blocked read unblocks.
 	c.connMu.Lock()
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
 	}
 	c.connMu.Unlock()
+
+	// Wait for read loop to exit.
+	if c.doneCh != nil {
+		<-c.doneCh
+		c.stopCh = nil
+		c.doneCh = nil
+	}
+
+	c.stopDispatcher()
 
 	// Clear pending operations
 	c.pending.clear(err)
@@ -531,57 +570,7 @@ func (c *Client) State() State {
 }
 
 // Publish sends a message to the broker.
-func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) error {
-	if !c.state.isConnected() {
-		return ErrNotConnected
-	}
-	if qos > 2 {
-		return ErrInvalidQoS
-	}
-	if topic == "" {
-		return ErrInvalidTopic
-	}
-
-	msg := NewMessage(topic, payload, qos, retain)
-
-	if qos == 0 {
-		return c.sendPublish(msg, 0)
-	}
-
-	// QoS 1 or 2: need packet ID and wait for ack
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return ErrMaxInflight
-	}
-	msg.PacketID = packetID
-
-	// Store message for potential retransmission
-	if err := c.store.StoreOutbound(packetID, msg); err != nil {
-		return err
-	}
-
-	op, err := c.pending.add(packetID, pendingPublish, msg)
-	if err != nil {
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-
-	if err := c.sendPublish(msg, packetID); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-
-	if err := op.wait(c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-	return nil
-}
-
-// PublishContext sends a message to the broker with context cancellation support.
-func (c *Client) PublishContext(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
+func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -598,10 +587,9 @@ func (c *Client) PublishContext(ctx context.Context, topic string, payload []byt
 	}
 
 	msg := NewMessage(topic, payload, qos, retain)
-	deadline := c.writeDeadline(ctx)
 
 	if qos == 0 {
-		return c.sendPublishWithDeadline(msg, 0, deadline)
+		return c.sendPublish(ctx, msg, 0)
 	}
 
 	packetID := c.pending.nextPacketID()
@@ -620,7 +608,7 @@ func (c *Client) PublishContext(ctx context.Context, topic string, payload []byt
 		return err
 	}
 
-	if err := c.sendPublishWithDeadline(msg, packetID, deadline); err != nil {
+	if err := c.sendPublish(ctx, msg, packetID); err != nil {
 		c.pending.remove(packetID)
 		c.store.DeleteOutbound(packetID)
 		return err
@@ -636,58 +624,7 @@ func (c *Client) PublishContext(ctx context.Context, topic string, payload []byt
 
 // PublishMessage sends a message with optional MQTT 5.0 publish properties.
 // For MQTT 3.1.1, publish properties are ignored.
-func (c *Client) PublishMessage(msg *Message) error {
-	if msg == nil {
-		return ErrInvalidMessage
-	}
-	if !c.state.isConnected() {
-		return ErrNotConnected
-	}
-	if msg.QoS > 2 {
-		return ErrInvalidQoS
-	}
-	if msg.Topic == "" {
-		return ErrInvalidTopic
-	}
-
-	if msg.QoS == 0 {
-		return c.sendPublish(msg, 0)
-	}
-
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return ErrMaxInflight
-	}
-
-	publishMsg := msg.Copy()
-	publishMsg.PacketID = packetID
-
-	if err := c.store.StoreOutbound(packetID, publishMsg); err != nil {
-		return err
-	}
-
-	op, err := c.pending.add(packetID, pendingPublish, publishMsg)
-	if err != nil {
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-
-	if err := c.sendPublish(publishMsg, packetID); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-
-	if err := op.wait(c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-	return nil
-}
-
-// PublishMessageContext sends a message with properties with context cancellation support.
-func (c *Client) PublishMessageContext(ctx context.Context, msg *Message) error {
+func (c *Client) PublishMessage(ctx context.Context, msg *Message) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -706,9 +643,8 @@ func (c *Client) PublishMessageContext(ctx context.Context, msg *Message) error 
 		return ErrInvalidTopic
 	}
 
-	deadline := c.writeDeadline(ctx)
 	if msg.QoS == 0 {
-		return c.sendPublishWithDeadline(msg, 0, deadline)
+		return c.sendPublish(ctx, msg, 0)
 	}
 
 	packetID := c.pending.nextPacketID()
@@ -729,7 +665,7 @@ func (c *Client) PublishMessageContext(ctx context.Context, msg *Message) error 
 		return err
 	}
 
-	if err := c.sendPublishWithDeadline(publishMsg, packetID, deadline); err != nil {
+	if err := c.sendPublish(ctx, publishMsg, packetID); err != nil {
 		c.pending.remove(packetID)
 		c.store.DeleteOutbound(packetID)
 		return err
@@ -744,25 +680,25 @@ func (c *Client) PublishMessageContext(ctx context.Context, msg *Message) error 
 }
 
 // PublishAsync publishes in a background goroutine and returns a completion token.
-func (c *Client) PublishAsync(topic string, payload []byte, qos byte, retain bool) *PublishToken {
+func (c *Client) PublishAsync(ctx context.Context, topic string, payload []byte, qos byte, retain bool) *PublishToken {
 	tok := &PublishToken{token: newToken()}
 	go func() {
-		tok.complete(c.Publish(topic, payload, qos, retain))
+		tok.complete(c.Publish(ctx, topic, payload, qos, retain))
 	}()
 	return tok
 }
 
 // PublishMessageAsync publishes a message with properties in a background goroutine.
-func (c *Client) PublishMessageAsync(msg *Message) *PublishToken {
+func (c *Client) PublishMessageAsync(ctx context.Context, msg *Message) *PublishToken {
 	tok := &PublishToken{token: newToken()}
 	go func() {
-		tok.complete(c.PublishMessage(msg))
+		tok.complete(c.PublishMessage(ctx, msg))
 	}()
 	return tok
 }
 
-func (c *Client) sendPublish(msg *Message, packetID uint16) error {
-	return c.sendPublishWithDeadline(msg, packetID, c.writeDeadline(nil))
+func (c *Client) sendPublish(ctx context.Context, msg *Message, packetID uint16) error {
+	return c.sendPublishWithDeadline(msg, packetID, c.writeDeadline(ctx))
 }
 
 func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline time.Time) error {
@@ -878,11 +814,23 @@ func (c *Client) writeDeadline(ctx context.Context) time.Time {
 }
 
 // Subscribe subscribes to one or more topics.
-func (c *Client) Subscribe(topics map[string]byte) error {
-	return c.subscribe(topics, true)
+func (c *Client) Subscribe(ctx context.Context, topics map[string]byte) error {
+	if err := c.subscribe(ctx, topics); err != nil {
+		return err
+	}
+	for topic, qos := range topics {
+		c.subscriptions.setBasic(topic, qos)
+	}
+	return nil
 }
 
-func (c *Client) subscribe(topics map[string]byte, remember bool) error {
+// subscribe performs a protocol subscribe exchange without mutating stored subscription state.
+func (c *Client) subscribe(ctx context.Context, topics map[string]byte) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if !c.state.isConnected() {
 		return ErrNotConnected
 	}
@@ -908,37 +856,43 @@ func (c *Client) subscribe(topics map[string]byte, remember bool) error {
 		return err
 	}
 
-	if err := c.sendSubscribe(packetID, topics); err != nil {
+	if err := c.sendSubscribe(ctx, packetID, topics); err != nil {
 		c.pending.remove(packetID)
 		return err
 	}
 
-	if err := op.wait(c.opts.AckTimeout); err != nil {
+	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
 		c.pending.remove(packetID)
 		return err
-	}
-
-	if remember {
-		for topic, qos := range topics {
-			c.subscriptions.setBasic(topic, qos)
-		}
 	}
 
 	return nil
 }
 
 // SubscribeSingle is a convenience method for subscribing to a single topic.
-func (c *Client) SubscribeSingle(topic string, qos byte) error {
-	return c.Subscribe(map[string]byte{topic: qos})
+func (c *Client) SubscribeSingle(ctx context.Context, topic string, qos byte) error {
+	return c.Subscribe(ctx, map[string]byte{topic: qos})
 }
 
 // SubscribeWithOptions subscribes with advanced MQTT 5.0 options.
 // For MQTT 3.1.1 connections, advanced options are ignored.
-func (c *Client) SubscribeWithOptions(opts ...*SubscribeOption) error {
-	return c.subscribeWithOptions(opts, true)
+func (c *Client) SubscribeWithOptions(ctx context.Context, opts ...*SubscribeOption) error {
+	if err := c.subscribeWithOptions(ctx, opts); err != nil {
+		return err
+	}
+	for _, opt := range opts {
+		c.subscriptions.setOption(opt)
+	}
+	return nil
 }
 
-func (c *Client) subscribeWithOptions(opts []*SubscribeOption, remember bool) error {
+// subscribeWithOptions performs a protocol subscribe exchange without mutating stored subscription state.
+func (c *Client) subscribeWithOptions(ctx context.Context, opts []*SubscribeOption) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if !c.state.isConnected() {
 		return ErrNotConnected
 	}
@@ -970,26 +924,20 @@ func (c *Client) subscribeWithOptions(opts []*SubscribeOption, remember bool) er
 		return err
 	}
 
-	if err := c.sendSubscribeWithOptions(packetID, opts); err != nil {
+	if err := c.sendSubscribeWithOptions(ctx, packetID, opts); err != nil {
 		c.pending.remove(packetID)
 		return err
 	}
 
-	if err := op.wait(c.opts.AckTimeout); err != nil {
+	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
 		c.pending.remove(packetID)
 		return err
-	}
-
-	if remember {
-		for _, opt := range opts {
-			c.subscriptions.setOption(opt)
-		}
 	}
 
 	return nil
 }
 
-func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
+func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[string]byte) error {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -998,8 +946,10 @@ func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
 		return ErrNotConnected
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
+	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
+		conn.SetWriteDeadline(deadline)
+		defer conn.SetWriteDeadline(time.Time{})
+	}
 
 	if c.opts.ProtocolVersion == 5 {
 		opts := make([]v5.SubOption, 0, len(topics))
@@ -1028,7 +978,7 @@ func (c *Client) sendSubscribe(packetID uint16, topics map[string]byte) error {
 	return pkt.Pack(conn)
 }
 
-func (c *Client) sendSubscribeWithOptions(packetID uint16, opts []*SubscribeOption) error {
+func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -1037,8 +987,10 @@ func (c *Client) sendSubscribeWithOptions(packetID uint16, opts []*SubscribeOpti
 		return ErrNotConnected
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
+	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
+		conn.SetWriteDeadline(deadline)
+		defer conn.SetWriteDeadline(time.Time{})
+	}
 
 	if c.opts.ProtocolVersion == 5 {
 		v5Opts := make([]v5.SubOption, len(opts))
@@ -1097,7 +1049,12 @@ func (c *Client) sendSubscribeWithOptions(packetID uint16, opts []*SubscribeOpti
 }
 
 // Unsubscribe unsubscribes from one or more topics.
-func (c *Client) Unsubscribe(topics ...string) error {
+func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if !c.state.isConnected() {
 		return ErrNotConnected
 	}
@@ -1115,12 +1072,12 @@ func (c *Client) Unsubscribe(topics ...string) error {
 		return err
 	}
 
-	if err := c.sendUnsubscribe(packetID, topics); err != nil {
+	if err := c.sendUnsubscribe(ctx, packetID, topics); err != nil {
 		c.pending.remove(packetID)
 		return err
 	}
 
-	if err := op.wait(c.opts.AckTimeout); err != nil {
+	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
 		c.pending.remove(packetID)
 		return err
 	}
@@ -1130,7 +1087,7 @@ func (c *Client) Unsubscribe(topics ...string) error {
 	return nil
 }
 
-func (c *Client) sendUnsubscribe(packetID uint16, topics []string) error {
+func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []string) error {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -1139,8 +1096,10 @@ func (c *Client) sendUnsubscribe(packetID uint16, topics []string) error {
 		return ErrNotConnected
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
+	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
+		conn.SetWriteDeadline(deadline)
+		defer conn.SetWriteDeadline(time.Time{})
+	}
 
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.Unsubscribe{
@@ -1162,28 +1121,28 @@ func (c *Client) sendUnsubscribe(packetID uint16, topics []string) error {
 }
 
 // SubscribeAsync subscribes in a background goroutine and returns a completion token.
-func (c *Client) SubscribeAsync(topics map[string]byte) *SubscribeToken {
+func (c *Client) SubscribeAsync(ctx context.Context, topics map[string]byte) *SubscribeToken {
 	tok := &SubscribeToken{token: newToken()}
 	go func() {
-		tok.complete(c.Subscribe(topics))
+		tok.complete(c.Subscribe(ctx, topics))
 	}()
 	return tok
 }
 
 // SubscribeWithOptionsAsync subscribes with MQTT 5 options in a background goroutine.
-func (c *Client) SubscribeWithOptionsAsync(opts ...*SubscribeOption) *SubscribeToken {
+func (c *Client) SubscribeWithOptionsAsync(ctx context.Context, opts ...*SubscribeOption) *SubscribeToken {
 	tok := &SubscribeToken{token: newToken()}
 	go func() {
-		tok.complete(c.SubscribeWithOptions(opts...))
+		tok.complete(c.SubscribeWithOptions(ctx, opts...))
 	}()
 	return tok
 }
 
 // UnsubscribeAsync unsubscribes in a background goroutine and returns a completion token.
-func (c *Client) UnsubscribeAsync(topics ...string) *UnsubscribeToken {
+func (c *Client) UnsubscribeAsync(ctx context.Context, topics ...string) *UnsubscribeToken {
 	tok := &UnsubscribeToken{token: newToken()}
 	go func() {
-		tok.complete(c.Unsubscribe(topics...))
+		tok.complete(c.Unsubscribe(ctx, topics...))
 	}()
 	return tok
 }
@@ -1853,25 +1812,15 @@ func (c *Client) SendAuth(reasonCode byte, authData []byte) error {
 }
 
 func (c *Client) handleConnectionLost(err error) {
+	c.lifecycleMu.Lock()
 	if !c.state.transition(StateConnected, StateDisconnected) {
+		c.lifecycleMu.Unlock()
 		return
 	}
+	c.lifecycleMu.Unlock()
 
 	c.stopKeepAlive()
-	c.stopDispatcher()
-	c.pending.clear(ErrConnectionLost)
-
-	c.connMu.Lock()
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-	}
-	c.connMu.Unlock()
-
-	c.pingMu.Lock()
-	c.waitingPing = false
-	c.lastPingSent = time.Time{}
-	c.pingMu.Unlock()
+	c.cleanup(ErrConnectionLost)
 
 	if c.opts.OnConnectionLost != nil {
 		go c.opts.OnConnectionLost(err)
@@ -1932,10 +1881,10 @@ func (c *Client) restoreSubscriptions() {
 
 	for _, rec := range records {
 		if rec.opt != nil {
-			_ = c.subscribeWithOptions([]*SubscribeOption{rec.opt}, false)
+			_ = c.subscribeWithOptions(nil, []*SubscribeOption{rec.opt})
 			continue
 		}
-		_ = c.subscribe(map[string]byte{rec.topic: rec.qos}, false)
+		_ = c.subscribe(nil, map[string]byte{rec.topic: rec.qos})
 	}
 }
 
@@ -1954,10 +1903,10 @@ func (c *Client) restoreQueueSubscriptions() {
 			if sub.consumerGroup != "" {
 				userProps["consumer-group"] = sub.consumerGroup
 			}
-			_ = c.subscribeWithUserProperties("$queue/"+sub.queueName, 1, userProps)
+			_ = c.subscribeWithUserProperties(nil, "$queue/"+sub.queueName, 1, userProps)
 			continue
 		}
-		_ = c.subscribe(map[string]byte{"$queue/" + sub.queueName: 1}, false)
+		_ = c.subscribe(nil, map[string]byte{"$queue/" + sub.queueName: 1})
 	}
 }
 
@@ -1975,7 +1924,7 @@ func (c *Client) restoreOutboundMessages() {
 		}
 
 		if msg.QoS == 0 {
-			_ = c.sendPublish(msg, 0)
+			_ = c.sendPublish(nil, msg, 0)
 			continue
 		}
 
@@ -1997,7 +1946,7 @@ func (c *Client) restoreOutboundMessages() {
 			continue
 		}
 
-		if err := c.sendPublish(replay, packetID); err != nil {
+		if err := c.sendPublish(nil, replay, packetID); err != nil {
 			c.pending.remove(packetID)
 			_ = c.store.DeleteOutbound(packetID)
 			continue

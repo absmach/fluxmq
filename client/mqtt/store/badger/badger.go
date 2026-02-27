@@ -10,10 +10,13 @@ import (
 	badgerdb "github.com/dgraph-io/badger/v4"
 )
 
-var (
-	// ErrMissingDir indicates persistent mode was requested without a directory.
-	ErrMissingDir = errors.New("badger dir is required when in-memory mode is disabled")
+const (
+	prefixOutbound byte = 'o'
+	prefixInbound  byte = 'i'
 )
+
+// ErrMissingDir indicates persistent mode was requested without a directory.
+var ErrMissingDir = errors.New("badger dir is required when in-memory mode is disabled")
 
 // Options configures the Badger-backed store.
 type Options struct {
@@ -196,8 +199,3 @@ func cloneBytes(value []byte) []byte {
 	copy(out, value)
 	return out
 }
-
-const (
-	prefixOutbound byte = 'o'
-	prefixInbound  byte = 'i'
-)

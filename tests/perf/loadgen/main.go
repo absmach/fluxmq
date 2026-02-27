@@ -539,11 +539,11 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 
 	switch sc.resolvedSubscriberProto {
 	case "mqtt":
-		subs, err := connectMQTTSubscribers(mqttSubscriberEndpoints, sc.Name, runID, sc.Subscribers)
+		subs, err := connectMQTTSubscribers(ctx, mqttSubscriberEndpoints, sc.Name, runID, sc.Subscribers)
 		if err != nil {
 			return res, err
 		}
-		defer disconnectMQTTClients(subs)
+		defer disconnectMQTTClients(ctx, subs)
 
 		for i, sub := range subs {
 			filter := filters[i]
@@ -576,7 +576,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 		if err != nil {
 			return res, err
 		}
-		defer closeAMQPClients(subs)
+		defer closeAMQPClients(ctx, subs)
 	default:
 		return res, fmt.Errorf("unsupported subscriber protocol %q", sc.resolvedSubscriberProto)
 	}
@@ -746,14 +746,14 @@ func buildTopicMatchCounts(topicSet, filters []string) map[string]int64 {
 	return matchCounts
 }
 
-func connectMQTTSubscribers(endpoints []mqttEndpoint, scenario string, runID int64, count int) ([]*msgclient.Client, error) {
+func connectMQTTSubscribers(ctx context.Context, endpoints []mqttEndpoint, scenario string, runID int64, count int) ([]*msgclient.Client, error) {
 	clients := make([]*msgclient.Client, 0, count)
 	for i := 0; i < count; i++ {
 		endpoint := mqttEndpointByOffset(endpoints, i, subscriberNodeOffset)
 		clientID := fmt.Sprintf("%s-sub-%d-%d", scenario, runID, i)
-		client, err := connectMQTTClient(endpoint.Addr, endpoint.ProtocolVersion, clientID)
+		client, err := connectMQTTClient(ctx, endpoint.Addr, endpoint.ProtocolVersion, clientID)
 		if err != nil {
-			disconnectMQTTClients(clients)
+			disconnectMQTTClients(ctx, clients)
 			return nil, fmt.Errorf("failed to connect MQTT subscriber %s to %s (v%d): %w", clientID, endpoint.Addr, endpoint.ProtocolVersion, err)
 		}
 		clients = append(clients, client)
@@ -766,16 +766,16 @@ func connectAMQPTopicSubscribersWithFilters(ctx context.Context, addrs []string,
 	for i, filter := range filters {
 		addr := addrByOffset(addrs, i, subscriberNodeOffset)
 		cid := i
-		client, err := connectAMQPClient(addr)
+		client, err := connectAMQPClient(ctx, addr)
 		if err != nil {
-			closeAMQPClients(clients)
+			closeAMQPClients(ctx, clients)
 			return nil, fmt.Errorf("failed to connect AMQP subscriber %d to %s: %w", i, addr, err)
 		}
 		if err := client.Subscribe(ctx, filter, func(msg *msgclient.Message) {
 			handler(cid, msg)
 		}, msgclient.WithAutoAck(false)); err != nil {
-			_ = client.Close(context.Background())
-			closeAMQPClients(clients)
+			_ = client.Close(ctx)
+			closeAMQPClients(ctx, clients)
 			return nil, fmt.Errorf("failed AMQP subscribe for scenario=%s run=%d filter=%q: %w", scenario, runID, filter, err)
 		}
 		clients = append(clients, client)
@@ -847,7 +847,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 	for i := 0; i < params.Publishers; i++ {
 		endpoint := mqttEndpointByOffset(params.Endpoints, i, publisherNodeOffset)
 		clientID := fmt.Sprintf("%s-pub-%d-%d", params.Scenario, params.RunID, i)
-		client, err := connectMQTTClient(endpoint.Addr, endpoint.ProtocolVersion, clientID)
+		client, err := connectMQTTClient(ctx, endpoint.Addr, endpoint.ProtocolVersion, clientID)
 		if err != nil {
 			if params.ErrCount != nil {
 				params.ErrCount.Add(1)
@@ -856,7 +856,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 		}
 		pubClients = append(pubClients, client)
 	}
-	defer disconnectMQTTClients(pubClients)
+	defer disconnectMQTTClients(ctx, pubClients)
 
 	counter := params.PublishedCounter
 	if counter == nil {
@@ -936,7 +936,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 	pubClients := make([]*msgclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
 		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
-		client, err := connectAMQPClient(addr)
+		client, err := connectAMQPClient(ctx, addr)
 		if err != nil {
 			if params.ErrCount != nil {
 				params.ErrCount.Add(1)
@@ -945,7 +945,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 		}
 		pubClients = append(pubClients, client)
 	}
-	defer closeAMQPClients(pubClients)
+	defer closeAMQPClients(ctx, pubClients)
 
 	counter := params.PublishedCounter
 	if counter == nil {
@@ -1000,7 +1000,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 	return counter.Load()
 }
 
-func connectMQTTClient(addr string, protocolVersion byte, clientID string) (*msgclient.Client, error) {
+func connectMQTTClient(ctx context.Context, addr string, protocolVersion byte, clientID string) (*msgclient.Client, error) {
 	if protocolVersion != 4 && protocolVersion != 5 {
 		return nil, fmt.Errorf("unsupported MQTT protocol version %d", protocolVersion)
 	}
@@ -1019,13 +1019,13 @@ func connectMQTTClient(addr string, protocolVersion byte, clientID string) (*msg
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Connect(context.Background()); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func connectAMQPClient(addr string) (*msgclient.Client, error) {
+func connectAMQPClient(ctx context.Context, addr string) (*msgclient.Client, error) {
 	opts := amqpclient.NewOptions().
 		SetAddress(addr).
 		SetCredentials("guest", "guest").
@@ -1036,27 +1036,27 @@ func connectAMQPClient(addr string) (*msgclient.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Connect(context.Background()); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func disconnectMQTTClients(clients []*msgclient.Client) {
+func disconnectMQTTClients(ctx context.Context, clients []*msgclient.Client) {
 	for _, c := range clients {
 		if c == nil {
 			continue
 		}
-		_ = c.Close(context.Background())
+		_ = c.Close(ctx)
 	}
 }
 
-func closeAMQPClients(clients []*msgclient.Client) {
+func closeAMQPClients(ctx context.Context, clients []*msgclient.Client) {
 	for _, c := range clients {
 		if c == nil {
 			continue
 		}
-		_ = c.Close(context.Background())
+		_ = c.Close(ctx)
 	}
 }
 

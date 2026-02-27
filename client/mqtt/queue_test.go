@@ -4,6 +4,7 @@
 package mqtt
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -34,8 +35,45 @@ func TestPublishToQueueWithNilOptions(t *testing.T) {
 	require.NoError(t, err)
 	client.state.set(StateConnected)
 
-	err = client.PublishToQueueWithOptions(nil)
+	err = client.PublishToQueueWithOptions(nil, nil)
 	assert.Equal(t, ErrInvalidMessage, err)
+}
+
+func TestSubscribeToQueueContextCanceled(t *testing.T) {
+	opts := NewOptions().SetClientID("test-client")
+	client, err := New(opts)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = client.SubscribeToQueue(ctx, "test", "workers", func(msg *QueueMessage) {})
+	assert.Equal(t, context.Canceled, err)
+}
+
+func TestUnsubscribeFromQueueContextCanceled(t *testing.T) {
+	opts := NewOptions().SetClientID("test-client")
+	client, err := New(opts)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = client.UnsubscribeFromQueue(ctx, "test")
+	assert.Equal(t, context.Canceled, err)
+}
+
+func TestAckContextCanceled(t *testing.T) {
+	opts := NewOptions().SetClientID("test-client").SetProtocolVersion(5)
+	client, err := New(opts)
+	require.NoError(t, err)
+	client.state.set(StateConnected)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = client.AckWithGroup(ctx, "test", "msg-123", "workers")
+	assert.Equal(t, context.Canceled, err)
 }
 
 func TestQueueMessage_Ack(t *testing.T) {
@@ -57,7 +95,7 @@ func TestQueueMessage_Ack(t *testing.T) {
 	}
 
 	// Ack should fail when not connected (we're connected but no conn object)
-	err = qm.Ack()
+	err = qm.Ack(nil)
 	assert.Error(t, err) // Will fail because conn is nil
 }
 
@@ -68,15 +106,15 @@ func TestQueueMessage_NoClient(t *testing.T) {
 		queueName: "test",
 	}
 
-	err := qm.Ack()
+	err := qm.Ack(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "client not set")
 
-	err = qm.Nack()
+	err = qm.Nack(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "client not set")
 
-	err = qm.Reject()
+	err = qm.Reject(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "client not set")
 }
@@ -375,12 +413,12 @@ func TestQueueMessage_AckNackReject_Integration(t *testing.T) {
 
 	// These will fail because we don't have a real connection
 	// But they should not panic and should return errors
-	err = qm.Ack()
+	err = qm.Ack(nil)
 	assert.Error(t, err)
 
-	err = qm.Nack()
+	err = qm.Nack(nil)
 	assert.Error(t, err)
 
-	err = qm.Reject()
+	err = qm.Reject(nil)
 	assert.Error(t, err)
 }

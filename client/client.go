@@ -164,7 +164,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 			}
 			msg := mqtt.NewMessage(topic, payload, qos, retain)
 			msg.UserProperties = mqttUserProps(po.Properties)
-			if err := c.mqtt.PublishMessageContext(ctx, msg); err != nil {
+			if err := c.mqtt.PublishMessage(ctx, msg); err != nil {
 				return fmt.Errorf("%w: %v", ErrPublishFailed, err)
 			}
 			return nil
@@ -210,7 +210,7 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handler MessageHan
 			if so.QoS != nil {
 				qos = *so.QoS
 			}
-			if err := c.mqtt.SubscribeSingle(topic, qos); err != nil {
+			if err := c.mqtt.SubscribeSingle(ctx, topic, qos); err != nil {
 				return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
 			}
 			c.mu.Lock()
@@ -246,7 +246,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string, opts ...Option) 
 
 	return doWithContext(ctx, func() error {
 		if protocol == ProtocolMQTT {
-			if err := c.mqtt.Unsubscribe(topic); err != nil {
+			if err := c.mqtt.Unsubscribe(ctx, topic); err != nil {
 				return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
 			}
 			c.mu.Lock()
@@ -285,7 +285,7 @@ func (c *Client) PublishToQueue(ctx context.Context, queue string, payload []byt
 				Properties: mqttUserProps(po.Properties),
 				QoS:        qos,
 			}
-			if err := c.mqtt.PublishToQueueWithOptionsContext(ctx, qopts); err != nil {
+			if err := c.mqtt.PublishToQueueWithOptions(ctx, qopts); err != nil {
 				return fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
 			}
 			return nil
@@ -319,7 +319,7 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 
 	return doWithContext(ctx, func() error {
 		if protocol == ProtocolMQTT {
-			if err := c.mqtt.SubscribeToQueue(queue, group, func(msg *mqtt.QueueMessage) {
+			if err := c.mqtt.SubscribeToQueue(ctx, queue, group, func(msg *mqtt.QueueMessage) {
 				handler(mqttQueueToMessage(msg, queue))
 			}); err != nil {
 				return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
@@ -352,7 +352,7 @@ func (c *Client) UnsubscribeFromQueue(ctx context.Context, queue string, opts ..
 
 	return doWithContext(ctx, func() error {
 		if protocol == ProtocolMQTT {
-			if err := c.mqtt.UnsubscribeFromQueue(queue); err != nil {
+			if err := c.mqtt.UnsubscribeFromQueue(ctx, queue); err != nil {
 				return fmt.Errorf("%w: %v", ErrQueueUnsubFailed, err)
 			}
 			c.mu.Lock()
@@ -472,9 +472,9 @@ func mqttQueueToMessage(msg *mqtt.QueueMessage, queue string) *Message {
 	}
 	m.Queue = queue
 	m.Offset = msg.Offset
-	m.ackFn = msg.Ack
-	m.nackFn = msg.Nack
-	m.rejectFn = msg.Reject
+	m.ackFn = func() error { return msg.Ack(context.Background()) }
+	m.nackFn = func() error { return msg.Nack(context.Background()) }
+	m.rejectFn = func() error { return msg.Reject(context.Background()) }
 	return m
 }
 

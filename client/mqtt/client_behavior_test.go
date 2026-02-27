@@ -4,6 +4,7 @@
 package mqtt
 
 import (
+	"context"
 	"io"
 	"net"
 	"sync"
@@ -298,13 +299,13 @@ func TestAsyncAPIsReturnUnderlyingErrors(t *testing.T) {
 	c, err := New(NewOptions().SetClientID("async-errors"))
 	require.NoError(t, err)
 
-	assert.Equal(t, ErrNotConnected, c.PublishAsync("events/test", []byte("payload"), 0, false).Wait())
-	assert.Equal(t, ErrInvalidMessage, c.PublishMessageAsync(nil).Wait())
-	assert.Equal(t, ErrNotConnected, c.SubscribeAsync(map[string]byte{"events/#": 1}).Wait())
-	assert.Equal(t, ErrNotConnected, c.UnsubscribeAsync("events/#").Wait())
+	assert.Equal(t, ErrNotConnected, c.PublishAsync(context.TODO(), "events/test", []byte("payload"), 0, false).Wait())
+	assert.Equal(t, ErrInvalidMessage, c.PublishMessageAsync(context.TODO(), nil).Wait())
+	assert.Equal(t, ErrNotConnected, c.SubscribeAsync(context.TODO(), map[string]byte{"events/#": 1}).Wait())
+	assert.Equal(t, ErrNotConnected, c.UnsubscribeAsync(context.TODO(), "events/#").Wait())
 
 	c.state.set(StateConnected)
-	assert.Equal(t, ErrInvalidSubscribeOpt, c.SubscribeWithOptionsAsync(nil).Wait())
+	assert.Equal(t, ErrInvalidSubscribeOpt, c.SubscribeWithOptionsAsync(context.TODO(), nil).Wait())
 }
 
 func TestSendAuthRequiresV5AndConnection(t *testing.T) {
