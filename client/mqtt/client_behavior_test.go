@@ -270,7 +270,7 @@ func TestDeliverMessageOrderMattersBlocksWhenChannelFull(t *testing.T) {
 	}
 }
 
-func TestDeliverMessageOrderMattersFalseFallsBackWithoutBlocking(t *testing.T) {
+func TestDeliverMessageOrderMattersFalseDropsWithoutBlocking(t *testing.T) {
 	c := &Client{
 		opts: NewOptions().
 			SetOrderMatters(false),
@@ -279,20 +279,14 @@ func TestDeliverMessageOrderMattersFalseFallsBackWithoutBlocking(t *testing.T) {
 	}
 
 	c.msgCh = make(chan *Message, 1)
-	c.msgOverflow = make(chan *Message, 1)
 	c.msgCh <- &Message{Topic: "prefill"}
 
 	start := time.Now()
-	c.deliverMessage(&Message{Topic: "fallback"})
+	c.deliverMessage(&Message{Topic: "dropped"})
 	assert.Less(t, time.Since(start), 50*time.Millisecond, "deliverMessage should not block when OrderMatters=false")
 
-	select {
-	case msg := <-c.msgOverflow:
-		require.NotNil(t, msg)
-		assert.Equal(t, "fallback", msg.Topic)
-	case <-time.After(250 * time.Millisecond):
-		t.Fatal("expected overflow delivery when message channel is full")
-	}
+	msg := <-c.msgCh
+	assert.Equal(t, "prefill", msg.Topic, "original message should still be in channel")
 }
 
 func TestAsyncAPIsReturnUnderlyingErrors(t *testing.T) {

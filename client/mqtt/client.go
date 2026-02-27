@@ -61,18 +61,16 @@ type Client struct {
 	reconnMu    sync.Mutex
 
 	// Keep-alive
-	pingStop     chan struct{}
-	lastActivity time.Time
-	activityMu   sync.Mutex
+	lastActivity atomic.Int64 // UnixNano timestamp, no mutex needed
 	pingMu       sync.Mutex
+	pingStop     chan struct{}
 	waitingPing  bool
 	lastPingSent time.Time
 
 	// Message dispatching
-	msgCh       chan *Message
-	msgOverflow chan *Message
-	msgStop     chan struct{}
-	dispatchWg  sync.WaitGroup
+	msgCh      chan *Message
+	msgStop    chan struct{}
+	dispatchWg sync.WaitGroup
 
 	// Server index for round-robin
 	serverIdx int
@@ -1315,13 +1313,6 @@ func (c *Client) deliverMessage(msg *Message) {
 	select {
 	case c.msgCh <- msg:
 	default:
-		// Primary channel full, try overflow channel
-		select {
-		case c.msgOverflow <- msg:
-		default:
-			// Both channels full — fall back to direct handling without blocking.
-			go c.handleDeliveredMessage(msg)
-		}
 	}
 }
 
@@ -1353,7 +1344,6 @@ func (c *Client) startDispatcher() {
 	}
 
 	c.msgCh = make(chan *Message, size)
-	c.msgOverflow = make(chan *Message, size)
 	c.msgStop = make(chan struct{})
 
 	workers := 1
@@ -1380,11 +1370,6 @@ func (c *Client) startDispatcher() {
 						return
 					}
 					c.handleDeliveredMessage(msg)
-				case msg, ok := <-c.msgOverflow:
-					if !ok {
-						return
-					}
-					c.handleDeliveredMessage(msg)
 				}
 			}
 		}()
@@ -1399,10 +1384,6 @@ func (c *Client) stopDispatcher() {
 	if c.msgCh != nil {
 		close(c.msgCh)
 		c.msgCh = nil
-	}
-	if c.msgOverflow != nil {
-		close(c.msgOverflow)
-		c.msgOverflow = nil
 	}
 	c.dispatchWg.Wait()
 }
@@ -1957,10 +1938,12 @@ func (c *Client) restoreOutboundMessages() {
 // Keep-alive management
 
 func (c *Client) startKeepAlive() {
+	c.stopKeepAlive()
+
 	stop := make(chan struct{})
-	c.activityMu.Lock()
+	c.pingMu.Lock()
 	c.pingStop = stop
-	c.activityMu.Unlock()
+	c.pingMu.Unlock()
 
 	interval := c.opts.KeepAlive
 
@@ -1973,10 +1956,7 @@ func (c *Client) startKeepAlive() {
 			case <-stop:
 				return
 			case <-ticker.C:
-				c.activityMu.Lock()
-				idle := time.Since(c.lastActivity)
-				c.activityMu.Unlock()
-
+				idle := time.Since(time.Unix(0, c.lastActivity.Load()))
 				if idle >= interval/2 {
 					c.sendPing()
 				}
@@ -1986,10 +1966,10 @@ func (c *Client) startKeepAlive() {
 }
 
 func (c *Client) stopKeepAlive() {
-	c.activityMu.Lock()
+	c.pingMu.Lock()
 	stop := c.pingStop
 	c.pingStop = nil
-	c.activityMu.Unlock()
+	c.pingMu.Unlock()
 
 	if stop != nil {
 		close(stop)
@@ -2042,9 +2022,7 @@ func (c *Client) sendPing() {
 }
 
 func (c *Client) updateActivity() {
-	c.activityMu.Lock()
-	defer c.activityMu.Unlock()
-	c.lastActivity = time.Now().UTC()
+	c.lastActivity.Store(time.Now().UTC().UnixNano())
 }
 
 // ServerCapabilities returns the capabilities advertised by the server
