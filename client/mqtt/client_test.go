@@ -264,6 +264,9 @@ func TestClientCloseAndDisconnectConcurrent(t *testing.T) {
 		client.stopCh = make(chan struct{})
 		client.doneCh = make(chan struct{})
 		close(client.doneCh)
+		client.writeCh = make(chan writeRequest, 256)
+		client.writeDone = make(chan struct{})
+		close(client.writeDone)
 
 		var wg sync.WaitGroup
 		wg.Add(2)

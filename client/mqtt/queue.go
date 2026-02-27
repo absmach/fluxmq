@@ -281,18 +281,7 @@ func (c *Client) publishWithUserProperties(ctx context.Context, topic string, pa
 
 // sendPublishV5 sends a PUBLISH packet with user properties (MQTT v5 only).
 func (c *Client) sendPublishV5(ctx context.Context, msg *Message, packetID uint16) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
-		defer conn.SetWriteDeadline(timeZero)
-	}
+	deadline := c.writeDeadline(ctx)
 
 	pkt := &v5.Publish{
 		FixedHeader: packets.FixedHeader{
@@ -306,7 +295,6 @@ func (c *Client) sendPublishV5(ctx context.Context, msg *Message, packetID uint1
 		ID:        packetID,
 	}
 
-	// Add user properties if present
 	if len(msg.UserProperties) > 0 {
 		if pkt.Properties == nil {
 			pkt.Properties = &v5.PublishProperties{}
@@ -317,15 +305,12 @@ func (c *Client) sendPublishV5(ctx context.Context, msg *Message, packetID uint1
 		}
 	}
 
-	// Apply topic alias if available
 	if c.topicAliases != nil {
 		if alias, isNew, ok := c.topicAliases.getOrAssignOutbound(msg.Topic); ok {
 			if pkt.Properties == nil {
 				pkt.Properties = &v5.PublishProperties{}
 			}
 			pkt.Properties.TopicAlias = &alias
-
-			// If using existing alias, clear topic name to save bandwidth
 			if !isNew {
 				pkt.TopicName = ""
 			}
@@ -333,7 +318,7 @@ func (c *Client) sendPublishV5(ctx context.Context, msg *Message, packetID uint1
 	}
 
 	c.updateActivity()
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), deadline)
 }
 
 // SubscribeToQueue subscribes to a durable queue with a consumer group.
@@ -410,18 +395,7 @@ func (c *Client) subscribeWithUserProperties(ctx context.Context, topic string, 
 
 // sendSubscribeWithUserProps sends a SUBSCRIBE packet with user properties (MQTT v5).
 func (c *Client) sendSubscribeWithUserProps(ctx context.Context, packetID uint16, topic string, qos byte, userProps map[string]string) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
-		defer conn.SetWriteDeadline(timeZero)
-	}
+	deadline := c.writeDeadline(ctx)
 
 	pkt := &v5.Subscribe{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
@@ -431,7 +405,6 @@ func (c *Client) sendSubscribeWithUserProps(ctx context.Context, packetID uint16
 		},
 	}
 
-	// Add user properties if present
 	if len(userProps) > 0 {
 		if pkt.Properties == nil {
 			pkt.Properties = &v5.SubscribeProperties{}
@@ -443,7 +416,7 @@ func (c *Client) sendSubscribeWithUserProps(ctx context.Context, packetID uint16
 	}
 
 	c.updateActivity()
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), deadline)
 }
 
 // UnsubscribeFromQueue unsubscribes from a durable queue.

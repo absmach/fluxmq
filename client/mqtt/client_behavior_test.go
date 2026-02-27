@@ -70,6 +70,19 @@ func (c *packetCaptureConn) packetTypeCounts() map[byte]int {
 	return counts
 }
 
+// setupWriteLoop wires up the write infrastructure so tests that bypass Connect() can use send methods.
+// Cleanup is handled by the client's own cleanup() or Disconnect() — no explicit teardown needed,
+// but callers that don't trigger cleanup should close stopCh+writeCh themselves.
+func setupWriteLoop(c *Client, conn net.Conn) {
+	c.conn = conn
+	c.stopCh = make(chan struct{})
+	c.doneCh = make(chan struct{})
+	close(c.doneCh) // no readLoop in tests — mark as already exited
+	c.writeCh = make(chan writeRequest, 256)
+	c.writeDone = make(chan struct{})
+	go c.writeLoop()
+}
+
 func TestRestoreStateReplaysSubscriptionsQueueAndOutbound(t *testing.T) {
 	opts := NewOptions().
 		SetClientID("restore-client").
@@ -81,7 +94,7 @@ func TestRestoreStateReplaysSubscriptionsQueueAndOutbound(t *testing.T) {
 
 	c.state.set(StateConnected)
 	conn := &packetCaptureConn{}
-	c.conn = conn
+	setupWriteLoop(c, conn)
 
 	c.subscriptions.setBasic("sensors/basic", 1)
 	c.subscriptions.setOption(&SubscribeOption{Topic: "sensors/advanced", QoS: 2, NoLocal: true})
@@ -111,6 +124,8 @@ func TestRestoreStateReplaysSubscriptionsQueueAndOutbound(t *testing.T) {
 
 	c.restoreState()
 	close(done)
+
+	c.cleanup(nil)
 
 	counts := conn.packetTypeCounts()
 	assert.Equal(t, 3, counts[packets.SubscribeType], "should replay regular, advanced, and queue subscriptions")
@@ -215,7 +230,7 @@ func TestSendPingTriggersConnectionLostOnTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	c.state.set(StateConnected)
-	c.conn = &packetCaptureConn{}
+	setupWriteLoop(c, &packetCaptureConn{})
 
 	c.pingMu.Lock()
 	c.waitingPing = true
@@ -339,7 +354,7 @@ func TestHandleAuthCallsOnAuthCallback(t *testing.T) {
 
 	c.state.set(StateConnected)
 	conn := &packetCaptureConn{}
-	c.conn = conn
+	setupWriteLoop(c, conn)
 
 	authPkt := &v5.Auth{
 		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
@@ -357,6 +372,8 @@ func TestHandleAuthCallsOnAuthCallback(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("expected OnAuth callback to be called")
 	}
+
+	c.cleanup(nil)
 }
 
 func TestHandleAuthWithoutCallbackDoesNotPanic(t *testing.T) {

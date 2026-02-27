@@ -19,7 +19,11 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
-var timeZero = time.Time{}
+type writeRequest struct {
+	data     []byte
+	deadline time.Time
+	errCh    chan error // nil for fire-and-forget
+}
 
 // Client is a thread-safe MQTT client.
 type Client struct {
@@ -28,9 +32,12 @@ type Client struct {
 	// State management
 	state *stateManager
 
-	// Connection
-	conn   net.Conn
-	connMu sync.RWMutex
+	// Connection — only touched by writeLoop (writes) and readLoop (reads) after Connect().
+	conn net.Conn
+
+	// Write serialization
+	writeCh   chan writeRequest
+	writeDone chan struct{}
 
 	// Server capabilities (MQTT 5.0)
 	serverCaps   *ServerCapabilities
@@ -63,7 +70,7 @@ type Client struct {
 	// Keep-alive
 	lastActivity atomic.Int64 // UnixNano timestamp, no mutex needed
 	pingMu       sync.Mutex
-	pingStop     chan struct{}
+	pingTimer    *time.Timer
 	waitingPing  bool
 	lastPingSent time.Time
 
@@ -129,12 +136,10 @@ func (c *Client) Connect() error {
 
 	// If another goroutine closed the client while connecting, do not transition to connected.
 	if !c.state.transition(StateConnecting, StateConnected) {
-		c.connMu.Lock()
 		if c.conn != nil {
 			c.conn.Close()
 			c.conn = nil
 		}
-		c.connMu.Unlock()
 		if c.state.isClosed() {
 			return ErrClientClosed
 		}
@@ -144,6 +149,15 @@ func (c *Client) Connect() error {
 	// Start background goroutines
 	c.stopCh = make(chan struct{})
 	c.doneCh = make(chan struct{})
+
+	size := c.opts.MessageChanSize
+	if size <= 0 {
+		size = DefaultMessageChanSize
+	}
+	c.writeCh = make(chan writeRequest, size)
+	c.writeDone = make(chan struct{})
+	go c.writeLoop()
+
 	c.startDispatcher()
 	go c.readLoop()
 
@@ -215,10 +229,7 @@ func (c *Client) connectToServer(addr string) error {
 		return code
 	}
 
-	c.connMu.Lock()
 	c.conn = conn
-	c.connMu.Unlock()
-
 	c.updateActivity()
 	return nil
 }
@@ -445,10 +456,11 @@ func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, rea
 		c.lifecycleMu.Unlock()
 		return nil
 	}
-	c.lifecycleMu.Unlock()
 
 	c.stopKeepAlive()
 	c.sendDisconnectWithReason(reasonCode, sessionExpiry, reasonString)
+	c.lifecycleMu.Unlock()
+
 	c.cleanup(nil)
 	c.lifecycleMu.Lock()
 	c.state.transition(StateDisconnecting, StateDisconnected)
@@ -457,15 +469,13 @@ func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, rea
 	return nil
 }
 
+// sendDisconnectWithReason writes the DISCONNECT directly to conn (bypassing writeLoop)
+// because it runs right before cleanup tears down the write infrastructure.
 func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) {
-	c.connMu.RLock()
 	conn := c.conn
-	c.connMu.RUnlock()
-
 	if conn == nil {
 		return
 	}
-
 	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
 
 	if c.opts.ProtocolVersion == 5 {
@@ -474,7 +484,6 @@ func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32,
 			ReasonCode:  reasonCode,
 		}
 
-		// Add properties if specified
 		if sessionExpiry > 0 || reasonString != "" {
 			pkt.Properties = &v5.DisconnectProperties{}
 
@@ -516,25 +525,36 @@ func (c *Client) cleanup(err error) {
 	}
 	defer atomic.StoreUint32(&c.cleanupInProgress, 0)
 
-	// Signal read loop first.
+	// Signal readLoop.
 	if c.stopCh != nil {
 		close(c.stopCh)
 	}
 
-	// Close connection before waiting on doneCh so a blocked read unblocks.
-	c.connMu.Lock()
+	// Signal writeLoop to drain and exit.
+	if c.writeCh != nil {
+		close(c.writeCh)
+	}
+
+	// Close connection to unblock any blocked read/write syscalls.
 	if c.conn != nil {
 		c.conn.Close()
-		c.conn = nil
 	}
-	c.connMu.Unlock()
 
-	// Wait for read loop to exit.
+	// Wait for readLoop to exit.
 	if c.doneCh != nil {
 		<-c.doneCh
-		c.stopCh = nil
-		c.doneCh = nil
 	}
+
+	// Wait for writeLoop to exit.
+	if c.writeDone != nil {
+		<-c.writeDone
+	}
+
+	c.conn = nil
+	c.stopCh = nil
+	c.doneCh = nil
+	c.writeCh = nil
+	c.writeDone = nil
 
 	c.stopDispatcher()
 
@@ -554,6 +574,7 @@ func (c *Client) cleanup(err error) {
 	c.pingMu.Lock()
 	c.waitingPing = false
 	c.lastPingSent = time.Time{}
+	c.pingTimer = nil
 	c.pingMu.Unlock()
 }
 
@@ -700,19 +721,6 @@ func (c *Client) sendPublish(ctx context.Context, msg *Message, packetID uint16)
 }
 
 func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline time.Time) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	if !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
-		defer conn.SetWriteDeadline(time.Time{})
-	}
-
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.Publish{
 			FixedHeader: packets.FixedHeader{
@@ -758,24 +766,20 @@ func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline
 			}
 		}
 
-		// Apply topic alias if available
 		if c.topicAliases != nil {
 			if alias, isNew, ok := c.topicAliases.getOrAssignOutbound(msg.Topic); ok {
 				if pkt.Properties == nil {
 					pkt.Properties = &v5.PublishProperties{}
 				}
 				pkt.Properties.TopicAlias = &alias
-
-				// If using existing alias, clear topic name to save bandwidth
 				if !isNew {
 					pkt.TopicName = ""
 				}
-				// If new alias, send both topic and alias for registration
 			}
 		}
 
 		c.updateActivity()
-		return pkt.Pack(conn)
+		return c.queueWrite(pkt.Encode(), deadline)
 	}
 
 	pkt := &v3.Publish{
@@ -790,7 +794,7 @@ func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline
 		ID:        packetID,
 	}
 	c.updateActivity()
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), deadline)
 }
 
 func (c *Client) writeDeadline(ctx context.Context) time.Time {
@@ -936,18 +940,7 @@ func (c *Client) subscribeWithOptions(ctx context.Context, opts []*SubscribeOpti
 }
 
 func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[string]byte) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
-		defer conn.SetWriteDeadline(time.Time{})
-	}
+	deadline := c.writeDeadline(ctx)
 
 	if c.opts.ProtocolVersion == 5 {
 		opts := make([]v5.SubOption, 0, len(topics))
@@ -960,7 +953,7 @@ func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[
 			Opts:        opts,
 		}
 		c.updateActivity()
-		return pkt.Pack(conn)
+		return c.queueWrite(pkt.Encode(), deadline)
 	}
 
 	ts := make([]v3.Topic, 0, len(topics))
@@ -973,22 +966,11 @@ func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[
 		Topics:      ts,
 	}
 	c.updateActivity()
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), deadline)
 }
 
 func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
-		defer conn.SetWriteDeadline(time.Time{})
-	}
+	deadline := c.writeDeadline(ctx)
 
 	if c.opts.ProtocolVersion == 5 {
 		v5Opts := make([]v5.SubOption, len(opts))
@@ -998,7 +980,6 @@ func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, 
 				MaxQoS: opt.QoS,
 			}
 
-			// Set advanced options if specified
 			if opt.NoLocal {
 				noLocal := true
 				v5Opts[i].NoLocal = &noLocal
@@ -1020,7 +1001,6 @@ func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, 
 			Opts:        v5Opts,
 		}
 
-		// Use subscription identifier from first option (applies to all topics in this packet)
 		if len(opts) > 0 && opts[0].SubscriptionID > 0 {
 			subID := int(opts[0].SubscriptionID)
 			pkt.Properties = &v5.SubscribeProperties{
@@ -1029,10 +1009,9 @@ func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, 
 		}
 
 		c.updateActivity()
-		return pkt.Pack(conn)
+		return c.queueWrite(pkt.Encode(), deadline)
 	}
 
-	// For MQTT 3.1.1, ignore advanced options
 	ts := make([]v3.Topic, len(opts))
 	for i, opt := range opts {
 		ts[i] = v3.Topic{Name: opt.Topic, QoS: opt.QoS}
@@ -1043,7 +1022,7 @@ func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, 
 		Topics:      ts,
 	}
 	c.updateActivity()
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), deadline)
 }
 
 // Unsubscribe unsubscribes from one or more topics.
@@ -1086,18 +1065,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 }
 
 func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []string) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	if deadline := c.writeDeadline(ctx); !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
-		defer conn.SetWriteDeadline(time.Time{})
-	}
+	deadline := c.writeDeadline(ctx)
 
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.Unsubscribe{
@@ -1106,7 +1074,7 @@ func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []
 			Topics:      topics,
 		}
 		c.updateActivity()
-		return pkt.Pack(conn)
+		return c.queueWrite(pkt.Encode(), deadline)
 	}
 
 	pkt := &v3.Unsubscribe{
@@ -1115,7 +1083,7 @@ func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []
 		Topics:      topics,
 	}
 	c.updateActivity()
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), deadline)
 }
 
 // SubscribeAsync subscribes in a background goroutine and returns a completion token.
@@ -1149,16 +1117,14 @@ func (c *Client) UnsubscribeAsync(ctx context.Context, topics ...string) *Unsubs
 func (c *Client) readLoop() {
 	defer close(c.doneCh)
 
+	conn := c.conn
+
 	for {
 		select {
 		case <-c.stopCh:
 			return
 		default:
 		}
-
-		c.connMu.RLock()
-		conn := c.conn
-		c.connMu.RUnlock()
 
 		if conn == nil {
 			return
@@ -1552,98 +1518,66 @@ func (c *Client) handleUnsubAck(pkt packets.ControlPacket) {
 }
 
 func (c *Client) sendPubAck(packetID uint16) {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.PubAck{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubAck{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	}
 }
 
 func (c *Client) sendPubRec(packetID uint16) {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.PubRec{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubRec{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	}
 }
 
 func (c *Client) sendPubRel(packetID uint16) {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.PubRel{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubRel{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	}
 }
 
 func (c *Client) sendPubComp(packetID uint16) {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.PubComp{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubComp{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 			ID:          packetID,
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	}
 }
 
@@ -1749,15 +1683,7 @@ func (c *Client) handleAuth(pkt packets.ControlPacket) {
 		},
 	}
 
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn != nil {
-		if err := resp.Pack(conn); err != nil {
-			c.handleConnectionLost(fmt.Errorf("%w: %v", ErrAuthFailed, err))
-		}
-	}
+	c.queueWriteNoWait(resp.Encode())
 }
 
 // SendAuth initiates re-authentication by sending an AUTH packet to the server (MQTT 5.0).
@@ -1781,15 +1707,7 @@ func (c *Client) SendAuth(reasonCode byte, authData []byte) error {
 		},
 	}
 
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return ErrNotConnected
-	}
-
-	return pkt.Pack(conn)
+	return c.queueWrite(pkt.Encode(), time.Time{})
 }
 
 func (c *Client) handleConnectionLost(err error) {
@@ -1939,52 +1857,36 @@ func (c *Client) restoreOutboundMessages() {
 
 func (c *Client) startKeepAlive() {
 	c.stopKeepAlive()
-
-	stop := make(chan struct{})
-	c.pingMu.Lock()
-	c.pingStop = stop
-	c.pingMu.Unlock()
-
 	interval := c.opts.KeepAlive
 
-	go func() {
-		ticker := time.NewTicker(interval / 2)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ticker.C:
-				idle := time.Since(time.Unix(0, c.lastActivity.Load()))
-				if idle >= interval/2 {
-					c.sendPing()
-				}
-			}
+	var tick func()
+	tick = func() {
+		idle := time.Since(time.Unix(0, c.lastActivity.Load()))
+		if idle >= interval/2 {
+			c.sendPing()
 		}
-	}()
+		c.pingMu.Lock()
+		if c.pingTimer != nil {
+			c.pingTimer.Reset(interval / 2)
+		}
+		c.pingMu.Unlock()
+	}
+
+	c.pingMu.Lock()
+	c.pingTimer = time.AfterFunc(interval/2, tick)
+	c.pingMu.Unlock()
 }
 
 func (c *Client) stopKeepAlive() {
 	c.pingMu.Lock()
-	stop := c.pingStop
-	c.pingStop = nil
-	c.pingMu.Unlock()
-
-	if stop != nil {
-		close(stop)
+	if c.pingTimer != nil {
+		c.pingTimer.Stop()
+		c.pingTimer = nil
 	}
+	c.pingMu.Unlock()
 }
 
 func (c *Client) sendPing() {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-
 	timeout := c.opts.PingTimeout
 	if timeout <= 0 {
 		timeout = DefaultPingTimeout
@@ -2003,22 +1905,69 @@ func (c *Client) sendPing() {
 	c.lastPingSent = time.Now().UTC()
 	c.pingMu.Unlock()
 
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
-
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.PingReq{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PingReq{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
 		}
-		pkt.Pack(conn)
+		c.queueWriteNoWait(pkt.Encode())
 	}
 
 	c.updateActivity()
+}
+
+func (c *Client) writeLoop() {
+	defer close(c.writeDone)
+	for req := range c.writeCh {
+		if !req.deadline.IsZero() {
+			c.conn.SetWriteDeadline(req.deadline)
+		}
+		_, err := c.conn.Write(req.data)
+		if !req.deadline.IsZero() {
+			c.conn.SetWriteDeadline(time.Time{})
+		}
+		if req.errCh != nil {
+			req.errCh <- err
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (c *Client) queueWrite(data []byte, deadline time.Time) (retErr error) {
+	defer func() {
+		if recover() != nil {
+			retErr = ErrNotConnected
+		}
+	}()
+	wch := c.writeCh
+	sch := c.stopCh
+	if wch == nil || sch == nil {
+		return ErrNotConnected
+	}
+	errCh := make(chan error, 1)
+	select {
+	case wch <- writeRequest{data: data, deadline: deadline, errCh: errCh}:
+		return <-errCh
+	case <-sch:
+		return ErrNotConnected
+	}
+}
+
+func (c *Client) queueWriteNoWait(data []byte) {
+	wch := c.writeCh
+	if wch == nil {
+		return
+	}
+	select {
+	case wch <- writeRequest{data: data}:
+	default:
+	}
 }
 
 func (c *Client) updateActivity() {
