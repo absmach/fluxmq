@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	amqpclient "github.com/absmach/fluxmq/client/amqp"
-	mqttclient "github.com/absmach/fluxmq/client/mqtt"
+	"github.com/absmach/fluxmq/client/amqp"
+	"github.com/absmach/fluxmq/client/mqtt"
 	"github.com/absmach/fluxmq/topics"
 )
 
@@ -20,8 +20,8 @@ import (
 type Client struct {
 	defaultProtocol Protocol
 
-	mqtt *mqttclient.Client
-	amqp *amqpclient.Client
+	mqtt *mqtt.Client
+	amqp *amqp.Client
 
 	mu    sync.RWMutex
 	subs  map[string]MessageHandler
@@ -51,7 +51,7 @@ func New(cfg *Config) (*Client, error) {
 		c.mqtt = mqttClient
 	}
 	if cfg.AMQP != nil {
-		amqpClient, err := amqpclient.New(cfg.AMQP)
+		amqpClient, err := amqp.New(cfg.AMQP)
 		if err != nil {
 			return nil, err
 		}
@@ -62,26 +62,26 @@ func New(cfg *Config) (*Client, error) {
 }
 
 // NewMQTT creates a unified client backed by the MQTT client.
-func NewMQTT(opts *mqttclient.Options) (*Client, error) {
+func NewMQTT(opts *mqtt.Options) (*Client, error) {
 	if opts == nil {
-		opts = mqttclient.NewOptions()
+		opts = mqtt.NewOptions()
 	}
 	return New(NewConfig().SetMQTT(opts).SetDefaultProtocol(ProtocolMQTT))
 }
 
 // NewAMQP creates a unified client backed by the AMQP client.
-func NewAMQP(opts *amqpclient.Options) (*Client, error) {
+func NewAMQP(opts *amqp.Options) (*Client, error) {
 	if opts == nil {
-		opts = amqpclient.NewOptions()
+		opts = amqp.NewOptions()
 	}
 	return New(NewConfig().SetAMQP(opts).SetDefaultProtocol(ProtocolAMQP))
 }
 
 // MQTT returns the underlying MQTT client, if configured.
-func (c *Client) MQTT() *mqttclient.Client { return c.mqtt }
+func (c *Client) MQTT() *mqtt.Client { return c.mqtt }
 
 // AMQP returns the underlying AMQP client, if configured.
-func (c *Client) AMQP() *amqpclient.Client { return c.amqp }
+func (c *Client) AMQP() *amqp.Client { return c.amqp }
 
 // Connect establishes a connection to the broker.
 func (c *Client) Connect(ctx context.Context) error {
@@ -162,7 +162,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 			if po.Retain != nil {
 				retain = *po.Retain
 			}
-			msg := mqttclient.NewMessage(topic, payload, qos, retain)
+			msg := mqtt.NewMessage(topic, payload, qos, retain)
 			msg.UserProperties = mqttUserProps(po.Properties)
 			if err := c.mqtt.PublishMessageContext(ctx, msg); err != nil {
 				return fmt.Errorf("%w: %v", ErrPublishFailed, err)
@@ -170,7 +170,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 			return nil
 		}
 
-		amqpOpts := &amqpclient.PublishOptions{
+		amqpOpts := &amqp.PublishOptions{
 			Exchange:   po.Exchange,
 			RoutingKey: po.RoutingKey,
 			Topic:      topic,
@@ -223,8 +223,8 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handler MessageHan
 		if so.AutoAck != nil {
 			autoAck = *so.AutoAck
 		}
-		subOpts := &amqpclient.SubscribeOptions{Topic: topic, AutoAck: autoAck}
-		if err := c.amqp.SubscribeWithOptions(subOpts, func(msg *amqpclient.Message) {
+		subOpts := &amqp.SubscribeOptions{Topic: topic, AutoAck: autoAck}
+		if err := c.amqp.SubscribeWithOptions(subOpts, func(msg *amqp.Message) {
 			handler(amqpToMessage(msg, ""))
 		}); err != nil {
 			return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
@@ -279,7 +279,7 @@ func (c *Client) PublishToQueue(ctx context.Context, queue string, payload []byt
 			if po.QoS != nil {
 				qos = *po.QoS
 			}
-			qopts := &mqttclient.QueuePublishOptions{
+			qopts := &mqtt.QueuePublishOptions{
 				QueueName:  queue,
 				Payload:    payload,
 				Properties: mqttUserProps(po.Properties),
@@ -291,7 +291,7 @@ func (c *Client) PublishToQueue(ctx context.Context, queue string, payload []byt
 			return nil
 		}
 
-		qopts := &amqpclient.QueuePublishOptions{
+		qopts := &amqp.QueuePublishOptions{
 			QueueName:  queue,
 			Payload:    payload,
 			Properties: amqpHeaders(po.Properties),
@@ -319,7 +319,7 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 
 	return doWithContext(ctx, func() error {
 		if protocol == ProtocolMQTT {
-			if err := c.mqtt.SubscribeToQueue(queue, group, func(msg *mqttclient.QueueMessage) {
+			if err := c.mqtt.SubscribeToQueue(queue, group, func(msg *mqtt.QueueMessage) {
 				handler(mqttQueueToMessage(msg, queue))
 			}); err != nil {
 				return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
@@ -330,7 +330,7 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 			return nil
 		}
 
-		if err := c.amqp.SubscribeToQueue(queue, group, func(msg *amqpclient.QueueMessage) {
+		if err := c.amqp.SubscribeToQueue(queue, group, func(msg *amqp.QueueMessage) {
 			handler(amqpQueueToMessage(msg, queue))
 		}); err != nil {
 			return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
@@ -368,16 +368,16 @@ func (c *Client) UnsubscribeFromQueue(ctx context.Context, queue string, opts ..
 	})
 }
 
-func (c *Client) newMQTTClient(opts *mqttclient.Options) (*mqttclient.Client, error) {
+func (c *Client) newMQTTClient(opts *mqtt.Options) (*mqtt.Client, error) {
 	if opts == nil {
-		opts = mqttclient.NewOptions()
+		opts = mqtt.NewOptions()
 	}
 
 	userOnMessageV2 := opts.OnMessageV2
 	userOnMessage := opts.OnMessage
 
 	cloned := *opts
-	cloned.OnMessageV2 = func(msg *mqttclient.Message) {
+	cloned.OnMessageV2 = func(msg *mqtt.Message) {
 		c.dispatchMQTT(msg)
 		if userOnMessageV2 != nil {
 			userOnMessageV2(msg)
@@ -389,7 +389,7 @@ func (c *Client) newMQTTClient(opts *mqttclient.Options) (*mqttclient.Client, er
 	}
 	cloned.OnMessage = nil
 
-	return mqttclient.New(&cloned)
+	return mqtt.New(&cloned)
 }
 
 func (c *Client) resolveProtocol(requested Protocol) (Protocol, error) {
@@ -427,7 +427,7 @@ func (c *Client) defaultProtocolOrFallback() (Protocol, error) {
 	return "", ErrNoTransport
 }
 
-func (c *Client) dispatchMQTT(msg *mqttclient.Message) {
+func (c *Client) dispatchMQTT(msg *mqtt.Message) {
 	if msg == nil {
 		return
 	}
@@ -440,7 +440,7 @@ func (c *Client) dispatchMQTT(msg *mqttclient.Message) {
 	}
 }
 
-func mqttToMessage(msg *mqttclient.Message) *Message {
+func mqttToMessage(msg *mqtt.Message) *Message {
 	if msg == nil {
 		return nil
 	}
@@ -461,7 +461,7 @@ func mqttToMessage(msg *mqttclient.Message) *Message {
 	}
 }
 
-func mqttQueueToMessage(msg *mqttclient.QueueMessage, queue string) *Message {
+func mqttQueueToMessage(msg *mqtt.QueueMessage, queue string) *Message {
 	if msg == nil {
 		return nil
 	}
@@ -478,7 +478,7 @@ func mqttQueueToMessage(msg *mqttclient.QueueMessage, queue string) *Message {
 	return m
 }
 
-func amqpToMessage(msg *amqpclient.Message, queue string) *Message {
+func amqpToMessage(msg *amqp.Message, queue string) *Message {
 	if msg == nil {
 		return nil
 	}
@@ -500,7 +500,7 @@ func amqpToMessage(msg *amqpclient.Message, queue string) *Message {
 	}
 }
 
-func amqpQueueToMessage(msg *amqpclient.QueueMessage, queue string) *Message {
+func amqpQueueToMessage(msg *amqp.QueueMessage, queue string) *Message {
 	if msg == nil {
 		return nil
 	}
