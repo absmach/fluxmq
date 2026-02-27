@@ -203,9 +203,6 @@ func (c *Client) PublishToQueueWithOptions(ctx context.Context, opts *QueuePubli
 			return err
 		}
 	}
-	if !c.state.isConnected() {
-		return ErrNotConnected
-	}
 	if opts == nil {
 		return ErrInvalidMessage
 	}
@@ -244,6 +241,9 @@ func (c *Client) publishWithUserProperties(ctx context.Context, topic string, pa
 	}
 	msg := NewMessage(topic, payload, qos, retain)
 	msg.UserProperties = userProps
+	if !c.state.isConnected() {
+		return c.handleDisconnectedPublish(msg)
+	}
 
 	if qos == 0 {
 		return c.sendPublishV5(ctx, msg, 0)

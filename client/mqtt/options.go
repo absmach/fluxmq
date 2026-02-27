@@ -74,11 +74,13 @@ type Options struct {
 	AutoReconnect    bool          // Enable automatic reconnection
 	ReconnectBackoff time.Duration // Initial reconnect delay
 	MaxReconnectWait time.Duration // Maximum reconnect delay
+	ReconnectBufSize int           // Max buffered outbound publish bytes while disconnected (0 = disabled)
 
 	// Callbacks
 	OnConnect            func()                                                                    // Called on successful connection
 	OnConnectionLost     func(error)                                                               // Called when connection is lost
 	OnReconnecting       func(attempt int)                                                         // Called before each reconnect attempt
+	OnAsyncError         func(error)                                                               // Called for asynchronous non-fatal errors (slow consumer, reconnect buffer overflow)
 	OnMessage            func(topic string, payload []byte, qos byte)                              // Called for incoming messages (basic)
 	OnMessageV2          func(msg *Message)                                                        // Called for incoming messages (full context, takes precedence over OnMessage)
 	OnServerCapabilities func(*ServerCapabilities)                                                 // Called when server capabilities received (MQTT 5.0)
@@ -89,9 +91,11 @@ type Options struct {
 	AuthData   []byte // Authentication data for initial CONNECT
 
 	// Advanced
-	MessageChanSize int          // Size of internal message channel
-	OrderMatters    bool         // Maintain message order (may reduce throughput)
-	Store           MessageStore // Message store for QoS 1/2 (nil = in-memory)
+	MessageChanSize    int          // Size of internal message channel
+	MaxPendingMessages int          // Max queued callback messages before dropping (0 = disabled)
+	MaxPendingBytes    int64        // Max queued callback bytes before dropping (0 = disabled)
+	OrderMatters       bool         // Maintain message order (may reduce throughput)
+	Store              MessageStore // Message store for QoS 1/2 (nil = in-memory)
 }
 
 // NewOptions creates Options with sensible defaults.
@@ -255,6 +259,13 @@ func (o *Options) SetMaxReconnectWait(d time.Duration) *Options {
 	return o
 }
 
+// SetReconnectBufferSize sets max buffered publish bytes while disconnected.
+// A value <= 0 disables buffering.
+func (o *Options) SetReconnectBufferSize(bytes int) *Options {
+	o.ReconnectBufSize = bytes
+	return o
+}
+
 // SetMaxInflight sets the maximum number of inflight messages.
 func (o *Options) SetMaxInflight(max int) *Options {
 	o.MaxInflight = max
@@ -264,6 +275,20 @@ func (o *Options) SetMaxInflight(max int) *Options {
 // SetMessageChanSize sets internal message dispatch channel size.
 func (o *Options) SetMessageChanSize(size int) *Options {
 	o.MessageChanSize = size
+	return o
+}
+
+// SetMaxPendingMessages sets max queued callback messages before dropping.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxPendingMessages(max int) *Options {
+	o.MaxPendingMessages = max
+	return o
+}
+
+// SetMaxPendingBytes sets max queued callback bytes before dropping.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxPendingBytes(max int64) *Options {
+	o.MaxPendingBytes = max
 	return o
 }
 
@@ -288,6 +313,12 @@ func (o *Options) SetOnConnectionLost(fn func(error)) *Options {
 // SetOnReconnecting sets the reconnecting callback.
 func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
 	o.OnReconnecting = fn
+	return o
+}
+
+// SetOnAsyncError sets callback for non-fatal asynchronous errors.
+func (o *Options) SetOnAsyncError(fn func(error)) *Options {
+	o.OnAsyncError = fn
 	return o
 }
 
@@ -362,6 +393,15 @@ func (o *Options) Validate() error {
 	}
 	if o.MaxReconnectWait <= 0 {
 		o.MaxReconnectWait = DefaultReconnectMax
+	}
+	if o.ReconnectBufSize < 0 {
+		o.ReconnectBufSize = 0
+	}
+	if o.MaxPendingMessages < 0 {
+		o.MaxPendingMessages = 0
+	}
+	if o.MaxPendingBytes < 0 {
+		o.MaxPendingBytes = 0
 	}
 	return nil
 }

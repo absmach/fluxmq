@@ -31,6 +31,8 @@ var (
 	ErrInvalidQoS           = errors.New("invalid QoS level (must be 0, 1, or 2)")
 	ErrInvalidTopic         = errors.New("invalid topic")
 	ErrSubscribeFailed      = errors.New("subscription failed")
+	ErrSlowConsumer         = errors.New("slow consumer: message dropped")
+	ErrReconnectBufferFull  = errors.New("reconnect publish buffer is full")
 	ErrQueueAckRequiresV5   = errors.New("queue acknowledgments require MQTT v5 user properties")
 	ErrQueueAckMissingGroup = errors.New("group-id required for queue acknowledgment")
 

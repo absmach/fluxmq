@@ -25,6 +25,8 @@ type writeRequest struct {
 	errCh    chan error // nil for fire-and-forget
 }
 
+const defaultControlWriteChanSize = 64
+
 // Client is a thread-safe MQTT client.
 type Client struct {
 	opts *Options
@@ -32,12 +34,16 @@ type Client struct {
 	// State management
 	state *stateManager
 
+	// Guards connection and write-loop channel pointers.
+	writeStateMu sync.RWMutex
+
 	// Connection — only touched by writeLoop (writes) and readLoop (reads) after Connect().
 	conn net.Conn
 
 	// Write serialization
-	writeCh   chan writeRequest
-	writeDone chan struct{}
+	writeCh        chan writeRequest
+	controlWriteCh chan writeRequest
+	writeDone      chan struct{}
 
 	// Server capabilities (MQTT 5.0)
 	serverCaps   *ServerCapabilities
@@ -78,6 +84,20 @@ type Client struct {
 	msgCh      chan *Message
 	msgStop    chan struct{}
 	dispatchWg sync.WaitGroup
+
+	// Callback queue pressure accounting.
+	pendingMu       sync.Mutex
+	pendingMessages int
+	pendingBytes    int64
+	droppedMessages atomic.Uint64
+
+	// Avoid flooding async error callback with repeated slow-consumer notifications.
+	slowConsumerNotified atomic.Bool
+
+	// Buffered publishes while disconnected.
+	reconnectBufMu    sync.Mutex
+	reconnectBuf      []*Message
+	reconnectBufBytes int
 
 	// Server index for round-robin
 	serverIdx int
@@ -136,10 +156,12 @@ func (c *Client) Connect() error {
 
 	// If another goroutine closed the client while connecting, do not transition to connected.
 	if !c.state.transition(StateConnecting, StateConnected) {
+		c.writeStateMu.Lock()
 		if c.conn != nil {
 			c.conn.Close()
 			c.conn = nil
 		}
+		c.writeStateMu.Unlock()
 		if c.state.isClosed() {
 			return ErrClientClosed
 		}
@@ -147,15 +169,28 @@ func (c *Client) Connect() error {
 	}
 
 	// Start background goroutines
-	c.stopCh = make(chan struct{})
-	c.doneCh = make(chan struct{})
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
 
 	size := c.opts.MessageChanSize
 	if size <= 0 {
 		size = DefaultMessageChanSize
 	}
-	c.writeCh = make(chan writeRequest, size)
-	c.writeDone = make(chan struct{})
+	writeCh := make(chan writeRequest, size)
+	controlSize := size / 4
+	if controlSize < defaultControlWriteChanSize {
+		controlSize = defaultControlWriteChanSize
+	}
+	controlWriteCh := make(chan writeRequest, controlSize)
+	writeDone := make(chan struct{})
+	c.writeStateMu.Lock()
+	c.stopCh = stopCh
+	c.doneCh = doneCh
+	c.writeCh = writeCh
+	c.controlWriteCh = controlWriteCh
+	c.writeDone = writeDone
+	c.writeStateMu.Unlock()
+
 	go c.writeLoop()
 
 	c.startDispatcher()
@@ -167,6 +202,7 @@ func (c *Client) Connect() error {
 
 	// Restore client-side state on reconnect (subscriptions and QoS in-flight).
 	c.restoreState()
+	c.flushReconnectBuffer()
 
 	// Callback
 	if c.opts.OnConnect != nil {
@@ -229,7 +265,9 @@ func (c *Client) connectToServer(addr string) error {
 		return code
 	}
 
+	c.writeStateMu.Lock()
 	c.conn = conn
+	c.writeStateMu.Unlock()
 	c.updateActivity()
 	return nil
 }
@@ -472,7 +510,9 @@ func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, rea
 // sendDisconnectWithReason writes the DISCONNECT directly to conn (bypassing writeLoop)
 // because it runs right before cleanup tears down the write infrastructure.
 func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) {
+	c.writeStateMu.RLock()
 	conn := c.conn
+	c.writeStateMu.RUnlock()
 	if conn == nil {
 		return
 	}
@@ -525,36 +565,47 @@ func (c *Client) cleanup(err error) {
 	}
 	defer atomic.StoreUint32(&c.cleanupInProgress, 0)
 
-	// Signal readLoop.
-	if c.stopCh != nil {
-		close(c.stopCh)
-	}
+	c.writeStateMu.RLock()
+	stopCh := c.stopCh
+	doneCh := c.doneCh
+	writeDone := c.writeDone
+	conn := c.conn
+	c.writeStateMu.RUnlock()
 
-	// Signal writeLoop to drain and exit.
-	if c.writeCh != nil {
-		close(c.writeCh)
+	// Signal read/write loops.
+	if stopCh != nil {
+		close(stopCh)
 	}
 
 	// Close connection to unblock any blocked read/write syscalls.
-	if c.conn != nil {
-		c.conn.Close()
+	if conn != nil {
+		conn.Close()
 	}
 
 	// Wait for readLoop to exit.
-	if c.doneCh != nil {
-		<-c.doneCh
+	if doneCh != nil {
+		<-doneCh
 	}
 
 	// Wait for writeLoop to exit.
-	if c.writeDone != nil {
-		<-c.writeDone
+	if writeDone != nil {
+		<-writeDone
 	}
 
+	c.writeStateMu.Lock()
 	c.conn = nil
 	c.stopCh = nil
 	c.doneCh = nil
 	c.writeCh = nil
+	c.controlWriteCh = nil
 	c.writeDone = nil
+	c.writeStateMu.Unlock()
+
+	c.pendingMu.Lock()
+	c.pendingMessages = 0
+	c.pendingBytes = 0
+	c.pendingMu.Unlock()
+	c.slowConsumerNotified.Store(false)
 
 	c.stopDispatcher()
 
@@ -595,9 +646,6 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 			return err
 		}
 	}
-	if !c.state.isConnected() {
-		return ErrNotConnected
-	}
 	if qos > 2 {
 		return ErrInvalidQoS
 	}
@@ -606,6 +654,9 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 	}
 
 	msg := NewMessage(topic, payload, qos, retain)
+	if !c.state.isConnected() {
+		return c.handleDisconnectedPublish(msg)
+	}
 
 	if qos == 0 {
 		return c.sendPublish(ctx, msg, 0)
@@ -652,14 +703,14 @@ func (c *Client) PublishMessage(ctx context.Context, msg *Message) error {
 	if msg == nil {
 		return ErrInvalidMessage
 	}
-	if !c.state.isConnected() {
-		return ErrNotConnected
-	}
 	if msg.QoS > 2 {
 		return ErrInvalidQoS
 	}
 	if msg.Topic == "" {
 		return ErrInvalidTopic
+	}
+	if !c.state.isConnected() {
+		return c.handleDisconnectedPublish(msg)
 	}
 
 	if msg.QoS == 0 {
@@ -1276,9 +1327,18 @@ func (c *Client) deliverMessage(msg *Message) {
 		return
 	}
 
+	msgBytes := int64(mqttMessageSize(msg))
+	if !c.reservePending(msgBytes) {
+		c.onSlowConsumer()
+		return
+	}
+
 	select {
 	case c.msgCh <- msg:
+		c.slowConsumerNotified.Store(false)
 	default:
+		c.releasePending(msgBytes)
+		c.onSlowConsumer()
 	}
 }
 
@@ -1335,6 +1395,7 @@ func (c *Client) startDispatcher() {
 					if !ok {
 						return
 					}
+					c.releasePending(int64(mqttMessageSize(msg)))
 					c.handleDeliveredMessage(msg)
 				}
 			}
@@ -1523,13 +1584,13 @@ func (c *Client) sendPubAck(packetID uint16) {
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubAck{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	}
 }
 
@@ -1539,13 +1600,13 @@ func (c *Client) sendPubRec(packetID uint16) {
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubRec{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	}
 }
 
@@ -1555,13 +1616,13 @@ func (c *Client) sendPubRel(packetID uint16) {
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubRel{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	}
 }
 
@@ -1571,13 +1632,13 @@ func (c *Client) sendPubComp(packetID uint16) {
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PubComp{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 			ID:          packetID,
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	}
 }
 
@@ -1683,7 +1744,7 @@ func (c *Client) handleAuth(pkt packets.ControlPacket) {
 		},
 	}
 
-	c.queueWriteNoWait(resp.Encode())
+	c.queueControlWriteNoWait(resp.Encode())
 }
 
 // SendAuth initiates re-authentication by sending an AUTH packet to the server (MQTT 5.0).
@@ -1853,6 +1914,136 @@ func (c *Client) restoreOutboundMessages() {
 	}
 }
 
+func (c *Client) handleDisconnectedPublish(msg *Message) error {
+	if err := c.bufferDisconnectedPublish(msg); err != nil {
+		if err == ErrReconnectBufferFull {
+			c.reportAsyncError(err)
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *Client) bufferDisconnectedPublish(msg *Message) error {
+	if msg == nil {
+		return ErrInvalidMessage
+	}
+	if c.state.isClosed() {
+		return ErrClientClosed
+	}
+	if !c.opts.AutoReconnect || c.opts.ReconnectBufSize <= 0 {
+		return ErrNotConnected
+	}
+
+	state := c.state.get()
+	if state != StateDisconnected && state != StateReconnecting && state != StateConnecting {
+		return ErrNotConnected
+	}
+
+	buffered := msg.Copy()
+	if buffered == nil {
+		return ErrInvalidMessage
+	}
+	msgBytes := mqttMessageSize(buffered)
+	if msgBytes <= 0 {
+		msgBytes = 1
+	}
+
+	c.reconnectBufMu.Lock()
+	defer c.reconnectBufMu.Unlock()
+
+	if msgBytes > c.opts.ReconnectBufSize || c.reconnectBufBytes+msgBytes > c.opts.ReconnectBufSize {
+		return ErrReconnectBufferFull
+	}
+
+	c.reconnectBuf = append(c.reconnectBuf, buffered)
+	c.reconnectBufBytes += msgBytes
+
+	return nil
+}
+
+func (c *Client) flushReconnectBuffer() {
+	if !c.state.isConnected() {
+		return
+	}
+
+	c.reconnectBufMu.Lock()
+	msgs := c.reconnectBuf
+	c.reconnectBuf = nil
+	c.reconnectBufBytes = 0
+	c.reconnectBufMu.Unlock()
+
+	for i, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+
+		if msg.QoS == 0 {
+			if err := c.sendPublish(nil, msg, 0); err != nil {
+				c.prependReconnectBuffer(msgs[i:])
+				c.reportAsyncError(err)
+				return
+			}
+			continue
+		}
+
+		packetID := c.pending.nextPacketID()
+		if packetID == 0 {
+			c.prependReconnectBuffer(msgs[i:])
+			c.reportAsyncError(ErrMaxInflight)
+			return
+		}
+
+		// No copy needed: we own these messages (buffer was drained above).
+		// On failure, PacketID is harmless — next flush reassigns it.
+		msg.PacketID = packetID
+
+		if err := c.store.StoreOutbound(packetID, msg); err != nil {
+			c.prependReconnectBuffer(msgs[i:])
+			c.reportAsyncError(err)
+			return
+		}
+
+		if _, err := c.pending.add(packetID, pendingPublish, msg); err != nil {
+			_ = c.store.DeleteOutbound(packetID)
+			c.prependReconnectBuffer(msgs[i:])
+			c.reportAsyncError(err)
+			return
+		}
+
+		if err := c.sendPublish(nil, msg, packetID); err != nil {
+			c.pending.remove(packetID)
+			_ = c.store.DeleteOutbound(packetID)
+			c.prependReconnectBuffer(msgs[i:])
+			c.reportAsyncError(err)
+			return
+		}
+	}
+}
+
+func (c *Client) prependReconnectBuffer(msgs []*Message) {
+	if len(msgs) == 0 {
+		return
+	}
+
+	total := 0
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		total += mqttMessageSize(msg)
+	}
+
+	c.reconnectBufMu.Lock()
+	defer c.reconnectBufMu.Unlock()
+
+	combined := make([]*Message, 0, len(msgs)+len(c.reconnectBuf))
+	combined = append(combined, msgs...)
+	combined = append(combined, c.reconnectBuf...)
+	c.reconnectBuf = combined
+	c.reconnectBufBytes += total
+}
+
 // Keep-alive management
 
 func (c *Client) startKeepAlive() {
@@ -1909,65 +2100,227 @@ func (c *Client) sendPing() {
 		pkt := &v5.PingReq{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	} else {
 		pkt := &v3.PingReq{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
 		}
-		c.queueWriteNoWait(pkt.Encode())
+		c.queueControlWriteNoWait(pkt.Encode())
 	}
 
 	c.updateActivity()
 }
 
 func (c *Client) writeLoop() {
-	defer close(c.writeDone)
-	for req := range c.writeCh {
-		if !req.deadline.IsZero() {
-			c.conn.SetWriteDeadline(req.deadline)
+	c.writeStateMu.RLock()
+	stopCh := c.stopCh
+	writeCh := c.writeCh
+	controlWriteCh := c.controlWriteCh
+	writeDone := c.writeDone
+	conn := c.conn
+	c.writeStateMu.RUnlock()
+
+	if stopCh == nil || writeCh == nil || controlWriteCh == nil || writeDone == nil {
+		return
+	}
+
+	defer close(writeDone)
+
+	writeOne := func(req writeRequest) bool {
+		if conn == nil {
+			if req.errCh != nil {
+				req.errCh <- ErrNotConnected
+			}
+			return true
 		}
-		_, err := c.conn.Write(req.data)
 		if !req.deadline.IsZero() {
-			c.conn.SetWriteDeadline(time.Time{})
+			conn.SetWriteDeadline(req.deadline)
+		}
+		_, err := conn.Write(req.data)
+		if !req.deadline.IsZero() {
+			conn.SetWriteDeadline(time.Time{})
 		}
 		if req.errCh != nil {
 			req.errCh <- err
 		}
-		if err != nil {
+		return err == nil
+	}
+
+	for {
+		// Prefer control frames whenever present.
+		select {
+		case <-stopCh:
 			return
+		case req := <-controlWriteCh:
+			if !writeOne(req) {
+				return
+			}
+			continue
+		default:
+		}
+
+		select {
+		case <-stopCh:
+			return
+		case req := <-controlWriteCh:
+			if !writeOne(req) {
+				return
+			}
+		case req := <-writeCh:
+			if !writeOne(req) {
+				return
+			}
 		}
 	}
 }
 
-func (c *Client) queueWrite(data []byte, deadline time.Time) (retErr error) {
+func (c *Client) enqueueWrite(req writeRequest) (retErr error) {
 	defer func() {
 		if recover() != nil {
 			retErr = ErrNotConnected
 		}
 	}()
-	wch := c.writeCh
+	c.writeStateMu.RLock()
+	ch := c.writeCh
 	sch := c.stopCh
-	if wch == nil || sch == nil {
+	done := c.writeDone
+	c.writeStateMu.RUnlock()
+	if ch == nil || sch == nil || done == nil {
 		return ErrNotConnected
 	}
-	errCh := make(chan error, 1)
+
 	select {
-	case wch <- writeRequest{data: data, deadline: deadline, errCh: errCh}:
-		return <-errCh
 	case <-sch:
+		return ErrNotConnected
+	case <-done:
+		return ErrNotConnected
+	default:
+	}
+
+	select {
+	case ch <- req:
+		return nil
+	case <-sch:
+		return ErrNotConnected
+	case <-done:
 		return ErrNotConnected
 	}
 }
 
-func (c *Client) queueWriteNoWait(data []byte) {
-	wch := c.writeCh
-	if wch == nil {
+func (c *Client) queueWrite(data []byte, deadline time.Time) error {
+	errCh := make(chan error, 1)
+	if err := c.enqueueWrite(writeRequest{data: data, deadline: deadline, errCh: errCh}); err != nil {
+		return err
+	}
+
+	c.writeStateMu.RLock()
+	sch := c.stopCh
+	done := c.writeDone
+	c.writeStateMu.RUnlock()
+	if sch == nil || done == nil {
+		return ErrNotConnected
+	}
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-sch:
+		return ErrNotConnected
+	case <-done:
+		return ErrNotConnected
+	}
+}
+
+// queueControlWriteNoWait sends a control frame (ack, ping, auth response)
+// without waiting for write completion. Drops silently if the control channel
+// is full or the connection is shutting down.
+func (c *Client) queueControlWriteNoWait(data []byte) {
+	defer func() { recover() }()
+	c.writeStateMu.RLock()
+	ch := c.controlWriteCh
+	sch := c.stopCh
+	done := c.writeDone
+	c.writeStateMu.RUnlock()
+	if ch == nil || sch == nil || done == nil {
 		return
 	}
+
 	select {
-	case wch <- writeRequest{data: data}:
+	case <-sch:
+	case <-done:
+	case ch <- writeRequest{data: data}:
 	default:
 	}
+}
+
+func (c *Client) reservePending(msgBytes int64) bool {
+	if c.opts.MaxPendingMessages <= 0 && c.opts.MaxPendingBytes <= 0 {
+		return true
+	}
+
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+
+	if c.opts.MaxPendingMessages > 0 && c.pendingMessages+1 > c.opts.MaxPendingMessages {
+		return false
+	}
+	if c.opts.MaxPendingBytes > 0 && c.pendingBytes+msgBytes > c.opts.MaxPendingBytes {
+		return false
+	}
+
+	c.pendingMessages++
+	c.pendingBytes += msgBytes
+
+	return true
+}
+
+func (c *Client) releasePending(msgBytes int64) {
+	if c.opts.MaxPendingMessages <= 0 && c.opts.MaxPendingBytes <= 0 {
+		return
+	}
+
+	c.pendingMu.Lock()
+	if c.pendingMessages > 0 {
+		c.pendingMessages--
+	}
+	if c.pendingBytes >= msgBytes {
+		c.pendingBytes -= msgBytes
+	} else {
+		c.pendingBytes = 0
+	}
+	c.pendingMu.Unlock()
+}
+
+func (c *Client) onSlowConsumer() {
+	c.droppedMessages.Add(1)
+	if c.slowConsumerNotified.CompareAndSwap(false, true) {
+		c.reportAsyncError(ErrSlowConsumer)
+	}
+}
+
+func (c *Client) reportAsyncError(err error) {
+	if err == nil || c.opts.OnAsyncError == nil {
+		return
+	}
+	go c.opts.OnAsyncError(err)
+}
+
+func mqttMessageSize(msg *Message) int {
+	if msg == nil {
+		return 0
+	}
+
+	size := len(msg.Topic) + len(msg.Payload) + len(msg.ContentType) + len(msg.ResponseTopic) + len(msg.CorrelationData) + 32
+	for k, v := range msg.UserProperties {
+		size += len(k) + len(v)
+	}
+	size += len(msg.SubscriptionIDs) * 4
+	return size
+}
+
+// DroppedMessages returns count of messages dropped due to slow consumer pressure.
+func (c *Client) DroppedMessages() uint64 {
+	return c.droppedMessages.Load()
 }
 
 func (c *Client) updateActivity() {

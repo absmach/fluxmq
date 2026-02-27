@@ -55,6 +55,81 @@ func (c *packetCaptureConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *packetCaptureConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *packetCaptureConn) SetWriteDeadline(_ time.Time) error { return nil }
 
+type blockingFailWriteConn struct {
+	mu                sync.Mutex
+	writes            int
+	firstWriteStarted chan struct{}
+	releaseFirstWrite chan struct{}
+}
+
+func (c *blockingFailWriteConn) Read(_ []byte) (int, error) { return 0, io.EOF }
+
+func (c *blockingFailWriteConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.writes++
+	writeNum := c.writes
+	c.mu.Unlock()
+
+	if writeNum == 1 {
+		close(c.firstWriteStarted)
+		<-c.releaseFirstWrite
+		return 0, io.ErrClosedPipe
+	}
+
+	return len(p), nil
+}
+
+func (c *blockingFailWriteConn) Close() error                       { return nil }
+func (c *blockingFailWriteConn) LocalAddr() net.Addr                { return testAddr("127.0.0.1:1883") }
+func (c *blockingFailWriteConn) RemoteAddr() net.Addr               { return testAddr("127.0.0.1:1883") }
+func (c *blockingFailWriteConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *blockingFailWriteConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *blockingFailWriteConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+type blockFirstWriteConn struct {
+	mu                sync.Mutex
+	writes            [][]byte
+	writeCount        int
+	firstWriteStarted chan struct{}
+	releaseFirstWrite chan struct{}
+}
+
+func (c *blockFirstWriteConn) Read(_ []byte) (int, error) { return 0, io.EOF }
+
+func (c *blockFirstWriteConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.writeCount++
+	writeNum := c.writeCount
+	c.mu.Unlock()
+
+	if writeNum == 1 {
+		close(c.firstWriteStarted)
+		<-c.releaseFirstWrite
+	}
+
+	c.mu.Lock()
+	c.writes = append(c.writes, append([]byte(nil), p...))
+	c.mu.Unlock()
+	return len(p), nil
+}
+
+func (c *blockFirstWriteConn) snapshotWrites() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([][]byte, len(c.writes))
+	for i := range c.writes {
+		out[i] = append([]byte(nil), c.writes[i]...)
+	}
+	return out
+}
+
+func (c *blockFirstWriteConn) Close() error                       { return nil }
+func (c *blockFirstWriteConn) LocalAddr() net.Addr                { return testAddr("127.0.0.1:1883") }
+func (c *blockFirstWriteConn) RemoteAddr() net.Addr               { return testAddr("127.0.0.1:1883") }
+func (c *blockFirstWriteConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *blockFirstWriteConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *blockFirstWriteConn) SetWriteDeadline(_ time.Time) error { return nil }
+
 func (c *packetCaptureConn) packetTypeCounts() map[byte]int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -71,14 +146,14 @@ func (c *packetCaptureConn) packetTypeCounts() map[byte]int {
 }
 
 // setupWriteLoop wires up the write infrastructure so tests that bypass Connect() can use send methods.
-// Cleanup is handled by the client's own cleanup() or Disconnect() — no explicit teardown needed,
-// but callers that don't trigger cleanup should close stopCh+writeCh themselves.
+// Cleanup is handled by the client's own cleanup() or Disconnect().
 func setupWriteLoop(c *Client, conn net.Conn) {
 	c.conn = conn
 	c.stopCh = make(chan struct{})
 	c.doneCh = make(chan struct{})
 	close(c.doneCh) // no readLoop in tests — mark as already exited
 	c.writeCh = make(chan writeRequest, 256)
+	c.controlWriteCh = make(chan writeRequest, 64)
 	c.writeDone = make(chan struct{})
 	go c.writeLoop()
 }
@@ -441,4 +516,262 @@ func TestHandleConnectAuthMethodMismatch(t *testing.T) {
 	}
 
 	assert.Equal(t, ErrAuthMethodMismatch, c.handleConnectAuth(conn, authPkt))
+}
+
+func TestQueueWriteReturnsWhenWriteLoopExitsWithPendingWrites(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("write-loop-exit"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockingFailWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- c.queueWrite([]byte("first"), time.Now().Add(time.Second))
+	}()
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first write did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- c.queueWrite([]byte("second"), time.Now().Add(time.Second))
+	}()
+
+	close(conn.releaseFirstWrite)
+
+	select {
+	case err := <-firstDone:
+		require.Error(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first write should not hang")
+	}
+
+	select {
+	case err := <-secondDone:
+		require.ErrorIs(t, err, ErrNotConnected)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second write should not hang when write loop exits")
+	}
+
+	c.cleanup(nil)
+}
+
+func TestControlWriteNoWaitDropsWhenFull(t *testing.T) {
+	c := &Client{
+		writeCh:        make(chan writeRequest, 1),
+		controlWriteCh: make(chan writeRequest, 1),
+		stopCh:         make(chan struct{}),
+		writeDone:      make(chan struct{}),
+	}
+
+	// Fill the control channel.
+	c.queueControlWriteNoWait([]byte("first"))
+
+	// Second call should return immediately (drop), not block.
+	done := make(chan struct{})
+	go func() {
+		c.queueControlWriteNoWait([]byte("second"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("queueControlWriteNoWait should not block when channel is full")
+	}
+
+	// Only one message should be in the channel.
+	assert.Len(t, c.controlWriteCh, 1)
+}
+
+func TestControlWriteNoWaitConcurrentWithCleanupDoesNotPanic(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("cleanup-race"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+	setupWriteLoop(c, &packetCaptureConn{})
+
+	const workers = 32
+	const loops = 200
+
+	start := make(chan struct{})
+	panicCh := make(chan any, workers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panicCh <- r
+				}
+			}()
+
+			<-start
+			payload := []byte{byte(id), 0xAA, 0x55}
+			for j := 0; j < loops; j++ {
+				c.queueControlWriteNoWait(payload)
+			}
+		}(i)
+	}
+
+	close(start)
+	time.Sleep(10 * time.Millisecond)
+
+	var cleanupWG sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		cleanupWG.Add(1)
+		go func() {
+			defer cleanupWG.Done()
+			c.cleanup(nil)
+		}()
+	}
+
+	cleanupWG.Wait()
+	wg.Wait()
+	close(panicCh)
+
+	for p := range panicCh {
+		t.Fatalf("unexpected panic during concurrent cleanup/write: %v", p)
+	}
+}
+
+func TestPublishBufferedWhileDisconnectedAndFlushedOnReconnect(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("reconnect-buffer").
+			SetReconnectBufferSize(1024),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, c.Publish(nil, "events/a", []byte("hello"), 0, false))
+
+	c.reconnectBufMu.Lock()
+	require.Len(t, c.reconnectBuf, 1)
+	c.reconnectBufMu.Unlock()
+
+	c.state.set(StateConnected)
+	conn := &packetCaptureConn{}
+	setupWriteLoop(c, conn)
+
+	c.flushReconnectBuffer()
+	c.cleanup(nil)
+
+	counts := conn.packetTypeCounts()
+	assert.Equal(t, 1, counts[packets.PublishType], "buffered publish should be flushed after reconnect")
+
+	c.reconnectBufMu.Lock()
+	assert.Len(t, c.reconnectBuf, 0)
+	assert.Equal(t, 0, c.reconnectBufBytes)
+	c.reconnectBufMu.Unlock()
+}
+
+func TestReconnectBufferFullReportsAsyncError(t *testing.T) {
+	asyncErr := make(chan error, 1)
+	c, err := New(
+		NewOptions().
+			SetClientID("reconnect-buffer-full").
+			SetReconnectBufferSize(16).
+			SetOnAsyncError(func(err error) {
+				select {
+				case asyncErr <- err:
+				default:
+				}
+			}),
+	)
+	require.NoError(t, err)
+
+	err = c.Publish(nil, "events/big", []byte("this-payload-is-too-large"), 0, false)
+	require.ErrorIs(t, err, ErrReconnectBufferFull)
+
+	select {
+	case got := <-asyncErr:
+		require.ErrorIs(t, got, ErrReconnectBufferFull)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected reconnect buffer async error callback")
+	}
+}
+
+func TestSlowConsumerPendingLimitReportsAsyncError(t *testing.T) {
+	asyncErr := make(chan error, 2)
+	c := &Client{
+		opts: NewOptions().
+			SetClientID("slow-consumer").
+			SetMaxPendingMessages(1).
+			SetOnAsyncError(func(err error) {
+				select {
+				case asyncErr <- err:
+				default:
+				}
+			}),
+		state:     newStateManager(),
+		queueSubs: newQueueSubscriptions(),
+	}
+
+	c.msgCh = make(chan *Message, 1)
+
+	c.deliverMessage(&Message{Topic: "events/1", Payload: []byte("one")})
+	c.deliverMessage(&Message{Topic: "events/2", Payload: []byte("two")})
+	c.deliverMessage(&Message{Topic: "events/3", Payload: []byte("three")})
+
+	assert.Equal(t, uint64(2), c.DroppedMessages())
+
+	select {
+	case got := <-asyncErr:
+		require.ErrorIs(t, got, ErrSlowConsumer)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected slow consumer async error callback")
+	}
+
+	// Repeated drops while pressure persists should not spam callback.
+	select {
+	case got := <-asyncErr:
+		t.Fatalf("unexpected extra async slow-consumer callback: %v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestControlWritePriorityOverDataQueue(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("control-priority"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockFirstWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x01}}))
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first write did not start")
+	}
+
+	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x02}}))
+	c.queueControlWriteNoWait([]byte{0x09})
+
+	close(conn.releaseFirstWrite)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for len(conn.snapshotWrites()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	writes := conn.snapshotWrites()
+	require.Len(t, writes, 3)
+	assert.Equal(t, []byte{0x01}, writes[0])
+	assert.Equal(t, []byte{0x09}, writes[1], "control write should preempt queued data writes")
+	assert.Equal(t, []byte{0x02}, writes[2])
+
+	c.cleanup(nil)
 }
