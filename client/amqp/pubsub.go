@@ -4,6 +4,7 @@
 package amqp
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"time"
@@ -102,6 +103,14 @@ func (c *Client) Publish(topic string, payload []byte) error {
 	})
 }
 
+// PublishContext publishes a message with context cancellation support.
+func (c *Client) PublishContext(ctx context.Context, topic string, payload []byte) error {
+	return c.PublishWithOptionsContext(ctx, &PublishOptions{
+		Topic:   topic,
+		Payload: payload,
+	})
+}
+
 // PublishWithOptions publishes a message with optional properties and routing control.
 func (c *Client) PublishWithOptions(opts *PublishOptions) error {
 	if opts == nil {
@@ -135,6 +144,13 @@ func (c *Client) PublishWithOptions(opts *PublishOptions) error {
 
 	applyProperties(&publishing, opts.Properties)
 	return c.publish(exchange, routingKey, publishing, opts.Mandatory, opts.Immediate)
+}
+
+// PublishWithOptionsContext publishes a message with context cancellation support.
+func (c *Client) PublishWithOptionsContext(ctx context.Context, opts *PublishOptions) error {
+	return runWithContext(ctx, func() error {
+		return c.PublishWithOptions(opts)
+	})
 }
 
 // Subscribe registers a pub/sub consumer for a topic filter with auto-ack enabled.

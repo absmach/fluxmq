@@ -1,7 +1,7 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package client
+package mqtt
 
 import v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 

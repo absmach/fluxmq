@@ -1,9 +1,10 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package client
+package mqtt
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -185,4 +186,36 @@ func (op *pendingOp) wait(timeout time.Duration) error {
 	case <-timer.C:
 		return ErrTimeout
 	}
+}
+
+// waitWithContext waits for completion, honoring timeout and context cancellation.
+func (op *pendingOp) waitWithContext(ctx context.Context, timeout time.Duration) error {
+	if ctx == nil {
+		return op.wait(timeout)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var timer *time.Timer
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+	}
+
+	select {
+	case <-op.done:
+		return op.err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timerC(timer):
+		return ErrTimeout
+	}
+}
+
+func timerC(t *time.Timer) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
 }

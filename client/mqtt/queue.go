@@ -1,9 +1,10 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package client
+package mqtt
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -194,6 +195,16 @@ func (c *Client) PublishToQueue(queueName string, payload []byte) error {
 	})
 }
 
+// PublishToQueueContext publishes a message to a durable queue with context cancellation support.
+// The queueName should NOT include the "$queue/" prefix - it will be added automatically.
+func (c *Client) PublishToQueueContext(ctx context.Context, queueName string, payload []byte) error {
+	return c.PublishToQueueWithOptionsContext(ctx, &QueuePublishOptions{
+		QueueName: queueName,
+		Payload:   payload,
+		QoS:       1,
+	})
+}
+
 // PublishToQueueWithOptions publishes a message to a durable queue with full control.
 // The queueName should NOT include the "$queue/" prefix - it will be added automatically.
 func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
@@ -231,6 +242,46 @@ func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
 
 	// For MQTT v3, just publish (partition key will be random)
 	return c.Publish(topic, opts.Payload, qos, false)
+}
+
+// PublishToQueueWithOptionsContext publishes a message to a durable queue with context cancellation support.
+// The queueName should NOT include the "$queue/" prefix - it will be added automatically.
+func (c *Client) PublishToQueueWithOptionsContext(ctx context.Context, opts *QueuePublishOptions) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if !c.state.isConnected() {
+		return ErrNotConnected
+	}
+	if opts == nil {
+		return ErrInvalidMessage
+	}
+	if opts.QueueName == "" {
+		return ErrInvalidTopic
+	}
+
+	topic := "$queue/" + opts.QueueName
+
+	var userProps map[string]string
+	if len(opts.Properties) > 0 {
+		userProps = make(map[string]string)
+		for k, v := range opts.Properties {
+			userProps[k] = v
+		}
+	}
+
+	qos := opts.QoS
+	if qos == 0 {
+		qos = 1
+	}
+
+	if c.opts.ProtocolVersion == 5 && len(userProps) > 0 {
+		return c.publishWithUserPropertiesContext(ctx, topic, opts.Payload, qos, false, userProps)
+	}
+
+	return c.PublishContext(ctx, topic, opts.Payload, qos, false)
 }
 
 // publishWithUserProperties publishes a message with MQTT v5 user properties.
@@ -274,8 +325,57 @@ func (c *Client) publishWithUserProperties(topic string, payload []byte, qos byt
 	return nil
 }
 
+// publishWithUserPropertiesContext publishes a message with MQTT v5 user properties and context cancellation support.
+func (c *Client) publishWithUserPropertiesContext(ctx context.Context, topic string, payload []byte, qos byte, retain bool, userProps map[string]string) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	msg := NewMessage(topic, payload, qos, retain)
+	msg.UserProperties = userProps
+	deadline := c.writeDeadline(ctx)
+
+	if qos == 0 {
+		return c.sendPublishV5WithDeadline(msg, 0, deadline)
+	}
+
+	packetID := c.pending.nextPacketID()
+	if packetID == 0 {
+		return ErrMaxInflight
+	}
+	msg.PacketID = packetID
+
+	if err := c.store.StoreOutbound(packetID, msg); err != nil {
+		return err
+	}
+
+	op, err := c.pending.add(packetID, pendingPublish, msg)
+	if err != nil {
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+
+	if err := c.sendPublishV5WithDeadline(msg, packetID, deadline); err != nil {
+		c.pending.remove(packetID)
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+
+	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
+		c.store.DeleteOutbound(packetID)
+		return err
+	}
+	return nil
+}
+
 // sendPublishV5 sends a PUBLISH packet with user properties (MQTT v5 only).
 func (c *Client) sendPublishV5(msg *Message, packetID uint16) error {
+	return c.sendPublishV5WithDeadline(msg, packetID, c.writeDeadline(nil))
+}
+
+func (c *Client) sendPublishV5WithDeadline(msg *Message, packetID uint16, deadline time.Time) error {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -284,8 +384,10 @@ func (c *Client) sendPublishV5(msg *Message, packetID uint16) error {
 		return ErrNotConnected
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-	defer conn.SetWriteDeadline(timeZero)
+	if !deadline.IsZero() {
+		conn.SetWriteDeadline(deadline)
+		defer conn.SetWriteDeadline(timeZero)
+	}
 
 	pkt := &v5.Publish{
 		FixedHeader: packets.FixedHeader{

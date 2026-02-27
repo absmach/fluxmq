@@ -1,11 +1,14 @@
 ---
 title: Go Client
-description: Pure Go client library for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support
+description: Unified Go client plus protocol-specific MQTT 3.1.1/5.0 and AMQP 0.9.1 clients with durable queue support
 ---
 
 # Go Client
 
-Pure Go client libraries for MQTT 3.1.1/5.0 and AMQP 0.9.1 with durable queue support.
+FluxMQ provides:
+- A unified Go client for common messaging use cases (publish/subscribe/queues).
+- Protocol-specific clients for MQTT 3.1.1/5.0 and AMQP 0.9.1 when you need advanced features.
+
 Note: FluxMQ also exposes AMQP 1.0 server support, but this repository does not
 currently include a dedicated AMQP 1.0 client library.
 
@@ -13,7 +16,8 @@ currently include a dedicated AMQP 1.0 client library.
 
 ## Features
 
-- **Protocol Support:** MQTT 3.1.1 (v4) and MQTT 5.0 (v5)
+- **Protocol Support:** MQTT 3.1.1 (v4), MQTT 5.0 (v5), AMQP 0.9.1
+- **Unified API:** Common publish/subscribe/queue interface
 - **Auto-Reconnect:** Exponential backoff with configurable limits
 - **QoS Levels:** Full QoS 0/1/2 support with pluggable in-flight store (memory by default)
 - **TLS/SSL:** Secure connections with custom certificates
@@ -23,7 +27,98 @@ currently include a dedicated AMQP 1.0 client library.
 
 ---
 
+## Unified Client (Recommended)
+
+The unified client lives in `github.com/absmach/fluxmq/client` and wraps either MQTT or AMQP.
+Use protocol-specific clients only when you need advanced features.
+
+### Basic MQTT Example
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    client "github.com/absmach/fluxmq/client"
+    mqttclient "github.com/absmach/fluxmq/client/mqtt"
+)
+
+func main() {
+    ctx := context.Background()
+
+    opts := mqttclient.NewOptions().
+        SetServers("localhost:1884").
+        SetClientID("my-client").
+        SetProtocolVersion(5)
+
+    c, err := client.NewMQTT(opts)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    if err := c.Connect(ctx); err != nil {
+        log.Fatal(err)
+    }
+    defer c.Close(ctx)
+
+    if err := c.Subscribe(ctx, "sensors/#", func(msg *client.Message) {
+        log.Printf("Received: %s -> %s", msg.Topic, string(msg.Payload))
+    }, client.WithQoS(1)); err != nil {
+        log.Fatal(err)
+    }
+
+    if err := c.Publish(ctx, "sensors/temp", []byte("22.5"), client.WithQoS(1)); err != nil {
+        log.Fatal(err)
+    }
+
+    select {}
+}
+```
+
+### Unified Queue Example
+
+```go
+// Publish to a queue
+_ = c.PublishToQueue(ctx, "orders", []byte("payload"), client.WithQoS(1))
+
+// Subscribe to a queue
+_ = c.SubscribeToQueue(ctx, "orders", "order-processors", func(msg *client.Message) {
+    // Process message...
+    _ = msg.Ack()
+})
+```
+
+### Functional Options
+
+Use functional options for publish/subscribe:
+
+```go
+_ = c.Publish(ctx, "topic", []byte("payload"),
+    client.WithQoS(1),
+    client.WithRetain(true),
+    client.WithProperties(map[string]string{
+        "mqtt.user.source": "sensor-1",
+        "amqp.exchange": "events",
+    }),
+)
+```
+
+### Property Prefix Mapping
+
+Unified properties map to protocol-specific headers using well-known prefixes:
+
+- `mqtt.qos`, `mqtt.retain`, `mqtt.dup`
+- `mqtt.user.<key>`
+- `amqp.exchange`, `amqp.routing_key`, `amqp.mandatory`, `amqp.immediate`
+- `amqp.headers.<key>`
+
+---
+
 ## MQTT Client
+
+The MQTT client lives in `github.com/absmach/fluxmq/client/mqtt`.
 
 ## Quick Start
 
@@ -34,12 +129,12 @@ package main
 
 import (
     "log"
-    "github.com/absmach/fluxmq/client"
+    mqttclient "github.com/absmach/fluxmq/client/mqtt"
 )
 
 func main() {
     // Create client with options
-    opts := client.NewOptions().
+    opts := mqttclient.NewOptions().
         SetServers("localhost:1884").
         SetClientID("my-client").
         SetProtocolVersion(5).
@@ -47,7 +142,7 @@ func main() {
             log.Printf("Received: %s -> %s", topic, string(payload))
         })
 
-    c, err := client.New(opts)
+    c, err := mqttclient.New(opts)
     if err != nil {
         log.Fatal(err)
     }
@@ -80,7 +175,7 @@ func main() {
 ### Connection Settings
 
 ```go
-opts := client.NewOptions().
+opts := mqttclient.NewOptions().
     SetServers("broker1:1883", "broker2:1883").  // Multiple servers
     SetClientID("device-001").
     SetCredentials("user", "password").
@@ -149,7 +244,7 @@ Use `PublishMessage` to set publish properties such as content type, response
 topic, correlation data, and user properties (MQTT 5.0 only).
 
 ```go
-msg := &client.Message{
+msg := &mqttclient.Message{
     Topic:           "sensors/temp",
     Payload:         []byte("22.5"),
     QoS:             1,
@@ -183,7 +278,7 @@ c.Subscribe(map[string]byte{
 ### MQTT 5.0 Subscription Options
 
 ```go
-opts := &client.SubscribeOption{
+opts := &mqttclient.SubscribeOption{
     Topic:            "sensors/temp",
     QoS:              1,
     NoLocal:          true,   // Don't receive own messages
@@ -215,7 +310,7 @@ opts.SetOnMessage(func(topic string, payload []byte, qos byte) {
 ### Full Message Context (MQTT 5.0)
 
 ```go
-opts.SetOnMessageV2(func(msg *client.Message) {
+opts.SetOnMessageV2(func(msg *mqttclient.Message) {
     log.Printf("Topic: %s", msg.Topic)
     log.Printf("Payload: %s", msg.Payload)
     log.Printf("QoS: %d", msg.QoS)
@@ -261,7 +356,7 @@ sequenceDiagram
 c.PublishToQueue("orders", []byte(`{"item": "widget"}`))
 
 // Full control
-c.PublishToQueueWithOptions(&client.QueuePublishOptions{
+c.PublishToQueueWithOptions(&mqttclient.QueuePublishOptions{
     QueueName:    "events",
     Payload:      []byte("event-data"),
     Properties:   map[string]string{"priority": "high"},
@@ -273,7 +368,7 @@ c.PublishToQueueWithOptions(&client.QueuePublishOptions{
 
 ```go
 // Subscribe with consumer group
-err := c.SubscribeToQueue("orders", "order-processors", func(msg *client.QueueMessage) {
+err := c.SubscribeToQueue("orders", "order-processors", func(msg *mqttclient.QueueMessage) {
     log.Printf("Processing order: %s", msg.Payload)
     log.Printf("Message ID: %s", msg.MessageID)
     log.Printf("Group: %s", msg.GroupID)
@@ -324,16 +419,16 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/absmach/fluxmq/client"
+    mqttclient "github.com/absmach/fluxmq/client/mqtt"
 )
 
 func main() {
-    opts := client.NewOptions().
+    opts := mqttclient.NewOptions().
         SetServers("localhost:1884").
         SetClientID("order-processor").
         SetProtocolVersion(5)
 
-    c, err := client.New(opts)
+    c, err := mqttclient.New(opts)
     if err != nil {
         log.Fatal(err)
     }
@@ -343,7 +438,7 @@ func main() {
     defer c.Disconnect()
 
     // Subscribe to order queue with consumer group
-    err := c.SubscribeToQueue("orders", "processors", func(msg *client.QueueMessage) {
+    err := c.SubscribeToQueue("orders", "processors", func(msg *mqttclient.QueueMessage) {
         log.Printf("Order received: %s", msg.Payload)
         
         // Simulate processing
@@ -392,7 +487,7 @@ SetOnConnectionLost(func(err error) {
 SetOnReconnecting(func(attempt int) {
     log.Printf("Reconnecting (attempt %d)...", attempt)
 }).
-SetOnServerCapabilities(func(caps *client.ServerCapabilities) {
+SetOnServerCapabilities(func(caps *mqttclient.ServerCapabilities) {
     log.Printf("Server max QoS: %d", caps.MaximumQoS)
     log.Printf("Server retain available: %v", caps.RetainAvailable)
 })
@@ -421,7 +516,7 @@ opts.SetWill("clients/device-001/status", []byte("offline"), 1, true)
 ### With MQTT 5.0 Properties
 
 ```go
-opts.Will = &client.WillMessage{
+opts.Will = &mqttclient.WillMessage{
     Topic:             "clients/device-001/status",
     Payload:           []byte("offline"),
     QoS:               1,
@@ -456,9 +551,9 @@ opts.Will = &client.WillMessage{
 ```go
 if err := c.Connect(); err != nil {
     switch err {
-    case client.ErrNoServers:
+    case mqttclient.ErrNoServers:
         log.Fatal("No brokers configured")
-    case client.ErrEmptyClientID:
+    case mqttclient.ErrEmptyClientID:
         log.Fatal("ClientID required")
     default:
         log.Printf("Connection error: %v", err)
@@ -473,7 +568,7 @@ if err := c.Connect(); err != nil {
 For QoS 1/2 in-flight storage:
 
 ```go
-store := client.NewMemoryStore()
+store := mqttclient.NewMemoryStore()
 opts.SetStore(store)
 ```
 
@@ -505,7 +600,8 @@ You can implement the `MessageStore` interface to persist QoS 1/2 in-flight data
 
 ## AMQP 0.9.1 Client
 
-The AMQP 0.9.1 client focuses on durable queue interop with the broker. It uses the same queue naming convention as MQTT: pass the queue name without the `$queue/` prefix.
+The AMQP 0.9.1 client lives in `github.com/absmach/fluxmq/client/amqp`.
+It uses the same queue naming convention as MQTT: pass the queue name without the `$queue/` prefix.
 
 ### Quick Start
 
@@ -515,7 +611,7 @@ package main
 import (
     "log"
 
-    "github.com/absmach/fluxmq/client/amqp"
+    amqp "github.com/absmach/fluxmq/client/amqp"
 )
 
 func main() {

@@ -3,365 +3,233 @@
 
 package client
 
-import (
-	"crypto/tls"
-	"time"
-)
+import "strconv"
 
-// Default values.
+// Protocol identifies the messaging transport.
+type Protocol string
+
 const (
-	DefaultKeepAlive       = 60 * time.Second
-	DefaultConnectTimeout  = 10 * time.Second
-	DefaultWriteTimeout    = 5 * time.Second
-	DefaultAckTimeout      = 10 * time.Second
-	DefaultPingTimeout     = 5 * time.Second
-	DefaultReconnectMin    = 1 * time.Second
-	DefaultReconnectMax    = 2 * time.Minute
-	DefaultMaxInflight     = 100
-	DefaultMessageChanSize = 256
+	// ProtocolMQTT routes operations over MQTT.
+	ProtocolMQTT Protocol = "mqtt"
+	// ProtocolAMQP routes operations over AMQP 0.9.1.
+	ProtocolAMQP Protocol = "amqp"
 )
 
-// WillMessage represents a last will and testament message.
-type WillMessage struct {
-	Topic   string
-	Payload []byte
-	QoS     byte
-	Retain  bool
+const (
+	propMQTTQoS      = "mqtt.qos"
+	propMQTTRetain   = "mqtt.retain"
+	propMQTTDup      = "mqtt.dup"
+	propMQTTUserPref = "mqtt.user."
 
-	// MQTT 5.0 Will Properties
-	WillDelayInterval uint32            // Delay before sending will (seconds)
-	PayloadFormat     *byte             // 0=bytes, 1=UTF-8
-	MessageExpiry     uint32            // Will message lifetime (seconds)
-	ContentType       string            // MIME type
-	ResponseTopic     string            // Response topic for request/response
-	CorrelationData   []byte            // Correlation data for request/response
-	UserProperties    map[string]string // User-defined properties
+	propAMQPExchange    = "amqp.exchange"
+	propAMQPRoutingKey  = "amqp.routing_key"
+	propAMQPMandatory   = "amqp.mandatory"
+	propAMQPImmediate   = "amqp.immediate"
+	propAMQPHeadersPref = "amqp.headers."
+)
+
+// Option applies to publish and/or subscribe operations.
+type Option interface {
+	applyPublish(*PublishOptions)
+	applySubscribe(*SubscribeOptions)
 }
 
-// Options configures the MQTT client.
-type Options struct {
-	// Connection
-	Servers        []string      // List of broker addresses (host:port)
-	ClientID       string        // Client identifier
-	Username       string        // Optional username
-	Password       string        // Optional password
-	TLSConfig      *tls.Config   // TLS configuration (nil for plain TCP)
-	ConnectTimeout time.Duration // Timeout for connection attempts
-	WriteTimeout   time.Duration // Timeout for write operations
-	KeepAlive      time.Duration // Keep-alive interval (0 to disable)
-	PingTimeout    time.Duration // Timeout waiting for PINGRESP
+type publishOption func(*PublishOptions)
 
-	// Session
-	CleanSession    bool   // Start with clean session
-	SessionExpiry   uint32 // Session expiry interval (MQTT 5.0, seconds)
-	ProtocolVersion byte   // 4 for MQTT 3.1.1, 5 for MQTT 5.0
+func (o publishOption) applyPublish(opts *PublishOptions) { o(opts) }
+func (o publishOption) applySubscribe(*SubscribeOptions)  {}
 
-	// MQTT 5.0 Connect Properties
-	ReceiveMaximum      uint16 // Maximum inflight messages client accepts (0 = use default 65535)
-	MaximumPacketSize   uint32 // Maximum packet size client accepts (0 = no limit)
-	TopicAliasMaximum   uint16 // Maximum topic aliases client accepts (0 = disabled)
-	RequestResponseInfo bool   // Request server to send response information in CONNACK
-	RequestProblemInfo  bool   // Request detailed error information (default true)
+type subscribeOption func(*SubscribeOptions)
 
-	// Will
-	Will *WillMessage // Last will and testament
+func (o subscribeOption) applyPublish(*PublishOptions)          {}
+func (o subscribeOption) applySubscribe(opts *SubscribeOptions) { o(opts) }
 
-	// QoS
-	AckTimeout  time.Duration // Timeout waiting for PUBACK/SUBACK
-	MaxInflight int           // Maximum inflight messages
+type dualOption func(*PublishOptions, *SubscribeOptions)
 
-	// Reconnection
-	AutoReconnect    bool          // Enable automatic reconnection
-	ReconnectBackoff time.Duration // Initial reconnect delay
-	MaxReconnectWait time.Duration // Maximum reconnect delay
-
-	// Callbacks
-	OnConnect            func()                                       // Called on successful connection
-	OnConnectionLost     func(error)                                  // Called when connection is lost
-	OnReconnecting       func(attempt int)                            // Called before each reconnect attempt
-	OnMessage            func(topic string, payload []byte, qos byte) // Called for incoming messages (basic)
-	OnMessageV2          func(msg *Message)                           // Called for incoming messages (full context, takes precedence over OnMessage)
-	OnServerCapabilities func(*ServerCapabilities)                    // Called when server capabilities received (MQTT 5.0)
-	OnAuth               func(reasonCode byte, authMethod string, authData []byte) ([]byte, error) // Called for enhanced authentication (MQTT 5.0)
-
-	// Enhanced Authentication (MQTT 5.0)
-	AuthMethod string // Authentication method for enhanced auth
-	AuthData   []byte // Authentication data for initial CONNECT
-
-	// Advanced
-	MessageChanSize int          // Size of internal message channel
-	OrderMatters    bool         // Maintain message order (may reduce throughput)
-	Store           MessageStore // Message store for QoS 1/2 (nil = in-memory)
+func (o dualOption) applyPublish(opts *PublishOptions) {
+	o(opts, nil)
+}
+func (o dualOption) applySubscribe(opts *SubscribeOptions) {
+	o(nil, opts)
 }
 
-// NewOptions creates Options with sensible defaults.
-func NewOptions() *Options {
-	return &Options{
-		Servers:          []string{"localhost:1883"},
-		ProtocolVersion:  4, // MQTT 3.1.1
-		CleanSession:     true,
-		KeepAlive:        DefaultKeepAlive,
-		ConnectTimeout:   DefaultConnectTimeout,
-		WriteTimeout:     DefaultWriteTimeout,
-		AckTimeout:       DefaultAckTimeout,
-		PingTimeout:      DefaultPingTimeout,
-		AutoReconnect:    true,
-		ReconnectBackoff: DefaultReconnectMin,
-		MaxReconnectWait: DefaultReconnectMax,
-		MaxInflight:      DefaultMaxInflight,
-		MessageChanSize:  DefaultMessageChanSize,
-		// MQTT 5.0 defaults
-		RequestProblemInfo: true, // Request detailed error information
+// PublishOptions configure publishing behavior.
+type PublishOptions struct {
+	Protocol   Protocol
+	QoS        *byte
+	Retain     *bool
+	Exchange   string
+	RoutingKey string
+	Mandatory  *bool
+	Immediate  *bool
+
+	Properties map[string]string
+}
+
+// SubscribeOptions configure subscription behavior.
+type SubscribeOptions struct {
+	Protocol Protocol
+	QoS      *byte
+	AutoAck  *bool
+}
+
+// WithProtocol sets protocol routing for publish/subscribe operations.
+func WithProtocol(protocol Protocol) Option {
+	return dualOption(func(p *PublishOptions, s *SubscribeOptions) {
+		if p != nil {
+			p.Protocol = protocol
+		}
+		if s != nil {
+			s.Protocol = protocol
+		}
+	})
+}
+
+// WithQoS sets the MQTT QoS for publish/subscribe.
+func WithQoS(qos byte) Option {
+	return dualOption(func(p *PublishOptions, s *SubscribeOptions) {
+		if p != nil {
+			p.QoS = &qos
+		}
+		if s != nil {
+			s.QoS = &qos
+		}
+	})
+}
+
+// WithRetain sets the MQTT retain flag (publish only).
+func WithRetain(retain bool) Option {
+	return publishOption(func(p *PublishOptions) {
+		p.Retain = &retain
+	})
+}
+
+// WithExchange sets the AMQP exchange (publish only).
+func WithExchange(exchange string) Option {
+	return publishOption(func(p *PublishOptions) {
+		p.Exchange = exchange
+	})
+}
+
+// WithRoutingKey sets the AMQP routing key (publish only).
+func WithRoutingKey(key string) Option {
+	return publishOption(func(p *PublishOptions) {
+		p.RoutingKey = key
+	})
+}
+
+// WithMandatory sets the AMQP mandatory flag (publish only).
+func WithMandatory(mandatory bool) Option {
+	return publishOption(func(p *PublishOptions) {
+		p.Mandatory = &mandatory
+	})
+}
+
+// WithImmediate sets the AMQP immediate flag (publish only).
+func WithImmediate(immediate bool) Option {
+	return publishOption(func(p *PublishOptions) {
+		p.Immediate = &immediate
+	})
+}
+
+// WithProperties sets unified properties.
+func WithProperties(props map[string]string) Option {
+	return publishOption(func(p *PublishOptions) {
+		if len(props) == 0 {
+			return
+		}
+		if p.Properties == nil {
+			p.Properties = make(map[string]string, len(props))
+		}
+		for k, v := range props {
+			p.Properties[k] = v
+		}
+	})
+}
+
+func buildPublishOptions(opts []Option) PublishOptions {
+	var po PublishOptions
+	for _, opt := range opts {
+		opt.applyPublish(&po)
+	}
+	applyPropertyPrefixes(&po)
+	return po
+}
+
+func buildSubscribeOptions(opts []Option) SubscribeOptions {
+	var so SubscribeOptions
+	for _, opt := range opts {
+		opt.applySubscribe(&so)
+	}
+	applySubscribePropertyPrefixes(&so, nil)
+	return so
+}
+
+// WithAutoAck controls AMQP auto-ack for subscriptions (publish/subscribe only).
+// It has no effect for MQTT subscriptions.
+func WithAutoAck(autoAck bool) Option {
+	return subscribeOption(func(s *SubscribeOptions) {
+		s.AutoAck = &autoAck
+	})
+}
+
+func applyPropertyPrefixes(po *PublishOptions) {
+	if po == nil || len(po.Properties) == 0 {
+		return
+	}
+
+	if po.QoS == nil {
+		if v, ok := po.Properties[propMQTTQoS]; ok {
+			if qos, err := strconv.Atoi(v); err == nil && qos >= 0 && qos <= 2 {
+				q := byte(qos)
+				po.QoS = &q
+			}
+		}
+	}
+	if po.Retain == nil {
+		if v, ok := po.Properties[propMQTTRetain]; ok {
+			if retain, err := strconv.ParseBool(v); err == nil {
+				po.Retain = &retain
+			}
+		}
+	}
+
+	if po.Exchange == "" {
+		if v, ok := po.Properties[propAMQPExchange]; ok {
+			po.Exchange = v
+		}
+	}
+	if po.RoutingKey == "" {
+		if v, ok := po.Properties[propAMQPRoutingKey]; ok {
+			po.RoutingKey = v
+		}
+	}
+	if po.Mandatory == nil {
+		if v, ok := po.Properties[propAMQPMandatory]; ok {
+			if mandatory, err := strconv.ParseBool(v); err == nil {
+				po.Mandatory = &mandatory
+			}
+		}
+	}
+	if po.Immediate == nil {
+		if v, ok := po.Properties[propAMQPImmediate]; ok {
+			if immediate, err := strconv.ParseBool(v); err == nil {
+				po.Immediate = &immediate
+			}
+		}
 	}
 }
 
-// SetServers sets the broker addresses.
-func (o *Options) SetServers(servers ...string) *Options {
-	o.Servers = servers
-	return o
-}
-
-// SetClientID sets the client identifier.
-func (o *Options) SetClientID(id string) *Options {
-	o.ClientID = id
-	return o
-}
-
-// SetCredentials sets username and password.
-func (o *Options) SetCredentials(username, password string) *Options {
-	o.Username = username
-	o.Password = password
-	return o
-}
-
-// SetTLSConfig sets TLS configuration.
-func (o *Options) SetTLSConfig(cfg *tls.Config) *Options {
-	o.TLSConfig = cfg
-	return o
-}
-
-// SetCleanSession sets the clean session flag.
-func (o *Options) SetCleanSession(clean bool) *Options {
-	o.CleanSession = clean
-	return o
-}
-
-// SetKeepAlive sets the keep-alive interval.
-func (o *Options) SetKeepAlive(d time.Duration) *Options {
-	o.KeepAlive = d
-	return o
-}
-
-// SetConnectTimeout sets the connection timeout.
-func (o *Options) SetConnectTimeout(d time.Duration) *Options {
-	o.ConnectTimeout = d
-	return o
-}
-
-// SetWriteTimeout sets the write timeout.
-func (o *Options) SetWriteTimeout(d time.Duration) *Options {
-	o.WriteTimeout = d
-	return o
-}
-
-// SetAckTimeout sets the acknowledgment timeout.
-func (o *Options) SetAckTimeout(d time.Duration) *Options {
-	o.AckTimeout = d
-	return o
-}
-
-// SetPingTimeout sets timeout waiting for PINGRESP.
-func (o *Options) SetPingTimeout(d time.Duration) *Options {
-	o.PingTimeout = d
-	return o
-}
-
-// SetProtocolVersion sets MQTT protocol version (4 or 5).
-func (o *Options) SetProtocolVersion(v byte) *Options {
-	o.ProtocolVersion = v
-	return o
-}
-
-// SetSessionExpiry sets the session expiry interval in seconds (MQTT 5.0).
-// 0 means the session expires when the network connection closes.
-func (o *Options) SetSessionExpiry(seconds uint32) *Options {
-	o.SessionExpiry = seconds
-	return o
-}
-
-// SetReceiveMaximum sets the maximum inflight messages the client accepts (MQTT 5.0).
-// Default is 65535 if not set. Must be > 0.
-func (o *Options) SetReceiveMaximum(max uint16) *Options {
-	o.ReceiveMaximum = max
-	return o
-}
-
-// SetMaximumPacketSize sets the maximum packet size the client accepts (MQTT 5.0).
-// 0 means no limit beyond protocol maximum (256 MB).
-func (o *Options) SetMaximumPacketSize(size uint32) *Options {
-	o.MaximumPacketSize = size
-	return o
-}
-
-// SetTopicAliasMaximum sets the maximum topic aliases the client accepts (MQTT 5.0).
-// 0 means topic aliases are disabled. Server cannot use topic aliases if set to 0.
-func (o *Options) SetTopicAliasMaximum(max uint16) *Options {
-	o.TopicAliasMaximum = max
-	return o
-}
-
-// SetRequestResponseInfo requests the server to send response information (MQTT 5.0).
-// The server may include response information in CONNACK which can be used for
-// request/response patterns.
-func (o *Options) SetRequestResponseInfo(request bool) *Options {
-	o.RequestResponseInfo = request
-	return o
-}
-
-// SetRequestProblemInfo requests detailed error information from server (MQTT 5.0).
-// When true, server includes reason strings and user properties in error responses.
-// Default is true.
-func (o *Options) SetRequestProblemInfo(request bool) *Options {
-	o.RequestProblemInfo = request
-	return o
-}
-
-// SetWill sets the last will and testament.
-func (o *Options) SetWill(topic string, payload []byte, qos byte, retain bool) *Options {
-	o.Will = &WillMessage{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     qos,
-		Retain:  retain,
+func applySubscribePropertyPrefixes(so *SubscribeOptions, props map[string]string) {
+	if so == nil || len(props) == 0 {
+		return
 	}
-	return o
-}
-
-// SetAutoReconnect enables or disables automatic reconnection.
-func (o *Options) SetAutoReconnect(enable bool) *Options {
-	o.AutoReconnect = enable
-	return o
-}
-
-// SetReconnectBackoff sets initial reconnect delay.
-func (o *Options) SetReconnectBackoff(d time.Duration) *Options {
-	o.ReconnectBackoff = d
-	return o
-}
-
-// SetMaxReconnectWait sets maximum reconnect delay.
-func (o *Options) SetMaxReconnectWait(d time.Duration) *Options {
-	o.MaxReconnectWait = d
-	return o
-}
-
-// SetMaxInflight sets the maximum number of inflight messages.
-func (o *Options) SetMaxInflight(max int) *Options {
-	o.MaxInflight = max
-	return o
-}
-
-// SetMessageChanSize sets internal message dispatch channel size.
-func (o *Options) SetMessageChanSize(size int) *Options {
-	o.MessageChanSize = size
-	return o
-}
-
-// SetOrderMatters controls whether message callback ordering is preserved.
-func (o *Options) SetOrderMatters(orderMatters bool) *Options {
-	o.OrderMatters = orderMatters
-	return o
-}
-
-// SetOnConnect sets the connection callback.
-func (o *Options) SetOnConnect(fn func()) *Options {
-	o.OnConnect = fn
-	return o
-}
-
-// SetOnConnectionLost sets the connection lost callback.
-func (o *Options) SetOnConnectionLost(fn func(error)) *Options {
-	o.OnConnectionLost = fn
-	return o
-}
-
-// SetOnReconnecting sets the reconnecting callback.
-func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
-	o.OnReconnecting = fn
-	return o
-}
-
-// SetOnMessage sets the message handler callback.
-func (o *Options) SetOnMessage(fn func(topic string, payload []byte, qos byte)) *Options {
-	o.OnMessage = fn
-	return o
-}
-
-// SetOnMessageV2 sets the enhanced message handler callback with full message context.
-// This takes precedence over OnMessage if both are set.
-// The Message includes MQTT v5 properties, user properties, and other metadata.
-func (o *Options) SetOnMessageV2(fn func(msg *Message)) *Options {
-	o.OnMessageV2 = fn
-	return o
-}
-
-// SetOnServerCapabilities sets the server capabilities callback (MQTT 5.0).
-func (o *Options) SetOnServerCapabilities(fn func(*ServerCapabilities)) *Options {
-	o.OnServerCapabilities = fn
-	return o
-}
-
-// SetOnAuth sets the enhanced authentication callback (MQTT 5.0).
-// The callback receives the server's reason code, auth method, and auth data,
-// and should return response auth data or an error to abort.
-func (o *Options) SetOnAuth(fn func(reasonCode byte, authMethod string, authData []byte) ([]byte, error)) *Options {
-	o.OnAuth = fn
-	return o
-}
-
-// SetAuthMethod sets the authentication method for enhanced auth (MQTT 5.0).
-func (o *Options) SetAuthMethod(method string) *Options {
-	o.AuthMethod = method
-	return o
-}
-
-// SetAuthData sets the initial authentication data for enhanced auth (MQTT 5.0).
-func (o *Options) SetAuthData(data []byte) *Options {
-	o.AuthData = data
-	return o
-}
-
-// SetStore sets the message store for QoS 1/2 persistence.
-func (o *Options) SetStore(store MessageStore) *Options {
-	o.Store = store
-	return o
-}
-
-// Validate checks the options for errors.
-func (o *Options) Validate() error {
-	if len(o.Servers) == 0 {
-		return ErrNoServers
+	if so.QoS == nil {
+		if v, ok := props[propMQTTQoS]; ok {
+			if qos, err := strconv.Atoi(v); err == nil && qos >= 0 && qos <= 2 {
+				q := byte(qos)
+				so.QoS = &q
+			}
+		}
 	}
-	if o.ClientID == "" {
-		return ErrEmptyClientID
-	}
-	if o.ProtocolVersion != 4 && o.ProtocolVersion != 5 {
-		return ErrInvalidProtocol
-	}
-	if o.MaxInflight <= 0 {
-		o.MaxInflight = DefaultMaxInflight
-	}
-	if o.MessageChanSize <= 0 {
-		o.MessageChanSize = DefaultMessageChanSize
-	}
-	if o.PingTimeout <= 0 {
-		o.PingTimeout = DefaultPingTimeout
-	}
-	if o.ReconnectBackoff <= 0 {
-		o.ReconnectBackoff = DefaultReconnectMin
-	}
-	if o.MaxReconnectWait <= 0 {
-		o.MaxReconnectWait = DefaultReconnectMax
-	}
-	return nil
 }

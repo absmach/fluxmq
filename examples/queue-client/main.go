@@ -34,8 +34,9 @@ import (
 	"time"
 
 	"github.com/Azure/go-amqp"
-	"github.com/absmach/fluxmq/client"
-	amqp091 "github.com/absmach/fluxmq/client/amqp"
+	client "github.com/absmach/fluxmq/client"
+	amqpclient "github.com/absmach/fluxmq/client/amqp"
+	mqttclient "github.com/absmach/fluxmq/client/mqtt"
 )
 
 const queueName = "tasks/orders"
@@ -141,7 +142,7 @@ func main() {
 func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, count int, published *int64) {
 	clientID := fmt.Sprintf("publisher-%d", id)
 
-	opts := client.NewOptions().
+	opts := mqttclient.NewOptions().
 		SetServers(nodeAddr).
 		SetClientID(clientID).
 		SetProtocolVersion(5).
@@ -153,17 +154,17 @@ func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, coun
 			log.Printf("[%s] Connection lost: %v", clientID, err)
 		})
 
-	c, err := client.New(opts)
+	c, err := client.NewMQTT(opts)
 	if err != nil {
 		log.Printf("[%s] Failed to create client: %v", clientID, err)
 		return
 	}
 
-	if err := c.Connect(); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer c.Disconnect()
+	defer c.Close(ctx)
 
 	log.Printf("[%s] Connected to %s (MQTT), publishing orders for %s", clientID, nodeAddr, customerID)
 
@@ -178,11 +179,7 @@ func runPublisher(ctx context.Context, id int, customerID, nodeAddr string, coun
 		payload := fmt.Appendf(nil, `{"order_id":"%s","customer":"%s","amount":%d}`,
 			orderID, customerID, rand.Intn(1000)+100)
 
-		err := c.PublishToQueueWithOptions(&client.QueuePublishOptions{
-			QueueName: queueName,
-			Payload:   payload,
-			QoS:       2,
-		})
+		err := c.PublishToQueue(ctx, queueName, payload, client.WithQoS(2))
 		if err != nil {
 			log.Printf("[%s] Failed to publish order %s: %v", clientID, orderID, err)
 			continue
@@ -200,7 +197,7 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 	clientID := fmt.Sprintf("validator-%d", id)
 	consumerGroup := "order-validators"
 
-	opts := client.NewOptions().
+	opts := mqttclient.NewOptions().
 		SetServers(*mqttAddr).
 		SetClientID(clientID).
 		SetProtocolVersion(5).
@@ -211,23 +208,23 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 			log.Printf("[%s] Connection lost: %v", clientID, err)
 		})
 
-	c, err := client.New(opts)
+	c, err := client.NewMQTT(opts)
 	if err != nil {
 		log.Printf("[%s] Failed to create client: %v", clientID, err)
 		return
 	}
 
-	if err := c.Connect(); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer c.Disconnect()
+	defer c.Close(ctx)
 
 	log.Printf("[%s] Connected to %s (MQTT)", clientID, *mqttAddr)
 
-	msgCh := make(chan *client.QueueMessage, 100)
+	msgCh := make(chan *client.Message, 100)
 
-	err = c.SubscribeToQueue(queueName, consumerGroup, func(msg *client.QueueMessage) {
+	err = c.SubscribeToQueue(ctx, queueName, consumerGroup, func(msg *client.Message) {
 		select {
 		case msgCh <- msg:
 		default:
@@ -249,8 +246,8 @@ func runValidator(ctx context.Context, id int, processed *int64) {
 			time.Sleep(100 * time.Millisecond)
 
 			atomic.AddInt64(processed, 1)
-			log.Printf("[%s] Validated order (seq=%d): %s",
-				clientID, msg.Sequence, string(msg.Payload))
+			log.Printf("[%s] Validated order (offset=%d): %s",
+				clientID, msg.Offset, string(msg.Payload))
 
 			if err := msg.Ack(); err != nil {
 				log.Printf("[%s] Failed to ack message: %v", clientID, err)
@@ -346,24 +343,24 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 	clientID := "amqp091-shipper-1"
 	consumerGroup := "order-shipper"
 
-	opts := amqp091.NewOptions().
+	opts := amqpclient.NewOptions().
 		SetAddress(*amqp091Addr).
 		SetCredentials("guest", "guest")
 
-	c, err := amqp091.New(opts)
+	c, err := client.NewAMQP(opts)
 	if err != nil {
 		log.Printf("[%s] Failed to create client: %v", clientID, err)
 		return
 	}
 
-	if err := c.Connect(); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer c.Close()
+	defer c.Close(ctx)
 
-	msgCh := make(chan *amqp091.QueueMessage, 100)
-	err = c.SubscribeToQueue(queueName, consumerGroup, func(msg *amqp091.QueueMessage) {
+	msgCh := make(chan *client.Message, 100)
+	err = c.SubscribeToQueue(ctx, queueName, consumerGroup, func(msg *client.Message) {
 		select {
 		case msgCh <- msg:
 		default:
@@ -374,7 +371,7 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 		log.Printf("[%s] Failed to register a consumer: %v", clientID, err)
 		return
 	}
-	defer c.UnsubscribeFromQueue(queueName)
+	defer c.UnsubscribeFromQueue(ctx, queueName)
 
 	log.Printf("[%s] Connected to %s (AMQP 0.9.1), receiving from queue '%s' in group '%s'",
 		clientID, *amqp091Addr, "$queue/"+queueName, consumerGroup)
@@ -392,7 +389,7 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 			time.Sleep(250 * time.Millisecond) // Simulate shipping work
 
 			atomic.AddInt64(processed, 1)
-			log.Printf("[%s] Shipped order (AMQP 0.9.1): %s", clientID, string(msg.Body))
+			log.Printf("[%s] Shipped order (AMQP 0.9.1): %s", clientID, string(msg.Payload))
 
 			if err := msg.Ack(); err != nil {
 				log.Printf("[%s] Failed to ack message: %v", clientID, err)
