@@ -30,6 +30,9 @@ func TestNewOptions(t *testing.T) {
 	if !opts.AutoReconnect {
 		t.Error("expected AutoReconnect to be true by default")
 	}
+	if opts.OutboundBackpressurePolicy != OutboundBackpressureBlock {
+		t.Errorf("expected outbound backpressure policy %q, got %q", OutboundBackpressureBlock, opts.OutboundBackpressurePolicy)
+	}
 }
 
 func TestOptionsBuilder(t *testing.T) {
@@ -38,6 +41,7 @@ func TestOptionsBuilder(t *testing.T) {
 	onLost := func(error) {}
 	onReconn := func(int) {}
 	onReconnFailed := func(error) {}
+	onDropped := func(*DroppedMessage) {}
 	onMsg := func(string, []byte, byte) {}
 	store := NewMemoryStore()
 
@@ -56,10 +60,15 @@ func TestOptionsBuilder(t *testing.T) {
 		SetReconnectJitter(250 * time.Millisecond).
 		SetMaxReconnectAttempts(3).
 		SetMaxInflight(50).
+		SetMaxOutboundPendingMessages(64).
+		SetMaxOutboundPendingBytes(4096).
+		SetOutboundBackpressurePolicy(OutboundBackpressureDropNew).
+		SetOutboundBlockTimeout(75 * time.Millisecond).
 		SetOnConnect(onConnect).
 		SetOnConnectionLost(onLost).
 		SetOnReconnecting(onReconn).
 		SetOnReconnectFailed(onReconnFailed).
+		SetOnDroppedMessage(onDropped).
 		SetSlowConsumerPolicy(SlowConsumerDropOldest).
 		SetSlowConsumerBlockTimeout(250 * time.Millisecond).
 		SetOnMessage(onMsg).
@@ -118,6 +127,18 @@ func TestOptionsBuilder(t *testing.T) {
 	}
 	if opts.SlowConsumerBlockTimeout != 250*time.Millisecond {
 		t.Errorf("expected slow consumer block timeout 250ms, got %v", opts.SlowConsumerBlockTimeout)
+	}
+	if opts.MaxOutboundPendingMessages != 64 {
+		t.Errorf("expected max outbound pending messages 64, got %d", opts.MaxOutboundPendingMessages)
+	}
+	if opts.MaxOutboundPendingBytes != 4096 {
+		t.Errorf("expected max outbound pending bytes 4096, got %d", opts.MaxOutboundPendingBytes)
+	}
+	if opts.OutboundBackpressurePolicy != OutboundBackpressureDropNew {
+		t.Errorf("expected outbound backpressure policy %q, got %q", OutboundBackpressureDropNew, opts.OutboundBackpressurePolicy)
+	}
+	if opts.OutboundBlockTimeout != 75*time.Millisecond {
+		t.Errorf("expected outbound block timeout 75ms, got %v", opts.OutboundBlockTimeout)
 	}
 	if opts.Store != store {
 		t.Error("Store not set correctly")
@@ -185,7 +206,11 @@ func TestOptionsValidationNormalizesReconnectAndSlowConsumer(t *testing.T) {
 		SetReconnectJitter(-1 * time.Second).
 		SetMaxReconnectAttempts(-1).
 		SetSlowConsumerPolicy(SlowConsumerPolicy("invalid")).
-		SetSlowConsumerBlockTimeout(-1 * time.Second)
+		SetSlowConsumerBlockTimeout(-1 * time.Second).
+		SetMaxOutboundPendingMessages(-1).
+		SetMaxOutboundPendingBytes(-1).
+		SetOutboundBackpressurePolicy(OutboundBackpressurePolicy("invalid")).
+		SetOutboundBlockTimeout(-1 * time.Second)
 
 	if err := opts.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -202,5 +227,17 @@ func TestOptionsValidationNormalizesReconnectAndSlowConsumer(t *testing.T) {
 	}
 	if opts.SlowConsumerBlockTimeout != 0 {
 		t.Errorf("expected slow consumer block timeout normalized to 0, got %v", opts.SlowConsumerBlockTimeout)
+	}
+	if opts.MaxOutboundPendingMessages != 0 {
+		t.Errorf("expected max outbound pending messages normalized to 0, got %d", opts.MaxOutboundPendingMessages)
+	}
+	if opts.MaxOutboundPendingBytes != 0 {
+		t.Errorf("expected max outbound pending bytes normalized to 0, got %d", opts.MaxOutboundPendingBytes)
+	}
+	if opts.OutboundBackpressurePolicy != OutboundBackpressureBlock {
+		t.Errorf("expected outbound backpressure policy normalized to %q, got %q", OutboundBackpressureBlock, opts.OutboundBackpressurePolicy)
+	}
+	if opts.OutboundBlockTimeout != 0 {
+		t.Errorf("expected outbound block timeout normalized to 0, got %v", opts.OutboundBlockTimeout)
 	}
 }

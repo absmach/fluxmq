@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -676,6 +677,7 @@ func TestPublishBufferedWhileDisconnectedAndFlushedOnReconnect(t *testing.T) {
 
 func TestReconnectBufferFullReportsAsyncError(t *testing.T) {
 	asyncErr := make(chan error, 1)
+	dropped := make(chan *DroppedMessage, 1)
 	c, err := New(
 		NewOptions().
 			SetClientID("reconnect-buffer-full").
@@ -683,6 +685,12 @@ func TestReconnectBufferFullReportsAsyncError(t *testing.T) {
 			SetOnAsyncError(func(err error) {
 				select {
 				case asyncErr <- err:
+				default:
+				}
+			}).
+			SetOnDroppedMessage(func(msg *DroppedMessage) {
+				select {
+				case dropped <- msg:
 				default:
 				}
 			}),
@@ -697,6 +705,15 @@ func TestReconnectBufferFullReportsAsyncError(t *testing.T) {
 		require.ErrorIs(t, got, ErrReconnectBufferFull)
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("expected reconnect buffer async error callback")
+	}
+
+	select {
+	case got := <-dropped:
+		require.NotNil(t, got)
+		assert.Equal(t, DroppedMessageOutbound, got.Direction)
+		assert.Equal(t, DroppedReasonReconnectBufferFull, got.Reason)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected reconnect buffer dropped-message callback")
 	}
 }
 
@@ -1041,4 +1058,396 @@ func TestDeliverMessageConcurrentWithStopDispatcherDoesNotPanic(t *testing.T) {
 		t.Fatalf("unexpected panic while stopping dispatcher: %v", p)
 	default:
 	}
+}
+
+func TestOutboundBackpressureDropNewReturnsErrorAndReportsDrop(t *testing.T) {
+	dropped := make(chan *DroppedMessage, 1)
+	asyncErr := make(chan error, 1)
+	c, err := New(
+		NewOptions().
+			SetClientID("outbound-drop-new").
+			SetMessageChanSize(1).
+			SetMaxOutboundPendingMessages(1).
+			SetOutboundBackpressurePolicy(OutboundBackpressureDropNew).
+			SetOnAsyncError(func(err error) {
+				select {
+				case asyncErr <- err:
+				default:
+				}
+			}).
+			SetOnDroppedMessage(func(msg *DroppedMessage) {
+				select {
+				case dropped <- msg:
+				default:
+				}
+			}),
+	)
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockFirstWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- c.Publish(nil, "events/first", []byte("first"), 0, false)
+	}()
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first publish write did not start")
+	}
+
+	err = c.Publish(nil, "events/second", []byte("second"), 0, false)
+	require.ErrorIs(t, err, ErrOutboundBackpressure)
+
+	select {
+	case got := <-asyncErr:
+		require.ErrorIs(t, got, ErrOutboundBackpressure)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected async outbound backpressure error")
+	}
+
+	select {
+	case got := <-dropped:
+		require.NotNil(t, got)
+		assert.Equal(t, DroppedMessageOutbound, got.Direction)
+		assert.Equal(t, DroppedReasonOutboundBackpressure, got.Reason)
+		assert.Equal(t, "events/second", got.Topic)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected outbound dropped-message callback")
+	}
+
+	close(conn.releaseFirstWrite)
+
+	select {
+	case err := <-firstDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first publish did not complete")
+	}
+
+	c.cleanup(nil)
+}
+
+func TestOutboundBackpressureBlockWithTimeout(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("outbound-block-timeout").
+			SetMessageChanSize(1).
+			SetMaxOutboundPendingMessages(1).
+			SetOutboundBackpressurePolicy(OutboundBackpressureBlockWithTimeout).
+			SetOutboundBlockTimeout(30 * time.Millisecond),
+	)
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockFirstWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- c.Publish(nil, "events/first", []byte("first"), 0, false)
+	}()
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first publish write did not start")
+	}
+
+	start := time.Now()
+	err = c.Publish(nil, "events/second", []byte("second"), 0, false)
+	elapsed := time.Since(start)
+	require.ErrorIs(t, err, ErrOutboundBackpressure)
+	assert.GreaterOrEqual(t, elapsed, 25*time.Millisecond)
+	assert.Less(t, elapsed, 200*time.Millisecond)
+
+	close(conn.releaseFirstWrite)
+	<-firstDone
+	c.cleanup(nil)
+}
+
+func TestOutboundBackpressureBlockWaitsAndSucceeds(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("outbound-block").
+			SetMessageChanSize(1).
+			SetMaxOutboundPendingMessages(1).
+			SetOutboundBackpressurePolicy(OutboundBackpressureBlock),
+	)
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockFirstWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- c.Publish(nil, "events/first", []byte("first"), 0, false)
+	}()
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first publish write did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- c.Publish(nil, "events/second", []byte("second"), 0, false)
+	}()
+
+	select {
+	case <-secondDone:
+		t.Fatal("second publish should block while outbound queue is full")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(conn.releaseFirstWrite)
+
+	select {
+	case err := <-firstDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first publish did not complete")
+	}
+
+	select {
+	case err := <-secondDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second publish should complete after outbound capacity frees up")
+	}
+
+	c.cleanup(nil)
+}
+
+func TestOutboundBackpressureBlockHonorsContextCancellation(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("outbound-block-context").
+			SetMessageChanSize(1).
+			SetMaxOutboundPendingMessages(1).
+			SetOutboundBackpressurePolicy(OutboundBackpressureBlock),
+	)
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockFirstWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- c.Publish(nil, "events/first", []byte("first"), 0, false)
+	}()
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first publish write did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = c.Publish(ctx, "events/second", []byte("second"), 0, false)
+	elapsed := time.Since(start)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.GreaterOrEqual(t, elapsed, 20*time.Millisecond)
+	assert.Less(t, elapsed, 250*time.Millisecond)
+
+	close(conn.releaseFirstWrite)
+	select {
+	case err := <-firstDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first publish did not complete")
+	}
+
+	c.cleanup(nil)
+}
+
+func TestDroppedMessageCallbackForSlowConsumer(t *testing.T) {
+	dropped := make(chan *DroppedMessage, 2)
+	c := &Client{
+		opts: NewOptions().
+			SetClientID("drop-callback").
+			SetOrderMatters(false).
+			SetMaxPendingMessages(1).
+			SetOnDroppedMessage(func(msg *DroppedMessage) {
+				select {
+				case dropped <- msg:
+				default:
+				}
+			}),
+		state:     newStateManager(),
+		queueSubs: newQueueSubscriptions(),
+	}
+	c.pendingCond = sync.NewCond(&c.pendingMu)
+	c.msgCh = make(chan *Message, 1)
+	c.msgStop = make(chan struct{})
+
+	c.deliverMessage(&Message{Topic: "events/ok", Payload: []byte("ok")})
+	c.deliverMessage(&Message{Topic: "events/dropped", Payload: []byte("drop-me")})
+
+	select {
+	case got := <-dropped:
+		require.NotNil(t, got)
+		assert.Equal(t, DroppedMessageInbound, got.Direction)
+		assert.Equal(t, DroppedReasonSlowConsumer, got.Reason)
+		assert.Equal(t, "events/dropped", got.Topic)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected dropped-message callback for slow consumer")
+	}
+}
+
+func TestDroppedMessageCallbackQueueIsBounded(t *testing.T) {
+	block := make(chan struct{})
+	c, err := New(
+		NewOptions().
+			SetClientID("drop-callback-bounded").
+			SetOrderMatters(false).
+			SetMaxPendingMessages(1).
+			SetOnDroppedMessage(func(_ *DroppedMessage) {
+				<-block
+			}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		close(block)
+		c.cleanup(nil)
+	}()
+
+	c.msgCh = make(chan *Message, 1)
+	c.msgStop = make(chan struct{})
+	c.msgCh <- &Message{Topic: "prefill", Payload: []byte("x")}
+
+	before := runtime.NumGoroutine()
+	for i := 0; i < 300; i++ {
+		c.deliverMessage(&Message{Topic: "events/drop", Payload: []byte("y")})
+	}
+
+	time.Sleep(40 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	assert.Less(t, after-before, 80, "dropped-message callbacks should be bounded and not spawn one goroutine per drop")
+}
+
+func TestSoakReconnectStormNoPanic(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("soak-reconnect").
+			SetServers("127.0.0.1:1").
+			SetAutoReconnect(true).
+			SetReconnectBackoff(2 * time.Millisecond).
+			SetMaxReconnectWait(4 * time.Millisecond).
+			SetReconnectJitter(1 * time.Millisecond).
+			SetMaxReconnectAttempts(2),
+	)
+	require.NoError(t, err)
+	defer c.Close()
+
+	for i := 0; i < 20; i++ {
+		c.state.set(StateConnected)
+		c.handleConnectionLost(ErrConnectionLost)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	assert.NotEqual(t, StateConnected, c.State())
+}
+
+func TestSoakBlockedHandlerPressureNoDeadlock(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("soak-blocked-handler").
+			SetOrderMatters(false).
+			SetMaxPendingMessages(32).
+			SetSlowConsumerPolicy(SlowConsumerBlockWithTimeout).
+			SetSlowConsumerBlockTimeout(5 * time.Millisecond).
+			SetOnMessage(func(_ string, _ []byte, _ byte) {
+				time.Sleep(3 * time.Millisecond)
+			}),
+	)
+	require.NoError(t, err)
+	defer c.cleanup(nil)
+
+	c.startDispatcher()
+
+	const total = 300
+	var wg sync.WaitGroup
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			c.deliverMessage(&Message{
+				Topic:   "events/blocked",
+				Payload: []byte{byte(idx % 251)},
+				QoS:     0,
+			})
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocked-handler soak did not finish in time")
+	}
+
+	c.stopDispatcher()
+}
+
+func TestSoakDrainConcurrentPublishBursts(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("soak-drain").SetMessageChanSize(64))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+	setupWriteLoop(c, &packetCaptureConn{})
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			payload := []byte{byte(id), 0xAA}
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				err := c.Publish(nil, "events/soak", payload, 0, false)
+				if err != nil && err != ErrDraining && err != ErrNotConnected {
+					return
+				}
+			}
+		}(i)
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, c.Drain(ctx))
+
+	close(stop)
+	wg.Wait()
 }

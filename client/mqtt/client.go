@@ -24,9 +24,19 @@ type writeRequest struct {
 	data     []byte
 	deadline time.Time
 	errCh    chan error // nil for fire-and-forget
+	ctx      context.Context
+	// Set for outbound publish writes subject to outbound pressure limits.
+	trackOutbound bool
+	dropMeta      *DroppedMessage
 }
 
 const defaultControlWriteChanSize = 64
+const defaultCallbackQueueSize = 256
+
+var (
+	callbackQueueOnce sync.Once
+	callbackQueueCh   chan func()
+)
 
 // Client is a thread-safe MQTT client.
 type Client struct {
@@ -97,6 +107,12 @@ type Client struct {
 	// Avoid flooding async error callback with repeated slow-consumer notifications.
 	slowConsumerNotified atomic.Bool
 
+	// Outbound publish pressure accounting.
+	outboundMu              sync.Mutex
+	outboundCond            *sync.Cond // signaled when outbound pending decreases
+	outboundPendingMessages int
+	outboundPendingBytes    int64
+
 	// Buffered publishes while disconnected.
 	reconnectBufMu    sync.Mutex
 	reconnectBuf      []*Message
@@ -138,6 +154,7 @@ func New(opts *Options) (*Client, error) {
 		subscriptions: newSubscriptionRegistry(),
 	}
 	c.pendingCond = sync.NewCond(&c.pendingMu)
+	c.outboundCond = sync.NewCond(&c.outboundMu)
 	return c, nil
 }
 
@@ -537,7 +554,10 @@ func (c *Client) Drain(ctx context.Context) error {
 			return ErrConnectionLost
 		}
 
-		if c.pending.countByType(pendingPublish) == 0 && c.writeQueueDepth() == 0 && c.reconnectBufferDepth() == 0 {
+		if c.pending.countByType(pendingPublish) == 0 &&
+			c.writeQueueDepth() == 0 &&
+			c.outboundPendingDepth() == 0 &&
+			c.reconnectBufferDepth() == 0 {
 			break
 		}
 
@@ -649,8 +669,19 @@ func (c *Client) cleanup(err error) {
 	c.pendingMessages = 0
 	c.pendingBytes = 0
 	c.pendingMu.Unlock()
+	if c.pendingCond != nil {
+		c.pendingCond.Broadcast()
+	}
 	c.slowConsumerNotified.Store(false)
 	c.draining.Store(false)
+
+	c.outboundMu.Lock()
+	c.outboundPendingMessages = 0
+	c.outboundPendingBytes = 0
+	if c.outboundCond != nil {
+		c.outboundCond.Broadcast()
+	}
+	c.outboundMu.Unlock()
 
 	c.stopDispatcher()
 
@@ -808,10 +839,10 @@ func (c *Client) PublishMessageAsync(ctx context.Context, msg *Message) *Publish
 }
 
 func (c *Client) sendPublish(ctx context.Context, msg *Message, packetID uint16) error {
-	return c.sendPublishWithDeadline(msg, packetID, c.writeDeadline(ctx))
+	return c.sendPublishWithDeadline(ctx, msg, packetID, c.writeDeadline(ctx))
 }
 
-func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline time.Time) error {
+func (c *Client) sendPublishWithDeadline(ctx context.Context, msg *Message, packetID uint16, deadline time.Time) error {
 	if c.opts.ProtocolVersion == 5 {
 		pkt := &v5.Publish{
 			FixedHeader: packets.FixedHeader{
@@ -870,7 +901,7 @@ func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline
 		}
 
 		c.updateActivity()
-		return c.queueWrite(pkt.Encode(), deadline)
+		return c.queuePublishWrite(ctx, pkt.Encode(), deadline, msg)
 	}
 
 	pkt := &v3.Publish{
@@ -885,7 +916,7 @@ func (c *Client) sendPublishWithDeadline(msg *Message, packetID uint16, deadline
 		ID:        packetID,
 	}
 	c.updateActivity()
-	return c.queueWrite(pkt.Encode(), deadline)
+	return c.queuePublishWrite(ctx, pkt.Encode(), deadline, msg)
 }
 
 func (c *Client) writeDeadline(ctx context.Context) time.Time {
@@ -1981,6 +2012,17 @@ func (c *Client) handleDisconnectedPublish(msg *Message) error {
 	if err := c.bufferDisconnectedPublish(msg); err != nil {
 		if err == ErrReconnectBufferFull {
 			c.reportAsyncError(err)
+			meta := &DroppedMessage{
+				Direction: DroppedMessageOutbound,
+				Reason:    DroppedReasonReconnectBufferFull,
+				Timestamp: time.Now().UTC(),
+			}
+			if msg != nil {
+				meta.PayloadSize = len(msg.Payload)
+				meta.Topic = msg.Topic
+				meta.QoS = msg.QoS
+			}
+			c.reportDroppedMessage(c.prepareDroppedMeta(meta, DroppedMessageOutbound, DroppedReasonReconnectBufferFull))
 		}
 		return err
 	}
@@ -2190,6 +2232,9 @@ func (c *Client) writeLoop() {
 	defer close(writeDone)
 
 	writeOne := func(req writeRequest) bool {
+		if req.trackOutbound {
+			defer c.releaseOutbound(req)
+		}
 		if conn == nil {
 			if req.errCh != nil {
 				req.errCh <- ErrNotConnected
@@ -2238,6 +2283,12 @@ func (c *Client) writeLoop() {
 }
 
 func (c *Client) enqueueWriteTo(req writeRequest, control bool) (retErr error) {
+	reservedOutbound := false
+	defer func() {
+		if retErr != nil && reservedOutbound {
+			c.releaseOutbound(req)
+		}
+	}()
 	defer func() {
 		if recover() != nil {
 			retErr = ErrNotConnected
@@ -2255,6 +2306,12 @@ func (c *Client) enqueueWriteTo(req writeRequest, control bool) (retErr error) {
 	targetCh := dataCh
 	if control {
 		targetCh = controlCh
+	}
+	if !control && req.trackOutbound {
+		if err := c.reserveOutbound(req); err != nil {
+			return err
+		}
+		reservedOutbound = true
 	}
 
 	select {
@@ -2284,32 +2341,52 @@ func (c *Client) enqueueControlWrite(req writeRequest) error {
 }
 
 func (c *Client) queueWrite(data []byte, deadline time.Time) error {
-	errCh := make(chan error, 1)
-	if err := c.enqueueWrite(writeRequest{data: data, deadline: deadline, errCh: errCh}); err != nil {
-		return err
+	return c.queueWriteRequest(writeRequest{
+		data:     data,
+		deadline: deadline,
+		errCh:    make(chan error, 1),
+	}, false)
+}
+
+func (c *Client) queuePublishWrite(ctx context.Context, data []byte, deadline time.Time, msg *Message) error {
+	dropMeta := &DroppedMessage{
+		Direction:   DroppedMessageOutbound,
+		Reason:      DroppedReasonOutboundBackpressure,
+		Timestamp:   time.Now().UTC(),
+		PayloadSize: len(data),
+	}
+	if msg != nil {
+		dropMeta.Topic = msg.Topic
+		dropMeta.QoS = msg.QoS
+		dropMeta.PayloadSize = len(msg.Payload)
 	}
 
-	c.writeStateMu.RLock()
-	sch := c.stopCh
-	done := c.writeDone
-	c.writeStateMu.RUnlock()
-	if sch == nil || done == nil {
-		return ErrNotConnected
-	}
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-sch:
-		return ErrNotConnected
-	case <-done:
-		return ErrNotConnected
-	}
+	return c.queueWriteRequest(writeRequest{
+		data:          data,
+		deadline:      deadline,
+		errCh:         make(chan error, 1),
+		ctx:           ctx,
+		trackOutbound: true,
+		dropMeta:      dropMeta,
+	}, false)
 }
 
 func (c *Client) queueControlWrite(data []byte, deadline time.Time) error {
-	errCh := make(chan error, 1)
-	if err := c.enqueueControlWrite(writeRequest{data: data, deadline: deadline, errCh: errCh}); err != nil {
+	return c.queueWriteRequest(writeRequest{
+		data:     data,
+		deadline: deadline,
+		errCh:    make(chan error, 1),
+	}, true)
+}
+
+func (c *Client) queueWriteRequest(req writeRequest, control bool) error {
+	var err error
+	if control {
+		err = c.enqueueControlWrite(req)
+	} else {
+		err = c.enqueueWrite(req)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -2322,7 +2399,7 @@ func (c *Client) queueControlWrite(data []byte, deadline time.Time) error {
 	}
 
 	select {
-	case err := <-errCh:
+	case err := <-req.errCh:
 		return err
 	case <-sch:
 		return ErrNotConnected
@@ -2353,6 +2430,131 @@ func (c *Client) queueControlWriteNoWait(data []byte) {
 	}
 }
 
+func (c *Client) isWritePathActive() bool {
+	c.writeStateMu.RLock()
+	sch := c.stopCh
+	done := c.writeDone
+	c.writeStateMu.RUnlock()
+	if sch == nil || done == nil {
+		return false
+	}
+	select {
+	case <-sch:
+		return false
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (c *Client) reserveOutbound(req writeRequest) error {
+	if c.opts.MaxOutboundPendingMessages <= 0 && c.opts.MaxOutboundPendingBytes <= 0 {
+		return nil
+	}
+
+	policy := c.opts.OutboundBackpressurePolicy
+	if policy == "" {
+		policy = OutboundBackpressureBlock
+	}
+	size := int64(len(req.data))
+	if size <= 0 {
+		size = 1
+	}
+
+	var deadline time.Time
+	if policy == OutboundBackpressureBlockWithTimeout {
+		if c.opts.OutboundBlockTimeout <= 0 {
+			policy = OutboundBackpressureDropNew
+		} else {
+			deadline = time.Now().Add(c.opts.OutboundBlockTimeout)
+		}
+	}
+
+	c.outboundMu.Lock()
+	defer c.outboundMu.Unlock()
+
+	for !c.canReserveOutboundLocked(size) {
+		if req.ctx != nil {
+			select {
+			case <-req.ctx.Done():
+				return req.ctx.Err()
+			default:
+			}
+		}
+		c.outboundMu.Unlock()
+		active := c.isWritePathActive()
+		c.outboundMu.Lock()
+		if !active {
+			return ErrNotConnected
+		}
+
+		switch policy {
+		case OutboundBackpressureDropNew:
+			c.reportAsyncError(ErrOutboundBackpressure)
+			c.reportDroppedMessage(c.prepareDroppedMeta(req.dropMeta, DroppedMessageOutbound, DroppedReasonOutboundBackpressure))
+			return ErrOutboundBackpressure
+		case OutboundBackpressureBlockWithTimeout:
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				c.reportAsyncError(ErrOutboundBackpressure)
+				c.reportDroppedMessage(c.prepareDroppedMeta(req.dropMeta, DroppedMessageOutbound, DroppedReasonOutboundBackpressure))
+				return ErrOutboundBackpressure
+			}
+			waitFor := remaining
+			if waitFor > 100*time.Millisecond {
+				waitFor = 100 * time.Millisecond
+			}
+			timer := time.AfterFunc(waitFor, func() { c.outboundCond.Broadcast() })
+			c.outboundCond.Wait()
+			timer.Stop()
+		default:
+			timer := time.AfterFunc(100*time.Millisecond, func() { c.outboundCond.Broadcast() })
+			c.outboundCond.Wait()
+			timer.Stop()
+		}
+	}
+
+	c.outboundPendingMessages++
+	c.outboundPendingBytes += size
+	return nil
+}
+
+func (c *Client) canReserveOutboundLocked(size int64) bool {
+	if c.opts.MaxOutboundPendingMessages > 0 && c.outboundPendingMessages+1 > c.opts.MaxOutboundPendingMessages {
+		return false
+	}
+	if c.opts.MaxOutboundPendingBytes > 0 && c.outboundPendingBytes+size > c.opts.MaxOutboundPendingBytes {
+		return false
+	}
+	return true
+}
+
+func (c *Client) releaseOutbound(req writeRequest) {
+	if c.opts.MaxOutboundPendingMessages <= 0 && c.opts.MaxOutboundPendingBytes <= 0 {
+		return
+	}
+
+	size := int64(len(req.data))
+	if size <= 0 {
+		size = 1
+	}
+
+	c.outboundMu.Lock()
+	if c.outboundPendingMessages > 0 {
+		c.outboundPendingMessages--
+	}
+	if c.outboundPendingBytes >= size {
+		c.outboundPendingBytes -= size
+	} else {
+		c.outboundPendingBytes = 0
+	}
+	if c.outboundCond != nil {
+		c.outboundCond.Broadcast()
+	}
+	c.outboundMu.Unlock()
+}
+
 func (c *Client) dispatcherChannels() (chan *Message, chan struct{}) {
 	c.dispatchMu.RLock()
 	defer c.dispatchMu.RUnlock()
@@ -2361,7 +2563,7 @@ func (c *Client) dispatcherChannels() (chan *Message, chan struct{}) {
 
 func (c *Client) deliverDropNew(msgCh chan *Message, msgStop chan struct{}, msg *Message, msgBytes int64) {
 	if !c.reservePending(msgBytes) {
-		c.onSlowConsumer()
+		c.onSlowConsumer(msg)
 		return
 	}
 
@@ -2372,7 +2574,7 @@ func (c *Client) deliverDropNew(msgCh chan *Message, msgStop chan struct{}, msg 
 		c.releasePending(msgBytes)
 	default:
 		c.releasePending(msgBytes)
-		c.onSlowConsumer()
+		c.onSlowConsumer(msg)
 	}
 }
 
@@ -2380,12 +2582,12 @@ func (c *Client) deliverDropOldest(msgCh chan *Message, msgStop chan struct{}, m
 	// Try to reserve pending capacity; if full, drop one queued message to make room.
 	if !c.reservePending(msgBytes) {
 		if !c.dropOldestQueued(msgCh, msgStop) {
-			c.onSlowConsumer()
+			c.onSlowConsumer(msg)
 			return
 		}
 		// Retry once after freeing one slot.
 		if !c.reservePending(msgBytes) {
-			c.onSlowConsumer()
+			c.onSlowConsumer(msg)
 			return
 		}
 	}
@@ -2399,12 +2601,12 @@ func (c *Client) deliverDropOldest(msgCh chan *Message, msgStop chan struct{}, m
 		// Channel full — drop oldest to make room.
 		c.releasePending(msgBytes)
 		if !c.dropOldestQueued(msgCh, msgStop) {
-			c.onSlowConsumer()
+			c.onSlowConsumer(msg)
 			return
 		}
 		// Re-reserve and send.
 		if !c.reservePending(msgBytes) {
-			c.onSlowConsumer()
+			c.onSlowConsumer(msg)
 			return
 		}
 		select {
@@ -2414,7 +2616,7 @@ func (c *Client) deliverDropOldest(msgCh chan *Message, msgStop chan struct{}, m
 			c.releasePending(msgBytes)
 		default:
 			c.releasePending(msgBytes)
-			c.onSlowConsumer()
+			c.onSlowConsumer(msg)
 		}
 	}
 }
@@ -2434,7 +2636,7 @@ func (c *Client) deliverBlockWithTimeout(msgCh chan *Message, msgStop chan struc
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			c.pendingMu.Unlock()
-			c.onSlowConsumer()
+			c.onSlowConsumer(msg)
 			return
 		}
 		// Schedule a wakeup at the deadline in case no release happens.
@@ -2449,7 +2651,7 @@ func (c *Client) deliverBlockWithTimeout(msgCh chan *Message, msgStop chan struc
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
 		c.releasePending(msgBytes)
-		c.onSlowConsumer()
+		c.onSlowConsumer(msg)
 		return
 	}
 
@@ -2463,7 +2665,7 @@ func (c *Client) deliverBlockWithTimeout(msgCh chan *Message, msgStop chan struc
 		c.releasePending(msgBytes)
 	case <-timer.C:
 		c.releasePending(msgBytes)
-		c.onSlowConsumer()
+		c.onSlowConsumer(msg)
 	}
 }
 
@@ -2473,7 +2675,7 @@ func (c *Client) dropOldestQueued(msgCh chan *Message, msgStop chan struct{}) bo
 		return false
 	case oldest := <-msgCh:
 		c.releasePending(int64(mqttMessageSize(oldest)))
-		c.onSlowConsumer()
+		c.onSlowConsumer(oldest)
 		return true
 	default:
 		return false
@@ -2530,8 +2732,20 @@ func (c *Client) releasePending(msgBytes int64) {
 	c.pendingMu.Unlock()
 }
 
-func (c *Client) onSlowConsumer() {
+func (c *Client) onSlowConsumer(msg *Message) {
+	meta := &DroppedMessage{
+		Direction: DroppedMessageInbound,
+		Reason:    DroppedReasonSlowConsumer,
+		Timestamp: time.Now().UTC(),
+	}
+	if msg != nil {
+		meta.Topic = msg.Topic
+		meta.QoS = msg.QoS
+		meta.PayloadSize = len(msg.Payload)
+	}
+
 	c.droppedMessages.Add(1)
+	c.reportDroppedMessage(c.prepareDroppedMeta(meta, DroppedMessageInbound, DroppedReasonSlowConsumer))
 	if c.slowConsumerNotified.CompareAndSwap(false, true) {
 		c.reportAsyncError(ErrSlowConsumer)
 	}
@@ -2541,7 +2755,66 @@ func (c *Client) reportAsyncError(err error) {
 	if err == nil || c.opts.OnAsyncError == nil {
 		return
 	}
-	go c.opts.OnAsyncError(err)
+	enqueueAsyncCallback(func() {
+		c.opts.OnAsyncError(err)
+	})
+}
+
+func (c *Client) reportDroppedMessage(meta *DroppedMessage) {
+	if meta == nil || c.opts.OnDroppedMessage == nil {
+		return
+	}
+	copyMeta := *meta
+	enqueueAsyncCallback(func() {
+		c.opts.OnDroppedMessage(&copyMeta)
+	})
+}
+
+func enqueueAsyncCallback(fn func()) {
+	if fn == nil {
+		return
+	}
+
+	callbackQueueOnce.Do(func() {
+		callbackQueueCh = make(chan func(), defaultCallbackQueueSize)
+		go func(callbackCh <-chan func()) {
+			for fn := range callbackCh {
+				if fn == nil {
+					continue
+				}
+				func() {
+					defer func() { recover() }()
+					fn()
+				}()
+			}
+		}(callbackQueueCh)
+	})
+
+	select {
+	case callbackQueueCh <- fn:
+	default:
+	}
+}
+
+func (c *Client) prepareDroppedMeta(meta *DroppedMessage, dir DroppedMessageDirection, reason DroppedMessageReason) *DroppedMessage {
+	if meta == nil {
+		return &DroppedMessage{
+			Direction: dir,
+			Reason:    reason,
+			Timestamp: time.Now().UTC(),
+		}
+	}
+	out := *meta
+	if out.Direction == "" {
+		out.Direction = dir
+	}
+	if out.Reason == "" {
+		out.Reason = reason
+	}
+	if out.Timestamp.IsZero() {
+		out.Timestamp = time.Now().UTC()
+	}
+	return &out
 }
 
 func mqttMessageSize(msg *Message) int {
@@ -2573,6 +2846,12 @@ func (c *Client) writeQueueDepth() int {
 		depth += len(c.controlWriteCh)
 	}
 	return depth
+}
+
+func (c *Client) outboundPendingDepth() int {
+	c.outboundMu.Lock()
+	defer c.outboundMu.Unlock()
+	return c.outboundPendingMessages
 }
 
 func (c *Client) reconnectBufferDepth() int {

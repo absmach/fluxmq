@@ -33,6 +33,18 @@ const (
 	SlowConsumerBlockWithTimeout SlowConsumerPolicy = "block_with_timeout"
 )
 
+// OutboundBackpressurePolicy controls behavior when outbound publish pressure is hit.
+type OutboundBackpressurePolicy string
+
+const (
+	// OutboundBackpressureBlock blocks until outbound capacity is available.
+	OutboundBackpressureBlock OutboundBackpressurePolicy = "block"
+	// OutboundBackpressureBlockWithTimeout blocks up to OutboundBlockTimeout.
+	OutboundBackpressureBlockWithTimeout OutboundBackpressurePolicy = "block_with_timeout"
+	// OutboundBackpressureDropNew drops the new publish when outbound pressure is hit.
+	OutboundBackpressureDropNew OutboundBackpressurePolicy = "drop_new"
+)
+
 // WillMessage represents a last will and testament message.
 type WillMessage struct {
 	Topic   string
@@ -96,6 +108,7 @@ type Options struct {
 	OnReconnecting       func(attempt int)                                                         // Called before each reconnect attempt
 	OnReconnectFailed    func(error)                                                               // Called when reconnect retries are exhausted
 	OnAsyncError         func(error)                                                               // Called for asynchronous non-fatal errors (slow consumer, reconnect buffer overflow)
+	OnDroppedMessage     func(*DroppedMessage)                                                     // Called when inbound/outbound messages are dropped by pressure policies
 	OnMessage            func(topic string, payload []byte, qos byte)                              // Called for incoming messages (basic)
 	OnMessageV2          func(msg *Message)                                                        // Called for incoming messages (full context, takes precedence over OnMessage)
 	OnServerCapabilities func(*ServerCapabilities)                                                 // Called when server capabilities received (MQTT 5.0)
@@ -106,32 +119,37 @@ type Options struct {
 	AuthData   []byte // Authentication data for initial CONNECT
 
 	// Advanced
-	MessageChanSize          int                // Size of internal message channel
-	MaxPendingMessages       int                // Max queued callback messages before dropping (0 = disabled)
-	MaxPendingBytes          int64              // Max queued callback bytes before dropping (0 = disabled)
-	SlowConsumerPolicy       SlowConsumerPolicy // Slow-consumer behavior for unordered callbacks
-	SlowConsumerBlockTimeout time.Duration      // Blocking duration for SlowConsumerBlockWithTimeout
-	OrderMatters             bool               // Maintain message order (may reduce throughput)
-	Store                    MessageStore       // Message store for QoS 1/2 (nil = in-memory)
+	MessageChanSize            int                        // Size of internal message channel
+	MaxPendingMessages         int                        // Max queued callback messages before dropping (0 = disabled)
+	MaxPendingBytes            int64                      // Max queued callback bytes before dropping (0 = disabled)
+	SlowConsumerPolicy         SlowConsumerPolicy         // Slow-consumer behavior for unordered callbacks
+	SlowConsumerBlockTimeout   time.Duration              // Blocking duration for SlowConsumerBlockWithTimeout
+	MaxOutboundPendingMessages int                        // Max pending outbound publish writes before pressure policy applies (0 = disabled)
+	MaxOutboundPendingBytes    int64                      // Max pending outbound publish write bytes before pressure policy applies (0 = disabled)
+	OutboundBackpressurePolicy OutboundBackpressurePolicy // Outbound publish pressure behavior
+	OutboundBlockTimeout       time.Duration              // Blocking duration for OutboundBackpressureBlockWithTimeout
+	OrderMatters               bool                       // Maintain message order (may reduce throughput)
+	Store                      MessageStore               // Message store for QoS 1/2 (nil = in-memory)
 }
 
 // NewOptions creates Options with sensible defaults.
 func NewOptions() *Options {
 	return &Options{
-		Servers:                  []string{"localhost:1883"},
-		ProtocolVersion:          4, // MQTT 3.1.1
-		CleanSession:             true,
-		KeepAlive:                DefaultKeepAlive,
-		ConnectTimeout:           DefaultConnectTimeout,
-		WriteTimeout:             DefaultWriteTimeout,
-		AckTimeout:               DefaultAckTimeout,
-		PingTimeout:              DefaultPingTimeout,
-		AutoReconnect:            true,
-		ReconnectBackoff:         DefaultReconnectMin,
-		MaxReconnectWait:         DefaultReconnectMax,
-		MaxInflight:              DefaultMaxInflight,
-		MessageChanSize:          DefaultMessageChanSize,
-		SlowConsumerPolicy: SlowConsumerDropNew,
+		Servers:                    []string{"localhost:1883"},
+		ProtocolVersion:            4, // MQTT 3.1.1
+		CleanSession:               true,
+		KeepAlive:                  DefaultKeepAlive,
+		ConnectTimeout:             DefaultConnectTimeout,
+		WriteTimeout:               DefaultWriteTimeout,
+		AckTimeout:                 DefaultAckTimeout,
+		PingTimeout:                DefaultPingTimeout,
+		AutoReconnect:              true,
+		ReconnectBackoff:           DefaultReconnectMin,
+		MaxReconnectWait:           DefaultReconnectMax,
+		MaxInflight:                DefaultMaxInflight,
+		MessageChanSize:            DefaultMessageChanSize,
+		SlowConsumerPolicy:         SlowConsumerDropNew,
+		OutboundBackpressurePolicy: OutboundBackpressureBlock,
 		// MQTT 5.0 defaults
 		RequestProblemInfo: true, // Request detailed error information
 	}
@@ -322,6 +340,32 @@ func (o *Options) SetMaxPendingBytes(max int64) *Options {
 	return o
 }
 
+// SetMaxOutboundPendingMessages sets max pending outbound publish writes before applying pressure policy.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxOutboundPendingMessages(max int) *Options {
+	o.MaxOutboundPendingMessages = max
+	return o
+}
+
+// SetMaxOutboundPendingBytes sets max pending outbound publish write bytes before applying pressure policy.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxOutboundPendingBytes(max int64) *Options {
+	o.MaxOutboundPendingBytes = max
+	return o
+}
+
+// SetOutboundBackpressurePolicy sets outbound publish pressure behavior.
+func (o *Options) SetOutboundBackpressurePolicy(policy OutboundBackpressurePolicy) *Options {
+	o.OutboundBackpressurePolicy = policy
+	return o
+}
+
+// SetOutboundBlockTimeout sets blocking duration for OutboundBackpressureBlockWithTimeout.
+func (o *Options) SetOutboundBlockTimeout(timeout time.Duration) *Options {
+	o.OutboundBlockTimeout = timeout
+	return o
+}
+
 // SetSlowConsumerPolicy sets callback queue pressure policy.
 func (o *Options) SetSlowConsumerPolicy(policy SlowConsumerPolicy) *Options {
 	o.SlowConsumerPolicy = policy
@@ -367,6 +411,12 @@ func (o *Options) SetOnReconnectFailed(fn func(error)) *Options {
 // SetOnAsyncError sets callback for non-fatal asynchronous errors.
 func (o *Options) SetOnAsyncError(fn func(error)) *Options {
 	o.OnAsyncError = fn
+	return o
+}
+
+// SetOnDroppedMessage sets callback for dropped inbound/outbound messages due to pressure policies.
+func (o *Options) SetOnDroppedMessage(fn func(*DroppedMessage)) *Options {
+	o.OnDroppedMessage = fn
 	return o
 }
 
@@ -457,8 +507,17 @@ func (o *Options) Validate() error {
 	if o.MaxPendingBytes < 0 {
 		o.MaxPendingBytes = 0
 	}
+	if o.MaxOutboundPendingMessages < 0 {
+		o.MaxOutboundPendingMessages = 0
+	}
+	if o.MaxOutboundPendingBytes < 0 {
+		o.MaxOutboundPendingBytes = 0
+	}
 	if o.SlowConsumerBlockTimeout < 0 {
 		o.SlowConsumerBlockTimeout = 0
+	}
+	if o.OutboundBlockTimeout < 0 {
+		o.OutboundBlockTimeout = 0
 	}
 	switch o.SlowConsumerPolicy {
 	case "", SlowConsumerDropNew:
@@ -466,6 +525,13 @@ func (o *Options) Validate() error {
 	case SlowConsumerDropOldest, SlowConsumerBlockWithTimeout:
 	default:
 		o.SlowConsumerPolicy = SlowConsumerDropNew
+	}
+	switch o.OutboundBackpressurePolicy {
+	case "", OutboundBackpressureBlock:
+		o.OutboundBackpressurePolicy = OutboundBackpressureBlock
+	case OutboundBackpressureBlockWithTimeout, OutboundBackpressureDropNew:
+	default:
+		o.OutboundBackpressurePolicy = OutboundBackpressureBlock
 	}
 	return nil
 }
