@@ -21,6 +21,18 @@ const (
 	DefaultMessageChanSize = 256
 )
 
+// SlowConsumerPolicy controls behavior when callback queue pressure is hit.
+type SlowConsumerPolicy string
+
+const (
+	// SlowConsumerDropNew drops the newly received message.
+	SlowConsumerDropNew SlowConsumerPolicy = "drop_new"
+	// SlowConsumerDropOldest drops one queued message and keeps the new one.
+	SlowConsumerDropOldest SlowConsumerPolicy = "drop_oldest"
+	// SlowConsumerBlockWithTimeout waits for callback queue space up to SlowConsumerBlockTimeout.
+	SlowConsumerBlockWithTimeout SlowConsumerPolicy = "block_with_timeout"
+)
+
 // WillMessage represents a last will and testament message.
 type WillMessage struct {
 	Topic   string
@@ -71,15 +83,18 @@ type Options struct {
 	MaxInflight int           // Maximum inflight messages
 
 	// Reconnection
-	AutoReconnect    bool          // Enable automatic reconnection
-	ReconnectBackoff time.Duration // Initial reconnect delay
-	MaxReconnectWait time.Duration // Maximum reconnect delay
-	ReconnectBufSize int           // Max buffered outbound publish bytes while disconnected (0 = disabled)
+	AutoReconnect        bool          // Enable automatic reconnection
+	ReconnectBackoff     time.Duration // Initial reconnect delay
+	MaxReconnectWait     time.Duration // Maximum reconnect delay
+	ReconnectJitter      time.Duration // Random reconnect delay component [0, ReconnectJitter]
+	MaxReconnectAttempts int           // Maximum reconnect attempts (0 = unlimited)
+	ReconnectBufSize     int           // Max buffered outbound publish bytes while disconnected (0 = disabled)
 
 	// Callbacks
 	OnConnect            func()                                                                    // Called on successful connection
 	OnConnectionLost     func(error)                                                               // Called when connection is lost
 	OnReconnecting       func(attempt int)                                                         // Called before each reconnect attempt
+	OnReconnectFailed    func(error)                                                               // Called when reconnect retries are exhausted
 	OnAsyncError         func(error)                                                               // Called for asynchronous non-fatal errors (slow consumer, reconnect buffer overflow)
 	OnMessage            func(topic string, payload []byte, qos byte)                              // Called for incoming messages (basic)
 	OnMessageV2          func(msg *Message)                                                        // Called for incoming messages (full context, takes precedence over OnMessage)
@@ -91,29 +106,32 @@ type Options struct {
 	AuthData   []byte // Authentication data for initial CONNECT
 
 	// Advanced
-	MessageChanSize    int          // Size of internal message channel
-	MaxPendingMessages int          // Max queued callback messages before dropping (0 = disabled)
-	MaxPendingBytes    int64        // Max queued callback bytes before dropping (0 = disabled)
-	OrderMatters       bool         // Maintain message order (may reduce throughput)
-	Store              MessageStore // Message store for QoS 1/2 (nil = in-memory)
+	MessageChanSize          int                // Size of internal message channel
+	MaxPendingMessages       int                // Max queued callback messages before dropping (0 = disabled)
+	MaxPendingBytes          int64              // Max queued callback bytes before dropping (0 = disabled)
+	SlowConsumerPolicy       SlowConsumerPolicy // Slow-consumer behavior for unordered callbacks
+	SlowConsumerBlockTimeout time.Duration      // Blocking duration for SlowConsumerBlockWithTimeout
+	OrderMatters             bool               // Maintain message order (may reduce throughput)
+	Store                    MessageStore       // Message store for QoS 1/2 (nil = in-memory)
 }
 
 // NewOptions creates Options with sensible defaults.
 func NewOptions() *Options {
 	return &Options{
-		Servers:          []string{"localhost:1883"},
-		ProtocolVersion:  4, // MQTT 3.1.1
-		CleanSession:     true,
-		KeepAlive:        DefaultKeepAlive,
-		ConnectTimeout:   DefaultConnectTimeout,
-		WriteTimeout:     DefaultWriteTimeout,
-		AckTimeout:       DefaultAckTimeout,
-		PingTimeout:      DefaultPingTimeout,
-		AutoReconnect:    true,
-		ReconnectBackoff: DefaultReconnectMin,
-		MaxReconnectWait: DefaultReconnectMax,
-		MaxInflight:      DefaultMaxInflight,
-		MessageChanSize:  DefaultMessageChanSize,
+		Servers:                  []string{"localhost:1883"},
+		ProtocolVersion:          4, // MQTT 3.1.1
+		CleanSession:             true,
+		KeepAlive:                DefaultKeepAlive,
+		ConnectTimeout:           DefaultConnectTimeout,
+		WriteTimeout:             DefaultWriteTimeout,
+		AckTimeout:               DefaultAckTimeout,
+		PingTimeout:              DefaultPingTimeout,
+		AutoReconnect:            true,
+		ReconnectBackoff:         DefaultReconnectMin,
+		MaxReconnectWait:         DefaultReconnectMax,
+		MaxInflight:              DefaultMaxInflight,
+		MessageChanSize:          DefaultMessageChanSize,
+		SlowConsumerPolicy: SlowConsumerDropNew,
 		// MQTT 5.0 defaults
 		RequestProblemInfo: true, // Request detailed error information
 	}
@@ -259,6 +277,18 @@ func (o *Options) SetMaxReconnectWait(d time.Duration) *Options {
 	return o
 }
 
+// SetReconnectJitter sets reconnect jitter added to each reconnect sleep.
+func (o *Options) SetReconnectJitter(d time.Duration) *Options {
+	o.ReconnectJitter = d
+	return o
+}
+
+// SetMaxReconnectAttempts sets maximum reconnect attempts (0 = unlimited).
+func (o *Options) SetMaxReconnectAttempts(max int) *Options {
+	o.MaxReconnectAttempts = max
+	return o
+}
+
 // SetReconnectBufferSize sets max buffered publish bytes while disconnected.
 // A value <= 0 disables buffering.
 func (o *Options) SetReconnectBufferSize(bytes int) *Options {
@@ -292,6 +322,18 @@ func (o *Options) SetMaxPendingBytes(max int64) *Options {
 	return o
 }
 
+// SetSlowConsumerPolicy sets callback queue pressure policy.
+func (o *Options) SetSlowConsumerPolicy(policy SlowConsumerPolicy) *Options {
+	o.SlowConsumerPolicy = policy
+	return o
+}
+
+// SetSlowConsumerBlockTimeout sets blocking duration for SlowConsumerBlockWithTimeout.
+func (o *Options) SetSlowConsumerBlockTimeout(timeout time.Duration) *Options {
+	o.SlowConsumerBlockTimeout = timeout
+	return o
+}
+
 // SetOrderMatters controls whether message callback ordering is preserved.
 func (o *Options) SetOrderMatters(orderMatters bool) *Options {
 	o.OrderMatters = orderMatters
@@ -313,6 +355,12 @@ func (o *Options) SetOnConnectionLost(fn func(error)) *Options {
 // SetOnReconnecting sets the reconnecting callback.
 func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
 	o.OnReconnecting = fn
+	return o
+}
+
+// SetOnReconnectFailed sets callback for reconnect exhaustion.
+func (o *Options) SetOnReconnectFailed(fn func(error)) *Options {
+	o.OnReconnectFailed = fn
 	return o
 }
 
@@ -394,6 +442,12 @@ func (o *Options) Validate() error {
 	if o.MaxReconnectWait <= 0 {
 		o.MaxReconnectWait = DefaultReconnectMax
 	}
+	if o.ReconnectJitter < 0 {
+		o.ReconnectJitter = 0
+	}
+	if o.MaxReconnectAttempts < 0 {
+		o.MaxReconnectAttempts = 0
+	}
 	if o.ReconnectBufSize < 0 {
 		o.ReconnectBufSize = 0
 	}
@@ -402,6 +456,16 @@ func (o *Options) Validate() error {
 	}
 	if o.MaxPendingBytes < 0 {
 		o.MaxPendingBytes = 0
+	}
+	if o.SlowConsumerBlockTimeout < 0 {
+		o.SlowConsumerBlockTimeout = 0
+	}
+	switch o.SlowConsumerPolicy {
+	case "", SlowConsumerDropNew:
+		o.SlowConsumerPolicy = SlowConsumerDropNew
+	case SlowConsumerDropOldest, SlowConsumerBlockWithTimeout:
+	default:
+		o.SlowConsumerPolicy = SlowConsumerDropNew
 	}
 	return nil
 }

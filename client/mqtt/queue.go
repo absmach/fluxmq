@@ -234,91 +234,10 @@ func (c *Client) PublishToQueueWithOptions(ctx context.Context, opts *QueuePubli
 
 // publishWithUserProperties publishes a message with MQTT v5 user properties.
 func (c *Client) publishWithUserProperties(ctx context.Context, topic string, payload []byte, qos byte, retain bool, userProps map[string]string) error {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
 	msg := NewMessage(topic, payload, qos, retain)
 	msg.UserProperties = userProps
-	if !c.state.isConnected() {
-		return c.handleDisconnectedPublish(msg)
-	}
-
-	if qos == 0 {
-		return c.sendPublishV5(ctx, msg, 0)
-	}
-
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return ErrMaxInflight
-	}
-	msg.PacketID = packetID
-
-	if err := c.store.StoreOutbound(packetID, msg); err != nil {
-		return err
-	}
-
-	op, err := c.pending.add(packetID, pendingPublish, msg)
-	if err != nil {
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-
-	if err := c.sendPublishV5(ctx, msg, packetID); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-
-	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
-		return err
-	}
-	return nil
-}
-
-// sendPublishV5 sends a PUBLISH packet with user properties (MQTT v5 only).
-func (c *Client) sendPublishV5(ctx context.Context, msg *Message, packetID uint16) error {
-	deadline := c.writeDeadline(ctx)
-
-	pkt := &v5.Publish{
-		FixedHeader: packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-			Dup:        msg.Dup,
-		},
-		TopicName: msg.Topic,
-		Payload:   msg.Payload,
-		ID:        packetID,
-	}
-
-	if len(msg.UserProperties) > 0 {
-		if pkt.Properties == nil {
-			pkt.Properties = &v5.PublishProperties{}
-		}
-		pkt.Properties.User = make([]v5.User, 0, len(msg.UserProperties))
-		for k, v := range msg.UserProperties {
-			pkt.Properties.User = append(pkt.Properties.User, v5.User{Key: k, Value: v})
-		}
-	}
-
-	if c.topicAliases != nil {
-		if alias, isNew, ok := c.topicAliases.getOrAssignOutbound(msg.Topic); ok {
-			if pkt.Properties == nil {
-				pkt.Properties = &v5.PublishProperties{}
-			}
-			pkt.Properties.TopicAlias = &alias
-			if !isNew {
-				pkt.TopicName = ""
-			}
-		}
-	}
-
-	c.updateActivity()
-	return c.queueWrite(pkt.Encode(), deadline)
+	_, _, err := c.publishInternal(ctx, msg, true)
+	return err
 }
 
 // SubscribeToQueue subscribes to a durable queue with a consumer group.

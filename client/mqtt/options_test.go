@@ -37,6 +37,7 @@ func TestOptionsBuilder(t *testing.T) {
 	onConnect := func() {}
 	onLost := func(error) {}
 	onReconn := func(int) {}
+	onReconnFailed := func(error) {}
 	onMsg := func(string, []byte, byte) {}
 	store := NewMemoryStore()
 
@@ -52,10 +53,15 @@ func TestOptionsBuilder(t *testing.T) {
 		SetProtocolVersion(5).
 		SetWill("will/topic", []byte("goodbye"), 1, true).
 		SetAutoReconnect(false).
+		SetReconnectJitter(250 * time.Millisecond).
+		SetMaxReconnectAttempts(3).
 		SetMaxInflight(50).
 		SetOnConnect(onConnect).
 		SetOnConnectionLost(onLost).
 		SetOnReconnecting(onReconn).
+		SetOnReconnectFailed(onReconnFailed).
+		SetSlowConsumerPolicy(SlowConsumerDropOldest).
+		SetSlowConsumerBlockTimeout(250 * time.Millisecond).
 		SetOnMessage(onMsg).
 		SetStore(store)
 
@@ -100,6 +106,18 @@ func TestOptionsBuilder(t *testing.T) {
 	}
 	if opts.MaxInflight != 50 {
 		t.Errorf("expected MaxInflight 50, got %d", opts.MaxInflight)
+	}
+	if opts.ReconnectJitter != 250*time.Millisecond {
+		t.Errorf("expected reconnect jitter 250ms, got %v", opts.ReconnectJitter)
+	}
+	if opts.MaxReconnectAttempts != 3 {
+		t.Errorf("expected max reconnect attempts 3, got %d", opts.MaxReconnectAttempts)
+	}
+	if opts.SlowConsumerPolicy != SlowConsumerDropOldest {
+		t.Errorf("expected slow consumer policy %q, got %q", SlowConsumerDropOldest, opts.SlowConsumerPolicy)
+	}
+	if opts.SlowConsumerBlockTimeout != 250*time.Millisecond {
+		t.Errorf("expected slow consumer block timeout 250ms, got %v", opts.SlowConsumerBlockTimeout)
 	}
 	if opts.Store != store {
 		t.Error("Store not set correctly")
@@ -158,5 +176,31 @@ func TestOptionsValidationFixesMaxInflight(t *testing.T) {
 	}
 	if opts.MaxInflight != DefaultMaxInflight {
 		t.Errorf("expected MaxInflight to be fixed to %d, got %d", DefaultMaxInflight, opts.MaxInflight)
+	}
+}
+
+func TestOptionsValidationNormalizesReconnectAndSlowConsumer(t *testing.T) {
+	opts := NewOptions().
+		SetClientID("test").
+		SetReconnectJitter(-1 * time.Second).
+		SetMaxReconnectAttempts(-1).
+		SetSlowConsumerPolicy(SlowConsumerPolicy("invalid")).
+		SetSlowConsumerBlockTimeout(-1 * time.Second)
+
+	if err := opts.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if opts.ReconnectJitter != 0 {
+		t.Errorf("expected reconnect jitter normalized to 0, got %v", opts.ReconnectJitter)
+	}
+	if opts.MaxReconnectAttempts != 0 {
+		t.Errorf("expected max reconnect attempts normalized to 0, got %d", opts.MaxReconnectAttempts)
+	}
+	if opts.SlowConsumerPolicy != SlowConsumerDropNew {
+		t.Errorf("expected slow consumer policy normalized to %q, got %q", SlowConsumerDropNew, opts.SlowConsumerPolicy)
+	}
+	if opts.SlowConsumerBlockTimeout != 0 {
+		t.Errorf("expected slow consumer block timeout normalized to 0, got %v", opts.SlowConsumerBlockTimeout)
 	}
 }

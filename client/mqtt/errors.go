@@ -26,6 +26,7 @@ var (
 	ErrMaxInflight          = errors.New("maximum inflight messages exceeded")
 	ErrConnectionLost       = errors.New("connection lost")
 	ErrClientClosed         = errors.New("client has been closed")
+	ErrDraining             = errors.New("client is draining")
 	ErrInvalidMessage       = errors.New("invalid message")
 	ErrInvalidSubscribeOpt  = errors.New("invalid subscribe option")
 	ErrInvalidQoS           = errors.New("invalid QoS level (must be 0, 1, or 2)")

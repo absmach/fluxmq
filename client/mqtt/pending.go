@@ -32,11 +32,12 @@ type pendingOp struct {
 
 // pendingStore manages pending operations.
 type pendingStore struct {
-	mu       sync.RWMutex
-	pending  map[uint16]*pendingOp
-	nextID   uint16
-	maxSize  int
-	inflight int
+	mu           sync.RWMutex
+	pending      map[uint16]*pendingOp
+	nextID       uint16
+	maxSize      int
+	inflight     int
+	typeCounts   [3]int // indexed by pendingType
 }
 
 // newPendingStore creates a new pending operation store.
@@ -92,6 +93,7 @@ func (ps *pendingStore) add(id uint16, opType pendingType, msg *Message) (*pendi
 
 	ps.pending[id] = op
 	ps.inflight++
+	ps.typeCounts[opType]++
 	return op, nil
 }
 
@@ -109,6 +111,7 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 	if exists {
 		delete(ps.pending, id)
 		ps.inflight--
+		ps.typeCounts[op.opType]--
 	}
 	ps.mu.Unlock()
 
@@ -125,9 +128,10 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 func (ps *pendingStore) remove(id uint16) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	if _, exists := ps.pending[id]; exists {
+	if op, exists := ps.pending[id]; exists {
 		delete(ps.pending, id)
 		ps.inflight--
+		ps.typeCounts[op.opType]--
 	}
 }
 
@@ -161,6 +165,7 @@ func (ps *pendingStore) clear(err error) {
 	pending := ps.pending
 	ps.pending = make(map[uint16]*pendingOp)
 	ps.inflight = 0
+	ps.typeCounts = [3]int{}
 	ps.mu.Unlock()
 
 	for _, op := range pending {
@@ -174,6 +179,13 @@ func (ps *pendingStore) count() int {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 	return ps.inflight
+}
+
+// countByType returns number of inflight operations of a given type.
+func (ps *pendingStore) countByType(opType pendingType) int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.typeCounts[opType]
 }
 
 // wait waits for a pending operation to complete with timeout.

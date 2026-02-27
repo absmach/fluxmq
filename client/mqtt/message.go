@@ -160,6 +160,50 @@ func (t *token) Error() error {
 type PublishToken struct {
 	*token
 	MessageID uint16
+	pendingOp *pendingOp
+	ackWait   time.Duration
+}
+
+func (t *PublishToken) bindPending(op *pendingOp, ackWait time.Duration) {
+	t.pendingOp = op
+	t.ackWait = ackWait
+}
+
+// Wait blocks until publish completes.
+func (t *PublishToken) Wait() error {
+	if t.pendingOp == nil {
+		return t.token.Wait()
+	}
+	return t.pendingOp.waitWithContext(nil, t.ackWait)
+}
+
+// WaitTimeout blocks until publish completes or timeout occurs.
+func (t *PublishToken) WaitTimeout(timeout time.Duration) error {
+	if t.pendingOp == nil {
+		return t.token.WaitTimeout(timeout)
+	}
+	return t.pendingOp.wait(timeout)
+}
+
+// Done returns a channel closed when publish completes.
+func (t *PublishToken) Done() <-chan struct{} {
+	if t.pendingOp == nil {
+		return t.token.Done()
+	}
+	return t.pendingOp.done
+}
+
+// Error returns publish error if already completed.
+func (t *PublishToken) Error() error {
+	if t.pendingOp == nil {
+		return t.token.Error()
+	}
+	select {
+	case <-t.pendingOp.done:
+		return t.pendingOp.err
+	default:
+		return nil
+	}
 }
 
 // SubscribeToken is returned by Subscribe operations.

@@ -775,3 +775,270 @@ func TestControlWritePriorityOverDataQueue(t *testing.T) {
 
 	c.cleanup(nil)
 }
+
+func TestPublishAsyncTokenCompletesFromPendingAck(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("async-pending"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	setupWriteLoop(c, &packetCaptureConn{})
+
+	tok := c.PublishAsync(context.Background(), "events/async", []byte("payload"), 1, false)
+	require.NotZero(t, tok.MessageID)
+	require.ErrorIs(t, tok.WaitTimeout(20*time.Millisecond), ErrTimeout)
+
+	c.pending.complete(tok.MessageID, nil, nil)
+	require.NoError(t, tok.Wait())
+
+	c.cleanup(nil)
+}
+
+func TestDrainWaitsForInflightPublishes(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("drain"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+	setupWriteLoop(c, &packetCaptureConn{})
+
+	packetID := c.pending.nextPacketID()
+	require.NotZero(t, packetID)
+	_, err = c.pending.add(packetID, pendingPublish, &Message{Topic: "events/drain", QoS: 1})
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		c.pending.complete(packetID, nil, nil)
+	}()
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	require.NoError(t, c.Drain(ctx))
+	assert.GreaterOrEqual(t, time.Since(start), 25*time.Millisecond)
+	assert.Equal(t, StateDisconnected, c.State())
+}
+
+func TestPublishRejectedWhileDraining(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("draining"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+	c.draining.Store(true)
+
+	err = c.Publish(nil, "events/draining", []byte("payload"), 0, false)
+	require.ErrorIs(t, err, ErrDraining)
+}
+
+func TestSlowConsumerDropOldestReplacesQueuedMessage(t *testing.T) {
+	c := &Client{
+		opts: NewOptions().
+			SetClientID("slow-consumer-drop-oldest").
+			SetOrderMatters(false).
+			SetMaxPendingMessages(1).
+			SetSlowConsumerPolicy(SlowConsumerDropOldest),
+		state:     newStateManager(),
+		queueSubs: newQueueSubscriptions(),
+	}
+	c.msgCh = make(chan *Message, 1)
+	c.msgStop = make(chan struct{})
+
+	c.deliverMessage(&Message{Topic: "events/old", Payload: []byte("old")})
+	c.deliverMessage(&Message{Topic: "events/new", Payload: []byte("new")})
+
+	msg := <-c.msgCh
+	assert.Equal(t, "events/new", msg.Topic)
+	assert.Equal(t, uint64(1), c.DroppedMessages())
+}
+
+func TestSlowConsumerBlockWithTimeoutWaitsForCapacity(t *testing.T) {
+	c := &Client{
+		opts: NewOptions().
+			SetClientID("slow-consumer-block").
+			SetOrderMatters(false).
+			SetMaxPendingMessages(1).
+			SetSlowConsumerPolicy(SlowConsumerBlockWithTimeout).
+			SetSlowConsumerBlockTimeout(100 * time.Millisecond),
+		state:     newStateManager(),
+		queueSubs: newQueueSubscriptions(),
+	}
+	c.pendingCond = sync.NewCond(&c.pendingMu)
+	c.msgCh = make(chan *Message, 1)
+	c.msgStop = make(chan struct{})
+
+	c.deliverMessage(&Message{Topic: "events/1", Payload: []byte("one")})
+
+	done := make(chan struct{})
+	go func() {
+		c.deliverMessage(&Message{Topic: "events/2", Payload: []byte("two")})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("second delivery should block until queue pressure is relieved")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	first := <-c.msgCh
+	c.releasePending(int64(mqttMessageSize(first)))
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("expected blocked delivery to continue after freeing queue capacity")
+	}
+
+	second := <-c.msgCh
+	assert.Equal(t, "events/2", second.Topic)
+}
+
+func TestSlowConsumerBlockWithTimeoutDropsOnTimeout(t *testing.T) {
+	c := &Client{
+		opts: NewOptions().
+			SetClientID("slow-consumer-block-timeout").
+			SetOrderMatters(false).
+			SetMaxPendingMessages(1).
+			SetSlowConsumerPolicy(SlowConsumerBlockWithTimeout).
+			SetSlowConsumerBlockTimeout(30 * time.Millisecond),
+		state:     newStateManager(),
+		queueSubs: newQueueSubscriptions(),
+	}
+	c.pendingCond = sync.NewCond(&c.pendingMu)
+	c.msgCh = make(chan *Message, 1)
+	c.msgStop = make(chan struct{})
+
+	c.deliverMessage(&Message{Topic: "events/1", Payload: []byte("one")})
+
+	start := time.Now()
+	c.deliverMessage(&Message{Topic: "events/2", Payload: []byte("two")})
+	elapsed := time.Since(start)
+	assert.GreaterOrEqual(t, elapsed, 25*time.Millisecond)
+	assert.Less(t, elapsed, 150*time.Millisecond)
+
+	msg := <-c.msgCh
+	assert.Equal(t, "events/1", msg.Topic)
+	assert.Equal(t, uint64(1), c.DroppedMessages())
+}
+
+func TestReconnectStopsAfterMaxAttemptsAndCallsFailureCallback(t *testing.T) {
+	failed := make(chan error, 1)
+	c, err := New(
+		NewOptions().
+			SetClientID("reconnect-limit").
+			SetServers("127.0.0.1:1").
+			SetAutoReconnect(true).
+			SetReconnectBackoff(5 * time.Millisecond).
+			SetMaxReconnectWait(5 * time.Millisecond).
+			SetReconnectJitter(0).
+			SetMaxReconnectAttempts(1).
+			SetOnReconnectFailed(func(err error) {
+				select {
+				case failed <- err:
+				default:
+				}
+			}),
+	)
+	require.NoError(t, err)
+	defer c.Close()
+
+	c.state.set(StateConnected)
+	c.handleConnectionLost(ErrConnectionLost)
+
+	select {
+	case got := <-failed:
+		require.Error(t, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected reconnect failed callback")
+	}
+
+	assert.Equal(t, StateDisconnected, c.State())
+}
+
+func TestSendAuthUsesControlWriteLanePriority(t *testing.T) {
+	c, err := New(
+		NewOptions().
+			SetClientID("send-auth-priority").
+			SetProtocolVersion(5).
+			SetAuthMethod("PLAIN"),
+	)
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockFirstWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x01}}))
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first data write did not start")
+	}
+
+	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x02}}))
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- c.SendAuth(0x18, []byte("auth-data"))
+	}()
+
+	select {
+	case <-sendDone:
+		t.Fatal("SendAuth should wait while first write is blocked")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(conn.releaseFirstWrite)
+
+	select {
+	case err := <-sendDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("SendAuth did not complete")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for len(conn.snapshotWrites()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	writes := conn.snapshotWrites()
+	require.Len(t, writes, 3)
+	assert.Equal(t, []byte{0x01}, writes[0])
+	assert.EqualValues(t, packets.AuthType, writes[1][0]>>4, "AUTH should be written through control lane before queued data")
+	assert.Equal(t, []byte{0x02}, writes[2])
+
+	c.cleanup(nil)
+}
+
+func TestDeliverMessageConcurrentWithStopDispatcherDoesNotPanic(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("dispatcher-stop-race").SetOrderMatters(false))
+	require.NoError(t, err)
+
+	c.startDispatcher()
+
+	panicCh := make(chan any, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				panicCh <- r
+			}
+		}()
+		for i := 0; i < 200; i++ {
+			c.deliverMessage(&Message{Topic: "events/race"})
+		}
+	}()
+
+	time.Sleep(5 * time.Millisecond)
+	c.stopDispatcher()
+	<-done
+
+	select {
+	case p := <-panicCh:
+		t.Fatalf("unexpected panic while stopping dispatcher: %v", p)
+	default:
+	}
+}
