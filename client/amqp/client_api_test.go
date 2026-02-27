@@ -39,3 +39,42 @@ func TestPublishWithConfirmNilOptions(t *testing.T) {
 		t.Fatalf("expected ErrNilOptions, got %v", err)
 	}
 }
+
+func TestGetValidation(t *testing.T) {
+	c, err := New(NewOptions())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Not connected
+	_, _, err = c.Get("test-queue", true)
+	if err != ErrNotConnected {
+		t.Fatalf("expected ErrNotConnected, got %v", err)
+	}
+
+	c.connected.Store(true)
+
+	// Empty queue name
+	_, _, err = c.Get("", true)
+	if err != ErrInvalidQueueName {
+		t.Fatalf("expected ErrInvalidQueueName, got %v", err)
+	}
+
+	_, _, err = c.GetFromQueue("", true)
+	if err != ErrInvalidQueueName {
+		t.Fatalf("expected ErrInvalidQueueName, got %v", err)
+	}
+}
+
+func TestGetFromQueueNormalizesName(t *testing.T) {
+	c, err := New(NewOptions())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Not connected — should still propagate ErrNotConnected
+	_, _, err = c.GetFromQueue("my-queue", true)
+	if err != ErrNotConnected {
+		t.Fatalf("expected ErrNotConnected, got %v", err)
+	}
+}

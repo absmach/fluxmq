@@ -34,6 +34,13 @@ var (
 	ErrQueueAckRequiresV5   = errors.New("queue acknowledgments require MQTT v5 user properties")
 	ErrQueueAckMissingGroup = errors.New("group-id required for queue acknowledgment")
 
+	// Authentication errors.
+	ErrAuthFailed      = errors.New("enhanced authentication failed")
+	ErrNoAuthHandler   = errors.New("server sent AUTH but no OnAuth handler configured")
+	ErrAuthNotV5       = errors.New("enhanced authentication requires MQTT 5.0")
+	ErrAuthMethodMissing = errors.New("enhanced authentication method not set")
+	ErrAuthMethodMismatch = errors.New("enhanced authentication method mismatch")
+
 	// Protocol errors.
 	ErrUnexpectedPacket = errors.New("unexpected packet type")
 	ErrMalformedPacket  = errors.New("malformed packet")

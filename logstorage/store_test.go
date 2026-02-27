@@ -155,3 +155,50 @@ func TestStore_DeleteQueue(t *testing.T) {
 	_, err = os.Stat(queueDir)
 	assert.True(t, os.IsNotExist(err))
 }
+
+func TestStore_SetCursorUpdatesCursorState(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultStoreConfig()
+
+	store, err := NewStore(dir, cfg)
+	require.NoError(t, err)
+	defer store.Close()
+
+	err = store.CreateQueue("q1")
+	require.NoError(t, err)
+
+	// Create consumer group
+	err = store.CreateConsumerGroup("q1", "g1")
+	require.NoError(t, err)
+
+	// Initially cursor should be 0
+	cursor, err := store.GetCursor("q1", "g1")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), cursor)
+
+	// Set cursor to 42
+	err = store.SetCursor("q1", "g1", 42)
+	require.NoError(t, err)
+
+	// Cursor should now be 42
+	cursor, err = store.GetCursor("q1", "g1")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), cursor)
+
+	// Verify via GetCursorState as well
+	cs, err := store.GetCursorState("q1", "g1")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), cs.Cursor)
+
+	// Set cursor to 100
+	err = store.SetCursor("q1", "g1", 100)
+	require.NoError(t, err)
+
+	cursor, err = store.GetCursor("q1", "g1")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(100), cursor)
+
+	// SetCursor on non-existent queue returns error
+	err = store.SetCursor("no-such-queue", "g1", 10)
+	assert.ErrorIs(t, err, ErrQueueNotFound)
+}

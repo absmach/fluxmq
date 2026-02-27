@@ -166,6 +166,47 @@ func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
 	return c.publish("", queueTopic, publishing, false, false)
 }
 
+// Get performs a basic.get on a queue, synchronously fetching a single message.
+// Returns the message and true if one was available, or nil and false if the queue was empty.
+func (c *Client) Get(queue string, autoAck bool) (*QueueMessage, bool, error) {
+	if !c.connected.Load() {
+		return nil, false, ErrNotConnected
+	}
+	if queue == "" {
+		return nil, false, ErrInvalidQueueName
+	}
+
+	ch, err := c.channel()
+	if err != nil {
+		return nil, false, err
+	}
+
+	c.subChMu.Lock()
+	d, ok, err := ch.Get(queue, autoAck)
+	c.subChMu.Unlock()
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+
+	return &QueueMessage{
+		Delivery:  d,
+		queueName: queue,
+		client:    c,
+	}, true, nil
+}
+
+// GetFromQueue performs a basic.get on a durable queue.
+// The queueName should NOT include the "$queue/" prefix - it will be added automatically.
+func (c *Client) GetFromQueue(queueName string, autoAck bool) (*QueueMessage, bool, error) {
+	if queueName == "" {
+		return nil, false, ErrInvalidQueueName
+	}
+	return c.Get(normalizeQueueTopic(queueName), autoAck)
+}
+
 // PublishToStream publishes a message to a stream queue (RabbitMQ-style queue name).
 func (c *Client) PublishToStream(queueName string, payload []byte, props map[string]string) error {
 	if !c.connected.Load() {

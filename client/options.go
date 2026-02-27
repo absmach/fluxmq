@@ -82,6 +82,11 @@ type Options struct {
 	OnMessage            func(topic string, payload []byte, qos byte) // Called for incoming messages (basic)
 	OnMessageV2          func(msg *Message)                           // Called for incoming messages (full context, takes precedence over OnMessage)
 	OnServerCapabilities func(*ServerCapabilities)                    // Called when server capabilities received (MQTT 5.0)
+	OnAuth               func(reasonCode byte, authMethod string, authData []byte) ([]byte, error) // Called for enhanced authentication (MQTT 5.0)
+
+	// Enhanced Authentication (MQTT 5.0)
+	AuthMethod string // Authentication method for enhanced auth
+	AuthData   []byte // Authentication data for initial CONNECT
 
 	// Advanced
 	MessageChanSize int          // Size of internal message channel
@@ -303,6 +308,26 @@ func (o *Options) SetOnMessageV2(fn func(msg *Message)) *Options {
 // SetOnServerCapabilities sets the server capabilities callback (MQTT 5.0).
 func (o *Options) SetOnServerCapabilities(fn func(*ServerCapabilities)) *Options {
 	o.OnServerCapabilities = fn
+	return o
+}
+
+// SetOnAuth sets the enhanced authentication callback (MQTT 5.0).
+// The callback receives the server's reason code, auth method, and auth data,
+// and should return response auth data or an error to abort.
+func (o *Options) SetOnAuth(fn func(reasonCode byte, authMethod string, authData []byte) ([]byte, error)) *Options {
+	o.OnAuth = fn
+	return o
+}
+
+// SetAuthMethod sets the authentication method for enhanced auth (MQTT 5.0).
+func (o *Options) SetAuthMethod(method string) *Options {
+	o.AuthMethod = method
+	return o
+}
+
+// SetAuthData sets the initial authentication data for enhanced auth (MQTT 5.0).
+func (o *Options) SetAuthData(data []byte) *Options {
+	o.AuthData = data
 	return o
 }
 

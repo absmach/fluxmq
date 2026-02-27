@@ -306,3 +306,127 @@ func TestAsyncAPIsReturnUnderlyingErrors(t *testing.T) {
 	c.state.set(StateConnected)
 	assert.Equal(t, ErrInvalidSubscribeOpt, c.SubscribeWithOptionsAsync(nil).Wait())
 }
+
+func TestSendAuthRequiresV5AndConnection(t *testing.T) {
+	// v4 client should reject auth
+	c4, err := New(NewOptions().SetClientID("auth-v4").SetProtocolVersion(4))
+	require.NoError(t, err)
+	assert.Equal(t, ErrAuthNotV5, c4.SendAuth(0x18, []byte("data")))
+
+	// v5 client not connected should reject auth
+	c5, err := New(NewOptions().SetClientID("auth-v5").SetProtocolVersion(5).SetAuthMethod("SCRAM-SHA-256"))
+	require.NoError(t, err)
+	assert.Equal(t, ErrNotConnected, c5.SendAuth(0x18, []byte("data")))
+
+	// v5 client without auth method should reject
+	c5nomethod, err := New(NewOptions().SetClientID("auth-v5-no").SetProtocolVersion(5))
+	require.NoError(t, err)
+	c5nomethod.state.set(StateConnected)
+	assert.Equal(t, ErrAuthMethodMissing, c5nomethod.SendAuth(0x18, []byte("data")))
+}
+
+func TestHandleAuthCallsOnAuthCallback(t *testing.T) {
+	authCalled := make(chan struct{}, 1)
+	opts := NewOptions().
+		SetClientID("auth-session").
+		SetProtocolVersion(5).
+		SetAuthMethod("PLAIN").
+		SetOnAuth(func(reasonCode byte, authMethod string, authData []byte) ([]byte, error) {
+			assert.Equal(t, byte(0x00), reasonCode)
+			assert.Equal(t, "PLAIN", authMethod)
+			assert.Equal(t, []byte("challenge"), authData)
+			authCalled <- struct{}{}
+			return []byte("response"), nil
+		})
+
+	c, err := New(opts)
+	require.NoError(t, err)
+
+	c.state.set(StateConnected)
+	conn := &packetCaptureConn{}
+	c.conn = conn
+
+	authPkt := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  0x00, // Success — no response needed
+		Properties: &v5.AuthProperties{
+			AuthMethod: "PLAIN",
+			AuthData:   []byte("challenge"),
+		},
+	}
+
+	c.handleAuth(authPkt)
+
+	select {
+	case <-authCalled:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected OnAuth callback to be called")
+	}
+}
+
+func TestHandleAuthWithoutCallbackDoesNotPanic(t *testing.T) {
+	opts := NewOptions().
+		SetClientID("auth-no-cb").
+		SetProtocolVersion(5)
+
+	c, err := New(opts)
+	require.NoError(t, err)
+
+	c.state.set(StateConnected)
+
+	authPkt := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  0x18,
+	}
+
+	// Should not panic
+	c.handleAuth(authPkt)
+}
+
+func TestHandleConnectAuthRequiresMethod(t *testing.T) {
+	opts := NewOptions().
+		SetClientID("auth-connect-no-method").
+		SetProtocolVersion(5).
+		SetOnAuth(func(reasonCode byte, authMethod string, authData []byte) ([]byte, error) {
+			return []byte("response"), nil
+		})
+
+	c, err := New(opts)
+	require.NoError(t, err)
+
+	conn := &packetCaptureConn{}
+	authPkt := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  0x18,
+		Properties: &v5.AuthProperties{
+			AuthData: []byte("challenge"),
+		},
+	}
+
+	assert.Equal(t, ErrAuthMethodMissing, c.handleConnectAuth(conn, authPkt))
+}
+
+func TestHandleConnectAuthMethodMismatch(t *testing.T) {
+	opts := NewOptions().
+		SetClientID("auth-connect-mismatch").
+		SetProtocolVersion(5).
+		SetAuthMethod("PLAIN").
+		SetOnAuth(func(reasonCode byte, authMethod string, authData []byte) ([]byte, error) {
+			return []byte("response"), nil
+		})
+
+	c, err := New(opts)
+	require.NoError(t, err)
+
+	conn := &packetCaptureConn{}
+	authPkt := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  0x18,
+		Properties: &v5.AuthProperties{
+			AuthMethod: "SCRAM-SHA-256",
+			AuthData:   []byte("challenge"),
+		},
+	}
+
+	assert.Equal(t, ErrAuthMethodMismatch, c.handleConnectAuth(conn, authPkt))
+}

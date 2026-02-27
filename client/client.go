@@ -277,7 +277,8 @@ func (c *Client) sendConnect(conn net.Conn) error {
 		// Set v5 Connect properties
 		if c.opts.SessionExpiry > 0 || c.opts.ReceiveMaximum > 0 ||
 			c.opts.MaximumPacketSize > 0 || c.opts.TopicAliasMaximum > 0 ||
-			c.opts.RequestResponseInfo || !c.opts.RequestProblemInfo {
+			c.opts.RequestResponseInfo || !c.opts.RequestProblemInfo ||
+			c.opts.AuthMethod != "" {
 			if pkt.Properties == nil {
 				pkt.Properties = &v5.ConnectProperties{}
 			}
@@ -307,6 +308,11 @@ func (c *Client) sendConnect(conn net.Conn) error {
 			if !c.opts.RequestProblemInfo {
 				zero := byte(0)
 				pkt.Properties.RequestProblemInfo = &zero
+			}
+
+			if c.opts.AuthMethod != "" {
+				pkt.Properties.AuthMethod = c.opts.AuthMethod
+				pkt.Properties.AuthData = c.opts.AuthData
 			}
 		}
 
@@ -349,33 +355,45 @@ func (c *Client) readConnAck(conn net.Conn) (ConnAckCode, error) {
 	defer conn.SetReadDeadline(time.Time{})
 
 	if c.opts.ProtocolVersion == 5 {
-		pkt, _, _, err := v5.ReadPacket(conn)
-		if err != nil {
-			return 0, err
+		// Enhanced auth may require multiple AUTH packet exchanges
+		// before the final CONNACK arrives.
+		for {
+			pkt, _, _, err := v5.ReadPacket(conn)
+			if err != nil {
+				return 0, err
+			}
+
+			if auth, ok := pkt.(*v5.Auth); ok {
+				if err := c.handleConnectAuth(conn, auth); err != nil {
+					return 0, err
+				}
+				continue
+			}
+
+			ack, ok := pkt.(*v5.ConnAck)
+			if !ok {
+				return 0, ErrUnexpectedPacket
+			}
+
+			// Parse and store server capabilities
+			caps := parseConnAckProperties(ack.Properties)
+			c.serverCapsMu.Lock()
+			c.serverCaps = caps
+			c.serverCapsMu.Unlock()
+
+			// Initialize topic alias manager with server's limits
+			c.topicAliases = newTopicAliasManager(
+				c.opts.TopicAliasMaximum, // client accepts from server
+				caps.TopicAliasMaximum,   // server accepts from client
+			)
+
+			// Invoke callback if set
+			if c.opts.OnServerCapabilities != nil {
+				c.opts.OnServerCapabilities(caps)
+			}
+
+			return ConnAckCode(ack.ReasonCode), nil
 		}
-		ack, ok := pkt.(*v5.ConnAck)
-		if !ok {
-			return 0, ErrUnexpectedPacket
-		}
-
-		// Parse and store server capabilities
-		caps := parseConnAckProperties(ack.Properties)
-		c.serverCapsMu.Lock()
-		c.serverCaps = caps
-		c.serverCapsMu.Unlock()
-
-		// Initialize topic alias manager with server's limits
-		c.topicAliases = newTopicAliasManager(
-			c.opts.TopicAliasMaximum, // client accepts from server
-			caps.TopicAliasMaximum,   // server accepts from client
-		)
-
-		// Invoke callback if set
-		if c.opts.OnServerCapabilities != nil {
-			c.opts.OnServerCapabilities(caps)
-		}
-
-		return ConnAckCode(ack.ReasonCode), nil
 	}
 
 	pkt, err := v3.ReadPacket(conn)
@@ -1098,6 +1116,8 @@ func (c *Client) handlePacket(pkt packets.ControlPacket) {
 		c.pingMu.Unlock()
 	case packets.DisconnectType:
 		c.handleServerDisconnect(pkt)
+	case packets.AuthType:
+		c.handleAuth(pkt)
 	}
 }
 
@@ -1563,6 +1583,137 @@ func (c *Client) handleServerDisconnect(pkt packets.ControlPacket) {
 	}
 
 	c.handleConnectionLost(fmt.Errorf("%w: %s", ErrConnectionLost, reason))
+}
+
+// handleConnectAuth handles AUTH packets received during the CONNECT handshake.
+func (c *Client) handleConnectAuth(conn net.Conn, auth *v5.Auth) error {
+	if c.opts.OnAuth == nil {
+		return ErrNoAuthHandler
+	}
+
+	method := c.opts.AuthMethod
+	var data []byte
+	if auth.Properties != nil {
+		if auth.Properties.AuthMethod != "" {
+			if c.opts.AuthMethod != "" && c.opts.AuthMethod != auth.Properties.AuthMethod {
+				return ErrAuthMethodMismatch
+			}
+			method = auth.Properties.AuthMethod
+		}
+		data = auth.Properties.AuthData
+	}
+
+	if method == "" {
+		return ErrAuthMethodMissing
+	}
+
+	responseData, err := c.opts.OnAuth(auth.ReasonCode, method, data)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAuthFailed, err)
+	}
+
+	resp := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  0x18, // Continue Authentication
+		Properties: &v5.AuthProperties{
+			AuthMethod: method,
+			AuthData:   responseData,
+		},
+	}
+
+	return resp.Pack(conn)
+}
+
+// handleAuth handles AUTH packets received during an active session (re-authentication).
+func (c *Client) handleAuth(pkt packets.ControlPacket) {
+	if c.opts.ProtocolVersion != 5 {
+		return
+	}
+
+	auth := pkt.(*v5.Auth)
+	if c.opts.OnAuth == nil {
+		return
+	}
+
+	method := c.opts.AuthMethod
+	var data []byte
+	if auth.Properties != nil {
+		if auth.Properties.AuthMethod != "" {
+			if c.opts.AuthMethod != "" && c.opts.AuthMethod != auth.Properties.AuthMethod {
+				c.handleConnectionLost(fmt.Errorf("%w: %s", ErrAuthMethodMismatch, auth.Properties.AuthMethod))
+				return
+			}
+			method = auth.Properties.AuthMethod
+		}
+		data = auth.Properties.AuthData
+	}
+
+	if method == "" {
+		c.handleConnectionLost(ErrAuthMethodMissing)
+		return
+	}
+
+	responseData, err := c.opts.OnAuth(auth.ReasonCode, method, data)
+	if err != nil {
+		c.handleConnectionLost(fmt.Errorf("%w: %v", ErrAuthFailed, err))
+		return
+	}
+
+	// Reason code 0x00 means success — no response needed
+	if auth.ReasonCode == 0x00 {
+		return
+	}
+
+	resp := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  0x18, // Continue Authentication
+		Properties: &v5.AuthProperties{
+			AuthMethod: method,
+			AuthData:   responseData,
+		},
+	}
+
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil {
+		if err := resp.Pack(conn); err != nil {
+			c.handleConnectionLost(fmt.Errorf("%w: %v", ErrAuthFailed, err))
+		}
+	}
+}
+
+// SendAuth initiates re-authentication by sending an AUTH packet to the server (MQTT 5.0).
+func (c *Client) SendAuth(reasonCode byte, authData []byte) error {
+	if c.opts.ProtocolVersion != 5 {
+		return ErrAuthNotV5
+	}
+	if c.state.get() != StateConnected {
+		return ErrNotConnected
+	}
+	if c.opts.AuthMethod == "" {
+		return ErrAuthMethodMissing
+	}
+
+	pkt := &v5.Auth{
+		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
+		ReasonCode:  reasonCode,
+		Properties: &v5.AuthProperties{
+			AuthMethod: c.opts.AuthMethod,
+			AuthData:   authData,
+		},
+	}
+
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil {
+		return ErrNotConnected
+	}
+
+	return pkt.Pack(conn)
 }
 
 func (c *Client) handleConnectionLost(err error) {
