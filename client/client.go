@@ -582,16 +582,5 @@ func doWithContext(ctx context.Context, fn func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- fn()
-	}()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return fn()
 }

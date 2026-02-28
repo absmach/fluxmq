@@ -202,6 +202,14 @@ run-perf:
 		echo ">> $${cmd[*]}"; \
 		"$${cmd[@]}"'
 
+.PHONY: mock-mqtt-cluster
+mock-mqtt-cluster:
+	@bash -lc 'set -euo pipefail; \
+		addrs="$${MOCK_MQTT_ADDRS:-127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887}"; \
+		cmd=(go run ./tests/perf/mockmqtt/cmd/mockmqttcluster -addrs "$${addrs}"); \
+		echo ">> $${cmd[*]}"; \
+		"$${cmd[@]}"'
+
 .PHONY: perf-cleanup
 perf-cleanup:
 	bash $(PERF_SCRIPT_DIR)/cleanup.sh
@@ -303,6 +311,8 @@ help:
 	@echo "Performance:"
 	@echo "  run-perf           Run one config-driven perf scenario"
 	@echo "                     Usage: make run-perf CONFIG=<config.json>"
+	@echo "  mock-mqtt-cluster  Run lightweight 3-node mock MQTT cluster"
+	@echo "                     Usage: make mock-mqtt-cluster [MOCK_MQTT_ADDRS=a,b,c]"
 	@echo "  perf-suite         Run configurable performance suite"
 	@echo "  perf-cleanup       Remove suite result files"
 	@echo "  perf-compare       Compare benchmark files with benchstat"

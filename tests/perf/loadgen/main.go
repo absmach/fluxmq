@@ -598,10 +598,6 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	}
 
 	var published int64
-	publishTimeout := cfg.DrainTimeout
-	if publishTimeout <= 0 {
-		publishTimeout = 30 * time.Second
-	}
 	switch sc.resolvedPublisherProto {
 	case "mqtt":
 		published = runMQTTPublishers(ctx, mqttPublishParams{
@@ -619,7 +615,6 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 			ErrCount:             &errCount,
 			PublishedCounter:     &sent,
 			QoS:                  sc.resolvedQoS,
-			PublishTimeout:       publishTimeout,
 		})
 	case "amqp":
 		published = runAMQPTopicPublishers(ctx, amqpTopicPublishParams{
@@ -636,7 +631,6 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 			OnPublishError:       onPublishError,
 			ErrCount:             &errCount,
 			PublishedCounter:     &sent,
-			PublishTimeout:       publishTimeout,
 		})
 	default:
 		return res, fmt.Errorf("unsupported publisher protocol %q", sc.resolvedPublisherProto)
@@ -798,7 +792,6 @@ type mqttPublishParams struct {
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
 	QoS                  byte
-	PublishTimeout       time.Duration
 }
 
 func newPublishRNG(runID int64, publisherIdx int) *rand.Rand {
@@ -888,13 +881,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 				}
 				msgID := fmt.Sprintf("%s-%d-%d", params.Scenario, idx, msgIdx)
 				payload := makePayload(msgID, params.PayloadSize)
-				pubCtx := ctx
-				cancel := func() {}
-				if params.PublishTimeout > 0 {
-					pubCtx, cancel = context.WithTimeout(ctx, params.PublishTimeout)
-				}
-				err := client.Publish(pubCtx, topic, payload, msgclient.WithQoS(qos))
-				cancel()
+				err := client.Publish(ctx, topic, payload, msgclient.WithQoS(qos))
 				if err != nil {
 					if params.OnPublishError != nil {
 						params.OnPublishError(topic)
@@ -929,7 +916,6 @@ type amqpTopicPublishParams struct {
 	OnPublishError       func(topic string)
 	ErrCount             *atomic.Int64
 	PublishedCounter     *atomic.Int64
-	PublishTimeout       time.Duration
 }
 
 func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) int64 {
@@ -973,13 +959,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 				}
 				msgID := fmt.Sprintf("%s-at-%d-%d", params.Scenario, idx, msgIdx)
 				payload := makePayload(msgID, params.PayloadSize)
-				pubCtx := ctx
-				cancel := func() {}
-				if params.PublishTimeout > 0 {
-					pubCtx, cancel = context.WithTimeout(ctx, params.PublishTimeout)
-				}
-				err := client.Publish(pubCtx, topic, payload)
-				cancel()
+				err := client.Publish(ctx, topic, payload)
 				if err != nil {
 					if params.OnPublishError != nil {
 						params.OnPublishError(topic)
