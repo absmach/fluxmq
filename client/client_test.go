@@ -144,16 +144,22 @@ func TestConnectWrapsErrors(t *testing.T) {
 
 func TestDispatchMQTTDoesNotHoldLockWhileCallingHandlers(t *testing.T) {
 	c := &Client{
-		subsExact: make(map[string]MessageHandler),
-		subsWild:  make(map[string]MessageHandler),
+		subsExact: make(map[string]*mqttSubDispatcher),
+		subsWild:  make(map[string]*mqttSubDispatcher),
 		qsubs:     make(map[string]MessageHandler),
 	}
+	t.Cleanup(c.stopAllMQTTSubs)
 
 	done := make(chan struct{})
-	c.subsWild["events/#"] = func(_ *Message) {
+	c.mu.Lock()
+	replaced := c.setMQTTSubLocked("events/#", func(_ *Message) {
 		c.mu.Lock()
 		c.mu.Unlock()
 		close(done)
+	})
+	c.mu.Unlock()
+	if replaced != nil {
+		replaced.stop()
 	}
 
 	go c.dispatchMQTT(&mqttclient.Message{Topic: "events/test", Payload: []byte("payload")})
@@ -167,15 +173,24 @@ func TestDispatchMQTTDoesNotHoldLockWhileCallingHandlers(t *testing.T) {
 
 func TestDispatchMQTTMatchesExactAndWildcard(t *testing.T) {
 	c := &Client{
-		subsExact: make(map[string]MessageHandler),
-		subsWild:  make(map[string]MessageHandler),
+		subsExact: make(map[string]*mqttSubDispatcher),
+		subsWild:  make(map[string]*mqttSubDispatcher),
 		qsubs:     make(map[string]MessageHandler),
 	}
+	t.Cleanup(c.stopAllMQTTSubs)
 
 	got := make(chan string, 4)
-	c.subsExact["events/a"] = func(_ *Message) { got <- "exact" }
-	c.subsWild["events/+"] = func(_ *Message) { got <- "wild-plus" }
-	c.subsWild["events/#"] = func(_ *Message) { got <- "wild-hash" }
+	c.mu.Lock()
+	if replaced := c.setMQTTSubLocked("events/a", func(_ *Message) { got <- "exact" }); replaced != nil {
+		replaced.stop()
+	}
+	if replaced := c.setMQTTSubLocked("events/+", func(_ *Message) { got <- "wild-plus" }); replaced != nil {
+		replaced.stop()
+	}
+	if replaced := c.setMQTTSubLocked("events/#", func(_ *Message) { got <- "wild-hash" }); replaced != nil {
+		replaced.stop()
+	}
+	c.mu.Unlock()
 
 	c.dispatchMQTT(&mqttclient.Message{Topic: "events/a", Payload: []byte("payload")})
 
@@ -191,6 +206,54 @@ func TestDispatchMQTTMatchesExactAndWildcard(t *testing.T) {
 
 	if !seen["exact"] || !seen["wild-plus"] || !seen["wild-hash"] {
 		t.Fatalf("expected exact and wildcard handlers, got %#v", seen)
+	}
+}
+
+func TestDispatchMQTTPerSubscriptionWorkersAvoidCrossSubHOL(t *testing.T) {
+	c := &Client{
+		subsExact: make(map[string]*mqttSubDispatcher),
+		subsWild:  make(map[string]*mqttSubDispatcher),
+		qsubs:     make(map[string]MessageHandler),
+	}
+	t.Cleanup(c.stopAllMQTTSubs)
+
+	slowStarted := make(chan struct{})
+	fastDone := make(chan struct{})
+
+	c.mu.Lock()
+	if replaced := c.setMQTTSubLocked("events/slow", func(_ *Message) {
+		select {
+		case <-slowStarted:
+		default:
+			close(slowStarted)
+		}
+		time.Sleep(150 * time.Millisecond)
+	}); replaced != nil {
+		replaced.stop()
+	}
+	if replaced := c.setMQTTSubLocked("events/fast", func(_ *Message) {
+		select {
+		case <-fastDone:
+		default:
+			close(fastDone)
+		}
+	}); replaced != nil {
+		replaced.stop()
+	}
+	c.mu.Unlock()
+
+	c.dispatchMQTT(&mqttclient.Message{Topic: "events/slow", Payload: []byte("slow")})
+	select {
+	case <-slowStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("slow handler did not start")
+	}
+
+	c.dispatchMQTT(&mqttclient.Message{Topic: "events/fast", Payload: []byte("fast")})
+	select {
+	case <-fastDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("fast handler appears blocked by slow subscription handler")
 	}
 }
 

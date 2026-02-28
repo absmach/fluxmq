@@ -32,14 +32,37 @@ func (p *Publish) Release() {
 }
 
 func (p *Publish) Encode() []byte {
-	var body []byte
-	body = append(body, codec.EncodeString(p.TopicName)...)
+	return p.EncodeTo(nil)
+}
+
+// EncodeTo appends the encoded packet to dst and returns the extended buffer.
+func (p *Publish) EncodeTo(dst []byte) []byte {
+	remainingLen := 2 + len(p.TopicName) + len(p.Payload)
 	if p.QoS > 0 {
-		body = append(body, codec.EncodeUint16(p.ID)...)
+		remainingLen += 2
 	}
-	body = append(body, p.Payload...)
-	p.FixedHeader.RemainingLength = len(body)
-	return append(p.FixedHeader.Encode(), body...)
+	p.FixedHeader.RemainingLength = remainingLen
+
+	var dup, retain byte
+	if p.Dup {
+		dup = 1
+	}
+	if p.Retain {
+		retain = 1
+	}
+	dst = append(dst, p.PacketType<<4|dup<<3|p.QoS<<1|retain)
+	dst = appendVBI(dst, remainingLen)
+
+	topicLen := len(p.TopicName)
+	dst = append(dst, byte(topicLen>>8), byte(topicLen))
+	dst = append(dst, p.TopicName...)
+
+	if p.QoS > 0 {
+		dst = append(dst, byte(p.ID>>8), byte(p.ID))
+	}
+	dst = append(dst, p.Payload...)
+
+	return dst
 }
 
 func (p *Publish) Unpack(r io.Reader) error {
@@ -65,4 +88,19 @@ func (p *Publish) Pack(w io.Writer) error {
 
 func (p *Publish) Details() packets.Details {
 	return packets.Details{Type: packets.PublishType, ID: p.ID, QoS: p.QoS}
+}
+
+func appendVBI(dst []byte, num int) []byte {
+	v := uint32(num)
+	for {
+		b := byte(v & 0x7F)
+		v >>= 7
+		if v > 0 {
+			b |= 0x80
+		}
+		dst = append(dst, b)
+		if v == 0 {
+			return dst
+		}
+	}
 }

@@ -155,6 +155,7 @@ func setupWriteLoop(c *Client, conn net.Conn) {
 	close(c.doneCh) // no readLoop in tests — mark as already exited
 	c.writeCh = make(chan writeRequest, 256)
 	c.controlWriteCh = make(chan writeRequest, 64)
+	c.qos0Wake = make(chan struct{}, 1)
 	c.writeDone = make(chan struct{})
 	c.writeRT.Store(&writeRuntime{
 		conn:           c.conn,
@@ -162,6 +163,7 @@ func setupWriteLoop(c *Client, conn net.Conn) {
 		doneCh:         c.doneCh,
 		writeCh:        c.writeCh,
 		controlWriteCh: c.controlWriteCh,
+		qos0Wake:       c.qos0Wake,
 		writeDone:      c.writeDone,
 	})
 	go c.writeLoop()

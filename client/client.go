@@ -16,6 +16,107 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+type mqttSubNode struct {
+	msg  *Message
+	next *mqttSubNode
+}
+
+type mqttSubDispatcher struct {
+	handler MessageHandler
+
+	mu     sync.Mutex
+	cond   *sync.Cond
+	head   *mqttSubNode
+	tail   *mqttSubNode
+	closed bool
+}
+
+func newMQTTSubDispatcher(handler MessageHandler) *mqttSubDispatcher {
+	d := &mqttSubDispatcher{handler: handler}
+	d.cond = sync.NewCond(&d.mu)
+	go d.run()
+	return d
+}
+
+func (d *mqttSubDispatcher) run() {
+	for {
+		d.mu.Lock()
+		for d.head == nil && !d.closed {
+			d.cond.Wait()
+		}
+		if d.closed {
+			d.head = nil
+			d.tail = nil
+			d.mu.Unlock()
+			return
+		}
+		node := d.head
+		d.head = node.next
+		if d.head == nil {
+			d.tail = nil
+		}
+		d.mu.Unlock()
+
+		if d.handler != nil && node.msg != nil {
+			d.handler(node.msg)
+		}
+	}
+}
+
+func (d *mqttSubDispatcher) enqueue(msg *Message) bool {
+	if msg == nil {
+		return false
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return false
+	}
+
+	node := &mqttSubNode{msg: msg}
+	if d.tail == nil {
+		d.head = node
+		d.tail = node
+	} else {
+		d.tail.next = node
+		d.tail = node
+	}
+	d.cond.Signal()
+	return true
+}
+
+func (d *mqttSubDispatcher) stop() {
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return
+	}
+	d.closed = true
+	d.head = nil
+	d.tail = nil
+	d.cond.Broadcast()
+	d.mu.Unlock()
+}
+
+func cloneMessage(msg *Message) *Message {
+	if msg == nil {
+		return nil
+	}
+
+	cloned := *msg
+	if len(msg.Payload) > 0 {
+		cloned.Payload = append([]byte(nil), msg.Payload...)
+	}
+	if len(msg.Properties) > 0 {
+		cloned.Properties = make(map[string]string, len(msg.Properties))
+		for k, v := range msg.Properties {
+			cloned.Properties[k] = v
+		}
+	}
+	return &cloned
+}
+
 // Client provides a unified messaging API over MQTT or AMQP transports.
 type Client struct {
 	defaultProtocol Protocol
@@ -24,8 +125,8 @@ type Client struct {
 	amqp *amqp.Client
 
 	mu        sync.RWMutex
-	subsExact map[string]MessageHandler
-	subsWild  map[string]MessageHandler
+	subsExact map[string]*mqttSubDispatcher
+	subsWild  map[string]*mqttSubDispatcher
 	qsubs     map[string]MessageHandler
 }
 
@@ -40,8 +141,8 @@ func New(cfg *Config) (*Client, error) {
 
 	c := &Client{
 		defaultProtocol: cfg.DefaultProtocol,
-		subsExact:       make(map[string]MessageHandler),
-		subsWild:        make(map[string]MessageHandler),
+		subsExact:       make(map[string]*mqttSubDispatcher),
+		subsWild:        make(map[string]*mqttSubDispatcher),
 		qsubs:           make(map[string]MessageHandler),
 	}
 
@@ -121,6 +222,7 @@ func (c *Client) Close(ctx context.Context) error {
 			return err
 		}
 	}
+	c.stopAllMQTTSubs()
 	var errs []error
 	if c.mqtt != nil {
 		if err := c.mqtt.Close(); err != nil {
@@ -228,8 +330,11 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handler MessageHan
 			return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
 		}
 		c.mu.Lock()
-		c.setMQTTSubLocked(topic, handler)
+		replaced := c.setMQTTSubLocked(topic, handler)
 		c.mu.Unlock()
+		if replaced != nil {
+			replaced.stop()
+		}
 		return nil
 	}
 
@@ -267,9 +372,11 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string, opts ...Option) 
 			return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
 		}
 		c.mu.Lock()
-		delete(c.subsExact, topic)
-		delete(c.subsWild, topic)
+		removed := c.removeMQTTSubLocked(topic)
 		c.mu.Unlock()
+		if removed != nil {
+			removed.stop()
+		}
 		return nil
 	}
 
@@ -458,42 +565,98 @@ func (c *Client) dispatchMQTT(msg *mqtt.Message) {
 		return
 	}
 
-	var buf [4]MessageHandler
-	handlers := buf[:0]
+	var buf [4]*mqttSubDispatcher
+	dispatchers := buf[:0]
 	c.mu.RLock()
-	if handler, ok := c.subsExact[msg.Topic]; ok {
-		handlers = append(handlers, handler)
+	if dispatcher, ok := c.subsExact[msg.Topic]; ok {
+		dispatchers = append(dispatchers, dispatcher)
 	}
-	for filter, handler := range c.subsWild {
+	for filter, dispatcher := range c.subsWild {
 		if topics.TopicMatch(filter, msg.Topic) {
-			handlers = append(handlers, handler)
+			dispatchers = append(dispatchers, dispatcher)
 		}
 	}
 	c.mu.RUnlock()
 
-	if len(handlers) == 0 {
+	if len(dispatchers) == 0 {
 		return
 	}
-	converted := mqttToMessage(msg)
-	if converted == nil {
+	base := mqttToMessage(msg)
+	if base == nil {
 		return
 	}
-	for _, handler := range handlers {
-		if handler == nil {
+	for _, dispatcher := range dispatchers {
+		if dispatcher == nil {
 			continue
 		}
-		handler(converted)
+		_ = dispatcher.enqueue(cloneMessage(base))
 	}
 }
 
-func (c *Client) setMQTTSubLocked(topic string, handler MessageHandler) {
+func (c *Client) setMQTTSubLocked(topic string, handler MessageHandler) (replaced *mqttSubDispatcher) {
+	next := newMQTTSubDispatcher(handler)
 	if isWildcardFilter(topic) {
-		c.subsWild[topic] = handler
+		if prev, ok := c.subsWild[topic]; ok {
+			replaced = prev
+		}
+		if prev, ok := c.subsExact[topic]; ok && replaced == nil {
+			replaced = prev
+		}
+		c.subsWild[topic] = next
 		delete(c.subsExact, topic)
+		return replaced
+	}
+	if prev, ok := c.subsExact[topic]; ok {
+		replaced = prev
+	}
+	if prev, ok := c.subsWild[topic]; ok && replaced == nil {
+		replaced = prev
+	}
+	c.subsExact[topic] = next
+	delete(c.subsWild, topic)
+	return replaced
+}
+
+func (c *Client) removeMQTTSubLocked(topic string) *mqttSubDispatcher {
+	var removed *mqttSubDispatcher
+	if sub, ok := c.subsExact[topic]; ok {
+		removed = sub
+		delete(c.subsExact, topic)
+	}
+	if sub, ok := c.subsWild[topic]; ok {
+		if removed == nil {
+			removed = sub
+		}
+		delete(c.subsWild, topic)
+	}
+	return removed
+}
+
+func (c *Client) stopAllMQTTSubs() {
+	c.mu.Lock()
+	if len(c.subsExact) == 0 && len(c.subsWild) == 0 {
+		c.mu.Unlock()
 		return
 	}
-	c.subsExact[topic] = handler
-	delete(c.subsWild, topic)
+
+	unique := make(map[*mqttSubDispatcher]struct{}, len(c.subsExact)+len(c.subsWild))
+	for _, sub := range c.subsExact {
+		if sub != nil {
+			unique[sub] = struct{}{}
+		}
+	}
+	for _, sub := range c.subsWild {
+		if sub != nil {
+			unique[sub] = struct{}{}
+		}
+	}
+	c.subsExact = make(map[string]*mqttSubDispatcher)
+	c.subsWild = make(map[string]*mqttSubDispatcher)
+	c.mu.Unlock()
+
+	for sub := range unique {
+		sub.stop()
+	}
 }
 
 func isWildcardFilter(topic string) bool {
