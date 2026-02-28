@@ -239,6 +239,12 @@ func TestClientCloseConcurrent(t *testing.T) {
 	client.stopCh = make(chan struct{})
 	client.doneCh = make(chan struct{})
 	close(client.doneCh)
+	client.writeRT.Store(&writeRuntime{
+		stopCh:    client.stopCh,
+		doneCh:    client.doneCh,
+		writeCh:   client.writeCh,
+		writeDone: client.writeDone,
+	})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
@@ -267,6 +273,12 @@ func TestClientCloseAndDisconnectConcurrent(t *testing.T) {
 		client.writeCh = make(chan writeRequest, 256)
 		client.writeDone = make(chan struct{})
 		close(client.writeDone)
+		client.writeRT.Store(&writeRuntime{
+			stopCh:    client.stopCh,
+			doneCh:    client.doneCh,
+			writeCh:   client.writeCh,
+			writeDone: client.writeDone,
+		})
 
 		var wg sync.WaitGroup
 		wg.Add(2)

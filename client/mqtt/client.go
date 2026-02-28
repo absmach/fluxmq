@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,10 +25,14 @@ type writeRequest struct {
 	data     []byte
 	deadline time.Time
 	errCh    chan error // nil for fire-and-forget
-	ctx      context.Context
+	// Indicates errCh came from the write error channel pool.
+	pooledErrCh bool
+	ctx         context.Context
 	// Set for outbound publish writes subject to outbound pressure limits.
 	trackOutbound bool
-	dropMeta      *DroppedMessage
+	dropTopic     string
+	dropQoS       byte
+	dropPayloadSz int
 }
 
 const defaultControlWriteChanSize = 64
@@ -36,7 +41,27 @@ const defaultCallbackQueueSize = 256
 var (
 	callbackQueueOnce sync.Once
 	callbackQueueCh   chan func()
+
+	writeErrChPool = sync.Pool{
+		New: func() any {
+			return make(chan error, 1)
+		},
+	}
 )
+
+type writeRuntime struct {
+	conn           net.Conn
+	stopCh         chan struct{}
+	doneCh         chan struct{}
+	writeCh        chan writeRequest
+	controlWriteCh chan writeRequest
+	writeDone      chan struct{}
+}
+
+type dispatchRuntime struct {
+	msgCh   chan *Message
+	msgStop chan struct{}
+}
 
 // Client is a thread-safe MQTT client.
 type Client struct {
@@ -47,6 +72,7 @@ type Client struct {
 
 	// Guards connection and write-loop channel pointers.
 	writeStateMu sync.RWMutex
+	writeRT      atomic.Pointer[writeRuntime]
 
 	// Connection — only touched by writeLoop (writes) and readLoop (reads) after Connect().
 	conn net.Conn
@@ -93,6 +119,7 @@ type Client struct {
 
 	// Message dispatching
 	dispatchMu sync.RWMutex
+	dispatchRT atomic.Pointer[dispatchRuntime]
 	msgCh      chan *Message
 	msgStop    chan struct{}
 	dispatchWg sync.WaitGroup
@@ -158,7 +185,157 @@ func New(opts *Options) (*Client, error) {
 	return c, nil
 }
 
-// Connect establishes a connection to the broker.
+func (c *Client) loadWriteRuntime() *writeRuntime {
+	if rt := c.writeRT.Load(); rt != nil {
+		return rt
+	}
+
+	c.writeStateMu.RLock()
+	defer c.writeStateMu.RUnlock()
+	if c.conn == nil && c.stopCh == nil && c.doneCh == nil && c.writeCh == nil && c.controlWriteCh == nil && c.writeDone == nil {
+		return nil
+	}
+
+	rt := &writeRuntime{
+		conn:           c.conn,
+		stopCh:         c.stopCh,
+		doneCh:         c.doneCh,
+		writeCh:        c.writeCh,
+		controlWriteCh: c.controlWriteCh,
+		writeDone:      c.writeDone,
+	}
+	// Cache the snapshot so subsequent calls on the same connection cycle
+	// don't allocate. CAS avoids overwriting a value stored by Connect().
+	c.writeRT.CompareAndSwap(nil, rt)
+	return rt
+}
+
+func (c *Client) isMQTTv5() bool {
+	return c.opts.ProtocolVersion == 5
+}
+
+func (c *Client) readPacketFromConn(conn net.Conn) (packets.ControlPacket, error) {
+	if c.isMQTTv5() {
+		pkt, _, _, err := v5.ReadPacket(conn)
+		return pkt, err
+	}
+	return v3.ReadPacket(conn)
+}
+
+func packetIDFromControlPacket(pkt packets.ControlPacket) uint16 {
+	switch p := pkt.(type) {
+	case *v3.PubAck:
+		return p.ID
+	case *v5.PubAck:
+		return p.ID
+	case *v3.PubRec:
+		return p.ID
+	case *v5.PubRec:
+		return p.ID
+	case *v3.PubRel:
+		return p.ID
+	case *v5.PubRel:
+		return p.ID
+	case *v3.PubComp:
+		return p.ID
+	case *v5.PubComp:
+		return p.ID
+	case *v3.SubAck:
+		return p.ID
+	case *v5.SubAck:
+		return p.ID
+	case *v3.UnSubAck:
+		return p.ID
+	case *v5.UnsubAck:
+		return p.ID
+	default:
+		return 0
+	}
+}
+
+func subAckDetails(pkt packets.ControlPacket) (uint16, []byte, bool) {
+	switch p := pkt.(type) {
+	case *v5.SubAck:
+		var reasonCodes []byte
+		if p.ReasonCodes != nil {
+			reasonCodes = *p.ReasonCodes
+		}
+		return p.ID, reasonCodes, true
+	case *v3.SubAck:
+		return p.ID, p.ReturnCodes, false
+	default:
+		return 0, nil, false
+	}
+}
+
+func (c *Client) encodePingReqPacket() []byte {
+	if c.isMQTTv5() {
+		pkt := &v5.PingReq{
+			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
+		}
+		return pkt.Encode()
+	}
+
+	pkt := &v3.PingReq{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
+	}
+	return pkt.Encode()
+}
+
+func (c *Client) encodeQoSControlPacket(packetType byte, packetID uint16, qos byte) []byte {
+	if c.isMQTTv5() {
+		switch packetType {
+		case packets.PubAckType:
+			return (&v5.PubAck{
+				FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+				ID:          packetID,
+			}).Encode()
+		case packets.PubRecType:
+			return (&v5.PubRec{
+				FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+				ID:          packetID,
+			}).Encode()
+		case packets.PubRelType:
+			return (&v5.PubRel{
+				FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+				ID:          packetID,
+			}).Encode()
+		case packets.PubCompType:
+			return (&v5.PubComp{
+				FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+				ID:          packetID,
+			}).Encode()
+		default:
+			panic(fmt.Sprintf("encodeQoSControlPacket: unexpected v5 packet type 0x%02X", packetType))
+		}
+	}
+
+	switch packetType {
+	case packets.PubAckType:
+		return (&v3.PubAck{
+			FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+			ID:          packetID,
+		}).Encode()
+	case packets.PubRecType:
+		return (&v3.PubRec{
+			FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+			ID:          packetID,
+		}).Encode()
+	case packets.PubRelType:
+		return (&v3.PubRel{
+			FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+			ID:          packetID,
+		}).Encode()
+	case packets.PubCompType:
+		return (&v3.PubComp{
+			FixedHeader: packets.FixedHeader{PacketType: packetType, QoS: qos},
+			ID:          packetID,
+		}).Encode()
+	default:
+		panic(fmt.Sprintf("encodeQoSControlPacket: unexpected v3 packet type 0x%02X", packetType))
+	}
+}
+
 func (c *Client) Connect() error {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
@@ -186,6 +363,7 @@ func (c *Client) Connect() error {
 			c.conn.Close()
 			c.conn = nil
 		}
+		c.writeRT.Store(nil)
 		c.writeStateMu.Unlock()
 		if c.state.isClosed() {
 			return ErrClientClosed
@@ -214,6 +392,14 @@ func (c *Client) Connect() error {
 	c.writeCh = writeCh
 	c.controlWriteCh = controlWriteCh
 	c.writeDone = writeDone
+	c.writeRT.Store(&writeRuntime{
+		conn:           c.conn,
+		stopCh:         stopCh,
+		doneCh:         doneCh,
+		writeCh:        writeCh,
+		controlWriteCh: controlWriteCh,
+		writeDone:      writeDone,
+	})
 	c.writeStateMu.Unlock()
 
 	go c.writeLoop()
@@ -303,7 +489,7 @@ func (c *Client) sendConnect(conn net.Conn) error {
 
 	keepAlive := uint16(c.opts.KeepAlive.Seconds())
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		pkt := &v5.Connect{
 			FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
 			ClientID:        c.opts.ClientID,
@@ -449,7 +635,7 @@ func (c *Client) readConnAck(conn net.Conn) (ConnAckCode, error) {
 	conn.SetReadDeadline(time.Now().Add(c.opts.ConnectTimeout))
 	defer conn.SetReadDeadline(time.Time{})
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		// Enhanced auth may require multiple AUTH packet exchanges
 		// before the final CONNACK arrives.
 		for {
@@ -574,15 +760,17 @@ func (c *Client) Drain(ctx context.Context) error {
 // sendDisconnectWithReason writes the DISCONNECT directly to conn (bypassing writeLoop)
 // because it runs right before cleanup tears down the write infrastructure.
 func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) {
-	c.writeStateMu.RLock()
-	conn := c.conn
-	c.writeStateMu.RUnlock()
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		return
+	}
+	conn := rt.conn
 	if conn == nil {
 		return
 	}
 	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		pkt := &v5.Disconnect{
 			FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
 			ReasonCode:  reasonCode,
@@ -629,12 +817,17 @@ func (c *Client) cleanup(err error) {
 	}
 	defer atomic.StoreUint32(&c.cleanupInProgress, 0)
 
-	c.writeStateMu.RLock()
-	stopCh := c.stopCh
-	doneCh := c.doneCh
-	writeDone := c.writeDone
-	conn := c.conn
-	c.writeStateMu.RUnlock()
+	rt := c.loadWriteRuntime()
+	var stopCh chan struct{}
+	var doneCh chan struct{}
+	var writeDone chan struct{}
+	var conn net.Conn
+	if rt != nil {
+		stopCh = rt.stopCh
+		doneCh = rt.doneCh
+		writeDone = rt.writeDone
+		conn = rt.conn
+	}
 
 	// Signal read/write loops.
 	if stopCh != nil {
@@ -663,6 +856,7 @@ func (c *Client) cleanup(err error) {
 	c.writeCh = nil
 	c.controlWriteCh = nil
 	c.writeDone = nil
+	c.writeRT.Store(nil)
 	c.writeStateMu.Unlock()
 
 	c.pendingMu.Lock()
@@ -716,6 +910,7 @@ func (c *Client) State() State {
 }
 
 // Publish sends a message to the broker.
+
 func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
 	msg := NewMessage(topic, payload, qos, retain)
 	_, _, err := c.publishInternal(ctx, msg, true)
@@ -843,7 +1038,7 @@ func (c *Client) sendPublish(ctx context.Context, msg *Message, packetID uint16)
 }
 
 func (c *Client) sendPublishWithDeadline(ctx context.Context, msg *Message, packetID uint16, deadline time.Time) error {
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		pkt := &v5.Publish{
 			FixedHeader: packets.FixedHeader{
 				PacketType: packets.PublishType,
@@ -1064,7 +1259,7 @@ func (c *Client) subscribeWithOptions(ctx context.Context, opts []*SubscribeOpti
 func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[string]byte) error {
 	deadline := c.writeDeadline(ctx)
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		opts := make([]v5.SubOption, 0, len(topics))
 		for topic, qos := range topics {
 			opts = append(opts, v5.SubOption{Topic: topic, MaxQoS: qos})
@@ -1094,7 +1289,7 @@ func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[
 func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
 	deadline := c.writeDeadline(ctx)
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		v5Opts := make([]v5.SubOption, len(opts))
 		for i, opt := range opts {
 			v5Opts[i] = v5.SubOption{
@@ -1189,7 +1384,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []string) error {
 	deadline := c.writeDeadline(ctx)
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		pkt := &v5.Unsubscribe{
 			FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType, QoS: 1},
 			ID:          packetID,
@@ -1236,30 +1431,22 @@ func (c *Client) UnsubscribeAsync(ctx context.Context, topics ...string) *Unsubs
 }
 
 // readLoop reads packets from the connection.
-func (c *Client) readLoop() {
-	defer close(c.doneCh)
 
-	conn := c.conn
+func (c *Client) readLoop() {
+	rt := c.loadWriteRuntime()
+	if rt == nil || rt.doneCh == nil {
+		return
+	}
+	defer close(rt.doneCh)
+
+	conn := rt.conn
 
 	for {
-		select {
-		case <-c.stopCh:
-			return
-		default:
-		}
-
 		if conn == nil {
 			return
 		}
 
-		var pkt packets.ControlPacket
-		var err error
-
-		if c.opts.ProtocolVersion == 5 {
-			pkt, _, _, err = v5.ReadPacket(conn)
-		} else {
-			pkt, err = v3.ReadPacket(conn)
-		}
+		pkt, err := c.readPacketFromConn(conn)
 
 		if err != nil {
 			if err == io.EOF || c.state.get() != StateConnected {
@@ -1305,7 +1492,7 @@ func (c *Client) handlePacket(pkt packets.ControlPacket) {
 func (c *Client) handlePublish(pkt packets.ControlPacket) {
 	var msg *Message
 
-	if c.opts.ProtocolVersion == 5 {
+	if c.isMQTTv5() {
 		p := pkt.(*v5.Publish)
 
 		topic := p.TopicName
@@ -1451,6 +1638,10 @@ func (c *Client) startDispatcher() {
 	c.dispatchMu.Lock()
 	c.msgCh = msgCh
 	c.msgStop = msgStop
+	c.dispatchRT.Store(&dispatchRuntime{
+		msgCh:   msgCh,
+		msgStop: msgStop,
+	})
 	c.dispatchMu.Unlock()
 
 	workers := 1
@@ -1493,6 +1684,7 @@ func (c *Client) stopDispatcher() {
 	}
 	c.msgStop = nil
 	c.msgCh = nil
+	c.dispatchRT.Store(nil)
 	close(msgStop)
 	c.dispatchMu.Unlock()
 	c.dispatchWg.Wait()
@@ -1525,9 +1717,13 @@ func (c *Client) handleQueueMessage(msg *Message) {
 			groupID = gid
 		}
 		if off, ok := msg.UserProperties["offset"]; ok {
-			fmt.Sscanf(off, "%d", &offset)
+			if parsed, err := strconv.ParseUint(off, 10, 64); err == nil {
+				offset = parsed
+			}
 		} else if seq, ok := msg.UserProperties["sequence"]; ok {
-			fmt.Sscanf(seq, "%d", &offset)
+			if parsed, err := strconv.ParseUint(seq, 10, 64); err == nil {
+				offset = parsed
+			}
 		}
 	}
 
@@ -1551,35 +1747,20 @@ func (c *Client) handleQueueMessage(msg *Message) {
 }
 
 func (c *Client) handlePubAck(pkt packets.ControlPacket) {
-	var packetID uint16
-	if c.opts.ProtocolVersion == 5 {
-		packetID = pkt.(*v5.PubAck).ID
-	} else {
-		packetID = pkt.(*v3.PubAck).ID
-	}
+	packetID := packetIDFromControlPacket(pkt)
 	c.store.DeleteOutbound(packetID)
 	c.pending.complete(packetID, nil, nil)
 }
 
 func (c *Client) handlePubRec(pkt packets.ControlPacket) {
-	var packetID uint16
-	if c.opts.ProtocolVersion == 5 {
-		packetID = pkt.(*v5.PubRec).ID
-	} else {
-		packetID = pkt.(*v3.PubRec).ID
-	}
+	packetID := packetIDFromControlPacket(pkt)
 
 	c.pending.updateQoS2State(packetID, 1) // Now waiting for PUBCOMP
 	c.sendPubRel(packetID)
 }
 
 func (c *Client) handlePubRel(pkt packets.ControlPacket) {
-	var packetID uint16
-	if c.opts.ProtocolVersion == 5 {
-		packetID = pkt.(*v5.PubRel).ID
-	} else {
-		packetID = pkt.(*v3.PubRel).ID
-	}
+	packetID := packetIDFromControlPacket(pkt)
 
 	c.qos2IncomingMu.Lock()
 	msg, exists := c.qos2Incoming[packetID]
@@ -1607,35 +1788,17 @@ func (c *Client) handlePubRel(pkt packets.ControlPacket) {
 }
 
 func (c *Client) handlePubComp(pkt packets.ControlPacket) {
-	var packetID uint16
-	if c.opts.ProtocolVersion == 5 {
-		packetID = pkt.(*v5.PubComp).ID
-	} else {
-		packetID = pkt.(*v3.PubComp).ID
-	}
+	packetID := packetIDFromControlPacket(pkt)
 	c.store.DeleteOutbound(packetID)
 	c.pending.complete(packetID, nil, nil)
 }
 
 func (c *Client) handleSubAck(pkt packets.ControlPacket) {
-	var packetID uint16
-	var returnCodes []byte
-
-	if c.opts.ProtocolVersion == 5 {
-		p := pkt.(*v5.SubAck)
-		packetID = p.ID
-		if p.ReasonCodes != nil {
-			returnCodes = *p.ReasonCodes
-		}
-	} else {
-		p := pkt.(*v3.SubAck)
-		packetID = p.ID
-		returnCodes = p.ReturnCodes
-	}
+	packetID, returnCodes, isV5 := subAckDetails(pkt)
 
 	var err error
 	for _, rc := range returnCodes {
-		if c.opts.ProtocolVersion == 5 {
+		if isV5 {
 			if rc >= 0x80 {
 				err = ErrSubscribeFailed
 				break
@@ -1652,81 +1815,34 @@ func (c *Client) handleSubAck(pkt packets.ControlPacket) {
 }
 
 func (c *Client) handleUnsubAck(pkt packets.ControlPacket) {
-	var packetID uint16
-	if c.opts.ProtocolVersion == 5 {
-		packetID = pkt.(*v5.UnsubAck).ID
-	} else {
-		packetID = pkt.(*v3.UnSubAck).ID
-	}
+	packetID := packetIDFromControlPacket(pkt)
 	c.pending.complete(packetID, nil, nil)
 }
 
 func (c *Client) sendPubAck(packetID uint16) {
-	if c.opts.ProtocolVersion == 5 {
-		pkt := &v5.PubAck{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	} else {
-		pkt := &v3.PubAck{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	}
+	c.sendControlAck(c.encodeQoSControlPacket(packets.PubAckType, packetID, 0))
 }
 
 func (c *Client) sendPubRec(packetID uint16) {
-	if c.opts.ProtocolVersion == 5 {
-		pkt := &v5.PubRec{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	} else {
-		pkt := &v3.PubRec{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	}
+	c.sendControlAck(c.encodeQoSControlPacket(packets.PubRecType, packetID, 0))
 }
 
 func (c *Client) sendPubRel(packetID uint16) {
-	if c.opts.ProtocolVersion == 5 {
-		pkt := &v5.PubRel{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	} else {
-		pkt := &v3.PubRel{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	}
+	c.sendControlAck(c.encodeQoSControlPacket(packets.PubRelType, packetID, 1))
 }
 
 func (c *Client) sendPubComp(packetID uint16) {
-	if c.opts.ProtocolVersion == 5 {
-		pkt := &v5.PubComp{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	} else {
-		pkt := &v3.PubComp{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
-			ID:          packetID,
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
+	c.sendControlAck(c.encodeQoSControlPacket(packets.PubCompType, packetID, 0))
+}
+
+func (c *Client) sendControlAck(data []byte) {
+	if err := c.queueControlWrite(data, c.writeDeadline(nil)); err != nil {
+		c.reportAsyncError(err)
 	}
 }
 
 func (c *Client) handleServerDisconnect(pkt packets.ControlPacket) {
-	if c.opts.ProtocolVersion != 5 {
+	if !c.isMQTTv5() {
 		return
 	}
 
@@ -1780,7 +1896,7 @@ func (c *Client) handleConnectAuth(conn net.Conn, auth *v5.Auth) error {
 
 // handleAuth handles AUTH packets received during an active session (re-authentication).
 func (c *Client) handleAuth(pkt packets.ControlPacket) {
-	if c.opts.ProtocolVersion != 5 {
+	if !c.isMQTTv5() {
 		return
 	}
 
@@ -1832,7 +1948,7 @@ func (c *Client) handleAuth(pkt packets.ControlPacket) {
 
 // SendAuth initiates re-authentication by sending an AUTH packet to the server (MQTT 5.0).
 func (c *Client) SendAuth(reasonCode byte, authData []byte) error {
-	if c.opts.ProtocolVersion != 5 {
+	if !c.isMQTTv5() {
 		return ErrAuthNotV5
 	}
 	if c.state.get() != StateConnected {
@@ -1952,7 +2068,7 @@ func (c *Client) restoreQueueSubscriptions() {
 	c.queueSubs.mu.RUnlock()
 
 	for _, sub := range subs {
-		if c.opts.ProtocolVersion == 5 {
+		if c.isMQTTv5() {
 			userProps := make(map[string]string)
 			if sub.consumerGroup != "" {
 				userProps["consumer-group"] = sub.consumerGroup
@@ -2201,29 +2317,30 @@ func (c *Client) sendPing() {
 	c.lastPingSent = time.Now().UTC()
 	c.pingMu.Unlock()
 
-	if c.opts.ProtocolVersion == 5 {
-		pkt := &v5.PingReq{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
-	} else {
-		pkt := &v3.PingReq{
-			FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType},
-		}
-		c.queueControlWriteNoWait(pkt.Encode())
+	pingReq := c.encodePingReqPacket()
+
+	if !c.queueControlWriteNoWait(pingReq) {
+		c.pingMu.Lock()
+		c.waitingPing = false
+		c.lastPingSent = time.Time{}
+		c.pingMu.Unlock()
+		return
 	}
 
 	c.updateActivity()
 }
 
 func (c *Client) writeLoop() {
-	c.writeStateMu.RLock()
-	stopCh := c.stopCh
-	writeCh := c.writeCh
-	controlWriteCh := c.controlWriteCh
-	writeDone := c.writeDone
-	conn := c.conn
-	c.writeStateMu.RUnlock()
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		return
+	}
+
+	stopCh := rt.stopCh
+	writeCh := rt.writeCh
+	controlWriteCh := rt.controlWriteCh
+	writeDone := rt.writeDone
+	conn := rt.conn
 
 	if stopCh == nil || writeCh == nil || controlWriteCh == nil || writeDone == nil {
 		return
@@ -2231,27 +2348,91 @@ func (c *Client) writeLoop() {
 
 	defer close(writeDone)
 
-	writeOne := func(req writeRequest) bool {
-		if req.trackOutbound {
-			defer c.releaseOutbound(req)
-		}
-		if conn == nil {
-			if req.errCh != nil {
-				req.errCh <- ErrNotConnected
-			}
+	const maxWriteBatchItems = 32
+	const maxWriteBatchBytes = 256 * 1024
+
+	batch := make([]writeRequest, 0, maxWriteBatchItems)
+	buffers := make(net.Buffers, 0, maxWriteBatchItems)
+
+	resetBatch := func() {
+		batch = batch[:0]
+		buffers = buffers[:0]
+	}
+	appendBatch := func(req writeRequest) {
+		batch = append(batch, req)
+		buffers = append(buffers, req.data)
+	}
+
+	writeBatch := func() bool {
+		if len(batch) == 0 {
 			return true
 		}
-		if !req.deadline.IsZero() {
-			conn.SetWriteDeadline(req.deadline)
+
+		ackBatch := func(err error) {
+			for _, req := range batch {
+				if req.trackOutbound {
+					c.releaseOutbound(req)
+				}
+				if req.errCh != nil {
+					req.errCh <- err
+				}
+			}
 		}
-		_, err := conn.Write(req.data)
-		if !req.deadline.IsZero() {
+
+		if conn == nil {
+			ackBatch(ErrNotConnected)
+			resetBatch()
+			return true
+		}
+
+		deadline := time.Time{}
+		for _, req := range batch {
+			if req.deadline.IsZero() {
+				continue
+			}
+			if deadline.IsZero() || req.deadline.Before(deadline) {
+				deadline = req.deadline
+			}
+		}
+
+		if !deadline.IsZero() {
+			conn.SetWriteDeadline(deadline)
+		}
+		_, err := buffers.WriteTo(conn)
+		if !deadline.IsZero() {
 			conn.SetWriteDeadline(time.Time{})
 		}
-		if req.errCh != nil {
-			req.errCh <- err
-		}
+
+		ackBatch(err)
+		resetBatch()
 		return err == nil
+	}
+
+	collectBatch := func(first writeRequest) {
+		resetBatch()
+		appendBatch(first)
+		totalBytes := len(first.data)
+
+		for len(batch) < maxWriteBatchItems && totalBytes < maxWriteBatchBytes {
+			select {
+			case req := <-controlWriteCh:
+				appendBatch(req)
+				totalBytes += len(req.data)
+				continue
+			default:
+			}
+
+			select {
+			case req := <-controlWriteCh:
+				appendBatch(req)
+				totalBytes += len(req.data)
+			case req := <-writeCh:
+				appendBatch(req)
+				totalBytes += len(req.data)
+			default:
+				return
+			}
+		}
 	}
 
 	for {
@@ -2260,7 +2441,8 @@ func (c *Client) writeLoop() {
 		case <-stopCh:
 			return
 		case req := <-controlWriteCh:
-			if !writeOne(req) {
+			collectBatch(req)
+			if !writeBatch() {
 				return
 			}
 			continue
@@ -2271,11 +2453,13 @@ func (c *Client) writeLoop() {
 		case <-stopCh:
 			return
 		case req := <-controlWriteCh:
-			if !writeOne(req) {
+			collectBatch(req)
+			if !writeBatch() {
 				return
 			}
 		case req := <-writeCh:
-			if !writeOne(req) {
+			collectBatch(req)
+			if !writeBatch() {
 				return
 			}
 		}
@@ -2294,12 +2478,14 @@ func (c *Client) enqueueWriteTo(req writeRequest, control bool) (retErr error) {
 			retErr = ErrNotConnected
 		}
 	}()
-	c.writeStateMu.RLock()
-	dataCh := c.writeCh
-	controlCh := c.controlWriteCh
-	sch := c.stopCh
-	done := c.writeDone
-	c.writeStateMu.RUnlock()
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		return ErrNotConnected
+	}
+	dataCh := rt.writeCh
+	controlCh := rt.controlWriteCh
+	sch := rt.stopCh
+	done := rt.writeDone
 	if dataCh == nil || controlCh == nil || sch == nil || done == nil {
 		return ErrNotConnected
 	}
@@ -2340,46 +2526,69 @@ func (c *Client) enqueueControlWrite(req writeRequest) error {
 	return c.enqueueWriteTo(req, true)
 }
 
+func acquireWriteErrCh() chan error {
+	return writeErrChPool.Get().(chan error)
+}
+
+func releaseWriteErrCh(ch chan error) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	writeErrChPool.Put(ch)
+}
+
 func (c *Client) queueWrite(data []byte, deadline time.Time) error {
 	return c.queueWriteRequest(writeRequest{
-		data:     data,
-		deadline: deadline,
-		errCh:    make(chan error, 1),
+		data:        data,
+		deadline:    deadline,
+		errCh:       acquireWriteErrCh(),
+		pooledErrCh: true,
 	}, false)
 }
 
 func (c *Client) queuePublishWrite(ctx context.Context, data []byte, deadline time.Time, msg *Message) error {
-	dropMeta := &DroppedMessage{
-		Direction:   DroppedMessageOutbound,
-		Reason:      DroppedReasonOutboundBackpressure,
-		Timestamp:   time.Now().UTC(),
-		PayloadSize: len(data),
-	}
+	dropPayloadSz := len(data)
+	dropTopic := ""
+	dropQoS := byte(0)
 	if msg != nil {
-		dropMeta.Topic = msg.Topic
-		dropMeta.QoS = msg.QoS
-		dropMeta.PayloadSize = len(msg.Payload)
+		dropTopic = msg.Topic
+		dropQoS = msg.QoS
+		dropPayloadSz = len(msg.Payload)
 	}
 
 	return c.queueWriteRequest(writeRequest{
 		data:          data,
 		deadline:      deadline,
-		errCh:         make(chan error, 1),
+		errCh:         acquireWriteErrCh(),
+		pooledErrCh:   true,
 		ctx:           ctx,
 		trackOutbound: true,
-		dropMeta:      dropMeta,
+		dropTopic:     dropTopic,
+		dropQoS:       dropQoS,
+		dropPayloadSz: dropPayloadSz,
 	}, false)
 }
 
 func (c *Client) queueControlWrite(data []byte, deadline time.Time) error {
 	return c.queueWriteRequest(writeRequest{
-		data:     data,
-		deadline: deadline,
-		errCh:    make(chan error, 1),
+		data:        data,
+		deadline:    deadline,
+		errCh:       acquireWriteErrCh(),
+		pooledErrCh: true,
 	}, true)
 }
 
 func (c *Client) queueWriteRequest(req writeRequest, control bool) error {
+	recycleErrCh := func() {
+		if req.pooledErrCh {
+			releaseWriteErrCh(req.errCh)
+		}
+	}
+
 	var err error
 	if control {
 		err = c.enqueueControlWrite(req)
@@ -2387,54 +2596,104 @@ func (c *Client) queueWriteRequest(req writeRequest, control bool) error {
 		err = c.enqueueWrite(req)
 	}
 	if err != nil {
+		recycleErrCh()
 		return err
 	}
+	if req.errCh == nil {
+		return nil
+	}
 
-	c.writeStateMu.RLock()
-	sch := c.stopCh
-	done := c.writeDone
-	c.writeStateMu.RUnlock()
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		recycleErrCh()
+		return ErrNotConnected
+	}
+	sch := rt.stopCh
+	done := rt.writeDone
 	if sch == nil || done == nil {
+		recycleErrCh()
 		return ErrNotConnected
 	}
 
 	select {
 	case err := <-req.errCh:
+		recycleErrCh()
 		return err
-	case <-sch:
-		return ErrNotConnected
 	case <-done:
+		select {
+		case err := <-req.errCh:
+			recycleErrCh()
+			return err
+		default:
+		}
+		recycleErrCh()
+		return ErrNotConnected
+	case <-sch:
+		// Prefer a completed write result if already available.
+		select {
+		case err := <-req.errCh:
+			recycleErrCh()
+			return err
+		default:
+		}
+		// If writer has fully stopped, it is safe to recycle pooled channels.
+		// When done hasn't closed yet the writeLoop may still send on errCh,
+		// so we intentionally skip recycling to avoid pool corruption.
+		select {
+		case <-done:
+			select {
+			case err := <-req.errCh:
+				recycleErrCh()
+				return err
+			default:
+			}
+			recycleErrCh()
+		default:
+			// writeLoop still running — channel cannot be safely recycled.
+		}
 		return ErrNotConnected
 	}
 }
 
 // queueControlWriteNoWait sends a control frame (ack, ping, auth response)
-// without waiting for write completion. Drops silently if the control channel
-// is full or the connection is shutting down.
-func (c *Client) queueControlWriteNoWait(data []byte) {
-	defer func() { recover() }()
-	c.writeStateMu.RLock()
-	ch := c.controlWriteCh
-	sch := c.stopCh
-	done := c.writeDone
-	c.writeStateMu.RUnlock()
+// without waiting for write completion.
+// Returns false if the frame could not be enqueued.
+func (c *Client) queueControlWriteNoWait(data []byte) (enqueued bool) {
+	defer func() {
+		if recover() != nil {
+			enqueued = false
+		}
+	}()
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		return false
+	}
+	ch := rt.controlWriteCh
+	sch := rt.stopCh
+	done := rt.writeDone
 	if ch == nil || sch == nil || done == nil {
-		return
+		return false
 	}
 
 	select {
 	case <-sch:
+		return false
 	case <-done:
+		return false
 	case ch <- writeRequest{data: data}:
+		return true
 	default:
+		return false
 	}
 }
 
 func (c *Client) isWritePathActive() bool {
-	c.writeStateMu.RLock()
-	sch := c.stopCh
-	done := c.writeDone
-	c.writeStateMu.RUnlock()
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		return false
+	}
+	sch := rt.stopCh
+	done := rt.writeDone
 	if sch == nil || done == nil {
 		return false
 	}
@@ -2491,33 +2750,53 @@ func (c *Client) reserveOutbound(req writeRequest) error {
 
 		switch policy {
 		case OutboundBackpressureDropNew:
-			c.reportAsyncError(ErrOutboundBackpressure)
-			c.reportDroppedMessage(c.prepareDroppedMeta(req.dropMeta, DroppedMessageOutbound, DroppedReasonOutboundBackpressure))
+			c.reportOutboundBackpressureDrop(req)
 			return ErrOutboundBackpressure
 		case OutboundBackpressureBlockWithTimeout:
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
-				c.reportAsyncError(ErrOutboundBackpressure)
-				c.reportDroppedMessage(c.prepareDroppedMeta(req.dropMeta, DroppedMessageOutbound, DroppedReasonOutboundBackpressure))
+				c.reportOutboundBackpressureDrop(req)
 				return ErrOutboundBackpressure
 			}
 			waitFor := remaining
 			if waitFor > 100*time.Millisecond {
 				waitFor = 100 * time.Millisecond
 			}
-			timer := time.AfterFunc(waitFor, func() { c.outboundCond.Broadcast() })
+			timer := time.AfterFunc(waitFor, func() { c.outboundCond.Signal() })
 			c.outboundCond.Wait()
 			timer.Stop()
 		default:
-			timer := time.AfterFunc(100*time.Millisecond, func() { c.outboundCond.Broadcast() })
-			c.outboundCond.Wait()
-			timer.Stop()
+			if req.ctx == nil {
+				c.outboundCond.Wait()
+			} else {
+				timer := time.AfterFunc(100*time.Millisecond, func() { c.outboundCond.Signal() })
+				c.outboundCond.Wait()
+				timer.Stop()
+			}
 		}
 	}
 
 	c.outboundPendingMessages++
 	c.outboundPendingBytes += size
 	return nil
+}
+
+func (c *Client) reportOutboundBackpressureDrop(req writeRequest) {
+	c.reportAsyncError(ErrOutboundBackpressure)
+
+	payloadSz := req.dropPayloadSz
+	if payloadSz <= 0 {
+		payloadSz = len(req.data)
+	}
+
+	c.reportDroppedMessage(&DroppedMessage{
+		Direction:   DroppedMessageOutbound,
+		Reason:      DroppedReasonOutboundBackpressure,
+		Topic:       req.dropTopic,
+		QoS:         req.dropQoS,
+		PayloadSize: payloadSz,
+		Timestamp:   time.Now().UTC(),
+	})
 }
 
 func (c *Client) canReserveOutboundLocked(size int64) bool {
@@ -2550,12 +2829,16 @@ func (c *Client) releaseOutbound(req writeRequest) {
 		c.outboundPendingBytes = 0
 	}
 	if c.outboundCond != nil {
-		c.outboundCond.Broadcast()
+		c.outboundCond.Signal()
 	}
 	c.outboundMu.Unlock()
 }
 
 func (c *Client) dispatcherChannels() (chan *Message, chan struct{}) {
+	if rt := c.dispatchRT.Load(); rt != nil {
+		return rt.msgCh, rt.msgStop
+	}
+
 	c.dispatchMu.RLock()
 	defer c.dispatchMu.RUnlock()
 	return c.msgCh, c.msgStop
@@ -2640,7 +2923,7 @@ func (c *Client) deliverBlockWithTimeout(msgCh chan *Message, msgStop chan struc
 			return
 		}
 		// Schedule a wakeup at the deadline in case no release happens.
-		timer := time.AfterFunc(remaining, func() { c.pendingCond.Broadcast() })
+		timer := time.AfterFunc(remaining, func() { c.pendingCond.Signal() })
 		c.pendingCond.Wait()
 		timer.Stop()
 	}
@@ -2727,7 +3010,7 @@ func (c *Client) releasePending(msgBytes int64) {
 		c.pendingBytes = 0
 	}
 	if c.pendingCond != nil {
-		c.pendingCond.Broadcast()
+		c.pendingCond.Signal()
 	}
 	c.pendingMu.Unlock()
 }
@@ -2836,14 +3119,16 @@ func (c *Client) DroppedMessages() uint64 {
 }
 
 func (c *Client) writeQueueDepth() int {
-	c.writeStateMu.RLock()
-	defer c.writeStateMu.RUnlock()
-	depth := 0
-	if c.writeCh != nil {
-		depth += len(c.writeCh)
+	rt := c.loadWriteRuntime()
+	if rt == nil {
+		return 0
 	}
-	if c.controlWriteCh != nil {
-		depth += len(c.controlWriteCh)
+	depth := 0
+	if rt.writeCh != nil {
+		depth += len(rt.writeCh)
+	}
+	if rt.controlWriteCh != nil {
+		depth += len(rt.controlWriteCh)
 	}
 	return depth
 }

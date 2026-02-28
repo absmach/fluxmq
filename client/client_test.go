@@ -142,6 +142,58 @@ func TestConnectWrapsErrors(t *testing.T) {
 	})
 }
 
+func TestDispatchMQTTDoesNotHoldLockWhileCallingHandlers(t *testing.T) {
+	c := &Client{
+		subsExact: make(map[string]MessageHandler),
+		subsWild:  make(map[string]MessageHandler),
+		qsubs:     make(map[string]MessageHandler),
+	}
+
+	done := make(chan struct{})
+	c.subsWild["events/#"] = func(_ *Message) {
+		c.mu.Lock()
+		c.mu.Unlock()
+		close(done)
+	}
+
+	go c.dispatchMQTT(&mqttclient.Message{Topic: "events/test", Payload: []byte("payload")})
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("dispatchMQTT appears to hold c.mu while invoking handlers")
+	}
+}
+
+func TestDispatchMQTTMatchesExactAndWildcard(t *testing.T) {
+	c := &Client{
+		subsExact: make(map[string]MessageHandler),
+		subsWild:  make(map[string]MessageHandler),
+		qsubs:     make(map[string]MessageHandler),
+	}
+
+	got := make(chan string, 4)
+	c.subsExact["events/a"] = func(_ *Message) { got <- "exact" }
+	c.subsWild["events/+"] = func(_ *Message) { got <- "wild-plus" }
+	c.subsWild["events/#"] = func(_ *Message) { got <- "wild-hash" }
+
+	c.dispatchMQTT(&mqttclient.Message{Topic: "events/a", Payload: []byte("payload")})
+
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		select {
+		case name := <-got:
+			seen[name] = true
+		case <-time.After(250 * time.Millisecond):
+			t.Fatal("timed out waiting for dispatch handlers")
+		}
+	}
+
+	if !seen["exact"] || !seen["wild-plus"] || !seen["wild-hash"] {
+		t.Fatalf("expected exact and wildcard handlers, got %#v", seen)
+	}
+}
+
 func testMQTTOptions() *mqttclient.Options {
 	return mqttclient.NewOptions().
 		SetServers("127.0.0.1:1").

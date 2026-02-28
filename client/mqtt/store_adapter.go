@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 
 	storebadger "github.com/absmach/fluxmq/client/mqtt/store/badger"
-	storememory "github.com/absmach/fluxmq/client/mqtt/store/memory"
 )
 
 type kvMessageStore struct {
@@ -16,7 +15,7 @@ type kvMessageStore struct {
 
 // NewMemoryStore creates a MessageStore backed by in-memory key/value storage.
 func NewMemoryStore() MessageStore {
-	return newKVMessageStore(storememory.New())
+	return newMemoryMessageStore()
 }
 
 // NewBadgerStore creates a MessageStore backed by BadgerDB key/value storage.
@@ -146,5 +145,4 @@ type rawStore interface {
 }
 
 var _ MessageStore = (*kvMessageStore)(nil)
-var _ rawStore = (*storememory.Store)(nil)
 var _ rawStore = (*storebadger.Store)(nil)

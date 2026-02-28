@@ -23,9 +23,10 @@ type Client struct {
 	mqtt *mqtt.Client
 	amqp *amqp.Client
 
-	mu    sync.RWMutex
-	subs  map[string]MessageHandler
-	qsubs map[string]MessageHandler
+	mu        sync.RWMutex
+	subsExact map[string]MessageHandler
+	subsWild  map[string]MessageHandler
+	qsubs     map[string]MessageHandler
 }
 
 // New creates a unified client configured with one or both transports.
@@ -39,7 +40,8 @@ func New(cfg *Config) (*Client, error) {
 
 	c := &Client{
 		defaultProtocol: cfg.DefaultProtocol,
-		subs:            make(map[string]MessageHandler),
+		subsExact:       make(map[string]MessageHandler),
+		subsWild:        make(map[string]MessageHandler),
 		qsubs:           make(map[string]MessageHandler),
 	}
 
@@ -88,22 +90,25 @@ func (c *Client) Connect(ctx context.Context) error {
 	if c.mqtt == nil && c.amqp == nil {
 		return ErrNoTransport
 	}
-	return doWithContext(ctx, func() error {
-		if c.mqtt != nil {
-			if err := c.mqtt.Connect(); err != nil {
-				return fmt.Errorf("%w: %v", ErrConnectFailed, err)
-			}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if c.amqp != nil {
-			if err := c.amqp.Connect(); err != nil {
-				if c.mqtt != nil {
-					_ = c.mqtt.Close()
-				}
-				return fmt.Errorf("%w: %v", ErrConnectFailed, err)
-			}
+	}
+	if c.mqtt != nil {
+		if err := c.mqtt.Connect(); err != nil {
+			return fmt.Errorf("%w: %v", ErrConnectFailed, err)
 		}
-		return nil
-	})
+	}
+	if c.amqp != nil {
+		if err := c.amqp.Connect(); err != nil {
+			if c.mqtt != nil {
+				_ = c.mqtt.Close()
+			}
+			return fmt.Errorf("%w: %v", ErrConnectFailed, err)
+		}
+	}
+	return nil
 }
 
 // Close terminates the connection.
@@ -111,20 +116,23 @@ func (c *Client) Close(ctx context.Context) error {
 	if c.mqtt == nil && c.amqp == nil {
 		return ErrNoTransport
 	}
-	return doWithContext(ctx, func() error {
-		var errs []error
-		if c.mqtt != nil {
-			if err := c.mqtt.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
-			}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if c.amqp != nil {
-			if err := c.amqp.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
-			}
+	}
+	var errs []error
+	if c.mqtt != nil {
+		if err := c.mqtt.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
 		}
-		return errors.Join(errs...)
-	})
+	}
+	if c.amqp != nil {
+		if err := c.amqp.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // IsConnected reports whether the client is connected.
@@ -151,43 +159,46 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 	if err != nil {
 		return err
 	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 
-	return doWithContext(ctx, func() error {
-		if protocol == ProtocolMQTT {
-			qos := byte(0)
-			if po.QoS != nil {
-				qos = *po.QoS
-			}
-			retain := false
-			if po.Retain != nil {
-				retain = *po.Retain
-			}
-			msg := mqtt.NewMessage(topic, payload, qos, retain)
-			msg.UserProperties = mqttUserProps(po.Properties)
-			if err := c.mqtt.PublishMessage(ctx, msg); err != nil {
-				return fmt.Errorf("%w: %v", ErrPublishFailed, err)
-			}
-			return nil
+	if protocol == ProtocolMQTT {
+		qos := byte(0)
+		if po.QoS != nil {
+			qos = *po.QoS
 		}
-
-		amqpOpts := &amqp.PublishOptions{
-			Exchange:   po.Exchange,
-			RoutingKey: po.RoutingKey,
-			Topic:      topic,
-			Payload:    payload,
-			Properties: amqpHeaders(po.Properties),
+		retain := false
+		if po.Retain != nil {
+			retain = *po.Retain
 		}
-		if po.Mandatory != nil {
-			amqpOpts.Mandatory = *po.Mandatory
-		}
-		if po.Immediate != nil {
-			amqpOpts.Immediate = *po.Immediate
-		}
-		if err := c.amqp.PublishWithOptionsContext(ctx, amqpOpts); err != nil {
+		msg := mqtt.NewMessage(topic, payload, qos, retain)
+		msg.UserProperties = mqttUserProps(po.Properties)
+		if err := c.mqtt.PublishMessage(ctx, msg); err != nil {
 			return fmt.Errorf("%w: %v", ErrPublishFailed, err)
 		}
 		return nil
-	})
+	}
+
+	amqpOpts := &amqp.PublishOptions{
+		Exchange:   po.Exchange,
+		RoutingKey: po.RoutingKey,
+		Topic:      topic,
+		Payload:    payload,
+		Properties: amqpHeaders(po.Properties),
+	}
+	if po.Mandatory != nil {
+		amqpOpts.Mandatory = *po.Mandatory
+	}
+	if po.Immediate != nil {
+		amqpOpts.Immediate = *po.Immediate
+	}
+	if err := c.amqp.PublishWithOptionsContext(ctx, amqpOpts); err != nil {
+		return fmt.Errorf("%w: %v", ErrPublishFailed, err)
+	}
+	return nil
 }
 
 // Subscribe subscribes to a topic and routes matching messages to handler.
@@ -198,39 +209,41 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handler MessageHan
 	if handler == nil {
 		return fmt.Errorf("%w: handler cannot be nil", ErrSubscribeFailed)
 	}
-
 	so := buildSubscribeOptions(opts)
 	protocol, err := c.resolveProtocol(so.Protocol)
 	if err != nil {
 		return err
 	}
-	return doWithContext(ctx, func() error {
-		if protocol == ProtocolMQTT {
-			qos := byte(0)
-			if so.QoS != nil {
-				qos = *so.QoS
-			}
-			if err := c.mqtt.SubscribeSingle(ctx, topic, qos); err != nil {
-				return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
-			}
-			c.mu.Lock()
-			c.subs[topic] = handler
-			c.mu.Unlock()
-			return nil
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-
-		autoAck := true
-		if so.AutoAck != nil {
-			autoAck = *so.AutoAck
+	}
+	if protocol == ProtocolMQTT {
+		qos := byte(0)
+		if so.QoS != nil {
+			qos = *so.QoS
 		}
-		subOpts := &amqp.SubscribeOptions{Topic: topic, AutoAck: autoAck}
-		if err := c.amqp.SubscribeWithOptions(subOpts, func(msg *amqp.Message) {
-			handler(amqpToMessage(msg, ""))
-		}); err != nil {
+		if err := c.mqtt.SubscribeSingle(ctx, topic, qos); err != nil {
 			return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
 		}
+		c.mu.Lock()
+		c.setMQTTSubLocked(topic, handler)
+		c.mu.Unlock()
 		return nil
-	})
+	}
+
+	autoAck := true
+	if so.AutoAck != nil {
+		autoAck = *so.AutoAck
+	}
+	subOpts := &amqp.SubscribeOptions{Topic: topic, AutoAck: autoAck}
+	if err := c.amqp.SubscribeWithOptions(subOpts, func(msg *amqp.Message) {
+		handler(amqpToMessage(msg, ""))
+	}); err != nil {
+		return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
+	}
+	return nil
 }
 
 // Unsubscribe removes a topic subscription.
@@ -243,23 +256,27 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string, opts ...Option) 
 	if err != nil {
 		return err
 	}
-
-	return doWithContext(ctx, func() error {
-		if protocol == ProtocolMQTT {
-			if err := c.mqtt.Unsubscribe(ctx, topic); err != nil {
-				return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
-			}
-			c.mu.Lock()
-			delete(c.subs, topic)
-			c.mu.Unlock()
-			return nil
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+	}
 
-		if err := c.amqp.Unsubscribe(topic); err != nil {
+	if protocol == ProtocolMQTT {
+		if err := c.mqtt.Unsubscribe(ctx, topic); err != nil {
 			return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
 		}
+		c.mu.Lock()
+		delete(c.subsExact, topic)
+		delete(c.subsWild, topic)
+		c.mu.Unlock()
 		return nil
-	})
+	}
+
+	if err := c.amqp.Unsubscribe(topic); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
+	}
+	return nil
 }
 
 // PublishToQueue publishes a message to a durable queue.
@@ -272,35 +289,38 @@ func (c *Client) PublishToQueue(ctx context.Context, queue string, payload []byt
 	if err != nil {
 		return err
 	}
-
-	return doWithContext(ctx, func() error {
-		if protocol == ProtocolMQTT {
-			qos := byte(1)
-			if po.QoS != nil {
-				qos = *po.QoS
-			}
-			qopts := &mqtt.QueuePublishOptions{
-				QueueName:  queue,
-				Payload:    payload,
-				Properties: mqttUserProps(po.Properties),
-				QoS:        qos,
-			}
-			if err := c.mqtt.PublishToQueueWithOptions(ctx, qopts); err != nil {
-				return fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
-			}
-			return nil
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+	}
 
-		qopts := &amqp.QueuePublishOptions{
+	if protocol == ProtocolMQTT {
+		qos := byte(1)
+		if po.QoS != nil {
+			qos = *po.QoS
+		}
+		qopts := &mqtt.QueuePublishOptions{
 			QueueName:  queue,
 			Payload:    payload,
-			Properties: amqpHeaders(po.Properties),
+			Properties: mqttUserProps(po.Properties),
+			QoS:        qos,
 		}
-		if err := c.amqp.PublishToQueueWithOptionsContext(ctx, qopts); err != nil {
+		if err := c.mqtt.PublishToQueueWithOptions(ctx, qopts); err != nil {
 			return fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
 		}
 		return nil
-	})
+	}
+
+	qopts := &amqp.QueuePublishOptions{
+		QueueName:  queue,
+		Payload:    payload,
+		Properties: amqpHeaders(po.Properties),
+	}
+	if err := c.amqp.PublishToQueueWithOptionsContext(ctx, qopts); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
+	}
+	return nil
 }
 
 // SubscribeToQueue subscribes to a queue with a consumer group.
@@ -316,27 +336,30 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 	if err != nil {
 		return err
 	}
-
-	return doWithContext(ctx, func() error {
-		if protocol == ProtocolMQTT {
-			if err := c.mqtt.SubscribeToQueue(ctx, queue, group, func(msg *mqtt.QueueMessage) {
-				handler(mqttQueueToMessage(msg, queue))
-			}); err != nil {
-				return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
-			}
-			c.mu.Lock()
-			c.qsubs[queue] = handler
-			c.mu.Unlock()
-			return nil
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+	}
 
-		if err := c.amqp.SubscribeToQueue(queue, group, func(msg *amqp.QueueMessage) {
-			handler(amqpQueueToMessage(msg, queue))
+	if protocol == ProtocolMQTT {
+		if err := c.mqtt.SubscribeToQueue(ctx, queue, group, func(msg *mqtt.QueueMessage) {
+			handler(mqttQueueToMessage(msg, queue))
 		}); err != nil {
 			return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
 		}
+		c.mu.Lock()
+		c.qsubs[queue] = handler
+		c.mu.Unlock()
 		return nil
-	})
+	}
+
+	if err := c.amqp.SubscribeToQueue(queue, group, func(msg *amqp.QueueMessage) {
+		handler(amqpQueueToMessage(msg, queue))
+	}); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
+	}
+	return nil
 }
 
 // UnsubscribeFromQueue removes a queue subscription.
@@ -349,23 +372,26 @@ func (c *Client) UnsubscribeFromQueue(ctx context.Context, queue string, opts ..
 	if err != nil {
 		return err
 	}
-
-	return doWithContext(ctx, func() error {
-		if protocol == ProtocolMQTT {
-			if err := c.mqtt.UnsubscribeFromQueue(ctx, queue); err != nil {
-				return fmt.Errorf("%w: %v", ErrQueueUnsubFailed, err)
-			}
-			c.mu.Lock()
-			delete(c.qsubs, queue)
-			c.mu.Unlock()
-			return nil
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+	}
 
-		if err := c.amqp.UnsubscribeFromQueue(queue); err != nil {
+	if protocol == ProtocolMQTT {
+		if err := c.mqtt.UnsubscribeFromQueue(ctx, queue); err != nil {
 			return fmt.Errorf("%w: %v", ErrQueueUnsubFailed, err)
 		}
+		c.mu.Lock()
+		delete(c.qsubs, queue)
+		c.mu.Unlock()
 		return nil
-	})
+	}
+
+	if err := c.amqp.UnsubscribeFromQueue(queue); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueueUnsubFailed, err)
+	}
+	return nil
 }
 
 func (c *Client) newMQTTClient(opts *mqtt.Options) (*mqtt.Client, error) {
@@ -431,13 +457,47 @@ func (c *Client) dispatchMQTT(msg *mqtt.Message) {
 	if msg == nil {
 		return
 	}
+
+	var buf [4]MessageHandler
+	handlers := buf[:0]
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for filter, handler := range c.subs {
+	if handler, ok := c.subsExact[msg.Topic]; ok {
+		handlers = append(handlers, handler)
+	}
+	for filter, handler := range c.subsWild {
 		if topics.TopicMatch(filter, msg.Topic) {
-			handler(mqttToMessage(msg))
+			handlers = append(handlers, handler)
 		}
 	}
+	c.mu.RUnlock()
+
+	if len(handlers) == 0 {
+		return
+	}
+	converted := mqttToMessage(msg)
+	if converted == nil {
+		return
+	}
+	for _, handler := range handlers {
+		if handler == nil {
+			continue
+		}
+		handler(converted)
+	}
+}
+
+func (c *Client) setMQTTSubLocked(topic string, handler MessageHandler) {
+	if isWildcardFilter(topic) {
+		c.subsWild[topic] = handler
+		delete(c.subsExact, topic)
+		return
+	}
+	c.subsExact[topic] = handler
+	delete(c.subsWild, topic)
+}
+
+func isWildcardFilter(topic string) bool {
+	return strings.ContainsAny(topic, "+#")
 }
 
 func mqttToMessage(msg *mqtt.Message) *Message {
@@ -573,14 +633,4 @@ func amqpHeaders(props map[string]string) map[string]string {
 		return nil
 	}
 	return out
-}
-
-func doWithContext(ctx context.Context, fn func() error) error {
-	if ctx == nil {
-		return fn()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fn()
 }

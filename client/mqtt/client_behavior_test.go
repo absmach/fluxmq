@@ -156,6 +156,14 @@ func setupWriteLoop(c *Client, conn net.Conn) {
 	c.writeCh = make(chan writeRequest, 256)
 	c.controlWriteCh = make(chan writeRequest, 64)
 	c.writeDone = make(chan struct{})
+	c.writeRT.Store(&writeRuntime{
+		conn:           c.conn,
+		stopCh:         c.stopCh,
+		doneCh:         c.doneCh,
+		writeCh:        c.writeCh,
+		controlWriteCh: c.controlWriteCh,
+		writeDone:      c.writeDone,
+	})
 	go c.writeLoop()
 }
 
@@ -591,6 +599,28 @@ func TestControlWriteNoWaitDropsWhenFull(t *testing.T) {
 
 	// Only one message should be in the channel.
 	assert.Len(t, c.controlWriteCh, 1)
+}
+
+func TestSendPingDroppedControlWriteClearsPingState(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("ping-control-drop"))
+	require.NoError(t, err)
+
+	c.writeStateMu.Lock()
+	c.controlWriteCh = make(chan writeRequest, 1)
+	c.stopCh = make(chan struct{})
+	c.writeDone = make(chan struct{})
+	c.controlWriteCh <- writeRequest{data: []byte("full")}
+	c.writeStateMu.Unlock()
+
+	c.sendPing()
+
+	c.pingMu.Lock()
+	waiting := c.waitingPing
+	lastSent := c.lastPingSent
+	c.pingMu.Unlock()
+
+	require.False(t, waiting, "ping should not remain pending if enqueue fails")
+	require.True(t, lastSent.IsZero(), "lastPingSent should be cleared when ping enqueue fails")
 }
 
 func TestControlWriteNoWaitConcurrentWithCleanupDoesNotPanic(t *testing.T) {
