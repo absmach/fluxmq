@@ -6,10 +6,6 @@ package mqtt
 import (
 	"context"
 	"time"
-
-	"github.com/absmach/fluxmq/mqtt/packets"
-	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
-	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
 func (c *Client) openPending(opType pendingType, msg *Message) (uint16, *pendingOp, error) {
@@ -51,7 +47,36 @@ func (c *Client) sendAndAwaitPending(ctx context.Context, opType pendingType, ms
 	return c.waitPendingAck(ctx, packetID, op)
 }
 
-func (c *Client) rollbackStoredPublish(packetID uint16) {
+func (c *Client) stageQoSPublish(msg *Message) (uint16, *Message, *pendingOp, error) {
+	if msg == nil {
+		return 0, nil, nil, ErrInvalidMessage
+	}
+
+	packetID := c.pending.nextPacketID()
+	if packetID == 0 {
+		return 0, nil, nil, ErrMaxInflight
+	}
+
+	staged := msg.Copy()
+	if staged == nil {
+		return 0, nil, nil, ErrInvalidMessage
+	}
+	staged.PacketID = packetID
+
+	if err := c.store.StoreOutbound(packetID, staged); err != nil {
+		return 0, nil, nil, err
+	}
+
+	op, err := c.pending.add(packetID, pendingPublish, staged)
+	if err != nil {
+		_ = c.store.DeleteOutbound(packetID)
+		return 0, nil, nil, err
+	}
+
+	return packetID, staged, op, nil
+}
+
+func (c *Client) rollbackStagedPublish(packetID uint16) {
 	c.pending.remove(packetID)
 	c.store.DeleteOutbound(packetID)
 }
@@ -105,24 +130,13 @@ func (c *Client) publishInternal(ctx context.Context, msg *Message, waitAck bool
 		return nil, 0, c.sendPublish(ctx, msg, 0)
 	}
 
-	publishMsg := msg.Copy()
-	if publishMsg == nil {
-		return nil, 0, ErrInvalidMessage
-	}
-
-	packetID, op, err := c.openPending(pendingPublish, publishMsg)
+	packetID, publishMsg, op, err := c.stageQoSPublish(msg)
 	if err != nil {
-		return nil, 0, err
-	}
-	publishMsg.PacketID = packetID
-
-	if err := c.store.StoreOutbound(packetID, publishMsg); err != nil {
-		c.pending.remove(packetID)
 		return nil, 0, err
 	}
 
 	if err := c.sendPublish(ctx, publishMsg, packetID); err != nil {
-		c.rollbackStoredPublish(packetID)
+		c.rollbackStagedPublish(packetID)
 		return nil, 0, err
 	}
 
@@ -280,89 +294,20 @@ func (c *Client) subscribeWithOptions(ctx context.Context, opts []*SubscribeOpti
 }
 
 func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[string]byte) error {
-	deadline := c.writeDeadline(ctx)
-
-	if c.isMQTTv5() {
-		opts := make([]v5.SubOption, 0, len(topics))
-		for topic, qos := range topics {
-			opts = append(opts, v5.SubOption{Topic: topic, MaxQoS: qos})
-		}
-		pkt := &v5.Subscribe{
-			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
-			ID:          packetID,
-			Opts:        opts,
-		}
-		c.updateActivity()
-		return c.queueWrite(pkt.Encode(), deadline)
-	}
-
-	ts := make([]v3.Topic, 0, len(topics))
+	opts := make([]*SubscribeOption, 0, len(topics))
 	for topic, qos := range topics {
-		ts = append(ts, v3.Topic{Name: topic, QoS: qos})
+		opts = append(opts, &SubscribeOption{Topic: topic, QoS: qos})
 	}
-	pkt := &v3.Subscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
-		ID:          packetID,
-		Topics:      ts,
-	}
+	return c.sendSubscribePacket(ctx, packetID, opts)
+}
+
+func (c *Client) sendSubscribePacket(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
 	c.updateActivity()
-	return c.queueWrite(pkt.Encode(), deadline)
+	return c.queueWrite(c.encodeSubscribePacket(packetID, opts), c.writeDeadline(ctx))
 }
 
 func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
-	deadline := c.writeDeadline(ctx)
-
-	if c.isMQTTv5() {
-		v5Opts := make([]v5.SubOption, len(opts))
-		for i, opt := range opts {
-			v5Opts[i] = v5.SubOption{
-				Topic:  opt.Topic,
-				MaxQoS: opt.QoS,
-			}
-
-			if opt.NoLocal {
-				noLocal := true
-				v5Opts[i].NoLocal = &noLocal
-			}
-
-			if opt.RetainAsPublished {
-				rap := true
-				v5Opts[i].RetainAsPublished = &rap
-			}
-
-			if opt.RetainHandling > 0 {
-				v5Opts[i].RetainHandling = &opt.RetainHandling
-			}
-		}
-
-		pkt := &v5.Subscribe{
-			FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
-			ID:          packetID,
-			Opts:        v5Opts,
-		}
-
-		if len(opts) > 0 && opts[0].SubscriptionID > 0 {
-			subID := int(opts[0].SubscriptionID)
-			pkt.Properties = &v5.SubscribeProperties{
-				SubscriptionIdentifier: &subID,
-			}
-		}
-
-		c.updateActivity()
-		return c.queueWrite(pkt.Encode(), deadline)
-	}
-
-	ts := make([]v3.Topic, len(opts))
-	for i, opt := range opts {
-		ts[i] = v3.Topic{Name: opt.Topic, QoS: opt.QoS}
-	}
-	pkt := &v3.Subscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
-		ID:          packetID,
-		Topics:      ts,
-	}
-	c.updateActivity()
-	return c.queueWrite(pkt.Encode(), deadline)
+	return c.sendSubscribePacket(ctx, packetID, opts)
 }
 
 // Unsubscribe unsubscribes from one or more topics.
@@ -392,25 +337,8 @@ func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 }
 
 func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []string) error {
-	deadline := c.writeDeadline(ctx)
-
-	if c.isMQTTv5() {
-		pkt := &v5.Unsubscribe{
-			FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType, QoS: 1},
-			ID:          packetID,
-			Topics:      topics,
-		}
-		c.updateActivity()
-		return c.queueWrite(pkt.Encode(), deadline)
-	}
-
-	pkt := &v3.Unsubscribe{
-		FixedHeader: packets.FixedHeader{PacketType: packets.UnsubscribeType, QoS: 1},
-		ID:          packetID,
-		Topics:      topics,
-	}
 	c.updateActivity()
-	return c.queueWrite(pkt.Encode(), deadline)
+	return c.queueWrite(c.encodeUnsubscribePacket(packetID, topics), c.writeDeadline(ctx))
 }
 
 // SubscribeAsync subscribes in a background goroutine and returns a completion token.

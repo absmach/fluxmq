@@ -181,39 +181,32 @@ func (c *Client) restoreOutboundMessages() {
 
 		originalPacketID := msg.PacketID
 
-		packetID := c.pending.nextPacketID()
-		if packetID == 0 {
+		replay := msg.Copy()
+		if replay == nil {
+			storeForRetry(msg, msg.PacketID)
+			continue
+		}
+		replay.Dup = true
+
+		packetID, staged, _, err := c.stageQoSPublish(replay)
+		if err == ErrMaxInflight {
 			// Inflight slots exhausted — preserve all remaining messages.
 			for _, remaining := range msgs[i:] {
 				if remaining != nil && remaining.QoS > 0 {
 					storeForRetry(remaining, remaining.PacketID)
 				}
 			}
-			c.reportAsyncError(ErrMaxInflight)
+			c.reportAsyncError(err)
 			return
 		}
-
-		replay := msg.Copy()
-		if replay == nil {
-			storeForRetry(msg, msg.PacketID)
-			continue
-		}
-		replay.PacketID = packetID
-		replay.Dup = true
-
-		if err := c.store.StoreOutbound(packetID, replay); err != nil {
+		if err != nil {
 			c.reportAsyncError(err)
 			storeForRetry(msg, originalPacketID)
 			continue
 		}
 		usedStoreIDs[packetID] = struct{}{}
 
-		if _, err := c.pending.add(packetID, pendingPublish, replay); err != nil {
-			c.reportAsyncError(err)
-			continue
-		}
-
-		if err := c.sendPublish(nil, replay, packetID); err != nil {
+		if err := c.sendPublish(nil, staged, packetID); err != nil {
 			c.pending.remove(packetID)
 			c.reportAsyncError(err)
 			continue
@@ -312,45 +305,29 @@ func (c *Client) flushReconnectBuffer() {
 			continue
 		}
 
-		packetID := c.pending.nextPacketID()
-		if packetID == 0 {
-			c.prependReconnectBuffer(entries[i:])
-			c.reportAsyncError(ErrMaxInflight)
-			return
-		}
-
 		msg, err := c.decodeBufferedPublish(entry.wire)
 		if err != nil {
 			c.prependReconnectBuffer(entries[i:])
 			c.reportAsyncError(err)
 			return
 		}
-		msg.PacketID = packetID
 
-		if err := c.store.StoreOutbound(packetID, msg); err != nil {
-			c.prependReconnectBuffer(entries[i:])
-			c.reportAsyncError(err)
-			return
-		}
-
-		if _, err := c.pending.add(packetID, pendingPublish, msg); err != nil {
-			_ = c.store.DeleteOutbound(packetID)
+		packetID, _, _, err := c.stageQoSPublish(msg)
+		if err != nil {
 			c.prependReconnectBuffer(entries[i:])
 			c.reportAsyncError(err)
 			return
 		}
 
 		if err := patchPublishPacketID(entry.wire, packetID); err != nil {
-			c.pending.remove(packetID)
-			_ = c.store.DeleteOutbound(packetID)
+			c.rollbackStagedPublish(packetID)
 			c.prependReconnectBuffer(entries[i:])
 			c.reportAsyncError(err)
 			return
 		}
 
 		if err := c.queuePublishRawWrite(nil, entry.wire, c.writeDeadline(nil), entry.topic, entry.qos, entry.payloadSz, true); err != nil {
-			c.pending.remove(packetID)
-			_ = c.store.DeleteOutbound(packetID)
+			c.rollbackStagedPublish(packetID)
 			c.prependReconnectBuffer(entries[i:])
 			c.reportAsyncError(err)
 			return

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/mqtt/packets"
-	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
@@ -74,69 +73,9 @@ func (c *Client) handlePacket(pkt packets.ControlPacket) {
 }
 
 func (c *Client) handlePublish(pkt packets.ControlPacket) {
-	var msg *Message
-
-	if c.isMQTTv5() {
-		p := pkt.(*v5.Publish)
-
-		topic := p.TopicName
-
-		// Handle topic alias
-		if c.topicAliases != nil && p.Properties != nil && p.Properties.TopicAlias != nil {
-			alias := *p.Properties.TopicAlias
-
-			if topic != "" {
-				// Server sent both topic and alias - register the mapping
-				c.topicAliases.registerInbound(alias, topic)
-			} else {
-				// Server sent only alias - resolve it
-				var ok bool
-				topic, ok = c.topicAliases.resolveInbound(alias)
-				if !ok {
-					// Unknown alias - protocol error, ignore message
-					return
-				}
-			}
-		}
-
-		msg = &Message{
-			Topic:    topic,
-			Payload:  p.Payload,
-			QoS:      p.QoS,
-			Retain:   p.Retain,
-			Dup:      p.Dup,
-			PacketID: p.ID,
-		}
-
-		// Parse v5 properties
-		if p.Properties != nil {
-			msg.PayloadFormat = p.Properties.PayloadFormat
-			msg.MessageExpiry = p.Properties.MessageExpiry
-			msg.ContentType = p.Properties.ContentType
-			msg.ResponseTopic = p.Properties.ResponseTopic
-			msg.CorrelationData = p.Properties.CorrelationData
-
-			if len(p.Properties.User) > 0 {
-				msg.UserProperties = make(map[string]string, len(p.Properties.User))
-				for _, u := range p.Properties.User {
-					msg.UserProperties[u.Key] = u.Value
-				}
-			}
-
-			if p.Properties.SubscriptionID != nil {
-				msg.SubscriptionIDs = []uint32{uint32(*p.Properties.SubscriptionID)}
-			}
-		}
-	} else {
-		p := pkt.(*v3.Publish)
-		msg = &Message{
-			Topic:    p.TopicName,
-			Payload:  p.Payload,
-			QoS:      p.QoS,
-			Retain:   p.Retain,
-			Dup:      p.Dup,
-			PacketID: p.ID,
-		}
+	msg, ok := c.decodeIncomingPublish(pkt)
+	if !ok || msg == nil {
+		return
 	}
 
 	switch msg.QoS {

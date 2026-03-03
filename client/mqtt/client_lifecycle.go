@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
@@ -199,147 +198,7 @@ func (c *Client) sendConnect(conn net.Conn) error {
 	defer conn.SetWriteDeadline(time.Time{})
 
 	keepAlive := uint16(c.opts.KeepAlive.Seconds())
-
-	if c.isMQTTv5() {
-		pkt := &v5.Connect{
-			FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-			ClientID:        c.opts.ClientID,
-			KeepAlive:       keepAlive,
-			ProtocolName:    "MQTT",
-			ProtocolVersion: 5,
-			CleanStart:      c.opts.CleanSession,
-		}
-
-		if c.opts.Username != "" {
-			pkt.UsernameFlag = true
-			pkt.Username = c.opts.Username
-		}
-		if c.opts.Password != "" {
-			pkt.PasswordFlag = true
-			pkt.Password = []byte(c.opts.Password)
-		}
-
-		if c.opts.Will != nil {
-			pkt.WillFlag = true
-			pkt.WillQoS = c.opts.Will.QoS
-			pkt.WillRetain = c.opts.Will.Retain
-			pkt.WillTopic = c.opts.Will.Topic
-			pkt.WillPayload = c.opts.Will.Payload
-
-			// Set v5 Will properties
-			if c.opts.Will.WillDelayInterval > 0 || c.opts.Will.PayloadFormat != nil ||
-				c.opts.Will.MessageExpiry > 0 || c.opts.Will.ContentType != "" ||
-				c.opts.Will.ResponseTopic != "" || len(c.opts.Will.CorrelationData) > 0 ||
-				len(c.opts.Will.UserProperties) > 0 {
-				pkt.WillProperties = &v5.WillProperties{}
-
-				if c.opts.Will.WillDelayInterval > 0 {
-					pkt.WillProperties.WillDelayInterval = &c.opts.Will.WillDelayInterval
-				}
-
-				if c.opts.Will.PayloadFormat != nil {
-					pkt.WillProperties.PayloadFormat = c.opts.Will.PayloadFormat
-				}
-
-				if c.opts.Will.MessageExpiry > 0 {
-					pkt.WillProperties.MessageExpiry = &c.opts.Will.MessageExpiry
-				}
-
-				if c.opts.Will.ContentType != "" {
-					pkt.WillProperties.ContentType = c.opts.Will.ContentType
-				}
-
-				if c.opts.Will.ResponseTopic != "" {
-					pkt.WillProperties.ResponseTopic = c.opts.Will.ResponseTopic
-				}
-
-				if len(c.opts.Will.CorrelationData) > 0 {
-					pkt.WillProperties.CorrelationData = c.opts.Will.CorrelationData
-				}
-
-				if len(c.opts.Will.UserProperties) > 0 {
-					pkt.WillProperties.User = make([]v5.User, 0, len(c.opts.Will.UserProperties))
-					for k, v := range c.opts.Will.UserProperties {
-						pkt.WillProperties.User = append(pkt.WillProperties.User, v5.User{Key: k, Value: v})
-					}
-				}
-			}
-		}
-
-		// Set v5 Connect properties
-		if c.opts.SessionExpiry > 0 || c.opts.ReceiveMaximum > 0 ||
-			c.opts.MaximumPacketSize > 0 || c.opts.TopicAliasMaximum > 0 ||
-			c.opts.RequestResponseInfo || !c.opts.RequestProblemInfo ||
-			c.opts.AuthMethod != "" {
-			if pkt.Properties == nil {
-				pkt.Properties = &v5.ConnectProperties{}
-			}
-
-			if c.opts.SessionExpiry > 0 {
-				pkt.Properties.SessionExpiryInterval = &c.opts.SessionExpiry
-			}
-
-			if c.opts.ReceiveMaximum > 0 {
-				pkt.Properties.ReceiveMaximum = &c.opts.ReceiveMaximum
-			}
-
-			if c.opts.MaximumPacketSize > 0 {
-				pkt.Properties.MaximumPacketSize = &c.opts.MaximumPacketSize
-			}
-
-			if c.opts.TopicAliasMaximum > 0 {
-				pkt.Properties.TopicAliasMaximum = &c.opts.TopicAliasMaximum
-			}
-
-			if c.opts.RequestResponseInfo {
-				one := byte(1)
-				pkt.Properties.RequestResponseInfo = &one
-			}
-
-			// RequestProblemInfo defaults to true, only set if explicitly false
-			if !c.opts.RequestProblemInfo {
-				zero := byte(0)
-				pkt.Properties.RequestProblemInfo = &zero
-			}
-
-			if c.opts.AuthMethod != "" {
-				pkt.Properties.AuthMethod = c.opts.AuthMethod
-				pkt.Properties.AuthData = c.opts.AuthData
-			}
-		}
-
-		c.updateActivity()
-		return pkt.Pack(conn)
-	}
-
-	// MQTT 3.1.1
-	pkt := &v3.Connect{
-		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ClientID:        c.opts.ClientID,
-		KeepAlive:       keepAlive,
-		ProtocolName:    "MQTT",
-		ProtocolVersion: 4,
-		CleanSession:    c.opts.CleanSession,
-	}
-
-	if c.opts.Username != "" {
-		pkt.UsernameFlag = true
-		pkt.Username = c.opts.Username
-	}
-	if c.opts.Password != "" {
-		pkt.PasswordFlag = true
-		pkt.Password = []byte(c.opts.Password)
-	}
-
-	if c.opts.Will != nil {
-		pkt.WillFlag = true
-		pkt.WillQoS = c.opts.Will.QoS
-		pkt.WillRetain = c.opts.Will.Retain
-		pkt.WillTopic = c.opts.Will.Topic
-		pkt.WillMessage = c.opts.Will.Payload
-	}
-
-	return pkt.Pack(conn)
+	return c.packConnectPacket(conn, keepAlive)
 }
 
 func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckCode, error) {
@@ -491,32 +350,7 @@ func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32,
 		return
 	}
 	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-
-	if c.isMQTTv5() {
-		pkt := &v5.Disconnect{
-			FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
-			ReasonCode:  reasonCode,
-		}
-
-		if sessionExpiry > 0 || reasonString != "" {
-			pkt.Properties = &v5.DisconnectProperties{}
-
-			if sessionExpiry > 0 {
-				pkt.Properties.SessionExpiryInterval = &sessionExpiry
-			}
-
-			if reasonString != "" {
-				pkt.Properties.ReasonString = reasonString
-			}
-		}
-
-		pkt.Pack(conn)
-	} else {
-		pkt := &v3.Disconnect{
-			FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
-		}
-		pkt.Pack(conn)
-	}
+	_, _ = conn.Write(c.encodeDisconnectPacket(reasonCode, sessionExpiry, reasonString))
 }
 
 // Close permanently closes the client.
