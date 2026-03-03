@@ -197,14 +197,14 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 	}
 	if c.mqtt != nil {
-		if err := c.mqtt.Connect(); err != nil {
+		if err := c.mqtt.Connect(ctx); err != nil {
 			return fmt.Errorf("%w: %v", ErrConnectFailed, err)
 		}
 	}
 	if c.amqp != nil {
 		if err := c.amqp.Connect(); err != nil {
 			if c.mqtt != nil {
-				_ = c.mqtt.Close()
+				_ = c.mqtt.Close(ctx)
 			}
 			return fmt.Errorf("%w: %v", ErrConnectFailed, err)
 		}
@@ -225,7 +225,7 @@ func (c *Client) Close(ctx context.Context) error {
 	c.stopAllMQTTSubs()
 	var errs []error
 	if c.mqtt != nil {
-		if err := c.mqtt.Close(); err != nil {
+		if err := c.mqtt.Close(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
 		}
 	}

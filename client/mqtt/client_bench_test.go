@@ -3,7 +3,10 @@
 
 package mqtt
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func setupBenchClient(b *testing.B, opts *Options) *Client {
 	b.Helper()
@@ -14,7 +17,7 @@ func setupBenchClient(b *testing.B, opts *Options) *Client {
 	}
 	c.state.set(StateConnected)
 	setupWriteLoop(c, &packetCaptureConn{})
-	b.Cleanup(func() { c.cleanup(nil) })
+	b.Cleanup(func() { c.cleanup(context.Background(), nil) })
 
 	return c
 }

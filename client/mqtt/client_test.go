@@ -215,7 +215,7 @@ func TestClientClose(t *testing.T) {
 	opts := NewOptions().SetClientID("test-client")
 	client, _ := New(opts)
 
-	err := client.Close()
+	err := client.Close(context.Background())
 	if err != nil {
 		t.Errorf("Close failed: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestClientClose(t *testing.T) {
 	}
 
 	// Operations should fail after close
-	err = client.Connect()
+	err = client.Connect(context.Background())
 	if err != ErrClientClosed {
 		t.Errorf("Connect after Close should fail with ErrClientClosed, got: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestClientCloseConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = client.Close()
+			_ = client.Close(context.Background())
 		}()
 	}
 	wg.Wait()
@@ -284,11 +284,11 @@ func TestClientCloseAndDisconnectConcurrent(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_ = client.Disconnect()
+			_ = client.Disconnect(context.Background())
 		}()
 		go func() {
 			defer wg.Done()
-			_ = client.Close()
+			_ = client.Close(context.Background())
 		}()
 		wg.Wait()
 
@@ -306,10 +306,10 @@ func TestClientConnectFailure(t *testing.T) {
 
 	client, _ := New(opts)
 
-	err := client.Connect()
+	err := client.Connect(context.Background())
 	if err == nil {
 		t.Error("Connect to non-existent server should fail")
-		client.Disconnect()
+		client.Disconnect(context.Background())
 	}
 
 	if client.State() != StateDisconnected {
@@ -321,7 +321,7 @@ func TestClientDisconnectWhenNotConnected(t *testing.T) {
 	opts := NewOptions().SetClientID("test-client")
 	client, _ := New(opts)
 
-	err := client.Disconnect()
+	err := client.Disconnect(context.Background())
 	if err != nil {
 		t.Errorf("Disconnect when not connected should not error, got: %v", err)
 	}

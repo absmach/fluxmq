@@ -350,7 +350,11 @@ func (c *Client) encodeQoSControlPacket(packetType byte, packetID uint16, qos by
 	}
 }
 
-func (c *Client) Connect() error {
+func (c *Client) Connect(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
 
@@ -362,7 +366,7 @@ func (c *Client) Connect() error {
 		return ErrAlreadyConnected
 	}
 
-	err := c.doConnect()
+	err := c.doConnect(ctx)
 	if err != nil {
 		if !c.state.isClosed() {
 			c.state.set(StateDisconnected)
@@ -440,14 +444,14 @@ func (c *Client) Connect() error {
 	return nil
 }
 
-func (c *Client) doConnect() error {
+func (c *Client) doConnect(ctx context.Context) error {
 	// Try each server in order
 	var lastErr error
 	for i := 0; i < len(c.opts.Servers); i++ {
 		idx := (c.serverIdx + i) % len(c.opts.Servers)
 		addr := c.opts.Servers[idx]
 
-		err := c.connectToServer(addr)
+		err := c.connectToServer(ctx, addr)
 		if err == nil {
 			c.serverIdx = idx
 			return nil
@@ -461,19 +465,34 @@ func (c *Client) doConnect() error {
 	return ErrConnectFailed
 }
 
-func (c *Client) connectToServer(addr string) error {
+func (c *Client) connectToServer(ctx context.Context, addr string) error {
 	// Establish TCP connection
+	dialer := &net.Dialer{Timeout: c.opts.ConnectTimeout}
+
 	var conn net.Conn
 	var err error
-
-	dialer := &net.Dialer{Timeout: c.opts.ConnectTimeout}
 	if c.opts.TLSConfig != nil {
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, c.opts.TLSConfig)
+		rawConn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+		if dialErr != nil {
+			return dialErr
+		}
+		tlsConn := tls.Client(rawConn, c.opts.TLSConfig)
+		if deadline, ok := ctx.Deadline(); ok && (c.opts.ConnectTimeout <= 0 || time.Until(deadline) < c.opts.ConnectTimeout) {
+			tlsConn.SetDeadline(deadline)
+		} else if c.opts.ConnectTimeout > 0 {
+			tlsConn.SetDeadline(time.Now().Add(c.opts.ConnectTimeout))
+		}
+		if err = tlsConn.Handshake(); err != nil {
+			tlsConn.Close()
+			return err
+		}
+		tlsConn.SetDeadline(time.Time{})
+		conn = tlsConn
 	} else {
-		conn, err = dialer.Dial("tcp", addr)
-	}
-	if err != nil {
-		return err
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Send CONNECT packet
@@ -483,7 +502,7 @@ func (c *Client) connectToServer(addr string) error {
 	}
 
 	// Read CONNACK
-	code, err := c.readConnAck(conn)
+	code, err := c.readConnAck(ctx, conn)
 	if err != nil {
 		conn.Close()
 		return err
@@ -648,8 +667,12 @@ func (c *Client) sendConnect(conn net.Conn) error {
 	return pkt.Pack(conn)
 }
 
-func (c *Client) readConnAck(conn net.Conn) (ConnAckCode, error) {
-	conn.SetReadDeadline(time.Now().Add(c.opts.ConnectTimeout))
+func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckCode, error) {
+	deadline := time.Now().Add(c.opts.ConnectTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	conn.SetReadDeadline(deadline)
 	defer conn.SetReadDeadline(time.Time{})
 
 	if c.isMQTTv5() {
@@ -706,17 +729,22 @@ func (c *Client) readConnAck(conn net.Conn) (ConnAckCode, error) {
 }
 
 // Disconnect gracefully disconnects from the broker.
-func (c *Client) Disconnect() error {
-	return c.DisconnectWithReason(0, 0, "")
+func (c *Client) Disconnect(ctx context.Context) error {
+	return c.DisconnectWithReason(ctx, 0, 0, "")
 }
 
 // DisconnectWithReason disconnects with an optional reason code (MQTT 5.0).
 // For MQTT 3.1.1, reasonCode and sessionExpiry are ignored.
 // Parameters:
+//   - ctx: bounds how long the graceful teardown may wait for background goroutines to exit
 //   - reasonCode: MQTT 5.0 disconnect reason (0 = normal disconnect)
 //   - sessionExpiry: Update session expiry interval (0 = use current value, ignored if 0)
 //   - reasonString: Human-readable reason (empty = no reason string)
-func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, reasonString string) error {
+func (c *Client) DisconnectWithReason(ctx context.Context, reasonCode byte, sessionExpiry uint32, reasonString string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	c.lifecycleMu.Lock()
 	if !c.state.transition(StateConnected, StateDisconnecting) {
 		c.lifecycleMu.Unlock()
@@ -727,12 +755,12 @@ func (c *Client) DisconnectWithReason(reasonCode byte, sessionExpiry uint32, rea
 	c.sendDisconnectWithReason(reasonCode, sessionExpiry, reasonString)
 	c.lifecycleMu.Unlock()
 
-	c.cleanup(nil)
+	err := c.cleanup(ctx, nil)
 	c.lifecycleMu.Lock()
 	c.state.transition(StateDisconnecting, StateDisconnected)
 	c.lifecycleMu.Unlock()
 
-	return nil
+	return err
 }
 
 // Drain stops accepting new publishes, waits for in-flight publishes to finish,
@@ -771,7 +799,7 @@ func (c *Client) Drain(ctx context.Context) error {
 		}
 	}
 
-	return c.DisconnectWithReason(0, 0, "")
+	return c.DisconnectWithReason(ctx, 0, 0, "")
 }
 
 // sendDisconnectWithReason writes the DISCONNECT directly to conn (bypassing writeLoop)
@@ -815,22 +843,26 @@ func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32,
 }
 
 // Close permanently closes the client.
-func (c *Client) Close() error {
+func (c *Client) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	c.lifecycleMu.Lock()
 	c.state.set(StateClosed)
 	c.lifecycleMu.Unlock()
 
 	c.stopKeepAlive()
-	c.cleanup(ErrClientClosed)
+	err := c.cleanup(ctx, ErrClientClosed)
 	if c.store != nil {
 		c.store.Close()
 	}
-	return nil
+	return err
 }
 
-func (c *Client) cleanup(err error) {
+func (c *Client) cleanup(ctx context.Context, err error) error {
 	if !atomic.CompareAndSwapUint32(&c.cleanupInProgress, 0, 1) {
-		return
+		return nil
 	}
 	defer atomic.StoreUint32(&c.cleanupInProgress, 0)
 
@@ -856,14 +888,28 @@ func (c *Client) cleanup(err error) {
 		conn.Close()
 	}
 
+	var ctxErr error
+
 	// Wait for readLoop to exit.
 	if doneCh != nil {
-		<-doneCh
+		select {
+		case <-doneCh:
+		case <-ctx.Done():
+			ctxErr = ctx.Err()
+			<-doneCh // conn is already closed; exits imminently
+		}
 	}
 
 	// Wait for writeLoop to exit.
 	if writeDone != nil {
-		<-writeDone
+		select {
+		case <-writeDone:
+		case <-ctx.Done():
+			if ctxErr == nil {
+				ctxErr = ctx.Err()
+			}
+			<-writeDone // conn is already closed; exits imminently
+		}
 	}
 
 	c.writeStateMu.Lock()
@@ -915,6 +961,8 @@ func (c *Client) cleanup(err error) {
 	c.lastPingSent = time.Time{}
 	c.pingTimer = nil
 	c.pingMu.Unlock()
+
+	return ctxErr
 }
 
 // IsConnected returns true if the client is connected.
@@ -2005,7 +2053,7 @@ func (c *Client) handleConnectionLost(err error) {
 	c.lifecycleMu.Unlock()
 
 	c.stopKeepAlive()
-	c.cleanup(ErrConnectionLost)
+	c.cleanup(context.Background(), ErrConnectionLost) //nolint:errcheck
 
 	if c.opts.OnConnectionLost != nil {
 		go c.opts.OnConnectionLost(err)
@@ -2034,7 +2082,7 @@ func (c *Client) reconnect() {
 			c.opts.OnReconnecting(attempt)
 		}
 
-		err := c.Connect()
+		err := c.Connect(context.Background())
 		if err == nil {
 			return
 		}

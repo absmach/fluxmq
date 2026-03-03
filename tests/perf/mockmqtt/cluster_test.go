@@ -134,10 +134,10 @@ func startMQTTClient(t *testing.T, addr string, protocolVersion byte, onMessage 
 		t.Fatalf("new mqtt client failed: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = client.Close()
+		_ = client.Close(context.Background())
 	})
 
-	if err := client.Connect(); err != nil {
+	if err := client.Connect(context.Background()); err != nil {
 		t.Fatalf("connect mqtt client failed: %v", err)
 	}
 
