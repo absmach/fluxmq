@@ -26,6 +26,14 @@ const (
 	queuePrefix    = "/queue/"
 )
 
+type queueManager interface {
+	broker.QueueLifecycle
+	broker.QueuePublisher
+	broker.QueueSubscriber
+	broker.QueueAcknowledger
+	broker.QueueAdminRead
+}
+
 // Broker is the core MQTT broker with clean domain methods.
 type Broker struct {
 	sessionLocks  keyLock
@@ -39,11 +47,11 @@ type Broker struct {
 	retained      storage.RetainedStore
 	wills         storage.WillStore
 	cluster       cluster.Cluster         // nil for single-node mode
-	queueManager  broker.QueueManager     // nil if queue functionality disabled
+	queueManager  queueManager            // nil if queue functionality disabled
 	crossDeliver  broker.CrossDeliverFunc // nil if cross-protocol local pub/sub disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
-	rateLimiter   broker.ClientRateLimiter // nil if rate limiting disabled
+	rateLimiter   broker.RateLimiter // nil if rate limiting disabled
 	logger        *slog.Logger
 	stats         *Stats
 	webhooks      broker.Notifier // nil if webhooks disabled
@@ -156,7 +164,8 @@ func (b *Broker) SetCrossDeliver(fn broker.CrossDeliverFunc) {
 
 // GetQueueManager returns the queue manager.
 func (b *Broker) GetQueueManager() broker.QueueManager {
-	return b.queueManager
+	qm, _ := b.queueManager.(broker.QueueManager)
+	return qm
 }
 
 // Get returns a session by client ID.
@@ -175,7 +184,7 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 }
 
 // SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.
-func (b *Broker) SetClientRateLimiter(rl broker.ClientRateLimiter) {
+func (b *Broker) SetClientRateLimiter(rl broker.RateLimiter) {
 	b.rateLimiter = rl
 }
 

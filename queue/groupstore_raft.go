@@ -20,6 +20,11 @@ type GroupOpForwarder interface {
 	ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error
 }
 
+type groupCoordinator interface {
+	raft.ReplicationInfo
+	raft.GroupStateReplicator
+}
+
 // raftGroupStore routes mutating consumer-group operations for replicated
 // queues through the Raft coordinator. On the leader node, mutations go
 // directly through the coordinator's Apply* methods. On follower nodes,
@@ -27,7 +32,7 @@ type GroupOpForwarder interface {
 // go through Raft consensus and get replicated to all nodes.
 type raftGroupStore struct {
 	base        storage.ConsumerGroupStore
-	coordinator raft.QueueCoordinator
+	coordinator groupCoordinator
 	forwarder   GroupOpForwarder
 	logger      *slog.Logger
 
@@ -62,7 +67,7 @@ func (s *raftGroupStore) SetLogger(logger *slog.Logger) {
 // leaderCoordinatorForQueue returns the coordinator only when the queue is
 // replicated AND this node is the leader for the queue's Raft group.
 // Returns nil otherwise.
-func (s *raftGroupStore) leaderCoordinatorForQueue(queueName string) raft.QueueCoordinator {
+func (s *raftGroupStore) leaderCoordinatorForQueue(queueName string) groupCoordinator {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -108,7 +113,7 @@ func (s *raftGroupStore) forwardToLeader(ctx context.Context, queueName string, 
 // applyOrForward applies the mutation on the leader, forwards to the leader
 // for replicated follower queues, or falls back to local store for
 // non-replicated queues.
-func (s *raftGroupStore) applyOrForward(ctx context.Context, queueName string, applyOnLeader func(raft.QueueCoordinator) error, op *raft.Operation, localFallback func() error) error {
+func (s *raftGroupStore) applyOrForward(ctx context.Context, queueName string, applyOnLeader func(groupCoordinator) error, op *raft.Operation, localFallback func() error) error {
 	if coordinator := s.leaderCoordinatorForQueue(queueName); coordinator != nil {
 		return applyOnLeader(coordinator)
 	}
@@ -150,7 +155,7 @@ func (s *raftGroupStore) CreateConsumerGroup(ctx context.Context, group *types.C
 	}
 
 	return s.applyOrForward(ctx, group.QueueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyCreateGroup(ctx, group.QueueName, group)
 		},
 		op,
@@ -176,7 +181,7 @@ func (s *raftGroupStore) UpdateConsumerGroup(ctx context.Context, group *types.C
 	}
 
 	return s.applyOrForward(ctx, group.QueueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyUpdateGroup(ctx, group.QueueName, group)
 		},
 		op,
@@ -193,7 +198,7 @@ func (s *raftGroupStore) DeleteConsumerGroup(ctx context.Context, queueName, gro
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyDeleteGroup(ctx, queueName, groupID)
 		},
 		op,
@@ -215,7 +220,7 @@ func (s *raftGroupStore) AddPendingEntry(ctx context.Context, queueName, groupID
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyAddPending(ctx, queueName, groupID, entry)
 		},
 		op,
@@ -234,7 +239,7 @@ func (s *raftGroupStore) RemovePendingEntry(ctx context.Context, queueName, grou
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyRemovePending(ctx, queueName, groupID, consumerID, offset)
 		},
 		op,
@@ -262,7 +267,7 @@ func (s *raftGroupStore) TransferPendingEntry(ctx context.Context, queueName, gr
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyTransferPending(ctx, queueName, groupID, offset, fromConsumer, toConsumer)
 		},
 		op,
@@ -282,7 +287,7 @@ func (s *raftGroupStore) UpdateCursor(ctx context.Context, queueName, groupID st
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyUpdateCursor(ctx, queueName, groupID, cursor)
 		},
 		op,
@@ -300,7 +305,7 @@ func (s *raftGroupStore) UpdateCommitted(ctx context.Context, queueName, groupID
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyUpdateCommitted(ctx, queueName, groupID, committed)
 		},
 		op,
@@ -318,7 +323,7 @@ func (s *raftGroupStore) RegisterConsumer(ctx context.Context, queueName, groupI
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyRegisterConsumer(ctx, queueName, groupID, consumer)
 		},
 		op,
@@ -336,7 +341,7 @@ func (s *raftGroupStore) UnregisterConsumer(ctx context.Context, queueName, grou
 	}
 
 	return s.applyOrForward(ctx, queueName,
-		func(c raft.QueueCoordinator) error {
+		func(c groupCoordinator) error {
 			return c.ApplyUnregisterConsumer(ctx, queueName, groupID, consumerID)
 		},
 		op,

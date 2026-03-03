@@ -78,9 +78,8 @@ type SubscriptionRouter interface {
 	GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error)
 }
 
-// QueueConsumerRegistry manages cluster-wide queue consumer registrations.
-// This enables cross-node queue message routing.
-type QueueConsumerRegistry interface {
+// QueueConsumerDirectory manages cluster-wide queue consumer registrations.
+type QueueConsumerDirectory interface {
 	// RegisterQueueConsumer registers a queue consumer visible to all nodes.
 	RegisterQueueConsumer(ctx context.Context, info *QueueConsumerInfo) error
 
@@ -96,7 +95,10 @@ type QueueConsumerRegistry interface {
 	// ListAllQueueConsumers returns all queue consumers across all queues.
 	// Used to find which nodes have consumers for a topic.
 	ListAllQueueConsumers(ctx context.Context) ([]*QueueConsumerInfo, error)
+}
 
+// QueueForwarder forwards queue-related operations to peer nodes.
+type QueueForwarder interface {
 	// ForwardQueuePublish forwards a queue publish to a remote node.
 	// The remote node will store the message in its local matching queues.
 	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error
@@ -104,6 +106,13 @@ type QueueConsumerRegistry interface {
 	// ForwardGroupOp forwards a consumer group mutation to the Raft leader
 	// node for the given queue. opData is a JSON-encoded raft.Operation.
 	ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error
+}
+
+// QueueConsumerRegistry keeps the existing composite for compatibility.
+// This enables cross-node queue message routing.
+type QueueConsumerRegistry interface {
+	QueueConsumerDirectory
+	QueueForwarder
 }
 
 type Lifecycle interface {

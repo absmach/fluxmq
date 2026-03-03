@@ -15,8 +15,23 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
+
+type channelQueueManager interface {
+	Publish(ctx context.Context, publish qtypes.PublishRequest) error
+	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
+	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error
+	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
+	Ack(ctx context.Context, queueName, messageID, groupID string) error
+	Nack(ctx context.Context, queueName, messageID, groupID string) error
+	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
+	CreateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error)
+	UpdateQueue(ctx context.Context, config qtypes.QueueConfig) error
+	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
+}
 
 // IsAMQP091Client checks if a client ID belongs to an AMQP 0.9.1 client.
 func IsAMQP091Client(clientID string) bool {
@@ -33,7 +48,7 @@ type Broker struct {
 	connections         sync.Map // connID -> *Connection
 	router              *router.TrieRouter
 	routeResolver       *corebroker.RoutingResolver
-	queueManager        corebroker.StreamQueueManager
+	queueManager        channelQueueManager
 	cluster             cluster.Cluster
 	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration

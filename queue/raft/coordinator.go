@@ -18,23 +18,31 @@ const (
 	DefaultGroupID = "default"
 )
 
-// QueueCoordinator routes queue operations to Raft replication domains.
-//
-// The current implementation can map queues to logical groups and delegate all
-// groups to one underlying replicator. Future work can register dedicated
-// replicators per group without changing queue manager call sites.
-type QueueCoordinator interface {
+// CoordinatorLifecycle defines lifecycle methods for a queue coordinator.
+type CoordinatorLifecycle interface {
 	Stop() error
+}
+
+// ReplicationInfo exposes replication/leadership lookup for a queue.
+type ReplicationInfo interface {
 	IsEnabled() bool
 	IsQueueReplicated(queueName string) bool
 	IsLeaderForQueue(queueName string) bool
 	LeaderForQueue(queueName string) string
 	LeaderIDForQueue(queueName string) string
+}
+
+// QueueLogReplicator applies queue-log state changes through replication.
+type QueueLogReplicator interface {
 	ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error
 	ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error
 	ApplyDeleteQueue(ctx context.Context, queueName string) error
 	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
+}
+
+// GroupStateReplicator applies consumer-group state changes through replication.
+type GroupStateReplicator interface {
 	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
 	ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
 	ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error
@@ -45,9 +53,26 @@ type QueueCoordinator interface {
 	ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
 	ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error
 	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
+}
+
+// QueueMapping controls queue-to-group mapping metadata.
+type QueueMapping interface {
 	EnsureQueue(ctx context.Context, cfg types.QueueConfig) error
 	UpdateQueue(ctx context.Context, cfg types.QueueConfig) error
 	DeleteQueue(ctx context.Context, queueName string) error
+}
+
+// QueueCoordinator routes queue operations to Raft replication domains.
+//
+// The current implementation can map queues to logical groups and delegate all
+// groups to one underlying replicator. Future work can register dedicated
+// replicators per group without changing queue manager call sites.
+type QueueCoordinator interface {
+	CoordinatorLifecycle
+	ReplicationInfo
+	QueueLogReplicator
+	GroupStateReplicator
+	QueueMapping
 }
 
 // GroupReplicator is a low-level Raft apply/leader API for one replication

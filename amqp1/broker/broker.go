@@ -20,12 +20,23 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+type queueLinkManager interface {
+	corebroker.QueuePublisher
+	corebroker.QueueSubscriber
+	corebroker.QueueAcknowledger
+}
+
+type queueAdminManager interface {
+	corebroker.QueueAdmin
+}
+
 // Broker manages AMQP 1.0 connections and message routing.
 type Broker struct {
 	connections         sync.Map // containerID -> *Connection
 	router              *router.TrieRouter
 	routeResolver       *corebroker.RoutingResolver
-	queueManager        corebroker.QueueManager
+	queueLinkManager    queueLinkManager
+	queueAdminManager   queueAdminManager
 	cluster             cluster.Cluster
 	auth                *corebroker.AuthEngine
 	crossDeliver        corebroker.CrossDeliverFunc
@@ -44,11 +55,12 @@ func New(qm corebroker.QueueManager, stats *Stats, logger *slog.Logger) *Broker 
 		stats = NewStats()
 	}
 	return &Broker{
-		router:        router.NewRouter(),
-		routeResolver: corebroker.NewRoutingResolver(),
-		queueManager:  qm,
-		stats:         stats,
-		logger:        logger,
+		router:            router.NewRouter(),
+		routeResolver:     corebroker.NewRoutingResolver(),
+		queueLinkManager:  qm,
+		queueAdminManager: qm,
+		stats:             stats,
+		logger:            logger,
 	}
 }
 
@@ -222,7 +234,8 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 
 // SetQueueManager sets the queue manager for the AMQP broker.
 func (b *Broker) SetQueueManager(qm corebroker.QueueManager) {
-	b.queueManager = qm
+	b.queueLinkManager = qm
+	b.queueAdminManager = qm
 }
 
 // SetAuthEngine sets the authentication and authorization engine.

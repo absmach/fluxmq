@@ -158,7 +158,7 @@ func (l *Link) subscribe() {
 	if l.isQueue {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()
-		qm := l.session.conn.broker.queueManager
+		qm := l.session.conn.broker.queueLinkManager
 		if qm == nil {
 			l.logger.Warn("queue manager not available for subscription", "address", l.address)
 			return
@@ -205,7 +205,7 @@ func (l *Link) detach() {
 	if l.isQueue {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()
-		qm := l.session.conn.broker.queueManager
+		qm := l.session.conn.broker.queueLinkManager
 		if qm != nil {
 			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup)
 		}
@@ -268,7 +268,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	resolver := l.session.conn.broker.routeResolver
 	topicRoute := resolver.Resolve(topic)
 	if l.isQueue || topicRoute.Kind == corebroker.RouteQueue {
-		qm := l.session.conn.broker.queueManager
+		qm := l.session.conn.broker.queueLinkManager
 		if qm != nil {
 			publishTopic := topic
 			if l.capabilityBased && topicRoute.Kind != corebroker.RouteQueue {
@@ -472,7 +472,7 @@ func (l *Link) handleDisposition(disp *performatives.Disposition) {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
 
-	qm := l.session.conn.broker.queueManager
+	qm := l.session.conn.broker.queueLinkManager
 
 	for id := first; id <= last; id++ {
 		pd, ok := l.pending[id]

@@ -21,6 +21,18 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+type queueCluster interface {
+	cluster.QueueConsumerDirectory
+	cluster.QueueForwarder
+}
+
+type queueRaftCoordinator interface {
+	raft.CoordinatorLifecycle
+	raft.ReplicationInfo
+	raft.QueueMapping
+	raft.QueueLogReplicator
+}
+
 // Manager is the queue-based queue manager.
 // It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
@@ -35,14 +47,16 @@ type Manager struct {
 	distributionMode DistributionMode
 
 	// Raft replication coordinator (queue -> raft group routing).
-	raftCoordinator raft.QueueCoordinator
+	raftCoordinator queueRaftCoordinator
+	// Group-state replicator for forwarded group operations.
+	groupReplicator raft.GroupStateReplicator
 
 	// Legacy access to the underlying single-group raft manager.
 	// Kept for compatibility with existing call sites/tests.
 	raftManager *raft.Manager
 
 	// Cluster support for cross-node message routing
-	cluster     cluster.Cluster
+	cluster     queueCluster
 	localNodeID string
 
 	// Lightweight heartbeat index keyed by client/queue/group.
@@ -303,9 +317,11 @@ func (m *Manager) Stop() error {
 
 // SetRaftManager sets the Raft replication manager.
 func (m *Manager) SetRaftManager(rm *raft.Manager) {
-	m.raftCoordinator = raft.NewLogicalGroupCoordinator(rm, m.logger)
+	coordinator := raft.NewLogicalGroupCoordinator(rm, m.logger)
+	m.raftCoordinator = coordinator
+	m.groupReplicator = coordinator
 	if m.raftGroupStore != nil {
-		m.raftGroupStore.SetCoordinator(m.raftCoordinator)
+		m.raftGroupStore.SetCoordinator(coordinator)
 	}
 	m.raftManager = rm
 }
@@ -313,6 +329,7 @@ func (m *Manager) SetRaftManager(rm *raft.Manager) {
 // SetRaftCoordinator sets queue-aware Raft coordinator.
 func (m *Manager) SetRaftCoordinator(rc raft.QueueCoordinator) {
 	m.raftCoordinator = rc
+	m.groupReplicator = rc
 	if m.raftGroupStore != nil {
 		m.raftGroupStore.SetCoordinator(rc)
 	}
@@ -1670,7 +1687,7 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 // HandleForwardedGroupOp implements cluster.QueueHandler.HandleForwardedGroupOp.
 // It decodes a raft.Operation and applies it through the local coordinator.
 func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, opData []byte) error {
-	if m.raftCoordinator == nil {
+	if m.groupReplicator == nil {
 		return fmt.Errorf("raft coordinator not available")
 	}
 
@@ -1689,25 +1706,25 @@ func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, 
 func (m *Manager) applyGroupOp(ctx context.Context, op *raft.Operation) error {
 	switch op.Type {
 	case raft.OpCreateGroup:
-		return m.raftCoordinator.ApplyCreateGroup(ctx, op.QueueName, op.GroupState)
+		return m.groupReplicator.ApplyCreateGroup(ctx, op.QueueName, op.GroupState)
 	case raft.OpUpdateGroup:
-		return m.raftCoordinator.ApplyUpdateGroup(ctx, op.QueueName, op.GroupState)
+		return m.groupReplicator.ApplyUpdateGroup(ctx, op.QueueName, op.GroupState)
 	case raft.OpDeleteGroup:
-		return m.raftCoordinator.ApplyDeleteGroup(ctx, op.QueueName, op.GroupID)
+		return m.groupReplicator.ApplyDeleteGroup(ctx, op.QueueName, op.GroupID)
 	case raft.OpUpdateCursor:
-		return m.raftCoordinator.ApplyUpdateCursor(ctx, op.QueueName, op.GroupID, op.Cursor)
+		return m.groupReplicator.ApplyUpdateCursor(ctx, op.QueueName, op.GroupID, op.Cursor)
 	case raft.OpUpdateCommitted:
-		return m.raftCoordinator.ApplyUpdateCommitted(ctx, op.QueueName, op.GroupID, op.Committed)
+		return m.groupReplicator.ApplyUpdateCommitted(ctx, op.QueueName, op.GroupID, op.Committed)
 	case raft.OpAddPending:
-		return m.raftCoordinator.ApplyAddPending(ctx, op.QueueName, op.GroupID, op.PendingEntry)
+		return m.groupReplicator.ApplyAddPending(ctx, op.QueueName, op.GroupID, op.PendingEntry)
 	case raft.OpRemovePending:
-		return m.raftCoordinator.ApplyRemovePending(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
+		return m.groupReplicator.ApplyRemovePending(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
 	case raft.OpTransferPending:
-		return m.raftCoordinator.ApplyTransferPending(ctx, op.QueueName, op.GroupID, op.Offset, op.FromConsumer, op.ToConsumer)
+		return m.groupReplicator.ApplyTransferPending(ctx, op.QueueName, op.GroupID, op.Offset, op.FromConsumer, op.ToConsumer)
 	case raft.OpRegisterConsumer:
-		return m.raftCoordinator.ApplyRegisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerInfo)
+		return m.groupReplicator.ApplyRegisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerInfo)
 	case raft.OpUnregisterConsumer:
-		return m.raftCoordinator.ApplyUnregisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerID)
+		return m.groupReplicator.ApplyUnregisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerID)
 	default:
 		return fmt.Errorf("unsupported forwarded group op type: %d", op.Type)
 	}
