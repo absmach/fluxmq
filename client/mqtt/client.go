@@ -884,19 +884,15 @@ func (c *Client) cleanup(err error) {
 	c.pendingMu.Lock()
 	c.pendingMessages = 0
 	c.pendingBytes = 0
+	c.pendingCond.Broadcast()
 	c.pendingMu.Unlock()
-	if c.pendingCond != nil {
-		c.pendingCond.Broadcast()
-	}
 	c.slowConsumerNotified.Store(false)
 	c.draining.Store(false)
 
 	c.outboundMu.Lock()
 	c.outboundPendingMessages = 0
 	c.outboundPendingBytes = 0
-	if c.outboundCond != nil {
-		c.outboundCond.Broadcast()
-	}
+	c.outboundCond.Broadcast()
 	c.outboundMu.Unlock()
 
 	c.stopDispatcher()
@@ -3130,9 +3126,7 @@ func (c *Client) releaseOutbound(req writeRequest) {
 	} else {
 		c.outboundPendingBytes = 0
 	}
-	if c.outboundCond != nil {
-		c.outboundCond.Signal()
-	}
+	c.outboundCond.Signal()
 	c.outboundMu.Unlock()
 }
 
@@ -3311,9 +3305,7 @@ func (c *Client) releasePending(msgBytes int64) {
 	} else {
 		c.pendingBytes = 0
 	}
-	if c.pendingCond != nil {
-		c.pendingCond.Signal()
-	}
+	c.pendingCond.Signal()
 	c.pendingMu.Unlock()
 }
 

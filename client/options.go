@@ -49,6 +49,7 @@ type dualOption func(*PublishOptions, *SubscribeOptions)
 func (o dualOption) applyPublish(opts *PublishOptions) {
 	o(opts, nil)
 }
+
 func (o dualOption) applySubscribe(opts *SubscribeOptions) {
 	o(nil, opts)
 }
@@ -152,7 +153,7 @@ func buildPublishOptions(opts []Option) PublishOptions {
 	for _, opt := range opts {
 		opt.applyPublish(&po)
 	}
-	applyPropertyPrefixes(&po)
+	applyPublishProperties(&po)
 	return po
 }
 
@@ -161,7 +162,6 @@ func buildSubscribeOptions(opts []Option) SubscribeOptions {
 	for _, opt := range opts {
 		opt.applySubscribe(&so)
 	}
-	applySubscribePropertyPrefixes(&so, nil)
 	return so
 }
 
@@ -173,7 +173,7 @@ func WithAutoAck(autoAck bool) Option {
 	})
 }
 
-func applyPropertyPrefixes(po *PublishOptions) {
+func applyPublishProperties(po *PublishOptions) {
 	if po == nil || len(po.Properties) == 0 {
 		return
 	}
@@ -215,20 +215,6 @@ func applyPropertyPrefixes(po *PublishOptions) {
 		if v, ok := po.Properties[propAMQPImmediate]; ok {
 			if immediate, err := strconv.ParseBool(v); err == nil {
 				po.Immediate = &immediate
-			}
-		}
-	}
-}
-
-func applySubscribePropertyPrefixes(so *SubscribeOptions, props map[string]string) {
-	if so == nil || len(props) == 0 {
-		return
-	}
-	if so.QoS == nil {
-		if v, ok := props[propMQTTQoS]; ok {
-			if qos, err := strconv.Atoi(v); err == nil && qos >= 0 && qos <= 2 {
-				q := byte(qos)
-				so.QoS = &q
 			}
 		}
 	}
