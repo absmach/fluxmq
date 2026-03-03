@@ -29,10 +29,10 @@ type Client struct {
 	subCh   *amqp091.Channel
 	subChMu sync.Mutex
 
-	notifyMu              sync.RWMutex
-	onReturn              func(amqp091.Return)
-	onPublishConfirmation func(amqp091.Confirmation)
-	publisherConfirms     atomic.Bool
+	notifyMu               sync.RWMutex
+	onReturn               func(amqp091.Return)
+	onPublishConfirmation  func(amqp091.Confirmation)
+	publisherConfirms      atomic.Bool
 	returnListenerStarted  atomic.Bool
 	confirmListenerStarted atomic.Bool
 

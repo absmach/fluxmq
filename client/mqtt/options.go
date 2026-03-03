@@ -1,0 +1,537 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package mqtt
+
+import (
+	"crypto/tls"
+	"time"
+)
+
+// Default values.
+const (
+	DefaultKeepAlive       = 60 * time.Second
+	DefaultConnectTimeout  = 10 * time.Second
+	DefaultWriteTimeout    = 5 * time.Second
+	DefaultAckTimeout      = 10 * time.Second
+	DefaultPingTimeout     = 5 * time.Second
+	DefaultReconnectMin    = 1 * time.Second
+	DefaultReconnectMax    = 2 * time.Minute
+	DefaultMaxInflight     = 100
+	DefaultMessageChanSize = 256
+)
+
+// SlowConsumerPolicy controls behavior when callback queue pressure is hit.
+type SlowConsumerPolicy string
+
+const (
+	// SlowConsumerDropNew drops the newly received message.
+	SlowConsumerDropNew SlowConsumerPolicy = "drop_new"
+	// SlowConsumerDropOldest drops one queued message and keeps the new one.
+	SlowConsumerDropOldest SlowConsumerPolicy = "drop_oldest"
+	// SlowConsumerBlockWithTimeout waits for callback queue space up to SlowConsumerBlockTimeout.
+	SlowConsumerBlockWithTimeout SlowConsumerPolicy = "block_with_timeout"
+)
+
+// OutboundBackpressurePolicy controls behavior when outbound publish pressure is hit.
+type OutboundBackpressurePolicy string
+
+const (
+	// OutboundBackpressureBlock blocks until outbound capacity is available.
+	OutboundBackpressureBlock OutboundBackpressurePolicy = "block"
+	// OutboundBackpressureBlockWithTimeout blocks up to OutboundBlockTimeout.
+	OutboundBackpressureBlockWithTimeout OutboundBackpressurePolicy = "block_with_timeout"
+	// OutboundBackpressureDropNew drops the new publish when outbound pressure is hit.
+	OutboundBackpressureDropNew OutboundBackpressurePolicy = "drop_new"
+)
+
+// WillMessage represents a last will and testament message.
+type WillMessage struct {
+	Topic   string
+	Payload []byte
+	QoS     byte
+	Retain  bool
+
+	// MQTT 5.0 Will Properties
+	WillDelayInterval uint32            // Delay before sending will (seconds)
+	PayloadFormat     *byte             // 0=bytes, 1=UTF-8
+	MessageExpiry     uint32            // Will message lifetime (seconds)
+	ContentType       string            // MIME type
+	ResponseTopic     string            // Response topic for request/response
+	CorrelationData   []byte            // Correlation data for request/response
+	UserProperties    map[string]string // User-defined properties
+}
+
+// Options configures the MQTT client.
+type Options struct {
+	// Connection
+	Servers        []string      // List of broker addresses (host:port)
+	ClientID       string        // Client identifier
+	Username       string        // Optional username
+	Password       string        // Optional password
+	TLSConfig      *tls.Config   // TLS configuration (nil for plain TCP)
+	ConnectTimeout time.Duration // Timeout for connection attempts
+	WriteTimeout   time.Duration // Timeout for write operations
+	KeepAlive      time.Duration // Keep-alive interval (0 to disable)
+	PingTimeout    time.Duration // Timeout waiting for PINGRESP
+
+	// Session
+	CleanSession    bool   // Start with clean session
+	SessionExpiry   uint32 // Session expiry interval (MQTT 5.0, seconds)
+	ProtocolVersion byte   // 4 for MQTT 3.1.1, 5 for MQTT 5.0
+
+	// MQTT 5.0 Connect Properties
+	ReceiveMaximum      uint16 // Maximum inflight messages client accepts (0 = use default 65535)
+	MaximumPacketSize   uint32 // Maximum packet size client accepts (0 = no limit)
+	TopicAliasMaximum   uint16 // Maximum topic aliases client accepts (0 = disabled)
+	RequestResponseInfo bool   // Request server to send response information in CONNACK
+	RequestProblemInfo  bool   // Request detailed error information (default true)
+
+	// Will
+	Will *WillMessage // Last will and testament
+
+	// QoS
+	AckTimeout  time.Duration // Timeout waiting for PUBACK/SUBACK
+	MaxInflight int           // Maximum inflight messages
+
+	// Reconnection
+	AutoReconnect        bool          // Enable automatic reconnection
+	ReconnectBackoff     time.Duration // Initial reconnect delay
+	MaxReconnectWait     time.Duration // Maximum reconnect delay
+	ReconnectJitter      time.Duration // Random reconnect delay component [0, ReconnectJitter]
+	MaxReconnectAttempts int           // Maximum reconnect attempts (0 = unlimited)
+	ReconnectBufSize     int           // Max buffered outbound publish bytes while disconnected (0 = disabled)
+
+	// Callbacks
+	OnConnect            func()                                                                    // Called on successful connection
+	OnConnectionLost     func(error)                                                               // Called when connection is lost
+	OnReconnecting       func(attempt int)                                                         // Called before each reconnect attempt
+	OnReconnectFailed    func(error)                                                               // Called when reconnect retries are exhausted
+	OnAsyncError         func(error)                                                               // Called for asynchronous non-fatal errors (slow consumer, reconnect buffer overflow)
+	OnDroppedMessage     func(*DroppedMessage)                                                     // Called when inbound/outbound messages are dropped by pressure policies
+	OnMessage            func(topic string, payload []byte, qos byte)                              // Called for incoming messages (basic)
+	OnMessageV2          func(msg *Message)                                                        // Called for incoming messages (full context, takes precedence over OnMessage)
+	OnServerCapabilities func(*ServerCapabilities)                                                 // Called when server capabilities received (MQTT 5.0)
+	OnAuth               func(reasonCode byte, authMethod string, authData []byte) ([]byte, error) // Called for enhanced authentication (MQTT 5.0)
+
+	// Enhanced Authentication (MQTT 5.0)
+	AuthMethod string // Authentication method for enhanced auth
+	AuthData   []byte // Authentication data for initial CONNECT
+
+	// Advanced
+	MessageChanSize            int                        // Size of internal message channel
+	MaxPendingMessages         int                        // Max queued callback messages before dropping (0 = disabled)
+	MaxPendingBytes            int64                      // Max queued callback bytes before dropping (0 = disabled)
+	SlowConsumerPolicy         SlowConsumerPolicy         // Slow-consumer behavior for unordered callbacks
+	SlowConsumerBlockTimeout   time.Duration              // Blocking duration for SlowConsumerBlockWithTimeout
+	MaxOutboundPendingMessages int                        // Max pending outbound publish writes before pressure policy applies (0 = disabled)
+	MaxOutboundPendingBytes    int64                      // Max pending outbound publish write bytes before pressure policy applies (0 = disabled)
+	OutboundBackpressurePolicy OutboundBackpressurePolicy // Outbound publish pressure behavior
+	OutboundBlockTimeout       time.Duration              // Blocking duration for OutboundBackpressureBlockWithTimeout
+	OrderMatters               bool                       // Maintain message order (may reduce throughput)
+	Store                      MessageStore               // Message store for QoS 1/2 (nil = in-memory)
+}
+
+// NewOptions creates Options with sensible defaults.
+func NewOptions() *Options {
+	return &Options{
+		Servers:                    []string{"localhost:1883"},
+		ProtocolVersion:            4, // MQTT 3.1.1
+		CleanSession:               true,
+		KeepAlive:                  DefaultKeepAlive,
+		ConnectTimeout:             DefaultConnectTimeout,
+		WriteTimeout:               DefaultWriteTimeout,
+		AckTimeout:                 DefaultAckTimeout,
+		PingTimeout:                DefaultPingTimeout,
+		AutoReconnect:              true,
+		ReconnectBackoff:           DefaultReconnectMin,
+		MaxReconnectWait:           DefaultReconnectMax,
+		MaxInflight:                DefaultMaxInflight,
+		MessageChanSize:            DefaultMessageChanSize,
+		SlowConsumerPolicy:         SlowConsumerDropNew,
+		OutboundBackpressurePolicy: OutboundBackpressureBlock,
+		// MQTT 5.0 defaults
+		RequestProblemInfo: true, // Request detailed error information
+	}
+}
+
+// SetServers sets the broker addresses.
+func (o *Options) SetServers(servers ...string) *Options {
+	o.Servers = servers
+	return o
+}
+
+// SetClientID sets the client identifier.
+func (o *Options) SetClientID(id string) *Options {
+	o.ClientID = id
+	return o
+}
+
+// SetCredentials sets username and password.
+func (o *Options) SetCredentials(username, password string) *Options {
+	o.Username = username
+	o.Password = password
+	return o
+}
+
+// SetTLSConfig sets TLS configuration.
+func (o *Options) SetTLSConfig(cfg *tls.Config) *Options {
+	o.TLSConfig = cfg
+	return o
+}
+
+// SetCleanSession sets the clean session flag.
+func (o *Options) SetCleanSession(clean bool) *Options {
+	o.CleanSession = clean
+	return o
+}
+
+// SetKeepAlive sets the keep-alive interval.
+func (o *Options) SetKeepAlive(d time.Duration) *Options {
+	o.KeepAlive = d
+	return o
+}
+
+// SetConnectTimeout sets the connection timeout.
+func (o *Options) SetConnectTimeout(d time.Duration) *Options {
+	o.ConnectTimeout = d
+	return o
+}
+
+// SetWriteTimeout sets the write timeout.
+func (o *Options) SetWriteTimeout(d time.Duration) *Options {
+	o.WriteTimeout = d
+	return o
+}
+
+// SetAckTimeout sets the acknowledgment timeout.
+func (o *Options) SetAckTimeout(d time.Duration) *Options {
+	o.AckTimeout = d
+	return o
+}
+
+// SetPingTimeout sets timeout waiting for PINGRESP.
+func (o *Options) SetPingTimeout(d time.Duration) *Options {
+	o.PingTimeout = d
+	return o
+}
+
+// SetProtocolVersion sets MQTT protocol version (4 or 5).
+func (o *Options) SetProtocolVersion(v byte) *Options {
+	o.ProtocolVersion = v
+	return o
+}
+
+// SetSessionExpiry sets the session expiry interval in seconds (MQTT 5.0).
+// 0 means the session expires when the network connection closes.
+func (o *Options) SetSessionExpiry(seconds uint32) *Options {
+	o.SessionExpiry = seconds
+	return o
+}
+
+// SetReceiveMaximum sets the maximum inflight messages the client accepts (MQTT 5.0).
+// Default is 65535 if not set. Must be > 0.
+func (o *Options) SetReceiveMaximum(max uint16) *Options {
+	o.ReceiveMaximum = max
+	return o
+}
+
+// SetMaximumPacketSize sets the maximum packet size the client accepts (MQTT 5.0).
+// 0 means no limit beyond protocol maximum (256 MB).
+func (o *Options) SetMaximumPacketSize(size uint32) *Options {
+	o.MaximumPacketSize = size
+	return o
+}
+
+// SetTopicAliasMaximum sets the maximum topic aliases the client accepts (MQTT 5.0).
+// 0 means topic aliases are disabled. Server cannot use topic aliases if set to 0.
+func (o *Options) SetTopicAliasMaximum(max uint16) *Options {
+	o.TopicAliasMaximum = max
+	return o
+}
+
+// SetRequestResponseInfo requests the server to send response information (MQTT 5.0).
+// The server may include response information in CONNACK which can be used for
+// request/response patterns.
+func (o *Options) SetRequestResponseInfo(request bool) *Options {
+	o.RequestResponseInfo = request
+	return o
+}
+
+// SetRequestProblemInfo requests detailed error information from server (MQTT 5.0).
+// When true, server includes reason strings and user properties in error responses.
+// Default is true.
+func (o *Options) SetRequestProblemInfo(request bool) *Options {
+	o.RequestProblemInfo = request
+	return o
+}
+
+// SetWill sets the last will and testament.
+func (o *Options) SetWill(topic string, payload []byte, qos byte, retain bool) *Options {
+	o.Will = &WillMessage{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     qos,
+		Retain:  retain,
+	}
+	return o
+}
+
+// SetAutoReconnect enables or disables automatic reconnection.
+func (o *Options) SetAutoReconnect(enable bool) *Options {
+	o.AutoReconnect = enable
+	return o
+}
+
+// SetReconnectBackoff sets initial reconnect delay.
+func (o *Options) SetReconnectBackoff(d time.Duration) *Options {
+	o.ReconnectBackoff = d
+	return o
+}
+
+// SetMaxReconnectWait sets maximum reconnect delay.
+func (o *Options) SetMaxReconnectWait(d time.Duration) *Options {
+	o.MaxReconnectWait = d
+	return o
+}
+
+// SetReconnectJitter sets reconnect jitter added to each reconnect sleep.
+func (o *Options) SetReconnectJitter(d time.Duration) *Options {
+	o.ReconnectJitter = d
+	return o
+}
+
+// SetMaxReconnectAttempts sets maximum reconnect attempts (0 = unlimited).
+func (o *Options) SetMaxReconnectAttempts(max int) *Options {
+	o.MaxReconnectAttempts = max
+	return o
+}
+
+// SetReconnectBufferSize sets max buffered publish bytes while disconnected.
+// A value <= 0 disables buffering.
+func (o *Options) SetReconnectBufferSize(bytes int) *Options {
+	o.ReconnectBufSize = bytes
+	return o
+}
+
+// SetMaxInflight sets the maximum number of inflight messages.
+func (o *Options) SetMaxInflight(max int) *Options {
+	o.MaxInflight = max
+	return o
+}
+
+// SetMessageChanSize sets internal message dispatch channel size.
+func (o *Options) SetMessageChanSize(size int) *Options {
+	o.MessageChanSize = size
+	return o
+}
+
+// SetMaxPendingMessages sets max queued callback messages before dropping.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxPendingMessages(max int) *Options {
+	o.MaxPendingMessages = max
+	return o
+}
+
+// SetMaxPendingBytes sets max queued callback bytes before dropping.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxPendingBytes(max int64) *Options {
+	o.MaxPendingBytes = max
+	return o
+}
+
+// SetMaxOutboundPendingMessages sets max pending outbound publish writes before applying pressure policy.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxOutboundPendingMessages(max int) *Options {
+	o.MaxOutboundPendingMessages = max
+	return o
+}
+
+// SetMaxOutboundPendingBytes sets max pending outbound publish write bytes before applying pressure policy.
+// A value <= 0 disables this limit.
+func (o *Options) SetMaxOutboundPendingBytes(max int64) *Options {
+	o.MaxOutboundPendingBytes = max
+	return o
+}
+
+// SetOutboundBackpressurePolicy sets outbound publish pressure behavior.
+func (o *Options) SetOutboundBackpressurePolicy(policy OutboundBackpressurePolicy) *Options {
+	o.OutboundBackpressurePolicy = policy
+	return o
+}
+
+// SetOutboundBlockTimeout sets blocking duration for OutboundBackpressureBlockWithTimeout.
+func (o *Options) SetOutboundBlockTimeout(timeout time.Duration) *Options {
+	o.OutboundBlockTimeout = timeout
+	return o
+}
+
+// SetSlowConsumerPolicy sets callback queue pressure policy.
+func (o *Options) SetSlowConsumerPolicy(policy SlowConsumerPolicy) *Options {
+	o.SlowConsumerPolicy = policy
+	return o
+}
+
+// SetSlowConsumerBlockTimeout sets blocking duration for SlowConsumerBlockWithTimeout.
+func (o *Options) SetSlowConsumerBlockTimeout(timeout time.Duration) *Options {
+	o.SlowConsumerBlockTimeout = timeout
+	return o
+}
+
+// SetOrderMatters controls whether message callback ordering is preserved.
+func (o *Options) SetOrderMatters(orderMatters bool) *Options {
+	o.OrderMatters = orderMatters
+	return o
+}
+
+// SetOnConnect sets the connection callback.
+func (o *Options) SetOnConnect(fn func()) *Options {
+	o.OnConnect = fn
+	return o
+}
+
+// SetOnConnectionLost sets the connection lost callback.
+func (o *Options) SetOnConnectionLost(fn func(error)) *Options {
+	o.OnConnectionLost = fn
+	return o
+}
+
+// SetOnReconnecting sets the reconnecting callback.
+func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
+	o.OnReconnecting = fn
+	return o
+}
+
+// SetOnReconnectFailed sets callback for reconnect exhaustion.
+func (o *Options) SetOnReconnectFailed(fn func(error)) *Options {
+	o.OnReconnectFailed = fn
+	return o
+}
+
+// SetOnAsyncError sets callback for non-fatal asynchronous errors.
+func (o *Options) SetOnAsyncError(fn func(error)) *Options {
+	o.OnAsyncError = fn
+	return o
+}
+
+// SetOnDroppedMessage sets callback for dropped inbound/outbound messages due to pressure policies.
+func (o *Options) SetOnDroppedMessage(fn func(*DroppedMessage)) *Options {
+	o.OnDroppedMessage = fn
+	return o
+}
+
+// SetOnMessage sets the message handler callback.
+func (o *Options) SetOnMessage(fn func(topic string, payload []byte, qos byte)) *Options {
+	o.OnMessage = fn
+	return o
+}
+
+// SetOnMessageV2 sets the enhanced message handler callback with full message context.
+// This takes precedence over OnMessage if both are set.
+// The Message includes MQTT v5 properties, user properties, and other metadata.
+func (o *Options) SetOnMessageV2(fn func(msg *Message)) *Options {
+	o.OnMessageV2 = fn
+	return o
+}
+
+// SetOnServerCapabilities sets the server capabilities callback (MQTT 5.0).
+func (o *Options) SetOnServerCapabilities(fn func(*ServerCapabilities)) *Options {
+	o.OnServerCapabilities = fn
+	return o
+}
+
+// SetOnAuth sets the enhanced authentication callback (MQTT 5.0).
+// The callback receives the server's reason code, auth method, and auth data,
+// and should return response auth data or an error to abort.
+func (o *Options) SetOnAuth(fn func(reasonCode byte, authMethod string, authData []byte) ([]byte, error)) *Options {
+	o.OnAuth = fn
+	return o
+}
+
+// SetAuthMethod sets the authentication method for enhanced auth (MQTT 5.0).
+func (o *Options) SetAuthMethod(method string) *Options {
+	o.AuthMethod = method
+	return o
+}
+
+// SetAuthData sets the initial authentication data for enhanced auth (MQTT 5.0).
+func (o *Options) SetAuthData(data []byte) *Options {
+	o.AuthData = data
+	return o
+}
+
+// SetStore sets the message store for QoS 1/2 persistence.
+func (o *Options) SetStore(store MessageStore) *Options {
+	o.Store = store
+	return o
+}
+
+// Validate checks the options for errors.
+func (o *Options) Validate() error {
+	if len(o.Servers) == 0 {
+		return ErrNoServers
+	}
+	if o.ClientID == "" {
+		return ErrEmptyClientID
+	}
+	if o.ProtocolVersion != 4 && o.ProtocolVersion != 5 {
+		return ErrInvalidProtocol
+	}
+	if o.MaxInflight <= 0 {
+		o.MaxInflight = DefaultMaxInflight
+	}
+	if o.MessageChanSize <= 0 {
+		o.MessageChanSize = DefaultMessageChanSize
+	}
+	if o.PingTimeout <= 0 {
+		o.PingTimeout = DefaultPingTimeout
+	}
+	if o.ReconnectBackoff <= 0 {
+		o.ReconnectBackoff = DefaultReconnectMin
+	}
+	if o.MaxReconnectWait <= 0 {
+		o.MaxReconnectWait = DefaultReconnectMax
+	}
+	if o.ReconnectJitter < 0 {
+		o.ReconnectJitter = 0
+	}
+	if o.MaxReconnectAttempts < 0 {
+		o.MaxReconnectAttempts = 0
+	}
+	if o.ReconnectBufSize < 0 {
+		o.ReconnectBufSize = 0
+	}
+	if o.MaxPendingMessages < 0 {
+		o.MaxPendingMessages = 0
+	}
+	if o.MaxPendingBytes < 0 {
+		o.MaxPendingBytes = 0
+	}
+	if o.MaxOutboundPendingMessages < 0 {
+		o.MaxOutboundPendingMessages = 0
+	}
+	if o.MaxOutboundPendingBytes < 0 {
+		o.MaxOutboundPendingBytes = 0
+	}
+	if o.SlowConsumerBlockTimeout < 0 {
+		o.SlowConsumerBlockTimeout = 0
+	}
+	if o.OutboundBlockTimeout < 0 {
+		o.OutboundBlockTimeout = 0
+	}
+	switch o.SlowConsumerPolicy {
+	case "", SlowConsumerDropNew:
+		o.SlowConsumerPolicy = SlowConsumerDropNew
+	case SlowConsumerDropOldest, SlowConsumerBlockWithTimeout:
+	default:
+		o.SlowConsumerPolicy = SlowConsumerDropNew
+	}
+	switch o.OutboundBackpressurePolicy {
+	case "", OutboundBackpressureBlock:
+		o.OutboundBackpressurePolicy = OutboundBackpressureBlock
+	case OutboundBackpressureBlockWithTimeout, OutboundBackpressureDropNew:
+	default:
+		o.OutboundBackpressurePolicy = OutboundBackpressureBlock
+	}
+	return nil
+}

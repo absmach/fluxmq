@@ -4,288 +4,268 @@
 package client
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
-	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
+	amqpclient "github.com/absmach/fluxmq/client/amqp"
+	mqttclient "github.com/absmach/fluxmq/client/mqtt"
 )
 
-func TestNewClient(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, err := New(opts)
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-	if client == nil {
-		t.Fatal("client should not be nil")
-	}
-	if client.State() != StateDisconnected {
-		t.Errorf("initial state should be Disconnected, got %v", client.State())
-	}
-	if client.IsConnected() {
-		t.Error("IsConnected should be false initially")
-	}
-}
-
-func TestNewClientValidation(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    *Options
-		wantErr error
-	}{
-		{
-			name:    "empty client ID",
-			opts:    NewOptions(),
-			wantErr: ErrEmptyClientID,
-		},
-		{
-			name:    "no servers",
-			opts:    &Options{ClientID: "test", ProtocolVersion: 4},
-			wantErr: ErrNoServers,
-		},
-		{
-			name:    "invalid protocol",
-			opts:    NewOptions().SetClientID("test").SetProtocolVersion(3),
-			wantErr: ErrInvalidProtocol,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(tt.opts)
-			if err != tt.wantErr {
-				t.Errorf("expected error %v, got %v", tt.wantErr, err)
-			}
-		})
-	}
-}
-
-func TestNewClientNilOptions(t *testing.T) {
+func TestNewNoTransport(t *testing.T) {
 	_, err := New(nil)
-	if err != ErrNilOptions {
-		t.Fatalf("expected ErrNilOptions, got %v", err)
+	if !errors.Is(err, ErrNoTransport) {
+		t.Fatalf("New(nil) error = %v, want %v", err, ErrNoTransport)
+	}
+
+	_, err = New(NewConfig())
+	if !errors.Is(err, ErrNoTransport) {
+		t.Fatalf("New(NewConfig()) error = %v, want %v", err, ErrNoTransport)
 	}
 }
 
-func TestClientDefaultStore(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, err := New(opts)
+func TestNewWithBothTransports(t *testing.T) {
+	cfg := NewConfig().
+		SetMQTT(testMQTTOptions()).
+		SetAMQP(testAMQPOptions()).
+		SetDefaultProtocol(ProtocolAMQP)
+
+	c, err := New(cfg)
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
-	if client.store == nil {
-		t.Error("store should be initialized with default MemoryStore")
+	if c.MQTT() == nil {
+		t.Fatal("MQTT transport should be configured")
+	}
+	if c.AMQP() == nil {
+		t.Fatal("AMQP transport should be configured")
 	}
 }
 
-func TestClientCustomStore(t *testing.T) {
-	customStore := NewMemoryStore()
-	opts := NewOptions().SetClientID("test-client").SetStore(customStore)
-	client, err := New(opts)
+func TestPublishNoTransport(t *testing.T) {
+	c := &Client{}
+	err := c.Publish(context.Background(), "topic/a", []byte("x"))
+	if !errors.Is(err, ErrNoTransport) {
+		t.Fatalf("Publish() error = %v, want %v", err, ErrNoTransport)
+	}
+}
+
+func TestPublishNoRouteProtocol(t *testing.T) {
+	c, err := NewMQTT(testMQTTOptions())
 	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-	if client.store != customStore {
-		t.Error("client should use the custom store")
-	}
-}
-
-func TestClientNotConnectedOperations(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
-
-	err := client.Publish("topic", []byte("payload"), 0, false)
-	if err != ErrNotConnected {
-		t.Errorf("Publish should fail with ErrNotConnected, got: %v", err)
+		t.Fatalf("NewMQTT() error = %v", err)
 	}
 
-	err = client.Subscribe(map[string]byte{"topic": 0})
-	if err != ErrNotConnected {
-		t.Errorf("Subscribe should fail with ErrNotConnected, got: %v", err)
-	}
-
-	err = client.Unsubscribe("topic")
-	if err != ErrNotConnected {
-		t.Errorf("Unsubscribe should fail with ErrNotConnected, got: %v", err)
+	err = c.Publish(context.Background(), "topic/a", []byte("x"), WithProtocol(ProtocolAMQP))
+	if !errors.Is(err, ErrNoRouteProtocol) {
+		t.Fatalf("Publish() error = %v, want %v", err, ErrNoRouteProtocol)
 	}
 }
 
-func TestClientPublishValidation(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
-
-	// Force connected state for validation tests
-	client.state.set(StateConnected)
-
-	err := client.Publish("", []byte("payload"), 0, false)
-	if err != ErrInvalidTopic {
-		t.Errorf("Publish with empty topic should fail with ErrInvalidTopic, got: %v", err)
-	}
-
-	err = client.Publish("topic", []byte("payload"), 3, false)
-	if err != ErrInvalidQoS {
-		t.Errorf("Publish with invalid QoS should fail with ErrInvalidQoS, got: %v", err)
-	}
-}
-
-func TestClientSubscribeValidation(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
-
-	// Force connected state
-	client.state.set(StateConnected)
-
-	err := client.Subscribe(map[string]byte{})
-	if err != ErrInvalidTopic {
-		t.Errorf("Subscribe with empty topics should fail with ErrInvalidTopic, got: %v", err)
-	}
-}
-
-func TestClientSubscribeWithOptionsValidation(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client").SetProtocolVersion(5)
-	client, _ := New(opts)
-	client.state.set(StateConnected)
-
-	err := client.SubscribeWithOptions(nil)
-	if err != ErrInvalidSubscribeOpt {
-		t.Fatalf("expected ErrInvalidSubscribeOpt, got %v", err)
-	}
-
-	err = client.SubscribeWithOptions(&SubscribeOption{Topic: "test/topic", QoS: 1, RetainHandling: 3})
-	if err != ErrInvalidSubscribeOpt {
-		t.Fatalf("expected ErrInvalidSubscribeOpt for retain handling, got %v", err)
-	}
-}
-
-func TestClientUnsubscribeValidation(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
-
-	// Force connected state
-	client.state.set(StateConnected)
-
-	err := client.Unsubscribe()
-	if err != ErrInvalidTopic {
-		t.Errorf("Unsubscribe with no topics should fail with ErrInvalidTopic, got: %v", err)
-	}
-}
-
-func TestClientClose(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
-
-	err := client.Close()
+func TestSubscribeNilHandler(t *testing.T) {
+	c, err := NewMQTT(testMQTTOptions())
 	if err != nil {
-		t.Errorf("Close failed: %v", err)
+		t.Fatalf("NewMQTT() error = %v", err)
 	}
 
-	if client.State() != StateClosed {
-		t.Errorf("state should be Closed after Close, got %v", client.State())
+	err = c.Subscribe(context.Background(), "topic/a", nil)
+	if !errors.Is(err, ErrSubscribeFailed) {
+		t.Fatalf("Subscribe() error = %v, want %v", err, ErrSubscribeFailed)
 	}
 
-	// Operations should fail after close
-	err = client.Connect()
-	if err != ErrClientClosed {
-		t.Errorf("Connect after Close should fail with ErrClientClosed, got: %v", err)
-	}
-}
-
-func TestClientConnectFailure(t *testing.T) {
-	opts := NewOptions().
-		SetClientID("test-client").
-		SetServers("localhost:19999"). // Non-existent port
-		SetConnectTimeout(100 * time.Millisecond)
-
-	client, _ := New(opts)
-
-	err := client.Connect()
-	if err == nil {
-		t.Error("Connect to non-existent server should fail")
-		client.Disconnect()
-	}
-
-	if client.State() != StateDisconnected {
-		t.Errorf("state should be Disconnected after failed connect, got %v", client.State())
+	err = c.SubscribeToQueue(context.Background(), "queue/a", "group-a", nil)
+	if !errors.Is(err, ErrQueueSubscribeFailed) {
+		t.Fatalf("SubscribeToQueue() error = %v, want %v", err, ErrQueueSubscribeFailed)
 	}
 }
 
-func TestClientDisconnectWhenNotConnected(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
-
-	err := client.Disconnect()
+func TestUnsubscribeProtocolRouting(t *testing.T) {
+	c, err := New(NewConfig().SetMQTT(testMQTTOptions()).SetAMQP(testAMQPOptions()))
 	if err != nil {
-		t.Errorf("Disconnect when not connected should not error, got: %v", err)
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// AMQP unsubscribe returns nil when no subscription exists.
+	if err := c.Unsubscribe(context.Background(), "topic/a", WithProtocol(ProtocolAMQP)); err != nil {
+		t.Fatalf("Unsubscribe(AMQP) unexpected error: %v", err)
+	}
+
+	// MQTT unsubscribe attempts network state checks and fails while disconnected.
+	err = c.Unsubscribe(context.Background(), "topic/a", WithProtocol(ProtocolMQTT))
+	if !errors.Is(err, ErrUnsubFailed) {
+		t.Fatalf("Unsubscribe(MQTT) error = %v, want %v", err, ErrUnsubFailed)
 	}
 }
 
-func TestSubscribeSingle(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client")
-	client, _ := New(opts)
+func TestUnsubscribeFromQueueProtocolRouting(t *testing.T) {
+	c, err := New(NewConfig().SetMQTT(testMQTTOptions()).SetAMQP(testAMQPOptions()))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 
-	// Force connected state
-	client.state.set(StateConnected)
+	// AMQP queue unsubscribe returns nil when no subscription exists.
+	if err := c.UnsubscribeFromQueue(context.Background(), "queue/a", WithProtocol(ProtocolAMQP)); err != nil {
+		t.Fatalf("UnsubscribeFromQueue(AMQP) unexpected error: %v", err)
+	}
 
-	// This will fail because there's no actual connection,
-	// but we're testing that SubscribeSingle calls Subscribe correctly
-	err := client.SubscribeSingle("topic", 1)
-	if err != ErrNotConnected {
-		// The state check passes but the actual send fails
-		// because there's no real connection
-		t.Logf("SubscribeSingle error (expected): %v", err)
+	// MQTT queue unsubscribe attempts network state checks and fails while disconnected.
+	err = c.UnsubscribeFromQueue(context.Background(), "queue/a", WithProtocol(ProtocolMQTT))
+	if !errors.Is(err, ErrQueueUnsubFailed) {
+		t.Fatalf("UnsubscribeFromQueue(MQTT) error = %v, want %v", err, ErrQueueUnsubFailed)
 	}
 }
 
-func TestConnAckCodeString(t *testing.T) {
-	tests := []struct {
-		code ConnAckCode
-		want string
-	}{
-		{ConnAccepted, "connection accepted"},
-		{ConnRefusedProtocol, "unacceptable protocol version"},
-		{ConnRefusedIDRejected, "client identifier rejected"},
-		{ConnRefusedUnavailable, "server unavailable"},
-		{ConnRefusedBadAuth, "bad username or password"},
-		{ConnRefusedNotAuth, "not authorized"},
-		{ConnAckCode(99), "unknown error"},
-	}
-
-	for _, tt := range tests {
-		got := tt.code.String()
-		if got != tt.want {
-			t.Errorf("ConnAckCode(%d).String() = %s, want %s", tt.code, got, tt.want)
+func TestConnectWrapsErrors(t *testing.T) {
+	t.Run("mqtt", func(t *testing.T) {
+		c, err := NewMQTT(testMQTTOptions())
+		if err != nil {
+			t.Fatalf("NewMQTT() error = %v", err)
 		}
-	}
-}
 
-func TestConnAckCodeError(t *testing.T) {
-	code := ConnRefusedBadAuth
-	err := code.Error()
-	if err != "bad username or password" {
-		t.Errorf("Error() = %s, want 'bad username or password'", err)
-	}
-}
-
-func TestHandleSubAckV5FailureCodes(t *testing.T) {
-	opts := NewOptions().SetClientID("test-client").SetProtocolVersion(5)
-	client, err := New(opts)
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-
-	packetID := uint16(10)
-	op, err := client.pending.add(packetID, pendingSubscribe, nil)
-	if err != nil {
-		t.Fatalf("pending add failed: %v", err)
-	}
-
-	reasonCodes := []byte{v5.SubAckNotAuthorized}
-	client.handleSubAck(&v5.SubAck{
-		ID:          packetID,
-		ReasonCodes: &reasonCodes,
+		err = c.Connect(context.Background())
+		if !errors.Is(err, ErrConnectFailed) {
+			t.Fatalf("Connect() error = %v, want %v", err, ErrConnectFailed)
+		}
 	})
 
-	if err := op.wait(100 * time.Millisecond); err != ErrSubscribeFailed {
-		t.Fatalf("expected ErrSubscribeFailed, got %v", err)
+	t.Run("amqp", func(t *testing.T) {
+		c, err := NewAMQP(testAMQPOptions())
+		if err != nil {
+			t.Fatalf("NewAMQP() error = %v", err)
+		}
+
+		err = c.Connect(context.Background())
+		if !errors.Is(err, ErrConnectFailed) {
+			t.Fatalf("Connect() error = %v, want %v", err, ErrConnectFailed)
+		}
+	})
+}
+
+func TestDispatchMQTTDoesNotHoldLockWhileCallingHandlers(t *testing.T) {
+	c := &Client{
+		subsExact: make(map[string]*mqttSubDispatcher),
+		subsWild:  make(map[string]*mqttSubDispatcher),
+		qsubs:     make(map[string]MessageHandler),
 	}
+	t.Cleanup(c.stopAllMQTTSubs)
+
+	done := make(chan struct{})
+	c.mu.Lock()
+	replaced := c.setMQTTSubLocked("events/#", func(_ *Message) {
+		c.mu.Lock()
+		c.mu.Unlock()
+		close(done)
+	})
+	c.mu.Unlock()
+	if replaced != nil {
+		replaced.stop()
+	}
+
+	go c.dispatchMQTT(&mqttclient.Message{Topic: "events/test", Payload: []byte("payload")})
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("dispatchMQTT appears to hold c.mu while invoking handlers")
+	}
+}
+
+func TestDispatchMQTTMatchesExactAndWildcard(t *testing.T) {
+	c := &Client{
+		subsExact: make(map[string]*mqttSubDispatcher),
+		subsWild:  make(map[string]*mqttSubDispatcher),
+		qsubs:     make(map[string]MessageHandler),
+	}
+	t.Cleanup(c.stopAllMQTTSubs)
+
+	got := make(chan string, 4)
+	c.mu.Lock()
+	if replaced := c.setMQTTSubLocked("events/a", func(_ *Message) { got <- "exact" }); replaced != nil {
+		replaced.stop()
+	}
+	if replaced := c.setMQTTSubLocked("events/+", func(_ *Message) { got <- "wild-plus" }); replaced != nil {
+		replaced.stop()
+	}
+	if replaced := c.setMQTTSubLocked("events/#", func(_ *Message) { got <- "wild-hash" }); replaced != nil {
+		replaced.stop()
+	}
+	c.mu.Unlock()
+
+	c.dispatchMQTT(&mqttclient.Message{Topic: "events/a", Payload: []byte("payload")})
+
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		select {
+		case name := <-got:
+			seen[name] = true
+		case <-time.After(250 * time.Millisecond):
+			t.Fatal("timed out waiting for dispatch handlers")
+		}
+	}
+
+	if !seen["exact"] || !seen["wild-plus"] || !seen["wild-hash"] {
+		t.Fatalf("expected exact and wildcard handlers, got %#v", seen)
+	}
+}
+
+func TestDispatchMQTTPerSubscriptionWorkersAvoidCrossSubHOL(t *testing.T) {
+	c := &Client{
+		subsExact: make(map[string]*mqttSubDispatcher),
+		subsWild:  make(map[string]*mqttSubDispatcher),
+		qsubs:     make(map[string]MessageHandler),
+	}
+	t.Cleanup(c.stopAllMQTTSubs)
+
+	slowStarted := make(chan struct{})
+	fastDone := make(chan struct{})
+
+	c.mu.Lock()
+	if replaced := c.setMQTTSubLocked("events/slow", func(_ *Message) {
+		select {
+		case <-slowStarted:
+		default:
+			close(slowStarted)
+		}
+		time.Sleep(150 * time.Millisecond)
+	}); replaced != nil {
+		replaced.stop()
+	}
+	if replaced := c.setMQTTSubLocked("events/fast", func(_ *Message) {
+		select {
+		case <-fastDone:
+		default:
+			close(fastDone)
+		}
+	}); replaced != nil {
+		replaced.stop()
+	}
+	c.mu.Unlock()
+
+	c.dispatchMQTT(&mqttclient.Message{Topic: "events/slow", Payload: []byte("slow")})
+	select {
+	case <-slowStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("slow handler did not start")
+	}
+
+	c.dispatchMQTT(&mqttclient.Message{Topic: "events/fast", Payload: []byte("fast")})
+	select {
+	case <-fastDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("fast handler appears blocked by slow subscription handler")
+	}
+}
+
+func testMQTTOptions() *mqttclient.Options {
+	return mqttclient.NewOptions().
+		SetServers("127.0.0.1:1").
+		SetClientID("test-client").
+		SetConnectTimeout(20 * time.Millisecond)
+}
+
+func testAMQPOptions() *amqpclient.Options {
+	return amqpclient.NewOptions().
+		SetAddress("127.0.0.1:1").
+		SetDialTimeout(20 * time.Millisecond)
 }

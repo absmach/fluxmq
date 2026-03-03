@@ -117,43 +117,79 @@ func (p *PublishProperties) Unpack(r io.Reader) error {
 }
 
 func (p *PublishProperties) Encode() []byte {
-	var ret []byte
+	return p.EncodeTo(nil)
+}
+
+// EncodeTo appends the encoded properties to dst and returns the extended buffer.
+func (p *PublishProperties) EncodeTo(dst []byte) []byte {
 	if p.PayloadFormat != nil {
-		ret = append(ret, PayloadFormatProp, *p.PayloadFormat)
+		dst = append(dst, PayloadFormatProp, *p.PayloadFormat)
 	}
 	if p.MessageExpiry != nil {
-		ret = append(ret, MessageExpiryProp)
-		ret = append(ret, codec.EncodeUint32(*p.MessageExpiry)...)
+		dst = append(dst, MessageExpiryProp)
+		dst = appendUint32(dst, *p.MessageExpiry)
 	}
 	if p.TopicAlias != nil {
-		ret = append(ret, TopicAliasProp)
-		ret = append(ret, codec.EncodeUint16(*p.TopicAlias)...)
+		dst = append(dst, TopicAliasProp)
+		dst = appendUint16(dst, *p.TopicAlias)
 	}
 	if p.ResponseTopic != "" {
-		ret = append(ret, ResponseTopicProp)
-		ret = append(ret, codec.EncodeBytes([]byte(p.ResponseTopic))...)
+		dst = append(dst, ResponseTopicProp)
+		dst = appendString(dst, p.ResponseTopic)
 	}
 	if len(p.CorrelationData) > 0 {
-		ret = append(ret, CorrelationDataProp)
-		ret = append(ret, codec.EncodeBytes(p.CorrelationData)...)
+		dst = append(dst, CorrelationDataProp)
+		dst = appendBytes(dst, p.CorrelationData)
 	}
 	if len(p.User) > 0 {
 		for _, u := range p.User {
-			ret = append(ret, UserProp)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Key))...)
-			ret = append(ret, codec.EncodeBytes([]byte(u.Value))...)
+			dst = append(dst, UserProp)
+			dst = appendString(dst, u.Key)
+			dst = appendString(dst, u.Value)
 		}
 	}
 	if p.SubscriptionID != nil {
-		ret = append(ret, SubscriptionIdentifierProp)
-		ret = append(ret, codec.EncodeVBI(*p.SubscriptionID)...)
+		dst = append(dst, SubscriptionIdentifierProp)
+		dst = appendVBI(dst, *p.SubscriptionID)
 	}
 	if p.ContentType != "" {
-		ret = append(ret, ContentTypeProp)
-		ret = append(ret, codec.EncodeBytes([]byte(p.ContentType))...)
+		dst = append(dst, ContentTypeProp)
+		dst = appendString(dst, p.ContentType)
+	}
+	return dst
+}
+
+func (p *PublishProperties) encodedLen() int {
+	if p == nil {
+		return 0
 	}
 
-	return ret
+	n := 0
+	if p.PayloadFormat != nil {
+		n += 2
+	}
+	if p.MessageExpiry != nil {
+		n += 5
+	}
+	if p.TopicAlias != nil {
+		n += 3
+	}
+	if p.ResponseTopic != "" {
+		n += 1 + 2 + len(p.ResponseTopic)
+	}
+	if len(p.CorrelationData) > 0 {
+		n += 1 + 2 + len(p.CorrelationData)
+	}
+	for _, u := range p.User {
+		n += 1 + 2 + len(u.Key) + 2 + len(u.Value)
+	}
+	if p.SubscriptionID != nil {
+		n += 1 + vbiLen(*p.SubscriptionID)
+	}
+	if p.ContentType != "" {
+		n += 1 + 2 + len(p.ContentType)
+	}
+	return n
 }
 
 func (pkt *Publish) String() string {
@@ -170,28 +206,86 @@ func (pkt *Publish) Release() {
 }
 
 func (pkt *Publish) Encode() []byte {
-	ret := codec.EncodeBytes([]byte(pkt.TopicName))
-	if pkt.QoS > 0 {
-		ret = append(ret, codec.EncodeUint16(pkt.ID)...)
-	}
-	// Properties (MQTT 5.0)
-	if pkt.Properties != nil {
-		props := pkt.Properties.Encode()
-		l := len(props)
-		proplen := codec.EncodeVBI(l)
-		ret = append(ret, proplen...)
-		if l > 0 {
-			ret = append(ret, props...)
-		}
-	} else {
-		ret = append(ret, 0) // Zero-length properties
-	}
-	// Take care size is calculated properly if someone tempered with the packet.
-	pkt.FixedHeader.RemainingLength = len(ret) + len(pkt.Payload)
-	ret = append(ret, pkt.Payload...)
-	ret = append(pkt.FixedHeader.Encode(), ret...)
+	return pkt.EncodeTo(nil)
+}
 
-	return ret
+// EncodeTo appends the encoded packet to dst and returns the extended buffer.
+func (pkt *Publish) EncodeTo(dst []byte) []byte {
+	propsLen := 0
+	if pkt.Properties != nil {
+		propsLen = pkt.Properties.encodedLen()
+	}
+
+	remainingLen := 2 + len(pkt.TopicName) + len(pkt.Payload)
+	if pkt.QoS > 0 {
+		remainingLen += 2
+	}
+	remainingLen += vbiLen(propsLen) + propsLen
+	pkt.FixedHeader.RemainingLength = remainingLen
+
+	var dup, retain byte
+	if pkt.Dup {
+		dup = 1
+	}
+	if pkt.Retain {
+		retain = 1
+	}
+	dst = append(dst, pkt.PacketType<<4|dup<<3|pkt.QoS<<1|retain)
+	dst = appendVBI(dst, remainingLen)
+
+	dst = appendString(dst, pkt.TopicName)
+	if pkt.QoS > 0 {
+		dst = appendUint16(dst, pkt.ID)
+	}
+	dst = appendVBI(dst, propsLen)
+	if propsLen > 0 {
+		dst = pkt.Properties.EncodeTo(dst)
+	}
+	dst = append(dst, pkt.Payload...)
+
+	return dst
+}
+
+func appendString(dst []byte, s string) []byte {
+	dst = append(dst, byte(len(s)>>8), byte(len(s)))
+	return append(dst, s...)
+}
+
+func appendBytes(dst []byte, b []byte) []byte {
+	dst = append(dst, byte(len(b)>>8), byte(len(b)))
+	return append(dst, b...)
+}
+
+func appendUint16(dst []byte, v uint16) []byte {
+	return append(dst, byte(v>>8), byte(v))
+}
+
+func appendUint32(dst []byte, v uint32) []byte {
+	return append(dst, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
+func appendVBI(dst []byte, num int) []byte {
+	v := uint32(num)
+	for {
+		b := byte(v & 0x7F)
+		v >>= 7
+		if v > 0 {
+			b |= 0x80
+		}
+		dst = append(dst, b)
+		if v == 0 {
+			return dst
+		}
+	}
+}
+
+func vbiLen(num int) int {
+	n := 1
+	for num >= 128 {
+		num /= 128
+		n++
+	}
+	return n
 }
 
 func (pkt *Publish) Pack(w io.Writer) error {

@@ -18,8 +18,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	mqttclient "github.com/absmach/fluxmq/client"
+	msgclient "github.com/absmach/fluxmq/client"
 	amqpclient "github.com/absmach/fluxmq/client/amqp"
+	mqttclient "github.com/absmach/fluxmq/client/mqtt"
 	"github.com/absmach/fluxmq/topics"
 )
 
@@ -538,30 +539,32 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 
 	switch sc.resolvedSubscriberProto {
 	case "mqtt":
-		subs, err := connectMQTTSubscribers(mqttSubscriberEndpoints, sc.Name, runID, sc.Subscribers, func(subID int, _ string, msg *mqttclient.Message) {
-			if !isCountablePayload(msg.Payload) {
-				return
-			}
-			msgID := extractMsgID(msg.Payload)
-			if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
-				received.Add(1)
-			}
-		})
+		subs, err := connectMQTTSubscribers(ctx, mqttSubscriberEndpoints, sc.Name, runID, sc.Subscribers)
 		if err != nil {
 			return res, err
 		}
-		defer disconnectMQTTClients(subs)
+		defer disconnectMQTTClients(ctx, subs)
 
 		for i, sub := range subs {
-			if err := sub.SubscribeSingle(filters[i], sc.resolvedQoS); err != nil {
+			filter := filters[i]
+			subID := i
+			if err := sub.Subscribe(ctx, filter, func(msg *msgclient.Message) {
+				if !isCountablePayload(msg.Payload) {
+					return
+				}
+				msgID := extractMsgID(msg.Payload)
+				if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
+					received.Add(1)
+				}
+			}, msgclient.WithQoS(sc.resolvedQoS)); err != nil {
 				errCount.Add(1)
-				return res, fmt.Errorf("subscriber %d failed to subscribe %q: %w", i, filters[i], err)
+				return res, fmt.Errorf("subscriber %d failed to subscribe %q: %w", i, filter, err)
 			}
 		}
 	case "amqp":
-		subs, err := connectAMQPTopicSubscribersWithFilters(amqpSubscriberAddrs, sc.Name, runID, filters, func(subID int, msg *amqpclient.Message) {
-			if isCountablePayload(msg.Body) {
-				msgID := extractMsgID(msg.Body)
+		subs, err := connectAMQPTopicSubscribersWithFilters(ctx, amqpSubscriberAddrs, sc.Name, runID, filters, func(subID int, msg *msgclient.Message) {
+			if isCountablePayload(msg.Payload) {
+				msgID := extractMsgID(msg.Payload)
 				if seen.add(fmt.Sprintf("%d:%s", subID, msgID)) {
 					received.Add(1)
 				}
@@ -573,7 +576,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 		if err != nil {
 			return res, err
 		}
-		defer closeAMQPClients(subs)
+		defer closeAMQPClients(ctx, subs)
 	default:
 		return res, fmt.Errorf("unsupported subscriber protocol %q", sc.resolvedSubscriberProto)
 	}
@@ -737,20 +740,14 @@ func buildTopicMatchCounts(topicSet, filters []string) map[string]int64 {
 	return matchCounts
 }
 
-func connectMQTTSubscribers(endpoints []mqttEndpoint, scenario string, runID int64, count int, onMessage func(subID int, subName string, msg *mqttclient.Message)) ([]*mqttclient.Client, error) {
-	clients := make([]*mqttclient.Client, 0, count)
+func connectMQTTSubscribers(ctx context.Context, endpoints []mqttEndpoint, scenario string, runID int64, count int) ([]*msgclient.Client, error) {
+	clients := make([]*msgclient.Client, 0, count)
 	for i := 0; i < count; i++ {
 		endpoint := mqttEndpointByOffset(endpoints, i, subscriberNodeOffset)
 		clientID := fmt.Sprintf("%s-sub-%d-%d", scenario, runID, i)
-		sid := i
-		sname := clientID
-		client, err := connectMQTTClient(endpoint.Addr, endpoint.ProtocolVersion, clientID, func(msg *mqttclient.Message) {
-			if onMessage != nil {
-				onMessage(sid, sname, msg)
-			}
-		})
+		client, err := connectMQTTClient(ctx, endpoint.Addr, endpoint.ProtocolVersion, clientID)
 		if err != nil {
-			disconnectMQTTClients(clients)
+			disconnectMQTTClients(ctx, clients)
 			return nil, fmt.Errorf("failed to connect MQTT subscriber %s to %s (v%d): %w", clientID, endpoint.Addr, endpoint.ProtocolVersion, err)
 		}
 		clients = append(clients, client)
@@ -758,22 +755,21 @@ func connectMQTTSubscribers(endpoints []mqttEndpoint, scenario string, runID int
 	return clients, nil
 }
 
-func connectAMQPTopicSubscribersWithFilters(addrs []string, scenario string, runID int64, filters []string, handler func(subID int, msg *amqpclient.Message)) ([]*amqpclient.Client, error) {
-	clients := make([]*amqpclient.Client, 0, len(filters))
+func connectAMQPTopicSubscribersWithFilters(ctx context.Context, addrs []string, scenario string, runID int64, filters []string, handler func(subID int, msg *msgclient.Message)) ([]*msgclient.Client, error) {
+	clients := make([]*msgclient.Client, 0, len(filters))
 	for i, filter := range filters {
 		addr := addrByOffset(addrs, i, subscriberNodeOffset)
 		cid := i
-		client, err := connectAMQPClient(addr)
+		client, err := connectAMQPClient(ctx, addr)
 		if err != nil {
-			closeAMQPClients(clients)
+			closeAMQPClients(ctx, clients)
 			return nil, fmt.Errorf("failed to connect AMQP subscriber %d to %s: %w", i, addr, err)
 		}
-		subOpts := &amqpclient.SubscribeOptions{Topic: filter, AutoAck: false}
-		if err := client.SubscribeWithOptions(subOpts, func(msg *amqpclient.Message) {
+		if err := client.Subscribe(ctx, filter, func(msg *msgclient.Message) {
 			handler(cid, msg)
-		}); err != nil {
-			_ = client.Close()
-			closeAMQPClients(clients)
+		}, msgclient.WithAutoAck(false)); err != nil {
+			_ = client.Close(ctx)
+			closeAMQPClients(ctx, clients)
 			return nil, fmt.Errorf("failed AMQP subscribe for scenario=%s run=%d filter=%q: %w", scenario, runID, filter, err)
 		}
 		clients = append(clients, client)
@@ -840,11 +836,11 @@ func sleepWithContext(ctx context.Context, d time.Duration) bool {
 }
 
 func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
-	pubClients := make([]*mqttclient.Client, 0, params.Publishers)
+	pubClients := make([]*msgclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
 		endpoint := mqttEndpointByOffset(params.Endpoints, i, publisherNodeOffset)
 		clientID := fmt.Sprintf("%s-pub-%d-%d", params.Scenario, params.RunID, i)
-		client, err := connectMQTTClient(endpoint.Addr, endpoint.ProtocolVersion, clientID, nil)
+		client, err := connectMQTTClient(ctx, endpoint.Addr, endpoint.ProtocolVersion, clientID)
 		if err != nil {
 			if params.ErrCount != nil {
 				params.ErrCount.Add(1)
@@ -853,7 +849,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 		}
 		pubClients = append(pubClients, client)
 	}
-	defer disconnectMQTTClients(pubClients)
+	defer disconnectMQTTClients(ctx, pubClients)
 
 	counter := params.PublishedCounter
 	if counter == nil {
@@ -866,7 +862,7 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
-		go func(idx int, client *mqttclient.Client) {
+		go func(idx int, client *msgclient.Client) {
 			defer wg.Done()
 			rng := newPublishRNG(params.RunID, idx)
 			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
@@ -885,7 +881,8 @@ func runMQTTPublishers(ctx context.Context, params mqttPublishParams) int64 {
 				}
 				msgID := fmt.Sprintf("%s-%d-%d", params.Scenario, idx, msgIdx)
 				payload := makePayload(msgID, params.PayloadSize)
-				if err := client.Publish(topic, payload, qos, false); err != nil {
+				err := client.Publish(ctx, topic, payload, msgclient.WithQoS(qos))
+				if err != nil {
 					if params.OnPublishError != nil {
 						params.OnPublishError(topic)
 					}
@@ -922,10 +919,10 @@ type amqpTopicPublishParams struct {
 }
 
 func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) int64 {
-	pubClients := make([]*amqpclient.Client, 0, params.Publishers)
+	pubClients := make([]*msgclient.Client, 0, params.Publishers)
 	for i := 0; i < params.Publishers; i++ {
 		addr := addrByOffset(params.Addrs, i, publisherNodeOffset)
-		client, err := connectAMQPClient(addr)
+		client, err := connectAMQPClient(ctx, addr)
 		if err != nil {
 			if params.ErrCount != nil {
 				params.ErrCount.Add(1)
@@ -934,7 +931,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 		}
 		pubClients = append(pubClients, client)
 	}
-	defer closeAMQPClients(pubClients)
+	defer closeAMQPClients(ctx, pubClients)
 
 	counter := params.PublishedCounter
 	if counter == nil {
@@ -943,7 +940,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 	var wg sync.WaitGroup
 	for pubIdx, c := range pubClients {
 		wg.Add(1)
-		go func(idx int, client *amqpclient.Client) {
+		go func(idx int, client *msgclient.Client) {
 			defer wg.Done()
 			rng := newPublishRNG(params.RunID, idx)
 			if !sleepWithContext(ctx, initialPublishDelay(params.PublishJitter, rng)) {
@@ -962,7 +959,8 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 				}
 				msgID := fmt.Sprintf("%s-at-%d-%d", params.Scenario, idx, msgIdx)
 				payload := makePayload(msgID, params.PayloadSize)
-				if err := client.Publish(topic, payload); err != nil {
+				err := client.Publish(ctx, topic, payload)
+				if err != nil {
 					if params.OnPublishError != nil {
 						params.OnPublishError(topic)
 					}
@@ -982,7 +980,7 @@ func runAMQPTopicPublishers(ctx context.Context, params amqpTopicPublishParams) 
 	return counter.Load()
 }
 
-func connectMQTTClient(addr string, protocolVersion byte, clientID string, onMessage func(msg *mqttclient.Message)) (*mqttclient.Client, error) {
+func connectMQTTClient(ctx context.Context, addr string, protocolVersion byte, clientID string) (*msgclient.Client, error) {
 	if protocolVersion != 4 && protocolVersion != 5 {
 		return nil, fmt.Errorf("unsupported MQTT protocol version %d", protocolVersion)
 	}
@@ -997,52 +995,48 @@ func connectMQTTClient(addr string, protocolVersion byte, clientID string, onMes
 		SetAutoReconnect(true).
 		SetMessageChanSize(4096)
 
-	if onMessage != nil {
-		opts.SetOnMessageV2(onMessage)
-	}
-
-	c, err := mqttclient.New(opts)
+	c, err := msgclient.NewMQTT(opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Connect(); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func connectAMQPClient(addr string) (*amqpclient.Client, error) {
+func connectAMQPClient(ctx context.Context, addr string) (*msgclient.Client, error) {
 	opts := amqpclient.NewOptions().
 		SetAddress(addr).
 		SetCredentials("guest", "guest").
 		SetPrefetch(512, 0).
 		SetAutoReconnect(true)
 
-	c, err := amqpclient.New(opts)
+	c, err := msgclient.NewAMQP(opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Connect(); err != nil {
+	if err := c.Connect(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func disconnectMQTTClients(clients []*mqttclient.Client) {
+func disconnectMQTTClients(ctx context.Context, clients []*msgclient.Client) {
 	for _, c := range clients {
 		if c == nil {
 			continue
 		}
-		_ = c.Disconnect()
+		_ = c.Close(ctx)
 	}
 }
 
-func closeAMQPClients(clients []*amqpclient.Client) {
+func closeAMQPClients(ctx context.Context, clients []*msgclient.Client) {
 	for _, c := range clients {
 		if c == nil {
 			continue
 		}
-		_ = c.Close()
+		_ = c.Close(ctx)
 	}
 }
 

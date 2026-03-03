@@ -4,6 +4,7 @@
 package amqp
 
 import (
+	"context"
 	"math"
 	"strconv"
 	"strings"
@@ -140,6 +141,14 @@ func (c *Client) PublishToQueue(queueName string, payload []byte) error {
 	})
 }
 
+// PublishToQueueContext publishes a message to a durable queue with context cancellation support.
+func (c *Client) PublishToQueueContext(ctx context.Context, queueName string, payload []byte) error {
+	return c.PublishToQueueWithOptionsContext(ctx, &QueuePublishOptions{
+		QueueName: queueName,
+		Payload:   payload,
+	})
+}
+
 // PublishToQueueWithOptions publishes a message to a durable queue with full control.
 // The queueName should NOT include the "$queue/" prefix - it will be added automatically.
 func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
@@ -164,6 +173,13 @@ func (c *Client) PublishToQueueWithOptions(opts *QueuePublishOptions) error {
 
 	// Queue publishes always use default exchange with routing key as the full queue topic.
 	return c.publish("", queueTopic, publishing, false, false)
+}
+
+// PublishToQueueWithOptionsContext publishes a message to a durable queue with context cancellation support.
+func (c *Client) PublishToQueueWithOptionsContext(ctx context.Context, opts *QueuePublishOptions) error {
+	return runWithContext(ctx, func() error {
+		return c.PublishToQueueWithOptions(opts)
+	})
 }
 
 // Get performs a basic.get on a queue, synchronously fetching a single message.
@@ -222,6 +238,13 @@ func (c *Client) PublishToStream(queueName string, payload []byte, props map[str
 	}
 	applyProperties(&publishing, props)
 	return c.publish("", queueName, publishing, false, false)
+}
+
+// PublishToStreamContext publishes a message to a stream queue with context cancellation support.
+func (c *Client) PublishToStreamContext(ctx context.Context, queueName string, payload []byte, props map[string]string) error {
+	return runWithContext(ctx, func() error {
+		return c.PublishToStream(queueName, payload, props)
+	})
 }
 
 // DeclareStreamQueue declares a stream queue with retention settings.

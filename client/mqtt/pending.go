@@ -1,9 +1,10 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package client
+package mqtt
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -31,11 +32,13 @@ type pendingOp struct {
 
 // pendingStore manages pending operations.
 type pendingStore struct {
-	mu       sync.RWMutex
-	pending  map[uint16]*pendingOp
-	nextID   uint16
-	maxSize  int
-	inflight int
+	mu              sync.RWMutex
+	pending         map[uint16]*pendingOp
+	nextID          uint16
+	maxSize         int
+	inflight        int
+	typeCounts      [3]int // indexed by pendingType
+	onPublishChange func() // called (without mu held) when pendingPublish count decreases
 }
 
 // newPendingStore creates a new pending operation store.
@@ -91,6 +94,7 @@ func (ps *pendingStore) add(id uint16, opType pendingType, msg *Message) (*pendi
 
 	ps.pending[id] = op
 	ps.inflight++
+	ps.typeCounts[opType]++
 	return op, nil
 }
 
@@ -108,6 +112,7 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 	if exists {
 		delete(ps.pending, id)
 		ps.inflight--
+		ps.typeCounts[op.opType]--
 	}
 	ps.mu.Unlock()
 
@@ -115,6 +120,9 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 		op.err = err
 		op.result = result
 		close(op.done)
+		if op.opType == pendingPublish && ps.onPublishChange != nil {
+			ps.onPublishChange()
+		}
 		return true
 	}
 	return false
@@ -122,11 +130,17 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 
 // remove removes a pending operation without completing it.
 func (ps *pendingStore) remove(id uint16) {
+	notify := false
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if _, exists := ps.pending[id]; exists {
+	if op, exists := ps.pending[id]; exists {
 		delete(ps.pending, id)
 		ps.inflight--
+		ps.typeCounts[op.opType]--
+		notify = op.opType == pendingPublish
+	}
+	ps.mu.Unlock()
+	if notify && ps.onPublishChange != nil {
+		ps.onPublishChange()
 	}
 }
 
@@ -158,13 +172,18 @@ func (ps *pendingStore) getAll() []*pendingOp {
 func (ps *pendingStore) clear(err error) {
 	ps.mu.Lock()
 	pending := ps.pending
+	hadPendingPublishes := ps.typeCounts[pendingPublish] > 0
 	ps.pending = make(map[uint16]*pendingOp)
 	ps.inflight = 0
+	ps.typeCounts = [3]int{}
 	ps.mu.Unlock()
 
 	for _, op := range pending {
 		op.err = err
 		close(op.done)
+	}
+	if hadPendingPublishes && ps.onPublishChange != nil {
+		ps.onPublishChange()
 	}
 }
 
@@ -173,6 +192,13 @@ func (ps *pendingStore) count() int {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 	return ps.inflight
+}
+
+// countByType returns number of inflight operations of a given type.
+func (ps *pendingStore) countByType(opType pendingType) int {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.typeCounts[opType]
 }
 
 // wait waits for a pending operation to complete with timeout.
@@ -185,4 +211,36 @@ func (op *pendingOp) wait(timeout time.Duration) error {
 	case <-timer.C:
 		return ErrTimeout
 	}
+}
+
+// waitWithContext waits for completion, honoring timeout and context cancellation.
+func (op *pendingOp) waitWithContext(ctx context.Context, timeout time.Duration) error {
+	if ctx == nil {
+		return op.wait(timeout)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var timer *time.Timer
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+	}
+
+	select {
+	case <-op.done:
+		return op.err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timerC(timer):
+		return ErrTimeout
+	}
+}
+
+func timerC(t *time.Timer) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
 }

@@ -25,6 +25,26 @@ make docker-cluster-down     # docker mode
 make clean-data              # optional
 ```
 
+## Mock MQTT cluster (broker-free baseline)
+
+For isolating client-side behavior from broker internals, use the lightweight mock cluster:
+
+```bash
+# terminal 1: start mock cluster on 3 node-like ports
+make mock-mqtt-cluster
+
+# terminal 2: run MQTT-only perf against mock
+make run-perf \
+  CONFIG=tests/perf/configs/fanin_mqtt_mqtt.json \
+  PERF_MQTT_V3_ADDRS=127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887 \
+  PERF_MQTT_V5_ADDRS=127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887
+```
+
+Notes:
+- Mock server intentionally ignores broker-level QoS durability/routing semantics.
+- It only provides basic protocol parsing/acks and shared fanout delivery across 3 listeners.
+- Use MQTT-only scenarios (`*-mqtt-mqtt.json`) for this mode.
+
 ## Prerequisites
 
 - Go toolchain available in PATH
