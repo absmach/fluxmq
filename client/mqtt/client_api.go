@@ -283,7 +283,8 @@ func (c *Client) subscribeWithOptions(ctx context.Context, opts []*SubscribeOpti
 	}
 
 	return c.sendAndAwaitPending(ctx, pendingSubscribe, nil, func(packetID uint16) error {
-		return c.sendSubscribeWithOptions(ctx, packetID, opts)
+		c.updateActivity()
+		return c.queueWrite(c.encodeSubscribePacket(packetID, opts), c.writeDeadline(ctx))
 	})
 }
 
@@ -292,20 +293,11 @@ func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[
 	for topic, qos := range topics {
 		opts = append(opts, &SubscribeOption{Topic: topic, QoS: qos})
 	}
-	return c.sendSubscribePacket(ctx, packetID, opts)
-}
-
-func (c *Client) sendSubscribePacket(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
 	c.updateActivity()
 	return c.queueWrite(c.encodeSubscribePacket(packetID, opts), c.writeDeadline(ctx))
 }
 
-func (c *Client) sendSubscribeWithOptions(ctx context.Context, packetID uint16, opts []*SubscribeOption) error {
-	return c.sendSubscribePacket(ctx, packetID, opts)
-}
-
 // Unsubscribe unsubscribes from one or more topics.
-
 func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -320,7 +312,8 @@ func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 	}
 
 	if err := c.sendAndAwaitPending(ctx, pendingUnsubscribe, nil, func(packetID uint16) error {
-		return c.sendUnsubscribe(ctx, packetID, topics)
+		c.updateActivity()
+		return c.queueWrite(c.encodeUnsubscribePacket(packetID, topics), c.writeDeadline(ctx))
 	}); err != nil {
 		return err
 	}
@@ -330,13 +323,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 	return nil
 }
 
-func (c *Client) sendUnsubscribe(ctx context.Context, packetID uint16, topics []string) error {
-	c.updateActivity()
-	return c.queueWrite(c.encodeUnsubscribePacket(packetID, topics), c.writeDeadline(ctx))
-}
-
 // SubscribeAsync subscribes in a background goroutine and returns a completion token.
-
 func (c *Client) SubscribeAsync(ctx context.Context, topics map[string]byte) *SubscribeToken {
 	tok := &SubscribeToken{token: newToken()}
 	go func() {
