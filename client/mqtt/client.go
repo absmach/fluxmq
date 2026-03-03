@@ -15,9 +15,7 @@ type writeRequest struct {
 	data     []byte
 	deadline time.Time
 	errCh    chan error // nil for fire-and-forget
-	// Indicates errCh came from the write error channel pool.
-	pooledErrCh bool
-	ctx         context.Context
+	ctx      context.Context
 	// Set for outbound publish writes subject to outbound pressure limits.
 	trackOutbound bool
 	dropTopic     string
@@ -31,12 +29,6 @@ const defaultCallbackQueueSize = 256
 var (
 	callbackQueueOnce sync.Once
 	callbackQueueCh   chan func()
-
-	writeErrChPool = sync.Pool{
-		New: func() any {
-			return make(chan error, 1)
-		},
-	}
 )
 
 type writeRuntime struct {
@@ -72,17 +64,8 @@ type Client struct {
 	// Guards connection and write-loop channel pointers.
 	writeStateMu sync.RWMutex
 	writeRT      atomic.Pointer[writeRuntime]
-
-	// Connection — only touched by writeLoop (writes) and readLoop (reads) after Connect().
-	conn net.Conn
-
-	// Write serialization
-	writeCh        chan writeRequest
-	controlWriteCh chan writeRequest
-	qos0Wake       chan struct{}
-	writeDone      chan struct{}
-	qos0BufMu      sync.Mutex
-	qos0Buf        []writeRequest
+	qos0BufMu    sync.Mutex
+	qos0Buf      []writeRequest
 
 	// Server capabilities (MQTT 5.0)
 	serverCaps   *ServerCapabilities
@@ -108,8 +91,6 @@ type Client struct {
 
 	// Lifecycle
 	lifecycleMu sync.Mutex
-	stopCh      chan struct{}
-	doneCh      chan struct{}
 	reconnMu    sync.Mutex
 
 	// Keep-alive

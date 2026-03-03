@@ -126,30 +126,50 @@ func (c *Client) collectBufferedQoS0WriteBatch(batch *writeBatchState) bool {
 	return true
 }
 
+func (c *Client) resolveOrphanedWrites(rt *writeRuntime, err error) {
+	resolveReq := func(req writeRequest) {
+		if req.trackOutbound {
+			c.releaseOutbound(req)
+		}
+		if req.errCh != nil {
+			select {
+			case req.errCh <- err:
+			default:
+			}
+		}
+	}
+
+	drainQueue := func(ch <-chan writeRequest) {
+		if ch == nil {
+			return
+		}
+		for {
+			select {
+			case req, ok := <-ch:
+				if !ok {
+					return
+				}
+				resolveReq(req)
+			default:
+				return
+			}
+		}
+	}
+
+	drainQueue(rt.controlWriteCh)
+	drainQueue(rt.writeCh)
+
+	c.qos0BufMu.Lock()
+	pendingQoS0 := c.qos0Buf
+	c.qos0Buf = nil
+	c.qos0BufMu.Unlock()
+	for _, req := range pendingQoS0 {
+		resolveReq(req)
+	}
+}
+
 func (c *Client) loadWriteRuntime() *writeRuntime {
-	if rt := c.writeRT.Load(); rt != nil {
-		return rt
-	}
-
-	c.writeStateMu.RLock()
-	defer c.writeStateMu.RUnlock()
-	if c.conn == nil && c.stopCh == nil && c.doneCh == nil && c.writeCh == nil && c.controlWriteCh == nil && c.qos0Wake == nil && c.writeDone == nil {
-		return nil
-	}
-
-	rt := &writeRuntime{
-		conn:           c.conn,
-		stopCh:         c.stopCh,
-		doneCh:         c.doneCh,
-		writeCh:        c.writeCh,
-		controlWriteCh: c.controlWriteCh,
-		qos0Wake:       c.qos0Wake,
-		writeDone:      c.writeDone,
-	}
-	// Cache the snapshot so subsequent calls on the same connection cycle
-	// don't allocate. CAS avoids overwriting a value stored by Connect().
-	c.writeRT.CompareAndSwap(nil, rt)
-	return rt
+	return c.writeRT.Load()
 }
 
 func (c *Client) writeLoop() {
@@ -169,7 +189,11 @@ func (c *Client) writeLoop() {
 		return
 	}
 
-	defer close(writeDone)
+	defer func() {
+		// Resolve abandoned queued writes before signaling writeDone.
+		c.resolveOrphanedWrites(rt, ErrNotConnected)
+		close(writeDone)
+	}()
 
 	batch := newWriteBatchState(maxWriteBatchItems)
 
@@ -218,23 +242,23 @@ func (c *Client) writeLoop() {
 	}
 }
 
-func (c *Client) enqueueWriteTo(req writeRequest, control bool) (retErr error) {
+func (c *Client) enqueueWriteTo(req writeRequest, control bool) (rt *writeRuntime, retErr error) {
 	reservedOutbound := false
 	defer func() {
 		if retErr != nil && reservedOutbound {
 			c.releaseOutbound(req)
 		}
 	}()
-	rt := c.loadWriteRuntime()
+	rt = c.loadWriteRuntime()
 	if rt == nil {
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	}
 	dataCh := rt.writeCh
 	controlCh := rt.controlWriteCh
 	sch := rt.stopCh
 	done := rt.writeDone
 	if dataCh == nil || controlCh == nil || sch == nil || done == nil {
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	}
 	targetCh := dataCh
 	if control {
@@ -242,58 +266,42 @@ func (c *Client) enqueueWriteTo(req writeRequest, control bool) (retErr error) {
 	}
 	if !control && req.trackOutbound {
 		if err := c.reserveOutbound(req); err != nil {
-			return err
+			return nil, err
 		}
 		reservedOutbound = true
 	}
 
 	select {
 	case <-sch:
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	case <-done:
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	default:
 	}
 
 	select {
 	case targetCh <- req:
-		return nil
+		return rt, nil
 	case <-sch:
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	case <-done:
-		return ErrNotConnected
+		return nil, ErrNotConnected
 	}
 }
 
-func (c *Client) enqueueWrite(req writeRequest) error {
+func (c *Client) enqueueWrite(req writeRequest) (*writeRuntime, error) {
 	return c.enqueueWriteTo(req, false)
 }
 
-func (c *Client) enqueueControlWrite(req writeRequest) error {
+func (c *Client) enqueueControlWrite(req writeRequest) (*writeRuntime, error) {
 	return c.enqueueWriteTo(req, true)
-}
-
-func acquireWriteErrCh() chan error {
-	return writeErrChPool.Get().(chan error)
-}
-
-func releaseWriteErrCh(ch chan error) {
-	if ch == nil {
-		return
-	}
-	select {
-	case <-ch:
-	default:
-	}
-	writeErrChPool.Put(ch)
 }
 
 func (c *Client) queueWrite(data []byte, deadline time.Time) error {
 	return c.queueWriteRequest(writeRequest{
-		data:        data,
-		deadline:    deadline,
-		errCh:       acquireWriteErrCh(),
-		pooledErrCh: true,
+		data:     data,
+		deadline: deadline,
+		errCh:    make(chan error, 1),
 	}, false)
 }
 
@@ -308,17 +316,14 @@ func (c *Client) queuePublishWrite(ctx context.Context, data []byte, deadline ti
 	}
 
 	var errCh chan error
-	pooled := false
 	if waitForWrite {
-		errCh = acquireWriteErrCh()
-		pooled = true
+		errCh = make(chan error, 1)
 	}
 
 	req := writeRequest{
 		data:          data,
 		deadline:      deadline,
 		errCh:         errCh,
-		pooledErrCh:   pooled,
 		ctx:           ctx,
 		trackOutbound: true,
 		dropTopic:     dropTopic,
@@ -336,10 +341,8 @@ func (c *Client) queuePublishWrite(ctx context.Context, data []byte, deadline ti
 
 func (c *Client) queuePublishRawWrite(ctx context.Context, data []byte, deadline time.Time, topic string, qos byte, payloadSz int, waitForWrite bool) error {
 	var errCh chan error
-	pooled := false
 	if waitForWrite {
-		errCh = acquireWriteErrCh()
-		pooled = true
+		errCh = make(chan error, 1)
 	}
 	if payloadSz <= 0 {
 		payloadSz = len(data)
@@ -349,7 +352,6 @@ func (c *Client) queuePublishRawWrite(ctx context.Context, data []byte, deadline
 		data:          data,
 		deadline:      deadline,
 		errCh:         errCh,
-		pooledErrCh:   pooled,
 		ctx:           ctx,
 		trackOutbound: true,
 		dropTopic:     topic,
@@ -447,67 +449,59 @@ func (c *Client) hasBufferedQoS0Writes() bool {
 
 func (c *Client) queueControlWrite(data []byte, deadline time.Time) error {
 	return c.queueWriteRequest(writeRequest{
-		data:        data,
-		deadline:    deadline,
-		errCh:       acquireWriteErrCh(),
-		pooledErrCh: true,
+		data:     data,
+		deadline: deadline,
+		errCh:    make(chan error, 1),
 	}, true)
 }
 
 func (c *Client) queueWriteRequest(req writeRequest, control bool) error {
-	recycleErrCh := func() {
-		if req.pooledErrCh {
-			releaseWriteErrCh(req.errCh)
-		}
-	}
-
+	var rt *writeRuntime
 	var err error
 	if control {
-		err = c.enqueueControlWrite(req)
+		rt, err = c.enqueueControlWrite(req)
 	} else {
-		err = c.enqueueWrite(req)
+		rt, err = c.enqueueWrite(req)
 	}
 	if err != nil {
-		recycleErrCh()
 		return err
 	}
 	if req.errCh == nil {
 		return nil
 	}
 
-	rt := c.loadWriteRuntime()
 	if rt == nil {
-		recycleErrCh()
 		return ErrNotConnected
 	}
 	sch := rt.stopCh
 	done := rt.writeDone
 	if sch == nil || done == nil {
-		recycleErrCh()
 		return ErrNotConnected
 	}
 
 	select {
 	case err := <-req.errCh:
-		recycleErrCh()
 		return err
 	case <-done:
 		select {
 		case err := <-req.errCh:
-			recycleErrCh()
 			return err
 		default:
 		}
-		recycleErrCh()
 		return ErrNotConnected
 	case <-sch:
 		// Prefer a completed write result if already available.
 		select {
 		case err := <-req.errCh:
-			recycleErrCh()
 			return err
 		default:
-			// writeLoop may still hold a reference to errCh; skip recycle.
+		}
+		// Wait for writeLoop teardown on this same runtime.
+		<-done
+		select {
+		case err := <-req.errCh:
+			return err
+		default:
 		}
 		return ErrNotConnected
 	}

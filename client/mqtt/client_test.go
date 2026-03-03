@@ -236,14 +236,15 @@ func TestClientCloseConcurrent(t *testing.T) {
 	client, _ := New(opts)
 
 	client.state.set(StateConnected)
-	client.stopCh = make(chan struct{})
-	client.doneCh = make(chan struct{})
-	close(client.doneCh)
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	writeDone := make(chan struct{})
+	close(doneCh)
+	close(writeDone)
 	client.writeRT.Store(&writeRuntime{
-		stopCh:    client.stopCh,
-		doneCh:    client.doneCh,
-		writeCh:   client.writeCh,
-		writeDone: client.writeDone,
+		stopCh:    stopCh,
+		doneCh:    doneCh,
+		writeDone: writeDone,
 	})
 
 	var wg sync.WaitGroup
@@ -267,17 +268,17 @@ func TestClientCloseAndDisconnectConcurrent(t *testing.T) {
 		client, _ := New(opts)
 
 		client.state.set(StateConnected)
-		client.stopCh = make(chan struct{})
-		client.doneCh = make(chan struct{})
-		close(client.doneCh)
-		client.writeCh = make(chan writeRequest, 256)
-		client.writeDone = make(chan struct{})
-		close(client.writeDone)
+		stopCh := make(chan struct{})
+		doneCh := make(chan struct{})
+		close(doneCh)
+		writeCh := make(chan writeRequest, 256)
+		writeDone := make(chan struct{})
+		close(writeDone)
 		client.writeRT.Store(&writeRuntime{
-			stopCh:    client.stopCh,
-			doneCh:    client.doneCh,
-			writeCh:   client.writeCh,
-			writeDone: client.writeDone,
+			stopCh:    stopCh,
+			doneCh:    doneCh,
+			writeCh:   writeCh,
+			writeDone: writeDone,
 		})
 
 		var wg sync.WaitGroup

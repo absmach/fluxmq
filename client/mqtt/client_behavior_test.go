@@ -149,22 +149,21 @@ func (c *packetCaptureConn) packetTypeCounts() map[byte]int {
 // setupWriteLoop wires up the write infrastructure so tests that bypass Connect() can use send methods.
 // Cleanup is handled by the client's own cleanup() or Disconnect().
 func setupWriteLoop(c *Client, conn net.Conn) {
-	c.conn = conn
-	c.stopCh = make(chan struct{})
-	c.doneCh = make(chan struct{})
-	close(c.doneCh) // no readLoop in tests — mark as already exited
-	c.writeCh = make(chan writeRequest, 256)
-	c.controlWriteCh = make(chan writeRequest, 64)
-	c.qos0Wake = make(chan struct{}, 1)
-	c.writeDone = make(chan struct{})
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	close(doneCh) // no readLoop in tests — mark as already exited
+	writeCh := make(chan writeRequest, 256)
+	controlWriteCh := make(chan writeRequest, 64)
+	qos0Wake := make(chan struct{}, 1)
+	writeDone := make(chan struct{})
 	c.writeRT.Store(&writeRuntime{
-		conn:           c.conn,
-		stopCh:         c.stopCh,
-		doneCh:         c.doneCh,
-		writeCh:        c.writeCh,
-		controlWriteCh: c.controlWriteCh,
-		qos0Wake:       c.qos0Wake,
-		writeDone:      c.writeDone,
+		conn:           conn,
+		stopCh:         stopCh,
+		doneCh:         doneCh,
+		writeCh:        writeCh,
+		controlWriteCh: controlWriteCh,
+		qos0Wake:       qos0Wake,
+		writeDone:      writeDone,
 	})
 	go c.writeLoop()
 }
@@ -575,13 +574,128 @@ func TestQueueWriteReturnsWhenWriteLoopExitsWithPendingWrites(t *testing.T) {
 	c.cleanup(context.Background(), nil)
 }
 
-func TestControlWriteNoWaitDropsWhenFull(t *testing.T) {
-	c := &Client{
-		writeCh:        make(chan writeRequest, 1),
+func TestQueueWriteRequestTracksEnqueueRuntimeAcrossRuntimeSwap(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("write-runtime-swap"))
+	require.NoError(t, err)
+
+	oldWriteCh := make(chan writeRequest, 1)
+	oldWriteCh <- writeRequest{data: []byte("prefill")}
+	oldRT := &writeRuntime{
+		writeCh:        oldWriteCh,
 		controlWriteCh: make(chan writeRequest, 1),
+		qos0Wake:       make(chan struct{}, 1),
 		stopCh:         make(chan struct{}),
 		writeDone:      make(chan struct{}),
 	}
+	c.writeRT.Store(oldRT)
+
+	newRT := &writeRuntime{
+		writeCh:        make(chan writeRequest, 1),
+		controlWriteCh: make(chan writeRequest, 1),
+		qos0Wake:       make(chan struct{}, 1),
+		stopCh:         make(chan struct{}),
+		writeDone:      make(chan struct{}),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- c.queueWrite([]byte("payload"), time.Now().Add(time.Second))
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	c.writeRT.Store(newRT)
+
+	select {
+	case <-oldWriteCh:
+	default:
+		t.Fatal("expected prefilled old write channel")
+	}
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for len(oldWriteCh) == 0 && time.Now().Before(deadline) {
+		time.Sleep(1 * time.Millisecond)
+	}
+	if len(oldWriteCh) == 0 {
+		t.Fatal("request was not enqueued onto old runtime")
+	}
+
+	close(oldRT.stopCh)
+	close(oldRT.writeDone)
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrNotConnected)
+	case <-time.After(250 * time.Millisecond):
+		close(newRT.stopCh)
+		close(newRT.writeDone)
+		select {
+		case <-done:
+		case <-time.After(250 * time.Millisecond):
+			t.Fatal("queueWrite should unblock on old runtime shutdown, not wait on swapped runtime")
+		}
+		t.Fatal("queueWrite waited on swapped runtime channels")
+	}
+}
+
+func TestWriteLoopResolvesOrphanedQueuedWritesOnExit(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("write-loop-orphaned"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+
+	conn := &blockingFailWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+	}
+	setupWriteLoop(c, conn)
+
+	firstErr := make(chan error, 1)
+	_, err = c.enqueueWrite(writeRequest{
+		data:  []byte("first"),
+		errCh: firstErr,
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first write did not start")
+	}
+
+	orphanErr := make(chan error, 1)
+	_, err = c.enqueueWrite(writeRequest{
+		data:  []byte("orphan"),
+		errCh: orphanErr,
+	})
+	require.NoError(t, err)
+
+	close(conn.releaseFirstWrite)
+
+	select {
+	case err := <-firstErr:
+		require.Error(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first write should not hang")
+	}
+
+	select {
+	case err := <-orphanErr:
+		require.ErrorIs(t, err, ErrNotConnected)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("orphaned queued write should be resolved when write loop exits")
+	}
+
+	c.cleanup(context.Background(), nil)
+}
+
+func TestControlWriteNoWaitDropsWhenFull(t *testing.T) {
+	c := &Client{}
+	controlCh := make(chan writeRequest, 1)
+	c.writeRT.Store(&writeRuntime{
+		writeCh:        make(chan writeRequest, 1),
+		controlWriteCh: controlCh,
+		stopCh:         make(chan struct{}),
+		writeDone:      make(chan struct{}),
+	})
 
 	// Fill the control channel.
 	c.queueControlWriteNoWait([]byte("first"))
@@ -600,19 +714,20 @@ func TestControlWriteNoWaitDropsWhenFull(t *testing.T) {
 	}
 
 	// Only one message should be in the channel.
-	assert.Len(t, c.controlWriteCh, 1)
+	assert.Len(t, controlCh, 1)
 }
 
 func TestSendPingDroppedControlWriteClearsPingState(t *testing.T) {
 	c, err := New(NewOptions().SetClientID("ping-control-drop"))
 	require.NoError(t, err)
 
-	c.writeStateMu.Lock()
-	c.controlWriteCh = make(chan writeRequest, 1)
-	c.stopCh = make(chan struct{})
-	c.writeDone = make(chan struct{})
-	c.controlWriteCh <- writeRequest{data: []byte("full")}
-	c.writeStateMu.Unlock()
+	controlCh := make(chan writeRequest, 1)
+	controlCh <- writeRequest{data: []byte("full")}
+	c.writeRT.Store(&writeRuntime{
+		controlWriteCh: controlCh,
+		stopCh:         make(chan struct{}),
+		writeDone:      make(chan struct{}),
+	})
 
 	c.sendPing()
 
@@ -799,14 +914,16 @@ func TestControlWritePriorityOverDataQueue(t *testing.T) {
 	}
 	setupWriteLoop(c, conn)
 
-	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x01}}))
+	_, err = c.enqueueWrite(writeRequest{data: []byte{0x01}})
+	require.NoError(t, err)
 	select {
 	case <-conn.firstWriteStarted:
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("first write did not start")
 	}
 
-	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x02}}))
+	_, err = c.enqueueWrite(writeRequest{data: []byte{0x02}})
+	require.NoError(t, err)
 	c.queueControlWriteNoWait([]byte{0x09})
 
 	close(conn.releaseFirstWrite)
@@ -1122,14 +1239,16 @@ func TestSendAuthUsesControlWriteLanePriority(t *testing.T) {
 	}
 	setupWriteLoop(c, conn)
 
-	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x01}}))
+	_, err = c.enqueueWrite(writeRequest{data: []byte{0x01}})
+	require.NoError(t, err)
 	select {
 	case <-conn.firstWriteStarted:
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("first data write did not start")
 	}
 
-	require.NoError(t, c.enqueueWrite(writeRequest{data: []byte{0x02}}))
+	_, err = c.enqueueWrite(writeRequest{data: []byte{0x02}})
+	require.NoError(t, err)
 
 	sendDone := make(chan error, 1)
 	go func() {

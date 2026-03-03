@@ -33,7 +33,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.lifecycleMu.Unlock()
 
 	// Phase 2: network I/O with no lock held.
-	err := c.doConnect(ctx)
+	conn, err := c.doConnect(ctx)
 	if err != nil {
 		if c.state.transition(StateConnecting, StateDisconnected) {
 			return err
@@ -50,13 +50,10 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	// If another goroutine closed the client while connecting, do not transition to connected.
 	if !c.state.transition(StateConnecting, StateConnected) {
-		c.writeStateMu.Lock()
-		if c.conn != nil {
-			c.conn.Close()
-			c.conn = nil
+		if conn != nil {
+			conn.Close()
 		}
 		c.writeRT.Store(nil)
-		c.writeStateMu.Unlock()
 		if c.state.isClosed() {
 			return ErrClientClosed
 		}
@@ -80,14 +77,8 @@ func (c *Client) Connect(ctx context.Context) error {
 	qos0Wake := make(chan struct{}, 1)
 	writeDone := make(chan struct{})
 	c.writeStateMu.Lock()
-	c.stopCh = stopCh
-	c.doneCh = doneCh
-	c.writeCh = writeCh
-	c.controlWriteCh = controlWriteCh
-	c.qos0Wake = qos0Wake
-	c.writeDone = writeDone
 	c.writeRT.Store(&writeRuntime{
-		conn:           c.conn,
+		conn:           conn,
 		stopCh:         stopCh,
 		doneCh:         doneCh,
 		writeCh:        writeCh,
@@ -118,28 +109,28 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) doConnect(ctx context.Context) error {
+func (c *Client) doConnect(ctx context.Context) (net.Conn, error) {
 	// Try each server in order
 	var lastErr error
 	for i := 0; i < len(c.opts.Servers); i++ {
 		idx := (c.serverIdx + i) % len(c.opts.Servers)
 		addr := c.opts.Servers[idx]
 
-		err := c.connectToServer(ctx, addr)
+		conn, err := c.connectToServer(ctx, addr)
 		if err == nil {
 			c.serverIdx = idx
-			return nil
+			return conn, nil
 		}
 		lastErr = err
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("%w: %v", ErrConnectFailed, lastErr)
+		return nil, fmt.Errorf("%w: %v", ErrConnectFailed, lastErr)
 	}
-	return ErrConnectFailed
+	return nil, ErrConnectFailed
 }
 
-func (c *Client) connectToServer(ctx context.Context, addr string) error {
+func (c *Client) connectToServer(ctx context.Context, addr string) (net.Conn, error) {
 	// Establish TCP connection
 	dialer := &net.Dialer{Timeout: c.opts.ConnectTimeout}
 
@@ -148,7 +139,7 @@ func (c *Client) connectToServer(ctx context.Context, addr string) error {
 	if c.opts.TLSConfig != nil {
 		rawConn, dialErr := dialer.DialContext(ctx, "tcp", addr)
 		if dialErr != nil {
-			return dialErr
+			return nil, dialErr
 		}
 		tlsConn := tls.Client(rawConn, c.opts.TLSConfig)
 		if deadline, ok := ctx.Deadline(); ok && (c.opts.ConnectTimeout <= 0 || time.Until(deadline) < c.opts.ConnectTimeout) {
@@ -158,39 +149,36 @@ func (c *Client) connectToServer(ctx context.Context, addr string) error {
 		}
 		if err = tlsConn.Handshake(); err != nil {
 			tlsConn.Close()
-			return err
+			return nil, err
 		}
 		tlsConn.SetDeadline(time.Time{})
 		conn = tlsConn
 	} else {
 		conn, err = dialer.DialContext(ctx, "tcp", addr)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	// Send CONNECT packet
 	if err := c.sendConnect(conn); err != nil {
 		conn.Close()
-		return err
+		return nil, err
 	}
 
 	// Read CONNACK
 	code, err := c.readConnAck(ctx, conn)
 	if err != nil {
 		conn.Close()
-		return err
+		return nil, err
 	}
 	if code != ConnAccepted {
 		conn.Close()
-		return code
+		return nil, code
 	}
 
-	c.writeStateMu.Lock()
-	c.conn = conn
-	c.writeStateMu.Unlock()
 	c.updateActivity()
-	return nil
+	return conn, nil
 }
 
 func (c *Client) sendConnect(conn net.Conn) error {
@@ -426,13 +414,6 @@ func (c *Client) cleanup(ctx context.Context, err error) error {
 	}
 
 	c.writeStateMu.Lock()
-	c.conn = nil
-	c.stopCh = nil
-	c.doneCh = nil
-	c.writeCh = nil
-	c.controlWriteCh = nil
-	c.qos0Wake = nil
-	c.writeDone = nil
 	c.writeRT.Store(nil)
 	c.writeStateMu.Unlock()
 
