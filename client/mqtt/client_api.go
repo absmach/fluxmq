@@ -83,15 +83,7 @@ func (c *Client) rollbackStagedPublish(packetID uint16) {
 
 func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
 	msg := NewMessage(topic, payload, qos, retain)
-	_, _, err := c.publishInternal(ctx, msg, true)
-	return err
-}
-
-// PublishMessage sends a message with optional MQTT 5.0 publish properties.
-// For MQTT 3.1.1, publish properties are ignored.
-
-func (c *Client) PublishMessage(ctx context.Context, msg *Message) error {
-	_, _, err := c.publishInternal(ctx, msg, true)
+	_, _, err := c.PublishMessage(ctx, msg, true)
 	return err
 }
 
@@ -108,7 +100,9 @@ func (c *Client) validatePublishMessage(msg *Message) error {
 	return nil
 }
 
-func (c *Client) publishInternal(ctx context.Context, msg *Message, waitAck bool) (*pendingOp, uint16, error) {
+// PublishMessage sends a message with optional MQTT 5.0 publish properties.
+// For MQTT 3.1.1, publish properties are ignored.
+func (c *Client) PublishMessage(ctx context.Context, msg *Message, waitAck bool) (*pendingOp, uint16, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, 0, err
@@ -156,7 +150,7 @@ func (c *Client) publishInternal(ctx context.Context, msg *Message, waitAck bool
 func (c *Client) PublishAsync(ctx context.Context, topic string, payload []byte, qos byte, retain bool) *PublishToken {
 	tok := &PublishToken{token: newToken()}
 	msg := NewMessage(topic, payload, qos, retain)
-	op, packetID, err := c.publishInternal(ctx, msg, false)
+	op, packetID, err := c.PublishMessage(ctx, msg, false)
 	if err != nil {
 		tok.complete(err)
 		return tok
@@ -174,7 +168,7 @@ func (c *Client) PublishAsync(ctx context.Context, topic string, payload []byte,
 
 func (c *Client) PublishMessageAsync(ctx context.Context, msg *Message) *PublishToken {
 	tok := &PublishToken{token: newToken()}
-	op, packetID, err := c.publishInternal(ctx, msg, false)
+	op, packetID, err := c.PublishMessage(ctx, msg, false)
 	if err != nil {
 		tok.complete(err)
 		return tok

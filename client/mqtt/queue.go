@@ -236,7 +236,7 @@ func (c *Client) PublishToQueueWithOptions(ctx context.Context, opts *QueuePubli
 func (c *Client) publishWithUserProperties(ctx context.Context, topic string, payload []byte, qos byte, retain bool, userProps map[string]string) error {
 	msg := NewMessage(topic, payload, qos, retain)
 	msg.UserProperties = userProps
-	_, _, err := c.publishInternal(ctx, msg, true)
+	_, _, err := c.PublishMessage(ctx, msg, true)
 	return err
 }
 

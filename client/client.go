@@ -278,7 +278,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 		}
 		msg := mqtt.NewMessage(topic, payload, qos, retain)
 		msg.UserProperties = mqttUserProps(po.Properties)
-		if err := c.mqtt.PublishMessage(ctx, msg); err != nil {
+		if _, _, err := c.mqtt.PublishMessage(ctx, msg, true); err != nil {
 			return fmt.Errorf("%w: %v", ErrPublishFailed, err)
 		}
 		return nil
