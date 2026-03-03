@@ -12,6 +12,50 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
+func (c *Client) openPending(opType pendingType, msg *Message) (uint16, *pendingOp, error) {
+	packetID := c.pending.nextPacketID()
+	if packetID == 0 {
+		return 0, nil, ErrMaxInflight
+	}
+
+	op, err := c.pending.add(packetID, opType, msg)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return packetID, op, nil
+}
+
+func (c *Client) waitPendingAck(ctx context.Context, packetID uint16, op *pendingOp) error {
+	if op == nil {
+		return nil
+	}
+	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
+		c.pending.remove(packetID)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) sendAndAwaitPending(ctx context.Context, opType pendingType, msg *Message, send func(packetID uint16) error) error {
+	packetID, op, err := c.openPending(opType, msg)
+	if err != nil {
+		return err
+	}
+
+	if err := send(packetID); err != nil {
+		c.pending.remove(packetID)
+		return err
+	}
+
+	return c.waitPendingAck(ctx, packetID, op)
+}
+
+func (c *Client) rollbackStoredPublish(packetID uint16) {
+	c.pending.remove(packetID)
+	c.store.DeleteOutbound(packetID)
+}
+
 func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
 	msg := NewMessage(topic, payload, qos, retain)
 	_, _, err := c.publishInternal(ctx, msg, true)
@@ -61,30 +105,24 @@ func (c *Client) publishInternal(ctx context.Context, msg *Message, waitAck bool
 		return nil, 0, c.sendPublish(ctx, msg, 0)
 	}
 
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return nil, 0, ErrMaxInflight
-	}
-
 	publishMsg := msg.Copy()
 	if publishMsg == nil {
 		return nil, 0, ErrInvalidMessage
 	}
+
+	packetID, op, err := c.openPending(pendingPublish, publishMsg)
+	if err != nil {
+		return nil, 0, err
+	}
 	publishMsg.PacketID = packetID
 
 	if err := c.store.StoreOutbound(packetID, publishMsg); err != nil {
-		return nil, 0, err
-	}
-
-	op, err := c.pending.add(packetID, pendingPublish, publishMsg)
-	if err != nil {
-		c.store.DeleteOutbound(packetID)
+		c.pending.remove(packetID)
 		return nil, 0, err
 	}
 
 	if err := c.sendPublish(ctx, publishMsg, packetID); err != nil {
-		c.pending.remove(packetID)
-		c.store.DeleteOutbound(packetID)
+		c.rollbackStoredPublish(packetID)
 		return nil, 0, err
 	}
 
@@ -92,8 +130,7 @@ func (c *Client) publishInternal(ctx context.Context, msg *Message, waitAck bool
 		return op, packetID, nil
 	}
 
-	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
+	if err := c.waitPendingAck(ctx, packetID, op); err != nil {
 		c.store.DeleteOutbound(packetID)
 		return nil, 0, err
 	}
@@ -184,27 +221,9 @@ func (c *Client) subscribe(ctx context.Context, topics map[string]byte) error {
 		}
 	}
 
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return ErrMaxInflight
-	}
-
-	op, err := c.pending.add(packetID, pendingSubscribe, nil)
-	if err != nil {
-		return err
-	}
-
-	if err := c.sendSubscribe(ctx, packetID, topics); err != nil {
-		c.pending.remove(packetID)
-		return err
-	}
-
-	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
-		return err
-	}
-
-	return nil
+	return c.sendAndAwaitPending(ctx, pendingSubscribe, nil, func(packetID uint16) error {
+		return c.sendSubscribe(ctx, packetID, topics)
+	})
 }
 
 // SubscribeSingle is a convenience method for subscribing to a single topic.
@@ -255,27 +274,9 @@ func (c *Client) subscribeWithOptions(ctx context.Context, opts []*SubscribeOpti
 		}
 	}
 
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return ErrMaxInflight
-	}
-
-	op, err := c.pending.add(packetID, pendingSubscribe, nil)
-	if err != nil {
-		return err
-	}
-
-	if err := c.sendSubscribeWithOptions(ctx, packetID, opts); err != nil {
-		c.pending.remove(packetID)
-		return err
-	}
-
-	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
-		return err
-	}
-
-	return nil
+	return c.sendAndAwaitPending(ctx, pendingSubscribe, nil, func(packetID uint16) error {
+		return c.sendSubscribeWithOptions(ctx, packetID, opts)
+	})
 }
 
 func (c *Client) sendSubscribe(ctx context.Context, packetID uint16, topics map[string]byte) error {
@@ -379,23 +380,9 @@ func (c *Client) Unsubscribe(ctx context.Context, topics ...string) error {
 		return ErrInvalidTopic
 	}
 
-	packetID := c.pending.nextPacketID()
-	if packetID == 0 {
-		return ErrMaxInflight
-	}
-
-	op, err := c.pending.add(packetID, pendingUnsubscribe, nil)
-	if err != nil {
-		return err
-	}
-
-	if err := c.sendUnsubscribe(ctx, packetID, topics); err != nil {
-		c.pending.remove(packetID)
-		return err
-	}
-
-	if err := op.waitWithContext(ctx, c.opts.AckTimeout); err != nil {
-		c.pending.remove(packetID)
+	if err := c.sendAndAwaitPending(ctx, pendingUnsubscribe, nil, func(packetID uint16) error {
+		return c.sendUnsubscribe(ctx, packetID, topics)
+	}); err != nil {
 		return err
 	}
 
@@ -455,5 +442,3 @@ func (c *Client) UnsubscribeAsync(ctx context.Context, topics ...string) *Unsubs
 	}()
 	return tok
 }
-
-// readLoop reads packets from the connection.

@@ -9,6 +9,123 @@ import (
 	"time"
 )
 
+const (
+	maxWriteBatchItems = 32
+	maxWriteBatchBytes = 256 * 1024
+)
+
+type writeBatchState struct {
+	reqs []writeRequest
+	bufs net.Buffers
+}
+
+func newWriteBatchState(maxItems int) writeBatchState {
+	return writeBatchState{
+		reqs: make([]writeRequest, 0, maxItems),
+		bufs: make(net.Buffers, 0, maxItems),
+	}
+}
+
+func (b *writeBatchState) reset() {
+	b.reqs = b.reqs[:0]
+	b.bufs = b.bufs[:0]
+}
+
+func (b *writeBatchState) append(req writeRequest) {
+	b.reqs = append(b.reqs, req)
+	b.bufs = append(b.bufs, req.data)
+}
+
+func (b *writeBatchState) earliestDeadline() time.Time {
+	deadline := time.Time{}
+	for _, req := range b.reqs {
+		if req.deadline.IsZero() {
+			continue
+		}
+		if deadline.IsZero() || req.deadline.Before(deadline) {
+			deadline = req.deadline
+		}
+	}
+	return deadline
+}
+
+func (c *Client) acknowledgeWriteBatch(batch *writeBatchState, err error) {
+	for _, req := range batch.reqs {
+		if req.trackOutbound {
+			c.releaseOutbound(req)
+		}
+		if req.errCh != nil {
+			req.errCh <- err
+		}
+	}
+	c.notifyDrain()
+}
+
+func (c *Client) flushWriteBatch(conn net.Conn, batch *writeBatchState) bool {
+	if len(batch.reqs) == 0 {
+		return true
+	}
+
+	if conn == nil {
+		c.acknowledgeWriteBatch(batch, ErrNotConnected)
+		batch.reset()
+		return true
+	}
+
+	deadline := batch.earliestDeadline()
+	if !deadline.IsZero() {
+		conn.SetWriteDeadline(deadline)
+	}
+	_, err := batch.bufs.WriteTo(conn)
+	if !deadline.IsZero() {
+		conn.SetWriteDeadline(time.Time{})
+	}
+
+	c.acknowledgeWriteBatch(batch, err)
+	batch.reset()
+	return err == nil
+}
+
+func (c *Client) collectWriteBatch(batch *writeBatchState, first writeRequest, writeCh, controlWriteCh <-chan writeRequest) {
+	batch.reset()
+	batch.append(first)
+	totalBytes := len(first.data)
+
+	for len(batch.reqs) < maxWriteBatchItems && totalBytes < maxWriteBatchBytes {
+		select {
+		case req := <-controlWriteCh:
+			batch.append(req)
+			totalBytes += len(req.data)
+			continue
+		default:
+		}
+
+		select {
+		case req := <-controlWriteCh:
+			batch.append(req)
+			totalBytes += len(req.data)
+		case req := <-writeCh:
+			batch.append(req)
+			totalBytes += len(req.data)
+		default:
+			return
+		}
+	}
+}
+
+func (c *Client) collectBufferedQoS0WriteBatch(batch *writeBatchState) bool {
+	extra := c.popBufferedQoS0Batch(maxWriteBatchItems, maxWriteBatchBytes)
+	if len(extra) == 0 {
+		return false
+	}
+
+	batch.reset()
+	for _, req := range extra {
+		batch.append(req)
+	}
+	return true
+}
+
 func (c *Client) loadWriteRuntime() *writeRuntime {
 	if rt := c.writeRT.Load(); rt != nil {
 		return rt
@@ -54,106 +171,7 @@ func (c *Client) writeLoop() {
 
 	defer close(writeDone)
 
-	const maxWriteBatchItems = 32
-	const maxWriteBatchBytes = 256 * 1024
-
-	batch := make([]writeRequest, 0, maxWriteBatchItems)
-	buffers := make(net.Buffers, 0, maxWriteBatchItems)
-
-	resetBatch := func() {
-		batch = batch[:0]
-		buffers = buffers[:0]
-	}
-	appendBatch := func(req writeRequest) {
-		batch = append(batch, req)
-		buffers = append(buffers, req.data)
-	}
-
-	writeBatch := func() bool {
-		if len(batch) == 0 {
-			return true
-		}
-
-		ackBatch := func(err error) {
-			for _, req := range batch {
-				if req.trackOutbound {
-					c.releaseOutbound(req)
-				}
-				if req.errCh != nil {
-					req.errCh <- err
-				}
-			}
-			c.notifyDrain()
-		}
-
-		if conn == nil {
-			ackBatch(ErrNotConnected)
-			resetBatch()
-			return true
-		}
-
-		deadline := time.Time{}
-		for _, req := range batch {
-			if req.deadline.IsZero() {
-				continue
-			}
-			if deadline.IsZero() || req.deadline.Before(deadline) {
-				deadline = req.deadline
-			}
-		}
-
-		if !deadline.IsZero() {
-			conn.SetWriteDeadline(deadline)
-		}
-		_, err := buffers.WriteTo(conn)
-		if !deadline.IsZero() {
-			conn.SetWriteDeadline(time.Time{})
-		}
-
-		ackBatch(err)
-		resetBatch()
-		return err == nil
-	}
-
-	collectBatch := func(first writeRequest) {
-		resetBatch()
-		appendBatch(first)
-		totalBytes := len(first.data)
-
-		for len(batch) < maxWriteBatchItems && totalBytes < maxWriteBatchBytes {
-			select {
-			case req := <-controlWriteCh:
-				appendBatch(req)
-				totalBytes += len(req.data)
-				continue
-			default:
-			}
-
-			select {
-			case req := <-controlWriteCh:
-				appendBatch(req)
-				totalBytes += len(req.data)
-			case req := <-writeCh:
-				appendBatch(req)
-				totalBytes += len(req.data)
-			default:
-				return
-			}
-		}
-	}
-
-	collectBufferedQoS0Batch := func() bool {
-		extra := c.popBufferedQoS0Batch(maxWriteBatchItems, maxWriteBatchBytes)
-		if len(extra) == 0 {
-			return false
-		}
-
-		resetBatch()
-		for _, req := range extra {
-			appendBatch(req)
-		}
-		return true
-	}
+	batch := newWriteBatchState(maxWriteBatchItems)
 
 	for {
 		// Prefer control frames whenever present.
@@ -161,8 +179,8 @@ func (c *Client) writeLoop() {
 		case <-stopCh:
 			return
 		case req := <-controlWriteCh:
-			collectBatch(req)
-			if !writeBatch() {
+			c.collectWriteBatch(&batch, req, writeCh, controlWriteCh)
+			if !c.flushWriteBatch(conn, &batch) {
 				return
 			}
 			continue
@@ -173,12 +191,12 @@ func (c *Client) writeLoop() {
 		case <-stopCh:
 			return
 		case req := <-controlWriteCh:
-			collectBatch(req)
-			if !writeBatch() {
+			c.collectWriteBatch(&batch, req, writeCh, controlWriteCh)
+			if !c.flushWriteBatch(conn, &batch) {
 				return
 			}
 		case <-qos0Wake:
-			if !collectBufferedQoS0Batch() {
+			if !c.collectBufferedQoS0WriteBatch(&batch) {
 				continue
 			}
 			// Keep draining buffered QoS0 writes until empty.
@@ -188,12 +206,12 @@ func (c *Client) writeLoop() {
 				default:
 				}
 			}
-			if !writeBatch() {
+			if !c.flushWriteBatch(conn, &batch) {
 				return
 			}
 		case req := <-writeCh:
-			collectBatch(req)
-			if !writeBatch() {
+			c.collectWriteBatch(&batch, req, writeCh, controlWriteCh)
+			if !c.flushWriteBatch(conn, &batch) {
 				return
 			}
 		}
@@ -584,37 +602,47 @@ func (c *Client) reserveOutbound(req writeRequest) error {
 			return ErrNotConnected
 		}
 
-		switch policy {
-		case OutboundBackpressureDropNew:
-			c.reportOutboundBackpressureDrop(req)
-			return ErrOutboundBackpressure
-		case OutboundBackpressureBlockWithTimeout:
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				c.reportOutboundBackpressureDrop(req)
-				return ErrOutboundBackpressure
-			}
-			waitFor := remaining
-			if waitFor > 100*time.Millisecond {
-				waitFor = 100 * time.Millisecond
-			}
-			timer := time.AfterFunc(waitFor, func() { c.outboundCond.Signal() })
-			c.outboundCond.Wait()
-			timer.Stop()
-		default:
-			if req.ctx == nil {
-				c.outboundCond.Wait()
-			} else {
-				timer := time.AfterFunc(100*time.Millisecond, func() { c.outboundCond.Signal() })
-				c.outboundCond.Wait()
-				timer.Stop()
-			}
+		if err := c.waitForOutboundCapacityLocked(req, policy, deadline); err != nil {
+			return err
 		}
 	}
 
 	c.outboundPendingMessages++
 	c.outboundPendingBytes += size
 	return nil
+}
+
+// waitForOutboundCapacityLocked applies outbound-pressure policy while waiting.
+// Caller must hold outboundMu.
+func (c *Client) waitForOutboundCapacityLocked(req writeRequest, policy OutboundBackpressurePolicy, deadline time.Time) error {
+	switch policy {
+	case OutboundBackpressureDropNew:
+		c.reportOutboundBackpressureDrop(req)
+		return ErrOutboundBackpressure
+	case OutboundBackpressureBlockWithTimeout:
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			c.reportOutboundBackpressureDrop(req)
+			return ErrOutboundBackpressure
+		}
+		waitFor := remaining
+		if waitFor > 100*time.Millisecond {
+			waitFor = 100 * time.Millisecond
+		}
+		timer := time.AfterFunc(waitFor, func() { c.outboundCond.Signal() })
+		c.outboundCond.Wait()
+		timer.Stop()
+		return nil
+	default:
+		if req.ctx == nil {
+			c.outboundCond.Wait()
+			return nil
+		}
+		timer := time.AfterFunc(100*time.Millisecond, func() { c.outboundCond.Signal() })
+		c.outboundCond.Wait()
+		timer.Stop()
+		return nil
+	}
 }
 
 func (c *Client) reportOutboundBackpressureDrop(req writeRequest) {
