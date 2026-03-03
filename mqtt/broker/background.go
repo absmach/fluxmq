@@ -76,7 +76,7 @@ func (b *Broker) statsLoop() {
 
 // publishStats publishes current broker statistics to $SYS topics.
 func (b *Broker) publishStats() {
-	if b.stats == nil {
+	if b.telemetry.stats == nil {
 		return
 	}
 
@@ -85,22 +85,22 @@ func (b *Broker) publishStats() {
 		value string
 	}{
 		{"$SYS/broker/version", "mqtt-broker-0.1.0"},
-		{"$SYS/broker/uptime", fmt.Sprintf("%d", int64(b.stats.GetUptime().Seconds()))},
-		{"$SYS/broker/clients/connected", fmt.Sprintf("%d", b.stats.GetCurrentConnections())},
-		{"$SYS/broker/clients/total", fmt.Sprintf("%d", b.stats.GetTotalConnections())},
-		{"$SYS/broker/clients/disconnected", fmt.Sprintf("%d", b.stats.GetDisconnections())},
-		{"$SYS/broker/messages/received", fmt.Sprintf("%d", b.stats.GetMessagesReceived())},
-		{"$SYS/broker/messages/sent", fmt.Sprintf("%d", b.stats.GetMessagesSent())},
-		{"$SYS/broker/messages/publish/received", fmt.Sprintf("%d", b.stats.GetPublishReceived())},
-		{"$SYS/broker/messages/publish/sent", fmt.Sprintf("%d", b.stats.GetPublishSent())},
-		{"$SYS/broker/bytes/received", fmt.Sprintf("%d", b.stats.GetBytesReceived())},
-		{"$SYS/broker/bytes/sent", fmt.Sprintf("%d", b.stats.GetBytesSent())},
-		{"$SYS/broker/subscriptions/count", fmt.Sprintf("%d", b.stats.GetSubscriptions())},
-		{"$SYS/broker/retained/count", fmt.Sprintf("%d", b.stats.GetRetainedMessages())},
-		{"$SYS/broker/errors/protocol", fmt.Sprintf("%d", b.stats.GetProtocolErrors())},
-		{"$SYS/broker/errors/auth", fmt.Sprintf("%d", b.stats.GetAuthErrors())},
-		{"$SYS/broker/errors/authz", fmt.Sprintf("%d", b.stats.GetAuthzErrors())},
-		{"$SYS/broker/errors/packet", fmt.Sprintf("%d", b.stats.GetPacketErrors())},
+		{"$SYS/broker/uptime", fmt.Sprintf("%d", int64(b.telemetry.stats.GetUptime().Seconds()))},
+		{"$SYS/broker/clients/connected", fmt.Sprintf("%d", b.telemetry.stats.GetCurrentConnections())},
+		{"$SYS/broker/clients/total", fmt.Sprintf("%d", b.telemetry.stats.GetTotalConnections())},
+		{"$SYS/broker/clients/disconnected", fmt.Sprintf("%d", b.telemetry.stats.GetDisconnections())},
+		{"$SYS/broker/messages/received", fmt.Sprintf("%d", b.telemetry.stats.GetMessagesReceived())},
+		{"$SYS/broker/messages/sent", fmt.Sprintf("%d", b.telemetry.stats.GetMessagesSent())},
+		{"$SYS/broker/messages/publish/received", fmt.Sprintf("%d", b.telemetry.stats.GetPublishReceived())},
+		{"$SYS/broker/messages/publish/sent", fmt.Sprintf("%d", b.telemetry.stats.GetPublishSent())},
+		{"$SYS/broker/bytes/received", fmt.Sprintf("%d", b.telemetry.stats.GetBytesReceived())},
+		{"$SYS/broker/bytes/sent", fmt.Sprintf("%d", b.telemetry.stats.GetBytesSent())},
+		{"$SYS/broker/subscriptions/count", fmt.Sprintf("%d", b.telemetry.stats.GetSubscriptions())},
+		{"$SYS/broker/retained/count", fmt.Sprintf("%d", b.telemetry.stats.GetRetainedMessages())},
+		{"$SYS/broker/errors/protocol", fmt.Sprintf("%d", b.telemetry.stats.GetProtocolErrors())},
+		{"$SYS/broker/errors/auth", fmt.Sprintf("%d", b.telemetry.stats.GetAuthErrors())},
+		{"$SYS/broker/errors/authz", fmt.Sprintf("%d", b.telemetry.stats.GetAuthzErrors())},
+		{"$SYS/broker/errors/packet", fmt.Sprintf("%d", b.telemetry.stats.GetPacketErrors())},
 	}
 
 	for _, s := range stats {

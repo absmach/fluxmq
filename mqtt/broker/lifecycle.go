@@ -48,7 +48,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 					keepAliveDeadline := s.KeepAlive + s.KeepAlive/2
 					if time.Since(lastActivity) > keepAliveDeadline {
 						// Real keep-alive timeout - client is unresponsive
-						b.stats.DecrementConnections()
+						b.telemetry.stats.DecrementConnections()
 						s.Disconnect(false)
 						return err
 					}
@@ -61,9 +61,9 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 
 			// Real error (EOF, connection closed, etc.)
 			if err != io.EOF && err != session.ErrNotConnected {
-				b.stats.IncrementPacketErrors()
+				b.telemetry.stats.IncrementPacketErrors()
 			}
-			b.stats.DecrementConnections()
+			b.telemetry.stats.DecrementConnections()
 			s.Disconnect(false)
 			return err
 		}
@@ -71,7 +71,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 		// Packet received - update activity time
 		lastActivity = time.Now()
 
-		b.stats.IncrementMessagesReceived()
+		b.telemetry.stats.IncrementMessagesReceived()
 		s.Touch()
 
 		// Throttled retry check: under sustained traffic the read loop never
@@ -83,11 +83,11 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 
 		if err := dispatchPacket(handler, s, pkt); err != nil {
 			if err == io.EOF {
-				b.stats.DecrementConnections()
+				b.telemetry.stats.DecrementConnections()
 				return nil
 			}
-			b.stats.IncrementProtocolErrors()
-			b.stats.DecrementConnections()
+			b.telemetry.stats.IncrementProtocolErrors()
+			b.telemetry.stats.DecrementConnections()
 			s.Disconnect(false)
 			return err
 		}
@@ -126,7 +126,7 @@ func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPack
 func (b *Broker) Shutdown(ctx context.Context, drainTimeout time.Duration) error {
 	b.shuttingDown.Store(true)
 
-	b.logger.Info("Starting shutdown", "drain_timeout", drainTimeout)
+	b.telemetry.logger.Info("Starting shutdown", "drain_timeout", drainTimeout)
 
 	// Wait for drain timeout or until all sessions disconnect
 	drainDeadline := time.Now().Add(drainTimeout)
@@ -136,23 +136,23 @@ func (b *Broker) Shutdown(ctx context.Context, drainTimeout time.Duration) error
 	for {
 		select {
 		case <-ctx.Done():
-			b.logger.Warn("Shutdown cancelled by context")
+			b.telemetry.logger.Warn("Shutdown cancelled by context")
 			return b.Close()
 		case <-ticker.C:
 			count := b.sessionsMap.Count()
 			if count == 0 {
-				b.logger.Info("All sessions disconnected")
+				b.telemetry.logger.Info("All sessions disconnected")
 				return b.Close()
 			}
 			if time.Now().After(drainDeadline) {
-				b.logger.Info("Drain timeout reached", "remaining_sessions", count)
+				b.telemetry.logger.Info("Drain timeout reached", "remaining_sessions", count)
 				// Transfer remaining sessions to other nodes (if clustered)
 				if b.cluster != nil {
 					b.transferActiveSessions(ctx)
 				}
 				return b.Close()
 			}
-			b.logger.Info("Waiting for sessions to drain", "remaining", count)
+			b.telemetry.logger.Info("Waiting for sessions to drain", "remaining", count)
 		}
 	}
 }
@@ -170,19 +170,19 @@ func (b *Broker) transferActiveSessions(ctx context.Context) {
 
 		// Release session ownership so another node can take it
 		if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
-			b.logger.Error("Failed to release session during shutdown",
+			b.telemetry.logger.Error("Failed to release session during shutdown",
 				"client_id", s.ID,
 				"error", err)
 			return
 		}
 
 		transferred++
-		b.logger.Info("Released session for takeover",
+		b.telemetry.logger.Info("Released session for takeover",
 			"client_id", s.ID)
 	})
 
 	if transferred > 0 {
-		b.logger.Info("Released sessions for cluster takeover", "count", transferred)
+		b.telemetry.logger.Info("Released sessions for cluster takeover", "count", transferred)
 		// Give clients brief moment to reconnect to other nodes
 		time.Sleep(2 * time.Second)
 	}
@@ -198,8 +198,8 @@ func (b *Broker) Close() error {
 	b.wg.Wait()
 
 	// Close webhook notifier if enabled
-	if b.webhooks != nil {
-		if err := b.webhooks.Close(); err != nil {
+	if b.telemetry.webhooks != nil {
+		if err := b.telemetry.webhooks.Close(); err != nil {
 			b.logError("close_webhooks", err)
 		}
 	}

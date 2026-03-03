@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
-	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage/memory"
 	piondtls "github.com/pion/dtls/v3"
@@ -121,7 +120,7 @@ func TestNew(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := broker.NewBroker(store, cl, broker.WithLogger(slog.Default()), broker.WithStats(stats))
 	defer b.Close()
 
 	cfg := Config{
@@ -165,7 +164,7 @@ func TestHandleHealth(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := broker.NewBroker(store, cl, broker.WithLogger(slog.Default()), broker.WithStats(stats))
 	defer b.Close()
 
 	server := New(Config{}, b, slog.Default())
@@ -194,7 +193,7 @@ func TestHandlePublish(t *testing.T) {
 	store := memory.New()
 	cl := cluster.NewNoopCluster("test-node")
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, slog.Default(), stats, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := broker.NewBroker(store, cl, broker.WithLogger(slog.Default()), broker.WithStats(stats))
 	defer b.Close()
 
 	server := New(Config{}, b, slog.Default())

@@ -38,7 +38,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 		if exists && ownerNode != b.cluster.NodeID() {
 			// Session exists on different node - trigger takeover
-			b.logger.Info("taking over session from remote node",
+			b.telemetry.logger.Info("taking over session from remote node",
 				slog.String("client_id", clientID),
 				slog.String("from_node", ownerNode),
 				slog.String("to_node", b.cluster.NodeID()))
@@ -49,11 +49,11 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 				return nil, false, fmt.Errorf("session takeover failed: %w", err)
 			}
 
-			b.logger.Info("session takeover completed", slog.String("client_id", clientID))
+			b.telemetry.logger.Info("session takeover completed", slog.String("client_id", clientID))
 
 			// Webhook: session takeover
-			if b.webhooks != nil {
-				b.webhooks.Notify(ctx, events.SessionTakeover{
+			if b.telemetry.webhooks != nil {
+				b.telemetry.webhooks.Notify(ctx, events.SessionTakeover{
 					ClientID: clientID,
 					FromNode: ownerNode,
 					ToNode:   b.cluster.NodeID(),
@@ -74,7 +74,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		return existing, false, nil
 	}
 
-	serverReceiveMax := b.maxInflightMessages
+	serverReceiveMax := b.cfg.maxInflightMessages
 	if serverReceiveMax <= 0 {
 		serverReceiveMax = 256
 	}
@@ -86,7 +86,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		receiveMax = uint16(serverReceiveMax)
 	}
 	inflight := messages.NewInflightTracker(int(receiveMax))
-	offlineQueue := messages.NewMessageQueue(b.maxOfflineQueueSize, b.offlineQueueEvict)
+	offlineQueue := messages.NewMessageQueue(b.cfg.maxOfflineQueueSize, b.cfg.offlineQueueEvict)
 
 	// Restore from takeover state if present
 	if takeoverState != nil {
@@ -137,7 +137,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	// Override receive maximum with normalized value
 	opts.ReceiveMaximum = receiveMax
 
-	s := session.New(clientID, version, opts, inflight, offlineQueue, b.sessionCfg)
+	s := session.New(clientID, version, opts, inflight, offlineQueue, b.cfg.sessionCfg)
 
 	// Restore subscriptions from takeover state or storage
 	if takeoverState != nil {
@@ -154,8 +154,8 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 	b.sessionsMap.Set(clientID, s)
 
-	if b.sessions != nil {
-		if err := b.sessions.Save(s.Info()); err != nil {
+	if b.stores.sessions != nil {
+		if err := b.stores.sessions.Save(s.Info()); err != nil {
 			return nil, false, fmt.Errorf("failed to save session: %w", err)
 		}
 	}
@@ -190,23 +190,23 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 		s.Disconnect(false)
 	}
 
-	if b.sessions != nil {
-		if err := b.sessions.Delete(s.ID); err != nil {
+	if b.stores.sessions != nil {
+		if err := b.stores.sessions.Delete(s.ID); err != nil {
 			return fmt.Errorf("failed to delete session: %w", err)
 		}
 	}
-	if b.subscriptions != nil {
-		if err := b.subscriptions.RemoveAll(s.ID); err != nil {
+	if b.stores.subscriptions != nil {
+		if err := b.stores.subscriptions.RemoveAll(s.ID); err != nil {
 			return fmt.Errorf("failed to remove subscriptions: %w", err)
 		}
 	}
-	if b.messages != nil {
-		if err := b.messages.DeleteByPrefix(s.ID + "/"); err != nil {
+	if b.stores.messages != nil {
+		if err := b.stores.messages.DeleteByPrefix(s.ID + "/"); err != nil {
 			return fmt.Errorf("failed to delete messages: %w", err)
 		}
 	}
-	if b.wills != nil {
-		if err := b.wills.Delete(context.Background(), s.ID); err != nil {
+	if b.stores.wills != nil {
+		if err := b.stores.wills.Delete(context.Background(), s.ID); err != nil {
 			return fmt.Errorf("failed to delete will: %w", err)
 		}
 	}
@@ -247,40 +247,40 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 // handleDisconnect handles session disconnect.
 func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	// Webhook: client disconnected
-	if b.webhooks != nil {
+	if b.telemetry.webhooks != nil {
 		reason := "normal"
 		if !graceful {
 			reason = "error"
 		}
-		b.webhooks.Notify(context.Background(), events.ClientDisconnected{
+		b.telemetry.webhooks.Notify(context.Background(), events.ClientDisconnected{
 			ClientID:   s.ID,
 			Reason:     reason,
 			RemoteAddr: "", // Not available at broker level
 		})
 	}
 
-	if b.sessions != nil {
-		b.sessions.Save(s.Info())
+	if b.stores.sessions != nil {
+		b.stores.sessions.Save(s.Info())
 	}
-	if b.wills != nil {
+	if b.stores.wills != nil {
 		ctx := context.Background()
 		will := s.GetWill()
 		if !graceful && will != nil {
-			b.wills.Set(ctx, s.ID, will)
+			b.stores.wills.Set(ctx, s.ID, will)
 		} else if graceful {
-			b.wills.Delete(ctx, s.ID)
+			b.stores.wills.Delete(ctx, s.ID)
 		}
 	}
-	if b.messages != nil {
+	if b.stores.messages != nil {
 		msgs := s.OfflineQueue().Drain()
 		for i, msg := range msgs {
 			key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
-			b.messages.Store(key, msg)
+			b.stores.messages.Store(key, msg)
 		}
 
 		for _, inf := range s.Inflight().GetAll() {
 			key := fmt.Sprintf("%s%s%d", s.ID, inflightPrefix, inf.PacketID)
-			b.messages.Store(key, inf.Message)
+			b.stores.messages.Store(key, inf.Message)
 		}
 	}
 
@@ -304,11 +304,11 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 
 // restoreInflightFromStorage restores inflight messages from storage.
 func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.Inflight) error {
-	if b.messages == nil {
+	if b.stores.messages == nil {
 		return nil
 	}
 
-	inflightMsgs, err := b.messages.List(clientID + inflightPrefix)
+	inflightMsgs, err := b.stores.messages.List(clientID + inflightPrefix)
 	if err != nil {
 		return fmt.Errorf("failed to list inflight messages: %w", err)
 	}
@@ -319,7 +319,7 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 		}
 	}
 
-	if err := b.messages.DeleteByPrefix(clientID + inflightPrefix); err != nil {
+	if err := b.stores.messages.DeleteByPrefix(clientID + inflightPrefix); err != nil {
 		return fmt.Errorf("failed to clear inflight messages: %w", err)
 	}
 
@@ -328,11 +328,11 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 
 // restoreQueueFromStorage restores offline messages from storage.
 func (b *Broker) restoreQueueFromStorage(clientID string, queue messages.Queue) error {
-	if b.messages == nil {
+	if b.stores.messages == nil {
 		return nil
 	}
 
-	msgs, err := b.messages.List(clientID + queuePrefix)
+	msgs, err := b.stores.messages.List(clientID + queuePrefix)
 	if err != nil {
 		return fmt.Errorf("failed to list offline messages: %w", err)
 	}
@@ -341,7 +341,7 @@ func (b *Broker) restoreQueueFromStorage(clientID string, queue messages.Queue) 
 		queue.Enqueue(msg)
 	}
 
-	if err := b.messages.DeleteByPrefix(clientID + queuePrefix); err != nil {
+	if err := b.stores.messages.DeleteByPrefix(clientID + queuePrefix); err != nil {
 		return fmt.Errorf("failed to clear offline messages: %w", err)
 	}
 
@@ -350,11 +350,11 @@ func (b *Broker) restoreQueueFromStorage(clientID string, queue messages.Queue) 
 
 // restoreSessionFromStorage restores session metadata and subscriptions.
 func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, opts session.Options) error {
-	if opts.CleanStart || b.sessions == nil {
+	if opts.CleanStart || b.stores.sessions == nil {
 		return nil
 	}
 
-	stored, err := b.sessions.Get(clientID)
+	stored, err := b.stores.sessions.Get(clientID)
 	if err != nil && err != storage.ErrNotFound {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
@@ -371,7 +371,7 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 			return fmt.Errorf("failed to get subscriptions from cluster: %w", err)
 		}
 	} else {
-		subs, err = b.subscriptions.GetForClient(clientID)
+		subs, err = b.stores.subscriptions.GetForClient(clientID)
 		if err != nil {
 			return fmt.Errorf("failed to get subscriptions: %w", err)
 		}
@@ -385,7 +385,7 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 		s.AddSubscription(sub.Filter, sub.Options)
 
 		// Add to local subscription storage
-		if err := b.subscriptions.Add(sub); err != nil {
+		if err := b.stores.subscriptions.Add(sub); err != nil {
 			b.logError("restore_subscription", err, slog.String("filter", sub.Filter))
 			continue
 		}
@@ -459,7 +459,7 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 		s.AddSubscription(sub.Filter, opts)
 
 		// Add to local subscription storage
-		if err := b.subscriptions.Add(&storage.Subscription{
+		if err := b.stores.subscriptions.Add(&storage.Subscription{
 			ClientID: s.ID,
 			Filter:   sub.Filter,
 			QoS:      byte(sub.Qos),
@@ -494,8 +494,8 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	}
 
 	// Capture subscriptions from storage (includes QoS)
-	if b.subscriptions != nil {
-		subs, err := b.subscriptions.GetForClient(s.ID)
+	if b.stores.subscriptions != nil {
+		subs, err := b.stores.subscriptions.GetForClient(s.ID)
 		if err == nil {
 			for _, sub := range subs {
 				state.Subscriptions = append(state.Subscriptions, &clusterv1.Subscription{
@@ -550,13 +550,13 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 
 // persistOfflineQueue saves a session's offline queue to storage.
 func (b *Broker) persistOfflineQueue(s *session.Session) {
-	if b.messages == nil {
+	if b.stores.messages == nil {
 		return
 	}
 
 	msgs := s.OfflineQueue().Drain()
 	for i, msg := range msgs {
 		key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
-		b.messages.Store(key, msg)
+		b.stores.messages.Store(key, msg)
 	}
 }

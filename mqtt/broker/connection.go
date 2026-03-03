@@ -15,13 +15,13 @@ import (
 func HandleConnection(broker *Broker, conn core.Connection) {
 	pkt, err := conn.ReadPacket()
 	if err != nil {
-		broker.stats.IncrementPacketErrors()
+		broker.telemetry.stats.IncrementPacketErrors()
 		conn.Close()
 		return
 	}
 
 	if pkt.Type() != packets.ConnectType {
-		broker.stats.IncrementProtocolErrors()
+		broker.telemetry.stats.IncrementProtocolErrors()
 		conn.Close()
 		return
 	}
@@ -29,7 +29,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 	p3, ok := pkt.(*v3.Connect)
 	if ok {
 		if p3.ProtocolVersion != 3 && p3.ProtocolVersion != 4 {
-			broker.stats.IncrementProtocolErrors()
+			broker.telemetry.stats.IncrementProtocolErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckUnacceptableProtocol)
 			conn.Close()
 			return
@@ -42,7 +42,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 	p5, ok := pkt.(*v5.Connect)
 	if ok {
 		if p5.ProtocolVersion != 5 {
-			broker.stats.IncrementProtocolErrors()
+			broker.telemetry.stats.IncrementProtocolErrors()
 			sendV5ConnAck(conn, false, v5.ConnAckUnsupportedProtocolVersion, nil)
 			conn.Close()
 			return
@@ -52,7 +52,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 		return
 	}
 
-	broker.stats.IncrementProtocolErrors()
+	broker.telemetry.stats.IncrementProtocolErrors()
 	conn.Close()
 }
 

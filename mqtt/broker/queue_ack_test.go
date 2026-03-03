@@ -75,7 +75,7 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 	b := &Broker{
 		queueManager:  qm,
 		routeResolver: resolver,
-		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		telemetry:     brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
 	msg := &storage.Message{
@@ -100,7 +100,7 @@ func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
 	b := &Broker{
 		queueManager:  qm,
 		routeResolver: resolver,
-		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		telemetry:     brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
 	msg := &storage.Message{
@@ -123,7 +123,7 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 	b := &Broker{
 		queueManager:  qm,
 		routeResolver: resolver,
-		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		telemetry:     brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
 	msg := &storage.Message{

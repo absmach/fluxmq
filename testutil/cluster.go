@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
-	"github.com/absmach/fluxmq/config"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/queue"
@@ -286,7 +285,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		store.Close()
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
-	b := broker.NewBroker(store, clust, nullLogger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := broker.NewBroker(store, clust, broker.WithLogger(nullLogger))
 
 	// Create log-backed queue manager for queue/stream integration paths.
 	queueStore, err := logStorage.NewAdapter(fmt.Sprintf("%s/queue", node.DataDir), logStorage.DefaultAdapterConfig())

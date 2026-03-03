@@ -22,17 +22,17 @@ import (
 // Publish always releases msg's payload buffer before returning; callers must not
 // use the payload afterwards.
 func (b *Broker) Publish(msg *storage.Message) error {
-	if b.logger.Enabled(context.Background(), slog.LevelDebug) {
+	if b.telemetry.logger.Enabled(context.Background(), slog.LevelDebug) {
 		b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
 	}
-	b.stats.IncrementPublishReceived()
+	b.telemetry.stats.IncrementPublishReceived()
 
 	payloadLen := len(msg.GetPayload())
-	b.stats.AddBytesReceived(uint64(payloadLen))
+	b.telemetry.stats.AddBytesReceived(uint64(payloadLen))
 
 	// Record metrics
-	if b.metrics != nil {
-		b.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen))
+	if b.telemetry.metrics != nil {
+		b.telemetry.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen))
 	}
 
 	route := b.routeResolver.Resolve(msg.Topic)
@@ -80,11 +80,11 @@ func (b *Broker) Publish(msg *storage.Message) error {
 	}
 
 	// Webhook: message published
-	if b.webhooks != nil {
+	if b.telemetry.webhooks != nil {
 		payload := ""
 		// Note: Payload encoding should be done by caller if needed
 		// ClientID not available at broker level, will be set by handler
-		b.webhooks.Notify(context.Background(), events.MessagePublished{
+		b.telemetry.webhooks.Notify(context.Background(), events.MessagePublished{
 			ClientID:     "", // Set by handler
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
@@ -105,12 +105,12 @@ func (b *Broker) Publish(msg *storage.Message) error {
 
 // PublishWill publishes a session's will message if it exists.
 func (b *Broker) PublishWill(clientID string) error {
-	if b.wills == nil {
+	if b.stores.wills == nil {
 		return nil
 	}
 
 	ctx := context.Background()
-	will, err := b.wills.Get(ctx, clientID)
+	will, err := b.stores.wills.Get(ctx, clientID)
 	if err != nil {
 		if err == storage.ErrNotFound {
 			return nil
@@ -136,14 +136,14 @@ func (b *Broker) PublishWill(clientID string) error {
 	// Release the message buffer after distribution
 	msg.ReleasePayload()
 
-	return b.wills.Delete(ctx, clientID)
+	return b.stores.wills.Delete(ctx, clientID)
 }
 
 // handleRetained stores or clears a retained message.
 func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
 	ctx := context.Background()
 	if payloadLen == 0 {
-		if err := b.retained.Delete(ctx, msg.Topic); err != nil {
+		if err := b.stores.retained.Delete(ctx, msg.Topic); err != nil {
 			return err
 		}
 		if b.cluster != nil {
@@ -151,8 +151,8 @@ func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
 				b.logError("cluster_delete_retained", err, slog.String("topic", msg.Topic))
 			}
 		}
-		if b.webhooks != nil {
-			b.webhooks.Notify(ctx, events.RetainedMessageSet{
+		if b.telemetry.webhooks != nil {
+			b.telemetry.webhooks.Notify(ctx, events.RetainedMessageSet{
 				MessageTopic: msg.Topic,
 				PayloadSize:  0,
 				Cleared:      true,
@@ -163,7 +163,7 @@ func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
 
 	retainedMsg := storage.CopyMessage(msg)
 	retainedMsg.Retain = true
-	if err := b.retained.Set(ctx, msg.Topic, retainedMsg); err != nil {
+	if err := b.stores.retained.Set(ctx, msg.Topic, retainedMsg); err != nil {
 		retainedMsg.ReleasePayload()
 		return err
 	}
@@ -174,8 +174,8 @@ func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
 			b.logError("cluster_set_retained", err, slog.String("topic", msg.Topic))
 		}
 	}
-	if b.webhooks != nil {
-		b.webhooks.Notify(ctx, events.RetainedMessageSet{
+	if b.telemetry.webhooks != nil {
+		b.telemetry.webhooks.Notify(ctx, events.RetainedMessageSet{
 			MessageTopic: msg.Topic,
 			PayloadSize:  payloadLen,
 			Cleared:      false,
@@ -210,7 +210,7 @@ func (b *Broker) distribute(msg *storage.Message) error {
 
 	// Route to remote subscribers in cluster
 	if b.cluster != nil {
-		timeout := b.routePublishTimeout
+		timeout := b.cfg.routePublishTimeout
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
@@ -293,7 +293,7 @@ func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
 				if deliverQoS > 0 {
-					b.logger.Warn("failed to deliver QoS message",
+					b.telemetry.logger.Warn("failed to deliver QoS message",
 						slog.String("client_id", selectedClientID),
 						slog.String("topic", msg.Topic),
 						slog.Uint64("qos", uint64(deliverQoS)),
@@ -334,7 +334,7 @@ func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
 				if deliverQoS > 0 {
-					b.logger.Warn("failed to deliver QoS message",
+					b.telemetry.logger.Warn("failed to deliver QoS message",
 						slog.String("client_id", clientID),
 						slog.String("topic", msg.Topic),
 						slog.Uint64("qos", uint64(deliverQoS)),
@@ -420,17 +420,17 @@ func (b *Broker) GetRetainedMatching(filter string) ([]*storage.Message, error) 
 	if b.cluster != nil {
 		return b.cluster.Retained().Match(ctx, filter)
 	}
-	return b.retained.Match(ctx, filter)
+	return b.stores.retained.Match(ctx, filter)
 }
 
 // triggerWills processes pending will messages.
 func (b *Broker) triggerWills() {
-	if b.wills == nil {
+	if b.stores.wills == nil {
 		return
 	}
 
 	ctx := context.Background()
-	pending, err := b.wills.GetPending(ctx, time.Now())
+	pending, err := b.stores.wills.GetPending(ctx, time.Now())
 	if err != nil {
 		return
 	}
@@ -438,7 +438,7 @@ func (b *Broker) triggerWills() {
 	for _, will := range pending {
 		s := b.Get(will.ClientID)
 		if s != nil && s.IsConnected() {
-			b.wills.Delete(ctx, will.ClientID)
+			b.stores.wills.Delete(ctx, will.ClientID)
 			continue
 		}
 
@@ -457,24 +457,24 @@ func (b *Broker) triggerWills() {
 		// Release the message buffer after distribution
 		msg.ReleasePayload()
 
-		b.wills.Delete(ctx, will.ClientID)
+		b.stores.wills.Delete(ctx, will.ClientID)
 	}
 }
 
 // GetRetainedMessage implements cluster.MessageHandler.GetRetainedMessage.
 // Fetches a retained message from the local storage for remote node requests.
 func (b *Broker) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
-	if b.retained == nil {
+	if b.stores.retained == nil {
 		return nil, fmt.Errorf("retained store not configured")
 	}
-	return b.retained.Get(ctx, topic)
+	return b.stores.retained.Get(ctx, topic)
 }
 
 // GetWillMessage implements cluster.MessageHandler.GetWillMessage.
 // Fetches a will message from the local storage for remote node requests.
 func (b *Broker) GetWillMessage(ctx context.Context, clientID string) (*storage.WillMessage, error) {
-	if b.wills == nil {
+	if b.stores.wills == nil {
 		return nil, fmt.Errorf("will store not configured")
 	}
-	return b.wills.Get(ctx, clientID)
+	return b.stores.wills.Get(ctx, clientID)
 }

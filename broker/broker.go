@@ -6,12 +6,13 @@ package broker
 import (
 	"context"
 
+	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
 // Notifier defines the interface for webhook notifications.
 type Notifier interface {
-	Notify(ctx context.Context, event interface{}) error
+	Notify(ctx context.Context, event events.Event) error
 	Close() error
 }
 

@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 )
@@ -21,7 +20,7 @@ import (
 func newTestBroker(t *testing.T) *broker.Broker {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	b := broker.NewBroker(nil, nil, logger, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := broker.NewBroker(nil, nil, broker.WithLogger(logger))
 	t.Cleanup(func() { _ = b.Close() })
 	return b
 }

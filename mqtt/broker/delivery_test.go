@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/config"
 	core "github.com/absmach/fluxmq/mqtt"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -17,7 +16,7 @@ import (
 )
 
 func TestDeliverToSession_MarkSentAfterWireWrite(t *testing.T) {
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := NewBroker(nil, nil)
 	defer b.Close()
 
 	s, _, err := b.CreateSession("test-client", 4, session.Options{CleanStart: true, ReceiveMaximum: 10})

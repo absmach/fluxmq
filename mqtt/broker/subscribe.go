@@ -71,11 +71,11 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 		b.router.Subscribe(s.ID, filter, qos, opts)
 	}
 
-	b.stats.IncrementSubscriptions()
+	b.telemetry.stats.IncrementSubscriptions()
 
 	// Record metrics
-	if b.metrics != nil {
-		b.metrics.RecordSubscriptionAdded()
+	if b.telemetry.metrics != nil {
+		b.telemetry.metrics.RecordSubscriptionAdded()
 	}
 
 	sub := &storage.Subscription{
@@ -84,7 +84,7 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 		QoS:      qos,
 		Options:  opts,
 	}
-	if err := b.subscriptions.Add(sub); err != nil {
+	if err := b.stores.subscriptions.Add(sub); err != nil {
 		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
@@ -99,8 +99,8 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 	s.AddSubscription(filter, opts)
 
 	// Webhook: subscription created
-	if b.webhooks != nil {
-		b.webhooks.Notify(context.Background(), events.SubscriptionCreated{
+	if b.telemetry.webhooks != nil {
+		b.telemetry.webhooks.Notify(context.Background(), events.SubscriptionCreated{
 			ClientID:       s.ID,
 			TopicFilter:    filter,
 			QoS:            qos,
@@ -147,14 +147,14 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 		b.router.Unsubscribe(s.ID, filter)
 	}
 
-	b.stats.DecrementSubscriptions()
+	b.telemetry.stats.DecrementSubscriptions()
 
 	// Record metrics
-	if b.metrics != nil {
-		b.metrics.RecordSubscriptionRemoved()
+	if b.telemetry.metrics != nil {
+		b.telemetry.metrics.RecordSubscriptionRemoved()
 	}
 
-	if err := b.subscriptions.Remove(s.ID, filter); err != nil {
+	if err := b.stores.subscriptions.Remove(s.ID, filter); err != nil {
 		return fmt.Errorf("failed to remove subscription: %w", err)
 	}
 
@@ -169,8 +169,8 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 	s.RemoveSubscription(filter)
 
 	// Webhook: subscription removed
-	if b.webhooks != nil {
-		b.webhooks.Notify(context.Background(), events.SubscriptionRemoved{
+	if b.telemetry.webhooks != nil {
+		b.telemetry.webhooks.Notify(context.Background(), events.SubscriptionRemoved{
 			ClientID:    s.ID,
 			TopicFilter: filter,
 		})

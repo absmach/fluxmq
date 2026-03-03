@@ -18,10 +18,7 @@ import (
 	"github.com/sony/gobreaker"
 )
 
-var (
-	ErrSenderCannotBeNil                = errors.New("sender cannot be nil")
-	ErrEventMustImplementEventInterface = errors.New("event must implement events.Event interface")
-)
+var ErrSenderCannotBeNil = errors.New("sender cannot be nil")
 
 // GenericNotifier implements webhook notifications with worker pool and circuit breaker.
 type GenericNotifier struct {
@@ -148,21 +145,15 @@ func NewNotifier(cfg config.WebhookConfig, brokerID string, sender Sender, logge
 }
 
 // Notify sends an event to all matching endpoints asynchronously.
-func (n *GenericNotifier) Notify(ctx context.Context, event interface{}) error {
-	// Cast to events.Event
-	ev, ok := event.(events.Event)
-	if !ok {
-		return ErrEventMustImplementEventInterface
-	}
-
+func (n *GenericNotifier) Notify(ctx context.Context, event events.Event) error {
 	// Filter endpoints and queue jobs
 	for _, endpoint := range n.endpoints {
-		if !n.shouldNotify(endpoint, ev) {
+		if !n.shouldNotify(endpoint, event) {
 			continue
 		}
 
 		job := eventJob{
-			event:    ev,
+			event:    event,
 			endpoint: endpoint,
 			attempt:  0,
 		}
@@ -182,13 +173,13 @@ func (n *GenericNotifier) Notify(ctx context.Context, event interface{}) error {
 				case n.eventQueue <- job: // try to add newest
 				default:
 					n.logger.Error("webhook queue full, event dropped",
-						slog.String("event_type", ev.Type()),
+						slog.String("event_type", event.Type()),
 						slog.String("endpoint", endpoint.name))
 				}
 			} else {
 				// Drop newest (this one)
 				n.logger.Error("webhook queue full, event dropped",
-					slog.String("event_type", ev.Type()),
+					slog.String("event_type", event.Type()),
 					slog.String("endpoint", endpoint.name))
 			}
 		}

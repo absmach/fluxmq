@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
@@ -84,7 +83,7 @@ func (m *mockConnection) LocalAddr() net.Addr {
 
 func TestBroker_HandleV5Connect(t *testing.T) {
 	t.Log("Creating broker")
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := NewBroker(nil, nil)
 	defer b.Close()
 
 	conn := &mockConnection{}

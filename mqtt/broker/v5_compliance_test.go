@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -66,7 +65,7 @@ func newComplianceTestBroker(t *testing.T) *Broker {
 	t.Helper()
 
 	store := memory.New()
-	b := NewBroker(store, nil, testLogger(), nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := NewBroker(store, nil, WithLogger(testLogger()))
 	t.Cleanup(func() { _ = b.Close() })
 	return b
 }

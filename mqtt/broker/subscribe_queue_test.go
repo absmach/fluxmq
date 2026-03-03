@@ -105,7 +105,7 @@ func TestQueueSubscribe_UsesStreamModeForStreamQueues(t *testing.T) {
 
 	b := &Broker{
 		queueManager: qm,
-		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		telemetry:    brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
 	s := &session.Session{ID: "mqtt-client-1"}

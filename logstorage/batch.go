@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/s2"
@@ -330,28 +331,32 @@ func decodeRecords(data []byte, count int) ([]Record, error) {
 	return records, nil
 }
 
-// Zstd encoder/decoder pools for reuse.
 var (
-	zstdEncoder *zstd.Encoder
-	zstdDecoder *zstd.Decoder
+	zstdEnc     *zstd.Encoder
+	zstdDec     *zstd.Decoder
+	zstdEncOnce sync.Once
+	zstdDecOnce sync.Once
+	zstdEncErr  error
+	zstdDecErr  error
 )
 
-func init() {
-	var err error
-	zstdEncoder, err = zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(zstd.SpeedDefault),
-		zstd.WithEncoderConcurrency(1),
-	)
-	if err != nil {
-		panic("failed to create zstd encoder: " + err.Error())
-	}
+func getZstdEncoder() (*zstd.Encoder, error) {
+	zstdEncOnce.Do(func() {
+		zstdEnc, zstdEncErr = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedDefault),
+			zstd.WithEncoderConcurrency(1),
+		)
+	})
+	return zstdEnc, zstdEncErr
+}
 
-	zstdDecoder, err = zstd.NewReader(nil,
-		zstd.WithDecoderConcurrency(1),
-	)
-	if err != nil {
-		panic("failed to create zstd decoder: " + err.Error())
-	}
+func getZstdDecoder() (*zstd.Decoder, error) {
+	zstdDecOnce.Do(func() {
+		zstdDec, zstdDecErr = zstd.NewReader(nil,
+			zstd.WithDecoderConcurrency(1),
+		)
+	})
+	return zstdDec, zstdDecErr
 }
 
 // compress compresses data using the specified compression type.
@@ -362,8 +367,11 @@ func compress(data []byte, ct CompressionType) ([]byte, error) {
 		return s2.Encode(nil, data), nil
 
 	case CompressionZstd:
-		// Zstd provides best compression ratio
-		return zstdEncoder.EncodeAll(data, nil), nil
+		enc, err := getZstdEncoder()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create zstd encoder: %w", err)
+		}
+		return enc.EncodeAll(data, nil), nil
 
 	default:
 		return data, nil
@@ -378,7 +386,11 @@ func decompress(data []byte, ct CompressionType) ([]byte, error) {
 		return s2.Decode(nil, data)
 
 	case CompressionZstd:
-		return zstdDecoder.DecodeAll(data, nil)
+		dec, err := getZstdDecoder()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create zstd decoder: %w", err)
+		}
+		return dec.DecodeAll(data, nil)
 
 	default:
 		return data, nil

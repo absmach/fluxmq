@@ -54,8 +54,8 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 		err := b.DeliverMessage(s, msg, nil)
 		if err == nil {
 			// Webhook: message delivered (QoS 0)
-			if b.webhooks != nil {
-				b.webhooks.Notify(context.Background(), events.MessageDelivered{
+			if b.telemetry.webhooks != nil {
+				b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{
 					ClientID:     s.ID,
 					MessageTopic: msg.Topic,
 					QoS:          msg.QoS,
@@ -118,8 +118,8 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 	}
 
 	// Webhook: message delivered (QoS 1/2)
-	if b.webhooks != nil {
-		b.webhooks.Notify(context.Background(), events.MessageDelivered{
+	if b.telemetry.webhooks != nil {
+		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{
 			ClientID:     s.ID,
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
@@ -154,8 +154,8 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 
 // DeliverMessage sends a message packet to the session's connection.
 func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent func()) error {
-	b.stats.IncrementPublishSent()
-	b.stats.AddBytesSent(uint64(len(msg.GetPayload())))
+	b.telemetry.stats.IncrementPublishSent()
+	b.telemetry.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
 	var pub packets.ControlPacket
 

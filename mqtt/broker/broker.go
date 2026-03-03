@@ -34,100 +34,145 @@ type queueManager interface {
 	broker.QueueAdminRead
 }
 
-// Broker is the core MQTT broker with clean domain methods.
-type Broker struct {
-	sessionLocks  keyLock
-	globalMu      sync.Mutex // protects lifecycle (Close, transferActiveSessions, expireSessions)
-	wg            sync.WaitGroup
-	sessionsMap   session.Cache
-	router        Router
+// brokerStores groups all storage backends.
+type brokerStores struct {
 	messages      storage.MessageStore
 	sessions      storage.SessionStore
 	subscriptions storage.SubscriptionStore
 	retained      storage.RetainedStore
 	wills         storage.WillStore
+}
+
+// brokerTelemetry groups observability dependencies.
+type brokerTelemetry struct {
+	logger   *slog.Logger
+	stats    *Stats
+	webhooks broker.Notifier // nil if webhooks disabled
+	metrics  *otel.Metrics   // nil if metrics disabled
+	tracer   trace.Tracer    // nil if tracing disabled
+}
+
+// brokerConfig groups tunable broker settings.
+type brokerConfig struct {
+	maxQoS              byte
+	maxOfflineQueueSize int
+	offlineQueueEvict   bool
+	maxInflightMessages int
+	routePublishTimeout time.Duration
+	asyncFanOut         bool
+	sessionCfg          config.SessionConfig
+}
+
+// Option configures the broker.
+type Option func(*Broker)
+
+// WithLogger sets the logger. Defaults to slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(b *Broker) { b.telemetry.logger = l }
+}
+
+// WithStats sets the stats collector. Defaults to NewStats().
+func WithStats(s *Stats) Option {
+	return func(b *Broker) { b.telemetry.stats = s }
+}
+
+// WithWebhooks sets the webhook notifier.
+func WithWebhooks(n broker.Notifier) Option {
+	return func(b *Broker) { b.telemetry.webhooks = n }
+}
+
+// WithMetrics sets the OTel metrics instance.
+func WithMetrics(m *otel.Metrics) Option {
+	return func(b *Broker) { b.telemetry.metrics = m }
+}
+
+// WithTracer sets the OTel tracer.
+func WithTracer(t trace.Tracer) Option {
+	return func(b *Broker) { b.telemetry.tracer = t }
+}
+
+// WithSessionConfig sets session-related settings.
+func WithSessionConfig(c config.SessionConfig) Option {
+	return func(b *Broker) {
+		b.cfg.sessionCfg = c
+		b.cfg.maxOfflineQueueSize = c.MaxOfflineQueueSize
+		b.cfg.offlineQueueEvict = c.OfflineQueuePolicy == "evict"
+		b.cfg.maxInflightMessages = c.MaxInflightMessages
+	}
+}
+
+// WithTransportConfig sets transport-related settings.
+func WithTransportConfig(c config.TransportConfig) Option {
+	return func(b *Broker) { b.cfg.routePublishTimeout = c.RoutePublishTimeout }
+}
+
+// WithBrokerConfig sets broker-level settings (fan-out, etc).
+func WithBrokerConfig(c config.BrokerConfig) Option {
+	return func(b *Broker) {
+		b.cfg.asyncFanOut = c.AsyncFanOut
+		if c.AsyncFanOut {
+			b.fanOutPool = newFanOutPool(c.FanOutWorkers)
+		}
+	}
+}
+
+// Broker is the core MQTT broker with clean domain methods.
+type Broker struct {
+	stores    brokerStores
+	telemetry brokerTelemetry
+	cfg       brokerConfig
+
+	sessionLocks  keyLock
+	globalMu      sync.Mutex // protects lifecycle (Close, transferActiveSessions, expireSessions)
+	wg            sync.WaitGroup
+	sessionsMap   session.Cache
+	router        Router
 	cluster       cluster.Cluster         // nil for single-node mode
 	queueManager  queueManager            // nil if queue functionality disabled
 	crossDeliver  broker.CrossDeliverFunc // nil if cross-protocol local pub/sub disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
 	rateLimiter   broker.RateLimiter // nil if rate limiting disabled
-	logger        *slog.Logger
-	stats         *Stats
-	webhooks      broker.Notifier // nil if webhooks disabled
-	metrics       *otel.Metrics   // nil if metrics disabled
-	tracer        trace.Tracer    // nil if tracing disabled
 	stopCh        chan struct{}
 	shuttingDown  atomic.Bool
 	closed        atomic.Bool
-	// Shared subscriptions (MQTT 5.0)
-	sharedSubs *SharedSubscriptionManager
-	// Maximum QoS level supported by this broker (0, 1, or 2)
-	maxQoS byte
-	// Offline queue settings
-	maxOfflineQueueSize int
-	offlineQueueEvict   bool
-	maxInflightMessages int
-	routePublishTimeout time.Duration
-	// Fan-out settings
-	fanOutPool  *fanOutPool // non-nil only when AsyncFanOut is true
-	asyncFanOut bool
-	// Stored for session creation
-	sessionCfg config.SessionConfig
+	sharedSubs    *SharedSubscriptionManager
+	fanOutPool    *fanOutPool // non-nil only when AsyncFanOut is true
 }
 
 // NewBroker creates a new broker instance.
-// Parameters:
-//   - store: Storage backend for messages, sessions, subscriptions, retained, and wills (nil uses memory)
-//   - cl: Cluster coordination interface (nil for single-node mode)
-//   - logger: Logger instance (nil uses default)
-//   - stats: Stats collector (nil creates new one)
-//   - webhooks: Webhook notifier (nil if webhooks disabled)
-//   - metrics: OTel metrics instance (nil if metrics disabled)
-//   - tracer: OTel tracer (nil if tracing disabled)
-func NewBroker(store storage.Store, cl cluster.Cluster, logger *slog.Logger, stats *Stats, webhooks broker.Notifier, metrics *otel.Metrics, tracer trace.Tracer, sessionCfg config.SessionConfig, transportCfg config.TransportConfig, brokerCfg config.BrokerConfig) *Broker {
+// store and cl are required dependencies (nil store falls back to in-memory).
+// All other settings are supplied via functional options.
+func NewBroker(store storage.Store, cl cluster.Cluster, opts ...Option) *Broker {
 	if store == nil {
-		// Fallback to memory storage if none provided
 		store = memory.New()
 	}
 
-	r := router.NewRouter()
-
-	if logger == nil {
-		logger = slog.Default()
-	}
-	if stats == nil {
-		stats = NewStats()
-	}
-
 	b := &Broker{
-		sessionsMap:         session.NewShardedCache(),
-		router:              r,
-		routeResolver:       broker.NewRoutingResolver(),
-		messages:            store.Messages(),
-		sessions:            store.Sessions(),
-		subscriptions:       store.Subscriptions(),
-		retained:            store.Retained(),
-		wills:               store.Wills(),
-		cluster:             cl,
-		logger:              logger,
-		stats:               stats,
-		webhooks:            webhooks,
-		metrics:             metrics,
-		tracer:              tracer,
-		stopCh:              make(chan struct{}),
-		sharedSubs:          NewSharedSubscriptionManager(),
-		maxQoS:              2, // Default to QoS 2 (highest)
-		maxOfflineQueueSize: sessionCfg.MaxOfflineQueueSize,
-		offlineQueueEvict:   sessionCfg.OfflineQueuePolicy == "evict",
-		maxInflightMessages: sessionCfg.MaxInflightMessages,
-		routePublishTimeout: transportCfg.RoutePublishTimeout,
-		asyncFanOut:         brokerCfg.AsyncFanOut,
-		sessionCfg:          sessionCfg,
+		sessionsMap:   session.NewShardedCache(),
+		router:        router.NewRouter(),
+		routeResolver: broker.NewRoutingResolver(),
+		stores: brokerStores{
+			messages:      store.Messages(),
+			sessions:      store.Sessions(),
+			subscriptions: store.Subscriptions(),
+			retained:      store.Retained(),
+			wills:         store.Wills(),
+		},
+		telemetry: brokerTelemetry{
+			logger: slog.Default(),
+			stats:  NewStats(),
+		},
+		cfg: brokerConfig{
+			maxQoS: 2,
+		},
+		cluster:    cl,
+		stopCh:     make(chan struct{}),
+		sharedSubs: NewSharedSubscriptionManager(),
 	}
 
-	if brokerCfg.AsyncFanOut {
-		b.fanOutPool = newFanOutPool(brokerCfg.FanOutWorkers)
+	for _, opt := range opts {
+		opt(b)
 	}
 
 	b.wg.Add(2)
@@ -175,7 +220,7 @@ func (b *Broker) Get(clientID string) *session.Session {
 
 // Stats returns the broker statistics.
 func (b *Broker) Stats() *Stats {
-	return b.stats
+	return b.telemetry.stats
 }
 
 // SetAuthEngine sets the authentication and authorization engine.
@@ -194,21 +239,21 @@ func (b *Broker) SetMaxQoS(qos byte) {
 	if qos > 2 {
 		qos = 2
 	}
-	b.maxQoS = qos
+	b.cfg.maxQoS = qos
 }
 
 // MaxQoS returns the maximum QoS level supported by this broker.
 func (b *Broker) MaxQoS() byte {
-	return b.maxQoS
+	return b.cfg.maxQoS
 }
 
 func (b *Broker) logOp(op string, attrs ...any) {
-	b.logger.Debug(op, attrs...)
+	b.telemetry.logger.Debug(op, attrs...)
 }
 
 func (b *Broker) logError(op string, err error, attrs ...any) {
 	if err != nil {
 		allAttrs := append([]any{slog.String("error", err.Error())}, attrs...)
-		b.logger.Error(op, allAttrs...)
+		b.telemetry.logger.Error(op, allAttrs...)
 	}
 }

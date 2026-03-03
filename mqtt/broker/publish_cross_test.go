@@ -9,12 +9,11 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
-	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/storage"
 )
 
 func TestPublishCrossDeliverToAMQP091(t *testing.T) {
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := NewBroker(nil, nil)
 	defer b.Close()
 
 	amqpClientID := corebroker.PrefixedAMQP091ClientID("conn-1")
@@ -59,7 +58,7 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 }
 
 func TestForwardPublishDoesNotCrossDeliverToAMQP091(t *testing.T) {
-	b := NewBroker(nil, nil, nil, nil, nil, nil, nil, config.SessionConfig{}, config.TransportConfig{}, config.BrokerConfig{})
+	b := NewBroker(nil, nil)
 	defer b.Close()
 
 	amqpClientID := corebroker.PrefixedAMQP091ClientID("conn-1")

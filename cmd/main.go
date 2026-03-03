@@ -247,7 +247,16 @@ func main() {
 	}
 
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl, logger, stats, webhooks, metrics, tracer, cfg.Session, cfg.Cluster.Transport, cfg.Broker)
+	b := broker.NewBroker(store, cl,
+		broker.WithLogger(logger),
+		broker.WithStats(stats),
+		broker.WithWebhooks(webhooks),
+		broker.WithMetrics(metrics),
+		broker.WithTracer(tracer),
+		broker.WithSessionConfig(cfg.Session),
+		broker.WithTransportConfig(cfg.Cluster.Transport),
+		broker.WithBrokerConfig(cfg.Broker),
+	)
 	defer b.Close()
 
 	// Configure maximum QoS level

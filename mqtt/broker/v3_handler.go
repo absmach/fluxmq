@@ -38,13 +38,13 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Info("v3_connect",
+	h.broker.telemetry.logger.Info("v3_connect",
 		slog.String("remote_addr", conn.RemoteAddr().String()),
 		slog.String("client_id", p.ClientID),
 	)
 
 	if err := p.Validate(); err != nil {
-		h.broker.stats.IncrementProtocolErrors()
+		h.broker.telemetry.stats.IncrementProtocolErrors()
 		code := byte(v3.ConnAckIdentifierRejected)
 		if errors.Is(err, v3.ErrInvalidProtocolName) {
 			code = v3.ConnAckUnacceptableProtocol
@@ -61,14 +61,14 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		if cleanStart {
 			generated, err := GenerateClientID()
 			if err != nil {
-				h.broker.stats.IncrementProtocolErrors()
+				h.broker.telemetry.stats.IncrementProtocolErrors()
 				sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
 				conn.Close()
 				return err
 			}
 			clientID = generated
 		} else {
-			h.broker.stats.IncrementProtocolErrors()
+			h.broker.telemetry.stats.IncrementProtocolErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
 			conn.Close()
 			return ErrClientIDRequired
@@ -81,7 +81,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
-			h.broker.stats.IncrementAuthErrors()
+			h.broker.telemetry.stats.IncrementAuthErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword)
 			conn.Close()
 			return ErrNotAuthorized
@@ -91,7 +91,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	var will *storage.WillMessage
 	if p.WillFlag {
 		if err := topics.ValidateTopicName(p.WillTopic); err != nil {
-			h.broker.stats.IncrementProtocolErrors()
+			h.broker.telemetry.stats.IncrementProtocolErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
 			conn.Close()
 			return ErrTopicInvalid
@@ -116,14 +116,14 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
-		h.broker.stats.IncrementProtocolErrors()
+		h.broker.telemetry.stats.IncrementProtocolErrors()
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable)
 		conn.Close()
 		return err
 	}
 
 	if err := s.Connect(conn); err != nil {
-		h.broker.stats.IncrementProtocolErrors()
+		h.broker.telemetry.stats.IncrementProtocolErrors()
 		conn.Close()
 		return err
 	}
@@ -134,8 +134,8 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		return err
 	}
 
-	h.broker.stats.IncrementConnections()
-	h.broker.logger.Info("v3_connect_success",
+	h.broker.telemetry.stats.IncrementConnections()
+	h.broker.telemetry.logger.Info("v3_connect_success",
 		slog.String("client_id", clientID),
 		slog.Bool("session_present", sessionPresent),
 		slog.Duration("duration", time.Since(start)),
@@ -156,7 +156,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	// Check client rate limit
 	if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowPublish(s.ID) {
-		h.broker.logger.Warn("v3_publish_rate_limit",
+		h.broker.telemetry.logger.Warn("v3_publish_rate_limit",
 			slog.String("client_id", s.ID),
 			slog.String("topic", p.TopicName))
 		// For V3, silently drop QoS 0, return error for QoS > 0 (will disconnect)
@@ -166,7 +166,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return nil
 	}
 
-	h.broker.logger.Debug("v3_publish",
+	h.broker.telemetry.logger.Debug("v3_publish",
 		slog.String("client_id", s.ID),
 		slog.String("topic", p.TopicName),
 		slog.Int("qos", int(p.FixedHeader.QoS)),
@@ -180,7 +180,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	dup := p.FixedHeader.Dup
 
 	if err := topics.ValidateTopicName(topic); err != nil {
-		h.broker.logger.Warn("v3_publish_invalid_topic",
+		h.broker.telemetry.logger.Warn("v3_publish_invalid_topic",
 			slog.String("client_id", s.ID),
 			slog.String("topic", topic))
 		return ErrTopicInvalid
@@ -188,7 +188,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	// Downgrade QoS if it exceeds server's maximum
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		h.broker.logger.Debug("v3_publish_qos_downgrade",
+		h.broker.telemetry.logger.Debug("v3_publish_qos_downgrade",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),
 			slog.Int("server_max_qos", int(maxQoS)),
@@ -197,7 +197,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	}
 
 	if h.broker.auth != nil && !h.broker.auth.CanPublish(s.ID, topic) {
-		h.broker.stats.IncrementAuthzErrors()
+		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
 
@@ -212,7 +212,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(msg)
 		storage.ReleaseMessage(msg)
-		h.broker.logger.Debug("v3_publish_complete",
+		h.broker.telemetry.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 			slog.Any("error", err),
@@ -232,7 +232,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			return err
 		}
 		storage.ReleaseMessage(msg)
-		h.broker.logger.Debug("v3_publish_complete",
+		h.broker.telemetry.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
@@ -263,7 +263,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			return err
 		}
 
-		h.broker.logger.Debug("v3_publish_complete",
+		h.broker.telemetry.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
@@ -281,7 +281,7 @@ func (h *V3Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) 
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Debug("v3_puback", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
+	h.broker.telemetry.logger.Debug("v3_puback", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 	return h.broker.AckMessage(s, p.ID)
 }
 
@@ -292,7 +292,7 @@ func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Debug("v3_pubrec", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
+	h.broker.telemetry.logger.Debug("v3_pubrec", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
 	rel := &v3.PubRel{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
@@ -308,14 +308,14 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Debug("v3_pubrel", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
+	h.broker.telemetry.logger.Debug("v3_pubrel", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 
 	packetID := p.ID
 
 	// Distribute stored message now that publisher has committed with PUBREL.
 	msg, err := s.Inflight().Ack(packetID)
 	if err != nil {
-		h.broker.logger.Warn("v3_pubrel_unknown_packet",
+		h.broker.telemetry.logger.Warn("v3_pubrel_unknown_packet",
 			slog.String("client_id", s.ID),
 			slog.Int("packet_id", int(packetID)))
 	}
@@ -326,7 +326,7 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 		ID:          packetID,
 	}
 
-	if h.broker.asyncFanOut {
+	if h.broker.cfg.asyncFanOut {
 		if msg != nil {
 			submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
 				if err := h.broker.Publish(msg); err != nil {
@@ -367,7 +367,7 @@ func (h *V3Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket)
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Debug("v3_pubcomp", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
+	h.broker.telemetry.logger.Debug("v3_pubcomp", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 	return h.broker.AckMessage(s, p.ID)
 }
 
@@ -379,7 +379,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Info("v3_subscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
+	h.broker.telemetry.logger.Info("v3_subscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
 
 	packetID := p.ID
 
@@ -395,14 +395,14 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		}
 
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Name) {
-			h.broker.stats.IncrementAuthzErrors()
+			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
 
 		// Check subscription rate limit
 		if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowSubscribe(s.ID) {
-			h.broker.logger.Warn("v3_subscribe_rate_limit",
+			h.broker.telemetry.logger.Warn("v3_subscribe_rate_limit",
 				slog.String("client_id", s.ID),
 				slog.String("topic", t.Name))
 			reasonCodes[i] = v3.SubAckFailure
@@ -448,7 +448,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		}
 	}
 
-	h.broker.logger.Info("v3_subscribe_complete",
+	h.broker.telemetry.logger.Info("v3_subscribe_complete",
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
@@ -468,13 +468,13 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Info("v3_unsubscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
+	h.broker.telemetry.logger.Info("v3_unsubscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
 
 	for _, filter := range p.Topics {
 		h.broker.unsubscribeInternal(s, filter)
 	}
 
-	h.broker.logger.Info("v3_unsubscribe_complete",
+	h.broker.telemetry.logger.Info("v3_unsubscribe_complete",
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
@@ -488,7 +488,7 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 
 // HandlePingReq handles PINGREQ packets.
 func (h *V3Handler) HandlePingReq(s *session.Session) error {
-	h.broker.logger.Debug("v3_pingreq", slog.String("client_id", s.ID))
+	h.broker.telemetry.logger.Debug("v3_pingreq", slog.String("client_id", s.ID))
 
 	// Update heartbeat for queue consumers
 	// Fire and forget - don't block PINGRESP on this.
@@ -508,7 +508,7 @@ func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 		return ErrInvalidPacketType
 	}
 
-	h.broker.logger.Info("v3_disconnect", slog.String("client_id", s.ID))
+	h.broker.telemetry.logger.Info("v3_disconnect", slog.String("client_id", s.ID))
 	s.Disconnect(true)
 	return io.EOF
 }

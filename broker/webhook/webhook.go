@@ -6,12 +6,14 @@ package webhook
 import (
 	"context"
 	"time"
+
+	"github.com/absmach/fluxmq/broker/events"
 )
 
 // Notifier sends webhook notifications asynchronously.
 type Notifier interface {
 	// Notify sends an event asynchronously (non-blocking)
-	Notify(ctx context.Context, event interface{}) error
+	Notify(ctx context.Context, event events.Event) error
 
 	// Close gracefully shuts down, flushing pending events
 	Close() error
