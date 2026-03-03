@@ -32,12 +32,13 @@ type pendingOp struct {
 
 // pendingStore manages pending operations.
 type pendingStore struct {
-	mu           sync.RWMutex
-	pending      map[uint16]*pendingOp
-	nextID       uint16
-	maxSize      int
-	inflight     int
-	typeCounts   [3]int // indexed by pendingType
+	mu                sync.RWMutex
+	pending           map[uint16]*pendingOp
+	nextID            uint16
+	maxSize           int
+	inflight          int
+	typeCounts        [3]int   // indexed by pendingType
+	onPublishComplete func()   // called (without mu held) when a pendingPublish op completes
 }
 
 // newPendingStore creates a new pending operation store.
@@ -119,6 +120,9 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 		op.err = err
 		op.result = result
 		close(op.done)
+		if op.opType == pendingPublish && ps.onPublishComplete != nil {
+			ps.onPublishComplete()
+		}
 		return true
 	}
 	return false

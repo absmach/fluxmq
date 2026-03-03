@@ -166,6 +166,9 @@ type Client struct {
 
 	// Drain mode rejects new publishes until disconnect completes.
 	draining atomic.Bool
+
+	// drainCh is poked (non-blocking) whenever a condition that Drain() waits on changes.
+	drainCh chan struct{}
 }
 
 // New creates a new MQTT client with the given options.
@@ -192,7 +195,9 @@ func New(opts *Options) (*Client, error) {
 		queueSubs:     newQueueSubscriptions(),
 		queueAckCache: newQueueAckCache(5 * time.Minute),
 		subscriptions: newSubscriptionRegistry(),
+		drainCh:       make(chan struct{}, 1),
 	}
+	c.pending.onPublishComplete = c.notifyDrain
 	c.pendingCond = sync.NewCond(&c.pendingMu)
 	c.outboundCond = sync.NewCond(&c.outboundMu)
 	return c, nil
@@ -355,17 +360,19 @@ func (c *Client) Connect(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
+	// Phase 1: guard state transition only — no I/O inside the lock.
 	c.lifecycleMu.Lock()
-	defer c.lifecycleMu.Unlock()
-
 	if c.state.isClosed() {
+		c.lifecycleMu.Unlock()
 		return ErrClientClosed
 	}
-
 	if !c.state.transitionFrom(StateConnecting, StateDisconnected, StateReconnecting) {
+		c.lifecycleMu.Unlock()
 		return ErrAlreadyConnected
 	}
+	c.lifecycleMu.Unlock()
 
+	// Phase 2: network I/O with no lock held.
 	err := c.doConnect(ctx)
 	if err != nil {
 		if !c.state.isClosed() {
@@ -373,6 +380,10 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 		return err
 	}
+
+	// Phase 3: re-acquire to commit result and start goroutines.
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 
 	// If another goroutine closed the client while connecting, do not transition to connected.
 	if !c.state.transition(StateConnecting, StateConnected) {
@@ -777,9 +788,6 @@ func (c *Client) Drain(ctx context.Context) error {
 	}
 	defer c.draining.Store(false)
 
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
 	for {
 		if !c.state.isConnected() {
 			return ErrConnectionLost
@@ -795,7 +803,7 @@ func (c *Client) Drain(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-c.drainCh:
 		}
 	}
 
@@ -2051,6 +2059,7 @@ func (c *Client) handleConnectionLost(err error) {
 		return
 	}
 	c.lifecycleMu.Unlock()
+	c.notifyDrain()
 
 	c.stopKeepAlive()
 	c.cleanup(context.Background(), ErrConnectionLost) //nolint:errcheck
@@ -2124,11 +2133,15 @@ func (c *Client) restoreSubscriptions() {
 	}
 
 	for _, rec := range records {
+		var err error
 		if rec.opt != nil {
-			_ = c.subscribeWithOptions(nil, []*SubscribeOption{rec.opt})
-			continue
+			err = c.subscribeWithOptions(nil, []*SubscribeOption{rec.opt})
+		} else {
+			err = c.subscribe(nil, map[string]byte{rec.topic: rec.qos})
 		}
-		_ = c.subscribe(nil, map[string]byte{rec.topic: rec.qos})
+		if err != nil {
+			c.reportAsyncError(err)
+		}
 	}
 }
 
@@ -2142,15 +2155,19 @@ func (c *Client) restoreQueueSubscriptions() {
 	c.queueSubs.mu.RUnlock()
 
 	for _, sub := range subs {
+		var err error
 		if c.isMQTTv5() {
 			userProps := make(map[string]string)
 			if sub.consumerGroup != "" {
 				userProps["consumer-group"] = sub.consumerGroup
 			}
-			_ = c.subscribeWithUserProperties(nil, "$queue/"+sub.queueName, 1, userProps)
-			continue
+			err = c.subscribeWithUserProperties(nil, "$queue/"+sub.queueName, 1, userProps)
+		} else {
+			err = c.subscribe(nil, map[string]byte{"$queue/" + sub.queueName: 1})
 		}
-		_ = c.subscribe(nil, map[string]byte{"$queue/" + sub.queueName: 1})
+		if err != nil {
+			c.reportAsyncError(err)
+		}
 	}
 }
 
@@ -2160,9 +2177,12 @@ func (c *Client) restoreOutboundMessages() {
 		return
 	}
 
+	// Reset clears stale packet IDs so nextPacketID() cannot collide with them
+	// during re-queue. Messages that fail to re-queue are written back to the
+	// store with their original IDs so they survive the next reconnect attempt.
 	_ = c.store.Reset()
 
-	for _, msg := range msgs {
+	for i, msg := range msgs {
 		if msg == nil {
 			continue
 		}
@@ -2172,8 +2192,16 @@ func (c *Client) restoreOutboundMessages() {
 			continue
 		}
 
+		originalPacketID := msg.PacketID
+
 		packetID := c.pending.nextPacketID()
 		if packetID == 0 {
+			// Inflight slots exhausted — preserve all remaining messages.
+			for _, remaining := range msgs[i:] {
+				if remaining != nil && remaining.QoS > 0 {
+					_ = c.store.StoreOutbound(remaining.PacketID, remaining)
+				}
+			}
 			return
 		}
 
@@ -2182,17 +2210,20 @@ func (c *Client) restoreOutboundMessages() {
 		replay.Dup = true
 
 		if err := c.store.StoreOutbound(packetID, replay); err != nil {
+			_ = c.store.StoreOutbound(originalPacketID, msg)
 			continue
 		}
 
 		if _, err := c.pending.add(packetID, pendingPublish, replay); err != nil {
 			_ = c.store.DeleteOutbound(packetID)
+			_ = c.store.StoreOutbound(originalPacketID, msg)
 			continue
 		}
 
 		if err := c.sendPublish(nil, replay, packetID); err != nil {
 			c.pending.remove(packetID)
 			_ = c.store.DeleteOutbound(packetID)
+			_ = c.store.StoreOutbound(originalPacketID, msg)
 			continue
 		}
 	}
@@ -2571,6 +2602,7 @@ func (c *Client) writeLoop() {
 					req.errCh <- err
 				}
 			}
+			c.notifyDrain()
 		}
 
 		if conn == nil {
@@ -2692,11 +2724,6 @@ func (c *Client) enqueueWriteTo(req writeRequest, control bool) (retErr error) {
 	defer func() {
 		if retErr != nil && reservedOutbound {
 			c.releaseOutbound(req)
-		}
-	}()
-	defer func() {
-		if recover() != nil {
-			retErr = ErrNotConnected
 		}
 	}()
 	rt := c.loadWriteRuntime()
@@ -2981,21 +3008,7 @@ func (c *Client) queueWriteRequest(req writeRequest, control bool) error {
 			recycleErrCh()
 			return err
 		default:
-		}
-		// If writer has fully stopped, it is safe to recycle pooled channels.
-		// When done hasn't closed yet the writeLoop may still send on errCh,
-		// so we intentionally skip recycling to avoid pool corruption.
-		select {
-		case <-done:
-			select {
-			case err := <-req.errCh:
-				recycleErrCh()
-				return err
-			default:
-			}
-			recycleErrCh()
-		default:
-			// writeLoop still running — channel cannot be safely recycled.
+			// writeLoop may still hold a reference to errCh; skip recycle.
 		}
 		return ErrNotConnected
 	}
@@ -3005,11 +3018,6 @@ func (c *Client) queueWriteRequest(req writeRequest, control bool) error {
 // without waiting for write completion.
 // Returns false if the frame could not be enqueued.
 func (c *Client) queueControlWriteNoWait(data []byte) (enqueued bool) {
-	defer func() {
-		if recover() != nil {
-			enqueued = false
-		}
-	}()
 	rt := c.loadWriteRuntime()
 	if rt == nil {
 		return false
@@ -3176,6 +3184,7 @@ func (c *Client) releaseOutbound(req writeRequest) {
 	}
 	c.outboundCond.Signal()
 	c.outboundMu.Unlock()
+	c.notifyDrain()
 }
 
 func (c *Client) dispatcherChannels() (chan *Message, chan struct{}) {
@@ -3373,6 +3382,13 @@ func (c *Client) onSlowConsumer(msg *Message) {
 	c.reportDroppedMessage(c.prepareDroppedMeta(meta, DroppedMessageInbound, DroppedReasonSlowConsumer))
 	if c.slowConsumerNotified.CompareAndSwap(false, true) {
 		c.reportAsyncError(ErrSlowConsumer)
+	}
+}
+
+func (c *Client) notifyDrain() {
+	select {
+	case c.drainCh <- struct{}{}:
+	default:
 	}
 }
 
