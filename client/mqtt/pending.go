@@ -32,13 +32,13 @@ type pendingOp struct {
 
 // pendingStore manages pending operations.
 type pendingStore struct {
-	mu                sync.RWMutex
-	pending           map[uint16]*pendingOp
-	nextID            uint16
-	maxSize           int
-	inflight          int
-	typeCounts        [3]int   // indexed by pendingType
-	onPublishComplete func()   // called (without mu held) when a pendingPublish op completes
+	mu              sync.RWMutex
+	pending         map[uint16]*pendingOp
+	nextID          uint16
+	maxSize         int
+	inflight        int
+	typeCounts      [3]int // indexed by pendingType
+	onPublishChange func() // called (without mu held) when pendingPublish count decreases
 }
 
 // newPendingStore creates a new pending operation store.
@@ -120,8 +120,8 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 		op.err = err
 		op.result = result
 		close(op.done)
-		if op.opType == pendingPublish && ps.onPublishComplete != nil {
-			ps.onPublishComplete()
+		if op.opType == pendingPublish && ps.onPublishChange != nil {
+			ps.onPublishChange()
 		}
 		return true
 	}
@@ -130,12 +130,17 @@ func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool 
 
 // remove removes a pending operation without completing it.
 func (ps *pendingStore) remove(id uint16) {
+	notify := false
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
 	if op, exists := ps.pending[id]; exists {
 		delete(ps.pending, id)
 		ps.inflight--
 		ps.typeCounts[op.opType]--
+		notify = op.opType == pendingPublish
+	}
+	ps.mu.Unlock()
+	if notify && ps.onPublishChange != nil {
+		ps.onPublishChange()
 	}
 }
 
@@ -167,6 +172,7 @@ func (ps *pendingStore) getAll() []*pendingOp {
 func (ps *pendingStore) clear(err error) {
 	ps.mu.Lock()
 	pending := ps.pending
+	hadPendingPublishes := ps.typeCounts[pendingPublish] > 0
 	ps.pending = make(map[uint16]*pendingOp)
 	ps.inflight = 0
 	ps.typeCounts = [3]int{}
@@ -175,6 +181,9 @@ func (ps *pendingStore) clear(err error) {
 	for _, op := range pending {
 		op.err = err
 		close(op.done)
+	}
+	if hadPendingPublishes && ps.onPublishChange != nil {
+		ps.onPublishChange()
 	}
 }
 

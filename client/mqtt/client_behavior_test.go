@@ -867,6 +867,109 @@ func TestDrainWaitsForInflightPublishes(t *testing.T) {
 	assert.Equal(t, StateDisconnected, c.State())
 }
 
+func TestDrainUnblocksWhenPendingPublishIsRemoved(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("drain-remove"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+	setupWriteLoop(c, &packetCaptureConn{})
+
+	packetID := c.pending.nextPacketID()
+	require.NotZero(t, packetID)
+	_, err = c.pending.add(packetID, pendingPublish, &Message{Topic: "events/drain-remove", QoS: 1})
+	require.NoError(t, err)
+
+	drainDone := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		drainDone <- c.Drain(ctx)
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	c.pending.remove(packetID)
+
+	select {
+	case err := <-drainDone:
+		require.NoError(t, err)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("drain should unblock when pending publish is removed")
+	}
+	assert.Equal(t, StateDisconnected, c.State())
+}
+
+func TestDrainUnblocksWhenClientIsClosed(t *testing.T) {
+	c, err := New(NewOptions().SetClientID("drain-close"))
+	require.NoError(t, err)
+	c.state.set(StateConnected)
+	setupWriteLoop(c, &packetCaptureConn{})
+
+	packetID := c.pending.nextPacketID()
+	require.NotZero(t, packetID)
+	_, err = c.pending.add(packetID, pendingPublish, &Message{Topic: "events/drain-close", QoS: 1})
+	require.NoError(t, err)
+
+	drainDone := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		drainDone <- c.Drain(ctx)
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	require.NoError(t, c.Close(context.Background()))
+
+	select {
+	case err := <-drainDone:
+		require.ErrorIs(t, err, ErrConnectionLost)
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("drain should unblock when client is closed")
+	}
+}
+
+func TestConnectFailureConcurrentCloseKeepsStateClosed(t *testing.T) {
+	for i := 0; i < 256; i++ {
+		c, err := New(
+			NewOptions().
+				SetClientID("connect-close-race").
+				SetServers("127.0.0.1:1").
+				SetConnectTimeout(15 * time.Millisecond),
+		)
+		require.NoError(t, err)
+
+		connectDone := make(chan struct{})
+		go func() {
+			_ = c.Connect(context.Background())
+			close(connectDone)
+		}()
+
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			for {
+				select {
+				case <-connectDone:
+					return
+				default:
+					_ = c.Close(context.Background())
+					runtime.Gosched()
+				}
+			}
+		}()
+
+		select {
+		case <-connectDone:
+		case <-time.After(time.Second):
+			t.Fatalf("iteration %d: connect did not complete", i)
+		}
+		<-closeDone
+
+		_ = c.Close(context.Background())
+		if got := c.State(); got != StateClosed {
+			t.Fatalf("iteration %d: expected closed state, got %v", i, got)
+		}
+	}
+}
+
 func TestPublishRejectedWhileDraining(t *testing.T) {
 	c, err := New(NewOptions().SetClientID("draining"))
 	require.NoError(t, err)

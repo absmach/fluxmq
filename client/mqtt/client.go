@@ -197,7 +197,7 @@ func New(opts *Options) (*Client, error) {
 		subscriptions: newSubscriptionRegistry(),
 		drainCh:       make(chan struct{}, 1),
 	}
-	c.pending.onPublishComplete = c.notifyDrain
+	c.pending.onPublishChange = c.notifyDrain
 	c.pendingCond = sync.NewCond(&c.pendingMu)
 	c.outboundCond = sync.NewCond(&c.outboundMu)
 	return c, nil
@@ -375,8 +375,11 @@ func (c *Client) Connect(ctx context.Context) error {
 	// Phase 2: network I/O with no lock held.
 	err := c.doConnect(ctx)
 	if err != nil {
-		if !c.state.isClosed() {
-			c.state.set(StateDisconnected)
+		if c.state.transition(StateConnecting, StateDisconnected) {
+			return err
+		}
+		if c.state.isClosed() {
+			return ErrClientClosed
 		}
 		return err
 	}
@@ -761,6 +764,7 @@ func (c *Client) DisconnectWithReason(ctx context.Context, reasonCode byte, sess
 		c.lifecycleMu.Unlock()
 		return nil
 	}
+	c.notifyDrain()
 
 	c.stopKeepAlive()
 	c.sendDisconnectWithReason(reasonCode, sessionExpiry, reasonString)
@@ -859,6 +863,7 @@ func (c *Client) Close(ctx context.Context) error {
 	c.lifecycleMu.Lock()
 	c.state.set(StateClosed)
 	c.lifecycleMu.Unlock()
+	c.notifyDrain()
 
 	c.stopKeepAlive()
 	err := c.cleanup(ctx, ErrClientClosed)
@@ -969,6 +974,7 @@ func (c *Client) cleanup(ctx context.Context, err error) error {
 	c.lastPingSent = time.Time{}
 	c.pingTimer = nil
 	c.pingMu.Unlock()
+	c.notifyDrain()
 
 	return ctxErr
 }
@@ -2178,9 +2184,39 @@ func (c *Client) restoreOutboundMessages() {
 	}
 
 	// Reset clears stale packet IDs so nextPacketID() cannot collide with them
-	// during re-queue. Messages that fail to re-queue are written back to the
-	// store with their original IDs so they survive the next reconnect attempt.
+	// during re-queue.
 	_ = c.store.Reset()
+	usedStoreIDs := make(map[uint16]struct{}, len(msgs))
+
+	storeForRetry := func(msg *Message, preferredID uint16) {
+		if msg == nil || msg.QoS == 0 {
+			return
+		}
+		candidate := preferredID
+		if candidate == 0 {
+			candidate = 1
+		}
+		for tries := 0; tries < 0xFFFF; tries++ {
+			if _, used := usedStoreIDs[candidate]; !used {
+				stored := msg.Copy()
+				if stored == nil {
+					return
+				}
+				stored.PacketID = candidate
+				if err := c.store.StoreOutbound(candidate, stored); err != nil {
+					c.reportAsyncError(err)
+				} else {
+					usedStoreIDs[candidate] = struct{}{}
+				}
+				return
+			}
+			candidate++
+			if candidate == 0 {
+				candidate = 1
+			}
+		}
+		c.reportAsyncError(ErrMaxInflight)
+	}
 
 	for i, msg := range msgs {
 		if msg == nil {
@@ -2199,31 +2235,36 @@ func (c *Client) restoreOutboundMessages() {
 			// Inflight slots exhausted — preserve all remaining messages.
 			for _, remaining := range msgs[i:] {
 				if remaining != nil && remaining.QoS > 0 {
-					_ = c.store.StoreOutbound(remaining.PacketID, remaining)
+					storeForRetry(remaining, remaining.PacketID)
 				}
 			}
+			c.reportAsyncError(ErrMaxInflight)
 			return
 		}
 
 		replay := msg.Copy()
+		if replay == nil {
+			storeForRetry(msg, msg.PacketID)
+			continue
+		}
 		replay.PacketID = packetID
 		replay.Dup = true
 
 		if err := c.store.StoreOutbound(packetID, replay); err != nil {
-			_ = c.store.StoreOutbound(originalPacketID, msg)
+			c.reportAsyncError(err)
+			storeForRetry(msg, originalPacketID)
 			continue
 		}
+		usedStoreIDs[packetID] = struct{}{}
 
 		if _, err := c.pending.add(packetID, pendingPublish, replay); err != nil {
-			_ = c.store.DeleteOutbound(packetID)
-			_ = c.store.StoreOutbound(originalPacketID, msg)
+			c.reportAsyncError(err)
 			continue
 		}
 
 		if err := c.sendPublish(nil, replay, packetID); err != nil {
 			c.pending.remove(packetID)
-			_ = c.store.DeleteOutbound(packetID)
-			_ = c.store.StoreOutbound(originalPacketID, msg)
+			c.reportAsyncError(err)
 			continue
 		}
 	}
