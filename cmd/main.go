@@ -599,8 +599,6 @@ func main() {
 		name string
 		cfg  config.WSListenerConfig
 	}{
-		{name: "v3", cfg: cfg.Server.WebSocket.V3},
-		{name: "v5", cfg: cfg.Server.WebSocket.V5},
 		{name: "tls", cfg: cfg.Server.WebSocket.TLS},
 		{name: "mtls", cfg: cfg.Server.WebSocket.MTLS},
 	}
