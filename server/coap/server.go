@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
 	piondtls "github.com/pion/dtls/v3"
@@ -40,7 +41,7 @@ type Server struct {
 }
 
 func authFromQuery(r *mux.Message, remoteAddr string) (clientID, username, password string) {
-	clientID = "coap:" + remoteAddr
+	clientID = corebroker.CoAPClientPrefix + remoteAddr
 
 	queries, err := r.Options().Queries()
 	if err != nil {

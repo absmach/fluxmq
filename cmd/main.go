@@ -17,6 +17,7 @@ import (
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
+	smqauth "github.com/absmach/fluxmq/auth/smq"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
@@ -308,6 +309,32 @@ func main() {
 	// Create AMQP 0.9.1 broker (needs queue manager set later)
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
+
+	// Optional SuperMQ-backed authorizer integration.
+	if cfg.Auth.SuperMQ.Enabled {
+		smqAuthorizer, err := smqauth.NewAuthorizer(smqauth.Config{
+			Address:    cfg.Auth.SuperMQ.Address,
+			Timeout:    cfg.Auth.SuperMQ.Timeout,
+			ClientType: cfg.Auth.SuperMQ.ClientType,
+			Insecure:   cfg.Auth.SuperMQ.Insecure,
+		}, logger)
+		if err != nil {
+			slog.Error("Failed to initialize SuperMQ authorizer", "error", err)
+			os.Exit(1)
+		}
+		defer smqAuthorizer.Close()
+
+		authEngine := corebroker.NewAuthEngine(nil, smqAuthorizer)
+		b.SetAuthEngine(authEngine)
+		amqpBroker.SetAuthEngine(authEngine)
+		amqp091Broker.SetAuthEngine(authEngine)
+
+		slog.Info("SuperMQ authorizer enabled",
+			slog.String("address", cfg.Auth.SuperMQ.Address),
+			slog.String("client_type", cfg.Auth.SuperMQ.ClientType),
+			slog.Bool("insecure", cfg.Auth.SuperMQ.Insecure),
+		)
+	}
 
 	// Shared local pub/sub router (MQTT + AMQP 0.9.1 + AMQP 1.0).
 	sharedRouter := router.NewRouter()
