@@ -410,7 +410,7 @@ func (c *Client) handleConnectAuth(conn net.Conn, auth *v5.Auth) error {
 
 	responseData, err := c.opts.OnAuth(auth.ReasonCode, method, data)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrAuthFailed, err)
+		return fmt.Errorf("%w: %w", ErrAuthFailed, err)
 	}
 
 	resp := &v5.Auth{
@@ -457,7 +457,7 @@ func (c *Client) handleAuth(pkt packets.ControlPacket) {
 
 	responseData, err := c.opts.OnAuth(auth.ReasonCode, method, data)
 	if err != nil {
-		c.handleConnectionLost(fmt.Errorf("%w: %v", ErrAuthFailed, err))
+		c.handleConnectionLost(fmt.Errorf("%w: %w", ErrAuthFailed, err))
 		return
 	}
 

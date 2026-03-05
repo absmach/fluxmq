@@ -198,7 +198,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	if c.mqtt != nil {
 		if err := c.mqtt.Connect(ctx); err != nil {
-			return fmt.Errorf("%w: %v", ErrConnectFailed, err)
+			return fmt.Errorf("%w: %w", ErrConnectFailed, err)
 		}
 	}
 	if c.amqp != nil {
@@ -206,7 +206,7 @@ func (c *Client) Connect(ctx context.Context) error {
 			if c.mqtt != nil {
 				_ = c.mqtt.Close(ctx)
 			}
-			return fmt.Errorf("%w: %v", ErrConnectFailed, err)
+			return fmt.Errorf("%w: %w", ErrConnectFailed, err)
 		}
 	}
 	return nil
@@ -226,12 +226,12 @@ func (c *Client) Close(ctx context.Context) error {
 	var errs []error
 	if c.mqtt != nil {
 		if err := c.mqtt.Close(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
+			errs = append(errs, fmt.Errorf("%w: %w", ErrCloseFailed, err))
 		}
 	}
 	if c.amqp != nil {
 		if err := c.amqp.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("%w: %v", ErrCloseFailed, err))
+			errs = append(errs, fmt.Errorf("%w: %w", ErrCloseFailed, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -279,7 +279,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 		msg := mqtt.NewMessage(topic, payload, qos, retain)
 		msg.UserProperties = mqttUserProps(po.Properties)
 		if _, _, err := c.mqtt.PublishMessage(ctx, msg, true); err != nil {
-			return fmt.Errorf("%w: %v", ErrPublishFailed, err)
+			return fmt.Errorf("%w: %w", ErrPublishFailed, err)
 		}
 		return nil
 	}
@@ -298,7 +298,7 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, opts
 		amqpOpts.Immediate = *po.Immediate
 	}
 	if err := c.amqp.PublishWithOptionsContext(ctx, amqpOpts); err != nil {
-		return fmt.Errorf("%w: %v", ErrPublishFailed, err)
+		return fmt.Errorf("%w: %w", ErrPublishFailed, err)
 	}
 	return nil
 }
@@ -327,7 +327,7 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handler MessageHan
 			qos = *so.QoS
 		}
 		if err := c.mqtt.SubscribeSingle(ctx, topic, qos); err != nil {
-			return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
+			return fmt.Errorf("%w: %w", ErrSubscribeFailed, err)
 		}
 		c.mu.Lock()
 		replaced := c.setMQTTSubLocked(topic, handler)
@@ -346,7 +346,7 @@ func (c *Client) Subscribe(ctx context.Context, topic string, handler MessageHan
 	if err := c.amqp.SubscribeWithOptions(subOpts, func(msg *amqp.Message) {
 		handler(amqpToMessage(msg, ""))
 	}); err != nil {
-		return fmt.Errorf("%w: %v", ErrSubscribeFailed, err)
+		return fmt.Errorf("%w: %w", ErrSubscribeFailed, err)
 	}
 	return nil
 }
@@ -369,7 +369,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string, opts ...Option) 
 
 	if protocol == ProtocolMQTT {
 		if err := c.mqtt.Unsubscribe(ctx, topic); err != nil {
-			return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
+			return fmt.Errorf("%w: %w", ErrUnsubFailed, err)
 		}
 		c.mu.Lock()
 		removed := c.removeMQTTSubLocked(topic)
@@ -381,7 +381,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topic string, opts ...Option) 
 	}
 
 	if err := c.amqp.Unsubscribe(topic); err != nil {
-		return fmt.Errorf("%w: %v", ErrUnsubFailed, err)
+		return fmt.Errorf("%w: %w", ErrUnsubFailed, err)
 	}
 	return nil
 }
@@ -414,7 +414,7 @@ func (c *Client) PublishToQueue(ctx context.Context, queue string, payload []byt
 			QoS:        qos,
 		}
 		if err := c.mqtt.PublishToQueueWithOptions(ctx, qopts); err != nil {
-			return fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
+			return fmt.Errorf("%w: %w", ErrQueuePublishFailed, err)
 		}
 		return nil
 	}
@@ -425,7 +425,7 @@ func (c *Client) PublishToQueue(ctx context.Context, queue string, payload []byt
 		Properties: amqpHeaders(po.Properties),
 	}
 	if err := c.amqp.PublishToQueueWithOptionsContext(ctx, qopts); err != nil {
-		return fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
+		return fmt.Errorf("%w: %w", ErrQueuePublishFailed, err)
 	}
 	return nil
 }
@@ -453,7 +453,7 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 		if err := c.mqtt.SubscribeToQueue(ctx, queue, group, func(msg *mqtt.QueueMessage) {
 			handler(mqttQueueToMessage(msg, queue))
 		}); err != nil {
-			return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
+			return fmt.Errorf("%w: %w", ErrQueueSubscribeFailed, err)
 		}
 		c.mu.Lock()
 		c.qsubs[queue] = handler
@@ -464,7 +464,7 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 	if err := c.amqp.SubscribeToQueue(queue, group, func(msg *amqp.QueueMessage) {
 		handler(amqpQueueToMessage(msg, queue))
 	}); err != nil {
-		return fmt.Errorf("%w: %v", ErrQueueSubscribeFailed, err)
+		return fmt.Errorf("%w: %w", ErrQueueSubscribeFailed, err)
 	}
 	return nil
 }
@@ -487,7 +487,7 @@ func (c *Client) UnsubscribeFromQueue(ctx context.Context, queue string, opts ..
 
 	if protocol == ProtocolMQTT {
 		if err := c.mqtt.UnsubscribeFromQueue(ctx, queue); err != nil {
-			return fmt.Errorf("%w: %v", ErrQueueUnsubFailed, err)
+			return fmt.Errorf("%w: %w", ErrQueueUnsubFailed, err)
 		}
 		c.mu.Lock()
 		delete(c.qsubs, queue)
@@ -496,7 +496,7 @@ func (c *Client) UnsubscribeFromQueue(ctx context.Context, queue string, opts ..
 	}
 
 	if err := c.amqp.UnsubscribeFromQueue(queue); err != nil {
-		return fmt.Errorf("%w: %v", ErrQueueUnsubFailed, err)
+		return fmt.Errorf("%w: %w", ErrQueueUnsubFailed, err)
 	}
 	return nil
 }

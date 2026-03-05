@@ -4,6 +4,7 @@
 package logstorage
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -438,7 +439,7 @@ func (s *Segment) Close() error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("errors closing segment: %v", errs)
+		return fmt.Errorf("errors closing segment: %w", errors.Join(errs...))
 	}
 
 	return nil

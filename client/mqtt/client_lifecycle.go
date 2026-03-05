@@ -125,7 +125,7 @@ func (c *Client) doConnect(ctx context.Context) (net.Conn, error) {
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("%w: %v", ErrConnectFailed, lastErr)
+		return nil, fmt.Errorf("%w: %w", ErrConnectFailed, lastErr)
 	}
 	return nil, ErrConnectFailed
 }

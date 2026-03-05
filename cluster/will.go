@@ -335,7 +335,12 @@ func (h *WillStore) watchWillData() {
 		case <-h.stopCh:
 			return
 
-		case resp := <-dataChan:
+		case resp, ok := <-dataChan:
+			if !ok {
+				h.logger.Warn("watch channel closed on will-data, restarting")
+				dataChan = h.etcdClient.Watch(ctx, willDataPrefix, clientv3.WithPrefix())
+				continue
+			}
 			if resp.Err() != nil {
 				h.logger.Error("watch error on will-data",
 					slog.String("error", resp.Err().Error()))
@@ -343,7 +348,12 @@ func (h *WillStore) watchWillData() {
 			}
 			h.handleDataWatchEvents(resp.Events)
 
-		case resp := <-indexChan:
+		case resp, ok := <-indexChan:
+			if !ok {
+				h.logger.Warn("watch channel closed on will-index, restarting")
+				indexChan = h.etcdClient.Watch(ctx, willIndexPrefix, clientv3.WithPrefix())
+				continue
+			}
 			if resp.Err() != nil {
 				h.logger.Error("watch error on will-index",
 					slog.String("error", resp.Err().Error()))

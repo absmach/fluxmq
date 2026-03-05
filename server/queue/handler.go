@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -699,7 +700,9 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 	}
 
 	if len(msg.Offsets) > 0 {
-		h.groupStore.UpdateCommitted(ctx, msg.QueueName, msg.GroupId, maxOffset+1)
+		if err := h.groupStore.UpdateCommitted(ctx, msg.QueueName, msg.GroupId, maxOffset+1); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update committed offset: %w", err))
+		}
 	}
 
 	return connect.NewResponse(&queuev1.AckResponse{
@@ -710,16 +713,27 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackRequest]) (*connect.Response[emptypb.Empty], error) {
 	msg := req.Msg
 
+	var errs []error
 	if h.manager != nil {
 		for _, offset := range msg.Offsets {
 			messageID := fmt.Sprintf("%s:%d", msg.QueueName, offset)
-			_ = h.manager.Nack(ctx, msg.QueueName, messageID, msg.GroupId)
+			if err := h.manager.Nack(ctx, msg.QueueName, messageID, msg.GroupId); err != nil {
+				errs = append(errs, fmt.Errorf("offset %d: %w", offset, err))
+			}
+		}
+		if len(errs) > 0 {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to nack offsets: %w", errors.Join(errs...)))
 		}
 		return connect.NewResponse(&emptypb.Empty{}), nil
 	}
 
 	for _, offset := range msg.Offsets {
-		h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset)
+		if err := h.groupStore.RemovePendingEntry(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId, offset); err != nil {
+			errs = append(errs, fmt.Errorf("offset %d: %w", offset, err))
+		}
+	}
+	if len(errs) > 0 {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to nack offsets: %w", errors.Join(errs...)))
 	}
 
 	return connect.NewResponse(&emptypb.Empty{}), nil

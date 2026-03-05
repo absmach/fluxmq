@@ -29,7 +29,10 @@ var (
 	ErrSessionNotFound   = errors.New("session not found")
 )
 
-const queueHeartbeatUpdateMinInterval = time.Second
+const (
+	queueHeartbeatUpdateMinInterval = time.Second
+	queueHeartbeatUpdateTimeout     = 2 * time.Second
+)
 
 func maybeUpdateQueueHeartbeat(b *Broker, s *session.Session) {
 	if b.queueManager == nil {
@@ -38,7 +41,9 @@ func maybeUpdateQueueHeartbeat(b *Broker, s *session.Session) {
 	if !s.ShouldUpdateHeartbeat(time.Now(), queueHeartbeatUpdateMinInterval) {
 		return
 	}
-	go b.queueManager.UpdateHeartbeat(context.Background(), s.ID)
+	ctx, cancel := context.WithTimeout(context.Background(), queueHeartbeatUpdateTimeout)
+	defer cancel()
+	_ = b.queueManager.UpdateHeartbeat(ctx, s.ID)
 }
 
 // Handler is the interface for packet handlers (V3, V5, etc).

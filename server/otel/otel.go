@@ -5,6 +5,7 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -72,7 +73,7 @@ func InitProvider(cfg config.ServerConfig, nodeID string) (func(context.Context)
 			}
 		}
 		if len(errs) > 0 {
-			return fmt.Errorf("shutdown errors: %v", errs)
+			return fmt.Errorf("shutdown errors: %w", errors.Join(errs...))
 		}
 		return nil
 	}, nil

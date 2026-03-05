@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -215,7 +216,7 @@ func (h *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Me
 
 	// If all fetches failed, return error
 	if len(fetchErrors) > 0 && len(messages) == 0 {
-		return nil, fmt.Errorf("failed to fetch retained messages: %v", fetchErrors)
+		return nil, fmt.Errorf("failed to fetch retained messages: %w", errors.Join(fetchErrors...))
 	}
 
 	// Log warnings for partial failures but still return successful fetches
@@ -353,7 +354,12 @@ func (h *RetainedStore) watchRetainedData() {
 		case <-h.stopCh:
 			return
 
-		case resp := <-dataChan:
+		case resp, ok := <-dataChan:
+			if !ok {
+				h.logger.Warn("watch channel closed on retained-data, restarting")
+				dataChan = h.etcdClient.Watch(ctx, retainedDataPrefix, clientv3.WithPrefix())
+				continue
+			}
 			if resp.Err() != nil {
 				h.logger.Error("watch error on retained-data",
 					slog.String("error", resp.Err().Error()))
@@ -361,7 +367,12 @@ func (h *RetainedStore) watchRetainedData() {
 			}
 			h.handleDataWatchEvents(resp.Events)
 
-		case resp := <-indexChan:
+		case resp, ok := <-indexChan:
+			if !ok {
+				h.logger.Warn("watch channel closed on retained-index, restarting")
+				indexChan = h.etcdClient.Watch(ctx, retainedIndexPrefix, clientv3.WithPrefix())
+				continue
+			}
 			if resp.Err() != nil {
 				h.logger.Error("watch error on retained-index",
 					slog.String("error", resp.Err().Error()))
