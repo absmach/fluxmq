@@ -24,6 +24,7 @@ const (
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
 	Broker       BrokerConfig       `yaml:"broker"`
+	Auth         AuthConfig         `yaml:"auth"`
 	Session      SessionConfig      `yaml:"session"`
 	Log          LogConfig          `yaml:"log"`
 	Storage      StorageConfig      `yaml:"storage"`
@@ -97,6 +98,20 @@ type QueueManagerConfig struct {
 	// AutoCommitInterval controls how often stream groups auto-commit offsets.
 	// Zero means commit on every delivery batch.
 	AutoCommitInterval time.Duration `yaml:"auto_commit_interval"`
+}
+
+// AuthConfig holds broker authn/authz integration configuration.
+type AuthConfig struct {
+	SuperMQ SuperMQAuthConfig `yaml:"supermq"`
+}
+
+// SuperMQAuthConfig configures SuperMQ-backed authorizer integration.
+type SuperMQAuthConfig struct {
+	Enabled    bool          `yaml:"enabled"`
+	Address    string        `yaml:"address"`
+	Timeout    time.Duration `yaml:"timeout"`
+	ClientType string        `yaml:"client_type"`
+	Insecure   bool          `yaml:"insecure"`
 }
 
 // RateLimitConfig holds rate limiting configuration.
@@ -598,6 +613,15 @@ func Default() *Config {
 			MaxQoS:              2, // Support all QoS levels
 			AsyncFanOut:         false,
 			FanOutWorkers:       0, // 0 = GOMAXPROCS
+		},
+		Auth: AuthConfig{
+			SuperMQ: SuperMQAuthConfig{
+				Enabled:    false,
+				Address:    "localhost:7005",
+				Timeout:    2 * time.Second,
+				ClientType: "client",
+				Insecure:   true,
+			},
 		},
 		Session: SessionConfig{
 			MaxSessions:           10000,
@@ -1221,6 +1245,18 @@ func (c *Config) Validate() error {
 			if q.Replication.AckTimeout <= 0 {
 				return fmt.Errorf("queues[%d].replication.ack_timeout must be > 0", i)
 			}
+		}
+	}
+
+	if c.Auth.SuperMQ.Enabled {
+		if strings.TrimSpace(c.Auth.SuperMQ.Address) == "" {
+			return fmt.Errorf("auth.supermq.address is required when auth.supermq.enabled is true")
+		}
+		if c.Auth.SuperMQ.Timeout < 0 {
+			return fmt.Errorf("auth.supermq.timeout cannot be negative")
+		}
+		if strings.TrimSpace(c.Auth.SuperMQ.ClientType) == "" {
+			return fmt.Errorf("auth.supermq.client_type is required when auth.supermq.enabled is true")
 		}
 	}
 
