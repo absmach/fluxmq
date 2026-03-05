@@ -39,6 +39,34 @@ type Server struct {
 	mux    *mux.Router
 }
 
+func authFromQuery(r *mux.Message, remoteAddr string) (clientID, username, password string) {
+	clientID = "coap:" + remoteAddr
+
+	queries, err := r.Options().Queries()
+	if err != nil {
+		return clientID, "", ""
+	}
+
+	for _, q := range queries {
+		key, value, ok := strings.Cut(q, "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "client_id":
+			if value != "" {
+				clientID = value
+			}
+		case "username":
+			username = value
+		case "password", "authorization":
+			password = value
+		}
+	}
+
+	return clientID, username, password
+}
+
 // New creates a new CoAP server.
 func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	if logger == nil {
@@ -185,6 +213,30 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	if err != nil {
 		s.logger.Warn("coap_publish_read_body_error", slog.String("error", err.Error()))
 		s.sendResponse(w, r, codes.BadRequest, fmt.Sprintf("failed to read body: %v", err))
+		return
+	}
+
+	remoteAddr := ""
+	if addr := w.Conn().RemoteAddr(); addr != nil {
+		remoteAddr = addr.String()
+	}
+
+	// Placeholder bridge-level auth hook. A concrete SuperMQ-backed auth
+	// implementation will be wired in a follow-up step.
+	clientID, username, password := authFromQuery(r, remoteAddr)
+	authenticated, err := s.broker.Authenticate(clientID, username, password)
+	if err != nil || !authenticated {
+		s.logger.Warn("coap_publish_auth_failed",
+			slog.String("client_id", clientID),
+			slog.String("topic", topic))
+		s.sendResponse(w, r, codes.Unauthorized, "unauthorized")
+		return
+	}
+	if !s.broker.CanPublish(clientID, topic) {
+		s.logger.Warn("coap_publish_forbidden",
+			slog.String("client_id", clientID),
+			slog.String("topic", topic))
+		s.sendResponse(w, r, codes.Forbidden, "forbidden")
 		return
 	}
 

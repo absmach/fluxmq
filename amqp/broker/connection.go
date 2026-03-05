@@ -11,11 +11,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/absmach/fluxmq/amqp/codec"
+	"github.com/absmach/fluxmq/amqp1/sasl"
 	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
@@ -75,6 +77,7 @@ func (c *Connection) nextDeliveryTag() uint64 {
 // run executes the full connection lifecycle.
 func (c *Connection) run() error {
 	defer c.cleanup()
+	c.connID = c.conn.RemoteAddr().String()
 
 	if err := c.negotiateProtocol(); err != nil {
 		return fmt.Errorf("protocol negotiation: %w", err)
@@ -84,7 +87,6 @@ func (c *Connection) run() error {
 		return fmt.Errorf("connection handshake: %w", err)
 	}
 
-	c.connID = c.conn.RemoteAddr().String()
 	c.broker.registerConnection(c.connID, c)
 	c.broker.stats.IncrementConnections()
 	if cl := c.broker.cluster; cl != nil {
@@ -154,9 +156,12 @@ func (c *Connection) connectionHandshake() error {
 	if err != nil {
 		return err
 	}
-	_, ok := decoded.(*codec.ConnectionStartOk)
+	startOK, ok := decoded.(*codec.ConnectionStartOk)
 	if !ok {
 		return fmt.Errorf("expected Connection.StartOk, got %T", decoded)
+	}
+	if err := c.authenticate(startOK); err != nil {
+		return err
 	}
 
 	// Send Connection.Tune
@@ -211,6 +216,36 @@ func (c *Connection) connectionHandshake() error {
 	// Send Connection.OpenOk
 	openOk := &codec.ConnectionOpenOk{}
 	return c.writeMethod(0, openOk)
+}
+
+func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
+	auth := c.broker.auth
+	if auth == nil {
+		return nil
+	}
+
+	// Placeholder credential extraction for PLAIN/AMQPLAIN during migration.
+	// This will be replaced by SuperMQ-backed authenticator wiring.
+	mechanism := strings.ToUpper(strings.TrimSpace(start.Mechanism))
+	switch mechanism {
+	case "PLAIN", "AMQPLAIN":
+		_, username, password, err := sasl.ParsePLAIN([]byte(start.Response))
+		if err != nil {
+			_ = c.sendConnectionClose(codec.AccessRefused, "invalid auth response", codec.ClassConnection, codec.MethodConnectionStartOk)
+			return fmt.Errorf("invalid %s auth response: %w", mechanism, err)
+		}
+
+		clientID := PrefixedClientID(c.connID)
+		ok, err := auth.Authenticate(clientID, username, password)
+		if err != nil || !ok {
+			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
+			return fmt.Errorf("%s auth rejected for user %q", mechanism, username)
+		}
+		return nil
+	default:
+		_ = c.sendConnectionClose(codec.CommandInvalid, "unsupported auth mechanism", codec.ClassConnection, codec.MethodConnectionStartOk)
+		return fmt.Errorf("unsupported auth mechanism %q", start.Mechanism)
+	}
 }
 
 // processFrames is the main frame processing loop.

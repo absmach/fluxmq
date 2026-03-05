@@ -228,6 +228,24 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 	b.auth = auth
 }
 
+// Authenticate validates credentials using the configured auth engine.
+// Returns true when auth is not configured.
+func (b *Broker) Authenticate(clientID, username, password string) (bool, error) {
+	if b.auth == nil {
+		return true, nil
+	}
+	return b.auth.Authenticate(clientID, username, password)
+}
+
+// CanPublish checks publish authorization for a client/topic pair.
+// Returns true when authz is not configured.
+func (b *Broker) CanPublish(clientID, topic string) bool {
+	if b.auth == nil {
+		return true
+	}
+	return b.auth.CanPublish(clientID, topic)
+}
+
 // SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.
 func (b *Broker) SetClientRateLimiter(rl broker.RateLimiter) {
 	b.rateLimiter = rl

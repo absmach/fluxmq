@@ -334,6 +334,15 @@ func (ch *Channel) completePublish() {
 		topic = exchangeName + "/" + routingKey
 	}
 
+	if auth := ch.conn.broker.auth; auth != nil {
+		clientID := PrefixedClientID(ch.conn.connID)
+		if !auth.CanPublish(clientID, topic) {
+			ch.conn.logger.Warn("publish denied", "client_id", clientID, "topic", topic)
+			_ = ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
+			return
+		}
+	}
+
 	// Route through resolver for default-exchange queue operations.
 	resolver := ch.conn.broker.routeResolver
 	if exchangeName == "" {
@@ -1010,6 +1019,14 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	mqttFilter := ""
 	if !isQueue {
 		mqttFilter = topics.AMQPFilterToMQTT(queueFilter)
+	}
+
+	if auth := ch.conn.broker.auth; auth != nil {
+		clientID := PrefixedClientID(ch.conn.connID)
+		if !auth.CanSubscribe(clientID, queueFilter) {
+			ch.conn.logger.Warn("subscribe denied", "client_id", clientID, "filter", queueFilter)
+			return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe not authorized", codec.ClassBasic, codec.MethodBasicConsume)
+		}
 	}
 
 	queueInfo := ch.getQueueInfo(queueFilter)

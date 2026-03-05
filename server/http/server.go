@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/absmach/fluxmq/mqtt/broker"
@@ -94,6 +95,35 @@ type publishRequest struct {
 	Retain  bool   `json:"retain"`
 }
 
+func authFromRequest(r *http.Request) (clientID, username, password string) {
+	clientID = strings.TrimSpace(r.Header.Get("X-FluxMQ-Client-ID"))
+	if clientID == "" {
+		clientID = "http:" + r.RemoteAddr
+	}
+
+	if user, pass, ok := r.BasicAuth(); ok {
+		username = user
+		password = pass
+	}
+	if username == "" {
+		username = strings.TrimSpace(r.Header.Get("X-FluxMQ-Username"))
+	}
+	if password == "" {
+		password = strings.TrimSpace(r.Header.Get("X-FluxMQ-Password"))
+	}
+	if password == "" {
+		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+		lower := strings.ToLower(authHeader)
+		if strings.HasPrefix(lower, "bearer ") {
+			password = strings.TrimSpace(authHeader[len("Bearer "):])
+		} else {
+			password = authHeader
+		}
+	}
+
+	return clientID, username, password
+}
+
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -114,6 +144,25 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 	if req.QoS > 2 {
 		http.Error(w, "qos must be 0, 1, or 2", http.StatusBadRequest)
+		return
+	}
+
+	// Placeholder bridge-level auth hook. A concrete SuperMQ-backed auth
+	// implementation will be wired in a follow-up step.
+	clientID, username, password := authFromRequest(r)
+	authenticated, err := s.broker.Authenticate(clientID, username, password)
+	if err != nil || !authenticated {
+		s.logger.Warn("http_publish_auth_failed",
+			slog.String("client_id", clientID),
+			slog.String("topic", req.Topic))
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.broker.CanPublish(clientID, req.Topic) {
+		s.logger.Warn("http_publish_forbidden",
+			slog.String("client_id", clientID),
+			slog.String("topic", req.Topic))
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 

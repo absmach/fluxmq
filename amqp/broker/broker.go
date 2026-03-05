@@ -49,6 +49,7 @@ type Broker struct {
 	router              *router.TrieRouter
 	routeResolver       *corebroker.RoutingResolver
 	queueManager        channelQueueManager
+	auth                *corebroker.AuthEngine
 	cluster             cluster.Cluster
 	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration
@@ -76,6 +77,11 @@ func (b *Broker) GetStats() *Stats { return b.stats }
 // SetQueueManager sets the queue manager for the broker.
 func (b *Broker) SetQueueManager(qm corebroker.StreamQueueManager) {
 	b.queueManager = qm
+}
+
+// SetAuthEngine sets the authentication and authorization engine.
+func (b *Broker) SetAuthEngine(auth *corebroker.AuthEngine) {
+	b.auth = auth
 }
 
 // SetCluster sets the cluster reference for cross-node pub/sub routing.
