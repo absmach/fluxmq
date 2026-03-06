@@ -132,7 +132,9 @@ type Broker struct {
 	crossDeliver  broker.CrossDeliverFunc // nil if cross-protocol local pub/sub disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
-	rateLimiter   broker.RateLimiter // nil if rate limiting disabled
+	rateLimiter   broker.RateLimiter    // nil if rate limiting disabled
+	eventHook     broker.EventHook      // nil if no event hooks configured
+	topicRewriter broker.TopicRewriter  // nil if no topic rewriting configured
 	stopCh        chan struct{}
 	shuttingDown  atomic.Bool
 	closed        atomic.Bool
@@ -251,6 +253,16 @@ func (b *Broker) SetClientRateLimiter(rl broker.RateLimiter) {
 	b.rateLimiter = rl
 }
 
+// SetEventHook sets the event hook for lifecycle notifications.
+func (b *Broker) SetEventHook(h broker.EventHook) {
+	b.eventHook = h
+}
+
+// SetTopicRewriter sets the topic rewriter for publish/subscribe topic transformation.
+func (b *Broker) SetTopicRewriter(r broker.TopicRewriter) {
+	b.topicRewriter = r
+}
+
 // SetMaxQoS sets the maximum QoS level supported by this broker.
 // Valid values are 0, 1, or 2. Default is 2.
 func (b *Broker) SetMaxQoS(qos byte) {
@@ -263,6 +275,16 @@ func (b *Broker) SetMaxQoS(qos byte) {
 // MaxQoS returns the maximum QoS level supported by this broker.
 func (b *Broker) MaxQoS() byte {
 	return b.cfg.maxQoS
+}
+
+// NotifyConnect fires the event hook for a successful client connection.
+// Should be called by protocol handlers after CONNACK is sent.
+func (b *Broker) NotifyConnect(clientID, username, protocol string) {
+	if b.eventHook != nil {
+		if err := b.eventHook.OnConnect(context.Background(), clientID, username, protocol); err != nil {
+			b.logError("event_hook_connect", err, slog.String("client_id", clientID))
+		}
+	}
 }
 
 func (b *Broker) logOp(op string, attrs ...any) {

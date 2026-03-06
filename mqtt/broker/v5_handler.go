@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"time"
@@ -161,6 +162,8 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		slog.Duration("duration", time.Since(start)),
 	)
 
+	h.broker.NotifyConnect(clientID, p.Username, "mqtt5")
+
 	h.deliverOfflineMessages(s)
 
 	return h.broker.runSession(h, s)
@@ -227,6 +230,15 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	if err := topics.ValidateTopicName(topic); err != nil {
 		return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic name invalid", ErrTopicInvalid)
+	}
+
+	// Rewrite topic (e.g., name→ID resolution) before auth and routing
+	if h.broker.auth != nil {
+		rewritten, err := h.broker.auth.RewritePublishTopic(context.Background(), s.ID, topic)
+		if err != nil {
+			return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic rewrite failed", ErrTopicInvalid)
+		}
+		topic = rewritten
 	}
 
 	if h.broker.auth != nil && !h.broker.auth.CanPublish(s.ID, topic) {
@@ -474,6 +486,16 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		if t.MaxQoS > 2 {
 			reasonCodes[i] = v5.SubAckTopicFilterInvalid
 			continue
+		}
+
+		// Rewrite topic filter before auth and routing
+		if h.broker.auth != nil {
+			rewritten, err := h.broker.auth.RewriteSubscribeTopic(context.Background(), s.ID, t.Topic)
+			if err != nil {
+				reasonCodes[i] = v5.SubAckTopicFilterInvalid
+				continue
+			}
+			t.Topic = rewritten
 		}
 
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Topic) {

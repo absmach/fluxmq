@@ -94,6 +94,13 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		})
 	}
 
+	// Event hook: message published
+	if b.eventHook != nil {
+		if err := b.eventHook.OnPublish(context.Background(), msg.PublisherID, msg.Topic, msg.QoS, msg.GetPayload()); err != nil {
+			b.logError("event_hook_publish", err, slog.String("topic", msg.Topic))
+		}
+	}
+
 	// Distribute message to subscribers (this will retain the buffer as needed)
 	err := b.distribute(msg)
 
