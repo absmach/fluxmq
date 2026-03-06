@@ -16,13 +16,6 @@ type EventHook interface {
 	Close() error
 }
 
-// TopicRewriter rewrites topics before routing.
-// This enables name-to-ID resolution, prefix injection, or other transformations.
-type TopicRewriter interface {
-	RewritePublish(ctx context.Context, clientID, topic string) (string, error)
-	RewriteSubscribe(ctx context.Context, clientID, topic string) (string, error)
-}
-
 // ChainedEventHook composes multiple EventHook implementations.
 // Hooks are called in order; first error short-circuits.
 type ChainedEventHook struct {

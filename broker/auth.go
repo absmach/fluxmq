@@ -3,8 +3,6 @@
 
 package broker
 
-import "context"
-
 // Authenticator validates client credentials.
 type Authenticator interface {
 	Authenticate(clientID, username, secret string) (bool, error)
@@ -16,39 +14,15 @@ type Authorizer interface {
 	CanSubscribe(clientID string, filter string) bool
 }
 
-// AuthEngine handles authentication, authorization, and topic rewriting.
+// AuthEngine handles authentication and authorization.
 type AuthEngine struct {
-	auth     Authenticator
-	authz    Authorizer
-	rewriter TopicRewriter
+	auth  Authenticator
+	authz Authorizer
 }
 
 // NewAuthEngine creates a new AuthEngine with the given authenticator and authorizer.
 func NewAuthEngine(auth Authenticator, authz Authorizer) *AuthEngine {
 	return &AuthEngine{auth: auth, authz: authz}
-}
-
-// SetTopicRewriter configures topic rewriting before authorization checks.
-func (e *AuthEngine) SetTopicRewriter(r TopicRewriter) {
-	e.rewriter = r
-}
-
-// RewritePublishTopic rewrites a publish topic using the configured rewriter.
-// Returns the original topic if no rewriter is configured.
-func (e *AuthEngine) RewritePublishTopic(ctx context.Context, clientID, topic string) (string, error) {
-	if e.rewriter == nil {
-		return topic, nil
-	}
-	return e.rewriter.RewritePublish(ctx, clientID, topic)
-}
-
-// RewriteSubscribeTopic rewrites a subscribe topic using the configured rewriter.
-// Returns the original topic if no rewriter is configured.
-func (e *AuthEngine) RewriteSubscribeTopic(ctx context.Context, clientID, topic string) (string, error) {
-	if e.rewriter == nil {
-		return topic, nil
-	}
-	return e.rewriter.RewriteSubscribe(ctx, clientID, topic)
 }
 
 // CanPublish checks if a client is authorized to publish to a topic.
