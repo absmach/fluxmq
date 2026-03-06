@@ -247,16 +247,23 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 // handleDisconnect handles session disconnect.
 func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	// Webhook: client disconnected
+	disconnectReason := "normal"
+	if !graceful {
+		disconnectReason = "error"
+	}
 	if b.telemetry.webhooks != nil {
-		reason := "normal"
-		if !graceful {
-			reason = "error"
-		}
 		b.telemetry.webhooks.Notify(context.Background(), events.ClientDisconnected{
 			ClientID:   s.ID,
-			Reason:     reason,
+			Reason:     disconnectReason,
 			RemoteAddr: "", // Not available at broker level
 		})
+	}
+
+	// Event hook: client disconnected
+	if b.eventHook != nil {
+		if err := b.eventHook.OnDisconnect(context.Background(), s.ID, disconnectReason); err != nil {
+			b.logError("event_hook_disconnect", err, slog.String("client_id", s.ID))
+		}
 	}
 
 	if b.stores.sessions != nil {
