@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -98,7 +99,7 @@ type publishRequest struct {
 func authFromRequest(r *http.Request) (clientID, username, password string) {
 	clientID = strings.TrimSpace(r.Header.Get("X-FluxMQ-Client-ID"))
 	if clientID == "" {
-		clientID = "http:" + r.RemoteAddr
+		clientID = corebroker.HTTPClientPrefix + r.RemoteAddr
 	}
 
 	if user, pass, ok := r.BasicAuth(); ok {

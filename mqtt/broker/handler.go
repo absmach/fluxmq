@@ -90,17 +90,6 @@ type Router interface {
 	MatchInto(topic string, matched *[]*storage.Subscription) error
 }
 
-// Authenticator validates client credentials.
-type Authenticator interface {
-	Authenticate(clientID, username, password string) (bool, error)
-}
-
-// Authorizer checks topic permissions.
-type Authorizer interface {
-	CanPublish(clientID string, topic string) bool
-	CanSubscribe(clientID string, filter string) bool
-}
-
 // Service defines the broker service interface for middleware wrapping.
 type Service interface {
 	HandleConnection(conn core.Connection)

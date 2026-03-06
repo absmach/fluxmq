@@ -141,6 +141,8 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		slog.Duration("duration", time.Since(start)),
 	)
 
+	h.broker.NotifyConnect(clientID, p.Username, "mqtt3")
+
 	h.deliverOfflineMessages(s)
 
 	return h.broker.runSession(h, s)

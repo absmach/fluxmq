@@ -348,8 +348,10 @@ type mockAuth struct {
 	acceptPass string
 }
 
-func (m *mockAuth) Authenticate(clientID, username, password string) (bool, error) {
-	return username == m.acceptUser && password == m.acceptPass, nil
+func (m *mockAuth) Authenticate(clientID, username, password string) (*broker.AuthnResult, error) {
+	return &broker.AuthnResult{
+		Authenticated: username == m.acceptUser && password == m.acceptPass,
+	}, nil
 }
 
 type mockAuthz struct{}

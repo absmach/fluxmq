@@ -18,6 +18,7 @@ import (
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/broker/authcallout"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
@@ -308,6 +309,21 @@ func main() {
 	// Create AMQP 0.9.1 broker (needs queue manager set later)
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
+
+	// Configure auth callout
+	if cfg.Auth.URL != "" {
+		calloutClient := authcallout.NewClient(nil, cfg.Auth.URL,
+			authcallout.WithTimeout(cfg.Auth.Timeout),
+			authcallout.WithLogger(logger),
+		)
+		authEngine := corebroker.NewAuthEngine(calloutClient, calloutClient)
+		b.SetAuthEngine(authEngine)
+		amqpBroker.SetAuthEngine(authEngine)
+		amqp091Broker.SetAuthEngine(authEngine)
+		slog.Info("Auth callout enabled", "url", cfg.Auth.URL, "timeout", cfg.Auth.Timeout)
+	} else {
+		slog.Info("Auth callout disabled")
+	}
 
 	// Shared local pub/sub router (MQTT + AMQP 0.9.1 + AMQP 1.0).
 	sharedRouter := router.NewRouter()
