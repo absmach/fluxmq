@@ -133,9 +133,8 @@ type Broker struct {
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
 	rateLimiter   broker.RateLimiter    // nil if rate limiting disabled
-	eventHook     broker.EventHook      // nil if no event hooks configured
-	topicRewriter broker.TopicRewriter  // nil if no topic rewriting configured
-	stopCh        chan struct{}
+	eventHook    broker.EventHook // nil if no event hooks configured
+	stopCh       chan struct{}
 	shuttingDown  atomic.Bool
 	closed        atomic.Bool
 	sharedSubs    *SharedSubscriptionManager
@@ -256,11 +255,6 @@ func (b *Broker) SetClientRateLimiter(rl broker.RateLimiter) {
 // SetEventHook sets the event hook for lifecycle notifications.
 func (b *Broker) SetEventHook(h broker.EventHook) {
 	b.eventHook = h
-}
-
-// SetTopicRewriter sets the topic rewriter for publish/subscribe topic transformation.
-func (b *Broker) SetTopicRewriter(r broker.TopicRewriter) {
-	b.topicRewriter = r
 }
 
 // SetMaxQoS sets the maximum QoS level supported by this broker.

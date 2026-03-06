@@ -4,7 +4,6 @@
 package broker
 
 import (
-	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -187,19 +186,6 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 			slog.String("client_id", s.ID),
 			slog.String("topic", topic))
 		return ErrTopicInvalid
-	}
-
-	// Rewrite topic (e.g., name→ID resolution) before auth and routing
-	if h.broker.auth != nil {
-		rewritten, err := h.broker.auth.RewritePublishTopic(context.Background(), s.ID, topic)
-		if err != nil {
-			h.broker.telemetry.logger.Warn("v3_publish_rewrite_failed",
-				slog.String("client_id", s.ID),
-				slog.String("topic", topic),
-				slog.String("error", err.Error()))
-			return ErrTopicInvalid
-		}
-		topic = rewritten
 	}
 
 	// Downgrade QoS if it exceeds server's maximum
@@ -408,18 +394,6 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 		if t.QoS > 2 {
 			reasonCodes[i] = v3.SubAckFailure
 			continue
-		}
-
-		// Rewrite topic filter before auth and routing
-		filter := t.Name
-		if h.broker.auth != nil {
-			rewritten, err := h.broker.auth.RewriteSubscribeTopic(context.Background(), s.ID, filter)
-			if err != nil {
-				reasonCodes[i] = v3.SubAckFailure
-				continue
-			}
-			filter = rewritten
-			t.Name = filter
 		}
 
 		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Name) {
