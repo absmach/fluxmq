@@ -1,0 +1,67 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package fluxmq.auth.v1;
+
+// AuthService is a callout service for external authentication and
+// authorization. Broker implementations call this service during CONNECT,
+// PUBLISH, and SUBSCRIBE to delegate credential validation and topic-level
+// access control to an external provider.
+service AuthService {
+  // Authenticate validates client credentials presented during CONNECT.
+  // The server resolves the credentials to an external identity (e.g. a UUID)
+  // which the broker stores on the session and passes in subsequent Authorize
+  // calls.
+  rpc Authenticate(AuthnReq) returns (AuthnRes);
+
+  // Authorize checks whether a previously authenticated identity is allowed
+  // to perform a given action on a topic. The topic is passed as-is; any
+  // parsing, route resolution, or mapping is the server's responsibility.
+  rpc Authorize(AuthzReq) returns (AuthzRes);
+}
+
+message AuthnReq {
+  // MQTT ClientID from the CONNECT packet.
+  string client_id = 1;
+  // Username from the CONNECT packet.
+  string username = 2;
+  // Password from the CONNECT packet.
+  string password = 3;
+}
+
+message AuthnRes {
+  // Whether the credentials are valid.
+  bool authenticated = 1;
+  // External identity resolved by the auth provider (e.g. a client UUID).
+  // The broker stores this on the session and passes it in AuthzReq.
+  string id = 2;
+  // Machine-readable reason code (0 = success).
+  uint32 reason_code = 3;
+  // Human-readable reason for rejection (empty on success).
+  string reason = 4;
+}
+
+message AuthzReq {
+  // External identity returned from AuthnRes.id.
+  string external_id = 1;
+  // Raw topic or topic filter from the PUBLISH/SUBSCRIBE packet.
+  string topic = 2;
+  // The action being requested.
+  Action action = 3;
+}
+
+enum Action {
+  ACTION_PUBLISH = 0;
+  ACTION_SUBSCRIBE = 1;
+}
+
+message AuthzRes {
+  // Whether the action is authorized.
+  bool authorized = 1;
+  // Machine-readable reason code (0 = authorized).
+  uint32 reason_code = 2;
+  // Human-readable reason for rejection (empty on success).
+  string reason = 3;
+}
