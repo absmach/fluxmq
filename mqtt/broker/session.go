@@ -246,6 +246,10 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 
 // handleDisconnect handles session disconnect.
 func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
+	if b.auth != nil {
+		b.auth.Forget(s.ID)
+	}
+
 	// Webhook: client disconnected
 	disconnectReason := "normal"
 	if !graceful {

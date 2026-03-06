@@ -32,6 +32,15 @@ type Config struct {
 	RateLimit    RateLimitConfig    `yaml:"ratelimit"`
 	QueueManager QueueManagerConfig `yaml:"queue_manager"`
 	Queues       []QueueConfig      `yaml:"queues"`
+	Auth         AuthConfig         `yaml:"auth"`
+}
+
+// AuthConfig configures the external authentication/authorization callout.
+type AuthConfig struct {
+	// URL is the ConnectRPC/gRPC server address (e.g. "http://localhost:9090").
+	// When empty, auth callout is disabled.
+	URL     string        `yaml:"url"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // QueueConfig defines configuration for a persistent queue.
