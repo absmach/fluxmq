@@ -16,6 +16,12 @@ plugins:
     opt:
       - paths=source_relative
 
+  # Standard gRPC server/client stubs
+  - remote: buf.build/grpc/go
+    out: pkg/proto
+    opt:
+      - paths=source_relative
+
   # Connect-Go for gRPC + HTTP support
   - remote: buf.build/connectrpc/go
     out: pkg/proto

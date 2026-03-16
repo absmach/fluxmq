@@ -8,6 +8,8 @@ import "strings"
 const (
 	AMQP091ClientPrefix = "amqp091-"
 	AMQP1ClientPrefix   = "amqp:"
+	HTTPClientPrefix    = "http:"
+	CoAPClientPrefix    = "coap:"
 )
 
 // CrossDeliverFunc delivers a pub/sub message to a client in another protocol broker.

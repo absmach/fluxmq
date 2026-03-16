@@ -161,6 +161,8 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		slog.Duration("duration", time.Since(start)),
 	)
 
+	h.broker.NotifyConnect(clientID, p.Username, "mqtt5")
+
 	h.deliverOfflineMessages(s)
 
 	return h.broker.runSession(h, s)

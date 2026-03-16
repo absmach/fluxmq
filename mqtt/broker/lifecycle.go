@@ -204,6 +204,13 @@ func (b *Broker) Close() error {
 		}
 	}
 
+	// Close event hook if enabled
+	if b.eventHook != nil {
+		if err := b.eventHook.Close(); err != nil {
+			b.logError("close_event_hook", err)
+		}
+	}
+
 	// Stop queue manager if enabled
 	if b.queueManager != nil {
 		if err := b.queueManager.Stop(); err != nil {

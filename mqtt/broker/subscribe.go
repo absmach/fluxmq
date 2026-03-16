@@ -108,6 +108,13 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 		})
 	}
 
+	// Event hook: subscription created
+	if b.eventHook != nil {
+		if err := b.eventHook.OnSubscribe(context.Background(), s.ID, filter, qos); err != nil {
+			b.logError("event_hook_subscribe", err, slog.String("client_id", s.ID), slog.String("filter", filter))
+		}
+	}
+
 	return nil
 }
 
@@ -174,6 +181,13 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 			ClientID:    s.ID,
 			TopicFilter: filter,
 		})
+	}
+
+	// Event hook: subscription removed
+	if b.eventHook != nil {
+		if err := b.eventHook.OnUnsubscribe(context.Background(), s.ID, filter); err != nil {
+			b.logError("event_hook_unsubscribe", err, slog.String("client_id", s.ID), slog.String("filter", filter))
+		}
 	}
 
 	return nil
