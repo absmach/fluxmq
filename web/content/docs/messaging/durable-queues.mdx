@@ -518,11 +518,39 @@ ch.Consume(
 ```
 
 Stream offset options:
+- *(omitted)* - Resume from the last committed offset, or start from the beginning if no prior state exists (default)
 - `"first"` - Start from the beginning of the log
 - `"last"` or `"next"` - Start from the end (new messages only)
 - `123` (number) - Start from specific offset
 - `"offset=123"` - Same as above, string format
 - `"timestamp=1706745600000"` - Start from timestamp (unix millis)
+
+When `x-stream-offset` is omitted the broker uses **resume semantics**: if the
+consumer group already has a stored committed offset it picks up where it left
+off; otherwise it starts from the beginning of the log. This is the recommended
+default for event-sourcing and long-lived consumers that should never miss
+messages after a reconnect.
+
+#### Filtered Stream Subscriptions
+
+A consumer can subscribe to a subset of messages in a stream queue by using a
+topic filter. The broker routes only matching messages to the consumer while
+sharing the same underlying log.
+
+```go
+ch.Consume(
+    "$queue/events/sensors/#",  // queue name + topic filter
+    "consumer-tag",
+    false, false, false, false,
+    amqp091.Table{
+        "x-consumer-group": "sensor-readers",
+    },
+)
+```
+
+The filter follows MQTT topic semantics (`+` single-level, `#` multi-level).
+Each filter + consumer group combination maintains an independent cursor, so
+multiple groups can track different subsets of the same stream independently.
 
 Manual commit (when `x-auto-commit: false`):
 
@@ -591,6 +619,25 @@ A background retention loop computes a **safe truncation offset** and truncates 
 - Truncate the log to the lowest safe offset (segment-granular in log storage).
 
 See [Storage internals](/docs/architecture/storage) for on-disk format and retention behavior details.
+
+### Per-Message TTL
+
+In addition to queue-level retention, each message can have an individual time-to-live controlled by the `message_ttl` queue setting. When a message's TTL expires, it is silently skipped during delivery — consumers never see it.
+
+```yaml
+queues:
+  - name: "tasks"
+    topics: ["$queue/tasks/#"]
+    limits:
+      message_ttl: "30m"   # messages expire 30 minutes after publish
+```
+
+Key behavior:
+
+- The expiry timestamp is computed at publish time (`created_at + message_ttl`) and persisted with the message.
+- Both classic (queue-mode) and stream consumers skip expired messages. In queue mode, expired messages never enter the pending entry list.
+- Setting `message_ttl` to `0` disables per-message expiry. Messages then live until queue-level retention truncates them.
+- Per-message TTL and queue-level retention are complementary. TTL prevents delivery of stale individual messages; retention reclaims storage by truncating the head of the log in bulk.
 
 ## Clustering and Replication Notes
 

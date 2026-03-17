@@ -336,19 +336,29 @@ func main() {
 			}
 		}
 
-		mqttAuthn, mqttAuthz := newClient(authcallout.ProtocolMQTT)
-		b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz))
+		if cfg.Auth.AuthEnabledFor("mqtt") {
+			mqttAuthn, mqttAuthz := newClient(authcallout.ProtocolMQTT)
+			b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz))
+			slog.Info("Auth callout enabled for mqtt")
+		}
 
-		amqpAuthn, amqpAuthz := newClient(authcallout.ProtocolAMQP10)
-		amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz))
+		if cfg.Auth.AuthEnabledFor("amqp") {
+			amqpAuthn, amqpAuthz := newClient(authcallout.ProtocolAMQP10)
+			amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz))
+			slog.Info("Auth callout enabled for amqp")
+		}
 
-		amqp091Authn, amqp091Authz := newClient(authcallout.ProtocolAMQP091)
-		amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz))
+		if cfg.Auth.AuthEnabledFor("amqp091") {
+			amqp091Authn, amqp091Authz := newClient(authcallout.ProtocolAMQP091)
+			amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz))
+			slog.Info("Auth callout enabled for amqp091")
+		}
 
-		slog.Info("Auth callout enabled",
+		slog.Info("Auth callout configured",
 			"url", cfg.Auth.URL,
 			"transport", transport,
-			"timeout", cfg.Auth.Timeout)
+			"timeout", cfg.Auth.Timeout,
+			"protocols", cfg.Auth.Protocols)
 	} else {
 		slog.Info("Auth callout disabled")
 	}

@@ -77,6 +77,12 @@ func (m *Message) SetPayloadFromBytes(data []byte) {
 	m.Payload = nil
 }
 
+// IsExpired reports whether the message has passed its expiry time.
+// Messages with a zero ExpiresAt are considered non-expiring.
+func (m *Message) IsExpired() bool {
+	return !m.ExpiresAt.IsZero() && time.Now().After(m.ExpiresAt)
+}
+
 // ReleasePayload releases the buffer reference if PayloadBuf is set.
 // This should be called when the message is no longer needed.
 func (m *Message) ReleasePayload() {

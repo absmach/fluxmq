@@ -248,6 +248,11 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 			return nil, err
 		}
 
+		// Skip expired messages
+		if msg.IsExpired() {
+			continue
+		}
+
 		if filter != nil {
 			queueRoot := "$queue/" + group.QueueName
 			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
@@ -322,6 +327,11 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 			return nil, err
 		}
 
+		// Skip expired messages
+		if msg.IsExpired() {
+			continue
+		}
+
 		// Check if message matches filter
 		if filter != nil {
 			queueRoot := "$queue/" + group.QueueName
@@ -374,6 +384,12 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 		msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
 		if err != nil {
 			continue // Message might be truncated
+		}
+
+		// Remove expired messages from PEL instead of redelivering
+		if msg.IsExpired() {
+			_ = m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset)
+			continue
 		}
 
 		// Check filter

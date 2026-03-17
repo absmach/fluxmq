@@ -6,6 +6,7 @@ package broker
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"testing"
@@ -13,6 +14,56 @@ import (
 	"github.com/absmach/fluxmq/amqp/codec"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 )
+
+type mockChannelQueueManager struct {
+	lastCursor *qtypes.CursorOption
+	queueCfg   *qtypes.QueueConfig
+}
+
+func (m *mockChannelQueueManager) Publish(context.Context, qtypes.PublishRequest) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) Subscribe(context.Context, string, string, string, string, string) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) SubscribeWithCursor(_ context.Context, _ string, _ string, _ string, _ string, _ string, cursor *qtypes.CursorOption) error {
+	m.lastCursor = cursor
+	return nil
+}
+
+func (m *mockChannelQueueManager) Unsubscribe(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) Ack(context.Context, string, string, string) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) Nack(context.Context, string, string, string) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) Reject(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) CreateQueue(context.Context, qtypes.QueueConfig) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) GetQueue(context.Context, string) (*qtypes.QueueConfig, error) {
+	return m.queueCfg, nil
+}
+
+func (m *mockChannelQueueManager) UpdateQueue(context.Context, qtypes.QueueConfig) error {
+	return nil
+}
+
+func (m *mockChannelQueueManager) CommitOffset(context.Context, string, string, uint64) error {
+	return nil
+}
 
 func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
 	t.Helper()
@@ -375,5 +426,58 @@ func TestParseStreamOffsetString(t *testing.T) {
 	ts, ok := parseStreamOffsetString("timestamp=1700000000")
 	if !ok || ts.Position != qtypes.CursorTimestamp || ts.Timestamp.IsZero() {
 		t.Fatalf("expected timestamp, got %+v", ts)
+	}
+}
+
+func TestHandleBasicConsumeDefaultsStreamCursorToResume(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+	ch.queues["events"] = &queueInfo{name: "events", queueType: string(qtypes.QueueTypeStream)}
+
+	err := ch.handleMethod(&codec.BasicConsume{
+		Queue:       "events",
+		ConsumerTag: "stream-reader",
+		NoWait:      true,
+	})
+	if err != nil {
+		t.Fatalf("handleMethod failed: %v", err)
+	}
+
+	if mockQM.lastCursor == nil {
+		t.Fatal("expected SubscribeWithCursor to be called")
+	}
+	if mockQM.lastCursor.Position != qtypes.CursorDefault {
+		t.Fatalf("expected default cursor position, got %+v", mockQM.lastCursor)
+	}
+	if mockQM.lastCursor.Mode != qtypes.GroupModeStream {
+		t.Fatalf("expected stream mode cursor, got %+v", mockQM.lastCursor)
+	}
+}
+
+func TestHandleBasicConsumeInfersStreamFromQueueManager(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{
+			Name: "events",
+			Type: qtypes.QueueTypeStream,
+		},
+	}
+	ch.conn.broker.queueManager = mockQM
+
+	err := ch.handleMethod(&codec.BasicConsume{
+		Queue:       "$queue/events/supermq/domain/#",
+		ConsumerTag: "stream-reader",
+		NoWait:      true,
+	})
+	if err != nil {
+		t.Fatalf("handleMethod failed: %v", err)
+	}
+
+	if mockQM.lastCursor == nil {
+		t.Fatal("expected SubscribeWithCursor to be called")
+	}
+	if mockQM.lastCursor.Position != qtypes.CursorDefault {
+		t.Fatalf("expected default cursor position, got %+v", mockQM.lastCursor)
 	}
 }

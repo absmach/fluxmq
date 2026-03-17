@@ -6,6 +6,7 @@ package logstorage
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
@@ -121,4 +122,82 @@ func TestAdapter_UpdateQueueRefreshesTopicIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
 	assert.Equal(t, "orders", matches[0])
+}
+
+func TestAdapter_ExpiresAtRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("q1", "$queue/q1/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	expiry := time.Now().Add(5 * time.Minute).Truncate(time.Millisecond)
+	msg := &types.Message{
+		ID:        "1",
+		Topic:     "$queue/q1/test",
+		Payload:   []byte("data"),
+		ExpiresAt: expiry,
+	}
+
+	offset, err := adapter.Append(ctx, "q1", msg)
+	require.NoError(t, err)
+
+	got, err := adapter.Read(ctx, "q1", offset)
+	require.NoError(t, err)
+	assert.Equal(t, expiry, got.ExpiresAt)
+}
+
+func TestAdapter_ExpiresAtZeroNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("q1", "$queue/q1/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	msg := &types.Message{
+		ID:      "1",
+		Topic:   "$queue/q1/test",
+		Payload: []byte("data"),
+	}
+
+	offset, err := adapter.Append(ctx, "q1", msg)
+	require.NoError(t, err)
+
+	got, err := adapter.Read(ctx, "q1", offset)
+	require.NoError(t, err)
+	assert.True(t, got.ExpiresAt.IsZero())
+}
+
+func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("q1", "$queue/q1/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	expiry := time.Now().Add(10 * time.Minute).Truncate(time.Millisecond)
+	msgs := []*types.Message{
+		{ID: "1", Topic: "$queue/q1/a", Payload: []byte("a"), ExpiresAt: expiry},
+		{ID: "2", Topic: "$queue/q1/b", Payload: []byte("b")},
+	}
+
+	_, err = adapter.AppendBatch(ctx, "q1", msgs)
+	require.NoError(t, err)
+
+	got0, err := adapter.Read(ctx, "q1", 0)
+	require.NoError(t, err)
+	assert.Equal(t, expiry, got0.ExpiresAt)
+
+	got1, err := adapter.Read(ctx, "q1", 1)
+	require.NoError(t, err)
+	assert.True(t, got1.ExpiresAt.IsZero())
 }

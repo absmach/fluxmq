@@ -186,6 +186,22 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid auth protocols",
+			modify: func(c *Config) {
+				c.Auth.URL = "localhost:7016"
+				c.Auth.Protocols = map[string]bool{"mqtt": true, "amqp091": false}
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown auth protocol",
+			modify: func(c *Config) {
+				c.Auth.URL = "localhost:7016"
+				c.Auth.Protocols = map[string]bool{"mqtt": true, "websocket": true}
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -251,6 +267,54 @@ func TestSaveLoad(t *testing.T) {
 	}
 	if loaded.Log.Level != "debug" {
 		t.Errorf("expected log level debug, got %s", loaded.Log.Level)
+	}
+}
+
+func TestAuthEnabledFor(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      AuthConfig
+		protocol string
+		want     bool
+	}{
+		{
+			name:     "no URL disables all",
+			cfg:      AuthConfig{},
+			protocol: "mqtt",
+			want:     false,
+		},
+		{
+			name:     "URL set, empty protocols enables all",
+			cfg:      AuthConfig{URL: "localhost:7016"},
+			protocol: "amqp091",
+			want:     true,
+		},
+		{
+			name:     "protocol explicitly enabled",
+			cfg:      AuthConfig{URL: "localhost:7016", Protocols: map[string]bool{"mqtt": true, "amqp091": false}},
+			protocol: "mqtt",
+			want:     true,
+		},
+		{
+			name:     "protocol explicitly disabled",
+			cfg:      AuthConfig{URL: "localhost:7016", Protocols: map[string]bool{"mqtt": true, "amqp091": false}},
+			protocol: "amqp091",
+			want:     false,
+		},
+		{
+			name:     "protocol not in map defaults to false",
+			cfg:      AuthConfig{URL: "localhost:7016", Protocols: map[string]bool{"mqtt": true}},
+			protocol: "amqp",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.AuthEnabledFor(tt.protocol); got != tt.want {
+				t.Fatalf("AuthEnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
+			}
+		})
 	}
 }
 

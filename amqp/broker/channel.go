@@ -1029,9 +1029,15 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		}
 	}
 
+	qm := ch.conn.broker.queueManager
 	queueInfo := ch.getQueueInfo(queueFilter)
 	streamCursor, hasStreamOffset := extractStreamOffset(m.Arguments)
 	isStream := (queueInfo != nil && queueInfo.queueType == string(qtypes.QueueTypeStream)) || hasStreamOffset
+	if !isStream && qm != nil && queueName != "" {
+		if cfg, err := qm.GetQueue(context.Background(), queueName); err == nil && cfg != nil && cfg.Type == qtypes.QueueTypeStream {
+			isStream = true
+		}
+	}
 	if isStream && !isQueue {
 		queueName = queueFilter
 		pattern = ""
@@ -1063,14 +1069,13 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	ch.conn.broker.stats.IncrementConsumers()
 
 	// Subscribe to the queue via queue manager
-	qm := ch.conn.broker.queueManager
 	if qm != nil && (isQueue || isStream) && queueName != "" {
 		clientID := PrefixedClientID(ch.conn.connID)
 		subGroupID := groupID
 		if isStream {
 			cursor := streamCursor
 			if cursor == nil {
-				cursor = &qtypes.CursorOption{Position: qtypes.CursorLatest}
+				cursor = &qtypes.CursorOption{Position: qtypes.CursorDefault}
 			}
 			cursor.Mode = qtypes.GroupModeStream
 			if autoCommit := extractAutoCommit(m.Arguments); autoCommit != nil {

@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/absmach/fluxmq/queue/storage"
@@ -201,6 +202,9 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 	if msg.State != "" {
 		headers["_state"] = []byte(msg.State)
 	}
+	if !msg.ExpiresAt.IsZero() {
+		headers["_expires_at"] = []byte(strconv.FormatInt(msg.ExpiresAt.UnixMilli(), 10))
+	}
 
 	return a.store.Append(queueName, value, key, headers)
 }
@@ -230,6 +234,9 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*typ
 		headers["_id"] = []byte(msg.ID)
 		if msg.State != "" {
 			headers["_state"] = []byte(msg.State)
+		}
+		if !msg.ExpiresAt.IsZero() {
+			headers["_expires_at"] = []byte(strconv.FormatInt(msg.ExpiresAt.UnixMilli(), 10))
 		}
 
 		batch.Append(value, key, headers)
@@ -628,6 +635,10 @@ func logMessageToTypes(msg *Message) *types.Message {
 			result.ID = string(v)
 		case "_state":
 			result.State = types.MessageState(v)
+		case "_expires_at":
+			if ms, err := strconv.ParseInt(string(v), 10, 64); err == nil {
+				result.ExpiresAt = time.UnixMilli(ms)
+			}
 		default:
 			result.Properties[k] = string(v)
 		}

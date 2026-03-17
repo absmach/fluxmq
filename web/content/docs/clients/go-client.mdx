@@ -686,11 +686,36 @@ if err != nil {
     log.Fatal(err)
 }
 
+// Consume a filtered subset of the stream (e.g. only sensor events)
+err = c.SubscribeToStream(&amqp.StreamConsumeOptions{
+    QueueName:     "events",
+    Filter:        "sensors/#",
+    ConsumerGroup: "sensor-readers",
+}, func(msg *amqp.QueueMessage) {
+    log.Printf("sensor event: %s", string(msg.Body))
+    _ = msg.Ack()
+})
+if err != nil {
+    log.Fatal(err)
+}
+
 // Publish to the stream queue (RabbitMQ-style)
 if err := c.PublishToStream("events", []byte("hello"), nil); err != nil {
     log.Fatal(err)
 }
 ```
+
+`StreamConsumeOptions` fields:
+
+| Field           | Description                                                                                                                                                                                                |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `QueueName`     | Name of the stream queue                                                                                                                                                                                   |
+| `Filter`        | Optional topic filter (e.g. `"sensors/#"`). Only matching messages are delivered. Each filter + consumer group gets an independent cursor                                                                  |
+| `ConsumerGroup` | Consumer group name for cursor tracking                                                                                                                                                                    |
+| `Offset`        | Starting position: `"first"`, `"last"`, `"next"`, `"offset=N"`, `"timestamp=N"`. When omitted, the consumer resumes from its last committed offset (or starts from the beginning if no prior state exists) |
+| `AutoAck`       | Auto-acknowledge messages on delivery                                                                                                                                                                      |
+| `AutoCommit`    | Pointer to bool. `nil` = auto-commit (default), `&false` = manual commit                                                                                                                                   |
+| `ConsumerTag`   | Optional AMQP consumer tag (auto-generated if empty)                                                                                                                                                       |
 
 Stream deliveries include:
 - `x-stream-offset`
@@ -720,9 +745,12 @@ _ = c.SubscribeToStream(&amqp.StreamConsumeOptions{
     QueueName:     "events",
     ConsumerGroup: "my-group",
     AutoCommit:    &autoCommit,
-}, handler)
-
-_ = c.CommitOffset("events", "my-group", lastProcessedOffset)
+}, func(msg *amqp.QueueMessage) {
+    if off, ok := msg.StreamOffset(); ok {
+        _ = msg.Ack()
+        _ = c.CommitOffset("events", "my-group", off+1)
+    }
+})
 ```
 
 Use the same consumer group name in both calls.
@@ -730,7 +758,11 @@ Use the same consumer group name in both calls.
 With manual commit:
 - Messages are delivered but the committed offset doesn't advance automatically
 - On reconnect, delivery resumes from the last committed offset
-- Use `CommitOffset()` to advance the committed position
+- Use `CommitOffset()` to advance the next safe resume position
+
+When `Offset` is omitted (the default), the consumer automatically resumes from
+its stored committed position. This applies to both auto-commit and manual-commit
+modes, and is the recommended approach for long-lived consumers and event sourcing.
 
 ### Pub/Sub
 

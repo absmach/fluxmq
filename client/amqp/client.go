@@ -372,7 +372,13 @@ func (c *Client) resubscribeAll() error {
 	c.subsMu.Unlock()
 
 	for _, sub := range queueSubs {
-		if err := c.subscribeQueue(sub); err != nil {
+		var err error
+		if sub.stream {
+			err = c.subscribeStream(sub, sub.streamOpts)
+		} else {
+			err = c.subscribeQueue(sub)
+		}
+		if err != nil {
 			return err
 		}
 	}

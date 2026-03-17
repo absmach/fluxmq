@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
@@ -359,4 +360,147 @@ func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, client
 		msg:       msg,
 	})
 	return nil
+}
+
+func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
+	var mu sync.Mutex
+	var delivered []*brokerstorage.Message
+
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		mu.Lock()
+		delivered = append(delivered, msg)
+		mu.Unlock()
+		return nil
+	})
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	logStore.CreateQueue(ctx, queueCfg)
+
+	group := types.NewConsumerGroupState("tasks", "workers", "")
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
+	groupStore.CreateConsumerGroup(ctx, group)
+
+	// Append an expired message then a valid one.
+	logStore.Append(ctx, "tasks", &types.Message{
+		ID:        "expired",
+		Topic:     "$queue/tasks/old",
+		Payload:   []byte("stale"),
+		ExpiresAt: time.Now().Add(-time.Second),
+	})
+	logStore.Append(ctx, "tasks", &types.Message{
+		ID:      "valid",
+		Topic:   "$queue/tasks/new",
+		Payload: []byte("fresh"),
+	})
+
+	engine.DeliverQueue(ctx, "tasks")
+
+	mu.Lock()
+	count := len(delivered)
+	mu.Unlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 delivered message (expired skipped), got %d", count)
+	}
+	if string(delivered[0].GetPayload()) != "fresh" {
+		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	}
+}
+
+func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
+	var mu sync.Mutex
+	var delivered []*brokerstorage.Message
+
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		mu.Lock()
+		delivered = append(delivered, msg)
+		mu.Unlock()
+		return nil
+	})
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg)
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
+	groupStore.CreateConsumerGroup(ctx, group)
+
+	logStore.Append(ctx, "events", &types.Message{
+		ID:        "expired",
+		Topic:     "$queue/events/old",
+		Payload:   []byte("stale"),
+		ExpiresAt: time.Now().Add(-time.Second),
+	})
+	logStore.Append(ctx, "events", &types.Message{
+		ID:      "valid",
+		Topic:   "$queue/events/new",
+		Payload: []byte("fresh"),
+	})
+
+	engine.DeliverQueue(ctx, "events")
+
+	mu.Lock()
+	count := len(delivered)
+	mu.Unlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 delivered message (expired skipped), got %d", count)
+	}
+	if string(delivered[0].GetPayload()) != "fresh" {
+		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	}
+}
+
+func TestDeliverQueueAllExpiredReturnsNoDelivery(t *testing.T) {
+	var mu sync.Mutex
+	deliveryCount := 0
+
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		mu.Lock()
+		deliveryCount++
+		mu.Unlock()
+		return nil
+	})
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	logStore.CreateQueue(ctx, queueCfg)
+
+	group := types.NewConsumerGroupState("tasks", "workers", "")
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
+	groupStore.CreateConsumerGroup(ctx, group)
+
+	logStore.Append(ctx, "tasks", &types.Message{
+		ID:        "e1",
+		Topic:     "$queue/tasks/a",
+		Payload:   []byte("old1"),
+		ExpiresAt: time.Now().Add(-time.Minute),
+	})
+	logStore.Append(ctx, "tasks", &types.Message{
+		ID:        "e2",
+		Topic:     "$queue/tasks/b",
+		Payload:   []byte("old2"),
+		ExpiresAt: time.Now().Add(-time.Minute),
+	})
+
+	ok := engine.DeliverQueue(ctx, "tasks")
+	if ok {
+		t.Fatal("expected DeliverQueue to return false when all messages are expired")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if deliveryCount != 0 {
+		t.Fatalf("expected 0 deliveries, got %d", deliveryCount)
+	}
 }

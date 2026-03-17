@@ -391,7 +391,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	}
 }
 
-func TestStreamAckAdvancesCursor(t *testing.T) {
+func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -403,21 +403,28 @@ func TestStreamAckAdvancesCursor(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
-	if err := mgr.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamer", "", cursor); err != nil {
-		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	group := types.NewConsumerGroupState("events", "streamer", "")
+	group.Mode = types.GroupModeStream
+	group.AutoCommit = false
+	group.Cursor.Cursor = 1
+	group.Cursor.Committed = 0
+	if err := groupStore.CreateConsumerGroup(context.Background(), group); err != nil {
+		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
 
 	if err := mgr.Ack(context.Background(), "events", "events:0", "streamer"); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
 
-	group, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	stored, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if cursor := group.GetCursor().Cursor; cursor != 1 {
+	if cursor := stored.GetCursor().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", cursor)
+	}
+	if committed := stored.GetCursor().Committed; committed != 0 {
+		t.Fatalf("expected committed offset 0, got %d", committed)
 	}
 }
 
@@ -1326,6 +1333,53 @@ func TestSubscribeWithCursorDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	}
 	if registered[0].ProxyNodeID != "node-1" {
 		t.Fatalf("expected proxy node id node-1, got %q", registered[0].ProxyNodeID)
+	}
+}
+
+func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	manager := NewManager(
+		logStore,
+		groupStore,
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		logger,
+		nil,
+	)
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	if err := manager.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("events", "streamers", "")
+	group.Mode = types.GroupModeStream
+	group.Cursor.Cursor = 7
+	group.Cursor.Committed = 7
+	if err := groupStore.CreateConsumerGroup(context.Background(), group); err != nil {
+		t.Fatalf("CreateConsumerGroup failed: %v", err)
+	}
+
+	cursor := &types.CursorOption{
+		Position: types.CursorDefault,
+		Mode:     types.GroupModeStream,
+	}
+	if err := manager.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamers", "", cursor); err != nil {
+		t.Fatalf("SubscribeWithCursor failed: %v", err)
+	}
+
+	stored, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamers")
+	if err != nil {
+		t.Fatalf("GetConsumerGroup failed: %v", err)
+	}
+	if cursor := stored.GetCursor().Cursor; cursor != 7 {
+		t.Fatalf("expected cursor 7 to be preserved, got %d", cursor)
+	}
+	if committed := stored.GetCursor().Committed; committed != 7 {
+		t.Fatalf("expected committed 7 to be preserved, got %d", committed)
 	}
 }
 

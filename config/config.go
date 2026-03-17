@@ -43,6 +43,29 @@ type AuthConfig struct {
 	// Transport selects the callout wire format: "grpc" (default) or "http".
 	Transport string        `yaml:"transport"`
 	Timeout   time.Duration `yaml:"timeout"`
+	// Protocols controls which protocols require auth callout.
+	// When empty or nil, all protocols require auth (backward compatible).
+	// When set, only protocols mapped to true get auth; others allow all connections.
+	// Valid keys: "mqtt", "amqp", "amqp091", "http", "coap".
+	Protocols map[string]bool `yaml:"protocols"`
+}
+
+// knownAuthProtocols is the set of valid protocol names for auth config.
+var knownAuthProtocols = map[string]bool{
+	"mqtt": true, "amqp": true, "amqp091": true, "http": true, "coap": true,
+}
+
+// AuthEnabledFor reports whether auth callout is enabled for the given protocol.
+// Returns true when auth is globally enabled (URL is set) and either no per-protocol
+// filter is configured or the protocol is explicitly set to true.
+func (a AuthConfig) AuthEnabledFor(protocol string) bool {
+	if a.URL == "" {
+		return false
+	}
+	if len(a.Protocols) == 0 {
+		return true
+	}
+	return a.Protocols[protocol]
 }
 
 // QueueConfig defines configuration for a persistent queue.
@@ -971,6 +994,12 @@ func (c *Config) Validate() error {
 			if err := validateListenerTLS("server.amqp091."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
+		}
+	}
+
+	for proto := range c.Auth.Protocols {
+		if !knownAuthProtocols[proto] {
+			return fmt.Errorf("auth.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
 	}
 

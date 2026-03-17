@@ -657,14 +657,17 @@ func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.Publi
 		}
 
 		// Create message for this queue
+		now := time.Now()
 		msg := &types.Message{
 			ID:         generateMessageID(),
 			Payload:    publish.Payload,
 			Topic:      publish.Topic,
 			Properties: cleanProps,
 			State:      types.StateQueued,
-			CreatedAt:  time.Now(),
-			ExpiresAt:  time.Now().Add(queueConfig.MessageTTL),
+			CreatedAt:  now,
+		}
+		if queueConfig.MessageTTL > 0 {
+			msg.ExpiresAt = now.Add(queueConfig.MessageTTL)
 		}
 
 		var (
@@ -816,7 +819,7 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		if mode != types.GroupModeStream {
 			return m.Subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID)
 		}
-		cursor = &types.CursorOption{Position: types.CursorLatest, Mode: mode}
+		cursor = &types.CursorOption{Position: types.CursorDefault, Mode: mode}
 	}
 
 	// Ensure queue exists
@@ -1057,22 +1060,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 	if groupID != "" {
 		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
 			if group.Mode == types.GroupModeStream {
-				cursor := group.GetCursor()
-				next := offset + 1
-				if next > cursor.Cursor {
-					if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
-						m.logger.Warn("failed to update stream cursor",
-							slog.String("queue", queueName),
-							slog.String("group", group.ID),
-							slog.String("error", err.Error()))
-					}
-					if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
-						m.logger.Warn("failed to update stream committed offset",
-							slog.String("queue", queueName),
-							slog.String("group", group.ID),
-							slog.String("error", err.Error()))
-					}
-				}
+				m.handleStreamAck(ctx, queueName, group, offset)
 				m.delivery.Schedule(queueName)
 				return nil
 			}
@@ -1091,22 +1079,7 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 			continue
 		}
 		if group.Mode == types.GroupModeStream {
-			cursor := group.GetCursor()
-			next := offset + 1
-			if next > cursor.Cursor {
-				if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
-					m.logger.Warn("failed to update stream cursor",
-						slog.String("queue", queueName),
-						slog.String("group", group.ID),
-						slog.String("error", err.Error()))
-				}
-				if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
-					m.logger.Warn("failed to update stream committed offset",
-						slog.String("queue", queueName),
-						slog.String("group", group.ID),
-						slog.String("error", err.Error()))
-				}
-			}
+			m.handleStreamAck(ctx, queueName, group, offset)
 			m.delivery.Schedule(queueName)
 			return nil
 		}
@@ -1124,6 +1097,25 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 	}
 
 	return consumer.ErrMessageNotPending
+}
+
+func (m *Manager) handleStreamAck(ctx context.Context, queueName string, group *types.ConsumerGroup, offset uint64) {
+	if !group.AutoCommit {
+		return
+	}
+
+	cursor := group.GetCursor()
+	next := offset + 1
+	if next <= cursor.Committed {
+		return
+	}
+
+	if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
+		m.logger.Warn("failed to update stream committed offset",
+			slog.String("queue", queueName),
+			slog.String("group", group.ID),
+			slog.String("error", err.Error()))
+	}
 }
 
 // Nack negatively acknowledges a message.

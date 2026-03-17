@@ -38,3 +38,52 @@ func TestQueueMessageStreamMetadata(t *testing.T) {
 		t.Fatalf("expected work group workers, got %q (ok=%v)", group, ok)
 	}
 }
+
+func TestNormalizeStreamTopic(t *testing.T) {
+	tests := []struct {
+		name string
+		opts *StreamConsumeOptions
+		want string
+	}{
+		{
+			name: "queue root",
+			opts: &StreamConsumeOptions{
+				QueueName: "events",
+			},
+			want: "$queue/events",
+		},
+		{
+			name: "queue root with filter",
+			opts: &StreamConsumeOptions{
+				QueueName: "events",
+				Filter:    "supermq/domain/#",
+			},
+			want: "$queue/events/supermq/domain/#",
+		},
+		{
+			name: "full queue topic passthrough",
+			opts: &StreamConsumeOptions{
+				QueueName: "$queue/events",
+				Filter:    "supermq/group/#",
+			},
+			want: "$queue/events/supermq/group/#",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeStreamTopic(tc.opts); got != tc.want {
+				t.Fatalf("normalizeStreamTopic() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestQueueSubscriptionKey(t *testing.T) {
+	streamKey := queueSubscriptionKey("$queue/events/supermq/domain/#", "domains", true)
+	queueKey := queueSubscriptionKey("$queue/events", "domains", false)
+
+	if streamKey == queueKey {
+		t.Fatalf("expected stream and queue subscription keys to differ")
+	}
+}

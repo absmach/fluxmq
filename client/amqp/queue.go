@@ -35,6 +35,7 @@ type StreamQueueOptions struct {
 // StreamConsumeOptions configures a stream queue subscription.
 type StreamConsumeOptions struct {
 	QueueName     string
+	Filter        string
 	ConsumerGroup string
 	Offset        string // "first", "last", "next", "offset=123", "timestamp=..."
 	AutoAck       bool
@@ -115,10 +116,13 @@ func (qm *QueueMessage) withChannelLock(fn func() error) error {
 }
 
 type queueSubscription struct {
+	key           string
 	queueName     string
 	queueTopic    string
 	consumerGroup string
 	consumerTag   string
+	stream        bool
+	streamOpts    *StreamConsumeOptions
 	handler       QueueMessageHandler
 	done          chan struct{}
 }
@@ -305,14 +309,16 @@ func (c *Client) SubscribeToQueue(queueName, consumerGroup string, handler Queue
 	}
 
 	queueTopic := normalizeQueueTopic(queueName)
+	subKey := queueSubscriptionKey(queueTopic, consumerGroup, false)
 
 	c.subsMu.Lock()
-	if _, exists := c.queueSubs[queueTopic]; exists {
+	if _, exists := c.queueSubs[subKey]; exists {
 		c.subsMu.Unlock()
 		return ErrAlreadySubscribed
 	}
 
 	sub := &queueSubscription{
+		key:           subKey,
 		queueName:     queueName,
 		queueTopic:    queueTopic,
 		consumerGroup: consumerGroup,
@@ -320,12 +326,12 @@ func (c *Client) SubscribeToQueue(queueName, consumerGroup string, handler Queue
 		handler:       handler,
 		done:          make(chan struct{}),
 	}
-	c.queueSubs[queueTopic] = sub
+	c.queueSubs[subKey] = sub
 	c.subsMu.Unlock()
 
 	if err := c.subscribeQueue(sub); err != nil {
 		c.subsMu.Lock()
-		delete(c.queueSubs, queueTopic)
+		delete(c.queueSubs, subKey)
 		c.subsMu.Unlock()
 		return err
 	}
@@ -349,31 +355,37 @@ func (c *Client) SubscribeToStream(opts *StreamConsumeOptions, handler QueueMess
 	}
 
 	queueName := opts.QueueName
+	queueTopic := normalizeStreamTopic(opts)
+	subKey := queueSubscriptionKey(queueTopic, opts.ConsumerGroup, true)
 	c.subsMu.Lock()
-	if _, exists := c.queueSubs[queueName]; exists {
+	if _, exists := c.queueSubs[subKey]; exists {
 		c.subsMu.Unlock()
 		return ErrAlreadySubscribed
 	}
 
 	consumerTag := opts.ConsumerTag
 	if consumerTag == "" {
-		consumerTag = "ctag-" + strings.ReplaceAll(queueName, "/", "-") + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		consumerTag = "ctag-" + strings.ReplaceAll(queueTopic, "/", "-") + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	}
 
+	subOpts := *opts
 	sub := &queueSubscription{
+		key:           subKey,
 		queueName:     queueName,
-		queueTopic:    queueName,
+		queueTopic:    queueTopic,
 		consumerGroup: opts.ConsumerGroup,
 		consumerTag:   consumerTag,
+		stream:        true,
+		streamOpts:    &subOpts,
 		handler:       handler,
 		done:          make(chan struct{}),
 	}
-	c.queueSubs[queueName] = sub
+	c.queueSubs[subKey] = sub
 	c.subsMu.Unlock()
 
 	if err := c.subscribeStream(sub, opts); err != nil {
 		c.subsMu.Lock()
-		delete(c.queueSubs, queueName)
+		delete(c.queueSubs, subKey)
 		c.subsMu.Unlock()
 		return err
 	}
@@ -387,13 +399,18 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 	queueTopic := normalizeQueueTopic(queueName)
 
 	c.subsMu.Lock()
-	sub, ok := c.queueSubs[queueTopic]
-	if ok {
-		delete(c.queueSubs, queueTopic)
+	var sub *queueSubscription
+	for key, candidate := range c.queueSubs {
+		if candidate.stream || candidate.queueTopic != queueTopic {
+			continue
+		}
+		sub = candidate
+		delete(c.queueSubs, key)
+		break
 	}
 	c.subsMu.Unlock()
 
-	if !ok {
+	if sub == nil {
 		return nil
 	}
 
@@ -409,20 +426,28 @@ func (c *Client) UnsubscribeFromQueue(queueName string) error {
 	return ch.Cancel(sub.consumerTag, false)
 }
 
-// UnsubscribeFromStream unsubscribes from a stream queue.
+// UnsubscribeFromStream unsubscribes from stream subscriptions matching the
+// provided queue name or full queue topic.
 func (c *Client) UnsubscribeFromStream(queueName string) error {
+	queueTopic := normalizeQueueTopic(queueName)
+
 	c.subsMu.Lock()
-	sub, ok := c.queueSubs[queueName]
-	if ok {
-		delete(c.queueSubs, queueName)
+	var subs []*queueSubscription
+	for key, candidate := range c.queueSubs {
+		if !candidate.stream {
+			continue
+		}
+		if candidate.queueName != queueName && candidate.queueTopic != queueName && candidate.queueTopic != queueTopic {
+			continue
+		}
+		subs = append(subs, candidate)
+		delete(c.queueSubs, key)
 	}
 	c.subsMu.Unlock()
 
-	if !ok {
+	if len(subs) == 0 {
 		return nil
 	}
-
-	sub.close()
 
 	ch, err := c.channel()
 	if err != nil {
@@ -431,7 +456,13 @@ func (c *Client) UnsubscribeFromStream(queueName string) error {
 
 	c.subChMu.Lock()
 	defer c.subChMu.Unlock()
-	return ch.Cancel(sub.consumerTag, false)
+	for _, sub := range subs {
+		sub.close()
+		if err := ch.Cancel(sub.consumerTag, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CommitOffset explicitly commits an offset for a stream consumer group.
@@ -579,6 +610,23 @@ func normalizeQueueTopic(queueName string) string {
 		return queueName
 	}
 	return "$queue/" + queueName
+}
+
+func normalizeStreamTopic(opts *StreamConsumeOptions) string {
+	queueTopic := normalizeQueueTopic(opts.QueueName)
+	filter := strings.TrimPrefix(strings.TrimSpace(opts.Filter), "/")
+	if filter == "" {
+		return queueTopic
+	}
+	return queueTopic + "/" + filter
+}
+
+func queueSubscriptionKey(queueTopic, consumerGroup string, stream bool) string {
+	mode := "queue"
+	if stream {
+		mode = "stream"
+	}
+	return mode + "|" + queueTopic + "|" + consumerGroup
 }
 
 func applyProperties(p *amqp091.Publishing, props map[string]string) {
