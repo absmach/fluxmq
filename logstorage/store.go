@@ -33,7 +33,9 @@ type Store struct {
 type StoreConfig struct {
 	ManagerConfig
 	ConsumerStateConfig
-	AutoCreate bool // Automatically create queues/partitions on first access
+	AutoCreate         bool // Automatically create queues/partitions on first access
+	RecoverOnStartup   bool // Run segment recovery before loading queues
+	RecoveryLogger     func(msg string, args ...any)
 }
 
 // DefaultStoreConfig returns default store configuration.
@@ -51,6 +53,10 @@ func NewStore(baseDir string, config StoreConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 
+	if config.RecoverOnStartup {
+		recoverAllQueues(baseDir, config.RecoveryLogger)
+	}
+
 	s := &Store{
 		baseDir:   baseDir,
 		config:    config,
@@ -64,6 +70,49 @@ func NewStore(baseDir string, config StoreConfig) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+// recoverAllQueues discovers queue directories and runs segment recovery on each.
+func recoverAllQueues(baseDir string, logFn func(string, ...any)) {
+	if logFn == nil {
+		logFn = func(string, ...any) {}
+	}
+
+	queuesDir := filepath.Join(baseDir, "queues")
+	entries, err := os.ReadDir(queuesDir)
+	if err != nil {
+		return // No queues directory yet
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		queueName := entry.Name()
+		segDir := filepath.Join(queuesDir, queueName, "segments")
+		if _, err := os.Stat(segDir); os.IsNotExist(err) {
+			continue
+		}
+
+		result, err := RecoverSegments(segDir)
+		if err != nil {
+			logFn("segment recovery failed for queue",
+				"queue", queueName, "error", err)
+			continue
+		}
+
+		if result.SegmentsTruncated > 0 || len(result.Errors) > 0 {
+			logFn("segment recovery completed",
+				"queue", queueName,
+				"segments_recovered", result.SegmentsRecovered,
+				"segments_truncated", result.SegmentsTruncated,
+				"indexes_rebuilt", result.IndexesRebuilt,
+				"messages_lost", result.MessagesLost,
+				"bytes_truncated", result.BytesTruncated,
+				"errors", len(result.Errors))
+		}
+	}
 }
 
 // loadQueues discovers and loads existing queues from disk.

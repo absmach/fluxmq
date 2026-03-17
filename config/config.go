@@ -375,6 +375,11 @@ type StorageConfig struct {
 	// BadgerDB settings
 	BadgerDir  string `yaml:"badger_dir"`
 	SyncWrites bool   `yaml:"sync_writes"`
+
+	// RecoverOnStartup runs segment recovery before loading queues.
+	// Corrupted segments are truncated at the last valid batch and indexes
+	// are rebuilt. Disabled by default to avoid unexpected data loss.
+	RecoverOnStartup bool `yaml:"recover_on_startup"`
 }
 
 // ClusterConfig holds clustering configuration.

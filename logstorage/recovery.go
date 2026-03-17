@@ -63,8 +63,8 @@ func RecoverSegment(dir string, baseOffset uint64) (*RecoveryResult, error) {
 
 		// Read and validate CRC
 		storedCRC := GetUint32(header[4:8])
-		batchLen := GetUint32(header[12:16])
-		count := GetUint16(header[16:18])
+		batchLen := GetUint32(header[16:20])
+		count := GetUint16(header[20:22])
 		totalSize := BatchHeaderSize + int(batchLen)
 
 		if pos+int64(totalSize) > info.Size() {

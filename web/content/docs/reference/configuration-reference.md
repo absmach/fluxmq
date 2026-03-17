@@ -338,13 +338,15 @@ storage:
   type: "badger"      # memory or badger
   badger_dir: "/tmp/fluxmq/data"
   sync_writes: false
+  recover_on_startup: false
 ```
 
-| Field         | Default            | Description                                                                    |
-| ------------- | ------------------ | ------------------------------------------------------------------------------ |
-| `type`        | `badger`           | Storage backend: `memory` or `badger`.                                         |
-| `badger_dir`  | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`).               |
-| `sync_writes` | `false`            | If `true`, fsync-like durability on write path; if `false`, better throughput. |
+| Field                | Default            | Description                                                                                                            |
+| -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `type`               | `badger`           | Storage backend: `memory` or `badger`.                                                                                 |
+| `badger_dir`         | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`).                                                       |
+| `sync_writes`        | `false`            | If `true`, fsync-like durability on write path; if `false`, better throughput.                                         |
+| `recover_on_startup` | `false`            | Run segment recovery before loading queues. Truncates corrupted segments at the last valid batch and rebuilds indexes. |
 
 ## Cluster
 

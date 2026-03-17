@@ -393,7 +393,10 @@ func main() {
 		queueDir += "queue"
 
 		// Use file-based AOL storage (implements both LogStore and ConsumerGroupStore)
-		queueLogStore, err = logStorage.NewAdapter(queueDir, logStorage.DefaultAdapterConfig())
+		adapterCfg := logStorage.DefaultAdapterConfig()
+		adapterCfg.RecoverOnStartup = cfg.Storage.RecoverOnStartup
+		adapterCfg.RecoveryLogger = slog.Warn
+		queueLogStore, err = logStorage.NewAdapter(queueDir, adapterCfg)
 		if err != nil {
 			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
