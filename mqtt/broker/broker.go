@@ -224,6 +224,11 @@ func (b *Broker) Stats() *Stats {
 	return b.telemetry.stats
 }
 
+// SessionCount returns the total number of sessions (connected + disconnected).
+func (b *Broker) SessionCount() int {
+	return b.sessionsMap.Count()
+}
+
 // SetAuthEngine sets the authentication and authorization engine.
 func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 	b.auth = auth

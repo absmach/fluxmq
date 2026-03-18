@@ -127,6 +127,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		conn.Close()
 		return err
 	}
+	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {

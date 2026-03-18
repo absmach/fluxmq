@@ -1,6 +1,7 @@
 {
   "title": "Reference",
   "pages": [
+    "admin-api",
     "configuration-reference",
     "queue-service",
     "cli-reference",

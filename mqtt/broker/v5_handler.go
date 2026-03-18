@@ -147,6 +147,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		conn.Close()
 		return err
 	}
+	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {

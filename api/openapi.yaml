@@ -1,0 +1,726 @@
+openapi: 3.1.0
+info:
+  title: FluxMQ Admin API
+  description: |
+    Admin-facing HTTP endpoints for FluxMQ broker monitoring and management.
+
+    FluxMQ exposes two HTTP servers with distinct responsibilities:
+
+    - **API Server** (`api_addr`): Admin endpoints for stats, cluster info, session
+      management, and a combined overview. Also serves the Queue Service gRPC/Connect API.
+    - **Health Server** (`health_addr`): Lightweight k8s probes for liveness, readiness,
+      and basic cluster status.
+
+    Both servers are internal/trusted — no authentication is required.
+  version: 0.1.0
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: API Server (api_addr) — admin endpoints, sessions, queue service
+  - url: http://localhost:8888
+    description: Health Server (health_addr) — k8s liveness/readiness probes
+
+tags:
+  - name: Admin
+    description: Broker statistics, cluster topology, and combined overview
+  - name: Sessions
+    description: MQTT session listing and detail
+  - name: Health
+    description: Kubernetes liveness, readiness, and cluster status probes
+
+paths:
+  # ── API Server endpoints ──────────────────────────────────────────────
+
+  /api/v1/stats:
+    get:
+      operationId: getStats
+      summary: Broker statistics
+      description: |
+        Returns all broker counters in one call. Every field is an atomic load —
+        zero allocation, zero contention. Raw cumulative counters are exposed;
+        clients compute rates by polling.
+      tags: [Admin]
+      servers:
+        - url: http://localhost:8080
+          description: API Server
+      responses:
+        "200":
+          description: Current broker statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+        "405":
+          description: Method not allowed (non-GET request)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/cluster:
+    get:
+      operationId: getCluster
+      summary: Cluster topology
+      description: |
+        Returns cluster topology and per-node health. In single-node mode
+        (no cluster configured), returns `cluster_mode: false` with
+        `node_id: "single-node"`.
+      tags: [Admin]
+      servers:
+        - url: http://localhost:8080
+          description: API Server
+      responses:
+        "200":
+          description: Cluster topology and node health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/overview:
+    get:
+      operationId: getOverview
+      summary: Dashboard overview
+      description: |
+        Combined endpoint for dashboard landing pages — avoids multiple
+        round trips. Composes stats, cluster topology, and session counts
+        into a single response.
+      tags: [Admin]
+      servers:
+        - url: http://localhost:8080
+          description: API Server
+      responses:
+        "200":
+          description: Combined broker overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverviewResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      summary: List sessions
+      description: |
+        Returns MQTT sessions with optional filtering by state and client ID
+        prefix. Supports cursor-based pagination via `page_token`.
+      tags: [Sessions]
+      servers:
+        - url: http://localhost:8080
+          description: API Server
+      parameters:
+        - name: state
+          in: query
+          description: Filter by session state
+          schema:
+            type: string
+            enum: [all, connected, disconnected]
+            default: all
+        - name: prefix
+          in: query
+          description: Filter sessions whose client ID starts with this prefix
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of sessions to return (0 = no limit)
+          schema:
+            type: integer
+            minimum: 0
+        - name: page_token
+          in: query
+          description: Cursor token from a previous response's `next_page_token`
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated list of sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSessionsResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/sessions/{client_id}:
+    get:
+      operationId: getSession
+      summary: Session detail
+      description: |
+        Returns full detail for a single MQTT session, including subscriptions,
+        inflight count, and offline queue depth. The client ID must be
+        URL-encoded if it contains special characters (e.g. slashes).
+      tags: [Sessions]
+      servers:
+        - url: http://localhost:8080
+          description: API Server
+      parameters:
+        - name: client_id
+          in: path
+          required: true
+          description: MQTT client identifier (URL-encoded)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /health:
+    get:
+      operationId: healthLiveness
+      summary: Health / liveness probe
+      description: |
+        Available on **both** servers with slightly different responses:
+
+        - **API Server** (`api_addr`): Returns `{"status":"ok"}`. Minimal stub
+          for clients that expect a health endpoint on the API port.
+        - **Health Server** (`health_addr`): Returns `{"status":"healthy"}`.
+          Use as the k8s `livenessProbe`.
+      tags: [Health]
+      servers:
+        - url: http://localhost:8888
+          description: Health Server
+        - url: http://localhost:8080
+          description: API Server
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "405":
+          description: Method not allowed
+
+  /ready:
+    get:
+      operationId: healthReadiness
+      summary: Readiness probe
+      description: |
+        Returns 200 if the node is ready to accept traffic (broker initialized,
+        cluster connected if applicable). Use as the k8s `readinessProbe`.
+      tags: [Health]
+      servers:
+        - url: http://localhost:8888
+          description: Health Server
+      responses:
+        "200":
+          description: Node is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "503":
+          description: Node is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "405":
+          description: Method not allowed
+
+  /cluster/status:
+    get:
+      operationId: healthClusterStatus
+      summary: Cluster status (health)
+      description: |
+        Basic cluster membership info from the health server. For richer
+        cluster topology, use `GET /api/v1/cluster` on the API server.
+      tags: [Health]
+      servers:
+        - url: http://localhost:8888
+          description: Health Server
+      responses:
+        "200":
+          description: Cluster status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterStatusResponse"
+        "405":
+          description: Method not allowed
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: broker not available
+
+    # ── Stats (aggregated + per-protocol) ──
+
+    ConnectionStats:
+      type: object
+      properties:
+        current:
+          type: integer
+          format: uint64
+          description: Currently connected clients (sum across protocols)
+          example: 342
+        total:
+          type: integer
+          format: uint64
+          description: Total connections since startup
+          example: 15000
+        disconnections:
+          type: integer
+          format: uint64
+          description: Total disconnections since startup
+          example: 14658
+
+    MessageStats:
+      type: object
+      description: Aggregated message counters across all protocols
+      properties:
+        received:
+          type: integer
+          format: uint64
+          example: 1250000
+        sent:
+          type: integer
+          format: uint64
+          example: 980000
+
+    ByteStats:
+      type: object
+      properties:
+        received:
+          type: integer
+          format: uint64
+          example: 524288000
+        sent:
+          type: integer
+          format: uint64
+          example: 412000000
+
+    ErrorStats:
+      type: object
+      description: Aggregated protocol error count
+      properties:
+        protocol:
+          type: integer
+          format: uint64
+          example: 12
+
+    MQTTMessageStats:
+      type: object
+      properties:
+        received:
+          type: integer
+          format: uint64
+          example: 1100000
+        sent:
+          type: integer
+          format: uint64
+          example: 850000
+        publish_received:
+          type: integer
+          format: uint64
+          description: PUBLISH packets received
+          example: 1000000
+        publish_sent:
+          type: integer
+          format: uint64
+          description: PUBLISH packets sent
+          example: 800000
+
+    MQTTSubscriptionStats:
+      type: object
+      properties:
+        active:
+          type: integer
+          format: uint64
+          description: Currently active MQTT subscriptions
+          example: 1200
+        retained_messages:
+          type: integer
+          format: uint64
+          description: Number of retained messages stored
+          example: 45
+
+    MQTTErrorStats:
+      type: object
+      properties:
+        protocol:
+          type: integer
+          format: uint64
+          example: 12
+        auth:
+          type: integer
+          format: uint64
+          description: Authentication failures
+          example: 5
+        authz:
+          type: integer
+          format: uint64
+          description: Authorization failures
+          example: 3
+        packet:
+          type: integer
+          format: uint64
+          description: Malformed packet errors
+          example: 8
+
+    MQTTStats:
+      type: object
+      description: MQTT-specific counters
+      properties:
+        connections:
+          $ref: "#/components/schemas/ConnectionStats"
+        messages:
+          $ref: "#/components/schemas/MQTTMessageStats"
+        bytes:
+          $ref: "#/components/schemas/ByteStats"
+        subscriptions:
+          $ref: "#/components/schemas/MQTTSubscriptionStats"
+        errors:
+          $ref: "#/components/schemas/MQTTErrorStats"
+
+    AMQPStats:
+      type: object
+      description: AMQP 0.9.1-specific counters
+      properties:
+        connections:
+          $ref: "#/components/schemas/ConnectionStats"
+        messages:
+          $ref: "#/components/schemas/MessageStats"
+        bytes:
+          $ref: "#/components/schemas/ByteStats"
+        channels:
+          type: integer
+          format: uint64
+          description: Currently open AMQP channels
+          example: 42
+        consumers:
+          type: integer
+          format: uint64
+          description: Currently active AMQP consumers
+          example: 15
+        errors:
+          $ref: "#/components/schemas/ErrorStats"
+
+    ByProtocolStats:
+      type: object
+      properties:
+        mqtt:
+          $ref: "#/components/schemas/MQTTStats"
+        amqp:
+          $ref: "#/components/schemas/AMQPStats"
+
+    StatsResponse:
+      type: object
+      description: |
+        Top-level fields are aggregated totals across all protocols.
+        The `by_protocol` section contains per-protocol breakdowns with
+        protocol-specific fields (e.g. MQTT subscriptions, AMQP channels).
+      properties:
+        uptime_seconds:
+          type: number
+          format: double
+          description: Broker uptime in seconds
+          example: 86400.5
+        connections:
+          $ref: "#/components/schemas/ConnectionStats"
+        messages:
+          $ref: "#/components/schemas/MessageStats"
+        bytes:
+          $ref: "#/components/schemas/ByteStats"
+        errors:
+          $ref: "#/components/schemas/ErrorStats"
+        by_protocol:
+          $ref: "#/components/schemas/ByProtocolStats"
+
+    # ── Cluster ──
+
+    NodeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: node-1
+        address:
+          type: string
+          description: Inter-broker transport address
+          example: "10.0.0.1:7946"
+        healthy:
+          type: boolean
+          example: true
+        leader:
+          type: boolean
+          example: true
+        uptime_seconds:
+          type: number
+          format: double
+          example: 86400.5
+
+    ClusterResponse:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: node-1
+        cluster_mode:
+          type: boolean
+          description: Whether the broker is running in cluster mode
+          example: true
+        is_leader:
+          type: boolean
+          example: true
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeResponse"
+
+    # ── Overview ──
+
+    SessionSummary:
+      type: object
+      properties:
+        connected:
+          type: integer
+          description: Currently connected sessions
+          example: 342
+        total:
+          type: integer
+          description: Total sessions (connected + disconnected with state)
+          example: 500
+
+    OverviewCluster:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeResponse"
+
+    OverviewResponse:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: node-1
+        cluster_mode:
+          type: boolean
+          example: true
+        is_leader:
+          type: boolean
+          example: true
+        uptime_seconds:
+          type: number
+          format: double
+          example: 86400.5
+        sessions:
+          $ref: "#/components/schemas/SessionSummary"
+        stats:
+          $ref: "#/components/schemas/StatsResponse"
+        cluster:
+          $ref: "#/components/schemas/OverviewCluster"
+
+    # ── Sessions ──
+
+    SessionSubscription:
+      type: object
+      properties:
+        filter:
+          type: string
+          example: devices/+/events
+        qos:
+          type: integer
+          minimum: 0
+          maximum: 2
+          example: 1
+        no_local:
+          type: boolean
+        retain_as_published:
+          type: boolean
+        retain_handling:
+          type: integer
+          minimum: 0
+          maximum: 2
+        consumer_group:
+          type: string
+        subscription_id:
+          type: ["integer", "null"]
+
+    SessionResponse:
+      type: object
+      properties:
+        client_id:
+          type: string
+          example: my-device-001
+        state:
+          type: string
+          enum: [connected, disconnected]
+          example: connected
+        connected:
+          type: boolean
+          example: true
+        protocol:
+          type: string
+          enum: [mqtt3.1, mqtt3.1.1, mqtt5, unknown]
+          example: mqtt5
+        version:
+          type: integer
+          description: Raw protocol version byte (3, 4, or 5)
+          example: 5
+        clean_start:
+          type: boolean
+        expiry_interval:
+          type: integer
+          format: uint32
+          description: Session expiry interval in seconds (0 = no expiry)
+        connected_at:
+          type: ["string", "null"]
+          format: date-time
+        disconnected_at:
+          type: ["string", "null"]
+          format: date-time
+        receive_maximum:
+          type: integer
+          format: uint16
+        max_packet_size:
+          type: integer
+          format: uint32
+        topic_alias_max:
+          type: integer
+          format: uint16
+        request_response:
+          type: boolean
+        request_problem:
+          type: boolean
+        has_will:
+          type: boolean
+        subscription_count:
+          type: integer
+        inflight_count:
+          type: integer
+        offline_queue_depth:
+          type: integer
+        subscriptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionSubscription"
+
+    ListSessionsResponse:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionResponse"
+        next_page_token:
+          type: string
+          description: Cursor for the next page (empty if no more results)
+
+    # ── Health Server ──
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+
+    ReadyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+          example: ready
+        details:
+          type: string
+          description: Human-readable reason when not ready
+
+    ClusterStatusResponse:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: node-1
+        is_leader:
+          type: boolean
+        cluster_mode:
+          type: boolean
+        node_count:
+          type: integer
+          description: Number of nodes (cluster mode only)
+        sessions:
+          type: integer
+          description: Current connected session count on this node
+        details:
+          type: string

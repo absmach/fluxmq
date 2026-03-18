@@ -270,9 +270,7 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		}
 	}
 
-	if b.stores.sessions != nil {
-		b.stores.sessions.Save(s.Info())
-	}
+	b.persistSessionInfo(s)
 	if b.stores.wills != nil {
 		ctx := context.Background()
 		will := s.GetWill()
@@ -311,6 +309,15 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	// For persistent sessions, DON'T release ownership immediately
 	// Keep ownership so messages can still be routed to this node
 	// Ownership will expire naturally after TTL (30s)
+}
+
+func (b *Broker) persistSessionInfo(s *session.Session) {
+	if b.stores.sessions == nil || s == nil {
+		return
+	}
+	if err := b.stores.sessions.Save(s.Info()); err != nil {
+		b.logError("save_session_info", err, slog.String("client_id", s.ID))
+	}
 }
 
 // restoreInflightFromStorage restores inflight messages from storage.
