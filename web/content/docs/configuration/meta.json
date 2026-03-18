@@ -4,6 +4,7 @@
     "server",
     "storage",
     "clustering",
-    "security"
+    "security",
+    "hot-reload"
   ]
 }

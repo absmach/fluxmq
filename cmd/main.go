@@ -32,6 +32,7 @@ import (
 	qraft "github.com/absmach/fluxmq/queue/raft"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
+	"github.com/absmach/fluxmq/reload"
 	amqpserver "github.com/absmach/fluxmq/server/amqp"
 	amqp1server "github.com/absmach/fluxmq/server/amqp1"
 	"github.com/absmach/fluxmq/server/api"
@@ -266,34 +267,32 @@ func main() {
 		b.SetMaxQoS(byte(cfg.Broker.MaxQoS))
 	}
 
-	// Initialize rate limiting
-	var rateLimitManager *ratelimit.Manager
+	// Initialize rate limiting with AtomicManager for hot-reload support.
+	rlConfig := ratelimit.Config{
+		Enabled: cfg.RateLimit.Enabled,
+		Connection: ratelimit.ConnectionConfig{
+			Enabled:         cfg.RateLimit.Connection.Enabled,
+			Rate:            cfg.RateLimit.Connection.Rate,
+			Burst:           cfg.RateLimit.Connection.Burst,
+			CleanupInterval: cfg.RateLimit.Connection.CleanupInterval,
+		},
+		Message: ratelimit.MessageConfig{
+			Enabled: cfg.RateLimit.Message.Enabled,
+			Rate:    cfg.RateLimit.Message.Rate,
+			Burst:   cfg.RateLimit.Message.Burst,
+		},
+		Subscribe: ratelimit.SubscribeConfig{
+			Enabled: cfg.RateLimit.Subscribe.Enabled,
+			Rate:    cfg.RateLimit.Subscribe.Rate,
+			Burst:   cfg.RateLimit.Subscribe.Burst,
+		},
+	}
+	rateLimitManager := ratelimit.NewAtomicManager(ratelimit.NewManager(rlConfig))
+	defer rateLimitManager.Stop()
+
+	b.SetClientRateLimiter(rateLimitManager)
+
 	if cfg.RateLimit.Enabled {
-		rlConfig := ratelimit.Config{
-			Enabled: true,
-			Connection: ratelimit.ConnectionConfig{
-				Enabled:         cfg.RateLimit.Connection.Enabled,
-				Rate:            cfg.RateLimit.Connection.Rate,
-				Burst:           cfg.RateLimit.Connection.Burst,
-				CleanupInterval: cfg.RateLimit.Connection.CleanupInterval,
-			},
-			Message: ratelimit.MessageConfig{
-				Enabled: cfg.RateLimit.Message.Enabled,
-				Rate:    cfg.RateLimit.Message.Rate,
-				Burst:   cfg.RateLimit.Message.Burst,
-			},
-			Subscribe: ratelimit.SubscribeConfig{
-				Enabled: cfg.RateLimit.Subscribe.Enabled,
-				Rate:    cfg.RateLimit.Subscribe.Rate,
-				Burst:   cfg.RateLimit.Subscribe.Burst,
-			},
-		}
-		rateLimitManager = ratelimit.NewManager(rlConfig)
-		defer rateLimitManager.Stop()
-
-		// Set client rate limiter on broker
-		b.SetClientRateLimiter(rateLimitManager)
-
 		slog.Info("Rate limiting enabled",
 			slog.Bool("connection", cfg.RateLimit.Connection.Enabled),
 			slog.Bool("message", cfg.RateLimit.Message.Enabled),
@@ -638,9 +637,7 @@ func main() {
 			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
 			Logger:           logger,
 		}
-		if rateLimitManager != nil {
 			tcpCfg.IPRateLimiter = rateLimitManager
-		}
 		tcpServer := tcp.New(tcpCfg, b)
 
 		wg.Add(1)
@@ -680,9 +677,7 @@ func main() {
 			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
 			AllowedOrigins:  slot.cfg.AllowedOrigins,
 		}
-		if rateLimitManager != nil {
 			wsCfg.IPRateLimiter = rateLimitManager
-		}
 
 		wsServer := websocket.New(wsCfg, b, logger)
 
@@ -875,6 +870,13 @@ func main() {
 		}()
 	}
 
+	// Initialize config reload manager.
+	reloadManager := reload.New(*configFile, cfg,
+		reload.WithLogSetup(reload.SetupLogger),
+		reload.WithRateLimiter(rateLimitManager),
+		reload.WithBroker(b),
+	)
+
 	// Start Admin API server (HTTP + Connect/gRPC queue service)
 	if cfg.Server.AdminAPIAddr != "" {
 		apiCfg := api.Config{
@@ -884,6 +886,7 @@ func main() {
 
 		if qm != nil && queueLogStore != nil {
 			apiServer := api.New(apiCfg, b, amqp091Broker, cl, qm, qm.QueueStore(), qm.GroupStore(), logger)
+			apiServer.SetReloadManager(reloadManager)
 
 			wg.Add(1)
 			go func() {
@@ -900,15 +903,28 @@ func main() {
 
 	slog.Info("MQTT broker started successfully")
 
+	// SIGHUP triggers config reload; SIGINT/SIGTERM trigger shutdown.
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
-	select {
-	case sig := <-sigChan:
-		slog.Info("Received shutdown signal", "signal", sig)
-	case err := <-serverErr:
-		slog.Error("Server error", "error", err)
+	for {
+		select {
+		case sig := <-sigChan:
+			if sig == syscall.SIGHUP {
+				slog.Info("Received SIGHUP, reloading configuration")
+				if _, err := reloadManager.Reload(ctx); err != nil {
+					slog.Error("Config reload failed", "error", err)
+				}
+				continue
+			}
+			slog.Info("Received shutdown signal", "signal", sig)
+		case err := <-serverErr:
+			slog.Error("Server error", "error", err)
+		}
+		break
 	}
+
+	reloadManager.Shutdown()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()

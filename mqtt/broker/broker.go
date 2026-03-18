@@ -54,7 +54,7 @@ type brokerTelemetry struct {
 
 // brokerConfig groups tunable broker settings.
 type brokerConfig struct {
-	maxQoS              byte
+	maxQoS              atomic.Uint32 // accessed atomically for hot-reload safety
 	maxOfflineQueueSize int
 	offlineQueueEvict   bool
 	maxInflightMessages int
@@ -164,13 +164,11 @@ func NewBroker(store storage.Store, cl cluster.Cluster, opts ...Option) *Broker 
 			logger: slog.Default(),
 			stats:  NewStats(),
 		},
-		cfg: brokerConfig{
-			maxQoS: 2,
-		},
 		cluster:    cl,
 		stopCh:     make(chan struct{}),
 		sharedSubs: NewSharedSubscriptionManager(),
 	}
+	b.cfg.maxQoS.Store(2)
 
 	for _, opt := range opts {
 		opt(b)
@@ -263,17 +261,18 @@ func (b *Broker) SetEventHook(h broker.EventHook) {
 }
 
 // SetMaxQoS sets the maximum QoS level supported by this broker.
-// Valid values are 0, 1, or 2. Default is 2.
+// Valid values are 0, 1, or 2. Default is 2. Safe to call concurrently.
 func (b *Broker) SetMaxQoS(qos byte) {
 	if qos > 2 {
 		qos = 2
 	}
-	b.cfg.maxQoS = qos
+	b.cfg.maxQoS.Store(uint32(qos))
 }
 
 // MaxQoS returns the maximum QoS level supported by this broker.
+// Safe to call concurrently.
 func (b *Broker) MaxQoS() byte {
-	return b.cfg.maxQoS
+	return byte(b.cfg.maxQoS.Load())
 }
 
 // NotifyConnect fires the event hook for a successful client connection.

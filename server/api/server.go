@@ -16,6 +16,7 @@ import (
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
 	"github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/queue/storage"
+	"github.com/absmach/fluxmq/reload"
 	serverqueue "github.com/absmach/fluxmq/server/queue"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -31,12 +32,13 @@ type Config struct {
 
 // Server provides the HTTP/gRPC API server using Connect protocol.
 type Server struct {
-	config     Config
-	broker     *mqttbroker.Broker
-	amqpBroker *amqpbroker.Broker
-	cluster    cluster.Cluster
-	httpServer *http.Server
-	logger     *slog.Logger
+	config        Config
+	broker        *mqttbroker.Broker
+	amqpBroker    *amqpbroker.Broker
+	cluster       cluster.Cluster
+	reloadManager *reload.Manager
+	httpServer    *http.Server
+	logger        *slog.Logger
 }
 
 // New creates a new API server.
@@ -63,6 +65,7 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 	mux.HandleFunc("/api/v1/stats", s.handleStats)
 	mux.HandleFunc("/api/v1/cluster", s.handleCluster)
 	mux.HandleFunc("/api/v1/overview", s.handleOverview)
+	mux.HandleFunc("/api/v1/reload", s.handleReload)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -79,6 +82,11 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 
 	s.httpServer = httpServer
 	return s
+}
+
+// SetReloadManager sets the reload manager for the /api/v1/reload endpoint.
+func (s *Server) SetReloadManager(rm *reload.Manager) {
+	s.reloadManager = rm
 }
 
 // Listen starts the API server.

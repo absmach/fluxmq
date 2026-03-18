@@ -6,6 +6,7 @@ package ratelimit
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -317,5 +318,61 @@ func (m *Manager) OnClientDisconnect(clientID string) {
 func (m *Manager) Stop() {
 	if m.ip != nil {
 		m.ip.Stop()
+	}
+}
+
+// AtomicManager wraps a Manager behind an atomic pointer, allowing the
+// underlying rate limiter to be swapped at runtime without data races.
+// It implements the same interfaces as Manager (IPRateLimiter, RateLimiter,
+// ClientRateLimiter) so it can be used as a drop-in replacement.
+type AtomicManager struct {
+	current atomic.Pointer[Manager]
+}
+
+// NewAtomicManager creates an AtomicManager with the given initial Manager.
+func NewAtomicManager(m *Manager) *AtomicManager {
+	am := &AtomicManager{}
+	am.current.Store(m)
+	return am
+}
+
+// Swap replaces the underlying Manager with a new one and stops the old one.
+// Returns the old Manager.
+func (am *AtomicManager) Swap(m *Manager) *Manager {
+	old := am.current.Swap(m)
+	if old != nil {
+		old.Stop()
+	}
+	return old
+}
+
+// Load returns the current Manager.
+func (am *AtomicManager) Load() *Manager {
+	return am.current.Load()
+}
+
+func (am *AtomicManager) Allow(addr net.Addr) bool {
+	return am.current.Load().Allow(addr)
+}
+
+func (am *AtomicManager) AllowConnection(addr net.Addr) bool {
+	return am.current.Load().AllowConnection(addr)
+}
+
+func (am *AtomicManager) AllowPublish(clientID string) bool {
+	return am.current.Load().AllowPublish(clientID)
+}
+
+func (am *AtomicManager) AllowSubscribe(clientID string) bool {
+	return am.current.Load().AllowSubscribe(clientID)
+}
+
+func (am *AtomicManager) OnClientDisconnect(clientID string) {
+	am.current.Load().OnClientDisconnect(clientID)
+}
+
+func (am *AtomicManager) Stop() {
+	if m := am.current.Load(); m != nil {
+		m.Stop()
 	}
 }
