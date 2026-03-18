@@ -36,6 +36,11 @@ type Manager struct {
 	mu         sync.RWMutex
 }
 
+// DLQHandler is called when a message exceeds MaxDeliveryCount.
+// The handler receives the queue name, group ID, the poisoned message,
+// and the delivery count that triggered the DLQ move.
+type DLQHandler func(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int)
+
 // Config defines configuration for the consumer group manager.
 type Config struct {
 	// VisibilityTimeout is how long a message stays claimed before it can be stolen.
@@ -59,6 +64,10 @@ type Config struct {
 	// When reached, new claims are rejected until entries are acknowledged.
 	// Zero means unlimited (not recommended for production).
 	MaxPELSize int
+
+	// OnDLQ is called when a message exceeds MaxDeliveryCount during work stealing.
+	// If nil, poison messages are silently removed from the PEL.
+	OnDLQ DLQHandler
 }
 
 // DefaultConfig returns default manager configuration.
@@ -374,9 +383,15 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 
 	// Try to steal the oldest entry
 	for _, entry := range stealable {
-		// Check delivery count
+		// Poison message: exceeded max delivery attempts.
 		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
-			// TODO: Move to DLQ instead of stealing
+			if m.config.OnDLQ != nil {
+				msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
+				if err == nil {
+					m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.DeliveryCount)
+				}
+			}
+			_ = m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset)
 			continue
 		}
 

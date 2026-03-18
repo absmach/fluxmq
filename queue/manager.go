@@ -139,6 +139,15 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 	metrics := consumer.NewMetrics()
 
+	// mgr is populated below; the DLQ closure captures it by pointer so that
+	// the consumer.Manager can call back into the queue.Manager for DLQ publishing.
+	var mgr *Manager
+
+	dlqPrefix := config.DLQTopicPrefix
+	if dlqPrefix == "" {
+		dlqPrefix = "$dlq/"
+	}
+
 	consumerCfg := consumer.Config{
 		VisibilityTimeout:  config.VisibilityTimeout,
 		MaxDeliveryCount:   config.MaxDeliveryCount,
@@ -146,6 +155,12 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		StealBatchSize:     5,
 		AutoCommitInterval: config.AutoCommitInterval,
 		MaxPELSize:         config.MaxPELSize,
+		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int) {
+			if mgr == nil {
+				return
+			}
+			mgr.moveToDLQ(ctx, queueName, groupID, msg, deliveryCount, dlqPrefix)
+		},
 	}
 
 	raftGroupStore := newRaftGroupStore(groupStore)
@@ -179,7 +194,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		logger,
 	)
 
-	return &Manager{
+	mgr = &Manager{
 		queueStore:      queueStore,
 		groupStore:      raftGroupStore,
 		raftGroupStore:  raftGroupStore,
@@ -197,6 +212,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		delivery:         engine,
 		metrics:          metrics,
 	}
+
+	return mgr
 }
 
 // Start starts background workers.
@@ -707,6 +724,70 @@ func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.Publi
 	}
 
 	return nil
+}
+
+// moveToDLQ publishes a poison message to the dead-letter queue.
+// It auto-creates the DLQ queue if it doesn't exist.
+func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int, dlqPrefix string) {
+	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil || queueCfg == nil || !queueCfg.DLQConfig.Enabled {
+		return
+	}
+
+	dlqTopic := queueCfg.DLQConfig.Topic
+	if dlqTopic == "" {
+		dlqTopic = dlqPrefix + queueName
+	}
+
+	dlqQueueName := dlqTopic
+	if _, err := m.queueStore.GetQueue(ctx, dlqQueueName); err != nil {
+		dlqCfg := types.DefaultQueueConfig(dlqQueueName, dlqTopic+"/#")
+		dlqCfg.DLQConfig.Enabled = false // prevent DLQ chains
+		dlqCfg.MessageTTL = 0            // DLQ messages don't expire
+		if createErr := m.queueStore.CreateQueue(ctx, dlqCfg); createErr != nil {
+			m.logger.Warn("failed to auto-create DLQ queue",
+				slog.String("dlq_queue", dlqQueueName),
+				slog.String("error", createErr.Error()))
+		}
+	}
+
+	props := make(map[string]string, len(msg.Properties)+6)
+	for k, v := range msg.Properties {
+		props[k] = v
+	}
+	props["_dlq_original_queue"] = queueName
+	props["_dlq_original_topic"] = msg.Topic
+	props["_dlq_group"] = groupID
+	props["_dlq_delivery_count"] = strconv.Itoa(deliveryCount)
+	props["_dlq_moved_at"] = time.Now().UTC().Format(time.RFC3339)
+	if msg.ID != "" {
+		props["_dlq_original_id"] = msg.ID
+	}
+
+	dlqMsg := &types.Message{
+		ID:         generateMessageID(),
+		Payload:    msg.GetPayload(),
+		Topic:      dlqTopic,
+		Properties: props,
+		State:      types.StateDLQ,
+		CreatedAt:  time.Now(),
+	}
+
+	if _, err := m.queueStore.Append(ctx, dlqQueueName, dlqMsg); err != nil {
+		m.logger.Warn("failed to append message to DLQ",
+			slog.String("queue", queueName),
+			slog.String("dlq_queue", dlqQueueName),
+			slog.String("message_id", msg.ID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	m.logger.Warn("message moved to DLQ",
+		slog.String("queue", queueName),
+		slog.String("group", groupID),
+		slog.String("dlq_queue", dlqQueueName),
+		slog.String("message_id", msg.ID),
+		slog.Int("delivery_count", deliveryCount))
 }
 
 func autoQueueFromTopic(topic string) (queueName, pattern string) {

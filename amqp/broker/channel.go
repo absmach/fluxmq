@@ -883,32 +883,41 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 	}
 	ch.exchangeMu.Unlock()
 
-	if queueType == string(qtypes.QueueTypeStream) {
-		qm := ch.conn.broker.queueManager
-		if qm != nil {
-			queueTopicPattern := ch.conn.broker.routeResolver.QueueTopic(m.Queue, "#")
-			var cfg qtypes.QueueConfig
-			if m.Durable {
-				cfg = qtypes.DefaultQueueConfig(m.Queue, queueTopicPattern)
-			} else {
-				cfg = qtypes.DefaultEphemeralQueueConfig(m.Queue, queueTopicPattern)
-			}
-			cfg.Type = qtypes.QueueTypeStream
+	qm := ch.conn.broker.queueManager
+	if qm != nil {
+		queueTopicPattern := ch.conn.broker.routeResolver.QueueTopic(m.Queue, "#")
+		var cfg qtypes.QueueConfig
+		if m.Durable {
+			cfg = qtypes.DefaultQueueConfig(m.Queue, queueTopicPattern)
+		} else {
+			cfg = qtypes.DefaultEphemeralQueueConfig(m.Queue, queueTopicPattern)
+		}
+		cfg.Type = qtypes.QueueType(queueType)
+
+		if queueType == string(qtypes.QueueTypeStream) {
 			cfg.Retention = extractStreamRetention(m.Arguments)
-			if err := qm.CreateQueue(context.Background(), cfg); err != nil {
-				// If it already exists, attempt to update retention/type only.
-				if existing, err := qm.GetQueue(context.Background(), m.Queue); err == nil && existing != nil {
-					existing.Type = qtypes.QueueTypeStream
+		}
+		if ttl, ok := extractMessageTTL(m.Arguments); ok {
+			cfg.MessageTTL = ttl
+		}
+
+		if err := qm.CreateQueue(context.Background(), cfg); err != nil {
+			if existing, getErr := qm.GetQueue(context.Background(), m.Queue); getErr == nil && existing != nil {
+				existing.Type = qtypes.QueueType(queueType)
+				if queueType == string(qtypes.QueueTypeStream) {
 					existing.Retention = cfg.Retention
-					if !m.Durable {
-						existing.Durable = false
-						if existing.ExpiresAfter == 0 {
-							existing.ExpiresAfter = 5 * time.Minute
-						}
+				}
+				if ttl, ok := extractMessageTTL(m.Arguments); ok {
+					existing.MessageTTL = ttl
+				}
+				if !m.Durable {
+					existing.Durable = false
+					if existing.ExpiresAfter == 0 {
+						existing.ExpiresAfter = 5 * time.Minute
 					}
-					if err := qm.UpdateQueue(context.Background(), *existing); err != nil {
-						ch.conn.logger.Warn("failed to update stream queue config", "queue", m.Queue, "error", err)
-					}
+				}
+				if err := qm.UpdateQueue(context.Background(), *existing); err != nil {
+					ch.conn.logger.Warn("failed to update queue config", "queue", m.Queue, "error", err)
 				}
 			}
 		}
@@ -1508,6 +1517,23 @@ func extractStreamRetention(args map[string]interface{}) qtypes.RetentionPolicy 
 	return policy
 }
 
+// extractMessageTTL parses x-message-ttl from queue arguments.
+// Per AMQP 0.9.1 spec, x-message-ttl is in milliseconds.
+func extractMessageTTL(args map[string]interface{}) (time.Duration, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	val, ok := args["x-message-ttl"]
+	if !ok {
+		return 0, false
+	}
+	ms, ok := parseInt64Arg(val)
+	if !ok || ms < 0 {
+		return 0, false
+	}
+	return time.Duration(ms) * time.Millisecond, true
+}
+
 func extractStreamOffset(args map[string]interface{}) (*qtypes.CursorOption, bool) {
 	if len(args) == 0 {
 		return nil, false
@@ -1619,6 +1645,8 @@ func parseInt64Arg(val any) (int64, bool) {
 	switch v := val.(type) {
 	case int64:
 		return v, true
+	case int32:
+		return int64(v), true
 	case int:
 		return int64(v), true
 	case uint64:

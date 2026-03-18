@@ -2209,3 +2209,147 @@ func TestPELCapRejectsClaim(t *testing.T) {
 		t.Fatalf("expected 1 message after ack, got %d", len(msgs2))
 	}
 }
+
+func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	mgr := NewManager(
+		logStore, groupStore,
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		logger, nil,
+	)
+
+	// Source queue with DLQ enabled
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	queueCfg.DLQConfig.Enabled = true
+	if err := mgr.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	poisonMsg := &types.Message{
+		ID:      "bad-msg-1",
+		Topic:   "$queue/tasks/process",
+		Payload: []byte("poison-payload"),
+		Properties: map[string]string{
+			"custom-key": "custom-val",
+		},
+	}
+
+	mgr.moveToDLQ(ctx, "tasks", "workers", poisonMsg, 6, "$dlq/")
+
+	// Verify the DLQ queue was auto-created
+	dlqCfg, err := logStore.GetQueue(ctx, "$dlq/tasks")
+	if err != nil {
+		t.Fatalf("DLQ queue not created: %v", err)
+	}
+	if dlqCfg.DLQConfig.Enabled {
+		t.Fatal("DLQ queue should have DLQ disabled to prevent chains")
+	}
+
+	// Read the message from the DLQ queue
+	msg, err := logStore.Read(ctx, "$dlq/tasks", 0)
+	if err != nil {
+		t.Fatalf("failed to read DLQ message: %v", err)
+	}
+	if string(msg.GetPayload()) != "poison-payload" {
+		t.Fatalf("expected poison-payload, got %s", string(msg.GetPayload()))
+	}
+	if msg.Properties["_dlq_original_queue"] != "tasks" {
+		t.Fatalf("expected original queue 'tasks', got %q", msg.Properties["_dlq_original_queue"])
+	}
+	if msg.Properties["_dlq_original_topic"] != "$queue/tasks/process" {
+		t.Fatalf("expected original topic, got %q", msg.Properties["_dlq_original_topic"])
+	}
+	if msg.Properties["_dlq_group"] != "workers" {
+		t.Fatalf("expected group 'workers', got %q", msg.Properties["_dlq_group"])
+	}
+	if msg.Properties["_dlq_delivery_count"] != "6" {
+		t.Fatalf("expected delivery count '6', got %q", msg.Properties["_dlq_delivery_count"])
+	}
+	if msg.Properties["_dlq_original_id"] != "bad-msg-1" {
+		t.Fatalf("expected original ID 'bad-msg-1', got %q", msg.Properties["_dlq_original_id"])
+	}
+	if msg.Properties["custom-key"] != "custom-val" {
+		t.Fatalf("expected original property preserved, got %q", msg.Properties["custom-key"])
+	}
+	if msg.State != types.StateDLQ {
+		t.Fatalf("expected state StateDLQ, got %q", msg.State)
+	}
+}
+
+func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	mgr := NewManager(
+		logStore, groupStore,
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		logger, nil,
+	)
+
+	// Source queue with DLQ disabled
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	queueCfg.DLQConfig.Enabled = false
+	if err := mgr.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	mgr.moveToDLQ(ctx, "tasks", "workers", &types.Message{
+		ID:      "msg-1",
+		Topic:   "$queue/tasks/test",
+		Payload: []byte("data"),
+	}, 5, "$dlq/")
+
+	// DLQ queue should not be created
+	_, err := logStore.GetQueue(ctx, "$dlq/tasks")
+	if err == nil {
+		t.Fatal("expected DLQ queue not to be created when DLQ is disabled")
+	}
+}
+
+func TestMoveToDLQCustomTopic(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	mgr := NewManager(
+		logStore, groupStore,
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DefaultConfig(),
+		logger, nil,
+	)
+
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	queueCfg.DLQConfig.Enabled = true
+	queueCfg.DLQConfig.Topic = "errors/tasks"
+	if err := mgr.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	mgr.moveToDLQ(ctx, "tasks", "workers", &types.Message{
+		ID:      "msg-1",
+		Topic:   "$queue/tasks/test",
+		Payload: []byte("data"),
+	}, 5, "$dlq/")
+
+	// Should use custom topic as queue name
+	_, err := logStore.GetQueue(ctx, "errors/tasks")
+	if err != nil {
+		t.Fatalf("expected DLQ queue at custom topic: %v", err)
+	}
+	msg, err := logStore.Read(ctx, "errors/tasks", 0)
+	if err != nil {
+		t.Fatalf("failed to read from custom DLQ: %v", err)
+	}
+	if string(msg.GetPayload()) != "data" {
+		t.Fatalf("expected 'data', got %s", string(msg.GetPayload()))
+	}
+}

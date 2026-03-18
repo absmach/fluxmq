@@ -362,6 +362,165 @@ func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, client
 	return nil
 }
 
+func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
+	var mu sync.Mutex
+	var dlqCalls []struct {
+		queueName     string
+		groupID       string
+		msgID         string
+		deliveryCount int
+	}
+
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		return nil
+	})
+
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	consumerCfg := consumer.Config{
+		ClaimBatchSize:     10,
+		MaxDeliveryCount:   3,
+		MaxPELSize:         100_000,
+		AutoCommitInterval: DefaultConfig().AutoCommitInterval,
+		VisibilityTimeout:  1 * time.Millisecond, // very short so entries are immediately stealable
+		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int) {
+			mu.Lock()
+			dlqCalls = append(dlqCalls, struct {
+				queueName     string
+				groupID       string
+				msgID         string
+				deliveryCount int
+			}{queueName, groupID, msg.ID, deliveryCount})
+			mu.Unlock()
+		},
+	}
+	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
+
+	engine := NewDeliveryEngine(
+		logStore, groupStore, consumerMgr,
+		local, nil, "",
+		DistributionForward, 100, logger,
+	)
+	_ = engine
+
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	logStore.CreateQueue(ctx, queueCfg)
+
+	// Create group with two consumers
+	group := types.NewConsumerGroupState("tasks", "workers", "")
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
+	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
+	groupStore.CreateConsumerGroup(ctx, group)
+
+	logStore.Append(ctx, "tasks", &types.Message{
+		ID:      "poison-msg",
+		Topic:   "$queue/tasks/job",
+		Payload: []byte("bad-job"),
+	})
+
+	// Claim as c1 to put it in PEL
+	_, err := consumerMgr.Claim(ctx, "tasks", "workers", "c1", nil)
+	if err != nil {
+		t.Fatalf("initial claim failed: %v", err)
+	}
+
+	// Manually set delivery count to exceed max (simulate repeated redeliveries)
+	group.PEL["c1"][0].DeliveryCount = 5
+	group.PEL["c1"][0].ClaimedAt = time.Now().Add(-time.Hour) // make stealable
+
+	// c2 tries to claim — triggers stealWork which should fire DLQ callback
+	_, err = consumerMgr.Claim(ctx, "tasks", "workers", "c2", nil)
+	if err == nil {
+		t.Fatal("expected no messages (poison should go to DLQ, not be delivered)")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dlqCalls) != 1 {
+		t.Fatalf("expected 1 DLQ callback, got %d", len(dlqCalls))
+	}
+	if dlqCalls[0].queueName != "tasks" {
+		t.Fatalf("expected queue 'tasks', got %q", dlqCalls[0].queueName)
+	}
+	if dlqCalls[0].groupID != "workers" {
+		t.Fatalf("expected group 'workers', got %q", dlqCalls[0].groupID)
+	}
+	if dlqCalls[0].msgID != "poison-msg" {
+		t.Fatalf("expected msg ID 'poison-msg', got %q", dlqCalls[0].msgID)
+	}
+	if dlqCalls[0].deliveryCount != 5 {
+		t.Fatalf("expected delivery count 5, got %d", dlqCalls[0].deliveryCount)
+	}
+
+	// Verify the PEL entry was removed
+	entries, _ := groupStore.GetPendingEntries(ctx, "tasks", "workers", "c1")
+	if len(entries) != 0 {
+		t.Fatalf("expected PEL entry to be removed, got %d entries", len(entries))
+	}
+}
+
+func TestDLQCallbackNilHandlerSilentlyDrops(t *testing.T) {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		return nil
+	})
+
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	consumerCfg := consumer.Config{
+		ClaimBatchSize:     10,
+		MaxDeliveryCount:   3,
+		MaxPELSize:         100_000,
+		AutoCommitInterval: DefaultConfig().AutoCommitInterval,
+		VisibilityTimeout:  1 * time.Millisecond,
+		// OnDLQ is nil — should silently remove from PEL
+	}
+	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
+
+	engine := NewDeliveryEngine(
+		logStore, groupStore, consumerMgr,
+		local, nil, "",
+		DistributionForward, 100, logger,
+	)
+	_ = engine
+
+	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	logStore.CreateQueue(ctx, queueCfg)
+
+	group := types.NewConsumerGroupState("tasks", "workers", "")
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
+	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
+	groupStore.CreateConsumerGroup(ctx, group)
+
+	logStore.Append(ctx, "tasks", &types.Message{
+		ID:      "poison-msg",
+		Topic:   "$queue/tasks/job",
+		Payload: []byte("bad-job"),
+	})
+
+	// Claim as c1, then simulate poison
+	consumerMgr.Claim(ctx, "tasks", "workers", "c1", nil)
+	group.PEL["c1"][0].DeliveryCount = 5
+	group.PEL["c1"][0].ClaimedAt = time.Now().Add(-time.Hour)
+
+	// Should not panic with nil OnDLQ
+	_, err := consumerMgr.Claim(ctx, "tasks", "workers", "c2", nil)
+	if err == nil {
+		t.Fatal("expected no messages")
+	}
+
+	// PEL entry should still be removed
+	entries, _ := groupStore.GetPendingEntries(ctx, "tasks", "workers", "c1")
+	if len(entries) != 0 {
+		t.Fatalf("expected PEL entry removed, got %d", len(entries))
+	}
+}
+
 func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
 	var mu sync.Mutex
 	var delivered []*brokerstorage.Message

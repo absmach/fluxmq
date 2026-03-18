@@ -10,14 +10,17 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
 type mockChannelQueueManager struct {
-	lastCursor *qtypes.CursorOption
-	queueCfg   *qtypes.QueueConfig
+	lastCursor    *qtypes.CursorOption
+	queueCfg      *qtypes.QueueConfig
+	createdQueues []qtypes.QueueConfig
+	updatedQueues []qtypes.QueueConfig
 }
 
 func (m *mockChannelQueueManager) Publish(context.Context, qtypes.PublishRequest) error {
@@ -49,7 +52,8 @@ func (m *mockChannelQueueManager) Reject(context.Context, string, string, string
 	return nil
 }
 
-func (m *mockChannelQueueManager) CreateQueue(context.Context, qtypes.QueueConfig) error {
+func (m *mockChannelQueueManager) CreateQueue(_ context.Context, cfg qtypes.QueueConfig) error {
+	m.createdQueues = append(m.createdQueues, cfg)
 	return nil
 }
 
@@ -57,7 +61,8 @@ func (m *mockChannelQueueManager) GetQueue(context.Context, string) (*qtypes.Que
 	return m.queueCfg, nil
 }
 
-func (m *mockChannelQueueManager) UpdateQueue(context.Context, qtypes.QueueConfig) error {
+func (m *mockChannelQueueManager) UpdateQueue(_ context.Context, cfg qtypes.QueueConfig) error {
+	m.updatedQueues = append(m.updatedQueues, cfg)
 	return nil
 }
 
@@ -479,5 +484,122 @@ func TestHandleBasicConsumeInfersStreamFromQueueManager(t *testing.T) {
 	}
 	if mockQM.lastCursor.Position != qtypes.CursorDefault {
 		t.Fatalf("expected default cursor position, got %+v", mockQM.lastCursor)
+	}
+}
+
+func TestExtractMessageTTL(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     map[string]interface{}
+		wantTTL  time.Duration
+		wantOK   bool
+	}{
+		{"nil args", nil, 0, false},
+		{"empty args", map[string]interface{}{}, 0, false},
+		{"missing key", map[string]interface{}{"x-other": 100}, 0, false},
+		{"int32 millis", map[string]interface{}{"x-message-ttl": int32(60000)}, 60 * time.Second, true},
+		{"int64 millis", map[string]interface{}{"x-message-ttl": int64(5000)}, 5 * time.Second, true},
+		{"int millis", map[string]interface{}{"x-message-ttl": 30000}, 30 * time.Second, true},
+		{"string millis", map[string]interface{}{"x-message-ttl": "1000"}, time.Second, true},
+		{"zero", map[string]interface{}{"x-message-ttl": int64(0)}, 0, true},
+		{"negative", map[string]interface{}{"x-message-ttl": int64(-1)}, 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := extractMessageTTL(tt.args)
+			if ok != tt.wantOK {
+				t.Fatalf("ok=%v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.wantTTL {
+				t.Fatalf("ttl=%v, want %v", got, tt.wantTTL)
+			}
+		})
+	}
+}
+
+func TestQueueDeclareClassicCreatesQueueConfig(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+
+	err := ch.handleQueueDeclare(&codec.QueueDeclare{
+		Queue:   "orders",
+		Durable: true,
+	})
+	if err != nil {
+		t.Fatalf("handleQueueDeclare failed: %v", err)
+	}
+
+	if len(mockQM.createdQueues) != 1 {
+		t.Fatalf("expected 1 created queue, got %d", len(mockQM.createdQueues))
+	}
+	cfg := mockQM.createdQueues[0]
+	if cfg.Name != "orders" {
+		t.Fatalf("expected queue name 'orders', got %q", cfg.Name)
+	}
+	if cfg.Type != qtypes.QueueTypeClassic {
+		t.Fatalf("expected classic type, got %q", cfg.Type)
+	}
+	if !cfg.Durable {
+		t.Fatal("expected durable=true")
+	}
+}
+
+func TestQueueDeclareWithMessageTTL(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+
+	err := ch.handleQueueDeclare(&codec.QueueDeclare{
+		Queue:   "orders",
+		Durable: true,
+		Arguments: map[string]interface{}{
+			"x-message-ttl": int32(60000), // 60 seconds in ms
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleQueueDeclare failed: %v", err)
+	}
+
+	if len(mockQM.createdQueues) != 1 {
+		t.Fatalf("expected 1 created queue, got %d", len(mockQM.createdQueues))
+	}
+	cfg := mockQM.createdQueues[0]
+	if cfg.MessageTTL != 60*time.Second {
+		t.Fatalf("expected MessageTTL=60s, got %v", cfg.MessageTTL)
+	}
+}
+
+func TestQueueDeclareStreamWithTTL(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+
+	err := ch.handleQueueDeclare(&codec.QueueDeclare{
+		Queue:   "events",
+		Durable: true,
+		Arguments: map[string]interface{}{
+			"x-queue-type":  "stream",
+			"x-message-ttl": int64(30000),
+			"x-max-age":     "7d",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleQueueDeclare failed: %v", err)
+	}
+
+	if len(mockQM.createdQueues) != 1 {
+		t.Fatalf("expected 1 created queue, got %d", len(mockQM.createdQueues))
+	}
+	cfg := mockQM.createdQueues[0]
+	if cfg.Type != qtypes.QueueTypeStream {
+		t.Fatalf("expected stream type, got %q", cfg.Type)
+	}
+	if cfg.MessageTTL != 30*time.Second {
+		t.Fatalf("expected MessageTTL=30s, got %v", cfg.MessageTTL)
+	}
+	if cfg.Retention.RetentionTime != 7*24*time.Hour {
+		t.Fatalf("expected RetentionTime=7d, got %v", cfg.Retention.RetentionTime)
 	}
 }
