@@ -116,6 +116,7 @@ func main() {
 		"amqp091_plain_listener", cfg.Server.AMQP091.Plain.Addr,
 		"amqp091_tls_listener", cfg.Server.AMQP091.TLS.Addr,
 		"amqp091_mtls_listener", cfg.Server.AMQP091.MTLS.Addr,
+		"admin_api_addr", cfg.Server.AdminAPIAddr,
 		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
@@ -874,10 +875,10 @@ func main() {
 		}()
 	}
 
-	// Start Queue API server (gRPC/HTTP via Connect protocol)
-	if cfg.Server.APIEnabled {
+	// Start Admin API server (HTTP + Connect/gRPC queue service)
+	if cfg.Server.AdminAPIAddr != "" {
 		apiCfg := api.Config{
-			Address:         cfg.Server.APIAddr,
+			Address:         cfg.Server.AdminAPIAddr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 		}
 
@@ -887,13 +888,13 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				slog.Info("Starting Queue API server", "address", cfg.Server.APIAddr)
+				slog.Info("Starting admin API server", "address", cfg.Server.AdminAPIAddr)
 				if err := apiServer.Listen(ctx); err != nil {
 					serverErr <- err
 				}
 			}()
 		} else {
-			slog.Warn("Queue manager or log storage not available, API server disabled")
+			slog.Warn("Queue manager or log storage not available, admin API server disabled")
 		}
 	}
 

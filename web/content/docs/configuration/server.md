@@ -43,8 +43,7 @@ server:
   otel_traces_enabled: false
   otel_trace_sample_rate: 0.1
 
-  api_enabled: false
-  api_addr: ""
+  admin_api_addr: ":8082"
 ```
 
 ## Key Fields
@@ -56,7 +55,7 @@ server:
 - WebSocket specifics: `path`, `allowed_origins`.
 - Health/observability: `health_enabled`, `health_addr`, `metrics_enabled`, `metrics_addr`.
 - OpenTelemetry identity/tuning: `otel_service_name`, `otel_service_version`, `otel_metrics_enabled`, `otel_traces_enabled`, `otel_trace_sample_rate`.
-- Queue API server: `api_enabled`, `api_addr`.
+- Admin API server: `admin_api_addr` (empty string disables the admin API listener).
 - Graceful shutdown: `shutdown_timeout`.
 
 ## Learn More

@@ -25,7 +25,7 @@ _openapi:
       - content: |
           Available on **both** servers with slightly different responses:
 
-          - **API Server** (`api_addr`): Returns `{"status":"ok"}`. Minimal stub
+          - **API Server** (`admin_api_addr`): Returns `{"status":"ok"}`. Minimal stub
             for clients that expect a health endpoint on the API port.
           - **Health Server** (`health_addr`): Returns `{"status":"healthy"}`.
             Use as the k8s `livenessProbe`.

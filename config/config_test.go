@@ -33,6 +33,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Server.WebSocket.V5.Protocol != ProtocolModeV5 {
 		t.Errorf("expected default WebSocket v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.WebSocket.V5.Protocol)
 	}
+	if cfg.Server.AdminAPIAddr != ":8082" {
+		t.Errorf("expected default admin API addr :8082, got %q", cfg.Server.AdminAPIAddr)
+	}
 
 	// Test broker defaults
 	if cfg.Broker.RetryInterval != 20*time.Second {

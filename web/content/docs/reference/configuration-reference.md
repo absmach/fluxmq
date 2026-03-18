@@ -109,8 +109,7 @@ server:
   otel_traces_enabled: false
   otel_trace_sample_rate: 0.1
 
-  api_enabled: false
-  api_addr: "" # Queue API (Connect/gRPC)
+  admin_api_addr: ":8082" # Admin API (HTTP + Connect/gRPC queue service); empty disables
 
   shutdown_timeout: "30s"
 ```
@@ -131,20 +130,19 @@ These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v
 
 ### Server Runtime / Telemetry Fields
 
-| Field                    | Default          | Description                               |
-| ------------------------ | ---------------- | ----------------------------------------- |
-| `health_enabled`         | `true`           | Enables `/health` endpoint.               |
-| `health_addr`            | `:8081`          | Health endpoint bind address.             |
-| `metrics_enabled`        | `false`          | Enables OpenTelemetry exporters.          |
-| `metrics_addr`           | `localhost:4317` | OTLP endpoint address (collector target). |
-| `otel_service_name`      | `fluxmq`         | Telemetry service name.                   |
-| `otel_service_version`   | `1.0.0`          | Telemetry service version tag.            |
-| `otel_metrics_enabled`   | `true`           | Enables OTel metrics export.              |
-| `otel_traces_enabled`    | `false`          | Enables OTel traces export.               |
-| `otel_trace_sample_rate` | `0.1`            | Trace sampling ratio in `[0.0, 1.0]`.     |
-| `api_enabled`            | `false`          | Enables queue API server (Connect/gRPC).  |
-| `api_addr`               | `""`             | API bind address when `api_enabled=true`. |
-| `shutdown_timeout`       | `30s`            | Graceful server shutdown timeout.         |
+| Field                    | Default          | Description                                                       |
+| ------------------------ | ---------------- | ----------------------------------------------------------------- |
+| `health_enabled`         | `true`           | Enables `/health` endpoint.                                       |
+| `health_addr`            | `:8081`          | Health endpoint bind address.                                     |
+| `metrics_enabled`        | `false`          | Enables OpenTelemetry exporters.                                  |
+| `metrics_addr`           | `localhost:4317` | OTLP endpoint address (collector target).                         |
+| `otel_service_name`      | `fluxmq`         | Telemetry service name.                                           |
+| `otel_service_version`   | `1.0.0`          | Telemetry service version tag.                                    |
+| `otel_metrics_enabled`   | `true`           | Enables OTel metrics export.                                      |
+| `otel_traces_enabled`    | `false`          | Enables OTel traces export.                                       |
+| `otel_trace_sample_rate` | `0.1`            | Trace sampling ratio in `[0.0, 1.0]`.                             |
+| `admin_api_addr`         | `:8082`          | Admin API bind address. Set empty string to disable the listener. |
+| `shutdown_timeout`       | `30s`            | Graceful server shutdown timeout.                                 |
 
 ### TLS / DTLS Settings
 

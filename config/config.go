@@ -185,9 +185,8 @@ type ServerConfig struct {
 	OtelMetricsEnabled  bool    `yaml:"otel_metrics_enabled"`
 	OtelTraceSampleRate float64 `yaml:"otel_trace_sample_rate"` // 0.0 to 1.0
 
-	// Queue API server (Connect/gRPC)
-	APIEnabled bool   `yaml:"api_enabled"`
-	APIAddr    string `yaml:"api_addr"`
+	// Admin API server (HTTP + Connect/gRPC). Empty disables the listener.
+	AdminAPIAddr string `yaml:"admin_api_addr"`
 }
 
 // TCPListenerConfig holds TCP listener configuration.
@@ -618,6 +617,7 @@ func Default() *Config {
 			},
 			HealthAddr:      ":8081",
 			HealthEnabled:   true,
+			AdminAPIAddr:    ":8082",
 			MetricsAddr:     "localhost:4317",
 			MetricsEnabled:  false,
 			ShutdownTimeout: 30 * time.Second,
@@ -890,6 +890,11 @@ func (c *Config) Validate() error {
 
 	if !hasMQTTListener {
 		return fmt.Errorf("at least one TCP or WebSocket listener must be configured")
+	}
+
+	c.Server.AdminAPIAddr = strings.TrimSpace(c.Server.AdminAPIAddr)
+	if c.Server.AdminAPIAddr != "" && !hasAddr(c.Server.AdminAPIAddr) {
+		return fmt.Errorf("server.admin_api_addr cannot be blank when set")
 	}
 
 	for _, slot := range httpSlots {

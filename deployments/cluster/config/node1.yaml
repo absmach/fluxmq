@@ -32,6 +32,7 @@ server:
     plain:
       addr: "127.0.0.1:5682"
       max_connections: 10000
+  admin_api_addr: "127.0.0.1:9081"
   health_addr: "127.0.0.1:8081"
   health_enabled: true
   shutdown_timeout: 30s

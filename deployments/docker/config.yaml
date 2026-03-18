@@ -16,6 +16,7 @@ server:
       addr: ":8084"
       path: "/mqtt"
       protocol: "v5"
+  admin_api_addr: ":8082"
 
 cluster:
   enabled: false

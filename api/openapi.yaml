@@ -6,7 +6,7 @@ info:
 
     FluxMQ exposes two HTTP servers with distinct responsibilities:
 
-    - **API Server** (`api_addr`): Admin endpoints for stats, cluster info, session
+    - **API Server** (`admin_api_addr`): Admin endpoints for stats, cluster info, session
       management, and a combined overview. Also serves the Queue Service gRPC/Connect API.
     - **Health Server** (`health_addr`): Lightweight k8s probes for liveness, readiness,
       and basic cluster status.
@@ -18,8 +18,8 @@ info:
     identifier: Apache-2.0
 
 servers:
-  - url: http://localhost:8080
-    description: API Server (api_addr) — admin endpoints, sessions, queue service
+  - url: http://localhost:8082
+    description: API Server (admin_api_addr) — admin endpoints, sessions, queue service
   - url: http://localhost:8888
     description: Health Server (health_addr) — k8s liveness/readiness probes
 
@@ -44,7 +44,7 @@ paths:
         clients compute rates by polling.
       tags: [Admin]
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8082
           description: API Server
       responses:
         "200":
@@ -76,7 +76,7 @@ paths:
         `node_id: "single-node"`.
       tags: [Admin]
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8082
           description: API Server
       responses:
         "200":
@@ -108,7 +108,7 @@ paths:
         into a single response.
       tags: [Admin]
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8082
           description: API Server
       responses:
         "200":
@@ -139,7 +139,7 @@ paths:
         prefix. Supports cursor-based pagination via `page_token`.
       tags: [Sessions]
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8082
           description: API Server
       parameters:
         - name: state
@@ -201,7 +201,7 @@ paths:
         URL-encoded if it contains special characters (e.g. slashes).
       tags: [Sessions]
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8082
           description: API Server
       parameters:
         - name: client_id
@@ -243,7 +243,7 @@ paths:
       description: |
         Available on **both** servers with slightly different responses:
 
-        - **API Server** (`api_addr`): Returns `{"status":"ok"}`. Minimal stub
+        - **API Server** (`admin_api_addr`): Returns `{"status":"ok"}`. Minimal stub
           for clients that expect a health endpoint on the API port.
         - **Health Server** (`health_addr`): Returns `{"status":"healthy"}`.
           Use as the k8s `livenessProbe`.
@@ -251,7 +251,7 @@ paths:
       servers:
         - url: http://localhost:8888
           description: Health Server
-        - url: http://localhost:8080
+        - url: http://localhost:8082
           description: API Server
       responses:
         "200":
