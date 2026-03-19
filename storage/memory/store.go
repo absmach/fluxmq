@@ -54,6 +54,11 @@ func (s *Store) Wills() storage.WillStore {
 	return s.wills
 }
 
+// Ping verifies the store is operational (always succeeds for in-memory).
+func (s *Store) Ping() error {
+	return nil
+}
+
 // Close closes all stores (no-op for memory).
 func (s *Store) Close() error {
 	return nil

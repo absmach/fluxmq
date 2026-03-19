@@ -6,6 +6,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +14,19 @@ import (
 
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/mqtt/broker"
+	"github.com/absmach/fluxmq/storage"
+)
+
+// Operating modes reported by health and readiness endpoints.
+const (
+	ModeNominal  = "nominal"
+	ModeDegraded = "degraded"
+)
+
+// Check status values.
+const (
+	StatusUp   = "up"
+	StatusDown = "down"
 )
 
 // Config holds health check server configuration.
@@ -26,13 +40,14 @@ type Server struct {
 	config   Config
 	broker   *broker.Broker
 	cluster  cluster.Cluster
+	store    storage.Store
 	logger   *slog.Logger
 	server   *http.Server
 	listener net.Listener
 }
 
 // New creates a new health check server.
-func New(cfg Config, b *broker.Broker, cl cluster.Cluster, logger *slog.Logger) *Server {
+func New(cfg Config, b *broker.Broker, cl cluster.Cluster, st storage.Store, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -41,6 +56,7 @@ func New(cfg Config, b *broker.Broker, cl cluster.Cluster, logger *slog.Logger) 
 		config:  cfg,
 		broker:  b,
 		cluster: cl,
+		store:   st,
 		logger:  logger,
 	}
 
@@ -60,7 +76,7 @@ func New(cfg Config, b *broker.Broker, cl cluster.Cluster, logger *slog.Logger) 
 }
 
 // Addr returns the listener's network address.
-// Returns nil if server hasn't started listening yet.
+// Returns empty string if server hasn't started listening yet.
 func (s *Server) Addr() string {
 	if s.listener == nil {
 		return ""
@@ -103,9 +119,23 @@ func (s *Server) Listen(ctx context.Context) error {
 	}
 }
 
+// CheckResult holds the status of an individual health check component.
+type CheckResult struct {
+	Status  string `json:"status"`
+	Details string `json:"details,omitempty"`
+}
+
 // HealthResponse represents the liveness probe response.
 type HealthResponse struct {
 	Status string `json:"status"`
+}
+
+// ReadyResponse represents the readiness probe response.
+type ReadyResponse struct {
+	Status  string                  `json:"status"`
+	Mode    string                  `json:"mode,omitempty"`
+	Details string                  `json:"details,omitempty"`
+	Checks  map[string]*CheckResult `json:"checks,omitempty"`
 }
 
 // handleHealth implements liveness probe.
@@ -123,14 +153,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ReadyResponse represents the readiness probe response.
-type ReadyResponse struct {
-	Status  string `json:"status"`
-	Details string `json:"details,omitempty"`
-}
-
 // handleReady implements readiness probe.
-// Returns 200 OK if the node is ready to accept traffic.
+//
+// The endpoint evaluates three components and returns a composite result:
+//
+//   - broker:  fails (503) when the broker has not been initialized.
+//   - storage: fails (503) when storage.Ping() returns an error.
+//   - cluster: in clustered mode, returns degraded (200) when some peers are
+//     unreachable but the local node is operational; fails (503) when the
+//     cluster has not finished initializing (empty NodeID).
+//
+// A degraded response still returns HTTP 200 so that load-balancers keep
+// routing traffic — the node can serve local clients even when some peers
+// are unreachable. The "mode" field distinguishes nominal from degraded.
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -139,33 +174,85 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Check if broker is ready (not shutting down)
+	checks := make(map[string]*CheckResult, 3)
+	mode := ModeNominal
+
+	// --- Broker ---
 	if s.broker == nil {
+		checks["broker"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(ReadyResponse{
 			Status:  "not_ready",
 			Details: "broker not initialized",
+			Checks:  checks,
 		})
 		return
 	}
+	checks["broker"] = &CheckResult{Status: StatusUp}
 
-	// If clustered, check cluster connectivity
+	// --- Storage ---
+	if s.store != nil {
+		if err := s.store.Ping(); err != nil {
+			checks["storage"] = &CheckResult{Status: StatusDown, Details: err.Error()}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(ReadyResponse{
+				Status:  "not_ready",
+				Details: "storage unavailable",
+				Checks:  checks,
+			})
+			return
+		}
+	}
+	checks["storage"] = &CheckResult{Status: StatusUp}
+
+	// --- Cluster ---
 	if s.cluster != nil {
 		nodeID := s.cluster.NodeID()
 		if nodeID == "" {
+			checks["cluster"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(ReadyResponse{
 				Status:  "not_ready",
 				Details: "cluster not initialized",
+				Checks:  checks,
 			})
 			return
+		}
+
+		nodes := s.cluster.Nodes()
+		total, healthy := countPeers(nodeID, nodes)
+		if total > 0 && healthy < total {
+			mode = ModeDegraded
+			checks["cluster"] = &CheckResult{
+				Status:  StatusUp,
+				Details: fmt.Sprintf("%d/%d peers reachable", healthy, total),
+			}
+		} else {
+			checks["cluster"] = &CheckResult{Status: StatusUp}
 		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(ReadyResponse{
 		Status: "ready",
+		Mode:   mode,
+		Checks: checks,
 	})
+}
+
+// countPeers returns the total number of peers (excluding self) and how many
+// of those report as healthy.
+func countPeers(selfID string, nodes []cluster.NodeInfo) (total, healthy int) {
+	for _, n := range nodes {
+		if n.ID == selfID {
+			continue
+		}
+		total++
+		if n.Healthy {
+			healthy++
+		}
+	}
+	return total, healthy
 }
 
 // ClusterStatusResponse represents cluster health information.
@@ -205,9 +292,6 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	response.NodeID = s.cluster.NodeID()
 	response.IsLeader = s.cluster.IsLeader()
 	response.Sessions = int(s.broker.Stats().GetCurrentConnections())
-
-	// Get node count if available (would need to add GetNodeCount to cluster interface)
-	// For now, just return what we have
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)

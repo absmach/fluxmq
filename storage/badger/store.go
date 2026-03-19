@@ -97,6 +97,13 @@ func (s *Store) Wills() storage.WillStore {
 	return s.wills
 }
 
+// Ping verifies BadgerDB is reachable by executing a lightweight read transaction.
+func (s *Store) Ping() error {
+	return s.db.View(func(txn *badger.Txn) error {
+		return nil
+	})
+}
+
 // Close gracefully closes the BadgerDB database.
 func (s *Store) Close() error {
 	s.mu.Lock()

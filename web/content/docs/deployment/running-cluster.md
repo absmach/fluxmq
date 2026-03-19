@@ -39,18 +39,18 @@ make build
 
 ## Cluster Port Map
 
-| Service      | Node 1 | Node 2 | Node 3 |
-|--------------|--------|--------|--------|
-| MQTT v3      | 1883   | 1885   | 1887   |
-| MQTT v5      | 1884   | 1886   | 1888   |
-| WebSocket    | 8883   | 8884   | 8885   |
-| HTTP         | 8090   | 8091   | 8092   |
-| AMQP 1.0     | 5672   | 5673   | 5674   |
-| AMQP 0.9.1   | 5682   | 5683   | 5684   |
-| Health       | 8081   | 8082   | 8083   |
-| etcd peer    | 2380   | 2381   | 2382   |
-| etcd client  | 2379   | 2389   | 2399   |
-| gRPC transport | 7948 | 7949   | 7950   |
+| Service        | Node 1 | Node 2 | Node 3 |
+| -------------- | ------ | ------ | ------ |
+| MQTT v3        | 1883   | 1885   | 1887   |
+| MQTT v5        | 1884   | 1886   | 1888   |
+| WebSocket      | 8883   | 8884   | 8885   |
+| HTTP           | 8090   | 8091   | 8092   |
+| AMQP 1.0       | 5672   | 5673   | 5674   |
+| AMQP 0.9.1     | 5682   | 5683   | 5684   |
+| Health         | 8081   | 8082   | 8083   |
+| etcd peer      | 2380   | 2381   | 2382   |
+| etcd client    | 2379   | 2389   | 2399   |
+| gRPC transport | 7948   | 7949   | 7950   |
 
 Local cluster configs use dedicated listeners on each node:
 - `server.tcp.v3` for MQTT 3.1.1

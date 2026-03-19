@@ -3,6 +3,7 @@
   "pages": [
     "running-cluster",
     "running-in-production",
+    "health-readiness",
     "performance-tuning"
   ]
 }

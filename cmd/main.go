@@ -858,7 +858,7 @@ func main() {
 			Address:         cfg.Server.HealthAddr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 		}
-		healthServer := health.New(healthCfg, b, cl, logger)
+		healthServer := health.New(healthCfg, b, cl, store, logger)
 
 		wg.Add(1)
 		go func() {

@@ -35,6 +35,9 @@ type Store interface {
 	// Wills returns the will message store.
 	Wills() WillStore
 
+	// Ping verifies the storage backend is reachable and operational.
+	Ping() error
+
 	// Close closes all storage backends.
 	Close() error
 }
