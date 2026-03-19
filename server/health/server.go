@@ -158,7 +158,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // The endpoint evaluates three components and returns a composite result:
 //
 //   - broker:  fails (503) when the broker has not been initialized.
-//   - storage: fails (503) when storage.Ping() returns an error.
+//   - storage: fails (503) when storage is not initialized or Ping() fails.
 //   - cluster: in clustered mode, returns degraded (200) when some peers are
 //     unreachable but the local node is operational; fails (503) when the
 //     cluster has not finished initializing (empty NodeID).
@@ -191,22 +191,30 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	checks["broker"] = &CheckResult{Status: StatusUp}
 
 	// --- Storage ---
-	if s.store != nil {
-		if err := s.store.Ping(); err != nil {
-			checks["storage"] = &CheckResult{Status: StatusDown, Details: err.Error()}
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(ReadyResponse{
-				Status:  "not_ready",
-				Details: "storage unavailable",
-				Checks:  checks,
-			})
-			return
-		}
+	if s.store == nil {
+		checks["storage"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(ReadyResponse{
+			Status:  "not_ready",
+			Details: "storage not initialized",
+			Checks:  checks,
+		})
+		return
+	}
+	if err := s.store.Ping(); err != nil {
+		checks["storage"] = &CheckResult{Status: StatusDown, Details: err.Error()}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(ReadyResponse{
+			Status:  "not_ready",
+			Details: "storage unavailable",
+			Checks:  checks,
+		})
+		return
 	}
 	checks["storage"] = &CheckResult{Status: StatusUp}
 
 	// --- Cluster ---
-	if s.cluster != nil {
+	if s.clusterEnabled() {
 		nodeID := s.cluster.NodeID()
 		if nodeID == "" {
 			checks["cluster"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
@@ -238,6 +246,15 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		Mode:   mode,
 		Checks: checks,
 	})
+}
+
+// clusterEnabled reports whether true distributed clustering is enabled.
+func (s *Server) clusterEnabled() bool {
+	if s.cluster == nil {
+		return false
+	}
+	_, isNoop := s.cluster.(*cluster.NoopCluster)
+	return !isNoop
 }
 
 // countPeers returns the total number of peers (excluding self) and how many
@@ -279,7 +296,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Single-node mode
-	if s.cluster == nil {
+	if !s.clusterEnabled() {
 		response.NodeID = "single-node"
 		response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 		w.WriteHeader(http.StatusOK)

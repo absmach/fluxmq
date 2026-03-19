@@ -63,12 +63,12 @@ Each entry in `checks` contains:
 
 ### Components checked
 
-| Component   | Failure →     | Condition                                                              |
-| ----------- | ------------- | ---------------------------------------------------------------------- |
-| **broker**  | 503 not_ready | Broker not initialized                                                 |
-| **storage** | 503 not_ready | `storage.Ping()` returns an error (BadgerDB unreachable, closed, etc.) |
-| **cluster** | 503 not_ready | Cluster enabled but NodeID is empty (still initializing)               |
-| **cluster** | 200 degraded  | Some peers are unreachable (node can still serve local traffic)        |
+| Component   | Failure →     | Condition                                                                                          |
+| ----------- | ------------- | -------------------------------------------------------------------------------------------------- |
+| **broker**  | 503 not_ready | Broker not initialized                                                                             |
+| **storage** | 503 not_ready | Storage not initialized, or `storage.Ping()` returns an error (BadgerDB unreachable, closed, etc.) |
+| **cluster** | 503 not_ready | Cluster enabled but NodeID is empty (still initializing)                                           |
+| **cluster** | 200 degraded  | Some peers are unreachable (node can still serve local traffic)                                    |
 
 ### Nominal (all healthy)
 

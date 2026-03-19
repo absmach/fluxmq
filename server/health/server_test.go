@@ -27,10 +27,10 @@ type mockCluster struct {
 	nodes    []cluster.NodeInfo
 }
 
-func (m *mockCluster) NodeID() string  { return m.nodeID }
-func (m *mockCluster) IsLeader() bool  { return m.isLeader }
-func (m *mockCluster) Start() error    { return nil }
-func (m *mockCluster) Stop() error     { return nil }
+func (m *mockCluster) NodeID() string { return m.nodeID }
+func (m *mockCluster) IsLeader() bool { return m.isLeader }
+func (m *mockCluster) Start() error   { return nil }
+func (m *mockCluster) Stop() error    { return nil }
 func (m *mockCluster) Nodes() []cluster.NodeInfo {
 	if m.nodes != nil {
 		return m.nodes
@@ -196,6 +196,7 @@ func TestReadyEndpoint(t *testing.T) {
 		expectedReason string
 		checkName      string
 		checkStatus    string
+		absentCheck    string
 	}{
 		{
 			name:           "broker nil - not ready",
@@ -208,12 +209,14 @@ func TestReadyEndpoint(t *testing.T) {
 			checkStatus:    StatusDown,
 		},
 		{
-			name:           "single node no store - ready nominal",
+			name:           "nil store - not ready",
 			broker:         broker.NewBroker(nil, nil),
 			method:         http.MethodGet,
-			expectedStatus: http.StatusOK,
-			expectedReady:  true,
-			expectedMode:   ModeNominal,
+			expectedStatus: http.StatusServiceUnavailable,
+			expectedReady:  false,
+			expectedReason: "storage not initialized",
+			checkName:      "storage",
+			checkStatus:    StatusDown,
 		},
 		{
 			name:           "storage healthy - ready nominal",
@@ -225,6 +228,20 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedMode:   ModeNominal,
 			checkName:      "storage",
 			checkStatus:    StatusUp,
+			absentCheck:    "cluster",
+		},
+		{
+			name:           "noop cluster treated as single-node mode",
+			broker:         broker.NewBroker(nil, nil),
+			cluster:        cluster.NewNoopCluster("single-node"),
+			store:          &mockStore{},
+			method:         http.MethodGet,
+			expectedStatus: http.StatusOK,
+			expectedReady:  true,
+			expectedMode:   ModeNominal,
+			checkName:      "storage",
+			checkStatus:    StatusUp,
+			absentCheck:    "cluster",
 		},
 		{
 			name:           "storage down - not ready",
@@ -241,6 +258,7 @@ func TestReadyEndpoint(t *testing.T) {
 			name:           "cluster not initialized - not ready",
 			broker:         broker.NewBroker(nil, nil),
 			cluster:        &mockCluster{nodeID: ""},
+			store:          &mockStore{},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusServiceUnavailable,
 			expectedReady:  false,
@@ -260,6 +278,7 @@ func TestReadyEndpoint(t *testing.T) {
 					{ID: "node-3", Healthy: true},
 				},
 			},
+			store:          &mockStore{},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
@@ -279,6 +298,7 @@ func TestReadyEndpoint(t *testing.T) {
 					{ID: "node-3", Healthy: false},
 				},
 			},
+			store:          &mockStore{},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
@@ -298,6 +318,7 @@ func TestReadyEndpoint(t *testing.T) {
 					{ID: "node-3", Healthy: false},
 				},
 			},
+			store:          &mockStore{},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
@@ -353,6 +374,11 @@ func TestReadyEndpoint(t *testing.T) {
 					t.Errorf("expected check %q status %q, got %q", tt.checkName, tt.checkStatus, check.Status)
 				}
 			}
+			if tt.absentCheck != "" {
+				if _, ok := resp.Checks[tt.absentCheck]; ok {
+					t.Errorf("expected check %q to be omitted, got %v", tt.absentCheck, resp.Checks)
+				}
+			}
 		})
 	}
 }
@@ -400,6 +426,14 @@ func TestClusterStatusEndpoint(t *testing.T) {
 		{
 			name:            "single node mode",
 			cluster:         nil,
+			method:          http.MethodGet,
+			expectedStatus:  http.StatusOK,
+			expectedCluster: false,
+			expectedNodeID:  "single-node",
+		},
+		{
+			name:            "noop cluster mode is reported as single node",
+			cluster:         cluster.NewNoopCluster("node-1"),
 			method:          http.MethodGet,
 			expectedStatus:  http.StatusOK,
 			expectedCluster: false,
