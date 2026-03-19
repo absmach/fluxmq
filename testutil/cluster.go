@@ -382,11 +382,13 @@ func (tc *TestCluster) stopNode(node *TestNode) {
 	// Stop broker first so queue/session cleanup finishes before etcd client closes.
 	if node.Broker != nil {
 		node.Broker.Close()
+		node.Broker = nil
 	}
 
 	// Stop cluster after broker/queue shutdown.
 	if node.Cluster != nil {
 		node.Cluster.Stop()
+		node.Cluster = nil
 	}
 
 	if node.queueStore != nil {
@@ -435,12 +437,54 @@ func (tc *TestCluster) KillNode(id string) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	node := tc.GetNode(id)
+	var node *TestNode
+	for _, n := range tc.Nodes {
+		if n.ID == id {
+			node = n
+			break
+		}
+	}
 	if node == nil {
 		return fmt.Errorf("node %s not found", id)
 	}
 
 	tc.stopNode(node)
+	return nil
+}
+
+// WaitForNewLeader waits for a leader to be elected, excluding the given node ID.
+func (tc *TestCluster) WaitForNewLeader(timeout time.Duration, excludeNodeID string) (*TestNode, error) {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		tc.mu.RLock()
+		for _, node := range tc.Nodes {
+			if node.ID == excludeNodeID {
+				continue
+			}
+			if node.Cluster != nil && node.Cluster.IsLeader() {
+				tc.mu.RUnlock()
+				tc.t.Logf("New leader elected: %s (excluding %s)", node.ID, excludeNodeID)
+				return node, nil
+			}
+		}
+		tc.mu.RUnlock()
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	return nil, fmt.Errorf("no new leader elected within %v (excluding %s)", timeout, excludeNodeID)
+}
+
+// GetNonLeaderNode returns the first non-leader node.
+func (tc *TestCluster) GetNonLeaderNode() *TestNode {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	for _, node := range tc.Nodes {
+		if node.Cluster != nil && !node.Cluster.IsLeader() {
+			return node
+		}
+	}
 	return nil
 }
 
