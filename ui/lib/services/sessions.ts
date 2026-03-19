@@ -5,6 +5,8 @@ export interface SessionsParams {
 	prefix?: string;
 	limit?: number;
 	pageToken?: string;
+	scope?: "cluster" | "node";
+	nodeId?: string | null;
 }
 
 export interface SessionsResult {
@@ -18,8 +20,10 @@ export async function getSessions(
 	const qs = new URLSearchParams();
 	if (params.state && params.state !== "all") qs.set("state", params.state);
 	if (params.prefix) qs.set("prefix", params.prefix);
-	if (params.limit) qs.set("limit", String(params.limit));
+	if (params.limit !== undefined) qs.set("limit", String(params.limit));
 	if (params.pageToken) qs.set("page_token", params.pageToken);
+	if (params.scope) qs.set("scope", params.scope);
+	if (params.nodeId) qs.set("node_id", params.nodeId);
 
 	const url = `/api/sessions${qs.toString() ? `?${qs}` : ""}`;
 	const res = await fetch(url, { cache: "no-store" });
@@ -31,8 +35,14 @@ export async function getSessions(
 	};
 }
 
-export async function getSession(id: string): Promise<SessionInfo> {
-	const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+export async function getSession(
+	id: string,
+	nodeId?: string | null,
+): Promise<SessionInfo> {
+	const qs = new URLSearchParams();
+	if (nodeId) qs.set("node_id", nodeId);
+	const url = `/api/sessions/${encodeURIComponent(id)}${qs.toString() ? `?${qs}` : ""}`;
+	const res = await fetch(url, {
 		cache: "no-store",
 	});
 	if (!res.ok)

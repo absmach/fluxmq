@@ -1,8 +1,10 @@
 "use client";
 
 import { BookMarked, Search } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,14 +16,10 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { TablePagination } from "@/components/ui/table-pagination";
-import { getSession, getSessions } from "@/lib/services/sessions";
-
-interface AggregatedSubscription {
-	filter: string;
-	subscriber_count: number;
-	max_qos: number;
-	clients: string[];
-}
+import {
+	type AggregatedSubscription,
+	getAggregatedSubscriptions,
+} from "@/lib/services/subscriptions";
 
 const QOS_COLORS = [
 	"bg-flux-green/10 text-flux-green border-flux-green/20",
@@ -42,41 +40,15 @@ const SubsClient = () => {
 		async function load() {
 			setLoading(true);
 			try {
-				const { sessions } = await getSessions({ state: "connected" });
-				const details = await Promise.all(
-					sessions.map((s) => getSession(s.client_id).catch(() => null)),
-				);
-				const map = new Map<string, AggregatedSubscription>();
-				for (const detail of details) {
-					if (!detail?.subscriptions) continue;
-					for (const sub of detail.subscriptions) {
-						const existing = map.get(sub.filter);
-						if (existing) {
-							existing.subscriber_count++;
-							existing.max_qos = Math.max(existing.max_qos, sub.qos);
-							existing.clients.push(detail.client_id);
-						} else {
-							map.set(sub.filter, {
-								filter: sub.filter,
-								subscriber_count: 1,
-								max_qos: sub.qos,
-								clients: [detail.client_id],
-							});
-						}
-					}
-				}
-				setSubscriptions(
-					Array.from(map.values()).sort(
-						(a, b) => b.subscriber_count - a.subscriber_count,
-					),
-				);
+				const aggregated = await getAggregatedSubscriptions();
+				setSubscriptions(aggregated);
 			} catch (e) {
 				console.error(e);
 			} finally {
 				setLoading(false);
 			}
 		}
-		load();
+		void load();
 	}, []);
 
 	const filtered = search
@@ -136,7 +108,7 @@ const SubsClient = () => {
 									<TableHead>Filter</TableHead>
 									<TableHead className="text-right">Subscribers</TableHead>
 									<TableHead>Max QoS</TableHead>
-									<TableHead>Clients</TableHead>
+									<TableHead className="text-right">Actions</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -170,17 +142,22 @@ const SubsClient = () => {
 													QoS {sub.max_qos}
 												</Badge>
 											</TableCell>
-											<TableCell>
-												<div className="flex flex-wrap gap-1">
-													{sub.clients.map((c) => (
-														<span
-															key={c}
-															className="text-xs font-mono bg-flux-bg border border-flux-card-border text-flux-text-muted px-1.5 py-0.5 rounded"
-														>
-															{c}
-														</span>
-													))}
-												</div>
+											<TableCell className="text-right">
+												<Button
+													asChild
+													variant="ghost"
+													size="sm"
+													className="text-xs text-flux-text-muted hover:text-flux-blue hover:bg-flux-blue/10"
+												>
+													<Link
+														href={{
+															pathname: "/dashboard/subscriptions/details",
+															query: { filter: sub.filter },
+														}}
+													>
+														View clients
+													</Link>
+												</Button>
 											</TableCell>
 										</TableRow>
 									))}

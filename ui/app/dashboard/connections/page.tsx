@@ -1,7 +1,7 @@
-import ConnectionsClient from "./_components/connections-client";
+import { redirect } from "next/navigation";
 
 const ConnectionsPage = () => {
-	return <ConnectionsClient />;
+	redirect("/dashboard/sessions");
 };
 
 export default ConnectionsPage;

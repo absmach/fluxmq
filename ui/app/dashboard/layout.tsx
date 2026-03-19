@@ -3,7 +3,6 @@
 import {
 	Activity,
 	BookMarked,
-	Globe,
 	Home,
 	Info,
 	Menu,
@@ -35,7 +34,6 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 
 	const navigationItems = [
 		{ label: "Overview", href: "/dashboard", icon: Home },
-		{ label: "Connections", href: "/dashboard/connections", icon: Globe },
 		{ label: "Sessions", href: "/dashboard/sessions", icon: Activity },
 		{
 			label: "Subscriptions",
