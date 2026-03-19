@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +122,25 @@ func (b *Broker) registerConnection(connID string, c *Connection) {
 
 func (b *Broker) unregisterConnection(connID string) {
 	b.connections.Delete(connID)
+}
+
+// ConnectionIDs returns active AMQP 0.9.1 connection IDs sorted ascending.
+func (b *Broker) ConnectionIDs() []string {
+	ids := make([]string, 0)
+	b.connections.Range(func(key, _ any) bool {
+		if connID, ok := key.(string); ok {
+			ids = append(ids, connID)
+		}
+		return true
+	})
+	sort.Strings(ids)
+	return ids
+}
+
+// HasConnection reports whether an AMQP 0.9.1 connection is currently active.
+func (b *Broker) HasConnection(connID string) bool {
+	_, ok := b.connections.Load(connID)
+	return ok
 }
 
 // Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.

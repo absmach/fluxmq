@@ -8,10 +8,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -62,7 +64,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil {
+	if s.broker == nil && s.amqpBroker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -83,26 +85,19 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	sessions, nextPageToken, err := s.broker.ListSessions(mqttbroker.SessionListFilter{
-		Prefix:    strings.TrimSpace(r.URL.Query().Get("prefix")),
-		State:     state,
-		Limit:     limit,
-		PageToken: strings.TrimSpace(r.URL.Query().Get("page_token")),
-	})
+	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
+	pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
+
+	sessions, nextPageToken, err := s.listSessions(prefix, state, limit, pageToken)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	resp := listSessionsResponse{
-		Sessions:      make([]sessionResponse, 0, len(sessions)),
+	writeJSON(w, http.StatusOK, listSessionsResponse{
+		Sessions:      sessions,
 		NextPageToken: nextPageToken,
-	}
-	for _, snapshot := range sessions {
-		resp.Sessions = append(resp.Sessions, sessionToResponse(snapshot))
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	})
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +110,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil {
+	if s.broker == nil && s.amqpBroker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -126,17 +121,111 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, err := s.broker.GetSessionSnapshot(clientID)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			writeAPIError(w, http.StatusNotFound, "session not found")
+	if s.broker != nil {
+		snapshot, err := s.broker.GetSessionSnapshot(clientID)
+		if err == nil {
+			writeJSON(w, http.StatusOK, sessionToResponse(*snapshot))
 			return
 		}
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
+		if !errors.Is(err, storage.ErrNotFound) {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
-	writeJSON(w, http.StatusOK, sessionToResponse(*snapshot))
+	if s.amqpBroker != nil && corebroker.IsAMQP091Client(clientID) {
+		connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
+		if s.amqpBroker.HasConnection(connID) {
+			writeJSON(w, http.StatusOK, amqpSessionResponse(clientID))
+			return
+		}
+	}
+
+	writeAPIError(w, http.StatusNotFound, "session not found")
+}
+
+func (s *Server) listSessions(prefix, state string, limit int, pageToken string) ([]sessionResponse, string, error) {
+	byClientID := make(map[string]sessionResponse)
+
+	if s.broker != nil {
+		snapshots, _, err := s.broker.ListSessions(mqttbroker.SessionListFilter{
+			Prefix: prefix,
+			State:  state,
+			Limit:  0,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		for _, snapshot := range snapshots {
+			resp := sessionToResponse(snapshot)
+			byClientID[resp.ClientID] = resp
+		}
+	}
+
+	if s.amqpBroker != nil && stateAllowsConnected(state) {
+		for _, connID := range s.amqpBroker.ConnectionIDs() {
+			clientID := corebroker.PrefixedAMQP091ClientID(connID)
+			if prefix != "" && !strings.HasPrefix(clientID, prefix) {
+				continue
+			}
+			if _, exists := byClientID[clientID]; exists {
+				continue
+			}
+			byClientID[clientID] = amqpSessionResponse(clientID)
+		}
+	}
+
+	clientIDs := make([]string, 0, len(byClientID))
+	for clientID := range byClientID {
+		clientIDs = append(clientIDs, clientID)
+	}
+	sort.Strings(clientIDs)
+
+	start := 0
+	if pageToken != "" {
+		start = len(clientIDs)
+		for i, clientID := range clientIDs {
+			if clientID > pageToken {
+				start = i
+				break
+			}
+		}
+	}
+
+	end := len(clientIDs)
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+
+	page := make([]sessionResponse, 0, end-start)
+	for _, clientID := range clientIDs[start:end] {
+		page = append(page, byClientID[clientID])
+	}
+
+	nextPageToken := ""
+	if end < len(clientIDs) && len(page) > 0 {
+		nextPageToken = page[len(page)-1].ClientID
+	}
+
+	return page, nextPageToken, nil
+}
+
+func stateAllowsConnected(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "", "all", "connected":
+		return true
+	default:
+		return false
+	}
+}
+
+func amqpSessionResponse(clientID string) sessionResponse {
+	return sessionResponse{
+		ClientID:  clientID,
+		State:     "connected",
+		Connected: true,
+		Protocol:  "amqp0.9.1",
+	}
 }
 
 func sessionIDFromPath(r *http.Request) (string, bool) {
@@ -165,7 +254,7 @@ func sessionToResponse(snapshot mqttbroker.SessionSnapshot) sessionResponse {
 		ClientID:          snapshot.ClientID,
 		State:             snapshot.State,
 		Connected:         snapshot.Connected,
-		Protocol:          protocolLabel(snapshot.Version),
+		Protocol:          protocolLabel(snapshot.ClientID, snapshot.Version),
 		Version:           int(snapshot.Version),
 		CleanStart:        snapshot.CleanStart,
 		ExpiryInterval:    snapshot.ExpiryInterval,
@@ -200,7 +289,7 @@ func sessionToResponse(snapshot mqttbroker.SessionSnapshot) sessionResponse {
 	return resp
 }
 
-func protocolLabel(version byte) string {
+func protocolLabel(clientID string, version byte) string {
 	switch version {
 	case 3:
 		return "mqtt3.1"
@@ -209,6 +298,12 @@ func protocolLabel(version byte) string {
 	case 5:
 		return "mqtt5"
 	default:
+		if corebroker.IsAMQP091Client(clientID) {
+			return "amqp0.9.1"
+		}
+		if corebroker.IsAMQP1Client(clientID) {
+			return "amqp1.0"
+		}
 		return "unknown"
 	}
 }

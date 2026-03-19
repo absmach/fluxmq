@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -179,6 +180,37 @@ func TestListSessionsStripsSubscriptionsFromListView(t *testing.T) {
 		if s.Subscriptions != nil {
 			t.Fatalf("expected nil Subscriptions in list view for %q", s.ClientID)
 		}
+	}
+}
+
+func TestListSessionsZeroLimitReturnsAllSessions(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+
+	opts := session.Options{
+		CleanStart:     false,
+		KeepAlive:      30 * time.Second,
+		ReceiveMaximum: 10,
+	}
+
+	const total = 60
+	for i := 0; i < total; i++ {
+		clientID := fmt.Sprintf("client-%03d", i)
+		if _, _, err := b.CreateSession(clientID, 5, opts); err != nil {
+			t.Fatalf("CreateSession(%q): %v", clientID, err)
+		}
+	}
+
+	sessions, token, err := b.ListSessions(SessionListFilter{Limit: 0})
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != total {
+		t.Fatalf("expected %d sessions, got %d", total, len(sessions))
+	}
+	if token != "" {
+		t.Fatalf("expected empty page token with no limit, got %q", token)
 	}
 }
 

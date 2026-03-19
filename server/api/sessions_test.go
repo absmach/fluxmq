@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	corebroker "github.com/absmach/fluxmq/broker"
 	mqtt "github.com/absmach/fluxmq/mqtt"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -112,6 +114,31 @@ func TestSessionDetailEndpointSupportsEscapedClientID(t *testing.T) {
 	}
 }
 
+func TestSessionDetailEndpointDetectsAMQPProtocolFromClientIDPrefix(t *testing.T) {
+	store := memory.New()
+	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
+	clientID := corebroker.PrefixedAMQP091ClientID("conn-1")
+	createSessionWithVersion(t, b, store, clientID, 0, true, "amqp/one")
+
+	srv := New(Config{}, b, nil, nil, nil, nil, nil, slog.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+url.PathEscape(clientID), nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp sessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Protocol != "amqp0.9.1" {
+		t.Fatalf("expected amqp0.9.1 protocol, got %q", resp.Protocol)
+	}
+}
+
 func TestSessionsListEndpointRejectsInvalidState(t *testing.T) {
 	srv := newTestAPIServer(t)
 
@@ -201,6 +228,57 @@ func TestSessionsNilBrokerReturnsServiceUnavailable(t *testing.T) {
 				t.Fatalf("expected 503, got %d", rec.Code)
 			}
 		})
+	}
+}
+
+func TestSessionsAMQPOnlyListReturnsOK(t *testing.T) {
+	srv := New(
+		Config{},
+		nil,
+		amqpbroker.New(nil, slog.Default()),
+		nil,
+		nil,
+		nil,
+		nil,
+		slog.Default(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp listSessionsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Sessions) != 0 {
+		t.Fatalf("expected no sessions, got %d", len(resp.Sessions))
+	}
+}
+
+func TestSessionsAMQPOnlyDetailMissingReturnsNotFound(t *testing.T) {
+	srv := New(
+		Config{},
+		nil,
+		amqpbroker.New(nil, slog.Default()),
+		nil,
+		nil,
+		nil,
+		nil,
+		slog.Default(),
+	)
+
+	clientID := corebroker.PrefixedAMQP091ClientID("missing-conn")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+url.PathEscape(clientID), nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
 	}
 }
 
@@ -323,9 +401,13 @@ func newTestAPIServer(t *testing.T) *Server {
 }
 
 func createSession(t *testing.T, b *mqttbroker.Broker, store *memory.Store, clientID string, connected bool, filter string) {
+	createSessionWithVersion(t, b, store, clientID, byte(mqtt.ProtocolV5), connected, filter)
+}
+
+func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.Store, clientID string, version byte, connected bool, filter string) {
 	t.Helper()
 
-	s, _, err := b.CreateSession(clientID, mqtt.ProtocolV5, session.Options{
+	s, _, err := b.CreateSession(clientID, version, session.Options{
 		CleanStart:     false,
 		KeepAlive:      30 * time.Second,
 		ReceiveMaximum: 10,

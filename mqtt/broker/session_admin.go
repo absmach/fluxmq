@@ -14,8 +14,6 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
-const defaultSessionListLimit = 50
-
 // SessionListFilter controls session listing.
 type SessionListFilter struct {
 	Prefix    string
@@ -74,9 +72,7 @@ func (b *Broker) ListSessions(filter SessionListFilter) ([]SessionSnapshot, stri
 	}
 
 	state := normalizeSessionState(filter.State)
-	if filter.Limit <= 0 {
-		filter.Limit = defaultSessionListLimit
-	}
+	limit := filter.Limit
 
 	filtered := make([]sessionListEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -110,8 +106,9 @@ func (b *Broker) ListSessions(filter SessionListFilter) ([]SessionSnapshot, stri
 	}
 
 	end := len(filtered)
-	if start+filter.Limit < end {
-		end = start + filter.Limit
+	// A limit of 0 means "no limit".
+	if limit > 0 && start+limit < end {
+		end = start + limit
 	}
 
 	pageEntries := filtered[start:end]
