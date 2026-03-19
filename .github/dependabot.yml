@@ -22,7 +22,7 @@ updates:
       timezone: "Europe/Paris"
 
   - package-ecosystem: "docker"
-    directory: "./docker"
+    directory: "./deployments/docker"
     schedule:
       interval: "weekly"
       day: "monday"

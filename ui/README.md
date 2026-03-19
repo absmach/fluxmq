@@ -4,14 +4,14 @@ A Next.js dashboard for real-time monitoring of the FluxMQ message broker. Displ
 
 ## Pages
 
-| Route | Description |
-|---|---|
-| `/dashboard` | Overview — live metrics, message traffic charts, bandwidth, cluster node table |
-| `/dashboard/connections` | Active connections — connected sessions with protocol, subscriptions, inflight |
-| `/dashboard/sessions` | All sessions — connected and disconnected, filterable, with detail dialog |
-| `/dashboard/subscriptions` | Subscriptions — active topic filters aggregated from connected sessions |
-| `/dashboard/cluster` | Cluster — node topology with per-node health, sessions, messages, bytes |
-| `/dashboard/broker-info` | Broker Info — runtime identity, session counts, error counters |
+| Route                      | Description                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| `/dashboard`               | Overview — live metrics, message traffic charts, bandwidth, cluster node table |
+| `/dashboard/connections`   | Active connections — connected sessions with protocol, subscriptions, inflight |
+| `/dashboard/sessions`      | All sessions — connected and disconnected, filterable, with detail dialog      |
+| `/dashboard/subscriptions` | Subscriptions — active topic filters aggregated from connected sessions        |
+| `/dashboard/cluster`       | Cluster — node topology with per-node health, sessions, messages, bytes        |
+| `/dashboard/broker-info`   | Broker Info — runtime identity, session counts, error counters                 |
 
 ## Environment Setup
 

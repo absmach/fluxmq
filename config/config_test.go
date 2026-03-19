@@ -4,6 +4,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -316,6 +317,24 @@ func TestAuthEnabledFor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.AuthEnabledFor(tt.protocol); got != tt.want {
 				t.Fatalf("AuthEnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExampleConfigsValid(t *testing.T) {
+	files, err := filepath.Glob("../examples/*.yaml")
+	if err != nil {
+		t.Fatalf("glob examples: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no example configs found in ../examples/")
+	}
+
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			if _, err := Load(f); err != nil {
+				t.Fatalf("Load(%s): %v", f, err)
 			}
 		})
 	}
