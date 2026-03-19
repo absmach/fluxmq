@@ -155,6 +155,82 @@ func TestSubscriptionClientsEndpointDefaultsToConnected(t *testing.T) {
 	}
 }
 
+func TestSubscriptionsListEndpointPrefix(t *testing.T) {
+	srv := newTestAPIServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions?state=all&prefix=alpha", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp listSubscriptionsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Subscriptions) != 1 {
+		t.Fatalf("expected 1 subscription with prefix alpha, got %d", len(resp.Subscriptions))
+	}
+	if resp.Subscriptions[0].Filter != "alpha/one" {
+		t.Fatalf("expected alpha/one, got %q", resp.Subscriptions[0].Filter)
+	}
+}
+
+func TestSubscriptionClientsEndpointPrefix(t *testing.T) {
+	srv := newTestAPIServer(t)
+
+	filter := "devices/+/events"
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/subscriptions/"+url.PathEscape(filter)+"/clients?prefix=tenant",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp listSubscriptionClientsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Clients) != 1 {
+		t.Fatalf("expected 1 client with prefix tenant, got %d", len(resp.Clients))
+	}
+}
+
+func TestSubscriptionClientsEndpointStateAll(t *testing.T) {
+	srv := newTestAPIServer(t)
+
+	filter := "bravo/one"
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/subscriptions/"+url.PathEscape(filter)+"/clients?state=all",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp listSubscriptionClientsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Clients) != 1 {
+		t.Fatalf("expected 1 client with state=all, got %d", len(resp.Clients))
+	}
+	if resp.Clients[0].ClientID != "bravo-offline" {
+		t.Fatalf("expected bravo-offline, got %q", resp.Clients[0].ClientID)
+	}
+}
+
 func TestSubscriptionsEndpointRejectsInvalidState(t *testing.T) {
 	srv := newTestAPIServer(t)
 
