@@ -280,7 +280,7 @@ export default function DashboardClient() {
 	const scopeLabel = selectedNodeId ?? "Cluster";
 
 	return (
-		<div className="p-6 lg:p-8 space-y-6">
+		<div className="p-4 sm:p-6 lg:p-8 space-y-6">
 			<div className="flex flex-wrap items-start justify-between gap-4">
 				<div>
 					<h1 className="text-3xl font-bold text-flux-text">Dashboard</h1>
@@ -316,7 +316,7 @@ export default function DashboardClient() {
 						variant="outline"
 						size="sm"
 						onClick={() => setLiveUpdates((v) => !v)}
-						className={`flex items-center gap-1.5 text-xs ${
+						className={`flex items-center gap-1.5 text-xs min-h-10 ${
 							liveUpdates
 								? "border-flux-green/40 text-flux-green bg-flux-green/10 hover:bg-flux-green/20"
 								: "border-flux-card-border text-flux-text-muted hover:bg-flux-hover"
@@ -335,7 +335,7 @@ export default function DashboardClient() {
 
 					<Badge
 						variant="outline"
-						className={`flex items-center gap-1.5 text-sm px-3 py-1.5 ${
+						className={`flex items-center gap-1.5 text-sm px-3 py-1.5 min-h-10 ${
 							error
 								? "text-flux-red border-flux-red/30 bg-flux-red/10"
 								: "text-flux-green border-flux-green/30 bg-flux-green/10"
@@ -355,7 +355,7 @@ export default function DashboardClient() {
 					⚠ {error}
 				</div>
 			)}
-			<div className="flex items-center gap-2 flex-wrap">
+			<div className="flex items-center gap-2 overflow-x-auto pb-1">
 				<Network className="w-4 h-4 text-flux-text-muted shrink-0" />
 				<NodePill
 					label="Cluster"
@@ -595,96 +595,98 @@ export default function DashboardClient() {
 						</div>
 					</CardHeader>
 					<CardContent className="p-0">
-						<Table>
-							<TableHeader>
-								<TableRow className="border-flux-card-border hover:bg-transparent">
-									<TableHead className="pl-6">Node</TableHead>
-									<TableHead>Address</TableHead>
-									<TableHead className="text-right">Sessions</TableHead>
-									<TableHead className="text-right">Subscriptions</TableHead>
-									<TableHead className="text-right">Msgs In</TableHead>
-									<TableHead className="text-right">Msgs Out</TableHead>
-									<TableHead className="text-right">Bytes In</TableHead>
-									<TableHead className="text-right pr-6">Uptime</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{nodes.slice(0, 5).map((node) => {
-									const isSelected = selectedNodeId === node.node_id;
-									return (
-										<TableRow
-											key={node.node_id}
-											className={`border-flux-card-border cursor-pointer transition-colors ${
-												isSelected
-													? "bg-flux-blue/10 hover:bg-flux-blue/15"
-													: "hover:bg-flux-hover"
-											}`}
-											onClick={() =>
-												setSelectedNodeId(isSelected ? null : node.node_id)
-											}
-										>
-											<TableCell className="pl-6 py-4">
-												<div className="flex items-center gap-2">
-													<span className="inline-block w-2 h-2 rounded-full bg-flux-green shrink-0" />
-													<span className="text-flux-text font-medium text-sm">
-														{node.node_id}
-													</span>
-													{node.is_leader && (
-														<Badge
-															variant="outline"
-															className="text-xs bg-flux-blue/10 text-flux-blue border-flux-blue/20"
-														>
-															Leader
-														</Badge>
+						<div className="overflow-x-auto">
+							<Table>
+								<TableHeader>
+									<TableRow className="border-flux-card-border hover:bg-transparent">
+										<TableHead className="pl-6">Node</TableHead>
+										<TableHead>Address</TableHead>
+										<TableHead className="text-right">Sessions</TableHead>
+										<TableHead className="text-right">Subscriptions</TableHead>
+										<TableHead className="text-right">Msgs In</TableHead>
+										<TableHead className="text-right">Msgs Out</TableHead>
+										<TableHead className="text-right">Bytes In</TableHead>
+										<TableHead className="text-right pr-6">Uptime</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{nodes.slice(0, 5).map((node) => {
+										const isSelected = selectedNodeId === node.node_id;
+										return (
+											<TableRow
+												key={node.node_id}
+												className={`border-flux-card-border cursor-pointer transition-colors ${
+													isSelected
+														? "bg-flux-blue/10 hover:bg-flux-blue/15"
+														: "hover:bg-flux-hover"
+												}`}
+												onClick={() =>
+													setSelectedNodeId(isSelected ? null : node.node_id)
+												}
+											>
+												<TableCell className="pl-6 py-4">
+													<div className="flex items-center gap-2">
+														<span className="inline-block w-2 h-2 rounded-full bg-flux-green shrink-0" />
+														<span className="text-flux-text font-medium text-sm">
+															{node.node_id}
+														</span>
+														{node.is_leader && (
+															<Badge
+																variant="outline"
+																className="text-xs bg-flux-blue/10 text-flux-blue border-flux-blue/20"
+															>
+																Leader
+															</Badge>
+														)}
+													</div>
+												</TableCell>
+												<TableCell className="text-flux-text-muted font-mono text-xs py-4">
+													{node.addr}
+												</TableCell>
+												<TableCell className="text-flux-text text-sm text-right py-4">
+													{node.sessions !== undefined ? (
+														formatCount(node.sessions)
+													) : (
+														<span className="text-flux-text-muted">—</span>
 													)}
-												</div>
-											</TableCell>
-											<TableCell className="text-flux-text-muted font-mono text-xs py-4">
-												{node.addr}
-											</TableCell>
-											<TableCell className="text-flux-text text-sm text-right py-4">
-												{node.sessions !== undefined ? (
-													formatCount(node.sessions)
-												) : (
-													<span className="text-flux-text-muted">—</span>
-												)}
-											</TableCell>
-											<TableCell className="text-flux-text text-sm text-right py-4">
-												{node.subscriptions !== undefined ? (
-													formatCount(node.subscriptions)
-												) : (
-													<span className="text-flux-text-muted">—</span>
-												)}
-											</TableCell>
-											<TableCell className="text-flux-text text-sm text-right py-4">
-												{node.messages_received !== undefined ? (
-													formatCount(node.messages_received)
-												) : (
-													<span className="text-flux-text-muted">—</span>
-												)}
-											</TableCell>
-											<TableCell className="text-flux-text text-sm text-right py-4">
-												{node.messages_sent !== undefined ? (
-													formatCount(node.messages_sent)
-												) : (
-													<span className="text-flux-text-muted">—</span>
-												)}
-											</TableCell>
-											<TableCell className="text-flux-text text-sm text-right py-4">
-												{node.bytes_received !== undefined ? (
-													formatBytes(node.bytes_received)
-												) : (
-													<span className="text-flux-text-muted">—</span>
-												)}
-											</TableCell>
-											<TableCell className="text-flux-text-muted text-sm text-right pr-6 py-4">
-												{formatUptime(node.uptime_seconds)}
-											</TableCell>
-										</TableRow>
-									);
-								})}
-							</TableBody>
-						</Table>
+												</TableCell>
+												<TableCell className="text-flux-text text-sm text-right py-4">
+													{node.subscriptions !== undefined ? (
+														formatCount(node.subscriptions)
+													) : (
+														<span className="text-flux-text-muted">—</span>
+													)}
+												</TableCell>
+												<TableCell className="text-flux-text text-sm text-right py-4">
+													{node.messages_received !== undefined ? (
+														formatCount(node.messages_received)
+													) : (
+														<span className="text-flux-text-muted">—</span>
+													)}
+												</TableCell>
+												<TableCell className="text-flux-text text-sm text-right py-4">
+													{node.messages_sent !== undefined ? (
+														formatCount(node.messages_sent)
+													) : (
+														<span className="text-flux-text-muted">—</span>
+													)}
+												</TableCell>
+												<TableCell className="text-flux-text text-sm text-right py-4">
+													{node.bytes_received !== undefined ? (
+														formatBytes(node.bytes_received)
+													) : (
+														<span className="text-flux-text-muted">—</span>
+													)}
+												</TableCell>
+												<TableCell className="text-flux-text-muted text-sm text-right pr-6 py-4">
+													{formatUptime(node.uptime_seconds)}
+												</TableCell>
+											</TableRow>
+										);
+									})}
+								</TableBody>
+							</Table>
+						</div>
 						{nodes.length > 5 && (
 							<div className="flex items-center justify-between px-6 py-3 border-t border-flux-card-border">
 								<p className="text-xs text-flux-text-muted">
@@ -744,8 +746,9 @@ function ChartErrorOverlay() {
 function NodePill({ label, active, isLeader, onClick }: NodePillProps) {
 	return (
 		<button
+			type="button"
 			onClick={onClick}
-			className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+			className={`flex items-center gap-1.5 text-xs px-3 py-2 min-h-10 rounded-full border transition-colors whitespace-nowrap ${
 				active
 					? "bg-flux-blue text-white border-flux-blue"
 					: "bg-flux-card text-flux-text-muted border-flux-card-border hover:bg-flux-hover hover:text-flux-text"

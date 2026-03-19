@@ -15,21 +15,33 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FluxLogo } from "@/components/flux-logo";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/lib/theme-provider";
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
-	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const pathname = usePathname();
 	const { theme, toggleTheme } = useTheme();
+
+	useEffect(() => {
+		const mediaQuery = window.matchMedia("(min-width: 1024px)");
+		const syncSidebar = () => setSidebarOpen(mediaQuery.matches);
+		syncSidebar();
+		mediaQuery.addEventListener("change", syncSidebar);
+		return () => mediaQuery.removeEventListener("change", syncSidebar);
+	}, []);
 
 	const navigationItems = [
 		{ label: "Overview", href: "/dashboard", icon: Home },
 		{ label: "Connections", href: "/dashboard/connections", icon: Globe },
 		{ label: "Sessions", href: "/dashboard/sessions", icon: Activity },
-		{ label: "Subscriptions", href: "/dashboard/subscriptions", icon: BookMarked },
+		{
+			label: "Subscriptions",
+			href: "/dashboard/subscriptions",
+			icon: BookMarked,
+		},
 		{ label: "Cluster", href: "/dashboard/cluster", icon: Network },
 		{ label: "Broker Info", href: "/dashboard/broker-info", icon: Info },
 	];
@@ -46,8 +58,10 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 			{/* Sidebar */}
 			<aside
 				className={`${
-					sidebarOpen ? "w-64" : "w-20"
-				} bg-flux-card border-r border-flux-card-border transition-all duration-300 flex flex-col fixed h-screen z-40 lg:relative shadow-sm`}
+					sidebarOpen
+						? "flex w-64 translate-x-0"
+						: "hidden lg:flex lg:w-20 lg:translate-x-0"
+				} bg-flux-card border-r border-flux-card-border transition-all duration-300 flex-col fixed h-screen z-40 lg:relative shadow-md`}
 			>
 				{/* Sidebar Header */}
 				<div
@@ -59,7 +73,9 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 							variant="ghost"
 							size="icon"
 							onClick={toggleTheme}
-							className="text-flux-text-muted hover:text-flux-text hover:bg-flux-hover"
+							className={`text-flux-text-muted hover:text-flux-text hover:bg-flux-hover ${
+								sidebarOpen ? "hidden lg:inline-flex" : ""
+							}`}
 							aria-label="Toggle theme"
 						>
 							{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
@@ -101,39 +117,41 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 
 			{/* Mobile Overlay */}
 			{sidebarOpen && (
-				<div
+				<button
+					type="button"
 					className="fixed inset-0 bg-black/50 lg:hidden z-30"
 					onClick={() => setSidebarOpen(false)}
+					aria-label="Close sidebar"
 				/>
 			)}
 
 			{/* Main Content */}
 			<main className="flex-1 overflow-auto">
 				{/* Top Bar for Mobile */}
-				<div className="lg:hidden bg-flux-card border-b border-flux-card-border p-4 flex items-center justify-between">
-					<h1 className="text-xl font-bold bg-gradient-to-r from-flux-blue to-flux-orange bg-clip-text text-transparent">
-						FluxMQ
-					</h1>
+				<div className="lg:hidden bg-flux-card border-b border-flux-card-border p-4 flex items-center justify-between shadow-sm">
 					<div className="flex items-center gap-2">
-						<Button
-							variant="ghost"
-							size="icon"
-							onClick={toggleTheme}
-							className="hover:bg-flux-hover"
-							aria-label="Toggle theme"
-						>
-							{theme === "light" ? <Moon size={20} /> : <Sun size={20} />}
-						</Button>
 						<Button
 							variant="ghost"
 							size="icon"
 							onClick={() => setSidebarOpen(!sidebarOpen)}
 							className="hover:bg-flux-hover"
-							aria-label="Open sidebar"
+							aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
 						>
-							<Menu size={20} />
+							{sidebarOpen ? <X size={20} /> : <Menu size={20} />}
 						</Button>
+						<h1 className="text-xl font-bold bg-gradient-to-r from-flux-blue to-flux-orange bg-clip-text text-transparent">
+							FluxMQ
+						</h1>
 					</div>
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={toggleTheme}
+						className="hover:bg-flux-hover"
+						aria-label="Toggle theme"
+					>
+						{theme === "light" ? <Moon size={20} /> : <Sun size={20} />}
+					</Button>
 				</div>
 				{children}
 			</main>

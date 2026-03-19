@@ -133,7 +133,7 @@ function QueueStat({
 	highlight?: boolean;
 }) {
 	return (
-		<div className="flex-1 rounded-lg border border-flux-card-border bg-flux-bg p-3 flex flex-col gap-1">
+		<div className="rounded-lg border border-flux-card-border bg-flux-bg p-3 flex flex-col gap-1">
 			<p className="text-xs text-flux-text-muted">{label}</p>
 			<p
 				className={`text-xl font-bold tabular-nums ${highlight && value > 0 ? "text-flux-orange" : "text-flux-text"}`}
@@ -206,7 +206,7 @@ function SessionDetailDialog({
 						<div className="px-6 pb-6 overflow-y-auto max-h-[60vh]">
 							{/* Queue stats */}
 							<SectionLabel icon={Radio} label="Queue" />
-							<div className="flex gap-3 mb-1">
+							<div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-1">
 								<QueueStat
 									label="Inflight"
 									value={session.inflight_count}
@@ -381,11 +381,8 @@ const SessionsClient = () => {
 	const connectedCount = sessions.filter((s) => s.connected).length;
 	const disconnectedCount = sessions.length - connectedCount;
 
-	// Filtering is handled server-side; reset page when results change
+	// Filtering is handled server-side
 	const filtered = sessions;
-	useEffect(() => {
-		setPage(1);
-	}, [filter, search]);
 
 	const totalPages = Math.max(1, Math.ceil(filtered.length / limit));
 	const paginated = filtered.slice((page - 1) * limit, page * limit);
@@ -413,7 +410,7 @@ const SessionsClient = () => {
 	];
 
 	return (
-		<div className="p-8 space-y-6">
+		<div className="p-4 sm:p-6 lg:p-8 space-y-6">
 			{/* Header */}
 			<div>
 				<h1 className="text-3xl font-bold text-flux-text mb-1">Sessions</h1>
@@ -458,8 +455,12 @@ const SessionsClient = () => {
 						<div className="flex items-center gap-1 p-1 rounded-lg bg-flux-bg border border-flux-card-border">
 							{filterButtons.map(({ label, value }) => (
 								<button
+									type="button"
 									key={value}
-									onClick={() => setFilter(value)}
+									onClick={() => {
+										setFilter(value);
+										setPage(1);
+									}}
 									className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
 										filter === value
 											? "bg-flux-blue text-white"
@@ -471,7 +472,7 @@ const SessionsClient = () => {
 							))}
 						</div>
 
-						<div className="relative flex-1 min-w-[180px] max-w-xs ml-auto">
+						<div className="relative flex-1 w-full sm:w-auto min-w-[180px] max-w-xs sm:ml-auto">
 							<Search
 								className="absolute left-3 top-1/2 -translate-y-1/2 text-flux-text-muted"
 								size={16}
@@ -480,7 +481,10 @@ const SessionsClient = () => {
 								type="text"
 								placeholder="Search by client ID..."
 								value={search}
-								onChange={(e) => setSearch(e.target.value)}
+								onChange={(e) => {
+									setSearch(e.target.value);
+									setPage(1);
+								}}
 								className="pl-9 bg-flux-bg border-flux-card-border text-flux-text placeholder:text-flux-text-muted focus-visible:ring-flux-blue"
 							/>
 						</div>
@@ -497,137 +501,139 @@ const SessionsClient = () => {
 					</div>
 
 					{/* Table */}
-					<Table>
-						<TableHeader>
-							<TableRow className="border-flux-card-border hover:bg-transparent">
-								<TableHead className="w-8">
-									<input
-										type="checkbox"
-										checked={
-											filtered.length > 0 && selected.size === filtered.length
-										}
-										onChange={toggleAll}
-										className="accent-flux-blue cursor-pointer"
-									/>
-								</TableHead>
-								<TableHead>Client ID</TableHead>
-								<TableHead>Protocol</TableHead>
-								<TableHead>Status</TableHead>
-								<TableHead className="text-right">Subscriptions</TableHead>
-								<TableHead className="text-right">Inflight</TableHead>
-								<TableHead className="text-right">Queued</TableHead>
-								<TableHead>Clean Start</TableHead>
-								<TableHead className="text-right">Actions</TableHead>
-							</TableRow>
-						</TableHeader>
-						<TableBody>
-							{paginated.map((session: SessionInfo) => (
-								<TableRow
-									key={session.client_id}
-									className={`border-flux-card-border hover:bg-flux-hover ${
-										selected.has(session.client_id) ? "bg-flux-blue/5" : ""
-									}`}
-								>
-									<TableCell>
+					<div className="overflow-x-auto">
+						<Table>
+							<TableHeader>
+								<TableRow className="border-flux-card-border hover:bg-transparent">
+									<TableHead className="w-8">
 										<input
 											type="checkbox"
-											checked={selected.has(session.client_id)}
-											onChange={() => toggleSelect(session.client_id)}
+											checked={
+												filtered.length > 0 && selected.size === filtered.length
+											}
+											onChange={toggleAll}
 											className="accent-flux-blue cursor-pointer"
 										/>
-									</TableCell>
-
-									<TableCell className="font-medium text-sm text-flux-text font-mono py-4">
-										{session.client_id}
-									</TableCell>
-
-									<TableCell>
-										<Badge
-											variant="outline"
-											className={`text-xs ${PROTOCOL_COLORS[session.protocol] ?? "bg-flux-blue/10 text-flux-blue border-flux-blue/20"}`}
-										>
-											{formatProtocol(session.protocol)}
-										</Badge>
-									</TableCell>
-
-									<TableCell>
-										<Badge
-											variant="outline"
-											className={`inline-flex items-center gap-1.5 ${
-												session.connected
-													? "bg-flux-green/10 text-flux-green border-flux-green/20"
-													: "bg-flux-red/10 text-flux-red border-flux-red/20"
-											}`}
-										>
-											<span
-												className={`w-1.5 h-1.5 rounded-full ${session.connected ? "bg-flux-green animate-pulse" : "bg-flux-red"}`}
-											/>
-											{session.connected ? "Connected" : "Disconnected"}
-										</Badge>
-									</TableCell>
-
-									<TableCell className="text-right text-sm text-flux-text tabular-nums py-4">
-										{session.subscription_count}
-									</TableCell>
-
-									<TableCell className="text-right text-sm tabular-nums py-4">
-										{session.inflight_count > 0 ? (
-											<span className="text-flux-orange font-medium">
-												{session.inflight_count}
-											</span>
-										) : (
-											<span className="text-flux-text-muted">0</span>
-										)}
-									</TableCell>
-
-									<TableCell className="text-right text-sm tabular-nums py-4">
-										{session.offline_queue_depth > 0 ? (
-											<span className="text-flux-orange font-medium">
-												{session.offline_queue_depth}
-											</span>
-										) : (
-											<span className="text-flux-text-muted">0</span>
-										)}
-									</TableCell>
-
-									<TableCell>
-										<Badge
-											variant="outline"
-											className={
-												session.clean_start
-													? "bg-flux-green/10 text-flux-green border-flux-green/20"
-													: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
-											}
-										>
-											{session.clean_start ? "Yes" : "No"}
-										</Badge>
-									</TableCell>
-
-									<TableCell className="text-right py-4">
-										<Button
-											variant="ghost"
-											size="sm"
-											onClick={() => setDetailSession(session)}
-											className="text-xs text-flux-text-muted hover:text-flux-blue hover:bg-flux-blue/10"
-										>
-											View Details
-										</Button>
-									</TableCell>
+									</TableHead>
+									<TableHead>Client ID</TableHead>
+									<TableHead>Protocol</TableHead>
+									<TableHead>Status</TableHead>
+									<TableHead className="text-right">Subscriptions</TableHead>
+									<TableHead className="text-right">Inflight</TableHead>
+									<TableHead className="text-right">Queued</TableHead>
+									<TableHead>Clean Start</TableHead>
+									<TableHead className="text-right">Actions</TableHead>
 								</TableRow>
-							))}
-
-							{paginated.length === 0 && (
-								<TableRow className="hover:bg-transparent">
-									<TableCell
-										colSpan={9}
-										className="text-center text-flux-text-muted py-12"
+							</TableHeader>
+							<TableBody>
+								{paginated.map((session: SessionInfo) => (
+									<TableRow
+										key={session.client_id}
+										className={`border-flux-card-border hover:bg-flux-hover ${
+											selected.has(session.client_id) ? "bg-flux-blue/5" : ""
+										}`}
 									>
-										No sessions match the current filter.
-									</TableCell>
-								</TableRow>
-							)}
-						</TableBody>
-					</Table>
+										<TableCell>
+											<input
+												type="checkbox"
+												checked={selected.has(session.client_id)}
+												onChange={() => toggleSelect(session.client_id)}
+												className="accent-flux-blue cursor-pointer"
+											/>
+										</TableCell>
+
+										<TableCell className="font-medium text-sm text-flux-text font-mono py-4">
+											{session.client_id}
+										</TableCell>
+
+										<TableCell>
+											<Badge
+												variant="outline"
+												className={`text-xs ${PROTOCOL_COLORS[session.protocol] ?? "bg-flux-blue/10 text-flux-blue border-flux-blue/20"}`}
+											>
+												{formatProtocol(session.protocol)}
+											</Badge>
+										</TableCell>
+
+										<TableCell>
+											<Badge
+												variant="outline"
+												className={`inline-flex items-center gap-1.5 ${
+													session.connected
+														? "bg-flux-green/10 text-flux-green border-flux-green/20"
+														: "bg-flux-red/10 text-flux-red border-flux-red/20"
+												}`}
+											>
+												<span
+													className={`w-1.5 h-1.5 rounded-full ${session.connected ? "bg-flux-green animate-pulse" : "bg-flux-red"}`}
+												/>
+												{session.connected ? "Connected" : "Disconnected"}
+											</Badge>
+										</TableCell>
+
+										<TableCell className="text-right text-sm text-flux-text tabular-nums py-4">
+											{session.subscription_count}
+										</TableCell>
+
+										<TableCell className="text-right text-sm tabular-nums py-4">
+											{session.inflight_count > 0 ? (
+												<span className="text-flux-orange font-medium">
+													{session.inflight_count}
+												</span>
+											) : (
+												<span className="text-flux-text-muted">0</span>
+											)}
+										</TableCell>
+
+										<TableCell className="text-right text-sm tabular-nums py-4">
+											{session.offline_queue_depth > 0 ? (
+												<span className="text-flux-orange font-medium">
+													{session.offline_queue_depth}
+												</span>
+											) : (
+												<span className="text-flux-text-muted">0</span>
+											)}
+										</TableCell>
+
+										<TableCell>
+											<Badge
+												variant="outline"
+												className={
+													session.clean_start
+														? "bg-flux-green/10 text-flux-green border-flux-green/20"
+														: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
+												}
+											>
+												{session.clean_start ? "Yes" : "No"}
+											</Badge>
+										</TableCell>
+
+										<TableCell className="text-right py-4">
+											<Button
+												variant="ghost"
+												size="sm"
+												onClick={() => setDetailSession(session)}
+												className="text-xs text-flux-text-muted hover:text-flux-blue hover:bg-flux-blue/10"
+											>
+												View Details
+											</Button>
+										</TableCell>
+									</TableRow>
+								))}
+
+								{paginated.length === 0 && (
+									<TableRow className="hover:bg-transparent">
+										<TableCell
+											colSpan={9}
+											className="text-center text-flux-text-muted py-12"
+										>
+											No sessions match the current filter.
+										</TableCell>
+									</TableRow>
+								)}
+							</TableBody>
+						</Table>
+					</div>
 
 					<TablePagination
 						page={page}

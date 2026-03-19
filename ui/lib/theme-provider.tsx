@@ -11,26 +11,25 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-	const [theme, setTheme] = useState<Theme>("light");
-	useEffect(() => {
-		// Check for saved theme preference or default to light mode
-		const savedTheme = localStorage.getItem("fluxmq-theme") as Theme;
-		const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-			.matches
-			? "dark"
-			: "light";
-		const initialTheme = savedTheme || systemTheme;
+function getInitialTheme(): Theme {
+	if (typeof window === "undefined") return "light";
+	const savedTheme = localStorage.getItem("fluxmq-theme");
+	if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
+	return window.matchMedia("(prefers-color-scheme: dark)").matches
+		? "dark"
+		: "light";
+}
 
-		setTheme(initialTheme);
-		document.documentElement.classList.toggle("dark", initialTheme === "dark");
-	}, []);
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+	const [theme, setTheme] = useState<Theme>(getInitialTheme);
+
+	useEffect(() => {
+		document.documentElement.classList.toggle("dark", theme === "dark");
+		localStorage.setItem("fluxmq-theme", theme);
+	}, [theme]);
 
 	const toggleTheme = () => {
-		const newTheme = theme === "light" ? "dark" : "light";
-		setTheme(newTheme);
-		document.documentElement.classList.toggle("dark", newTheme === "dark");
-		localStorage.setItem("fluxmq-theme", newTheme);
+		setTheme((prev) => (prev === "light" ? "dark" : "light"));
 	};
 
 	return (
