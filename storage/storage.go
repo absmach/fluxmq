@@ -296,6 +296,9 @@ type SubscriptionStore interface {
 	// This is the core routing operation.
 	Match(topic string) ([]*Subscription, error)
 
+	// GetByFilter returns all subscriptions for an exact topic filter.
+	GetByFilter(filter string) ([]*Subscription, error)
+
 	// Count returns total subscription count.
 	Count() int
 }

@@ -139,6 +139,40 @@ func (s *SubscriptionStore) GetForClient(clientID string) ([]*storage.Subscripti
 	return subs, err
 }
 
+// GetByFilter returns all subscriptions for an exact topic filter.
+func (s *SubscriptionStore) GetByFilter(filter string) ([]*storage.Subscription, error) {
+	var subs []*storage.Subscription
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte("sub:")
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+
+			err := item.Value(func(val []byte) error {
+				var sub storage.Subscription
+				if err := json.Unmarshal(val, &sub); err != nil {
+					return err
+				}
+				if sub.Filter == filter {
+					subs = append(subs, &sub)
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("failed to unmarshal subscription: %w", err)
+			}
+		}
+
+		return nil
+	})
+
+	return subs, err
+}
+
 // Match returns all subscriptions matching a topic.
 // This scans all subscriptions and performs MQTT topic matching.
 func (s *SubscriptionStore) Match(topic string) ([]*storage.Subscription, error) {

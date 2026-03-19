@@ -20,8 +20,7 @@ import { TablePagination } from "@/components/ui/table-pagination";
 import type { SessionInfo } from "@/lib/api";
 import { getSession } from "@/lib/services/sessions";
 import {
-	type AggregatedSubscription,
-	getAggregatedSubscriptions,
+	getSubscriptionClients,
 	type SubscriptionClient,
 } from "@/lib/services/subscriptions";
 
@@ -32,8 +31,7 @@ const QOS_COLORS = [
 ];
 
 const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
-	const [subscription, setSubscription] =
-		useState<AggregatedSubscription | null>(null);
+	const [clients, setClients] = useState<SubscriptionClient[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [search, setSearch] = useState("");
 	const [page, setPage] = useState(1);
@@ -47,18 +45,19 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 		async function load() {
 			setLoading(true);
 			try {
-				const aggregated = await getAggregatedSubscriptions();
-				const match = aggregated.find((item) => item.filter === filter) ?? null;
-				setSubscription(match);
+				const nextClients = await getSubscriptionClients(filter, {
+					state: "connected",
+				});
+				setClients(nextClients);
 			} catch (err) {
 				console.error(err);
-				setSubscription(null);
+				setClients([]);
 			} finally {
 				setLoading(false);
 			}
 		}
 		if (!filter) {
-			setSubscription(null);
+			setClients([]);
 			setLoading(false);
 			return;
 		}
@@ -66,15 +65,14 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 	}, [filter]);
 
 	const filteredClients = useMemo(() => {
-		if (!subscription) return [];
-		if (!search) return subscription.clients;
+		if (!search) return clients;
 		const q = search.toLowerCase();
-		return subscription.clients.filter(
+		return clients.filter(
 			(client) =>
 				client.client_id.toLowerCase().includes(q) ||
 				(client.node_id ?? "").toLowerCase().includes(q),
 		);
-	}, [search, subscription]);
+	}, [clients, search]);
 
 	const totalPages = Math.max(1, Math.ceil(filteredClients.length / limit));
 	const paginated = filteredClients.slice((page - 1) * limit, page * limit);
@@ -127,7 +125,7 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 					className="flex items-center gap-1.5 text-sm px-3 py-1.5 min-h-10 bg-flux-blue/10 text-flux-blue border-flux-blue/30"
 				>
 					<Users className="w-3.5 h-3.5" />
-					{subscription?.subscriber_count ?? 0} clients
+					{clients.length} clients
 				</Badge>
 			</div>
 
@@ -223,7 +221,7 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 										</TableCell>
 									</TableRow>
 								)}
-								{!loading && filter && !subscription && (
+								{!loading && filter && clients.length === 0 && (
 									<TableRow className="hover:bg-transparent">
 										<TableCell
 											colSpan={4}
@@ -235,7 +233,7 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 								)}
 								{!loading &&
 									filter &&
-									subscription &&
+									clients.length > 0 &&
 									paginated.length === 0 &&
 									filteredClients.length === 0 && (
 										<TableRow className="hover:bg-transparent">

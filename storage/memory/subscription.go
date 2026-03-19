@@ -167,6 +167,28 @@ func (s *SubscriptionStore) GetForClient(clientID string) ([]*storage.Subscripti
 	return result, nil
 }
 
+// GetByFilter returns all subscriptions for an exact topic filter.
+func (s *SubscriptionStore) GetByFilter(filter string) ([]*storage.Subscription, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	levels := strings.Split(filter, "/")
+	node := s.root
+	for _, level := range levels {
+		child, ok := node.children[level]
+		if !ok {
+			return nil, nil
+		}
+		node = child
+	}
+
+	result := make([]*storage.Subscription, 0, len(node.subs))
+	for _, sub := range node.subs {
+		result = append(result, storage.CopySubscription(sub))
+	}
+	return result, nil
+}
+
 // Match returns all subscriptions matching a topic.
 func (s *SubscriptionStore) Match(topic string) ([]*storage.Subscription, error) {
 	s.mu.RLock()

@@ -62,6 +62,8 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 	mux.Handle(path, handler)
 	mux.HandleFunc("/api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/api/v1/sessions/", s.handleSession)
+	mux.HandleFunc("/api/v1/subscriptions", s.handleSubscriptions)
+	mux.HandleFunc("/api/v1/subscriptions/", s.handleSubscriptions)
 	mux.HandleFunc("/api/v1/stats", s.handleStats)
 	mux.HandleFunc("/api/v1/cluster", s.handleCluster)
 	mux.HandleFunc("/api/v1/overview", s.handleOverview)

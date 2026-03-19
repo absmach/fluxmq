@@ -169,6 +169,72 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 	}
 }
 
+func TestSubscriptionStoreGetByFilter(t *testing.T) {
+	s := NewSubscriptionStore()
+
+	s.Add(&storage.Subscription{ClientID: "c1", Filter: "a/b", QoS: 0})
+	s.Add(&storage.Subscription{ClientID: "c2", Filter: "a/b", QoS: 1})
+	s.Add(&storage.Subscription{ClientID: "c3", Filter: "x/y", QoS: 2})
+
+	subs, err := s.GetByFilter("a/b")
+	if err != nil {
+		t.Fatalf("GetByFilter failed: %v", err)
+	}
+	if len(subs) != 2 {
+		t.Fatalf("expected 2 subs, got %d", len(subs))
+	}
+
+	clientIDs := map[string]bool{}
+	for _, sub := range subs {
+		clientIDs[sub.ClientID] = true
+		if sub.Filter != "a/b" {
+			t.Fatalf("expected filter a/b, got %q", sub.Filter)
+		}
+	}
+	if !clientIDs["c1"] || !clientIDs["c2"] {
+		t.Fatalf("expected c1 and c2, got %v", clientIDs)
+	}
+}
+
+func TestSubscriptionStoreGetByFilterEmpty(t *testing.T) {
+	s := NewSubscriptionStore()
+
+	subs, err := s.GetByFilter("nonexistent")
+	if err != nil {
+		t.Fatalf("GetByFilter failed: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Fatalf("expected 0 subs, got %d", len(subs))
+	}
+}
+
+func TestSubscriptionStoreGetByFilterWildcard(t *testing.T) {
+	s := NewSubscriptionStore()
+
+	s.Add(&storage.Subscription{ClientID: "c1", Filter: "devices/+/events", QoS: 1})
+	s.Add(&storage.Subscription{ClientID: "c2", Filter: "devices/+/events", QoS: 0})
+	s.Add(&storage.Subscription{ClientID: "c3", Filter: "devices/#", QoS: 2})
+
+	subs, err := s.GetByFilter("devices/+/events")
+	if err != nil {
+		t.Fatalf("GetByFilter failed: %v", err)
+	}
+	if len(subs) != 2 {
+		t.Fatalf("expected 2 subs for devices/+/events, got %d", len(subs))
+	}
+
+	subs, err = s.GetByFilter("devices/#")
+	if err != nil {
+		t.Fatalf("GetByFilter failed: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("expected 1 sub for devices/#, got %d", len(subs))
+	}
+	if subs[0].ClientID != "c3" {
+		t.Fatalf("expected c3, got %q", subs[0].ClientID)
+	}
+}
+
 func TestRetainedStore(t *testing.T) {
 	s := NewRetainedStore()
 	ctx := context.Background()

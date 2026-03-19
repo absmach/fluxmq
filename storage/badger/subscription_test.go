@@ -375,6 +375,54 @@ func TestSubscriptionStore_MatchEmpty(t *testing.T) {
 	assert.Empty(t, matched)
 }
 
+func TestSubscriptionStore_GetByFilter(t *testing.T) {
+	store := setupSubscriptionStore(t)
+	defer cleanupSubscriptionStore(t, store)
+
+	require.NoError(t, store.Add(&storage.Subscription{ClientID: "c1", Filter: "a/b", QoS: 0}))
+	require.NoError(t, store.Add(&storage.Subscription{ClientID: "c2", Filter: "a/b", QoS: 1}))
+	require.NoError(t, store.Add(&storage.Subscription{ClientID: "c3", Filter: "x/y", QoS: 2}))
+
+	subs, err := store.GetByFilter("a/b")
+	require.NoError(t, err)
+	assert.Len(t, subs, 2)
+
+	clientIDs := map[string]bool{}
+	for _, s := range subs {
+		clientIDs[s.ClientID] = true
+		assert.Equal(t, "a/b", s.Filter)
+	}
+	assert.True(t, clientIDs["c1"])
+	assert.True(t, clientIDs["c2"])
+}
+
+func TestSubscriptionStore_GetByFilterEmpty(t *testing.T) {
+	store := setupSubscriptionStore(t)
+	defer cleanupSubscriptionStore(t, store)
+
+	subs, err := store.GetByFilter("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, subs)
+}
+
+func TestSubscriptionStore_GetByFilterWildcard(t *testing.T) {
+	store := setupSubscriptionStore(t)
+	defer cleanupSubscriptionStore(t, store)
+
+	require.NoError(t, store.Add(&storage.Subscription{ClientID: "c1", Filter: "devices/+/events", QoS: 1}))
+	require.NoError(t, store.Add(&storage.Subscription{ClientID: "c2", Filter: "devices/+/events", QoS: 0}))
+	require.NoError(t, store.Add(&storage.Subscription{ClientID: "c3", Filter: "devices/#", QoS: 2}))
+
+	subs, err := store.GetByFilter("devices/+/events")
+	require.NoError(t, err)
+	assert.Len(t, subs, 2)
+
+	subs, err = store.GetByFilter("devices/#")
+	require.NoError(t, err)
+	assert.Len(t, subs, 1)
+	assert.Equal(t, "c3", subs[0].ClientID)
+}
+
 // Helper functions
 
 func setupSubscriptionStore(t *testing.T) *SubscriptionStore {

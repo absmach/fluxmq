@@ -27,7 +27,9 @@ tags:
   - name: Admin
     description: Broker statistics, cluster topology, and combined overview
   - name: Sessions
-    description: MQTT session listing and detail
+    description: Session listing and detail
+  - name: Subscriptions
+    description: Subscription aggregation and per-filter client lookup
   - name: Health
     description: Kubernetes liveness, readiness, and cluster status probes
 
@@ -135,7 +137,8 @@ paths:
       operationId: listSessions
       summary: List sessions
       description: |
-        Returns MQTT sessions with optional filtering by state and client ID
+        Returns broker sessions (MQTT and protocol-mapped AMQP sessions) with
+        optional filtering by state and client ID
         prefix. Supports cursor-based pagination via `page_token`.
       tags: [Sessions]
       servers:
@@ -196,8 +199,9 @@ paths:
       operationId: getSession
       summary: Session detail
       description: |
-        Returns full detail for a single MQTT session, including subscriptions,
-        inflight count, and offline queue depth. The client ID must be
+        Returns full detail for a single session. For MQTT sessions this
+        includes subscriptions, inflight count, and offline queue depth.
+        The client ID must be
         URL-encoded if it contains special characters (e.g. slashes).
       tags: [Sessions]
       servers:
@@ -219,6 +223,136 @@ paths:
                 $ref: "#/components/schemas/SessionResponse"
         "404":
           description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/subscriptions:
+    get:
+      operationId: listSubscriptions
+      summary: List subscriptions
+      description: |
+        Returns aggregated subscriptions grouped by topic filter, with subscriber
+        count and max QoS for each filter. By default, only connected clients are
+        included (`state=connected`).
+      tags: [Subscriptions]
+      servers:
+        - url: http://localhost:8082
+          description: API Server
+      parameters:
+        - name: state
+          in: query
+          description: Filter by client session state (`connected` by default)
+          schema:
+            type: string
+            enum: [all, connected, disconnected]
+            default: connected
+        - name: prefix
+          in: query
+          description: Filter by subscription filter prefix
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of subscription rows (0 = no limit)
+          schema:
+            type: integer
+            minimum: 0
+        - name: page_token
+          in: query
+          description: Cursor token from a previous response's `next_page_token`
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated list of aggregated subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSubscriptionsResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "405":
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Broker not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/subscriptions/{filter}/clients:
+    get:
+      operationId: listSubscriptionClients
+      summary: List clients for a subscription filter
+      description: |
+        Returns clients subscribed to an exact topic filter. The `filter` path
+        parameter must be URL-encoded (for example, `devices%2F%2B%2Fevents`).
+        By default, only connected clients are included (`state=connected`).
+      tags: [Subscriptions]
+      servers:
+        - url: http://localhost:8082
+          description: API Server
+      parameters:
+        - name: filter
+          in: path
+          required: true
+          description: Exact subscription filter (URL-encoded)
+          schema:
+            type: string
+        - name: state
+          in: query
+          description: Filter by client session state (`connected` by default)
+          schema:
+            type: string
+            enum: [all, connected, disconnected]
+            default: connected
+        - name: prefix
+          in: query
+          description: Filter client IDs by prefix
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of clients (0 = no limit)
+          schema:
+            type: integer
+            minimum: 0
+        - name: page_token
+          in: query
+          description: Cursor token from a previous response's `next_page_token`
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated list of clients for the given filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSubscriptionClientsResponse"
+        "400":
+          description: Invalid query parameters
           content:
             application/json:
               schema:
@@ -631,7 +765,7 @@ components:
           example: true
         protocol:
           type: string
-          enum: [mqtt3.1, mqtt3.1.1, mqtt5, unknown]
+          enum: [mqtt3.1, mqtt3.1.1, mqtt5, amqp0.9.1, amqp1.0, unknown]
           example: mqtt5
         version:
           type: integer
@@ -682,6 +816,61 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SessionResponse"
+        next_page_token:
+          type: string
+          description: Cursor for the next page (empty if no more results)
+
+    # ── Subscriptions ──
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        filter:
+          type: string
+          example: devices/+/events
+        subscriber_count:
+          type: integer
+          minimum: 0
+          example: 42
+        max_qos:
+          type: integer
+          minimum: 0
+          maximum: 2
+          example: 1
+
+    ListSubscriptionsResponse:
+      type: object
+      properties:
+        subscriptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubscriptionResponse"
+        next_page_token:
+          type: string
+          description: Cursor for the next page (empty if no more results)
+
+    SubscriptionClientResponse:
+      type: object
+      properties:
+        client_id:
+          type: string
+          example: my-device-001
+        qos:
+          type: integer
+          minimum: 0
+          maximum: 2
+          example: 1
+
+    ListSubscriptionClientsResponse:
+      type: object
+      properties:
+        filter:
+          type: string
+          example: devices/+/events
+        clients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubscriptionClientResponse"
         next_page_token:
           type: string
           description: Cursor for the next page (empty if no more results)
