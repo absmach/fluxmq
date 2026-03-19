@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── FluxMQ Design Tokens ─────────────────────────────────────────────── */
+
+:root {
+	/* Brand */
+	--flux-blue: #2f69b3;
+	--flux-orange: #f9a32a;
+
+	/* Surface */
+	--flux-bg: #f8fafc;
+	--flux-bg-alt: #f1f5f9;
+	--flux-card: #ffffff;
+	--flux-card-border: #e2e8f0;
+	--flux-hover: #f1f5f9;
+
+	/* Foreground */
+	--flux-text: #0f172a;
+	--flux-text-muted: #64748b;
+	--flux-fg: #0f172a;
+
+	/* Structural */
+	--flux-border: #cbd5e1;
+	--flux-grid: #e2e8f0;
+
+	/* Semantic surface layers (used by dashboard pages) */
+	--flux-surface: #ffffff;
+	--flux-surface-border: #e2e8f0;
+
+	/* ── shadcn/ui CSS variable mappings (light) ────────────────────────── */
+	--background: 248 250 252; /* flux-bg  #f8fafc  */
+	--foreground: 15 23 42; /* flux-text #0f172a */
+	--card: 255 255 255; /* flux-card #ffffff */
+	--card-foreground: 15 23 42; /* flux-text */
+	--primary: 47 105 179; /* flux-blue #2F69B3 */
+	--primary-foreground: 255 255 255;
+	--secondary: 241 245 249; /* flux-hover #f1f5f9 */
+	--secondary-foreground: 15 23 42;
+	--muted: 241 245 249; /* flux-hover */
+	--muted-foreground: 100 116 139; /* flux-text-muted #64748b */
+	--accent: 241 245 249;
+	--accent-foreground: 15 23 42;
+	--destructive: 239 68 68; /* flux-red #ef4444 */
+	--destructive-foreground: 255 255 255;
+	--border: 226 232 240; /* flux-card-border #e2e8f0 */
+	--input: 226 232 240;
+	--ring: 47 105 179; /* flux-blue */
+	--radius: 0.5rem;
+}
+
+:root[class~="dark"] {
+	/* Brand — brighter in dark mode */
+	--flux-blue: hsl(213.64deg 70% 60%);
+	--flux-orange: #f9a32a;
+
+	/* Surface */
+	--flux-bg: #0f172a;
+	--flux-bg-alt: #1e293b;
+	--flux-card: #1e293b;
+	--flux-card-border: #334155;
+	--flux-hover: #334155;
+
+	/* Foreground */
+	--flux-text: #f1f5f9;
+	--flux-text-muted: #94a3b8;
+	--flux-fg: #f1f5f9;
+
+	/* Structural */
+	--flux-border: #475569;
+	--flux-grid: #334155;
+
+	/* Semantic surface layers */
+	--flux-surface: #1e293b;
+	--flux-surface-border: #334155;
+
+	/* ── shadcn/ui CSS variable mappings (dark) ─────────────────────────── */
+	--background: 15 23 42; /* flux-bg  #0f172a */
+	--foreground: 241 245 249; /* flux-text #f1f5f9 */
+	--card: 30 41 59; /* flux-card #1e293b */
+	--card-foreground: 241 245 249;
+	--primary: 99 145 205; /* flux-blue (bright) */
+	--primary-foreground: 255 255 255;
+	--secondary: 51 65 85; /* flux-hover #334155 */
+	--secondary-foreground: 241 245 249;
+	--muted: 51 65 85; /* flux-hover */
+	--muted-foreground: 148 163 184; /* flux-text-muted #94a3b8 */
+	--accent: 51 65 85;
+	--accent-foreground: 241 245 249;
+	--destructive: 239 68 68;
+	--destructive-foreground: 255 255 255;
+	--border: 51 65 85; /* flux-card-border #334155 */
+	--input: 51 65 85;
+	--ring: 99 145 205;
+}
+
+/* ─── Base ──────────────────────────────────────────────────────────────── */
+
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+html,
+body {
+	width: 100%;
+	height: 100%;
+	background: var(--flux-bg);
+	color: var(--flux-text);
+	font-family:
+		"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	color: var(--flux-text);
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+p {
+	color: var(--flux-text);
+	margin-bottom: 1rem;
+}
+
+.text-muted {
+	color: var(--flux-text-muted);
+}
+
+/* ─── Focus ─────────────────────────────────────────────────────────────── */
+
+*:focus-visible {
+	outline: 2px solid var(--flux-blue);
+	outline-offset: 2px;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+	width: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: var(--flux-bg);
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--flux-border);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--flux-text-muted);
+}
+
+/* ─── Animations ────────────────────────────────────────────────────────── */
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes slideIn {
+	from {
+		transform: translateX(-100%);
+		opacity: 0;
+	}
+	to {
+		transform: translateX(0);
+		opacity: 1;
+	}
+}
+
+.animate-fade-in {
+	animation: fadeIn 0.3s ease-out;
+}
+.animate-slide-in {
+	animation: slideIn 0.3s ease-out;
+}
+
+/* ─── Theme toggle ──────────────────────────────────────────────────────── */
+
+.theme-toggle {
+	background: none;
+	border: none;
+	color: var(--flux-text);
+	cursor: pointer;
+	padding: 0.5rem;
+	border-radius: 0.375rem;
+	transition: background-color 0.2s;
+}
+
+.theme-toggle:hover {
+	background: var(--flux-hover);
+}
