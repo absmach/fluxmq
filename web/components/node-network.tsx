@@ -1,302 +1,484 @@
 "use client";
 
-import { useMemo } from "react";
 import {
-  ReactFlow,
-  Background,
-  Node,
-  Edge,
-  Position,
-  MarkerType,
-  Handle,
   ConnectionMode,
+  type Edge,
+  type EdgeProps,
+  getBezierPath,
+  Handle,
+  MarkerType,
+  type Node,
+  type NodeProps,
+  Position,
+  ReactFlow,
 } from "@xyflow/react";
+import { Activity, Database, Layers3, Radio, Server } from "lucide-react";
+import { useMemo } from "react";
 import "@xyflow/react/dist/style.css";
-import { SmartBezierEdge } from "@tisoap/react-flow-smart-edge";
 
-const blue = "#2F69B3";
-const orange = "#F9A32A";
-const green = "#5a9f5a";
+const COLORS = {
+  blue: "#2F69B3",
+  orange: "#F9A32A",
+  green: "#2FB07A",
+  violet: "#8A63D2",
+};
 
-const nodeTypes = {
+type NodeKind = "protocol" | "broker" | "consumer";
+
+type NetworkNodeData = {
+  label: string;
+  subtitle: string;
+  metric: string;
+};
+
+type DiagramNode = Node<NetworkNodeData, NodeKind>;
+
+type NetworkEdgeData = {
+  start: string;
+  end: string;
+  emphasize?: boolean;
+  bidirectional?: boolean;
+};
+
+type DiagramEdge = Edge<NetworkEdgeData, "flow">;
+
+const nodesTypes = {
+  protocol: ProtocolNode,
   broker: BrokerNode,
+  consumer: ConsumerNode,
 };
+
 const edgeTypes = {
-  smart: SmartBezierEdge,
+  flow: FlowEdge,
 };
+
 export function NodeNetwork() {
-  const nodes: Node[] = useMemo(
+  const nodes: DiagramNode[] = useMemo(
     () => [
-      // 🔵 Protocol Inputs
-      {
-        id: "mqtt",
-        position: { x: 0, y: 50 },
-        data: { label: "MQTT" },
-        sourcePosition: Position.Right,
-        type: "input",
-        style: protocolStyle,
-      },
-      {
-        id: "http",
-        position: { x: 0, y: 250 },
-        data: { label: "HTTP" },
-        sourcePosition: Position.Right,
-        type: "input",
-        style: protocolStyle,
-      },
-      {
-        id: "ws",
-        position: { x: 0, y: 450 },
-        data: { label: "WebSocket" },
-        sourcePosition: Position.Right,
-        type: "input",
-        style: protocolStyle,
-      },
-      {
-        id: "amqp",
-        position: { x: 0, y: 650 },
-        data: { label: "AMQP" },
-        sourcePosition: Position.Right,
-        type: "input",
-        style: protocolStyle,
-      },
+      protocolNode("mqtt-v5", "MQTT 5.0", "stateful ingest", "94k msgs/s", 0),
+      protocolNode(
+        "mqtt-v3",
+        "MQTT v3.1.1",
+        "IoT ingest",
+        "41k msgs/s",
+        160,
+      ),
+      protocolNode("http", "HTTP", "gateway events", "22k req/s", 320),
+      protocolNode("ws", "WebSocket", "live streams", "17k conn", 480),
+      protocolNode("amqp", "AMQP", "durable workloads", "8.4k chan", 640),
 
-      // 🟠 FluxMQ Cluster
-      {
-        id: "broker-a",
-        position: { x: 300, y: 50 },
-        data: { label: "FluxMQ Node A" },
-        style: brokerStyle,
-        type: "broker",
-      },
-      {
-        id: "broker-b",
-        position: { x: 300, y: 350 },
-        data: { label: "FluxMQ Node B" },
-        style: brokerStyle,
-        type: "broker",
-      },
-      {
-        id: "broker-c",
-        position: { x: 300, y: 600 },
-        data: { label: "FluxMQ Node C" },
-        style: brokerStyle,
-        type: "broker",
-      },
+      brokerNode(
+        "broker-a",
+        "FluxMQ Node A",
+        "Leader",
+        "p95 3.9 ms",
+        30,
+      ),
+      brokerNode(
+        "broker-b",
+        "FluxMQ Node B",
+        "Follower",
+        "p95 4.1 ms",
+        310,
+      ),
+      brokerNode(
+        "broker-c",
+        "FluxMQ Node C",
+        "Follower",
+        "p95 4.0 ms",
+        590,
+      ),
 
-      // 🟣 Consumers
-      {
-        id: "analytics",
-        position: { x: 600, y: 150 },
-        data: { label: "Analytics" },
-        targetPosition: Position.Left,
-        type: "output",
-        style: consumerStyle,
-      },
-      {
-        id: "apps",
-        position: { x: 600, y: 350 },
-        data: { label: "Applications" },
-        targetPosition: Position.Left,
-        type: "output",
-        style: consumerStyle,
-      },
-      {
-        id: "services",
-        position: { x: 600, y: 550 },
-        data: { label: "Services" },
-        targetPosition: Position.Left,
-        type: "output",
-        style: consumerStyle,
-      },
+      consumerNode(
+        "analytics",
+        "Analytics",
+        "stream processing",
+        "1.2 GB/s",
+        80,
+      ),
+      consumerNode(
+        "apps",
+        "Applications",
+        "business workflows",
+        "36k acks/s",
+        360,
+      ),
+      consumerNode("services", "Services", "internal APIs", "9.8k jobs/s", 640),
     ],
     [],
   );
 
-  const edges: Edge[] = useMemo(
+  const edges: DiagramEdge[] = useMemo(
     () => [
-      // Protocols → Cluster
-      edge("mqtt", "broker-a"),
-      edge("mqtt", "broker-b"),
-      edge("mqtt", "broker-c"),
+      ingressEdge("mqtt-v5", "broker-a"),
+      ingressEdge("mqtt-v5", "broker-b"),
+      ingressEdge("mqtt-v3", "broker-a"),
+      ingressEdge("mqtt-v3", "broker-b"),
+      ingressEdge("http", "broker-b"),
+      ingressEdge("http", "broker-c"),
+      ingressEdge("ws", "broker-a"),
+      ingressEdge("ws", "broker-b"),
+      ingressEdge("ws", "broker-c"),
+      ingressEdge("amqp", "broker-c"),
 
-      edge("http", "broker-b"),
-      edge("http", "broker-c"),
-
-      edge("ws", "broker-a"),
-      edge("ws", "broker-b"),
-      edge("ws", "broker-c"),
-
-      edge("amqp", "broker-c"),
-
-      // Cluster mesh (clustering)
       clusterEdge("broker-a", "broker-b", "bottom", "top"),
       clusterEdge("broker-b", "broker-c", "bottom", "top"),
-      clusterEdge("broker-c", "broker-a", "bottom", "left"),
-      clusterEdge("broker-c", "broker-b", "bottom", "left"),
-      clusterEdge("broker-b", "broker-a", "right", "top"),
 
-      // Cluster → Consumers
-      consumerEdge("broker-a", "analytics"),
-      consumerEdge("broker-b", "analytics"),
-
-      consumerEdge("broker-a", "apps"),
-      consumerEdge("broker-b", "apps"),
-      consumerEdge("broker-c", "apps"),
-
-      consumerEdge("broker-b", "services"),
-      consumerEdge("broker-c", "services"),
+      egressEdge("broker-a", "analytics"),
+      egressEdge("broker-b", "analytics"),
+      egressEdge("broker-a", "apps"),
+      egressEdge("broker-b", "apps"),
+      egressEdge("broker-c", "apps"),
+      egressEdge("broker-b", "services"),
+      egressEdge("broker-c", "services"),
     ],
     [],
   );
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        cursor: "default",
-        pointerEvents: "none",
-      }}
-    >
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-        panOnDrag={false}
-        zoomOnScroll={false}
-        zoomOnPinch={false}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        preventScrolling={true}
-        connectionMode={ConnectionMode.Loose}
-        proOptions={{
-          hideAttribution: true,
-        }}
-      >
-        <Background gap={32} size={1} color="rgba(47,105,179,0.08)" />
-      </ReactFlow>
+    <div className="relative h-full w-full pointer-events-none">
+      <div className="h-full w-full">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodesTypes}
+          edgeTypes={edgeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.02, duration: 350 }}
+          panOnDrag={false}
+          zoomOnScroll={false}
+          zoomOnPinch={false}
+          zoomOnDoubleClick={false}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          preventScrolling
+          connectionMode={ConnectionMode.Loose}
+          proOptions={{ hideAttribution: true }}
+        />
+      </div>
     </div>
   );
 }
 
-/* ---------- Edge Helpers ---------- */
+function ProtocolNode({ data }: NodeProps<DiagramNode>) {
+  return (
+    <div className="relative min-w-[208px] rounded-xl border border-(--flux-blue)/30 bg-(--flux-bg)/70 px-4 py-3.5 shadow-[0_8px_22px_rgba(47,105,179,0.22)] backdrop-blur-sm">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-(--flux-blue)">
+        <Radio className="size-4" />
+        <span>{data.label}</span>
+      </div>
+      <p className="text-[11px] uppercase tracking-[0.14em] text-(--flux-text-muted)">
+        {data.subtitle}
+      </p>
+      <div className="mt-3 inline-flex rounded-full bg-(--flux-blue)/12 px-2.5 py-1 text-[10px] font-medium text-(--flux-blue)">
+        {data.metric}
+      </div>
 
-const edge = (
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={HIDDEN_HANDLE_STYLE}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={getHandleStyle(COLORS.blue)}
+      />
+    </div>
+  );
+}
+
+function ConsumerNode({ data }: NodeProps<DiagramNode>) {
+  return (
+    <div className="relative min-w-[208px] rounded-xl border border-[#2FB07A]/50 bg-(--flux-bg)/70 px-4 py-3.5 shadow-[0_8px_22px_rgba(47,176,122,0.2)] backdrop-blur-sm">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-(--flux-green)">
+        <Activity className="size-4" />
+        <span>{data.label}</span>
+      </div>
+      <p className="text-[11px] uppercase tracking-[0.14em] text-(--flux-text-muted)">
+        {data.subtitle}
+      </p>
+      <div className="mt-3 inline-flex rounded-full bg-(--flux-green)/12 px-2.5 py-1 text-[10px] font-medium text-(--flux-green)">
+        {data.metric}
+      </div>
+
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={getHandleStyle(COLORS.green)}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={HIDDEN_HANDLE_STYLE}
+      />
+    </div>
+  );
+}
+
+function BrokerNode({ data }: NodeProps<DiagramNode>) {
+  return (
+    <div className="relative min-w-[268px] rounded-2xl border border-(--flux-orange)/30 bg-gradient-to-br from-(--flux-orange)/14 via-(--flux-bg)/80 to-(--flux-blue)/12 px-4 py-3.5 shadow-[0_14px_32px_rgba(249,163,42,0.24)] backdrop-blur-sm">
+      <div className="absolute -right-6 -top-6 size-20 rounded-full bg-(--flux-orange)/25 blur-2xl" />
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-(--flux-orange)">
+          <Server className="size-4" />
+          <span>{data.label}</span>
+        </div>
+        <span className="rounded-full bg-(--flux-orange)/20 px-2 py-0.5 text-[9px] font-semibold tracking-[0.14em] text-(--flux-orange)">
+          RAFT
+        </span>
+      </div>
+
+      <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-(--flux-text-muted)">
+        {data.subtitle}
+      </p>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-(--flux-text)">
+        <StatusChip icon={<Database className="size-3.5" />} label="segments" />
+        <StatusChip icon={<Layers3 className="size-3.5" />} label="replicas" />
+      </div>
+
+      <div className="mt-3 inline-flex rounded-full bg-(--flux-orange)/18 px-2.5 py-1 text-[10px] font-medium text-(--flux-orange)">
+        {data.metric}
+      </div>
+
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="left"
+        style={getHandleStyle(COLORS.orange)}
+      />
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="top"
+        style={getHandleStyle(COLORS.orange)}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="right"
+        style={getHandleStyle(COLORS.orange)}
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="bottom"
+        style={getHandleStyle(COLORS.orange)}
+      />
+    </div>
+  );
+}
+
+function StatusChip({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-md bg-(--flux-bg)/70 px-2 py-1 text-(--flux-text-muted)">
+      {icon}
+      <span className="uppercase tracking-[0.1em]">{label}</span>
+    </div>
+  );
+}
+
+function FlowEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+  markerEnd,
+  markerStart,
+}: EdgeProps<DiagramEdge>) {
+  const [edgePath] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    curvature: 0.32,
+  });
+
+  const gradientId = `flux-edge-${id}`;
+  const isBidirectional = data?.bidirectional;
+
+  return (
+    <>
+      <defs>
+        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor={data?.start ?? COLORS.blue} />
+          <stop offset="100%" stopColor={data?.end ?? COLORS.orange} />
+        </linearGradient>
+      </defs>
+
+      <path
+        d={edgePath}
+        fill="none"
+        stroke={isBidirectional ? (data?.start ?? COLORS.violet) : `url(#${gradientId})`}
+        strokeWidth={data?.emphasize ? 3 : 2.2}
+        opacity={0.92}
+        markerEnd={markerEnd as string | undefined}
+        markerStart={markerStart as string | undefined}
+      />
+
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="rgba(255,255,255,0.75)"
+        strokeWidth={1.05}
+        strokeDasharray="7 14"
+        opacity={0.75}
+        markerEnd={markerEnd as string | undefined}
+        markerStart={markerStart as string | undefined}
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          values="0;-280"
+          dur={data?.emphasize ? "6.2s" : "8.5s"}
+          repeatCount="indefinite"
+        />
+      </path>
+    </>
+  );
+}
+
+const getHandleStyle = (color: string) => ({
+  width: 9,
+  height: 9,
+  borderRadius: 999,
+  border: "none",
+  background: "#ffffff",
+  boxShadow: `0 0 0 4px ${color}22`,
+});
+
+const HIDDEN_HANDLE_STYLE = {
+  width: 6,
+  height: 6,
+  opacity: 0,
+};
+
+const protocolNode = (
+  id: string,
+  label: string,
+  subtitle: string,
+  metric: string,
+  y: number,
+): DiagramNode => ({
+  id,
+  type: "protocol",
+  position: { x: 0, y },
+  data: {
+    label,
+    subtitle,
+    metric,
+  },
+});
+
+const brokerNode = (
+  id: string,
+  label: string,
+  subtitle: string,
+  metric: string,
+  y: number,
+): DiagramNode => ({
+  id,
+  type: "broker",
+  position: { x: 320, y },
+  data: {
+    label,
+    subtitle,
+    metric,
+  },
+});
+
+const consumerNode = (
+  id: string,
+  label: string,
+  subtitle: string,
+  metric: string,
+  y: number,
+): DiagramNode => ({
+  id,
+  type: "consumer",
+  position: { x: 660, y },
+  data: {
+    label,
+    subtitle,
+    metric,
+  },
+});
+
+const ingressEdge = (source: string, target: string): DiagramEdge =>
+  createEdge(source, target, {
+    start: COLORS.blue,
+    end: COLORS.orange,
+  });
+
+const egressEdge = (source: string, target: string): DiagramEdge =>
+  createEdge(source, target, {
+    start: COLORS.orange,
+    end: COLORS.green,
+  });
+
+const clusterEdge = (
   source: string,
   target: string,
   sourceHandle?: string,
   targetHandle?: string,
-): Edge => ({
-  id: `${source}-${target}`,
-  source,
-  target,
-  sourceHandle,
-  targetHandle,
-  animated: true,
-  style: {
-    stroke: blue,
-    strokeWidth: 1.5,
+): DiagramEdge =>
+  createEdge(source, target, {
+    start: COLORS.orange,
+    end: COLORS.violet,
+    emphasize: true,
+    bidirectional: true,
+    sourceHandle,
+    targetHandle,
+  });
+
+function createEdge(
+  source: string,
+  target: string,
+  {
+    start,
+    end,
+    emphasize,
+    bidirectional,
+    sourceHandle,
+    targetHandle,
+  }: {
+    start: string;
+    end: string;
+    emphasize?: boolean;
+    bidirectional?: boolean;
+    sourceHandle?: string;
+    targetHandle?: string;
   },
-  markerEnd: {
-    type: MarkerType.ArrowClosed,
-    color: blue,
-  },
-});
-
-const consumerEdge = (source: string, target: string): Edge => ({
-  id: `${source}-${target}`,
-  source,
-  target,
-  animated: true,
-  style: {
-    stroke: green,
-    strokeWidth: 1.5,
-  },
-  markerEnd: {
-    type: MarkerType.ArrowClosed,
-    color: green,
-  },
-});
-
-const clusterEdge = (
-  a: string,
-  b: string,
-  sourceHandle?: string,
-  targetHandle?: string,
-): Edge => ({
-  id: `${a}-${b}`,
-  source: a,
-  target: b,
-  sourceHandle,
-  targetHandle,
-  animated: true,
-  type: "smoothstep",
-  style: {
-    stroke: orange,
-    strokeWidth: 2,
-    strokeDasharray: "6 6",
-  },
-});
-
-/* ---------- Node Styles ---------- */
-
-const baseBox = {
-  borderRadius: 8,
-  padding: "16px 20px",
-  fontSize: 16,
-  fontWeight: 600,
-  border: `1px solid ${blue}`,
-  color: blue,
-  background: "rgba(47,105,179,0.05)",
-  minWidth: 120,
-  textAlign: "center" as const,
-};
-
-const protocolStyle = {
-  ...baseBox,
-};
-
-const consumerStyle = {
-  ...baseBox,
-  color: green,
-  border: `1px solid ${green}`,
-  background: "rgba(40, 184, 40, 0.08)",
-};
-
-const brokerStyle = {
-  borderRadius: 12,
-  padding: "20px 24px",
-  fontSize: 18,
-  fontWeight: 700,
-  border: `1px solid ${orange}`,
-  color: orange,
-  background: "rgba(249,163,42,0.08)",
-  boxShadow: "0 0 18px rgba(249,163,42,0.35)",
-  minWidth: 160,
-  textAlign: "center" as const,
-};
-
-function BrokerNode() {
-  return (
-    <div className="flex flex-col gap-2 w-full">
-      <div className="border p-1 rounded-md text-center w-full">
-        <span className="text-(--flux-blue)">Flux</span>
-        <span className="text-(--flux-orange)">MQ</span>
-      </div>
-      <div className="border p-1 rounded-md text-center w-full">
-        Durable Queue
-      </div>
-      {/* Targets */}
-      <Handle type="target" position={Position.Left} id="left" />
-      <Handle type="target" position={Position.Top} id="top" />
-
-      {/* Sources */}
-      <Handle type="source" position={Position.Right} id="right" />
-      <Handle type="source" position={Position.Bottom} id="bottom" />
-    </div>
-  );
+): DiagramEdge {
+  return {
+    id: `${source}-${target}-${sourceHandle ?? ""}-${targetHandle ?? ""}`,
+    source,
+    target,
+    type: "flow",
+    sourceHandle,
+    targetHandle,
+    data: {
+      start,
+      end,
+      emphasize,
+      bidirectional,
+    },
+    ...(bidirectional
+      ? {}
+      : {
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: end,
+          },
+        }),
+  };
 }

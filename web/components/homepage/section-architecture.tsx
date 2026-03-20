@@ -13,9 +13,15 @@ graph TD
     G --> H
     H --> I[Log Storage<br/>+ Topic Index]
 
-    style A fill:#2F69B3,stroke:#000000,stroke-width:2px,color:#ffffff
-    style H fill:#F9A32A,stroke:#000000,stroke-width:2px,color:#000000
-    style I fill:#2F69B3,stroke:#000000,stroke-width:2px,color:#ffffff
+    style A fill:#4a4a4a,color:#ffffff
+    style B fill:#2F69B3,color:#ffffff
+    style C fill:#2F69B3,color:#ffffff
+    style D fill:#2F69B3,color:#ffffff
+    style E fill:#2F69B3,color:#ffffff
+    style F fill:#2F69B3,color:#ffffff
+    style G fill:#2F69B3,color:#ffffff
+    style H fill:#F9A32A,color:#111111
+    style I fill:#F9A32A,color:#111111
 `;
 
 export function ArchitectureSection() {

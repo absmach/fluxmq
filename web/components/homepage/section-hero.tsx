@@ -5,11 +5,14 @@ export function HeroSection() {
   return (
     <section className="relative border-b-2 border-(--flux-border) py-20 md:py-20 min-h-[90vh]">
       <div className="container mx-auto px-6">
-        <div className="grid md:grid-cols-2 gap-12 items-center">
+        <div className="grid gap-8 items-center md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
           {/* Left side - Content */}
           <div className="max-w-2xl">
             {/* Title with technical specs overlay */}
             <div className="mb-14">
+              <p className="mb-4 text-xs font-semibold tracking-[0.16em] text-(--flux-text-muted) uppercase animate-fade-in">
+                Multi-protocol mesh
+              </p>
               <h1
                 className="text-6xl md:text-8xl font-bold mb-4 animate-fade-in"
                 style={{ lineHeight: "1.1" }}
@@ -56,7 +59,7 @@ export function HeroSection() {
           </div>
 
           {/* Right side - Node Network Animation */}
-          <div className="hidden md:flex items-center justify-center h-[80vh]">
+          <div className="hidden h-[80vh] max-h-[800px] items-center justify-start md:flex">
             <HeroNodeNetwork />
           </div>
         </div>
