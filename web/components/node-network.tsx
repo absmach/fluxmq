@@ -225,7 +225,16 @@ function BrokerNode({ data }: NodeProps<DiagramNode>) {
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-(--flux-orange)">
           <Server className="size-4" />
-          <span>{data.label}</span>
+          <span>
+            {data.label.startsWith("FluxMQ") ? (
+              <>
+                <span className="text-(--flux-blue)">Flux</span>
+                {data.label.slice(4)}
+              </>
+            ) : (
+              data.label
+            )}
+          </span>
         </div>
         <span className="rounded-full bg-(--flux-orange)/20 px-2 py-0.5 text-[9px] font-semibold tracking-[0.14em] text-(--flux-orange)">
           RAFT
