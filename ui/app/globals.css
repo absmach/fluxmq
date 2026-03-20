@@ -55,43 +55,43 @@
 	--flux-blue: hsl(213.64deg 70% 60%);
 	--flux-orange: #f9a32a;
 
-	/* Surface */
-	--flux-bg: #0f172a;
-	--flux-bg-alt: #1e293b;
-	--flux-card: #1e293b;
-	--flux-card-border: #334155;
-	--flux-hover: #334155;
+	/* Surface — neutral charcoal (no blue tint) */
+	--flux-bg: #111318;
+	--flux-bg-alt: #1a1d24;
+	--flux-card: #1a1d24;
+	--flux-card-border: #2a2d35;
+	--flux-hover: #2a2d35;
 
 	/* Foreground */
-	--flux-text: #f1f5f9;
-	--flux-text-muted: #94a3b8;
-	--flux-fg: #f1f5f9;
+	--flux-text: #e8eaed;
+	--flux-text-muted: #8b8f98;
+	--flux-fg: #e8eaed;
 
 	/* Structural */
-	--flux-border: #475569;
-	--flux-grid: #334155;
+	--flux-border: #3a3d45;
+	--flux-grid: #2a2d35;
 
 	/* Semantic surface layers */
-	--flux-surface: #1e293b;
-	--flux-surface-border: #334155;
+	--flux-surface: #1a1d24;
+	--flux-surface-border: #2a2d35;
 
 	/* ── shadcn/ui CSS variable mappings (dark) ─────────────────────────── */
-	--background: 15 23 42; /* flux-bg  #0f172a */
-	--foreground: 241 245 249; /* flux-text #f1f5f9 */
-	--card: 30 41 59; /* flux-card #1e293b */
-	--card-foreground: 241 245 249;
+	--background: 17 19 24; /* flux-bg  #111318 */
+	--foreground: 232 234 237; /* flux-text #e8eaed */
+	--card: 26 29 36; /* flux-card #1a1d24 */
+	--card-foreground: 232 234 237;
 	--primary: 99 145 205; /* flux-blue (bright) */
 	--primary-foreground: 255 255 255;
-	--secondary: 51 65 85; /* flux-hover #334155 */
-	--secondary-foreground: 241 245 249;
-	--muted: 51 65 85; /* flux-hover */
-	--muted-foreground: 148 163 184; /* flux-text-muted #94a3b8 */
-	--accent: 51 65 85;
-	--accent-foreground: 241 245 249;
+	--secondary: 42 45 53; /* flux-hover #2a2d35 */
+	--secondary-foreground: 232 234 237;
+	--muted: 42 45 53; /* flux-hover */
+	--muted-foreground: 139 143 152; /* flux-text-muted #8b8f98 */
+	--accent: 42 45 53;
+	--accent-foreground: 232 234 237;
 	--destructive: 239 68 68;
 	--destructive-foreground: 255 255 255;
-	--border: 51 65 85; /* flux-card-border #334155 */
-	--input: 51 65 85;
+	--border: 42 45 53; /* flux-card-border #2a2d35 */
+	--input: 42 45 53;
 	--ring: 99 145 205;
 }
 
@@ -205,4 +205,18 @@ p {
 
 .theme-toggle:hover {
 	background: var(--flux-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-fade-in,
+	.animate-slide-in,
+	.animate-pulse {
+		animation: none;
+	}
+
+	* {
+		transition-duration: 0.01ms;
+		animation-duration: 0.01ms;
+		animation-iteration-count: 1;
+	}
 }

@@ -16,19 +16,25 @@ export function NewsletterSection() {
             id="mc-embedded-subscribe-form"
             name="mc-embedded-subscribe-form"
             target="_blank"
+            rel="noopener noreferrer"
             className="max-w-md mx-auto"
           >
             <div className="flex flex-col sm:flex-row gap-0">
+              <label htmlFor="newsletter-email" className="sr-only">
+                Email address
+              </label>
               <input
+                id="newsletter-email"
                 type="email"
                 name="EMAIL"
+                aria-label="Email address"
                 placeholder="Enter your email"
                 required
                 className="flex-1 brutalist-border sm:border-r-0 px-4 py-3 focus:outline-none focus:border-(--flux-orange)"
               />
               <button
                 type="submit"
-                className="brutalist-border border-t-0 sm:border-t-2 bg-(--flux-orange) hover:bg-(--flux-blue) text-white px-6 py-3 font-bold transition-colors"
+                className="brutalist-border border-t-0 sm:border-t-2 bg-(--flux-orange) hover:bg-(--flux-blue) text-(--flux-fg) hover:text-white px-6 py-3 font-bold transition-colors"
               >
                 SUBSCRIBE
               </button>

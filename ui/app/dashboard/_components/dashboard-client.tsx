@@ -3,7 +3,6 @@
 import {
 	Activity,
 	AlertTriangle,
-	ArrowRight,
 	BookOpen,
 	Clock,
 	HardDrive,
@@ -15,7 +14,6 @@ import {
 	Wifi,
 	WifiOff,
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
 	CartesianGrid,
@@ -46,7 +44,6 @@ import {
 	type NodeInfo,
 } from "@/lib/api";
 import { getBrokerOverview } from "@/lib/services/broker";
-import { useTheme } from "@/lib/theme-provider";
 
 const POLL_MS = 5_000;
 const POLL_S = POLL_MS / 1000;
@@ -95,8 +92,6 @@ function nodeToStatus(node: NodeInfo): BrokerStatus {
 }
 
 export default function DashboardClient() {
-	const { theme } = useTheme();
-	const isDark = theme === "dark";
 	const [clusterStatus, setClusterStatus] = useState<BrokerStatus | null>(null);
 	const [nodes, setNodes] = useState<NodeInfo[]>([]);
 	const historiesRef = useRef<Record<string, ChartPoint[]>>({});
@@ -210,11 +205,11 @@ export default function DashboardClient() {
 	const historyKey = selectedNodeId ?? "";
 	const displayHistory = historiesRef.current[historyKey] ?? [];
 
-	const gridColor = isDark ? "#334155" : "#e2e8f0";
-	const axisColor = isDark ? "#94a3b8" : "#64748b";
-	const tooltipBg = isDark ? "#1e293b" : "#ffffff";
-	const tooltipBdr = isDark ? "#475569" : "#e2e8f0";
-	const tooltipTxt = isDark ? "#f1f5f9" : "#0f172a";
+	const gridColor = "var(--flux-grid)";
+	const axisColor = "var(--flux-text-muted)";
+	const tooltipBg = "var(--flux-card)";
+	const tooltipBdr = "var(--flux-card-border)";
+	const tooltipTxt = "var(--flux-text)";
 
 	const tooltipStyle = {
 		backgroundColor: tooltipBg,
@@ -278,6 +273,16 @@ export default function DashboardClient() {
 		: [];
 
 	const scopeLabel = selectedNodeId ?? "Cluster";
+	const latestPoint = displayHistory.at(-1);
+	const trafficSummary = latestPoint
+		? `Latest ${scopeLabel} traffic: ${latestPoint.msgsIn.toFixed(1)} messages in per second and ${latestPoint.msgsOut.toFixed(1)} messages out per second.`
+		: `No traffic points available yet for ${scopeLabel}.`;
+	const bandwidthSummary = latestPoint
+		? `Latest ${scopeLabel} bandwidth: ${formatBytes(latestPoint.bytesIn)} in per second and ${formatBytes(latestPoint.bytesOut)} out per second.`
+		: `No bandwidth points available yet for ${scopeLabel}.`;
+	const sessionsSummary = latestPoint
+		? `Latest ${scopeLabel} active sessions: ${formatCount(latestPoint.sessions)}.`
+		: `No active session trend points available yet for ${scopeLabel}.`;
 
 	return (
 		<div className="p-4 sm:p-6 lg:p-8 space-y-6">
@@ -316,6 +321,10 @@ export default function DashboardClient() {
 						variant="outline"
 						size="sm"
 						onClick={() => setLiveUpdates((v) => !v)}
+						aria-pressed={liveUpdates}
+						aria-label={
+							liveUpdates ? "Pause live updates" : "Resume live updates"
+						}
 						className={`flex items-center gap-1.5 text-xs min-h-10 ${
 							liveUpdates
 								? "border-flux-green/40 text-flux-green bg-flux-green/10 hover:bg-flux-green/20"
@@ -351,7 +360,10 @@ export default function DashboardClient() {
 				</div>
 			</div>
 			{error && (
-				<div className="rounded-lg border border-flux-red/30 bg-flux-red/10 px-4 py-3 text-sm text-flux-red">
+				<div
+					role="alert"
+					className="rounded-lg border border-flux-red/30 bg-flux-red/10 px-4 py-3 text-sm text-flux-red"
+				>
 					⚠ {error}
 				</div>
 			)}
@@ -408,7 +420,11 @@ export default function DashboardClient() {
 						</p>
 					</CardHeader>
 					<CardContent>
-						<div className="relative">
+						<div
+							className="relative"
+							role="img"
+							aria-label={`Message traffic trend chart for ${scopeLabel}`}
+						>
 							{!loaded && <ChartLoadingSkeleton height={260} />}
 							<ResponsiveContainer width="100%" height={260}>
 								<LineChart
@@ -437,7 +453,7 @@ export default function DashboardClient() {
 										type="monotone"
 										dataKey="msgsIn"
 										name="In"
-										stroke="#10b981"
+										stroke="var(--flux-green)"
 										strokeWidth={2}
 										dot={false}
 										isAnimationActive={false}
@@ -446,13 +462,14 @@ export default function DashboardClient() {
 										type="monotone"
 										dataKey="msgsOut"
 										name="Out"
-										stroke="#3b82f6"
+										stroke="var(--flux-blue)"
 										strokeWidth={2}
 										dot={false}
 										isAnimationActive={false}
 									/>
 								</LineChart>
 							</ResponsiveContainer>
+							<p className="sr-only">{trafficSummary}</p>
 							{error && <ChartErrorOverlay />}
 						</div>
 					</CardContent>
@@ -468,7 +485,11 @@ export default function DashboardClient() {
 						</p>
 					</CardHeader>
 					<CardContent>
-						<div className="relative">
+						<div
+							className="relative"
+							role="img"
+							aria-label={`Bandwidth trend chart for ${scopeLabel}`}
+						>
 							{!loaded && <ChartLoadingSkeleton height={260} />}
 							<ResponsiveContainer width="100%" height={260}>
 								<LineChart
@@ -497,7 +518,7 @@ export default function DashboardClient() {
 										type="monotone"
 										dataKey="bytesIn"
 										name="In"
-										stroke="#f97316"
+										stroke="var(--flux-orange)"
 										strokeWidth={2}
 										dot={false}
 										isAnimationActive={false}
@@ -506,13 +527,14 @@ export default function DashboardClient() {
 										type="monotone"
 										dataKey="bytesOut"
 										name="Out"
-										stroke="#a78bfa"
+										stroke="var(--flux-purple)"
 										strokeWidth={2}
 										dot={false}
 										isAnimationActive={false}
 									/>
 								</LineChart>
 							</ResponsiveContainer>
+							<p className="sr-only">{bandwidthSummary}</p>
 							{error && <ChartErrorOverlay />}
 						</div>
 					</CardContent>
@@ -529,7 +551,11 @@ export default function DashboardClient() {
 							</p>
 						</CardHeader>
 						<CardContent>
-							<div className="relative">
+							<div
+								className="relative"
+								role="img"
+								aria-label="Active connections trend chart for cluster"
+							>
 								{!loaded && <ChartLoadingSkeleton height={200} />}
 								<ResponsiveContainer width="100%" height={200}>
 									<LineChart
@@ -553,13 +579,14 @@ export default function DashboardClient() {
 											type="monotone"
 											dataKey="sessions"
 											name="Connections"
-											stroke="#3b82f6"
+											stroke="var(--flux-blue)"
 											strokeWidth={2}
 											dot={false}
 											isAnimationActive={false}
 										/>
 									</LineChart>
 								</ResponsiveContainer>
+								<p className="sr-only">{sessionsSummary}</p>
 								{error && <ChartErrorOverlay />}
 							</div>
 						</CardContent>
@@ -580,18 +607,6 @@ export default function DashboardClient() {
 									row to inspect
 								</p>
 							</div>
-							{nodes.length > 5 && (
-								<Link href="/dashboard/cluster">
-									<Button
-										variant="ghost"
-										size="sm"
-										className="flex items-center gap-1.5 text-xs text-flux-blue hover:text-flux-blue hover:bg-flux-blue/10"
-									>
-										View All
-										<ArrowRight className="w-3.5 h-3.5" />
-									</Button>
-								</Link>
-							)}
 						</div>
 					</CardHeader>
 					<CardContent className="p-0">
@@ -610,22 +625,29 @@ export default function DashboardClient() {
 									</TableRow>
 								</TableHeader>
 								<TableBody>
-									{nodes.slice(0, 5).map((node) => {
+									{nodes.map((node) => {
 										const isSelected = selectedNodeId === node.node_id;
 										return (
 											<TableRow
 												key={node.node_id}
-												className={`border-flux-card-border cursor-pointer transition-colors ${
+												className={`border-flux-card-border transition-colors ${
 													isSelected
 														? "bg-flux-blue/10 hover:bg-flux-blue/15"
 														: "hover:bg-flux-hover"
 												}`}
-												onClick={() =>
-													setSelectedNodeId(isSelected ? null : node.node_id)
-												}
 											>
 												<TableCell className="pl-6 py-4">
-													<div className="flex items-center gap-2">
+													<button
+														type="button"
+														aria-pressed={isSelected}
+														aria-label={`Inspect node ${node.node_id}`}
+														onClick={() =>
+															setSelectedNodeId(
+																isSelected ? null : node.node_id,
+															)
+														}
+														className="flex w-full items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flux-blue"
+													>
 														<span className="inline-block w-2 h-2 rounded-full bg-flux-green shrink-0" />
 														<span className="text-flux-text font-medium text-sm">
 															{node.node_id}
@@ -638,7 +660,7 @@ export default function DashboardClient() {
 																Leader
 															</Badge>
 														)}
-													</div>
+													</button>
 												</TableCell>
 												<TableCell className="text-flux-text-muted font-mono text-xs py-4">
 													{node.addr}
@@ -687,23 +709,6 @@ export default function DashboardClient() {
 								</TableBody>
 							</Table>
 						</div>
-						{nodes.length > 5 && (
-							<div className="flex items-center justify-between px-6 py-3 border-t border-flux-card-border">
-								<p className="text-xs text-flux-text-muted">
-									Showing 5 of {nodes.length} nodes
-								</p>
-								<Link href="/dashboard/cluster">
-									<Button
-										variant="ghost"
-										size="sm"
-										className="flex items-center gap-1.5 text-xs text-flux-blue hover:text-flux-blue hover:bg-flux-blue/10"
-									>
-										View All Nodes
-										<ArrowRight className="w-3.5 h-3.5" />
-									</Button>
-								</Link>
-							</div>
-						)}
 					</CardContent>
 				</Card>
 			)}

@@ -1,7 +1,7 @@
-@import 'tailwindcss';
-@import 'fumadocs-ui/css/neutral.css';
-@import 'fumadocs-ui/css/preset.css';
-@import 'fumadocs-openapi/css/preset.css';
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "fumadocs-openapi/css/preset.css";
 
 /* FluxMQ Brand Colors - Light Theme */
 :root {
@@ -60,7 +60,7 @@
 .terminal {
   background: hsl(0 0% 10%);
   color: hsl(120 100% 80%);
-  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-family: "JetBrains Mono", "Courier New", monospace;
   border: 2px solid var(--flux-border);
 }
 
@@ -75,7 +75,7 @@
 }
 
 .accent-line::before {
-  content: '';
+  content: "";
   position: absolute;
   left: 0;
   top: 0;
@@ -86,7 +86,7 @@
 
 /* Technical Typography */
 .mono {
-  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-family: "JetBrains Mono", "Courier New", monospace;
 }
 
 /* Performance Metrics Table */
@@ -201,6 +201,9 @@ p {
 
 /* Respect reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 
   .animate-fade-in,
   .animate-slide-up {

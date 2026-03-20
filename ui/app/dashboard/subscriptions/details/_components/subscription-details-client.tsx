@@ -2,7 +2,7 @@
 
 import { ArrowLeft, Search, Users } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { SessionDetailDialog } from "@/components/session-detail-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 	const [loadingSessionKey, setLoadingSessionKey] = useState<string | null>(
 		null,
 	);
+	const searchInputId = useId();
 
 	useEffect(() => {
 		async function load() {
@@ -133,11 +134,15 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 				<CardContent className="p-6">
 					<div className="flex items-center mb-6">
 						<div className="relative flex-1 w-full sm:max-w-xs">
+							<label htmlFor={searchInputId} className="sr-only">
+								Search clients by client ID or node ID
+							</label>
 							<Search
 								className="absolute left-3 top-1/2 -translate-y-1/2 text-flux-text-muted"
 								size={16}
 							/>
 							<Input
+								id={searchInputId}
 								type="text"
 								placeholder="Search clients or nodes..."
 								value={search}
@@ -155,8 +160,8 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 							<TableHeader>
 								<TableRow className="border-flux-card-border hover:bg-transparent">
 									<TableHead>Client ID</TableHead>
-									<TableHead>Node</TableHead>
-									<TableHead>QoS</TableHead>
+									<TableHead className="hidden md:table-cell">Node</TableHead>
+									<TableHead className="hidden sm:table-cell">QoS</TableHead>
 									<TableHead className="text-right">Actions</TableHead>
 								</TableRow>
 							</TableHeader>
@@ -180,12 +185,15 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 												className="border-flux-card-border hover:bg-flux-hover"
 											>
 												<TableCell className="font-mono text-sm text-flux-text font-medium py-4">
-													{client.client_id}
+													<div>{client.client_id}</div>
+													<div className="md:hidden mt-1 text-xs text-flux-text-muted font-sans">
+														{client.node_id ?? "No node"}
+													</div>
 												</TableCell>
-												<TableCell className="font-mono text-sm text-flux-text-muted py-4">
+												<TableCell className="font-mono text-sm text-flux-text-muted py-4 hidden md:table-cell">
 													{client.node_id ?? "—"}
 												</TableCell>
-												<TableCell>
+												<TableCell className="hidden sm:table-cell">
 													<Badge
 														variant="outline"
 														className={`text-xs ${QOS_COLORS[client.qos] ?? QOS_COLORS[0]}`}
@@ -202,6 +210,7 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 															void openSessionDetail(client);
 														}}
 														disabled={loadingSessionKey === key}
+														aria-label={`View session for client ${client.client_id}`}
 													>
 														{loadingSessionKey === key
 															? "Loading…"

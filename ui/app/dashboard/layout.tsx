@@ -3,11 +3,12 @@
 import {
 	Activity,
 	BookMarked,
+	BookOpen,
+	HeartPulse,
 	Home,
-	Info,
+	Mail,
 	Menu,
 	Moon,
-	Network,
 	Sun,
 	X,
 } from "lucide-react";
@@ -40,8 +41,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 			href: "/dashboard/subscriptions",
 			icon: BookMarked,
 		},
-		{ label: "Cluster", href: "/dashboard/cluster", icon: Network },
-		{ label: "Broker Info", href: "/dashboard/broker-info", icon: Info },
+		{ label: "Health", href: "/dashboard/broker-info", icon: HeartPulse },
 	];
 
 	const isActive = (href: string) => {
@@ -99,6 +99,8 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 							<Link
 								key={item.href}
 								href={item.href}
+								aria-label={item.label}
+								aria-current={active ? "page" : undefined}
 								className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
 									active
 										? "bg-flux-blue text-white"
@@ -111,6 +113,28 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 						);
 					})}
 				</nav>
+
+				{/* Footer Links */}
+				<div className="border-t border-flux-card-border p-4 space-y-1">
+					<a
+						href="https://fluxmq.absmach.eu/docs"
+						target="_blank"
+						rel="noopener noreferrer"
+						aria-label="Documentation"
+						className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-flux-text-muted hover:bg-flux-hover hover:text-flux-text transition-colors text-sm"
+					>
+						<BookOpen size={18} />
+						{sidebarOpen && <span>Documentation</span>}
+					</a>
+					<a
+						href="mailto:info@absmach.eu"
+						aria-label="Contact"
+						className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-flux-text-muted hover:bg-flux-hover hover:text-flux-text transition-colors text-sm"
+					>
+						<Mail size={18} />
+						{sidebarOpen && <span>Contact</span>}
+					</a>
+				</div>
 			</aside>
 
 			{/* Mobile Overlay */}
@@ -137,9 +161,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 						>
 							{sidebarOpen ? <X size={20} /> : <Menu size={20} />}
 						</Button>
-						<h1 className="text-xl font-bold bg-gradient-to-r from-flux-blue to-flux-orange bg-clip-text text-transparent">
-							FluxMQ
-						</h1>
+						<FluxLogo className="text-xl font-bold" />
 					</div>
 					<Button
 						variant="ghost"

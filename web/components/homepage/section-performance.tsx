@@ -13,36 +13,36 @@ export function PerformanceSection() {
 
         <div className="max-w-4xl mx-auto">
           <div className="overflow-x-auto">
-          <table className="metrics-table w-full mono text-sm md:text-base">
-            <thead>
-              <tr>
-                <th>METRIC</th>
-                <th>VALUE</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white">
-              <tr>
-                <td>Concurrent Connections</td>
-                <td className="font-bold">500K+ per node</td>
-              </tr>
-              <tr>
-                <td>Message Throughput</td>
-                <td className="font-bold">300K-500K msg/s per node</td>
-              </tr>
-              <tr>
-                <td>Latency (local)</td>
-                <td className="font-bold">&lt;10ms</td>
-              </tr>
-              <tr>
-                <td>Latency (cross-node)</td>
-                <td className="font-bold">~5ms</td>
-              </tr>
-              <tr>
-                <td>Session Takeover</td>
-                <td className="font-bold">&lt;100ms</td>
-              </tr>
-            </tbody>
-          </table>
+            <table className="metrics-table w-full mono text-sm md:text-base">
+              <thead>
+                <tr>
+                  <th>METRIC</th>
+                  <th>VALUE</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Concurrent Connections</td>
+                  <td className="font-bold">500K+ per node</td>
+                </tr>
+                <tr>
+                  <td>Message Throughput</td>
+                  <td className="font-bold">300K-500K msg/s per node</td>
+                </tr>
+                <tr>
+                  <td>Latency (local)</td>
+                  <td className="font-bold">&lt;10ms</td>
+                </tr>
+                <tr>
+                  <td>Latency (cross-node)</td>
+                  <td className="font-bold">~5ms</td>
+                </tr>
+                <tr>
+                  <td>Session Takeover</td>
+                  <td className="font-bold">&lt;100ms</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <div className="mt-8 brutalist-border bg-theme p-6">

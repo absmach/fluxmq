@@ -1,39 +1,127 @@
 "use client";
 
+import {
+	AlertTriangle,
+	Clock,
+	Globe,
+	Heart,
+	Shield,
+	ShieldAlert,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import type { BrokerStatus } from "@/lib/api";
-import { formatBytes, formatCount, formatUptime } from "@/lib/api";
+import type { BrokerStatus, NodeInfo } from "@/lib/api";
+import { formatCount, formatUptime } from "@/lib/api";
 import { getBrokerOverview } from "@/lib/services/broker";
 
-interface InfoRow {
-	label: string;
-	value: string | React.ReactNode;
-}
+function NodeCard({ node }: { node: NodeInfo }) {
+	const isHealthy = node.healthy !== false;
 
-function InfoSection({ title, rows }: { title: string; rows: InfoRow[] }) {
 	return (
 		<Card className="border-flux-card-border bg-flux-card overflow-hidden">
-			<div className="px-6 py-3 border-b border-flux-card-border bg-flux-hover">
-				<h2 className="text-sm font-semibold text-flux-text-muted uppercase tracking-wide">
-					{title}
-				</h2>
-			</div>
-			<CardContent className="p-0">
-				<div className="divide-y divide-flux-card-border">
-					{rows.map((row) => (
-						<div
-							key={row.label}
-							className="px-6 py-3 flex items-center justify-between gap-4"
+			<CardContent className="p-5">
+				<div className="flex items-start justify-between gap-3 mb-4">
+					<div className="flex items-center gap-2.5">
+						<span
+							className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${
+								isHealthy ? "bg-flux-green" : "bg-flux-red"
+							}`}
+						/>
+						<h3 className="text-sm font-semibold text-flux-text">
+							{node.node_id}
+						</h3>
+					</div>
+					<div className="flex items-center gap-1.5">
+						{node.is_leader && (
+							<Badge
+								variant="outline"
+								className="text-xs bg-flux-blue/10 text-flux-blue border-flux-blue/20"
+							>
+								Leader
+							</Badge>
+						)}
+						<Badge
+							variant="outline"
+							className={`text-xs ${
+								isHealthy
+									? "bg-flux-green/10 text-flux-green border-flux-green/20"
+									: "bg-flux-red/10 text-flux-red border-flux-red/20"
+							}`}
 						>
-							<p className="text-flux-text-muted text-sm">{row.label}</p>
-							<span className="text-flux-text text-sm font-mono text-right">
-								{row.value}
-							</span>
-						</div>
-					))}
+							{isHealthy ? "Healthy" : "Unhealthy"}
+						</Badge>
+					</div>
 				</div>
+
+				<div className="space-y-2.5">
+					<div className="flex items-center justify-between">
+						<span className="flex items-center gap-2 text-xs text-flux-text-muted">
+							<Globe size={13} />
+							Address
+						</span>
+						<span className="text-xs font-mono text-flux-text">
+							{node.addr}
+						</span>
+					</div>
+					<div className="flex items-center justify-between">
+						<span className="flex items-center gap-2 text-xs text-flux-text-muted">
+							<Clock size={13} />
+							Uptime
+						</span>
+						<span className="text-xs font-mono text-flux-text">
+							{formatUptime(node.uptime_seconds)}
+						</span>
+					</div>
+					<div className="flex items-center justify-between">
+						<span className="flex items-center gap-2 text-xs text-flux-text-muted">
+							<Shield size={13} />
+							Role
+						</span>
+						<span className="text-xs font-mono text-flux-text">
+							{node.is_leader ? "Leader" : "Follower"}
+						</span>
+					</div>
+				</div>
+			</CardContent>
+		</Card>
+	);
+}
+
+function ErrorCard({
+	label,
+	count,
+	icon: Icon,
+}: {
+	label: string;
+	count: number;
+	icon: React.ElementType;
+}) {
+	const hasErrors = count > 0;
+
+	return (
+		<Card className="border-flux-card-border bg-flux-card overflow-hidden">
+			<CardContent className="p-5">
+				<div className="flex items-center gap-3 mb-2">
+					<div
+						className={`p-2 rounded-lg ${
+							hasErrors ? "bg-flux-red/10" : "bg-flux-green/10"
+						}`}
+					>
+						<Icon
+							size={16}
+							className={hasErrors ? "text-flux-red" : "text-flux-green"}
+						/>
+					</div>
+					<p className="text-xs text-flux-text-muted">{label}</p>
+				</div>
+				<p
+					className={`text-2xl font-bold ${
+						hasErrors ? "text-flux-red" : "text-flux-text"
+					}`}
+				>
+					{formatCount(count)}
+				</p>
 			</CardContent>
 		</Card>
 	);
@@ -41,133 +129,40 @@ function InfoSection({ title, rows }: { title: string; rows: InfoRow[] }) {
 
 const InfoClient = () => {
 	const [status, setStatus] = useState<BrokerStatus | null>(null);
+	const [nodes, setNodes] = useState<NodeInfo[]>([]);
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
 		getBrokerOverview()
-			.then(({ status }) => setStatus(status))
+			.then(({ status, nodes }) => {
+				setStatus(status);
+				setNodes(nodes);
+			})
 			.catch(console.error)
 			.finally(() => setLoading(false));
 	}, []);
 
-	const roleBadge = status ? (
-		status.is_leader ? (
-			<Badge
-				variant="outline"
-				className="text-xs bg-flux-blue/10 text-flux-blue border-flux-blue/20"
-			>
-				Leader
-			</Badge>
-		) : (
-			<Badge
-				variant="outline"
-				className="text-xs bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
-			>
-				Follower
-			</Badge>
-		)
-	) : (
-		"—"
-	);
-
-	const modeBadge = status ? (
-		status.cluster_mode ? (
-			<Badge
-				variant="outline"
-				className="text-xs bg-flux-purple/10 text-flux-purple border-flux-purple/20"
-			>
-				Cluster
-			</Badge>
-		) : (
-			<Badge
-				variant="outline"
-				className="text-xs bg-flux-teal/10 text-flux-teal border-flux-teal/20"
-			>
-				Single Node
-			</Badge>
-		)
-	) : (
-		"—"
-	);
-
-	const v = (n: number | undefined) => (n !== undefined ? formatCount(n) : "—");
-	const b = (n: number | undefined) => (n !== undefined ? formatBytes(n) : "—");
-
-	const sections = status
-		? [
-				{
-					title: "Identity",
-					rows: [
-						{ label: "Node ID", value: status.node_id },
-						{ label: "Role", value: roleBadge },
-						{ label: "Mode", value: modeBadge },
-						{ label: "Uptime", value: formatUptime(status.uptime_seconds) },
-						...(status.cluster_mode
-							? [{ label: "Cluster Nodes", value: v(status.node_count) }]
-							: []),
-					],
-				},
-				{
-					title: "Sessions",
-					rows: [
-						{ label: "Connected", value: v(status.sessions) },
-						{ label: "Total (incl. offline)", value: v(status.sessions_total) },
-						{ label: "Active Subscriptions", value: v(status.subscriptions) },
-						{ label: "Retained Messages", value: v(status.retained_messages) },
-					],
-				},
-				{
-					title: "Connections",
-					rows: [
-						{ label: "Current", value: v(status.sessions) },
-						{
-							label: "Total Ever Connected",
-							value: v(status.connections_total),
-						},
-						{
-							label: "Disconnections",
-							value: v(status.connections_disconnections),
-						},
-					],
-				},
-				{
-					title: "Messages",
-					rows: [
-						{ label: "Received", value: v(status.messages_received) },
-						{ label: "Sent", value: v(status.messages_sent) },
-						{ label: "Publish Received", value: v(status.publish_received) },
-						{ label: "Publish Sent", value: v(status.publish_sent) },
-					],
-				},
-				{
-					title: "Bandwidth",
-					rows: [
-						{ label: "Bytes In", value: b(status.bytes_received) },
-						{ label: "Bytes Out", value: b(status.bytes_sent) },
-					],
-				},
-				{
-					title: "Errors",
-					rows: [
-						{ label: "Protocol Errors", value: v(status.protocol_errors) },
-						{ label: "Auth Errors", value: v(status.auth_errors) },
-						{ label: "Authz Errors", value: v(status.authz_errors) },
-						{ label: "Packet Errors", value: v(status.packet_errors) },
-					],
-				},
-			]
-		: [];
+	const totalErrors = status
+		? status.protocol_errors +
+			status.auth_errors +
+			status.authz_errors +
+			status.packet_errors
+		: 0;
 
 	return (
 		<div className="p-4 sm:p-6 lg:p-8 space-y-6">
 			<div>
-				<h1 className="text-3xl font-bold text-flux-text mb-1">Broker Info</h1>
-				<p className="text-flux-text-muted">
-					Runtime state of the connected broker node
+				<h1 className="text-3xl font-bold text-flux-text mb-1">
+					Broker Health
+				</h1>
+				<p className="text-flux-text-muted text-sm">
+					Cluster topology, node health, and error diagnostics
 				</p>
 			</div>
 
-			{loading && <div className="text-flux-text-muted text-sm">Loading…</div>}
+			{loading && (
+				<div className="text-flux-text-muted text-sm">Loading…</div>
+			)}
 
 			{!loading && !status && (
 				<div className="rounded-lg border border-flux-red/30 bg-flux-red/10 px-4 py-3 text-sm text-flux-red">
@@ -177,11 +172,117 @@ const InfoClient = () => {
 			)}
 
 			{!loading && status && (
-				<div className="space-y-4">
-					{sections.map((s) => (
-						<InfoSection key={s.title} title={s.title} rows={s.rows} />
-					))}
-				</div>
+				<>
+					{/* Cluster Status */}
+					<Card className="border-flux-card-border bg-flux-card overflow-hidden">
+						<CardContent className="p-5">
+							<div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+								<div className="flex items-center gap-2.5">
+									<Heart
+										size={18}
+										className={
+											totalErrors === 0
+												? "text-flux-green"
+												: "text-flux-orange"
+										}
+									/>
+									<span className="text-sm font-semibold text-flux-text">
+										Cluster Status
+									</span>
+								</div>
+
+								<div className="flex items-center gap-2">
+									{status.cluster_mode ? (
+										<Badge
+											variant="outline"
+											className="text-xs bg-flux-purple/10 text-flux-purple border-flux-purple/20"
+										>
+											Cluster
+										</Badge>
+									) : (
+										<Badge
+											variant="outline"
+											className="text-xs bg-flux-teal/10 text-flux-teal border-flux-teal/20"
+										>
+											Single Node
+										</Badge>
+									)}
+
+									<Badge
+										variant="outline"
+										className={`text-xs ${
+											totalErrors === 0
+												? "bg-flux-green/10 text-flux-green border-flux-green/20"
+												: "bg-flux-orange/10 text-flux-orange border-flux-orange/20"
+										}`}
+									>
+										{totalErrors === 0
+											? "All Clear"
+											: `${formatCount(totalErrors)} Error${totalErrors !== 1 ? "s" : ""}`}
+									</Badge>
+								</div>
+
+								<div className="flex items-center gap-4 ml-auto text-xs text-flux-text-muted">
+									<span>
+										Nodes:{" "}
+										<span className="font-mono text-flux-text">
+											{nodes.length || 1}
+										</span>
+									</span>
+									<span>
+										Uptime:{" "}
+										<span className="font-mono text-flux-text">
+											{formatUptime(status.uptime_seconds)}
+										</span>
+									</span>
+								</div>
+							</div>
+						</CardContent>
+					</Card>
+
+					{/* Node Health Cards */}
+					{nodes.length > 0 && (
+						<div>
+							<h2 className="text-sm font-semibold text-flux-text-muted uppercase tracking-wide mb-3">
+								Node Health
+							</h2>
+							<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+								{nodes.map((node) => (
+									<NodeCard key={node.node_id} node={node} />
+								))}
+							</div>
+						</div>
+					)}
+
+					{/* Error Counts */}
+					<div>
+						<h2 className="text-sm font-semibold text-flux-text-muted uppercase tracking-wide mb-3">
+							Errors
+						</h2>
+						<div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+							<ErrorCard
+								label="Protocol"
+								count={status.protocol_errors}
+								icon={AlertTriangle}
+							/>
+							<ErrorCard
+								label="Authentication"
+								count={status.auth_errors}
+								icon={ShieldAlert}
+							/>
+							<ErrorCard
+								label="Authorization"
+								count={status.authz_errors}
+								icon={ShieldAlert}
+							/>
+							<ErrorCard
+								label="Packet"
+								count={status.packet_errors}
+								icon={AlertTriangle}
+							/>
+						</div>
+					</div>
+				</>
 			)}
 		</div>
 	);

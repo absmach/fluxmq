@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { NodeNetwork } from "@/components/node-network";
+import { HeroNodeNetwork } from "@/components/homepage/hero-node-network";
 
 export function HeroSection() {
   return (
@@ -48,7 +48,7 @@ export function HeroSection() {
               </Link>
               <Link
                 href="/docs"
-                className="brutalist-border px-6 py-3 font-bold hover:bg-(--flux-orange) hover:text-white transition-colors inline-block"
+                className="brutalist-border px-6 py-3 font-bold hover:bg-(--flux-orange) hover:text-(--flux-fg) transition-colors inline-block"
               >
                 READ DOCUMENTATION
               </Link>
@@ -57,7 +57,7 @@ export function HeroSection() {
 
           {/* Right side - Node Network Animation */}
           <div className="hidden md:flex items-center justify-center h-[80vh]">
-            <NodeNetwork />
+            <HeroNodeNetwork />
           </div>
         </div>
       </div>

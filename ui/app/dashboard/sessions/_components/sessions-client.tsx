@@ -1,7 +1,7 @@
 "use client";
 
 import { Hourglass, Search, Trash2, Users, Wifi, WifiOff } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { SessionDetailDialog } from "@/components/session-detail-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -69,6 +69,8 @@ const SessionsClient = () => {
 	const [detailSession, setDetailSession] = useState<SessionInfo | null>(null);
 	const [page, setPage] = useState(1);
 	const [limit, setLimit] = useState(10);
+	const searchInputId = useId();
+	const nodeSelectId = useId();
 
 	useEffect(() => {
 		getBrokerOverview()
@@ -188,11 +190,12 @@ const SessionsClient = () => {
 								<button
 									type="button"
 									key={value}
+									aria-pressed={filter === value}
 									onClick={() => {
 										setFilter(value);
 										setPage(1);
 									}}
-									className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+									className={`px-3 py-2 min-h-11 rounded-md text-sm font-medium transition-colors ${
 										filter === value
 											? "bg-flux-blue text-white"
 											: "text-flux-text-muted hover:text-flux-text hover:bg-flux-hover"
@@ -206,11 +209,12 @@ const SessionsClient = () => {
 						<div className="flex items-center gap-1 p-1 rounded-lg bg-flux-bg border border-flux-card-border">
 							<button
 								type="button"
+								aria-pressed={scope === "cluster"}
 								onClick={() => {
 									setScope("cluster");
 									setPage(1);
 								}}
-								className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+								className={`px-3 py-2 min-h-11 rounded-md text-sm font-medium transition-colors ${
 									scope === "cluster"
 										? "bg-flux-blue text-white"
 										: "text-flux-text-muted hover:text-flux-text hover:bg-flux-hover"
@@ -220,11 +224,12 @@ const SessionsClient = () => {
 							</button>
 							<button
 								type="button"
+								aria-pressed={scope === "node"}
 								onClick={() => {
 									setScope("node");
 									setPage(1);
 								}}
-								className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+								className={`px-3 py-2 min-h-11 rounded-md text-sm font-medium transition-colors ${
 									scope === "node"
 										? "bg-flux-blue text-white"
 										: "text-flux-text-muted hover:text-flux-text hover:bg-flux-hover"
@@ -236,16 +241,21 @@ const SessionsClient = () => {
 
 						{scope === "node" && (
 							<div className="flex items-center gap-2 min-w-[180px]">
-								<span className="text-xs font-medium uppercase tracking-wide text-flux-text-muted">
+								<label
+									htmlFor={nodeSelectId}
+									className="text-xs font-medium uppercase tracking-wide text-flux-text-muted"
+								>
 									Node
-								</span>
+								</label>
 								<select
+									id={nodeSelectId}
+									aria-label="Select node scope"
 									value={nodeId}
 									onChange={(e) => {
 										setNodeId(e.target.value);
 										setPage(1);
 									}}
-									className="h-9 rounded-md border border-flux-card-border bg-flux-bg px-3 text-sm text-flux-text focus:outline-none focus:ring-2 focus:ring-flux-blue/40"
+									className="h-11 rounded-md border border-flux-card-border bg-flux-bg px-3 text-sm text-flux-text focus:outline-none focus:ring-2 focus:ring-flux-blue/40"
 								>
 									{nodeId === "" && <option value="">Current node</option>}
 									{nodes.map((node) => (
@@ -258,11 +268,15 @@ const SessionsClient = () => {
 						)}
 
 						<div className="relative flex-1 w-full sm:w-auto min-w-[180px] max-w-xs sm:ml-auto">
+							<label htmlFor={searchInputId} className="sr-only">
+								Search sessions by client ID
+							</label>
 							<Search
 								className="absolute left-3 top-1/2 -translate-y-1/2 text-flux-text-muted"
 								size={16}
 							/>
 							<Input
+								id={searchInputId}
 								type="text"
 								placeholder="Search by client ID..."
 								value={search}
@@ -293,6 +307,7 @@ const SessionsClient = () => {
 									<TableHead className="w-8">
 										<input
 											type="checkbox"
+											aria-label="Select all sessions"
 											checked={
 												filtered.length > 0 && selected.size === filtered.length
 											}
@@ -301,13 +316,21 @@ const SessionsClient = () => {
 										/>
 									</TableHead>
 									<TableHead>Client ID</TableHead>
-									<TableHead>Node</TableHead>
-									<TableHead>Protocol</TableHead>
+									<TableHead className="hidden md:table-cell">Node</TableHead>
+									<TableHead className="hidden md:table-cell">
+										Protocol
+									</TableHead>
 									<TableHead>Status</TableHead>
-									<TableHead className="text-right">Subscriptions</TableHead>
-									<TableHead className="text-right">Inflight</TableHead>
+									<TableHead className="text-right hidden md:table-cell">
+										Subscriptions
+									</TableHead>
+									<TableHead className="text-right hidden md:table-cell">
+										Inflight
+									</TableHead>
 									<TableHead className="text-right">Queued</TableHead>
-									<TableHead>Clean Start</TableHead>
+									<TableHead className="hidden md:table-cell">
+										Clean Start
+									</TableHead>
 									<TableHead className="text-right">Actions</TableHead>
 								</TableRow>
 							</TableHeader>
@@ -324,6 +347,7 @@ const SessionsClient = () => {
 											<TableCell>
 												<input
 													type="checkbox"
+													aria-label={`Select session ${session.client_id}`}
 													checked={selected.has(session.client_id)}
 													onChange={() => toggleSelect(session.client_id)}
 													className="accent-flux-blue cursor-pointer"
@@ -331,14 +355,18 @@ const SessionsClient = () => {
 											</TableCell>
 
 											<TableCell className="font-medium text-sm text-flux-text font-mono py-4">
-												{session.client_id}
+												<div>{session.client_id}</div>
+												<div className="md:hidden mt-1 text-xs text-flux-text-muted font-sans">
+													{session.node_id ?? "No node"} ·{" "}
+													{formatProtocolLabel(protocol)}
+												</div>
 											</TableCell>
 
-											<TableCell className="text-sm text-flux-text-muted font-mono py-4">
+											<TableCell className="text-sm text-flux-text-muted font-mono py-4 hidden md:table-cell">
 												{session.node_id ?? "—"}
 											</TableCell>
 
-											<TableCell>
+											<TableCell className="hidden md:table-cell">
 												<Badge
 													variant="outline"
 													className={`text-xs ${PROTOCOL_BADGE_CLASSES[protocol]}`}
@@ -363,11 +391,11 @@ const SessionsClient = () => {
 												</Badge>
 											</TableCell>
 
-											<TableCell className="text-right text-sm text-flux-text tabular-nums py-4">
+											<TableCell className="text-right text-sm text-flux-text tabular-nums py-4 hidden md:table-cell">
 												{session.subscription_count}
 											</TableCell>
 
-											<TableCell className="text-right text-sm tabular-nums py-4">
+											<TableCell className="text-right text-sm tabular-nums py-4 hidden md:table-cell">
 												{session.inflight_count > 0 ? (
 													<span className="text-flux-orange font-medium">
 														{session.inflight_count}
@@ -387,7 +415,7 @@ const SessionsClient = () => {
 												)}
 											</TableCell>
 
-											<TableCell>
+											<TableCell className="hidden md:table-cell">
 												<Badge
 													variant="outline"
 													className={

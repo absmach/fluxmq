@@ -7,7 +7,7 @@ import {
 	ChevronsLeft,
 	ChevronsRight,
 } from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
+import { type Dispatch, type SetStateAction, useId } from "react";
 import { Button } from "@/components/ui/button";
 
 interface TablePaginationProps {
@@ -36,7 +36,7 @@ const NavBtn = ({
 		onClick={onClick}
 		disabled={disabled}
 		className={clsx(
-			"h-8 w-8 border-flux-card-border",
+			"h-11 w-11 border-flux-card-border",
 			disabled
 				? "pointer-events-none text-flux-text-muted opacity-40"
 				: "text-flux-text hover:bg-flux-hover",
@@ -56,6 +56,8 @@ export function TablePagination({
 	itemLabel = "items",
 	pageSizeOptions = [5, 10, 15, 25],
 }: TablePaginationProps) {
+	const rowsPerPageLabelId = useId();
+
 	if (totalItems === 0) return null;
 
 	const from = Math.min((page - 1) * limit + 1, totalItems);
@@ -72,16 +74,20 @@ export function TablePagination({
 			<div className="flex items-center gap-4">
 				{/* Rows per page */}
 				<div className="flex items-center gap-2">
-					<span className="text-xs text-flux-text-muted whitespace-nowrap">
+					<span
+						id={rowsPerPageLabelId}
+						className="text-xs text-flux-text-muted whitespace-nowrap"
+					>
 						Rows per page
 					</span>
 					<select
+						aria-labelledby={rowsPerPageLabelId}
 						value={limit}
 						onChange={(e) => {
 							setLimit(Number(e.target.value));
 							setPage(1);
 						}}
-						className="h-8 rounded-md border border-flux-card-border bg-flux-bg px-2 text-xs text-flux-text focus:outline-none focus:ring-1 focus:ring-flux-blue"
+						className="h-11 rounded-md border border-flux-card-border bg-flux-bg px-2 text-xs text-flux-text focus:outline-none focus:ring-1 focus:ring-flux-blue"
 					>
 						{pageSizeOptions.map((n) => (
 							<option key={n} value={n}>

@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { useTheme } from "next-themes";
-import mermaid from "mermaid";
+import { useEffect, useId, useRef } from "react";
 
 interface MermaidDiagramProps {
   chart: string;
@@ -11,41 +10,48 @@ interface MermaidDiagramProps {
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
+  const stableId = useId().replace(/:/g, "-");
 
   useEffect(() => {
     const isDark = theme === "dark";
+    let cancelled = false;
 
-    // Initialize mermaid with theme-aware absolute colors
-    mermaid.initialize({
-      startOnLoad: true,
-      theme: "base",
-      themeVariables: {
-        primaryColor: "#2F69B3", // Flux Blue
-        primaryTextColor: "#ffffff",
-        primaryBorderColor: isDark ? "#444444" : "#333333",
-        lineColor: isDark ? "#cccccc" : "#666666",
-        secondaryColor: "#F9A32A", // Flux Orange
-        tertiaryColor: isDark ? "#1a1a1a" : "#ffffff",
-        background: isDark ? "#1a1a1a" : "#f9f9f9",
-        mainBkg: "#1a1a1a",
-        textColor: isDark ? "#ffffff" : "#1a1a1a",
-        fontSize: "14px",
-        fontFamily: "'JetBrains Mono', 'Courier New', monospace",
-      },
-    });
+    async function renderDiagram() {
+      const { default: mermaid } = await import("mermaid");
 
-    if (ref.current) {
-      // Create unique ID for this diagram
-      const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`;
+      // Initialize mermaid with theme-aware absolute colors
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "base",
+        themeVariables: {
+          primaryColor: "#2F69B3",
+          primaryTextColor: isDark ? "#111318" : "#ffffff",
+          primaryBorderColor: isDark ? "#3a3d45" : "#333333",
+          lineColor: isDark ? "#b7bbc4" : "#666666",
+          secondaryColor: "#F9A32A",
+          tertiaryColor: isDark ? "#1a1a1a" : "#ffffff",
+          background: isDark ? "#1a1a1a" : "#f9f9f9",
+          mainBkg: isDark ? "#1a1a1a" : "#ffffff",
+          textColor: isDark ? "#e8eaed" : "#0f172a",
+          fontSize: "14px",
+          fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+        },
+      });
 
-      // Render the diagram
-      mermaid.render(id, chart).then(({ svg }) => {
-        if (ref.current) {
+      if (ref.current) {
+        const id = `mermaid-${stableId}`;
+        const { svg } = await mermaid.render(id, chart);
+        if (!cancelled && ref.current) {
           ref.current.innerHTML = svg;
         }
-      });
+      }
     }
-  }, [chart, theme]);
+
+    void renderDiagram();
+    return () => {
+      cancelled = true;
+    };
+  }, [chart, stableId, theme]);
 
   return (
     <div

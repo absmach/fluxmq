@@ -22,10 +22,12 @@ _openapi:
       - content: Cluster status (health)
         id: cluster-status-health
     contents:
-      - content: |
+      - content: >
           Available on **both** servers with slightly different responses:
 
-          - **API Server** (`admin_api_addr`): Returns `{"status":"ok"}`. Minimal stub
+
+          - **API Server** (`admin_api_addr`): Returns `{"status":"ok"}`.
+          Minimal stub
             for clients that expect a health endpoint on the API port.
           - **Health Server** (`health_addr`): Returns `{"status":"healthy"}`.
             Use as the k8s `livenessProbe`.

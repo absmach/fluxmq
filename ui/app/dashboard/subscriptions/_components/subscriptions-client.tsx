@@ -2,7 +2,7 @@
 
 import { BookMarked, Search } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,6 +35,7 @@ const SubsClient = () => {
 	const [search, setSearch] = useState("");
 	const [page, setPage] = useState(1);
 	const [limit, setLimit] = useState(10);
+	const searchInputId = useId();
 
 	useEffect(() => {
 		async function load() {
@@ -84,11 +85,15 @@ const SubsClient = () => {
 				<CardContent className="p-6">
 					<div className="flex items-center mb-6">
 						<div className="relative flex-1 w-full sm:max-w-xs">
+							<label htmlFor={searchInputId} className="sr-only">
+								Search subscription filters
+							</label>
 							<Search
 								className="absolute left-3 top-1/2 -translate-y-1/2 text-flux-text-muted"
 								size={16}
 							/>
 							<Input
+								id={searchInputId}
 								type="text"
 								placeholder="Search filters..."
 								value={search}
@@ -107,7 +112,9 @@ const SubsClient = () => {
 								<TableRow className="border-flux-card-border hover:bg-transparent">
 									<TableHead>Filter</TableHead>
 									<TableHead className="text-right">Subscribers</TableHead>
-									<TableHead>Max QoS</TableHead>
+									<TableHead className="hidden sm:table-cell">
+										Max QoS
+									</TableHead>
 									<TableHead className="text-right">Actions</TableHead>
 								</TableRow>
 							</TableHeader>
@@ -134,7 +141,7 @@ const SubsClient = () => {
 											<TableCell className="text-right text-sm text-flux-text tabular-nums py-4">
 												{sub.subscriber_count}
 											</TableCell>
-											<TableCell>
+											<TableCell className="hidden sm:table-cell">
 												<Badge
 													variant="outline"
 													className={`text-xs ${QOS_COLORS[sub.max_qos] ?? QOS_COLORS[0]}`}
@@ -150,6 +157,7 @@ const SubsClient = () => {
 													className="text-xs text-flux-text-muted hover:text-flux-blue hover:bg-flux-blue/10"
 												>
 													<Link
+														aria-label={`View clients for subscription filter ${sub.filter}`}
 														href={{
 															pathname: "/dashboard/subscriptions/details",
 															query: { filter: sub.filter },

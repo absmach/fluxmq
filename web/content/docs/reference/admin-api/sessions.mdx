@@ -22,12 +22,10 @@ _openapi:
           optional filtering by state and client ID
           prefix. Supports cursor-based pagination via `page_token`.
         heading: list-sessions
-      - content: >
+      - content: |
           Returns full detail for a single session. For MQTT sessions this
-          includes subscriptions,
-
-          inflight count, and offline queue depth. The client ID must be
-
+          includes subscriptions, inflight count, and offline queue depth.
+          The client ID must be
           URL-encoded if it contains special characters (e.g. slashes).
         heading: session-detail
 ---

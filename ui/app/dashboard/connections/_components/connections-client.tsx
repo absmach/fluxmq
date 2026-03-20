@@ -1,7 +1,7 @@
 "use client";
 
 import { Search, Wifi } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,7 @@ const ConnectionsClient = () => {
 	const [search, setSearch] = useState("");
 	const [page, setPage] = useState(1);
 	const [limit, setLimit] = useState(10);
+	const searchInputId = useId();
 
 	useEffect(() => {
 		getSessions({ state: "connected" })
@@ -75,11 +76,15 @@ const ConnectionsClient = () => {
 				<CardContent className="p-6">
 					<div className="flex items-center justify-between mb-6">
 						<div className="relative flex-1 w-full sm:max-w-xs">
+							<label htmlFor={searchInputId} className="sr-only">
+								Search connections by client ID
+							</label>
 							<Search
 								className="absolute left-3 top-1/2 -translate-y-1/2 text-flux-text-muted"
 								size={16}
 							/>
 							<Input
+								id={searchInputId}
 								type="text"
 								placeholder="Search by client ID..."
 								value={search}
@@ -98,10 +103,18 @@ const ConnectionsClient = () => {
 								<TableRow className="border-flux-card-border hover:bg-transparent">
 									<TableHead>Client ID</TableHead>
 									<TableHead>Protocol</TableHead>
-									<TableHead className="text-right">Subscriptions</TableHead>
-									<TableHead className="text-right">Inflight</TableHead>
-									<TableHead>Clean Start</TableHead>
-									<TableHead>Has Will</TableHead>
+									<TableHead className="text-right hidden md:table-cell">
+										Subscriptions
+									</TableHead>
+									<TableHead className="text-right hidden md:table-cell">
+										Inflight
+									</TableHead>
+									<TableHead className="hidden md:table-cell">
+										Clean Start
+									</TableHead>
+									<TableHead className="hidden md:table-cell">
+										Has Will
+									</TableHead>
 									<TableHead>Connected At</TableHead>
 								</TableRow>
 							</TableHeader>
@@ -112,7 +125,10 @@ const ConnectionsClient = () => {
 										className="border-flux-card-border hover:bg-flux-hover"
 									>
 										<TableCell className="font-mono text-sm text-flux-text font-medium py-4">
-											{s.client_id}
+											<div>{s.client_id}</div>
+											<div className="md:hidden mt-1 text-xs text-flux-text-muted font-sans">
+												{formatProtocol(s.protocol, s.version)}
+											</div>
 										</TableCell>
 
 										<TableCell>
@@ -124,11 +140,11 @@ const ConnectionsClient = () => {
 											</Badge>
 										</TableCell>
 
-										<TableCell className="text-right text-sm text-flux-text tabular-nums py-4">
+										<TableCell className="text-right text-sm text-flux-text tabular-nums py-4 hidden md:table-cell">
 											{s.subscription_count}
 										</TableCell>
 
-										<TableCell className="text-right text-sm tabular-nums py-4">
+										<TableCell className="text-right text-sm tabular-nums py-4 hidden md:table-cell">
 											{s.inflight_count > 0 ? (
 												<span className="text-flux-orange font-medium">
 													{s.inflight_count}
@@ -138,7 +154,7 @@ const ConnectionsClient = () => {
 											)}
 										</TableCell>
 
-										<TableCell>
+										<TableCell className="hidden md:table-cell">
 											<Badge
 												variant="outline"
 												className={
@@ -151,7 +167,7 @@ const ConnectionsClient = () => {
 											</Badge>
 										</TableCell>
 
-										<TableCell>
+										<TableCell className="hidden md:table-cell">
 											<Badge
 												variant="outline"
 												className={

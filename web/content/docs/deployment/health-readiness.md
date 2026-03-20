@@ -193,7 +193,7 @@ Kubernetes readiness probes only look at the HTTP status code. Since degraded
 returns `200`, the pod stays in the ready pool. To alert on degraded state,
 scrape `/ready` from your monitoring system and check the `mode` field:
 
-```promql
+```text
 # Example: alert when any FluxMQ node reports degraded for >5m
 fluxmq_ready_mode{mode="degraded"} == 1
 ```

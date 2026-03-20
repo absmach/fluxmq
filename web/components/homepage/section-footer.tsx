@@ -1,5 +1,5 @@
-import Link from "next/link";
 import Image from "next/image";
+import Link from "next/link";
 import Logo from "@/public/abstract-machines.svg";
 
 export function FooterSection() {
@@ -12,18 +12,19 @@ export function FooterSection() {
             <Link
               href="https://absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
               target="_blank"
+              rel="noopener noreferrer"
             >
               <Image
                 src={Logo}
-                alt="Magistrala"
+                alt="Abstract Machines"
                 height={120}
                 width={120}
                 className="invert dark:invert-0 mb-4"
               />
             </Link>
             <p className="text-muted-foreground leading-relaxed mb-5">
-              Abstract Machines, creators of FluxMQ, builds secure,
-              open-source infrastructure for distributed cloud and edge systems.
+              Abstract Machines, creators of FluxMQ, builds secure, open-source
+              infrastructure for distributed cloud and edge systems.
             </p>
           </div>
 
@@ -36,6 +37,7 @@ export function FooterSection() {
                   href="https://magistrala.absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
+                  rel="noopener noreferrer"
                 >
                   Magistrala
                 </a>
@@ -45,6 +47,7 @@ export function FooterSection() {
                   href="https://absmach.eu/supermq/?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
+                  rel="noopener noreferrer"
                 >
                   SuperMQ
                 </a>
@@ -54,6 +57,7 @@ export function FooterSection() {
                   href="https://propeller.absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
+                  rel="noopener noreferrer"
                 >
                   Propeller
                 </a>
@@ -63,6 +67,7 @@ export function FooterSection() {
                   href="https://hardware.absmach.eu?utm_source=flux.absmach.eu&utm_medium=website&utm_campaign=footer"
                   className="hover:text-(--flux-orange)"
                   target="_blank"
+                  rel="noopener noreferrer"
                 >
                   Hardware
                 </a>
