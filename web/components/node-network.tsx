@@ -56,15 +56,9 @@ export function NodeNetwork() {
   const nodes: DiagramNode[] = useMemo(
     () => [
       protocolNode("mqtt-v5", "MQTT 5.0", "stateful ingest", "94k msgs/s", 0),
-      protocolNode(
-        "mqtt-v3",
-        "MQTT v3.1.1",
-        "IoT ingest",
-        "41k msgs/s",
-        160,
-      ),
-      protocolNode("http", "HTTP", "gateway events", "22k req/s", 320),
-      protocolNode("ws", "WebSocket", "live streams", "17k conn", 480),
+      protocolNode("mqtt-v3", "MQTT v3.1.1","IoT ingest", "41k msgs/s",160,),
+      protocolNode("http", "HTTP/Websocket", "gateway events", "22k req/s", 320),
+      protocolNode("coap", "CoAP", "edge telemetry", "17k conn", 480),
       protocolNode("amqp", "AMQP", "durable workloads", "8.4k chan", 640),
 
       brokerNode(
@@ -484,10 +478,10 @@ function createEdge(
     ...(bidirectional
       ? {}
       : {
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            color: end,
-          },
-        }),
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: end,
+        },
+      }),
   };
 }
