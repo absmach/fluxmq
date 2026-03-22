@@ -58,7 +58,7 @@ func mqttHandshake(t *testing.T, conn net.Conn) {
 		t.Fatalf("failed to send CONNECT: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck // best-effort
 	connack, err := v3.ReadPacket(conn)
 	if err != nil {
 		t.Fatalf("failed to read CONNACK: %v", err)
@@ -91,7 +91,7 @@ func TestTLS_BasicConnection(t *testing.T) {
 	certs := GenerateTestCerts(t)
 	serverTLS := LoadServerTLSConfig(t, certs, tls.NoClientCert)
 	clientTLS := LoadClientTLSConfig(t, certs, false)
-	clientTLS.ServerName = "localhost"
+	clientTLS.ServerName = "localhost" //nolint:goconst // test value
 
 	b := newTestBroker(t)
 	server := New(Config{TLSConfig: serverTLS}, b)
@@ -139,7 +139,7 @@ func TestTLS_RequireClientCert(t *testing.T) {
 			}
 			err = connectPkt.Pack(tlsClient)
 			if err == nil {
-				tlsClient.SetReadDeadline(time.Now().Add(1 * time.Second))
+				tlsClient.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck // best-effort
 				_, err = v3.ReadPacket(tlsClient)
 			}
 		}

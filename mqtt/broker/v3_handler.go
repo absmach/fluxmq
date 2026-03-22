@@ -49,7 +49,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		if errors.Is(err, v3.ErrInvalidProtocolName) {
 			code = v3.ConnAckUnacceptableProtocol
 		}
-		sendV3ConnAck(conn, false, code)
+		sendV3ConnAck(conn, false, code) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return ErrProtocolViolation
 	}
@@ -62,14 +62,14 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			generated, err := GenerateClientID()
 			if err != nil {
 				h.broker.telemetry.stats.IncrementProtocolErrors()
-				sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
+				sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected) //nolint:errcheck // best-effort rejection reply before closing
 				conn.Close()
 				return err
 			}
 			clientID = generated
 		} else {
 			h.broker.telemetry.stats.IncrementProtocolErrors()
-			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
+			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrClientIDRequired
 		}
@@ -82,7 +82,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
-			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword)
+			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrNotAuthorized
 		}
@@ -92,12 +92,12 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	if p.WillFlag {
 		if err := topics.ValidateTopicName(p.WillTopic); err != nil {
 			h.broker.telemetry.stats.IncrementProtocolErrors()
-			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected)
+			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrTopicInvalid
 		}
 		// Note: Will payload is stored as []byte in storage.WillMessage
-		// TODO: Consider zero-copy for will messages in future
+		//nolint:godox // TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
 			ClientID: clientID,
 			Topic:    p.WillTopic,
@@ -117,7 +117,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
-		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable)
+		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err
 	}
@@ -131,7 +131,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {
-		s.Disconnect(false)
+		s.Disconnect(false) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
 
@@ -296,7 +296,7 @@ func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 	}
 
 	h.broker.telemetry.logger.Debug("v3_pubrec", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
-	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
+	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived) //nolint:errcheck // state update for in-flight QoS2; non-fatal if packet not tracked
 	rel := &v3.PubRel{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 		ID:          p.ID,
@@ -446,7 +446,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 					// Legacy fallback for messages without PayloadBuf
 					deliverMsg.SetPayloadFromBytes(msg.Payload)
 				}
-				h.broker.DeliverToSession(s, deliverMsg)
+				h.broker.DeliverToSession(s, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
 			}
 		}
 	}
@@ -474,7 +474,7 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 	h.broker.telemetry.logger.Info("v3_unsubscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
 
 	for _, filter := range p.Topics {
-		h.broker.unsubscribeInternal(s, filter)
+		h.broker.unsubscribeInternal(s, filter) //nolint:errcheck // best-effort unsubscribe; errors are non-fatal
 	}
 
 	h.broker.telemetry.logger.Info("v3_unsubscribe_complete",
@@ -512,7 +512,7 @@ func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 	}
 
 	h.broker.telemetry.logger.Info("v3_disconnect", slog.String("client_id", s.ID))
-	s.Disconnect(true)
+	s.Disconnect(true) //nolint:errcheck // graceful disconnect initiated by client
 	return io.EOF
 }
 
@@ -525,7 +525,7 @@ func (h *V3Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) er
 func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
-		h.broker.DeliverToSession(s, msg)
+		h.broker.DeliverToSession(s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
 	}
 }
 

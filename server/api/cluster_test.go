@@ -23,7 +23,7 @@ type clusterStub struct {
 	nodes  []cluster.NodeInfo
 }
 
-func (c *clusterStub) NodeID() string           { return c.nodeID }
+func (c *clusterStub) NodeID() string            { return c.nodeID }
 func (c *clusterStub) IsLeader() bool            { return c.leader }
 func (c *clusterStub) Nodes() []cluster.NodeInfo { return c.nodes }
 
@@ -89,7 +89,7 @@ func TestClusterWithStub(t *testing.T) {
 	if !resp.ClusterMode {
 		t.Fatal("expected cluster_mode true")
 	}
-	if resp.NodeID != "node-1" {
+	if resp.NodeID != "node-1" { //nolint:goconst // test value
 		t.Fatalf("expected node_id 'node-1', got %q", resp.NodeID)
 	}
 	if !resp.IsLeader {

@@ -189,7 +189,7 @@ func DecodeSASL(body []byte) (uint64, any, error) {
 }
 
 // ParsePLAIN parses a SASL PLAIN initial response.
-// Format: \0<authzid>\0<authcid>\0<password> or \0<authcid>\0<password>
+// Format: \0<authzid>\0<authcid>\0<password> or \0<authcid>\0<password>.
 func ParsePLAIN(response []byte) (authzID, username, password string, err error) {
 	if len(response) == 0 {
 		return "", "", "", fmt.Errorf("empty PLAIN response")

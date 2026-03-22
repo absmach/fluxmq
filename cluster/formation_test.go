@@ -172,7 +172,7 @@ func TestClusterFormation_DataReplication(t *testing.T) {
 	// Use MQTT client to publish retained message
 	publisher := testutil.NewTestMQTTClient(t, node0, "retained-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("critical alert")
 	require.NoError(t, publisher.Publish("alerts/fire", 1, payload, true)) // retained=true
@@ -183,7 +183,7 @@ func TestClusterFormation_DataReplication(t *testing.T) {
 	// New client on node-2 subscribes and receives retained message
 	subscriber := testutil.NewTestMQTTClient(t, node2, "retained-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	require.NoError(t, subscriber.Subscribe("alerts/fire", 1))
 
@@ -209,7 +209,7 @@ func TestClusterFormation_DataReplication(t *testing.T) {
 	assert.Equal(t, node1.ID, owner, "Session owner should be node-1")
 	t.Log("✓ Session ownership replicated across nodes")
 
-	testClient.Disconnect()
+	testClient.Disconnect() //nolint:errcheck // test cleanup
 
 	t.Log("Data replication test passed: subscriptions, retained messages, and sessions replicate correctly")
 }

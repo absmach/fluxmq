@@ -70,6 +70,7 @@ func (m *mockReplicator) ApplyTruncate(context.Context, string, uint64) error { 
 func (m *mockReplicator) ApplyCreateGroup(context.Context, string, *types.ConsumerGroup) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyUpdateGroup(context.Context, string, *types.ConsumerGroup) error {
 	return nil
 }
@@ -77,21 +78,27 @@ func (m *mockReplicator) ApplyDeleteGroup(context.Context, string, string) error
 func (m *mockReplicator) ApplyUpdateCursor(context.Context, string, string, uint64) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyUpdateCommitted(context.Context, string, string, uint64) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyAddPending(context.Context, string, string, *types.PendingEntry) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyRemovePending(context.Context, string, string, string, uint64) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyTransferPending(context.Context, string, string, uint64, string, string) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyRegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
 	return nil
 }
+
 func (m *mockReplicator) ApplyUnregisterConsumer(context.Context, string, string, string) error {
 	return nil
 }
@@ -103,7 +110,7 @@ func TestLogicalGroupCoordinatorQueueAssignments(t *testing.T) {
 
 	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
 	cfg.Replication.Enabled = true
-	cfg.Replication.Group = "hot"
+	cfg.Replication.Group = "hot" //nolint:goconst // test value
 
 	if err := coordinator.EnsureQueue(ctx, cfg); err != nil {
 		t.Fatalf("EnsureQueue failed: %v", err)

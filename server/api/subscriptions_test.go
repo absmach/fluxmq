@@ -33,7 +33,7 @@ func TestSubscriptionsListEndpointDefaultsToConnected(t *testing.T) {
 	if resp.Subscriptions[0].Filter != "alpha/one" {
 		t.Fatalf("expected first filter alpha/one, got %q", resp.Subscriptions[0].Filter)
 	}
-	if resp.Subscriptions[1].Filter != "devices/+/events" {
+	if resp.Subscriptions[1].Filter != "devices/+/events" { //nolint:goconst // test value
 		t.Fatalf("expected second filter devices/+/events, got %q", resp.Subscriptions[1].Filter)
 	}
 }

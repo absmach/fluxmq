@@ -51,16 +51,16 @@ var (
 )
 
 // ConnAckCode represents MQTT CONNACK return codes.
-type ConnAckCode byte
+type ConnAckCode byte //nolint:errname // ConnAckCode is a protocol-defined numeric type; renaming would break the public API
 
 // MQTT 3.1.1 CONNACK return codes.
 const (
-	ConnAccepted           ConnAckCode = 0x00
-	ConnRefusedProtocol    ConnAckCode = 0x01
-	ConnRefusedIDRejected  ConnAckCode = 0x02
-	ConnRefusedUnavailable ConnAckCode = 0x03
-	ConnRefusedBadAuth     ConnAckCode = 0x04
-	ConnRefusedNotAuth     ConnAckCode = 0x05
+	ConnAccepted           ConnAckCode = 0x00 //nolint:errname // protocol-defined sentinel; renaming would break the public API
+	ConnRefusedProtocol    ConnAckCode = 0x01 //nolint:errname // protocol-defined sentinel; renaming would break the public API
+	ConnRefusedIDRejected  ConnAckCode = 0x02 //nolint:errname // protocol-defined sentinel; renaming would break the public API
+	ConnRefusedUnavailable ConnAckCode = 0x03 //nolint:errname // protocol-defined sentinel; renaming would break the public API
+	ConnRefusedBadAuth     ConnAckCode = 0x04 //nolint:errname // protocol-defined sentinel; renaming would break the public API
+	ConnRefusedNotAuth     ConnAckCode = 0x05 //nolint:errname // protocol-defined sentinel; renaming would break the public API
 )
 
 // String returns a human-readable description of the CONNACK code.

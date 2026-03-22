@@ -168,7 +168,6 @@ type TLSConfig interface {
 
 // LoadTLSConfig returns a TLS or DTLS configuration that can be used for TLS or DTLS servers.
 func LoadTLSConfig[sc TLSConfig](c *Config) (sc, error) {
-
 	var zero sc
 
 	if c.CertFile == "" || c.KeyFile == "" {

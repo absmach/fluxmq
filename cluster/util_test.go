@@ -177,7 +177,7 @@ func TestMatchLevels_DirectCalls(t *testing.T) {
 }
 
 func BenchmarkTopicMatchesFilter_Exact(b *testing.B) {
-	topic := "sensor/room1/temperature/current"
+	topic := "sensor/room1/temperature/current" //nolint:goconst // test value
 	filter := "sensor/room1/temperature/current"
 
 	for i := 0; i < b.N; i++ {

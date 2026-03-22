@@ -12,8 +12,10 @@ import (
 )
 
 // ErrFailRemaining indicates remaining data does not match the size of sent data.
-var ErrFailRemaining = errors.New("remaining data length does not match data size")
-var ErrInvalidFixedHeader = errors.New("invalid fixed header flags")
+var (
+	ErrFailRemaining      = errors.New("remaining data length does not match data size")
+	ErrInvalidFixedHeader = errors.New("invalid fixed header flags")
+)
 
 // Protocol version constants.
 const (

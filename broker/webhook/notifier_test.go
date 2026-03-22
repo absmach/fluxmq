@@ -212,11 +212,11 @@ func TestNotifier_Notify_EventTypeFilter(t *testing.T) {
 
 	// Send matching event
 	event1 := events.ClientConnected{ClientID: "client-1"}
-	notifier.Notify(context.Background(), event1)
+	notifier.Notify(context.Background(), event1) //nolint:errcheck // best-effort fire-and-forget in test
 
 	// Send non-matching event
 	event2 := events.ClientDisconnected{ClientID: "client-1"}
-	notifier.Notify(context.Background(), event2)
+	notifier.Notify(context.Background(), event2) //nolint:errcheck // best-effort fire-and-forget in test
 
 	// Wait for processing
 	time.Sleep(100 * time.Millisecond)
@@ -284,7 +284,7 @@ func TestNotifier_Notify_TopicFilter(t *testing.T) {
 			ClientID:     "client-1",
 			QoS:          1,
 		}
-		notifier.Notify(context.Background(), event)
+		notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 		time.Sleep(50 * time.Millisecond)
 
 		expected := 0
@@ -343,7 +343,7 @@ func TestNotifier_Retry(t *testing.T) {
 	defer notifier.Close()
 
 	event := events.ClientConnected{ClientID: "client-1"}
-	notifier.Notify(context.Background(), event)
+	notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 
 	// Wait for retries
 	time.Sleep(500 * time.Millisecond)
@@ -391,7 +391,7 @@ func TestNotifier_QueueOverflow_DropOldest(t *testing.T) {
 	// Send more events than queue can hold
 	for i := 0; i < 10; i++ {
 		event := events.ClientConnected{ClientID: "client-1"}
-		notifier.Notify(context.Background(), event)
+		notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 	}
 
 	// Wait for processing
@@ -482,7 +482,7 @@ func TestNotifier_GracefulShutdown(t *testing.T) {
 	// Send some events
 	for i := 0; i < 5; i++ {
 		event := events.ClientConnected{ClientID: "client-1"}
-		notifier.Notify(context.Background(), event)
+		notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 	}
 
 	// Give workers a moment to start processing

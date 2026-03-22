@@ -9,7 +9,7 @@ import (
 
 // AMQP 1.0 type constructor codes per OASIS spec.
 const (
-	// Fixed-width primitives
+	// Fixed-width primitives.
 	TypeNull       byte = 0x40
 	TypeBoolTrue   byte = 0x41
 	TypeBoolFalse  byte = 0x42
@@ -33,7 +33,7 @@ const (
 	TypeTimestamp  byte = 0x83
 	TypeUUID       byte = 0x98
 
-	// Variable-width primitives
+	// Variable-width primitives.
 	TypeBinaryShort byte = 0xa0
 	TypeBinaryLong  byte = 0xb0
 	TypeStringShort byte = 0xa1
@@ -41,7 +41,7 @@ const (
 	TypeSymbolShort byte = 0xa3
 	TypeSymbolLong  byte = 0xb3
 
-	// Compound types
+	// Compound types.
 	TypeList0   byte = 0x45
 	TypeList8   byte = 0xc0
 	TypeList32  byte = 0xd0
@@ -50,7 +50,7 @@ const (
 	TypeArray8  byte = 0xe0
 	TypeArray32 byte = 0xf0
 
-	// Described type constructor
+	// Described type constructor.
 	TypeDescriptor byte = 0x00
 )
 

@@ -1,3 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
 package broker
 
 import (
@@ -36,23 +39,29 @@ func (m *mockQueueManager) Stop() error                     { return nil }
 func (m *mockQueueManager) Publish(ctx context.Context, publish qtypes.PublishRequest) error {
 	return nil
 }
+
 func (m *mockQueueManager) Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error {
 	return nil
 }
+
 func (m *mockQueueManager) SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error {
 	return nil
 }
+
 func (m *mockQueueManager) Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error {
 	return nil
 }
+
 func (m *mockQueueManager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
 	m.ackCalls = append(m.ackCalls, ackCall{queueName: queueName, messageID: messageID, groupID: groupID})
 	return nil
 }
+
 func (m *mockQueueManager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
 	m.nackCalls = append(m.nackCalls, ackCall{queueName: queueName, messageID: messageID, groupID: groupID})
 	return nil
 }
+
 func (m *mockQueueManager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
 	m.rejectCalls = append(m.rejectCalls, rejectCall{queueName: queueName, messageID: messageID, groupID: groupID, reason: reason})
 	return nil
@@ -65,6 +74,7 @@ func (m *mockQueueManager) DeleteQueue(ctx context.Context, queueName string) er
 func (m *mockQueueManager) GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error) {
 	return nil, storage.ErrNotFound
 }
+
 func (m *mockQueueManager) ListQueues(ctx context.Context) ([]qtypes.QueueConfig, error) {
 	return nil, nil
 }

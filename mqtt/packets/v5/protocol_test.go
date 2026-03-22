@@ -645,7 +645,7 @@ func TestMalformedV5Packets(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
 			reader := bytes.NewReader(tc.data)
-			_, _, _, err := ReadPacket(reader)
+			_, _, _, err := ReadPacket(reader) //nolint:dogsled
 			assert.Error(t, err)
 		})
 	}
@@ -693,7 +693,7 @@ func TestV5ControlPackets(t *testing.T) {
 
 func TestReadPacketEOF(t *testing.T) {
 	reader := bytes.NewReader([]byte{})
-	_, _, _, err := ReadPacket(reader)
+	_, _, _, err := ReadPacket(reader) //nolint:dogsled
 	assert.Equal(t, io.EOF, err)
 }
 

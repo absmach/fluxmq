@@ -124,7 +124,7 @@ func TestConnectionLifecycle(t *testing.T) {
 	require.NoError(t, c.WritePerformative(0, body))
 
 	// Read End response
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorEnd, desc)
 
@@ -135,7 +135,7 @@ func TestConnectionLifecycle(t *testing.T) {
 	require.NoError(t, c.WritePerformative(0, body))
 
 	// Read Close response
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorClose, desc)
 }
@@ -169,7 +169,7 @@ func TestAttachDetach(t *testing.T) {
 	assert.Equal(t, performatives.RoleReceiver, resp.Role) // mirrored
 
 	// Read Flow (credit grant for sender link)
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorFlow, desc)
 
@@ -180,7 +180,7 @@ func TestAttachDetach(t *testing.T) {
 	require.NoError(t, c.WritePerformative(0, body))
 
 	// Read Detach response
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorDetach, desc)
 }
@@ -205,7 +205,7 @@ func TestPubSubFlow(t *testing.T) {
 	require.NoError(t, c.WritePerformative(0, body))
 
 	// Read Attach response
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -265,12 +265,12 @@ func TestTransferFromClient(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
 	// Read Flow (credit grant for sender link)
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorFlow, desc)
 
@@ -372,7 +372,7 @@ func TestMultiFrameTransferSend(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -451,12 +451,12 @@ func TestMultiFrameTransferReceive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
 	// Read Flow (credit grant)
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorFlow, desc)
 
@@ -559,7 +559,7 @@ func TestLinkSteal(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -636,12 +636,12 @@ func TestUnsettledTransferDisposition(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
 	// Read Flow (credit grant)
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorFlow, desc)
 
@@ -694,7 +694,7 @@ func TestCreditExhaustion(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -718,7 +718,7 @@ func TestCreditExhaustion(t *testing.T) {
 	// Publish and read 2 messages (using goroutines since net.Pipe blocks)
 	for i := range 2 {
 		go b.Publish("test/credit", []byte(fmt.Sprintf("msg-%d", i)), nil)
-		_, desc, _, _, err := c.ReadPerformative()
+		desc, err := readDescriptor(t, c)
 		require.NoError(t, err)
 		assert.Equal(t, performatives.DescriptorTransfer, desc)
 	}
@@ -775,7 +775,7 @@ func TestMultipleSessions(t *testing.T) {
 	body, err := attach0.Encode()
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -789,7 +789,7 @@ func TestMultipleSessions(t *testing.T) {
 	body, err = attach1.Encode()
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(1, body))
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -842,8 +842,7 @@ func TestConnectionCloseCleanup(t *testing.T) {
 	body, err := attach.Encode()
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
-	_, _, _, _, err = c.ReadPerformative() // attach resp
-	require.NoError(t, err)
+	require.NoError(t, drainPerformative(t, c)) // attach resp
 
 	// Verify connection is registered
 	_, ok := b.connections.Load("cleanup-client")
@@ -856,7 +855,7 @@ func TestConnectionCloseCleanup(t *testing.T) {
 	require.NoError(t, c.WritePerformative(0, body))
 
 	// Read close response
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorClose, desc)
 	c.Close()
@@ -918,8 +917,7 @@ func TestConcurrentPublishAndFlow(t *testing.T) {
 	body, err := attach.Encode()
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
-	_, _, _, _, err = c.ReadPerformative() // attach resp
-	require.NoError(t, err)
+	require.NoError(t, drainPerformative(t, c)) // attach resp
 
 	// Grant initial credit
 	h := uint32(0)
@@ -945,7 +943,7 @@ func TestConcurrentPublishAndFlow(t *testing.T) {
 			case <-stopDrain:
 				return
 			default:
-				c.ReadPerformative()
+				c.ReadPerformative() //nolint:errcheck // best-effort
 			}
 		}
 	}()
@@ -973,7 +971,7 @@ func TestConcurrentPublishAndFlow(t *testing.T) {
 				LinkCredit:     &newLC,
 			}
 			fb, _ := f.Encode()
-			c.WritePerformative(0, fb)
+			c.WritePerformative(0, fb) //nolint:errcheck // best-effort
 		}
 	}()
 

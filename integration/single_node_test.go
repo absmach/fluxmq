@@ -51,7 +51,7 @@ func TestSingleNode_BasicPubSub(t *testing.T) {
 	subscriber := testutil.NewTestMQTTClient(t, node0, "subscriber-1")
 	err = subscriber.Connect(true)
 	require.NoError(t, err)
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	// Subscribe to topic
 	err = subscriber.Subscribe("test/topic", 0)
@@ -64,7 +64,7 @@ func TestSingleNode_BasicPubSub(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node0, "publisher-1")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish message
 	payload := []byte("hello world")

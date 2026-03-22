@@ -36,7 +36,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 		if s.KeepAlive > 0 && s.KeepAlive < readTimeout {
 			readTimeout = s.KeepAlive
 		}
-		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		conn.SetReadDeadline(time.Now().Add(readTimeout)) //nolint:errcheck // fails only on closed connection
 
 		pkt, err := s.ReadPacket()
 		if err != nil {
@@ -49,7 +49,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 					if time.Since(lastActivity) > keepAliveDeadline {
 						// Real keep-alive timeout - client is unresponsive
 						b.telemetry.stats.DecrementConnections()
-						s.Disconnect(false)
+						s.Disconnect(false) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
 						return err
 					}
 				}
@@ -64,7 +64,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 				b.telemetry.stats.IncrementPacketErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
-			s.Disconnect(false)
+			s.Disconnect(false) //nolint:errcheck // disconnect on read error; connection already failed
 			return err
 		}
 
@@ -88,7 +88,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 			}
 			b.telemetry.stats.IncrementProtocolErrors()
 			b.telemetry.stats.DecrementConnections()
-			s.Disconnect(false)
+			s.Disconnect(false) //nolint:errcheck // disconnect on protocol error; connection is being terminated
 			return err
 		}
 	}
@@ -223,7 +223,7 @@ func (b *Broker) Close() error {
 
 	b.sessionsMap.ForEach(func(s *session.Session) {
 		if s.IsConnected() {
-			s.Disconnect(false)
+			s.Disconnect(false) //nolint:errcheck // best-effort disconnect during broker close
 		} else {
 			// For already-disconnected sessions, persist any queued messages
 			b.persistOfflineQueue(s)

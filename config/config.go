@@ -18,6 +18,9 @@ const (
 	ProtocolModeAuto = "auto"
 	ProtocolModeV3   = "v3"
 	ProtocolModeV5   = "v5"
+
+	listenerNamePlain = "plain"
+	raftGroupDefault  = "default"
 )
 
 // Config holds all configuration for the MQTT broker.
@@ -828,7 +831,7 @@ func (c *Config) Validate() error {
 		cfg               HTTPListenerConfig
 		requireClientAuth bool
 	}{
-		{name: "plain", cfg: c.Server.HTTP.Plain, requireClientAuth: false},
+		{name: listenerNamePlain, cfg: c.Server.HTTP.Plain, requireClientAuth: false},
 		{name: "tls", cfg: c.Server.HTTP.TLS, requireClientAuth: false},
 		{name: "mtls", cfg: c.Server.HTTP.MTLS, requireClientAuth: true},
 	}
@@ -899,16 +902,16 @@ func (c *Config) Validate() error {
 
 	for _, slot := range httpSlots {
 		if !hasAddr(slot.cfg.Addr) {
-			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == listenerNamePlain {
 				return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
 		}
 
-		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
 		}
-		if slot.name != "plain" {
+		if slot.name != listenerNamePlain {
 			if err := validateListenerTLS("server.http."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
@@ -920,23 +923,23 @@ func (c *Config) Validate() error {
 		cfg               CoAPListenerConfig
 		requireClientAuth bool
 	}{
-		{name: "plain", cfg: c.Server.CoAP.Plain},
+		{name: listenerNamePlain, cfg: c.Server.CoAP.Plain},
 		{name: "dtls", cfg: c.Server.CoAP.DTLS},
 		{name: "mdtls", cfg: c.Server.CoAP.MDTLS, requireClientAuth: true},
 	}
 
 	for _, slot := range coapSlots {
 		if !hasAddr(slot.cfg.Addr) {
-			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == listenerNamePlain {
 				return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
 		}
 
-		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
 		}
-		if slot.name != "plain" {
+		if slot.name != listenerNamePlain {
 			if err := validateListenerTLS("server.coap."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
@@ -949,14 +952,14 @@ func (c *Config) Validate() error {
 		cfg               AMQPListenerConfig
 		requireClientAuth bool
 	}{
-		{name: "plain", cfg: c.Server.AMQP.Plain, requireClientAuth: false},
+		{name: listenerNamePlain, cfg: c.Server.AMQP.Plain, requireClientAuth: false},
 		{name: "tls", cfg: c.Server.AMQP.TLS, requireClientAuth: false},
 		{name: "mtls", cfg: c.Server.AMQP.MTLS, requireClientAuth: true},
 	}
 
 	for _, slot := range amqpSlots {
 		if !hasAddr(slot.cfg.Addr) {
-			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == listenerNamePlain {
 				return fmt.Errorf("server.amqp.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
@@ -965,10 +968,10 @@ func (c *Config) Validate() error {
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.amqp.%s.max_connections cannot be negative", slot.name)
 		}
-		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.amqp.%s TLS fields are not supported for plain listeners", slot.name)
 		}
-		if slot.name != "plain" {
+		if slot.name != listenerNamePlain {
 			if err := validateListenerTLS("server.amqp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
@@ -981,14 +984,14 @@ func (c *Config) Validate() error {
 		cfg               AMQP091ListenerConfig
 		requireClientAuth bool
 	}{
-		{name: "plain", cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
+		{name: listenerNamePlain, cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
 		{name: "tls", cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
 		{name: "mtls", cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
 	}
 
 	for _, slot := range amqp091Slots {
 		if !hasAddr(slot.cfg.Addr) {
-			if tlsConfigured(slot.cfg.TLS) && slot.name == "plain" {
+			if tlsConfigured(slot.cfg.TLS) && slot.name == listenerNamePlain {
 				return fmt.Errorf("server.amqp091.%s TLS fields are not supported for plain listeners", slot.name)
 			}
 			continue
@@ -997,10 +1000,10 @@ func (c *Config) Validate() error {
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.amqp091.%s.max_connections cannot be negative", slot.name)
 		}
-		if slot.name == "plain" && tlsConfigured(slot.cfg.TLS) {
+		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.amqp091.%s TLS fields are not supported for plain listeners", slot.name)
 		}
-		if slot.name != "plain" {
+		if slot.name != listenerNamePlain {
 			if err := validateListenerTLS("server.amqp091."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
@@ -1157,10 +1160,10 @@ func (c *Config) Validate() error {
 				}
 
 				// Non-default groups must define dedicated endpoints.
-				if gid != "default" && strings.TrimSpace(groupCfg.BindAddr) == "" {
+				if gid != raftGroupDefault && strings.TrimSpace(groupCfg.BindAddr) == "" {
 					return fmt.Errorf("cluster.raft.groups.%s.bind_addr required for non-default group", gid)
 				}
-				if gid != "default" && len(groupCfg.Peers) == 0 {
+				if gid != raftGroupDefault && len(groupCfg.Peers) == 0 {
 					return fmt.Errorf("cluster.raft.groups.%s.peers required for non-default group", gid)
 				}
 
@@ -1248,9 +1251,9 @@ func (c *Config) Validate() error {
 			if c.Cluster.Enabled && c.Cluster.Raft.Enabled && !c.Cluster.Raft.AutoProvisionGroups {
 				groupID := strings.TrimSpace(q.Replication.Group)
 				if groupID == "" {
-					groupID = "default"
+					groupID = raftGroupDefault
 				}
-				if groupID != "default" {
+				if groupID != raftGroupDefault {
 					if _, ok := c.Cluster.Raft.Groups[groupID]; !ok {
 						return fmt.Errorf("queues[%d].replication.group '%s' is not configured under cluster.raft.groups and auto_provision_groups is disabled", i, groupID)
 					}

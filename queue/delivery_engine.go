@@ -275,7 +275,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 		}
 
 		if len(msgs) > 0 {
-			e.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID)
+			e.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID) //nolint:errcheck // fire-and-forget heartbeat update
 		}
 
 		var workCommitted uint64

@@ -38,7 +38,7 @@ func startServer(t *testing.T) (*amqpbroker.Broker, string) {
 	t.Cleanup(cancel)
 
 	go func() {
-		srv.Listen(ctx)
+		srv.Listen(ctx) //nolint:errcheck // best-effort
 	}()
 
 	var addr net.Addr
@@ -84,7 +84,7 @@ func handshake(t *testing.T, c *amqpconn.Connection, containerID string) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	require.Equal(t, performatives.DescriptorOpen, desc)
 }
@@ -101,7 +101,7 @@ func beginSession(t *testing.T, c *amqpconn.Connection, channel uint16) {
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(channel, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	require.Equal(t, performatives.DescriptorBegin, desc)
 }
@@ -150,12 +150,12 @@ func TestIntegrationPubSub(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pub.WritePerformative(0, body))
 
-	_, desc, _, _, err := pub.ReadPerformative()
+	desc, err := readDescriptor(t, pub)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
 	// Read Flow (credit grant)
-	_, desc, _, _, err = pub.ReadPerformative()
+	desc, err = readDescriptor(t, pub)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorFlow, desc)
 
@@ -173,7 +173,7 @@ func TestIntegrationPubSub(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sub.WritePerformative(0, body))
 
-	_, desc, _, _, err = sub.ReadPerformative()
+	desc, err = readDescriptor(t, sub)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -230,7 +230,7 @@ func TestIntegrationMultipleSubscribers(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, sub.WritePerformative(0, body))
 
-		_, desc, _, _, err := sub.ReadPerformative()
+		desc, err := readDescriptor(t, sub)
 		require.NoError(t, err)
 		assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -276,7 +276,7 @@ func TestIntegrationWildcardSubscription(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sub.WritePerformative(0, body))
 
-	_, desc, _, _, err := sub.ReadPerformative()
+	desc, err := readDescriptor(t, sub)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorAttach, desc)
 
@@ -339,8 +339,7 @@ func TestIntegrationIdleTimeout(t *testing.T) {
 
 	// Server should send heartbeat within ~250ms
 	c.SetIdleTimeout(2 * time.Second)
-	_, _, _, _, err = c.ReadPerformative()
-	require.NoError(t, err) // should be a heartbeat or any frame — no error means server is alive
+	require.NoError(t, drainPerformative(t, c)) // should be a heartbeat or any frame — no error means server is alive
 }
 
 type mockAuth struct {
@@ -371,7 +370,7 @@ func TestIntegrationSASLPlainAuth(t *testing.T) {
 	srv := amqpserver.New(cfg, b)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go srv.Listen(ctx)
+	go srv.Listen(ctx) //nolint:errcheck // best-effort
 
 	var addr net.Addr
 	for range 50 {
@@ -461,8 +460,7 @@ func TestIntegrationDeliverToClient(t *testing.T) {
 	body, err := attach.Encode()
 	require.NoError(t, err)
 	require.NoError(t, c.WritePerformative(0, body))
-	_, _, _, _, err = c.ReadPerformative() // attach resp
-	require.NoError(t, err)
+	require.NoError(t, drainPerformative(t, c)) // attach resp
 
 	grantCredit(t, c, 0, 0, 10)
 	time.Sleep(50 * time.Millisecond)
@@ -497,7 +495,7 @@ func TestIntegrationGracefulClose(t *testing.T) {
 	body, _ := end.Encode()
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err := c.ReadPerformative()
+	desc, err := readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorEnd, desc)
 
@@ -505,7 +503,7 @@ func TestIntegrationGracefulClose(t *testing.T) {
 	body, _ = cl.Encode()
 	require.NoError(t, c.WritePerformative(0, body))
 
-	_, desc, _, _, err = c.ReadPerformative()
+	desc, err = readDescriptor(t, c)
 	require.NoError(t, err)
 	assert.Equal(t, performatives.DescriptorClose, desc)
 }

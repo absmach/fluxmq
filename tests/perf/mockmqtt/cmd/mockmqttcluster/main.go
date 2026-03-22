@@ -31,7 +31,7 @@ func main() {
 	cluster := mockmqtt.New(addrs)
 	if err := cluster.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start mock cluster: %v\n", err)
-		os.Exit(2)
+		os.Exit(2) //nolint:gocritic // exitAfterDefer: intentional in CLI tool
 	}
 	fmt.Printf("mock mqtt cluster listening on %s\n", strings.Join(cluster.Addrs(), ","))
 

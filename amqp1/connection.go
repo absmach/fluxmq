@@ -70,7 +70,7 @@ func (c *Connection) SetIdleTimeout(d time.Duration) {
 // ReadProtocolHeader reads and validates the 8-byte AMQP protocol header.
 func (c *Connection) ReadProtocolHeader() (byte, error) {
 	if c.idleTimeout > 0 {
-		c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout)) //nolint:errcheck // fails only if connection is already closed
 	}
 	return frames.ReadProtocolHeader(c.conn)
 }
@@ -85,7 +85,7 @@ func (c *Connection) WriteProtocolHeader(protoID byte) error {
 // ReadFrame reads a single AMQP frame.
 func (c *Connection) ReadFrame() (*frames.Frame, error) {
 	if c.idleTimeout > 0 {
-		c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout)) //nolint:errcheck // fails only if connection is already closed
 	}
 	return frames.ReadFrame(c.conn)
 }
@@ -309,7 +309,7 @@ func (c *Connection) ReadPerformative() (uint16, uint64, any, []byte, error) {
 	var payload []byte
 	if remaining := r.Len(); remaining > 0 {
 		payload = make([]byte, remaining)
-		r.Read(payload)
+		r.Read(payload) //nolint:errcheck // bytes.Reader.Read into a same-sized buffer never fails
 	}
 
 	return f.Channel, descriptor, perf, payload, nil

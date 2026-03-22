@@ -233,31 +233,31 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// Cleanup ephemeral queues that expired while broker was down
-	m.cleanupEphemeralQueues()
+	m.cleanupEphemeralQueues() //nolint:contextcheck // context propagation would require API changes across the call chain
 
 	// Prime delivery for existing queues at startup.
 	m.delivery.ScheduleAll(ctx)
 
 	// Start delivery engine
-	m.delivery.Start()
+	m.delivery.Start() //nolint:contextcheck // context propagation would require API changes across the call chain
 
 	// Start work stealing if enabled
 	if m.config.StealEnabled {
 		m.wg.Add(1)
-		go m.runStealLoop()
+		go m.runStealLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
 	}
 
 	// Start consumer cleanup
 	m.wg.Add(1)
-	go m.runCleanupLoop()
+	go m.runCleanupLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
 
 	// Start retention
 	m.wg.Add(1)
-	go m.runRetentionLoop()
+	go m.runRetentionLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
 
 	// Start ephemeral queue cleanup
 	m.wg.Add(1)
-	go m.runEphemeralCleanupLoop()
+	go m.runEphemeralCleanupLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
 
 	m.logger.Info("queue-based queue manager started")
 	return nil
@@ -946,12 +946,12 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 	case types.CursorEarliest:
 		head, err := m.queueStore.Head(ctx, queueName)
 		if err == nil {
-			m.groupStore.UpdateCursor(ctx, queueName, group.ID, head)
+			m.groupStore.UpdateCursor(ctx, queueName, group.ID, head) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
 		}
 	case types.CursorLatest:
 		tail, err := m.queueStore.Tail(ctx, queueName)
 		if err == nil {
-			m.groupStore.UpdateCursor(ctx, queueName, group.ID, tail)
+			m.groupStore.UpdateCursor(ctx, queueName, group.ID, tail) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
 		}
 	case types.CursorOffset:
 		head, _ := m.queueStore.Head(ctx, queueName)
@@ -963,11 +963,11 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 		if offset > tail {
 			offset = tail
 		}
-		m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset)
+		m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
 	case types.CursorTimestamp:
 		if !cursor.Timestamp.IsZero() {
 			if offset, err := m.offsetByTime(ctx, queueName, cursor.Timestamp); err == nil {
-				m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset)
+				m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
 			}
 		}
 	}
@@ -1630,7 +1630,7 @@ func (m *Manager) cleanupEphemeralQueues() {
 		groups, err := m.groupStore.ListConsumerGroups(ctx, q.Name)
 		if err == nil {
 			for _, g := range groups {
-				m.groupStore.DeleteConsumerGroup(ctx, q.Name, g.ID)
+				m.groupStore.DeleteConsumerGroup(ctx, q.Name, g.ID) //nolint:errcheck // best-effort cleanup before queue deletion
 			}
 		}
 

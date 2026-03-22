@@ -46,8 +46,8 @@ func TestMessageStore(t *testing.T) {
 	}
 
 	// Test List with prefix
-	s.Store("client1/456", &storage.Message{Topic: "t2"})
-	s.Store("client2/789", &storage.Message{Topic: "t3"})
+	s.Store("client1/456", &storage.Message{Topic: "t2"}) //nolint:errcheck // test setup
+	s.Store("client2/789", &storage.Message{Topic: "t3"}) //nolint:errcheck // test setup
 
 	list, err := s.List("client1/")
 	if err != nil {
@@ -139,7 +139,7 @@ func TestSubscriptionStore(t *testing.T) {
 	}
 
 	// Test RemoveAll
-	s.Add(&storage.Subscription{ClientID: "client2", Filter: "other/topic", QoS: 0})
+	s.Add(&storage.Subscription{ClientID: "client2", Filter: "other/topic", QoS: 0}) //nolint:errcheck // test setup
 	if err := s.RemoveAll("client2"); err != nil {
 		t.Fatalf("RemoveAll failed: %v", err)
 	}
@@ -152,8 +152,8 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 	s := NewSubscriptionStore()
 
 	// Add overlapping subscriptions for same client
-	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/#", QoS: 1})
-	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/+/temp", QoS: 2})
+	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/#", QoS: 1})      //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/+/temp", QoS: 2}) //nolint:errcheck // test setup
 
 	matched, err := s.Match("home/bedroom/temp")
 	if err != nil {
@@ -172,9 +172,9 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 func TestSubscriptionStoreGetByFilter(t *testing.T) {
 	s := NewSubscriptionStore()
 
-	s.Add(&storage.Subscription{ClientID: "c1", Filter: "a/b", QoS: 0})
-	s.Add(&storage.Subscription{ClientID: "c2", Filter: "a/b", QoS: 1})
-	s.Add(&storage.Subscription{ClientID: "c3", Filter: "x/y", QoS: 2})
+	s.Add(&storage.Subscription{ClientID: "c1", Filter: "a/b", QoS: 0}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c2", Filter: "a/b", QoS: 1}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c3", Filter: "x/y", QoS: 2}) //nolint:errcheck // test setup
 
 	subs, err := s.GetByFilter("a/b")
 	if err != nil {
@@ -211,9 +211,9 @@ func TestSubscriptionStoreGetByFilterEmpty(t *testing.T) {
 func TestSubscriptionStoreGetByFilterWildcard(t *testing.T) {
 	s := NewSubscriptionStore()
 
-	s.Add(&storage.Subscription{ClientID: "c1", Filter: "devices/+/events", QoS: 1})
-	s.Add(&storage.Subscription{ClientID: "c2", Filter: "devices/+/events", QoS: 0})
-	s.Add(&storage.Subscription{ClientID: "c3", Filter: "devices/#", QoS: 2})
+	s.Add(&storage.Subscription{ClientID: "c1", Filter: "devices/+/events", QoS: 1}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c2", Filter: "devices/+/events", QoS: 0}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c3", Filter: "devices/#", QoS: 2})        //nolint:errcheck // test setup
 
 	subs, err := s.GetByFilter("devices/+/events")
 	if err != nil {
@@ -260,8 +260,8 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Match with exact filter
-	s.Set(ctx, "sensors/humidity", &storage.Message{Payload: []byte("60")})
-	s.Set(ctx, "sensors/pressure", &storage.Message{Payload: []byte("1013")})
+	s.Set(ctx, "sensors/humidity", &storage.Message{Payload: []byte("60")})   //nolint:errcheck // test setup
+	s.Set(ctx, "sensors/pressure", &storage.Message{Payload: []byte("1013")}) //nolint:errcheck // test setup
 
 	matched, err := s.Match(ctx, "sensors/+")
 	if err != nil {
@@ -303,8 +303,8 @@ func TestRetainedStoreSystemTopics(t *testing.T) {
 	s := NewRetainedStore()
 	ctx := context.Background()
 
-	s.Set(ctx, "$SYS/broker/clients", &storage.Message{Payload: []byte("10")})
-	s.Set(ctx, "normal/topic", &storage.Message{Payload: []byte("data")})
+	s.Set(ctx, "$SYS/broker/clients", &storage.Message{Payload: []byte("10")}) //nolint:errcheck // test setup
+	s.Set(ctx, "normal/topic", &storage.Message{Payload: []byte("data")})      //nolint:errcheck // test setup
 
 	// # should not match $SYS topics
 	matched, _ := s.Match(ctx, "#")
@@ -364,7 +364,7 @@ func TestWillStore(t *testing.T) {
 	}
 
 	// Mark as disconnected
-	s.MarkDisconnected("client1")
+	s.MarkDisconnected("client1") //nolint:errcheck // test setup
 
 	// Still not pending (delay not elapsed)
 	pending, _ = s.GetPending(ctx, time.Now())

@@ -77,6 +77,6 @@ func TestParsePLAIN(t *testing.T) {
 }
 
 func TestParsePLAINEmpty(t *testing.T) {
-	_, _, _, err := ParsePLAIN(nil)
+	_, _, _, err := ParsePLAIN(nil) //nolint:dogsled
 	assert.Error(t, err)
 }

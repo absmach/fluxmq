@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/absmach/fluxmq/cluster"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
@@ -22,7 +20,6 @@ import (
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
-	hraft "github.com/hashicorp/raft"
 )
 
 // mockGroupStore implements storage.ConsumerGroupStore for testing.
@@ -277,7 +274,7 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	clientID := "test-client-1"
 	queueName := "topic"
@@ -515,10 +512,10 @@ func TestExactQueueSubscription(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	clientID := "test-client-1"
-	queueName := "tasks"
+	queueName := "tasks" //nolint:goconst // test value
 
 	if err := manager.Subscribe(ctx, queueName, "", clientID, "", ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -560,7 +557,7 @@ func TestMultiLevelWildcard(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	if err := manager.Subscribe(ctx, "images", "#", "client1", "", ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -614,7 +611,7 @@ func TestSingleLevelWildcard(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	if err := manager.Subscribe(ctx, "sensors", "+/temperature", "client1", "", ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -688,7 +685,7 @@ func TestQueueNameWildcardSingleLevel(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	if err := manager.Subscribe(ctx, "+", "temperature", "client1", "", ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -942,45 +939,6 @@ func (c *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName stri
 	return nil
 }
 
-func setUnexportedField(t *testing.T, target any, fieldName string, value any) {
-	t.Helper()
-
-	v := reflect.ValueOf(target)
-	if v.Kind() != reflect.Ptr || v.IsNil() {
-		t.Fatalf("target must be a non-nil pointer")
-	}
-
-	elem := v.Elem()
-	field := elem.FieldByName(fieldName)
-	if !field.IsValid() {
-		t.Fatalf("field %q not found on %T", fieldName, target)
-	}
-
-	val := reflect.ValueOf(value)
-	if !val.IsValid() {
-		t.Fatalf("value for %q is invalid", fieldName)
-	}
-
-	if !val.Type().AssignableTo(field.Type()) {
-		t.Fatalf("cannot assign %s to %s for %q", val.Type(), field.Type(), fieldName)
-	}
-
-	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(val)
-}
-
-func newTestRaftManager(t *testing.T, leaderID string) *queueraft.Manager {
-	t.Helper()
-
-	rm := &queueraft.Manager{}
-	setUnexportedField(t, rm, "config", queueraft.ManagerConfig{Enabled: true})
-
-	fakeRaft := &hraft.Raft{}
-	setUnexportedField(t, fakeRaft, "leaderID", hraft.ServerID(leaderID))
-	setUnexportedField(t, rm, "raft", fakeRaft)
-
-	return rm
-}
-
 type mockQueueCoordinator struct {
 	enabled           bool
 	replicatedByQueue map[string]bool
@@ -998,12 +956,14 @@ func (m *mockQueueCoordinator) Stop() error { return nil }
 func (m *mockQueueCoordinator) IsEnabled() bool {
 	return m.enabled
 }
+
 func (m *mockQueueCoordinator) IsQueueReplicated(queueName string) bool {
 	if m.replicatedByQueue == nil {
 		return false
 	}
 	return m.replicatedByQueue[queueName]
 }
+
 func (m *mockQueueCoordinator) IsLeaderForQueue(queueName string) bool {
 	if m.leaderByQueue == nil {
 		return false
@@ -1013,21 +973,25 @@ func (m *mockQueueCoordinator) IsLeaderForQueue(queueName string) bool {
 	}
 	return false
 }
+
 func (m *mockQueueCoordinator) LeaderForQueue(queueName string) string {
 	if m.leaderAddrByQueue == nil {
 		return ""
 	}
 	return m.leaderAddrByQueue[queueName]
 }
+
 func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 	if m.leaderIDByQueue == nil {
 		return ""
 	}
 	return m.leaderIDByQueue[queueName]
 }
+
 func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, _ types.QueueConfig) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, _ types.QueueConfig) error {
 	return nil
 }
@@ -1036,39 +1000,50 @@ func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueNa
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
 }
+
 func (m *mockQueueCoordinator) ApplyTruncate(_ context.Context, _ string, _ uint64) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyCreateGroup(_ context.Context, queueName string, group *types.ConsumerGroup) error {
 	m.createCalls = append(m.createCalls, queueName+"/"+group.ID)
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyUpdateGroup(_ context.Context, _ string, _ *types.ConsumerGroup) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyDeleteGroup(_ context.Context, _ string, _ string) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyUpdateCursor(_ context.Context, queueName, groupID string, cursor uint64) error {
 	m.cursorCalls = append(m.cursorCalls, fmt.Sprintf("%s/%s/%d", queueName, groupID, cursor))
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyUpdateCommitted(_ context.Context, queueName, groupID string, committed uint64) error {
 	m.commitCalls = append(m.commitCalls, fmt.Sprintf("%s/%s/%d", queueName, groupID, committed))
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyAddPending(_ context.Context, _ string, _ string, _ *types.PendingEntry) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyRemovePending(_ context.Context, _ string, _ string, _ string, _ uint64) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyTransferPending(_ context.Context, _ string, _ string, _ uint64, _ string, _ string) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyRegisterConsumer(_ context.Context, _ string, _ string, _ *types.ConsumerInfo) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyUnregisterConsumer(_ context.Context, _ string, _ string, _ string) error {
 	return nil
 }
@@ -1080,8 +1055,8 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	localNodeID := "node-1"
-	remoteNodeID := "node-2"
+	localNodeID := "node-1"  //nolint:goconst // test value
+	remoteNodeID := "node-2" //nolint:goconst // test value
 	mockCl := newMockCluster(localNodeID)
 
 	var localDeliveries []string
@@ -1104,7 +1079,7 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	localClientID := "local-client"
 	if err := manager.Subscribe(ctx, "test", "#", localClientID, "", localNodeID); err != nil {
@@ -1219,7 +1194,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if msg.message.MessageID != "tasks:0" {
 		t.Fatalf("expected message-id tasks:0, got %q", msg.message.MessageID)
 	}
-	if got := msg.message.GroupID; got != "workers" {
+	if got := msg.message.GroupID; got != "workers" { //nolint:goconst // test value
 		t.Fatalf("expected group-id workers, got %q", got)
 	}
 	if got := msg.message.QueueName; got != "tasks" {
@@ -1253,7 +1228,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	ctx := context.Background()
 	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
@@ -1765,7 +1740,7 @@ func TestGetOrCreateQueue_CreatesEphemeral(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	cfg, err := manager.GetOrCreateQueue(ctx, "ephemeral-test", "$queue/ephemeral-test/#")
 	if err != nil {
@@ -1878,7 +1853,7 @@ func TestEphemeralQueue_DisconnectAndCleanup(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	// Subscribe creates an ephemeral queue
 	if err := manager.Subscribe(ctx, "eph-queue", "#", "client1", "", ""); err != nil {
@@ -1935,7 +1910,7 @@ func TestCleanupEphemeralQueues(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	// Create an ephemeral queue with a very short expiry that already expired
 	ephCfg := types.DefaultEphemeralQueueConfig("expired-queue", "$queue/expired/#")
@@ -1994,7 +1969,7 @@ func TestEnqueueLocal(t *testing.T) {
 	if err := manager.Start(ctx); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)
 	}
-	defer manager.Stop()
+	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	msgID, err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{"key": "value"})
 	if err != nil {

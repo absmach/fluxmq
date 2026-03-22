@@ -29,9 +29,9 @@ func TestSharedSubscription_GroupCreation(t *testing.T) {
 	sharedFilter := "$share/group1/sensors/#"
 	opts := storage.SubscribeOptions{}
 
-	b.subscribe(s1, sharedFilter, 1, opts)
-	b.subscribe(s2, sharedFilter, 1, opts)
-	b.subscribe(s3, sharedFilter, 1, opts)
+	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s3, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Verify share group was created with all 3 subscribers
 	group := b.sharedSubs.GetGroup("group1/sensors/#")
@@ -63,9 +63,9 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	sharedFilter := "$share/workers/jobs/#"
 	opts := storage.SubscribeOptions{}
 
-	b.subscribe(s1, sharedFilter, 1, opts)
-	b.subscribe(s2, sharedFilter, 1, opts)
-	b.subscribe(s3, sharedFilter, 1, opts)
+	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s3, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	group := b.sharedSubs.GetGroup("workers/jobs/#")
 
@@ -91,8 +91,8 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	sharedFilter := "$share/group1/test/topic"
 	opts := storage.SubscribeOptions{}
 
-	b.subscribe(s1, sharedFilter, 1, opts)
-	b.subscribe(s2, sharedFilter, 1, opts)
+	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Verify group exists
 	group := b.sharedSubs.GetGroup("group1/test/topic")
@@ -104,7 +104,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	}
 
 	// Unsubscribe client1
-	b.unsubscribeInternal(s1, sharedFilter)
+	b.unsubscribeInternal(s1, sharedFilter) //nolint:errcheck // test cleanup
 
 	// Group should still exist with 1 subscriber
 	group = b.sharedSubs.GetGroup("group1/test/topic")
@@ -116,7 +116,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	}
 
 	// Unsubscribe client2
-	b.unsubscribeInternal(s2, sharedFilter)
+	b.unsubscribeInternal(s2, sharedFilter) //nolint:errcheck // test cleanup
 
 	// Group should be deleted
 	group = b.sharedSubs.GetGroup("group1/test/topic")
@@ -137,11 +137,11 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	sharedFilter := "$share/mygroup/data/#"
 	opts := storage.SubscribeOptions{}
 
-	b.subscribe(s1, sharedFilter, 1, opts)
-	b.subscribe(s2, sharedFilter, 1, opts)
+	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Destroy client1's session
-	b.DestroySession("client1")
+	b.DestroySession("client1") //nolint:errcheck // test cleanup
 
 	// Group should still exist with 1 subscriber
 	group := b.sharedSubs.GetGroup("mygroup/data/#")
@@ -156,7 +156,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	}
 
 	// Destroy client2's session
-	b.DestroySession("client2")
+	b.DestroySession("client2") //nolint:errcheck // test cleanup
 
 	// Group should be deleted
 	group = b.sharedSubs.GetGroup("mygroup/data/#")
@@ -178,11 +178,11 @@ func TestSharedSubscription_MultipleGroups(t *testing.T) {
 	opts := storage.SubscribeOptions{}
 
 	// Two different share groups on the same topic
-	b.subscribe(s1, "$share/group1/sensors/#", 1, opts)
-	b.subscribe(s2, "$share/group2/sensors/#", 1, opts)
+	b.subscribe(s1, "$share/group1/sensors/#", 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, "$share/group2/sensors/#", 1, opts) //nolint:errcheck // test setup
 
 	// Client3 subscribes to both groups
-	b.subscribe(s3, "$share/group1/sensors/#", 1, opts)
+	b.subscribe(s3, "$share/group1/sensors/#", 1, opts) //nolint:errcheck // test setup
 
 	// Both groups should exist
 	group1 := b.sharedSubs.GetGroup("group1/sensors/#")
@@ -211,8 +211,8 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	opts := storage.SubscribeOptions{}
 
 	// Same share name but different topic filters
-	b.subscribe(s1, "$share/workers/sensors/#", 1, opts)
-	b.subscribe(s2, "$share/workers/logs/#", 1, opts)
+	b.subscribe(s1, "$share/workers/sensors/#", 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, "$share/workers/logs/#", 1, opts)    //nolint:errcheck // test setup
 
 	// Two separate groups should exist
 	sensorsGroup := b.sharedSubs.GetGroup("workers/sensors/#")
@@ -244,8 +244,8 @@ func TestSharedSubscription_DuplicateSubscribe(t *testing.T) {
 	sharedFilter := "$share/group1/test/#"
 
 	// Subscribe twice
-	b.subscribe(s1, sharedFilter, 1, opts)
-	b.subscribe(s1, sharedFilter, 1, opts)
+	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Group should have the client only once
 	group := b.sharedSubs.GetGroup("group1/test/#")
@@ -270,8 +270,8 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	opts := storage.SubscribeOptions{}
 
 	// Subscribe to shared subscription
-	b.subscribe(s1, "$share/workers/tasks/#", 1, opts)
-	b.subscribe(s2, "$share/workers/tasks/#", 1, opts)
+	b.subscribe(s1, "$share/workers/tasks/#", 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, "$share/workers/tasks/#", 1, opts) //nolint:errcheck // test setup
 
 	// Router should have the share group subscription, not individual clients
 	matched, err := b.router.Match("tasks/job1")

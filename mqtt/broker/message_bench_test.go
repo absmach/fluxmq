@@ -31,7 +31,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 
 			// Create a subscriber
 			sub := createBenchSession(b, broker, "subscriber")
-			broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 			payload := make([]byte, size)
 			for i := range payload {
@@ -47,7 +47,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg)
+				broker.Publish(msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -65,7 +65,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 			// Create subscribers
 			for i := 0; i < count; i++ {
 				sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-				broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{})
+				broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 			}
 
 			payload := make([]byte, 1024)
@@ -82,7 +82,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg)
+				broker.Publish(msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 	defer broker.Close()
 
 	sub := createBenchSession(b, broker, "subscriber")
-	broker.subscribe(sub, "test/topic", 1, storage.SubscribeOptions{})
+	broker.subscribe(sub, "test/topic", 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	payload := make([]byte, 1024)
 	for i := range payload {
@@ -109,7 +109,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 			QoS:   1,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -119,7 +119,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 	defer broker.Close()
 
 	sub := createBenchSession(b, broker, "subscriber")
-	broker.subscribe(sub, "test/topic", 2, storage.SubscribeOptions{})
+	broker.subscribe(sub, "test/topic", 2, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	payload := make([]byte, 1024)
 	for i := range payload {
@@ -134,7 +134,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 			QoS:   2,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -150,7 +150,7 @@ func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 			// Create shared subscribers
 			for i := 0; i < count; i++ {
 				sub := createBenchSession(b, broker, fmt.Sprintf("subscriber-%d", i))
-				broker.subscribe(sub, "$share/group1/test/topic", 0, storage.SubscribeOptions{})
+				broker.subscribe(sub, "$share/group1/test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 			}
 
 			payload := make([]byte, 1024)
@@ -167,7 +167,7 @@ func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg)
+				broker.Publish(msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -181,7 +181,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 	// Create 10 subscribers
 	for i := 0; i < 10; i++ {
 		sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	// Mix of message sizes representing realistic workload:
@@ -210,7 +210,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -226,7 +226,7 @@ func BenchmarkMessagePublish_FanOut(b *testing.B) {
 			// Create N subscribers
 			for i := 0; i < count; i++ {
 				sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-				broker.subscribe(sub, "sensor/data", 0, storage.SubscribeOptions{})
+				broker.subscribe(sub, "sensor/data", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 			}
 
 			payload := make([]byte, 256) // Typical sensor data size
@@ -243,7 +243,7 @@ func BenchmarkMessagePublish_FanOut(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg)
+				broker.Publish(msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -266,7 +266,7 @@ func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 	for _, topic := range topics {
 		for i := 0; i < 5; i++ {
 			sub := createBenchSession(b, broker, fmt.Sprintf("sub-%s-%d", topic, i))
-			broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, topic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 		}
 	}
 
@@ -285,7 +285,7 @@ func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -306,7 +306,7 @@ func BenchmarkMessagePublish_WildcardHeavy(b *testing.B) {
 		topic := fmt.Sprintf("sensors/room%d/temperature", i)
 		topics[i] = topic
 		sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, topic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	// Wildcard subscribers.
@@ -314,20 +314,20 @@ func BenchmarkMessagePublish_WildcardHeavy(b *testing.B) {
 		sub := createBenchSession(b, broker, fmt.Sprintf("wild-%d", i))
 		switch i % 4 {
 		case 0:
-			broker.subscribe(sub, "sensors/+/temperature", 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, "sensors/+/temperature", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 		case 1:
-			broker.subscribe(sub, "sensors/#", 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, "sensors/#", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 		case 2:
-			broker.subscribe(sub, "+/room+/temperature", 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, "+/room+/temperature", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 		default:
-			broker.subscribe(sub, "sensors/+/+", 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, "sensors/+/+", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 		}
 	}
 
 	// Shared subscription group (forces dedup per publish).
 	for i := 0; i < sharedSubs; i++ {
 		sub := createBenchSession(b, broker, fmt.Sprintf("shared-%d", i))
-		broker.subscribe(sub, "$share/group1/sensors/+/temperature", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "$share/group1/sensors/+/temperature", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	payload := make([]byte, 256)
@@ -344,7 +344,7 @@ func BenchmarkMessagePublish_WildcardHeavy(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -364,7 +364,7 @@ func BenchmarkMessagePublish_WithChurn(b *testing.B) {
 		topic := fmt.Sprintf("devices/%d/state", i)
 		topics[i] = topic
 		sub := createBenchSession(b, broker, fmt.Sprintf("base-%d", i))
-		broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, topic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	// Churn sessions reused across subscribe/unsubscribe.
@@ -396,7 +396,7 @@ func BenchmarkMessagePublish_WithChurn(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -408,7 +408,7 @@ func BenchmarkMessageDistribute(b *testing.B) {
 	// Create 10 subscribers
 	for i := 0; i < 10; i++ {
 		sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	payload := make([]byte, 1024)
@@ -424,7 +424,7 @@ func BenchmarkMessageDistribute(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.distribute(msg)
+		broker.distribute(msg) //nolint:errcheck // best-effort
 		msg.ReleasePayload()
 	}
 }

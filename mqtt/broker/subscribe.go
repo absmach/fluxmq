@@ -60,7 +60,7 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 		// The client ID used for routing is the "$share/group/filter" string.
 		shareName, topicFilter, _ := topics.ParseShared(filter)
 		shareClientID := "$share/" + shareName + "/" + topicFilter
-		b.router.Subscribe(shareClientID, topicFilter, qos, opts)
+		b.router.Subscribe(shareClientID, topicFilter, qos, opts) //nolint:errcheck // subscribe errors are non-fatal; message routing degrades gracefully
 
 		b.logOp("shared_subscribe",
 			slog.String("client_id", s.ID),
@@ -68,7 +68,7 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 			slog.String("topic_filter", topicFilter))
 	} else if !topics.IsShared(filter) {
 		// Normal subscription
-		b.router.Subscribe(s.ID, filter, qos, opts)
+		b.router.Subscribe(s.ID, filter, qos, opts) //nolint:errcheck // subscribe errors are non-fatal; message routing degrades gracefully
 	}
 
 	b.telemetry.stats.IncrementSubscriptions()
@@ -100,7 +100,7 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 
 	// Webhook: subscription created
 	if b.telemetry.webhooks != nil {
-		b.telemetry.webhooks.Notify(context.Background(), events.SubscriptionCreated{
+		b.telemetry.webhooks.Notify(context.Background(), events.SubscriptionCreated{ //nolint:errcheck // fire-and-forget webhook notification
 			ClientID:       s.ID,
 			TopicFilter:    filter,
 			QoS:            qos,
@@ -143,7 +143,7 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 		// If group became empty, unsubscribe from router
 		shareName, topicFilter, _ := topics.ParseShared(filter)
 		shareClientID := "$share/" + shareName + "/" + topicFilter
-		b.router.Unsubscribe(shareClientID, topicFilter)
+		b.router.Unsubscribe(shareClientID, topicFilter) //nolint:errcheck // best-effort cleanup on shared subscription removal
 
 		b.logOp("shared_unsubscribe",
 			slog.String("client_id", s.ID),
@@ -151,7 +151,7 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 			slog.String("topic_filter", topicFilter))
 	} else if !topics.IsShared(filter) {
 		// Normal unsubscribe
-		b.router.Unsubscribe(s.ID, filter)
+		b.router.Unsubscribe(s.ID, filter) //nolint:errcheck // best-effort cleanup on unsubscribe
 	}
 
 	b.telemetry.stats.DecrementSubscriptions()
@@ -177,7 +177,7 @@ func (b *Broker) unsubscribeInternal(s *session.Session, filter string) error {
 
 	// Webhook: subscription removed
 	if b.telemetry.webhooks != nil {
-		b.telemetry.webhooks.Notify(context.Background(), events.SubscriptionRemoved{
+		b.telemetry.webhooks.Notify(context.Background(), events.SubscriptionRemoved{ //nolint:errcheck // fire-and-forget webhook notification
 			ClientID:    s.ID,
 			TopicFilter: filter,
 		})

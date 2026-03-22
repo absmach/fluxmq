@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-// TimeIndex header size: Magic(4) + Version(1) + BaseOffset(8) + EntryCount(4) + MinTS(8) + MaxTS(8) + Reserved(3) = 36 bytes
+// TimeIndex header size: Magic(4) + Version(1) + BaseOffset(8) + EntryCount(4) + MinTS(8) + MaxTS(8) + Reserved(3) = 36 bytes.
 const TimeIndexHeaderSize = 36
 
-// TimeIndex entry size: Timestamp(8) + RelativeOffset(4) = 12 bytes
+// TimeIndex entry size: Timestamp(8) + RelativeOffset(4) = 12 bytes.
 const TimeIndexEntrySize = 12
 
 // TimeIndex provides timestamp-to-offset mapping for time-based seeks.
@@ -342,8 +342,8 @@ func (tidx *TimeIndex) Close() error {
 	defer tidx.mu.Unlock()
 
 	if tidx.dirty && !tidx.readonly {
-		tidx.writeHeader()
-		tidx.file.Sync()
+		tidx.writeHeader() //nolint:errcheck // best-effort flush on close
+		tidx.file.Sync()   //nolint:errcheck // best-effort sync on close; file.Close() follows
 	}
 
 	return tidx.file.Close()

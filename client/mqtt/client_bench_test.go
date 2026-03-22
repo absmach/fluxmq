@@ -17,7 +17,7 @@ func setupBenchClient(b *testing.B, opts *Options) *Client {
 	}
 	c.state.set(StateConnected)
 	setupWriteLoop(c, &packetCaptureConn{})
-	b.Cleanup(func() { c.cleanup(context.Background(), nil) })
+	b.Cleanup(func() { c.cleanup(context.Background(), nil) }) //nolint:errcheck // test cleanup
 
 	return c
 }

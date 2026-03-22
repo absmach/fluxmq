@@ -102,8 +102,8 @@ func TestMemoryStoreGetAllOutbound(t *testing.T) {
 	msg2 := NewMessage("topic2", []byte("payload2"), 1, false)
 	msg2.PacketID = 2
 
-	store.StoreOutbound(1, msg1)
-	store.StoreOutbound(2, msg2)
+	store.StoreOutbound(1, msg1) //nolint:errcheck // test setup
+	store.StoreOutbound(2, msg2) //nolint:errcheck // test setup
 
 	msgs := store.GetAllOutbound()
 	if len(msgs) != 2 {
@@ -115,8 +115,8 @@ func TestMemoryStoreReset(t *testing.T) {
 	store := NewMemoryStore()
 
 	msg := NewMessage("topic", []byte("payload"), 1, false)
-	store.StoreOutbound(1, msg)
-	store.StoreInbound(2, msg)
+	store.StoreOutbound(1, msg) //nolint:errcheck // test setup
+	store.StoreInbound(2, msg)  //nolint:errcheck // test setup
 
 	err := store.Reset()
 	if err != nil {
@@ -138,7 +138,7 @@ func TestMemoryStoreClose(t *testing.T) {
 	store := NewMemoryStore()
 
 	msg := NewMessage("topic", []byte("payload"), 1, false)
-	store.StoreOutbound(1, msg)
+	store.StoreOutbound(1, msg) //nolint:errcheck // test setup
 
 	err := store.Close()
 	if err != nil {
@@ -158,7 +158,7 @@ func TestMemoryStoreDeepCopy(t *testing.T) {
 	original.PacketID = 1
 	original.UserProperties = map[string]string{"key": "value"}
 
-	store.StoreOutbound(1, original)
+	store.StoreOutbound(1, original) //nolint:errcheck // test setup
 
 	// Modify original
 	original.Payload = []byte("modified")
@@ -193,9 +193,9 @@ func TestMemoryStoreConcurrency(t *testing.T) {
 			defer wg.Done()
 			msg := NewMessage("topic", []byte("payload"), 1, false)
 			msg.PacketID = id
-			store.StoreOutbound(id, msg)
+			store.StoreOutbound(id, msg) //nolint:errcheck // best-effort
 			store.GetOutbound(id)
-			store.DeleteOutbound(id)
+			store.DeleteOutbound(id) //nolint:errcheck // best-effort
 		}(uint16(i))
 	}
 
@@ -205,9 +205,9 @@ func TestMemoryStoreConcurrency(t *testing.T) {
 			defer wg.Done()
 			msg := NewMessage("topic", []byte("payload"), 2, false)
 			msg.PacketID = id
-			store.StoreInbound(id, msg)
+			store.StoreInbound(id, msg) //nolint:errcheck // best-effort
 			store.GetInbound(id)
-			store.DeleteInbound(id)
+			store.DeleteInbound(id) //nolint:errcheck // best-effort
 		}(uint16(i + 1000))
 	}
 

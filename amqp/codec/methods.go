@@ -8,7 +8,7 @@ import (
 	"io"
 )
 
-// Class and Method IDs
+// Class and Method IDs.
 const (
 	ClassConnection = 10
 )

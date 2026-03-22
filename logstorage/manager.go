@@ -535,7 +535,7 @@ func (m *SegmentManager) syncLoop() {
 	for {
 		select {
 		case <-m.syncTicker.C:
-			m.Sync()
+			m.Sync() //nolint:errcheck // background periodic sync; errors surfaced on next write
 		case <-m.closeCh:
 			return
 		}

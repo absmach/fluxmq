@@ -51,7 +51,7 @@ func (b *Broker) expireSessions() {
 		b.sessionLocks.Lock(clientID)
 		s := b.sessionsMap.Get(clientID)
 		if s != nil {
-			b.destroySessionLocked(s)
+			b.destroySessionLocked(s) //nolint:errcheck // best-effort session cleanup during expired session sweep
 		}
 		b.sessionLocks.Unlock(clientID)
 	}
@@ -111,7 +111,7 @@ func (b *Broker) publishStats() {
 		}
 		msg.SetPayloadFromBytes([]byte(s.value))
 
-		b.distribute(msg)
+		b.distribute(msg) //nolint:errcheck // fire-and-forget stats distribution
 
 		// Release the message buffer after distribution
 		msg.ReleasePayload()

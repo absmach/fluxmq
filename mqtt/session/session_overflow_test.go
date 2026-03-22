@@ -34,12 +34,15 @@ func (c *testConn) RemoteAddr() net.Addr        { return testAddr("remote") }
 func (c *testConn) SetDeadline(_ time.Time) error {
 	return nil
 }
+
 func (c *testConn) SetReadDeadline(_ time.Time) error {
 	return nil
 }
+
 func (c *testConn) SetWriteDeadline(_ time.Time) error {
 	return nil
 }
+
 func (c *testConn) ReadPacket() (packets.ControlPacket, error) {
 	return nil, io.EOF
 }
@@ -50,6 +53,7 @@ func (c *testConn) WriteControlPacket(_ packets.ControlPacket, onSent func()) er
 	}
 	return nil
 }
+
 func (c *testConn) WriteDataPacket(_ packets.ControlPacket, onSent func()) error {
 	if onSent != nil {
 		onSent()

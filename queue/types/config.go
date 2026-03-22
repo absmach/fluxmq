@@ -37,7 +37,7 @@ type CursorOption struct {
 	AutoCommit *bool
 }
 
-// Queue constants
+// Queue constants.
 const (
 	MQTTQueueName  = "mqtt"
 	MQTTQueueTopic = "$queue/#"

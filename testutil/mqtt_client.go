@@ -259,14 +259,14 @@ func (c *TestMQTTClient) ConnectWithOptions(opts ConnectOptions) error {
 	}
 
 	// Read CONNACK
-	conn.SetReadDeadline(time.Now().Add(DefaultConnectTimeout))
+	conn.SetReadDeadline(time.Now().Add(DefaultConnectTimeout)) //nolint:errcheck // best-effort deadline
 	connackPkt := make([]byte, 4)
 	if _, err := io.ReadFull(conn, connackPkt); err != nil {
 		c.closeConn()
 		atomic.StoreUint32(&c.state, StateDisconnected)
 		return fmt.Errorf("failed to read CONNACK: %w", err)
 	}
-	conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Time{}) //nolint:errcheck // best-effort deadline reset
 
 	// Verify CONNACK
 	if connackPkt[0] != 0x20 {
@@ -353,7 +353,7 @@ func (c *TestMQTTClient) SubscribeMultiple(filters map[string]byte) error {
 	var buf bytes.Buffer
 
 	// Variable header - Packet ID
-	binary.Write(&buf, binary.BigEndian, packetID)
+	binary.Write(&buf, binary.BigEndian, packetID) //nolint:errcheck // bytes.Buffer.Write never errors
 
 	// Payload - Topic filters with QoS
 	for filter, qos := range filters {
@@ -409,7 +409,7 @@ func (c *TestMQTTClient) Publish(topic string, qos byte, payload []byte, retain 
 	var packetID uint16
 	if qos > 0 {
 		packetID = c.nextPacketIDLocked()
-		binary.Write(&buf, binary.BigEndian, packetID)
+		binary.Write(&buf, binary.BigEndian, packetID) //nolint:errcheck // bytes.Buffer.Write never errors
 	}
 
 	// Payload
@@ -472,7 +472,7 @@ func (c *TestMQTTClient) Disconnect() error {
 
 	// Send DISCONNECT packet
 	disconnectPkt := []byte{0xE0, 0x00}
-	c.writePacket(disconnectPkt)
+	c.writePacket(disconnectPkt) //nolint:errcheck // best-effort disconnect send
 
 	// Signal read loop to stop
 	if stopCh != nil {
@@ -569,7 +569,7 @@ func (c *TestMQTTClient) Reconnect(newNode *TestNode) error {
 
 	// Disconnect if connected
 	if c.IsConnected() {
-		c.Disconnect()
+		c.Disconnect() //nolint:errcheck // test cleanup, error irrelevant before reconnect
 	}
 
 	// Wait for full disconnect
@@ -612,7 +612,7 @@ func (c *TestMQTTClient) readLoop() {
 		}
 
 		// Set read deadline
-		conn.SetReadDeadline(time.Now().Add(DefaultReadTimeout))
+		conn.SetReadDeadline(time.Now().Add(DefaultReadTimeout)) //nolint:errcheck // best-effort deadline
 
 		// Read fixed header
 		header := make([]byte, 1)
@@ -822,22 +822,22 @@ func (c *TestMQTTClient) deliverMessage(msg *Message) {
 
 func (c *TestMQTTClient) sendPubAck(packetID uint16) {
 	pkt := []byte{0x40, 0x02, byte(packetID >> 8), byte(packetID)}
-	c.writePacket(pkt)
+	c.writePacket(pkt) //nolint:errcheck // best-effort QoS ack send
 }
 
 func (c *TestMQTTClient) sendPubRec(packetID uint16) {
 	pkt := []byte{0x50, 0x02, byte(packetID >> 8), byte(packetID)}
-	c.writePacket(pkt)
+	c.writePacket(pkt) //nolint:errcheck // best-effort QoS ack send
 }
 
 func (c *TestMQTTClient) sendPubRel(packetID uint16) {
 	pkt := []byte{0x62, 0x02, byte(packetID >> 8), byte(packetID)}
-	c.writePacket(pkt)
+	c.writePacket(pkt) //nolint:errcheck // best-effort QoS ack send
 }
 
 func (c *TestMQTTClient) sendPubComp(packetID uint16) {
 	pkt := []byte{0x70, 0x02, byte(packetID >> 8), byte(packetID)}
-	c.writePacket(pkt)
+	c.writePacket(pkt) //nolint:errcheck // best-effort QoS ack send
 }
 
 // Helper methods

@@ -148,7 +148,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 			continue
 		}
 		c := val.(*Connection)
-		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, sub.QoS)
+		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, sub.QoS) //nolint:contextcheck // context propagation would require API changes across the call chain
 	}
 
 	return nil
@@ -203,7 +203,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 			amqpMsg.Properties.MessageID = msgID
 		}
 
-		c.deliverAMQPMessage(topic, amqpMsg, m.QoS)
+		c.deliverAMQPMessage(topic, amqpMsg, m.QoS) //nolint:contextcheck // context propagation would require API changes across the call chain
 		return nil
 	default:
 		return fmt.Errorf("unsupported message type: %T", msg)
@@ -228,7 +228,7 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 		return fmt.Errorf("AMQP client not found: %s", containerID)
 	}
 	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS)
+	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS) //nolint:contextcheck // context propagation would require API changes across the call chain
 	return nil
 }
 

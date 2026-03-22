@@ -10,8 +10,10 @@ import (
 )
 
 // Common validation errors.
-var ErrInvalidTopicName = errors.New("invalid topic name: contains wildcards or illegal characters")
-var ErrInvalidTopicFilter = errors.New("invalid topic filter: malformed wildcard or illegal characters")
+var (
+	ErrInvalidTopicName   = errors.New("invalid topic name: contains wildcards or illegal characters")
+	ErrInvalidTopicFilter = errors.New("invalid topic filter: malformed wildcard or illegal characters")
+)
 
 // Validator is an interface for packets that can validate themselves.
 type Validator interface {

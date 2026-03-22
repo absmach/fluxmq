@@ -50,7 +50,7 @@ func TestConnectionReadPacketV3(t *testing.T) {
 			ClientID:        "test-client",
 		}
 		encoded := connect.Encode()
-		clientConn.Write(encoded)
+		clientConn.Write(encoded) //nolint:errcheck // best-effort
 	}()
 
 	pkt, err := conn.ReadPacket()
@@ -78,7 +78,7 @@ func TestConnectionReadPacketV5(t *testing.T) {
 			ClientID:        "test-client-v5",
 		}
 		encoded := connect.Encode()
-		clientConn.Write(encoded)
+		clientConn.Write(encoded) //nolint:errcheck // best-effort
 	}()
 
 	pkt, err := conn.ReadPacket()

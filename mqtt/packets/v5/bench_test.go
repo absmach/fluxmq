@@ -17,7 +17,7 @@ func BenchmarkReadInline(b *testing.B) {
 	var arr [1]byte
 	for i := 0; i < b.N; i++ {
 		buf.Reset([]byte{0x42})
-		io.ReadAtLeast(buf, arr[:], 1)
+		io.ReadAtLeast(buf, arr[:], 1) //nolint:errcheck // best-effort
 	}
 }
 
@@ -26,7 +26,7 @@ func BenchmarkReadInlineFull(b *testing.B) {
 	var arr [1]byte
 	for i := 0; i < b.N; i++ {
 		buf.Reset([]byte{0x42})
-		io.ReadFull(buf, arr[:])
+		io.ReadFull(buf, arr[:]) //nolint:errcheck // best-effort
 	}
 }
 
@@ -35,7 +35,7 @@ func BenchmarkReadMake(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		buf.Reset([]byte{0x42})
 		data := make([]byte, 1)
-		io.ReadAtLeast(buf, data, 1)
+		io.ReadAtLeast(buf, data, 1) //nolint:errcheck // best-effort
 	}
 }
 

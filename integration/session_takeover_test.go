@@ -62,7 +62,7 @@ func TestSessionTakeover_BasicReconnect(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node1, "publisher-takeover")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish message
 	payload := []byte("takeover message")
@@ -75,7 +75,7 @@ func TestSessionTakeover_BasicReconnect(t *testing.T) {
 	assert.Equal(t, "takeover/test", msg.Topic)
 	assert.Equal(t, payload, msg.Payload)
 
-	client.Disconnect()
+	client.Disconnect() //nolint:errcheck // test cleanup
 
 	t.Log("Session takeover successful")
 }
@@ -120,7 +120,7 @@ func TestSessionTakeover_QoS1Messages(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node2, "qos1-publisher")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("offline qos1 message")
 	err = publisher.Publish("qos1/test", 1, payload, false)
@@ -145,7 +145,7 @@ func TestSessionTakeover_QoS1Messages(t *testing.T) {
 	assert.Equal(t, "qos1/test", msg.Topic)
 	assert.Equal(t, payload, msg.Payload)
 
-	subscriber.Disconnect()
+	subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	t.Log("QoS 1 offline message delivered successfully")
 }
@@ -217,7 +217,7 @@ func TestSessionTakeover_MultipleClients(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node0, "multi-publisher")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("multi-client broadcast")
 	err = publisher.Publish("multi/test", 0, payload, false)
@@ -239,9 +239,9 @@ func TestSessionTakeover_MultipleClients(t *testing.T) {
 	assert.Equal(t, "multi/test", msg3.Topic)
 	assert.Equal(t, payload, msg3.Payload)
 
-	client1.Disconnect()
-	client2.Disconnect()
-	client3.Disconnect()
+	client1.Disconnect() //nolint:errcheck // test cleanup
+	client2.Disconnect() //nolint:errcheck // test cleanup
+	client3.Disconnect() //nolint:errcheck // test cleanup
 
 	t.Log("Multiple client takeover successful")
 }

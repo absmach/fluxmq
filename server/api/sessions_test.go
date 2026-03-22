@@ -360,7 +360,6 @@ func TestSessionDetailDisconnectedSession(t *testing.T) {
 	}
 	// Inflight and offline queue may have been drained by the disconnect
 	// callback depending on timing — we only assert the state fields here.
-
 }
 
 func TestSessionsListRejectsInvalidLimit(t *testing.T) {

@@ -84,7 +84,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		payload := ""
 		// Note: Payload encoding should be done by caller if needed
 		// ClientID not available at broker level, will be set by handler
-		b.telemetry.webhooks.Notify(context.Background(), events.MessagePublished{
+		b.telemetry.webhooks.Notify(context.Background(), events.MessagePublished{ //nolint:errcheck // fire-and-forget webhook notification
 			ClientID:     "", // Set by handler
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
@@ -159,7 +159,7 @@ func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
 			}
 		}
 		if b.telemetry.webhooks != nil {
-			b.telemetry.webhooks.Notify(ctx, events.RetainedMessageSet{
+			b.telemetry.webhooks.Notify(ctx, events.RetainedMessageSet{ //nolint:errcheck // fire-and-forget webhook notification
 				MessageTopic: msg.Topic,
 				PayloadSize:  0,
 				Cleared:      true,
@@ -182,7 +182,7 @@ func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
 		}
 	}
 	if b.telemetry.webhooks != nil {
-		b.telemetry.webhooks.Notify(ctx, events.RetainedMessageSet{
+		b.telemetry.webhooks.Notify(ctx, events.RetainedMessageSet{ //nolint:errcheck // fire-and-forget webhook notification
 			MessageTopic: msg.Topic,
 			PayloadSize:  payloadLen,
 			Cleared:      false,
@@ -365,7 +365,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	err := b.distributeLocal(storeMsg, false)
+	err := b.distributeLocal(storeMsg, false) //nolint:contextcheck // context propagation would require API changes across the call chain
 	storeMsg.ReleasePayload()
 	return err
 }
@@ -445,7 +445,7 @@ func (b *Broker) triggerWills() {
 	for _, will := range pending {
 		s := b.Get(will.ClientID)
 		if s != nil && s.IsConnected() {
-			b.stores.wills.Delete(ctx, will.ClientID)
+			b.stores.wills.Delete(ctx, will.ClientID) //nolint:errcheck // best-effort will cleanup for connected client
 			continue
 		}
 
@@ -459,12 +459,12 @@ func (b *Broker) triggerWills() {
 		}
 		msg.SetPayloadFromBytes(will.Payload)
 
-		b.distribute(msg)
+		b.distribute(msg) //nolint:errcheck // fire-and-forget will message distribution
 
 		// Release the message buffer after distribution
 		msg.ReleasePayload()
 
-		b.stores.wills.Delete(ctx, will.ClientID)
+		b.stores.wills.Delete(ctx, will.ClientID) //nolint:errcheck // best-effort will cleanup after distribution
 	}
 }
 

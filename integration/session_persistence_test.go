@@ -136,7 +136,7 @@ func TestSessionPersistence_SubscriptionsRestoredAfterRestart(t *testing.T) {
 
 		err := client.Connect(false) // CleanStart=false
 		require.NoError(t, err)
-		defer client.Disconnect()
+		defer client.Disconnect() //nolint:errcheck // test cleanup
 
 		time.Sleep(200 * time.Millisecond)
 
@@ -144,7 +144,7 @@ func TestSessionPersistence_SubscriptionsRestoredAfterRestart(t *testing.T) {
 		publisher := testutil.NewTestMQTTClient(t, node, "publisher")
 		err = publisher.Connect(true)
 		require.NoError(t, err)
-		defer publisher.Disconnect()
+		defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 		payload := []byte("test-after-restart")
 		err = publisher.Publish("test/topic", 0, payload, false)
@@ -207,7 +207,7 @@ func TestSessionPersistence_OfflineQueueDeliveredAfterRestart(t *testing.T) {
 		require.NoError(t, err)
 
 		time.Sleep(300 * time.Millisecond)
-		publisher.Disconnect()
+		publisher.Disconnect() //nolint:errcheck // test cleanup
 
 		inst.stop(t)
 		t.Log("Phase 1 complete: messages queued, broker stopped")
@@ -226,7 +226,7 @@ func TestSessionPersistence_OfflineQueueDeliveredAfterRestart(t *testing.T) {
 
 		err := client.Connect(false) // CleanStart=false
 		require.NoError(t, err)
-		defer client.Disconnect()
+		defer client.Disconnect() //nolint:errcheck // test cleanup
 
 		// Should receive the queued messages
 		msg1, err := client.WaitForMessage(5 * time.Second)
@@ -290,7 +290,7 @@ func TestSessionPersistence_CleanStartClearsSession(t *testing.T) {
 
 		err := client.Connect(true) // CleanStart=true should clear session
 		require.NoError(t, err)
-		defer client.Disconnect()
+		defer client.Disconnect() //nolint:errcheck // test cleanup
 
 		time.Sleep(200 * time.Millisecond)
 
@@ -298,7 +298,7 @@ func TestSessionPersistence_CleanStartClearsSession(t *testing.T) {
 		publisher := testutil.NewTestMQTTClient(t, node, "publisher")
 		err = publisher.Connect(true)
 		require.NoError(t, err)
-		defer publisher.Disconnect()
+		defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 		err = publisher.Publish("clean/topic", 0, []byte("should-not-receive"), false)
 		require.NoError(t, err)

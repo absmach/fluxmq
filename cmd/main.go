@@ -141,7 +141,7 @@ func main() {
 		slog.Info("Using BadgerDB persistent storage", "dir", cfg.Storage.BadgerDir)
 	default:
 		slog.Error("Unknown storage type", "type", cfg.Storage.Type)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: defer is in a different branch
 	}
 
 	var cl cluster.Cluster
@@ -181,7 +181,7 @@ func main() {
 		}
 		etcdCluster = ec
 		cl = etcdCluster
-		defer cl.Stop()
+		defer cl.Stop() //nolint:errcheck // best-effort deferred shutdown
 
 		if err := cl.Start(); err != nil {
 			slog.Error("Failed to start cluster", "error", err)
@@ -637,7 +637,7 @@ func main() {
 			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
 			Logger:           logger,
 		}
-			tcpCfg.IPRateLimiter = rateLimitManager
+		tcpCfg.IPRateLimiter = rateLimitManager
 		tcpServer := tcp.New(tcpCfg, b)
 
 		wg.Add(1)
@@ -677,7 +677,7 @@ func main() {
 			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
 			AllowedOrigins:  slot.cfg.AllowedOrigins,
 		}
-			wsCfg.IPRateLimiter = rateLimitManager
+		wsCfg.IPRateLimiter = rateLimitManager
 
 		wsServer := websocket.New(wsCfg, b, logger)
 

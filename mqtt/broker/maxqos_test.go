@@ -69,7 +69,7 @@ func TestMaxQoS_V5Handler_Downgrade_QoS2to0(t *testing.T) {
 	handler := NewV5Handler(b)
 
 	// Subscribe to capture the message
-	b.subscribe(s, "test/topic", 2, storage.SubscribeOptions{})
+	b.subscribe(s, "test/topic", 2, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	// Publish with QoS 2 (should be downgraded to 0, no ack needed)
 	pub := &v5.Publish{
@@ -100,7 +100,7 @@ func TestMaxQoS_V5Handler_Downgrade_QoS1to0(t *testing.T) {
 	handler := NewV5Handler(b)
 
 	// Subscribe to capture the message
-	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{})
+	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	// Publish with QoS 1 (should be downgraded to 0)
 	pub := &v5.Publish{
@@ -128,7 +128,7 @@ func TestMaxQoS_V5Handler_NoDowngrade(t *testing.T) {
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 	handler := NewV5Handler(b)
 
-	b.subscribe(s, "test/topic", 0, storage.SubscribeOptions{})
+	b.subscribe(s, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	// QoS 0 publish - no acknowledgment needed, no downgrade needed
 	pub := &v5.Publish{
@@ -155,7 +155,7 @@ func TestMaxQoS_V3Handler_Downgrade(t *testing.T) {
 	s, _, _ := b.CreateSession("client1", 4, session.Options{CleanStart: true})
 	handler := NewV3Handler(b)
 
-	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{})
+	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	// Publish with QoS 1 (should be downgraded to 0)
 	pub := &v3.Publish{

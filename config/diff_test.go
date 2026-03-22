@@ -55,7 +55,7 @@ func TestDiffRuntimeSafeFields(t *testing.T) {
 	}{
 		{
 			name:   "log level",
-			modify: func(cfg *Config) { cfg.Log.Level = "debug" },
+			modify: func(cfg *Config) { cfg.Log.Level = "debug" }, //nolint:goconst // test value
 			path:   "Log.Level",
 		},
 		{

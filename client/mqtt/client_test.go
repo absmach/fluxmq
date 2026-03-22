@@ -310,7 +310,7 @@ func TestClientConnectFailure(t *testing.T) {
 	err := client.Connect(context.Background())
 	if err == nil {
 		t.Error("Connect to non-existent server should fail")
-		client.Disconnect(context.Background())
+		client.Disconnect(context.Background()) //nolint:errcheck // test cleanup
 	}
 
 	if client.State() != StateDisconnected {

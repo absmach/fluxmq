@@ -14,7 +14,7 @@ import (
 
 // Batch header size in bytes.
 // Magic(4) + CRC(4) + BaseOffset(8) + BatchLen(4) + Count(2) + Flags(2) +
-// Compression(1) + Version(1) + Reserved(2) + BaseTimestamp(8) + MaxTimestamp(8) = 44 bytes
+// Compression(1) + Version(1) + Reserved(2) + BaseTimestamp(8) + MaxTimestamp(8) = 44 bytes.
 const BatchHeaderSize = 44
 
 // Batch represents a batch of records to be written together.
@@ -336,8 +336,8 @@ var (
 	zstdDec     *zstd.Decoder
 	zstdEncOnce sync.Once
 	zstdDecOnce sync.Once
-	zstdEncErr  error
-	zstdDecErr  error
+	zstdEncErr  error //nolint:errname // package-private variable holding init error; renaming to match errname convention would obscure its purpose
+	zstdDecErr  error //nolint:errname // package-private variable holding init error; renaming to match errname convention would obscure its purpose
 )
 
 func getZstdEncoder() (*zstd.Encoder, error) {

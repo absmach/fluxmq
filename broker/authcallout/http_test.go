@@ -45,7 +45,7 @@ func TestHTTPClient_Authenticate_Success(t *testing.T) {
 			assert.Equal(t, "mqtt", req.Protocol)
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(authnResponse{
+			json.NewEncoder(w).Encode(authnResponse{ //nolint:errcheck // best-effort
 				Authenticated: true,
 				ID:            "ext-id-1",
 			})
@@ -66,7 +66,7 @@ func TestHTTPClient_Authenticate_Denied(t *testing.T) {
 	srv := newHTTPTestServer(t,
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(authnResponse{
+			json.NewEncoder(w).Encode(authnResponse{ //nolint:errcheck // best-effort
 				Authenticated: false,
 				ReasonCode:    2,
 				Reason:        "bad credentials",
@@ -84,7 +84,7 @@ func TestHTTPClient_Authenticate_ServerError(t *testing.T) {
 	srv := newHTTPTestServer(t,
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("internal error"))
+			w.Write([]byte("internal error")) //nolint:errcheck // best-effort
 		}, nil)
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
@@ -104,7 +104,7 @@ func TestHTTPClient_CanPublish_Allowed(t *testing.T) {
 			assert.Equal(t, "publish", req.Action)
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(authzResponse{Authorized: true})
+			json.NewEncoder(w).Encode(authzResponse{Authorized: true}) //nolint:errcheck // best-effort
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
@@ -115,7 +115,7 @@ func TestHTTPClient_CanPublish_Denied(t *testing.T) {
 	srv := newHTTPTestServer(t, nil,
 		func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(authzResponse{
+			json.NewEncoder(w).Encode(authzResponse{ //nolint:errcheck // best-effort
 				Authorized: false,
 				ReasonCode: 4,
 				Reason:     "not authorized",
@@ -134,7 +134,7 @@ func TestHTTPClient_CanSubscribe_Allowed(t *testing.T) {
 			assert.Equal(t, "subscribe", req.Action)
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(authzResponse{Authorized: true})
+			json.NewEncoder(w).Encode(authzResponse{Authorized: true}) //nolint:errcheck // best-effort
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
@@ -166,9 +166,9 @@ func TestHTTPClient_ProtocolStrings(t *testing.T) {
 		var captured authnRequest
 		srv := newHTTPTestServer(t,
 			func(w http.ResponseWriter, r *http.Request) {
-				json.NewDecoder(r.Body).Decode(&captured)
+				json.NewDecoder(r.Body).Decode(&captured) //nolint:errcheck // best-effort
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(authnResponse{Authenticated: true, ID: "x"})
+				json.NewEncoder(w).Encode(authnResponse{Authenticated: true, ID: "x"}) //nolint:errcheck // best-effort
 			}, nil)
 
 		client := NewHTTPClient(srv.Client(), srv.URL,

@@ -76,10 +76,10 @@ func (s *Server) Listen(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		s.logger.Info("http_bridge_shutdown_initiated")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout) //nolint:contextcheck // intentionally creates new context for graceful shutdown
 		defer cancel()
 
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
+		if err := s.server.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // intentionally creates new context for graceful shutdown
 			s.logger.Error("http_bridge_shutdown_error", slog.String("error", err.Error()))
 			return err
 		}
@@ -179,17 +179,17 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		slog.Int("qos", int(req.QoS)),
 		slog.Int("payload_size", len(req.Payload)))
 
-	if err := s.broker.Publish(msg); err != nil {
+	if err := s.broker.Publish(msg); err != nil { //nolint:contextcheck // context propagation would require API changes across the call chain
 		s.logger.Error("http_publish_failed", slog.String("error", err.Error()))
 		http.Error(w, fmt.Sprintf("publish failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"}) //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 }

@@ -20,12 +20,12 @@ import (
 type OpType uint8
 
 const (
-	// Log operations
+	// Log operations.
 	OpAppend OpType = iota
 	OpAppendBatch
 	OpTruncate
 
-	// Consumer group operations
+	// Consumer group operations.
 	OpCreateGroup
 	OpDeleteGroup
 	OpUpdateCursor
@@ -36,7 +36,7 @@ const (
 	OpRegisterConsumer
 	OpUnregisterConsumer
 
-	// Queue config operations
+	// Queue config operations.
 	OpCreateQueue
 	OpUpdateQueue
 	OpDeleteQueue
@@ -620,7 +620,7 @@ func (s *GlobalSnapshot) Persist(sink raft.SnapshotSink) error {
 	}
 
 	if err := json.NewEncoder(sink).Encode(snapshot); err != nil {
-		sink.Cancel()
+		sink.Cancel() //nolint:errcheck // best-effort cancellation after encode failure
 		s.logger.Error("failed to encode snapshot",
 			slog.String("error", err.Error()))
 		return err

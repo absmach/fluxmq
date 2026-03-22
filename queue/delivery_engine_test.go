@@ -36,7 +36,7 @@ func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*Deliver
 
 	nodeID := ""
 	if remote != nil {
-		nodeID = "node-1"
+		nodeID = "node-1" //nolint:goconst // test value
 	}
 
 	engine := NewDeliveryEngine(
@@ -91,7 +91,7 @@ func TestScheduleAllQueues(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"a", "b", "c"} {
-		logStore.CreateQueue(ctx, types.DefaultQueueConfig(name, "$queue/"+name+"/#"))
+		logStore.CreateQueue(ctx, types.DefaultQueueConfig(name, "$queue/"+name+"/#")) //nolint:errcheck // test setup
 	}
 
 	engine.ScheduleAll(ctx)
@@ -147,16 +147,16 @@ func TestDeliverQueueLocalConsumer(t *testing.T) {
 	ctx := context.Background()
 
 	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	group := types.NewConsumerGroupState("tasks", "workers", "")
 	group.SetConsumer("c1", &types.ConsumerInfo{
 		ID:       "c1",
 		ClientID: "c1",
 	})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      "1",
 		Topic:   "$queue/tasks/new",
 		Payload: []byte("job1"),
@@ -175,7 +175,7 @@ func TestDeliverQueueLocalConsumer(t *testing.T) {
 		t.Fatalf("expected 1 delivered message, got %d", count)
 	}
 
-	if delivered[0].Properties[types.PropQueueName] != "tasks" {
+	if delivered[0].Properties[types.PropQueueName] != "tasks" { //nolint:goconst // test value
 		t.Fatalf("expected queue name tasks, got %s", delivered[0].Properties[types.PropQueueName])
 	}
 }
@@ -187,7 +187,7 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 	ctx := context.Background()
 
 	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	// Register a remote consumer via cluster listing.
 	mockRemote.mu.Lock()
@@ -204,7 +204,7 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 	}
 	mockRemote.mu.Unlock()
 
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      "1",
 		Topic:   "$queue/tasks/new",
 		Payload: []byte("job1"),
@@ -226,7 +226,7 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 	if mockRemote.routed[0].msg.QueueName != "tasks" {
 		t.Fatalf("expected queue tasks, got %s", mockRemote.routed[0].msg.QueueName)
 	}
-	if mockRemote.routed[0].nodeID != "node-2" {
+	if mockRemote.routed[0].nodeID != "node-2" { //nolint:goconst // test value
 		t.Fatalf("expected node-2, got %s", mockRemote.routed[0].nodeID)
 	}
 }
@@ -246,16 +246,16 @@ func TestDeliverAllSweep(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"q1", "q2"} {
-		logStore.CreateQueue(ctx, types.DefaultQueueConfig(name, "$queue/"+name+"/#"))
+		logStore.CreateQueue(ctx, types.DefaultQueueConfig(name, "$queue/"+name+"/#")) //nolint:errcheck // test setup
 
 		group := types.NewConsumerGroupState(name, "g-"+name, "")
 		group.SetConsumer("c1", &types.ConsumerInfo{
 			ID:       "c1",
 			ClientID: "c1",
 		})
-		groupStore.CreateConsumerGroup(ctx, group)
+		groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-		logStore.Append(ctx, name, &types.Message{
+		logStore.Append(ctx, name, &types.Message{ //nolint:errcheck // test setup
 			ID:      "msg-" + name,
 			Topic:   "$queue/" + name + "/test",
 			Payload: []byte("data"),
@@ -285,7 +285,7 @@ func TestDeliverQueueNilRemoteRouter(t *testing.T) {
 	engine, logStore, groupStore := newTestEngine(t, local, nil)
 	ctx := context.Background()
 
-	logStore.CreateQueue(ctx, types.DefaultQueueConfig("q1", "$queue/q1/#"))
+	logStore.CreateQueue(ctx, types.DefaultQueueConfig("q1", "$queue/q1/#")) //nolint:errcheck // test setup
 
 	group := types.NewConsumerGroupState("q1", "g1", "")
 	group.SetConsumer("c1", &types.ConsumerInfo{
@@ -293,9 +293,9 @@ func TestDeliverQueueNilRemoteRouter(t *testing.T) {
 		ClientID:    "c1",
 		ProxyNodeID: "node-2", // remote proxy, but no remote router
 	})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "q1", &types.Message{
+	logStore.Append(ctx, "q1", &types.Message{ //nolint:errcheck // test setup
 		ID:      "1",
 		Topic:   "$queue/q1/test",
 		Payload: []byte("data"),
@@ -407,15 +407,15 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	_ = engine
 
 	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	// Create group with two consumers
 	group := types.NewConsumerGroupState("tasks", "workers", "")
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
 	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      "poison-msg",
 		Topic:   "$queue/tasks/job",
 		Payload: []byte("bad-job"),
@@ -445,7 +445,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	if dlqCalls[0].queueName != "tasks" {
 		t.Fatalf("expected queue 'tasks', got %q", dlqCalls[0].queueName)
 	}
-	if dlqCalls[0].groupID != "workers" {
+	if dlqCalls[0].groupID != "workers" { //nolint:goconst // test value
 		t.Fatalf("expected group 'workers', got %q", dlqCalls[0].groupID)
 	}
 	if dlqCalls[0].msgID != "poison-msg" {
@@ -490,21 +490,21 @@ func TestDLQCallbackNilHandlerSilentlyDrops(t *testing.T) {
 	_ = engine
 
 	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	group := types.NewConsumerGroupState("tasks", "workers", "")
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
 	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      "poison-msg",
 		Topic:   "$queue/tasks/job",
 		Payload: []byte("bad-job"),
 	})
 
 	// Claim as c1, then simulate poison
-	consumerMgr.Claim(ctx, "tasks", "workers", "c1", nil)
+	consumerMgr.Claim(ctx, "tasks", "workers", "c1", nil) //nolint:errcheck // test setup
 	group.PEL["c1"][0].DeliveryCount = 5
 	group.PEL["c1"][0].ClaimedAt = time.Now().Add(-time.Hour)
 
@@ -536,20 +536,20 @@ func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
 	ctx := context.Background()
 
 	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	group := types.NewConsumerGroupState("tasks", "workers", "")
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
 	// Append an expired message then a valid one.
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:        "expired",
 		Topic:     "$queue/tasks/old",
 		Payload:   []byte("stale"),
 		ExpiresAt: time.Now().Add(-time.Second),
 	})
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      "valid",
 		Topic:   "$queue/tasks/new",
 		Payload: []byte("fresh"),
@@ -585,20 +585,20 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 
 	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	group := types.NewConsumerGroupState("events", "readers", "")
 	group.Mode = types.GroupModeStream
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
 		ID:        "expired",
 		Topic:     "$queue/events/old",
 		Payload:   []byte("stale"),
 		ExpiresAt: time.Now().Add(-time.Second),
 	})
-	logStore.Append(ctx, "events", &types.Message{
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
 		ID:      "valid",
 		Topic:   "$queue/events/new",
 		Payload: []byte("fresh"),
@@ -633,19 +633,19 @@ func TestDeliverQueueAllExpiredReturnsNoDelivery(t *testing.T) {
 	ctx := context.Background()
 
 	queueCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
-	logStore.CreateQueue(ctx, queueCfg)
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
 
 	group := types.NewConsumerGroupState("tasks", "workers", "")
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
-	groupStore.CreateConsumerGroup(ctx, group)
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:        "e1",
 		Topic:     "$queue/tasks/a",
 		Payload:   []byte("old1"),
 		ExpiresAt: time.Now().Add(-time.Minute),
 	})
-	logStore.Append(ctx, "tasks", &types.Message{
+	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:        "e2",
 		Topic:     "$queue/tasks/b",
 		Payload:   []byte("old2"),

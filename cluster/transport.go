@@ -661,7 +661,7 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 
 // AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
 func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*AppendEntriesResp, error) {
-	// TODO: Implement Raft consensus
+	//nolint:godox // TODO: Implement Raft consensus
 	return connect.NewResponse(&clusterv1.AppendEntriesResponse{
 		Term:    req.Msg.Term,
 		Success: false,
@@ -670,7 +670,7 @@ func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*
 
 // RequestVote implements BrokerServiceHandler.RequestVote (Raft).
 func (t *Transport) RequestVote(ctx context.Context, req *RequestVoteReq) (*RequestVoteResp, error) {
-	// TODO: Implement Raft consensus
+	//nolint:godox // TODO: Implement Raft consensus
 	return connect.NewResponse(&clusterv1.RequestVoteResponse{
 		Term:        req.Msg.Term,
 		VoteGranted: false,
@@ -679,7 +679,7 @@ func (t *Transport) RequestVote(ctx context.Context, req *RequestVoteReq) (*Requ
 
 // InstallSnapshot implements BrokerServiceHandler.InstallSnapshot (Raft).
 func (t *Transport) InstallSnapshot(ctx context.Context, req *InstallSnapshotReq) (*InstallSnapshotResp, error) {
-	// TODO: Implement Raft consensus
+	//nolint:godox // TODO: Implement Raft consensus
 	return connect.NewResponse(&clusterv1.InstallSnapshotResponse{
 		Term: req.Msg.Term,
 	}), nil

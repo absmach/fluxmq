@@ -83,7 +83,7 @@ func TestMessageExpiry_V5Handler(t *testing.T) {
 	handler := NewV5Handler(b)
 
 	// Subscribe to test topic
-	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{})
+	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	// Create PUBLISH packet with message expiry
 	expiry := uint32(10)

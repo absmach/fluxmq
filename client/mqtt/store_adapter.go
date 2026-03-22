@@ -144,5 +144,7 @@ type rawStore interface {
 	Close() error
 }
 
-var _ MessageStore = (*kvMessageStore)(nil)
-var _ rawStore = (*storebadger.Store)(nil)
+var (
+	_ MessageStore = (*kvMessageStore)(nil)
+	_ rawStore     = (*storebadger.Store)(nil)
+)

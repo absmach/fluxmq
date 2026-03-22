@@ -387,7 +387,7 @@ func (tc *TestCluster) stopNode(node *TestNode) {
 
 	// Stop cluster after broker/queue shutdown.
 	if node.Cluster != nil {
-		node.Cluster.Stop()
+		node.Cluster.Stop() //nolint:errcheck // best-effort cluster stop during test teardown
 		node.Cluster = nil
 	}
 

@@ -346,7 +346,7 @@ func ExtractRoutingKey(topic, queueRoot string) string {
 
 // ExtractQueueRoot extracts the queue root from a topic.
 // Convention: $queue/{name} is the root, everything after is routing key.
-// Example: "$queue/tasks/images" -> queue root is "$queue/tasks"
+// Example: "$queue/tasks/images" -> queue root is "$queue/tasks".
 func ExtractQueueRoot(topic string) string {
 	if !strings.HasPrefix(topic, "$queue/") {
 		return ""

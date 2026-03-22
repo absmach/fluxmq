@@ -111,9 +111,9 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 			}
 
 			if tcpConn, ok := conn.(*net.TCPConn); ok {
-				tcpConn.SetKeepAlive(true)
-				tcpConn.SetKeepAlivePeriod(15 * time.Second)
-				tcpConn.SetNoDelay(true)
+				tcpConn.SetKeepAlive(true)                   //nolint:errcheck // TCP socket options; fails only on closed connection
+				tcpConn.SetKeepAlivePeriod(15 * time.Second) //nolint:errcheck // TCP socket options; fails only on closed connection
+				tcpConn.SetNoDelay(true)                     //nolint:errcheck // TCP socket options; fails only on closed connection
 			}
 
 			// TLS handshake
@@ -127,13 +127,13 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 			}
 
 			s.wg.Add(1)
-			go func(c net.Conn) {
+			go func(c net.Conn) { //nolint:contextcheck // goroutine manages its own context lifecycle
 				defer s.wg.Done()
 				defer s.releaseSlot()
 				defer c.Close()
 
 				s.config.Logger.Debug("AMQP connection accepted", slog.String("remote", c.RemoteAddr().String()))
-				s.handler.HandleConnection(c)
+				s.handler.HandleConnection(c) //nolint:contextcheck // context propagation would require API changes across the call chain
 			}(conn)
 		}
 	}()

@@ -153,7 +153,7 @@ func rebuildIndexes(dir string, baseOffset uint64) error {
 
 		// Add to offset index at intervals
 		if bytesSinceLastIndex == 0 || bytesSinceLastIndex >= DefaultIndexIntervalBytes {
-			index.Append(relOffset, uint32(bp.position))
+			index.Append(relOffset, uint32(bp.position)) //nolint:errcheck // index rebuild; partial index is still usable
 			bytesSinceLastIndex = 0
 		}
 		bytesSinceLastIndex += bp.size
@@ -161,7 +161,7 @@ func rebuildIndexes(dir string, baseOffset uint64) error {
 		// Read batch for timestamp
 		batch, err := seg.ReadBatch(bp.offset)
 		if err == nil && batch.MaxTimestamp > 0 {
-			timeIndex.Append(batch.MaxTimestamp, relOffset)
+			timeIndex.Append(batch.MaxTimestamp, relOffset) //nolint:errcheck // time index rebuild; partial index is still usable
 		}
 	}
 

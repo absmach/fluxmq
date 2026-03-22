@@ -18,6 +18,11 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const (
+	sessionStateConnected    = "connected"
+	sessionStateDisconnected = "disconnected"
+)
+
 type sessionSubscriptionResponse struct {
 	Filter            string  `json:"filter"`
 	QoS               byte    `json:"qos"`
@@ -88,7 +93,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
 	pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
 
-	sessions, nextPageToken, err := s.listSessions(prefix, state, limit, pageToken)
+	sessions, nextPageToken, err := s.listSessions(prefix, state, limit, pageToken) //nolint:contextcheck // context propagation would require API changes across the call chain
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -122,7 +127,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.broker != nil {
-		snapshot, err := s.broker.GetSessionSnapshot(clientID)
+		snapshot, err := s.broker.GetSessionSnapshot(clientID) //nolint:contextcheck // context propagation would require API changes across the call chain
 		if err == nil {
 			writeJSON(w, http.StatusOK, sessionToResponse(*snapshot))
 			return
@@ -212,7 +217,7 @@ func (s *Server) listSessions(prefix, state string, limit int, pageToken string)
 
 func stateAllowsConnected(state string) bool {
 	switch strings.ToLower(strings.TrimSpace(state)) {
-	case "", "all", "connected":
+	case "", "all", sessionStateConnected:
 		return true
 	default:
 		return false
@@ -222,7 +227,7 @@ func stateAllowsConnected(state string) bool {
 func amqpSessionResponse(clientID string) sessionResponse {
 	return sessionResponse{
 		ClientID:  clientID,
-		State:     "connected",
+		State:     sessionStateConnected,
 		Connected: true,
 		Protocol:  "amqp0.9.1",
 	}
@@ -310,7 +315,7 @@ func protocolLabel(clientID string, version byte) string {
 
 func validSessionState(state string) bool {
 	switch strings.ToLower(strings.TrimSpace(state)) {
-	case "", "all", "connected", "disconnected":
+	case "", "all", sessionStateConnected, sessionStateDisconnected:
 		return true
 	default:
 		return false
@@ -331,5 +336,6 @@ func writeAPIError(w http.ResponseWriter, status int, message string) {
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	//nolint:errchkjson // payload is always a serializable struct; write errors are unrecoverable in HTTP handlers
 	_ = json.NewEncoder(w).Encode(payload)
 }

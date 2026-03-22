@@ -265,7 +265,7 @@ func (p *PEL) Add(entry PELEntry) error {
 
 	// Check if compaction is needed
 	if p.opCount >= p.compactThreshold {
-		go p.Compact()
+		go p.Compact() //nolint:errcheck // background compaction; errors are non-fatal
 	}
 
 	return nil
@@ -569,7 +569,7 @@ func (p *PEL) Close() error {
 	defer p.mu.Unlock()
 
 	if p.dirty {
-		p.compactUnlocked()
+		p.compactUnlocked() //nolint:errcheck // best-effort flush on close; file is being closed anyway
 	}
 
 	return p.logFile.Close()

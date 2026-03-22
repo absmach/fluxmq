@@ -87,6 +87,6 @@ func main() {
 
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to read %s: %v\n", *input, err)
-		os.Exit(2)
+		os.Exit(2) //nolint:gocritic // exitAfterDefer: intentional in CLI tool
 	}
 }

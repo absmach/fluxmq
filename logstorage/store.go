@@ -33,9 +33,9 @@ type Store struct {
 type StoreConfig struct {
 	ManagerConfig
 	ConsumerStateConfig
-	AutoCreate         bool // Automatically create queues/partitions on first access
-	RecoverOnStartup   bool // Run segment recovery before loading queues
-	RecoveryLogger     func(msg string, args ...any)
+	AutoCreate       bool // Automatically create queues/partitions on first access
+	RecoverOnStartup bool // Run segment recovery before loading queues
+	RecoveryLogger   func(msg string, args ...any)
 }
 
 // DefaultStoreConfig returns default store configuration.

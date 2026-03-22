@@ -132,9 +132,9 @@ type Broker struct {
 	crossDeliver  broker.CrossDeliverFunc // nil if cross-protocol local pub/sub disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
-	rateLimiter   broker.RateLimiter    // nil if rate limiting disabled
-	eventHook    broker.EventHook // nil if no event hooks configured
-	stopCh       chan struct{}
+	rateLimiter   broker.RateLimiter // nil if rate limiting disabled
+	eventHook     broker.EventHook   // nil if no event hooks configured
+	stopCh        chan struct{}
 	shuttingDown  atomic.Bool
 	closed        atomic.Bool
 	sharedSubs    *SharedSubscriptionManager

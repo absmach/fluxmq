@@ -30,7 +30,6 @@ func (c *Client) readLoop() {
 		}
 
 		pkt, err := c.readPacketFromConn(conn)
-
 		if err != nil {
 			if err == io.EOF || c.state.get() != StateConnected {
 				return
@@ -278,7 +277,7 @@ func (c *Client) handleQueueMessage(msg *Message) {
 
 func (c *Client) handlePubAck(pkt packets.ControlPacket) {
 	packetID := packetIDFromControlPacket(pkt)
-	c.store.DeleteOutbound(packetID)
+	c.store.DeleteOutbound(packetID) //nolint:errcheck // best-effort store cleanup; packet already acknowledged
 	c.pending.complete(packetID, nil, nil)
 }
 
@@ -319,7 +318,7 @@ func (c *Client) handlePubRel(pkt packets.ControlPacket) {
 
 func (c *Client) handlePubComp(pkt packets.ControlPacket) {
 	packetID := packetIDFromControlPacket(pkt)
-	c.store.DeleteOutbound(packetID)
+	c.store.DeleteOutbound(packetID) //nolint:errcheck // best-effort store cleanup; packet already acknowledged
 	c.pending.complete(packetID, nil, nil)
 }
 
@@ -741,7 +740,7 @@ func enqueueAsyncCallback(fn func()) {
 					continue
 				}
 				func() {
-					defer func() { recover() }()
+					defer func() { _ = recover() }()
 					fn()
 				}()
 			}

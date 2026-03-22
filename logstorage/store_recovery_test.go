@@ -34,7 +34,7 @@ func TestNewStore_RecoverOnStartup_CorruptedSegment(t *testing.T) {
 
 	f, err := os.OpenFile(segFiles[0], os.O_WRONLY|os.O_APPEND, 0o644)
 	require.NoError(t, err)
-	_, err = f.Write([]byte("CORRUPTION"))
+	_, err = f.WriteString("CORRUPTION")
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 

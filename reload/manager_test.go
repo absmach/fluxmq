@@ -83,10 +83,10 @@ func TestReloadLogLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if appliedLog.Level != "debug" {
+	if appliedLog.Level != "debug" { //nolint:goconst // test value
 		t.Errorf("expected log level 'debug', got %q", appliedLog.Level)
 	}
-	if appliedLog.Format != "json" {
+	if appliedLog.Format != "json" { //nolint:goconst // test value
 		t.Errorf("expected log format 'json', got %q", appliedLog.Format)
 	}
 	if len(result.Applied) == 0 {
@@ -347,7 +347,7 @@ func TestApplyFieldChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if updated.Log.Level != "warn" {
+	if updated.Log.Level != "warn" { //nolint:goconst // test value
 		t.Errorf("expected 'warn', got %q", updated.Log.Level)
 	}
 	if updated.Log.Format != "json" {

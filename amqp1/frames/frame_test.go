@@ -64,7 +64,7 @@ func TestProtocolHeaderSASL(t *testing.T) {
 }
 
 func TestProtocolHeaderInvalid(t *testing.T) {
-	buf := bytes.NewBuffer([]byte("MQTT0100"))
+	buf := bytes.NewBufferString("MQTT0100")
 	_, err := ReadProtocolHeader(buf)
 	assert.Error(t, err)
 }

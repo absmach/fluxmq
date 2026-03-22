@@ -74,11 +74,11 @@ func (c *Client) flushWriteBatch(conn net.Conn, batch *writeBatchState) bool {
 
 	deadline := batch.earliestDeadline()
 	if !deadline.IsZero() {
-		conn.SetWriteDeadline(deadline)
+		conn.SetWriteDeadline(deadline) //nolint:errcheck // fails only on closed connection
 	}
 	_, err := batch.bufs.WriteTo(conn)
 	if !deadline.IsZero() {
-		conn.SetWriteDeadline(time.Time{})
+		conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // fails only on closed connection
 	}
 
 	c.acknowledgeWriteBatch(batch, err)

@@ -57,7 +57,7 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 	}
 }
 
-// --- Queue Management ---
+// --- Queue Management ---.
 func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.CreateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	msg := req.Msg
 
@@ -621,7 +621,9 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 			ConsumerID: msg.ConsumerId,
 			ClaimedAt:  time.Now(),
 		}
-		h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry)
+		if err := h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry); err != nil {
+			h.logger.Error("failed to record pending entry", slog.String("queue", msg.QueueName), slog.String("group", msg.GroupId), slog.String("error", err.Error()))
+		}
 
 		protoMsgs = append(protoMsgs, h.messageToProto(m))
 	}
@@ -661,7 +663,9 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 				ConsumerID: msg.ConsumerId,
 				ClaimedAt:  time.Now(),
 			}
-			h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry)
+			if err := h.groupStore.AddPendingEntry(ctx, msg.QueueName, msg.GroupId, entry); err != nil {
+				h.logger.Error("failed to record pending entry", slog.String("queue", msg.QueueName), slog.String("group", msg.GroupId), slog.String("error", err.Error()))
+			}
 
 			if err := stream.Send(h.messageToProto(m)); err != nil {
 				return err
@@ -871,7 +875,9 @@ func (h *Handler) Purge(ctx context.Context, req *connect.Request[queuev1.PurgeR
 
 	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
-	h.queueStore.Truncate(ctx, msg.QueueName, tail)
+	if err := h.queueStore.Truncate(ctx, msg.QueueName, tail); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 
 	return connect.NewResponse(&queuev1.PurgeResponse{
 		MessagesDeleted: count,

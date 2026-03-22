@@ -5,7 +5,7 @@ package codec
 
 import "fmt"
 
-// AMQP Error Codes
+// AMQP Error Codes.
 const (
 	ContentTooLarge    = 311
 	NoRoute            = 312

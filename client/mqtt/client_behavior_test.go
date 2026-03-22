@@ -210,7 +210,7 @@ func TestRestoreStateReplaysSubscriptionsQueueAndOutbound(t *testing.T) {
 	c.restoreState()
 	close(done)
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 
 	counts := conn.packetTypeCounts()
 	assert.Equal(t, 3, counts[packets.SubscribeType], "should replay regular, advanced, and queue subscriptions")
@@ -245,7 +245,7 @@ func TestSubscriptionRegistrySnapshotIsolation(t *testing.T) {
 		if rec.topic == "metrics/#" {
 			basicRec = rec
 		}
-		if rec.topic == "alerts/#" {
+		if rec.topic == "alerts/#" { //nolint:goconst // test value
 			advRec = rec
 		}
 	}
@@ -458,7 +458,7 @@ func TestHandleAuthCallsOnAuthCallback(t *testing.T) {
 		t.Fatal("expected OnAuth callback to be called")
 	}
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestHandleAuthWithoutCallbackDoesNotPanic(t *testing.T) {
@@ -571,7 +571,7 @@ func TestQueueWriteReturnsWhenWriteLoopExitsWithPendingWrites(t *testing.T) {
 		t.Fatal("second write should not hang when write loop exits")
 	}
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestQueueWriteRequestTracksEnqueueRuntimeAcrossRuntimeSwap(t *testing.T) {
@@ -684,7 +684,7 @@ func TestWriteLoopResolvesOrphanedQueuedWritesOnExit(t *testing.T) {
 		t.Fatal("orphaned queued write should be resolved when write loop exits")
 	}
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestControlWriteNoWaitDropsWhenFull(t *testing.T) {
@@ -779,7 +779,7 @@ func TestControlWriteNoWaitConcurrentWithCleanupDoesNotPanic(t *testing.T) {
 		cleanupWG.Add(1)
 		go func() {
 			defer cleanupWG.Done()
-			c.cleanup(context.Background(), nil)
+			c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 		}()
 	}
 
@@ -811,7 +811,7 @@ func TestPublishBufferedWhileDisconnectedAndFlushedOnReconnect(t *testing.T) {
 	setupWriteLoop(c, conn)
 
 	c.flushReconnectBuffer()
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 
 	counts := conn.packetTypeCounts()
 	assert.Equal(t, 1, counts[packets.PublishType], "buffered publish should be flushed after reconnect")
@@ -939,7 +939,7 @@ func TestControlWritePriorityOverDataQueue(t *testing.T) {
 	assert.Equal(t, []byte{0x09}, writes[1], "control write should preempt queued data writes")
 	assert.Equal(t, []byte{0x02}, writes[2])
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestPublishAsyncTokenCompletesFromPendingAck(t *testing.T) {
@@ -956,7 +956,7 @@ func TestPublishAsyncTokenCompletesFromPendingAck(t *testing.T) {
 	c.pending.complete(tok.MessageID, nil, nil)
 	require.NoError(t, tok.Wait())
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestDrainWaitsForInflightPublishes(t *testing.T) {
@@ -1281,7 +1281,7 @@ func TestSendAuthUsesControlWriteLanePriority(t *testing.T) {
 	assert.EqualValues(t, packets.AuthType, writes[1][0]>>4, "AUTH should be written through control lane before queued data")
 	assert.Equal(t, []byte{0x02}, writes[2])
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestDeliverMessageConcurrentWithStopDispatcherDoesNotPanic(t *testing.T) {
@@ -1386,7 +1386,7 @@ func TestOutboundBackpressureDropNewReturnsErrorAndReportsDrop(t *testing.T) {
 		t.Fatal("first publish did not complete")
 	}
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestOutboundBackpressureBlockWithTimeout(t *testing.T) {
@@ -1427,7 +1427,7 @@ func TestOutboundBackpressureBlockWithTimeout(t *testing.T) {
 
 	close(conn.releaseFirstWrite)
 	<-firstDone
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestOutboundBackpressureBlockWaitsAndSucceeds(t *testing.T) {
@@ -1485,7 +1485,7 @@ func TestOutboundBackpressureBlockWaitsAndSucceeds(t *testing.T) {
 		t.Fatal("second publish should complete after outbound capacity frees up")
 	}
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestOutboundBackpressureBlockHonorsContextCancellation(t *testing.T) {
@@ -1533,7 +1533,7 @@ func TestOutboundBackpressureBlockHonorsContextCancellation(t *testing.T) {
 		t.Fatal("first publish did not complete")
 	}
 
-	c.cleanup(context.Background(), nil)
+	c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 }
 
 func TestDroppedMessageCallbackForSlowConsumer(t *testing.T) {
@@ -1584,7 +1584,7 @@ func TestDroppedMessageCallbackQueueIsBounded(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		close(block)
-		c.cleanup(context.Background(), nil)
+		c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 	}()
 
 	c.msgCh = make(chan *Message, 1)
@@ -1637,7 +1637,7 @@ func TestSoakBlockedHandlerPressureNoDeadlock(t *testing.T) {
 			}),
 	)
 	require.NoError(t, err)
-	defer c.cleanup(context.Background(), nil)
+	defer c.cleanup(context.Background(), nil) //nolint:errcheck // test cleanup
 
 	c.startDispatcher()
 

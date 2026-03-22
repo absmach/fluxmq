@@ -12,7 +12,7 @@ import (
 	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
-// Constants for AMQP frame types
+// Constants for AMQP frame types.
 const (
 	FrameMethod    byte = 1
 	FrameHeader    byte = 2
@@ -142,7 +142,7 @@ func WriteLongStr(w io.Writer, s string) error {
 	return err
 }
 
-// TODO: Implement ReadTable and WriteTable for field-table support.
+//nolint:godox // TODO: Implement ReadTable and WriteTable for field-table support.
 
 // ReadTable reads a field-table from the reader.
 func ReadTable(r io.Reader) (map[string]interface{}, error) {

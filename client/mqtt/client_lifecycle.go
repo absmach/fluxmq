@@ -15,7 +15,7 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
-func (c *Client) Connect(ctx context.Context) error {
+func (c *Client) Connect(ctx context.Context) error { //nolint:contextcheck // intentionally creates new context as a nil-guard fallback
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -143,15 +143,15 @@ func (c *Client) connectToServer(ctx context.Context, addr string) (net.Conn, er
 		}
 		tlsConn := tls.Client(rawConn, c.opts.TLSConfig)
 		if deadline, ok := ctx.Deadline(); ok && (c.opts.ConnectTimeout <= 0 || time.Until(deadline) < c.opts.ConnectTimeout) {
-			tlsConn.SetDeadline(deadline)
+			tlsConn.SetDeadline(deadline) //nolint:errcheck // fails only on closed connection
 		} else if c.opts.ConnectTimeout > 0 {
-			tlsConn.SetDeadline(time.Now().Add(c.opts.ConnectTimeout))
+			tlsConn.SetDeadline(time.Now().Add(c.opts.ConnectTimeout)) //nolint:errcheck // fails only on closed connection
 		}
 		if err = tlsConn.Handshake(); err != nil {
 			tlsConn.Close()
 			return nil, err
 		}
-		tlsConn.SetDeadline(time.Time{})
+		tlsConn.SetDeadline(time.Time{}) //nolint:errcheck // fails only on closed connection
 		conn = tlsConn
 	} else {
 		conn, err = dialer.DialContext(ctx, "tcp", addr)
@@ -182,8 +182,8 @@ func (c *Client) connectToServer(ctx context.Context, addr string) (net.Conn, er
 }
 
 func (c *Client) sendConnect(conn net.Conn) error {
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
-	defer conn.SetWriteDeadline(time.Time{})
+	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout)) //nolint:errcheck // fails only on closed connection
+	defer conn.SetWriteDeadline(time.Time{})                   //nolint:errcheck // fails only on closed connection
 
 	keepAlive := uint16(c.opts.KeepAlive.Seconds())
 	return c.packConnectPacket(conn, keepAlive)
@@ -194,8 +194,8 @@ func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckCode, e
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
-	conn.SetReadDeadline(deadline)
-	defer conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(deadline)          //nolint:errcheck // fails only on closed connection
+	defer conn.SetReadDeadline(time.Time{}) //nolint:errcheck // fails only on closed connection
 
 	if c.isMQTTv5() {
 		// Enhanced auth may require multiple AUTH packet exchanges
@@ -264,7 +264,7 @@ func (c *Client) Disconnect(ctx context.Context) error {
 //   - sessionExpiry: Update session expiry interval (0 = use current value, ignored if 0)
 //   - reasonString: Human-readable reason (empty = no reason string)
 
-func (c *Client) DisconnectWithReason(ctx context.Context, reasonCode byte, sessionExpiry uint32, reasonString string) error {
+func (c *Client) DisconnectWithReason(ctx context.Context, reasonCode byte, sessionExpiry uint32, reasonString string) error { //nolint:contextcheck // intentionally creates new context as a nil-guard fallback
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -291,7 +291,7 @@ func (c *Client) DisconnectWithReason(ctx context.Context, reasonCode byte, sess
 // Drain stops accepting new publishes, waits for in-flight publishes to finish,
 // and then disconnects gracefully.
 
-func (c *Client) Drain(ctx context.Context) error {
+func (c *Client) Drain(ctx context.Context) error { //nolint:contextcheck // intentionally creates new context as a nil-guard fallback
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -337,13 +337,13 @@ func (c *Client) sendDisconnectWithReason(reasonCode byte, sessionExpiry uint32,
 	if conn == nil {
 		return
 	}
-	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout))
+	conn.SetWriteDeadline(time.Now().Add(c.opts.WriteTimeout)) //nolint:errcheck // fails only on closed connection
 	_, _ = conn.Write(c.encodeDisconnectPacket(reasonCode, sessionExpiry, reasonString))
 }
 
 // Close permanently closes the client.
 
-func (c *Client) Close(ctx context.Context) error {
+func (c *Client) Close(ctx context.Context) error { //nolint:contextcheck // intentionally creates new context as a nil-guard fallback
 	if ctx == nil {
 		ctx = context.Background()
 	}

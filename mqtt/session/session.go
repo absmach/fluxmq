@@ -192,11 +192,11 @@ func (s *Session) Connect(c core.Connection) error {
 	default:
 	}
 
-	c.SetKeepAlive(s.KeepAlive)
+	c.SetKeepAlive(s.KeepAlive) //nolint:errcheck // keepalive timer setup; connection already validated at this point
 
 	// Set callback to handle connection loss/keepalive expiry
 	c.SetOnDisconnect(func(graceful bool) {
-		s.Disconnect(graceful)
+		s.Disconnect(graceful) //nolint:errcheck // disconnect callback; session cleanup is best-effort
 	})
 
 	return nil
@@ -556,7 +556,7 @@ func (s *Session) UpdateConnectionOptions(version byte, keepAlive time.Duration,
 	s.Will = will
 
 	if s.conn != nil {
-		s.conn.SetKeepAlive(keepAlive)
+		s.conn.SetKeepAlive(keepAlive) //nolint:errcheck // keepalive timer update; connection already validated
 	}
 }
 

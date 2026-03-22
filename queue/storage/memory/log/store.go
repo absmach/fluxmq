@@ -704,7 +704,7 @@ func (s *Store) UpdateHeartbeat(ctx context.Context, queueName, groupID, consume
 	return nil
 }
 
-// Compile-time interface assertions
+// Compile-time interface assertions.
 var (
 	_ storage.QueueStore    = (*Store)(nil)
 	_ storage.ConsumerStore = (*Store)(nil)

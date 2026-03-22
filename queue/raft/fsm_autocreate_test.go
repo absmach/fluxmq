@@ -20,45 +20,59 @@ type noopGroupStore struct{}
 func (noopGroupStore) CreateConsumerGroup(context.Context, *types.ConsumerGroup) error {
 	return nil
 }
+
 func (noopGroupStore) GetConsumerGroup(context.Context, string, string) (*types.ConsumerGroup, error) {
 	return nil, storage.ErrConsumerNotFound
 }
+
 func (noopGroupStore) UpdateConsumerGroup(context.Context, *types.ConsumerGroup) error {
 	return nil
 }
+
 func (noopGroupStore) DeleteConsumerGroup(context.Context, string, string) error {
 	return nil
 }
+
 func (noopGroupStore) ListConsumerGroups(context.Context, string) ([]*types.ConsumerGroup, error) {
 	return nil, nil
 }
+
 func (noopGroupStore) AddPendingEntry(context.Context, string, string, *types.PendingEntry) error {
 	return nil
 }
+
 func (noopGroupStore) RemovePendingEntry(context.Context, string, string, string, uint64) error {
 	return nil
 }
+
 func (noopGroupStore) GetPendingEntries(context.Context, string, string, string) ([]*types.PendingEntry, error) {
 	return nil, nil
 }
+
 func (noopGroupStore) GetAllPendingEntries(context.Context, string, string) ([]*types.PendingEntry, error) {
 	return nil, nil
 }
+
 func (noopGroupStore) TransferPendingEntry(context.Context, string, string, uint64, string, string) error {
 	return nil
 }
+
 func (noopGroupStore) UpdateCursor(context.Context, string, string, uint64) error {
 	return nil
 }
+
 func (noopGroupStore) UpdateCommitted(context.Context, string, string, uint64) error {
 	return nil
 }
+
 func (noopGroupStore) RegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
 	return nil
 }
+
 func (noopGroupStore) UnregisterConsumer(context.Context, string, string, string) error {
 	return nil
 }
+
 func (noopGroupStore) ListConsumers(context.Context, string, string) ([]*types.ConsumerInfo, error) {
 	return nil, nil
 }

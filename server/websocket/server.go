@@ -185,10 +185,10 @@ func (s *Server) Listen(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		s.logger.Info("websocket_server_shutdown_initiated")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout) //nolint:contextcheck // intentionally creates new context for graceful shutdown
 		defer cancel()
 
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
+		if err := s.server.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // intentionally creates new context for graceful shutdown
 			s.logger.Error("websocket_server_shutdown_error", slog.String("error", err.Error()))
 			return err
 		}
@@ -220,7 +220,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.logger.Debug("websocket_connection_accepted", slog.String("remote_addr", r.RemoteAddr))
 
 	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion)
-	broker.HandleConnection(s.broker, conn)
+	broker.HandleConnection(s.broker, conn) //nolint:contextcheck // context propagation would require API changes across the call chain
 }
 
 // wsConnection implements core.Connection for WebSocket transport.

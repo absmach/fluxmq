@@ -45,42 +45,55 @@ func (m *mockCluster) ReleaseSession(ctx context.Context, clientID string) error
 func (m *mockCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
 	return "", false, nil
 }
+
 func (m *mockCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan cluster.OwnershipChange {
 	return nil
 }
+
 func (m *mockCluster) AddSubscription(ctx context.Context, clientID, filter string, qos byte, opts storage.SubscribeOptions) error {
 	return nil
 }
+
 func (m *mockCluster) RemoveSubscription(ctx context.Context, clientID, filter string) error {
 	return nil
 }
+
 func (m *mockCluster) RemoveAllSubscriptions(ctx context.Context, clientID string) error {
 	return nil
 }
+
 func (m *mockCluster) GetSubscriptionsForClient(ctx context.Context, clientID string) ([]*storage.Subscription, error) {
 	return nil, nil
 }
+
 func (m *mockCluster) GetSubscribersForTopic(ctx context.Context, topic string) ([]*storage.Subscription, error) {
 	return nil, nil
 }
+
 func (m *mockCluster) RegisterQueueConsumer(ctx context.Context, info *cluster.QueueConsumerInfo) error {
 	return nil
 }
+
 func (m *mockCluster) UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
 	return nil
 }
+
 func (m *mockCluster) ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error) {
 	return nil, nil
 }
+
 func (m *mockCluster) ListQueueConsumersByGroup(ctx context.Context, queueName, groupID string) ([]*cluster.QueueConsumerInfo, error) {
 	return nil, nil
 }
+
 func (m *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.QueueConsumerInfo, error) {
 	return nil, nil
 }
+
 func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
 	return nil
 }
+
 func (m *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
 	return nil
 }
@@ -89,9 +102,11 @@ func (m *mockCluster) Wills() storage.WillStore        { return nil }
 func (m *mockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
 	return nil
 }
+
 func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
+
 func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error {
 	return nil
 }

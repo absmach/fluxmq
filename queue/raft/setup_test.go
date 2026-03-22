@@ -68,7 +68,7 @@ func TestBuildRaftGroupRuntimes(t *testing.T) {
 			if rt.ManagerConfig.SyncMode != true {
 				t.Fatalf("unexpected default sync mode: %v", rt.ManagerConfig.SyncMode)
 			}
-		case "hot":
+		case "hot": //nolint:goconst // test value
 			foundHot = true
 			if rt.BindAddr != "127.0.0.1:8100" {
 				t.Fatalf("unexpected hot bind addr: %q", rt.BindAddr)

@@ -99,7 +99,7 @@ func TestBroker_Shutdown_SetsFlag(t *testing.T) {
 
 	// Start shutdown in background
 	go func() {
-		broker.Shutdown(context.Background(), 100*time.Millisecond)
+		broker.Shutdown(context.Background(), 100*time.Millisecond) //nolint:errcheck // best-effort
 	}()
 
 	// Wait a bit for shutdown to start

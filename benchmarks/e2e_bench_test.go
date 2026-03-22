@@ -403,7 +403,7 @@ func startTestBroker(tb testing.TB) *TestServer {
 	// This would start an actual broker instance
 	// For now, returning a mock that needs implementation
 	server := &TestServer{}
-	// TODO: Implement actual broker startup
+	//nolint:godox // TODO: Implement actual broker startup
 	// server.Start()
 
 	return server
@@ -424,15 +424,15 @@ func createMQTTClient(tb testing.TB, addr, clientID string) paho.Client {
 
 // TestServer wraps broker for testing.
 type TestServer struct {
-	// TODO: Add actual broker instance
-	addr string
+	//nolint:godox // TODO: Add actual broker instance
+	addr string //nolint:unused // placeholder for future broker implementation
 }
 
 func (s *TestServer) Addr() string {
-	// TODO: Return actual address
+	//nolint:godox // TODO: Return actual address
 	return "localhost:1883"
 }
 
 func (s *TestServer) Stop() {
-	// TODO: Implement shutdown
+	//nolint:godox // TODO: Implement shutdown
 }

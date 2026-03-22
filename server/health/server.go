@@ -106,10 +106,10 @@ func (s *Server) Listen(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		s.logger.Info("Health check server shutdown initiated")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout) //nolint:contextcheck // intentionally creates new context for graceful shutdown
 		defer cancel()
 
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
+		if err := s.server.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // intentionally creates new context for graceful shutdown
 			s.logger.Error("Health check server shutdown error", "error", err)
 			return err
 		}
@@ -148,7 +148,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(HealthResponse{
+	json.NewEncoder(w).Encode(HealthResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 		Status: "healthy",
 	})
 }
@@ -181,7 +181,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.broker == nil {
 		checks["broker"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(ReadyResponse{
+		json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 			Status:  "not_ready",
 			Details: "broker not initialized",
 			Checks:  checks,
@@ -194,7 +194,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		checks["storage"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(ReadyResponse{
+		json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 			Status:  "not_ready",
 			Details: "storage not initialized",
 			Checks:  checks,
@@ -204,7 +204,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(); err != nil {
 		checks["storage"] = &CheckResult{Status: StatusDown, Details: err.Error()}
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(ReadyResponse{
+		json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 			Status:  "not_ready",
 			Details: "storage unavailable",
 			Checks:  checks,
@@ -219,7 +219,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		if nodeID == "" {
 			checks["cluster"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(ReadyResponse{
+			json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 				Status:  "not_ready",
 				Details: "cluster not initialized",
 				Checks:  checks,
@@ -241,7 +241,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(ReadyResponse{
+	json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 		Status: "ready",
 		Mode:   mode,
 		Checks: checks,
@@ -300,7 +300,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 		response.NodeID = "single-node"
 		response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		json.NewEncoder(w).Encode(response) //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 		return
 	}
 
@@ -311,5 +311,5 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(response) //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 }

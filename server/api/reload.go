@@ -20,7 +20,7 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	if s.reloadManager == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(reloadErrorResponse{
+		json.NewEncoder(w).Encode(reloadErrorResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 			Error: "reload not configured",
 		})
 		return
@@ -34,7 +34,7 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(reloadErrorResponse{
+		json.NewEncoder(w).Encode(reloadErrorResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 			Error:  err.Error(),
 			Result: result,
 		})
@@ -43,7 +43,7 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(result) //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
 }
 
 type reloadErrorResponse struct {

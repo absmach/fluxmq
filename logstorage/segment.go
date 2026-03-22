@@ -262,11 +262,11 @@ func (s *Segment) Append(batch *Batch) (uint64, error) {
 	// Update indexes
 	if s.index != nil {
 		if s.index.EntryCount() == 0 || s.index.ShouldIndex(n) {
-			s.index.Append(uint32(batch.BaseOffset-s.baseOffset), uint32(pos))
+			s.index.Append(uint32(batch.BaseOffset-s.baseOffset), uint32(pos)) //nolint:errcheck // index update; write succeeds independently
 		}
 	}
 	if s.timeIndex != nil && batch.MaxTimestamp > 0 {
-		s.timeIndex.Append(batch.MaxTimestamp, uint32(batch.BaseOffset-s.baseOffset))
+		s.timeIndex.Append(batch.MaxTimestamp, uint32(batch.BaseOffset-s.baseOffset)) //nolint:errcheck // time index update; write succeeds independently
 	}
 
 	return batch.BaseOffset, nil
@@ -562,7 +562,7 @@ func (s *Segment) RebuildIndex(indexInterval int) error {
 	for _, bp := range s.batchPositions {
 		relOffset := uint32(bp.offset - s.baseOffset)
 		if bytesScanned == 0 || bytesScanned >= int64(indexInterval) {
-			s.index.Append(relOffset, uint32(bp.position))
+			s.index.Append(relOffset, uint32(bp.position)) //nolint:errcheck // index rebuild; partial index is still usable
 			bytesScanned = 0
 		}
 		bytesScanned += int64(bp.size)

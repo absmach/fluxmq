@@ -23,8 +23,10 @@ type writeRequest struct {
 	dropPayloadSz int
 }
 
-const defaultControlWriteChanSize = 64
-const defaultCallbackQueueSize = 256
+const (
+	defaultControlWriteChanSize = 64
+	defaultCallbackQueueSize    = 256
+)
 
 var (
 	callbackQueueOnce sync.Once

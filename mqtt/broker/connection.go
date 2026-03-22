@@ -30,12 +30,12 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 	if ok {
 		if p3.ProtocolVersion != 3 && p3.ProtocolVersion != 4 {
 			broker.telemetry.stats.IncrementProtocolErrors()
-			sendV3ConnAck(conn, false, v3.ConnAckUnacceptableProtocol)
+			sendV3ConnAck(conn, false, v3.ConnAckUnacceptableProtocol) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return
 		}
 		handler := NewV3Handler(broker)
-		handler.HandleConnect(conn, p3)
+		handler.HandleConnect(conn, p3) //nolint:errcheck // handler manages connection lifecycle
 		return
 	}
 
@@ -43,12 +43,12 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 	if ok {
 		if p5.ProtocolVersion != 5 {
 			broker.telemetry.stats.IncrementProtocolErrors()
-			sendV5ConnAck(conn, false, v5.ConnAckUnsupportedProtocolVersion, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckUnsupportedProtocolVersion, nil) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return
 		}
 		handler := NewV5Handler(broker)
-		handler.HandleConnect(conn, p5)
+		handler.HandleConnect(conn, p5) //nolint:errcheck // handler manages connection lifecycle
 		return
 	}
 

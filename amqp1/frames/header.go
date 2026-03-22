@@ -16,7 +16,7 @@ const (
 )
 
 // ProtocolHeader is the 8-byte AMQP protocol header.
-// Format: "AMQP" + proto-id + major + minor + revision
+// Format: "AMQP" + proto-id + major + minor + revision.
 var (
 	AMQPHeader = [ProtoHeaderSize]byte{'A', 'M', 'Q', 'P', ProtoIDAMQP, 1, 0, 0}
 	SASLHeader = [ProtoHeaderSize]byte{'A', 'M', 'Q', 'P', ProtoIDSASL, 1, 0, 0}

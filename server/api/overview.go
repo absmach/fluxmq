@@ -6,8 +6,8 @@ package api
 import "net/http"
 
 type sessionSummary struct {
-	Connected int    `json:"connected"`
-	Total     int    `json:"total"`
+	Connected int `json:"connected"`
+	Total     int `json:"total"`
 }
 
 type overviewCluster struct {

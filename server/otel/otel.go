@@ -84,7 +84,7 @@ func initTracerProvider(ctx context.Context, cfg config.ServerConfig, res *resou
 	// Create OTLP trace exporter
 	exporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(cfg.MetricsAddr),
-		otlptracegrpc.WithInsecure(), // TODO: Add TLS support via config
+		otlptracegrpc.WithInsecure(), //nolint:godox // TODO: Add TLS support via config
 		otlptracegrpc.WithTimeout(30*time.Second),
 	)
 	if err != nil {
@@ -115,7 +115,7 @@ func initMeterProvider(ctx context.Context, cfg config.ServerConfig, res *resour
 	// Create OTLP metric exporter
 	exporter, err := otlpmetricgrpc.New(ctx,
 		otlpmetricgrpc.WithEndpoint(cfg.MetricsAddr),
-		otlpmetricgrpc.WithInsecure(), // TODO: Add TLS support via config
+		otlpmetricgrpc.WithInsecure(), //nolint:godox // TODO: Add TLS support via config
 		otlpmetricgrpc.WithTimeout(30*time.Second),
 	)
 	if err != nil {

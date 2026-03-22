@@ -92,7 +92,7 @@ func mqttPubSub(ctx context.Context) {
 		default:
 		}
 	}); tok.WaitTimeout(5*time.Second) && tok.Error() != nil {
-		log.Fatalf("MQTT subscribe failed: %v", tok.Error())
+		log.Fatalf("MQTT subscribe failed: %v", tok.Error()) //nolint:gocritic // exitAfterDefer: intentional in example
 	}
 	log.Printf("  [MQTT sub] Subscribed to %s", topic)
 
@@ -144,7 +144,7 @@ func mqttToAMQP091Queue(ctx context.Context) {
 
 	ch, err := conn091.Channel()
 	if err != nil {
-		log.Fatalf("AMQP 0.9.1 channel open failed: %v", err)
+		log.Fatalf("AMQP 0.9.1 channel open failed: %v", err) //nolint:gocritic // exitAfterDefer: intentional in example
 	}
 	defer ch.Close()
 
@@ -247,7 +247,7 @@ func amqp091Stream(ctx context.Context) {
 
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Fatalf("AMQP 0.9.1 channel open failed: %v", err)
+		log.Fatalf("AMQP 0.9.1 channel open failed: %v", err) //nolint:gocritic // exitAfterDefer: intentional in example
 	}
 	defer ch.Close()
 

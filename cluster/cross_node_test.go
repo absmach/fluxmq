@@ -31,7 +31,7 @@ func TestCrossNode_QoS0_PublishSubscribe(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	subscriber := testutil.NewTestMQTTClient(t, node0, "qos0-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	require.NoError(t, subscriber.Subscribe("sensor/temperature", 0))
 	time.Sleep(500 * time.Millisecond) // Allow subscription propagation
@@ -40,7 +40,7 @@ func TestCrossNode_QoS0_PublishSubscribe(t *testing.T) {
 	node2 := cluster.GetNodeByIndex(2)
 	publisher := testutil.NewTestMQTTClient(t, node2, "qos0-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish message
 	payload := []byte("22.5")
@@ -70,7 +70,7 @@ func TestCrossNode_QoS1_PublishSubscribe(t *testing.T) {
 	node1 := cluster.GetNodeByIndex(1)
 	subscriber := testutil.NewTestMQTTClient(t, node1, "qos1-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	require.NoError(t, subscriber.Subscribe("sensor/humidity", 1))
 	time.Sleep(500 * time.Millisecond)
@@ -79,7 +79,7 @@ func TestCrossNode_QoS1_PublishSubscribe(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	publisher := testutil.NewTestMQTTClient(t, node0, "qos1-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish with QoS 1
 	payload := []byte("65.3")
@@ -109,7 +109,7 @@ func TestCrossNode_QoS2_PublishSubscribe(t *testing.T) {
 	node2 := cluster.GetNodeByIndex(2)
 	subscriber := testutil.NewTestMQTTClient(t, node2, "qos2-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	require.NoError(t, subscriber.Subscribe("alerts/critical", 2))
 	time.Sleep(500 * time.Millisecond)
@@ -118,7 +118,7 @@ func TestCrossNode_QoS2_PublishSubscribe(t *testing.T) {
 	node1 := cluster.GetNodeByIndex(1)
 	publisher := testutil.NewTestMQTTClient(t, node1, "qos2-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish with QoS 2
 	payload := []byte("fire detected")
@@ -152,11 +152,11 @@ func TestCrossNode_StreamReplayFromFirstOffsetAfterLateConsumer(t *testing.T) {
 
 	publisher := testutil.NewTestMQTTClient(t, pubNode, "stream-pub-late")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	consumer := testutil.NewTestMQTTClient(t, subNode, "stream-sub-late")
 	require.NoError(t, consumer.Connect(true))
-	defer consumer.Disconnect()
+	defer consumer.Disconnect() //nolint:errcheck // test cleanup
 
 	pubQM := pubNode.Broker.GetQueueManager()
 	subQM := subNode.Broker.GetQueueManager()
@@ -231,17 +231,17 @@ func TestCrossNode_MultipleSubscribers(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	sub1 := testutil.NewTestMQTTClient(t, node0, "multi-sub-1")
 	require.NoError(t, sub1.Connect(true))
-	defer sub1.Disconnect()
+	defer sub1.Disconnect() //nolint:errcheck // test cleanup
 
 	node1 := cluster.GetNodeByIndex(1)
 	sub2 := testutil.NewTestMQTTClient(t, node1, "multi-sub-2")
 	require.NoError(t, sub2.Connect(true))
-	defer sub2.Disconnect()
+	defer sub2.Disconnect() //nolint:errcheck // test cleanup
 
 	node2 := cluster.GetNodeByIndex(2)
 	sub3 := testutil.NewTestMQTTClient(t, node2, "multi-sub-3")
 	require.NoError(t, sub3.Connect(true))
-	defer sub3.Disconnect()
+	defer sub3.Disconnect() //nolint:errcheck // test cleanup
 
 	// All subscribe to same topic
 	topic := "broadcast/message"
@@ -253,7 +253,7 @@ func TestCrossNode_MultipleSubscribers(t *testing.T) {
 	// Publisher on node-0
 	publisher := testutil.NewTestMQTTClient(t, node0, "multi-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	time.Sleep(500 * time.Millisecond) // Let publisher connection settle
 
@@ -321,7 +321,7 @@ func TestCrossNode_WildcardSubscriptions(t *testing.T) {
 			node1 := cluster.GetNodeByIndex(1)
 			subscriber := testutil.NewTestMQTTClient(t, node1, "wildcard-sub-"+tt.name)
 			require.NoError(t, subscriber.Connect(true))
-			defer subscriber.Disconnect()
+			defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 			require.NoError(t, subscriber.Subscribe(tt.subscription, 0))
 			time.Sleep(500 * time.Millisecond)
@@ -330,7 +330,7 @@ func TestCrossNode_WildcardSubscriptions(t *testing.T) {
 			node2 := cluster.GetNodeByIndex(2)
 			publisher := testutil.NewTestMQTTClient(t, node2, "wildcard-pub-"+tt.name)
 			require.NoError(t, publisher.Connect(true))
-			defer publisher.Disconnect()
+			defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 			// Publish to all topics
 			for _, topic := range tt.pubTopics {
@@ -378,7 +378,7 @@ func TestCrossNode_SubscriptionPropagation(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	subscriber := testutil.NewTestMQTTClient(t, node0, "prop-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	topic := "propagation/test"
 	require.NoError(t, subscriber.Subscribe(topic, 0))
@@ -403,7 +403,7 @@ func TestCrossNode_SubscriptionPropagation(t *testing.T) {
 		assert.Equal(t, topic, msg.Topic)
 		assert.Equal(t, payload, msg.Payload)
 
-		publisher.Disconnect()
+		publisher.Disconnect() //nolint:errcheck // test cleanup
 	}
 }
 
@@ -426,7 +426,7 @@ func TestCrossNode_UnsubscribePropagation(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	subscriber := testutil.NewTestMQTTClient(t, node0, "unsub-test")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	topic := "unsub/test"
 	require.NoError(t, subscriber.Subscribe(topic, 0))
@@ -436,7 +436,7 @@ func TestCrossNode_UnsubscribePropagation(t *testing.T) {
 	node1 := cluster.GetNodeByIndex(1)
 	publisher := testutil.NewTestMQTTClient(t, node1, "unsub-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish first message - should be received
 	require.NoError(t, publisher.Publish(topic, 0, []byte("before unsub"), false))
@@ -469,7 +469,7 @@ func TestCrossNode_RetainedMessages(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	publisher := testutil.NewTestMQTTClient(t, node0, "retained-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	topic := "status/server"
 	payload := []byte("online")
@@ -480,7 +480,7 @@ func TestCrossNode_RetainedMessages(t *testing.T) {
 	node2 := cluster.GetNodeByIndex(2)
 	subscriber := testutil.NewTestMQTTClient(t, node2, "retained-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	require.NoError(t, subscriber.Subscribe(topic, 0))
 
@@ -511,7 +511,7 @@ func TestCrossNode_HighThroughput(t *testing.T) {
 	node2 := cluster.GetNodeByIndex(2)
 	subscriber := testutil.NewTestMQTTClient(t, node2, "throughput-sub")
 	require.NoError(t, subscriber.Connect(true))
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	topic := "throughput/test"
 	require.NoError(t, subscriber.Subscribe(topic, 0))
@@ -521,7 +521,7 @@ func TestCrossNode_HighThroughput(t *testing.T) {
 	node0 := cluster.GetNodeByIndex(0)
 	publisher := testutil.NewTestMQTTClient(t, node0, "throughput-pub")
 	require.NoError(t, publisher.Connect(true))
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish 100 messages rapidly
 	messageCount := 100
@@ -569,7 +569,7 @@ func BenchmarkCrossNode_MessageLatency(b *testing.B) {
 	if err := subscriber.Connect(true); err != nil {
 		b.Fatalf("failed to connect subscriber: %v", err)
 	}
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	if err := subscriber.Subscribe("bench/latency", 0); err != nil {
 		b.Fatalf("failed to subscribe: %v", err)
@@ -582,7 +582,7 @@ func BenchmarkCrossNode_MessageLatency(b *testing.B) {
 	if err := publisher.Connect(true); err != nil {
 		b.Fatalf("failed to connect publisher: %v", err)
 	}
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("benchmark message")
 
@@ -625,7 +625,7 @@ func BenchmarkCrossNode_Throughput(b *testing.B) {
 	if err := subscriber.Connect(true); err != nil {
 		b.Fatalf("failed to connect subscriber: %v", err)
 	}
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	if err := subscriber.Subscribe("bench/throughput", 0); err != nil {
 		b.Fatalf("failed to subscribe: %v", err)
@@ -638,7 +638,7 @@ func BenchmarkCrossNode_Throughput(b *testing.B) {
 	if err := publisher.Connect(true); err != nil {
 		b.Fatalf("failed to connect publisher: %v", err)
 	}
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("throughput benchmark message with some payload data")
 

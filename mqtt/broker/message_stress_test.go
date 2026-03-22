@@ -36,7 +36,7 @@ func TestStress_HighThroughputPublish(t *testing.T) {
 	const numSubscribers = 100
 	for i := 0; i < numSubscribers; i++ {
 		sub := createBenchSession(t, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "stress/test", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "stress/test", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	payload := make([]byte, 1024)
@@ -68,7 +68,7 @@ func TestStress_HighThroughputPublish(t *testing.T) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg)
+		broker.Publish(msg) //nolint:errcheck // best-effort
 		messageCount.Add(1)
 	}
 
@@ -105,7 +105,7 @@ func TestStress_ConcurrentPublishers(t *testing.T) {
 	const numSubscribers = 50
 	for i := 0; i < numSubscribers; i++ {
 		sub := createBenchSession(t, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "stress/concurrent", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "stress/concurrent", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	const numPublishers = 10
@@ -173,7 +173,7 @@ func TestStress_MemoryPressure(t *testing.T) {
 	const numSubscribers = 20
 	for i := 0; i < numSubscribers; i++ {
 		sub := createBenchSession(t, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "stress/memory", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "stress/memory", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	// Test with various large message sizes
@@ -236,7 +236,7 @@ func TestStress_SustainedLoad(t *testing.T) {
 	for _, topic := range topics {
 		for i := 0; i < 25; i++ {
 			sub := createBenchSession(t, broker, fmt.Sprintf("sub-%s-%d", topic, i))
-			broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+			broker.subscribe(sub, topic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 		}
 	}
 
@@ -393,7 +393,7 @@ func TestStress_FanOutExtreme(t *testing.T) {
 
 	for i := 0; i < numSubscribers; i++ {
 		sub := createBenchSession(t, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "fanout/extreme", 0, storage.SubscribeOptions{})
+		broker.subscribe(sub, "fanout/extreme", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 		if (i+1)%1000 == 0 {
 			t.Logf("Created %d subscribers", i+1)
@@ -480,16 +480,16 @@ func TestStress_RapidSubscribeUnsubscribe(t *testing.T) {
 				sub := createBenchSession(t, broker, clientID)
 
 				topic := fmt.Sprintf("churn/topic/%d", workerID%5)
-				broker.subscribe(sub, topic, 0, storage.SubscribeOptions{})
+				broker.subscribe(sub, topic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 				subCount.Add(1)
 
 				// Keep subscription alive briefly
 				time.Sleep(time.Millisecond * 100)
 
-				broker.Unsubscribe(clientID, topic)
+				broker.Unsubscribe(clientID, topic) //nolint:errcheck // test cleanup
 				unsubCount.Add(1)
 
-				broker.DestroySession(clientID)
+				broker.DestroySession(clientID) //nolint:errcheck // test cleanup
 
 				time.Sleep(time.Millisecond * 10)
 			}
@@ -514,7 +514,7 @@ func TestStress_RapidSubscribeUnsubscribe(t *testing.T) {
 				QoS:   0,
 			}
 			msg.SetPayloadFromBytes(payload)
-			broker.Publish(msg)
+			broker.Publish(msg) //nolint:errcheck // best-effort
 			pubCount.Add(1)
 		}
 	}()

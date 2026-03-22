@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	// MQTT-specific prefixes
+	// MQTT-specific prefixes.
 	willPrefix     = "/mqtt/wills/"
 	retainedPrefix = "/mqtt/retained/"
 
-	// Protocol-agnostic prefixes
+	// Protocol-agnostic prefixes.
 	subscriptionsPrefix  = "/subscriptions/"
 	sessionsPrefix       = "/sessions/"
 	queueConsumersPrefix = "/queue-consumers/"
@@ -430,7 +430,7 @@ func (c *EtcdCluster) Stop() error {
 
 	// Stop gRPC transport
 	if c.transport != nil {
-		c.transport.Stop()
+		c.transport.Stop() //nolint:errcheck // best-effort shutdown; transport is being discarded
 	}
 
 	// Revoke session (releases leadership)
@@ -531,7 +531,7 @@ func (c *EtcdCluster) IsLeader() bool {
 // WaitForLeader blocks until this node becomes leader.
 func (c *EtcdCluster) WaitForLeader(ctx context.Context) error {
 	for {
-		if c.IsLeader() {
+		if c.IsLeader() { //nolint:contextcheck // context propagation would require API changes across the call chain
 			return nil
 		}
 
@@ -726,8 +726,8 @@ func (c *EtcdCluster) refreshSessionLeaseLocked(ctx context.Context) error {
 		c.leaseCancel = nil
 	}
 
-	keepAliveCtx, cancel := context.WithCancel(context.Background())
-	ch, err := c.client.KeepAlive(keepAliveCtx, leaseResp.ID)
+	keepAliveCtx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // intentionally creates new context for lease keep-alive lifecycle independent of caller
+	ch, err := c.client.KeepAlive(keepAliveCtx, leaseResp.ID)        //nolint:contextcheck // intentionally creates new context for lease keep-alive lifecycle independent of caller
 	if err != nil {
 		cancel()
 		return fmt.Errorf("failed to keep lease alive: %w", err)

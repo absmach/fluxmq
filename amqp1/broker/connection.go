@@ -85,7 +85,7 @@ func (c *Connection) run() error {
 	}
 
 	if protoID != frames.ProtoIDAMQP {
-		c.conn.WriteProtocolHeader(frames.ProtoIDAMQP)
+		c.conn.WriteProtocolHeader(frames.ProtoIDAMQP) //nolint:errcheck // best-effort protocol redirect before returning error
 		return fmt.Errorf("unexpected protocol ID: 0x%02x", protoID)
 	}
 
@@ -151,7 +151,7 @@ func (c *Connection) handleSASL() error {
 		if err != nil {
 			outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 			body, _ := outcome.Encode()
-			c.conn.WriteSASLFrame(body)
+			c.conn.WriteSASLFrame(body) //nolint:errcheck // best-effort auth failure notification before returning error
 			return fmt.Errorf("PLAIN auth failed: %w", err)
 		}
 		if auth := c.broker.auth; auth != nil {
@@ -163,7 +163,7 @@ func (c *Connection) handleSASL() error {
 				}
 				outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 				body, _ := outcome.Encode()
-				c.conn.WriteSASLFrame(body)
+				c.conn.WriteSASLFrame(body) //nolint:errcheck // best-effort auth failure notification before returning error
 				return fmt.Errorf("PLAIN auth rejected for user %q", username)
 			}
 		}
@@ -172,7 +172,7 @@ func (c *Connection) handleSASL() error {
 	default:
 		outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 		body, _ := outcome.Encode()
-		c.conn.WriteSASLFrame(body)
+		c.conn.WriteSASLFrame(body) //nolint:errcheck // best-effort auth failure notification before returning error
 		return fmt.Errorf("unsupported SASL mechanism: %s", init.Mechanism)
 	}
 

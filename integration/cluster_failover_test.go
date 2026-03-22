@@ -86,7 +86,7 @@ func TestCluster_LeaderFailover_PubSubContinues(t *testing.T) {
 	subscriber := testutil.NewTestMQTTClient(t, subNode, "failover-sub")
 	err := subscriber.Connect(true)
 	require.NoError(t, err)
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	err = subscriber.Subscribe("failover/topic", 0)
 	require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestCluster_LeaderFailover_PubSubContinues(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, pubNode, "failover-pub")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("message after leader failover")
 	err = publisher.Publish("failover/topic", 0, payload, false)
@@ -141,7 +141,7 @@ func TestCluster_NonLeaderCrash_TrafficContinues(t *testing.T) {
 	subscriber := testutil.NewTestMQTTClient(t, followerA, "crash-sub")
 	err := subscriber.Connect(true)
 	require.NoError(t, err)
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	err = subscriber.Subscribe("crash/topic", 0)
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestCluster_NonLeaderCrash_TrafficContinues(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, leader, "crash-pub")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Kill follower B — neither client is connected to it.
 	t.Logf("Killing non-leader: %s", followerB.ID)
@@ -207,7 +207,7 @@ func TestCluster_SessionTakeover_AfterNodeCrash(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node1, "crash-session-pub")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("post-crash message")
 	err = publisher.Publish("crash/session", 0, payload, false)
@@ -218,7 +218,7 @@ func TestCluster_SessionTakeover_AfterNodeCrash(t *testing.T) {
 	assert.Equal(t, "crash/session", msg.Topic)
 	assert.Equal(t, payload, msg.Payload)
 
-	client.Disconnect()
+	client.Disconnect() //nolint:errcheck // test cleanup
 }
 
 func TestCluster_CrossNodeDelivery_AfterNodeKill(t *testing.T) {
@@ -231,7 +231,7 @@ func TestCluster_CrossNodeDelivery_AfterNodeKill(t *testing.T) {
 	subscriber := testutil.NewTestMQTTClient(t, node0, "xnode-sub")
 	err := subscriber.Connect(true)
 	require.NoError(t, err)
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	err = subscriber.Subscribe("xnode/topic", 0)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestCluster_CrossNodeDelivery_AfterNodeKill(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node1, "xnode-pub")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	payload := []byte("cross-node after kill")
 	err = publisher.Publish("xnode/topic", 0, payload, false)

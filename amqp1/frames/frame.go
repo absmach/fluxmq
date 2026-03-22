@@ -10,20 +10,20 @@ import (
 )
 
 const (
-	// Frame types
+	// Frame types.
 	FrameTypeAMQP byte = 0x00
 	FrameTypeSASL byte = 0x01
 
-	// Minimum frame size per AMQP 1.0 spec
+	// Minimum frame size per AMQP 1.0 spec.
 	MinFrameSize uint32 = 512
 
-	// Default max frame size
+	// Default max frame size.
 	DefaultMaxFrameSize uint32 = 65536
 
-	// Frame header size: 4 (size) + 1 (doff) + 1 (type) + 2 (channel)
+	// Frame header size: 4 (size) + 1 (doff) + 1 (type) + 2 (channel).
 	HeaderSize = 8
 
-	// Minimum data offset (in 4-byte words) = 2 (8 bytes header)
+	// Minimum data offset (in 4-byte words) = 2 (8 bytes header).
 	MinDOFF = 2
 )
 

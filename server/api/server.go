@@ -71,7 +71,7 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck // HTTP response write; client disconnect is non-fatal
 	})
 
 	h2s := &http2.Server{}
@@ -114,9 +114,9 @@ func (s *Server) Listen(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		s.logger.Info("Shutting down API server")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout) //nolint:contextcheck // intentionally creates new context for graceful shutdown
 		defer cancel()
-		return s.httpServer.Shutdown(shutdownCtx)
+		return s.httpServer.Shutdown(shutdownCtx) //nolint:contextcheck // intentionally creates new context for graceful shutdown
 	case err := <-errCh:
 		return fmt.Errorf("API server error: %w", err)
 	}

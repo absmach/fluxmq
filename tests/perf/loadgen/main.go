@@ -24,6 +24,13 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+const (
+	patternFanIn  = "fanin"
+	patternFanOut = "fanout"
+	protoMQTT     = "mqtt"
+	protoAMQP     = "amqp"
+)
+
 type runConfig struct {
 	Scenario             string
 	PayloadLabel         string
@@ -374,7 +381,7 @@ func normalizeTopicScenarioConfig(cfg topicScenarioConfig, path string) (topicSc
 	}
 
 	cfg.Pattern = strings.ToLower(strings.TrimSpace(cfg.Pattern))
-	if cfg.Pattern != "fanin" && cfg.Pattern != "fanout" {
+	if cfg.Pattern != patternFanIn && cfg.Pattern != patternFanOut {
 		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid pattern %q (use fanin|fanout)", cfg.Name, cfg.Pattern)
 	}
 
@@ -400,10 +407,10 @@ func normalizeTopicScenarioConfig(cfg topicScenarioConfig, path string) (topicSc
 	if pubProto == "" || subProto == "" {
 		return topicScenarioConfig{}, fmt.Errorf("config %q must define flow or both publisher_protocol/subscriber_protocol", cfg.Name)
 	}
-	if pubProto != "mqtt" && pubProto != "amqp" {
+	if pubProto != protoMQTT && pubProto != protoAMQP {
 		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid publisher protocol %q (use mqtt|amqp)", cfg.Name, pubProto)
 	}
-	if subProto != "mqtt" && subProto != "amqp" {
+	if subProto != protoMQTT && subProto != protoAMQP {
 		return topicScenarioConfig{}, fmt.Errorf("config %q has invalid subscriber protocol %q (use mqtt|amqp)", cfg.Name, subProto)
 	}
 
@@ -423,7 +430,7 @@ func normalizeTopicScenarioConfig(cfg topicScenarioConfig, path string) (topicSc
 		cfg.WildcardSubscribers = cfg.Subscribers
 	}
 
-	if cfg.Pattern == "fanin" {
+	if cfg.Pattern == patternFanIn {
 		cfg.TopicCount = 1
 	} else if cfg.TopicCount <= 0 {
 		cfg.TopicCount = maxInt(4, minInt(64, cfg.Subscribers))
@@ -538,7 +545,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	defer stopReport()
 
 	switch sc.resolvedSubscriberProto {
-	case "mqtt":
+	case protoMQTT:
 		subs, err := connectMQTTSubscribers(ctx, mqttSubscriberEndpoints, sc.Name, runID, sc.Subscribers)
 		if err != nil {
 			return res, err
@@ -561,7 +568,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 				return res, fmt.Errorf("subscriber %d failed to subscribe %q: %w", i, filter, err)
 			}
 		}
-	case "amqp":
+	case protoAMQP:
 		subs, err := connectAMQPTopicSubscribersWithFilters(ctx, amqpSubscriberAddrs, sc.Name, runID, filters, func(subID int, msg *msgclient.Message) {
 			if isCountablePayload(msg.Payload) {
 				msgID := extractMsgID(msg.Payload)
@@ -584,7 +591,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	time.Sleep(500 * time.Millisecond)
 
 	topicFor := func(pubIdx, msgIdx int) string {
-		if sc.Pattern == "fanin" {
+		if sc.Pattern == patternFanIn {
 			return topicSet[0]
 		}
 		return topicSet[(pubIdx+msgIdx)%len(topicSet)]
@@ -599,7 +606,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 
 	var published int64
 	switch sc.resolvedPublisherProto {
-	case "mqtt":
+	case protoMQTT:
 		published = runMQTTPublishers(ctx, mqttPublishParams{
 			Endpoints:            mqttPublisherEndpoints,
 			Scenario:             sc.Name,
@@ -616,7 +623,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 			PublishedCounter:     &sent,
 			QoS:                  sc.resolvedQoS,
 		})
-	case "amqp":
+	case protoAMQP:
 		published = runAMQPTopicPublishers(ctx, amqpTopicPublishParams{
 			Addrs:                amqpPublisherAddrs,
 			Scenario:             sc.Name,
@@ -650,7 +657,7 @@ func runConfiguredTopicScenario(ctx context.Context, cfg runConfig, sc topicScen
 	res.DeliveryRatio = ratio(res.Received, res.Expected)
 	res.Pass = res.DeliveryRatio >= cfg.MinRatio
 	res.Notes = fmt.Sprintf("config pattern=%s flow=%s topics=%d wildcard_subscribers=%d qos=%d publish_errors=%d", sc.Pattern, sc.Flow, len(topicSet), sc.WildcardSubscribers, sc.resolvedQoS, res.PublishErrors)
-	if sc.resolvedPublisherProto != "mqtt" && sc.resolvedSubscriberProto != "mqtt" {
+	if sc.resolvedPublisherProto != protoMQTT && sc.resolvedSubscriberProto != protoMQTT {
 		res.Notes = res.Notes + "; qos applies to MQTT only"
 	}
 	if !res.Pass {
@@ -675,7 +682,7 @@ func resolvedPublishJitter(flagValue, cfgValue time.Duration) time.Duration {
 }
 
 func buildConfiguredTopicSet(pattern, baseTopic string, topicCount int) []string {
-	if pattern == "fanin" {
+	if pattern == patternFanIn {
 		return []string{baseTopic}
 	}
 	out := make([]string, 0, topicCount)
@@ -688,7 +695,7 @@ func buildConfiguredTopicSet(pattern, baseTopic string, topicCount int) []string
 func buildConfiguredSubscriberFilters(sc topicScenarioConfig, baseTopic string, topicSet []string, seed int64) []string {
 	filters := make([]string, sc.Subscribers)
 	for i := 0; i < sc.Subscribers; i++ {
-		if sc.Pattern == "fanin" {
+		if sc.Pattern == patternFanIn {
 			filters[i] = topicSet[0]
 		} else {
 			filters[i] = topicSet[i%len(topicSet)]
@@ -701,7 +708,7 @@ func buildConfiguredSubscriberFilters(sc topicScenarioConfig, baseTopic string, 
 
 	patterns := sc.WildcardPatterns
 	if len(patterns) == 0 {
-		if sc.Pattern == "fanin" {
+		if sc.Pattern == patternFanIn {
 			patterns = []string{
 				"{topic}",
 				"{base}/#",
@@ -1132,7 +1139,7 @@ func appendJSONLine(path string, line []byte) error {
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("failed to write json line: %w", err)
 	}
-	if _, err := f.Write([]byte("\n")); err != nil {
+	if _, err := f.WriteString("\n"); err != nil {
 		return fmt.Errorf("failed to write newline: %w", err)
 	}
 	return nil

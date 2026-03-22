@@ -10,7 +10,7 @@ import (
 	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
-// AMQP error descriptor
+// AMQP error descriptor.
 const DescriptorError uint64 = 0x1D
 
 // Standard error condition symbols.
@@ -29,18 +29,18 @@ const (
 	ErrIllegalState          types.Symbol = "amqp:illegal-state"
 	ErrFrameSizeTooSmall     types.Symbol = "amqp:frame-size-too-small"
 
-	// Connection errors
+	// Connection errors.
 	ErrConnectionForced   types.Symbol = "amqp:connection:forced"
 	ErrFramingError       types.Symbol = "amqp:connection:framing-error"
 	ErrConnectionRedirect types.Symbol = "amqp:connection:redirect"
 
-	// Session errors
+	// Session errors.
 	ErrWindowViolation  types.Symbol = "amqp:session:window-violation"
 	ErrErrantLink       types.Symbol = "amqp:session:errant-link"
 	ErrHandleInUse      types.Symbol = "amqp:session:handle-in-use"
 	ErrUnattachedHandle types.Symbol = "amqp:session:unattached-handle"
 
-	// Link errors
+	// Link errors.
 	ErrDetachForced          types.Symbol = "amqp:link:detach-forced"
 	ErrTransferLimitExceeded types.Symbol = "amqp:link:transfer-limit-exceeded"
 	ErrMessageSizeExceeded   types.Symbol = "amqp:link:message-size-exceeded"

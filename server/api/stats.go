@@ -27,11 +27,11 @@ type errorStats struct {
 
 // mqttStats holds MQTT-specific counters not present in other protocols.
 type mqttStats struct {
-	Connections      connectionStats      `json:"connections"`
-	Messages         mqttMessageStats     `json:"messages"`
-	Bytes            byteStats            `json:"bytes"`
-	Subscriptions    mqttSubscriptionStats `json:"subscriptions"`
-	Errors           mqttErrorStats       `json:"errors"`
+	Connections   connectionStats       `json:"connections"`
+	Messages      mqttMessageStats      `json:"messages"`
+	Bytes         byteStats             `json:"bytes"`
+	Subscriptions mqttSubscriptionStats `json:"subscriptions"`
+	Errors        mqttErrorStats        `json:"errors"`
 }
 
 type mqttMessageStats struct {

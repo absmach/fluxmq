@@ -37,6 +37,7 @@ func (m *mockSubscribeQueueManager) Stop() error                     { return ni
 func (m *mockSubscribeQueueManager) Publish(ctx context.Context, publish qtypes.PublishRequest) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error {
 	m.subscribeCalls = append(m.subscribeCalls, queueSubscribeCall{
 		queueName: queueName,
@@ -47,6 +48,7 @@ func (m *mockSubscribeQueueManager) Subscribe(ctx context.Context, queueName, pa
 	})
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *qtypes.CursorOption) error {
 	m.subscribeWithCalls = append(m.subscribeWithCalls, struct {
 		queueSubscribeCall
@@ -63,27 +65,35 @@ func (m *mockSubscribeQueueManager) SubscribeWithCursor(ctx context.Context, que
 	})
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) CreateQueue(ctx context.Context, config qtypes.QueueConfig) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) DeleteQueue(ctx context.Context, queueName string) error {
 	return nil
 }
+
 func (m *mockSubscribeQueueManager) GetQueue(ctx context.Context, queueName string) (*qtypes.QueueConfig, error) {
 	if m.queueCfg == nil || m.queueCfg.Name != queueName {
 		return nil, storage.ErrNotFound
@@ -91,6 +101,7 @@ func (m *mockSubscribeQueueManager) GetQueue(ctx context.Context, queueName stri
 	cfg := *m.queueCfg
 	return &cfg, nil
 }
+
 func (m *mockSubscribeQueueManager) ListQueues(ctx context.Context) ([]qtypes.QueueConfig, error) {
 	return nil, nil
 }

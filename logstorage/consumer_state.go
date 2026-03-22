@@ -16,7 +16,7 @@ import (
 // ConsumerState implements JetStream-style consumer state with:
 // - Monotonic AckFloor (highest contiguous acked offset)
 // - Sharded PEL for distributed redelivery
-// - Batched operations for performance
+// - Batched operations for performance.
 type ConsumerState struct {
 	mu sync.RWMutex
 
@@ -166,7 +166,7 @@ func NewConsumerState(baseDir, groupID string, config ConsumerStateConfig) (*Con
 	return cs, nil
 }
 
-// State snapshot file paths
+// State snapshot file paths.
 func (cs *ConsumerState) statePath() string {
 	return filepath.Join(cs.dir, "state.json")
 }
@@ -457,7 +457,7 @@ func (cs *ConsumerState) writeOp(op *Operation) error {
 
 	// Check if compaction needed
 	if cs.opCount >= cs.config.CompactThreshold {
-		go cs.Compact()
+		go cs.Compact() //nolint:errcheck // background compaction; errors are non-fatal
 	}
 
 	return nil
@@ -876,7 +876,7 @@ func (cs *ConsumerState) Close() error {
 	defer cs.mu.Unlock()
 
 	if cs.dirty {
-		cs.compactLocked()
+		cs.compactLocked() //nolint:errcheck // best-effort flush on close; file is being closed anyway
 	}
 
 	return cs.opLog.Close()

@@ -81,8 +81,8 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 		mux:    mux.NewRouter(),
 	}
 
-	s.mux.Handle("/mqtt/publish/{topic}", mux.HandlerFunc(s.handlePublish))
-	s.mux.Handle("/health", mux.HandlerFunc(s.handleHealth))
+	s.mux.Handle("/mqtt/publish/{topic}", mux.HandlerFunc(s.handlePublish)) //nolint:errcheck // route registration; only fails on duplicate paths which would be a programming error
+	s.mux.Handle("/health", mux.HandlerFunc(s.handleHealth))                //nolint:errcheck // route registration; only fails on duplicate paths which would be a programming error
 	s.mux.DefaultHandleFunc(s.handlePublish)
 
 	return s

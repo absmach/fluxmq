@@ -402,7 +402,6 @@ func TestConsumerQueueMatches(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := ch.consumerQueueMatches(&tc.cons, tc.topic)
 			if got != tc.want {
@@ -489,10 +488,10 @@ func TestHandleBasicConsumeInfersStreamFromQueueManager(t *testing.T) {
 
 func TestExtractMessageTTL(t *testing.T) {
 	tests := []struct {
-		name     string
-		args     map[string]interface{}
-		wantTTL  time.Duration
-		wantOK   bool
+		name    string
+		args    map[string]interface{}
+		wantTTL time.Duration
+		wantOK  bool
 	}{
 		{"nil args", nil, 0, false},
 		{"empty args", map[string]interface{}{}, 0, false},

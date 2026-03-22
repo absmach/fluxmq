@@ -55,7 +55,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 		if err == nil {
 			// Webhook: message delivered (QoS 0)
 			if b.telemetry.webhooks != nil {
-				b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{
+				b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck // fire-and-forget webhook notification
 					ClientID:     s.ID,
 					MessageTopic: msg.Topic,
 					QoS:          msg.QoS,
@@ -119,7 +119,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 
 	// Webhook: message delivered (QoS 1/2)
 	if b.telemetry.webhooks != nil {
-		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{
+		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck // fire-and-forget webhook notification
 			ClientID:     s.ID,
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
@@ -299,7 +299,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *clus
 	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	_, err := b.DeliverToSession(s, storeMsg)
+	_, err := b.DeliverToSession(s, storeMsg) //nolint:contextcheck // context propagation would require API changes across the call chain
 	// Note: DeliverToSession will release the message for QoS 0
 	// For QoS 1/2, Inflight storage takes ownership
 	return err
@@ -319,6 +319,6 @@ func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg 
 		return fmt.Errorf("invalid message type")
 	}
 
-	_, err := b.DeliverToSession(s, queueMsg)
+	_, err := b.DeliverToSession(s, queueMsg) //nolint:contextcheck // context propagation would require API changes across the call chain
 	return err
 }

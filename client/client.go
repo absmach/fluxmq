@@ -450,7 +450,7 @@ func (c *Client) SubscribeToQueue(ctx context.Context, queue, group string, hand
 	}
 
 	if protocol == ProtocolMQTT {
-		if err := c.mqtt.SubscribeToQueue(ctx, queue, group, func(msg *mqtt.QueueMessage) {
+		if err := c.mqtt.SubscribeToQueue(ctx, queue, group, func(msg *mqtt.QueueMessage) { //nolint:contextcheck // context propagation would require API changes across the call chain
 			handler(mqttQueueToMessage(msg, queue))
 		}); err != nil {
 			return fmt.Errorf("%w: %w", ErrQueueSubscribeFailed, err)

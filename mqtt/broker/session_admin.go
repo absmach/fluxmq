@@ -80,10 +80,10 @@ func (b *Broker) ListSessions(filter SessionListFilter) ([]SessionSnapshot, stri
 			continue
 		}
 		if state != "" {
-			if state == "connected" && !entry.connected {
+			if state == sessionStateConnected && !entry.connected {
 				continue
 			}
-			if state == "disconnected" && entry.connected {
+			if state == sessionStateDisconnected && entry.connected {
 				continue
 			}
 		}
@@ -283,10 +283,10 @@ func normalizeSessionState(state string) string {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "", "all":
 		return ""
-	case "connected":
-		return "connected"
-	case "disconnected":
-		return "disconnected"
+	case sessionStateConnected:
+		return sessionStateConnected
+	case sessionStateDisconnected:
+		return sessionStateDisconnected
 	default:
 		return ""
 	}
@@ -294,9 +294,9 @@ func normalizeSessionState(state string) string {
 
 func disconnectedState(connected bool) string {
 	if connected {
-		return "connected"
+		return sessionStateConnected
 	}
-	return "disconnected"
+	return sessionStateDisconnected
 }
 
 func liveSubscriptions(s *session.Session) []SessionSubscription {

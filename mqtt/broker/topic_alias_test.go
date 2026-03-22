@@ -253,7 +253,7 @@ func TestTopicAlias_SessionIsolation(t *testing.T) {
 			TopicAlias: &alias,
 		},
 	}
-	handler.HandlePublish(s1, pub1)
+	handler.HandlePublish(s1, pub1) //nolint:errcheck // best-effort
 
 	// Register alias 1 in session 2 with different topic
 	pub2 := &v5.Publish{
@@ -264,7 +264,7 @@ func TestTopicAlias_SessionIsolation(t *testing.T) {
 			TopicAlias: &alias,
 		},
 	}
-	handler.HandlePublish(s2, pub2)
+	handler.HandlePublish(s2, pub2) //nolint:errcheck // best-effort
 
 	// Verify aliases are isolated
 	topic1, _ := s1.ResolveInboundAlias(1)

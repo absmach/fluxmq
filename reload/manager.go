@@ -198,7 +198,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}, func() {
 			m.logSetup(old.Log)
 		}) {
-			return
+			return applied, errs
 		}
 	}
 
@@ -211,7 +211,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			oldManager := ratelimit.NewManager(configToRatelimit(old.RateLimit))
 			m.rateLimiter.Swap(oldManager)
 		}) {
-			return
+			return applied, errs
 		}
 	}
 
@@ -223,11 +223,11 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}, func() {
 			m.broker.SetMaxQoS(oldQoS)
 		}) {
-			return
+			return applied, errs
 		}
 	}
 
-	return
+	return applied, errs
 }
 
 func configToRatelimit(cfg config.RateLimitConfig) ratelimit.Config {

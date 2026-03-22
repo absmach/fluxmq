@@ -41,15 +41,19 @@ func (c *stubConn) Ping(ctx context.Context) error { return nil }
 func (c *stubConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) Observe(ctx context.Context, path string, observeFunc func(notification *pool.Message), opts ...message.Option) (mux.Observation, error) {
 	return nil, nil
 }
@@ -67,6 +71,7 @@ func (c *stubConn) Do(req *pool.Message) (*pool.Message, error) { return nil, ni
 func (c *stubConn) DoObserve(req *pool.Message, observeFunc func(req *pool.Message)) (mux.Observation, error) {
 	return nil, nil
 }
+
 func (c *stubConn) Close() error {
 	close(c.done)
 	return nil
@@ -79,15 +84,19 @@ func (c *stubConn) AddOnClose(func()) {}
 func (c *stubConn) NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) NewObserveRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }
+
 func (c *stubConn) NewDeleteRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	return nil, nil
 }

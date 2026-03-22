@@ -148,7 +148,7 @@ func (ch *Channel) handleMethod(decoded any) error {
 		}
 		return nil
 	case *codec.ChannelClose:
-		ch.conn.writeMethod(ch.id, &codec.ChannelCloseOk{})
+		ch.conn.writeMethod(ch.id, &codec.ChannelCloseOk{}) //nolint:errcheck // best-effort reply during channel close
 		ch.conn.closeChannel(ch.id)
 		return nil
 	case *codec.ChannelCloseOk:
@@ -998,7 +998,7 @@ func (ch *Channel) handleQueueDelete(m *codec.QueueDelete) error {
 	qm := ch.conn.broker.queueManager
 	if qm != nil {
 		clientID := PrefixedClientID(ch.conn.connID)
-		qm.Unsubscribe(context.Background(), m.Queue, "", clientID, "")
+		qm.Unsubscribe(context.Background(), m.Queue, "", clientID, "") //nolint:errcheck // best-effort cleanup on queue delete
 	}
 
 	if !m.NoWait {
@@ -1130,7 +1130,7 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 		qm := ch.conn.broker.queueManager
 		if qm != nil && cons.queueName != "" {
 			clientID := PrefixedClientID(ch.conn.connID)
-			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID)
+			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on consumer cancel
 		}
 
 		if cons.queueName == "" {
@@ -1355,7 +1355,7 @@ func (ch *Channel) cleanup() {
 	for _, cons := range consumers {
 		ch.conn.broker.stats.DecrementConsumers()
 		if qm != nil && cons.queueName != "" {
-			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID)
+			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup during channel close
 		}
 		if cons.queueName == "" {
 			if cons.mqttFilter == "" {

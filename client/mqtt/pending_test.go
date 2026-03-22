@@ -35,7 +35,7 @@ func TestPendingStoreAdd(t *testing.T) {
 	ps := newPendingStore(10)
 
 	msg := NewMessage("test/topic", []byte("payload"), 1, false)
-	op, err := ps.add(1, pendingPublish, msg)
+	op, err := ps.add(1, pendingPublish, msg) //nolint:errcheck // test setup
 	if err != nil {
 		t.Fatalf("add failed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestPendingStoreAdd(t *testing.T) {
 func TestPendingStoreMaxInflight(t *testing.T) {
 	ps := newPendingStore(2)
 
-	_, err := ps.add(1, pendingPublish, nil)
+	_, err := ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 	if err != nil {
 		t.Fatalf("first add failed: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestPendingStoreGet(t *testing.T) {
 	ps := newPendingStore(10)
 
 	msg := NewMessage("test/topic", []byte("payload"), 1, false)
-	ps.add(1, pendingPublish, msg)
+	ps.add(1, pendingPublish, msg) //nolint:errcheck // test setup
 
 	op := ps.get(1)
 	if op == nil {
@@ -91,7 +91,7 @@ func TestPendingStoreGet(t *testing.T) {
 
 func TestPendingStoreComplete(t *testing.T) {
 	ps := newPendingStore(10)
-	ps.add(1, pendingPublish, nil)
+	ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 
 	completed := ps.complete(1, nil, []byte{0x00})
 	if !completed {
@@ -109,7 +109,7 @@ func TestPendingStoreComplete(t *testing.T) {
 
 func TestPendingStoreRemove(t *testing.T) {
 	ps := newPendingStore(10)
-	ps.add(1, pendingPublish, nil)
+	ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 
 	ps.remove(1)
 	if ps.count() != 0 {
@@ -122,7 +122,7 @@ func TestPendingStoreRemove(t *testing.T) {
 
 func TestPendingStoreUpdateQoS2State(t *testing.T) {
 	ps := newPendingStore(10)
-	ps.add(1, pendingPublish, nil)
+	ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 
 	updated := ps.updateQoS2State(1, 1)
 	if !updated {
@@ -142,9 +142,9 @@ func TestPendingStoreUpdateQoS2State(t *testing.T) {
 
 func TestPendingStoreGetAll(t *testing.T) {
 	ps := newPendingStore(10)
-	ps.add(1, pendingPublish, nil)
-	ps.add(2, pendingSubscribe, nil)
-	ps.add(3, pendingUnsubscribe, nil)
+	ps.add(1, pendingPublish, nil)     //nolint:errcheck // test setup
+	ps.add(2, pendingSubscribe, nil)   //nolint:errcheck // test setup
+	ps.add(3, pendingUnsubscribe, nil) //nolint:errcheck // test setup
 
 	ops := ps.getAll()
 	if len(ops) != 3 {
@@ -155,8 +155,8 @@ func TestPendingStoreGetAll(t *testing.T) {
 func TestPendingStoreClear(t *testing.T) {
 	ps := newPendingStore(10)
 
-	op1, _ := ps.add(1, pendingPublish, nil)
-	op2, _ := ps.add(2, pendingPublish, nil)
+	op1, _ := ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
+	op2, _ := ps.add(2, pendingPublish, nil) //nolint:errcheck // test setup
 
 	testErr := ErrConnectionLost
 	ps.clear(testErr)
@@ -187,7 +187,7 @@ func TestPendingStoreClear(t *testing.T) {
 
 func TestPendingOpWait(t *testing.T) {
 	ps := newPendingStore(10)
-	op, _ := ps.add(1, pendingPublish, nil)
+	op, _ := ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 
 	// Complete in background
 	go func() {
@@ -203,7 +203,7 @@ func TestPendingOpWait(t *testing.T) {
 
 func TestPendingOpWaitTimeout(t *testing.T) {
 	ps := newPendingStore(10)
-	op, _ := ps.add(1, pendingPublish, nil)
+	op, _ := ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 
 	err := op.wait(10 * time.Millisecond)
 	if err != ErrTimeout {
@@ -221,7 +221,7 @@ func TestPendingStoreConcurrency(t *testing.T) {
 			defer wg.Done()
 			id := ps.nextPacketID()
 			if id != 0 {
-				ps.add(id, pendingPublish, nil)
+				ps.add(id, pendingPublish, nil) //nolint:errcheck // best-effort
 				ps.get(id)
 				ps.complete(id, nil, nil)
 			}

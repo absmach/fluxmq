@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	sessionStateConnected    = "connected"
+	sessionStateDisconnected = "disconnected"
+)
+
 // SubscriptionListFilter controls subscription listing.
 type SubscriptionListFilter struct {
 	Prefix    string
@@ -44,10 +49,10 @@ func (b *Broker) ListSubscriptions(filter SubscriptionListFilter) ([]Subscriptio
 
 	for _, entry := range entries {
 		if state != "" {
-			if state == "connected" && !entry.connected {
+			if state == sessionStateConnected && !entry.connected {
 				continue
 			}
-			if state == "disconnected" && entry.connected {
+			if state == sessionStateDisconnected && entry.connected {
 				continue
 			}
 		}

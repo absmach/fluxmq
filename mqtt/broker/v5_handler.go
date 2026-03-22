@@ -50,7 +50,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	if rc := p.Validate(); rc != v5.Accepted {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
-		sendV5ConnAck(conn, false, mapV5ConnectValidationReason(rc), nil)
+		sendV5ConnAck(conn, false, mapV5ConnectValidationReason(rc), nil) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return ErrProtocolViolation
 	}
@@ -63,14 +63,14 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			generated, err := GenerateClientID()
 			if err != nil {
 				h.broker.telemetry.stats.IncrementProtocolErrors()
-				sendV5ConnAck(conn, false, v5.ConnAckInvalidClientID, nil)
+				sendV5ConnAck(conn, false, v5.ConnAckInvalidClientID, nil) //nolint:errcheck // best-effort rejection reply before closing
 				conn.Close()
 				return err
 			}
 			clientID = generated
 		} else {
 			h.broker.telemetry.stats.IncrementProtocolErrors()
-			sendV5ConnAck(conn, false, v5.ConnAckInvalidClientID, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckInvalidClientID, nil) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrClientIDRequired
 		}
@@ -83,7 +83,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
-			sendV5ConnAck(conn, false, v5.ConnAckBadUsernameOrPassword, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckBadUsernameOrPassword, nil) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrNotAuthorized
 		}
@@ -93,12 +93,12 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	if p.WillFlag {
 		if err := topics.ValidateTopicName(p.WillTopic); err != nil {
 			h.broker.telemetry.stats.IncrementProtocolErrors()
-			sendV5ConnAck(conn, false, v5.ConnAckTopicNameInvalid, nil)
+			sendV5ConnAck(conn, false, v5.ConnAckTopicNameInvalid, nil) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrTopicInvalid
 		}
 		// Note: Will payload is stored as []byte in storage.WillMessage
-		// TODO: Consider zero-copy for will messages in future
+		//nolint:godox // TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
 			ClientID: clientID,
 			Topic:    p.WillTopic,
@@ -135,7 +135,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
-		sendV5ConnAck(conn, false, v5.ConnAckUnspecifiedError, nil)
+		sendV5ConnAck(conn, false, v5.ConnAckUnspecifiedError, nil) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err
 	}
@@ -151,7 +151,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {
-		s.Disconnect(false)
+		s.Disconnect(false) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
 
@@ -372,7 +372,7 @@ func (h *V5Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 	}
 
 	h.broker.telemetry.logger.Debug("v5_pubrec", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
-	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived)
+	s.Inflight().UpdateState(p.ID, messages.StatePubRecReceived) //nolint:errcheck // state update for in-flight QoS2; non-fatal if packet not tracked
 	rc := byte(0x00)
 	rel := &v5.PubRel{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
@@ -558,7 +558,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 						// Legacy fallback for messages without PayloadBuf
 						deliverMsg.SetPayloadFromBytes(msg.Payload)
 					}
-					h.broker.DeliverToSession(s, deliverMsg)
+					h.broker.DeliverToSession(s, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
 				}
 			}
 		}
@@ -632,7 +632,7 @@ func (h *V5Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 	}
 
 	h.broker.telemetry.logger.Info("v5_disconnect", slog.String("client_id", s.ID))
-	s.Disconnect(true)
+	s.Disconnect(true) //nolint:errcheck // graceful disconnect initiated by client
 	return io.EOF
 }
 
@@ -651,7 +651,7 @@ func (h *V5Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) er
 func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
-		h.broker.DeliverToSession(s, msg)
+		h.broker.DeliverToSession(s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
 	}
 }
 

@@ -88,7 +88,7 @@ func TestCluster_BasicPubSub(t *testing.T) {
 	subscriber := testutil.NewTestMQTTClient(t, node0, "subscriber-1")
 	err = subscriber.Connect(true)
 	require.NoError(t, err)
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	// Subscribe to topic
 	err = subscriber.Subscribe("test/topic", 0)
@@ -101,7 +101,7 @@ func TestCluster_BasicPubSub(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node0, "publisher-1")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish message
 	payload := []byte("hello from node-0")
@@ -136,7 +136,7 @@ func TestCluster_CrossNodePubSub(t *testing.T) {
 	subscriber := testutil.NewTestMQTTClient(t, node0, "subscriber-cross")
 	err = subscriber.Connect(true)
 	require.NoError(t, err)
-	defer subscriber.Disconnect()
+	defer subscriber.Disconnect() //nolint:errcheck // test cleanup
 
 	// Subscribe to topic
 	err = subscriber.Subscribe("cross/test", 0)
@@ -150,7 +150,7 @@ func TestCluster_CrossNodePubSub(t *testing.T) {
 	publisher := testutil.NewTestMQTTClient(t, node1, "publisher-cross")
 	err = publisher.Connect(true)
 	require.NoError(t, err)
-	defer publisher.Disconnect()
+	defer publisher.Disconnect() //nolint:errcheck // test cleanup
 
 	// Publish message from different node
 	payload := []byte("cross-node message")

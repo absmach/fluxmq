@@ -213,9 +213,11 @@ func (w *queueFullWriter) WriteControlPacket(_ packets.ControlPacket, onSent fun
 	}
 	return nil
 }
+
 func (w *queueFullWriter) WriteDataPacket(_ packets.ControlPacket, onSent func()) error {
 	return core.ErrSendQueueFull
 }
+
 func (w *queueFullWriter) TryWriteDataPacket(_ packets.ControlPacket, _ func()) error {
 	return core.ErrSendQueueFull
 }

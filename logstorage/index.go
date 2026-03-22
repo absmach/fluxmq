@@ -10,10 +10,10 @@ import (
 	"sync"
 )
 
-// Index header size: Magic(4) + Version(1) + BaseOffset(8) + EntryCount(4) + IndexInterval(4) + Reserved(11) = 32 bytes
+// Index header size: Magic(4) + Version(1) + BaseOffset(8) + EntryCount(4) + IndexInterval(4) + Reserved(11) = 32 bytes.
 const IndexHeaderSize = 32
 
-// Index entry size: RelativeOffset(4) + FilePosition(4) = 8 bytes
+// Index entry size: RelativeOffset(4) + FilePosition(4) = 8 bytes.
 const IndexEntrySize = 8
 
 // Index provides sparse offset-to-position mapping for a segment.
@@ -319,8 +319,8 @@ func (idx *Index) Close() error {
 	defer idx.mu.Unlock()
 
 	if idx.dirty && !idx.readonly {
-		idx.writeHeader()
-		idx.file.Sync()
+		idx.writeHeader() //nolint:errcheck // best-effort flush on close
+		idx.file.Sync()   //nolint:errcheck // best-effort sync on close; file.Close() follows
 	}
 
 	return idx.file.Close()

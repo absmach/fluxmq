@@ -221,7 +221,7 @@ func (s *SubscriptionStore) Count() int {
 func (s *SubscriptionStore) refreshCount() {
 	count := int64(0)
 
-	s.db.View(func(txn *badger.Txn) error {
+	s.db.View(func(txn *badger.Txn) error { //nolint:errcheck // count defaults to 0 on failure; non-fatal for initialization
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = []byte("sub:")
 		opts.PrefetchValues = false

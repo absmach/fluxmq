@@ -114,7 +114,7 @@ func (c *Connection) negotiateProtocol() error {
 
 	if !bytes.Equal(header, protocolHeader) {
 		// Send correct protocol header and close
-		c.conn.Write(protocolHeader)
+		c.conn.Write(protocolHeader) //nolint:errcheck // best-effort protocol redirect before closing
 		return fmt.Errorf("unsupported protocol header: %x", header)
 	}
 
@@ -259,7 +259,7 @@ func (c *Connection) processFrames() error {
 
 		if c.heartbeat > 0 {
 			deadline := time.Now().Add(time.Duration(c.heartbeat*2) * time.Second)
-			c.conn.SetReadDeadline(deadline)
+			c.conn.SetReadDeadline(deadline) //nolint:errcheck // fails only on closed connection
 		}
 
 		frame, err := codec.ReadFrame(c.reader)
@@ -306,7 +306,7 @@ func (c *Connection) handleMethodFrame(frame *codec.Frame) error {
 		switch m := decoded.(type) {
 		case *codec.ConnectionClose:
 			closeOk := &codec.ConnectionCloseOk{}
-			c.writeMethod(0, closeOk)
+			c.writeMethod(0, closeOk) //nolint:errcheck // best-effort reply during connection close
 			c.close()
 			return nil
 		case *codec.ConnectionCloseOk:

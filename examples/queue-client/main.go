@@ -371,7 +371,7 @@ func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
 		log.Printf("[%s] Failed to register a consumer: %v", clientID, err)
 		return
 	}
-	defer c.UnsubscribeFromQueue(ctx, queueName)
+	defer c.UnsubscribeFromQueue(ctx, queueName) //nolint:errcheck // best-effort cleanup on exit
 
 	log.Printf("[%s] Connected to %s (AMQP 0.9.1), receiving from queue '%s' in group '%s'",
 		clientID, *amqp091Addr, "$queue/"+queueName, consumerGroup)

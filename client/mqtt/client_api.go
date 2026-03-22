@@ -78,7 +78,7 @@ func (c *Client) stageQoSPublish(msg *Message) (uint16, *Message, *pendingOp, er
 
 func (c *Client) rollbackStagedPublish(packetID uint16) {
 	c.pending.remove(packetID)
-	c.store.DeleteOutbound(packetID)
+	c.store.DeleteOutbound(packetID) //nolint:errcheck // best-effort rollback cleanup
 }
 
 func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
@@ -139,7 +139,7 @@ func (c *Client) PublishMessage(ctx context.Context, msg *Message, waitAck bool)
 	}
 
 	if err := c.waitPendingAck(ctx, packetID, op); err != nil {
-		c.store.DeleteOutbound(packetID)
+		c.store.DeleteOutbound(packetID) //nolint:errcheck // best-effort cleanup on ack timeout/error path
 		return nil, 0, err
 	}
 	return nil, packetID, nil

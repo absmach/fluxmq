@@ -77,7 +77,7 @@ func TestClientRateLimiter_AllowPublish(t *testing.T) {
 	// 5 messages per second, burst of 2
 	limiter := NewClientRateLimiter(5, 2, 10, 2)
 
-	clientID := "test-client"
+	clientID := "test-client" //nolint:goconst // test value
 
 	// First 2 publishes should succeed (burst)
 	if !limiter.AllowPublish(clientID) {

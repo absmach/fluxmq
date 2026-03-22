@@ -185,7 +185,7 @@ func (l *Link) subscribe() {
 		// Translate AMQP address (dot-separated, * wildcard) to MQTT filter (slash-separated, + wildcard).
 		mqttFilter := topics.AMQPFilterToMQTT(l.address)
 		clientID := PrefixedClientID(l.session.conn.containerID)
-		l.session.conn.broker.router.Subscribe(
+		l.session.conn.broker.router.Subscribe( //nolint:errcheck // subscribe errors are non-fatal; link will simply not receive messages
 			clientID,
 			mqttFilter,
 			1, // default QoS
@@ -207,12 +207,12 @@ func (l *Link) detach() {
 		ctx := context.Background()
 		qm := l.session.conn.broker.queueLinkManager
 		if qm != nil {
-			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup)
+			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup) //nolint:errcheck // best-effort cleanup during link detach
 		}
 	} else if l.isSender {
 		mqttFilter := topics.AMQPFilterToMQTT(l.address)
 		clientID := PrefixedClientID(l.session.conn.containerID)
-		l.session.conn.broker.router.Unsubscribe(clientID, mqttFilter)
+		l.session.conn.broker.router.Unsubscribe(clientID, mqttFilter) //nolint:errcheck // best-effort cleanup during link detach
 
 		if cl := l.session.conn.broker.cluster; cl != nil {
 			if err := cl.RemoveSubscription(context.Background(), clientID, mqttFilter); err != nil {
@@ -484,11 +484,11 @@ func (l *Link) handleDisposition(disp *performatives.Disposition) {
 			ctx := context.Background()
 			switch disp.State.(type) {
 			case *performatives.Accepted:
-				qm.Ack(ctx, pd.queueName, pd.messageID, pd.groupID)
+				qm.Ack(ctx, pd.queueName, pd.messageID, pd.groupID) //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
 			case *performatives.Rejected:
-				qm.Reject(ctx, pd.queueName, pd.messageID, pd.groupID, "rejected by client")
+				qm.Reject(ctx, pd.queueName, pd.messageID, pd.groupID, "rejected by client") //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
 			case *performatives.Released:
-				qm.Nack(ctx, pd.queueName, pd.messageID, pd.groupID)
+				qm.Nack(ctx, pd.queueName, pd.messageID, pd.groupID) //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
 			}
 		}
 
@@ -520,7 +520,7 @@ func (l *Link) handleManagementTransfer(transfer *performatives.Transfer, msg *m
 		}
 		body, err := disp.Encode()
 		if err == nil {
-			l.session.conn.conn.WritePerformative(l.session.localCh, body)
+			l.session.conn.conn.WritePerformative(l.session.localCh, body) //nolint:errcheck // best-effort settlement reply; connection close will handle cleanup
 		}
 	}
 

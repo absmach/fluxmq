@@ -125,7 +125,7 @@ func TestIndex_LookupEntry(t *testing.T) {
 	require.NoError(t, err)
 	defer idx.Close()
 
-	entry, found := idx.LookupEntry(50)
+	_, found := idx.LookupEntry(50)
 	assert.False(t, found)
 
 	err = idx.Append(0, 0)
@@ -133,7 +133,7 @@ func TestIndex_LookupEntry(t *testing.T) {
 	err = idx.Append(100, 10000)
 	require.NoError(t, err)
 
-	entry, found = idx.LookupEntry(50)
+	entry, found := idx.LookupEntry(50)
 	assert.True(t, found)
 	assert.Equal(t, uint32(0), entry.RelativeOffset)
 
