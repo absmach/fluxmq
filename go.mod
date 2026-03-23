@@ -11,7 +11,7 @@ require (
 	github.com/authzed/grpcutil v0.0.0-20250221190651-1985b19b35b8
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/fatih/color v1.18.0
+	github.com/fatih/color v1.19.0
 	github.com/fiorix/go-smpp v0.0.0-20210403173735-2894b96e70ba
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-kit/kit v0.13.0
