@@ -261,7 +261,7 @@ func (n *GenericNotifier) processJob(job eventJob) {
 	breaker := n.breakers[job.endpoint.name]
 
 	// Wrap the send call with circuit breaker
-	_, err := breaker.Execute(func() (interface{}, error) {
+	_, err := breaker.Execute(func() (any, error) {
 		return nil, n.sendWebhook(job)
 	})
 	if err != nil {

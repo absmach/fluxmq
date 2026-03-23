@@ -205,15 +205,15 @@ func TestReadWriteLongStr(t *testing.T) {
 func TestReadWriteTable(t *testing.T) {
 	tests := []struct {
 		name  string
-		input map[string]interface{}
+		input map[string]any
 	}{
 		{
 			"empty",
-			map[string]interface{}{},
+			map[string]any{},
 		},
 		{
 			"simple",
-			map[string]interface{}{
+			map[string]any{
 				"key1": "value1",
 				"key2": true,
 				"key3": int32(123),
@@ -221,9 +221,9 @@ func TestReadWriteTable(t *testing.T) {
 		},
 		{
 			"nested",
-			map[string]interface{}{
+			map[string]any{
 				"key1": "value1",
-				"nested_table": map[string]interface{}{
+				"nested_table": map[string]any{
 					"nested_key1": int32(456),
 					"nested_key2": true,
 				},
@@ -232,9 +232,9 @@ func TestReadWriteTable(t *testing.T) {
 		},
 		{
 			"with_array",
-			map[string]interface{}{
+			map[string]any{
 				"key1": "value1",
-				"array_key": []interface{}{
+				"array_key": []any{
 					"arr_val1",
 					true,
 					int32(789),
@@ -269,7 +269,7 @@ func TestConnectionMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -278,7 +278,7 @@ func TestConnectionMethods(t *testing.T) {
 			&codec.ConnectionStart{
 				VersionMajor: 0,
 				VersionMinor: 9,
-				ServerProperties: map[string]interface{}{
+				ServerProperties: map[string]any{
 					"product": "FluxMQ",
 					"version": "0.1.0",
 				},
@@ -288,7 +288,7 @@ func TestConnectionMethods(t *testing.T) {
 			&codec.ConnectionStart{
 				VersionMajor: 0,
 				VersionMinor: 9,
-				ServerProperties: map[string]interface{}{
+				ServerProperties: map[string]any{
 					"product": "FluxMQ",
 					"version": "0.1.0",
 				},
@@ -301,7 +301,7 @@ func TestConnectionMethods(t *testing.T) {
 		{
 			"ConnectionStartOk",
 			&codec.ConnectionStartOk{
-				ClientProperties: map[string]interface{}{
+				ClientProperties: map[string]any{
 					"product": "Go Client",
 					"version": "1.0.0",
 				},
@@ -310,7 +310,7 @@ func TestConnectionMethods(t *testing.T) {
 				Locale:    "en_US",
 			},
 			&codec.ConnectionStartOk{
-				ClientProperties: map[string]interface{}{
+				ClientProperties: map[string]any{
 					"product": "Go Client",
 					"version": "1.0.0",
 				},
@@ -474,7 +474,7 @@ func TestConnectionMethods(t *testing.T) {
 func TestFieldValueTypes(t *testing.T) {
 	tests := []struct {
 		name  string
-		value interface{}
+		value any
 	}{
 		{"int8", int8(-42)},
 		{"byte_uint8", byte(255)},
@@ -517,7 +517,7 @@ func TestChannelMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -628,7 +628,7 @@ func TestExchangeMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -642,7 +642,7 @@ func TestExchangeMethods(t *testing.T) {
 				AutoDelete: true,
 				Internal:   true,
 				NoWait:     true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"x-message-ttl": int32(60000),
 				},
 			},
@@ -655,7 +655,7 @@ func TestExchangeMethods(t *testing.T) {
 				AutoDelete: true,
 				Internal:   true,
 				NoWait:     true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"x-message-ttl": int32(60000),
 				},
 			},
@@ -699,7 +699,7 @@ func TestExchangeMethods(t *testing.T) {
 				Source:      "source-exchange",
 				RoutingKey:  "routing.key",
 				NoWait:      true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -709,7 +709,7 @@ func TestExchangeMethods(t *testing.T) {
 				Source:      "source-exchange",
 				RoutingKey:  "routing.key",
 				NoWait:      true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -730,7 +730,7 @@ func TestExchangeMethods(t *testing.T) {
 				Source:      "source-exchange",
 				RoutingKey:  "routing.key",
 				NoWait:      false,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -740,7 +740,7 @@ func TestExchangeMethods(t *testing.T) {
 				Source:      "source-exchange",
 				RoutingKey:  "routing.key",
 				NoWait:      false,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -809,7 +809,7 @@ func TestQueueMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -822,7 +822,7 @@ func TestQueueMethods(t *testing.T) {
 				Exclusive:  true,
 				AutoDelete: true,
 				NoWait:     true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"x-max-length": int32(1000),
 				},
 			},
@@ -834,7 +834,7 @@ func TestQueueMethods(t *testing.T) {
 				Exclusive:  true,
 				AutoDelete: true,
 				NoWait:     true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"x-max-length": int32(1000),
 				},
 			},
@@ -863,7 +863,7 @@ func TestQueueMethods(t *testing.T) {
 				Exchange:   "test-exchange",
 				RoutingKey: "routing.key",
 				NoWait:     true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -873,7 +873,7 @@ func TestQueueMethods(t *testing.T) {
 				Exchange:   "test-exchange",
 				RoutingKey: "routing.key",
 				NoWait:     true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -939,7 +939,7 @@ func TestQueueMethods(t *testing.T) {
 				Queue:      "test-queue",
 				Exchange:   "test-exchange",
 				RoutingKey: "routing.key",
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -948,7 +948,7 @@ func TestQueueMethods(t *testing.T) {
 				Queue:      "test-queue",
 				Exchange:   "test-exchange",
 				RoutingKey: "routing.key",
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"key": "value",
 				},
 			},
@@ -1017,7 +1017,7 @@ func TestBasicMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -1052,7 +1052,7 @@ func TestBasicMethods(t *testing.T) {
 				NoAck:       true,
 				Exclusive:   true,
 				NoWait:      true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"x-priority": int32(5),
 				},
 			},
@@ -1064,7 +1064,7 @@ func TestBasicMethods(t *testing.T) {
 				NoAck:       true,
 				Exclusive:   true,
 				NoWait:      true,
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"x-priority": int32(5),
 				},
 			},
@@ -1309,7 +1309,7 @@ func TestTxMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -1410,7 +1410,7 @@ func TestConfirmMethods(t *testing.T) {
 			Read(*bytes.Reader) error
 			Write(io.Writer) error
 		}
-		expected interface{}
+		expected any
 		classID  uint16
 		methodID uint16
 	}{
@@ -1480,7 +1480,7 @@ func TestBasicProperties(t *testing.T) {
 	props := &codec.BasicProperties{
 		ContentType:     "application/json",
 		ContentEncoding: "gzip",
-		Headers: map[string]interface{}{
+		Headers: map[string]any{
 			"x-custom": "value",
 			"x-retry":  int32(3),
 		},
@@ -1529,7 +1529,7 @@ func TestContentHeaderFrame(t *testing.T) {
 	props := &codec.BasicProperties{
 		ContentType:     "text/plain",
 		ContentEncoding: "utf-8",
-		Headers: map[string]interface{}{
+		Headers: map[string]any{
 			"x-test": "header-value",
 		},
 		DeliveryMode:  1,

@@ -127,12 +127,12 @@ func (c *Connection) connectionHandshake() error {
 	start := &codec.ConnectionStart{
 		VersionMajor: 0,
 		VersionMinor: 9,
-		ServerProperties: map[string]interface{}{
+		ServerProperties: map[string]any{
 			"product":     "FluxMQ",
 			"version":     "0.1.0",
 			"platform":    "Go",
 			"information": "https://github.com/absmach/fluxmq",
-			"capabilities": map[string]interface{}{
+			"capabilities": map[string]any{
 				"basic.nack":                 true,
 				"publisher_confirms":         true,
 				"consumer_cancel_notify":     true,

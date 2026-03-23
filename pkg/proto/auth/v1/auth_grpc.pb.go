@@ -11,6 +11,7 @@ package authv1
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -105,6 +106,7 @@ type UnimplementedAuthServiceServer struct{}
 func (UnimplementedAuthServiceServer) Authenticate(context.Context, *AuthnReq) (*AuthnRes, error) {
 	return nil, status.Error(codes.Unimplemented, "method Authenticate not implemented")
 }
+
 func (UnimplementedAuthServiceServer) Authorize(context.Context, *AuthzReq) (*AuthzRes, error) {
 	return nil, status.Error(codes.Unimplemented, "method Authorize not implemented")
 }
@@ -129,7 +131,7 @@ func RegisterAuthServiceServer(s grpc.ServiceRegistrar, srv AuthServiceServer) {
 	s.RegisterService(&AuthService_ServiceDesc, srv)
 }
 
-func _AuthService_Authenticate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_Authenticate_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(AuthnReq)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -141,13 +143,13 @@ func _AuthService_Authenticate_Handler(srv interface{}, ctx context.Context, dec
 		Server:     srv,
 		FullMethod: AuthService_Authenticate_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).Authenticate(ctx, req.(*AuthnReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthService_Authorize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _AuthService_Authorize_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(AuthzReq)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -159,7 +161,7 @@ func _AuthService_Authorize_Handler(srv interface{}, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: AuthService_Authorize_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(AuthServiceServer).Authorize(ctx, req.(*AuthzReq))
 	}
 	return interceptor(ctx, in, info, handler)

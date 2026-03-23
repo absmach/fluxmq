@@ -398,7 +398,7 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 }
 
 // sendAMQPMessage sends a pre-built AMQP message to the client.
-func (l *Link) sendAMQPMessage(msg interface{}, qos byte) {
+func (l *Link) sendAMQPMessage(msg any, qos byte) {
 	amqpMsg, ok := msg.(*message.Message)
 	if !ok {
 		return

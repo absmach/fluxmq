@@ -54,7 +54,7 @@ func (h *PendingHeap) Swap(i, j int) {
 }
 
 // Push adds an entry to the heap.
-func (h *PendingHeap) Push(x interface{}) {
+func (h *PendingHeap) Push(x any) {
 	entry := x.(*types.PendingEntry)
 	he := &heapEntry{
 		entry: entry,
@@ -65,7 +65,7 @@ func (h *PendingHeap) Push(x interface{}) {
 }
 
 // Pop removes and returns the oldest entry from the heap.
-func (h *PendingHeap) Pop() interface{} {
+func (h *PendingHeap) Pop() any {
 	n := len(h.entries)
 	if n == 0 {
 		return nil

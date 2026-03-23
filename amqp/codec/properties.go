@@ -29,7 +29,7 @@ const (
 type BasicProperties struct {
 	ContentType     string
 	ContentEncoding string
-	Headers         map[string]interface{}
+	Headers         map[string]any
 	DeliveryMode    uint8
 	Priority        uint8
 	CorrelationID   string

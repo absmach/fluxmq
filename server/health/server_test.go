@@ -544,7 +544,7 @@ func TestContentTypeHeaders(t *testing.T) {
 				t.Fatalf("failed to read body: %v", err)
 			}
 
-			var data map[string]interface{}
+			var data map[string]any
 			if err := json.Unmarshal(body, &data); err != nil {
 				t.Errorf("response is not valid JSON: %v", err)
 			}

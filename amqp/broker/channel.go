@@ -39,7 +39,7 @@ type consumer struct {
 type queueInfo struct {
 	name      string
 	queueType string
-	args      map[string]interface{}
+	args      map[string]any
 }
 
 // exchange represents a declared exchange (in-memory, per-connection for now).
@@ -56,7 +56,7 @@ type binding struct {
 	queue      string
 	exchange   string
 	routingKey string
-	arguments  map[string]interface{}
+	arguments  map[string]any
 }
 
 // Channel represents an AMQP 0.9.1 channel multiplexed over a connection.
@@ -602,7 +602,7 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		return err
 	}
 
-	headers := make(map[string]interface{})
+	headers := make(map[string]any)
 	for k, v := range props {
 		switch k {
 		case "content-type", "content-encoding", "correlation-id", "reply-to", qtypes.PropMessageID, "type":
@@ -1430,7 +1430,7 @@ func (ch *Channel) handleQueueCommit(route corebroker.RouteResult, header *codec
 	}
 }
 
-func extractConsumerGroup(args map[string]interface{}) string {
+func extractConsumerGroup(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -1468,7 +1468,7 @@ func (ch *Channel) isStreamQueue(name string) bool {
 	return false
 }
 
-func extractQueueType(args map[string]interface{}) string {
+func extractQueueType(args map[string]any) string {
 	if len(args) == 0 {
 		return string(qtypes.QueueTypeClassic)
 	}
@@ -1492,7 +1492,7 @@ func extractQueueType(args map[string]interface{}) string {
 	}
 }
 
-func extractStreamRetention(args map[string]interface{}) qtypes.RetentionPolicy {
+func extractStreamRetention(args map[string]any) qtypes.RetentionPolicy {
 	var policy qtypes.RetentionPolicy
 	if len(args) == 0 {
 		return policy
@@ -1519,7 +1519,7 @@ func extractStreamRetention(args map[string]interface{}) qtypes.RetentionPolicy 
 
 // extractMessageTTL parses x-message-ttl from queue arguments.
 // Per AMQP 0.9.1 spec, x-message-ttl is in milliseconds.
-func extractMessageTTL(args map[string]interface{}) (time.Duration, bool) {
+func extractMessageTTL(args map[string]any) (time.Duration, bool) {
 	if len(args) == 0 {
 		return 0, false
 	}
@@ -1534,7 +1534,7 @@ func extractMessageTTL(args map[string]interface{}) (time.Duration, bool) {
 	return time.Duration(ms) * time.Millisecond, true
 }
 
-func extractStreamOffset(args map[string]interface{}) (*qtypes.CursorOption, bool) {
+func extractStreamOffset(args map[string]any) (*qtypes.CursorOption, bool) {
 	if len(args) == 0 {
 		return nil, false
 	}
@@ -1678,7 +1678,7 @@ func parseStringArg(val any) (string, bool) {
 	return "", false
 }
 
-func extractAutoCommit(args map[string]interface{}) *bool {
+func extractAutoCommit(args map[string]any) *bool {
 	if len(args) == 0 {
 		return nil
 	}

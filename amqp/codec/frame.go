@@ -71,7 +71,7 @@ func (f *Frame) WriteFrame(w io.Writer) error {
 }
 
 // Decode decodes the frame payload into a specific method, content header, or heartbeat.
-func (f *Frame) Decode() (interface{}, error) {
+func (f *Frame) Decode() (any, error) {
 	switch f.Type {
 	case FrameMethod:
 		return f.decodeMethod()
@@ -87,7 +87,7 @@ func (f *Frame) Decode() (interface{}, error) {
 	}
 }
 
-func decodeMethodSwitch(b *bytes.Reader, classID, methodID uint16) (interface{}, error) {
+func decodeMethodSwitch(b *bytes.Reader, classID, methodID uint16) (any, error) {
 	type methodReader interface {
 		Read(*bytes.Reader) error
 	}
@@ -259,7 +259,7 @@ func decodeMethodSwitch(b *bytes.Reader, classID, methodID uint16) (interface{},
 	return m, nil
 }
 
-func (f *Frame) decodeMethod() (interface{}, error) {
+func (f *Frame) decodeMethod() (any, error) {
 	b := bytes.NewReader(f.Payload)
 
 	classID, err := ReadShort(b)

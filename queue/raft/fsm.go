@@ -125,7 +125,7 @@ func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupSt
 
 // Apply applies a Raft log entry to the FSM.
 // This is called by Raft when a log entry is committed.
-func (f *LogFSM) Apply(l *raft.Log) interface{} {
+func (f *LogFSM) Apply(l *raft.Log) any {
 	var op Operation
 	if err := json.Unmarshal(l.Data, &op); err != nil {
 		f.logger.Error("failed to unmarshal operation",

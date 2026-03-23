@@ -508,7 +508,7 @@ func (c *Connection) deliverMessage(topic string, payload []byte, props map[stri
 }
 
 // deliverAMQPMessage delivers a pre-built AMQP message to receiver links matching the topic.
-func (c *Connection) deliverAMQPMessage(topic string, msg interface{}, qos byte) {
+func (c *Connection) deliverAMQPMessage(topic string, msg any, qos byte) {
 	c.sessionsMu.RLock()
 	defer c.sessionsMu.RUnlock()
 

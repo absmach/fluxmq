@@ -145,7 +145,7 @@ func WriteLongStr(w io.Writer, s string) error {
 //nolint:godox // TODO: Implement ReadTable and WriteTable for field-table support.
 
 // ReadTable reads a field-table from the reader.
-func ReadTable(r io.Reader) (map[string]interface{}, error) {
+func ReadTable(r io.Reader) (map[string]any, error) {
 	length, err := ReadLong(r)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func ReadTable(r io.Reader) (map[string]interface{}, error) {
 	b := new(bytes.Buffer)
 	b.Write(buf)
 
-	table := make(map[string]interface{})
+	table := make(map[string]any)
 	for b.Len() > 0 {
 		key, err := ReadShortStr(b)
 		if err != nil {
@@ -173,7 +173,7 @@ func ReadTable(r io.Reader) (map[string]interface{}, error) {
 }
 
 // WriteTable writes a field-table to the writer.
-func WriteTable(w io.Writer, table map[string]interface{}) error {
+func WriteTable(w io.Writer, table map[string]any) error {
 	b := bufpool.Get()
 	defer bufpool.Put(b)
 	for key, value := range table {
@@ -192,7 +192,7 @@ func WriteTable(w io.Writer, table map[string]interface{}) error {
 }
 
 // ReadFieldValue reads a single field-value from the reader.
-func ReadFieldValue(r io.Reader) (interface{}, error) {
+func ReadFieldValue(r io.Reader) (any, error) {
 	fieldType, err := ReadOctet(r)
 	if err != nil {
 		return nil, err
@@ -264,7 +264,7 @@ func ReadFieldValue(r io.Reader) (interface{}, error) {
 }
 
 // WriteFieldValue writes a single field-value to the writer.
-func WriteFieldValue(w io.Writer, value interface{}) error {
+func WriteFieldValue(w io.Writer, value any) error {
 	switch v := value.(type) {
 	case bool:
 		if err := WriteOctet(w, 't'); err != nil {
@@ -337,12 +337,12 @@ func WriteFieldValue(w io.Writer, value interface{}) error {
 			return err
 		}
 		return WriteLongStr(w, v)
-	case map[string]interface{}:
+	case map[string]any:
 		if err := WriteOctet(w, 'F'); err != nil {
 			return err
 		}
 		return WriteTable(w, v)
-	case []interface{}:
+	case []any:
 		if err := WriteOctet(w, 'A'); err != nil {
 			return err
 		}
@@ -364,7 +364,7 @@ func WriteFieldValue(w io.Writer, value interface{}) error {
 }
 
 // ReadArray reads a field-array from the reader.
-func ReadArray(r io.Reader) ([]interface{}, error) {
+func ReadArray(r io.Reader) ([]any, error) {
 	length, err := ReadLong(r)
 	if err != nil {
 		return nil, err
@@ -375,7 +375,7 @@ func ReadArray(r io.Reader) ([]interface{}, error) {
 	}
 	b := new(bytes.Buffer)
 	b.Write(buf)
-	var arr []interface{}
+	var arr []any
 	for b.Len() > 0 {
 		value, err := ReadFieldValue(b)
 		if err != nil {
@@ -387,7 +387,7 @@ func ReadArray(r io.Reader) ([]interface{}, error) {
 }
 
 // WriteArray writes a field-array to the writer.
-func WriteArray(w io.Writer, arr []interface{}) error {
+func WriteArray(w io.Writer, arr []any) error {
 	b := bufpool.Get()
 	defer bufpool.Put(b)
 	for _, value := range arr {

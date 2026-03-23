@@ -489,19 +489,19 @@ func TestHandleBasicConsumeInfersStreamFromQueueManager(t *testing.T) {
 func TestExtractMessageTTL(t *testing.T) {
 	tests := []struct {
 		name    string
-		args    map[string]interface{}
+		args    map[string]any
 		wantTTL time.Duration
 		wantOK  bool
 	}{
 		{"nil args", nil, 0, false},
-		{"empty args", map[string]interface{}{}, 0, false},
-		{"missing key", map[string]interface{}{"x-other": 100}, 0, false},
-		{"int32 millis", map[string]interface{}{"x-message-ttl": int32(60000)}, 60 * time.Second, true},
-		{"int64 millis", map[string]interface{}{"x-message-ttl": int64(5000)}, 5 * time.Second, true},
-		{"int millis", map[string]interface{}{"x-message-ttl": 30000}, 30 * time.Second, true},
-		{"string millis", map[string]interface{}{"x-message-ttl": "1000"}, time.Second, true},
-		{"zero", map[string]interface{}{"x-message-ttl": int64(0)}, 0, true},
-		{"negative", map[string]interface{}{"x-message-ttl": int64(-1)}, 0, false},
+		{"empty args", map[string]any{}, 0, false},
+		{"missing key", map[string]any{"x-other": 100}, 0, false},
+		{"int32 millis", map[string]any{"x-message-ttl": int32(60000)}, 60 * time.Second, true},
+		{"int64 millis", map[string]any{"x-message-ttl": int64(5000)}, 5 * time.Second, true},
+		{"int millis", map[string]any{"x-message-ttl": 30000}, 30 * time.Second, true},
+		{"string millis", map[string]any{"x-message-ttl": "1000"}, time.Second, true},
+		{"zero", map[string]any{"x-message-ttl": int64(0)}, 0, true},
+		{"negative", map[string]any{"x-message-ttl": int64(-1)}, 0, false},
 	}
 
 	for _, tt := range tests {
@@ -553,7 +553,7 @@ func TestQueueDeclareWithMessageTTL(t *testing.T) {
 	err := ch.handleQueueDeclare(&codec.QueueDeclare{
 		Queue:   "orders",
 		Durable: true,
-		Arguments: map[string]interface{}{
+		Arguments: map[string]any{
 			"x-message-ttl": int32(60000), // 60 seconds in ms
 		},
 	})
@@ -578,7 +578,7 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 	err := ch.handleQueueDeclare(&codec.QueueDeclare{
 		Queue:   "events",
 		Durable: true,
-		Arguments: map[string]interface{}{
+		Arguments: map[string]any{
 			"x-queue-type":  "stream",
 			"x-message-ttl": int64(30000),
 			"x-max-age":     "7d",

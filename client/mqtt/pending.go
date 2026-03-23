@@ -106,7 +106,7 @@ func (ps *pendingStore) get(id uint16) *pendingOp {
 }
 
 // complete marks a pending operation as complete.
-func (ps *pendingStore) complete(id uint16, err error, result interface{}) bool {
+func (ps *pendingStore) complete(id uint16, err error, result any) bool {
 	ps.mu.Lock()
 	op, exists := ps.pending[id]
 	if exists {

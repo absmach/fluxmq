@@ -9,7 +9,7 @@ import (
 
 // Publish packet pool to reduce allocations during message delivery.
 var publishPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return &Publish{
 			Properties: &PublishProperties{},
 		}

@@ -30,9 +30,9 @@ const (
 type ConnectionStart struct {
 	VersionMajor     byte
 	VersionMinor     byte
-	ServerProperties map[string]interface{} // Actually a table
-	Mechanisms       string                 // Long string
-	Locales          string                 // Long string
+	ServerProperties map[string]any // Actually a table
+	Mechanisms       string         // Long string
+	Locales          string         // Long string
 }
 
 func (m *ConnectionStart) Read(r *bytes.Reader) (err error) {
@@ -78,10 +78,10 @@ func (m *ConnectionStart) Write(w io.Writer) (err error) {
 
 // ConnectionStartOk is sent by the client in response to ConnectionStart.
 type ConnectionStartOk struct {
-	ClientProperties map[string]interface{} // Actually a table
-	Mechanism        string                 // Short string
-	Response         string                 // Long string
-	Locale           string                 // Short string
+	ClientProperties map[string]any // Actually a table
+	Mechanism        string         // Short string
+	Response         string         // Long string
+	Locale           string         // Short string
 }
 
 func (m *ConnectionStartOk) Read(r *bytes.Reader) (err error) {
@@ -550,7 +550,7 @@ type ExchangeDeclare struct {
 	AutoDelete bool
 	Internal   bool
 	NoWait     bool
-	Arguments  map[string]interface{}
+	Arguments  map[string]any
 }
 
 func (m *ExchangeDeclare) Read(r *bytes.Reader) (err error) {
@@ -700,7 +700,7 @@ type ExchangeBind struct {
 	Source      string
 	RoutingKey  string
 	NoWait      bool
-	Arguments   map[string]interface{}
+	Arguments   map[string]any
 }
 
 func (m *ExchangeBind) Read(r *bytes.Reader) (err error) {
@@ -778,7 +778,7 @@ type ExchangeUnbind struct {
 	Source      string
 	RoutingKey  string
 	NoWait      bool
-	Arguments   map[string]interface{}
+	Arguments   map[string]any
 }
 
 func (m *ExchangeUnbind) Read(r *bytes.Reader) (err error) {
@@ -875,7 +875,7 @@ type QueueDeclare struct {
 	Exclusive  bool
 	AutoDelete bool
 	NoWait     bool
-	Arguments  map[string]interface{}
+	Arguments  map[string]any
 }
 
 func (m *QueueDeclare) Read(r *bytes.Reader) (err error) {
@@ -976,7 +976,7 @@ type QueueBind struct {
 	Exchange   string
 	RoutingKey string
 	NoWait     bool
-	Arguments  map[string]interface{}
+	Arguments  map[string]any
 }
 
 func (m *QueueBind) Read(r *bytes.Reader) (err error) {
@@ -1053,7 +1053,7 @@ type QueueUnbind struct {
 	Queue      string
 	Exchange   string
 	RoutingKey string
-	Arguments  map[string]interface{}
+	Arguments  map[string]any
 }
 
 func (m *QueueUnbind) Read(r *bytes.Reader) (err error) {
@@ -1337,7 +1337,7 @@ type BasicConsume struct {
 	NoAck       bool
 	Exclusive   bool
 	NoWait      bool
-	Arguments   map[string]interface{}
+	Arguments   map[string]any
 }
 
 func (m *BasicConsume) Read(r *bytes.Reader) (err error) {

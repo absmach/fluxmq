@@ -62,7 +62,7 @@ func (c *stubConn) NetConn() net.Conn    { return nil }
 func (c *stubConn) Context() context.Context {
 	return context.Background()
 }
-func (c *stubConn) SetContextValue(key interface{}, val interface{}) {}
+func (c *stubConn) SetContextValue(key any, val any) {}
 func (c *stubConn) WriteMessage(req *pool.Message) error {
 	c.last = req
 	return nil

@@ -140,7 +140,7 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	var configs []types.QueueConfig
 
-	s.logs.Range(func(key, value interface{}) bool {
+	s.logs.Range(func(key, value any) bool {
 		sl := value.(*log)
 		sl.mu.RLock()
 		configs = append(configs, sl.config)
@@ -479,7 +479,7 @@ func (s *Store) ListConsumerGroups(ctx context.Context, queueName string) ([]*ty
 	groups := groupsVal.(*sync.Map)
 	var result []*types.ConsumerGroup
 
-	groups.Range(func(key, value interface{}) bool {
+	groups.Range(func(key, value any) bool {
 		result = append(result, value.(*types.ConsumerGroup))
 		return true
 	})
@@ -667,7 +667,7 @@ func (s *Store) ListConsumers(ctx context.Context, queueName, groupID string) ([
 	groupConsumers := groupConsumersVal.(*sync.Map)
 	var result []*types.Consumer
 
-	groupConsumers.Range(func(key, value interface{}) bool {
+	groupConsumers.Range(func(key, value any) bool {
 		result = append(result, value.(*types.Consumer))
 		return true
 	})
@@ -685,7 +685,7 @@ func (s *Store) ListGroups(ctx context.Context, queueName string) ([]string, err
 	queueConsumers := queueConsumersVal.(*sync.Map)
 	var result []string
 
-	queueConsumers.Range(func(key, value interface{}) bool {
+	queueConsumers.Range(func(key, value any) bool {
 		result = append(result, key.(string))
 		return true
 	})

@@ -307,7 +307,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *clus
 
 // DeliverToSessionByID delivers a message to a client by client ID.
 // This implements the BrokerInterface required by the queue manager.
-func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg interface{}) error {
+func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg any) error {
 	s := b.Get(clientID)
 	if s == nil {
 		return fmt.Errorf("session not found: %s", clientID)
