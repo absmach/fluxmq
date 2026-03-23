@@ -25,6 +25,8 @@ import (
 	"github.com/absmach/fluxmq/storage/messages"
 )
 
+const testTopicFilter = "devices/+/events"
+
 type testConn struct{}
 
 func (c *testConn) Read(b []byte) (int, error)                 { return 0, io.EOF }
@@ -109,7 +111,7 @@ func TestSessionDetailEndpointSupportsEscapedClientID(t *testing.T) {
 	if resp.SubscriptionCount != 1 {
 		t.Fatalf("expected 1 subscription, got %d", resp.SubscriptionCount)
 	}
-	if len(resp.Subscriptions) != 1 || resp.Subscriptions[0].Filter != "devices/+/events" {
+	if len(resp.Subscriptions) != 1 || resp.Subscriptions[0].Filter != testTopicFilter {
 		t.Fatalf("unexpected subscriptions: %#v", resp.Subscriptions)
 	}
 }
@@ -394,7 +396,7 @@ func newTestAPIServer(t *testing.T) *Server {
 
 	createSession(t, b, store, "alpha-live", true, "alpha/one")
 	createSession(t, b, store, "bravo-offline", false, "bravo/one")
-	createSession(t, b, store, "tenant/a/client-1", true, "devices/+/events")
+	createSession(t, b, store, "tenant/a/client-1", true, testTopicFilter)
 
 	return New(Config{}, b, nil, nil, nil, nil, nil, slog.Default())
 }

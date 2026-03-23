@@ -33,8 +33,8 @@ func TestSubscriptionsListEndpointDefaultsToConnected(t *testing.T) {
 	if resp.Subscriptions[0].Filter != "alpha/one" {
 		t.Fatalf("expected first filter alpha/one, got %q", resp.Subscriptions[0].Filter)
 	}
-	if resp.Subscriptions[1].Filter != "devices/+/events" { //nolint:goconst // test value
-		t.Fatalf("expected second filter devices/+/events, got %q", resp.Subscriptions[1].Filter)
+	if resp.Subscriptions[1].Filter != testTopicFilter {
+		t.Fatalf("expected second filter %s, got %q", testTopicFilter, resp.Subscriptions[1].Filter)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestSubscriptionsListEndpointPagination(t *testing.T) {
 func TestSubscriptionClientsEndpointSupportsEscapedFilter(t *testing.T) {
 	srv := newTestAPIServer(t)
 
-	filter := "devices/+/events"
+	filter := testTopicFilter
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"/api/v1/subscriptions/"+url.PathEscape(filter)+"/clients",
@@ -181,7 +181,7 @@ func TestSubscriptionsListEndpointPrefix(t *testing.T) {
 func TestSubscriptionClientsEndpointPrefix(t *testing.T) {
 	srv := newTestAPIServer(t)
 
-	filter := "devices/+/events"
+	filter := testTopicFilter
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"/api/v1/subscriptions/"+url.PathEscape(filter)+"/clients?prefix=tenant",
