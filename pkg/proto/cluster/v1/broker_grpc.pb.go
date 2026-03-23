@@ -11,7 +11,6 @@ package clusterv1
 
 import (
 	context "context"
-
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -265,51 +264,39 @@ type UnimplementedBrokerServiceServer struct{}
 func (UnimplementedBrokerServiceServer) RoutePublish(context.Context, *PublishRequest) (*PublishResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RoutePublish not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) RoutePublishBatch(context.Context, *PublishBatchRequest) (*PublishBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RoutePublishBatch not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) TakeoverSession(context.Context, *TakeoverRequest) (*TakeoverResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TakeoverSession not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) FetchRetained(context.Context, *FetchRetainedRequest) (*FetchRetainedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchRetained not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) FetchWill(context.Context, *FetchWillRequest) (*FetchWillResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchWill not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) EnqueueRemote(context.Context, *EnqueueRemoteRequest) (*EnqueueRemoteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnqueueRemote not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) RouteQueueMessage(context.Context, *RouteQueueMessageRequest) (*RouteQueueMessageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RouteQueueMessage not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) RouteQueueBatch(context.Context, *RouteQueueBatchRequest) (*RouteQueueBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RouteQueueBatch not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AppendEntries not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestVote not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InstallSnapshot not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) ForwardGroupOp(context.Context, *ForwardGroupOpRequest) (*ForwardGroupOpResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForwardGroupOp not implemented")
 }
-
 func (UnimplementedBrokerServiceServer) ForwardPublishBatch(context.Context, *ForwardPublishBatchRequest) (*ForwardPublishBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForwardPublishBatch not implemented")
 }
@@ -334,7 +321,7 @@ func RegisterBrokerServiceServer(s grpc.ServiceRegistrar, srv BrokerServiceServe
 	s.RegisterService(&BrokerService_ServiceDesc, srv)
 }
 
-func _BrokerService_RoutePublish_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_RoutePublish_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PublishRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -346,13 +333,13 @@ func _BrokerService_RoutePublish_Handler(srv any, ctx context.Context, dec func(
 		Server:     srv,
 		FullMethod: BrokerService_RoutePublish_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).RoutePublish(ctx, req.(*PublishRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_RoutePublishBatch_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_RoutePublishBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PublishBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -364,13 +351,13 @@ func _BrokerService_RoutePublishBatch_Handler(srv any, ctx context.Context, dec 
 		Server:     srv,
 		FullMethod: BrokerService_RoutePublishBatch_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).RoutePublishBatch(ctx, req.(*PublishBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_TakeoverSession_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_TakeoverSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TakeoverRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -382,13 +369,13 @@ func _BrokerService_TakeoverSession_Handler(srv any, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: BrokerService_TakeoverSession_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).TakeoverSession(ctx, req.(*TakeoverRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_FetchRetained_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_FetchRetained_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FetchRetainedRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -400,13 +387,13 @@ func _BrokerService_FetchRetained_Handler(srv any, ctx context.Context, dec func
 		Server:     srv,
 		FullMethod: BrokerService_FetchRetained_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).FetchRetained(ctx, req.(*FetchRetainedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_FetchWill_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_FetchWill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FetchWillRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -418,13 +405,13 @@ func _BrokerService_FetchWill_Handler(srv any, ctx context.Context, dec func(any
 		Server:     srv,
 		FullMethod: BrokerService_FetchWill_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).FetchWill(ctx, req.(*FetchWillRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_EnqueueRemote_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_EnqueueRemote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EnqueueRemoteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -436,13 +423,13 @@ func _BrokerService_EnqueueRemote_Handler(srv any, ctx context.Context, dec func
 		Server:     srv,
 		FullMethod: BrokerService_EnqueueRemote_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).EnqueueRemote(ctx, req.(*EnqueueRemoteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_RouteQueueMessage_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_RouteQueueMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RouteQueueMessageRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -454,13 +441,13 @@ func _BrokerService_RouteQueueMessage_Handler(srv any, ctx context.Context, dec 
 		Server:     srv,
 		FullMethod: BrokerService_RouteQueueMessage_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).RouteQueueMessage(ctx, req.(*RouteQueueMessageRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_RouteQueueBatch_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_RouteQueueBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RouteQueueBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -472,13 +459,13 @@ func _BrokerService_RouteQueueBatch_Handler(srv any, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: BrokerService_RouteQueueBatch_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).RouteQueueBatch(ctx, req.(*RouteQueueBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_AppendEntries_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AppendEntriesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -490,13 +477,13 @@ func _BrokerService_AppendEntries_Handler(srv any, ctx context.Context, dec func
 		Server:     srv,
 		FullMethod: BrokerService_AppendEntries_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).AppendEntries(ctx, req.(*AppendEntriesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_RequestVote_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RequestVoteRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -508,13 +495,13 @@ func _BrokerService_RequestVote_Handler(srv any, ctx context.Context, dec func(a
 		Server:     srv,
 		FullMethod: BrokerService_RequestVote_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).RequestVote(ctx, req.(*RequestVoteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_InstallSnapshot_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_InstallSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(InstallSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -526,13 +513,13 @@ func _BrokerService_InstallSnapshot_Handler(srv any, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: BrokerService_InstallSnapshot_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).InstallSnapshot(ctx, req.(*InstallSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_ForwardGroupOp_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_ForwardGroupOp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ForwardGroupOpRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -544,13 +531,13 @@ func _BrokerService_ForwardGroupOp_Handler(srv any, ctx context.Context, dec fun
 		Server:     srv,
 		FullMethod: BrokerService_ForwardGroupOp_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).ForwardGroupOp(ctx, req.(*ForwardGroupOpRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_ForwardPublishBatch_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _BrokerService_ForwardPublishBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ForwardPublishBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -562,7 +549,7 @@ func _BrokerService_ForwardPublishBatch_Handler(srv any, ctx context.Context, de
 		Server:     srv,
 		FullMethod: BrokerService_ForwardPublishBatch_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BrokerServiceServer).ForwardPublishBatch(ctx, req.(*ForwardPublishBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)

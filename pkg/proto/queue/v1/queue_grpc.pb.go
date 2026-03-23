@@ -11,7 +11,6 @@ package queuev1
 
 import (
 	context "context"
-
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -532,119 +531,90 @@ type UnimplementedQueueServiceServer struct{}
 func (UnimplementedQueueServiceServer) CreateQueue(context.Context, *CreateQueueRequest) (*Queue, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateQueue not implemented")
 }
-
 func (UnimplementedQueueServiceServer) GetQueue(context.Context, *GetQueueRequest) (*Queue, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetQueue not implemented")
 }
-
 func (UnimplementedQueueServiceServer) ListQueues(context.Context, *ListQueuesRequest) (*ListQueuesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListQueues not implemented")
 }
-
 func (UnimplementedQueueServiceServer) DeleteQueue(context.Context, *DeleteQueueRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteQueue not implemented")
 }
-
 func (UnimplementedQueueServiceServer) UpdateQueue(context.Context, *UpdateQueueRequest) (*Queue, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateQueue not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Append(context.Context, *AppendRequest) (*AppendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Append not implemented")
 }
-
 func (UnimplementedQueueServiceServer) AppendBatch(context.Context, *AppendBatchRequest) (*AppendBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AppendBatch not implemented")
 }
-
 func (UnimplementedQueueServiceServer) AppendQueue(grpc.ClientStreamingServer[AppendRequest, AppendBatchResponse]) error {
 	return status.Error(codes.Unimplemented, "method AppendQueue not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Read(context.Context, *ReadRequest) (*Message, error) {
 	return nil, status.Error(codes.Unimplemented, "method Read not implemented")
 }
-
 func (UnimplementedQueueServiceServer) ReadBatch(context.Context, *ReadBatchRequest) (*ReadBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReadBatch not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Tail(*TailRequest, grpc.ServerStreamingServer[Message]) error {
 	return status.Error(codes.Unimplemented, "method Tail not implemented")
 }
-
 func (UnimplementedQueueServiceServer) SeekToOffset(context.Context, *SeekToOffsetRequest) (*SeekResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SeekToOffset not implemented")
 }
-
 func (UnimplementedQueueServiceServer) SeekToTimestamp(context.Context, *SeekToTimestampRequest) (*SeekResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SeekToTimestamp not implemented")
 }
-
 func (UnimplementedQueueServiceServer) CreateConsumerGroup(context.Context, *CreateConsumerGroupRequest) (*ConsumerGroup, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateConsumerGroup not implemented")
 }
-
 func (UnimplementedQueueServiceServer) GetConsumerGroup(context.Context, *GetConsumerGroupRequest) (*ConsumerGroup, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetConsumerGroup not implemented")
 }
-
 func (UnimplementedQueueServiceServer) ListConsumerGroups(context.Context, *ListConsumerGroupsRequest) (*ListConsumerGroupsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListConsumerGroups not implemented")
 }
-
 func (UnimplementedQueueServiceServer) DeleteConsumerGroup(context.Context, *DeleteConsumerGroupRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteConsumerGroup not implemented")
 }
-
 func (UnimplementedQueueServiceServer) JoinGroup(context.Context, *JoinGroupRequest) (*JoinGroupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method JoinGroup not implemented")
 }
-
 func (UnimplementedQueueServiceServer) LeaveGroup(context.Context, *LeaveGroupRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method LeaveGroup not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Consume(context.Context, *ConsumeRequest) (*ConsumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Consume not implemented")
 }
-
 func (UnimplementedQueueServiceServer) ConsumeQueue(*ConsumeQueueRequest, grpc.ServerStreamingServer[Message]) error {
 	return status.Error(codes.Unimplemented, "method ConsumeQueue not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Ack(context.Context, *AckRequest) (*AckResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ack not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Nack(context.Context, *NackRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Nack not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Claim(context.Context, *ClaimRequest) (*ClaimResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Claim not implemented")
 }
-
 func (UnimplementedQueueServiceServer) GetPending(context.Context, *GetPendingRequest) (*GetPendingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPending not implemented")
 }
-
 func (UnimplementedQueueServiceServer) GetQueueInfo(context.Context, *GetQueueInfoRequest) (*QueueInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetQueueInfo not implemented")
 }
-
 func (UnimplementedQueueServiceServer) GetStats(context.Context, *GetStatsRequest) (*QueueStats, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStats not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Purge(context.Context, *PurgeRequest) (*PurgeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Purge not implemented")
 }
-
 func (UnimplementedQueueServiceServer) Truncate(context.Context, *TruncateRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Truncate not implemented")
 }
@@ -669,7 +639,7 @@ func RegisterQueueServiceServer(s grpc.ServiceRegistrar, srv QueueServiceServer)
 	s.RegisterService(&QueueService_ServiceDesc, srv)
 }
 
-func _QueueService_CreateQueue_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_CreateQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -681,13 +651,13 @@ func _QueueService_CreateQueue_Handler(srv any, ctx context.Context, dec func(an
 		Server:     srv,
 		FullMethod: QueueService_CreateQueue_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).CreateQueue(ctx, req.(*CreateQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_GetQueue_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_GetQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -699,13 +669,13 @@ func _QueueService_GetQueue_Handler(srv any, ctx context.Context, dec func(any) 
 		Server:     srv,
 		FullMethod: QueueService_GetQueue_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).GetQueue(ctx, req.(*GetQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_ListQueues_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_ListQueues_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListQueuesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -717,13 +687,13 @@ func _QueueService_ListQueues_Handler(srv any, ctx context.Context, dec func(any
 		Server:     srv,
 		FullMethod: QueueService_ListQueues_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).ListQueues(ctx, req.(*ListQueuesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_DeleteQueue_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_DeleteQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -735,13 +705,13 @@ func _QueueService_DeleteQueue_Handler(srv any, ctx context.Context, dec func(an
 		Server:     srv,
 		FullMethod: QueueService_DeleteQueue_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).DeleteQueue(ctx, req.(*DeleteQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_UpdateQueue_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_UpdateQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -753,13 +723,13 @@ func _QueueService_UpdateQueue_Handler(srv any, ctx context.Context, dec func(an
 		Server:     srv,
 		FullMethod: QueueService_UpdateQueue_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).UpdateQueue(ctx, req.(*UpdateQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Append_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Append_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AppendRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -771,13 +741,13 @@ func _QueueService_Append_Handler(srv any, ctx context.Context, dec func(any) er
 		Server:     srv,
 		FullMethod: QueueService_Append_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Append(ctx, req.(*AppendRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_AppendBatch_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_AppendBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AppendBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -789,20 +759,20 @@ func _QueueService_AppendBatch_Handler(srv any, ctx context.Context, dec func(an
 		Server:     srv,
 		FullMethod: QueueService_AppendBatch_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).AppendBatch(ctx, req.(*AppendBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_AppendQueue_Handler(srv any, stream grpc.ServerStream) error {
+func _QueueService_AppendQueue_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(QueueServiceServer).AppendQueue(&grpc.GenericServerStream[AppendRequest, AppendBatchResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type QueueService_AppendQueueServer = grpc.ClientStreamingServer[AppendRequest, AppendBatchResponse]
 
-func _QueueService_Read_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReadRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -814,13 +784,13 @@ func _QueueService_Read_Handler(srv any, ctx context.Context, dec func(any) erro
 		Server:     srv,
 		FullMethod: QueueService_Read_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Read(ctx, req.(*ReadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_ReadBatch_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_ReadBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReadBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -832,13 +802,13 @@ func _QueueService_ReadBatch_Handler(srv any, ctx context.Context, dec func(any)
 		Server:     srv,
 		FullMethod: QueueService_ReadBatch_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).ReadBatch(ctx, req.(*ReadBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Tail_Handler(srv any, stream grpc.ServerStream) error {
+func _QueueService_Tail_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(TailRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
@@ -849,7 +819,7 @@ func _QueueService_Tail_Handler(srv any, stream grpc.ServerStream) error {
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type QueueService_TailServer = grpc.ServerStreamingServer[Message]
 
-func _QueueService_SeekToOffset_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_SeekToOffset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SeekToOffsetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -861,13 +831,13 @@ func _QueueService_SeekToOffset_Handler(srv any, ctx context.Context, dec func(a
 		Server:     srv,
 		FullMethod: QueueService_SeekToOffset_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).SeekToOffset(ctx, req.(*SeekToOffsetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_SeekToTimestamp_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_SeekToTimestamp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SeekToTimestampRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -879,13 +849,13 @@ func _QueueService_SeekToTimestamp_Handler(srv any, ctx context.Context, dec fun
 		Server:     srv,
 		FullMethod: QueueService_SeekToTimestamp_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).SeekToTimestamp(ctx, req.(*SeekToTimestampRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_CreateConsumerGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_CreateConsumerGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateConsumerGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -897,13 +867,13 @@ func _QueueService_CreateConsumerGroup_Handler(srv any, ctx context.Context, dec
 		Server:     srv,
 		FullMethod: QueueService_CreateConsumerGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).CreateConsumerGroup(ctx, req.(*CreateConsumerGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_GetConsumerGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_GetConsumerGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetConsumerGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -915,13 +885,13 @@ func _QueueService_GetConsumerGroup_Handler(srv any, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: QueueService_GetConsumerGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).GetConsumerGroup(ctx, req.(*GetConsumerGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_ListConsumerGroups_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_ListConsumerGroups_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListConsumerGroupsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -933,13 +903,13 @@ func _QueueService_ListConsumerGroups_Handler(srv any, ctx context.Context, dec 
 		Server:     srv,
 		FullMethod: QueueService_ListConsumerGroups_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).ListConsumerGroups(ctx, req.(*ListConsumerGroupsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_DeleteConsumerGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_DeleteConsumerGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteConsumerGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -951,13 +921,13 @@ func _QueueService_DeleteConsumerGroup_Handler(srv any, ctx context.Context, dec
 		Server:     srv,
 		FullMethod: QueueService_DeleteConsumerGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).DeleteConsumerGroup(ctx, req.(*DeleteConsumerGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_JoinGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_JoinGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(JoinGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -969,13 +939,13 @@ func _QueueService_JoinGroup_Handler(srv any, ctx context.Context, dec func(any)
 		Server:     srv,
 		FullMethod: QueueService_JoinGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).JoinGroup(ctx, req.(*JoinGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_LeaveGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_LeaveGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LeaveGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -987,13 +957,13 @@ func _QueueService_LeaveGroup_Handler(srv any, ctx context.Context, dec func(any
 		Server:     srv,
 		FullMethod: QueueService_LeaveGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).LeaveGroup(ctx, req.(*LeaveGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Heartbeat_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HeartbeatRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1005,13 +975,13 @@ func _QueueService_Heartbeat_Handler(srv any, ctx context.Context, dec func(any)
 		Server:     srv,
 		FullMethod: QueueService_Heartbeat_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Heartbeat(ctx, req.(*HeartbeatRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Consume_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Consume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ConsumeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1023,13 +993,13 @@ func _QueueService_Consume_Handler(srv any, ctx context.Context, dec func(any) e
 		Server:     srv,
 		FullMethod: QueueService_Consume_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Consume(ctx, req.(*ConsumeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_ConsumeQueue_Handler(srv any, stream grpc.ServerStream) error {
+func _QueueService_ConsumeQueue_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ConsumeQueueRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
@@ -1040,7 +1010,7 @@ func _QueueService_ConsumeQueue_Handler(srv any, stream grpc.ServerStream) error
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type QueueService_ConsumeQueueServer = grpc.ServerStreamingServer[Message]
 
-func _QueueService_Ack_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Ack_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AckRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1052,13 +1022,13 @@ func _QueueService_Ack_Handler(srv any, ctx context.Context, dec func(any) error
 		Server:     srv,
 		FullMethod: QueueService_Ack_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Ack(ctx, req.(*AckRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Nack_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Nack_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NackRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1070,13 +1040,13 @@ func _QueueService_Nack_Handler(srv any, ctx context.Context, dec func(any) erro
 		Server:     srv,
 		FullMethod: QueueService_Nack_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Nack(ctx, req.(*NackRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Claim_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Claim_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ClaimRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1088,13 +1058,13 @@ func _QueueService_Claim_Handler(srv any, ctx context.Context, dec func(any) err
 		Server:     srv,
 		FullMethod: QueueService_Claim_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Claim(ctx, req.(*ClaimRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_GetPending_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_GetPending_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetPendingRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1106,13 +1076,13 @@ func _QueueService_GetPending_Handler(srv any, ctx context.Context, dec func(any
 		Server:     srv,
 		FullMethod: QueueService_GetPending_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).GetPending(ctx, req.(*GetPendingRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_GetQueueInfo_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_GetQueueInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetQueueInfoRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1124,13 +1094,13 @@ func _QueueService_GetQueueInfo_Handler(srv any, ctx context.Context, dec func(a
 		Server:     srv,
 		FullMethod: QueueService_GetQueueInfo_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).GetQueueInfo(ctx, req.(*GetQueueInfoRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_GetStats_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_GetStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetStatsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1142,13 +1112,13 @@ func _QueueService_GetStats_Handler(srv any, ctx context.Context, dec func(any) 
 		Server:     srv,
 		FullMethod: QueueService_GetStats_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).GetStats(ctx, req.(*GetStatsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Purge_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Purge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PurgeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1160,13 +1130,13 @@ func _QueueService_Purge_Handler(srv any, ctx context.Context, dec func(any) err
 		Server:     srv,
 		FullMethod: QueueService_Purge_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Purge(ctx, req.(*PurgeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QueueService_Truncate_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+func _QueueService_Truncate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TruncateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -1178,7 +1148,7 @@ func _QueueService_Truncate_Handler(srv any, ctx context.Context, dec func(any) 
 		Server:     srv,
 		FullMethod: QueueService_Truncate_FullMethodName,
 	}
-	handler := func(ctx context.Context, req any) (any, error) {
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Truncate(ctx, req.(*TruncateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
