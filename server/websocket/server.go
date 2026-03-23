@@ -220,7 +220,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.logger.Debug("websocket_connection_accepted", slog.String("remote_addr", r.RemoteAddr))
 
 	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion)
-	broker.HandleConnection(s.broker, conn) //nolint:contextcheck // context propagation would require API changes across the call chain
+	broker.HandleConnection(r.Context(), s.broker, conn)
 }
 
 // wsConnection implements core.Connection for WebSocket transport.

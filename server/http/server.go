@@ -179,7 +179,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		slog.Int("qos", int(req.QoS)),
 		slog.Int("payload_size", len(req.Payload)))
 
-	if err := s.broker.Publish(msg); err != nil { //nolint:contextcheck // context propagation would require API changes across the call chain
+	if err := s.broker.Publish(r.Context(), msg); err != nil {
 		s.logger.Error("http_publish_failed", slog.String("error", err.Error()))
 		http.Error(w, fmt.Sprintf("publish failed: %v", err), http.StatusInternalServerError)
 		return

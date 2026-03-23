@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -23,9 +24,9 @@ type clusterStub struct {
 	nodes  []cluster.NodeInfo
 }
 
-func (c *clusterStub) NodeID() string            { return c.nodeID }
-func (c *clusterStub) IsLeader() bool            { return c.leader }
-func (c *clusterStub) Nodes() []cluster.NodeInfo { return c.nodes }
+func (c *clusterStub) NodeID() string                  { return c.nodeID }
+func (c *clusterStub) IsLeader(_ context.Context) bool { return c.leader }
+func (c *clusterStub) Nodes() []cluster.NodeInfo       { return c.nodes }
 
 func TestClusterNilClusterReturnsSingleNode(t *testing.T) {
 	store := memory.New()

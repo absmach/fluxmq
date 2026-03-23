@@ -21,8 +21,8 @@ import (
 // Publish publishes a message, handling retained storage and distribution to subscribers.
 // Publish always releases msg's payload buffer before returning; callers must not
 // use the payload afterwards.
-func (b *Broker) Publish(msg *storage.Message) error {
-	if b.telemetry.logger.Enabled(context.Background(), slog.LevelDebug) {
+func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
+	if b.telemetry.logger.Enabled(ctx, slog.LevelDebug) {
 		b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
 	}
 	b.telemetry.stats.IncrementPublishReceived()
@@ -32,7 +32,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 
 	// Record metrics
 	if b.telemetry.metrics != nil {
-		b.telemetry.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen))
+		b.telemetry.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen)) //nolint:contextcheck // metrics recording uses background context internally
 	}
 
 	route := b.routeResolver.Resolve(msg.Topic)
@@ -40,7 +40,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 	// Handle retained messages before routing — ensures queue topics also
 	// store retained state so new subscribers receive the last known value.
 	if msg.Retain {
-		if err := b.handleRetained(msg, payloadLen); err != nil {
+		if err := b.handleRetained(ctx, msg, payloadLen); err != nil {
 			if route.Kind == broker.RouteQueue {
 				b.logError("retained_store_failed", err, slog.String("topic", msg.Topic))
 			} else {
@@ -63,7 +63,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		switch route.Kind {
 		case broker.RouteQueueAck:
 			msg.ReleasePayload()
-			return b.handleQueueAck(msg, route)
+			return b.handleQueueAck(ctx, msg, route)
 		case broker.RouteQueue:
 			// Copy payload: the queue manager stores the slice by reference,
 			// so it must outlive the RefCountedBuffer.
@@ -71,7 +71,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 			payloadCopy := make([]byte, len(src))
 			copy(payloadCopy, src)
 			msg.ReleasePayload()
-			return b.queueManager.Publish(context.Background(), types.PublishRequest{
+			return b.queueManager.Publish(ctx, types.PublishRequest{
 				Topic:      msg.Topic,
 				Payload:    payloadCopy,
 				Properties: msg.Properties,
@@ -84,7 +84,7 @@ func (b *Broker) Publish(msg *storage.Message) error {
 		payload := ""
 		// Note: Payload encoding should be done by caller if needed
 		// ClientID not available at broker level, will be set by handler
-		b.telemetry.webhooks.Notify(context.Background(), events.MessagePublished{ //nolint:errcheck // fire-and-forget webhook notification
+		b.telemetry.webhooks.Notify(ctx, events.MessagePublished{ //nolint:errcheck // fire-and-forget webhook notification
 			ClientID:     "", // Set by handler
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
@@ -96,13 +96,13 @@ func (b *Broker) Publish(msg *storage.Message) error {
 
 	// Event hook: message published
 	if b.eventHook != nil {
-		if err := b.eventHook.OnPublish(context.Background(), msg.PublisherID, msg.Topic, msg.QoS, msg.GetPayload()); err != nil {
+		if err := b.eventHook.OnPublish(ctx, msg.PublisherID, msg.Topic, msg.QoS, msg.GetPayload()); err != nil {
 			b.logError("event_hook_publish", err, slog.String("topic", msg.Topic))
 		}
 	}
 
 	// Distribute message to subscribers (this will retain the buffer as needed)
-	err := b.distribute(msg)
+	err := b.distribute(ctx, msg)
 
 	// Release the original message's buffer - Publish "consumes" the message
 	msg.ReleasePayload()
@@ -111,12 +111,11 @@ func (b *Broker) Publish(msg *storage.Message) error {
 }
 
 // PublishWill publishes a session's will message if it exists.
-func (b *Broker) PublishWill(clientID string) error {
+func (b *Broker) PublishWill(ctx context.Context, clientID string) error {
 	if b.stores.wills == nil {
 		return nil
 	}
 
-	ctx := context.Background()
 	will, err := b.stores.wills.Get(ctx, clientID)
 	if err != nil {
 		if err == storage.ErrNotFound {
@@ -135,7 +134,7 @@ func (b *Broker) PublishWill(clientID string) error {
 	}
 	msg.SetPayloadFromBytes(will.Payload)
 
-	if err := b.distribute(msg); err != nil {
+	if err := b.distribute(ctx, msg); err != nil {
 		msg.ReleasePayload()
 		return err
 	}
@@ -147,8 +146,7 @@ func (b *Broker) PublishWill(clientID string) error {
 }
 
 // handleRetained stores or clears a retained message.
-func (b *Broker) handleRetained(msg *storage.Message, payloadLen int) error {
-	ctx := context.Background()
+func (b *Broker) handleRetained(ctx context.Context, msg *storage.Message, payloadLen int) error {
 	if payloadLen == 0 {
 		if err := b.stores.retained.Delete(ctx, msg.Topic); err != nil {
 			return err
@@ -201,7 +199,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 	}
 	msg.SetPayloadFromBytes(payload)
 
-	err := b.distribute(msg)
+	err := b.distribute(context.Background(), msg)
 
 	// Release the message buffer after distribution
 	msg.ReleasePayload()
@@ -210,8 +208,8 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 }
 
 // distribute distributes a message to all matching subscribers (local and remote).
-func (b *Broker) distribute(msg *storage.Message) error {
-	if err := b.distributeLocal(msg, true); err != nil {
+func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
+	if err := b.distributeLocal(ctx, msg, true); err != nil {
 		return err
 	}
 
@@ -221,7 +219,7 @@ func (b *Broker) distribute(msg *storage.Message) error {
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
 		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
@@ -239,7 +237,7 @@ func (b *Broker) distribute(msg *storage.Message) error {
 
 // distributeLocal delivers a message to local subscribers.
 // allowCross controls whether cross-protocol delivery callbacks may run.
-func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
+func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allowCross bool) error {
 	matched := router.AcquireSubscriptionSlice()
 	defer router.ReleaseSubscriptionSlice(matched)
 
@@ -298,7 +296,7 @@ func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
 			// DeliverToSession takes full ownership of the message
-			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
+			if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
 				if deliverQoS > 0 {
 					b.telemetry.logger.Warn("failed to deliver QoS message",
 						slog.String("client_id", selectedClientID),
@@ -314,7 +312,7 @@ func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
 			}
 			if broker.IsAMQP091Client(clientID) || broker.IsAMQP1Client(clientID) {
 				if allowCross && b.crossDeliver != nil {
-					b.crossDeliver(clientID, msg.Topic, msg.GetPayload(), sub.QoS, msg.Properties)
+					b.crossDeliver(ctx, clientID, msg.Topic, msg.GetPayload(), sub.QoS, msg.Properties)
 				}
 				continue
 			}
@@ -339,7 +337,7 @@ func (b *Broker) distributeLocal(msg *storage.Message, allowCross bool) error {
 			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
 
 			// DeliverToSession takes full ownership of the message
-			if _, err := b.DeliverToSession(s, deliverMsg); err != nil {
+			if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
 				if deliverQoS > 0 {
 					b.telemetry.logger.Warn("failed to deliver QoS message",
 						slog.String("client_id", clientID),
@@ -365,14 +363,13 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	err := b.distributeLocal(storeMsg, false) //nolint:contextcheck // context propagation would require API changes across the call chain
+	err := b.distributeLocal(ctx, storeMsg, false)
 	storeMsg.ReleasePayload()
 	return err
 }
 
 // handleQueueAck handles queue acknowledgment messages ($ack, $nack, $reject).
-func (b *Broker) handleQueueAck(msg *storage.Message, route broker.RouteResult) error {
-	ctx := context.Background()
+func (b *Broker) handleQueueAck(ctx context.Context, msg *storage.Message, route broker.RouteResult) error {
 	queueName := route.QueueName
 
 	if queueName == "" {
@@ -459,7 +456,7 @@ func (b *Broker) triggerWills() {
 		}
 		msg.SetPayloadFromBytes(will.Payload)
 
-		b.distribute(msg) //nolint:errcheck // fire-and-forget will message distribution
+		b.distribute(ctx, msg) //nolint:errcheck // fire-and-forget will message distribution
 
 		// Release the message buffer after distribution
 		msg.ReleasePayload()

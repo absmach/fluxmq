@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -25,7 +26,7 @@ func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 	b := New(nil, nil, nil)
 	serverConn, clientConn := net.Pipe()
 
-	go b.HandleConnection(serverConn)
+	go b.HandleConnection(context.Background(), serverConn)
 
 	c := amqpconn.NewConnection(clientConn)
 	return b, c
@@ -350,7 +351,7 @@ func TestMultiFrameTransferSend(t *testing.T) {
 	b := New(nil, nil, nil)
 	serverConn, clientConn := net.Pipe()
 
-	go b.HandleConnection(serverConn)
+	go b.HandleConnection(context.Background(), serverConn)
 
 	c := amqpconn.NewConnection(clientConn)
 	c.SetMaxFrameSize(512)
@@ -430,7 +431,7 @@ func TestMultiFrameTransferReceive(t *testing.T) {
 	b := New(nil, nil, nil)
 	serverConn, clientConn := net.Pipe()
 
-	go b.HandleConnection(serverConn)
+	go b.HandleConnection(context.Background(), serverConn)
 
 	c := amqpconn.NewConnection(clientConn)
 	defer b.Close()
@@ -873,8 +874,8 @@ func TestBrokerClose(t *testing.T) {
 	serverConn1, clientConn1 := net.Pipe()
 	serverConn2, clientConn2 := net.Pipe()
 
-	go b.HandleConnection(serverConn1)
-	go b.HandleConnection(serverConn2)
+	go b.HandleConnection(context.Background(), serverConn1)
+	go b.HandleConnection(context.Background(), serverConn2)
 
 	c1 := amqpconn.NewConnection(clientConn1)
 	c2 := amqpconn.NewConnection(clientConn2)

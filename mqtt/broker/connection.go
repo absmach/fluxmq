@@ -4,6 +4,8 @@
 package broker
 
 import (
+	"context"
+
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -12,7 +14,7 @@ import (
 
 // HandleConnection handles a new incoming connection from the TCP server.
 // It detects the MQTT protocol version and creates the appropriate handler.
-func HandleConnection(broker *Broker, conn core.Connection) {
+func HandleConnection(ctx context.Context, broker *Broker, conn core.Connection) {
 	pkt, err := conn.ReadPacket()
 	if err != nil {
 		broker.telemetry.stats.IncrementPacketErrors()
@@ -35,7 +37,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 			return
 		}
 		handler := NewV3Handler(broker)
-		handler.HandleConnect(conn, p3) //nolint:errcheck // handler manages connection lifecycle
+		handler.HandleConnect(conn, p3) //nolint:errcheck,contextcheck // handler manages connection lifecycle; disconnect cleanup uses background context
 		return
 	}
 
@@ -48,7 +50,7 @@ func HandleConnection(broker *Broker, conn core.Connection) {
 			return
 		}
 		handler := NewV5Handler(broker)
-		handler.HandleConnect(conn, p5) //nolint:errcheck // handler manages connection lifecycle
+		handler.HandleConnect(conn, p5) //nolint:errcheck,contextcheck // handler manages connection lifecycle; disconnect cleanup uses background context
 		return
 	}
 

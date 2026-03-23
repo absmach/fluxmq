@@ -252,7 +252,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		slog.String("topic", topic),
 		slog.Int("payload_size", len(payload)))
 
-	if err := s.broker.Publish(msg); err != nil {
+	if err := s.broker.Publish(r.Context(), msg); err != nil {
 		s.logger.Error("coap_publish_failed", slog.String("error", err.Error()))
 		s.sendResponse(w, r, codes.InternalServerError, fmt.Sprintf("publish failed: %v", err))
 		return

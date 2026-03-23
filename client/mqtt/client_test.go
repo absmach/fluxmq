@@ -345,30 +345,30 @@ func TestSubscribeSingle(t *testing.T) {
 	}
 }
 
-func TestConnAckCodeString(t *testing.T) {
+func TestConnAckErrorString(t *testing.T) {
 	tests := []struct {
-		code ConnAckCode
+		code ConnAckError
 		want string
 	}{
-		{ConnAccepted, "connection accepted"},
-		{ConnRefusedProtocol, "unacceptable protocol version"},
-		{ConnRefusedIDRejected, "client identifier rejected"},
-		{ConnRefusedUnavailable, "server unavailable"},
-		{ConnRefusedBadAuth, "bad username or password"},
-		{ConnRefusedNotAuth, "not authorized"},
-		{ConnAckCode(99), "unknown error"},
+		{ErrConnAccepted, "connection accepted"},
+		{ErrConnRefusedProtocol, "unacceptable protocol version"},
+		{ErrConnRefusedIDRejected, "client identifier rejected"},
+		{ErrConnRefusedUnavailable, "server unavailable"},
+		{ErrConnRefusedBadAuth, "bad username or password"},
+		{ErrConnRefusedNotAuth, "not authorized"},
+		{ConnAckError(99), "unknown error"},
 	}
 
 	for _, tt := range tests {
 		got := tt.code.String()
 		if got != tt.want {
-			t.Errorf("ConnAckCode(%d).String() = %s, want %s", tt.code, got, tt.want)
+			t.Errorf("ConnAckError(%d).String() = %s, want %s", tt.code, got, tt.want)
 		}
 	}
 }
 
-func TestConnAckCodeError(t *testing.T) {
-	code := ConnRefusedBadAuth
+func TestConnAckErrorError(t *testing.T) {
+	code := ErrConnRefusedBadAuth
 	err := code.Error()
 	if err != "bad username or password" {
 		t.Errorf("Error() = %s, want 'bad username or password'", err)

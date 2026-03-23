@@ -336,27 +336,27 @@ var (
 	zstdDec     *zstd.Decoder
 	zstdEncOnce sync.Once
 	zstdDecOnce sync.Once
-	zstdEncErr  error //nolint:errname // package-private variable holding init error; renaming to match errname convention would obscure its purpose
-	zstdDecErr  error //nolint:errname // package-private variable holding init error; renaming to match errname convention would obscure its purpose
+	errZstdEnc  error
+	errZstdDec  error
 )
 
 func getZstdEncoder() (*zstd.Encoder, error) {
 	zstdEncOnce.Do(func() {
-		zstdEnc, zstdEncErr = zstd.NewWriter(nil,
+		zstdEnc, errZstdEnc = zstd.NewWriter(nil,
 			zstd.WithEncoderLevel(zstd.SpeedDefault),
 			zstd.WithEncoderConcurrency(1),
 		)
 	})
-	return zstdEnc, zstdEncErr
+	return zstdEnc, errZstdEnc
 }
 
 func getZstdDecoder() (*zstd.Decoder, error) {
 	zstdDecOnce.Do(func() {
-		zstdDec, zstdDecErr = zstd.NewReader(nil,
+		zstdDec, errZstdDec = zstd.NewReader(nil,
 			zstd.WithDecoderConcurrency(1),
 		)
 	})
-	return zstdDec, zstdDecErr
+	return zstdDec, errZstdDec
 }
 
 // compress compresses data using the specified compression type.

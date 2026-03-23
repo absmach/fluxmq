@@ -25,7 +25,7 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	var gotClientID string
 	var gotTopic string
 	var gotQoS byte
-	b.SetCrossDeliver(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
 		calls++
 		gotClientID = clientID
 		gotTopic = topic
@@ -39,7 +39,7 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	}
 	msg.SetPayloadFromBytes([]byte("hello"))
 
-	if err := b.Publish(msg); err != nil {
+	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestForwardPublishDoesNotCrossDeliverToAMQP091(t *testing.T) {
 	}
 
 	calls := 0
-	b.SetCrossDeliver(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
 		calls++
 	})
 

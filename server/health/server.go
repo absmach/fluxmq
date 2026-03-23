@@ -307,7 +307,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	// Cluster mode
 	response.ClusterMode = true
 	response.NodeID = s.cluster.NodeID()
-	response.IsLeader = s.cluster.IsLeader()
+	response.IsLeader = s.cluster.IsLeader(r.Context())
 	response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 
 	w.WriteHeader(http.StatusOK)

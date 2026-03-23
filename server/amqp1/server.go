@@ -127,13 +127,13 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 			}
 
 			s.wg.Add(1)
-			go func(c net.Conn) { //nolint:contextcheck // goroutine manages its own context lifecycle
+			go func(c net.Conn) {
 				defer s.wg.Done()
 				defer s.releaseSlot()
 				defer c.Close()
 
 				s.config.Logger.Debug("AMQP connection accepted", slog.String("remote", c.RemoteAddr().String()))
-				s.handler.HandleConnection(c) //nolint:contextcheck // context propagation would require API changes across the call chain
+				s.handler.HandleConnection(connCtx, c)
 			}(conn)
 		}
 	}()

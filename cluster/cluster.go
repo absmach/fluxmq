@@ -121,7 +121,7 @@ type Lifecycle interface {
 	// IsLeader returns true if this node is the cluster leader.
 	// Only the leader should execute background tasks like session expiry
 	// and will message processing to avoid duplication.
-	IsLeader() bool
+	IsLeader(ctx context.Context) bool
 
 	// WaitForLeader blocks until this node becomes the leader or context is cancelled.
 	WaitForLeader(ctx context.Context) error

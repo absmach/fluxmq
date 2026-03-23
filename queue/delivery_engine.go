@@ -81,9 +81,9 @@ func NewDeliveryEngine(
 }
 
 // Start launches the delivery loop goroutine.
-func (e *DeliveryEngine) Start() {
+func (e *DeliveryEngine) Start(ctx context.Context) {
 	e.wg.Add(1)
-	go e.run()
+	go e.run(ctx) //nolint:contextcheck // goroutine manages its own delivery lifecycle; ctx is stored for cancellation propagation
 }
 
 // Stop signals the delivery loop to exit and waits for it to finish.
@@ -163,7 +163,7 @@ func (e *DeliveryEngine) markDelivered(queueName string) {
 	e.mu.Unlock()
 }
 
-func (e *DeliveryEngine) run() {
+func (e *DeliveryEngine) run(ctx context.Context) {
 	defer e.wg.Done()
 
 	ticker := time.NewTicker(time.Second)
@@ -175,11 +175,11 @@ func (e *DeliveryEngine) run() {
 			return
 		case queueName := <-e.queue:
 			e.markDelivered(queueName)
-			if e.DeliverQueue(context.Background(), queueName) {
+			if e.DeliverQueue(ctx, queueName) {
 				e.Schedule(queueName)
 			}
 		case <-ticker.C:
-			e.ScheduleAll(context.Background())
+			e.ScheduleAll(ctx)
 		}
 	}
 }

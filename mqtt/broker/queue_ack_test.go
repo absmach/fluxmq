@@ -97,7 +97,7 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 	}
 
 	route := resolver.Resolve(msg.Topic)
-	require.NoError(t, b.handleQueueAck(msg, route))
+	require.NoError(t, b.handleQueueAck(context.Background(), msg, route))
 	require.Len(t, qm.ackCalls, 1)
 	require.Equal(t, "orders", qm.ackCalls[0].queueName)
 	require.Equal(t, "orders:42", qm.ackCalls[0].messageID)
@@ -122,7 +122,7 @@ func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
 	}
 
 	route := resolver.Resolve(msg.Topic)
-	require.NoError(t, b.handleQueueAck(msg, route))
+	require.NoError(t, b.handleQueueAck(context.Background(), msg, route))
 	require.Len(t, qm.nackCalls, 1)
 	require.Equal(t, "orders", qm.nackCalls[0].queueName)
 }
@@ -145,6 +145,6 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 	}
 
 	route := resolver.Resolve(msg.Topic)
-	require.Error(t, b.handleQueueAck(msg, route))
+	require.Error(t, b.handleQueueAck(context.Background(), msg, route))
 	require.Empty(t, qm.ackCalls)
 }

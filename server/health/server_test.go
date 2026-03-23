@@ -27,10 +27,10 @@ type mockCluster struct {
 	nodes    []cluster.NodeInfo
 }
 
-func (m *mockCluster) NodeID() string { return m.nodeID }
-func (m *mockCluster) IsLeader() bool { return m.isLeader }
-func (m *mockCluster) Start() error   { return nil }
-func (m *mockCluster) Stop() error    { return nil }
+func (m *mockCluster) NodeID() string                  { return m.nodeID }
+func (m *mockCluster) IsLeader(_ context.Context) bool { return m.isLeader }
+func (m *mockCluster) Start() error                    { return nil }
+func (m *mockCluster) Stop() error                     { return nil }
 func (m *mockCluster) Nodes() []cluster.NodeInfo {
 	if m.nodes != nil {
 		return m.nodes

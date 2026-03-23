@@ -72,5 +72,5 @@ func (s *Server) Listen(ctx context.Context) error {
 }
 
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
-	s.broker.HandleConnection(conn) //nolint:contextcheck // context propagation would require API changes across the call chain
+	s.broker.HandleConnection(ctx, conn)
 }

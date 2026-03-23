@@ -24,11 +24,14 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	b.sessionLocks.Lock(clientID)
 	defer b.sessionLocks.Unlock(clientID)
 
+	ctx := context.Background()
+
 	// Check if session is owned by another node in the cluster
 	var takeoverState *clusterv1.SessionState
 	if b.cluster != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		clusterCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
+		ctx = clusterCtx
 
 		ownerNode, exists, err := b.cluster.GetSessionOwner(ctx, clientID)
 		if err != nil {
@@ -64,7 +67,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 	existing := b.sessionsMap.Get(clientID)
 	if opts.CleanStart && existing != nil {
-		if err := b.destroySessionLocked(existing); err != nil {
+		if err := b.destroySessionLocked(ctx, existing); err != nil {
 			return nil, false, err
 		}
 		existing = nil
@@ -181,11 +184,11 @@ func (b *Broker) DestroySession(clientID string) error {
 		return nil
 	}
 
-	return b.destroySessionLocked(s)
+	return b.destroySessionLocked(context.Background(), s)
 }
 
 // destroySessionLocked destroys a session. Must be called with the session's key lock held.
-func (b *Broker) destroySessionLocked(s *session.Session) error {
+func (b *Broker) destroySessionLocked(ctx context.Context, s *session.Session) error {
 	if s.IsConnected() {
 		s.Disconnect(false) //nolint:errcheck // disconnect during session destroy; connection is being removed
 	}
@@ -206,7 +209,7 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 		}
 	}
 	if b.stores.wills != nil {
-		if err := b.stores.wills.Delete(context.Background(), s.ID); err != nil {
+		if err := b.stores.wills.Delete(ctx, s.ID); err != nil {
 			return fmt.Errorf("failed to delete will: %w", err)
 		}
 	}
@@ -227,7 +230,6 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 	}
 
 	if b.cluster != nil {
-		ctx := context.Background()
 		if err := b.cluster.RemoveAllSubscriptions(ctx, s.ID); err != nil {
 			b.logError("cluster_remove_all_subscriptions", err, slog.String("client_id", s.ID))
 		}
@@ -235,7 +237,6 @@ func (b *Broker) destroySessionLocked(s *session.Session) error {
 
 	// Release session ownership in cluster
 	if b.cluster != nil {
-		ctx := context.Background()
 		if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
 			b.logError("cluster_release_session", err, slog.String("client_id", s.ID))
 		}
@@ -295,7 +296,7 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 
 	if s.CleanStart && s.ExpiryInterval == 0 {
 		b.sessionLocks.Lock(s.ID)
-		b.destroySessionLocked(s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
+		b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
 		b.sessionLocks.Unlock(s.ID)
 
 		// Release ownership for clean sessions
@@ -559,7 +560,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	}
 
 	// Forcefully disconnect and remove
-	if err := b.destroySessionLocked(s); err != nil { //nolint:contextcheck // context propagation would require API changes across the call chain
+	if err := b.destroySessionLocked(ctx, s); err != nil {
 		return nil, fmt.Errorf("failed to destroy session: %w", err)
 	}
 

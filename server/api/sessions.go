@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -93,7 +94,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
 	pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
 
-	sessions, nextPageToken, err := s.listSessions(prefix, state, limit, pageToken) //nolint:contextcheck // context propagation would require API changes across the call chain
+	sessions, nextPageToken, err := s.listSessions(r.Context(), prefix, state, limit, pageToken)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -127,7 +128,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.broker != nil {
-		snapshot, err := s.broker.GetSessionSnapshot(clientID) //nolint:contextcheck // context propagation would require API changes across the call chain
+		snapshot, err := s.broker.GetSessionSnapshot(r.Context(), clientID)
 		if err == nil {
 			writeJSON(w, http.StatusOK, sessionToResponse(*snapshot))
 			return
@@ -149,11 +150,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeAPIError(w, http.StatusNotFound, "session not found")
 }
 
-func (s *Server) listSessions(prefix, state string, limit int, pageToken string) ([]sessionResponse, string, error) {
+func (s *Server) listSessions(ctx context.Context, prefix, state string, limit int, pageToken string) ([]sessionResponse, string, error) {
 	byClientID := make(map[string]sessionResponse)
 
 	if s.broker != nil {
-		snapshots, _, err := s.broker.ListSessions(mqttbroker.SessionListFilter{
+		snapshots, _, err := s.broker.ListSessions(ctx, mqttbroker.SessionListFilter{
 			Prefix: prefix,
 			State:  state,
 			Limit:  0,

@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestDeliverToSession_MarkSentAfterWireWrite(t *testing.T) {
 	msg.QoS = 1
 	msg.SetPayloadFromBytes([]byte("payload"))
 
-	packetID, err := b.DeliverToSession(s, msg)
+	packetID, err := b.DeliverToSession(context.Background(), s, msg)
 	require.NoError(t, err)
 	require.NotZero(t, packetID)
 

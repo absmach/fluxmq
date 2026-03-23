@@ -35,7 +35,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.buildStatsResponse()
-	cl := s.buildClusterResponse()
+	cl := s.buildClusterResponse(r.Context())
 
 	var sessions sessionSummary
 	if s.broker != nil {

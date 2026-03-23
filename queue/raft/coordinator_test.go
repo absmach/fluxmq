@@ -52,9 +52,9 @@ func (m *mockReplicator) Stop() error {
 	return nil
 }
 
-func (m *mockReplicator) IsEnabled() bool { return m.enabled }
-func (m *mockReplicator) IsLeader() bool  { return m.leader }
-func (m *mockReplicator) Leader() string  { return m.leaderAddr }
+func (m *mockReplicator) IsEnabled() bool                 { return m.enabled }
+func (m *mockReplicator) IsLeader(_ context.Context) bool { return m.leader }
+func (m *mockReplicator) Leader() string                  { return m.leaderAddr }
 func (m *mockReplicator) LeaderID() string {
 	return m.leaderID
 }

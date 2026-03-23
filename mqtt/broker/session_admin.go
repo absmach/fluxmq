@@ -65,7 +65,7 @@ type sessionListEntry struct {
 // The result is eventually consistent: storage and live session state are read
 // non-atomically, so a session that connects or disconnects during the call may
 // appear in either state. Live in-memory state takes precedence when available.
-func (b *Broker) ListSessions(filter SessionListFilter) ([]SessionSnapshot, string, error) {
+func (b *Broker) ListSessions(ctx context.Context, filter SessionListFilter) ([]SessionSnapshot, string, error) {
 	entries, err := b.collectSessionListEntries()
 	if err != nil {
 		return nil, "", err
@@ -114,7 +114,7 @@ func (b *Broker) ListSessions(filter SessionListFilter) ([]SessionSnapshot, stri
 	pageEntries := filtered[start:end]
 	snapshots := make([]SessionSnapshot, 0, len(pageEntries))
 	for _, entry := range pageEntries {
-		snapshot, err := b.GetSessionSnapshot(entry.clientID)
+		snapshot, err := b.GetSessionSnapshot(ctx, entry.clientID)
 		if err != nil {
 			if errors.Is(err, storage.ErrNotFound) {
 				continue
@@ -134,7 +134,7 @@ func (b *Broker) ListSessions(filter SessionListFilter) ([]SessionSnapshot, stri
 }
 
 // GetSessionSnapshot returns a detailed session snapshot for a client.
-func (b *Broker) GetSessionSnapshot(clientID string) (*SessionSnapshot, error) {
+func (b *Broker) GetSessionSnapshot(ctx context.Context, clientID string) (*SessionSnapshot, error) {
 	if clientID == "" {
 		return nil, storage.ErrNotFound
 	}
@@ -152,7 +152,7 @@ func (b *Broker) GetSessionSnapshot(clientID string) (*SessionSnapshot, error) {
 		return nil, err
 	}
 
-	return b.snapshotFromStoredSession(stored)
+	return b.snapshotFromStoredSession(ctx, stored)
 }
 
 // collectSessionListEntries merges stored and live sessions into a single list.
@@ -229,7 +229,7 @@ func (b *Broker) snapshotFromLiveSession(s *session.Session) (*SessionSnapshot, 
 	}, nil
 }
 
-func (b *Broker) snapshotFromStoredSession(stored *storage.Session) (*SessionSnapshot, error) {
+func (b *Broker) snapshotFromStoredSession(ctx context.Context, stored *storage.Session) (*SessionSnapshot, error) {
 	snapshot := &SessionSnapshot{
 		ClientID:        stored.ClientID,
 		State:           disconnectedState(stored.Connected),
@@ -269,7 +269,7 @@ func (b *Broker) snapshotFromStoredSession(stored *storage.Session) (*SessionSna
 	}
 
 	if b.stores.wills != nil {
-		if will, err := b.stores.wills.Get(context.Background(), stored.ClientID); err == nil && will != nil {
+		if will, err := b.stores.wills.Get(ctx, stored.ClientID); err == nil && will != nil {
 			snapshot.HasWill = true
 		} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			return nil, err

@@ -233,13 +233,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// Cleanup ephemeral queues that expired while broker was down
-	m.cleanupEphemeralQueues() //nolint:contextcheck // context propagation would require API changes across the call chain
+	m.cleanupEphemeralQueues(ctx)
 
 	// Prime delivery for existing queues at startup.
 	m.delivery.ScheduleAll(ctx)
 
 	// Start delivery engine
-	m.delivery.Start() //nolint:contextcheck // context propagation would require API changes across the call chain
+	m.delivery.Start(ctx)
 
 	// Start work stealing if enabled
 	if m.config.StealEnabled {
@@ -1605,9 +1605,7 @@ func (m *Manager) queueHasConsumers(ctx context.Context, queueName string) bool 
 }
 
 // cleanupEphemeralQueues deletes expired ephemeral queues.
-func (m *Manager) cleanupEphemeralQueues() {
-	ctx := context.Background()
-
+func (m *Manager) cleanupEphemeralQueues(ctx context.Context) {
 	queues, err := m.queueStore.ListQueues(ctx)
 	if err != nil {
 		return
@@ -1658,7 +1656,7 @@ func (m *Manager) runEphemeralCleanupLoop() {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			m.cleanupEphemeralQueues()
+			m.cleanupEphemeralQueues(context.Background()) //nolint:contextcheck // background goroutine; no request-scoped context available
 		}
 	}
 }

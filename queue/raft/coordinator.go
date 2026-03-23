@@ -80,7 +80,7 @@ type QueueCoordinator interface {
 type GroupReplicator interface {
 	Stop() error
 	IsEnabled() bool
-	IsLeader() bool
+	IsLeader(ctx context.Context) bool
 	Leader() string
 	LeaderID() string
 	ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error
@@ -356,7 +356,7 @@ func (c *LogicalGroupCoordinator) IsLeaderForQueue(queueName string) bool {
 	if replicator == nil {
 		return false
 	}
-	return replicator.IsLeader()
+	return replicator.IsLeader(context.Background())
 }
 
 // LeaderForQueue returns the leader address for the queue's assigned group.

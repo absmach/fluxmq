@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -213,7 +214,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.SetPayloadFromBuffer(buf)
-		err := h.broker.Publish(msg)
+		err := h.broker.Publish(context.Background(), msg)
 		storage.ReleaseMessage(msg)
 		h.broker.telemetry.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
@@ -230,7 +231,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.SetPayloadFromBuffer(buf)
-		if err := h.broker.Publish(msg); err != nil {
+		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			storage.ReleaseMessage(msg)
 			return err
 		}
@@ -332,7 +333,7 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 	if h.broker.cfg.asyncFanOut {
 		if msg != nil {
 			submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
-				if err := h.broker.Publish(msg); err != nil {
+				if err := h.broker.Publish(context.Background(), msg); err != nil {
 					h.broker.logError("v3_pubrel_publish", err,
 						slog.String("client_id", s.ID),
 						slog.String("topic", msg.Topic))
@@ -340,7 +341,7 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 				storage.ReleaseMessage(msg)
 			})
 			if !submitted {
-				if err := h.broker.Publish(msg); err != nil {
+				if err := h.broker.Publish(context.Background(), msg); err != nil {
 					h.broker.logError("v3_pubrel_publish", err,
 						slog.String("client_id", s.ID),
 						slog.String("topic", msg.Topic))
@@ -353,7 +354,7 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 
 	// Synchronous path: distribute before PUBCOMP (default).
 	if msg != nil {
-		if err := h.broker.Publish(msg); err != nil {
+		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			h.broker.logError("v3_pubrel_publish", err,
 				slog.String("client_id", s.ID),
 				slog.String("topic", msg.Topic))
@@ -446,7 +447,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 					// Legacy fallback for messages without PayloadBuf
 					deliverMsg.SetPayloadFromBytes(msg.Payload)
 				}
-				h.broker.DeliverToSession(s, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
+				h.broker.DeliverToSession(context.Background(), s, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
 			}
 		}
 	}
@@ -525,7 +526,7 @@ func (h *V3Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) er
 func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
-		h.broker.DeliverToSession(s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
+		h.broker.DeliverToSession(context.Background(), s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
 	}
 }
 

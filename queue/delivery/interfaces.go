@@ -40,7 +40,7 @@ type OrderingEnforcer interface {
 
 // RaftManager abstracts the Raft consensus manager.
 type RaftManager interface {
-	IsLeader() bool
+	IsLeader(ctx context.Context) bool
 }
 
 // RetentionManager abstracts the retention manager.

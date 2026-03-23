@@ -109,9 +109,9 @@ func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
 }
 
 // HandleConnection handles a new raw TCP connection through the full AMQP 0.9.1 lifecycle.
-func (b *Broker) HandleConnection(netConn net.Conn) {
+func (b *Broker) HandleConnection(ctx context.Context, netConn net.Conn) {
 	c := newConnection(b, netConn)
-	if err := c.run(); err != nil {
+	if err := c.run(); err != nil { //nolint:contextcheck // connection lifecycle manages its own context for cleanup
 		b.logger.Debug("AMQP 0.9.1 connection ended", "remote", netConn.RemoteAddr(), "error", err)
 	}
 }
@@ -164,7 +164,7 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 			continue
 		}
 		if b.crossDeliver != nil {
-			b.crossDeliver(sub.ClientID, topic, payload, sub.QoS, props)
+			b.crossDeliver(context.Background(), sub.ClientID, topic, payload, sub.QoS, props)
 		}
 	}
 
@@ -255,7 +255,7 @@ func (b *Broker) Close() error {
 }
 
 // LocalDeliverPubSub delivers a local pub/sub message to an AMQP 0.9.1 client.
-func (b *Broker) LocalDeliverPubSub(clientID string, topic string, payload []byte, _ byte, props map[string]string) {
+func (b *Broker) LocalDeliverPubSub(ctx context.Context, clientID string, topic string, payload []byte, _ byte, props map[string]string) {
 	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 	val, ok := b.connections.Load(connID)
 	if !ok {

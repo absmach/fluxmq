@@ -833,7 +833,7 @@ func (c *mockCluster) GetRegisteredQueueConsumers() []*cluster.QueueConsumerInfo
 
 func (c *mockCluster) Start() error                            { return nil }
 func (c *mockCluster) Stop() error                             { return nil }
-func (c *mockCluster) IsLeader() bool                          { return true }
+func (c *mockCluster) IsLeader(_ context.Context) bool         { return true }
 func (c *mockCluster) WaitForLeader(ctx context.Context) error { return nil }
 func (c *mockCluster) Nodes() []cluster.NodeInfo               { return nil }
 func (c *mockCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
@@ -1933,7 +1933,7 @@ func TestCleanupEphemeralQueues(t *testing.T) {
 	}
 
 	// Run cleanup
-	manager.cleanupEphemeralQueues()
+	manager.cleanupEphemeralQueues(ctx)
 
 	// Expired ephemeral queue should be deleted
 	if _, err := logStore.GetQueue(ctx, "expired-queue"); err != storage.ErrQueueNotFound {

@@ -18,6 +18,8 @@ import (
 	"github.com/absmach/fluxmq/storage/memory"
 )
 
+const testNodeID = "node-1"
+
 func TestOverviewCombinesStatsClusterSessions(t *testing.T) {
 	store := memory.New()
 	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
@@ -42,10 +44,10 @@ func TestOverviewCombinesStatsClusterSessions(t *testing.T) {
 	b.Stats().IncrementPublishReceived()
 
 	stub := &clusterStub{
-		nodeID: "node-1",
+		nodeID: testNodeID,
 		leader: true,
 		nodes: []cluster.NodeInfo{
-			{ID: "node-1", Address: "10.0.0.1:7946", Healthy: true, Leader: true, Uptime: time.Hour},
+			{ID: testNodeID, Address: "10.0.0.1:7946", Healthy: true, Leader: true, Uptime: time.Hour},
 		},
 	}
 	srv := New(Config{}, b, nil, stub, nil, nil, nil, slog.Default())
@@ -63,8 +65,8 @@ func TestOverviewCombinesStatsClusterSessions(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if resp.NodeID != "node-1" {
-		t.Fatalf("expected node_id 'node-1', got %q", resp.NodeID)
+	if resp.NodeID != testNodeID {
+		t.Fatalf("expected node_id %q, got %q", testNodeID, resp.NodeID)
 	}
 	if !resp.ClusterMode {
 		t.Fatal("expected cluster_mode true")

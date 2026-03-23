@@ -25,7 +25,7 @@ import (
 
 // DeliverToSession queues a message for delivery to a session.
 // Returns packet ID (>0) if session is connected and QoS>0, otherwise 0.
-func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uint16, error) {
+func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *storage.Message) (uint16, error) {
 	// Check if message has expired
 	if msg.MessageExpiry != nil && !msg.Expiry.IsZero() && time.Now().After(msg.Expiry) {
 		b.logOp("message_expired",
@@ -55,7 +55,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 		if err == nil {
 			// Webhook: message delivered (QoS 0)
 			if b.telemetry.webhooks != nil {
-				b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck // fire-and-forget webhook notification
+				b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
 					ClientID:     s.ID,
 					MessageTopic: msg.Topic,
 					QoS:          msg.QoS,
@@ -119,7 +119,7 @@ func (b *Broker) DeliverToSession(s *session.Session, msg *storage.Message) (uin
 
 	// Webhook: message delivered (QoS 1/2)
 	if b.telemetry.webhooks != nil {
-		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck // fire-and-forget webhook notification
+		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
 			ClientID:     s.ID,
 			MessageTopic: msg.Topic,
 			QoS:          msg.QoS,
@@ -145,7 +145,7 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	// message (pending queue mode) to keep the pipeline full.
 	s.ReleaseDeliverSlot()
 	s.DrainOnePending(func(pending *storage.Message, _ func()) error {
-		_, err := b.DeliverToSession(s, pending)
+		_, err := b.DeliverToSession(context.Background(), s, pending)
 		return err
 	})
 
@@ -299,7 +299,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *clus
 	storeMsg.Properties = msg.Properties
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	_, err := b.DeliverToSession(s, storeMsg) //nolint:contextcheck // context propagation would require API changes across the call chain
+	_, err := b.DeliverToSession(ctx, s, storeMsg)
 	// Note: DeliverToSession will release the message for QoS 0
 	// For QoS 1/2, Inflight storage takes ownership
 	return err
@@ -319,6 +319,6 @@ func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg 
 		return fmt.Errorf("invalid message type")
 	}
 
-	_, err := b.DeliverToSession(s, queueMsg) //nolint:contextcheck // context propagation would require API changes across the call chain
+	_, err := b.DeliverToSession(ctx, s, queueMsg)
 	return err
 }

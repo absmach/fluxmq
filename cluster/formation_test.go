@@ -45,7 +45,7 @@ func TestClusterFormation_ThreeNodes(t *testing.T) {
 	// Verify exactly one leader
 	leaderCount := 0
 	for _, node := range cluster.Nodes {
-		if node.Cluster.IsLeader() {
+		if node.Cluster.IsLeader(context.Background()) {
 			leaderCount++
 		}
 	}
@@ -112,7 +112,7 @@ func TestClusterFormation_LeaderElection(t *testing.T) {
 		// Log status of remaining nodes
 		for _, node := range cluster.Nodes {
 			if node.ID != initialLeader.ID && node.Cluster != nil {
-				t.Logf("Node %s - IsLeader: %v", node.ID, node.Cluster.IsLeader())
+				t.Logf("Node %s - IsLeader: %v", node.ID, node.Cluster.IsLeader(context.Background()))
 			}
 		}
 	}
@@ -124,7 +124,7 @@ func TestClusterFormation_LeaderElection(t *testing.T) {
 	// Verify exactly one leader among remaining nodes
 	leaderCount := 0
 	for _, node := range cluster.Nodes {
-		if node.ID != initialLeader.ID && node.Cluster != nil && node.Cluster.IsLeader() {
+		if node.ID != initialLeader.ID && node.Cluster != nil && node.Cluster.IsLeader(context.Background()) {
 			leaderCount++
 		}
 	}

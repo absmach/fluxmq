@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func TestCluster_LeaderElection(t *testing.T) {
 	// Verify only one leader
 	leaderCount := 0
 	for _, node := range cluster.Nodes {
-		if node.Cluster.IsLeader() {
+		if node.Cluster.IsLeader(context.Background()) {
 			leaderCount++
 		}
 	}

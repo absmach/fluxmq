@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"testing"
@@ -39,7 +40,7 @@ func TestMessageExpiry_ImmediateDelivery(t *testing.T) {
 	}
 
 	// Message should be delivered (not expired)
-	_, err := b.DeliverToSession(s, msg)
+	_, err := b.DeliverToSession(context.Background(), s, msg)
 	if err != nil {
 		t.Fatalf("Failed to deliver non-expired message: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestMessageExpiry_ExpiredMessage(t *testing.T) {
 	}
 
 	// Message should be dropped silently
-	_, err := b.DeliverToSession(s, msg)
+	_, err := b.DeliverToSession(context.Background(), s, msg)
 	if err != nil {
 		t.Fatalf("DeliverToSession should not error for expired messages: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestMessageExpiry_NoExpiry(t *testing.T) {
 	}
 
 	// Message should be delivered
-	_, err := b.DeliverToSession(s, msg)
+	_, err := b.DeliverToSession(context.Background(), s, msg)
 	if err != nil {
 		t.Fatalf("Failed to deliver message without expiry: %v", err)
 	}
@@ -158,7 +159,7 @@ func TestMessageExpiry_RemainingTime(t *testing.T) {
 	}
 
 	// Message should still be delivered (not expired)
-	_, err := b.DeliverToSession(s, msg)
+	_, err := b.DeliverToSession(context.Background(), s, msg)
 	if err != nil {
 		t.Fatalf("Failed to deliver message with remaining time: %v", err)
 	}
@@ -210,7 +211,7 @@ func TestMessageExpiry_RetainedMessage(t *testing.T) {
 	}
 
 	// Publish retained message
-	err := b.Publish(msg)
+	err := b.Publish(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("Failed to publish retained message: %v", err)
 	}

@@ -10,6 +10,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"sync"
@@ -68,7 +69,7 @@ func TestStress_HighThroughputPublish(t *testing.T) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 		messageCount.Add(1)
 	}
 
@@ -138,7 +139,7 @@ func TestStress_ConcurrentPublishers(t *testing.T) {
 				}
 				msg.SetPayloadFromBytes(payload)
 
-				if err := broker.Publish(msg); err != nil {
+				if err := broker.Publish(context.Background(), msg); err != nil {
 					errors.Add(1)
 				} else {
 					totalMessages.Add(1)
@@ -203,7 +204,7 @@ func TestStress_MemoryPressure(t *testing.T) {
 				QoS:   0,
 			}
 			msg.SetPayloadFromBytes(payload)
-			require.NoError(t, broker.Publish(msg))
+			require.NoError(t, broker.Publish(context.Background(), msg))
 		}
 
 		runtime.GC()
@@ -277,7 +278,7 @@ func TestStress_SustainedLoad(t *testing.T) {
 				}
 				msg.SetPayloadFromBytes(payload)
 
-				if err := broker.Publish(msg); err != nil {
+				if err := broker.Publish(context.Background(), msg); err != nil {
 					errors.Add(1)
 				} else {
 					totalMessages.Add(1)
@@ -420,7 +421,7 @@ func TestStress_FanOutExtreme(t *testing.T) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		require.NoError(t, broker.Publish(msg))
+		require.NoError(t, broker.Publish(context.Background(), msg))
 
 		if (i+1)%100 == 0 {
 			t.Logf("Published %d messages", i+1)
@@ -514,7 +515,7 @@ func TestStress_RapidSubscribeUnsubscribe(t *testing.T) {
 				QoS:   0,
 			}
 			msg.SetPayloadFromBytes(payload)
-			broker.Publish(msg) //nolint:errcheck // best-effort
+			broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			pubCount.Add(1)
 		}
 	}()

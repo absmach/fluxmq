@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func TestListSessionsFilterByState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sessions, _, err := b.ListSessions(SessionListFilter{State: tt.state})
+			sessions, _, err := b.ListSessions(context.Background(), SessionListFilter{State: tt.state})
 			if err != nil {
 				t.Fatalf("ListSessions: %v", err)
 			}
@@ -101,7 +102,7 @@ func TestListSessionsFilterByPrefix(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	sessions, _, err := b.ListSessions(SessionListFilter{Prefix: "client-a"})
+	sessions, _, err := b.ListSessions(context.Background(), SessionListFilter{Prefix: "client-a"})
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestListSessionsPagination(t *testing.T) {
 	defer cleanup()
 
 	// First page
-	page1, token1, err := b.ListSessions(SessionListFilter{Limit: 2})
+	page1, token1, err := b.ListSessions(context.Background(), SessionListFilter{Limit: 2})
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestListSessionsPagination(t *testing.T) {
 	}
 
 	// Second page
-	page2, token2, err := b.ListSessions(SessionListFilter{Limit: 2, PageToken: token1})
+	page2, token2, err := b.ListSessions(context.Background(), SessionListFilter{Limit: 2, PageToken: token1})
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestListSessionsSortedByClientID(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	sessions, _, err := b.ListSessions(SessionListFilter{})
+	sessions, _, err := b.ListSessions(context.Background(), SessionListFilter{})
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestListSessionsStripsSubscriptionsFromListView(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	sessions, _, err := b.ListSessions(SessionListFilter{})
+	sessions, _, err := b.ListSessions(context.Background(), SessionListFilter{})
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -202,7 +203,7 @@ func TestListSessionsZeroLimitReturnsAllSessions(t *testing.T) {
 		}
 	}
 
-	sessions, token, err := b.ListSessions(SessionListFilter{Limit: 0})
+	sessions, token, err := b.ListSessions(context.Background(), SessionListFilter{Limit: 0})
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -218,7 +219,7 @@ func TestGetSessionSnapshotLive(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	snap, err := b.GetSessionSnapshot("client-a")
+	snap, err := b.GetSessionSnapshot(context.Background(), "client-a")
 	if err != nil {
 		t.Fatalf("GetSessionSnapshot: %v", err)
 	}
@@ -240,7 +241,7 @@ func TestGetSessionSnapshotDisconnected(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	snap, err := b.GetSessionSnapshot("client-c")
+	snap, err := b.GetSessionSnapshot(context.Background(), "client-c")
 	if err != nil {
 		t.Fatalf("GetSessionSnapshot: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestGetSessionSnapshotNotFound(t *testing.T) {
 	b := NewBroker(memory.New(), nil)
 	defer b.Close()
 
-	_, err := b.GetSessionSnapshot("nonexistent")
+	_, err := b.GetSessionSnapshot(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent session")
 	}
@@ -266,7 +267,7 @@ func TestGetSessionSnapshotEmptyClientID(t *testing.T) {
 	b := NewBroker(memory.New(), nil)
 	defer b.Close()
 
-	_, err := b.GetSessionSnapshot("")
+	_, err := b.GetSessionSnapshot(context.Background(), "")
 	if err == nil {
 		t.Fatal("expected error for empty client ID")
 	}

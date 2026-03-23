@@ -153,7 +153,7 @@ func TestPublishDispatchesToLocalAndCross(t *testing.T) {
 
 	calls := 0
 	var gotClientID string
-	b.SetCrossDeliver(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
 		calls++
 		gotClientID = clientID
 	})
@@ -206,7 +206,7 @@ func TestForwardPublishSkipsCrossProtocolDispatch(t *testing.T) {
 	}
 
 	calls := 0
-	b.SetCrossDeliver(func(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
 		calls++
 	})
 

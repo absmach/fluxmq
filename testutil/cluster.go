@@ -462,7 +462,7 @@ func (tc *TestCluster) WaitForNewLeader(timeout time.Duration, excludeNodeID str
 			if node.ID == excludeNodeID {
 				continue
 			}
-			if node.Cluster != nil && node.Cluster.IsLeader() {
+			if node.Cluster != nil && node.Cluster.IsLeader(context.Background()) {
 				tc.mu.RUnlock()
 				tc.t.Logf("New leader elected: %s (excluding %s)", node.ID, excludeNodeID)
 				return node, nil
@@ -481,7 +481,7 @@ func (tc *TestCluster) GetNonLeaderNode() *TestNode {
 	defer tc.mu.RUnlock()
 
 	for _, node := range tc.Nodes {
-		if node.Cluster != nil && !node.Cluster.IsLeader() {
+		if node.Cluster != nil && !node.Cluster.IsLeader(context.Background()) {
 			return node
 		}
 	}
@@ -519,7 +519,7 @@ func (tc *TestCluster) GetLeader() *TestNode {
 	defer tc.mu.RUnlock()
 
 	for _, node := range tc.Nodes {
-		if node.Cluster != nil && node.Cluster.IsLeader() {
+		if node.Cluster != nil && node.Cluster.IsLeader(context.Background()) {
 			return node
 		}
 	}

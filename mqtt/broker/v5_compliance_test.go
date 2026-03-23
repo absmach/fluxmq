@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"io"
 	"net"
 	"testing"
@@ -86,7 +87,7 @@ func TestV5NoLocalPreventsSelfDelivery(t *testing.T) {
 		QoS:         1,
 	}
 	msg.SetPayloadFromBytes([]byte("payload"))
-	require.NoError(t, b.Publish(msg))
+	require.NoError(t, b.Publish(context.Background(), msg))
 
 	require.Len(t, conn.packets, 0)
 }
@@ -114,7 +115,7 @@ func TestV5RetainAsPublishedAffectsDeliveryFlag(t *testing.T) {
 		Retain:      true,
 	}
 	msg.SetPayloadFromBytes([]byte("payload"))
-	require.NoError(t, b.Publish(msg))
+	require.NoError(t, b.Publish(context.Background(), msg))
 
 	require.Len(t, conn1.packets, 1)
 	require.Len(t, conn2.packets, 1)
@@ -143,7 +144,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 		Retain:      true,
 	}
 	retained.SetPayloadFromBytes([]byte("retained"))
-	require.NoError(t, b.Publish(retained))
+	require.NoError(t, b.Publish(context.Background(), retained))
 	matchedRetained, err := b.GetRetainedMatching("retain/topic")
 	require.NoError(t, err)
 	require.Len(t, matchedRetained, 1)

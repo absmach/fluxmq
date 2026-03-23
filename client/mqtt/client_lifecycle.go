@@ -172,7 +172,7 @@ func (c *Client) connectToServer(ctx context.Context, addr string) (net.Conn, er
 		conn.Close()
 		return nil, err
 	}
-	if code != ConnAccepted {
+	if code != ErrConnAccepted {
 		conn.Close()
 		return nil, code
 	}
@@ -189,7 +189,7 @@ func (c *Client) sendConnect(conn net.Conn) error {
 	return c.packConnectPacket(conn, keepAlive)
 }
 
-func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckCode, error) {
+func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckError, error) {
 	deadline := time.Now().Add(c.opts.ConnectTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
@@ -235,7 +235,7 @@ func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckCode, e
 				c.opts.OnServerCapabilities(caps)
 			}
 
-			return ConnAckCode(ack.ReasonCode), nil
+			return ConnAckError(ack.ReasonCode), nil
 		}
 	}
 
@@ -247,7 +247,7 @@ func (c *Client) readConnAck(ctx context.Context, conn net.Conn) (ConnAckCode, e
 	if !ok {
 		return 0, ErrUnexpectedPacket
 	}
-	return ConnAckCode(ack.ReturnCode), nil
+	return ConnAckError(ack.ReturnCode), nil
 }
 
 // Disconnect gracefully disconnects from the broker.

@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -47,7 +48,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg) //nolint:errcheck // best-effort
+				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -82,7 +83,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg) //nolint:errcheck // best-effort
+				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -109,7 +110,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 			QoS:   1,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -134,7 +135,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 			QoS:   2,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -167,7 +168,7 @@ func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg) //nolint:errcheck // best-effort
+				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -210,7 +211,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -243,7 +244,7 @@ func BenchmarkMessagePublish_FanOut(b *testing.B) {
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
-				broker.Publish(msg) //nolint:errcheck // best-effort
+				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
 	}
@@ -285,7 +286,7 @@ func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -344,7 +345,7 @@ func BenchmarkMessagePublish_WildcardHeavy(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -396,7 +397,7 @@ func BenchmarkMessagePublish_WithChurn(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.Publish(msg) //nolint:errcheck // best-effort
+		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
 
@@ -424,7 +425,7 @@ func BenchmarkMessageDistribute(b *testing.B) {
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
-		broker.distribute(msg) //nolint:errcheck // best-effort
+		broker.distribute(context.Background(), msg) //nolint:errcheck // best-effort
 		msg.ReleasePayload()
 	}
 }

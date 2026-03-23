@@ -3,7 +3,10 @@
 
 package api
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
 type nodeResponse struct {
 	ID            string  `json:"id"`
@@ -20,7 +23,7 @@ type clusterResponse struct {
 	Nodes       []nodeResponse `json:"nodes"`
 }
 
-func (s *Server) buildClusterResponse() clusterResponse {
+func (s *Server) buildClusterResponse(ctx context.Context) clusterResponse {
 	if s.cluster == nil {
 		return clusterResponse{
 			NodeID:      "single-node",
@@ -34,7 +37,7 @@ func (s *Server) buildClusterResponse() clusterResponse {
 	resp := clusterResponse{
 		NodeID:      s.cluster.NodeID(),
 		ClusterMode: true,
-		IsLeader:    s.cluster.IsLeader(),
+		IsLeader:    s.cluster.IsLeader(ctx),
 		Nodes:       make([]nodeResponse, 0, len(nodes)),
 	}
 	for _, n := range nodes {
@@ -59,5 +62,5 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, s.buildClusterResponse())
+	writeJSON(w, http.StatusOK, s.buildClusterResponse(r.Context()))
 }

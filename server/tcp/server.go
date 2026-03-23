@@ -230,7 +230,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 
 	// core.NewConnection accepts any net.Conn (TCP or TLS)
 	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion)
-	broker.HandleConnection(s.handler, hc) //nolint:contextcheck // context propagation would require API changes across the call chain
+	broker.HandleConnection(connCtx, s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",
 		slog.String("remote", conn.RemoteAddr().String()))

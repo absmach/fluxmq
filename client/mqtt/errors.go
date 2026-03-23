@@ -50,33 +50,33 @@ var (
 	ErrMalformedPacket  = errors.New("malformed packet")
 )
 
-// ConnAckCode represents MQTT CONNACK return codes.
-type ConnAckCode byte //nolint:errname // ConnAckCode is a protocol-defined numeric type; renaming would break the public API
+// ConnAckError represents MQTT CONNACK return codes.
+type ConnAckError byte
 
 // MQTT 3.1.1 CONNACK return codes.
 const (
-	ConnAccepted           ConnAckCode = 0x00 //nolint:errname // protocol-defined sentinel; renaming would break the public API
-	ConnRefusedProtocol    ConnAckCode = 0x01 //nolint:errname // protocol-defined sentinel; renaming would break the public API
-	ConnRefusedIDRejected  ConnAckCode = 0x02 //nolint:errname // protocol-defined sentinel; renaming would break the public API
-	ConnRefusedUnavailable ConnAckCode = 0x03 //nolint:errname // protocol-defined sentinel; renaming would break the public API
-	ConnRefusedBadAuth     ConnAckCode = 0x04 //nolint:errname // protocol-defined sentinel; renaming would break the public API
-	ConnRefusedNotAuth     ConnAckCode = 0x05 //nolint:errname // protocol-defined sentinel; renaming would break the public API
+	ErrConnAccepted           ConnAckError = 0x00
+	ErrConnRefusedProtocol    ConnAckError = 0x01
+	ErrConnRefusedIDRejected  ConnAckError = 0x02
+	ErrConnRefusedUnavailable ConnAckError = 0x03
+	ErrConnRefusedBadAuth     ConnAckError = 0x04
+	ErrConnRefusedNotAuth     ConnAckError = 0x05
 )
 
 // String returns a human-readable description of the CONNACK code.
-func (c ConnAckCode) String() string {
+func (c ConnAckError) String() string {
 	switch c {
-	case ConnAccepted:
+	case ErrConnAccepted:
 		return "connection accepted"
-	case ConnRefusedProtocol:
+	case ErrConnRefusedProtocol:
 		return "unacceptable protocol version"
-	case ConnRefusedIDRejected:
+	case ErrConnRefusedIDRejected:
 		return "client identifier rejected"
-	case ConnRefusedUnavailable:
+	case ErrConnRefusedUnavailable:
 		return "server unavailable"
-	case ConnRefusedBadAuth:
+	case ErrConnRefusedBadAuth:
 		return "bad username or password"
-	case ConnRefusedNotAuth:
+	case ErrConnRefusedNotAuth:
 		return "not authorized"
 	default:
 		return "unknown error"
@@ -84,6 +84,6 @@ func (c ConnAckCode) String() string {
 }
 
 // Error implements the error interface.
-func (c ConnAckCode) Error() string {
+func (c ConnAckError) Error() string {
 	return c.String()
 }

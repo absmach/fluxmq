@@ -504,7 +504,7 @@ func (c *EtcdCluster) Nodes() []NodeInfo {
 			ID:      member.Name,
 			Address: peerURL,
 			Healthy: healthy,
-			Leader:  member.Name == c.nodeID && c.IsLeader(),
+			Leader:  member.Name == c.nodeID && c.IsLeader(context.Background()),
 		})
 	}
 
@@ -512,8 +512,8 @@ func (c *EtcdCluster) Nodes() []NodeInfo {
 }
 
 // IsLeader checks if this node is the cluster leader.
-func (c *EtcdCluster) IsLeader() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+func (c *EtcdCluster) IsLeader(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
 	resp, err := c.election.Leader(ctx)
@@ -531,7 +531,7 @@ func (c *EtcdCluster) IsLeader() bool {
 // WaitForLeader blocks until this node becomes leader.
 func (c *EtcdCluster) WaitForLeader(ctx context.Context) error {
 	for {
-		if c.IsLeader() { //nolint:contextcheck // context propagation would require API changes across the call chain
+		if c.IsLeader(ctx) {
 			return nil
 		}
 

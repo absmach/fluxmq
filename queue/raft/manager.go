@@ -315,7 +315,7 @@ func (m *Manager) IsEnabled() bool {
 }
 
 // IsLeader returns true if this node is the Raft leader.
-func (m *Manager) IsLeader() bool {
+func (m *Manager) IsLeader(_ context.Context) bool {
 	if m.raft == nil {
 		return false
 	}

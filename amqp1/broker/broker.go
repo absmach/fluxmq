@@ -75,9 +75,9 @@ func (b *Broker) GetStats() *Stats {
 }
 
 // HandleConnection handles a new raw TCP connection through the full AMQP lifecycle.
-func (b *Broker) HandleConnection(conn net.Conn) {
+func (b *Broker) HandleConnection(ctx context.Context, conn net.Conn) {
 	c := newConnection(b, conn)
-	if err := c.run(); err != nil {
+	if err := c.run(); err != nil { //nolint:contextcheck // connection lifecycle manages its own context for cleanup and metrics
 		b.logger.Debug("AMQP connection ended", "remote", conn.RemoteAddr(), "error", err)
 	}
 }
@@ -112,7 +112,7 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 			c.deliverMessage(topic, payload, props, sub.QoS)
 		} else {
 			if b.crossDeliver != nil {
-				b.crossDeliver(sub.ClientID, topic, payload, sub.QoS, props)
+				b.crossDeliver(context.Background(), sub.ClientID, topic, payload, sub.QoS, props)
 			}
 		}
 	}
@@ -148,7 +148,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 			continue
 		}
 		c := val.(*Connection)
-		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, sub.QoS) //nolint:contextcheck // context propagation would require API changes across the call chain
+		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, sub.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	}
 
 	return nil
@@ -156,14 +156,14 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 
 // LocalDeliverPubSub delivers a pub/sub message to a specific local AMQP 1.0 connection.
 // Called by the cross-deliver callback from other protocol brokers.
-func (b *Broker) LocalDeliverPubSub(clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+func (b *Broker) LocalDeliverPubSub(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
 	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
 	val, ok := b.connections.Load(containerID)
 	if !ok {
 		return
 	}
 	c := val.(*Connection)
-	c.deliverMessage(topic, payload, props, qos)
+	c.deliverMessage(topic, payload, props, qos) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 }
 
 // DeliverToClient delivers a queue message to a specific AMQP client.
@@ -203,7 +203,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 			amqpMsg.Properties.MessageID = msgID
 		}
 
-		c.deliverAMQPMessage(topic, amqpMsg, m.QoS) //nolint:contextcheck // context propagation would require API changes across the call chain
+		c.deliverAMQPMessage(topic, amqpMsg, m.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 		return nil
 	default:
 		return fmt.Errorf("unsupported message type: %T", msg)
@@ -228,7 +228,7 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 		return fmt.Errorf("AMQP client not found: %s", containerID)
 	}
 	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS) //nolint:contextcheck // context propagation would require API changes across the call chain
+	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	return nil
 }
 

@@ -3,7 +3,10 @@
 
 package broker
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 const (
 	AMQP091ClientPrefix = "amqp091-"
@@ -13,7 +16,7 @@ const (
 )
 
 // CrossDeliverFunc delivers a pub/sub message to a client in another protocol broker.
-type CrossDeliverFunc func(clientID string, topic string, payload []byte, qos byte, props map[string]string)
+type CrossDeliverFunc func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string)
 
 // IsAMQP091Client returns true when the client ID belongs to an AMQP 0.9.1 connection.
 func IsAMQP091Client(clientID string) bool {

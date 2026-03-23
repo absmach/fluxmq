@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestCluster_LeaderFailover_NewLeaderElected(t *testing.T) {
 		if node.ID == killedID {
 			continue
 		}
-		if node.Cluster != nil && node.Cluster.IsLeader() {
+		if node.Cluster != nil && node.Cluster.IsLeader(context.Background()) {
 			leaderCount++
 		}
 	}
@@ -168,7 +169,7 @@ func TestCluster_NonLeaderCrash_TrafficContinues(t *testing.T) {
 	assert.Equal(t, payload, msg.Payload)
 
 	// Leader should be unchanged.
-	assert.True(t, leader.Cluster.IsLeader(), "leader should remain unchanged")
+	assert.True(t, leader.Cluster.IsLeader(context.Background()), "leader should remain unchanged")
 }
 
 func TestCluster_SessionTakeover_AfterNodeCrash(t *testing.T) {

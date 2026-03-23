@@ -190,7 +190,7 @@ func (n *NoopCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName stri
 
 // Leadership - always leader in single-node
 
-func (n *NoopCluster) IsLeader() bool {
+func (n *NoopCluster) IsLeader(_ context.Context) bool {
 	// Single-node is always the leader
 	return true
 }
