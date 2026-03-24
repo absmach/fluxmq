@@ -248,6 +248,11 @@ export function SessionDetailDialog({
 										<span className="font-mono">{session.node_id}</span>
 									</DetailRow>
 								)}
+								{session.connection_name && (
+									<DetailRow label="Client Name">
+										<span className="break-all">{session.connection_name}</span>
+									</DetailRow>
+								)}
 								{session.connected_at && (
 									<DetailRow label="Connected At">
 										{fmt(session.connected_at)}

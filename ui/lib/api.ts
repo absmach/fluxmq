@@ -48,6 +48,7 @@ export interface SessionSubscription {
 
 export interface SessionInfo {
 	client_id: string;
+	connection_name?: string;
 	node_id?: string;
 	state: string; // "connected" | "disconnected"
 	connected: boolean;

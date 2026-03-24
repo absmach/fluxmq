@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 )
 
 func TestSubscriptionsListEndpointDefaultsToConnected(t *testing.T) {
@@ -252,6 +254,46 @@ func TestSubscriptionsEndpointRejectsInvalidLimit(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestMergeAMQPSubscriptionResponsesAddsAMQPSubscriptions(t *testing.T) {
+	aggregated := map[string]subscriptionResponse{
+		"devices/one": {
+			Filter:          "devices/one",
+			SubscriberCount: 2,
+			MaxQoS:          1,
+		},
+	}
+
+	mergeAMQPSubscriptionResponses(aggregated, []amqpbroker.SubscriptionSnapshot{
+		{ClientID: "amqp091-conn-1", Filter: "devices/one", QoS: 1},
+		{ClientID: "amqp091-conn-2", Filter: "jobs.*", QoS: 1},
+	}, "")
+
+	if aggregated["devices/one"].SubscriberCount != 3 {
+		t.Fatalf("expected devices/one subscriber count 3, got %d", aggregated["devices/one"].SubscriberCount)
+	}
+	if aggregated["jobs.*"].SubscriberCount != 1 {
+		t.Fatalf("expected jobs.* subscriber count 1, got %d", aggregated["jobs.*"].SubscriberCount)
+	}
+}
+
+func TestMergeAMQPSubscriptionClientsAddsAMQPClients(t *testing.T) {
+	clients := map[string]byte{
+		"mqtt-client": 1,
+	}
+
+	mergeAMQPSubscriptionClients(clients, []amqpbroker.SubscriptionSnapshot{
+		{ClientID: "amqp091-conn-1", Filter: "jobs.*", QoS: 1},
+		{ClientID: "amqp091-conn-2", Filter: "orders.*", QoS: 1},
+	}, "jobs.*", "")
+
+	if len(clients) != 2 {
+		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	if qos, ok := clients["amqp091-conn-1"]; !ok || qos != 1 {
+		t.Fatalf("expected amqp091-conn-1 with qos 1, got %v %v", ok, qos)
 	}
 }
 

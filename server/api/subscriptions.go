@@ -6,9 +6,11 @@ package api
 import (
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 )
 
@@ -39,7 +41,7 @@ func (s *Server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil {
+	if s.broker == nil && s.amqpBroker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -74,28 +76,14 @@ func (s *Server) handleSubscriptionsList(w http.ResponseWriter, r *http.Request)
 	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
 	pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
 
-	snapshots, nextPageToken, err := s.broker.ListSubscriptions(mqttbroker.SubscriptionListFilter{
-		Prefix:    prefix,
-		State:     state,
-		Limit:     limit,
-		PageToken: pageToken,
-	})
+	snapshots, nextPageToken, err := s.listSubscriptions(state, prefix, limit, pageToken)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	resp := make([]subscriptionResponse, 0, len(snapshots))
-	for _, snap := range snapshots {
-		resp = append(resp, subscriptionResponse{
-			Filter:          snap.Filter,
-			SubscriberCount: snap.SubscriberCount,
-			MaxQoS:          snap.MaxQoS,
-		})
-	}
-
 	writeJSON(w, http.StatusOK, listSubscriptionsResponse{
-		Subscriptions: resp,
+		Subscriptions: snapshots,
 		NextPageToken: nextPageToken,
 	})
 }
@@ -116,25 +104,196 @@ func (s *Server) handleSubscriptionClients(w http.ResponseWriter, r *http.Reques
 	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
 	pageToken := strings.TrimSpace(r.URL.Query().Get("page_token"))
 
-	clients, nextPageToken, err := s.broker.ListSubscriptionClients(filter, state, prefix, limit, pageToken)
+	clients, nextPageToken, err := s.listSubscriptionClients(filter, state, prefix, limit, pageToken)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	resp := make([]subscriptionClientResponse, 0, len(clients))
-	for _, client := range clients {
-		resp = append(resp, subscriptionClientResponse{
-			ClientID: client.ClientID,
-			QoS:      client.QoS,
+	writeJSON(w, http.StatusOK, listSubscriptionClientsResponse{
+		Filter:        filter,
+		Clients:       clients,
+		NextPageToken: nextPageToken,
+	})
+}
+
+func (s *Server) listSubscriptions(
+	state string,
+	prefix string,
+	limit int,
+	pageToken string,
+) ([]subscriptionResponse, string, error) {
+	aggregated := make(map[string]subscriptionResponse)
+
+	if s.broker != nil {
+		mqttSubs, _, err := s.broker.ListSubscriptions(mqttbroker.SubscriptionListFilter{
+			Prefix: prefix,
+			State:  state,
+			Limit:  0,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+
+		for _, snap := range mqttSubs {
+			aggregated[snap.Filter] = subscriptionResponse{
+				Filter:          snap.Filter,
+				SubscriberCount: snap.SubscriberCount,
+				MaxQoS:          snap.MaxQoS,
+			}
+		}
+	}
+
+	if s.amqpBroker != nil && stateAllowsConnected(state) {
+		mergeAMQPSubscriptionResponses(aggregated, s.amqpBroker.ListSubscriptionSnapshots(), prefix)
+	}
+
+	filters := make([]string, 0, len(aggregated))
+	for filter := range aggregated {
+		filters = append(filters, filter)
+	}
+	sort.Strings(filters)
+
+	start := 0
+	if pageToken != "" {
+		start = len(filters)
+		for i, filter := range filters {
+			if filter > pageToken {
+				start = i
+				break
+			}
+		}
+	}
+
+	end := len(filters)
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+
+	pageFilters := filters[start:end]
+	result := make([]subscriptionResponse, 0, len(pageFilters))
+	for _, filter := range pageFilters {
+		result = append(result, aggregated[filter])
+	}
+
+	nextPageToken := ""
+	if end < len(filters) && len(pageFilters) > 0 {
+		nextPageToken = pageFilters[len(pageFilters)-1]
+	}
+
+	return result, nextPageToken, nil
+}
+
+func mergeAMQPSubscriptionResponses(
+	aggregated map[string]subscriptionResponse,
+	snapshots []amqpbroker.SubscriptionSnapshot,
+	prefix string,
+) {
+	for _, snap := range snapshots {
+		if prefix != "" && !strings.HasPrefix(snap.Filter, prefix) {
+			continue
+		}
+
+		existing, ok := aggregated[snap.Filter]
+		if !ok {
+			aggregated[snap.Filter] = subscriptionResponse{
+				Filter:          snap.Filter,
+				SubscriberCount: 1,
+				MaxQoS:          snap.QoS,
+			}
+			continue
+		}
+
+		existing.SubscriberCount++
+		if snap.QoS > existing.MaxQoS {
+			existing.MaxQoS = snap.QoS
+		}
+		aggregated[snap.Filter] = existing
+	}
+}
+
+func (s *Server) listSubscriptionClients(
+	filter string,
+	state string,
+	prefix string,
+	limit int,
+	pageToken string,
+) ([]subscriptionClientResponse, string, error) {
+	clients := make(map[string]byte)
+
+	if s.broker != nil {
+		mqttClients, _, err := s.broker.ListSubscriptionClients(filter, state, prefix, 0, "")
+		if err != nil {
+			return nil, "", err
+		}
+
+		for _, client := range mqttClients {
+			if existing, ok := clients[client.ClientID]; !ok || client.QoS > existing {
+				clients[client.ClientID] = client.QoS
+			}
+		}
+	}
+
+	if s.amqpBroker != nil && stateAllowsConnected(state) {
+		mergeAMQPSubscriptionClients(clients, s.amqpBroker.ListSubscriptionSnapshots(), filter, prefix)
+	}
+
+	clientIDs := make([]string, 0, len(clients))
+	for clientID := range clients {
+		clientIDs = append(clientIDs, clientID)
+	}
+	sort.Strings(clientIDs)
+
+	start := 0
+	if pageToken != "" {
+		start = len(clientIDs)
+		for i, clientID := range clientIDs {
+			if clientID > pageToken {
+				start = i
+				break
+			}
+		}
+	}
+
+	end := len(clientIDs)
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+
+	pageClientIDs := clientIDs[start:end]
+	result := make([]subscriptionClientResponse, 0, len(pageClientIDs))
+	for _, clientID := range pageClientIDs {
+		result = append(result, subscriptionClientResponse{
+			ClientID: clientID,
+			QoS:      clients[clientID],
 		})
 	}
 
-	writeJSON(w, http.StatusOK, listSubscriptionClientsResponse{
-		Filter:        filter,
-		Clients:       resp,
-		NextPageToken: nextPageToken,
-	})
+	nextPageToken := ""
+	if end < len(clientIDs) && len(pageClientIDs) > 0 {
+		nextPageToken = pageClientIDs[len(pageClientIDs)-1]
+	}
+
+	return result, nextPageToken, nil
+}
+
+func mergeAMQPSubscriptionClients(
+	clients map[string]byte,
+	snapshots []amqpbroker.SubscriptionSnapshot,
+	filter string,
+	prefix string,
+) {
+	for _, snap := range snapshots {
+		if snap.Filter != filter {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(snap.ClientID, prefix) {
+			continue
+		}
+		if existing, ok := clients[snap.ClientID]; !ok || snap.QoS > existing {
+			clients[snap.ClientID] = snap.QoS
+		}
+	}
 }
 
 func subscriptionsStateParam(r *http.Request) (string, bool) {

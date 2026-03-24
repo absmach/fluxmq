@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
@@ -143,7 +144,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if s.amqpBroker != nil && corebroker.IsAMQP091Client(clientID) {
 		connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 		if s.amqpBroker.HasConnection(connID) {
-			writeJSON(w, http.StatusOK, amqpSessionResponse(clientID, s.amqpBroker.ConnectionName(connID)))
+			writeJSON(w, http.StatusOK, amqpSessionResponse(
+				clientID,
+				s.amqpBroker.ConnectionName(connID),
+				s.amqpBroker.ConnectionSubscriptions(connID),
+				true,
+			))
 			return
 		}
 	}
@@ -178,7 +184,12 @@ func (s *Server) listSessions(ctx context.Context, prefix, state string, limit i
 			if _, exists := byClientID[clientID]; exists {
 				continue
 			}
-			byClientID[clientID] = amqpSessionResponse(clientID, s.amqpBroker.ConnectionName(connID))
+			byClientID[clientID] = amqpSessionResponse(
+				clientID,
+				s.amqpBroker.ConnectionName(connID),
+				s.amqpBroker.ConnectionSubscriptions(connID),
+				false,
+			)
 		}
 	}
 
@@ -226,14 +237,32 @@ func stateAllowsConnected(state string) bool {
 	}
 }
 
-func amqpSessionResponse(clientID, connectionName string) sessionResponse {
-	return sessionResponse{
-		ClientID:       clientID,
-		ConnectionName: connectionName,
-		State:          sessionStateConnected,
-		Connected:      true,
-		Protocol:       "amqp0.9.1",
+func amqpSessionResponse(
+	clientID,
+	connectionName string,
+	subscriptions []amqpbroker.SubscriptionSnapshot,
+	includeSubscriptions bool,
+) sessionResponse {
+	resp := sessionResponse{
+		ClientID:          clientID,
+		ConnectionName:    connectionName,
+		State:             sessionStateConnected,
+		Connected:         true,
+		Protocol:          "amqp0.9.1",
+		SubscriptionCount: len(subscriptions),
 	}
+
+	if includeSubscriptions && len(subscriptions) > 0 {
+		resp.Subscriptions = make([]sessionSubscriptionResponse, 0, len(subscriptions))
+		for _, sub := range subscriptions {
+			resp.Subscriptions = append(resp.Subscriptions, sessionSubscriptionResponse{
+				Filter: sub.Filter,
+				QoS:    sub.QoS,
+			})
+		}
+	}
+
+	return resp
 }
 
 func sessionIDFromPath(r *http.Request) (string, bool) {

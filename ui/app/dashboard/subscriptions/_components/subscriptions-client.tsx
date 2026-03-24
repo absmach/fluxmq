@@ -69,7 +69,7 @@ const SubsClient = () => {
 						Subscriptions
 					</h1>
 					<p className="text-flux-text-muted">
-						Active topic filters aggregated from connected sessions
+						Active MQTT and AMQP 0.9.1 subscriptions aggregated from connected clients
 					</p>
 				</div>
 				<Badge
@@ -175,7 +175,7 @@ const SubsClient = () => {
 											colSpan={4}
 											className="text-center text-flux-text-muted py-12"
 										>
-											No active subscriptions.
+											No active MQTT or AMQP 0.9.1 subscriptions.
 										</TableCell>
 									</TableRow>
 								)}

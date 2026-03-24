@@ -331,6 +331,11 @@ const SessionsClient = () => {
 
 											<TableCell className="font-medium text-sm text-flux-text font-mono py-4">
 												<div>{session.client_id}</div>
+												{session.connection_name && (
+													<div className="mt-1 text-xs text-flux-text-muted font-sans">
+														{session.connection_name}
+													</div>
+												)}
 												<div className="md:hidden mt-1 text-xs text-flux-text-muted font-sans">
 													{session.node_id ?? "No node"} ·{" "}
 													{formatProtocolLabel(protocol)}

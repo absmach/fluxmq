@@ -141,6 +141,31 @@ func TestSessionDetailEndpointDetectsAMQPProtocolFromClientIDPrefix(t *testing.T
 	}
 }
 
+func TestAMQPSessionResponseIncludesConnectionNameAndSubscriptions(t *testing.T) {
+	resp := amqpSessionResponse(
+		corebroker.PrefixedAMQP091ClientID("conn-1"),
+		"orders-consumer",
+		[]amqpbroker.SubscriptionSnapshot{
+			{
+				ClientID: corebroker.PrefixedAMQP091ClientID("conn-1"),
+				Filter:   "orders.*",
+				QoS:      1,
+			},
+		},
+		true,
+	)
+
+	if resp.ConnectionName != "orders-consumer" {
+		t.Fatalf("expected connection name orders-consumer, got %q", resp.ConnectionName)
+	}
+	if resp.SubscriptionCount != 1 {
+		t.Fatalf("expected subscription count 1, got %d", resp.SubscriptionCount)
+	}
+	if len(resp.Subscriptions) != 1 || resp.Subscriptions[0].Filter != "orders.*" {
+		t.Fatalf("unexpected subscriptions: %#v", resp.Subscriptions)
+	}
+}
+
 func TestSessionsListEndpointRejectsInvalidState(t *testing.T) {
 	srv := newTestAPIServer(t)
 
