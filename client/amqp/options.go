@@ -22,14 +22,15 @@ const (
 // Options configures the AMQP 0.9.1 client.
 type Options struct {
 	// Connection
-	URL         string      // Full AMQP URL (overrides Address/Username/Password/Vhost)
-	Address     string      // Broker address (host:port)
-	Username    string      // Username for PLAIN auth
-	Password    string      // Password for PLAIN auth
-	Vhost       string      // Virtual host (default "/")
-	TLSConfig   *tls.Config // TLS configuration (nil for plain TCP)
-	DialTimeout time.Duration
-	Heartbeat   time.Duration
+	URL            string      // Full AMQP URL (overrides Address/Username/Password/Vhost)
+	Address        string      // Broker address (host:port)
+	Username       string      // Username for PLAIN auth
+	Password       string      // Password for PLAIN auth
+	Vhost          string      // Virtual host (default "/")
+	ConnectionName string      // Human-readable connection name (sent as "connection_name" in ClientProperties)
+	TLSConfig      *tls.Config // TLS configuration (nil for plain TCP)
+	DialTimeout    time.Duration
+	Heartbeat      time.Duration
 
 	// Channel QoS
 	PrefetchCount int // Maximum unacked deliveries
@@ -83,6 +84,14 @@ func (o *Options) SetCredentials(username, password string) *Options {
 // SetVhost sets the virtual host.
 func (o *Options) SetVhost(vhost string) *Options {
 	o.Vhost = vhost
+	return o
+}
+
+// SetConnectionName sets a human-readable name for the connection.
+// This is sent as "connection_name" in AMQP ClientProperties and
+// appears in the broker's admin UI for identifying connections.
+func (o *Options) SetConnectionName(name string) *Options {
+	o.ConnectionName = name
 	return o
 }
 

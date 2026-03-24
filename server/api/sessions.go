@@ -36,6 +36,7 @@ type sessionSubscriptionResponse struct {
 
 type sessionResponse struct {
 	ClientID          string                        `json:"client_id"`
+	ConnectionName    string                        `json:"connection_name,omitempty"`
 	State             string                        `json:"state"`
 	Connected         bool                          `json:"connected"`
 	Protocol          string                        `json:"protocol"`
@@ -142,7 +143,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if s.amqpBroker != nil && corebroker.IsAMQP091Client(clientID) {
 		connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 		if s.amqpBroker.HasConnection(connID) {
-			writeJSON(w, http.StatusOK, amqpSessionResponse(clientID))
+			writeJSON(w, http.StatusOK, amqpSessionResponse(clientID, s.amqpBroker.ConnectionName(connID)))
 			return
 		}
 	}
@@ -177,7 +178,7 @@ func (s *Server) listSessions(ctx context.Context, prefix, state string, limit i
 			if _, exists := byClientID[clientID]; exists {
 				continue
 			}
-			byClientID[clientID] = amqpSessionResponse(clientID)
+			byClientID[clientID] = amqpSessionResponse(clientID, s.amqpBroker.ConnectionName(connID))
 		}
 	}
 
@@ -225,12 +226,13 @@ func stateAllowsConnected(state string) bool {
 	}
 }
 
-func amqpSessionResponse(clientID string) sessionResponse {
+func amqpSessionResponse(clientID, connectionName string) sessionResponse {
 	return sessionResponse{
-		ClientID:  clientID,
-		State:     sessionStateConnected,
-		Connected: true,
-		Protocol:  "amqp0.9.1",
+		ClientID:       clientID,
+		ConnectionName: connectionName,
+		State:          sessionStateConnected,
+		Connected:      true,
+		Protocol:       "amqp0.9.1",
 	}
 }
 

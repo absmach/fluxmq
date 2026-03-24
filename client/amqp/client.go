@@ -170,6 +170,11 @@ func (c *Client) connectOnce() error {
 		Heartbeat:       c.opts.Heartbeat,
 		Dial:            dialer.Dial,
 	}
+	if c.opts.ConnectionName != "" {
+		cfg.Properties = amqp091.Table{
+			"connection_name": c.opts.ConnectionName,
+		}
+	}
 
 	conn, err := amqp091.DialConfig(url, cfg)
 	if err != nil {

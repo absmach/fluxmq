@@ -37,10 +37,11 @@ type Connection struct {
 	reader *bufio.Reader
 	writer *bufio.Writer
 
-	connID     string
-	frameMax   uint32
-	channelMax uint16
-	heartbeat  uint16
+	connID         string
+	connectionName string // human-readable label from AMQP ClientProperties "connection_name"
+	frameMax       uint32
+	channelMax     uint16
+	heartbeat      uint16
 
 	channels   map[uint16]*Channel
 	channelsMu sync.RWMutex
@@ -162,6 +163,9 @@ func (c *Connection) connectionHandshake() error {
 	}
 	if err := c.authenticate(startOK); err != nil {
 		return err
+	}
+	if name, ok := startOK.ClientProperties["connection_name"].(string); ok {
+		c.connectionName = name
 	}
 
 	// Send Connection.Tune

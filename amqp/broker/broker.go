@@ -143,6 +143,15 @@ func (b *Broker) HasConnection(connID string) bool {
 	return ok
 }
 
+// ConnectionName returns the human-readable name for the given connection, if set.
+func (b *Broker) ConnectionName(connID string) string {
+	v, ok := b.connections.Load(connID)
+	if !ok {
+		return ""
+	}
+	return v.(*Connection).connectionName
+}
+
 // Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.
 // It returns an error if cluster routing fails, so callers in confirm mode can NACK.
 func (b *Broker) Publish(topic string, payload []byte, props map[string]string) error {
