@@ -6,8 +6,6 @@ import {
 	Clock,
 	Database,
 	Download,
-	Pause,
-	Play,
 	Plug,
 	Rss,
 	Share2,
@@ -28,7 +26,6 @@ import {
 	YAxis,
 } from "recharts";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
 	Table,
@@ -106,14 +103,12 @@ export default function DashboardClient() {
 		>
 	>({});
 	const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-	const [liveUpdates, setLiveUpdates] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
 
 		async function poll() {
-			if (!liveUpdates) return;
 			try {
 				if (cancelled) return;
 
@@ -193,7 +188,7 @@ export default function DashboardClient() {
 			cancelled = true;
 			clearInterval(id);
 		};
-	}, [liveUpdates]);
+	}, []);
 
 	const displayStatus: BrokerStatus | null =
 		clusterStatus === null
@@ -279,31 +274,6 @@ export default function DashboardClient() {
 				</div>
 
 				<div className="flex items-center gap-2 flex-wrap">
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => setLiveUpdates((v) => !v)}
-						aria-pressed={liveUpdates}
-						aria-label={
-							liveUpdates ? "Pause live updates" : "Resume live updates"
-						}
-						className={`flex items-center gap-1.5 text-xs min-h-10 ${
-							liveUpdates
-								? "border-flux-green/40 text-flux-green bg-flux-green/10 hover:bg-flux-green/20"
-								: "border-flux-card-border text-flux-text-muted hover:bg-flux-hover"
-						}`}
-					>
-						{liveUpdates ? (
-							<>
-								<Pause className="w-3 h-3" /> Live
-							</>
-						) : (
-							<>
-								<Play className="w-3 h-3" /> Paused
-							</>
-						)}
-					</Button>
-
 					<Badge
 						variant="outline"
 						className={`flex items-center gap-1.5 text-sm px-3 py-1.5 min-h-10 ${

@@ -36,7 +36,7 @@ const NavBtn = ({
 		onClick={onClick}
 		disabled={disabled}
 		className={clsx(
-			"h-11 w-11 border-flux-card-border",
+			"h-8 w-8 border-flux-card-border",
 			disabled
 				? "pointer-events-none text-flux-text-muted opacity-40"
 				: "text-flux-text hover:bg-flux-hover",
@@ -64,14 +64,14 @@ export function TablePagination({
 	const to = Math.min(page * limit, totalItems);
 
 	return (
-		<div className="flex flex-wrap items-center justify-between gap-4 mt-4">
+		<div className="flex flex-wrap items-center justify-between gap-2 mt-4">
 			{/* Left: count info */}
 			<p className="text-xs text-flux-text-muted">
 				Showing {from}–{to} of {totalItems} {itemLabel}
 			</p>
 
 			{/* Right: controls */}
-			<div className="flex items-center gap-4">
+			<div className="flex items-center sm:gap-4 gap-2">
 				{/* Rows per page */}
 				<div className="flex items-center gap-2">
 					<span
@@ -87,7 +87,7 @@ export function TablePagination({
 							setLimit(Number(e.target.value));
 							setPage(1);
 						}}
-						className="h-11 rounded-md border border-flux-card-border bg-flux-bg px-2 text-xs text-flux-text focus:outline-none focus:ring-1 focus:ring-flux-blue"
+						className="h-8 rounded-md border border-flux-card-border bg-flux-bg px-2 text-xs text-flux-text focus:outline-none focus:ring-1 focus:ring-flux-blue"
 					>
 						{pageSizeOptions.map((n) => (
 							<option key={n} value={n}>
