@@ -1,6 +1,6 @@
 ---
 title: Sessions
-description: Session listing and detail
+description: MQTT session and AMQP 0.9.1 connection listing and detail
 full: true
 _openapi:
   toc:
@@ -17,16 +17,20 @@ _openapi:
       - content: Session detail
         id: session-detail
     contents:
-      - content: |
-          Returns broker sessions (MQTT and protocol-mapped AMQP sessions) with
-          optional filtering by state and client ID
-          prefix. Supports cursor-based pagination via `page_token`.
+      - content: >
+          Returns MQTT v3/v5 sessions and active AMQP 0.9.1 connections with
+
+          optional filtering by state and client ID prefix. Supports
+          cursor-based
+
+          pagination via `page_token`.
         heading: list-sessions
       - content: |
-          Returns full detail for a single session. For MQTT sessions this
-          includes subscriptions, inflight count, and offline queue depth.
-          The client ID must be
-          URL-encoded if it contains special characters (e.g. slashes).
+          Returns full detail for a single session or active AMQP 0.9.1
+          connection. MQTT sessions include subscriptions, inflight count, and
+          offline queue depth. AMQP 0.9.1 connections include `connection_name`
+          and active consumer filters. The client ID must be URL-encoded if it
+          contains special characters (e.g. slashes).
         heading: session-detail
 ---
 

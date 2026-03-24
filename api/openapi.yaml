@@ -27,9 +27,9 @@ tags:
   - name: Admin
     description: Broker statistics, cluster topology, and combined overview
   - name: Sessions
-    description: Session listing and detail
+    description: MQTT session and AMQP 0.9.1 connection listing and detail
   - name: Subscriptions
-    description: Subscription aggregation and per-filter client lookup
+    description: MQTT subscription and AMQP 0.9.1 consumer aggregation
   - name: Health
     description: Kubernetes liveness, readiness, and cluster status probes
 
@@ -106,8 +106,8 @@ paths:
       summary: Dashboard overview
       description: |
         Combined endpoint for dashboard landing pages — avoids multiple
-        round trips. Composes stats, cluster topology, and session counts
-        into a single response.
+        round trips. Composes stats, cluster topology, and combined MQTT +
+        AMQP 0.9.1 session counts into a single response.
       tags: [Admin]
       servers:
         - url: http://localhost:8082
@@ -137,9 +137,9 @@ paths:
       operationId: listSessions
       summary: List sessions
       description: |
-        Returns broker sessions (MQTT and protocol-mapped AMQP sessions) with
-        optional filtering by state and client ID
-        prefix. Supports cursor-based pagination via `page_token`.
+        Returns MQTT v3/v5 sessions and active AMQP 0.9.1 connections with
+        optional filtering by state and client ID prefix. Supports cursor-based
+        pagination via `page_token`.
       tags: [Sessions]
       servers:
         - url: http://localhost:8082
@@ -199,10 +199,11 @@ paths:
       operationId: getSession
       summary: Session detail
       description: |
-        Returns full detail for a single session. For MQTT sessions this
-        includes subscriptions, inflight count, and offline queue depth.
-        The client ID must be
-        URL-encoded if it contains special characters (e.g. slashes).
+        Returns full detail for a single session or active AMQP 0.9.1
+        connection. MQTT sessions include subscriptions, inflight count, and
+        offline queue depth. AMQP 0.9.1 connections include `connection_name`
+        and active consumer filters. The client ID must be URL-encoded if it
+        contains special characters (e.g. slashes).
       tags: [Sessions]
       servers:
         - url: http://localhost:8082
@@ -245,9 +246,10 @@ paths:
       operationId: listSubscriptions
       summary: List subscriptions
       description: |
-        Returns aggregated subscriptions grouped by topic filter, with subscriber
-        count and max QoS for each filter. By default, only connected clients are
-        included (`state=connected`).
+        Returns aggregated MQTT subscriptions and AMQP 0.9.1 active consumer
+        filters grouped by filter, with subscriber count and max QoS for each
+        row. By default, only connected clients are included
+        (`state=connected`).
       tags: [Subscriptions]
       servers:
         - url: http://localhost:8082
@@ -307,9 +309,10 @@ paths:
       operationId: listSubscriptionClients
       summary: List clients for a subscription filter
       description: |
-        Returns clients subscribed to an exact topic filter. The `filter` path
-        parameter must be URL-encoded (for example, `devices%2F%2B%2Fevents`).
-        By default, only connected clients are included (`state=connected`).
+        Returns clients or consumers registered for an exact MQTT subscription
+        filter or AMQP 0.9.1 consumer filter. The `filter` path parameter must
+        be URL-encoded (for example, `devices%2F%2B%2Fevents`). By default,
+        only connected clients are included (`state=connected`).
       tags: [Subscriptions]
       servers:
         - url: http://localhost:8082
@@ -538,7 +541,7 @@ components:
         active:
           type: integer
           format: uint64
-          description: Currently active MQTT subscriptions
+          description: Currently active MQTT topic subscriptions
           example: 1200
         retained_messages:
           type: integer
@@ -686,11 +689,11 @@ components:
       properties:
         connected:
           type: integer
-          description: Currently connected sessions
+          description: Currently connected MQTT sessions plus active AMQP 0.9.1 connections
           example: 342
         total:
           type: integer
-          description: Total sessions (connected + disconnected with state)
+          description: Total MQTT sessions plus currently active AMQP 0.9.1 connections
           example: 500
 
     OverviewCluster:
@@ -756,6 +759,10 @@ components:
         client_id:
           type: string
           example: my-device-001
+        connection_name:
+          type: string
+          description: Human-readable AMQP 0.9.1 connection name, when provided by the client
+          example: orders-consumer
         state:
           type: string
           enum: [connected, disconnected]
@@ -773,10 +780,11 @@ components:
           example: 5
         clean_start:
           type: boolean
+          description: MQTT-only session setting
         expiry_interval:
           type: integer
           format: uint32
-          description: Session expiry interval in seconds (0 = no expiry)
+          description: MQTT-only session expiry interval in seconds (0 = no expiry)
         connected_at:
           type: ["string", "null"]
           format: date-time
@@ -786,26 +794,36 @@ components:
         receive_maximum:
           type: integer
           format: uint16
+          description: MQTT-only flow control setting
         max_packet_size:
           type: integer
           format: uint32
+          description: MQTT-only packet size limit
         topic_alias_max:
           type: integer
           format: uint16
+          description: MQTT-only topic alias limit
         request_response:
           type: boolean
+          description: MQTT 5 request/response capability flag
         request_problem:
           type: boolean
+          description: MQTT 5 problem information capability flag
         has_will:
           type: boolean
+          description: MQTT-only flag indicating whether the session has a will message
         subscription_count:
           type: integer
+          description: Number of active MQTT subscriptions or AMQP 0.9.1 consumers
         inflight_count:
           type: integer
+          description: MQTT-only inflight publish count
         offline_queue_depth:
           type: integer
+          description: MQTT-only offline queue depth
         subscriptions:
           type: array
+          description: Active MQTT subscriptions or AMQP 0.9.1 consumer filters
           items:
             $ref: "#/components/schemas/SessionSubscription"
 
@@ -827,15 +845,18 @@ components:
       properties:
         filter:
           type: string
+          description: MQTT topic filter or AMQP 0.9.1 consumer filter
           example: devices/+/events
         subscriber_count:
           type: integer
           minimum: 0
+          description: Number of matching MQTT subscribers and AMQP 0.9.1 consumers
           example: 42
         max_qos:
           type: integer
           minimum: 0
           maximum: 2
+          description: Highest QoS observed for the filter
           example: 1
 
     ListSubscriptionsResponse:

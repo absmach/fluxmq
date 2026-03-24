@@ -42,6 +42,13 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		sessions.Connected = int(s.broker.Stats().GetCurrentConnections())
 		sessions.Total = s.broker.SessionCount()
 	}
+	if s.amqpBroker != nil {
+		amqpConnected := int(s.amqpBroker.GetStats().GetCurrentConnections())
+		sessions.Connected += amqpConnected
+		// AMQP 0.9.1 connections are only tracked while active, so they contribute
+		// to the total session count only while connected.
+		sessions.Total += amqpConnected
+	}
 
 	resp := overviewResponse{
 		NodeID:        cl.NodeID,

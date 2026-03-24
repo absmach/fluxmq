@@ -1,6 +1,6 @@
 ---
 title: Subscriptions
-description: Subscription aggregation and per-filter client lookup
+description: MQTT subscription and AMQP 0.9.1 consumer aggregation
 full: true
 _openapi:
   toc:
@@ -17,19 +17,17 @@ _openapi:
       - content: List clients for a subscription filter
         id: list-clients-for-a-subscription-filter
     contents:
-      - content: >
-          Returns aggregated subscriptions grouped by topic filter, with
-          subscriber
-
-          count and max QoS for each filter. By default, only connected clients
-          are
-
-          included (`state=connected`).
+      - content: |
+          Returns aggregated MQTT subscriptions and AMQP 0.9.1 active consumer
+          filters grouped by filter, with subscriber count and max QoS for each
+          row. By default, only connected clients are included
+          (`state=connected`).
         heading: list-subscriptions
       - content: |
-          Returns clients subscribed to an exact topic filter. The `filter` path
-          parameter must be URL-encoded (for example, `devices%2F%2B%2Fevents`).
-          By default, only connected clients are included (`state=connected`).
+          Returns clients or consumers registered for an exact MQTT subscription
+          filter or AMQP 0.9.1 consumer filter. The `filter` path parameter must
+          be URL-encoded (for example, `devices%2F%2B%2Fevents`). By default,
+          only connected clients are included (`state=connected`).
         heading: list-clients-for-a-subscription-filter
 ---
 

@@ -24,6 +24,7 @@ interface NodeStats {
 	bytes: { received: number; sent: number };
 	by_protocol?: {
 		mqtt?: { subscriptions?: { active: number } };
+		amqp?: { consumers?: number };
 	};
 }
 
@@ -38,9 +39,11 @@ async function fetchNodeStats(
 		});
 		if (!res.ok) return {};
 		const s: NodeStats = await res.json();
+		const mqttSubscriptions = s.by_protocol?.mqtt?.subscriptions?.active ?? 0;
+		const amqpConsumers = s.by_protocol?.amqp?.consumers ?? 0;
 		return {
 			sessions: s.connections?.current ?? 0,
-			subscriptions: s.by_protocol?.mqtt?.subscriptions?.active ?? 0,
+			subscriptions: mqttSubscriptions + amqpConsumers,
 			messages_received: s.messages?.received ?? 0,
 			messages_sent: s.messages?.sent ?? 0,
 			bytes_received: s.bytes?.received ?? 0,
@@ -68,6 +71,7 @@ export async function GET() {
 			const data = await res.json();
 
 			const mqtt = data.stats?.by_protocol?.mqtt;
+			const amqp = data.stats?.by_protocol?.amqp;
 			const status: BrokerStatus = {
 				node_id: data.node_id,
 				is_leader: data.is_leader,
@@ -85,7 +89,8 @@ export async function GET() {
 				publish_sent: mqtt?.messages?.publish_sent ?? 0,
 				bytes_received: data.stats?.bytes?.received ?? 0,
 				bytes_sent: data.stats?.bytes?.sent ?? 0,
-				subscriptions: mqtt?.subscriptions?.active ?? 0,
+				subscriptions:
+					(mqtt?.subscriptions?.active ?? 0) + (amqp?.consumers ?? 0),
 				retained_messages: mqtt?.subscriptions?.retained_messages ?? 0,
 				uptime_seconds: data.uptime_seconds ?? 0,
 				auth_errors: mqtt?.errors?.auth ?? 0,

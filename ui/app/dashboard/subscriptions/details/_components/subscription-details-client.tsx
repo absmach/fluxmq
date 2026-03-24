@@ -113,7 +113,7 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 					<p className="text-flux-text-muted">
 						{filter ? (
 							<>
-								Clients subscribed to{" "}
+								Connected MQTT subscribers and AMQP 0.9.1 consumers for{" "}
 								<span className="font-mono">{filter}</span>
 							</>
 						) : (
@@ -236,7 +236,8 @@ const SubscriptionDetailsClient = ({ filter }: { filter: string }) => {
 											colSpan={4}
 											className="text-center text-flux-text-muted py-12"
 										>
-											No active clients for this subscription.
+											No connected MQTT subscribers or AMQP 0.9.1 consumers
+											for this filter.
 										</TableCell>
 									</TableRow>
 								)}

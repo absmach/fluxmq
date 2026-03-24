@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	"github.com/absmach/fluxmq/cluster"
 	mqtt "github.com/absmach/fluxmq/mqtt"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
@@ -117,5 +118,39 @@ func TestOverviewRejectsPost(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestOverviewIncludesAMQPConnectedSessions(t *testing.T) {
+	amqp := amqpbroker.New(nil, slog.Default())
+	amqp.GetStats().IncrementConnections()
+	amqp.GetStats().IncrementConsumers()
+
+	srv := New(Config{}, nil, amqp, nil, nil, nil, nil, slog.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp overviewResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.Sessions.Connected != 1 {
+		t.Fatalf("expected 1 connected session, got %d", resp.Sessions.Connected)
+	}
+	if resp.Sessions.Total != 1 {
+		t.Fatalf("expected 1 total session, got %d", resp.Sessions.Total)
+	}
+	if resp.Stats.ByProtocol.AMQP == nil {
+		t.Fatal("expected amqp in by_protocol")
+	}
+	if resp.Stats.ByProtocol.AMQP.Consumers != 1 {
+		t.Fatalf("expected amqp consumers 1, got %d", resp.Stats.ByProtocol.AMQP.Consumers)
 	}
 }

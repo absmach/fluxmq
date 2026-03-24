@@ -96,17 +96,20 @@ function SessionSubscriptionsDialog({
 	onOpenChange: (open: boolean) => void;
 }) {
 	const subscriptions = session.subscriptions ?? [];
+	const protocolKey = resolveSessionProtocol(session);
+	const isAMQP091 = protocolKey === "amqp0.9.1";
+	const title = isAMQP091 ? "Active Consumers" : "Active Subscriptions";
+	const subject = isAMQP091 ? "active consumer" : "active subscription";
+	const filterHeading = isAMQP091 ? "Filter / Queue" : "Filter";
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="bg-flux-card border-flux-card-border text-flux-text max-w-2xl">
 				<DialogHeader>
-					<DialogTitle className="text-flux-text">
-						Active Subscriptions
-					</DialogTitle>
+					<DialogTitle className="text-flux-text">{title}</DialogTitle>
 					<DialogDescription className="text-flux-text-muted">
 						<span className="font-mono">{session.client_id}</span> has{" "}
-						{subscriptions.length} active subscription
+						{subscriptions.length} {subject}
 						{subscriptions.length !== 1 ? "s" : ""}.
 					</DialogDescription>
 				</DialogHeader>
@@ -115,7 +118,7 @@ function SessionSubscriptionsDialog({
 					<Table>
 						<TableHeader>
 							<TableRow className="border-flux-card-border hover:bg-transparent">
-								<TableHead>Filter</TableHead>
+								<TableHead>{filterHeading}</TableHead>
 								<TableHead className="text-right">QoS</TableHead>
 							</TableRow>
 						</TableHeader>
@@ -141,13 +144,15 @@ function SessionSubscriptionsDialog({
 							{subscriptions.length === 0 && (
 								<TableRow className="hover:bg-transparent">
 									<TableCell
-										colSpan={2}
-										className="text-center text-flux-text-muted py-10"
-									>
-										No active subscriptions.
-									</TableCell>
-								</TableRow>
-							)}
+											colSpan={2}
+											className="text-center text-flux-text-muted py-10"
+										>
+											{isAMQP091
+												? "No active consumers."
+												: "No active subscriptions."}
+										</TableCell>
+									</TableRow>
+								)}
 						</TableBody>
 					</Table>
 				</div>
@@ -164,6 +169,14 @@ export function SessionDetailDialog({
 	onClose: () => void;
 }) {
 	const protocolKey = session ? resolveSessionProtocol(session) : "unknown";
+	const isMQTT =
+		protocolKey === "mqtt3.1" ||
+		protocolKey === "mqtt3.1.1" ||
+		protocolKey === "mqtt5";
+	const isAMQP091 = protocolKey === "amqp0.9.1";
+	const subscriptionLabel = isAMQP091
+		? "Active Consumers"
+		: "Active Subscriptions";
 	const [subscriptionsOpen, setSubscriptionsOpen] = useState(false);
 
 	useEffect(() => {
@@ -224,23 +237,32 @@ export function SessionDetailDialog({
 							</div>
 
 							<div className="px-6 pb-6 overflow-y-auto max-h-[60vh]">
-								<SectionLabel icon={Radio} label="Queue" />
-								<div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-1">
-									<QueueStat
-										label="Inflight"
-										value={session.inflight_count}
-										highlight
-									/>
-									<QueueStat
-										label="Offline Queue"
-										value={session.offline_queue_depth}
-										highlight
-									/>
-									<QueueStat
-										label="Subscriptions"
-										value={session.subscription_count}
-									/>
-								</div>
+								<SectionLabel icon={Radio} label={isMQTT ? "Queue" : "Consumers"} />
+								{isMQTT ? (
+									<div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-1">
+										<QueueStat
+											label="Inflight"
+											value={session.inflight_count}
+											highlight
+										/>
+										<QueueStat
+											label="Offline Queue"
+											value={session.offline_queue_depth}
+											highlight
+										/>
+										<QueueStat
+											label="Subscriptions"
+											value={session.subscription_count}
+										/>
+									</div>
+								) : (
+									<div className="grid grid-cols-1 gap-3 mb-1">
+										<QueueStat
+											label="Active Consumers"
+											value={session.subscription_count}
+										/>
+									</div>
+								)}
 
 								<SectionLabel icon={Server} label="Connection" />
 								{session.node_id && (
@@ -264,85 +286,92 @@ export function SessionDetailDialog({
 									</DetailRow>
 								)}
 
-								<SectionLabel icon={ListFilter} label="Settings" />
-								<DetailRow label="Clean Start">
-									<Badge
-										variant="outline"
-										className={
-											session.clean_start
-												? "bg-flux-green/10 text-flux-green border-flux-green/20"
-												: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
-										}
-									>
-										{session.clean_start ? "Yes" : "No"}
-									</Badge>
-								</DetailRow>
-								{session.expiry_interval > 0 && (
-									<DetailRow label="Expiry Interval">
-										<span className="font-mono">
-											{session.expiry_interval}s
-										</span>
-									</DetailRow>
-								)}
-								{session.receive_maximum > 0 &&
-									session.receive_maximum < 65535 && (
-										<DetailRow label="Receive Maximum">
-											<span className="font-mono">
-												{session.receive_maximum}
-											</span>
+								{isMQTT && (
+									<>
+										<SectionLabel icon={ListFilter} label="Settings" />
+										<DetailRow label="Clean Start">
+											<Badge
+												variant="outline"
+												className={
+													session.clean_start
+														? "bg-flux-green/10 text-flux-green border-flux-green/20"
+														: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
+												}
+											>
+												{session.clean_start ? "Yes" : "No"}
+											</Badge>
 										</DetailRow>
-									)}
-								{session.max_packet_size > 0 && (
-									<DetailRow label="Max Packet Size">
-										<span className="font-mono">
-											{(session.max_packet_size / 1024).toFixed(0)} KB
-										</span>
-									</DetailRow>
+										{session.expiry_interval > 0 && (
+											<DetailRow label="Expiry Interval">
+												<span className="font-mono">
+													{session.expiry_interval}s
+												</span>
+											</DetailRow>
+										)}
+										{session.receive_maximum > 0 &&
+											session.receive_maximum < 65535 && (
+												<DetailRow label="Receive Maximum">
+													<span className="font-mono">
+														{session.receive_maximum}
+													</span>
+												</DetailRow>
+											)}
+										{session.max_packet_size > 0 && (
+											<DetailRow label="Max Packet Size">
+												<span className="font-mono">
+													{(session.max_packet_size / 1024).toFixed(0)} KB
+												</span>
+											</DetailRow>
+										)}
+										<DetailRow label="Has Will">
+											<Badge
+												variant="outline"
+												className={
+													session.has_will
+														? "bg-flux-orange/10 text-flux-orange border-flux-orange/20"
+														: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
+												}
+											>
+												{session.has_will ? "Yes" : "No"}
+											</Badge>
+										</DetailRow>
+										{session.topic_alias_max > 0 && (
+											<DetailRow label="Topic Alias Max">
+												<span className="font-mono">{session.topic_alias_max}</span>
+											</DetailRow>
+										)}
+										<DetailRow label="Request/Response">
+											<Badge
+												variant="outline"
+												className={
+													session.request_response
+														? "bg-flux-green/10 text-flux-green border-flux-green/20"
+														: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
+												}
+											>
+												{session.request_response ? "Enabled" : "Disabled"}
+											</Badge>
+										</DetailRow>
+										<DetailRow label="Problem Info">
+											<Badge
+												variant="outline"
+												className={
+													session.request_problem
+														? "bg-flux-green/10 text-flux-green border-flux-green/20"
+														: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
+												}
+											>
+												{session.request_problem ? "Enabled" : "Disabled"}
+											</Badge>
+										</DetailRow>
+									</>
 								)}
-								<DetailRow label="Has Will">
-									<Badge
-										variant="outline"
-										className={
-											session.has_will
-												? "bg-flux-orange/10 text-flux-orange border-flux-orange/20"
-												: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
-										}
-									>
-										{session.has_will ? "Yes" : "No"}
-									</Badge>
-								</DetailRow>
-								{session.topic_alias_max > 0 && (
-									<DetailRow label="Topic Alias Max">
-										<span className="font-mono">{session.topic_alias_max}</span>
-									</DetailRow>
-								)}
-								<DetailRow label="Request/Response">
-									<Badge
-										variant="outline"
-										className={
-											session.request_response
-												? "bg-flux-green/10 text-flux-green border-flux-green/20"
-												: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
-										}
-									>
-										{session.request_response ? "Enabled" : "Disabled"}
-									</Badge>
-								</DetailRow>
-								<DetailRow label="Problem Info">
-									<Badge
-										variant="outline"
-										className={
-											session.request_problem
-												? "bg-flux-green/10 text-flux-green border-flux-green/20"
-												: "bg-flux-text-muted/10 text-flux-text-muted border-flux-card-border"
-										}
-									>
-										{session.request_problem ? "Enabled" : "Disabled"}
-									</Badge>
-								</DetailRow>
 
-								<SectionLabel icon={Clock} label="Subscriptions" />
-								<DetailRow label="Active Subscriptions">
+								<SectionLabel
+									icon={Clock}
+									label={isAMQP091 ? "Consumers" : "Subscriptions"}
+								/>
+								<DetailRow label={subscriptionLabel}>
 									{session.subscription_count > 0 ? (
 										<Button
 											variant="ghost"
@@ -350,7 +379,8 @@ export function SessionDetailDialog({
 											className="text-xs text-flux-text-muted hover:text-flux-blue hover:bg-flux-blue/10"
 											onClick={() => setSubscriptionsOpen(true)}
 										>
-											View list ({session.subscription_count})
+											{isAMQP091 ? "View consumers" : "View list"} (
+											{session.subscription_count})
 										</Button>
 									) : (
 										<span className="text-flux-text-muted">None</span>
@@ -366,7 +396,7 @@ export function SessionDetailDialog({
 										className="border-flux-red/40 text-flux-red hover:bg-flux-red/10"
 										onClick={onClose}
 									>
-										Disconnect Session
+										{isAMQP091 ? "Close Connection" : "Disconnect Session"}
 									</Button>
 								</div>
 							)}

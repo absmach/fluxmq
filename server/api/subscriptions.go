@@ -6,7 +6,7 @@ package api
 import (
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -125,6 +125,8 @@ func (s *Server) listSubscriptions(
 ) ([]subscriptionResponse, string, error) {
 	aggregated := make(map[string]subscriptionResponse)
 
+	// Fetch all MQTT subscriptions without server-side pagination (Limit: 0)
+	// so we can merge with AMQP data and paginate the combined result.
 	if s.broker != nil {
 		mqttSubs, _, err := s.broker.ListSubscriptions(mqttbroker.SubscriptionListFilter{
 			Prefix: prefix,
@@ -152,7 +154,7 @@ func (s *Server) listSubscriptions(
 	for filter := range aggregated {
 		filters = append(filters, filter)
 	}
-	sort.Strings(filters)
+	slices.Sort(filters)
 
 	start := 0
 	if pageToken != "" {
@@ -221,6 +223,8 @@ func (s *Server) listSubscriptionClients(
 ) ([]subscriptionClientResponse, string, error) {
 	clients := make(map[string]byte)
 
+	// Fetch all MQTT clients without server-side pagination so we can merge
+	// with AMQP consumers and paginate the combined result.
 	if s.broker != nil {
 		mqttClients, _, err := s.broker.ListSubscriptionClients(filter, state, prefix, 0, "")
 		if err != nil {
@@ -242,7 +246,7 @@ func (s *Server) listSubscriptionClients(
 	for clientID := range clients {
 		clientIDs = append(clientIDs, clientID)
 	}
-	sort.Strings(clientIDs)
+	slices.Sort(clientIDs)
 
 	start := 0
 	if pageToken != "" {

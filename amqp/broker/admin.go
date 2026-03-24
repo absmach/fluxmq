@@ -3,7 +3,10 @@
 
 package broker
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 // SubscriptionSnapshot is an active AMQP 0.9.1 consumer view for admin APIs.
 type SubscriptionSnapshot struct {
@@ -34,11 +37,11 @@ func (b *Broker) ListSubscriptionSnapshots() []SubscriptionSnapshot {
 		all = append(all, b.ConnectionSubscriptions(connID)...)
 	}
 
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].Filter == all[j].Filter {
-			return all[i].ClientID < all[j].ClientID
+	slices.SortFunc(all, func(a, b SubscriptionSnapshot) int {
+		if c := cmp.Compare(a.Filter, b.Filter); c != 0 {
+			return c
 		}
-		return all[i].Filter < all[j].Filter
+		return cmp.Compare(a.ClientID, b.ClientID)
 	})
 
 	return all
@@ -80,8 +83,8 @@ func (c *Connection) subscriptionSnapshots() []SubscriptionSnapshot {
 		})
 	}
 
-	sort.Slice(snapshots, func(i, j int) bool {
-		return snapshots[i].Filter < snapshots[j].Filter
+	slices.SortFunc(snapshots, func(a, b SubscriptionSnapshot) int {
+		return cmp.Compare(a.Filter, b.Filter)
 	})
 
 	return snapshots
@@ -95,7 +98,11 @@ func (ch *Channel) subscriptionSnapshots(clientID string) []SubscriptionSnapshot
 		return nil
 	}
 
-	byFilter := make(map[string]byte)
+	// AMQP 0.9.1 consumers do not expose MQTT QoS semantics. We report
+	// a fixed QoS=1 matching the shared router integration level.
+	const amqpQoS byte = 1
+
+	filters := make(map[string]struct{})
 	for _, cons := range ch.consumers {
 		filter := cons.queue
 		if filter == "" {
@@ -104,31 +111,23 @@ func (ch *Channel) subscriptionSnapshots(clientID string) []SubscriptionSnapshot
 		if filter == "" {
 			continue
 		}
-
-		// AMQP 0.9.1 consumers do not expose MQTT QoS semantics. We report
-		// the same QoS=1 level used for the shared router integration.
-		const qos byte = 1
-		if existing, ok := byFilter[filter]; !ok || qos > existing {
-			byFilter[filter] = qos
-		}
+		filters[filter] = struct{}{}
 	}
 
-	if len(byFilter) == 0 {
+	if len(filters) == 0 {
 		return nil
 	}
 
-	snapshots := make([]SubscriptionSnapshot, 0, len(byFilter))
-	for filter, qos := range byFilter {
+	snapshots := make([]SubscriptionSnapshot, 0, len(filters))
+	for filter := range filters {
 		snapshots = append(snapshots, SubscriptionSnapshot{
 			ClientID: clientID,
 			Filter:   filter,
-			QoS:      qos,
+			QoS:      amqpQoS,
 		})
 	}
 
-	sort.Slice(snapshots, func(i, j int) bool {
-		return snapshots[i].Filter < snapshots[j].Filter
-	})
-
+	// No sort here — the caller (Connection.subscriptionSnapshots) deduplicates
+	// into a map and sorts the final result.
 	return snapshots
 }
