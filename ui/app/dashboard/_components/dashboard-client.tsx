@@ -1,18 +1,20 @@
 "use client";
 
 import {
-	Activity,
 	AlertTriangle,
-	BookOpen,
+	BarChart3,
 	Clock,
-	HardDrive,
-	MessageSquare,
-	Network,
+	Database,
+	Download,
 	Pause,
 	Play,
-	Server,
-	Wifi,
-	WifiOff,
+	Plug,
+	Rss,
+	Share2,
+	SquareArrowRightEnter,
+	SquareArrowRightExit,
+	Unplug,
+	Upload,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -221,54 +223,14 @@ export default function DashboardClient() {
 
 	const statCards = displayStatus
 		? [
-				{
-					label: "Active Connections",
-					value: formatCount(displayStatus.sessions),
-					icon: Activity,
-					gradient: "from-flux-blue-600 to-flux-blue-400",
-				},
-				{
-					label: "Subscriptions",
-					value: formatCount(displayStatus.subscriptions),
-					icon: BookOpen,
-					gradient: "from-flux-purple to-flux-dark",
-				},
-				{
-					label: "Messages Received",
-					value: formatCount(displayStatus.messages_received),
-					icon: MessageSquare,
-					gradient: "from-flux-green to-flux-teal",
-				},
-				{
-					label: "Messages Sent",
-					value: formatCount(displayStatus.messages_sent),
-					icon: MessageSquare,
-					gradient: "from-flux-teal to-flux-blue-400",
-				},
-				{
-					label: "Bytes In",
-					value: formatBytes(displayStatus.bytes_received),
-					icon: HardDrive,
-					gradient: "from-flux-orange to-amber-400",
-				},
-				{
-					label: "Bytes Out",
-					value: formatBytes(displayStatus.bytes_sent),
-					icon: HardDrive,
-					gradient: "from-amber-400 to-flux-orange",
-				},
-				{
-					label: "Retained Messages",
-					value: formatCount(displayStatus.retained_messages),
-					icon: Server,
-					gradient: "from-flux-purple to-flux-teal",
-				},
-				{
-					label: "Uptime",
-					value: formatUptime(displayStatus.uptime_seconds),
-					icon: Clock,
-					gradient: "from-flux-green to-flux-blue-400",
-				},
+				{ label: "Active Connections", value: formatCount(displayStatus.sessions), icon: BarChart3 },
+				{ label: "Subscriptions", value: formatCount(displayStatus.subscriptions), icon: Rss },
+				{ label: "Messages Received", value: formatCount(displayStatus.messages_received), icon: SquareArrowRightEnter },
+				{ label: "Messages Sent", value: formatCount(displayStatus.messages_sent), icon: SquareArrowRightExit },
+				{ label: "Bytes In", value: formatBytes(displayStatus.bytes_received), icon: Download },
+				{ label: "Bytes Out", value: formatBytes(displayStatus.bytes_sent), icon: Upload },
+				{ label: "Retained Messages", value: formatCount(displayStatus.retained_messages), icon: Database },
+				{ label: "Uptime", value: formatUptime(displayStatus.uptime_seconds), icon: Clock },
 			]
 		: [];
 
@@ -351,9 +313,9 @@ export default function DashboardClient() {
 						}`}
 					>
 						{error ? (
-							<WifiOff className="w-4 h-4" />
+							<Unplug className="w-4 h-4" />
 						) : (
-							<Wifi className="w-4 h-4" />
+							<Plug className="w-4 h-4" />
 						)}
 						{error ? "Offline" : "Online"}
 					</Badge>
@@ -368,7 +330,7 @@ export default function DashboardClient() {
 				</div>
 			)}
 			<div className="flex items-center gap-2 overflow-x-auto pb-1">
-				<Network className="w-4 h-4 text-flux-text-muted shrink-0" />
+				<Share2 className="w-4 h-4 text-flux-text-muted shrink-0" />
 				<NodePill
 					label="Cluster"
 					active={selectedNodeId === null}
@@ -393,17 +355,17 @@ export default function DashboardClient() {
 							className="border-flux-card-border bg-flux-card"
 						>
 							<CardContent className="p-5">
-								<div
-									className={`p-2 rounded-lg bg-gradient-to-br ${card.gradient} w-fit mb-3`}
-								>
-									<Icon className="w-4 h-4 text-white" />
+								<div className="flex items-center gap-4">
+									<Icon className="w-8 h-8 text-flux-blue dark:text-flux-orange shrink-0" />
+									<div>
+										<p className="text-2xl font-bold text-flux-text leading-none">
+											{card.value}
+										</p>
+										<p className="text-flux-text-muted text-xs mt-1">
+											{card.label}
+										</p>
+									</div>
 								</div>
-								<p className="text-flux-text-muted text-xs mb-1">
-									{card.label}
-								</p>
-								<p className="text-2xl font-bold text-flux-text">
-									{card.value}
-								</p>
 							</CardContent>
 						</Card>
 					);
@@ -446,7 +408,9 @@ export default function DashboardClient() {
 									/>
 									<Tooltip
 										contentStyle={tooltipStyle}
-										formatter={(v: number) => [`${v.toFixed(1)}/s`]}
+										formatter={(v) => [
+											typeof v === "number" ? `${v.toFixed(1)}/s` : "",
+										]}
 									/>
 									<Legend wrapperStyle={{ fontSize: 11 }} />
 									<Line
@@ -511,7 +475,9 @@ export default function DashboardClient() {
 									/>
 									<Tooltip
 										contentStyle={tooltipStyle}
-										formatter={(v: number) => [`${formatBytes(v)}/s`]}
+										formatter={(v) => [
+											typeof v === "number" ? `${formatBytes(v)}/s` : "",
+										]}
 									/>
 									<Legend wrapperStyle={{ fontSize: 11 }} />
 									<Line

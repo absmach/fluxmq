@@ -1,6 +1,6 @@
 "use client";
 
-import { BookMarked, Search } from "lucide-react";
+import { Rss, Search } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -76,7 +76,7 @@ const SubsClient = () => {
 					variant="outline"
 					className="flex items-center gap-1.5 text-sm px-3 py-1.5 min-h-10 bg-flux-blue/10 text-flux-blue border-flux-blue/30"
 				>
-					<BookMarked className="w-3.5 h-3.5" />
+					<Rss className="w-3.5 h-3.5" />
 					{subscriptions.length} filters
 				</Badge>
 			</div>

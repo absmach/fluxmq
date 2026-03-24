@@ -337,10 +337,6 @@ const NODE_RATES: Record<
 	},
 };
 
-function jitter(base: number, pct = 0.25): number {
-	return Math.round(base * (1 + (Math.random() * 2 - 1) * pct));
-}
-
 const _nodes: NodeInfo[] = [
 	{
 		node_id: "broker-1",

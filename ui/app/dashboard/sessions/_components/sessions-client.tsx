@@ -1,6 +1,6 @@
 "use client";
 
-import { Hourglass, Search, Trash2, Users, Wifi, WifiOff } from "lucide-react";
+import { Hourglass, Plug, Search, Trash2, Unplug, Users } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import { SessionDetailDialog } from "@/components/session-detail-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -163,13 +163,13 @@ const SessionsClient = () => {
 				<StatCard
 					label="Connected"
 					value={connectedCount}
-					icon={Wifi}
+					icon={Plug}
 					color="bg-flux-green/10 text-flux-green"
 				/>
 				<StatCard
 					label="Disconnected"
 					value={disconnectedCount}
-					icon={WifiOff}
+					icon={Unplug}
 					color="bg-flux-red/10 text-flux-red"
 				/>
 				<StatCard

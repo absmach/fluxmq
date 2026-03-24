@@ -1,6 +1,88 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@source "../**/*.{js,ts,jsx,tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ─── Tailwind v4 Theme ─────────────────────────────────────────────────── */
+
+@theme inline {
+	/* Flux dynamic tokens (resolved at runtime via CSS vars) */
+	--color-flux-bg: var(--flux-bg);
+	--color-flux-bg-alt: var(--flux-bg-alt);
+	--color-flux-fg: var(--flux-fg);
+	--color-flux-border: var(--flux-border);
+	--color-flux-grid: var(--flux-grid);
+	--color-flux-text: var(--flux-text);
+	--color-flux-text-muted: var(--flux-text-muted);
+	--color-flux-card: var(--flux-card);
+	--color-flux-card-border: var(--flux-card-border);
+	--color-flux-hover: var(--flux-hover);
+	--color-dark-surface: var(--flux-surface);
+	--color-dark-border: var(--flux-surface-border);
+
+	/* Flux blue scale */
+	--color-flux-blue: var(--flux-blue);
+	--color-flux-blue-50: #eef4fb;
+	--color-flux-blue-100: #d5e4f5;
+	--color-flux-blue-200: #adc9eb;
+	--color-flux-blue-300: #85afe1;
+	--color-flux-blue-400: #5d94d7;
+	--color-flux-blue-500: #3579cc;
+	--color-flux-blue-600: #2f69b3;
+	--color-flux-blue-700: #255898;
+	--color-flux-blue-800: #1c477d;
+	--color-flux-blue-900: #133662;
+	--color-flux-blue-950: #091e3b;
+
+	/* Flux orange scale */
+	--color-flux-orange: var(--flux-orange);
+	--color-flux-orange-50: #fef6e8;
+	--color-flux-orange-100: #fde9c2;
+	--color-flux-orange-200: #fcd185;
+	--color-flux-orange-300: #fab847;
+	--color-flux-orange-400: #f9a32a;
+	--color-flux-orange-500: #e88910;
+	--color-flux-orange-600: #c26f0b;
+	--color-flux-orange-700: #9b5508;
+	--color-flux-orange-800: #753e06;
+	--color-flux-orange-900: #4e2904;
+	--color-flux-orange-950: #2b1402;
+
+	/* Fixed semantic colors */
+	--color-flux-purple: #7c3aed;
+	--color-flux-dark: #1e293b;
+	--color-flux-green: #10b981;
+	--color-flux-teal: #0891b2;
+	--color-flux-red: #ef4444;
+
+	/* shadcn/ui color mappings */
+	--color-background: var(--flux-bg);
+	--color-foreground: var(--flux-text);
+	--color-card: var(--flux-card);
+	--color-card-foreground: var(--flux-text);
+	--color-primary: var(--flux-blue);
+	--color-primary-foreground: #ffffff;
+	--color-secondary: var(--flux-hover);
+	--color-secondary-foreground: var(--flux-text);
+	--color-muted: var(--flux-hover);
+	--color-muted-foreground: var(--flux-text-muted);
+	--color-accent: var(--flux-hover);
+	--color-accent-foreground: var(--flux-text);
+	--color-destructive: #ef4444;
+	--color-destructive-foreground: #ffffff;
+	--color-border: var(--flux-card-border);
+	--color-input: var(--flux-card-border);
+	--color-ring: var(--flux-blue);
+
+	/* Border radius */
+	--radius-lg: var(--radius);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-sm: calc(var(--radius) - 4px);
+
+	/* Font */
+	--font-geist: "Geist", sans-serif;
+}
 
 /* ─── FluxMQ Design Tokens ─────────────────────────────────────────────── */
 
@@ -29,24 +111,6 @@
 	--flux-surface: #ffffff;
 	--flux-surface-border: #e2e8f0;
 
-	/* ── shadcn/ui CSS variable mappings (light) ────────────────────────── */
-	--background: 248 250 252; /* flux-bg  #f8fafc  */
-	--foreground: 15 23 42; /* flux-text #0f172a */
-	--card: 255 255 255; /* flux-card #ffffff */
-	--card-foreground: 15 23 42; /* flux-text */
-	--primary: 47 105 179; /* flux-blue #2F69B3 */
-	--primary-foreground: 255 255 255;
-	--secondary: 241 245 249; /* flux-hover #f1f5f9 */
-	--secondary-foreground: 15 23 42;
-	--muted: 241 245 249; /* flux-hover */
-	--muted-foreground: 100 116 139; /* flux-text-muted #64748b */
-	--accent: 241 245 249;
-	--accent-foreground: 15 23 42;
-	--destructive: 239 68 68; /* flux-red #ef4444 */
-	--destructive-foreground: 255 255 255;
-	--border: 226 232 240; /* flux-card-border #e2e8f0 */
-	--input: 226 232 240;
-	--ring: 47 105 179; /* flux-blue */
 	--radius: 0.5rem;
 }
 
@@ -74,62 +138,45 @@
 	/* Semantic surface layers */
 	--flux-surface: #1a1d24;
 	--flux-surface-border: #2a2d35;
-
-	/* ── shadcn/ui CSS variable mappings (dark) ─────────────────────────── */
-	--background: 17 19 24; /* flux-bg  #111318 */
-	--foreground: 232 234 237; /* flux-text #e8eaed */
-	--card: 26 29 36; /* flux-card #1a1d24 */
-	--card-foreground: 232 234 237;
-	--primary: 99 145 205; /* flux-blue (bright) */
-	--primary-foreground: 255 255 255;
-	--secondary: 42 45 53; /* flux-hover #2a2d35 */
-	--secondary-foreground: 232 234 237;
-	--muted: 42 45 53; /* flux-hover */
-	--muted-foreground: 139 143 152; /* flux-text-muted #8b8f98 */
-	--accent: 42 45 53;
-	--accent-foreground: 232 234 237;
-	--destructive: 239 68 68;
-	--destructive-foreground: 255 255 255;
-	--border: 42 45 53; /* flux-card-border #2a2d35 */
-	--input: 42 45 53;
-	--ring: 99 145 205;
 }
 
 /* ─── Base ──────────────────────────────────────────────────────────────── */
 
-* {
-	margin: 0;
-	padding: 0;
-	box-sizing: border-box;
-}
+@layer base {
+	*,
+	*::before,
+	*::after {
+		box-sizing: border-box;
+	}
 
-html,
-body {
-	width: 100%;
-	height: 100%;
-	background: var(--flux-bg);
-	color: var(--flux-text);
-	font-family:
-		"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-	line-height: 1.6;
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
-}
+	html,
+	body {
+		width: 100%;
+		height: 100%;
+		background: var(--flux-bg);
+		color: var(--flux-text);
+		font-family:
+			"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+		line-height: 1.6;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-	color: var(--flux-text);
-	font-weight: 600;
-	line-height: 1.3;
-}
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6 {
+		color: var(--flux-text);
+		font-weight: 600;
+		line-height: 1.3;
+	}
 
-p {
-	color: var(--flux-text);
-	margin-bottom: 1rem;
+	p {
+		color: var(--flux-text);
+		margin-bottom: 1rem;
+	}
 }
 
 .text-muted {
