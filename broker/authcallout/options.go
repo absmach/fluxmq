@@ -99,7 +99,7 @@ func DefaultCircuitBreaker(logger *slog.Logger) *gobreaker.CircuitBreaker {
 			return counts.ConsecutiveFailures >= defaultCBFailThreshold
 		},
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-			logger.Warn("auth callout circuit breaker state changed",
+			logger.Debug("auth callout circuit breaker state changed",
 				slog.String("from", from.String()),
 				slog.String("to", to.String()))
 		},

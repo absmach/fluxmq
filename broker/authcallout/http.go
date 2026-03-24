@@ -89,18 +89,17 @@ func (c *HTTPClient) Authenticate(clientID, username, secret string) (*broker.Au
 		return nil, c.doPost(ctx, "/auth/authenticate", reqBody, &resp)
 	})
 	if err != nil {
-		c.Logger.Warn("auth_callout_authenticate_failed",
+		c.Logger.Info("auth_callout_authenticate",
 			slog.String("client_id", clientID),
+			slog.String("status", "error"),
 			slog.String("error", err.Error()))
 		return &broker.AuthnResult{}, err
 	}
 
-	if !resp.Authenticated {
-		c.Logger.Debug("auth_callout_authenticate_denied",
-			slog.String("client_id", clientID),
-			slog.Uint64("reason_code", uint64(resp.ReasonCode)),
-			slog.String("reason", resp.Reason))
-	}
+	c.Logger.Info("auth_callout_authenticate",
+		slog.String("client_id", clientID),
+		slog.String("status", "ok"),
+		slog.Bool("authenticated", resp.Authenticated))
 
 	return &broker.AuthnResult{
 		Authenticated: resp.Authenticated,
@@ -133,20 +132,21 @@ func (c *HTTPClient) authorize(externalID, topic, action string) bool {
 		return nil, c.doPost(ctx, "/auth/authorize", reqBody, &resp)
 	})
 	if err != nil {
-		c.Logger.Warn("auth_callout_authorize_failed",
+		c.Logger.Info("auth_callout_authorize",
 			slog.String("external_id", externalID),
 			slog.String("topic", topic),
+			slog.String("action", action),
+			slog.String("status", "error"),
 			slog.String("error", err.Error()))
 		return false
 	}
 
-	if !resp.Authorized {
-		c.Logger.Debug("auth_callout_authorize_denied",
-			slog.String("external_id", externalID),
-			slog.String("topic", topic),
-			slog.Uint64("reason_code", uint64(resp.ReasonCode)),
-			slog.String("reason", resp.Reason))
-	}
+	c.Logger.Info("auth_callout_authorize",
+		slog.String("external_id", externalID),
+		slog.String("topic", topic),
+		slog.String("action", action),
+		slog.String("status", "ok"),
+		slog.Bool("authorized", resp.Authorized))
 
 	return resp.Authorized
 }

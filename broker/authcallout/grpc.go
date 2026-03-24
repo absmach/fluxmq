@@ -57,20 +57,19 @@ func (c *GRPCClient) Authenticate(clientID, username, secret string) (*broker.Au
 		return c.svc.Authenticate(ctx, req)
 	})
 	if err != nil {
-		c.Logger.Warn("auth_callout_authenticate_failed",
+		c.Logger.Info("auth_callout_authenticate",
 			slog.String("client_id", clientID),
+			slog.String("status", "error"),
 			slog.String("error", err.Error()))
 		return &broker.AuthnResult{}, err
 	}
 
 	res := result.(*connect.Response[authv1.AuthnRes])
 	msg := res.Msg
-	if !msg.GetAuthenticated() {
-		c.Logger.Debug("auth_callout_authenticate_denied",
-			slog.String("client_id", clientID),
-			slog.Uint64("reason_code", uint64(msg.GetReasonCode())),
-			slog.String("reason", msg.GetReason()))
-	}
+	c.Logger.Info("auth_callout_authenticate",
+		slog.String("client_id", clientID),
+		slog.String("status", "ok"),
+		slog.Bool("authenticated", msg.GetAuthenticated()))
 
 	return &broker.AuthnResult{
 		Authenticated: msg.GetAuthenticated(),
@@ -102,22 +101,23 @@ func (c *GRPCClient) authorize(externalID, topic string, action authv1.Action) b
 		return c.svc.Authorize(ctx, req)
 	})
 	if err != nil {
-		c.Logger.Warn("auth_callout_authorize_failed",
+		c.Logger.Info("auth_callout_authorize",
 			slog.String("external_id", externalID),
 			slog.String("topic", topic),
+			slog.String("action", action.String()),
+			slog.String("status", "error"),
 			slog.String("error", err.Error()))
 		return false
 	}
 
 	res := result.(*connect.Response[authv1.AuthzRes])
 	msg := res.Msg
-	if !msg.GetAuthorized() {
-		c.Logger.Debug("auth_callout_authorize_denied",
-			slog.String("external_id", externalID),
-			slog.String("topic", topic),
-			slog.Uint64("reason_code", uint64(msg.GetReasonCode())),
-			slog.String("reason", msg.GetReason()))
-	}
+	c.Logger.Info("auth_callout_authorize",
+		slog.String("external_id", externalID),
+		slog.String("topic", topic),
+		slog.String("action", action.String()),
+		slog.String("status", "ok"),
+		slog.Bool("authorized", msg.GetAuthorized()))
 
 	return msg.GetAuthorized()
 }
