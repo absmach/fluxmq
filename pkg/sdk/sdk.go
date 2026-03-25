@@ -355,13 +355,13 @@ func NewSDK(conf Config) SDK {
 		msgContentType: conf.MsgContentType,
 
 		client: func() *http.Client {
-				transport := http.DefaultTransport.(*http.Transport).Clone()
-				transport.TLSClientConfig = &tls.Config{
-					InsecureSkipVerify: !conf.TLSVerification,
-				}
-				transport.DisableKeepAlives = true
-				return &http.Client{Transport: otelhttp.NewTransport(transport)}
-			}(),
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.TLSClientConfig = &tls.Config{
+				InsecureSkipVerify: !conf.TLSVerification,
+			}
+			transport.DisableKeepAlives = true
+			return &http.Client{Transport: otelhttp.NewTransport(transport)}
+		}(),
 		curlFlag: conf.CurlFlag,
 		SDK:      smqSDK,
 	}
