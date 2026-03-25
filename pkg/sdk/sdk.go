@@ -353,13 +353,13 @@ func NewSDK(conf Config) SDK {
 		rulesEngineURL: conf.RulesEngineURL,
 		msgContentType: conf.MsgContentType,
 
-		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
+		client: func() *http.Client {
+				transport := http.DefaultTransport.(*http.Transport).Clone()
+				transport.TLSClientConfig = &tls.Config{
 					InsecureSkipVerify: !conf.TLSVerification,
-				},
-			},
-		},
+				}
+				return &http.Client{Transport: transport}
+			}(),
 		curlFlag: conf.CurlFlag,
 		SDK:      smqSDK,
 	}
