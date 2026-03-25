@@ -19,6 +19,7 @@ import (
 
 	"github.com/absmach/supermq/pkg/errors"
 	smqSDK "github.com/absmach/supermq/pkg/sdk"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"moul.io/http2curl"
 )
 
@@ -358,7 +359,8 @@ func NewSDK(conf Config) SDK {
 				transport.TLSClientConfig = &tls.Config{
 					InsecureSkipVerify: !conf.TLSVerification,
 				}
-				return &http.Client{Transport: transport}
+				transport.DisableKeepAlives = true
+				return &http.Client{Transport: otelhttp.NewTransport(transport)}
 			}(),
 		curlFlag: conf.CurlFlag,
 		SDK:      smqSDK,
