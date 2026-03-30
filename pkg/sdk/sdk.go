@@ -8,16 +8,19 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	"github.com/absmach/supermq/pkg/errors"
+	smqerrors "github.com/absmach/supermq/pkg/errors"
 	smqSDK "github.com/absmach/supermq/pkg/sdk"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"moul.io/http2curl"
@@ -91,14 +94,14 @@ type SDK interface {
 	//  }
 	//  id, _ := sdk.AddBootstrap(ctx, cfg, "domainID", "token")
 	//  fmt.Println(id)
-	AddBootstrap(ctx context.Context, cfg BootstrapConfig, domainID, token string) (string, errors.SDKError)
+	AddBootstrap(ctx context.Context, cfg BootstrapConfig, domainID, token string) (string, smqerrors.SDKError)
 
 	// View returns Client Config with given ID belonging to the user identified by the given token.
 	//
 	// example:
 	//  bootstrap, _ := sdk.ViewBootstrap(ctx, "id", "domainID", "token")
 	//  fmt.Println(bootstrap)
-	ViewBootstrap(ctx context.Context, id, domainID, token string) (BootstrapConfig, errors.SDKError)
+	ViewBootstrap(ctx context.Context, id, domainID, token string) (BootstrapConfig, smqerrors.SDKError)
 
 	// Update updates editable fields of the provided Config.
 	//
@@ -112,42 +115,42 @@ type SDK interface {
 	//  }
 	//  err := sdk.UpdateBootstrap(ctx, cfg, "domainID", "token")
 	//  fmt.Println(err)
-	UpdateBootstrap(ctx context.Context, cfg BootstrapConfig, domainID, token string) errors.SDKError
+	UpdateBootstrap(ctx context.Context, cfg BootstrapConfig, domainID, token string) smqerrors.SDKError
 
 	// Update bootstrap config certificates.
 	//
 	// example:
 	//  err := sdk.UpdateBootstrapCerts(ctx, "id", "clientCert", "clientKey", "ca", "domainID", "token")
 	//  fmt.Println(err)
-	UpdateBootstrapCerts(ctx context.Context, id string, clientCert, clientKey, ca string, domainID, token string) (BootstrapConfig, errors.SDKError)
+	UpdateBootstrapCerts(ctx context.Context, id string, clientCert, clientKey, ca string, domainID, token string) (BootstrapConfig, smqerrors.SDKError)
 
 	// UpdateBootstrapConnection updates connections performs update of the channel list corresponding Client is connected to.
 	//
 	// example:
 	//  err := sdk.UpdateBootstrapConnection(ctx, "id", []string{"channel1", "channel2"}, "domainID", "token")
 	//  fmt.Println(err)
-	UpdateBootstrapConnection(ctx context.Context, id string, channels []string, domainID, token string) errors.SDKError
+	UpdateBootstrapConnection(ctx context.Context, id string, channels []string, domainID, token string) smqerrors.SDKError
 
 	// Remove removes Config with specified token that belongs to the user identified by the given token.
 	//
 	// example:
 	//  err := sdk.RemoveBootstrap(ctx, "id", "domainID", "token")
 	//  fmt.Println(err)
-	RemoveBootstrap(ctx context.Context, id, domainID, token string) errors.SDKError
+	RemoveBootstrap(ctx context.Context, id, domainID, token string) smqerrors.SDKError
 
 	// Bootstrap returns Config to the Client with provided external ID using external key.
 	//
 	// example:
 	//  bootstrap, _ := sdk.Bootstrap(ctx, "externalID", "externalKey")
 	//  fmt.Println(bootstrap)
-	Bootstrap(ctx context.Context, externalID, externalKey string) (BootstrapConfig, errors.SDKError)
+	Bootstrap(ctx context.Context, externalID, externalKey string) (BootstrapConfig, smqerrors.SDKError)
 
 	// BootstrapSecure retrieves a configuration with given external ID and encrypted external key.
 	//
 	// example:
 	//  bootstrap, _ := sdk.BootstrapSecure(ctx, "externalID", "externalKey", "cryptoKey")
 	//  fmt.Println(bootstrap)
-	BootstrapSecure(ctx context.Context, externalID, externalKey, cryptoKey string) (BootstrapConfig, errors.SDKError)
+	BootstrapSecure(ctx context.Context, externalID, externalKey, cryptoKey string) (BootstrapConfig, smqerrors.SDKError)
 
 	// Bootstraps retrieves a list of managed configs.
 	//
@@ -158,14 +161,14 @@ type SDK interface {
 	//  }
 	//  bootstraps, _ := sdk.Bootstraps(ctx, pm, "domainID", "token")
 	//  fmt.Println(bootstraps)
-	Bootstraps(ctx context.Context, pm PageMetadata, domainID, token string) (BootstrapPage, errors.SDKError)
+	Bootstraps(ctx context.Context, pm PageMetadata, domainID, token string) (BootstrapPage, smqerrors.SDKError)
 
 	// Whitelist updates Client state Config with given ID belonging to the user identified by the given token.
 	//
 	// example:
 	//  err := sdk.Whitelist(ctx, "clientID", 1, "domainID", "token")
 	//  fmt.Println(err)
-	Whitelist(ctx context.Context, clientID string, state int, domainID, token string) errors.SDKError
+	Whitelist(ctx context.Context, clientID string, state int, domainID, token string) smqerrors.SDKError
 
 	// ReadMessages read messages of specified channel.
 	//
@@ -176,14 +179,14 @@ type SDK interface {
 	//  }
 	//  msgs, _ := sdk.ReadMessages(ctx, pm,"channelID", "domainID", "token")
 	//  fmt.Println(msgs)
-	ReadMessages(ctx context.Context, pm MessagePageMetadata, chanID, domainID, token string) (MessagesPage, errors.SDKError)
+	ReadMessages(ctx context.Context, pm MessagePageMetadata, chanID, domainID, token string) (MessagesPage, smqerrors.SDKError)
 
 	// CreateSubscription creates a new subscription
 	//
 	// example:
 	//  subscription, _ := sdk.CreateSubscription(ctx, "topic", "contact", "token")
 	//  fmt.Println(subscription)
-	CreateSubscription(ctx context.Context, topic, contact, token string) (string, errors.SDKError)
+	CreateSubscription(ctx context.Context, topic, contact, token string) (string, smqerrors.SDKError)
 
 	// ListSubscriptions list subscriptions given list parameters.
 	//
@@ -194,101 +197,101 @@ type SDK interface {
 	//  }
 	//  subscriptions, _ := sdk.ListSubscriptions(ctx, pm, "token")
 	//  fmt.Println(subscriptions)
-	ListSubscriptions(ctx context.Context, pm PageMetadata, token string) (SubscriptionPage, errors.SDKError)
+	ListSubscriptions(ctx context.Context, pm PageMetadata, token string) (SubscriptionPage, smqerrors.SDKError)
 
 	// ViewSubscription retrieves a subscription with the provided id.
 	//
 	// example:
 	//  subscription, _ := sdk.ViewSubscription(ctx, "id", "token")
 	//  fmt.Println(subscription)
-	ViewSubscription(ctx context.Context, id, token string) (Subscription, errors.SDKError)
+	ViewSubscription(ctx context.Context, id, token string) (Subscription, smqerrors.SDKError)
 
 	// DeleteSubscription removes a subscription with the provided id.
 	//
 	// example:
 	//  err := sdk.DeleteSubscription(ctx, "id", "token")
 	//  fmt.Println(err)
-	DeleteSubscription(ctx context.Context, id, token string) errors.SDKError
+	DeleteSubscription(ctx context.Context, id, token string) smqerrors.SDKError
 
 	// Alarms API
 
 	// UpdateAlarm updates an existing alarm.
-	UpdateAlarm(ctx context.Context, alarm Alarm, domainID, token string) (Alarm, errors.SDKError)
+	UpdateAlarm(ctx context.Context, alarm Alarm, domainID, token string) (Alarm, smqerrors.SDKError)
 
 	// ViewAlarm retrieves an alarm by its ID.
-	ViewAlarm(ctx context.Context, id, domainID, token string) (Alarm, errors.SDKError)
+	ViewAlarm(ctx context.Context, id, domainID, token string) (Alarm, smqerrors.SDKError)
 
 	// ListAlarms retrieves a page of alarms.
-	ListAlarms(ctx context.Context, pm PageMetadata, domainID, token string) (AlarmsPage, errors.SDKError)
+	ListAlarms(ctx context.Context, pm PageMetadata, domainID, token string) (AlarmsPage, smqerrors.SDKError)
 
 	// DeleteAlarm deletes an alarm.
-	DeleteAlarm(ctx context.Context, id, domainID, token string) errors.SDKError
+	DeleteAlarm(ctx context.Context, id, domainID, token string) smqerrors.SDKError
 
 	// Reports API
 
 	// AddReportConfig creates a new report configuration.
-	AddReportConfig(ctx context.Context, cfg ReportConfig, domainID, token string) (ReportConfig, errors.SDKError)
+	AddReportConfig(ctx context.Context, cfg ReportConfig, domainID, token string) (ReportConfig, smqerrors.SDKError)
 
 	// ViewReportConfig retrieves a report config by its ID.
-	ViewReportConfig(ctx context.Context, id, domainID, token string) (ReportConfig, errors.SDKError)
+	ViewReportConfig(ctx context.Context, id, domainID, token string) (ReportConfig, smqerrors.SDKError)
 
 	// UpdateReportConfig updates an existing report configuration.
-	UpdateReportConfig(ctx context.Context, cfg ReportConfig, domainID, token string) (ReportConfig, errors.SDKError)
+	UpdateReportConfig(ctx context.Context, cfg ReportConfig, domainID, token string) (ReportConfig, smqerrors.SDKError)
 
 	// UpdateReportSchedule updates an existing report configuration's schedule.
-	UpdateReportSchedule(ctx context.Context, cfg ReportConfig, domainID, token string) (ReportConfig, errors.SDKError)
+	UpdateReportSchedule(ctx context.Context, cfg ReportConfig, domainID, token string) (ReportConfig, smqerrors.SDKError)
 
 	// RemoveReportConfig deletes a report config.
-	RemoveReportConfig(ctx context.Context, id, domainID, token string) errors.SDKError
+	RemoveReportConfig(ctx context.Context, id, domainID, token string) smqerrors.SDKError
 
 	// ListReportsConfig retrieves a page of report configs.
-	ListReportsConfig(ctx context.Context, pm PageMetadata, domainID, token string) (ReportConfigPage, errors.SDKError)
+	ListReportsConfig(ctx context.Context, pm PageMetadata, domainID, token string) (ReportConfigPage, smqerrors.SDKError)
 
 	// EnableReportConfig enables a report config.
-	EnableReportConfig(ctx context.Context, id, domainID, token string) (ReportConfig, errors.SDKError)
+	EnableReportConfig(ctx context.Context, id, domainID, token string) (ReportConfig, smqerrors.SDKError)
 
 	// DisableReportConfig disables a report config.
-	DisableReportConfig(ctx context.Context, id, domainID, token string) (ReportConfig, errors.SDKError)
+	DisableReportConfig(ctx context.Context, id, domainID, token string) (ReportConfig, smqerrors.SDKError)
 
 	// UpdateReportTemplate updates a report template.
-	UpdateReportTemplate(ctx context.Context, cfg ReportConfig, domainID, token string) errors.SDKError
+	UpdateReportTemplate(ctx context.Context, cfg ReportConfig, domainID, token string) smqerrors.SDKError
 
 	// ViewReportTemplate retrieves a report template.
-	ViewReportTemplate(ctx context.Context, id, domainID, token string) (ReportTemplate, errors.SDKError)
+	ViewReportTemplate(ctx context.Context, id, domainID, token string) (ReportTemplate, smqerrors.SDKError)
 
 	// DeleteReportTemplate deletes a report template.
-	DeleteReportTemplate(ctx context.Context, id, domainID, token string) errors.SDKError
+	DeleteReportTemplate(ctx context.Context, id, domainID, token string) smqerrors.SDKError
 
 	// GenerateReport generates a report from a configuration.
-	GenerateReport(ctx context.Context, config ReportConfig, action ReportAction, domainID, token string) (ReportPage, *ReportFile, errors.SDKError)
+	GenerateReport(ctx context.Context, config ReportConfig, action ReportAction, domainID, token string) (ReportPage, *ReportFile, smqerrors.SDKError)
 	// Rules Engine API
 
 	// AddRule creates a new rule.
-	AddRule(ctx context.Context, r Rule, domainID, token string) (Rule, errors.SDKError)
+	AddRule(ctx context.Context, r Rule, domainID, token string) (Rule, smqerrors.SDKError)
 
 	// ViewRule retrieves a rule by its ID.
-	ViewRule(ctx context.Context, id, domainID, token string) (Rule, errors.SDKError)
+	ViewRule(ctx context.Context, id, domainID, token string) (Rule, smqerrors.SDKError)
 
 	// UpdateRule updates an existing rule.
-	UpdateRule(ctx context.Context, r Rule, domainID, token string) (Rule, errors.SDKError)
+	UpdateRule(ctx context.Context, r Rule, domainID, token string) (Rule, smqerrors.SDKError)
 
 	// UpdateRuleTags updates an existing rule's tags.
-	UpdateRuleTags(ctx context.Context, r Rule, domainID, token string) (Rule, errors.SDKError)
+	UpdateRuleTags(ctx context.Context, r Rule, domainID, token string) (Rule, smqerrors.SDKError)
 
 	// UpdateRuleSchedule updates an existing rule's schedule.
-	UpdateRuleSchedule(ctx context.Context, r Rule, domainID, token string) (Rule, errors.SDKError)
+	UpdateRuleSchedule(ctx context.Context, r Rule, domainID, token string) (Rule, smqerrors.SDKError)
 
 	// ListRules retrieves a page of rules.
-	ListRules(ctx context.Context, pm PageMetadata, domainID, token string) (Page, errors.SDKError)
+	ListRules(ctx context.Context, pm PageMetadata, domainID, token string) (Page, smqerrors.SDKError)
 
 	// RemoveRule deletes a rule.
-	RemoveRule(ctx context.Context, id, domainID, token string) errors.SDKError
+	RemoveRule(ctx context.Context, id, domainID, token string) smqerrors.SDKError
 
 	// EnableRule enables a rule.
-	EnableRule(ctx context.Context, id, domainID, token string) (Rule, errors.SDKError)
+	EnableRule(ctx context.Context, id, domainID, token string) (Rule, smqerrors.SDKError)
 
 	// DisableRule disables a rule.
-	DisableRule(ctx context.Context, id, domainID, token string) (Rule, errors.SDKError)
+	DisableRule(ctx context.Context, id, domainID, token string) (Rule, smqerrors.SDKError)
 }
 
 type mgSDK struct {
@@ -358,7 +361,7 @@ func NewSDK(conf Config) SDK {
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: !conf.TLSVerification,
 			},
-			DisableKeepAlives: true,
+			IdleConnTimeout: 90 * time.Second,
 		})},
 		curlFlag: conf.CurlFlag,
 		SDK:      smqSDK,
@@ -367,10 +370,10 @@ func NewSDK(conf Config) SDK {
 
 // processRequest creates and send a new HTTP request, and checks for errors in the HTTP response.
 // It then returns the response headers, the response body, and the associated error(s) (if any).
-func (sdk mgSDK) processRequest(ctx context.Context, method, reqUrl, token string, data []byte, headers map[string]string, expectedRespCodes ...int) (http.Header, []byte, errors.SDKError) {
+func (sdk mgSDK) processRequest(ctx context.Context, method, reqUrl, token string, data []byte, headers map[string]string, expectedRespCodes ...int) (http.Header, []byte, smqerrors.SDKError) {
 	req, err := http.NewRequestWithContext(ctx, method, reqUrl, bytes.NewReader(data))
 	if err != nil {
-		return make(http.Header), []byte{}, errors.NewSDKError(err)
+		return make(http.Header), []byte{}, smqerrors.NewSDKError(err)
 	}
 
 	// Sets a default value for the Content-Type.
@@ -391,25 +394,35 @@ func (sdk mgSDK) processRequest(ctx context.Context, method, reqUrl, token strin
 	if sdk.curlFlag {
 		curlCommand, err := http2curl.GetCurlCommand(req)
 		if err != nil {
-			return nil, nil, errors.NewSDKError(err)
+			return nil, nil, smqerrors.NewSDKError(err)
 		}
 		log.Println(curlCommand.String())
 	}
 
 	resp, err := sdk.client.Do(req)
 	if err != nil {
-		return make(http.Header), []byte{}, errors.NewSDKError(err)
+		var opErr *net.OpError
+		switch {
+		case errors.Is(err, syscall.ECONNRESET):
+			return make(http.Header), []byte{}, smqerrors.NewSDKError(fmt.Errorf("request failed: connection reset by peer: %w", err))
+		case errors.As(err, &opErr):
+			return make(http.Header), []byte{}, smqerrors.NewSDKError(fmt.Errorf("request failed: network error (%s): %w", opErr.Op, err))
+		case errors.Is(err, io.EOF):
+			return make(http.Header), []byte{}, smqerrors.NewSDKError(fmt.Errorf("request failed: connection closed unexpectedly: %w", err))
+		default:
+			return make(http.Header), []byte{}, smqerrors.NewSDKError(fmt.Errorf("request failed: %w", err))
+		}
 	}
 	defer resp.Body.Close()
 
-	sdkerr := errors.CheckError(resp, expectedRespCodes...)
+	sdkerr := smqerrors.CheckError(resp, expectedRespCodes...)
 	if sdkerr != nil {
 		return make(http.Header), []byte{}, sdkerr
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return make(http.Header), []byte{}, errors.NewSDKError(err)
+		return make(http.Header), []byte{}, smqerrors.NewSDKError(err)
 	}
 
 	return resp.Header, body, nil
@@ -438,7 +451,7 @@ func (pm PageMetadata) query() (string, error) {
 	if pm.Metadata != nil {
 		md, err := json.Marshal(pm.Metadata)
 		if err != nil {
-			return "", errors.NewSDKError(err)
+			return "", smqerrors.NewSDKError(err)
 		}
 		q.Add("metadata", string(md))
 	}
