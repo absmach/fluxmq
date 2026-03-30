@@ -32,3 +32,14 @@ services:
     restart: unless-stopped
     depends_on:
       - node1
+
+  dashboard:
+    image: ghcr.io/absmach/fluxmq-dashboard:latest
+    network_mode: host
+    environment:
+      FLUXMQ_API_URL: ${FLUXMQ_API_URL:-http://127.0.0.1:9081}
+      FLUXMQ_NODE_URLS: ${FLUXMQ_NODE_URLS:-http://127.0.0.1:9081,http://127.0.0.1:9082,http://127.0.0.1:9083}
+      PORT: "3001"
+    depends_on:
+      - node1
+    restart: unless-stopped

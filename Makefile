@@ -9,6 +9,7 @@ GO := go
 LDFLAGS := -s -w
 GOFLAGS := -trimpath
 DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
+DASHBOARD_IMAGE_LATEST := ghcr.io/absmach/fluxmq-dashboard:latest
 PERF_SCRIPT_DIR := tests/perf/scripts
 PERF_SCENARIO_CONFIG ?= $(CONFIG)
 DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
@@ -30,6 +31,11 @@ $(BUILD_DIR)/$(BINARY): cmd/main.go $(shell find . -name '*.go' -not -path './bu
 .PHONY: docker
 docker:
 	docker build -f deployments/docker/Dockerfile -t $(DOCKER_IMAGE_LATEST) .
+
+# Build dashboard Docker image (latest tag)
+.PHONY: docker-dashboard
+docker-dashboard:
+	docker build -f ui/docker/Dockerfile -t $(DASHBOARD_IMAGE_LATEST) ui
 
 # Run the broker (uses default configuration)
 .PHONY: run
@@ -278,6 +284,7 @@ help:
 	@echo "Build:"
 	@echo "  build              Build the broker binary to $(BUILD_DIR)/$(BINARY)"
 	@echo "  docker             Build Docker image ($(DOCKER_IMAGE_LATEST))"
+	@echo "  docker-dashboard   Build dashboard Docker image ($(DASHBOARD_IMAGE_LATEST))"
 	@echo ""
 	@echo "Run (single node):"
 	@echo "  run                Build and run with default config"

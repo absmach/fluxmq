@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.git/
+.github/
+.gitignore
+*.md
+.env
+.env*.local
+next-env.d.ts
+coverage/
+build/

@@ -539,8 +539,7 @@ export default function DashboardClient() {
 									Cluster Nodes
 								</CardTitle>
 								<p className="text-xs text-flux-text-muted mt-0.5">
-									{nodes.length} node{nodes.length !== 1 ? "s" : ""} · click a
-									row to inspect
+									{nodes.length} node{nodes.length !== 1 ? "s" : ""}
 								</p>
 							</div>
 						</div>
