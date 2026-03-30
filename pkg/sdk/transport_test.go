@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 
 	"github.com/absmach/magistrala/pkg/sdk"
@@ -24,11 +23,12 @@ func TestTransport(t *testing.T) {
 	cases := []struct {
 		desc        string
 		serverFunc  func(t *testing.T) (url string, cleanup func())
+		ctxFunc     func() context.Context
 		wantErr     bool
 		errContains string
 	}{
 		{
-			desc: "no error - healthy server reuses pooled connection",
+			desc: "make request successfully with connection reuse",
 			serverFunc: func(t *testing.T) (string, func()) {
 				t.Helper()
 				var connCount atomic.Int32
@@ -51,7 +51,7 @@ func TestTransport(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			desc: "EOF - server closes connection immediately",
+			desc: "make request with server closing connection",
 			serverFunc: func(t *testing.T) (string, func()) {
 				t.Helper()
 				ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -71,7 +71,7 @@ func TestTransport(t *testing.T) {
 			errContains: "request failed",
 		},
 		{
-			desc: "ECONNRESET - server sends TCP reset",
+			desc: "make request with connection reset by peer",
 			serverFunc: func(t *testing.T) (string, func()) {
 				t.Helper()
 				ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -82,7 +82,7 @@ func TestTransport(t *testing.T) {
 						if err != nil {
 							return
 						}
-						// Set SO_LINGER with timeout 0 to force RST on close.
+
 						tcpConn, ok := conn.(*net.TCPConn)
 						if ok {
 							_ = tcpConn.SetLinger(0)
@@ -96,14 +96,31 @@ func TestTransport(t *testing.T) {
 			errContains: "request failed",
 		},
 		{
-			desc: "network error - listener closed before request completes",
+			desc: "make request with unreachable server",
 			serverFunc: func(t *testing.T) (string, func()) {
 				t.Helper()
 				ln, err := net.Listen("tcp", "127.0.0.1:0")
 				require.NoError(t, err)
 				addr := ln.Addr().String()
-				ln.Close() // close immediately so dial fails with a net.OpError
+				ln.Close()
 				return "http://" + addr, func() {}
+			},
+			wantErr:     true,
+			errContains: "request failed",
+		},
+		{
+			desc: "make request with cancelled context",
+			serverFunc: func(t *testing.T) (string, func()) {
+				t.Helper()
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return srv.URL, srv.Close
+			},
+			ctxFunc: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
 			},
 			wantErr:     true,
 			errContains: "request failed",
@@ -117,9 +134,14 @@ func TestTransport(t *testing.T) {
 
 			mgsdk := sdk.NewSDK(sdk.Config{RulesEngineURL: url})
 
+			ctx := context.Background()
+			if tc.ctxFunc != nil {
+				ctx = tc.ctxFunc()
+			}
+
 			rule := sdk.Rule{Name: "test-rule"}
 			for i := 0; i < 2; i++ {
-				_, err := mgsdk.AddRule(context.Background(), rule, domainID, validToken)
+				_, err := mgsdk.AddRule(ctx, rule, domainID, validToken)
 				if tc.wantErr {
 					require.Error(t, err)
 					if tc.errContains != "" {
@@ -132,38 +154,4 @@ func TestTransport(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestConnReset(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			tcpConn, ok := conn.(*net.TCPConn)
-			if ok {
-				_ = tcpConn.SetLinger(0)
-			}
-			conn.Close()
-		}
-	}()
-	defer ln.Close()
-
-	mgsdk := sdk.NewSDK(sdk.Config{RulesEngineURL: "http://" + ln.Addr().String()})
-	_, sdkErr := mgsdk.AddRule(context.Background(), sdk.Rule{Name: "test"}, domainID, validToken)
-	require.Error(t, sdkErr)
-
-	// On Linux, SO_LINGER=0 close produces ECONNRESET.
-	// On other systems it may surface as EOF or a net.OpError — all are covered by the switch.
-	errStr := sdkErr.Error()
-	assert.True(t,
-		strings.Contains(errStr, "connection reset by peer") ||
-			strings.Contains(errStr, "connection closed unexpectedly") ||
-			strings.Contains(errStr, "request failed"),
-		"unexpected error: %s", errStr)
-
-	_ = syscall.ECONNRESET // ensure syscall import is used
 }
