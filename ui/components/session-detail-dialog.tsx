@@ -169,6 +169,7 @@ export function SessionDetailDialog({
 	onClose: () => void;
 }) {
 	const protocolKey = session ? resolveSessionProtocol(session) : "unknown";
+	const clientName = session?.connection_name?.trim();
 	const isMQTT =
 		protocolKey === "mqtt3.1" ||
 		protocolKey === "mqtt3.1.1" ||
@@ -204,9 +205,18 @@ export function SessionDetailDialog({
 								<DialogHeader>
 									<div className="flex items-start justify-between gap-3">
 										<div className="space-y-1.5">
-											<DialogTitle className="text-flux-text font-mono text-lg leading-tight break-all">
-												{session.client_id}
+											<DialogTitle
+												className={`text-flux-text text-lg leading-tight break-all ${
+													clientName ? "font-semibold" : "font-mono"
+												}`}
+											>
+												{clientName ?? session.client_id}
 											</DialogTitle>
+											{clientName && (
+												<p className="text-xs text-flux-text-muted font-mono break-all">
+													{session.client_id}
+												</p>
+											)}
 											<div className="flex items-center gap-2 flex-wrap">
 												<Badge
 													variant="outline"
@@ -231,7 +241,8 @@ export function SessionDetailDialog({
 										</div>
 									</div>
 									<DialogDescription className="sr-only">
-										Session details for {session.client_id}
+										Session details for {clientName ?? session.client_id}
+										{clientName ? ` (${session.client_id})` : ""}
 									</DialogDescription>
 								</DialogHeader>
 							</div>
@@ -270,9 +281,9 @@ export function SessionDetailDialog({
 										<span className="font-mono">{session.node_id}</span>
 									</DetailRow>
 								)}
-								{session.connection_name && (
+								{clientName && (
 									<DetailRow label="Client Name">
-										<span className="break-all">{session.connection_name}</span>
+										<span className="break-all">{clientName}</span>
 									</DetailRow>
 								)}
 								{session.connected_at && (

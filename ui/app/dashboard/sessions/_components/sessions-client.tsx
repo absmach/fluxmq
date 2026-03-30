@@ -291,6 +291,9 @@ const SessionsClient = () => {
 										/>
 									</TableHead>
 									<TableHead>Client ID</TableHead>
+									<TableHead className="hidden lg:table-cell">
+										Client Name
+									</TableHead>
 									<TableHead className="hidden md:table-cell">Node</TableHead>
 									<TableHead className="hidden md:table-cell">
 										Protocol
@@ -312,6 +315,7 @@ const SessionsClient = () => {
 							<TableBody>
 								{paginated.map((session: SessionInfo) => {
 									const protocol = resolveSessionProtocol(session);
+									const clientName = session.connection_name?.trim();
 									return (
 										<TableRow
 											key={session.client_id}
@@ -331,15 +335,21 @@ const SessionsClient = () => {
 
 											<TableCell className="font-medium text-sm text-flux-text font-mono py-4">
 												<div>{session.client_id}</div>
-												{session.connection_name && (
+												{clientName && (
 													<div className="mt-1 text-xs text-flux-text-muted font-sans">
-														{session.connection_name}
+														{clientName}
 													</div>
 												)}
 												<div className="md:hidden mt-1 text-xs text-flux-text-muted font-sans">
 													{session.node_id ?? "No node"} ·{" "}
 													{formatProtocolLabel(protocol)}
 												</div>
+											</TableCell>
+
+											<TableCell className="hidden lg:table-cell py-4">
+												<span className="text-sm text-flux-text break-all">
+													{clientName ?? "—"}
+												</span>
 											</TableCell>
 
 											<TableCell className="text-sm text-flux-text-muted font-mono py-4 hidden md:table-cell">
@@ -427,7 +437,7 @@ const SessionsClient = () => {
 								{paginated.length === 0 && (
 									<TableRow className="hover:bg-transparent">
 										<TableCell
-											colSpan={10}
+											colSpan={11}
 											className="text-center text-flux-text-muted py-12"
 										>
 											No sessions match the current filter.
