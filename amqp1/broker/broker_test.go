@@ -337,7 +337,7 @@ func TestTransferFromClient(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-func TestTransferFromClientStampsPublisherProperty(t *testing.T) {
+func TestTransferFromClientPublisherIDProperty(t *testing.T) {
 	b, c := setupBrokerAndPipe(t)
 	defer b.Close()
 	defer c.Close()

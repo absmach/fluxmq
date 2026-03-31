@@ -14,6 +14,8 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const pubProp = "mqtt-pub-1"
+
 type fakeMQTTClusterHandler struct {
 	deliverCalls []string
 	forwardMsgs  []*cluster.Message
@@ -121,14 +123,13 @@ func TestMessageDispatcherForwardPublishPreservesProperties(t *testing.T) {
 	if err := d.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}
-
-	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Properties[corebroker.PublisherProperty] != "mqtt-pub-1" {
+	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Properties[corebroker.PublisherProperty] != pubProp {
 		t.Fatalf("expected mqtt forward to preserve publisher property, got %+v", mqtt.forwardMsgs)
 	}
-	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Properties[corebroker.PublisherProperty] != "mqtt-pub-1" {
+	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Properties[corebroker.PublisherProperty] != pubProp {
 		t.Fatalf("expected amqp1 forward to preserve publisher property, got %+v", amqp1.forwardMsgs)
 	}
-	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Properties[corebroker.PublisherProperty] != "mqtt-pub-1" {
+	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Properties[corebroker.PublisherProperty] != pubProp {
 		t.Fatalf("expected amqp091 forward to preserve publisher property, got %+v", amqp091.forwardMsgs)
 	}
 }
