@@ -51,7 +51,7 @@ type Message struct {
 	CorrelationData []byte
 	SubscriptionIDs []uint32
 	Topic           string
-	PublisherID     string
+	ClientID        string
 	ContentType     string
 	ResponseTopic   string
 	Properties      map[string]string
@@ -121,7 +121,7 @@ func CopyMessage(msg *Message) *Message {
 
 	cp := &Message{
 		Topic:         msg.Topic,
-		PublisherID:   msg.PublisherID,
+		ClientID:      msg.ClientID,
 		QoS:           msg.QoS,
 		Retain:        msg.Retain,
 		PacketID:      msg.PacketID,

@@ -266,7 +266,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		msg := storage.AcquireMessage()
 		msg.Topic = topic
-		msg.PublisherID = s.ID
+		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.MessageExpiry = messageExpiry
@@ -291,7 +291,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		msg := storage.AcquireMessage()
 		msg.Topic = topic
-		msg.PublisherID = s.ID
+		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
 		msg.MessageExpiry = messageExpiry
@@ -324,7 +324,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		buf := core.GetBufferWithData(payload)
 		storeMsg := storage.AcquireMessage()
 		storeMsg.Topic = topic
-		storeMsg.PublisherID = s.ID
+		storeMsg.ClientID = s.ID
 		storeMsg.QoS = qos
 		storeMsg.Retain = retain
 		storeMsg.PacketID = packetID

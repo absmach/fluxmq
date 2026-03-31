@@ -5,10 +5,10 @@ package types
 
 // PublishRequest encapsulates publish data for queue routing.
 type PublishRequest struct {
-	PublisherID string
-	Topic       string
-	Payload     []byte
-	Properties  map[string]string
+	ClientID   string
+	Topic      string
+	Payload    []byte
+	Properties map[string]string
 }
 
 // PublishMode controls how the queue manager should handle a publish.

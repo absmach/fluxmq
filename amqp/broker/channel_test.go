@@ -283,12 +283,12 @@ func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected 1 cross-deliver call, got %d", calls)
 	}
-	if gotProps[corebroker.PublisherProperty] != PrefixedClientID("test-conn") {
-		t.Fatalf("expected publisher property %q, got %q", PrefixedClientID("test-conn"), gotProps[corebroker.PublisherProperty])
+	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), gotProps[corebroker.ClientIDProperty])
 	}
 }
 
-func TestHandleQueuePublishCarriesPublisherID(t *testing.T) {
+func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	ch, _ := newTestChannel(t)
 	mockQM := &mockChannelQueueManager{}
 	ch.conn.broker.queueManager = mockQM
@@ -298,14 +298,14 @@ func TestHandleQueuePublishCarriesPublisherID(t *testing.T) {
 	if mockQM.publishCalls != 1 {
 		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
 	}
-	if mockQM.lastPublish.PublisherID != PrefixedClientID("test-conn") {
-		t.Fatalf("expected publisher ID %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.PublisherID)
+	if mockQM.lastPublish.ClientID != PrefixedClientID("test-conn") {
+		t.Fatalf("expected client ID %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.ClientID)
 	}
 	if mockQM.lastPublish.Properties["trace"] != "1" {
 		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.Properties["trace"])
 	}
-	if mockQM.lastPublish.Properties[corebroker.PublisherProperty] != PrefixedClientID("test-conn") {
-		t.Fatalf("expected publisher property %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.Properties[corebroker.PublisherProperty])
+	if mockQM.lastPublish.Properties[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.Properties[corebroker.ClientIDProperty])
 	}
 }
 

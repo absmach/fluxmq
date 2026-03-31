@@ -35,7 +35,7 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 		b.telemetry.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen)) //nolint:contextcheck // metrics recording uses background context internally
 	}
 
-	msg.Properties = broker.AddPublisherIDProperty(msg.Properties, msg.PublisherID)
+	msg.Properties = broker.AddClientIDProperty(msg.Properties, msg.ClientID)
 
 	route := b.routeResolver.Resolve(msg.Topic)
 
@@ -74,10 +74,10 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 			copy(payloadCopy, src)
 			msg.ReleasePayload()
 			return b.queueManager.Publish(ctx, types.PublishRequest{
-				PublisherID: msg.PublisherID,
-				Topic:       msg.Topic,
-				Payload:     payloadCopy,
-				Properties:  msg.Properties,
+				ClientID:   msg.ClientID,
+				Topic:      msg.Topic,
+				Payload:    payloadCopy,
+				Properties: msg.Properties,
 			})
 		}
 	}
@@ -99,7 +99,7 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 
 	// Event hook: message published
 	if b.eventHook != nil {
-		if err := b.eventHook.OnPublish(ctx, msg.PublisherID, msg.Topic, msg.QoS, msg.GetPayload()); err != nil {
+		if err := b.eventHook.OnPublish(ctx, msg.ClientID, msg.Topic, msg.QoS, msg.GetPayload()); err != nil {
 			b.logError("event_hook_publish", err, slog.String("topic", msg.Topic))
 		}
 	}
@@ -129,11 +129,11 @@ func (b *Broker) PublishWill(ctx context.Context, clientID string) error {
 
 	// Create message from will (will payload is []byte, not RefCountedBuffer)
 	msg := &storage.Message{
-		Topic:       will.Topic,
-		PublisherID: will.ClientID,
-		QoS:         will.QoS,
-		Retain:      will.Retain,
-		Properties:  will.Properties,
+		Topic:      will.Topic,
+		ClientID:   will.ClientID,
+		QoS:        will.QoS,
+		Retain:     will.Retain,
+		Properties: will.Properties,
 	}
 	msg.SetPayloadFromBytes(will.Payload)
 
@@ -212,7 +212,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 
 // distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
-	msg.Properties = broker.AddPublisherIDProperty(msg.Properties, msg.PublisherID)
+	msg.Properties = broker.AddClientIDProperty(msg.Properties, msg.ClientID)
 
 	if err := b.distributeLocal(ctx, msg, true); err != nil {
 		return err
@@ -312,7 +312,7 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allo
 				continue
 			}
 		} else {
-			if sub.Options.NoLocal && clientID == msg.PublisherID {
+			if sub.Options.NoLocal && clientID == msg.ClientID {
 				continue
 			}
 			if broker.IsAMQP091Client(clientID) || broker.IsAMQP1Client(clientID) {
@@ -366,7 +366,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.QoS = msg.QoS
 	storeMsg.Retain = msg.Retain
 	storeMsg.Properties = msg.Properties
-	storeMsg.PublisherID = broker.PublisherIDFromProperties(msg.Properties)
+	storeMsg.ClientID = broker.ClientIDFromProperties(msg.Properties)
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
 	err := b.distributeLocal(ctx, storeMsg, false)
@@ -454,11 +454,11 @@ func (b *Broker) triggerWills() {
 
 		// Create message from will (will payload is []byte, not RefCountedBuffer)
 		msg := &storage.Message{
-			Topic:       will.Topic,
-			PublisherID: will.ClientID,
-			QoS:         will.QoS,
-			Retain:      will.Retain,
-			Properties:  will.Properties,
+			Topic:      will.Topic,
+			ClientID:   will.ClientID,
+			QoS:        will.QoS,
+			Retain:     will.Retain,
+			Properties: will.Properties,
 		}
 		msg.SetPayloadFromBytes(will.Payload)
 

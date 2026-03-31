@@ -82,9 +82,9 @@ func TestV5NoLocalPreventsSelfDelivery(t *testing.T) {
 	require.NoError(t, b.subscribe(s, "devices/one", 1, storage.SubscribeOptions{NoLocal: true}))
 
 	msg := &storage.Message{
-		Topic:       "devices/one",
-		PublisherID: "client-1",
-		QoS:         1,
+		Topic:    "devices/one",
+		ClientID: "client-1",
+		QoS:      1,
 	}
 	msg.SetPayloadFromBytes([]byte("payload"))
 	require.NoError(t, b.Publish(context.Background(), msg))
@@ -109,10 +109,10 @@ func TestV5RetainAsPublishedAffectsDeliveryFlag(t *testing.T) {
 	require.NoError(t, b.subscribe(s2, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: true}))
 
 	msg := &storage.Message{
-		Topic:       "devices/two",
-		PublisherID: "publisher",
-		QoS:         1,
-		Retain:      true,
+		Topic:    "devices/two",
+		ClientID: "publisher",
+		QoS:      1,
+		Retain:   true,
 	}
 	msg.SetPayloadFromBytes([]byte("payload"))
 	require.NoError(t, b.Publish(context.Background(), msg))
@@ -138,10 +138,10 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, s.Connect(conn))
 
 	retained := &storage.Message{
-		Topic:       "retain/topic",
-		PublisherID: "publisher",
-		QoS:         1,
-		Retain:      true,
+		Topic:    "retain/topic",
+		ClientID: "publisher",
+		QoS:      1,
+		Retain:   true,
 	}
 	retained.SetPayloadFromBytes([]byte("retained"))
 	require.NoError(t, b.Publish(context.Background(), retained))

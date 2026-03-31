@@ -13,6 +13,7 @@ const (
 	AMQP1ClientPrefix   = "amqp:"
 	HTTPClientPrefix    = "http:"
 	CoAPClientPrefix    = "coap:"
+	ClientIDProperty    = "client_id"
 	PublisherProperty   = "publisher"
 )
 
@@ -39,21 +40,36 @@ func PrefixedAMQP1ClientID(containerID string) string {
 	return AMQP1ClientPrefix + containerID
 }
 
-// AddPublisherIDProperty writes the canonical publisher identity into the
+// AddClientIDProperty writes the protocol-level client identity into the
 // shared properties map used for cross-node and cross-protocol delivery.
-func AddPublisherIDProperty(props map[string]string, publisherID string) map[string]string {
-	if publisherID == "" {
+// On first call it also sets the publisher property (the message originator).
+// Subsequent calls update the client ID but preserve the original publisher.
+func AddClientIDProperty(props map[string]string, clientID string) map[string]string {
+	if clientID == "" {
 		return props
 	}
 	if props == nil {
-		props = make(map[string]string, 1)
+		props = make(map[string]string, 2)
 	}
-	props[PublisherProperty] = publisherID
+	props[ClientIDProperty] = clientID
+	// Set-once: preserve the original publisher across republishes.
+	if _, exists := props[PublisherProperty]; !exists {
+		props[PublisherProperty] = clientID
+	}
 	return props
 }
 
-// PublisherIDFromProperties returns the canonical publisher identity carried in
+// ClientIDFromProperties returns the protocol-level client identity carried in
 // the shared properties map.
+func ClientIDFromProperties(props map[string]string) string {
+	if len(props) == 0 {
+		return ""
+	}
+	return props[ClientIDProperty]
+}
+
+// PublisherIDFromProperties returns the original publisher identity —
+// the client that first published the message before any intermediary republished it.
 func PublisherIDFromProperties(props map[string]string) string {
 	if len(props) == 0 {
 		return ""

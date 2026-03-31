@@ -600,7 +600,7 @@ func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishR
 }
 
 func normalizePublishRequest(publish types.PublishRequest) types.PublishRequest {
-	publish.Properties = corebroker.AddPublisherIDProperty(publish.Properties, publish.PublisherID)
+	publish.Properties = corebroker.AddClientIDProperty(publish.Properties, publish.ClientID)
 	return publish
 }
 

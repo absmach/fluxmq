@@ -355,7 +355,7 @@ func TestTransferFromClient(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-func TestTransferFromClientPublisherIDProperty(t *testing.T) {
+func TestTransferFromClientClientIDProperty(t *testing.T) {
 	b, c := setupBrokerAndPipe(t)
 	defer b.Close()
 	defer c.Close()
@@ -413,13 +413,13 @@ func TestTransferFromClientPublisherIDProperty(t *testing.T) {
 	select {
 	case gotProps := <-propsCh:
 		require.Equal(t, "abc", gotProps["trace"])
-		require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.PublisherProperty])
+		require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.ClientIDProperty])
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for cross-deliver callback")
 	}
 }
 
-func TestQueueTransferCarriesPublisherID(t *testing.T) {
+func TestQueueTransferCarriesClientID(t *testing.T) {
 	mockQM := &mockAMQP1QueueLinkManager{publishCh: make(chan qtypes.PublishRequest, 1)}
 	b := New(nil, nil, nil)
 	b.queueLinkManager = mockQM
@@ -474,9 +474,9 @@ func TestQueueTransferCarriesPublisherID(t *testing.T) {
 
 	select {
 	case publish := <-mockQM.publishCh:
-		require.Equal(t, PrefixedClientID("sender-client"), publish.PublisherID)
+		require.Equal(t, PrefixedClientID("sender-client"), publish.ClientID)
 		require.Equal(t, "abc", publish.Properties["trace"])
-		require.Equal(t, PrefixedClientID("sender-client"), publish.Properties[corebroker.PublisherProperty])
+		require.Equal(t, PrefixedClientID("sender-client"), publish.Properties[corebroker.ClientIDProperty])
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for queue publish")
 	}

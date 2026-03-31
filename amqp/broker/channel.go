@@ -334,12 +334,12 @@ func (ch *Channel) completePublish() {
 		topic = exchangeName + "/" + routingKey
 	}
 
-	publisherID := PrefixedClientID(ch.conn.connID)
-	props = corebroker.AddPublisherIDProperty(props, publisherID)
+	clientID := PrefixedClientID(ch.conn.connID)
+	props = corebroker.AddClientIDProperty(props, clientID)
 
 	if auth := ch.conn.broker.auth; auth != nil {
-		if !auth.CanPublish(publisherID, topic) {
-			ch.conn.logger.Warn("publish denied", "client_id", publisherID, "topic", topic)
+		if !auth.CanPublish(clientID, topic) {
+			ch.conn.logger.Warn("publish denied", "client_id", clientID, "topic", topic)
 			_ = ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
 			return
 		}
@@ -357,7 +357,7 @@ func (ch *Channel) completePublish() {
 			}
 			return
 		case corebroker.RouteQueue:
-			ch.handleQueuePublish(route.PublishTopic, body, props, publisherID)
+			ch.handleQueuePublish(route.PublishTopic, body, props, clientID)
 			return
 		case corebroker.RouteQueueAck:
 			// AMQP 0.9.1 does not use ack-via-publish; skip.
@@ -369,7 +369,7 @@ func (ch *Channel) completePublish() {
 	// RabbitMQ-style stream queue publish: default exchange with routingKey == queue name.
 	if exchangeName == "" && ch.isStreamQueue(routingKey) {
 		queueTopic := resolver.QueueTopic(routingKey)
-		ch.handleQueuePublish(queueTopic, body, props, publisherID)
+		ch.handleQueuePublish(queueTopic, body, props, clientID)
 		return
 	}
 
@@ -392,10 +392,10 @@ func (ch *Channel) completePublish() {
 			if qm != nil {
 				queueTopic := resolver.QueueTopic(b.queue, routingKey)
 				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
-					PublisherID: publisherID,
-					Topic:       queueTopic,
-					Payload:     body,
-					Properties:  props,
+					ClientID:   clientID,
+					Topic:      queueTopic,
+					Payload:    body,
+					Properties: props,
 				}); err != nil {
 					ch.conn.logger.Error("queue publish failed", "queue", b.queue, "error", err)
 					publishFailed = true
@@ -1378,17 +1378,17 @@ func (ch *Channel) cleanup() {
 }
 
 // handleQueuePublish publishes a message to the queue manager and handles confirm mode.
-func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[string]string, publisherID string) {
+func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[string]string, clientID string) {
 	qm := ch.conn.broker.queueManager
 	if qm == nil {
 		return
 	}
-	props = corebroker.AddPublisherIDProperty(props, publisherID)
+	props = corebroker.AddClientIDProperty(props, clientID)
 	err := qm.Publish(context.Background(), qtypes.PublishRequest{
-		PublisherID: publisherID,
-		Topic:       queueTopic,
-		Payload:     body,
-		Properties:  props,
+		ClientID:   clientID,
+		Topic:      queueTopic,
+		Payload:    body,
+		Properties: props,
 	})
 	if err != nil {
 		ch.conn.logger.Error("queue publish failed", "queue", queueTopic, "error", err)

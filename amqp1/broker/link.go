@@ -257,10 +257,10 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 
 	// Check publish authorization
 	auth := l.session.conn.broker.auth
-	publisherID := PrefixedClientID(l.session.conn.containerID)
+	clientID := PrefixedClientID(l.session.conn.containerID)
 	if auth != nil {
-		if !auth.CanPublish(publisherID, topic) {
-			l.logger.Warn("publish denied", "client", publisherID, "topic", topic)
+		if !auth.CanPublish(clientID, topic) {
+			l.logger.Warn("publish denied", "client", clientID, "topic", topic)
 			return
 		}
 	}
@@ -271,7 +271,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 			props[k] = s
 		}
 	}
-	props = corebroker.AddPublisherIDProperty(props, publisherID)
+	props = corebroker.AddClientIDProperty(props, clientID)
 
 	resolver := l.session.conn.broker.routeResolver
 	topicRoute := resolver.Resolve(topic)
@@ -288,10 +288,10 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 			}
 
 			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
-				PublisherID: publisherID,
-				Topic:       publishTopic,
-				Payload:     data,
-				Properties:  props,
+				ClientID:   clientID,
+				Topic:      publishTopic,
+				Payload:    data,
+				Properties: props,
 			}); err != nil {
 				l.logger.Error("queue publish failed", "topic", publishTopic, "error", err)
 			}

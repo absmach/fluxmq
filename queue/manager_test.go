@@ -23,6 +23,8 @@ import (
 	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
+const node1 = "node-1"
+
 // mockGroupStore implements storage.ConsumerGroupStore for testing.
 type mockGroupStore struct {
 	mu     sync.RWMutex
@@ -411,9 +413,9 @@ func TestPublishNormalizesPublisherProperty(t *testing.T) {
 	}
 
 	if err := mgr.Publish(ctx, types.PublishRequest{
-		PublisherID: "mqtt-pub-1",
-		Topic:       "$queue/orders/process",
-		Payload:     []byte("hello"),
+		ClientID: "mqtt-pub-1",
+		Topic:    "$queue/orders/process",
+		Payload:  []byte("hello"),
 	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -422,6 +424,9 @@ func TestPublishNormalizesPublisherProperty(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
+		if got := msg.Properties[corebroker.ClientIDProperty]; got != "mqtt-pub-1" {
+			t.Fatalf("expected client_id property %q, got %q", "mqtt-pub-1", got)
+		}
 		if got := msg.Properties[corebroker.PublisherProperty]; got != "mqtt-pub-1" {
 			t.Fatalf("expected publisher property %q, got %q", "mqtt-pub-1", got)
 		}
@@ -1194,7 +1199,7 @@ func TestSubscribeDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	if len(registered) != 1 {
 		t.Fatalf("expected 1 registered consumer, got %d", len(registered))
 	}
-	if registered[0].ProxyNodeID != "node-1" {
+	if registered[0].ProxyNodeID != node1 {
 		t.Fatalf("expected proxy node id node-1, got %q", registered[0].ProxyNodeID)
 	}
 }
