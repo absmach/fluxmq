@@ -257,13 +257,21 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 
 	// Check publish authorization
 	auth := l.session.conn.broker.auth
+	publisherID := PrefixedClientID(l.session.conn.containerID)
 	if auth != nil {
-		clientID := PrefixedClientID(l.session.conn.containerID)
-		if !auth.CanPublish(clientID, topic) {
-			l.logger.Warn("publish denied", "client", clientID, "topic", topic)
+		if !auth.CanPublish(publisherID, topic) {
+			l.logger.Warn("publish denied", "client", publisherID, "topic", topic)
 			return
 		}
 	}
+
+	props := make(map[string]string, len(msg.ApplicationProperties)+1)
+	for k, v := range msg.ApplicationProperties {
+		if s, ok := v.(string); ok {
+			props[k] = s
+		}
+	}
+	props = corebroker.AddPublisherIDProperty(props, publisherID)
 
 	resolver := l.session.conn.broker.routeResolver
 	topicRoute := resolver.Resolve(topic)
@@ -279,16 +287,11 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 				publishTopic = resolver.QueueTopic(l.queueName, subject)
 			}
 
-			props := make(map[string]string)
-			for k, v := range msg.ApplicationProperties {
-				if s, ok := v.(string); ok {
-					props[k] = s
-				}
-			}
 			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
-				Topic:      publishTopic,
-				Payload:    data,
-				Properties: props,
+				PublisherID: publisherID,
+				Topic:       publishTopic,
+				Payload:     data,
+				Properties:  props,
 			}); err != nil {
 				l.logger.Error("queue publish failed", "topic", publishTopic, "error", err)
 			}
@@ -296,12 +299,6 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	} else {
 		// Publish to shared router (pub/sub).
 		// Translate AMQP routing key (dot-separated) to MQTT topic (slash-separated).
-		props := make(map[string]string)
-		for k, v := range msg.ApplicationProperties {
-			if s, ok := v.(string); ok {
-				props[k] = s
-			}
-		}
 		l.session.conn.broker.Publish(topics.AMQPTopicToMQTT(topic), data, props)
 	}
 

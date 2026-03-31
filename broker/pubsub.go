@@ -13,6 +13,7 @@ const (
 	AMQP1ClientPrefix   = "amqp:"
 	HTTPClientPrefix    = "http:"
 	CoAPClientPrefix    = "coap:"
+	PublisherProperty   = "publisher"
 )
 
 // CrossDeliverFunc delivers a pub/sub message to a client in another protocol broker.
@@ -36,4 +37,26 @@ func IsAMQP1Client(clientID string) bool {
 // PrefixedAMQP1ClientID returns the canonical AMQP 1.0 client ID.
 func PrefixedAMQP1ClientID(containerID string) string {
 	return AMQP1ClientPrefix + containerID
+}
+
+// AddPublisherIDProperty writes the canonical publisher identity into the
+// shared properties map used for cross-node and cross-protocol delivery.
+func AddPublisherIDProperty(props map[string]string, publisherID string) map[string]string {
+	if publisherID == "" {
+		return props
+	}
+	if props == nil {
+		props = make(map[string]string, 1)
+	}
+	props[PublisherProperty] = publisherID
+	return props
+}
+
+// PublisherIDFromProperties returns the canonical publisher identity carried in
+// the shared properties map.
+func PublisherIDFromProperties(props map[string]string) string {
+	if len(props) == 0 {
+		return ""
+	}
+	return props[PublisherProperty]
 }

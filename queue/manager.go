@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/raft"
@@ -508,6 +509,8 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 // This is the NATS JetQueue-style "multi-queue" routing.
 // It also forwards the publish to remote nodes that have consumers for the topic.
 func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
+	publish = normalizePublishRequest(publish)
+
 	targets, err := m.resolvePublishTargets(ctx, publish)
 	if err != nil {
 		return err
@@ -582,6 +585,8 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 
 // HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
 func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishRequest, mode types.PublishMode) error {
+	publish = normalizePublishRequest(publish)
+
 	switch mode {
 	case types.PublishLocal:
 		return m.publishLocal(ctx, publish)
@@ -592,6 +597,11 @@ func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishR
 	default:
 		return m.Publish(ctx, publish)
 	}
+}
+
+func normalizePublishRequest(publish types.PublishRequest) types.PublishRequest {
+	publish.Properties = corebroker.AddPublisherIDProperty(publish.Properties, publish.PublisherID)
+	return publish
 }
 
 func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest) error {

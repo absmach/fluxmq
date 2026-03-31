@@ -35,6 +35,8 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 		b.telemetry.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen)) //nolint:contextcheck // metrics recording uses background context internally
 	}
 
+	msg.Properties = broker.AddPublisherIDProperty(msg.Properties, msg.PublisherID)
+
 	route := b.routeResolver.Resolve(msg.Topic)
 
 	// Handle retained messages before routing — ensures queue topics also
@@ -72,9 +74,10 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 			copy(payloadCopy, src)
 			msg.ReleasePayload()
 			return b.queueManager.Publish(ctx, types.PublishRequest{
-				Topic:      msg.Topic,
-				Payload:    payloadCopy,
-				Properties: msg.Properties,
+				PublisherID: msg.PublisherID,
+				Topic:       msg.Topic,
+				Payload:     payloadCopy,
+				Properties:  msg.Properties,
 			})
 		}
 	}
@@ -209,6 +212,8 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 
 // distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
+	msg.Properties = broker.AddPublisherIDProperty(msg.Properties, msg.PublisherID)
+
 	if err := b.distributeLocal(ctx, msg, true); err != nil {
 		return err
 	}
@@ -361,6 +366,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.QoS = msg.QoS
 	storeMsg.Retain = msg.Retain
 	storeMsg.Properties = msg.Properties
+	storeMsg.PublisherID = broker.PublisherIDFromProperties(msg.Properties)
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
 	err := b.distributeLocal(ctx, storeMsg, false)

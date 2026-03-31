@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
@@ -385,6 +386,47 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	}
 	if cursor := group.GetCursor().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", cursor)
+	}
+}
+
+func TestPublishNormalizesPublisherProperty(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	delivered := make(chan *brokerstorage.Message, 1)
+
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+		delivered <- msg
+		return nil
+	})
+
+	mgr := NewManager(logStore, groupStore, deliveryTarget, DefaultConfig(), logger, nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("orders", "$queue/orders/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	if err := mgr.Subscribe(ctx, "orders", "", "client-1", "workers", ""); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	if err := mgr.Publish(ctx, types.PublishRequest{
+		PublisherID: "mqtt-pub-1",
+		Topic:       "$queue/orders/process",
+		Payload:     []byte("hello"),
+	}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+
+	mgr.deliverMessages()
+
+	select {
+	case msg := <-delivered:
+		if got := msg.Properties[corebroker.PublisherProperty]; got != "mqtt-pub-1" {
+			t.Fatalf("expected publisher property %q, got %q", "mqtt-pub-1", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delivery")
 	}
 }
 

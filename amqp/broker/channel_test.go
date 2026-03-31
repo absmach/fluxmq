@@ -13,17 +13,23 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/amqp/codec"
+	corebroker "github.com/absmach/fluxmq/broker"
 	qtypes "github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/storage"
 )
 
 type mockChannelQueueManager struct {
 	lastCursor    *qtypes.CursorOption
+	lastPublish   qtypes.PublishRequest
+	publishCalls  int
 	queueCfg      *qtypes.QueueConfig
 	createdQueues []qtypes.QueueConfig
 	updatedQueues []qtypes.QueueConfig
 }
 
-func (m *mockChannelQueueManager) Publish(context.Context, qtypes.PublishRequest) error {
+func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
+	m.lastPublish = publish
+	m.publishCalls++
 	return nil
 }
 
@@ -228,6 +234,78 @@ func TestMandatoryPublishReturn(t *testing.T) {
 	}
 	if _, ok := decoded3.(*codec.BasicAck); !ok {
 		t.Fatalf("expected BasicAck, got %T", decoded3)
+	}
+}
+
+func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
+	ch, _ := newTestChannel(t)
+
+	if err := ch.conn.broker.router.Subscribe("mqtt-client", "telemetry/room1", 1, storage.SubscribeOptions{}); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	calls := 0
+	var gotProps map[string]string
+	ch.conn.broker.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+		calls++
+		gotProps = props
+	})
+
+	if err := ch.handleMethod(&codec.BasicPublish{
+		Exchange:   "",
+		RoutingKey: "telemetry.room1",
+	}); err != nil {
+		t.Fatalf("handleMethod failed: %v", err)
+	}
+
+	payload := []byte("hello")
+	header := &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		Weight:   0,
+		BodySize: uint64(len(payload)),
+	}
+	var headerBuf bytes.Buffer
+	if err := header.WriteContentHeader(&headerBuf); err != nil {
+		t.Fatalf("WriteContentHeader failed: %v", err)
+	}
+
+	ch.handleHeaderFrame(&codec.Frame{
+		Type:    codec.FrameHeader,
+		Channel: 1,
+		Payload: headerBuf.Bytes(),
+	})
+	ch.handleBodyFrame(&codec.Frame{
+		Type:    codec.FrameBody,
+		Channel: 1,
+		Payload: payload,
+	})
+
+	if calls != 1 {
+		t.Fatalf("expected 1 cross-deliver call, got %d", calls)
+	}
+	if gotProps[corebroker.PublisherProperty] != PrefixedClientID("test-conn") {
+		t.Fatalf("expected publisher property %q, got %q", PrefixedClientID("test-conn"), gotProps[corebroker.PublisherProperty])
+	}
+}
+
+func TestHandleQueuePublishCarriesPublisherID(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+
+	ch.handleQueuePublish("$queue/orders/process", []byte("hello"), map[string]string{"trace": "1"}, PrefixedClientID("test-conn"))
+
+	if mockQM.publishCalls != 1 {
+		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
+	}
+	if mockQM.lastPublish.PublisherID != PrefixedClientID("test-conn") {
+		t.Fatalf("expected publisher ID %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.PublisherID)
+	}
+	if mockQM.lastPublish.Properties["trace"] != "1" {
+		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.Properties["trace"])
+	}
+	if mockQM.lastPublish.Properties[corebroker.PublisherProperty] != PrefixedClientID("test-conn") {
+		t.Fatalf("expected publisher property %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.Properties[corebroker.PublisherProperty])
 	}
 }
 

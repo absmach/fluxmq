@@ -17,6 +17,9 @@ import (
 	"github.com/absmach/fluxmq/amqp1/performatives"
 	"github.com/absmach/fluxmq/amqp1/sasl"
 	"github.com/absmach/fluxmq/amqp1/types"
+	corebroker "github.com/absmach/fluxmq/broker"
+	qtypes "github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +33,41 @@ func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 
 	c := amqpconn.NewConnection(clientConn)
 	return b, c
+}
+
+type mockAMQP1QueueLinkManager struct {
+	lastPublish  qtypes.PublishRequest
+	publishCalls int
+}
+
+func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
+	m.lastPublish = publish
+	m.publishCalls++
+	return nil
+}
+
+func (m *mockAMQP1QueueLinkManager) Subscribe(context.Context, string, string, string, string, string) error {
+	return nil
+}
+
+func (m *mockAMQP1QueueLinkManager) SubscribeWithCursor(context.Context, string, string, string, string, string, *qtypes.CursorOption) error {
+	return nil
+}
+
+func (m *mockAMQP1QueueLinkManager) Unsubscribe(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (m *mockAMQP1QueueLinkManager) Ack(context.Context, string, string, string) error {
+	return nil
+}
+
+func (m *mockAMQP1QueueLinkManager) Nack(context.Context, string, string, string) error {
+	return nil
+}
+
+func (m *mockAMQP1QueueLinkManager) Reject(context.Context, string, string, string, string) error {
+	return nil
 }
 
 // doAMQPHandshake performs SASL + OPEN handshake and returns.
@@ -297,6 +335,131 @@ func TestTransferFromClient(t *testing.T) {
 
 	// Give time for processing
 	time.Sleep(50 * time.Millisecond)
+}
+
+func TestTransferFromClientStampsPublisherProperty(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	if err := b.router.Subscribe("mqtt-client", "test/ingest", 1, storage.SubscribeOptions{}); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	calls := 0
+	var gotProps map[string]string
+	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+		calls++
+		gotProps = props
+	})
+
+	doAMQPHandshake(t, c, "sender-client")
+	doBeginSession(t, c, 0)
+
+	attach := &performatives.Attach{
+		Name:                 "send-link",
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: "test.ingest"},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	desc, err := readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	desc, err = readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
+	msg := &message.Message{
+		Properties:            &message.Properties{To: "test.ingest"},
+		ApplicationProperties: map[string]any{"trace": "abc"},
+		Data:                  [][]byte{[]byte("payload")},
+	}
+	msgBytes, err := msg.Encode()
+	require.NoError(t, err)
+
+	did := uint32(0)
+	mf := uint32(0)
+	transfer := &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &did,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &mf,
+		Settled:       true,
+	}
+	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
+
+	time.Sleep(50 * time.Millisecond)
+
+	require.Equal(t, 1, calls)
+	require.Equal(t, "abc", gotProps["trace"])
+	require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.PublisherProperty])
+}
+
+func TestQueueTransferCarriesPublisherID(t *testing.T) {
+	mockQM := &mockAMQP1QueueLinkManager{}
+	b := New(nil, nil, nil)
+	b.queueLinkManager = mockQM
+	serverConn, clientConn := net.Pipe()
+
+	go b.HandleConnection(context.Background(), serverConn)
+
+	c := amqpconn.NewConnection(clientConn)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "sender-client")
+	doBeginSession(t, c, 0)
+
+	attach := &performatives.Attach{
+		Name:                 "send-link",
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: "$queue/orders/process"},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	desc, err := readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	desc, err = readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
+	msg := &message.Message{
+		Properties:            &message.Properties{To: "$queue/orders/process"},
+		ApplicationProperties: map[string]any{"trace": "abc"},
+		Data:                  [][]byte{[]byte("payload")},
+	}
+	msgBytes, err := msg.Encode()
+	require.NoError(t, err)
+
+	did := uint32(0)
+	mf := uint32(0)
+	transfer := &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &did,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &mf,
+		Settled:       true,
+	}
+	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
+
+	time.Sleep(50 * time.Millisecond)
+
+	require.Equal(t, 1, mockQM.publishCalls)
+	require.Equal(t, PrefixedClientID("sender-client"), mockQM.lastPublish.PublisherID)
+	require.Equal(t, "abc", mockQM.lastPublish.Properties["trace"])
+	require.Equal(t, PrefixedClientID("sender-client"), mockQM.lastPublish.Properties[corebroker.PublisherProperty])
 }
 
 // doAMQPHandshakeWithFrameSize performs handshake with a custom max frame size.

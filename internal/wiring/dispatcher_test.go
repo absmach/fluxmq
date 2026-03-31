@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -15,6 +16,7 @@ import (
 
 type fakeMQTTClusterHandler struct {
 	deliverCalls []string
+	forwardMsgs  []*cluster.Message
 	forwardErr   error
 }
 
@@ -24,6 +26,7 @@ func (f *fakeMQTTClusterHandler) DeliverToClient(ctx context.Context, clientID s
 }
 
 func (f *fakeMQTTClusterHandler) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+	f.forwardMsgs = append(f.forwardMsgs, msg)
 	return f.forwardErr
 }
 
@@ -41,6 +44,7 @@ func (f *fakeMQTTClusterHandler) GetWillMessage(ctx context.Context, clientID st
 
 type fakeAMQPForwardHandler struct {
 	deliverCalls []string
+	forwardMsgs  []*cluster.Message
 	forwardErr   error
 }
 
@@ -50,6 +54,7 @@ func (f *fakeAMQPForwardHandler) DeliverToClusterMessage(ctx context.Context, cl
 }
 
 func (f *fakeAMQPForwardHandler) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+	f.forwardMsgs = append(f.forwardMsgs, msg)
 	return f.forwardErr
 }
 
@@ -100,5 +105,30 @@ func TestMessageDispatcherForwardPublishJoinsErrors(t *testing.T) {
 	}
 	if !errors.Is(err, errAMQP1) {
 		t.Fatalf("expected amqp1 error in chain, got %v", err)
+	}
+}
+
+func TestMessageDispatcherForwardPublishPreservesProperties(t *testing.T) {
+	mqtt := &fakeMQTTClusterHandler{}
+	amqp1 := &fakeAMQPForwardHandler{}
+	amqp091 := &fakeAMQPForwardHandler{}
+	d := NewMessageDispatcher(mqtt, amqp1, amqp091)
+
+	msg := &cluster.Message{
+		Topic:      "test/topic",
+		Properties: map[string]string{corebroker.PublisherProperty: "mqtt-pub-1"},
+	}
+	if err := d.ForwardPublish(context.Background(), msg); err != nil {
+		t.Fatalf("ForwardPublish failed: %v", err)
+	}
+
+	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Properties[corebroker.PublisherProperty] != "mqtt-pub-1" {
+		t.Fatalf("expected mqtt forward to preserve publisher property, got %+v", mqtt.forwardMsgs)
+	}
+	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Properties[corebroker.PublisherProperty] != "mqtt-pub-1" {
+		t.Fatalf("expected amqp1 forward to preserve publisher property, got %+v", amqp1.forwardMsgs)
+	}
+	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Properties[corebroker.PublisherProperty] != "mqtt-pub-1" {
+		t.Fatalf("expected amqp091 forward to preserve publisher property, got %+v", amqp091.forwardMsgs)
 	}
 }

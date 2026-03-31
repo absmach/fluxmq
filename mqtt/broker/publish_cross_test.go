@@ -25,17 +25,20 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	var gotClientID string
 	var gotTopic string
 	var gotQoS byte
+	var gotProps map[string]string
 	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
 		calls++
 		gotClientID = clientID
 		gotTopic = topic
 		gotQoS = qos
+		gotProps = props
 	})
 
 	msg := &storage.Message{
-		Topic:      "telemetry/room1",
-		QoS:        1,
-		Properties: map[string]string{"source": "test"},
+		Topic:       "telemetry/room1",
+		PublisherID: "mqtt-pub-1",
+		QoS:         1,
+		Properties:  map[string]string{"source": "test"},
 	}
 	msg.SetPayloadFromBytes([]byte("hello"))
 
@@ -54,6 +57,12 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	}
 	if gotQoS != 1 {
 		t.Fatalf("expected QoS 1, got %d", gotQoS)
+	}
+	if gotProps["source"] != "test" {
+		t.Fatalf("expected source property preserved, got %q", gotProps["source"])
+	}
+	if gotProps[corebroker.PublisherProperty] != "mqtt-pub-1" {
+		t.Fatalf("expected publisher property %q, got %q", "mqtt-pub-1", gotProps[corebroker.PublisherProperty])
 	}
 }
 
