@@ -36,13 +36,20 @@ func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 }
 
 type mockAMQP1QueueLinkManager struct {
-	lastPublish  qtypes.PublishRequest
-	publishCalls int
+	publishCh chan qtypes.PublishRequest
 }
 
 func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
-	m.lastPublish = publish
-	m.publishCalls++
+	if m.publishCh != nil {
+		cloned := publish
+		if len(publish.Properties) > 0 {
+			cloned.Properties = make(map[string]string, len(publish.Properties))
+			for k, v := range publish.Properties {
+				cloned.Properties[k] = v
+			}
+		}
+		m.publishCh <- cloned
+	}
 	return nil
 }
 
@@ -68,6 +75,17 @@ func (m *mockAMQP1QueueLinkManager) Nack(context.Context, string, string, string
 
 func (m *mockAMQP1QueueLinkManager) Reject(context.Context, string, string, string, string) error {
 	return nil
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // doAMQPHandshake performs SASL + OPEN handshake and returns.
@@ -346,11 +364,9 @@ func TestTransferFromClientPublisherIDProperty(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	calls := 0
-	var gotProps map[string]string
+	propsCh := make(chan map[string]string, 1)
 	b.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
-		calls++
-		gotProps = props
+		propsCh <- cloneStringMap(props)
 	})
 
 	doAMQPHandshake(t, c, "sender-client")
@@ -394,15 +410,17 @@ func TestTransferFromClientPublisherIDProperty(t *testing.T) {
 	}
 	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
 
-	time.Sleep(50 * time.Millisecond)
-
-	require.Equal(t, 1, calls)
-	require.Equal(t, "abc", gotProps["trace"])
-	require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.PublisherProperty])
+	select {
+	case gotProps := <-propsCh:
+		require.Equal(t, "abc", gotProps["trace"])
+		require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.PublisherProperty])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cross-deliver callback")
+	}
 }
 
 func TestQueueTransferCarriesPublisherID(t *testing.T) {
-	mockQM := &mockAMQP1QueueLinkManager{}
+	mockQM := &mockAMQP1QueueLinkManager{publishCh: make(chan qtypes.PublishRequest, 1)}
 	b := New(nil, nil, nil)
 	b.queueLinkManager = mockQM
 	serverConn, clientConn := net.Pipe()
@@ -454,12 +472,14 @@ func TestQueueTransferCarriesPublisherID(t *testing.T) {
 	}
 	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
 
-	time.Sleep(50 * time.Millisecond)
-
-	require.Equal(t, 1, mockQM.publishCalls)
-	require.Equal(t, PrefixedClientID("sender-client"), mockQM.lastPublish.PublisherID)
-	require.Equal(t, "abc", mockQM.lastPublish.Properties["trace"])
-	require.Equal(t, PrefixedClientID("sender-client"), mockQM.lastPublish.Properties[corebroker.PublisherProperty])
+	select {
+	case publish := <-mockQM.publishCh:
+		require.Equal(t, PrefixedClientID("sender-client"), publish.PublisherID)
+		require.Equal(t, "abc", publish.Properties["trace"])
+		require.Equal(t, PrefixedClientID("sender-client"), publish.Properties[corebroker.PublisherProperty])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for queue publish")
+	}
 }
 
 // doAMQPHandshakeWithFrameSize performs handshake with a custom max frame size.
