@@ -444,10 +444,11 @@ func (c *Connection) heartbeatLoop() {
 		return
 	}
 
-	// Send heartbeat at half the idle timeout period
+	// Send heartbeat at half the idle timeout period so the peer
+	// always receives a frame within its read deadline (2 × idleTimeout).
 	interval := c.idleTimeout / 2
-	if interval < time.Second {
-		interval = time.Second
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
 	}
 
 	ticker := time.NewTicker(interval)
