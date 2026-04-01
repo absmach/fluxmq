@@ -196,7 +196,7 @@ jobs:
           go test --race -v -count=1 -coverprofile=coverage/alarms.out ./alarms/...
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV }}
           files: ./coverage/*.out
