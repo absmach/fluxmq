@@ -15,6 +15,7 @@ const (
 	CoAPClientPrefix    = "coap:"
 	ClientIDProperty    = "client_id"
 	ExternalIDProperty  = "external_id"
+	ProtocolProperty    = "protocol"
 )
 
 // CrossDeliverFunc delivers a pub/sub message to a client in another protocol broker.

@@ -680,3 +680,61 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 		t.Fatalf("expected RetentionTime=7d, got %v", cfg.Retention.RetentionTime)
 	}
 }
+
+func TestPublishCustomHeadersPropagatedToCrossDeliver(t *testing.T) {
+	ch, _ := newTestChannel(t)
+
+	if err := ch.conn.broker.router.Subscribe("mqtt-client", "telemetry/room1", 1, storage.SubscribeOptions{}); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	var gotProps map[string]string
+	ch.conn.broker.SetCrossDeliver(func(_ context.Context, _ string, _ string, _ []byte, _ byte, props map[string]string) {
+		gotProps = props
+	})
+
+	if err := ch.handleMethod(&codec.BasicPublish{
+		Exchange:   "",
+		RoutingKey: "telemetry.room1",
+	}); err != nil {
+		t.Fatalf("handleMethod failed: %v", err)
+	}
+
+	payload := []byte("hello")
+	header := &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		Weight:   0,
+		BodySize: uint64(len(payload)),
+		Properties: codec.BasicProperties{
+			Headers: map[string]any{
+				corebroker.ExternalIDProperty: "pub-123",
+				corebroker.ProtocolProperty:   "http",
+			},
+		},
+	}
+	var headerBuf bytes.Buffer
+	if err := header.WriteContentHeader(&headerBuf); err != nil {
+		t.Fatalf("WriteContentHeader failed: %v", err)
+	}
+
+	ch.handleHeaderFrame(&codec.Frame{
+		Type:    codec.FrameHeader,
+		Channel: 1,
+		Payload: headerBuf.Bytes(),
+	})
+	ch.handleBodyFrame(&codec.Frame{
+		Type:    codec.FrameBody,
+		Channel: 1,
+		Payload: payload,
+	})
+
+	if gotProps == nil {
+		t.Fatal("expected cross-deliver call, got none")
+	}
+	if gotProps[corebroker.ExternalIDProperty] != "pub-123" {
+		t.Fatalf("expected external_id=%q, got %q", "pub-123", gotProps[corebroker.ExternalIDProperty])
+	}
+	if gotProps[corebroker.ProtocolProperty] != "http" {
+		t.Fatalf("expected protocol=%q, got %q", "http", gotProps[corebroker.ProtocolProperty])
+	}
+}

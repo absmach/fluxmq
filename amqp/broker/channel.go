@@ -325,6 +325,13 @@ func (ch *Channel) completePublish() {
 		props["type"] = header.Properties.Type
 	}
 
+	if v, ok := header.Properties.Headers[corebroker.ExternalIDProperty].(string); ok && v != "" {
+		props[corebroker.ExternalIDProperty] = v
+	}
+	if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
+		props[corebroker.ProtocolProperty] = v
+	}
+
 	exchangeName := normalizeExchange(method.Exchange)
 	routingKey := method.RoutingKey
 
