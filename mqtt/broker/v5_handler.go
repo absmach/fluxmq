@@ -77,6 +77,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		}
 	}
 
+	externalID := ""
 	if h.broker.auth != nil {
 		username := p.Username
 		password := string(p.Password)
@@ -88,6 +89,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			conn.Close()
 			return ErrNotAuthorized
 		}
+		externalID = h.broker.ExternalID(clientID)
 	}
 
 	var will *storage.WillMessage
@@ -101,11 +103,12 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		// Note: Will payload is stored as []byte in storage.WillMessage
 		//nolint:godox // TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
-			ClientID: clientID,
-			Topic:    p.WillTopic,
-			Payload:  p.WillPayload,
-			QoS:      p.WillQoS,
-			Retain:   p.WillRetain,
+			ClientID:   clientID,
+			Topic:      p.WillTopic,
+			Payload:    p.WillPayload,
+			QoS:        p.WillQoS,
+			Retain:     p.WillRetain,
+			Properties: setExternalIDProperty(nil, externalID),
 		}
 	}
 
@@ -142,6 +145,8 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	}
 
 	s.TopicAliasMax = topicAliasMax
+
+	s.ExternalID = externalID
 
 	if err := s.Connect(conn); err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
@@ -260,6 +265,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	// Extract MQTT v5 properties for queue functionality
 	properties := extractAllProperties(p.Properties)
+	properties = setExternalIDProperty(properties, s.ExternalID)
 
 	switch qos {
 	case 0:

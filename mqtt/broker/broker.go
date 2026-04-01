@@ -250,6 +250,14 @@ func (b *Broker) CanPublish(clientID, topic string) bool {
 	return b.auth.CanPublish(clientID, topic)
 }
 
+// ExternalID returns the authenticated external identity for a client.
+func (b *Broker) ExternalID(clientID string) string {
+	if b.auth == nil {
+		return ""
+	}
+	return b.auth.ExternalID(clientID)
+}
+
 // SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.
 func (b *Broker) SetClientRateLimiter(rl broker.RateLimiter) {
 	b.rateLimiter = rl

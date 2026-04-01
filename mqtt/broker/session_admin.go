@@ -36,6 +36,7 @@ type SessionSubscription struct {
 // SessionSnapshot is a point-in-time session view for management APIs.
 type SessionSnapshot struct {
 	ClientID          string
+	ExternalID        string
 	State             string
 	Connected         bool
 	Version           byte
@@ -209,6 +210,7 @@ func (b *Broker) snapshotFromLiveSession(s *session.Session) (*SessionSnapshot, 
 
 	return &SessionSnapshot{
 		ClientID:          s.ID,
+		ExternalID:        s.ExternalID,
 		State:             s.State().String(),
 		Connected:         s.IsConnected(),
 		Version:           info.Version,
@@ -232,6 +234,7 @@ func (b *Broker) snapshotFromLiveSession(s *session.Session) (*SessionSnapshot, 
 func (b *Broker) snapshotFromStoredSession(ctx context.Context, stored *storage.Session) (*SessionSnapshot, error) {
 	snapshot := &SessionSnapshot{
 		ClientID:        stored.ClientID,
+		ExternalID:      stored.ExternalID,
 		State:           disconnectedState(stored.Connected),
 		Connected:       stored.Connected,
 		Version:         stored.Version,

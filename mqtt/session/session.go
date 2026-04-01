@@ -57,6 +57,7 @@ type Session struct {
 	disconnectedAt time.Time
 
 	ID                   string
+	ExternalID           string
 	authMethod           string
 	authState            any
 	conn                 core.Connection
@@ -574,6 +575,7 @@ func (s *Session) Info() *storage.Session {
 
 	return &storage.Session{
 		ClientID:        s.ID,
+		ExternalID:      s.ExternalID,
 		Version:         s.Version,
 		CleanStart:      s.CleanStart,
 		ExpiryInterval:  s.ExpiryInterval,
@@ -593,6 +595,7 @@ func (s *Session) RestoreFrom(stored *storage.Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.ExternalID = stored.ExternalID
 	s.ExpiryInterval = stored.ExpiryInterval
 	s.ReceiveMaximum = stored.ReceiveMaximum
 	s.MaxPacketSize = stored.MaxPacketSize

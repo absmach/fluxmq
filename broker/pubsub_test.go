@@ -12,39 +12,30 @@ import (
 
 func TestAddClientIDProperty(t *testing.T) {
 	tests := []struct {
-		name          string
-		initial       map[string]string
-		clientID      string
-		wantClientID  string
-		wantPublisher string
-		wantNil       bool
+		name              string
+		initial           map[string]string
+		clientID          string
+		wantClientID      string
+		wantExternalID    string
+		wantExternalIDSet bool
+		wantNil           bool
 	}{
 		{
-			name:          "first publish sets both",
-			initial:       nil,
-			clientID:      "device-1",
-			wantClientID:  "device-1",
-			wantPublisher: "device-1",
+			name:         "first publish sets client_id only",
+			initial:      nil,
+			clientID:     "device-1",
+			wantClientID: "device-1",
 		},
 		{
-			name: "republish overwrites client_id, preserves publisher",
+			name: "republish overwrites client_id, preserves explicit external_id",
 			initial: map[string]string{
-				ClientIDProperty:  "device-1",
-				PublisherProperty: "device-1",
+				ClientIDProperty:   "device-1",
+				ExternalIDProperty: "ext-123",
 			},
-			clientID:      "amqp091-rules-engine",
-			wantClientID:  "amqp091-rules-engine",
-			wantPublisher: "device-1",
-		},
-		{
-			name: "third hop still preserves publisher",
-			initial: map[string]string{
-				ClientIDProperty:  "amqp091-rules-engine",
-				PublisherProperty: "device-1",
-			},
-			clientID:      "amqp091-timescale-writer",
-			wantClientID:  "amqp091-timescale-writer",
-			wantPublisher: "device-1",
+			clientID:          "amqp091-rules-engine",
+			wantClientID:      "amqp091-rules-engine",
+			wantExternalID:    "ext-123",
+			wantExternalIDSet: true,
 		},
 		{
 			name:     "empty clientID is no-op on nil props",
@@ -55,28 +46,27 @@ func TestAddClientIDProperty(t *testing.T) {
 		{
 			name: "empty clientID is no-op on existing props",
 			initial: map[string]string{
-				ClientIDProperty:  "device-1",
-				PublisherProperty: "device-1",
+				ClientIDProperty:   "device-1",
+				ExternalIDProperty: "ext-123",
 			},
-			clientID:      "",
-			wantClientID:  "device-1",
-			wantPublisher: "device-1",
+			clientID:          "",
+			wantClientID:      "device-1",
+			wantExternalID:    "ext-123",
+			wantExternalIDSet: true,
 		},
 		{
-			name:          "first publish with existing empty map",
-			initial:       map[string]string{},
-			clientID:      "coap:sensor-5",
-			wantClientID:  "coap:sensor-5",
-			wantPublisher: "coap:sensor-5",
+			name:         "first publish with existing empty map",
+			initial:      map[string]string{},
+			clientID:     "coap:sensor-5",
+			wantClientID: "coap:sensor-5",
 		},
 		{
 			name: "preserves unrelated properties",
 			initial: map[string]string{
 				"content-type": "application/json",
 			},
-			clientID:      "device-1",
-			wantClientID:  "device-1",
-			wantPublisher: "device-1",
+			clientID:     "device-1",
+			wantClientID: "device-1",
 		},
 	}
 
@@ -91,7 +81,12 @@ func TestAddClientIDProperty(t *testing.T) {
 
 			require.NotNil(t, result)
 			assert.Equal(t, tc.wantClientID, result[ClientIDProperty])
-			assert.Equal(t, tc.wantPublisher, result[PublisherProperty])
+
+			externalID, ok := result[ExternalIDProperty]
+			assert.Equal(t, tc.wantExternalIDSet, ok)
+			if tc.wantExternalIDSet {
+				assert.Equal(t, tc.wantExternalID, externalID)
+			}
 		})
 	}
 }
@@ -104,10 +99,10 @@ func TestClientIDFromProperties(t *testing.T) {
 	}))
 }
 
-func TestPublisherIDFromProperties(t *testing.T) {
-	assert.Equal(t, "", PublisherIDFromProperties(nil))
-	assert.Equal(t, "", PublisherIDFromProperties(map[string]string{}))
-	assert.Equal(t, "device-1", PublisherIDFromProperties(map[string]string{
-		PublisherProperty: "device-1",
+func TestExternalIDFromProperties(t *testing.T) {
+	assert.Equal(t, "", ExternalIDFromProperties(nil))
+	assert.Equal(t, "", ExternalIDFromProperties(map[string]string{}))
+	assert.Equal(t, "device-1", ExternalIDFromProperties(map[string]string{
+		ExternalIDProperty: "device-1",
 	}))
 }

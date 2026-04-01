@@ -14,7 +14,7 @@ const (
 	HTTPClientPrefix    = "http:"
 	CoAPClientPrefix    = "coap:"
 	ClientIDProperty    = "client_id"
-	PublisherProperty   = "publisher"
+	ExternalIDProperty = "external_id"
 )
 
 // CrossDeliverFunc delivers a pub/sub message to a client in another protocol broker.
@@ -42,20 +42,15 @@ func PrefixedAMQP1ClientID(containerID string) string {
 
 // AddClientIDProperty writes the protocol-level client identity into the
 // shared properties map used for cross-node and cross-protocol delivery.
-// On first call it also sets the publisher property (the message originator).
-// Subsequent calls update the client ID but preserve the original publisher.
+// External identity must be set explicitly by the ingress handler.
 func AddClientIDProperty(props map[string]string, clientID string) map[string]string {
 	if clientID == "" {
 		return props
 	}
 	if props == nil {
-		props = make(map[string]string, 2)
+		props = make(map[string]string, 1)
 	}
 	props[ClientIDProperty] = clientID
-	// Set-once: preserve the original publisher across republishes.
-	if _, exists := props[PublisherProperty]; !exists {
-		props[PublisherProperty] = clientID
-	}
 	return props
 }
 
@@ -68,11 +63,11 @@ func ClientIDFromProperties(props map[string]string) string {
 	return props[ClientIDProperty]
 }
 
-// PublisherIDFromProperties returns the original publisher identity —
-// the client that first published the message before any intermediary republished it.
-func PublisherIDFromProperties(props map[string]string) string {
+// ExternalIDFromProperties returns the authenticated external identity
+// of the client that originally published the message.
+func ExternalIDFromProperties(props map[string]string) string {
 	if len(props) == 0 {
 		return ""
 	}
-	return props[PublisherProperty]
+	return props[ExternalIDProperty]
 }

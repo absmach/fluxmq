@@ -76,6 +76,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		}
 	}
 
+	externalID := ""
 	if h.broker.auth != nil {
 		username := p.Username
 		password := string(p.Password)
@@ -87,6 +88,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			conn.Close()
 			return ErrNotAuthorized
 		}
+		externalID = h.broker.ExternalID(clientID)
 	}
 
 	var will *storage.WillMessage
@@ -100,11 +102,12 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		// Note: Will payload is stored as []byte in storage.WillMessage
 		//nolint:godox // TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{
-			ClientID: clientID,
-			Topic:    p.WillTopic,
-			Payload:  p.WillMessage,
-			QoS:      p.WillQoS,
-			Retain:   p.WillRetain,
+			ClientID:   clientID,
+			Topic:      p.WillTopic,
+			Payload:    p.WillMessage,
+			QoS:        p.WillQoS,
+			Retain:     p.WillRetain,
+			Properties: setExternalIDProperty(nil, externalID),
 		}
 	}
 
@@ -122,6 +125,8 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		conn.Close()
 		return err
 	}
+
+	s.ExternalID = externalID
 
 	if err := s.Connect(conn); err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
@@ -213,6 +218,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
+		msg.Properties = setExternalIDProperty(msg.Properties, s.ExternalID)
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(context.Background(), msg)
 		storage.ReleaseMessage(msg)
@@ -230,6 +236,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
+		msg.Properties = setExternalIDProperty(msg.Properties, s.ExternalID)
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			storage.ReleaseMessage(msg)
@@ -260,6 +267,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		storeMsg.QoS = qos
 		storeMsg.Retain = retain
 		storeMsg.PacketID = packetID
+		storeMsg.Properties = setExternalIDProperty(storeMsg.Properties, s.ExternalID)
 		storeMsg.SetPayloadFromBuffer(buf)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			storeMsg.ReleasePayload()

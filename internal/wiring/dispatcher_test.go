@@ -124,12 +124,12 @@ func TestMessageDispatcherForwardPublishPreservesProperties(t *testing.T) {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}
 	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Properties[corebroker.ClientIDProperty] != pubProp {
-		t.Fatalf("expected mqtt forward to preserve publisher property, got %+v", mqtt.forwardMsgs)
+		t.Fatalf("expected mqtt forward to preserve client_id property, got %+v", mqtt.forwardMsgs)
 	}
 	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Properties[corebroker.ClientIDProperty] != pubProp {
-		t.Fatalf("expected amqp1 forward to preserve publisher property, got %+v", amqp1.forwardMsgs)
+		t.Fatalf("expected amqp1 forward to preserve client_id property, got %+v", amqp1.forwardMsgs)
 	}
 	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Properties[corebroker.ClientIDProperty] != pubProp {
-		t.Fatalf("expected amqp091 forward to preserve publisher property, got %+v", amqp091.forwardMsgs)
+		t.Fatalf("expected amqp091 forward to preserve client_id property, got %+v", amqp091.forwardMsgs)
 	}
 }

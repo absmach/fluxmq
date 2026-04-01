@@ -391,7 +391,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	}
 }
 
-func TestPublishNormalizesPublisherProperty(t *testing.T) {
+func TestPublishNormalizesClientIDProperty(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -426,9 +426,6 @@ func TestPublishNormalizesPublisherProperty(t *testing.T) {
 	case msg := <-delivered:
 		if got := msg.Properties[corebroker.ClientIDProperty]; got != "mqtt-pub-1" {
 			t.Fatalf("expected client_id property %q, got %q", "mqtt-pub-1", got)
-		}
-		if got := msg.Properties[corebroker.PublisherProperty]; got != "mqtt-pub-1" {
-			t.Fatalf("expected publisher property %q, got %q", "mqtt-pub-1", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")

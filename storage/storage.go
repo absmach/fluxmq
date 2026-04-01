@@ -183,6 +183,7 @@ type Session struct {
 	ConnectedAt     time.Time
 	DisconnectedAt  time.Time
 	ClientID        string
+	ExternalID      string
 	ExpiryInterval  uint32 // Session expiry in seconds (0 = no expiry when disconnected)
 	MaxPacketSize   uint32
 	ReceiveMaximum  uint16

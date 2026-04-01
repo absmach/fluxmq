@@ -87,9 +87,17 @@ func (e *AuthEngine) Forget(clientID string) {
 	e.identities.Delete(clientID)
 }
 
-func (e *AuthEngine) resolveID(clientID string) string {
+// ExternalID returns the authenticated external identity for a protocol client ID.
+func (e *AuthEngine) ExternalID(clientID string) string {
 	if id, ok := e.identities.Load(clientID); ok {
 		return id.(string)
+	}
+	return ""
+}
+
+func (e *AuthEngine) resolveID(clientID string) string {
+	if id := e.ExternalID(clientID); id != "" {
+		return id
 	}
 	return clientID
 }

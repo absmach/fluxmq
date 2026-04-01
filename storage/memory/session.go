@@ -93,6 +93,7 @@ func copySession(session *storage.Session) *storage.Session {
 
 	return &storage.Session{
 		ClientID:        session.ClientID,
+		ExternalID:      session.ExternalID,
 		Version:         session.Version,
 		CleanStart:      session.CleanStart,
 		ExpiryInterval:  session.ExpiryInterval,
