@@ -13,7 +13,10 @@ function collectPages(dir: string, route = ""): MetadataRoute.Sitemap {
 
     if (entry.isDirectory()) {
       if (entry.name.startsWith("[")) return [];
-      return collectPages(fullPath, `${route}/${entry.name}`);
+      const segment = entry.name.startsWith("(")
+        ? route
+        : `${route}/${entry.name}`;
+      return collectPages(fullPath, segment);
     }
 
     if (entry.name !== "page.tsx") return [];
