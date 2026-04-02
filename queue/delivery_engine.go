@@ -257,7 +257,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 		} else {
 			msgs, err = e.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
 		}
-		if err != nil {
+		if err != nil && err != consumer.ErrNoMessages {
 			continue
 		}
 		if len(msgs) > 0 {
@@ -274,8 +274,12 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			continue
 		}
 
-		if len(msgs) > 0 {
-			e.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID) //nolint:errcheck // fire-and-forget heartbeat update
+		if err := e.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID); err != nil {
+			e.logger.Warn("failed to update consumer heartbeat",
+				slog.String("queue", config.Name),
+				slog.String("group", group.ID),
+				slog.String("consumer", consumerID),
+				slog.String("error", err.Error()))
 		}
 
 		var workCommitted uint64
