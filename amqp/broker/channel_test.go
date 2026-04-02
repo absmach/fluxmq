@@ -738,3 +738,100 @@ func TestPublishCustomHeadersPropagatedToCrossDeliver(t *testing.T) {
 		t.Fatalf("expected protocol=%q, got %q", "http", gotProps[corebroker.ProtocolProperty])
 	}
 }
+
+func TestCancelConsumerByQueue(t *testing.T) {
+	t.Run("cancels matching consumer and sends BasicCancel frame", func(t *testing.T) {
+		ch, buf := newTestChannel(t)
+
+		ch.consumers["ctag-1"] = &consumer{
+			tag:       "ctag-1",
+			queueName: "events",
+			groupID:   "workers",
+		}
+		ch.consumers["ctag-2"] = &consumer{
+			tag:       "ctag-2",
+			queueName: "orders",
+			groupID:   "processors",
+		}
+
+		beforeLen := buf.Len()
+		ch.cancelConsumerByQueue("events", "workers")
+
+		// ctag-1 should be removed, ctag-2 should remain
+		ch.consumersMu.RLock()
+		if _, exists := ch.consumers["ctag-1"]; exists {
+			t.Fatal("expected ctag-1 to be removed")
+		}
+		if _, exists := ch.consumers["ctag-2"]; !exists {
+			t.Fatal("expected ctag-2 to remain")
+		}
+		ch.consumersMu.RUnlock()
+
+		// Should have written a BasicCancel frame
+		frames := readFramesFrom(t, buf, beforeLen)
+		if len(frames) != 1 {
+			t.Fatalf("expected 1 frame, got %d", len(frames))
+		}
+		decoded, err := frames[0].Decode()
+		if err != nil {
+			t.Fatalf("Decode failed: %v", err)
+		}
+		cancel, ok := decoded.(*codec.BasicCancel)
+		if !ok {
+			t.Fatalf("expected *codec.BasicCancel, got %T", decoded)
+		}
+		if cancel.ConsumerTag != "ctag-1" {
+			t.Fatalf("expected ConsumerTag %q, got %q", "ctag-1", cancel.ConsumerTag)
+		}
+		if !cancel.NoWait {
+			t.Fatal("expected NoWait=true for server-initiated cancel")
+		}
+	})
+
+	t.Run("no-op when no consumers match", func(t *testing.T) {
+		ch, buf := newTestChannel(t)
+
+		ch.consumers["ctag-1"] = &consumer{
+			tag:       "ctag-1",
+			queueName: "events",
+			groupID:   "workers",
+		}
+
+		beforeLen := buf.Len()
+		ch.cancelConsumerByQueue("nonexistent", "group")
+
+		ch.consumersMu.RLock()
+		if len(ch.consumers) != 1 {
+			t.Fatalf("expected 1 consumer to remain, got %d", len(ch.consumers))
+		}
+		ch.consumersMu.RUnlock()
+
+		if buf.Len() != beforeLen {
+			t.Fatal("expected no frames to be written")
+		}
+	})
+
+	t.Run("no-op on closed channel", func(t *testing.T) {
+		ch, buf := newTestChannel(t)
+		ch.closed.Store(true)
+
+		ch.consumers["ctag-1"] = &consumer{
+			tag:       "ctag-1",
+			queueName: "events",
+			groupID:   "workers",
+		}
+
+		beforeLen := buf.Len()
+		ch.cancelConsumerByQueue("events", "workers")
+
+		ch.consumersMu.RLock()
+		if _, exists := ch.consumers["ctag-1"]; !exists {
+			t.Fatal("expected consumer to remain on closed channel")
+		}
+		ch.consumersMu.RUnlock()
+
+		if buf.Len() != beforeLen {
+			t.Fatal("expected no frames to be written on closed channel")
+		}
+	})
+}

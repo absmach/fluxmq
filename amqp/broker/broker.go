@@ -252,6 +252,23 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 	return nil
 }
 
+// CancelConsumers sends server-initiated basic.cancel frames for consumers
+// removed from the given queue/group. Only AMQP 0.9.1 clients are affected;
+// other protocol prefixes are skipped.
+func (b *Broker) CancelConsumers(queueName, groupID string, clientIDs []string) {
+	for _, clientID := range clientIDs {
+		if !corebroker.IsAMQP091Client(clientID) {
+			continue
+		}
+		connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
+		val, ok := b.connections.Load(connID)
+		if !ok {
+			continue
+		}
+		val.(*Connection).cancelConsumerByQueue(queueName, groupID)
+	}
+}
+
 // Close gracefully shuts down the broker.
 func (b *Broker) Close() error {
 	b.connections.Range(func(key, val any) bool {

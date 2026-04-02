@@ -70,7 +70,7 @@ func TestMessageDispatcherDeliverToClientRoutesByProtocol(t *testing.T) {
 	if err := d.DeliverToClient(context.Background(), "amqp:container-1", msg); err != nil {
 		t.Fatalf("amqp1 delivery failed: %v", err)
 	}
-	if err := d.DeliverToClient(context.Background(), "amqp091-conn-1", msg); err != nil {
+	if err := d.DeliverToClient(context.Background(), "amqp091:conn-1", msg); err != nil {
 		t.Fatalf("amqp091 delivery failed: %v", err)
 	}
 	if err := d.DeliverToClient(context.Background(), "mqtt-client-1", msg); err != nil {
@@ -80,7 +80,7 @@ func TestMessageDispatcherDeliverToClientRoutesByProtocol(t *testing.T) {
 	if len(amqp1.deliverCalls) != 1 || amqp1.deliverCalls[0] != "amqp:container-1" {
 		t.Fatalf("expected amqp1 route, got calls=%v", amqp1.deliverCalls)
 	}
-	if len(amqp091.deliverCalls) != 1 || amqp091.deliverCalls[0] != "amqp091-conn-1" {
+	if len(amqp091.deliverCalls) != 1 || amqp091.deliverCalls[0] != "amqp091:conn-1" {
 		t.Fatalf("expected amqp091 route, got calls=%v", amqp091.deliverCalls)
 	}
 	if len(mqtt.deliverCalls) != 1 || mqtt.deliverCalls[0] != "mqtt-client-1" {

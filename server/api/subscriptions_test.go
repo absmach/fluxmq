@@ -267,8 +267,8 @@ func TestMergeAMQPSubscriptionResponsesAddsAMQPSubscriptions(t *testing.T) {
 	}
 
 	mergeAMQPSubscriptionResponses(aggregated, []amqpbroker.SubscriptionSnapshot{
-		{ClientID: "amqp091-conn-1", Filter: "devices/one", QoS: 1},
-		{ClientID: "amqp091-conn-2", Filter: "jobs.*", QoS: 1},
+		{ClientID: "amqp091:conn-1", Filter: "devices/one", QoS: 1},
+		{ClientID: "amqp091:conn-2", Filter: "jobs.*", QoS: 1},
 	}, "")
 
 	if aggregated["devices/one"].SubscriberCount != 3 {
@@ -285,15 +285,15 @@ func TestMergeAMQPSubscriptionClientsAddsAMQPClients(t *testing.T) {
 	}
 
 	mergeAMQPSubscriptionClients(clients, []amqpbroker.SubscriptionSnapshot{
-		{ClientID: "amqp091-conn-1", Filter: "jobs.*", QoS: 1},
-		{ClientID: "amqp091-conn-2", Filter: "orders.*", QoS: 1},
+		{ClientID: "amqp091:conn-1", Filter: "jobs.*", QoS: 1},
+		{ClientID: "amqp091:conn-2", Filter: "orders.*", QoS: 1},
 	}, "jobs.*", "")
 
 	if len(clients) != 2 {
 		t.Fatalf("expected 2 clients, got %d", len(clients))
 	}
-	if qos, ok := clients["amqp091-conn-1"]; !ok || qos != 1 {
-		t.Fatalf("expected amqp091-conn-1 with qos 1, got %v %v", ok, qos)
+	if qos, ok := clients["amqp091:conn-1"]; !ok || qos != 1 {
+		t.Fatalf("expected amqp091:conn-1 with qos 1, got %v %v", ok, qos)
 	}
 }
 

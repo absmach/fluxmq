@@ -1188,7 +1188,7 @@ func TestSubscribeDefaultsProxyNodeIDFromCluster(t *testing.T) {
 		mockCl,
 	)
 
-	if err := manager.Subscribe(context.Background(), "demo-orders", "#", "amqp091-conn-1", "demo-workers", ""); err != nil {
+	if err := manager.Subscribe(context.Background(), "demo-orders", "#", "amqp091:conn-1", "demo-workers", ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
@@ -1292,7 +1292,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 			QueueName:    "events",
 			GroupID:      "demo-readers@#",
 			ConsumerID:   "remote-consumer-1",
-			ClientID:     "amqp091-conn-remote",
+			ClientID:     "amqp091:conn-remote",
 			Pattern:      "#",
 			Mode:         string(types.GroupModeStream),
 			ProxyNodeID:  "node-2",
@@ -1342,7 +1342,7 @@ func TestSubscribeWithCursorDefaultsProxyNodeIDFromCluster(t *testing.T) {
 		Position: types.CursorEarliest,
 		Mode:     types.GroupModeStream,
 	}
-	if err := manager.SubscribeWithCursor(context.Background(), "demo-events", "#", "amqp091-conn-1", "demo-readers", "", cursor); err != nil {
+	if err := manager.SubscribeWithCursor(context.Background(), "demo-events", "#", "amqp091:conn-1", "demo-readers", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
@@ -2113,6 +2113,70 @@ func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
 	targets := manager.getSubscriptionTargets("client-1")
 	if len(targets) != 0 {
 		t.Fatalf("expected stale tracked target to be removed after heartbeat update, got %d entries", len(targets))
+	}
+}
+
+func TestOnConsumerRemovedCallbackFires(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	var mu sync.Mutex
+	var gotQueue, gotGroup string
+	var gotConsumerIDs []string
+
+	cfg := DefaultConfig()
+	cfg.ConsumerTimeout = 20 * time.Millisecond
+	cfg.OnConsumerRemoved = func(queueName, groupID string, consumerIDs []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotQueue = queueName
+		gotGroup = groupID
+		gotConsumerIDs = consumerIDs
+	}
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		cfg,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	ctx := context.Background()
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("events", "workers", "")
+	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("CreateConsumerGroup failed: %v", err)
+	}
+
+	staleTime := time.Now().Add(-time.Hour)
+	info := &types.ConsumerInfo{
+		ID:            "amqp091:10.0.0.1:5000",
+		ClientID:      "amqp091:10.0.0.1:5000",
+		RegisteredAt:  staleTime,
+		LastHeartbeat: staleTime,
+	}
+	if err := groupStore.RegisterConsumer(ctx, "events", "workers", info); err != nil {
+		t.Fatalf("RegisterConsumer failed: %v", err)
+	}
+
+	manager.cleanupStaleConsumers()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotQueue != "events" {
+		t.Fatalf("expected queue 'events', got %q", gotQueue)
+	}
+	if gotGroup != "workers" {
+		t.Fatalf("expected group 'workers', got %q", gotGroup)
+	}
+	if len(gotConsumerIDs) != 1 || gotConsumerIDs[0] != "amqp091:10.0.0.1:5000" {
+		t.Fatalf("expected [amqp091-10.0.0.1:5000], got %v", gotConsumerIDs)
 	}
 }
 

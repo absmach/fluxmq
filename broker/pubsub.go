@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	AMQP091ClientPrefix = "amqp091-"
+	AMQP091ClientPrefix = "amqp091:"
 	AMQP1ClientPrefix   = "amqp:"
 	HTTPClientPrefix    = "http:"
 	CoAPClientPrefix    = "coap:"

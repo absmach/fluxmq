@@ -4,6 +4,7 @@
 package amqp
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -222,6 +223,7 @@ func (c *Client) connectOnce() error {
 
 	c.connected.Store(true)
 	c.startNotificationListeners(pubCh)
+	c.watchCancelNotifications(subCh)
 	c.watchClose(conn, pubCh, subCh)
 
 	if c.opts.OnConnect != nil {
@@ -287,6 +289,27 @@ func (c *Client) watchClose(conn *amqp091.Connection, pubCh, subCh *amqp091.Chan
 			c.handleDisconnect(err)
 		case <-c.stopCh:
 			return
+		}
+	}()
+}
+
+func (c *Client) watchCancelNotifications(subCh *amqp091.Channel) {
+	cancels := subCh.NotifyCancel(make(chan string, 16))
+	go func() {
+		for {
+			select {
+			case tag, ok := <-cancels:
+				if !ok {
+					return
+				}
+				if c.opts.OnConsumerCancelled != nil {
+					c.opts.OnConsumerCancelled(tag)
+				}
+				c.handleDisconnect(fmt.Errorf("consumer %q cancelled by server", tag))
+				return
+			case <-c.stopCh:
+				return
+			}
 		}
 	}()
 }

@@ -340,7 +340,7 @@ func runAMQPFulfillment(ctx context.Context, processed *int64) {
 
 // runAMQP091Fulfillment runs the order shipping consumer over AMQP 0.9.1.
 func runAMQP091Fulfillment(ctx context.Context, processed *int64) {
-	clientID := "amqp091-shipper-1"
+	clientID := "amqp091:shipper-1"
 	consumerGroup := "order-shipper"
 
 	opts := amqpclient.NewOptions().

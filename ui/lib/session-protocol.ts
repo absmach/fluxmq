@@ -51,7 +51,7 @@ export function resolveSessionProtocol(
 	if (AMQP091_ALIASES.has(raw)) return "amqp0.9.1";
 	if (AMQP10_ALIASES.has(raw)) return "amqp1.0";
 
-	if (session.client_id.startsWith("amqp091-")) return "amqp0.9.1";
+	if (session.client_id.startsWith("amqp091:")) return "amqp0.9.1";
 	if (session.client_id.startsWith("amqp:")) return "amqp1.0";
 
 	return raw || "unknown";

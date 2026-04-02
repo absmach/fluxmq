@@ -383,6 +383,25 @@ func (c *Connection) deliverMessage(topic string, payload []byte, props map[stri
 	}
 }
 
+// cancelConsumerByQueue sends a server-initiated basic.cancel to any channel
+// on this connection that has a consumer matching the given queue and group.
+func (c *Connection) cancelConsumerByQueue(queueName, groupID string) {
+	if c.closed.Load() {
+		return
+	}
+
+	c.channelsMu.RLock()
+	channels := make([]*Channel, 0, len(c.channels))
+	for _, ch := range c.channels {
+		channels = append(channels, ch)
+	}
+	c.channelsMu.RUnlock()
+
+	for _, ch := range channels {
+		ch.cancelConsumerByQueue(queueName, groupID)
+	}
+}
+
 // writeMethod serializes a method and sends it as a FrameMethod.
 func (c *Connection) writeMethod(channel uint16, method interface{ Write(io.Writer) error }) error {
 	buf := bufpool.Get()

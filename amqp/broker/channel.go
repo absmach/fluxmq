@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -1380,6 +1381,40 @@ func (ch *Channel) cleanup() {
 					ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
 				}
 			}
+		}
+	}
+}
+
+// cancelConsumerByQueue sends a server-initiated basic.cancel for any consumer
+// on this channel that matches the given queue and group. Per AMQP 0.9.1 spec,
+// the server sends basic.cancel with NoWait=true for server-initiated cancellation.
+// This does NOT call qm.Unsubscribe because the consumer was already removed
+// by the queue manager's stale heartbeat cleanup.
+func (ch *Channel) cancelConsumerByQueue(queueName, groupID string) {
+	if ch.closed.Load() {
+		return
+	}
+
+	ch.consumersMu.Lock()
+	var toCancel []string
+	for tag, cons := range ch.consumers {
+		if cons.queueName == queueName && cons.groupID == groupID {
+			toCancel = append(toCancel, tag)
+			delete(ch.consumers, tag)
+		}
+	}
+	ch.consumersMu.Unlock()
+
+	for _, tag := range toCancel {
+		ch.conn.broker.stats.DecrementConsumers()
+		if err := ch.conn.writeMethod(ch.id, &codec.BasicCancel{
+			ConsumerTag: tag,
+			NoWait:      true,
+		}); err != nil {
+			ch.conn.logger.Warn("failed to send server-initiated basic.cancel",
+				slog.String("consumer_tag", tag),
+				slog.String("queue", queueName),
+				slog.String("error", err.Error()))
 		}
 	}
 }

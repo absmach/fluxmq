@@ -487,6 +487,11 @@ func main() {
 			}))
 		}
 
+		// Notify AMQP 0.9.1 clients when their consumers are removed by stale cleanup
+		queueCfg.OnConsumerRemoved = func(queueName, groupID string, consumerIDs []string) {
+			amqp091Broker.CancelConsumers(queueName, groupID, consumerIDs)
+		}
+
 		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix
 		deliveryTarget := queue.DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *storage.Message) error {
 			if amqp1broker.IsAMQPClient(clientID) {

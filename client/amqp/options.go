@@ -42,9 +42,10 @@ type Options struct {
 	MaxReconnectWait time.Duration
 
 	// Callbacks
-	OnConnect        func()
-	OnConnectionLost func(error)
-	OnReconnecting   func(attempt int)
+	OnConnect           func()
+	OnConnectionLost    func(error)
+	OnReconnecting      func(attempt int)
+	OnConsumerCancelled func(consumerTag string)
 }
 
 // NewOptions creates Options with sensible defaults.
@@ -153,6 +154,12 @@ func (o *Options) SetOnConnectionLost(fn func(error)) *Options {
 // SetOnReconnecting sets the reconnecting callback.
 func (o *Options) SetOnReconnecting(fn func(attempt int)) *Options {
 	o.OnReconnecting = fn
+	return o
+}
+
+// SetOnConsumerCancelled sets the callback for server-initiated consumer cancellation.
+func (o *Options) SetOnConsumerCancelled(fn func(consumerTag string)) *Options {
+	o.OnConsumerCancelled = fn
 	return o
 }
 

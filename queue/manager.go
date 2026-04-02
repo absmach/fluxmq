@@ -108,6 +108,12 @@ type Config struct {
 
 	// Queue configurations from main config
 	QueueConfigs []types.QueueConfig
+
+	// OnConsumerRemoved is called when stale consumers are removed during
+	// heartbeat cleanup. The callback receives the queue name, group ID,
+	// and the list of removed consumer IDs (prefixed client IDs).
+	// Must be non-blocking.
+	OnConsumerRemoved func(queueName, groupID string, consumerIDs []string)
 }
 
 // DefaultConfig returns default configuration.
@@ -1501,6 +1507,9 @@ func (m *Manager) cleanupStaleConsumers() {
 					slog.Int("count", len(removed)),
 					slog.String("queue", queueConfig.Name),
 					slog.String("group", group.ID))
+				if m.config.OnConsumerRemoved != nil {
+					m.config.OnConsumerRemoved(queueConfig.Name, group.ID, removed)
+				}
 			}
 		}
 	}

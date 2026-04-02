@@ -139,14 +139,14 @@ Starting consumers...
 [validator-1] Connected to localhost:1883 (MQTT)
 [validator-2] Connected to localhost:1883 (MQTT)
 [amqp-fulfillment-1] Connected to localhost:5672 (AMQP 1.0), receiving from queue 'tasks/orders'
-[amqp091-shipper-1] Connected to localhost:5682 (AMQP 0.9.1), receiving from queue 'tasks/orders'
+[amqp091:shipper-1] Connected to localhost:5682 (AMQP 0.9.1), receiving from queue 'tasks/orders'
 Starting publishers...
 [publisher-1] Connected to localhost:1883 (MQTT), publishing orders for customer-alice
 [publisher-2] Connected to localhost:1883 (MQTT), publishing orders for customer-bob
 [publisher-3] Connected to localhost:1883 (MQTT), publishing orders for customer-charlie
 [validator-1] Validated order (seq=1): {"order_id":"customer-alice-order-1"...}
 [amqp-fulfillment-1] Fulfilled order (AMQP): {"order_id":"customer-alice-order-1"...}
-[amqp091-shipper-1] Shipped order (AMQP 0.9.1): {"order_id":"customer-alice-order-1"...}
+[amqp091:shipper-1] Shipped order (AMQP 0.9.1): {"order_id":"customer-alice-order-1"...}
 ...
 
 === Statistics ===
