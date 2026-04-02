@@ -398,19 +398,6 @@ export function SessionDetailDialog({
 									)}
 								</DetailRow>
 							</div>
-
-							{session.connected && (
-								<div className="px-6 py-4 border-t border-flux-card-border flex justify-end">
-									<Button
-										variant="outline"
-										size="sm"
-										className="border-flux-red/40 text-flux-red hover:bg-flux-red/10"
-										onClick={onClose}
-									>
-										{isAMQP091 ? "Close Connection" : "Disconnect Session"}
-									</Button>
-								</div>
-							)}
 						</>
 					)}
 				</DialogContent>

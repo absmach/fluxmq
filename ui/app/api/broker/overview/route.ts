@@ -64,7 +64,7 @@ export async function GET() {
 			});
 			if (!res.ok) {
 				return NextResponse.json(
-					{ error: `Backend returned ${res.status}` },
+					{ error: "Broker request failed" },
 					{ status: res.status },
 				);
 			}
