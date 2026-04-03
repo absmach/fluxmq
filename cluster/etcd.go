@@ -1296,13 +1296,23 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		return nil
 	}
 
+	forwardPayload := payload
+	forwardProperties := properties
+	// Snapshot mutable payload/properties only for async QoS0 batch enqueue.
+	// In this path, RoutePublish returns before the worker flushes, so caller
+	// owned buffers/maps can be reused or released.
+	if c.forwardBatcher != nil && qos == 0 {
+		forwardPayload = append([]byte(nil), payload...)
+		forwardProperties = cloneStringMap(properties)
+	}
+
 	// Send one ForwardPublish per remote node
 	msg := &clusterv1.ForwardPublishRequest{
 		Topic:      topic,
-		Payload:    payload,
+		Payload:    forwardPayload,
 		Qos:        uint32(qos),
 		Retain:     retain,
-		Properties: properties,
+		Properties: forwardProperties,
 	}
 
 	var errs []error
@@ -1815,6 +1825,21 @@ func parseSessionOwnerKey(key string) (clientID string, ok bool) {
 		return "", false
 	}
 	return clientID, true
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		if src == nil {
+			return nil
+		}
+		return map[string]string{}
+	}
+
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // loadSessionOwnerCache loads all session owners from etcd into the local cache.

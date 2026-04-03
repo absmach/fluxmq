@@ -209,3 +209,83 @@ func TestRoutePublishNoRemoteNodesSkipsForwarding(t *testing.T) {
 		t.Fatal("expected no forwarding calls for local-only subscribers")
 	}
 }
+
+func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
+	forwarded := make(chan *clusterv1.ForwardPublishRequest, 1)
+
+	c := &EtcdCluster{
+		nodeID:     "node-local",
+		transport:  &Transport{},
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		stopCh:     stopCh,
+		subTrie:    router.NewRouter(),
+		ownerCache: map[string]string{},
+	}
+
+	if err := c.subTrie.Subscribe("client-remote", "sensor/temp", 0, storage.SubscribeOptions{}); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+	c.ownerCache["client-remote"] = "node-remote"
+
+	c.forwardBatcher = newNodeBatcher(
+		32,
+		40*time.Millisecond,
+		1,
+		stopCh,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test-forward",
+		func(_ context.Context, nodeID string, items []*clusterv1.ForwardPublishRequest) error {
+			if nodeID != "node-remote" {
+				t.Fatalf("unexpected nodeID: %s", nodeID)
+			}
+			if len(items) != 1 {
+				t.Fatalf("expected 1 forwarded message, got %d", len(items))
+			}
+			msg := items[0]
+			props := make(map[string]string, len(msg.Properties))
+			for k, v := range msg.Properties {
+				props[k] = v
+			}
+			forwarded <- &clusterv1.ForwardPublishRequest{
+				Topic:      msg.Topic,
+				Payload:    append([]byte(nil), msg.Payload...),
+				Qos:        msg.Qos,
+				Retain:     msg.Retain,
+				Properties: props,
+			}
+			return nil
+		},
+	)
+
+	payload := []byte("first-message")
+	properties := map[string]string{
+		"trace": "one",
+	}
+
+	if err := c.RoutePublish(context.Background(), "sensor/temp", payload, 0, false, properties); err != nil {
+		t.Fatalf("route publish failed: %v", err)
+	}
+
+	// Mutate original inputs after RoutePublish returns. Forwarded data must stay unchanged.
+	payload[0] = 'X'
+	properties["trace"] = "two"
+	properties["new"] = "value"
+
+	select {
+	case got := <-forwarded:
+		if string(got.Payload) != "first-message" {
+			t.Fatalf("expected payload %q, got %q", "first-message", string(got.Payload))
+		}
+		if got.Properties["trace"] != "one" {
+			t.Fatalf("expected trace property %q, got %q", "one", got.Properties["trace"])
+		}
+		if _, ok := got.Properties["new"]; ok {
+			t.Fatalf("unexpected property propagated from caller mutation: %v", got.Properties)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for forwarded publish")
+	}
+}
