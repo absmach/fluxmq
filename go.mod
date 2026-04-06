@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/raft v1.7.3
 	github.com/klauspost/compress v1.18.5
 	github.com/pion/dtls/v3 v3.1.2
-	github.com/plgd-dev/go-coap/v3 v3.4.2
+	github.com/plgd-dev/go-coap/v3 v3.5.1
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
