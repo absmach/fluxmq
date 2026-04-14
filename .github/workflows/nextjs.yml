@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
           version: 10
@@ -56,7 +56,7 @@ jobs:
           FQ_BASE_PATH: ${{ steps.setup_pages.outputs.base_path }}
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./web/out
 
