@@ -328,9 +328,13 @@ func (ch *Channel) completePublish() {
 
 	if v, ok := header.Properties.Headers[corebroker.ExternalIDProperty].(string); ok && v != "" {
 		props[corebroker.ExternalIDProperty] = v
+	} else if externalID := ch.conn.broker.ExternalID(PrefixedClientID(ch.conn.connID)); externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
 	}
 	if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
 		props[corebroker.ProtocolProperty] = v
+	} else {
+		props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
 	}
 
 	exchangeName := normalizeExchange(method.Exchange)

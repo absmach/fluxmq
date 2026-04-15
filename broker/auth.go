@@ -44,23 +44,25 @@ func NewAuthEngine(auth Authenticator, authz Authorizer) *AuthEngine {
 
 // Authenticate validates client credentials.
 // Returns true if authenticated or if no authenticator is configured.
-// On success, caches the resolved external identity for subsequent
+// On success, also returns the resolved external identity (empty when the
+// authenticator did not provide one) and caches it for subsequent
 // authorization calls.
-func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, error) {
+func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, string, error) {
 	if e.auth == nil {
-		return true, nil
+		return true, "", nil
 	}
 	result, err := e.auth.Authenticate(clientID, username, password)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if result == nil {
-		return false, nil
+		return false, "", nil
 	}
 	if result.Authenticated && result.ID != "" {
 		e.identities.Store(clientID, result.ID)
+		return true, result.ID, nil
 	}
-	return result.Authenticated, nil
+	return result.Authenticated, "", nil
 }
 
 // CanPublish checks if a client is authorized to publish to a topic.

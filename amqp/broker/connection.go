@@ -240,7 +240,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 		}
 
 		clientID := PrefixedClientID(c.connID)
-		ok, err := auth.Authenticate(clientID, username, password)
+		ok, _, err := auth.Authenticate(clientID, username, password)
 		if err != nil || !ok {
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("%s auth rejected for user %q", mechanism, username)

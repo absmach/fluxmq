@@ -272,6 +272,16 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 		}
 	}
 	props = corebroker.AddClientIDProperty(props, clientID)
+	if _, set := props[corebroker.ProtocolProperty]; !set {
+		props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP1
+	}
+	if _, set := props[corebroker.ExternalIDProperty]; !set {
+		if auth != nil {
+			if externalID := auth.ExternalID(clientID); externalID != "" {
+				props[corebroker.ExternalIDProperty] = externalID
+			}
+		}
+	}
 
 	resolver := l.session.conn.broker.routeResolver
 	topicRoute := resolver.Resolve(topic)

@@ -82,14 +82,14 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		username := p.Username
 		password := string(p.Password)
 
-		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
+		authenticated, resolvedID, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
 			sendV5ConnAck(conn, false, v5.ConnAckBadUsernameOrPassword, nil) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrNotAuthorized
 		}
-		externalID = h.broker.ExternalID(clientID)
+		externalID = resolvedID
 	}
 
 	var will *storage.WillMessage
@@ -108,7 +108,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			Payload:    p.WillPayload,
 			QoS:        p.WillQoS,
 			Retain:     p.WillRetain,
-			Properties: setExternalIDProperty(nil, externalID),
+			Properties: setOriginProperties(nil, externalID),
 		}
 	}
 
@@ -265,7 +265,7 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 
 	// Extract MQTT v5 properties for queue functionality
 	properties := extractAllProperties(p.Properties)
-	properties = setExternalIDProperty(properties, s.ExternalID)
+	properties = setOriginProperties(properties, s.ExternalID)
 
 	switch qos {
 	case 0:

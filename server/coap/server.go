@@ -32,6 +32,24 @@ type Config struct {
 	TLSConfig *piondtls.Config
 }
 
+func buildPublishMessage(topic string, payload []byte, clientID, externalID, contentType string) *storage.Message {
+	props := map[string]string{
+		corebroker.ProtocolProperty: corebroker.ProtocolCoAP,
+	}
+	if externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
+	}
+	return &storage.Message{
+		Topic:       topic,
+		Payload:     payload,
+		QoS:         0,
+		Retain:      false,
+		ClientID:    clientID,
+		ContentType: contentType,
+		Properties:  props,
+	}
+}
+
 // Server is a CoAP server that bridges CoAP to MQTT.
 type Server struct {
 	config Config
@@ -225,7 +243,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	// Placeholder bridge-level auth hook. A concrete SuperMQ-backed auth
 	// implementation will be wired in a follow-up step.
 	clientID, username, password := authFromQuery(r, remoteAddr)
-	authenticated, err := s.broker.Authenticate(clientID, username, password)
+	authenticated, externalID, err := s.broker.Authenticate(clientID, username, password)
 	if err != nil || !authenticated {
 		s.logger.Warn("coap_publish_auth_failed",
 			slog.String("client_id", clientID),
@@ -241,12 +259,12 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 
-	msg := &storage.Message{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     0,
-		Retain:  false,
+	contentType := ""
+	if cf, cfErr := r.Options().ContentFormat(); cfErr == nil {
+		contentType = cf.String()
 	}
+
+	msg := buildPublishMessage(topic, payload, clientID, externalID, contentType)
 
 	s.logger.Debug("coap_publish",
 		slog.String("topic", topic),

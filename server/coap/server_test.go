@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -20,6 +21,8 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type stubConn struct {
@@ -287,5 +290,28 @@ func TestHandlePublish(t *testing.T) {
 		if string(body) != "ok" {
 			t.Fatalf("expected body %q, got %q", "ok", string(body))
 		}
+	})
+}
+
+func TestBuildPublishMessage(t *testing.T) {
+	t.Run("with external id and content type", func(t *testing.T) {
+		msg := buildPublishMessage("m/d1/c/c1/test", []byte("payload"), "coap:1.2.3.4:5683", "ext-7", "application/senml+json")
+		require.NotNil(t, msg)
+		assert.Equal(t, "m/d1/c/c1/test", msg.Topic)
+		assert.Equal(t, []byte("payload"), msg.Payload)
+		assert.Equal(t, byte(0), msg.QoS)
+		assert.False(t, msg.Retain)
+		assert.Equal(t, "coap:1.2.3.4:5683", msg.ClientID)
+		assert.Equal(t, "application/senml+json", msg.ContentType)
+		assert.Equal(t, corebroker.ProtocolCoAP, msg.Properties[corebroker.ProtocolProperty])
+		assert.Equal(t, "ext-7", msg.Properties[corebroker.ExternalIDProperty])
+	})
+
+	t.Run("omits external id when empty", func(t *testing.T) {
+		msg := buildPublishMessage("topic", []byte("p"), "client", "", "")
+		require.NotNil(t, msg)
+		assert.Equal(t, corebroker.ProtocolCoAP, msg.Properties[corebroker.ProtocolProperty])
+		_, present := msg.Properties[corebroker.ExternalIDProperty]
+		assert.False(t, present, "external_id must not be set when empty")
 	})
 }

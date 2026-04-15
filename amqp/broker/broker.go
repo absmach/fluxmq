@@ -85,6 +85,14 @@ func (b *Broker) SetAuthEngine(auth *corebroker.AuthEngine) {
 	b.auth = auth
 }
 
+// ExternalID returns the cached external identity for a protocol-level client ID.
+func (b *Broker) ExternalID(clientID string) string {
+	if b.auth == nil {
+		return ""
+	}
+	return b.auth.ExternalID(clientID)
+}
+
 // SetCluster sets the cluster reference for cross-node pub/sub routing.
 func (b *Broker) SetCluster(cl cluster.Cluster) {
 	b.cluster = cl

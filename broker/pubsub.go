@@ -18,6 +18,16 @@ const (
 	ProtocolProperty    = "protocol"
 )
 
+// Origin protocol identifiers written into ProtocolProperty by ingress
+// handlers so downstream consumers can tell where a message came from.
+const (
+	ProtocolMQTT    = "mqtt"
+	ProtocolAMQP091 = "amqp"
+	ProtocolAMQP1   = "amqp1"
+	ProtocolHTTP    = "http"
+	ProtocolCoAP    = "coap"
+)
+
 // CrossDeliverFunc delivers a pub/sub message to a client in another protocol broker.
 type CrossDeliverFunc func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string)
 

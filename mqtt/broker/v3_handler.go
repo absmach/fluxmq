@@ -81,14 +81,14 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		username := p.Username
 		password := string(p.Password)
 
-		authenticated, err := h.broker.auth.Authenticate(clientID, username, password)
+		authenticated, resolvedID, err := h.broker.auth.Authenticate(clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrNotAuthorized
 		}
-		externalID = h.broker.ExternalID(clientID)
+		externalID = resolvedID
 	}
 
 	var will *storage.WillMessage
@@ -107,7 +107,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			Payload:    p.WillMessage,
 			QoS:        p.WillQoS,
 			Retain:     p.WillRetain,
-			Properties: setExternalIDProperty(nil, externalID),
+			Properties: setOriginProperties(nil, externalID),
 		}
 	}
 
@@ -218,7 +218,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
-		msg.Properties = setExternalIDProperty(msg.Properties, s.ExternalID)
+		msg.Properties = setOriginProperties(msg.Properties, s.ExternalID)
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(context.Background(), msg)
 		storage.ReleaseMessage(msg)
@@ -236,7 +236,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
-		msg.Properties = setExternalIDProperty(msg.Properties, s.ExternalID)
+		msg.Properties = setOriginProperties(msg.Properties, s.ExternalID)
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			storage.ReleaseMessage(msg)
@@ -267,7 +267,7 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		storeMsg.QoS = qos
 		storeMsg.Retain = retain
 		storeMsg.PacketID = packetID
-		storeMsg.Properties = setExternalIDProperty(storeMsg.Properties, s.ExternalID)
+		storeMsg.Properties = setOriginProperties(storeMsg.Properties, s.ExternalID)
 		storeMsg.SetPayloadFromBuffer(buf)
 		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
 			storeMsg.ReleasePayload()

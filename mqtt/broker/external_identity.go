@@ -5,13 +5,15 @@ package broker
 
 import corebroker "github.com/absmach/fluxmq/broker"
 
-func setExternalIDProperty(props map[string]string, externalID string) map[string]string {
-	if externalID == "" {
-		return props
-	}
+// setOriginProperties stamps the MQTT origin protocol and (when available)
+// external identity onto the shared properties map carried with the message.
+func setOriginProperties(props map[string]string, externalID string) map[string]string {
 	if props == nil {
-		props = make(map[string]string, 1)
+		props = make(map[string]string, 2)
 	}
-	props[corebroker.ExternalIDProperty] = externalID
+	props[corebroker.ProtocolProperty] = corebroker.ProtocolMQTT
+	if externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
+	}
 	return props
 }

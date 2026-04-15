@@ -36,9 +36,10 @@ func (s *stubAuthorizer) CanSubscribe(clientID, filter string) bool {
 
 func TestAuthEngine_Authenticate_NilAuth(t *testing.T) {
 	e := NewAuthEngine(nil, nil)
-	ok, err := e.Authenticate("c1", "user", "pass")
+	ok, externalID, err := e.Authenticate("c1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
+	assert.Equal(t, "", externalID)
 }
 
 func TestAuthEngine_Authenticate_Success_StoresIdentity(t *testing.T) {
@@ -46,9 +47,10 @@ func TestAuthEngine_Authenticate_Success_StoresIdentity(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
-	ok, err := e.Authenticate("mqtt-client-1", "user", "pass")
+	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
+	assert.Equal(t, "ext-123", externalID)
 
 	// Authz should receive the resolved external ID, not the MQTT client ID
 	e.CanPublish("mqtt-client-1", "some/topic")
@@ -59,9 +61,10 @@ func TestAuthEngine_ExternalID_ReturnsStoredIdentity(t *testing.T) {
 	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "ext-123"}}
 	e := NewAuthEngine(authn, nil)
 
-	ok, err := e.Authenticate("mqtt-client-1", "user", "pass")
+	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
+	assert.Equal(t, "ext-123", externalID)
 
 	assert.Equal(t, "ext-123", e.ExternalID("mqtt-client-1"))
 	assert.Equal(t, "", e.ExternalID("missing-client"))
@@ -72,9 +75,10 @@ func TestAuthEngine_Authenticate_Failure_NoIdentityStored(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
-	ok, err := e.Authenticate("mqtt-client-1", "user", "wrong")
+	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "wrong")
 	require.NoError(t, err)
 	assert.False(t, ok)
+	assert.Equal(t, "", externalID)
 
 	// No identity mapping — authz receives the raw MQTT client ID
 	e.CanPublish("mqtt-client-1", "some/topic")
@@ -96,7 +100,8 @@ func TestAuthEngine_Forget_RemovesMapping(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
-	_, _ = e.Authenticate("mqtt-client-2", "user", "pass")
+	_, _, err := e.Authenticate("mqtt-client-2", "user", "pass")
+	assert.Nil(t, "auth err", err)
 	e.Forget("mqtt-client-2")
 
 	// After Forget, authz receives the raw MQTT client ID

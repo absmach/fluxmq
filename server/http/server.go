@@ -20,6 +20,24 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+func buildPublishMessage(topic string, payload []byte, qos byte, retain bool, clientID, externalID, contentType string) *storage.Message {
+	props := map[string]string{
+		corebroker.ProtocolProperty: corebroker.ProtocolHTTP,
+	}
+	if externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
+	}
+	return &storage.Message{
+		Topic:       topic,
+		Payload:     payload,
+		QoS:         qos,
+		Retain:      retain,
+		ClientID:    clientID,
+		ContentType: contentType,
+		Properties:  props,
+	}
+}
+
 const maxBodySize = 100 << 20 // 100 MB
 
 type Config struct {
@@ -261,7 +279,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		return
 	}
 
-	authenticated, err := s.broker.Authenticate(clientID, username, password)
+	authenticated, externalID, err := s.broker.Authenticate(clientID, username, password)
 	if err != nil || !authenticated {
 		s.logger.Warn("http_publish_auth_failed",
 			slog.String("client_id", clientID),
@@ -277,12 +295,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		return
 	}
 
-	msg := &storage.Message{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     qos,
-		Retain:  retain,
-	}
+	msg := buildPublishMessage(topic, payload, qos, retain, clientID, externalID, r.Header.Get("Content-Type"))
 
 	s.logger.Debug("http_publish",
 		slog.String("topic", topic),

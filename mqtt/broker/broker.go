@@ -233,10 +233,12 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 }
 
 // Authenticate validates credentials using the configured auth engine.
-// Returns true when auth is not configured.
-func (b *Broker) Authenticate(clientID, username, password string) (bool, error) {
+// Returns true when auth is not configured. The second return value is the
+// resolved external identity (empty when no authenticator is configured or
+// when the authenticator did not return one).
+func (b *Broker) Authenticate(clientID, username, password string) (bool, string, error) {
 	if b.auth == nil {
-		return true, nil
+		return true, "", nil
 	}
 	return b.auth.Authenticate(clientID, username, password)
 }
