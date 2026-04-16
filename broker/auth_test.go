@@ -101,7 +101,7 @@ func TestAuthEngine_Forget_RemovesMapping(t *testing.T) {
 	e := NewAuthEngine(authn, authz)
 
 	_, _, err := e.Authenticate("mqtt-client-2", "user", "pass")
-	assert.Nil(t, "auth err", err)
+	assert.Nil(t, err, "auth err")
 	e.Forget("mqtt-client-2")
 
 	// After Forget, authz receives the raw MQTT client ID
