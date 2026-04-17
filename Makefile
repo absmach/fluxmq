@@ -186,27 +186,46 @@ perf-suite:
 
 .PHONY: run-perf
 run-perf:
-	@if [ -z "$(PERF_SCENARIO_CONFIG)" ]; then \
-		echo "Usage: make run-perf PERF_SCENARIO_CONFIG=<path-to-config.json> [or CONFIG=<path>] [PERF_PAYLOAD=small|medium|large|PERF_PAYLOAD_BYTES=<bytes>] [PERF_PUBLISHERS=<n>] [PERF_SUBSCRIBERS=<n>] [PERF_MESSAGES_PER_PUBLISHER=<n>] [PERF_PUBLISH_INTERVAL=<duration>] [PERF_PUBLISH_JITTER=<duration>]"; \
-		exit 1; \
-	fi
 	@bash -lc 'set -euo pipefail; \
+		fuzzy="$${PERF_FUZZY:-$${FUZZY:-0}}"; \
+		scenario_config="$(PERF_SCENARIO_CONFIG)"; \
+		if [[ "$${fuzzy}" != "1" && -z "$${scenario_config}" ]]; then \
+			echo "Usage: make run-perf PERF_SCENARIO_CONFIG=<path-to-config.json> [or CONFIG=<path>]"; \
+			echo "   or: make run-perf FUZZY=1 [PERF_FUZZY_CONFIG=tests/perf/configs/fuzzy_mixed_bridge.json] [PERF_MAX_TOTAL_CONNECTIONS=<n>]"; \
+			exit 1; \
+		fi; \
+		min_ratio_default="0.95"; \
+		if [[ "$${fuzzy}" == "1" ]]; then min_ratio_default="0.75"; fi; \
+		max_total_connections="$${PERF_MAX_TOTAL_CONNECTIONS:-$${PERF_MAX_CONNECTIONS:-}}"; \
 		cmd=(go run ./tests/perf/loadgen \
-			-scenario-config "$(PERF_SCENARIO_CONFIG)" \
 			-mqtt-v3-addrs "$${PERF_MQTT_V3_ADDRS:-127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887}" \
 			-mqtt-v5-addrs "$${PERF_MQTT_V5_ADDRS:-127.0.0.1:1884,127.0.0.1:1886,127.0.0.1:1888}" \
 			-amqp-addrs "$${PERF_AMQP_ADDRS:-127.0.0.1:5682,127.0.0.1:5683,127.0.0.1:5684}" \
-			-min-ratio "$${PERF_MIN_RATIO:-0.95}" \
+			-min-ratio "$${PERF_MIN_RATIO:-$${min_ratio_default}}" \
 			-drain-timeout "$${PERF_DRAIN_TIMEOUT:-45s}"); \
+		if [[ "$${fuzzy}" == "1" ]]; then \
+			cmd+=( -fuzzy ); \
+			fuzzy_config="$${PERF_FUZZY_CONFIG:-$${scenario_config:-tests/perf/configs/fuzzy_mixed_bridge.json}}"; \
+			cmd+=( -scenario-config "$${fuzzy_config}" ); \
+		else \
+			cmd+=( -scenario-config "$${scenario_config}" ); \
+		fi; \
 		if [[ -n "$${PERF_PAYLOAD_BYTES:-}" ]]; then cmd+=( -payload-bytes "$${PERF_PAYLOAD_BYTES}" ); else cmd+=( -payload "$${PERF_PAYLOAD:-small}" ); fi; \
 		if [[ -n "$${PERF_PUBLISHERS:-}" ]]; then cmd+=( -publishers "$${PERF_PUBLISHERS}" ); fi; \
 		if [[ -n "$${PERF_SUBSCRIBERS:-}" ]]; then cmd+=( -subscribers "$${PERF_SUBSCRIBERS}" ); fi; \
 		if [[ -n "$${PERF_MESSAGES_PER_PUBLISHER:-}" ]]; then cmd+=( -messages-per-publisher "$${PERF_MESSAGES_PER_PUBLISHER}" ); fi; \
 		if [[ -n "$${PERF_PUBLISH_INTERVAL:-}" ]]; then cmd+=( -publish-interval "$${PERF_PUBLISH_INTERVAL}" ); fi; \
 		if [[ -n "$${PERF_PUBLISH_JITTER:-}" ]]; then cmd+=( -publish-jitter "$${PERF_PUBLISH_JITTER}" ); fi; \
+		if [[ -n "$${PERF_DURATION:-}" ]]; then cmd+=( -duration "$${PERF_DURATION}" ); fi; \
+		if [[ -n "$${PERF_CHURN_INTERVAL:-}" ]]; then cmd+=( -churn-interval "$${PERF_CHURN_INTERVAL}" ); fi; \
+		if [[ -n "$${max_total_connections:-}" ]]; then cmd+=( -max-total-connections "$${max_total_connections}" ); fi; \
 		if [[ -n "$${PERF_JSON_OUT:-}" ]]; then cmd+=( -json-out "$${PERF_JSON_OUT}" ); fi; \
 		echo ">> $${cmd[*]}"; \
 		"$${cmd[@]}"'
+
+.PHONY: run-perf-fuzzy
+run-perf-fuzzy:
+	@$(MAKE) run-perf FUZZY=1
 
 .PHONY: mock-mqtt-cluster
 mock-mqtt-cluster:
@@ -318,6 +337,8 @@ help:
 	@echo "Performance:"
 	@echo "  run-perf           Run one config-driven perf scenario"
 	@echo "                     Usage: make run-perf CONFIG=<config.json>"
+	@echo "                            make run-perf FUZZY=1"
+	@echo "  run-perf-fuzzy     Shortcut for: make run-perf FUZZY=1"
 	@echo "  mock-mqtt-cluster  Run lightweight 3-node mock MQTT cluster"
 	@echo "                     Usage: make mock-mqtt-cluster [MOCK_MQTT_ADDRS=a,b,c]"
 	@echo "  perf-suite         Run configurable performance suite"

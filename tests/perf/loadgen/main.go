@@ -41,6 +41,9 @@ type runConfig struct {
 	AMQPAddrs            []string
 	MinRatio             float64
 	DrainTimeout         time.Duration
+	Duration             time.Duration
+	ChurnInterval        time.Duration
+	MaxTotalConnections  int
 	Publishers           int
 	Subscribers          int
 	MessagesPerPublisher int
@@ -223,6 +226,7 @@ func mqttEndpointByOffset(endpoints []mqttEndpoint, idx, offset int) mqttEndpoin
 
 func main() {
 	scenarioConfigFlag := flag.String("scenario-config", "", "Path to JSON config for fanin/fanout scenario")
+	fuzzyFlag := flag.Bool("fuzzy", false, "Run fuzzy mixed-protocol churn scenario (time-based)")
 	payloadFlag := flag.String("payload", "small", "Payload preset: small|medium|large")
 	payloadBytesFlag := flag.Int("payload-bytes", 0, "Payload size in bytes (overrides -payload)")
 	mqttV3Flag := flag.String("mqtt-v3-addrs", "127.0.0.1:1883,127.0.0.1:1885,127.0.0.1:1887", "Comma-separated MQTT v3 broker addresses")
@@ -233,6 +237,9 @@ func main() {
 	messagesPerPublisherFlag := flag.Int("messages-per-publisher", 0, "Override messages each publisher sends")
 	publishIntervalFlag := flag.Duration("publish-interval", 0, "Pause between each publish per publisher (e.g. 5ms)")
 	publishJitterFlag := flag.Duration("publish-jitter", 0, "Per-publisher random jitter for publish cadence")
+	durationFlag := flag.Duration("duration", 0, "For fuzzy mode: run duration (e.g. 90s)")
+	churnIntervalFlag := flag.Duration("churn-interval", 0, "For fuzzy mode: connect/disconnect churn interval")
+	maxTotalConnectionsFlag := flag.Int("max-total-connections", 0, "For fuzzy mode: cap total active connections (publishers + subscribers)")
 	minRatioFlag := flag.Float64("min-ratio", 0.95, "Minimum delivery ratio")
 	drainTimeoutFlag := flag.Duration("drain-timeout", 45*time.Second, "Max wait time for message drain after publishers finish")
 	jsonOutFlag := flag.String("json-out", "", "Optional file to append one JSON line result")
@@ -248,17 +255,18 @@ func main() {
 		"tests/perf/configs/fanout_mqtt_amqp.json",
 		"tests/perf/configs/fanout_amqp_mqtt.json",
 		"tests/perf/configs/fanout_amqp_amqp.json",
+		defaultFuzzyConfigPath,
 	}
 
 	if *listFlag {
-		fmt.Println("Built-in fanin/fanout scenario configs (use -scenario-config <path>):")
+		fmt.Println("Built-in scenario configs (use -scenario-config <path>; combine with -fuzzy for fuzzy mode):")
 		for _, sc := range scenarios {
 			fmt.Println("  " + sc)
 		}
 		return
 	}
 
-	if *scenarioConfigFlag == "" {
+	if !*fuzzyFlag && *scenarioConfigFlag == "" {
 		exitErr(fmt.Errorf("-scenario-config is required (use -list-scenarios to see options)"))
 	}
 
@@ -300,6 +308,9 @@ func main() {
 		AMQPAddrs:            amqpAddrs,
 		MinRatio:             *minRatioFlag,
 		DrainTimeout:         *drainTimeoutFlag,
+		Duration:             *durationFlag,
+		ChurnInterval:        *churnIntervalFlag,
+		MaxTotalConnections:  *maxTotalConnectionsFlag,
 		Publishers:           *publishersFlag,
 		Subscribers:          *subscribersFlag,
 		MessagesPerPublisher: *messagesPerPublisherFlag,
@@ -310,12 +321,27 @@ func main() {
 	start := time.Now()
 	ctx := context.Background()
 
-	cfgTopic, err := loadTopicScenarioConfig(*scenarioConfigFlag)
-	if err != nil {
-		exitErr(err)
+	var (
+		res scenarioResult
+		err error
+	)
+	if *fuzzyFlag {
+		fuzzyConfigPath := strings.TrimSpace(*scenarioConfigFlag)
+		if fuzzyConfigPath == "" {
+			fuzzyConfigPath = defaultFuzzyConfigPath
+		}
+		cfgFuzzy, cfgErr := loadFuzzyScenarioConfig(fuzzyConfigPath)
+		if cfgErr != nil {
+			exitErr(cfgErr)
+		}
+		res, err = runFuzzyScenario(ctx, cfg, cfgFuzzy)
+	} else {
+		cfgTopic, cfgErr := loadTopicScenarioConfig(*scenarioConfigFlag)
+		if cfgErr != nil {
+			exitErr(cfgErr)
+		}
+		res, err = runConfiguredTopicScenario(ctx, cfg, cfgTopic)
 	}
-
-	res, err := runConfiguredTopicScenario(ctx, cfg, cfgTopic)
 
 	res.DurationMS = time.Since(start).Milliseconds()
 	res.Timestamp = time.Now().UTC().Format(time.RFC3339)

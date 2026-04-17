@@ -1,0 +1,52 @@
+{
+  "name": "fuzzy-mixed-bridge-churn",
+  "description": "Time-boxed fuzzy scenario with connect/disconnect churn, mixed MQTT+AMQP publishers/subscribers, and hot/cold topic profiles.",
+  "mode": "fuzzy",
+  "duration": "90s",
+  "churn_interval": "750ms",
+  "drain_timeout": "30s",
+  "qos": 1,
+  "max_total_connections": 260,
+  "max_publishers": 220,
+  "max_subscribers": 320,
+  "mqtt_publisher_percent": 60,
+  "mqtt_subscriber_percent": 55,
+  "topic_profiles": [
+    {
+      "name": "hot-many-pubs-few-subs",
+      "topic": "perf/topic/fuzzy/hot-many-pubs-few-subs/{run_id}",
+      "max_publishers": 140,
+      "max_subscribers": 28,
+      "publish_interval": "30ms",
+      "publish_jitter": "15ms",
+      "weight": 5
+    },
+    {
+      "name": "cold-many-pubs-few-subs",
+      "topic": "perf/topic/fuzzy/cold-many-pubs-few-subs/{run_id}",
+      "max_publishers": 80,
+      "max_subscribers": 20,
+      "publish_interval": "700ms",
+      "publish_jitter": "180ms",
+      "weight": 1
+    },
+    {
+      "name": "hot-few-pubs-many-subs",
+      "topic": "perf/topic/fuzzy/hot-few-pubs-many-subs/{run_id}",
+      "max_publishers": 28,
+      "max_subscribers": 180,
+      "publish_interval": "60ms",
+      "publish_jitter": "25ms",
+      "weight": 3
+    },
+    {
+      "name": "cold-few-pubs-many-subs",
+      "topic": "perf/topic/fuzzy/cold-few-pubs-many-subs/{run_id}",
+      "max_publishers": 12,
+      "max_subscribers": 220,
+      "publish_interval": "2s",
+      "publish_jitter": "350ms",
+      "weight": 1
+    }
+  ]
+}
