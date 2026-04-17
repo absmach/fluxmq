@@ -90,6 +90,10 @@
 	/* Brand */
 	--flux-blue: #2f69b3;
 	--flux-orange: #f9a32a;
+	--flux-green: #10b981;
+	--flux-purple: #7c3aed;
+	--flux-teal: #0891b2;
+	--flux-red: #ef4444;
 
 	/* Surface */
 	--flux-bg: #f8fafc;
@@ -118,6 +122,10 @@
 	/* Brand — brighter in dark mode */
 	--flux-blue: hsl(213.64deg 70% 60%);
 	--flux-orange: #f9a32a;
+	--flux-green: #10b981;
+	--flux-purple: #7c3aed;
+	--flux-teal: #0891b2;
+	--flux-red: #ef4444;
 
 	/* Surface — neutral charcoal (no blue tint) */
 	--flux-bg: #111318;
