@@ -3,7 +3,7 @@ module github.com/absmach/fluxmq
 go 1.25.3
 
 require (
-	connectrpc.com/connect v1.19.1
+	connectrpc.com/connect v1.19.2
 	github.com/Azure/go-amqp v1.5.1
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
