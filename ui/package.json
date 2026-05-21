@@ -9,6 +9,7 @@
 		"lint": "biome check",
 		"lint:fix": "biome check --fix"
 	},
+	"packageManager": "pnpm@10.33.0",
 	"pnpm": {
 		"onlyBuiltDependencies": [
 			"sharp",
