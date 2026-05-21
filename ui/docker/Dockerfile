@@ -2,7 +2,7 @@
 FROM node:25.1.0-alpine AS base
 
 ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
+ENV PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN rm -f /usr/local/bin/yarn
