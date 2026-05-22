@@ -7,8 +7,8 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ## Links
 
-- [Documentation](https://fluxmq.absmach.eu/docs)
-- [Website](https://fluxmq.absmach.eu)
+- [Documentation](https://www.absmach.eu/products/fluxmq/docs)
+- [Website](https://www.absmach.eu/products/fluxmq)
 - [Professional Support](mailto:info@absmach.eu)
 - [Discord](https://discord.gg/HvB5QuzF)
 - [Blogs](https://absmach.eu/blog/?category=fluxmq)
@@ -41,7 +41,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ### Event-Driven Architecture Pattern
 
-FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and [Durable Queues](https://fluxmq.absmach.eu/docs/messaging/durable-queues).
+FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and [Durable Queues](https://www.absmach.eu/products/fluxmq/docs/messaging/durable-queues).
 
 ## Features
 
@@ -220,7 +220,7 @@ Defaults in `examples/no-cluster.yaml`:
 
 ## Configuration
 
-Configuration is YAML-based. See `examples/` for starter files and [Configuration Reference](https://fluxmq.absmach.eu/docs/reference/configuration-reference) for the full reference.
+Configuration is YAML-based. See `examples/` for starter files and [Configuration Reference](https://www.absmach.eu/products/fluxmq/docs/reference/configuration-reference) for the full reference.
 
 ## Benchmarks
 
@@ -232,15 +232,15 @@ hardware. See `benchmarks/README.md` for commands and guidance.
 
 | Document                                                                                 | Description                                       |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| [Architecture](https://fluxmq.absmach.eu/docs/architecture/overview)                     | Detailed system design                            |
-| [Scaling & Performance](https://fluxmq.absmach.eu/docs/deployment/running-in-production) | Benchmarking and tuning guidance                  |
-| [Clustering](https://fluxmq.absmach.eu/docs/architecture/clustering)                     | Distributed broker design                         |
-| [Client Library](https://fluxmq.absmach.eu/docs/clients/go-client)                       | Go MQTT and AMQP 0.9.1 clients with queue support |
-| [Broker Internals](https://fluxmq.absmach.eu/docs/architecture/routing)                  | Message routing, sessions                         |
-| [Durable Queues](https://fluxmq.absmach.eu/docs/messaging/durable-queues)                | Queue configuration, consumer groups              |
-| [Configuration](https://fluxmq.absmach.eu/docs/reference/configuration-reference)        | Complete config reference                         |
-| [Webhooks](https://fluxmq.absmach.eu/docs/architecture/webhooks)                         | Webhook event system                              |
-| [Roadmap](https://fluxmq.absmach.eu/docs/roadmap)                                        | Project planning notes                            |
+| [Architecture](https://www.absmach.eu/products/fluxmq/docs/architecture/overview)                     | Detailed system design                            |
+| [Scaling & Performance](https://www.absmach.eu/products/fluxmq/docs/deployment/running-in-production) | Benchmarking and tuning guidance                  |
+| [Clustering](https://www.absmach.eu/products/fluxmq/docs/architecture/clustering)                     | Distributed broker design                         |
+| [Client Library](https://www.absmach.eu/products/fluxmq/docs/clients/go-client)                       | Go MQTT and AMQP 0.9.1 clients with queue support |
+| [Broker Internals](https://www.absmach.eu/products/fluxmq/docs/architecture/routing)                  | Message routing, sessions                         |
+| [Durable Queues](https://www.absmach.eu/products/fluxmq/docs/messaging/durable-queues)                | Queue configuration, consumer groups              |
+| [Configuration](https://www.absmach.eu/products/fluxmq/docs/reference/configuration-reference)        | Complete config reference                         |
+| [Webhooks](https://www.absmach.eu/products/fluxmq/docs/architecture/webhooks)                         | Webhook event system                              |
+| [Roadmap](https://www.absmach.eu/products/fluxmq/docs/roadmap)                                        | Project planning notes                            |
 
 ## Contributing
 

@@ -123,7 +123,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<a
-												href="https://fluxmq.absmach.eu/docs"
+												href="https://www.absmach.eu/products/fluxmq/docs"
 												target="_blank"
 												rel="noopener noreferrer"
 												aria-label="Documentation"
