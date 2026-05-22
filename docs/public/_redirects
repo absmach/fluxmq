@@ -1,0 +1,3 @@
+/ /docs/fluxmq/ 301
+/docs/fluxmq/_next/* /_next/:splat 200
+/docs/fluxmq/* /:splat 200
