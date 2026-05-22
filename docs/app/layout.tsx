@@ -6,7 +6,7 @@ import { source } from "@/lib/source";
 import "./global.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://fluxmq.absmach.eu/"),
+  metadataBase: new URL("https://www.absmach.eu/products/fluxmq/"),
   title: {
     default: "FluxMQ Docs",
     template: "%s | FluxMQ Docs",
