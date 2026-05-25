@@ -1,9 +1,4 @@
 {
   "title": "Clients",
-  "pages": [
-    "mqtt",
-    "http",
-    "go-client",
-    "websocket"
-  ]
+  "pages": ["mqtt", "http", "go-client", "websocket"]
 }

@@ -1,6 +1,6 @@
+import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import type { Metadata } from "next";
 import { Provider } from "@/components/provider";
-import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { baseOptions } from "@/lib/layout.shared";
 import { source } from "@/lib/source";
 import "./global.css";
