@@ -4,7 +4,9 @@
 package broker
 
 import (
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,4 +117,31 @@ func TestAuthEngine_ResolveID_NoMapping(t *testing.T) {
 
 	e.CanPublish("plain-client", "topic")
 	assert.Equal(t, "plain-client", authz.receivedClientID)
+}
+
+func TestAuthEngine_IdentityCacheBoundedBySize(t *testing.T) {
+	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "ext"}}
+	e := NewAuthEngine(authn, nil, WithIdentityCache(3, 0))
+
+	for i := range 10 {
+		// Each call inserts a fresh mapping; older ones must be evicted.
+		_, _, err := e.Authenticate("client-"+strconv.Itoa(i), "u", "p")
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 3, e.IdentityCacheLen(), "cache must respect size cap")
+}
+
+func TestAuthEngine_IdentityCacheTTLExpires(t *testing.T) {
+	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "ext-1"}}
+	e := NewAuthEngine(authn, nil, WithIdentityCache(10, 10*time.Millisecond))
+
+	_, _, err := e.Authenticate("c1", "u", "p")
+	require.NoError(t, err)
+	assert.Equal(t, "ext-1", e.ExternalID("c1"))
+
+	// Advance past TTL.
+	now := time.Now().Add(time.Hour)
+	e.identities.clock = func() time.Time { return now }
+	assert.Equal(t, "", e.ExternalID("c1"), "expired entry must read as missing")
+	assert.Equal(t, 0, e.IdentityCacheLen())
 }

@@ -336,21 +336,33 @@ func main() {
 			}
 		}
 
+		cacheSize := cfg.Auth.IdentityCacheSize
+		if cacheSize == 0 {
+			cacheSize = corebroker.DefaultIdentityCacheSize
+		}
+		cacheTTL := cfg.Auth.IdentityCacheTTL
+		if cacheTTL == 0 {
+			cacheTTL = corebroker.DefaultIdentityCacheTTL
+		}
+		engineOpts := []corebroker.AuthEngineOption{
+			corebroker.WithIdentityCache(cacheSize, cacheTTL),
+		}
+
 		if cfg.Auth.AuthEnabledFor("mqtt") {
 			mqttAuthn, mqttAuthz := newClient(authcallout.ProtocolMQTT)
-			b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz))
+			b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz, engineOpts...))
 			slog.Info("Auth callout enabled for mqtt")
 		}
 
 		if cfg.Auth.AuthEnabledFor("amqp") {
 			amqpAuthn, amqpAuthz := newClient(authcallout.ProtocolAMQP10)
-			amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz))
+			amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz, engineOpts...))
 			slog.Info("Auth callout enabled for amqp")
 		}
 
 		if cfg.Auth.AuthEnabledFor("amqp091") {
 			amqp091Authn, amqp091Authz := newClient(authcallout.ProtocolAMQP091)
-			amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz))
+			amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz, engineOpts...))
 			slog.Info("Auth callout enabled for amqp091")
 		}
 

@@ -3,7 +3,14 @@
 
 package broker
 
-import "sync"
+import "time"
+
+// Default bounds for the identity cache. These are deliberately conservative;
+// operators with large client populations should raise IdentityCacheSize.
+const (
+	DefaultIdentityCacheSize = 10000
+	DefaultIdentityCacheTTL  = 24 * time.Hour
+)
 
 // AuthnResult holds the outcome of an authentication attempt.
 type AuthnResult struct {
@@ -27,19 +34,51 @@ type Authorizer interface {
 	CanSubscribe(clientID string, filter string) bool
 }
 
+// AuthEngineOption configures an AuthEngine.
+type AuthEngineOption func(*authEngineOptions)
+
+type authEngineOptions struct {
+	cacheSize int
+	cacheTTL  time.Duration
+}
+
+// WithIdentityCache sets the bounded identity-cache size and TTL. A non-positive
+// size disables size-based eviction; a non-positive TTL disables expiry.
+func WithIdentityCache(size int, ttl time.Duration) AuthEngineOption {
+	return func(o *authEngineOptions) {
+		o.cacheSize = size
+		o.cacheTTL = ttl
+	}
+}
+
 // AuthEngine handles authentication and authorization.
 // It transparently maps protocol-level client IDs to external identities
 // returned by the Authenticator, so protocol handlers don't need to be
 // aware of identity resolution.
+//
+// The identity cache is bounded (TTL + LRU) so misbehaving disconnect
+// paths cannot leak memory.
 type AuthEngine struct {
 	auth       Authenticator
 	authz      Authorizer
-	identities sync.Map // protocol clientID → external ID
+	identities *identityCache
 }
 
 // NewAuthEngine creates a new AuthEngine with the given authenticator and authorizer.
-func NewAuthEngine(auth Authenticator, authz Authorizer) *AuthEngine {
-	return &AuthEngine{auth: auth, authz: authz}
+// Apply WithIdentityCache to override the default identity-cache bounds.
+func NewAuthEngine(auth Authenticator, authz Authorizer, opts ...AuthEngineOption) *AuthEngine {
+	o := authEngineOptions{
+		cacheSize: DefaultIdentityCacheSize,
+		cacheTTL:  DefaultIdentityCacheTTL,
+	}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return &AuthEngine{
+		auth:       auth,
+		authz:      authz,
+		identities: newIdentityCache(o.cacheSize, o.cacheTTL),
+	}
 }
 
 // Authenticate validates client credentials.
@@ -91,10 +130,15 @@ func (e *AuthEngine) Forget(clientID string) {
 
 // ExternalID returns the authenticated external identity for a protocol client ID.
 func (e *AuthEngine) ExternalID(clientID string) string {
-	if id, ok := e.identities.Load(clientID); ok {
-		return id.(string)
-	}
-	return ""
+	id, _ := e.identities.Load(clientID)
+	return id
+}
+
+// IdentityCacheLen returns the current number of cached identity mappings.
+// Intended for monitoring; a steadily-growing value relative to live client
+// count points to leaked Forget calls.
+func (e *AuthEngine) IdentityCacheLen() int {
+	return e.identities.Len()
 }
 
 func (e *AuthEngine) resolveID(clientID string) string {

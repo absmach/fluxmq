@@ -51,6 +51,13 @@ type AuthConfig struct {
 	// When set, only protocols mapped to true get auth; others allow all connections.
 	// Valid keys: "mqtt", "amqp", "amqp091", "http", "coap".
 	Protocols map[string]bool `yaml:"protocols"`
+
+	// IdentityCacheSize bounds the number of cached clientID→external-ID mappings.
+	// Zero or negative disables size-based eviction (entries still expire via TTL).
+	IdentityCacheSize int `yaml:"identity_cache_size"`
+	// IdentityCacheTTL bounds how long a cached identity may live without re-auth.
+	// Zero or negative disables TTL eviction.
+	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
 }
 
 // knownAuthProtocols is the set of valid protocol names for auth config.
