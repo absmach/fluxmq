@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/internal/connguard"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -220,6 +221,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.logger.Debug("websocket_connection_accepted", slog.String("remote_addr", r.RemoteAddr))
 
 	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion)
+	defer connguard.Recover(s.logger, "mqtt-ws", r.RemoteAddr)
 	broker.HandleConnection(r.Context(), s.broker, conn)
 }
 

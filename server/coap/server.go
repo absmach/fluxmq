@@ -12,6 +12,7 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/internal/connguard"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
 	piondtls "github.com/pion/dtls/v3"
@@ -99,9 +100,9 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 		mux:    mux.NewRouter(),
 	}
 
-	s.mux.Handle("/mqtt/publish/{topic}", mux.HandlerFunc(s.handlePublish)) //nolint:errcheck // route registration; only fails on duplicate paths which would be a programming error
-	s.mux.Handle("/health", mux.HandlerFunc(s.handleHealth))                //nolint:errcheck // route registration; only fails on duplicate paths which would be a programming error
-	s.mux.DefaultHandleFunc(s.handlePublish)
+	s.mux.Handle("/mqtt/publish/{topic}", mux.HandlerFunc(s.guarded(s.handlePublish))) //nolint:errcheck // route registration; only fails on duplicate paths which would be a programming error
+	s.mux.Handle("/health", mux.HandlerFunc(s.guarded(s.handleHealth)))                //nolint:errcheck // route registration; only fails on duplicate paths which would be a programming error
+	s.mux.DefaultHandleFunc(s.guarded(s.handlePublish))
 
 	return s
 }
@@ -281,6 +282,22 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 
 func (s *Server) handleHealth(w mux.ResponseWriter, r *mux.Message) {
 	s.sendResponse(w, r, codes.Content, "healthy")
+}
+
+// guarded wraps a CoAP mux handler with panic recovery. The go-coap library
+// dispatches requests on its own worker goroutines; a panic in our handler
+// would otherwise propagate up and could crash the server.
+func (s *Server) guarded(h func(mux.ResponseWriter, *mux.Message)) func(mux.ResponseWriter, *mux.Message) {
+	return func(w mux.ResponseWriter, r *mux.Message) {
+		remote := ""
+		if c := w.Conn(); c != nil {
+			if a := c.RemoteAddr(); a != nil {
+				remote = a.String()
+			}
+		}
+		defer connguard.Recover(s.logger, "coap", remote)
+		h(w, r)
+	}
 }
 
 func (s *Server) sendResponse(w mux.ResponseWriter, r *mux.Message, code codes.Code, body string) {

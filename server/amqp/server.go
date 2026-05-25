@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/amqp/broker"
+	"github.com/absmach/fluxmq/internal/connguard"
 )
 
 // Config represents the configuration for the AMQP 0.9.1 server.
@@ -72,5 +73,6 @@ func (s *Server) Listen(ctx context.Context) error {
 }
 
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
+	defer connguard.Recover(s.cfg.Logger, "amqp091", conn.RemoteAddr().String())
 	s.broker.HandleConnection(ctx, conn)
 }

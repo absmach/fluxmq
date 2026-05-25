@@ -76,10 +76,13 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 
 	h2s := &http2.Server{}
 	httpServer := &http.Server{
-		Addr:         config.Address,
-		Handler:      h2c.NewHandler(mux, h2s),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:              config.Address,
+		Handler:           h2c.NewHandler(mux, h2s),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	s.httpServer = httpServer

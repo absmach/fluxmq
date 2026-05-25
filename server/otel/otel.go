@@ -5,8 +5,11 @@ package otel
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/absmach/fluxmq/config"
@@ -18,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc/credentials"
 )
 
 // InitProvider initializes OpenTelemetry SDK with OTLP exporters.
@@ -79,22 +83,62 @@ func InitProvider(cfg config.ServerConfig, nodeID string) (func(context.Context)
 	}, nil
 }
 
+// buildExporterTLS constructs the transport-security configuration shared by
+// the trace and metric OTLP exporters. Returns (transportOption, error) where
+// transportOption is either otlptracegrpc.WithInsecure / otlpmetricgrpc.WithInsecure
+// equivalent or otlp...grpc.WithTLSCredentials.
+func buildTLSCredentials(cfg config.ServerConfig) (*tls.Config, error) {
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if cfg.OtelCAFile != "" {
+		pem, err := os.ReadFile(cfg.OtelCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read otel CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("otel CA file %q contains no valid certificates", cfg.OtelCAFile)
+		}
+		tlsCfg.RootCAs = pool
+	}
+
+	if cfg.OtelCertFile != "" || cfg.OtelKeyFile != "" {
+		if cfg.OtelCertFile == "" || cfg.OtelKeyFile == "" {
+			return nil, fmt.Errorf("otel client mTLS requires both otel_cert_file and otel_key_file")
+		}
+		cert, err := tls.LoadX509KeyPair(cfg.OtelCertFile, cfg.OtelKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load otel client keypair: %w", err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsCfg, nil
+}
+
 // initTracerProvider creates and registers a TracerProvider with OTLP exporter.
 func initTracerProvider(ctx context.Context, cfg config.ServerConfig, res *resource.Resource) (func(context.Context) error, error) {
-	// Create OTLP trace exporter
-	exporter, err := otlptracegrpc.New(ctx,
+	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.MetricsAddr),
-		otlptracegrpc.WithInsecure(), //nolint:godox // TODO: Add TLS support via config
-		otlptracegrpc.WithTimeout(30*time.Second),
-	)
+		otlptracegrpc.WithTimeout(30 * time.Second),
+	}
+	if cfg.OtelInsecure {
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	} else {
+		tlsCfg, err := buildTLSCredentials(cfg)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, otlptracegrpc.WithTLSCredentials(credentials.NewTLS(tlsCfg)))
+	}
+
+	exporter, err := otlptracegrpc.New(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
 
-	// Create sampler based on sample rate
 	sampler := trace.ParentBased(trace.TraceIDRatioBased(cfg.OtelTraceSampleRate))
 
-	// Create TracerProvider with batch span processor
 	tp := trace.NewTracerProvider(
 		trace.WithResource(res),
 		trace.WithSampler(sampler),
@@ -104,7 +148,6 @@ func initTracerProvider(ctx context.Context, cfg config.ServerConfig, res *resou
 		),
 	)
 
-	// Register as global tracer provider
 	otel.SetTracerProvider(tp)
 
 	return tp.Shutdown, nil
@@ -112,17 +155,25 @@ func initTracerProvider(ctx context.Context, cfg config.ServerConfig, res *resou
 
 // initMeterProvider creates and registers a MeterProvider with OTLP exporter.
 func initMeterProvider(ctx context.Context, cfg config.ServerConfig, res *resource.Resource) (func(context.Context) error, error) {
-	// Create OTLP metric exporter
-	exporter, err := otlpmetricgrpc.New(ctx,
+	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(cfg.MetricsAddr),
-		otlpmetricgrpc.WithInsecure(), //nolint:godox // TODO: Add TLS support via config
-		otlpmetricgrpc.WithTimeout(30*time.Second),
-	)
+		otlpmetricgrpc.WithTimeout(30 * time.Second),
+	}
+	if cfg.OtelInsecure {
+		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	} else {
+		tlsCfg, err := buildTLSCredentials(cfg)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(tlsCfg)))
+	}
+
+	exporter, err := otlpmetricgrpc.New(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metric exporter: %w", err)
 	}
 
-	// Create MeterProvider with periodic reader
 	mp := metric.NewMeterProvider(
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(exporter,
@@ -130,7 +181,6 @@ func initMeterProvider(ctx context.Context, cfg config.ServerConfig, res *resour
 		)),
 	)
 
-	// Register as global meter provider
 	otel.SetMeterProvider(mp)
 
 	return mp.Shutdown, nil

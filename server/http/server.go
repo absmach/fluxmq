@@ -38,12 +38,38 @@ func buildPublishMessage(topic string, payload []byte, qos byte, retain bool, cl
 	}
 }
 
-const maxBodySize = 100 << 20 // 100 MB
+// defaultMaxBodySize is the default per-request body cap when Config.MaxBodySize is unset.
+const defaultMaxBodySize int64 = 4 << 20 // 4 MB
+
+// Sensible HTTP server timeouts. Production deployments should override
+// these via Config when behind a proxy that needs longer timeouts.
+const (
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 30 * time.Second
+	defaultWriteTimeout      = 30 * time.Second
+	defaultIdleTimeout       = 120 * time.Second
+	defaultMaxHeaderBytes    = 1 << 20 // 1 MB
+)
 
 type Config struct {
-	Address         string
-	ShutdownTimeout time.Duration
-	TLSConfig       *tls.Config
+	Address           string
+	ShutdownTimeout   time.Duration
+	TLSConfig         *tls.Config
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	MaxHeaderBytes    int
+	// MaxBodySize caps the per-request body in bytes. Zero uses defaultMaxBodySize.
+	// Set to a larger value when forwarding bulk payloads.
+	MaxBodySize int64
+}
+
+func (c Config) maxBodySize() int64 {
+	if c.MaxBodySize > 0 {
+		return c.MaxBodySize
+	}
+	return defaultMaxBodySize
 }
 
 type Server struct {
@@ -69,10 +95,36 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/", s.handleLegacyPublish)
 
+	readHeader := cfg.ReadHeaderTimeout
+	if readHeader <= 0 {
+		readHeader = defaultReadHeaderTimeout
+	}
+	read := cfg.ReadTimeout
+	if read <= 0 {
+		read = defaultReadTimeout
+	}
+	write := cfg.WriteTimeout
+	if write <= 0 {
+		write = defaultWriteTimeout
+	}
+	idle := cfg.IdleTimeout
+	if idle <= 0 {
+		idle = defaultIdleTimeout
+	}
+	maxHeader := cfg.MaxHeaderBytes
+	if maxHeader <= 0 {
+		maxHeader = defaultMaxHeaderBytes
+	}
+
 	s.server = &http.Server{
-		Addr:      cfg.Address,
-		Handler:   mux,
-		TLSConfig: cfg.TLSConfig,
+		Addr:              cfg.Address,
+		Handler:           mux,
+		TLSConfig:         cfg.TLSConfig,
+		ReadHeaderTimeout: readHeader,
+		ReadTimeout:       read,
+		WriteTimeout:      write,
+		IdleTimeout:       idle,
+		MaxHeaderBytes:    maxHeader,
 	}
 
 	return s
@@ -208,7 +260,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, s.config.maxBodySize())
 
 	var req publishRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -246,7 +298,7 @@ func (s *Server) handleLegacyPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, s.config.maxBodySize())
 
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {

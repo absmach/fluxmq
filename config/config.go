@@ -188,6 +188,14 @@ type ServerConfig struct {
 	OtelMetricsEnabled  bool    `yaml:"otel_metrics_enabled"`
 	OtelTraceSampleRate float64 `yaml:"otel_trace_sample_rate"` // 0.0 to 1.0
 
+	// OtelInsecure forces a cleartext OTLP/gRPC connection. Default is false:
+	// system-trust TLS is used unless OtelCAFile is set. Set true only when
+	// the collector is reachable on localhost or a trusted network.
+	OtelInsecure bool   `yaml:"otel_insecure"`
+	OtelCAFile   string `yaml:"otel_ca_file"`   // optional PEM bundle for verifying the collector
+	OtelCertFile string `yaml:"otel_cert_file"` // client cert for mTLS to the collector
+	OtelKeyFile  string `yaml:"otel_key_file"`  // client key for mTLS to the collector
+
 	// Admin API server (HTTP + Connect/gRPC). Empty disables the listener.
 	AdminAPIAddr string `yaml:"admin_api_addr"`
 }

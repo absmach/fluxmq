@@ -14,6 +14,7 @@ import (
 	"time"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp1/broker"
+	"github.com/absmach/fluxmq/internal/connguard"
 )
 
 // ErrShutdownTimeout is returned when graceful shutdown exceeds the configured timeout.
@@ -131,6 +132,7 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 				defer s.wg.Done()
 				defer s.releaseSlot()
 				defer c.Close()
+				defer connguard.Recover(s.config.Logger, "amqp10", c.RemoteAddr().String())
 
 				s.config.Logger.Debug("AMQP connection accepted", slog.String("remote", c.RemoteAddr().String()))
 				s.handler.HandleConnection(connCtx, c)

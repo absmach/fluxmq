@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/internal/connguard"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 )
@@ -213,6 +214,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	defer s.releaseConnectionSlot()
 
 	defer conn.Close()
+	defer connguard.Recover(s.config.Logger, "mqtt-tcp", conn.RemoteAddr().String())
 
 	s.config.Logger.Debug("connection established",
 		slog.String("remote", conn.RemoteAddr().String()))
