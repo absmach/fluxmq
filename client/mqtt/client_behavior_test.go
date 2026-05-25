@@ -231,7 +231,7 @@ func TestSubscriptionRegistrySnapshotIsolation(t *testing.T) {
 	r := newSubscriptionRegistry()
 
 	r.setBasic("metrics/#", 1)
-	opt := &SubscribeOption{Topic: "alerts/#", QoS: 2, NoLocal: true, RetainHandling: 1, SubscriptionID: 7}
+	opt := &SubscribeOption{Topic: testTopicAlerts, QoS: 2, NoLocal: true, RetainHandling: 1, SubscriptionID: 7}
 	r.setOption(opt)
 
 	opt.QoS = 0
@@ -245,7 +245,7 @@ func TestSubscriptionRegistrySnapshotIsolation(t *testing.T) {
 		if rec.topic == "metrics/#" {
 			basicRec = rec
 		}
-		if rec.topic == "alerts/#" { //nolint:goconst // test value
+		if rec.topic == testTopicAlerts {
 			advRec = rec
 		}
 	}
@@ -259,7 +259,7 @@ func TestSubscriptionRegistrySnapshotIsolation(t *testing.T) {
 	advRec.opt.QoS = 1
 	again := r.snapshot()
 	for _, rec := range again {
-		if rec.topic == "alerts/#" {
+		if rec.topic == testTopicAlerts {
 			require.NotNil(t, rec.opt)
 			assert.Equal(t, byte(2), rec.opt.QoS, "snapshot mutation should not affect registry")
 		}
@@ -268,7 +268,7 @@ func TestSubscriptionRegistrySnapshotIsolation(t *testing.T) {
 	r.remove("metrics/#")
 	afterRemove := r.snapshot()
 	require.Len(t, afterRemove, 1)
-	assert.Equal(t, "alerts/#", afterRemove[0].topic)
+	assert.Equal(t, testTopicAlerts, afterRemove[0].topic)
 }
 
 func TestHandlePubRelFallsBackToStore(t *testing.T) {

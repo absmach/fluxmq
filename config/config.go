@@ -342,6 +342,12 @@ type BrokerConfig struct {
 	FanOutWorkers int `yaml:"fan_out_workers"`
 }
 
+// Offline queue policy values for SessionConfig.OfflineQueuePolicy.
+const (
+	OfflineQueuePolicyEvict  = "evict"  // drop oldest message when queue is full
+	OfflineQueuePolicyReject = "reject" // reject new message when queue is full
+)
+
 // SessionConfig holds session management settings.
 type SessionConfig struct {
 	// Maximum sessions allowed
@@ -661,7 +667,7 @@ func Default() *Config {
 			DefaultExpiryInterval: 300, // 5 minutes
 			MaxOfflineQueueSize:   1000,
 			MaxInflightMessages:   256,
-			OfflineQueuePolicy:    "evict",
+			OfflineQueuePolicy:    OfflineQueuePolicyEvict,
 			MaxSendQueueSize:      0,
 			DisconnectOnFull:      false,
 			InflightOverflow:      InflightOverflowBackpressure,
@@ -1044,8 +1050,8 @@ func (c *Config) Validate() error {
 	if c.Session.MaxOfflineQueueSize < 10 {
 		return fmt.Errorf("session.max_offline_queue_size must be at least 10")
 	}
-	if c.Session.OfflineQueuePolicy != "evict" && c.Session.OfflineQueuePolicy != "reject" {
-		return fmt.Errorf("session.offline_queue_policy must be 'evict' or 'reject'")
+	if c.Session.OfflineQueuePolicy != OfflineQueuePolicyEvict && c.Session.OfflineQueuePolicy != OfflineQueuePolicyReject {
+		return fmt.Errorf("session.offline_queue_policy must be %q or %q", OfflineQueuePolicyEvict, OfflineQueuePolicyReject)
 	}
 	if c.Session.MaxSendQueueSize < 0 {
 		return fmt.Errorf("session.max_send_queue_size cannot be negative")

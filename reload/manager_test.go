@@ -598,8 +598,8 @@ func TestReloadSessionConfig(t *testing.T) {
 	if last.MaxInflightMessages != 64 {
 		t.Errorf("expected MaxInflightMessages=64, got %d", last.MaxInflightMessages)
 	}
-	if last.OfflineQueuePolicy != "evict" {
-		t.Errorf("expected OfflineQueuePolicy=evict, got %q", last.OfflineQueuePolicy)
+	if last.OfflineQueuePolicy != config.OfflineQueuePolicyEvict {
+		t.Errorf("expected OfflineQueuePolicy=%q, got %q", config.OfflineQueuePolicyEvict, last.OfflineQueuePolicy)
 	}
 	if m.Version() != 2 {
 		t.Errorf("expected version 2, got %d", m.Version())

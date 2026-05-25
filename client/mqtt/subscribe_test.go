@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const testTopicAlerts = "alerts/#"
+
 func TestSubscribeOption_Basic(t *testing.T) {
 	opt := NewSubscribeOption("sensors/temperature", 1)
 
@@ -91,7 +93,7 @@ func TestSubscribeOption_MultipleTopics(t *testing.T) {
 	opts := []*SubscribeOption{
 		NewSubscribeOption("sensors/temperature", 1).SetNoLocal(true),
 		NewSubscribeOption("sensors/humidity", 2).SetRetainAsPublished(true),
-		NewSubscribeOption("alerts/#", 0).SetRetainHandling(2),
+		NewSubscribeOption(testTopicAlerts, 0).SetRetainHandling(2),
 	}
 
 	if len(opts) != 3 {
@@ -109,7 +111,7 @@ func TestSubscribeOption_MultipleTopics(t *testing.T) {
 	}
 
 	// Third option
-	if opts[2].Topic != "alerts/#" || opts[2].QoS != 0 || opts[2].RetainHandling != 2 {
+	if opts[2].Topic != testTopicAlerts || opts[2].QoS != 0 || opts[2].RetainHandling != 2 {
 		t.Error("Third option configured incorrectly")
 	}
 }

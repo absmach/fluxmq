@@ -99,7 +99,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		receiveMax = uint16(serverReceiveMax)
 	}
 	inflight := messages.NewInflightTracker(int(receiveMax))
-	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == "evict")
+	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == config.OfflineQueuePolicyEvict)
 
 	// Restore from takeover state if present
 	if takeoverState != nil {

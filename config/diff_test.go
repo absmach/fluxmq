@@ -110,7 +110,7 @@ func TestDiffRuntimeSafeFields(t *testing.T) {
 		},
 		{
 			name:   "session offline queue policy",
-			modify: func(cfg *Config) { cfg.Session.OfflineQueuePolicy = "reject" },
+			modify: func(cfg *Config) { cfg.Session.OfflineQueuePolicy = OfflineQueuePolicyReject },
 			path:   "Session.OfflineQueuePolicy",
 		},
 	}
