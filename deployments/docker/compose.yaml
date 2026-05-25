@@ -14,7 +14,32 @@ services:
       - "8081:8081"   # Health
     volumes:
       - ${FLUXMQ_CONFIG:-./config.yaml}:/etc/fluxmq/config.yaml:ro
-      - fluxmq-data:/tmp/fluxmq
+      # The default deployments/docker/config.yaml sets badger_dir=/var/lib/fluxmq/data.
+      # Override the broker's storage paths in your own config if you mount this volume elsewhere.
+      - fluxmq-data:/var/lib/fluxmq
+    # tmpfs gives Badger a writable scratch directory under a read-only rootfs.
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    read_only: true
+    user: "fluxmq"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # Conservative defaults; raise for production deployments with measured load.
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 4096
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8081/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
 
   dashboard:
@@ -24,6 +49,13 @@ services:
     environment:
       FLUXMQ_API_URL: ${FLUXMQ_API_URL:-http://fluxmq:8082}
       FLUXMQ_NODE_URLS: ${FLUXMQ_NODE_URLS:-http://fluxmq:8082}
+    read_only: true
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 0.5
     depends_on:
       fluxmq:
         condition: service_started

@@ -1,0 +1,205 @@
+# FluxMQ — Production Profile
+#
+# Opinionated configuration for a hardened single-node deployment. Tune for
+# your workload (max_connections, queue sizes, rate-limit burst) before
+# shipping to production.
+#
+# Required out-of-band setup:
+#   - TLS certificate + key, plus CA bundle for client mTLS
+#   - External auth callout reachable on auth.internal:9090 (or disable)
+#   - OTLP-compatible collector reachable on otel.internal:4317
+#   - Persistent volume mounted at /var/lib/fluxmq
+#
+# What this profile enables vs. examples/config.yaml:
+#   - TLS on every public listener; plaintext listeners are commented out
+#   - mTLS on the admin API and inter-cluster gRPC paths
+#   - External auth callout with bounded identity cache
+#   - Rate-limit on connections, messages, and subscriptions
+#   - Webhook notifier with worker pool + circuit breaker
+#   - OTel traces + metrics over TLS
+#   - Strict log level (info, JSON, sampled by your log aggregator)
+
+server:
+  tcp:
+    # Plaintext MQTT is intentionally disabled. Uncomment only behind a
+    # trusted load balancer that terminates TLS.
+    # plain:
+    #   addr: ":1883"
+    tls:
+      addr: ":8883"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      min_version: "TLS1.2"
+      prefer_server_cipher_suites: true
+      cipher_suites:
+        - TLS_AES_128_GCM_SHA256
+        - TLS_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    mtls:
+      addr: ":8884"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      ca_file: "/etc/fluxmq/certs/clients-ca.crt"
+      client_auth: "require"
+      min_version: "TLS1.2"
+
+  websocket:
+    # Plaintext WS disabled by default; expose only WSS publicly.
+    tls:
+      addr: ":8084"
+      path: "/mqtt"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      min_version: "TLS1.2"
+
+  http:
+    # HTTP publish bridge over TLS only.
+    tls:
+      addr: ":8443"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      min_version: "TLS1.2"
+
+  amqp:
+    tls:
+      addr: ":5671"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+
+  amqp091:
+    tls:
+      addr: ":5681"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+
+  coap:
+    mdtls:
+      addr: ":5685"
+      cert_file: "/etc/fluxmq/certs/server.crt"
+      key_file: "/etc/fluxmq/certs/server.key"
+      ca_file: "/etc/fluxmq/certs/clients-ca.crt"
+      client_auth: "require"
+
+  # Health probe stays plaintext on localhost; bind to a private interface
+  # if the host is multi-homed.
+  health_enabled: true
+  health_addr: "127.0.0.1:8081"
+
+  # Admin API. h2c is acceptable only on localhost; for remote access put
+  # TLS in front and require mTLS. The TLS fields here apply when set.
+  admin_api_addr: "127.0.0.1:8082"
+
+  # OTLP exporter targets — gRPC TLS by default. Set otel_insecure: true only
+  # when the collector is on localhost.
+  metrics_enabled: true
+  metrics_addr: "otel.internal:4317"
+  otel_service_name: "fluxmq"
+  otel_service_version: "1.0.0"
+  otel_traces_enabled: true
+  otel_metrics_enabled: true
+  otel_trace_sample_rate: 0.05
+  otel_insecure: false
+  otel_ca_file: "/etc/fluxmq/certs/otel-ca.crt"
+  otel_cert_file: "/etc/fluxmq/certs/otel-client.crt"
+  otel_key_file: "/etc/fluxmq/certs/otel-client.key"
+
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576  # 1 MiB; raise only with measured need
+  max_retained_messages: 100000
+  retry_interval: "20s"
+  max_retries: 5
+
+session:
+  max_sessions: 50000
+  default_expiry_interval: 3600
+  max_offline_queue_size: 1000
+  max_inflight_messages: 100
+
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/fluxmq/data"
+
+# External auth callout. Required for any multi-tenant deployment.
+# IdentityCacheSize bounds memory; IdentityCacheTTL forces re-auth on a
+# schedule so revoked tokens are eventually rejected.
+auth:
+  url: "https://auth.internal:9090"
+  transport: "grpc"
+  timeout: "2s"
+  protocols:
+    mqtt: true
+    amqp: true
+    amqp091: true
+    http: true
+    coap: true
+  identity_cache_size: 50000
+  identity_cache_ttl: "1h"
+
+# Per-IP / per-client rate limits. Always enable in production.
+ratelimit:
+  enabled: true
+  connection:
+    enabled: true
+    rate: 50.0
+    burst: 100
+    cleanup_interval: "5m"
+  message:
+    enabled: true
+    rate: 1000.0
+    burst: 2000
+  subscribe:
+    enabled: true
+    rate: 50.0
+    burst: 100
+
+# Outbound webhooks. Set enabled: false if you don't need event fanout.
+webhook:
+  enabled: true
+  queue_size: 10000
+  drop_policy: "oldest"
+  workers: 8
+  include_payload: false
+  shutdown_timeout: "30s"
+  defaults:
+    timeout: "5s"
+    retry:
+      max_attempts: 5
+      initial_interval: "1s"
+      max_interval: "30s"
+      multiplier: 2.0
+    circuit_breaker:
+      failure_threshold: 5
+      reset_timeout: "60s"
+  endpoints: []  # Populate per environment.
+
+cluster:
+  enabled: false
+  node_id: "broker-1"
+  # When enabling clustering, both etcd and the gRPC transport MUST be mTLS.
+  # See examples/single-node-cluster.yaml for the full schema.
+
+log:
+  level: "info"
+  format: "json"
+
+# Notes for operators:
+#   1. Run the broker container with read_only rootfs, cap_drop ALL, and
+#      no-new-privileges (see deployments/docker/compose.yaml).
+#   2. Rotate server certs and the auth-callout client cert separately.
+#   3. /api/v1/reload is exposed on admin_api_addr — never bind that to a
+#      public interface; put mTLS or a token middleware in front.
+#   4. Verify the image signature before pulling:
+#        cosign verify --certificate-identity-regexp 'absmach/fluxmq' \
+#          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#          ghcr.io/absmach/fluxmq:<tag>

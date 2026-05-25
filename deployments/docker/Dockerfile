@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.26.3-alpine AS builder
+# Multi-arch build: BUILDPLATFORM is the builder's native arch,
+# TARGETOS/TARGETARCH are the requested target. buildx supplies both.
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -8,11 +13,12 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w" -o /out/fluxmq ./cmd
 
 FROM alpine:3.23
 
+# wget is provided by busybox in alpine and is used by the HEALTHCHECK.
 RUN apk add --no-cache ca-certificates \
     && addgroup -S fluxmq \
     && adduser -S -G fluxmq fluxmq \
@@ -25,5 +31,8 @@ USER fluxmq
 WORKDIR /var/lib/fluxmq
 
 EXPOSE 1883 1884 8080 8081 8083 8084 5672 5682 5683
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O- http://127.0.0.1:8081/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/fluxmq"]

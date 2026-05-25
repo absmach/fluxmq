@@ -166,6 +166,10 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 	t.httpServer = &http.Server{
 		Handler:           httpHandler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       5 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	return t, nil
