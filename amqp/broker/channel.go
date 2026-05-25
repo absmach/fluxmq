@@ -1009,11 +1009,12 @@ func (ch *Channel) handleQueueDelete(m *codec.QueueDelete) error {
 	ch.bindings = filtered
 	ch.exchangeMu.Unlock()
 
-	// Unsubscribe from queue manager
 	qm := ch.conn.broker.queueManager
 	if qm != nil {
 		clientID := PrefixedClientID(ch.conn.connID)
-		qm.Unsubscribe(context.Background(), m.Queue, "", clientID, "") //nolint:errcheck // best-effort cleanup on queue delete
+		ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
+		qm.Unsubscribe(ctx, m.Queue, "", clientID, "") //nolint:errcheck // best-effort cleanup on queue delete
+		cancel()
 	}
 
 	if !m.NoWait {
@@ -1141,15 +1142,16 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 	if exists {
 		ch.conn.broker.stats.DecrementConsumers()
 
-		// Unsubscribe from queue manager
+		clientID := PrefixedClientID(ch.conn.connID)
+		ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
+		defer cancel()
+
 		qm := ch.conn.broker.queueManager
 		if qm != nil && cons.queueName != "" {
-			clientID := PrefixedClientID(ch.conn.connID)
-			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on consumer cancel
+			qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on consumer cancel
 		}
 
 		if cons.queueName == "" {
-			clientID := PrefixedClientID(ch.conn.connID)
 			if cons.mqttFilter == "" {
 				ch.conn.logger.Warn("pubsub unsubscribe skipped: missing canonical filter", "consumer_tag", cons.tag)
 			} else {
@@ -1157,7 +1159,7 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 					ch.conn.logger.Warn("pubsub unsubscribe failed", "mqtt_filter", cons.mqttFilter, "error", err)
 				}
 				if cl := ch.conn.broker.cluster; cl != nil {
-					if err := cl.RemoveSubscription(context.Background(), clientID, cons.mqttFilter); err != nil {
+					if err := cl.RemoveSubscription(ctx, clientID, cons.mqttFilter); err != nil {
 						ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
 					}
 				}
@@ -1366,11 +1368,13 @@ func (ch *Channel) cleanup() {
 
 	qm := ch.conn.broker.queueManager
 	clientID := PrefixedClientID(ch.conn.connID)
+	ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
+	defer cancel()
 
 	for _, cons := range consumers {
 		ch.conn.broker.stats.DecrementConsumers()
 		if qm != nil && cons.queueName != "" {
-			qm.Unsubscribe(context.Background(), cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup during channel close
+			qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup during channel close
 		}
 		if cons.queueName == "" {
 			if cons.mqttFilter == "" {
@@ -1381,7 +1385,7 @@ func (ch *Channel) cleanup() {
 				ch.conn.logger.Warn("pubsub unsubscribe failed", "mqtt_filter", cons.mqttFilter, "error", err)
 			}
 			if cl := ch.conn.broker.cluster; cl != nil {
-				if err := cl.RemoveSubscription(context.Background(), clientID, cons.mqttFilter); err != nil {
+				if err := cl.RemoveSubscription(ctx, clientID, cons.mqttFilter); err != nil {
 					ch.conn.logger.Error("cluster remove subscription failed", "mqtt_filter", cons.mqttFilter, "error", err)
 				}
 			}

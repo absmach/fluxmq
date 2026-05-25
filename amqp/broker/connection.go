@@ -28,6 +28,9 @@ const (
 	defaultFrameMax   = uint32(131072)
 	defaultChannelMax = uint16(2047)
 	defaultHeartbeat  = uint16(60)
+
+	// clusterOpTimeout prevents a slow/partitioned peer from blocking setup or shutdown.
+	clusterOpTimeout = 5 * time.Second
 )
 
 // Connection represents a single AMQP 0.9.1 client connection.
@@ -92,7 +95,10 @@ func (c *Connection) run() error {
 	c.broker.stats.IncrementConnections()
 	if cl := c.broker.cluster; cl != nil {
 		clientID := PrefixedClientID(c.connID)
-		if err := cl.AcquireSession(context.Background(), clientID, cl.NodeID()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
+		err := cl.AcquireSession(ctx, clientID, cl.NodeID())
+		cancel()
+		if err != nil {
 			c.logger.Warn("AMQP 0.9.1 acquire session ownership failed", "client_id", clientID, "error", err)
 		}
 	}
@@ -521,10 +527,12 @@ func (c *Connection) cleanup() {
 	if c.connID != "" {
 		if cl := c.broker.cluster; cl != nil {
 			clientID := PrefixedClientID(c.connID)
-			if err := cl.RemoveAllSubscriptions(context.Background(), clientID); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
+			defer cancel()
+			if err := cl.RemoveAllSubscriptions(ctx, clientID); err != nil {
 				c.logger.Warn("AMQP 0.9.1 remove all subscriptions failed", "client_id", clientID, "error", err)
 			}
-			if err := cl.ReleaseSession(context.Background(), clientID); err != nil {
+			if err := cl.ReleaseSession(ctx, clientID); err != nil {
 				c.logger.Warn("AMQP 0.9.1 release session ownership failed", "client_id", clientID, "error", err)
 			}
 		}
