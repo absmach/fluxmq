@@ -1,3 +1,15 @@
 / /docs/fluxmq/ 301
+/docs/fluxmq /docs/fluxmq/ 301
+
+/docs/fluxmq/ / 200
 /docs/fluxmq/_next/* /_next/:splat 200
-/docs/fluxmq/* /:splat 200
+/docs/fluxmq/api/search /api/search 200
+/docs/fluxmq/og/* /og/:splat 200
+/docs/fluxmq/:file.:ext /:file.:ext 200
+/docs/fluxmq/* /:splat/ 200
+
+/api/search /api/search 200
+/og/* /og/:splat 200
+/_next/* /_next/:splat 200
+/:file.:ext /:file.:ext 200
+/* /:splat/ 200
