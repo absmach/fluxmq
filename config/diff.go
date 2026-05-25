@@ -72,6 +72,22 @@ var runtimeSafeFields = map[string]struct{}{
 
 	// Broker tuning (implemented): MaxQoS.
 	"Broker.MaxQoS": {},
+
+	// Webhook — all fields handled by AtomicNotifier drain-and-restart.
+	"Webhook.Enabled":                                  {},
+	"Webhook.QueueSize":                               {},
+	"Webhook.DropPolicy":                              {},
+	"Webhook.Workers":                                 {},
+	"Webhook.IncludePayload":                          {},
+	"Webhook.ShutdownTimeout":                         {},
+	"Webhook.Defaults.Timeout":                        {},
+	"Webhook.Defaults.Retry.MaxAttempts":              {},
+	"Webhook.Defaults.Retry.InitialInterval":          {},
+	"Webhook.Defaults.Retry.MaxInterval":              {},
+	"Webhook.Defaults.Retry.Multiplier":               {},
+	"Webhook.Defaults.CircuitBreaker.FailureThreshold": {},
+	"Webhook.Defaults.CircuitBreaker.ResetTimeout":    {},
+	"Webhook.Endpoints":                               {},
 }
 
 // fieldClassification maps each leaf config field path to its reload
@@ -97,7 +113,6 @@ var restartReasons = map[string]string{
 	"Storage":      "storage backend cannot be changed at runtime",
 	"Cluster":      "cluster topology requires restart",
 	"Session":      "session config affects existing connections",
-	"Webhook":      "webhook worker pool requires drain/restart",
 	"QueueManager": "queue manager config requires restart",
 	"Queues":       "queue definitions require restart",
 	"Auth":         "auth config affects connection-level behavior",

@@ -15,6 +15,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/config"
+	"github.com/stretchr/testify/require"
 )
 
 // mockSender implements Sender interface for testing.
@@ -441,6 +442,147 @@ func TestTopicMatches(t *testing.T) {
 		if result != tt.match {
 			t.Errorf("topicMatches(%q, %q) = %v, want %v", tt.filter, tt.topic, result, tt.match)
 		}
+	}
+}
+
+func baseWebhookCfg(workers, queueSize int) config.WebhookConfig {
+	return config.WebhookConfig{
+		Enabled:    true,
+		Workers:    workers,
+		QueueSize:  queueSize,
+		DropPolicy: "oldest",
+		Defaults: config.WebhookDefaults{
+			Timeout: 5 * time.Second,
+			Retry:   config.RetryConfig{MaxAttempts: 1},
+			CircuitBreaker: config.CircuitBreakerConfig{
+				FailureThreshold: 10,
+				ResetTimeout:     10 * time.Second,
+			},
+		},
+		ShutdownTimeout: 500 * time.Millisecond,
+		Endpoints:       []config.WebhookEndpoint{{Name: "ep", Type: "http", URL: "http://example.com/hook"}},
+	}
+}
+
+func TestAtomicNotifier_NotifyWhenDisabled(t *testing.T) {
+	cfg := baseWebhookCfg(2, 100)
+	cfg.Enabled = false
+	cfg.Endpoints = nil
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	an, err := NewAtomicNotifier(cfg, "broker-1", newMockSender(), logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer an.Close()
+
+	if err := an.Notify(context.Background(), events.ClientConnected{ClientID: "c1"}); err != nil {
+		t.Errorf("Notify on disabled AtomicNotifier should return nil, got %v", err)
+	}
+}
+
+func TestAtomicNotifier_ReconfigureEnablesNotifier(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	sender := newMockSender()
+
+	// Start disabled.
+	disabled := baseWebhookCfg(2, 100)
+	disabled.Enabled = false
+	disabled.Endpoints = nil
+
+	an, err := NewAtomicNotifier(disabled, "broker-1", sender, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer an.Close()
+
+	// Notify is a no-op while disabled.
+	if err := an.Notify(context.Background(), events.ClientConnected{ClientID: "c1"}); err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+	if sender.getSendCount() != 0 {
+		t.Errorf("expected 0 sends while disabled, got %d", sender.getSendCount())
+	}
+
+	// Enable via Reconfigure.
+	enabled := baseWebhookCfg(1, 100)
+	if err := an.Reconfigure(enabled); err != nil {
+		t.Fatalf("Reconfigure failed: %v", err)
+	}
+
+	an.Notify(context.Background(), events.ClientConnected{ClientID: "c1"}) //nolint:errcheck
+
+	// Give the worker time to process.
+	require.Eventually(t, func() bool {
+		return sender.getSendCount() > 0
+	}, time.Second, 10*time.Millisecond, "expected at least one send after enabling")
+}
+
+func TestAtomicNotifier_ReconfigureDisablesNotifier(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	sender := newMockSender()
+
+	cfg := baseWebhookCfg(2, 100)
+	an, err := NewAtomicNotifier(cfg, "broker-1", sender, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Disable via Reconfigure.
+	disabled := cfg
+	disabled.Enabled = false
+	disabled.Endpoints = nil
+	if err := an.Reconfigure(disabled); err != nil {
+		t.Fatalf("Reconfigure failed: %v", err)
+	}
+	defer an.Close()
+
+	sender.resetCount()
+	an.Notify(context.Background(), events.ClientConnected{ClientID: "c1"}) //nolint:errcheck
+	time.Sleep(50 * time.Millisecond)
+	if sender.getSendCount() != 0 {
+		t.Errorf("expected 0 sends after disabling, got %d", sender.getSendCount())
+	}
+}
+
+func TestAtomicNotifier_ReconfigureSwapsWorkerCount(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	sender := newMockSender()
+
+	cfg := baseWebhookCfg(1, 100)
+	an, err := NewAtomicNotifier(cfg, "broker-1", sender, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer an.Close()
+
+	// Reconfigure with more workers — should succeed without blocking.
+	newCfg := baseWebhookCfg(4, 200)
+	if err := an.Reconfigure(newCfg); err != nil {
+		t.Fatalf("Reconfigure failed: %v", err)
+	}
+
+	// Verify it still delivers after reconfigure.
+	an.Notify(context.Background(), events.ClientConnected{ClientID: "c1"}) //nolint:errcheck
+	require.Eventually(t, func() bool {
+		return sender.getSendCount() > 0
+	}, time.Second, 10*time.Millisecond, "expected delivery after reconfigure")
+}
+
+func TestAtomicNotifier_CloseIdempotent(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	cfg := baseWebhookCfg(1, 10)
+
+	an, err := NewAtomicNotifier(cfg, "broker-1", newMockSender(), logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := an.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	if err := an.Close(); err != nil {
+		t.Fatalf("second Close should be idempotent, got: %v", err)
 	}
 }
 

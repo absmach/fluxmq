@@ -20,6 +20,81 @@ import (
 
 var ErrSenderCannotBeNil = errors.New("sender cannot be nil")
 
+// AtomicNotifier wraps a GenericNotifier and supports live reconfiguration
+// by draining the old notifier and starting a fresh one under a mutex.
+// It satisfies both webhook.Notifier and broker.Notifier.
+type AtomicNotifier struct {
+	mu       sync.RWMutex
+	current  *GenericNotifier
+	brokerID string
+	sender   Sender
+	logger   *slog.Logger
+}
+
+// NewAtomicNotifier creates an AtomicNotifier. If cfg.Enabled is true and
+// endpoints are configured, a GenericNotifier is started immediately.
+func NewAtomicNotifier(cfg config.WebhookConfig, brokerID string, sender Sender, logger *slog.Logger) (*AtomicNotifier, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	a := &AtomicNotifier{brokerID: brokerID, sender: sender, logger: logger}
+	if cfg.Enabled && len(cfg.Endpoints) > 0 {
+		n, err := NewNotifier(cfg, brokerID, sender, logger)
+		if err != nil {
+			return nil, err
+		}
+		a.current = n
+	}
+	return a, nil
+}
+
+// Notify delivers the event to the current inner notifier, if any.
+func (a *AtomicNotifier) Notify(ctx context.Context, event events.Event) error {
+	a.mu.RLock()
+	n := a.current
+	a.mu.RUnlock()
+	if n == nil {
+		return nil
+	}
+	return n.Notify(ctx, event)
+}
+
+// Reconfigure drains the current notifier and starts a new one with cfg.
+// If cfg.Enabled is false or cfg has no endpoints, the notifier is stopped
+// and no new one is started.
+func (a *AtomicNotifier) Reconfigure(cfg config.WebhookConfig) error {
+	var next *GenericNotifier
+	if cfg.Enabled && len(cfg.Endpoints) > 0 {
+		n, err := NewNotifier(cfg, a.brokerID, a.sender, a.logger)
+		if err != nil {
+			return err
+		}
+		next = n
+	}
+
+	a.mu.Lock()
+	old := a.current
+	a.current = next
+	a.mu.Unlock()
+
+	if old != nil {
+		return old.Close()
+	}
+	return nil
+}
+
+// Close drains the current inner notifier and stops it.
+func (a *AtomicNotifier) Close() error {
+	a.mu.Lock()
+	old := a.current
+	a.current = nil
+	a.mu.Unlock()
+	if old != nil {
+		return old.Close()
+	}
+	return nil
+}
+
 // GenericNotifier implements webhook notifications with worker pool and circuit breaker.
 type GenericNotifier struct {
 	cfg            config.WebhookConfig

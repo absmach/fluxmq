@@ -197,16 +197,13 @@ func main() {
 		slog.Info("Running in single-node mode", "node_id", cfg.Cluster.NodeID)
 	}
 
-	var webhooks corebroker.Notifier
+	webhookNotifier, err := webhook.NewAtomicNotifier(cfg.Webhook, cfg.Cluster.NodeID, webhook.NewHTTPSender(), logger)
+	if err != nil {
+		slog.Error("Failed to initialize webhooks", "error", err)
+		os.Exit(1)
+	}
+	var webhooks corebroker.Notifier = webhookNotifier
 	if cfg.Webhook.Enabled {
-		sender := webhook.NewHTTPSender()
-
-		wh, err := webhook.NewNotifier(cfg.Webhook, cfg.Cluster.NodeID, sender, logger)
-		if err != nil {
-			slog.Error("Failed to initialize webhooks", "error", err)
-			os.Exit(1)
-		}
-		webhooks = wh
 		slog.Info("Webhooks enabled",
 			"type", "http",
 			"endpoints", len(cfg.Webhook.Endpoints),
@@ -892,6 +889,7 @@ func main() {
 		reload.WithLogSetup(reload.SetupLogger),
 		reload.WithRateLimiter(rateLimitManager),
 		reload.WithBroker(b),
+		reload.WithWebhookTuner(webhookNotifier),
 	)
 
 	// Start Admin API server (HTTP + Connect/gRPC queue service)

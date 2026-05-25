@@ -5,6 +5,7 @@ package reload
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -295,6 +296,130 @@ func TestReloadConcurrentSerialization(t *testing.T) {
 	// Only the first reload should apply log changes (subsequent ones see no diff).
 	if calls != 1 {
 		t.Errorf("expected logSetup called once (first reload applies, rest see no diff), got %d", calls)
+	}
+}
+
+// mockWebhookTuner records Reconfigure calls for testing.
+type mockWebhookTuner struct {
+	mu   sync.Mutex
+	cfgs []config.WebhookConfig
+	err  error
+}
+
+func (m *mockWebhookTuner) Reconfigure(cfg config.WebhookConfig) error {
+	m.mu.Lock()
+	m.cfgs = append(m.cfgs, cfg)
+	m.mu.Unlock()
+	return m.err
+}
+
+func (m *mockWebhookTuner) calls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.cfgs)
+}
+
+func (m *mockWebhookTuner) last() config.WebhookConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfgs[len(m.cfgs)-1]
+}
+
+func TestReloadWebhookWorkers(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+
+	yamlContent := `webhook:
+  enabled: true
+  workers: 8
+  queue_size: 200
+`
+	path := writeConfig(t, dir, yamlContent)
+
+	tuner := &mockWebhookTuner{}
+	m := New(path, cfg, WithWebhookTuner(tuner))
+
+	result, err := m.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Applied) == 0 {
+		t.Error("expected applied webhook changes")
+	}
+	if len(result.RestartRequired) != 0 {
+		t.Errorf("expected no restart-required changes for webhook, got %v", result.RestartRequired)
+	}
+	if tuner.calls() != 1 {
+		t.Errorf("expected 1 Reconfigure call, got %d", tuner.calls())
+	}
+	if tuner.last().Workers != 8 {
+		t.Errorf("expected workers=8, got %d", tuner.last().Workers)
+	}
+	if m.Version() != 2 {
+		t.Errorf("expected version 2, got %d", m.Version())
+	}
+}
+
+func TestReloadWebhookRollbackOnError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+
+	yamlContent := `webhook:
+  enabled: true
+  workers: 8
+`
+	path := writeConfig(t, dir, yamlContent)
+
+	tuner := &mockWebhookTuner{err: errors.New("reconfigure failed")}
+	m := New(path, cfg, WithWebhookTuner(tuner))
+
+	_, err := m.Reload(context.Background())
+	if err == nil {
+		t.Error("expected error when WebhookTuner.Reconfigure fails")
+	}
+	if m.Version() != 1 {
+		t.Errorf("version should remain 1 after failed reload, got %d", m.Version())
+	}
+	// Only the failing apply call is made; no prior successful subsystem needs rollback.
+	if tuner.calls() != 1 {
+		t.Errorf("expected 1 Reconfigure call, got %d", tuner.calls())
+	}
+}
+
+func TestReloadWebhookRollbackRevertsEarlierSubsystems(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+
+	// Both log and webhook change; webhook fails → log should roll back.
+	yamlContent := `log:
+  level: debug
+webhook:
+  enabled: true
+  workers: 8
+`
+	path := writeConfig(t, dir, yamlContent)
+
+	var logApplies []string
+	tuner := &mockWebhookTuner{err: errors.New("reconfigure failed")}
+
+	m := New(path, cfg,
+		WithLogSetup(func(c config.LogConfig) { logApplies = append(logApplies, c.Level) }),
+		WithWebhookTuner(tuner),
+	)
+
+	_, err := m.Reload(context.Background())
+	if err == nil {
+		t.Error("expected error when WebhookTuner.Reconfigure fails")
+	}
+	if m.Version() != 1 {
+		t.Errorf("version should remain 1 after failed reload, got %d", m.Version())
+	}
+	// logSetup called twice: once to apply "debug", once to rollback to original.
+	if len(logApplies) != 2 {
+		t.Errorf("expected 2 logSetup calls (apply + rollback), got %d", len(logApplies))
+	}
+	if logApplies[1] == "debug" {
+		t.Error("rollback should have reverted log level from 'debug'")
 	}
 }
 

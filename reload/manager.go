@@ -25,6 +25,12 @@ type BrokerTuner interface {
 	MaxQoS() byte
 }
 
+// WebhookTuner applies webhook config changes by draining the old notifier
+// and starting a new one with the updated config.
+type WebhookTuner interface {
+	Reconfigure(cfg config.WebhookConfig) error
+}
+
 // ErrShuttingDown indicates reload was rejected because shutdown has started.
 var ErrShuttingDown = errors.New("server is shutting down")
 
@@ -47,9 +53,10 @@ type Manager struct {
 	shuttingDown atomic.Bool
 
 	// Subsystem references for direct calls (decision #1 from eng review).
-	rateLimiter *ratelimit.AtomicManager
-	broker      BrokerTuner
-	logSetup    func(cfg config.LogConfig)
+	rateLimiter  *ratelimit.AtomicManager
+	broker       BrokerTuner
+	webhookTuner WebhookTuner
+	logSetup     func(cfg config.LogConfig)
 }
 
 // Option configures the Manager.
@@ -63,6 +70,11 @@ func WithRateLimiter(rl *ratelimit.AtomicManager) Option {
 // WithBroker sets the broker for reload updates.
 func WithBroker(b BrokerTuner) Option {
 	return func(m *Manager) { m.broker = b }
+}
+
+// WithWebhookTuner sets the webhook tuner for reload updates.
+func WithWebhookTuner(t WebhookTuner) Option {
+	return func(m *Manager) { m.webhookTuner = t }
 }
 
 // WithLogSetup sets the function called to reconfigure logging.
@@ -179,7 +191,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 	}
 
 	// Partition changes by subsystem.
-	var logChanges, rateLimitChanges, brokerChanges []config.FieldChange
+	var logChanges, rateLimitChanges, brokerChanges, webhookChanges []config.FieldChange
 	for _, c := range changes {
 		switch {
 		case isLogField(c.Path):
@@ -188,6 +200,8 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			rateLimitChanges = append(rateLimitChanges, c)
 		case isBrokerField(c.Path):
 			brokerChanges = append(brokerChanges, c)
+		case isWebhookField(c.Path):
+			webhookChanges = append(webhookChanges, c)
 		}
 	}
 
@@ -222,6 +236,16 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			return nil
 		}, func() {
 			m.broker.SetMaxQoS(oldQoS)
+		}) {
+			return applied, errs
+		}
+	}
+
+	if len(webhookChanges) > 0 && m.webhookTuner != nil {
+		if !applySubsystem(webhookChanges, func() error {
+			return m.webhookTuner.Reconfigure(new.Webhook)
+		}, func() {
+			_ = m.webhookTuner.Reconfigure(old.Webhook)
 		}) {
 			return applied, errs
 		}
@@ -287,6 +311,7 @@ func (m *Manager) logAudit(result *ReloadResult) {
 func isLogField(path string) bool       { return len(path) > 4 && path[:4] == "Log." }
 func isRateLimitField(path string) bool { return len(path) > 10 && path[:10] == "RateLimit." }
 func isBrokerField(path string) bool    { return len(path) > 7 && path[:7] == "Broker." }
+func isWebhookField(path string) bool   { return len(path) > 8 && path[:8] == "Webhook." }
 
 // applyFieldChanges returns a new Config with only the given field changes
 // applied on top of base. The shallow copy is safe because all current
