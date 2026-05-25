@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"time"
@@ -139,7 +140,11 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
 	if err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
-		sendV5ConnAck(conn, false, v5.ConnAckUnspecifiedError, nil) //nolint:errcheck // best-effort rejection reply before closing
+		connAckCode := byte(v5.ConnAckUnspecifiedError)
+		if errors.Is(err, ErrMaxSessionsExceeded) {
+			connAckCode = v5.ConnAckQuotaExceeded
+		}
+		sendV5ConnAck(conn, false, connAckCode, nil) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err
 	}

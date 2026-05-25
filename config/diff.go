@@ -73,21 +73,32 @@ var runtimeSafeFields = map[string]struct{}{
 	// Broker tuning (implemented): MaxQoS.
 	"Broker.MaxQoS": {},
 
+	// Session — all fields apply only to new sessions, so reload is safe.
+	"Session.MaxSessions":           {},
+	"Session.DefaultExpiryInterval": {},
+	"Session.MaxOfflineQueueSize":   {},
+	"Session.MaxInflightMessages":   {},
+	"Session.OfflineQueuePolicy":    {},
+	"Session.MaxSendQueueSize":      {},
+	"Session.DisconnectOnFull":      {},
+	"Session.InflightOverflow":      {},
+	"Session.PendingQueueSize":      {},
+
 	// Webhook — all fields handled by AtomicNotifier drain-and-restart.
 	"Webhook.Enabled":                                  {},
-	"Webhook.QueueSize":                               {},
-	"Webhook.DropPolicy":                              {},
-	"Webhook.Workers":                                 {},
-	"Webhook.IncludePayload":                          {},
-	"Webhook.ShutdownTimeout":                         {},
-	"Webhook.Defaults.Timeout":                        {},
-	"Webhook.Defaults.Retry.MaxAttempts":              {},
-	"Webhook.Defaults.Retry.InitialInterval":          {},
-	"Webhook.Defaults.Retry.MaxInterval":              {},
-	"Webhook.Defaults.Retry.Multiplier":               {},
+	"Webhook.QueueSize":                                {},
+	"Webhook.DropPolicy":                               {},
+	"Webhook.Workers":                                  {},
+	"Webhook.IncludePayload":                           {},
+	"Webhook.ShutdownTimeout":                          {},
+	"Webhook.Defaults.Timeout":                         {},
+	"Webhook.Defaults.Retry.MaxAttempts":               {},
+	"Webhook.Defaults.Retry.InitialInterval":           {},
+	"Webhook.Defaults.Retry.MaxInterval":               {},
+	"Webhook.Defaults.Retry.Multiplier":                {},
 	"Webhook.Defaults.CircuitBreaker.FailureThreshold": {},
-	"Webhook.Defaults.CircuitBreaker.ResetTimeout":    {},
-	"Webhook.Endpoints":                               {},
+	"Webhook.Defaults.CircuitBreaker.ResetTimeout":     {},
+	"Webhook.Endpoints":                                {},
 }
 
 // fieldClassification maps each leaf config field path to its reload
@@ -112,7 +123,6 @@ var restartReasons = map[string]string{
 	"Server":       "listener addresses and TLS config require restart",
 	"Storage":      "storage backend cannot be changed at runtime",
 	"Cluster":      "cluster topology requires restart",
-	"Session":      "session config affects existing connections",
 	"QueueManager": "queue manager config requires restart",
 	"Queues":       "queue definitions require restart",
 	"Auth":         "auth config affects connection-level behavior",

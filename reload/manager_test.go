@@ -539,3 +539,115 @@ server:
 		t.Errorf("version should remain 2 when no new runtime-safe changes are applied, got %d", m.Version())
 	}
 }
+
+// mockSessionTuner records SetSessionConfig calls for testing.
+type mockSessionTuner struct {
+	mu   sync.Mutex
+	cfgs []config.SessionConfig
+}
+
+func (m *mockSessionTuner) SetSessionConfig(cfg config.SessionConfig) {
+	m.mu.Lock()
+	m.cfgs = append(m.cfgs, cfg)
+	m.mu.Unlock()
+}
+
+func (m *mockSessionTuner) calls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.cfgs)
+}
+
+func (m *mockSessionTuner) last() config.SessionConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfgs[len(m.cfgs)-1]
+}
+
+func TestReloadSessionConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+
+	yamlContent := `session:
+  max_offline_queue_size: 500
+  max_inflight_messages: 64
+  offline_queue_policy: evict
+`
+	path := writeConfig(t, dir, yamlContent)
+
+	tuner := &mockSessionTuner{}
+	m := New(path, cfg, WithSessionTuner(tuner))
+
+	result, err := m.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Applied) == 0 {
+		t.Error("expected applied session changes")
+	}
+	if len(result.RestartRequired) != 0 {
+		t.Errorf("expected no restart-required changes for session, got %v", result.RestartRequired)
+	}
+	if tuner.calls() != 1 {
+		t.Errorf("expected 1 SetSessionConfig call, got %d", tuner.calls())
+	}
+	last := tuner.last()
+	if last.MaxOfflineQueueSize != 500 {
+		t.Errorf("expected MaxOfflineQueueSize=500, got %d", last.MaxOfflineQueueSize)
+	}
+	if last.MaxInflightMessages != 64 {
+		t.Errorf("expected MaxInflightMessages=64, got %d", last.MaxInflightMessages)
+	}
+	if last.OfflineQueuePolicy != "evict" {
+		t.Errorf("expected OfflineQueuePolicy=evict, got %q", last.OfflineQueuePolicy)
+	}
+	if m.Version() != 2 {
+		t.Errorf("expected version 2, got %d", m.Version())
+	}
+}
+
+func TestReloadSessionRollbackRevertsEarlierSubsystems(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+
+	// Log changes first (applies OK), then session changes; webhook fails → everything rolls back.
+	// But session has no error path (SetSessionConfig returns nothing), so let's use
+	// log + session where session is the last: actually session never errors.
+	// Instead test that when broker max_qos (which rolls back) fails, session also rolls back.
+	// Easier: log succeeds, session succeeds, webhook fails → both log and session roll back.
+	yamlContent := `log:
+  level: debug
+session:
+  max_inflight_messages: 32
+webhook:
+  enabled: true
+  workers: 8
+`
+	path := writeConfig(t, dir, yamlContent)
+
+	var logApplies []string
+	sessionTuner := &mockSessionTuner{}
+	webhookTuner := &mockWebhookTuner{err: errors.New("reconfigure failed")}
+
+	m := New(path, cfg,
+		WithLogSetup(func(c config.LogConfig) { logApplies = append(logApplies, c.Level) }),
+		WithSessionTuner(sessionTuner),
+		WithWebhookTuner(webhookTuner),
+	)
+
+	_, err := m.Reload(context.Background())
+	if err == nil {
+		t.Error("expected error when WebhookTuner.Reconfigure fails")
+	}
+	if m.Version() != 1 {
+		t.Errorf("version should remain 1 after failed reload, got %d", m.Version())
+	}
+	// log: apply "debug" + rollback → 2 calls
+	if len(logApplies) != 2 {
+		t.Errorf("expected 2 logSetup calls (apply + rollback), got %d", len(logApplies))
+	}
+	// session: apply (new config) + rollback (old config) → 2 calls
+	if sessionTuner.calls() != 2 {
+		t.Errorf("expected 2 SetSessionConfig calls (apply + rollback), got %d", sessionTuner.calls())
+	}
+}

@@ -16,17 +16,18 @@ import (
 
 // Common handler errors.
 var (
-	ErrProtocolViolation = errors.New("protocol violation")
-	ErrNotAuthorized     = errors.New("not authorized")
-	ErrBadUserOrPassword = errors.New("bad username or password")
-	ErrClientIDRejected  = errors.New("client identifier rejected")
-	ErrClientIDRequired  = errors.New("client identifier required")
-	ErrServerUnavailable = errors.New("server unavailable")
-	ErrTopicInvalid      = errors.New("topic name invalid")
-	ErrPacketTooLarge    = errors.New("packet too large")
-	ErrQuotaExceeded     = errors.New("quota exceeded")
-	ErrInvalidPacketType = errors.New("invalid packet type")
-	ErrSessionNotFound   = errors.New("session not found")
+	ErrProtocolViolation   = errors.New("protocol violation")
+	ErrNotAuthorized       = errors.New("not authorized")
+	ErrBadUserOrPassword   = errors.New("bad username or password")
+	ErrClientIDRejected    = errors.New("client identifier rejected")
+	ErrClientIDRequired    = errors.New("client identifier required")
+	ErrServerUnavailable   = errors.New("server unavailable")
+	ErrTopicInvalid        = errors.New("topic name invalid")
+	ErrPacketTooLarge      = errors.New("packet too large")
+	ErrQuotaExceeded       = errors.New("quota exceeded")
+	ErrMaxSessionsExceeded = errors.New("maximum sessions exceeded")
+	ErrInvalidPacketType   = errors.New("invalid packet type")
+	ErrSessionNotFound     = errors.New("session not found")
 )
 
 const (

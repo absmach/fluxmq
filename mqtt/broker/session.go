@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/session"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -77,7 +78,16 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		return existing, false, nil
 	}
 
-	serverReceiveMax := b.cfg.maxInflightMessages
+	sessionCfg := b.cfg.sessionCfg.Load()
+	if sessionCfg == nil {
+		sessionCfg = &config.SessionConfig{}
+	}
+
+	if sessionCfg.MaxSessions > 0 && b.sessionsMap.Count() >= sessionCfg.MaxSessions {
+		return nil, false, ErrMaxSessionsExceeded
+	}
+
+	serverReceiveMax := sessionCfg.MaxInflightMessages
 	if serverReceiveMax <= 0 {
 		serverReceiveMax = 256
 	}
@@ -89,7 +99,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		receiveMax = uint16(serverReceiveMax)
 	}
 	inflight := messages.NewInflightTracker(int(receiveMax))
-	offlineQueue := messages.NewMessageQueue(b.cfg.maxOfflineQueueSize, b.cfg.offlineQueueEvict)
+	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == "evict")
 
 	// Restore from takeover state if present
 	if takeoverState != nil {
@@ -130,17 +140,16 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		opts.ExpiryInterval = takeoverState.ExpiryInterval
 	}
 
-	// Cap persistent session expiry to prevent indefinite memory growth.
-	// Sessions with CleanStart=false and ExpiryInterval=0 would otherwise live forever.
-	const maxSessionExpiry uint32 = 86400 // 24 hours
-	if !opts.CleanStart && opts.ExpiryInterval == 0 {
-		opts.ExpiryInterval = maxSessionExpiry
+	// Apply default expiry for persistent sessions that don't specify one,
+	// preventing indefinite memory growth.
+	if !opts.CleanStart && opts.ExpiryInterval == 0 && sessionCfg.DefaultExpiryInterval > 0 {
+		opts.ExpiryInterval = sessionCfg.DefaultExpiryInterval
 	}
 
 	// Override receive maximum with normalized value
 	opts.ReceiveMaximum = receiveMax
 
-	s := session.New(clientID, version, opts, inflight, offlineQueue, b.cfg.sessionCfg)
+	s := session.New(clientID, version, opts, inflight, offlineQueue, *sessionCfg)
 
 	// Restore subscriptions from takeover state or storage
 	if takeoverState != nil {

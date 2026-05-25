@@ -54,13 +54,10 @@ type brokerTelemetry struct {
 
 // brokerConfig groups tunable broker settings.
 type brokerConfig struct {
-	maxQoS              atomic.Uint32 // accessed atomically for hot-reload safety
-	maxOfflineQueueSize int
-	offlineQueueEvict   bool
-	maxInflightMessages int
+	maxQoS              atomic.Uint32                        // accessed atomically for hot-reload safety
+	sessionCfg          atomic.Pointer[config.SessionConfig] // accessed atomically for hot-reload safety
 	routePublishTimeout time.Duration
 	asyncFanOut         bool
-	sessionCfg          config.SessionConfig
 }
 
 // Option configures the broker.
@@ -93,12 +90,13 @@ func WithTracer(t trace.Tracer) Option {
 
 // WithSessionConfig sets session-related settings.
 func WithSessionConfig(c config.SessionConfig) Option {
-	return func(b *Broker) {
-		b.cfg.sessionCfg = c
-		b.cfg.maxOfflineQueueSize = c.MaxOfflineQueueSize
-		b.cfg.offlineQueueEvict = c.OfflineQueuePolicy == "evict"
-		b.cfg.maxInflightMessages = c.MaxInflightMessages
-	}
+	return func(b *Broker) { b.cfg.sessionCfg.Store(&c) }
+}
+
+// SetSessionConfig atomically replaces session-level settings. Safe to call
+// concurrently with active connections — new sessions pick up the new config.
+func (b *Broker) SetSessionConfig(c config.SessionConfig) {
+	b.cfg.sessionCfg.Store(&c)
 }
 
 // WithTransportConfig sets transport-related settings.

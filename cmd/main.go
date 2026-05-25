@@ -889,6 +889,7 @@ func main() {
 		reload.WithLogSetup(reload.SetupLogger),
 		reload.WithRateLimiter(rateLimitManager),
 		reload.WithBroker(b),
+		reload.WithSessionTuner(b),
 		reload.WithWebhookTuner(webhookNotifier),
 	)
 

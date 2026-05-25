@@ -93,6 +93,26 @@ func TestDiffRuntimeSafeFields(t *testing.T) {
 			modify: func(cfg *Config) { cfg.Broker.MaxQoS = 1 },
 			path:   "Broker.MaxQoS",
 		},
+		{
+			name:   "session max sessions",
+			modify: func(cfg *Config) { cfg.Session.MaxSessions = 50000 },
+			path:   "Session.MaxSessions",
+		},
+		{
+			name:   "session max offline queue size",
+			modify: func(cfg *Config) { cfg.Session.MaxOfflineQueueSize = 500 },
+			path:   "Session.MaxOfflineQueueSize",
+		},
+		{
+			name:   "session max inflight messages",
+			modify: func(cfg *Config) { cfg.Session.MaxInflightMessages = 64 },
+			path:   "Session.MaxInflightMessages",
+		},
+		{
+			name:   "session offline queue policy",
+			modify: func(cfg *Config) { cfg.Session.OfflineQueuePolicy = "reject" },
+			path:   "Session.OfflineQueuePolicy",
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,11 +159,6 @@ func TestDiffRestartRequiredFields(t *testing.T) {
 			name:   "cluster enabled",
 			modify: func(cfg *Config) { cfg.Cluster.Enabled = false },
 			path:   "Cluster.Enabled",
-		},
-		{
-			name:   "session max sessions",
-			modify: func(cfg *Config) { cfg.Session.MaxSessions = 50000 },
-			path:   "Session.MaxSessions",
 		},
 		{
 			name:   "auth url",

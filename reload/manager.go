@@ -25,6 +25,12 @@ type BrokerTuner interface {
 	MaxQoS() byte
 }
 
+// SessionTuner applies session config changes atomically. Changes take effect
+// for new sessions only; existing sessions are not disturbed.
+type SessionTuner interface {
+	SetSessionConfig(cfg config.SessionConfig)
+}
+
 // WebhookTuner applies webhook config changes by draining the old notifier
 // and starting a new one with the updated config.
 type WebhookTuner interface {
@@ -55,6 +61,7 @@ type Manager struct {
 	// Subsystem references for direct calls (decision #1 from eng review).
 	rateLimiter  *ratelimit.AtomicManager
 	broker       BrokerTuner
+	sessionTuner SessionTuner
 	webhookTuner WebhookTuner
 	logSetup     func(cfg config.LogConfig)
 }
@@ -70,6 +77,11 @@ func WithRateLimiter(rl *ratelimit.AtomicManager) Option {
 // WithBroker sets the broker for reload updates.
 func WithBroker(b BrokerTuner) Option {
 	return func(m *Manager) { m.broker = b }
+}
+
+// WithSessionTuner sets the session tuner for reload updates.
+func WithSessionTuner(t SessionTuner) Option {
+	return func(m *Manager) { m.sessionTuner = t }
 }
 
 // WithWebhookTuner sets the webhook tuner for reload updates.
@@ -191,7 +203,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 	}
 
 	// Partition changes by subsystem.
-	var logChanges, rateLimitChanges, brokerChanges, webhookChanges []config.FieldChange
+	var logChanges, rateLimitChanges, brokerChanges, sessionChanges, webhookChanges []config.FieldChange
 	for _, c := range changes {
 		switch {
 		case isLogField(c.Path):
@@ -200,6 +212,8 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			rateLimitChanges = append(rateLimitChanges, c)
 		case isBrokerField(c.Path):
 			brokerChanges = append(brokerChanges, c)
+		case isSessionField(c.Path):
+			sessionChanges = append(sessionChanges, c)
 		case isWebhookField(c.Path):
 			webhookChanges = append(webhookChanges, c)
 		}
@@ -236,6 +250,17 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			return nil
 		}, func() {
 			m.broker.SetMaxQoS(oldQoS)
+		}) {
+			return applied, errs
+		}
+	}
+
+	if len(sessionChanges) > 0 && m.sessionTuner != nil {
+		if !applySubsystem(sessionChanges, func() error {
+			m.sessionTuner.SetSessionConfig(new.Session)
+			return nil
+		}, func() {
+			m.sessionTuner.SetSessionConfig(old.Session)
 		}) {
 			return applied, errs
 		}
@@ -311,6 +336,7 @@ func (m *Manager) logAudit(result *ReloadResult) {
 func isLogField(path string) bool       { return len(path) > 4 && path[:4] == "Log." }
 func isRateLimitField(path string) bool { return len(path) > 10 && path[:10] == "RateLimit." }
 func isBrokerField(path string) bool    { return len(path) > 7 && path[:7] == "Broker." }
+func isSessionField(path string) bool   { return len(path) > 8 && path[:8] == "Session." }
 func isWebhookField(path string) bool   { return len(path) > 8 && path[:8] == "Webhook." }
 
 // applyFieldChanges returns a new Config with only the given field changes
