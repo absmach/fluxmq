@@ -240,7 +240,7 @@ func TestIntegrationMultipleSubscribers(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	go b.Publish("fanout/topic", []byte("fanout msg"), nil)
+	go b.Publish(context.Background(), "fanout/topic", []byte("fanout msg"), nil)
 
 	var wg sync.WaitGroup
 	for i, sub := range subs {
@@ -283,7 +283,7 @@ func TestIntegrationWildcardSubscription(t *testing.T) {
 	grantCredit(t, sub, 0, 0, 10)
 	time.Sleep(50 * time.Millisecond)
 
-	go b.Publish("sensors/room1/temp", []byte("22.5"), nil)
+	go b.Publish(context.Background(), "sensors/room1/temp", []byte("22.5"), nil)
 
 	_, desc, _, payload, err := sub.ReadPerformative()
 	require.NoError(t, err)

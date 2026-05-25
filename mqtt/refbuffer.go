@@ -4,8 +4,20 @@
 package mqtt
 
 import (
+	"log/slog"
+	"runtime/debug"
 	"sync/atomic"
 )
+
+// doubleReleaseCount tracks the number of times Release() has been called
+// on an already-released buffer. Exposed for monitoring; non-zero values
+// indicate a use-after-release bug somewhere in the broker that should be
+// investigated but must not crash the process in production.
+var doubleReleaseCount atomic.Uint64
+
+// DoubleReleaseCount returns the number of double-release events observed
+// since process start.
+func DoubleReleaseCount() uint64 { return doubleReleaseCount.Load() }
 
 // RefCountedBuffer is a reference-counted byte buffer that eliminates
 // unnecessary copying of message payloads. When a buffer is created,
@@ -68,13 +80,17 @@ func (r *RefCountedBuffer) Release() {
 
 	newCount := r.refCount.Add(-1)
 	if newCount == 0 {
-		// Last reference released, return to pool
 		if r.pool != nil {
 			r.pool.Put(r)
 		}
-	} else if newCount < 0 {
-		// Should never happen - indicates a bug
-		panic("RefCountedBuffer: negative reference count")
+		return
+	}
+	if newCount < 0 {
+		doubleReleaseCount.Add(1)
+		r.refCount.Store(0)
+		slog.Error("RefCountedBuffer: negative reference count (double release)",
+			slog.Int("count", int(newCount)),
+			slog.String("stack", string(debug.Stack())))
 	}
 }
 

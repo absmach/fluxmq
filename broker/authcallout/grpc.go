@@ -43,9 +43,6 @@ func NewGRPCClient(httpClient *http.Client, baseURL string, opts ...Option) *GRP
 
 // Authenticate calls the remote AuthService.Authenticate RPC.
 func (c *GRPCClient) Authenticate(clientID, username, secret string) (*broker.AuthnResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
-	defer cancel()
-
 	req := connect.NewRequest(&authv1.AuthnReq{
 		ClientId: clientID,
 		Username: username,
@@ -53,9 +50,13 @@ func (c *GRPCClient) Authenticate(clientID, username, secret string) (*broker.Au
 		Protocol: c.Protocol,
 	})
 
-	result, err := c.CB.Execute(func() (any, error) {
-		return c.svc.Authenticate(ctx, req)
-	})
+	result, err := c.retryWithBackoff(context.Background(), func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+		defer cancel()
+		return c.CB.Execute(func() (any, error) {
+			return c.svc.Authenticate(ctx, req)
+		})
+	}, retriableError)
 	if err != nil {
 		c.Logger.Info("auth_callout_authenticate",
 			slog.String("client_id", clientID),
@@ -88,18 +89,19 @@ func (c *GRPCClient) CanSubscribe(clientID string, filter string) bool {
 }
 
 func (c *GRPCClient) authorize(externalID, topic string, action authv1.Action) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
-	defer cancel()
-
 	req := connect.NewRequest(&authv1.AuthzReq{
 		ExternalId: externalID,
 		Topic:      topic,
 		Action:     action,
 	})
 
-	result, err := c.CB.Execute(func() (any, error) {
-		return c.svc.Authorize(ctx, req)
-	})
+	result, err := c.retryWithBackoff(context.Background(), func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+		defer cancel()
+		return c.CB.Execute(func() (any, error) {
+			return c.svc.Authorize(ctx, req)
+		})
+	}, retriableError)
 	if err != nil {
 		c.Logger.Info("auth_callout_authorize",
 			slog.String("external_id", externalID),

@@ -74,9 +74,6 @@ func NewHTTPClient(httpClient *http.Client, baseURL string, opts ...Option) *HTT
 
 // Authenticate calls the remote auth service's authenticate endpoint.
 func (c *HTTPClient) Authenticate(clientID, username, secret string) (*broker.AuthnResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
-	defer cancel()
-
 	reqBody := authnRequest{
 		ClientID: clientID,
 		Username: username,
@@ -85,9 +82,13 @@ func (c *HTTPClient) Authenticate(clientID, username, secret string) (*broker.Au
 	}
 
 	var resp authnResponse
-	_, err := c.CB.Execute(func() (any, error) {
-		return nil, c.doPost(ctx, "/auth/authenticate", reqBody, &resp)
-	})
+	_, err := c.retryWithBackoff(context.Background(), func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+		defer cancel()
+		return c.CB.Execute(func() (any, error) {
+			return nil, c.doPost(ctx, "/auth/authenticate", reqBody, &resp)
+		})
+	}, retriableError)
 	if err != nil {
 		c.Logger.Info("auth_callout_authenticate",
 			slog.String("client_id", clientID),
@@ -118,9 +119,6 @@ func (c *HTTPClient) CanSubscribe(clientID string, filter string) bool {
 }
 
 func (c *HTTPClient) authorize(externalID, topic, action string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
-	defer cancel()
-
 	reqBody := authzRequest{
 		ExternalID: externalID,
 		Topic:      topic,
@@ -128,9 +126,13 @@ func (c *HTTPClient) authorize(externalID, topic, action string) bool {
 	}
 
 	var resp authzResponse
-	_, err := c.CB.Execute(func() (any, error) {
-		return nil, c.doPost(ctx, "/auth/authorize", reqBody, &resp)
-	})
+	_, err := c.retryWithBackoff(context.Background(), func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+		defer cancel()
+		return c.CB.Execute(func() (any, error) {
+			return nil, c.doPost(ctx, "/auth/authorize", reqBody, &resp)
+		})
+	}, retriableError)
 	if err != nil {
 		c.Logger.Info("auth_callout_authorize",
 			slog.String("external_id", externalID),

@@ -239,17 +239,18 @@ func TestBufferPool_Clear(t *testing.T) {
 	buf.Release()
 }
 
-func TestRefCountedBuffer_PanicOnNegativeCount(t *testing.T) {
+func TestRefCountedBuffer_DoubleReleaseDoesNotPanic(t *testing.T) {
 	pool := NewBufferPool()
 	buf := pool.Get(100)
 
-	// Release once (count goes to 0, buffer returned to pool)
+	before := DoubleReleaseCount()
 	buf.Release()
 
-	// Releasing again should panic (negative count)
-	assert.Panics(t, func() {
+	assert.NotPanics(t, func() {
 		buf.Release()
 	})
+	assert.Equal(t, before+1, DoubleReleaseCount(), "double release should increment counter")
+	assert.GreaterOrEqual(t, buf.RefCount(), int32(0), "refcount should be clamped to >=0")
 }
 
 func TestDefaultBufferPool(t *testing.T) {

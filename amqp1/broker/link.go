@@ -297,7 +297,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 				publishTopic = resolver.QueueTopic(l.queueName, subject)
 			}
 
-			if err := qm.Publish(context.Background(), qtypes.PublishRequest{
+			if err := qm.Publish(l.session.conn.ctx, qtypes.PublishRequest{
 				ClientID:   clientID,
 				Topic:      publishTopic,
 				Payload:    data,
@@ -309,7 +309,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	} else {
 		// Publish to shared router (pub/sub).
 		// Translate AMQP routing key (dot-separated) to MQTT topic (slash-separated).
-		l.session.conn.broker.Publish(topics.AMQPTopicToMQTT(topic), data, props)
+		l.session.conn.broker.Publish(l.session.conn.ctx, topics.AMQPTopicToMQTT(topic), data, props)
 	}
 
 	// Settle if pre-settled by sender

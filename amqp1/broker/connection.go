@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -27,6 +28,12 @@ type Connection struct {
 	channelMax   uint16
 	idleTimeout  time.Duration
 
+	// ctx is cancelled when the connection is closed. Downstream operations
+	// (queue publish, cross-protocol delivery, subscription mutation) derive
+	// from this so that broker shutdown unblocks them.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	sessions   map[uint16]*Session
 	sessionsMu sync.RWMutex
 	nextCh     uint16
@@ -47,12 +54,18 @@ type partialTransfer struct {
 	payload  []byte
 }
 
-func newConnection(b *Broker, raw net.Conn) *Connection {
+func newConnection(ctx context.Context, b *Broker, raw net.Conn) *Connection { //nolint:contextcheck // ctx is propagated via c.ctx for downstream operations
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	connCtx, cancel := context.WithCancel(ctx)
 	return &Connection{
 		broker:           b,
 		conn:             amqpconn.NewConnection(raw),
 		maxFrameSize:     frames.DefaultMaxFrameSize,
 		channelMax:       65535,
+		ctx:              connCtx,
+		cancel:           cancel,
 		sessions:         make(map[uint16]*Session),
 		partialTransfers: make(map[uint16]*partialTransfer),
 		closeCh:          make(chan struct{}),
@@ -476,6 +489,9 @@ func (c *Connection) close(amqpErr *performatives.Error) {
 
 func (c *Connection) cleanup() {
 	c.close(nil)
+	if c.cancel != nil {
+		c.cancel()
+	}
 	c.broker.stats.DecrementConnections()
 	if m := c.broker.metrics; m != nil {
 		m.RecordDisconnection()

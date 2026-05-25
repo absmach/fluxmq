@@ -286,7 +286,7 @@ func TestPubSubFlow(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Publish from a goroutine since WriteTransfer blocks on net.Pipe until the client reads
-	go b.Publish("test/pubsub", []byte("hello amqp"), nil)
+	go b.Publish(context.Background(), "test/pubsub", []byte("hello amqp"), nil)
 
 	// Read the Transfer
 	_, desc, perf, payload, err := c.ReadPerformative()
@@ -584,7 +584,7 @@ func TestMultiFrameTransferSend(t *testing.T) {
 		bigPayload[i] = byte(i % 256)
 	}
 
-	go b.Publish("test/big", bigPayload, nil)
+	go b.Publish(context.Background(), "test/big", bigPayload, nil)
 
 	// Read frames — may be multiple with More=true
 	var reassembled []byte
@@ -901,14 +901,14 @@ func TestCreditExhaustion(t *testing.T) {
 
 	// Publish and read 2 messages (using goroutines since net.Pipe blocks)
 	for i := range 2 {
-		go b.Publish("test/credit", []byte(fmt.Sprintf("msg-%d", i)), nil)
+		go b.Publish(context.Background(), "test/credit", []byte(fmt.Sprintf("msg-%d", i)), nil)
 		desc, err := readDescriptor(t, c)
 		require.NoError(t, err)
 		assert.Equal(t, performatives.DescriptorTransfer, desc)
 	}
 
 	// 3rd publish should be silently dropped (no credit left)
-	b.Publish("test/credit", []byte("msg-dropped"), nil)
+	b.Publish(context.Background(), "test/credit", []byte("msg-dropped"), nil)
 
 	// Re-grant credit
 	lc2 := uint32(1)
@@ -927,7 +927,7 @@ func TestCreditExhaustion(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// New message should arrive with new credit
-	go b.Publish("test/credit", []byte("after-credit"), nil)
+	go b.Publish(context.Background(), "test/credit", []byte("after-credit"), nil)
 
 	_, desc, _, payload, err := c.ReadPerformative()
 	require.NoError(t, err)
@@ -997,7 +997,7 @@ func TestMultipleSessions(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Publish to s0 topic only
-	go b.Publish("test/s0", []byte("for-s0"), nil)
+	go b.Publish(context.Background(), "test/s0", []byte("for-s0"), nil)
 
 	_, desc, perf, payload, err := c.ReadPerformative()
 	require.NoError(t, err)
@@ -1138,7 +1138,7 @@ func TestConcurrentPublishAndFlow(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 20 {
-			b.Publish("test/race", []byte("msg"), nil)
+			b.Publish(context.Background(), "test/race", []byte("msg"), nil)
 		}
 	}()
 

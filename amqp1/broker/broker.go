@@ -76,8 +76,8 @@ func (b *Broker) GetStats() *Stats {
 
 // HandleConnection handles a new raw TCP connection through the full AMQP lifecycle.
 func (b *Broker) HandleConnection(ctx context.Context, conn net.Conn) {
-	c := newConnection(b, conn)
-	if err := c.run(); err != nil { //nolint:contextcheck // connection lifecycle manages its own context for cleanup and metrics
+	c := newConnection(ctx, b, conn)
+	if err := c.run(); err != nil { //nolint:contextcheck // connection lifecycle ctx is stored in c.ctx and used downstream
 		b.logger.Debug("AMQP connection ended", "remote", conn.RemoteAddr(), "error", err)
 	}
 }
@@ -94,7 +94,12 @@ func (b *Broker) unregisterConnection(containerID string) {
 
 // Publish routes a message to all subscribers via the shared router.
 // AMQP 1.0 subscribers are delivered locally; others via the cross-deliver callback.
-func (b *Broker) Publish(topic string, payload []byte, props map[string]string) {
+// The ctx is forwarded to cross-protocol delivery so that connection or broker
+// shutdown unblocks downstream operations.
+func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, props map[string]string) { //nolint:contextcheck // ctx is propagated to cross-deliver and cluster route
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	subs, err := b.router.Match(topic)
 	if err != nil {
 		b.logger.Error("AMQP router match failed", "topic", topic, "error", err)
@@ -112,7 +117,7 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 			c.deliverMessage(topic, payload, props, sub.QoS)
 		} else {
 			if b.crossDeliver != nil {
-				b.crossDeliver(context.Background(), sub.ClientID, topic, payload, sub.QoS, props)
+				b.crossDeliver(ctx, sub.ClientID, topic, payload, sub.QoS, props)
 			}
 		}
 	}
@@ -122,9 +127,11 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		// Derive from the caller's ctx so broker shutdown cancels in-flight
+		// cluster routes, but cap with a timeout.
+		routeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := cl.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
+		if err := cl.RoutePublish(routeCtx, topic, payload, 1, false, props); err != nil {
 			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
 		}
 	}
