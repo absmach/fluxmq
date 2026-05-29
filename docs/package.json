@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "generate:api": "node --import tsx scripts/generate-api-docs.mts",
-    "build": "pnpm run generate:api && next build",
+    "build": "pnpm run generate:api && next build && node scripts/nest-static-export.mjs",
     "dev": "next dev",
     "start": "serve out",
+    "deploy": "pnpm run build && wrangler deploy",
+    "upload": "pnpm run build && wrangler versions upload",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
     "lint": "biome check",
@@ -38,7 +40,8 @@
     "serve": "^14.2.5",
     "tailwindcss": "^4.1.18",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.95.0"
   },
   "packageManager": "pnpm@10.33.0"
 }

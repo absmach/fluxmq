@@ -5,8 +5,11 @@ import { baseOptions } from "@/lib/layout.shared";
 import { source } from "@/lib/source";
 import "./global.css";
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_BASE_URL || "https://www.absmach.eu/docs/fluxmq";
+
 export const metadata: Metadata = {
-  metadataBase: new URL("https://www.absmach.eu/products/fluxmq/"),
+  metadataBase: new URL(siteUrl),
   title: {
     default: "FluxMQ Docs",
     template: "%s | FluxMQ Docs",

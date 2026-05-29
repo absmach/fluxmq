@@ -7,6 +7,7 @@ import {
 import { createRelativeLink } from "fumadocs-ui/mdx";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { toSiteUrl } from "@/lib/base-path";
 import { getPageImage, source } from "@/lib/source";
 import { getMDXComponents } from "@/mdx-components";
 import { RootRedirect } from "./root-redirect";
@@ -50,10 +51,13 @@ export async function generateMetadata(
   const page = source.getPage(slug);
   if (!page) return { title: "FluxMQ Docs" };
 
+  const canonical = toSiteUrl(page.url);
   return {
     title: page.data.title,
     description: page.data.description,
+    alternates: { canonical },
     openGraph: {
+      url: canonical,
       images: getPageImage(page).url,
     },
   };
