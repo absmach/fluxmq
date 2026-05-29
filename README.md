@@ -7,7 +7,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ## Links
 
-- [Documentation](https://www.absmach.eu/products/fluxmq/docs)
+- [Documentation](https://www.absmach.eu/docs/fluxmq)
 - [Website](https://www.absmach.eu/products/fluxmq)
 - [Professional Support](mailto:info@absmach.eu)
 - [Discord](https://discord.gg/HvB5QuzF)
@@ -41,7 +41,7 @@ A high-performance, multi-protocol message broker written in Go designed for sca
 
 ### Event-Driven Architecture Pattern
 
-FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and [Durable Queues](https://www.absmach.eu/products/fluxmq/docs/messaging/durable-queues).
+FluxMQ is optimized for event-driven systems that need ordered delivery, durable queues, and lightweight operations. For configuration examples and queue patterns, see `examples/` and [Durable Queues](https://www.absmach.eu/docs/fluxmq/messaging/durable-queues).
 
 ## Features
 
