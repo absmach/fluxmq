@@ -230,10 +230,13 @@ type wsConnection struct {
 	ws           *websocket.Conn
 	remoteAddr   string
 	reader       io.Reader
+	frameReader  *wsFrameReader
 	version      int
 	mu           sync.RWMutex
+	readMu       sync.RWMutex
 	writeMu      sync.Mutex
 	closed       bool
+	readDeadline time.Time
 	lastActivity time.Time
 	onDisconnect func(graceful bool)
 	pingStop     chan struct{}
@@ -252,29 +255,24 @@ func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion int)
 func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 	c.Touch()
 
-	messageType, data, err := c.ws.ReadMessage()
-	if err != nil {
-		return nil, err
+	if c.frameReader == nil {
+		c.frameReader = &wsFrameReader{conn: c}
 	}
-
-	if messageType != websocket.BinaryMessage {
-		return nil, ErrExpectedBinaryMessage
+	if c.reader == nil {
+		c.reader = c.frameReader
 	}
-
-	reader := bytes.NewReader(data)
 
 	if c.version == 0 {
-		ver, restored, err := packets.DetectProtocolVersion(reader)
+		ver, restored, err := packets.DetectProtocolVersion(c.reader)
 		if err != nil {
 			return nil, err
 		}
 		c.version = ver
 		c.reader = restored
-	} else {
-		c.reader = reader
 	}
 
 	var pkt packets.ControlPacket
+	var err error
 	switch c.version {
 	case 5:
 		pkt, _, _, err = v5.ReadPacket(c.reader)
@@ -288,6 +286,120 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 		return nil, err
 	}
 	return pkt, nil
+}
+
+type wsFrameReader struct {
+	conn    *wsConnection
+	current *bytes.Reader
+	reads   chan wsReadResult
+	once    sync.Once
+	errMu   sync.RWMutex
+	err     error
+}
+
+type wsReadResult struct {
+	messageType int
+	data        []byte
+	err         error
+}
+
+func (r *wsFrameReader) Read(p []byte) (int, error) {
+	r.once.Do(r.start)
+
+	for {
+		if r.current != nil && r.current.Len() > 0 {
+			return r.current.Read(p)
+		}
+
+		result, err := r.nextMessage()
+		if err != nil {
+			return 0, err
+		}
+		if result.messageType != websocket.BinaryMessage {
+			return 0, ErrExpectedBinaryMessage
+		}
+		if len(result.data) == 0 {
+			continue
+		}
+
+		r.conn.Touch()
+		r.current = bytes.NewReader(result.data)
+	}
+}
+
+func (r *wsFrameReader) start() {
+	r.reads = make(chan wsReadResult, 1)
+	go func() {
+		defer close(r.reads)
+		for {
+			messageType, data, err := r.conn.ws.ReadMessage()
+			result := wsReadResult{messageType: messageType, data: data, err: err}
+			if err != nil {
+				r.setErr(err)
+				r.reads <- result
+				return
+			}
+			r.reads <- result
+		}
+	}()
+}
+
+func (r *wsFrameReader) nextMessage() (wsReadResult, error) {
+	deadline := r.conn.getReadDeadline()
+	if deadline.IsZero() {
+		result, ok := <-r.reads
+		if !ok {
+			return wsReadResult{}, r.getErr()
+		}
+		return result, result.err
+	}
+
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return wsReadResult{}, wsReadTimeoutError{}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case result, ok := <-r.reads:
+		if !ok {
+			return wsReadResult{}, r.getErr()
+		}
+		return result, result.err
+	case <-timer.C:
+		return wsReadResult{}, wsReadTimeoutError{}
+	}
+}
+
+func (r *wsFrameReader) setErr(err error) {
+	r.errMu.Lock()
+	defer r.errMu.Unlock()
+	r.err = err
+}
+
+func (r *wsFrameReader) getErr() error {
+	r.errMu.RLock()
+	defer r.errMu.RUnlock()
+	if r.err != nil {
+		return r.err
+	}
+	return io.EOF
+}
+
+type wsReadTimeoutError struct{}
+
+func (wsReadTimeoutError) Error() string {
+	return "websocket read timeout"
+}
+
+func (wsReadTimeoutError) Timeout() bool {
+	return true
+}
+
+func (wsReadTimeoutError) Temporary() bool {
+	return true
 }
 
 func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
@@ -369,7 +481,10 @@ func (c *wsConnection) RemoteAddr() net.Addr {
 }
 
 func (c *wsConnection) SetReadDeadline(t time.Time) error {
-	return c.ws.SetReadDeadline(t)
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	c.readDeadline = t
+	return nil
 }
 
 func (c *wsConnection) SetWriteDeadline(t time.Time) error {
@@ -377,10 +492,14 @@ func (c *wsConnection) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *wsConnection) SetDeadline(t time.Time) error {
-	if err := c.ws.SetReadDeadline(t); err != nil {
-		return err
-	}
+	c.SetReadDeadline(t) //nolint:errcheck // local state update cannot fail
 	return c.ws.SetWriteDeadline(t)
+}
+
+func (c *wsConnection) getReadDeadline() time.Time {
+	c.readMu.RLock()
+	defer c.readMu.RUnlock()
+	return c.readDeadline
 }
 
 func (c *wsConnection) SetKeepAlive(d time.Duration) error {
