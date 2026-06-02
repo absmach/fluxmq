@@ -233,9 +233,11 @@ type wsConnection struct {
 	frameReader  *wsFrameReader
 	version      int
 	mu           sync.RWMutex
+	closeOnce    sync.Once
 	readMu       sync.RWMutex
 	writeMu      sync.Mutex
 	closed       bool
+	closeCh      chan struct{}
 	readDeadline time.Time
 	lastActivity time.Time
 	onDisconnect func(graceful bool)
@@ -249,6 +251,7 @@ func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion int)
 		remoteAddr: remoteAddr,
 		version:    protocolVersion,
 		closed:     false,
+		closeCh:    make(chan struct{}),
 	}
 }
 
@@ -289,12 +292,16 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 }
 
 type wsFrameReader struct {
-	conn    *wsConnection
-	current *bytes.Reader
-	reads   chan wsReadResult
-	once    sync.Once
-	errMu   sync.RWMutex
-	err     error
+	conn     *wsConnection
+	current  *bytes.Reader
+	reads    chan wsReadResult
+	requests chan struct{}
+	done     chan struct{}
+	once     sync.Once
+	stateMu  sync.Mutex
+	reading  bool
+	errMu    sync.RWMutex
+	err      error
 }
 
 type wsReadResult struct {
@@ -329,29 +336,66 @@ func (r *wsFrameReader) Read(p []byte) (int, error) {
 
 func (r *wsFrameReader) start() {
 	r.reads = make(chan wsReadResult, 1)
+	r.requests = make(chan struct{}, 1)
+	r.done = make(chan struct{})
 	go func() {
+		defer close(r.done)
 		defer close(r.reads)
 		for {
+			select {
+			case <-r.conn.done():
+				return
+			case <-r.requests:
+			}
+
 			messageType, data, err := r.conn.ws.ReadMessage()
 			result := wsReadResult{messageType: messageType, data: data, err: err}
 			if err != nil {
 				r.setErr(err)
-				r.reads <- result
+			}
+
+			select {
+			case r.reads <- result:
+				r.finishRead()
+			case <-r.conn.done():
+				r.finishRead()
 				return
 			}
-			r.reads <- result
+
+			if err != nil {
+				return
+			}
 		}
 	}()
 }
 
 func (r *wsFrameReader) nextMessage() (wsReadResult, error) {
-	deadline := r.conn.getReadDeadline()
-	if deadline.IsZero() {
-		result, ok := <-r.reads
+	select {
+	case result, ok := <-r.reads:
 		if !ok {
+			r.finishRead()
 			return wsReadResult{}, r.getErr()
 		}
 		return result, result.err
+	default:
+	}
+
+	if err := r.requestRead(); err != nil {
+		return wsReadResult{}, err
+	}
+
+	deadline := r.conn.getReadDeadline()
+	if deadline.IsZero() {
+		select {
+		case result, ok := <-r.reads:
+			if !ok {
+				r.finishRead()
+				return wsReadResult{}, r.getErr()
+			}
+			return result, result.err
+		case <-r.conn.done():
+			return wsReadResult{}, r.getErr()
+		}
 	}
 
 	timeout := time.Until(deadline)
@@ -365,12 +409,39 @@ func (r *wsFrameReader) nextMessage() (wsReadResult, error) {
 	select {
 	case result, ok := <-r.reads:
 		if !ok {
+			r.finishRead()
 			return wsReadResult{}, r.getErr()
 		}
 		return result, result.err
 	case <-timer.C:
 		return wsReadResult{}, wsReadTimeoutError{}
+	case <-r.conn.done():
+		return wsReadResult{}, r.getErr()
 	}
+}
+
+func (r *wsFrameReader) requestRead() error {
+	r.stateMu.Lock()
+	if r.reading {
+		r.stateMu.Unlock()
+		return nil
+	}
+	r.reading = true
+	r.stateMu.Unlock()
+
+	select {
+	case r.requests <- struct{}{}:
+		return nil
+	case <-r.conn.done():
+		r.finishRead()
+		return r.getErr()
+	}
+}
+
+func (r *wsFrameReader) finishRead() {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	r.reading = false
 }
 
 func (r *wsFrameReader) setErr(err error) {
@@ -384,6 +455,11 @@ func (r *wsFrameReader) getErr() error {
 	defer r.errMu.RUnlock()
 	if r.err != nil {
 		return r.err
+	}
+	select {
+	case <-r.conn.done():
+		return net.ErrClosed
+	default:
 	}
 	return io.EOF
 }
@@ -460,6 +536,11 @@ func (c *wsConnection) Close() error {
 	}
 
 	c.closed = true
+	c.closeOnce.Do(func() {
+		if c.closeCh != nil {
+			close(c.closeCh)
+		}
+	})
 	c.pingOnce.Do(func() {
 		if c.pingStop != nil {
 			close(c.pingStop)
@@ -470,6 +551,13 @@ func (c *wsConnection) Close() error {
 	}
 
 	return c.ws.Close()
+}
+
+func (c *wsConnection) done() <-chan struct{} {
+	if c.closeCh == nil {
+		return nil
+	}
+	return c.closeCh
 }
 
 func (c *wsConnection) LocalAddr() net.Addr {
@@ -511,7 +599,7 @@ func (c *wsConnection) SetKeepAlive(d time.Duration) error {
 
 	c.ws.SetPongHandler(func(string) error {
 		c.Touch()
-		return c.ws.SetReadDeadline(time.Now().Add(d + d/2))
+		return c.SetReadDeadline(time.Now().Add(d + d/2))
 	})
 
 	pingInterval := d / 2

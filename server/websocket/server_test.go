@@ -267,6 +267,108 @@ func TestReadPacketTimeoutDoesNotPoisonWebSocket(t *testing.T) {
 	}
 }
 
+func TestSetKeepAliveAfterReadPacketProcessesPong(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto).(*wsConnection)
+	defer conn.Close()
+
+	connect := &v3.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 4,
+		CleanSession:    true,
+		KeepAlive:       30,
+		ClientID:        "client1",
+	}
+
+	go func() {
+		_ = clientWS.WriteMessage(websocket.BinaryMessage, connect.Encode())
+	}()
+
+	if _, err := conn.ReadPacket(); err != nil {
+		t.Fatalf("ReadPacket: %v", err)
+	}
+	if err := conn.SetKeepAlive(30 * time.Second); err != nil {
+		t.Fatalf("SetKeepAlive: %v", err)
+	}
+
+	before := lastActivity(conn)
+	time.Sleep(10 * time.Millisecond)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := conn.ReadPacket()
+		errCh <- err
+	}()
+
+	if err := clientWS.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("client pong: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		return lastActivity(conn).After(before)
+	}, "expected pong handler to update last activity")
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("ReadPacket did not exit after Close")
+	}
+}
+
+func TestReadPumpStopsAfterCloseWithBufferedRead(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto).(*wsConnection)
+	reader := &wsFrameReader{conn: conn}
+	reader.once.Do(reader.start)
+
+	if err := reader.requestRead(); err != nil {
+		t.Fatalf("requestRead: %v", err)
+	}
+	if err := clientWS.WriteMessage(websocket.BinaryMessage, []byte{0}); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		return len(reader.reads) == 1
+	}, "expected buffered read result")
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	select {
+	case <-reader.done:
+	case <-time.After(time.Second):
+		t.Fatal("read pump did not exit after Close")
+	}
+}
+
+func lastActivity(conn *wsConnection) time.Time {
+	conn.mu.RLock()
+	defer conn.mu.RUnlock()
+	return conn.lastActivity
+}
+
+func waitFor(t *testing.T, timeout time.Duration, fn func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}
+
 // wsConnPair creates a connected pair of WebSocket connections using an in-process
 // httptest server. The server-side conn is returned first.
 func wsConnPair(t *testing.T) (server *websocket.Conn, client *websocket.Conn) {
