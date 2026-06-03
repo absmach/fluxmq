@@ -215,6 +215,12 @@ func (b *Broker) Get(clientID string) *session.Session {
 	return b.sessionsMap.Get(clientID)
 }
 
+// IsClientConnected reports whether the MQTT client has a live session.
+func (b *Broker) IsClientConnected(clientID string) bool {
+	s := b.Get(clientID)
+	return s != nil && s.IsConnected()
+}
+
 // Stats returns the broker statistics.
 func (b *Broker) Stats() *Stats {
 	return b.telemetry.stats

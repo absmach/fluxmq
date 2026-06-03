@@ -68,6 +68,32 @@ func protocolVersionForMode(mode string) int {
 	}
 }
 
+type brokerDeliveryTarget struct {
+	mqtt    *broker.Broker
+	amqp    *amqp1broker.Broker
+	amqp091 *amqpbroker.Broker
+}
+
+func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg *storage.Message) error {
+	if amqp1broker.IsAMQPClient(clientID) {
+		return t.amqp.DeliverToClient(ctx, clientID, msg)
+	}
+	if amqpbroker.IsAMQP091Client(clientID) {
+		return t.amqp091.DeliverToClient(ctx, clientID, msg)
+	}
+	return t.mqtt.DeliverToSessionByID(ctx, clientID, msg)
+}
+
+func (t *brokerDeliveryTarget) IsClientConnected(clientID string) bool {
+	if amqp1broker.IsAMQPClient(clientID) {
+		return t.amqp != nil && t.amqp.IsClientConnected(clientID)
+	}
+	if amqpbroker.IsAMQP091Client(clientID) {
+		return t.amqp091 != nil && t.amqp091.IsClientConnected(clientID)
+	}
+	return t.mqtt != nil && t.mqtt.IsClientConnected(clientID)
+}
+
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
 	flag.Parse()
@@ -508,16 +534,12 @@ func main() {
 			amqp091Broker.CancelConsumers(queueName, groupID, consumerIDs)
 		}
 
-		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix
-		deliveryTarget := queue.DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *storage.Message) error {
-			if amqp1broker.IsAMQPClient(clientID) {
-				return amqpBroker.DeliverToClient(ctx, clientID, msg)
-			}
-			if amqpbroker.IsAMQP091Client(clientID) {
-				return amqp091Broker.DeliverToClient(ctx, clientID, msg)
-			}
-			return b.DeliverToSessionByID(ctx, clientID, msg)
-		})
+		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix.
+		deliveryTarget := &brokerDeliveryTarget{
+			mqtt:    b,
+			amqp:    amqpBroker,
+			amqp091: amqp091Broker,
+		}
 
 		// Create log-based queue manager with wildcard support
 		qm = queue.NewManager(

@@ -132,6 +132,14 @@ func (b *Broker) unregisterConnection(connID string) {
 	b.connections.Delete(connID)
 }
 
+// IsClientConnected reports whether the AMQP 0.9.1 client has a live
+// connection in this broker instance.
+func (b *Broker) IsClientConnected(clientID string) bool {
+	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
+	_, ok := b.connections.Load(connID)
+	return ok
+}
+
 // ConnectionIDs returns active AMQP 0.9.1 connection IDs sorted ascending.
 func (b *Broker) ConnectionIDs() []string {
 	ids := make([]string, 0)
@@ -231,7 +239,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 
 	val, ok := b.connections.Load(connID)
 	if !ok {
-		return fmt.Errorf("AMQP 0.9.1 client not found: %s", connID)
+		return fmt.Errorf("%w: AMQP 0.9.1 client not found: %s", corebroker.ErrClientNotConnected, connID)
 	}
 
 	c := val.(*Connection)
@@ -252,7 +260,7 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 
 	val, ok := b.connections.Load(connID)
 	if !ok {
-		return fmt.Errorf("AMQP 0.9.1 client not found: %s", connID)
+		return fmt.Errorf("%w: AMQP 0.9.1 client not found: %s", corebroker.ErrClientNotConnected, connID)
 	}
 
 	c := val.(*Connection)

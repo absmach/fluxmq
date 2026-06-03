@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
@@ -46,6 +47,39 @@ func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*Deliver
 	)
 
 	return engine, logStore, groupStore
+}
+
+type checkingDeliverer struct {
+	mu         sync.Mutex
+	connected  map[string]bool
+	delivered  []*brokerstorage.Message
+	deliverErr error
+}
+
+func (d *checkingDeliverer) Deliver(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	if d.deliverErr != nil {
+		return d.deliverErr
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.delivered = append(d.delivered, msg)
+	return nil
+}
+
+func (d *checkingDeliverer) IsClientConnected(clientID string) bool {
+	if d.connected == nil {
+		return true
+	}
+	return d.connected[clientID]
+}
+
+func (d *checkingDeliverer) deliveredMessages() []*brokerstorage.Message {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	result := make([]*brokerstorage.Message, len(d.delivered))
+	copy(result, d.delivered)
+	return result
 }
 
 func TestScheduleDedup(t *testing.T) {
@@ -335,6 +369,7 @@ type mockRemoteRouter struct {
 	mu        sync.Mutex
 	consumers []*cluster.QueueConsumerInfo
 	routed    []routedEntry
+	removed   []routedEntry
 }
 
 func (r *mockRemoteRouter) ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error) {
@@ -358,6 +393,17 @@ func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, client
 		clientID:  clientID,
 		queueName: queueName,
 		msg:       msg,
+	})
+	return nil
+}
+
+func (r *mockRemoteRouter) UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.removed = append(r.removed, routedEntry{
+		nodeID:    groupID,
+		clientID:  consumerID,
+		queueName: queueName,
 	})
 	return nil
 }
@@ -615,6 +661,129 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	}
 	if string(delivered[0].GetPayload()) != "fresh" {
 		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	}
+}
+
+func TestDeliverStreamDoesNotAdvanceCursorForDisconnectedConsumer(t *testing.T) {
+	local := &checkingDeliverer{
+		connected: map[string]bool{"dead-client": false},
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "dead-client"})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   "$queue/events/new",
+		Payload: []byte("payload"),
+	})
+
+	if engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected no delivery for disconnected consumer")
+	}
+
+	if got := len(local.deliveredMessages()); got != 0 {
+		t.Fatalf("expected 0 deliveries, got %d", got)
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer("c1") != nil {
+		t.Fatal("expected disconnected consumer to be removed")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
+	}
+}
+
+func TestDeliverStreamCommitsCursorAfterSuccessfulDelivery(t *testing.T) {
+	local := &checkingDeliverer{
+		connected: map[string]bool{"client-1": true},
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "client-1"})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   "$queue/events/new",
+		Payload: []byte("payload"),
+	})
+
+	if !engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected successful delivery")
+	}
+
+	if got := len(local.deliveredMessages()); got != 1 {
+		t.Fatalf("expected 1 delivery, got %d", got)
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
+	}
+}
+
+func TestDeliverStreamRemovesConsumerOnClientNotConnectedError(t *testing.T) {
+	local := &checkingDeliverer{
+		connected:  map[string]bool{"client-1": true},
+		deliverErr: corebroker.ErrClientNotConnected,
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "client-1"})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   "$queue/events/new",
+		Payload: []byte("payload"),
+	})
+
+	if engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected no successful delivery")
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer("c1") != nil {
+		t.Fatal("expected stale consumer to be removed")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
 	}
 }
 
