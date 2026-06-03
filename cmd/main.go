@@ -84,14 +84,14 @@ func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg
 	return t.mqtt.DeliverToSessionByID(ctx, clientID, msg)
 }
 
-func (t *brokerDeliveryTarget) IsClientConnected(clientID string) bool {
+func (t *brokerDeliveryTarget) HasDeliveryTarget(clientID string) bool {
 	if amqp1broker.IsAMQPClient(clientID) {
 		return t.amqp != nil && t.amqp.IsClientConnected(clientID)
 	}
 	if amqpbroker.IsAMQP091Client(clientID) {
 		return t.amqp091 != nil && t.amqp091.IsClientConnected(clientID)
 	}
-	return t.mqtt != nil && t.mqtt.IsClientConnected(clientID)
+	return t.mqtt != nil && t.mqtt.Get(clientID) != nil
 }
 
 func main() {

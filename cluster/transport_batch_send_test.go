@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -483,8 +484,12 @@ func TestSendRouteQueueBatch_ExhaustsPartialRetriesReturnsError(t *testing.T) {
 	deliveries := []QueueDelivery{
 		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
 	}
-	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err == nil {
+	err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries)
+	if err == nil {
 		t.Fatal("expected error after exhausted partial retries")
+	}
+	if !strings.Contains(err.Error(), "persistent") {
+		t.Fatalf("expected final error to preserve failure reason, got %v", err)
 	}
 	if c := callCount.Load(); int(c) != maxPartialRetries {
 		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)

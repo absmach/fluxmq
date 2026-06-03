@@ -267,7 +267,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			if e.local == nil {
 				continue
 			}
-			if e.localClientDisconnected(consumerInfo.ClientID) {
+			if e.localDeliveryTargetMissing(consumerInfo.ClientID) {
 				e.unregisterConsumer(ctx, config.Name, group.ID, consumerID,
 					corebroker.ErrClientNotConnected)
 				continue
@@ -497,7 +497,11 @@ func (e *DeliveryEngine) isRemoteConsumer(consumerInfo *types.ConsumerInfo) bool
 	return e.remote != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != e.localNodeID
 }
 
-func (e *DeliveryEngine) localClientDisconnected(clientID string) bool {
+func (e *DeliveryEngine) localDeliveryTargetMissing(clientID string) bool {
+	targetChecker, ok := e.local.(ClientDeliveryTargetChecker)
+	if ok {
+		return !targetChecker.HasDeliveryTarget(clientID)
+	}
 	checker, ok := e.local.(ClientConnectionChecker)
 	return ok && !checker.IsClientConnected(clientID)
 }
@@ -560,8 +564,12 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 		return nil
 	}
 	if batchRouter, ok := e.remote.(RemoteBatchRouter); ok {
-		if err := batchRouter.RouteQueueBatch(ctx, nodeID, deliveries); err == nil {
+		err := batchRouter.RouteQueueBatch(ctx, nodeID, deliveries)
+		if err == nil {
 			return nil
+		}
+		if corebroker.IsClientNotConnected(err) {
+			return err
 		}
 		// Fall back to single message RPC if batch routing fails.
 	}
