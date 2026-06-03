@@ -17,9 +17,9 @@ func TestReadWriteOctet(t *testing.T) {
 		name  string
 		input byte
 	}{
-		{"zero", 0x00},
-		{"max", 0xFF},
-		{"arbitrary", 0x42},
+		{testZero, 0x00},
+		{testMax, 0xFF},
+		{testArbitrary, 0x42},
 	}
 
 	for _, tt := range tests {
@@ -48,9 +48,9 @@ func TestReadWriteShort(t *testing.T) {
 		name  string
 		input uint16
 	}{
-		{"zero", 0},
-		{"max", 0xFFFF},
-		{"arbitrary", 0x1234},
+		{testZero, 0},
+		{testMax, 0xFFFF},
+		{testArbitrary, 0x1234},
 	}
 
 	for _, tt := range tests {
@@ -79,9 +79,9 @@ func TestReadWriteLong(t *testing.T) {
 		name  string
 		input uint32
 	}{
-		{"zero", 0},
-		{"max", 0xFFFFFFFF},
-		{"arbitrary", 0x12345678},
+		{testZero, 0},
+		{testMax, 0xFFFFFFFF},
+		{testArbitrary, 0x12345678},
 	}
 
 	for _, tt := range tests {
@@ -110,9 +110,9 @@ func TestReadWriteLongLong(t *testing.T) {
 		name  string
 		input uint64
 	}{
-		{"zero", 0},
-		{"max", 0xFFFFFFFFFFFFFFFF},
-		{"arbitrary", 0x123456789ABCDEF0},
+		{testZero, 0},
+		{testMax, 0xFFFFFFFFFFFFFFFF},
+		{testArbitrary, 0x123456789ABCDEF0},
 	}
 
 	for _, tt := range tests {
@@ -142,7 +142,7 @@ func TestReadWriteShortStr(t *testing.T) {
 		input string
 		err   error
 	}{
-		{"empty", "", nil},
+		{testEmpty, "", nil},
 		{"short", "hello", nil},
 		{"max_length", string(make([]byte, 255)), nil},
 		{"too_long", string(make([]byte, 256)), codec.NewErr(codec.InternalError, "short string too long", nil)},
@@ -179,7 +179,7 @@ func TestReadWriteLongStr(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"empty", ""},
+		{testEmpty, ""},
 		{"short", "hello world"},
 		{"long", string(make([]byte, 1024))},
 	}
@@ -208,21 +208,21 @@ func TestReadWriteTable(t *testing.T) {
 		input map[string]any
 	}{
 		{
-			"empty",
+			testEmpty,
 			map[string]any{},
 		},
 		{
 			"simple",
 			map[string]any{
-				"key1": "value1",
-				"key2": true,
-				"key3": int32(123),
+				testKey1: testValue1,
+				"key2":   true,
+				"key3":   int32(123),
 			},
 		},
 		{
 			"nested",
 			map[string]any{
-				"key1": "value1",
+				testKey1: testValue1,
 				"nested_table": map[string]any{
 					"nested_key1": int32(456),
 					"nested_key2": true,
@@ -233,7 +233,7 @@ func TestReadWriteTable(t *testing.T) {
 		{
 			"with_array",
 			map[string]any{
-				"key1": "value1",
+				testKey1: testValue1,
 				"array_key": []any{
 					"arr_val1",
 					true,
@@ -279,21 +279,21 @@ func TestConnectionMethods(t *testing.T) {
 				VersionMajor: 0,
 				VersionMinor: 9,
 				ServerProperties: map[string]any{
-					"product": "FluxMQ",
-					"version": "0.1.0",
+					testProduct: "FluxMQ",
+					testVersion: "0.1.0",
 				},
 				Mechanisms: "PLAIN AMQPLAIN",
-				Locales:    "en_US",
+				Locales:    testEnUS,
 			},
 			&codec.ConnectionStart{
 				VersionMajor: 0,
 				VersionMinor: 9,
 				ServerProperties: map[string]any{
-					"product": "FluxMQ",
-					"version": "0.1.0",
+					testProduct: "FluxMQ",
+					testVersion: "0.1.0",
 				},
 				Mechanisms: "PLAIN AMQPLAIN",
-				Locales:    "en_US",
+				Locales:    testEnUS,
 			},
 			codec.ClassConnection,
 			codec.MethodConnectionStart,
@@ -302,21 +302,21 @@ func TestConnectionMethods(t *testing.T) {
 			"ConnectionStartOk",
 			&codec.ConnectionStartOk{
 				ClientProperties: map[string]any{
-					"product": "Go Client",
-					"version": "1.0.0",
+					testProduct: "Go Client",
+					testVersion: "1.0.0",
 				},
 				Mechanism: "PLAIN",
 				Response:  "some_response",
-				Locale:    "en_US",
+				Locale:    testEnUS,
 			},
 			&codec.ConnectionStartOk{
 				ClientProperties: map[string]any{
-					"product": "Go Client",
-					"version": "1.0.0",
+					testProduct: "Go Client",
+					testVersion: "1.0.0",
 				},
 				Mechanism: "PLAIN",
 				Response:  "some_response",
-				Locale:    "en_US",
+				Locale:    testEnUS,
 			},
 			codec.ClassConnection,
 			codec.MethodConnectionStartOk,
@@ -635,7 +635,7 @@ func TestExchangeMethods(t *testing.T) {
 		{
 			"ExchangeDeclare",
 			&codec.ExchangeDeclare{
-				Exchange:   "test-exchange",
+				Exchange:   testExchange,
 				Type:       "direct",
 				Passive:    true,
 				Durable:    true,
@@ -648,7 +648,7 @@ func TestExchangeMethods(t *testing.T) {
 			},
 			&codec.ExchangeDeclare{
 				Reserved1:  0,
-				Exchange:   "test-exchange",
+				Exchange:   testExchange,
 				Type:       "direct",
 				Passive:    true,
 				Durable:    true,
@@ -672,13 +672,13 @@ func TestExchangeMethods(t *testing.T) {
 		{
 			"ExchangeDelete",
 			&codec.ExchangeDelete{
-				Exchange: "test-exchange",
+				Exchange: testExchange,
 				IfUnused: true,
 				NoWait:   true,
 			},
 			&codec.ExchangeDelete{
 				Reserved1: 0,
-				Exchange:  "test-exchange",
+				Exchange:  testExchange,
 				IfUnused:  true,
 				NoWait:    true,
 			},
@@ -695,22 +695,22 @@ func TestExchangeMethods(t *testing.T) {
 		{
 			"ExchangeBind",
 			&codec.ExchangeBind{
-				Destination: "dest-exchange",
-				Source:      "source-exchange",
-				RoutingKey:  "routing.key",
+				Destination: testDestExchange,
+				Source:      testSourceExchange,
+				RoutingKey:  testRoutingKey,
 				NoWait:      true,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			&codec.ExchangeBind{
 				Reserved1:   0,
-				Destination: "dest-exchange",
-				Source:      "source-exchange",
-				RoutingKey:  "routing.key",
+				Destination: testDestExchange,
+				Source:      testSourceExchange,
+				RoutingKey:  testRoutingKey,
 				NoWait:      true,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			codec.ClassExchange,
@@ -726,22 +726,22 @@ func TestExchangeMethods(t *testing.T) {
 		{
 			"ExchangeUnbind",
 			&codec.ExchangeUnbind{
-				Destination: "dest-exchange",
-				Source:      "source-exchange",
-				RoutingKey:  "routing.key",
+				Destination: testDestExchange,
+				Source:      testSourceExchange,
+				RoutingKey:  testRoutingKey,
 				NoWait:      false,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			&codec.ExchangeUnbind{
 				Reserved1:   0,
-				Destination: "dest-exchange",
-				Source:      "source-exchange",
-				RoutingKey:  "routing.key",
+				Destination: testDestExchange,
+				Source:      testSourceExchange,
+				RoutingKey:  testRoutingKey,
 				NoWait:      false,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			codec.ClassExchange,
@@ -816,7 +816,7 @@ func TestQueueMethods(t *testing.T) {
 		{
 			"QueueDeclare",
 			&codec.QueueDeclare{
-				Queue:      "test-queue",
+				Queue:      testQueueName,
 				Passive:    true,
 				Durable:    true,
 				Exclusive:  true,
@@ -828,7 +828,7 @@ func TestQueueMethods(t *testing.T) {
 			},
 			&codec.QueueDeclare{
 				Reserved1:  0,
-				Queue:      "test-queue",
+				Queue:      testQueueName,
 				Passive:    true,
 				Durable:    true,
 				Exclusive:  true,
@@ -859,22 +859,22 @@ func TestQueueMethods(t *testing.T) {
 		{
 			"QueueBind",
 			&codec.QueueBind{
-				Queue:      "test-queue",
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Queue:      testQueueName,
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 				NoWait:     true,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			&codec.QueueBind{
 				Reserved1:  0,
-				Queue:      "test-queue",
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Queue:      testQueueName,
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 				NoWait:     true,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			codec.ClassQueue,
@@ -890,12 +890,12 @@ func TestQueueMethods(t *testing.T) {
 		{
 			"QueuePurge",
 			&codec.QueuePurge{
-				Queue:  "test-queue",
+				Queue:  testQueueName,
 				NoWait: true,
 			},
 			&codec.QueuePurge{
 				Reserved1: 0,
-				Queue:     "test-queue",
+				Queue:     testQueueName,
 				NoWait:    true,
 			},
 			codec.ClassQueue,
@@ -911,14 +911,14 @@ func TestQueueMethods(t *testing.T) {
 		{
 			"QueueDelete",
 			&codec.QueueDelete{
-				Queue:    "test-queue",
+				Queue:    testQueueName,
 				IfUnused: true,
 				IfEmpty:  true,
 				NoWait:   true,
 			},
 			&codec.QueueDelete{
 				Reserved1: 0,
-				Queue:     "test-queue",
+				Queue:     testQueueName,
 				IfUnused:  true,
 				IfEmpty:   true,
 				NoWait:    true,
@@ -936,20 +936,20 @@ func TestQueueMethods(t *testing.T) {
 		{
 			"QueueUnbind",
 			&codec.QueueUnbind{
-				Queue:      "test-queue",
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Queue:      testQueueName,
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			&codec.QueueUnbind{
 				Reserved1:  0,
-				Queue:      "test-queue",
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Queue:      testQueueName,
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 				Arguments: map[string]any{
-					"key": "value",
+					testKey: testValue,
 				},
 			},
 			codec.ClassQueue,
@@ -1046,8 +1046,8 @@ func TestBasicMethods(t *testing.T) {
 		{
 			"BasicConsume",
 			&codec.BasicConsume{
-				Queue:       "test-queue",
-				ConsumerTag: "consumer-1",
+				Queue:       testQueueName,
+				ConsumerTag: testConsumer1,
 				NoLocal:     true,
 				NoAck:       true,
 				Exclusive:   true,
@@ -1058,8 +1058,8 @@ func TestBasicMethods(t *testing.T) {
 			},
 			&codec.BasicConsume{
 				Reserved1:   0,
-				Queue:       "test-queue",
-				ConsumerTag: "consumer-1",
+				Queue:       testQueueName,
+				ConsumerTag: testConsumer1,
 				NoLocal:     true,
 				NoAck:       true,
 				Exclusive:   true,
@@ -1073,19 +1073,19 @@ func TestBasicMethods(t *testing.T) {
 		},
 		{
 			"BasicConsumeOk",
-			&codec.BasicConsumeOk{ConsumerTag: "consumer-1"},
-			&codec.BasicConsumeOk{ConsumerTag: "consumer-1"},
+			&codec.BasicConsumeOk{ConsumerTag: testConsumer1},
+			&codec.BasicConsumeOk{ConsumerTag: testConsumer1},
 			codec.ClassBasic,
 			codec.MethodBasicConsumeOk,
 		},
 		{
 			"BasicCancel",
 			&codec.BasicCancel{
-				ConsumerTag: "consumer-1",
+				ConsumerTag: testConsumer1,
 				NoWait:      true,
 			},
 			&codec.BasicCancel{
-				ConsumerTag: "consumer-1",
+				ConsumerTag: testConsumer1,
 				NoWait:      true,
 			},
 			codec.ClassBasic,
@@ -1093,23 +1093,23 @@ func TestBasicMethods(t *testing.T) {
 		},
 		{
 			"BasicCancelOk",
-			&codec.BasicCancelOk{ConsumerTag: "consumer-1"},
-			&codec.BasicCancelOk{ConsumerTag: "consumer-1"},
+			&codec.BasicCancelOk{ConsumerTag: testConsumer1},
+			&codec.BasicCancelOk{ConsumerTag: testConsumer1},
 			codec.ClassBasic,
 			codec.MethodBasicCancelOk,
 		},
 		{
 			"BasicPublish",
 			&codec.BasicPublish{
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 				Mandatory:  true,
 				Immediate:  true,
 			},
 			&codec.BasicPublish{
 				Reserved1:  0,
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 				Mandatory:  true,
 				Immediate:  true,
 			},
@@ -1121,14 +1121,14 @@ func TestBasicMethods(t *testing.T) {
 			&codec.BasicReturn{
 				ReplyCode:  312,
 				ReplyText:  "NO_ROUTE",
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 			},
 			&codec.BasicReturn{
 				ReplyCode:  312,
 				ReplyText:  "NO_ROUTE",
-				Exchange:   "test-exchange",
-				RoutingKey: "routing.key",
+				Exchange:   testExchange,
+				RoutingKey: testRoutingKey,
 			},
 			codec.ClassBasic,
 			codec.MethodBasicReturn,
@@ -1136,18 +1136,18 @@ func TestBasicMethods(t *testing.T) {
 		{
 			"BasicDeliver",
 			&codec.BasicDeliver{
-				ConsumerTag: "consumer-1",
+				ConsumerTag: testConsumer1,
 				DeliveryTag: 123456,
 				Redelivered: true,
-				Exchange:    "test-exchange",
-				RoutingKey:  "routing.key",
+				Exchange:    testExchange,
+				RoutingKey:  testRoutingKey,
 			},
 			&codec.BasicDeliver{
-				ConsumerTag: "consumer-1",
+				ConsumerTag: testConsumer1,
 				DeliveryTag: 123456,
 				Redelivered: true,
-				Exchange:    "test-exchange",
-				RoutingKey:  "routing.key",
+				Exchange:    testExchange,
+				RoutingKey:  testRoutingKey,
 			},
 			codec.ClassBasic,
 			codec.MethodBasicDeliver,
@@ -1155,12 +1155,12 @@ func TestBasicMethods(t *testing.T) {
 		{
 			"BasicGet",
 			&codec.BasicGet{
-				Queue: "test-queue",
+				Queue: testQueueName,
 				NoAck: true,
 			},
 			&codec.BasicGet{
 				Reserved1: 0,
-				Queue:     "test-queue",
+				Queue:     testQueueName,
 				NoAck:     true,
 			},
 			codec.ClassBasic,
@@ -1171,15 +1171,15 @@ func TestBasicMethods(t *testing.T) {
 			&codec.BasicGetOk{
 				DeliveryTag:  123456,
 				Redelivered:  true,
-				Exchange:     "test-exchange",
-				RoutingKey:   "routing.key",
+				Exchange:     testExchange,
+				RoutingKey:   testRoutingKey,
 				MessageCount: 42,
 			},
 			&codec.BasicGetOk{
 				DeliveryTag:  123456,
 				Redelivered:  true,
-				Exchange:     "test-exchange",
-				RoutingKey:   "routing.key",
+				Exchange:     testExchange,
+				RoutingKey:   testRoutingKey,
 				MessageCount: 42,
 			},
 			codec.ClassBasic,
@@ -1481,7 +1481,7 @@ func TestBasicProperties(t *testing.T) {
 		ContentType:     "application/json",
 		ContentEncoding: "gzip",
 		Headers: map[string]any{
-			"x-custom": "value",
+			"x-custom": testValue,
 			"x-retry":  int32(3),
 		},
 		DeliveryMode:  2,
@@ -1608,3 +1608,26 @@ func TestContentHeaderFrame(t *testing.T) {
 		t.Errorf("Properties mismatch:\nExpected: %+v\nGot: %+v", header.Properties, readHeader.Properties)
 	}
 }
+
+const (
+	testZero           = "zero"
+	testMax            = "max"
+	testArbitrary      = "arbitrary"
+	testEmpty          = "empty"
+	testKey1           = "key1"
+	testProduct        = "product"
+	testVersion        = "version"
+	testEnUS           = "en_US"
+	testExchange       = "test-exchange"
+	testDestExchange   = "dest-exchange"
+	testSourceExchange = "source-exchange"
+	testRoutingKey     = "routing.key"
+	testKey            = "key"
+	testQueueName      = "test-queue"
+	testConsumer1      = "consumer-1"
+)
+
+const (
+	testValue1 = "value1"
+	testValue  = "value"
+)

@@ -17,7 +17,7 @@ func TestNormalizeTopicScenarioConfigPublishJitter(t *testing.T) {
 		Flow:                 "mqtt-mqtt",
 		Publishers:           1,
 		MessagesPerPublisher: 1,
-		PublishInterval:      "100ms",
+		PublishInterval:      testInterval100ms,
 		PublishJitter:        "25ms",
 		Subscribers:          1,
 	}

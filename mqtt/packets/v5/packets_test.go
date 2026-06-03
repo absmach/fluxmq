@@ -25,7 +25,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "basic connect",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       60,
@@ -36,7 +36,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "connect with credentials",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				UsernameFlag:    true,
@@ -51,7 +51,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "connect with will",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				WillFlag:        true,
@@ -59,7 +59,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 				WillRetain:      true,
 				KeepAlive:       60,
 				ClientID:        "will-client",
-				WillTopic:       "will/topic",
+				WillTopic:       testWillTopic,
 				WillPayload:     []byte("client disconnected"),
 			},
 		},
@@ -67,7 +67,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "connect with properties",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       60,
@@ -77,7 +77,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 					ReceiveMaximum:        ptr(uint16(100)),
 					MaximumPacketSize:     ptr(uint32(65535)),
 					TopicAliasMaximum:     ptr(uint16(10)),
-					User:                  []User{{Key: "key1", Value: "value1"}, {Key: "key2", Value: "value2"}},
+					User:                  []User{{Key: testUserKey1, Value: testUserValue1}, {Key: testUserKey2, Value: testUserValue2}},
 				},
 			},
 		},
@@ -208,7 +208,7 @@ func TestPublishEncodeDecode(t *testing.T) {
 			name: "qos0 publish",
 			pkt: &Publish{
 				FixedHeader: FixedHeader{PacketType: PublishType, QoS: 0},
-				TopicName:   "test/topic",
+				TopicName:   testTopic,
 				Payload:     []byte("hello world"),
 			},
 		},
@@ -216,7 +216,7 @@ func TestPublishEncodeDecode(t *testing.T) {
 			name: "qos1 publish",
 			pkt: &Publish{
 				FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-				TopicName:   "test/topic",
+				TopicName:   testTopic,
 				ID:          12345,
 				Payload:     []byte("qos1 message"),
 			},
@@ -241,9 +241,9 @@ func TestPublishEncodeDecode(t *testing.T) {
 					PayloadFormat:   ptr(byte(1)),
 					MessageExpiry:   ptr(uint32(3600)),
 					TopicAlias:      ptr(uint16(5)),
-					ResponseTopic:   "response/topic",
+					ResponseTopic:   testResponseTopic,
 					CorrelationData: []byte("correlation-123"),
-					ContentType:     "application/json",
+					ContentType:     testContentType,
 					User:            []User{{Key: "custom", Value: "header"}},
 				},
 			},
@@ -298,7 +298,7 @@ func TestSubscribeEncodeDecode(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 				ID:          1,
 				Opts: []SubOption{
-					{Topic: "test/topic", MaxQoS: 1},
+					{Topic: testTopic, MaxQoS: 1},
 				},
 			},
 		},
@@ -308,8 +308,8 @@ func TestSubscribeEncodeDecode(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 				ID:          2,
 				Opts: []SubOption{
-					{Topic: "topic/one", MaxQoS: 0},
-					{Topic: "topic/two", MaxQoS: 1},
+					{Topic: testTopicOne, MaxQoS: 0},
+					{Topic: testTopicTwo, MaxQoS: 1},
 					{Topic: "topic/three", MaxQoS: 2},
 				},
 			},
@@ -407,7 +407,7 @@ func TestUnsubscribeEncodeDecode(t *testing.T) {
 	pkt := &Unsubscribe{
 		FixedHeader: FixedHeader{PacketType: UnsubscribeType, QoS: 1},
 		ID:          1,
-		Topics:      []string{"topic/one", "topic/two"},
+		Topics:      []string{testTopicOne, testTopicTwo},
 	}
 
 	encoded := pkt.Encode()
@@ -619,7 +619,7 @@ func TestAuthEncodeDecode(t *testing.T) {
 		FixedHeader: FixedHeader{PacketType: AuthType},
 		ReasonCode:  0x00,
 		Properties: &AuthProperties{
-			AuthMethod:   "SCRAM-SHA-256",
+			AuthMethod:   testAuthMethodSCRAM,
 			AuthData:     []byte("auth-challenge"),
 			ReasonString: "continue auth",
 		},
@@ -704,13 +704,13 @@ func TestUserPropertiesEncodeDecode(t *testing.T) {
 	// Test that multiple user properties are encoded correctly
 	pkt := &Publish{
 		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-		TopicName:   "test",
+		TopicName:   testValueTest,
 		ID:          1,
-		Payload:     []byte("test"),
+		Payload:     []byte(testValueTest),
 		Properties: &PublishProperties{
 			User: []User{
-				{Key: "key1", Value: "value1"},
-				{Key: "key2", Value: "value2"},
+				{Key: testUserKey1, Value: testUserValue1},
+				{Key: testUserKey2, Value: testUserValue2},
 				{Key: "key3", Value: "value3"},
 			},
 		},

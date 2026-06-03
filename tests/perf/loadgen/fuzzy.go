@@ -19,6 +19,9 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+// fuzzyMode is the only supported fuzzy scenario mode.
+const fuzzyMode = "fuzzy"
+
 const (
 	defaultFuzzyConfigPath = "tests/perf/configs/fuzzy_mixed_bridge.json"
 )
@@ -103,9 +106,9 @@ func normalizeFuzzyScenarioConfig(cfg fuzzyScenarioConfig, path string) (fuzzySc
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
 	if mode == "" {
-		mode = "fuzzy"
+		mode = fuzzyMode
 	}
-	if mode != "fuzzy" {
+	if mode != fuzzyMode {
 		return fuzzyScenarioConfig{}, fmt.Errorf("fuzzy config %q has invalid mode %q (use fuzzy)", cfg.Name, cfg.Mode)
 	}
 	cfg.Mode = mode

@@ -15,7 +15,7 @@ func TestPublishUnpackBytes(t *testing.T) {
 	// Create a Publish packet
 	original := &Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
-		TopicName:   "test/topic",
+		TopicName:   testTopic,
 		ID:          12345,
 		Payload:     []byte("hello world"),
 	}
@@ -57,7 +57,7 @@ func TestReadPacketBytes(t *testing.T) {
 	// Create and encode a Publish packet
 	original := &Publish{
 		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 0},
-		TopicName:   "test/topic",
+		TopicName:   testTopic,
 		Payload:     []byte("hello"),
 	}
 	encoded := original.Encode()
@@ -88,7 +88,7 @@ func TestReadPacketBytes(t *testing.T) {
 func TestReadPacketBytesConnect(t *testing.T) {
 	original := &Connect{
 		FixedHeader:     FixedHeader{PacketType: ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolName,
 		ProtocolVersion: 4,
 		CleanSession:    true,
 		KeepAlive:       60,
@@ -123,8 +123,8 @@ func TestReadPacketBytesSubscribe(t *testing.T) {
 		FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 		ID:          1,
 		Topics: []Topic{
-			{Name: "topic/one", QoS: 1},
-			{Name: "topic/two", QoS: 2},
+			{Name: testTopicOne, QoS: 1},
+			{Name: testTopicTwo, QoS: 2},
 		},
 	}
 	encoded := original.Encode()
@@ -182,7 +182,7 @@ func BenchmarkPublishUnpackBytes(b *testing.B) {
 func BenchmarkReadPacketBytes(b *testing.B) {
 	original := &Publish{
 		FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-		TopicName:   "test/topic",
+		TopicName:   testTopic,
 		ID:          123,
 		Payload:     make([]byte, 256),
 	}

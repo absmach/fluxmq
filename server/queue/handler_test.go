@@ -20,6 +20,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	testGroupHotPath  = "hot-path"
+	testGroupJobsRaft = "jobs-raft"
+	testConsumer1     = "consumer-1"
+	testQueueEvents   = "events"
+)
+
 func TestListQueuesFilteringAndPagination(t *testing.T) {
 	t.Parallel()
 
@@ -108,7 +115,7 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_ASYNC,
 				MinInSyncReplicas: 2,
 				AckTimeout:        durationpb.New(2 * time.Second),
-				Group:             "hot-path",
+				Group:             testGroupHotPath,
 			},
 		},
 	}))
@@ -151,7 +158,7 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	if updated.Replication.AckTimeout != 2*time.Second {
 		t.Fatalf("unexpected ack timeout: got %s", updated.Replication.AckTimeout)
 	}
-	if updated.Replication.Group != "hot-path" {
+	if updated.Replication.Group != testGroupHotPath {
 		t.Fatalf("unexpected replication group: got %q", updated.Replication.Group)
 	}
 
@@ -164,7 +171,7 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	if got := updateResp.Msg.Config.GetReplication().GetMode(); got != queuev1.ReplicationMode_REPLICATION_MODE_ASYNC {
 		t.Fatalf("response replication mode mismatch: got %v", got)
 	}
-	if got := updateResp.Msg.Config.GetReplication().GetGroup(); got != "hot-path" {
+	if got := updateResp.Msg.Config.GetReplication().GetGroup(); got != testGroupHotPath {
 		t.Fatalf("response replication group mismatch: got %q", got)
 	}
 }
@@ -188,7 +195,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_SYNC,
 				MinInSyncReplicas: 3,
 				AckTimeout:        durationpb.New(4 * time.Second),
-				Group:             "jobs-raft",
+				Group:             testGroupJobsRaft,
 			},
 		},
 	}))
@@ -216,7 +223,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	if stored.Replication.AckTimeout != 4*time.Second {
 		t.Fatalf("unexpected ack timeout: %s", stored.Replication.AckTimeout)
 	}
-	if stored.Replication.Group != "jobs-raft" {
+	if stored.Replication.Group != testGroupJobsRaft {
 		t.Fatalf("unexpected replication group: %q", stored.Replication.Group)
 	}
 
@@ -226,7 +233,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	if got := createResp.Msg.Config.GetReplication().GetReplicationFactor(); got != 5 {
 		t.Fatalf("unexpected response replication factor: %d", got)
 	}
-	if got := createResp.Msg.Config.GetReplication().GetGroup(); got != "jobs-raft" {
+	if got := createResp.Msg.Config.GetReplication().GetGroup(); got != testGroupJobsRaft {
 		t.Fatalf("unexpected response replication group: %q", got)
 	}
 }
@@ -252,8 +259,8 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 
 	before := time.Now().Add(-time.Hour)
 	consumer := &types.ConsumerInfo{
-		ID:            "consumer-1",
-		ClientID:      "consumer-1",
+		ID:            testConsumer1,
+		ClientID:      testConsumer1,
 		RegisteredAt:  before,
 		LastHeartbeat: before,
 	}
@@ -264,7 +271,7 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 	_, err := h.Heartbeat(ctx, connect.NewRequest(&queuev1.HeartbeatRequest{
 		QueueName:  "orders",
 		GroupId:    "workers",
-		ConsumerId: "consumer-1",
+		ConsumerId: testConsumer1,
 	}))
 	if err != nil {
 		t.Fatalf("heartbeat: %v", err)
@@ -274,7 +281,7 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get group: %v", err)
 	}
-	updatedConsumer := updatedGroup.GetConsumer("consumer-1")
+	updatedConsumer := updatedGroup.GetConsumer(testConsumer1)
 	if updatedConsumer == nil {
 		t.Fatalf("expected consumer to exist")
 	}
@@ -422,7 +429,7 @@ func TestSeekToTimestamp(t *testing.T) {
 	store := memlog.New()
 	h := NewHandler(nil, store, nil, nil)
 
-	cfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	cfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	if err := store.CreateQueue(ctx, cfg); err != nil {
 		t.Fatalf("create queue: %v", err)
 	}
@@ -434,9 +441,9 @@ func TestSeekToTimestamp(t *testing.T) {
 		base.Add(2 * time.Minute),
 	}
 	for i, ts := range points {
-		if _, err := store.Append(ctx, "events", &types.Message{
+		if _, err := store.Append(ctx, testQueueEvents, &types.Message{
 			ID:        "m",
-			Topic:     "events",
+			Topic:     testQueueEvents,
 			Payload:   []byte{byte(i)},
 			CreatedAt: ts,
 		}); err != nil {
@@ -445,7 +452,7 @@ func TestSeekToTimestamp(t *testing.T) {
 	}
 
 	exactResp, err := h.SeekToTimestamp(ctx, connect.NewRequest(&queuev1.SeekToTimestampRequest{
-		QueueName: "events",
+		QueueName: testQueueEvents,
 		Timestamp: timestamppb.New(points[1]),
 	}))
 	if err != nil {
@@ -457,7 +464,7 @@ func TestSeekToTimestamp(t *testing.T) {
 
 	between := points[1].Add(30 * time.Second)
 	betweenResp, err := h.SeekToTimestamp(ctx, connect.NewRequest(&queuev1.SeekToTimestampRequest{
-		QueueName: "events",
+		QueueName: testQueueEvents,
 		Timestamp: timestamppb.New(between),
 	}))
 	if err != nil {
@@ -469,7 +476,7 @@ func TestSeekToTimestamp(t *testing.T) {
 
 	afterLast := points[2].Add(1 * time.Second)
 	afterResp, err := h.SeekToTimestamp(ctx, connect.NewRequest(&queuev1.SeekToTimestampRequest{
-		QueueName: "events",
+		QueueName: testQueueEvents,
 		Timestamp: timestamppb.New(afterLast),
 	}))
 	if err != nil {
@@ -483,7 +490,7 @@ func TestSeekToTimestamp(t *testing.T) {
 	}
 
 	_, err = h.SeekToTimestamp(ctx, connect.NewRequest(&queuev1.SeekToTimestampRequest{
-		QueueName: "events",
+		QueueName: testQueueEvents,
 	}))
 	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
 		t.Fatalf("unexpected code for missing timestamp: got %s want %s", got, connect.CodeInvalidArgument)

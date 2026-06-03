@@ -25,6 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testIntegrationTopic = "test/integration"
+
 func startServer(t *testing.T) (*amqpbroker.Broker, string) {
 	t.Helper()
 	b := amqpbroker.New(nil, nil, nil)
@@ -143,7 +145,7 @@ func TestIntegrationPubSub(t *testing.T) {
 		Name:                 "sender",
 		Handle:               0,
 		Role:                 performatives.RoleSender,
-		Target:               &performatives.Target{Address: "test/integration"},
+		Target:               &performatives.Target{Address: testIntegrationTopic},
 		InitialDeliveryCount: 0,
 	}
 	body, err := senderAttach.Encode()
@@ -167,7 +169,7 @@ func TestIntegrationPubSub(t *testing.T) {
 		Name:   "receiver",
 		Handle: 0,
 		Role:   performatives.RoleReceiver,
-		Source: &performatives.Source{Address: "test/integration"},
+		Source: &performatives.Source{Address: testIntegrationTopic},
 	}
 	body, err = recvAttach.Encode()
 	require.NoError(t, err)
@@ -182,7 +184,7 @@ func TestIntegrationPubSub(t *testing.T) {
 
 	// Publish
 	msg := &message.Message{
-		Properties: &message.Properties{To: "test/integration"},
+		Properties: &message.Properties{To: testIntegrationTopic},
 		Data:       [][]byte{[]byte("integration test payload")},
 	}
 	msgBytes, err := msg.Encode()

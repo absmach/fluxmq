@@ -25,6 +25,13 @@ var (
 	wildcardTopics = []string{"test/+/topic", "test/#", "+/+/+", "#"}
 )
 
+const (
+	testProtocolName = "MQTT"
+	testTopicOne     = "topic/one"
+	testTopicTwo     = "topic/two"
+	testTopicThree   = "topic/three"
+)
+
 func TestConnectProtocolCompliance(t *testing.T) {
 	cases := []struct {
 		desc    string
@@ -35,7 +42,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect with all fields",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       60,
@@ -56,7 +63,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect minimal",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       0,
@@ -68,7 +75,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect with empty client ID and clean session",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       60,
@@ -80,7 +87,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect with long client ID",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       60,
@@ -92,7 +99,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect with will QoS 0",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       60,
@@ -108,7 +115,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect with will QoS 2",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       60,
@@ -124,7 +131,7 @@ func TestConnectProtocolCompliance(t *testing.T) {
 			desc: "valid connect with max keep alive",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       65535,
@@ -322,9 +329,9 @@ func TestSubscribeProtocolCompliance(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 				ID:          100,
 				Topics: []Topic{
-					{Name: "topic/one", QoS: 0},
-					{Name: "topic/two", QoS: 1},
-					{Name: "topic/three", QoS: 2},
+					{Name: testTopicOne, QoS: 0},
+					{Name: testTopicTwo, QoS: 1},
+					{Name: testTopicThree, QoS: 2},
 				},
 			},
 			wantErr: false,
@@ -404,7 +411,7 @@ func TestUnsubscribeProtocolCompliance(t *testing.T) {
 			pkt: &Unsubscribe{
 				FixedHeader: FixedHeader{PacketType: UnsubscribeType, QoS: 1},
 				ID:          100,
-				Topics:      []string{"topic/one", "topic/two", "topic/three"},
+				Topics:      []string{testTopicOne, testTopicTwo, testTopicThree},
 			},
 			wantErr: false,
 		},
@@ -629,7 +636,7 @@ func TestPacketBoundaryValues(t *testing.T) {
 			desc: "connect with keep alive 0 (disable)",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       0,
@@ -794,7 +801,7 @@ func TestPacketTypeDetection(t *testing.T) {
 			create: func() ControlPacket {
 				return &Connect{
 					FixedHeader:     FixedHeader{PacketType: ConnectType},
-					ProtocolName:    "MQTT",
+					ProtocolName:    testProtocolName,
 					ProtocolVersion: 4,
 					ClientID:        "test",
 				}

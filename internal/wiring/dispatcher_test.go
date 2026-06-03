@@ -66,7 +66,7 @@ func TestMessageDispatcherDeliverToClientRoutesByProtocol(t *testing.T) {
 	amqp091 := &fakeAMQPForwardHandler{}
 	d := NewMessageDispatcher(mqtt, amqp1, amqp091)
 
-	msg := &cluster.Message{Topic: "test/topic", Payload: []byte("x")}
+	msg := &cluster.Message{Topic: testTopicForward, Payload: []byte("x")}
 	if err := d.DeliverToClient(context.Background(), "amqp:container-1", msg); err != nil {
 		t.Fatalf("amqp1 delivery failed: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestMessageDispatcherForwardPublishJoinsErrors(t *testing.T) {
 		&fakeAMQPForwardHandler{},
 	)
 
-	err := d.ForwardPublish(context.Background(), &cluster.Message{Topic: "test/topic"})
+	err := d.ForwardPublish(context.Background(), &cluster.Message{Topic: testTopicForward})
 	if err == nil {
 		t.Fatal("expected joined error, got nil")
 	}
@@ -117,7 +117,7 @@ func TestMessageDispatcherForwardPublishPreservesProperties(t *testing.T) {
 	d := NewMessageDispatcher(mqtt, amqp1, amqp091)
 
 	msg := &cluster.Message{
-		Topic:      "test/topic",
+		Topic:      testTopicForward,
 		Properties: map[string]string{corebroker.ClientIDProperty: "mqtt-pub-1"},
 	}
 	if err := d.ForwardPublish(context.Background(), msg); err != nil {

@@ -26,6 +26,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// subprotocolMQTT is the WebSocket subprotocol name for MQTT.
+const subprotocolMQTT = "mqtt"
+
 var (
 	ErrExpectedBinaryMessage      = errors.New("expected binary message")
 	ErrUnsupportedProtocolVersion = errors.New("unsupported MQTT protocol version")
@@ -98,7 +101,7 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 
 	s.upgrader = websocket.Upgrader{
 		CheckOrigin:  s.checkOrigin,
-		Subprotocols: []string{"mqtt"},
+		Subprotocols: []string{subprotocolMQTT},
 	}
 
 	mux := http.NewServeMux()

@@ -259,19 +259,19 @@ func TestSubscriptionsEndpointRejectsInvalidLimit(t *testing.T) {
 
 func TestMergeAMQPSubscriptionResponsesAddsAMQPSubscriptions(t *testing.T) {
 	aggregated := map[string]subscriptionResponse{
-		"devices/one": {
-			Filter:          "devices/one",
+		testFilterDevicesOne: {
+			Filter:          testFilterDevicesOne,
 			SubscriberCount: 2,
 			MaxQoS:          1,
 		},
 	}
 
 	mergeAMQPSubscriptionResponses(aggregated, []amqpbroker.SubscriptionSnapshot{
-		{ClientID: "amqp091:conn-1", Filter: "devices/one", QoS: 1},
+		{ClientID: "amqp091:conn-1", Filter: testFilterDevicesOne, QoS: 1},
 		{ClientID: "amqp091:conn-2", Filter: "jobs.*", QoS: 1},
 	}, "")
 
-	if aggregated["devices/one"].SubscriberCount != 3 {
+	if aggregated[testFilterDevicesOne].SubscriberCount != 3 {
 		t.Fatalf("expected devices/one subscriber count 3, got %d", aggregated["devices/one"].SubscriberCount)
 	}
 	if aggregated["jobs.*"].SubscriberCount != 1 {
@@ -286,7 +286,7 @@ func TestMergeAMQPSubscriptionClientsAddsAMQPClients(t *testing.T) {
 
 	mergeAMQPSubscriptionClients(clients, []amqpbroker.SubscriptionSnapshot{
 		{ClientID: "amqp091:conn-1", Filter: "jobs.*", QoS: 1},
-		{ClientID: "amqp091:conn-2", Filter: "orders.*", QoS: 1},
+		{ClientID: "amqp091:conn-2", Filter: testFilterOrders, QoS: 1},
 	}, "jobs.*", "")
 
 	if len(clients) != 2 {

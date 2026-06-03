@@ -80,8 +80,8 @@ func TestAttachSender(t *testing.T) {
 		Name:   "link-1",
 		Handle: 0,
 		Role:   RoleSender,
-		Source: &Source{Address: "test/topic"},
-		Target: &Target{Address: "test/topic"},
+		Source: &Source{Address: testTopic},
+		Target: &Target{Address: testTopic},
 	}
 
 	got := encodeDecodePerf(t, a.Encode, DescriptorAttach).(*Attach)
@@ -89,9 +89,9 @@ func TestAttachSender(t *testing.T) {
 	assert.Equal(t, uint32(0), got.Handle)
 	assert.Equal(t, RoleSender, got.Role)
 	require.NotNil(t, got.Source)
-	assert.Equal(t, "test/topic", got.Source.Address)
+	assert.Equal(t, testTopic, got.Source.Address)
 	require.NotNil(t, got.Target)
-	assert.Equal(t, "test/topic", got.Target.Address)
+	assert.Equal(t, testTopic, got.Target.Address)
 }
 
 func TestAttachReceiver(t *testing.T) {

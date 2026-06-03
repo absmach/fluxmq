@@ -19,6 +19,16 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const (
+	testPostNotAllowed = "POST request not allowed"
+	testCheckStorage   = "storage"
+	testCheckCluster   = "cluster"
+	testNodeID1        = "node-1"
+	testNodeID2        = "node-2"
+	testNodeID3        = "node-3"
+	testSingleNode     = "single-node"
+)
+
 // --- mocks ---
 
 type mockCluster struct {
@@ -173,7 +183,7 @@ func TestHealthEndpoint(t *testing.T) {
 			expectedBody:   HealthResponse{Status: "healthy"},
 		},
 		{
-			name:           "POST request not allowed",
+			name:           testPostNotAllowed,
 			method:         http.MethodPost,
 			expectedStatus: http.StatusMethodNotAllowed,
 		},
@@ -230,7 +240,7 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusServiceUnavailable,
 			expectedReady:  false,
 			expectedReason: "storage not initialized",
-			checkName:      "storage",
+			checkName:      testCheckStorage,
 			checkStatus:    StatusDown,
 		},
 		{
@@ -241,22 +251,22 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
 			expectedMode:   ModeNominal,
-			checkName:      "storage",
+			checkName:      testCheckStorage,
 			checkStatus:    StatusUp,
-			absentCheck:    "cluster",
+			absentCheck:    testCheckCluster,
 		},
 		{
 			name:           "noop cluster treated as single-node mode",
 			broker:         broker.NewBroker(nil, nil),
-			cluster:        cluster.NewNoopCluster("single-node"),
+			cluster:        cluster.NewNoopCluster(testSingleNode),
 			store:          &mockStore{},
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
 			expectedMode:   ModeNominal,
-			checkName:      "storage",
+			checkName:      testCheckStorage,
 			checkStatus:    StatusUp,
-			absentCheck:    "cluster",
+			absentCheck:    testCheckCluster,
 		},
 		{
 			name:           "storage down - not ready",
@@ -266,7 +276,7 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusServiceUnavailable,
 			expectedReady:  false,
 			expectedReason: "storage unavailable",
-			checkName:      "storage",
+			checkName:      testCheckStorage,
 			checkStatus:    StatusDown,
 		},
 		{
@@ -278,19 +288,19 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusServiceUnavailable,
 			expectedReady:  false,
 			expectedReason: "cluster not initialized",
-			checkName:      "cluster",
+			checkName:      testCheckCluster,
 			checkStatus:    StatusDown,
 		},
 		{
 			name:   "cluster all peers healthy - ready nominal",
 			broker: broker.NewBroker(nil, nil),
 			cluster: &mockCluster{
-				nodeID:   "node-1",
+				nodeID:   testNodeID1,
 				isLeader: true,
 				nodes: []cluster.NodeInfo{
-					{ID: "node-1", Healthy: true},
-					{ID: "node-2", Healthy: true},
-					{ID: "node-3", Healthy: true},
+					{ID: testNodeID1, Healthy: true},
+					{ID: testNodeID2, Healthy: true},
+					{ID: testNodeID3, Healthy: true},
 				},
 			},
 			store:          &mockStore{},
@@ -298,19 +308,19 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
 			expectedMode:   ModeNominal,
-			checkName:      "cluster",
+			checkName:      testCheckCluster,
 			checkStatus:    StatusUp,
 		},
 		{
 			name:   "cluster peer unreachable - ready degraded",
 			broker: broker.NewBroker(nil, nil),
 			cluster: &mockCluster{
-				nodeID:   "node-1",
+				nodeID:   testNodeID1,
 				isLeader: true,
 				nodes: []cluster.NodeInfo{
-					{ID: "node-1", Healthy: true},
-					{ID: "node-2", Healthy: true},
-					{ID: "node-3", Healthy: false},
+					{ID: testNodeID1, Healthy: true},
+					{ID: testNodeID2, Healthy: true},
+					{ID: testNodeID3, Healthy: false},
 				},
 			},
 			store:          &mockStore{},
@@ -318,19 +328,19 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
 			expectedMode:   ModeDegraded,
-			checkName:      "cluster",
+			checkName:      testCheckCluster,
 			checkStatus:    StatusUp,
 		},
 		{
 			name:   "cluster all peers unreachable - ready degraded",
 			broker: broker.NewBroker(nil, nil),
 			cluster: &mockCluster{
-				nodeID:   "node-1",
+				nodeID:   testNodeID1,
 				isLeader: true,
 				nodes: []cluster.NodeInfo{
-					{ID: "node-1", Healthy: true},
-					{ID: "node-2", Healthy: false},
-					{ID: "node-3", Healthy: false},
+					{ID: testNodeID1, Healthy: true},
+					{ID: testNodeID2, Healthy: false},
+					{ID: testNodeID3, Healthy: false},
 				},
 			},
 			store:          &mockStore{},
@@ -338,11 +348,11 @@ func TestReadyEndpoint(t *testing.T) {
 			expectedStatus: http.StatusOK,
 			expectedReady:  true,
 			expectedMode:   ModeDegraded,
-			checkName:      "cluster",
+			checkName:      testCheckCluster,
 			checkStatus:    StatusUp,
 		},
 		{
-			name:           "POST request not allowed",
+			name:           testPostNotAllowed,
 			broker:         broker.NewBroker(nil, nil),
 			method:         http.MethodPost,
 			expectedStatus: http.StatusMethodNotAllowed,
@@ -371,7 +381,7 @@ func TestReadyEndpoint(t *testing.T) {
 			if tt.expectedReady && resp.Status != "ready" {
 				t.Errorf("expected ready status, got %q", resp.Status)
 			}
-			if !tt.expectedReady && resp.Status != "not_ready" {
+			if !tt.expectedReady && resp.Status != statusNotReady {
 				t.Errorf("expected not_ready status, got %q", resp.Status)
 			}
 			if tt.expectedMode != "" && resp.Mode != tt.expectedMode {
@@ -401,12 +411,12 @@ func TestReadyEndpoint(t *testing.T) {
 func TestReadyDegradedDetails(t *testing.T) {
 	b := newTestBroker(t)
 	cl := &mockCluster{
-		nodeID:   "node-1",
+		nodeID:   testNodeID1,
 		isLeader: true,
 		nodes: []cluster.NodeInfo{
-			{ID: "node-1", Healthy: true},
-			{ID: "node-2", Healthy: true},
-			{ID: "node-3", Healthy: false},
+			{ID: testNodeID1, Healthy: true},
+			{ID: testNodeID2, Healthy: true},
+			{ID: testNodeID3, Healthy: false},
 		},
 	}
 
@@ -418,7 +428,7 @@ func TestReadyDegradedDetails(t *testing.T) {
 		t.Fatalf("expected degraded mode, got %q", resp.Mode)
 	}
 
-	check := resp.Checks["cluster"]
+	check := resp.Checks[testCheckCluster]
 	if check == nil {
 		t.Fatal("expected cluster check in response")
 	}
@@ -444,36 +454,36 @@ func TestClusterStatusEndpoint(t *testing.T) {
 			method:          http.MethodGet,
 			expectedStatus:  http.StatusOK,
 			expectedCluster: false,
-			expectedNodeID:  "single-node",
+			expectedNodeID:  testSingleNode,
 		},
 		{
 			name:            "noop cluster mode is reported as single node",
-			cluster:         cluster.NewNoopCluster("node-1"),
+			cluster:         cluster.NewNoopCluster(testNodeID1),
 			method:          http.MethodGet,
 			expectedStatus:  http.StatusOK,
 			expectedCluster: false,
-			expectedNodeID:  "single-node",
+			expectedNodeID:  testSingleNode,
 		},
 		{
 			name:             "cluster mode - follower",
-			cluster:          &mockCluster{nodeID: "node-2", isLeader: false},
+			cluster:          &mockCluster{nodeID: testNodeID2, isLeader: false},
 			method:           http.MethodGet,
 			expectedStatus:   http.StatusOK,
 			expectedCluster:  true,
-			expectedNodeID:   "node-2",
+			expectedNodeID:   testNodeID2,
 			expectedIsLeader: false,
 		},
 		{
 			name:             "cluster mode - leader",
-			cluster:          &mockCluster{nodeID: "node-1", isLeader: true},
+			cluster:          &mockCluster{nodeID: testNodeID1, isLeader: true},
 			method:           http.MethodGet,
 			expectedStatus:   http.StatusOK,
 			expectedCluster:  true,
-			expectedNodeID:   "node-1",
+			expectedNodeID:   testNodeID1,
 			expectedIsLeader: true,
 		},
 		{
-			name:                  "POST request not allowed",
+			name:                  testPostNotAllowed,
 			cluster:               nil,
 			method:                http.MethodPost,
 			expectedStatus:        http.StatusMethodNotAllowed,
@@ -562,40 +572,40 @@ func TestCountPeers(t *testing.T) {
 	}{
 		{
 			name:            "no peers",
-			selfID:          "node-1",
-			nodes:           []cluster.NodeInfo{{ID: "node-1", Healthy: true}},
+			selfID:          testNodeID1,
+			nodes:           []cluster.NodeInfo{{ID: testNodeID1, Healthy: true}},
 			expectedTotal:   0,
 			expectedHealthy: 0,
 		},
 		{
 			name:   "all peers healthy",
-			selfID: "node-1",
+			selfID: testNodeID1,
 			nodes: []cluster.NodeInfo{
-				{ID: "node-1", Healthy: true},
-				{ID: "node-2", Healthy: true},
-				{ID: "node-3", Healthy: true},
+				{ID: testNodeID1, Healthy: true},
+				{ID: testNodeID2, Healthy: true},
+				{ID: testNodeID3, Healthy: true},
 			},
 			expectedTotal:   2,
 			expectedHealthy: 2,
 		},
 		{
 			name:   "one peer down",
-			selfID: "node-1",
+			selfID: testNodeID1,
 			nodes: []cluster.NodeInfo{
-				{ID: "node-1", Healthy: true},
-				{ID: "node-2", Healthy: true},
-				{ID: "node-3", Healthy: false},
+				{ID: testNodeID1, Healthy: true},
+				{ID: testNodeID2, Healthy: true},
+				{ID: testNodeID3, Healthy: false},
 			},
 			expectedTotal:   2,
 			expectedHealthy: 1,
 		},
 		{
 			name:   "all peers down",
-			selfID: "node-1",
+			selfID: testNodeID1,
 			nodes: []cluster.NodeInfo{
-				{ID: "node-1", Healthy: true},
-				{ID: "node-2", Healthy: false},
-				{ID: "node-3", Healthy: false},
+				{ID: testNodeID1, Healthy: true},
+				{ID: testNodeID2, Healthy: false},
+				{ID: testNodeID3, Healthy: false},
 			},
 			expectedTotal:   2,
 			expectedHealthy: 0,

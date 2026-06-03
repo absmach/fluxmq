@@ -30,7 +30,7 @@ func TestMessageExpiry_ImmediateDelivery(t *testing.T) {
 	expiry := uint32(5)
 	now := time.Now()
 	msg := &storage.Message{
-		Topic:         "test/topic",
+		Topic:         testTopic,
 		Payload:       []byte("data"),
 		QoS:           0,
 		Retain:        false,
@@ -58,7 +58,7 @@ func TestMessageExpiry_ExpiredMessage(t *testing.T) {
 	expiry := uint32(1)
 	pastTime := time.Now().Add(-2 * time.Second)
 	msg := &storage.Message{
-		Topic:         "test/topic",
+		Topic:         testTopic,
 		Payload:       []byte("data"),
 		QoS:           0,
 		Retain:        false,
@@ -84,13 +84,13 @@ func TestMessageExpiry_V5Handler(t *testing.T) {
 	handler := NewV5Handler(b)
 
 	// Subscribe to test topic
-	b.subscribe(s, "test/topic", 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+	b.subscribe(s, testTopic, 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	// Create PUBLISH packet with message expiry
 	expiry := uint32(10)
 	pub := &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
-		TopicName:   "test/topic",
+		TopicName:   testTopic,
 		Payload:     []byte("test data"),
 		Properties: &v5.PublishProperties{
 			MessageExpiry: &expiry,
@@ -114,7 +114,7 @@ func TestMessageExpiry_NoExpiry(t *testing.T) {
 
 	// Create message without expiry
 	msg := &storage.Message{
-		Topic:         "test/topic",
+		Topic:         testTopic,
 		Payload:       []byte("data"),
 		QoS:           0,
 		Retain:        false,
@@ -143,7 +143,7 @@ func TestMessageExpiry_RemainingTime(t *testing.T) {
 	expiryTime := publishTime.Add(10 * time.Second)
 
 	msg := &storage.Message{
-		Topic:         "test/topic",
+		Topic:         testTopic,
 		Payload:       []byte("data"),
 		QoS:           0,
 		Retain:        false,
@@ -170,7 +170,7 @@ func TestMessageExpiry_QoS1WithExpiry(t *testing.T) {
 	expiry := uint32(30)
 	now := time.Now()
 	msg := &storage.Message{
-		Topic:         "test/topic",
+		Topic:         testTopic,
 		Payload:       []byte("qos1 data"),
 		QoS:           1,
 		Retain:        false,

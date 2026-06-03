@@ -25,10 +25,10 @@ func TestResolve_Queue(t *testing.T) {
 		queueName string
 		pattern   string
 	}{
-		{"$queue/tasks", "tasks", ""},
-		{"$queue/tasks/images", "tasks", "images"},
-		{"$queue/tasks/images/#", "tasks", "images/#"},
-		{"$queue/orders/region/eu", "orders", "region/eu"},
+		{"$queue/tasks", testQueueTasks, ""},
+		{"$queue/tasks/images", testQueueTasks, "images"},
+		{"$queue/tasks/images/#", testQueueTasks, "images/#"},
+		{"$queue/orders/region/eu", testQueueOrders, "region/eu"},
 	}
 
 	for _, tt := range tests {
@@ -49,9 +49,9 @@ func TestResolve_QueueAck(t *testing.T) {
 		ackKind   AckKind
 		queueName string
 	}{
-		{"$queue/orders/$ack", AckAccept, "orders"},
-		{"$queue/orders/images/$nack", AckNack, "orders"},
-		{"$queue/orders/$reject", AckReject, "orders"},
+		{"$queue/orders/$ack", AckAccept, testQueueOrders},
+		{"$queue/orders/images/$nack", AckNack, testQueueOrders},
+		{"$queue/orders/$reject", AckReject, testQueueOrders},
 	}
 
 	for _, tt := range tests {
@@ -95,11 +95,11 @@ func TestIsQueueTopic(t *testing.T) {
 
 func TestQueueTopic(t *testing.T) {
 	r := NewRoutingResolver()
-	assert.Equal(t, "$queue/tasks", r.QueueTopic("tasks"))
-	assert.Equal(t, "$queue/tasks/images", r.QueueTopic("tasks", "images"))
-	assert.Equal(t, "$queue/tasks/#", r.QueueTopic("tasks", "#"))
+	assert.Equal(t, "$queue/tasks", r.QueueTopic(testQueueTasks))
+	assert.Equal(t, "$queue/tasks/images", r.QueueTopic(testQueueTasks, "images"))
+	assert.Equal(t, "$queue/tasks/#", r.QueueTopic(testQueueTasks, "#"))
 	// Empty part is skipped
-	assert.Equal(t, "$queue/tasks", r.QueueTopic("tasks", ""))
+	assert.Equal(t, "$queue/tasks", r.QueueTopic(testQueueTasks, ""))
 }
 
 func TestParseQueueFilter(t *testing.T) {
@@ -108,9 +108,9 @@ func TestParseQueueFilter(t *testing.T) {
 		queueName string
 		pattern   string
 	}{
-		{"$queue/tasks", "tasks", ""},
-		{"$queue/tasks/images", "tasks", "images"},
-		{"$queue/tasks/images/#", "tasks", "images/#"},
+		{"$queue/tasks", testQueueTasks, ""},
+		{"$queue/tasks/images", testQueueTasks, "images"},
+		{"$queue/tasks/images/#", testQueueTasks, "images/#"},
 		{"$queue/", "", ""},
 		{"sensors/temp", "", ""},
 		{"", "", ""},
@@ -129,9 +129,9 @@ func TestDeliveryTargetFunc(t *testing.T) {
 	// Test that DeliveryTargetFunc in queue package would satisfy the interface.
 	// Here we just test the ParseQueueFilter round-trip with QueueTopic.
 	r := NewRoutingResolver()
-	topic := r.QueueTopic("orders", "region/eu")
+	topic := r.QueueTopic(testQueueOrders, "region/eu")
 	require.Equal(t, "$queue/orders/region/eu", topic)
 	qn, pat := ParseQueueFilter(topic)
-	assert.Equal(t, "orders", qn)
+	assert.Equal(t, testQueueOrders, qn)
 	assert.Equal(t, "region/eu", pat)
 }

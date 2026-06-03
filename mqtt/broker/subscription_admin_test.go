@@ -22,9 +22,9 @@ func TestListSubscriptionsFilterByState(t *testing.T) {
 		wantCount int
 	}{
 		{"defaults to all filters", "", 2},
-		{"connected only", "connected", 1},
-		{"disconnected only", "disconnected", 2},
-		{"explicit all", "all", 2},
+		{"connected only", sessionStateConnected, 1},
+		{"disconnected only", sessionStateDisconnected, 2},
+		{"explicit all", sessionStateAll, 2},
 	}
 
 	for _, tt := range tests {
@@ -44,7 +44,7 @@ func TestListSubscriptionsAggregatesSubscriberCount(t *testing.T) {
 	b, cleanup := newTestBrokerWithSharedSubs(t)
 	defer cleanup()
 
-	subs, _, err := b.ListSubscriptions(SubscriptionListFilter{State: "all"})
+	subs, _, err := b.ListSubscriptions(SubscriptionListFilter{State: sessionStateAll})
 	if err != nil {
 		t.Fatalf("ListSubscriptions: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestListSubscriptionsAggregatesSubscriberCount(t *testing.T) {
 		byFilter[s.Filter] = s
 	}
 
-	shared := byFilter["shared/topic"]
+	shared := byFilter[testSharedTopic]
 	if shared.SubscriberCount != 2 {
 		t.Fatalf("expected 2 subscribers for shared/topic, got %d", shared.SubscriberCount)
 	}
@@ -68,7 +68,7 @@ func TestListSubscriptionsPrefix(t *testing.T) {
 	defer cleanup()
 
 	subs, _, err := b.ListSubscriptions(SubscriptionListFilter{
-		State:  "all",
+		State:  sessionStateAll,
 		Prefix: "shared/",
 	})
 	if err != nil {
@@ -77,7 +77,7 @@ func TestListSubscriptionsPrefix(t *testing.T) {
 	if len(subs) != 1 {
 		t.Fatalf("expected 1 subscription with prefix shared/, got %d", len(subs))
 	}
-	if subs[0].Filter != "shared/topic" {
+	if subs[0].Filter != testSharedTopic {
 		t.Fatalf("expected shared/topic, got %q", subs[0].Filter)
 	}
 }
@@ -87,7 +87,7 @@ func TestListSubscriptionsPagination(t *testing.T) {
 	defer cleanup()
 
 	page1, token1, err := b.ListSubscriptions(SubscriptionListFilter{
-		State: "all",
+		State: sessionStateAll,
 		Limit: 1,
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestListSubscriptionsPagination(t *testing.T) {
 	}
 
 	page2, token2, err := b.ListSubscriptions(SubscriptionListFilter{
-		State:     "all",
+		State:     sessionStateAll,
 		Limit:     1,
 		PageToken: token1,
 	})
@@ -130,14 +130,14 @@ func TestListSubscriptionClientsByState(t *testing.T) {
 		wantCount int
 	}{
 		{"defaults to all", "", 2},
-		{"connected", "connected", 1},
-		{"disconnected", "disconnected", 1},
-		{"all", "all", 2},
+		{sessionStateConnected, sessionStateConnected, 1},
+		{sessionStateDisconnected, sessionStateDisconnected, 1},
+		{sessionStateAll, sessionStateAll, 2},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clients, _, err := b.ListSubscriptionClients("shared/topic", tt.state, "", 0, "")
+			clients, _, err := b.ListSubscriptionClients(testSharedTopic, tt.state, "", 0, "")
 			if err != nil {
 				t.Fatalf("ListSubscriptionClients: %v", err)
 			}
@@ -152,14 +152,14 @@ func TestListSubscriptionClientsPrefix(t *testing.T) {
 	b, cleanup := newTestBrokerWithSharedSubs(t)
 	defer cleanup()
 
-	clients, _, err := b.ListSubscriptionClients("shared/topic", "all", "sub-a", 0, "")
+	clients, _, err := b.ListSubscriptionClients(testSharedTopic, sessionStateAll, testSubA, 0, "")
 	if err != nil {
 		t.Fatalf("ListSubscriptionClients: %v", err)
 	}
 	if len(clients) != 1 {
 		t.Fatalf("expected 1 client with prefix sub-a, got %d", len(clients))
 	}
-	if clients[0].ClientID != "sub-a" {
+	if clients[0].ClientID != testSubA {
 		t.Fatalf("expected sub-a, got %q", clients[0].ClientID)
 	}
 }
@@ -168,7 +168,7 @@ func TestListSubscriptionClientsPagination(t *testing.T) {
 	b, cleanup := newTestBrokerWithSharedSubs(t)
 	defer cleanup()
 
-	page1, token1, err := b.ListSubscriptionClients("shared/topic", "all", "", 1, "")
+	page1, token1, err := b.ListSubscriptionClients(testSharedTopic, sessionStateAll, "", 1, "")
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestListSubscriptionClientsPagination(t *testing.T) {
 		t.Fatal("expected non-empty page token")
 	}
 
-	page2, token2, err := b.ListSubscriptionClients("shared/topic", "all", "", 1, token1)
+	page2, token2, err := b.ListSubscriptionClients(testSharedTopic, sessionStateAll, "", 1, token1)
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
@@ -229,13 +229,13 @@ func TestListSubscriptionClientsQoS(t *testing.T) {
 	b, cleanup := newTestBrokerWithSharedSubs(t)
 	defer cleanup()
 
-	clients, _, err := b.ListSubscriptionClients("shared/topic", "all", "", 0, "")
+	clients, _, err := b.ListSubscriptionClients(testSharedTopic, sessionStateAll, "", 0, "")
 	if err != nil {
 		t.Fatalf("ListSubscriptionClients: %v", err)
 	}
 
 	for _, c := range clients {
-		if c.ClientID == "sub-a" && c.QoS != 1 {
+		if c.ClientID == testSubA && c.QoS != 1 {
 			t.Fatalf("expected QoS 1 for sub-a, got %d", c.QoS)
 		}
 		if c.ClientID == "sub-b" && c.QoS != 2 {
@@ -245,8 +245,8 @@ func TestListSubscriptionClientsQoS(t *testing.T) {
 }
 
 // newTestBrokerWithSharedSubs creates a broker with subscription test data:
-//   - sub-a: connected, subscribed to "shared/topic" (QoS 1)
-//   - sub-b: disconnected, subscribed to "shared/topic" (QoS 2) and "only/b" (QoS 0)
+//   - sub-a: connected, subscribed to testSharedTopic (QoS 1)
+//   - sub-b: disconnected, subscribed to testSharedTopic (QoS 2) and "only/b" (QoS 0)
 func newTestBrokerWithSharedSubs(t *testing.T) (*Broker, func()) {
 	t.Helper()
 
@@ -269,8 +269,8 @@ func newTestBrokerWithSharedSubs(t *testing.T) (*Broker, func()) {
 		connected bool
 		subs      []subEntry
 	}{
-		{"sub-a", true, []subEntry{{"shared/topic", 1}}},
-		{"sub-b", false, []subEntry{{"shared/topic", 2}, {"only/b", 0}}},
+		{testSubA, true, []subEntry{{testSharedTopic, 1}}},
+		{"sub-b", false, []subEntry{{testSharedTopic, 2}, {"only/b", 0}}},
 	} {
 		s, _, err := b.CreateSession(tc.id, 5, opts)
 		if err != nil {

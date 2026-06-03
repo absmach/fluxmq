@@ -239,10 +239,10 @@ func (c *Client) handleQueueMessage(msg *Message) {
 	var offset uint64
 
 	if msg.UserProperties != nil {
-		if msgID, ok := msg.UserProperties["message-id"]; ok {
+		if msgID, ok := msg.UserProperties[propMessageID]; ok {
 			messageID = msgID
 		}
-		if gid, ok := msg.UserProperties["group-id"]; ok {
+		if gid, ok := msg.UserProperties[propGroupID]; ok {
 			groupID = gid
 		}
 		if off, ok := msg.UserProperties["offset"]; ok {

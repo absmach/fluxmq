@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+const (
+	testLogLevelDebug = "debug"
+	testBindAddr      = "127.0.0.1:8100"
+	testAuthURL       = "localhost:7016"
+	testProfileHot    = "hot"
+)
+
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
@@ -134,11 +141,11 @@ func TestValidate(t *testing.T) {
 			modify: func(c *Config) {
 				c.Cluster.Raft.Enabled = true
 				c.Cluster.Raft.Groups = map[string]RaftGroupConfig{
-					"hot": {
-						BindAddr: "127.0.0.1:8100",
+					testProfileHot: {
+						BindAddr: testBindAddr,
 						DataDir:  "/tmp/fluxmq/raft-hot",
 						Peers: map[string]string{
-							"broker-1": "127.0.0.1:8100",
+							"broker-1": testBindAddr,
 						},
 						ReplicationFactor: 3,
 						MinInSyncReplicas: 2,
@@ -152,9 +159,9 @@ func TestValidate(t *testing.T) {
 			modify: func(c *Config) {
 				c.Cluster.Raft.Enabled = true
 				c.Cluster.Raft.Groups = map[string]RaftGroupConfig{
-					"hot": {
+					testProfileHot: {
 						Peers: map[string]string{
-							"broker-1": "127.0.0.1:8100",
+							"broker-1": testBindAddr,
 						},
 					},
 				}
@@ -172,7 +179,7 @@ func TestValidate(t *testing.T) {
 						Topics: []string{"$queue/hot-events/#"},
 						Replication: QueueReplication{
 							Enabled:           true,
-							Group:             "hot",
+							Group:             testProfileHot,
 							ReplicationFactor: 3,
 							Mode:              "sync",
 							MinInSyncReplicas: 2,
@@ -193,16 +200,16 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid auth protocols",
 			modify: func(c *Config) {
-				c.Auth.URL = "localhost:7016"
-				c.Auth.Protocols = map[string]bool{"mqtt": true, "amqp091": false}
+				c.Auth.URL = testAuthURL
+				c.Auth.Protocols = map[string]bool{protocolMQTT: true, protocolAMQP091: false}
 			},
 			wantErr: false,
 		},
 		{
 			name: "unknown auth protocol",
 			modify: func(c *Config) {
-				c.Auth.URL = "localhost:7016"
-				c.Auth.Protocols = map[string]bool{"mqtt": true, "websocket": true}
+				c.Auth.URL = testAuthURL
+				c.Auth.Protocols = map[string]bool{protocolMQTT: true, "websocket": true}
 			},
 			wantErr: true,
 		},
@@ -246,7 +253,7 @@ func TestSaveLoad(t *testing.T) {
 	cfg.Server.TCP.V3.Addr = ":2883"
 	cfg.Server.TCP.V5.Addr = ":2884"
 	cfg.Broker.RetryInterval = 30 * time.Second
-	cfg.Log.Level = "debug"
+	cfg.Log.Level = testLogLevelDebug
 
 	// Save
 	if err := cfg.Save(tmpfile); err != nil {
@@ -269,7 +276,7 @@ func TestSaveLoad(t *testing.T) {
 	if loaded.Broker.RetryInterval != 30*time.Second {
 		t.Errorf("expected retry interval 30s, got %v", loaded.Broker.RetryInterval)
 	}
-	if loaded.Log.Level != "debug" {
+	if loaded.Log.Level != testLogLevelDebug {
 		t.Errorf("expected log level debug, got %s", loaded.Log.Level)
 	}
 }
@@ -284,30 +291,30 @@ func TestAuthEnabledFor(t *testing.T) {
 		{
 			name:     "no URL disables all",
 			cfg:      AuthConfig{},
-			protocol: "mqtt",
+			protocol: protocolMQTT,
 			want:     false,
 		},
 		{
 			name:     "URL set, empty protocols enables all",
-			cfg:      AuthConfig{URL: "localhost:7016"},
-			protocol: "amqp091",
+			cfg:      AuthConfig{URL: testAuthURL},
+			protocol: protocolAMQP091,
 			want:     true,
 		},
 		{
 			name:     "protocol explicitly enabled",
-			cfg:      AuthConfig{URL: "localhost:7016", Protocols: map[string]bool{"mqtt": true, "amqp091": false}},
-			protocol: "mqtt",
+			cfg:      AuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
+			protocol: protocolMQTT,
 			want:     true,
 		},
 		{
 			name:     "protocol explicitly disabled",
-			cfg:      AuthConfig{URL: "localhost:7016", Protocols: map[string]bool{"mqtt": true, "amqp091": false}},
-			protocol: "amqp091",
+			cfg:      AuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
+			protocol: protocolAMQP091,
 			want:     false,
 		},
 		{
 			name:     "protocol not in map defaults to false",
-			cfg:      AuthConfig{URL: "localhost:7016", Protocols: map[string]bool{"mqtt": true}},
+			cfg:      AuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true}},
 			protocol: "amqp",
 			want:     false,
 		},

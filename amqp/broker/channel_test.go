@@ -240,7 +240,7 @@ func TestMandatoryPublishReturn(t *testing.T) {
 func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 	ch, _ := newTestChannel(t)
 
-	if err := ch.conn.broker.router.Subscribe("mqtt-client", "telemetry/room1", 1, storage.SubscribeOptions{}); err != nil {
+	if err := ch.conn.broker.router.Subscribe("mqtt-client", testTelemetryRoom1, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 
 	if err := ch.handleMethod(&codec.BasicPublish{
 		Exchange:   "",
-		RoutingKey: "telemetry.room1",
+		RoutingKey: testTelemetryRoom1AM,
 	}); err != nil {
 		t.Fatalf("handleMethod failed: %v", err)
 	}
@@ -312,8 +312,8 @@ func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 func TestPrefetchBuffering(t *testing.T) {
 	ch, buf := newTestChannel(t)
 	ch.prefetchCount = 1
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
 		queue:      "q",
 		mqttFilter: "q",
 		noAck:      false,
@@ -344,8 +344,8 @@ func TestPrefetchBuffering(t *testing.T) {
 func TestChannelFlowQueueing(t *testing.T) {
 	ch, buf := newTestChannel(t)
 	ch.flow = false
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
 		queue:      "q",
 		mqttFilter: "q",
 		noAck:      true,
@@ -412,8 +412,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "stream queue root topic",
 			cons: consumer{
-				queue:     "demo-events",
-				queueName: "demo-events",
+				queue:     testDemoEvents,
+				queueName: testDemoEvents,
 				pattern:   "",
 			},
 			topic: "$queue/demo-events",
@@ -422,8 +422,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "stream queue routing key",
 			cons: consumer{
-				queue:     "demo-events",
-				queueName: "demo-events",
+				queue:     testDemoEvents,
+				queueName: testDemoEvents,
 				pattern:   "",
 			},
 			topic: "$queue/demo-events/user/action",
@@ -432,8 +432,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "queue filter root",
 			cons: consumer{
-				queue:     "$queue/demo-orders/#",
-				queueName: "demo-orders",
+				queue:     testQueueDemoOrders,
+				queueName: testDemoOrders,
 				pattern:   "#",
 			},
 			topic: "$queue/demo-orders",
@@ -442,8 +442,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "queue filter with routing key",
 			cons: consumer{
-				queue:     "$queue/demo-orders/#",
-				queueName: "demo-orders",
+				queue:     testQueueDemoOrders,
+				queueName: testDemoOrders,
 				pattern:   "#",
 			},
 			topic: "$queue/demo-orders/new",
@@ -452,8 +452,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "queue filter mismatch",
 			cons: consumer{
-				queue:     "$queue/demo-orders/#",
-				queueName: "demo-orders",
+				queue:     testQueueDemoOrders,
+				queueName: testDemoOrders,
 				pattern:   "#",
 			},
 			topic: "$queue/other/new",
@@ -462,8 +462,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "plain topic match",
 			cons: consumer{
-				queue:      "sensor/#",
-				mqttFilter: "sensor/#",
+				queue:      testSensorWild,
+				mqttFilter: testSensorWild,
 			},
 			topic: "sensor/temperature",
 			want:  true,
@@ -471,8 +471,8 @@ func TestConsumerQueueMatches(t *testing.T) {
 		{
 			name: "plain topic mismatch",
 			cons: consumer{
-				queue:      "sensor/#",
-				mqttFilter: "sensor/#",
+				queue:      testSensorWild,
+				mqttFilter: testSensorWild,
 			},
 			topic: "control/restart",
 			want:  false,
@@ -515,10 +515,10 @@ func TestHandleBasicConsumeDefaultsStreamCursorToResume(t *testing.T) {
 	ch, _ := newTestChannel(t)
 	mockQM := &mockChannelQueueManager{}
 	ch.conn.broker.queueManager = mockQM
-	ch.queues["events"] = &queueInfo{name: "events", queueType: string(qtypes.QueueTypeStream)}
+	ch.queues[testEvents] = &queueInfo{name: testEvents, queueType: string(qtypes.QueueTypeStream)}
 
 	err := ch.handleMethod(&codec.BasicConsume{
-		Queue:       "events",
+		Queue:       testEvents,
 		ConsumerTag: "stream-reader",
 		NoWait:      true,
 	})
@@ -541,7 +541,7 @@ func TestHandleBasicConsumeInfersStreamFromQueueManager(t *testing.T) {
 	ch, _ := newTestChannel(t)
 	mockQM := &mockChannelQueueManager{
 		queueCfg: &qtypes.QueueConfig{
-			Name: "events",
+			Name: testEvents,
 			Type: qtypes.QueueTypeStream,
 		},
 	}
@@ -574,12 +574,12 @@ func TestExtractMessageTTL(t *testing.T) {
 		{"nil args", nil, 0, false},
 		{"empty args", map[string]any{}, 0, false},
 		{"missing key", map[string]any{"x-other": 100}, 0, false},
-		{"int32 millis", map[string]any{"x-message-ttl": int32(60000)}, 60 * time.Second, true},
-		{"int64 millis", map[string]any{"x-message-ttl": int64(5000)}, 5 * time.Second, true},
-		{"int millis", map[string]any{"x-message-ttl": 30000}, 30 * time.Second, true},
-		{"string millis", map[string]any{"x-message-ttl": "1000"}, time.Second, true},
-		{"zero", map[string]any{"x-message-ttl": int64(0)}, 0, true},
-		{"negative", map[string]any{"x-message-ttl": int64(-1)}, 0, false},
+		{"int32 millis", map[string]any{testXMessageTTL: int32(60000)}, 60 * time.Second, true},
+		{"int64 millis", map[string]any{testXMessageTTL: int64(5000)}, 5 * time.Second, true},
+		{"int millis", map[string]any{testXMessageTTL: 30000}, 30 * time.Second, true},
+		{"string millis", map[string]any{testXMessageTTL: "1000"}, time.Second, true},
+		{"zero", map[string]any{testXMessageTTL: int64(0)}, 0, true},
+		{"negative", map[string]any{testXMessageTTL: int64(-1)}, 0, false},
 	}
 
 	for _, tt := range tests {
@@ -601,7 +601,7 @@ func TestQueueDeclareClassicCreatesQueueConfig(t *testing.T) {
 	ch.conn.broker.queueManager = mockQM
 
 	err := ch.handleQueueDeclare(&codec.QueueDeclare{
-		Queue:   "orders",
+		Queue:   testOrders,
 		Durable: true,
 	})
 	if err != nil {
@@ -612,7 +612,7 @@ func TestQueueDeclareClassicCreatesQueueConfig(t *testing.T) {
 		t.Fatalf("expected 1 created queue, got %d", len(mockQM.createdQueues))
 	}
 	cfg := mockQM.createdQueues[0]
-	if cfg.Name != "orders" {
+	if cfg.Name != testOrders {
 		t.Fatalf("expected queue name 'orders', got %q", cfg.Name)
 	}
 	if cfg.Type != qtypes.QueueTypeClassic {
@@ -629,10 +629,10 @@ func TestQueueDeclareWithMessageTTL(t *testing.T) {
 	ch.conn.broker.queueManager = mockQM
 
 	err := ch.handleQueueDeclare(&codec.QueueDeclare{
-		Queue:   "orders",
+		Queue:   testOrders,
 		Durable: true,
 		Arguments: map[string]any{
-			"x-message-ttl": int32(60000), // 60 seconds in ms
+			testXMessageTTL: int32(60000), // 60 seconds in ms
 		},
 	})
 	if err != nil {
@@ -654,11 +654,11 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 	ch.conn.broker.queueManager = mockQM
 
 	err := ch.handleQueueDeclare(&codec.QueueDeclare{
-		Queue:   "events",
+		Queue:   testEvents,
 		Durable: true,
 		Arguments: map[string]any{
 			"x-queue-type":  "stream",
-			"x-message-ttl": int64(30000),
+			testXMessageTTL: int64(30000),
 			"x-max-age":     "7d",
 		},
 	})
@@ -684,7 +684,7 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 func TestPublishCustomHeadersPropagatedToCrossDeliver(t *testing.T) {
 	ch, _ := newTestChannel(t)
 
-	if err := ch.conn.broker.router.Subscribe("mqtt-client", "telemetry/room1", 1, storage.SubscribeOptions{}); err != nil {
+	if err := ch.conn.broker.router.Subscribe("mqtt-client", testTelemetryRoom1, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
@@ -695,7 +695,7 @@ func TestPublishCustomHeadersPropagatedToCrossDeliver(t *testing.T) {
 
 	if err := ch.handleMethod(&codec.BasicPublish{
 		Exchange:   "",
-		RoutingKey: "telemetry.room1",
+		RoutingKey: testTelemetryRoom1AM,
 	}); err != nil {
 		t.Fatalf("handleMethod failed: %v", err)
 	}
@@ -743,23 +743,23 @@ func TestCancelConsumerByQueue(t *testing.T) {
 	t.Run("cancels matching consumer and sends BasicCancel frame", func(t *testing.T) {
 		ch, buf := newTestChannel(t)
 
-		ch.consumers["ctag-1"] = &consumer{
-			tag:       "ctag-1",
-			queueName: "events",
-			groupID:   "workers",
+		ch.consumers[testCtag1] = &consumer{
+			tag:       testCtag1,
+			queueName: testEvents,
+			groupID:   testWorkers,
 		}
 		ch.consumers["ctag-2"] = &consumer{
 			tag:       "ctag-2",
-			queueName: "orders",
+			queueName: testOrders,
 			groupID:   "processors",
 		}
 
 		beforeLen := buf.Len()
-		ch.cancelConsumerByQueue("events", "workers")
+		ch.cancelConsumerByQueue(testEvents, testWorkers)
 
 		// ctag-1 should be removed, ctag-2 should remain
 		ch.consumersMu.RLock()
-		if _, exists := ch.consumers["ctag-1"]; exists {
+		if _, exists := ch.consumers[testCtag1]; exists {
 			t.Fatal("expected ctag-1 to be removed")
 		}
 		if _, exists := ch.consumers["ctag-2"]; !exists {
@@ -780,8 +780,8 @@ func TestCancelConsumerByQueue(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected *codec.BasicCancel, got %T", decoded)
 		}
-		if cancel.ConsumerTag != "ctag-1" {
-			t.Fatalf("expected ConsumerTag %q, got %q", "ctag-1", cancel.ConsumerTag)
+		if cancel.ConsumerTag != testCtag1 {
+			t.Fatalf("expected ConsumerTag %q, got %q", testCtag1, cancel.ConsumerTag)
 		}
 		if !cancel.NoWait {
 			t.Fatal("expected NoWait=true for server-initiated cancel")
@@ -791,10 +791,10 @@ func TestCancelConsumerByQueue(t *testing.T) {
 	t.Run("no-op when no consumers match", func(t *testing.T) {
 		ch, buf := newTestChannel(t)
 
-		ch.consumers["ctag-1"] = &consumer{
-			tag:       "ctag-1",
-			queueName: "events",
-			groupID:   "workers",
+		ch.consumers[testCtag1] = &consumer{
+			tag:       testCtag1,
+			queueName: testEvents,
+			groupID:   testWorkers,
 		}
 
 		beforeLen := buf.Len()
@@ -815,17 +815,17 @@ func TestCancelConsumerByQueue(t *testing.T) {
 		ch, buf := newTestChannel(t)
 		ch.closed.Store(true)
 
-		ch.consumers["ctag-1"] = &consumer{
-			tag:       "ctag-1",
-			queueName: "events",
-			groupID:   "workers",
+		ch.consumers[testCtag1] = &consumer{
+			tag:       testCtag1,
+			queueName: testEvents,
+			groupID:   testWorkers,
 		}
 
 		beforeLen := buf.Len()
-		ch.cancelConsumerByQueue("events", "workers")
+		ch.cancelConsumerByQueue(testEvents, testWorkers)
 
 		ch.consumersMu.RLock()
-		if _, exists := ch.consumers["ctag-1"]; !exists {
+		if _, exists := ch.consumers[testCtag1]; !exists {
 			t.Fatal("expected consumer to remain on closed channel")
 		}
 		ch.consumersMu.RUnlock()

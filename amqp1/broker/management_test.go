@@ -11,6 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testPropName  = "name"
+	testQueueName = "test-queue"
+)
+
 func TestManagementHandlerNoQueueManager(t *testing.T) {
 	b := New(nil, nil, nil)
 	h := newManagementHandler(b)
@@ -18,9 +23,9 @@ func TestManagementHandlerNoQueueManager(t *testing.T) {
 	req := &message.Message{
 		Properties: &message.Properties{MessageID: "req-1"},
 		ApplicationProperties: map[string]any{
-			"operation": "CREATE",
-			"type":      "queue",
-			"name":      "test-queue",
+			testKeyOperation: opCreate,
+			testKeyType:      entityTypeQueue,
+			testPropName:     testQueueName,
 		},
 	}
 
@@ -53,9 +58,9 @@ func TestManagementHandlerUnsupportedType(t *testing.T) {
 	req := &message.Message{
 		Properties: &message.Properties{},
 		ApplicationProperties: map[string]any{
-			"operation": "CREATE",
-			"type":      "exchange",
-			"name":      "test",
+			testKeyOperation: opCreate,
+			testKeyType:      "exchange",
+			testPropName:     "test",
 		},
 	}
 
@@ -75,9 +80,9 @@ func TestManagementHandlerUnsupportedOperation(t *testing.T) {
 	req := &message.Message{
 		Properties: &message.Properties{},
 		ApplicationProperties: map[string]any{
-			"operation": "PURGE",
-			"type":      "queue",
-			"name":      "test",
+			testKeyOperation: "PURGE",
+			testKeyType:      entityTypeQueue,
+			testPropName:     "test",
 		},
 	}
 
@@ -98,9 +103,9 @@ func TestManagementResponseCorrelation(t *testing.T) {
 			ReplyTo:   "$management/reply/0",
 		},
 		ApplicationProperties: map[string]any{
-			"operation": "READ",
-			"type":      "queue",
-			"name":      "nonexistent",
+			testKeyOperation: "READ",
+			testKeyType:      entityTypeQueue,
+			testPropName:     "nonexistent",
 		},
 	}
 

@@ -47,7 +47,7 @@ func TestSubscribeToQueueContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = client.SubscribeToQueue(ctx, "test", "workers", func(msg *QueueMessage) {})
+	err = client.SubscribeToQueue(ctx, testStr, testWorkers, func(msg *QueueMessage) {})
 	assert.Equal(t, context.Canceled, err)
 }
 
@@ -59,7 +59,7 @@ func TestUnsubscribeFromQueueContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = client.UnsubscribeFromQueue(ctx, "test")
+	err = client.UnsubscribeFromQueue(ctx, testStr)
 	assert.Equal(t, context.Canceled, err)
 }
 
@@ -72,7 +72,7 @@ func TestAckContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = client.AckWithGroup(ctx, "test", "msg-123", "workers")
+	err = client.AckWithGroup(ctx, testStr, testMsg123, testWorkers)
 	assert.Equal(t, context.Canceled, err)
 }
 
@@ -83,15 +83,15 @@ func TestQueueMessage_Ack(t *testing.T) {
 	client.state.set(StateConnected)
 
 	msg := &Message{
-		Topic:   "$queue/test",
-		Payload: []byte("test"),
+		Topic:   testQueueTest,
+		Payload: []byte(testStr),
 	}
 
 	qm := &QueueMessage{
 		Message:   msg,
-		MessageID: "msg-123",
+		MessageID: testMsg123,
 		client:    client,
-		queueName: "test",
+		queueName: testStr,
 	}
 
 	// Ack should fail when not connected (we're connected but no conn object)
@@ -101,9 +101,9 @@ func TestQueueMessage_Ack(t *testing.T) {
 
 func TestQueueMessage_NoClient(t *testing.T) {
 	qm := &QueueMessage{
-		Message:   &Message{Topic: "$queue/test"},
-		MessageID: "msg-123",
-		queueName: "test",
+		Message:   &Message{Topic: testQueueTest},
+		MessageID: testMsg123,
+		queueName: testStr,
 	}
 
 	err := qm.Ack(nil)
@@ -127,19 +127,19 @@ func TestQueueSubscriptions_AddGetRemove(t *testing.T) {
 	}
 
 	sub := &queueSubscription{
-		queueName:     "test",
-		consumerGroup: "workers",
+		queueName:     testStr,
+		consumerGroup: testWorkers,
 		handler:       handler,
 	}
 
 	// Add subscription
-	qs.add("$queue/test", sub)
+	qs.add(testQueueTest, sub)
 
 	// Get subscription
-	retrieved, ok := qs.get("$queue/test")
+	retrieved, ok := qs.get(testQueueTest)
 	assert.True(t, ok)
-	assert.Equal(t, "test", retrieved.queueName)
-	assert.Equal(t, "workers", retrieved.consumerGroup)
+	assert.Equal(t, testStr, retrieved.queueName)
+	assert.Equal(t, testWorkers, retrieved.consumerGroup)
 	assert.NotNil(t, retrieved.handler)
 
 	// Get non-existent subscription
@@ -147,8 +147,8 @@ func TestQueueSubscriptions_AddGetRemove(t *testing.T) {
 	assert.False(t, ok)
 
 	// Remove subscription
-	qs.remove("$queue/test")
-	_, ok = qs.get("$queue/test")
+	qs.remove(testQueueTest)
+	_, ok = qs.get(testQueueTest)
 	assert.False(t, ok)
 }
 
@@ -164,17 +164,17 @@ func TestQueueSubscriptions_Concurrent(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			sub := &queueSubscription{
-				queueName:     "test",
-				consumerGroup: "workers",
+				queueName:     testStr,
+				consumerGroup: testWorkers,
 			}
-			qs.add("$queue/test", sub)
+			qs.add(testQueueTest, sub)
 		}(i)
 	}
 
 	wg.Wait()
 
 	// Should have one subscription (last write wins)
-	sub, ok := qs.get("$queue/test")
+	sub, ok := qs.get(testQueueTest)
 	assert.True(t, ok)
 	assert.NotNil(t, sub)
 }
@@ -185,10 +185,10 @@ func TestIsQueueTopic(t *testing.T) {
 		topic    string
 		expected bool
 	}{
-		{"Queue topic", "$queue/test", true},
+		{"Queue topic", testQueueTest, true},
 		{"Queue topic with path", "$queue/tasks/image", true},
 		{"Queue ack topic", "$queue/test/$ack", true},
-		{"Normal topic", "sensors/temperature", false},
+		{"Normal topic", testSensorsTemp, false},
 		{"Share topic", "$share/workers/tasks", false},
 		{"Short topic", "$queue", false},
 		{"Empty topic", "", false},
@@ -216,18 +216,18 @@ func TestClient_HandleQueueMessage(t *testing.T) {
 	}
 
 	msg := &Message{
-		Topic:   "$queue/test",
+		Topic:   testQueueTest,
 		Payload: []byte("test payload"),
 		UserProperties: map[string]string{
-			"message-id": "msg-123",
-			"group-id":   "workers",
-			"offset":     "42",
+			propMessageID: testMsg123,
+			propGroupID:   testWorkers,
+			"offset":      "42",
 		},
 	}
 
 	client.handleQueueMessage(msg)
 	assert.NotNil(t, receivedMsg)
-	assert.Equal(t, "$queue/test", receivedMsg.Topic)
+	assert.Equal(t, testQueueTest, receivedMsg.Topic)
 }
 
 func TestClient_HandleQueueMessage_WithHandler(t *testing.T) {
@@ -247,19 +247,19 @@ func TestClient_HandleQueueMessage_WithHandler(t *testing.T) {
 	}
 
 	// Register queue subscription
-	client.queueSubs.add("$queue/test", &queueSubscription{
-		queueName:     "test",
-		consumerGroup: "workers",
+	client.queueSubs.add(testQueueTest, &queueSubscription{
+		queueName:     testStr,
+		consumerGroup: testWorkers,
 		handler:       handler,
 	})
 
 	msg := &Message{
-		Topic:   "$queue/test",
+		Topic:   testQueueTest,
 		Payload: []byte("test payload"),
 		UserProperties: map[string]string{
-			"message-id": "msg-123",
-			"group-id":   "workers",
-			"offset":     "42",
+			propMessageID: testMsg123,
+			propGroupID:   testWorkers,
+			"offset":      "42",
 		},
 	}
 
@@ -280,11 +280,11 @@ func TestClient_HandleQueueMessage_WithHandler(t *testing.T) {
 	}
 
 	require.NotNil(t, receivedQueueMsg)
-	assert.Equal(t, "msg-123", receivedQueueMsg.MessageID)
-	assert.Equal(t, "workers", receivedQueueMsg.GroupID)
+	assert.Equal(t, testMsg123, receivedQueueMsg.MessageID)
+	assert.Equal(t, testWorkers, receivedQueueMsg.GroupID)
 	assert.Equal(t, uint64(42), receivedQueueMsg.Offset)
 	assert.Equal(t, uint64(42), receivedQueueMsg.Sequence)
-	assert.Equal(t, "test", receivedQueueMsg.queueName)
+	assert.Equal(t, testStr, receivedQueueMsg.queueName)
 	assert.Equal(t, client, receivedQueueMsg.client)
 }
 
@@ -300,15 +300,15 @@ func TestClient_DeliverMessage_RouteToQueueHandler(t *testing.T) {
 		receivedQueueMsg = msg
 	}
 
-	client.queueSubs.add("$queue/test", &queueSubscription{
-		queueName: "test",
+	client.queueSubs.add(testQueueTest, &queueSubscription{
+		queueName: testStr,
 		handler:   handler,
 	})
 
 	msg := &Message{
-		Topic:          "$queue/test",
-		Payload:        []byte("test"),
-		UserProperties: map[string]string{"message-id": "msg-1"},
+		Topic:          testQueueTest,
+		Payload:        []byte(testStr),
+		UserProperties: map[string]string{propMessageID: "msg-1"},
 	}
 
 	client.deliverMessage(msg)
@@ -330,14 +330,14 @@ func TestClient_DeliverMessage_OnMessageV2(t *testing.T) {
 	}
 
 	msg := &Message{
-		Topic:   "sensors/temp",
-		Payload: []byte("test"),
+		Topic:   testSensorsTempAlt,
+		Payload: []byte(testStr),
 	}
 
 	client.deliverMessage(msg)
 
 	assert.NotNil(t, receivedMsg)
-	assert.Equal(t, "sensors/temp", receivedMsg.Topic)
+	assert.Equal(t, testSensorsTempAlt, receivedMsg.Topic)
 }
 
 func TestClient_DeliverMessage_OnMessage_Fallback(t *testing.T) {
@@ -355,14 +355,14 @@ func TestClient_DeliverMessage_OnMessage_Fallback(t *testing.T) {
 	}
 
 	msg := &Message{
-		Topic:   "sensors/temp",
-		Payload: []byte("test"),
+		Topic:   testSensorsTempAlt,
+		Payload: []byte(testStr),
 	}
 
 	client.deliverMessage(msg)
 
-	assert.Equal(t, "sensors/temp", receivedTopic)
-	assert.Equal(t, []byte("test"), receivedPayload)
+	assert.Equal(t, testSensorsTempAlt, receivedTopic)
+	assert.Equal(t, []byte(testStr), receivedPayload)
 }
 
 func TestClient_DeliverMessage_OnMessageV2_TakesPrecedence(t *testing.T) {
@@ -384,8 +384,8 @@ func TestClient_DeliverMessage_OnMessageV2_TakesPrecedence(t *testing.T) {
 	}
 
 	msg := &Message{
-		Topic:   "sensors/temp",
-		Payload: []byte("test"),
+		Topic:   testSensorsTempAlt,
+		Payload: []byte(testStr),
 	}
 
 	client.deliverMessage(msg)
@@ -403,12 +403,12 @@ func TestQueueMessage_AckNackReject_Integration(t *testing.T) {
 
 	qm := &QueueMessage{
 		Message: &Message{
-			Topic:   "$queue/test",
-			Payload: []byte("test"),
+			Topic:   testQueueTest,
+			Payload: []byte(testStr),
 		},
-		MessageID: "msg-123",
+		MessageID: testMsg123,
 		client:    client,
-		queueName: "test",
+		queueName: testStr,
 	}
 
 	// These will fail because we don't have a real connection

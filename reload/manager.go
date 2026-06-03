@@ -19,6 +19,13 @@ import (
 	"github.com/absmach/fluxmq/ratelimit"
 )
 
+// Log level and format names.
+const (
+	logLevelDebug = "debug"
+	logLevelWarn  = "warn"
+	logFormatJSON = "json"
+)
+
 // BrokerTuner applies broker-level config changes atomically.
 type BrokerTuner interface {
 	SetMaxQoS(qos byte)
@@ -403,16 +410,16 @@ func setFieldByPath(cfg *config.Config, path string, value any) error {
 func SetupLogger(cfg config.LogConfig) {
 	logLevel := slog.LevelInfo
 	switch cfg.Level {
-	case "debug":
+	case logLevelDebug:
 		logLevel = slog.LevelDebug
-	case "warn":
+	case logLevelWarn:
 		logLevel = slog.LevelWarn
 	case "error":
 		logLevel = slog.LevelError
 	}
 
 	var handler slog.Handler
-	if cfg.Format == "json" {
+	if cfg.Format == logFormatJSON {
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})

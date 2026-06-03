@@ -23,18 +23,18 @@ func TestAddClientIDProperty(t *testing.T) {
 		{
 			name:         "first publish sets client_id only",
 			initial:      nil,
-			clientID:     "device-1",
-			wantClientID: "device-1",
+			clientID:     testDeviceID,
+			wantClientID: testDeviceID,
 		},
 		{
 			name: "republish overwrites client_id, preserves explicit external_id",
 			initial: map[string]string{
-				ClientIDProperty:   "device-1",
-				ExternalIDProperty: "ext-123",
+				ClientIDProperty:   testDeviceID,
+				ExternalIDProperty: testExternalID,
 			},
 			clientID:          "amqp091:rules-engine",
 			wantClientID:      "amqp091:rules-engine",
-			wantExternalID:    "ext-123",
+			wantExternalID:    testExternalID,
 			wantExternalIDSet: true,
 		},
 		{
@@ -46,12 +46,12 @@ func TestAddClientIDProperty(t *testing.T) {
 		{
 			name: "empty clientID is no-op on existing props",
 			initial: map[string]string{
-				ClientIDProperty:   "device-1",
-				ExternalIDProperty: "ext-123",
+				ClientIDProperty:   testDeviceID,
+				ExternalIDProperty: testExternalID,
 			},
 			clientID:          "",
-			wantClientID:      "device-1",
-			wantExternalID:    "ext-123",
+			wantClientID:      testDeviceID,
+			wantExternalID:    testExternalID,
 			wantExternalIDSet: true,
 		},
 		{
@@ -65,8 +65,8 @@ func TestAddClientIDProperty(t *testing.T) {
 			initial: map[string]string{
 				"content-type": "application/json",
 			},
-			clientID:     "device-1",
-			wantClientID: "device-1",
+			clientID:     testDeviceID,
+			wantClientID: testDeviceID,
 		},
 	}
 
@@ -94,15 +94,15 @@ func TestAddClientIDProperty(t *testing.T) {
 func TestClientIDFromProperties(t *testing.T) {
 	assert.Equal(t, "", ClientIDFromProperties(nil))
 	assert.Equal(t, "", ClientIDFromProperties(map[string]string{}))
-	assert.Equal(t, "device-1", ClientIDFromProperties(map[string]string{
-		ClientIDProperty: "device-1",
+	assert.Equal(t, testDeviceID, ClientIDFromProperties(map[string]string{
+		ClientIDProperty: testDeviceID,
 	}))
 }
 
 func TestExternalIDFromProperties(t *testing.T) {
 	assert.Equal(t, "", ExternalIDFromProperties(nil))
 	assert.Equal(t, "", ExternalIDFromProperties(map[string]string{}))
-	assert.Equal(t, "device-1", ExternalIDFromProperties(map[string]string{
-		ExternalIDProperty: "device-1",
+	assert.Equal(t, testDeviceID, ExternalIDFromProperties(map[string]string{
+		ExternalIDProperty: testDeviceID,
 	}))
 }

@@ -156,7 +156,7 @@ func TestMemoryStoreDeepCopy(t *testing.T) {
 
 	original := NewMessage("topic", []byte("original"), 1, false)
 	original.PacketID = 1
-	original.UserProperties = map[string]string{"key": "value"}
+	original.UserProperties = map[string]string{"key": testValue}
 
 	store.StoreOutbound(1, original) //nolint:errcheck // test setup
 
@@ -169,7 +169,7 @@ func TestMemoryStoreDeepCopy(t *testing.T) {
 	if string(retrieved.Payload) != "original" {
 		t.Error("stored message should not be affected by original modification")
 	}
-	if retrieved.UserProperties["key"] != "value" {
+	if retrieved.UserProperties["key"] != testValue {
 		t.Error("stored user properties should not be affected")
 	}
 

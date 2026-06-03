@@ -10,9 +10,9 @@ import (
 const testTopicAlerts = "alerts/#"
 
 func TestSubscribeOption_Basic(t *testing.T) {
-	opt := NewSubscribeOption("sensors/temperature", 1)
+	opt := NewSubscribeOption(testSensorsTemp, 1)
 
-	if opt.Topic != "sensors/temperature" {
+	if opt.Topic != testSensorsTemp {
 		t.Errorf("Expected topic 'sensors/temperature', got '%s'", opt.Topic)
 	}
 	if opt.QoS != 1 {
@@ -91,7 +91,7 @@ func TestSubscribeOption_Chaining(t *testing.T) {
 
 func TestSubscribeOption_MultipleTopics(t *testing.T) {
 	opts := []*SubscribeOption{
-		NewSubscribeOption("sensors/temperature", 1).SetNoLocal(true),
+		NewSubscribeOption(testSensorsTemp, 1).SetNoLocal(true),
 		NewSubscribeOption("sensors/humidity", 2).SetRetainAsPublished(true),
 		NewSubscribeOption(testTopicAlerts, 0).SetRetainHandling(2),
 	}
@@ -101,7 +101,7 @@ func TestSubscribeOption_MultipleTopics(t *testing.T) {
 	}
 
 	// First option
-	if opts[0].Topic != "sensors/temperature" || opts[0].QoS != 1 || !opts[0].NoLocal {
+	if opts[0].Topic != testSensorsTemp || opts[0].QoS != 1 || !opts[0].NoLocal {
 		t.Error("First option configured incorrectly")
 	}
 

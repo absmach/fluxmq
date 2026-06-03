@@ -21,7 +21,7 @@ func benchmarkRoutePublishCluster(b *testing.B, subscribers int) *EtcdCluster {
 	b.Cleanup(func() { close(stopCh) })
 
 	c := &EtcdCluster{
-		nodeID:     "node-local",
+		nodeID:     testNodeLocal,
 		transport:  &Transport{},
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		stopCh:     stopCh,
@@ -37,11 +37,11 @@ func benchmarkRoutePublishCluster(b *testing.B, subscribers int) *EtcdCluster {
 		// Spread ownership over two remote nodes and one local node.
 		switch i % 3 {
 		case 0:
-			c.ownerCache[clientID] = "node-a"
+			c.ownerCache[clientID] = testNodeA
 		case 1:
-			c.ownerCache[clientID] = "node-b"
+			c.ownerCache[clientID] = testNodeB
 		default:
-			c.ownerCache[clientID] = "node-local"
+			c.ownerCache[clientID] = testNodeLocal
 		}
 	}
 

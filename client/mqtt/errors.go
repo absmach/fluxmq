@@ -5,6 +5,9 @@ package mqtt
 
 import "errors"
 
+// msgBadAuth is the human-readable description for bad credentials.
+const msgBadAuth = "bad username or password"
+
 // Client errors.
 var (
 	// Configuration errors.
@@ -75,7 +78,7 @@ func (c ConnAckError) String() string {
 	case ErrConnRefusedUnavailable:
 		return "server unavailable"
 	case ErrConnRefusedBadAuth:
-		return "bad username or password"
+		return msgBadAuth
 	case ErrConnRefusedNotAuth:
 		return "not authorized"
 	default:

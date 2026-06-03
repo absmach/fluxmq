@@ -35,10 +35,10 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	})
 
 	msg := &storage.Message{
-		Topic:      "telemetry/room1",
+		Topic:      testTelemetryRoom,
 		ClientID:   "mqtt-pub-1",
 		QoS:        1,
-		Properties: map[string]string{"source": "test"},
+		Properties: map[string]string{"source": testSource},
 	}
 	msg.SetPayloadFromBytes([]byte("hello"))
 
@@ -52,13 +52,13 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	if gotClientID != amqpClientID {
 		t.Fatalf("expected clientID %q, got %q", amqpClientID, gotClientID)
 	}
-	if gotTopic != "telemetry/room1" {
+	if gotTopic != testTelemetryRoom {
 		t.Fatalf("expected topic telemetry/room1, got %q", gotTopic)
 	}
 	if gotQoS != 1 {
 		t.Fatalf("expected QoS 1, got %d", gotQoS)
 	}
-	if gotProps["source"] != "test" {
+	if gotProps["source"] != testSource {
 		t.Fatalf("expected source property preserved, got %q", gotProps["source"])
 	}
 	if gotProps[corebroker.ClientIDProperty] != "mqtt-pub-1" {
@@ -81,10 +81,10 @@ func TestForwardPublishDoesNotCrossDeliverToAMQP091(t *testing.T) {
 	})
 
 	if err := b.ForwardPublish(context.Background(), &cluster.Message{
-		Topic:      "telemetry/room1",
+		Topic:      testTelemetryRoom,
 		Payload:    []byte("hello"),
 		QoS:        1,
-		Properties: map[string]string{"source": "test"},
+		Properties: map[string]string{"source": testSource},
 	}); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}

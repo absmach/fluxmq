@@ -18,13 +18,13 @@ func TestQueueConfig_Validate(t *testing.T) {
 	}{
 		{
 			name:    "valid config",
-			config:  DefaultQueueConfig("$queue/test"),
+			config:  DefaultQueueConfig(testQueueName),
 			wantErr: false,
 		},
 		{
 			name: "replication group whitespace invalid",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.Replication.Enabled = true
 				cfg.Replication.Group = "   "
 				return cfg
@@ -48,35 +48,35 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "zero partitions",
 			config: QueueConfig{
-				Name: "$queue/test",
+				Name: testQueueName,
 			},
 			wantErr: true,
 		},
 		{
 			name: "too many partitions",
 			config: QueueConfig{
-				Name: "$queue/test",
+				Name: testQueueName,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid ordering mode",
 			config: QueueConfig{
-				Name: "$queue/test",
+				Name: testQueueName,
 			},
 			wantErr: true,
 		},
 		{
 			name: "strict ordering with multiple partitions",
 			config: QueueConfig{
-				Name: "$queue/test",
+				Name: testQueueName,
 			},
 			wantErr: true,
 		},
 		{
 			name: "strict ordering with single partition",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				return cfg
 			}(),
 			wantErr: false,
@@ -84,7 +84,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "zero max message size",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.MaxMessageSize = 0
 				return cfg
 			}(),
@@ -93,7 +93,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "zero max queue depth",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.MaxDepth = 0
 				return cfg
 			}(),
@@ -102,7 +102,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "zero delivery timeout",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.DeliveryTimeout = 0
 				return cfg
 			}(),
@@ -111,7 +111,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "zero batch size",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.BatchSize = 0
 				return cfg
 			}(),
@@ -120,7 +120,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "negative max retries",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.RetryPolicy.MaxRetries = -1
 				return cfg
 			}(),
@@ -129,7 +129,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "negative initial backoff",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.RetryPolicy.InitialBackoff = -1 * time.Second
 				return cfg
 			}(),
@@ -138,7 +138,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "max backoff less than initial",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.RetryPolicy.InitialBackoff = 10 * time.Second
 				cfg.RetryPolicy.MaxBackoff = 5 * time.Second
 				return cfg
@@ -148,7 +148,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "backoff multiplier less than 1",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.RetryPolicy.BackoffMultiplier = 0.5
 				return cfg
 			}(),
@@ -157,7 +157,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "negative total timeout",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.RetryPolicy.TotalTimeout = -1 * time.Hour
 				return cfg
 			}(),
@@ -166,7 +166,7 @@ func TestQueueConfig_Validate(t *testing.T) {
 		{
 			name: "ephemeral with zero expires after",
 			config: func() QueueConfig {
-				cfg := DefaultQueueConfig("$queue/test")
+				cfg := DefaultQueueConfig(testQueueName)
 				cfg.Durable = false
 				cfg.ExpiresAfter = 0
 				return cfg
@@ -175,13 +175,13 @@ func TestQueueConfig_Validate(t *testing.T) {
 		},
 		{
 			name:    "valid ephemeral config",
-			config:  DefaultEphemeralQueueConfig("$queue/test"),
+			config:  DefaultEphemeralQueueConfig(testQueueName),
 			wantErr: false,
 		},
 		{
 			name: "reserved non-durable rejected",
 			config: func() QueueConfig {
-				cfg := DefaultEphemeralQueueConfig("$queue/test")
+				cfg := DefaultEphemeralQueueConfig(testQueueName)
 				cfg.Reserved = true
 				return cfg
 			}(),
@@ -203,9 +203,9 @@ func TestQueueConfig_Validate(t *testing.T) {
 }
 
 func TestDefaultQueueConfig(t *testing.T) {
-	config := DefaultQueueConfig("$queue/test")
+	config := DefaultQueueConfig(testQueueName)
 
-	assert.Equal(t, "$queue/test", config.Name)
+	assert.Equal(t, testQueueName, config.Name)
 	assert.True(t, config.Durable)
 	assert.Equal(t, int64(1024*1024*10), config.MaxMessageSize, "unexpected max message size")
 	assert.Equal(t, 7*24*time.Hour, config.MessageTTL, "unexpected message TTL")

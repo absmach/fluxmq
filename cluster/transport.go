@@ -24,6 +24,12 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
+const (
+	errNoHandler      = "no handler configured"
+	errMessageIsNil   = "message is nil"
+	errNoQueueHandler = "no queue handler configured"
+)
+
 // QueueHandler defines callbacks for queue distribution operations.
 type QueueHandler interface {
 	// EnqueueLocal enqueues a message on this node (called by remote RPC).
@@ -262,7 +268,7 @@ func (t *Transport) RoutePublish(ctx context.Context, req *PublishReq) (*Publish
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.PublishResponse{
 			Success: false,
-			Error:   "no handler configured",
+			Error:   errNoHandler,
 		}), nil
 	}
 
@@ -293,7 +299,7 @@ func (t *Transport) RoutePublishBatch(ctx context.Context, req *PublishBatchReq)
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.PublishBatchResponse{
 			Success: false,
-			Error:   "no handler configured",
+			Error:   errNoHandler,
 		}), nil
 	}
 
@@ -306,7 +312,7 @@ func (t *Transport) RoutePublishBatch(ctx context.Context, req *PublishBatchReq)
 		if m == nil {
 			failures = append(failures, &clusterv1.PublishBatchError{
 				Index: uint32(idx),
-				Error: "message is nil",
+				Error: errMessageIsNil,
 			})
 			continue
 		}
@@ -349,7 +355,7 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverReq) (*Tak
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.TakeoverResponse{
 			Success: false,
-			Error:   "no handler configured",
+			Error:   errNoHandler,
 		}), nil
 	}
 
@@ -372,7 +378,7 @@ func (t *Transport) FetchRetained(ctx context.Context, req *FetchRetainedReq) (*
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.FetchRetainedResponse{
 			Found: false,
-			Error: "no handler configured",
+			Error: errNoHandler,
 		}), nil
 	}
 
@@ -410,7 +416,7 @@ func (t *Transport) FetchWill(ctx context.Context, req *FetchWillReq) (*FetchWil
 	if t.handler == nil {
 		return connect.NewResponse(&clusterv1.FetchWillResponse{
 			Found: false,
-			Error: "no handler configured",
+			Error: errNoHandler,
 		}), nil
 	}
 
@@ -451,7 +457,7 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 	if handler == nil {
 		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
 			Success: false,
-			Error:   "no queue handler configured",
+			Error:   errNoQueueHandler,
 		}), nil
 	}
 
@@ -507,7 +513,7 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 	if handler == nil {
 		return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
 			Success: false,
-			Error:   "no queue handler configured",
+			Error:   errNoQueueHandler,
 		}), nil
 	}
 
@@ -535,7 +541,7 @@ func (t *Transport) RouteQueueBatch(ctx context.Context, req *RouteQueueBatchReq
 	if handler == nil {
 		return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
 			Success: false,
-			Error:   "no queue handler configured",
+			Error:   errNoQueueHandler,
 		}), nil
 	}
 
@@ -548,7 +554,7 @@ func (t *Transport) RouteQueueBatch(ctx context.Context, req *RouteQueueBatchReq
 		if wire == nil {
 			failures = append(failures, &clusterv1.RouteQueueBatchError{
 				Index: uint32(idx),
-				Error: "message is nil",
+				Error: errMessageIsNil,
 			})
 			continue
 		}
@@ -587,7 +593,7 @@ func (t *Transport) ForwardGroupOp(ctx context.Context, req *ForwardGroupOpReq) 
 	if handler == nil {
 		return connect.NewResponse(&clusterv1.ForwardGroupOpResponse{
 			Success: false,
-			Error:   "no queue handler configured",
+			Error:   errNoQueueHandler,
 		}), nil
 	}
 
@@ -624,7 +630,7 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 		if m == nil {
 			failures = append(failures, &clusterv1.ForwardPublishBatchError{
 				Index: uint32(idx),
-				Error: "message is nil",
+				Error: errMessageIsNil,
 			})
 			continue
 		}

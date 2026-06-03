@@ -141,7 +141,7 @@ func TestMessage(t *testing.T) {
 }
 
 func TestClientState(t *testing.T) {
-	node := &TestNode{TCPAddr: "127.0.0.1:1883"}
+	node := &TestNode{TCPAddr: testLoopback1883}
 	client := NewTestMQTTClient(t, node, "test-client")
 
 	assert.Equal(t, StateDisconnected, client.State())
@@ -149,7 +149,7 @@ func TestClientState(t *testing.T) {
 }
 
 func TestClientSetMessageStore(t *testing.T) {
-	node := &TestNode{TCPAddr: "127.0.0.1:1883"}
+	node := &TestNode{TCPAddr: testLoopback1883}
 	client := NewTestMQTTClient(t, node, "test-client")
 
 	customStore := NewInMemoryStore()
@@ -174,7 +174,7 @@ func TestClientConnectWithoutServer(t *testing.T) {
 }
 
 func TestClientOperationsWhenDisconnected(t *testing.T) {
-	node := &TestNode{TCPAddr: "127.0.0.1:1883"}
+	node := &TestNode{TCPAddr: testLoopback1883}
 	client := NewTestMQTTClient(t, node, "test-client")
 
 	err := client.Subscribe("test", 0)

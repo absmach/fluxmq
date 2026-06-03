@@ -20,15 +20,15 @@ func TestRetainedStore_Set(t *testing.T) {
 	defer cleanupRetainedStore(t, store)
 
 	msg := &storage.Message{
-		Topic:   "test/topic",
+		Topic:   testTopic,
 		Payload: []byte("retained message"),
 		QoS:     1,
 	}
 
-	err := store.Set(ctx, "test/topic", msg)
+	err := store.Set(ctx, testTopic, msg)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get(ctx, "test/topic")
+	retrieved, err := store.Get(ctx, testTopic)
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
 	assert.Equal(t, msg.Payload, retrieved.Payload)
@@ -40,23 +40,23 @@ func TestRetainedStore_SetEmptyPayload(t *testing.T) {
 	defer cleanupRetainedStore(t, store)
 
 	msg := &storage.Message{
-		Topic:   "test/topic",
+		Topic:   testTopic,
 		Payload: []byte("initial message"),
 		QoS:     1,
 	}
 
-	err := store.Set(ctx, "test/topic", msg)
+	err := store.Set(ctx, testTopic, msg)
 	require.NoError(t, err)
 
 	emptyMsg := &storage.Message{
-		Topic:   "test/topic",
+		Topic:   testTopic,
 		Payload: []byte{},
 		QoS:     0,
 	}
-	err = store.Set(ctx, "test/topic", emptyMsg)
+	err = store.Set(ctx, testTopic, emptyMsg)
 	require.NoError(t, err)
 
-	_, err = store.Get(ctx, "test/topic")
+	_, err = store.Get(ctx, testTopic)
 	assert.Error(t, err)
 	assert.Equal(t, storage.ErrNotFound, err)
 }
@@ -158,7 +158,7 @@ func TestRetainedStore_MatchMultiLevelWildcard(t *testing.T) {
 		{Topic: "sensor/temp/room1", Payload: []byte("20"), QoS: 1},
 		{Topic: "sensor/temp/room2", Payload: []byte("21"), QoS: 1},
 		{Topic: "sensor/humidity/room1", Payload: []byte("60"), QoS: 1},
-		{Topic: "alerts/critical", Payload: []byte("fire"), QoS: 2},
+		{Topic: testAlertsCritical, Payload: []byte("fire"), QoS: 2},
 	}
 
 	for _, msg := range messages {

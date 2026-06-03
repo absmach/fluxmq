@@ -65,10 +65,10 @@ func TestClusterWithStub(t *testing.T) {
 	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
 
 	stub := &clusterStub{
-		nodeID: "node-1",
+		nodeID: testNodeID,
 		leader: true,
 		nodes: []cluster.NodeInfo{
-			{ID: "node-1", Address: "10.0.0.1:7946", Healthy: true, Leader: true, Uptime: 24 * time.Hour},
+			{ID: testNodeID, Address: "10.0.0.1:7946", Healthy: true, Leader: true, Uptime: 24 * time.Hour},
 			{ID: "node-2", Address: "10.0.0.2:7946", Healthy: true, Leader: false, Uptime: 12 * time.Hour},
 		},
 	}
@@ -90,7 +90,7 @@ func TestClusterWithStub(t *testing.T) {
 	if !resp.ClusterMode {
 		t.Fatal("expected cluster_mode true")
 	}
-	if resp.NodeID != "node-1" { //nolint:goconst // test value
+	if resp.NodeID != testNodeID {
 		t.Fatalf("expected node_id 'node-1', got %q", resp.NodeID)
 	}
 	if !resp.IsLeader {
@@ -99,7 +99,7 @@ func TestClusterWithStub(t *testing.T) {
 	if len(resp.Nodes) != 2 {
 		t.Fatalf("expected 2 nodes, got %d", len(resp.Nodes))
 	}
-	if resp.Nodes[0].ID != "node-1" || !resp.Nodes[0].Leader {
+	if resp.Nodes[0].ID != testNodeID || !resp.Nodes[0].Leader {
 		t.Fatalf("unexpected node-1 data: %+v", resp.Nodes[0])
 	}
 	if resp.Nodes[1].ID != "node-2" || resp.Nodes[1].Leader {

@@ -32,7 +32,7 @@ func TestForwardPublishBatchNoHandler(t *testing.T) {
 
 	req := connect.NewRequest(&clusterv1.ForwardPublishBatchRequest{
 		Messages: []*clusterv1.ForwardPublishRequest{
-			{Topic: "a/b"},
+			{Topic: testTopicAB},
 		},
 	})
 	resp, err := tr.ForwardPublishBatch(context.Background(), req)
@@ -53,7 +53,7 @@ func TestForwardPublishBatchReportsPartialFailures(t *testing.T) {
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		forwardHandler: &stubForwardPublishHandler{
 			errByTopic: map[string]error{
-				"bad/topic": topicErr,
+				testTopicBad: topicErr,
 			},
 		},
 	}
@@ -62,7 +62,7 @@ func TestForwardPublishBatchReportsPartialFailures(t *testing.T) {
 		Messages: []*clusterv1.ForwardPublishRequest{
 			nil,
 			{Topic: "ok/topic", Payload: []byte("ok")},
-			{Topic: "bad/topic", Payload: []byte("bad")},
+			{Topic: testTopicBad, Payload: []byte("bad")},
 		},
 	})
 	resp, err := tr.ForwardPublishBatch(context.Background(), req)
@@ -81,7 +81,7 @@ func TestForwardPublishBatchReportsPartialFailures(t *testing.T) {
 	if resp.Msg.Failures[0].Index != 0 || resp.Msg.Failures[0].Error == "" {
 		t.Fatalf("unexpected failure[0]: %+v", resp.Msg.Failures[0])
 	}
-	if resp.Msg.Failures[1].Index != 2 || resp.Msg.Failures[1].Topic != "bad/topic" {
+	if resp.Msg.Failures[1].Index != 2 || resp.Msg.Failures[1].Topic != testTopicBad {
 		t.Fatalf("unexpected failure[1]: %+v", resp.Msg.Failures[1])
 	}
 	if resp.Msg.Failures[1].Error != topicErr.Error() {

@@ -19,6 +19,24 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const (
+	testConn1            = "conn-1"
+	testOrdersStar       = "orders.*"
+	testCtag             = "ctag"
+	testTelemetryWild    = "telemetry/#"
+	testTelemetryRoom1   = "telemetry/room1"
+	testTelemetryRoom1AM = "telemetry.room1"
+	testDemoEvents       = "demo-events"
+	testQueueDemoOrders  = "$queue/demo-orders/#"
+	testDemoOrders       = "demo-orders"
+	testSensorWild       = "sensor/#"
+	testEvents           = "events"
+	testXMessageTTL      = "x-message-ttl"
+	testOrders           = "orders"
+	testCtag1            = "ctag-1"
+	testWorkers          = "workers"
+)
+
 func readBrokerFramesFrom(t *testing.T, buf *bytes.Buffer, start int) []*codec.Frame {
 	t.Helper()
 
@@ -49,21 +67,21 @@ func TestDeliverToClusterMessage(t *testing.T) {
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
-		connID:   "conn-1",
+		connID:   testConn1,
 		channels: make(map[uint16]*Channel),
 	}
 	ch := newChannel(c, 1)
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
-		queue:      "telemetry/#",
-		mqttFilter: "telemetry/#",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
+		queue:      testTelemetryWild,
+		mqttFilter: testTelemetryWild,
 		noAck:      true,
 	}
 	c.channels[1] = ch
 	b.connections.Store(c.connID, c)
 
 	msg := &cluster.Message{
-		Topic:      "telemetry/room1",
+		Topic:      testTelemetryRoom1,
 		Payload:    []byte("hello"),
 		Properties: map[string]string{qtypes.PropMessageID: "m1"},
 	}
@@ -84,13 +102,13 @@ func TestDeliverToClusterMessage(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected BasicDeliver, got %T", decoded)
 	}
-	if deliver.ConsumerTag != "ctag" {
+	if deliver.ConsumerTag != testCtag {
 		t.Fatalf("expected consumer tag ctag, got %q", deliver.ConsumerTag)
 	}
 	if deliver.Exchange != "" {
 		t.Fatalf("expected default exchange, got %q", deliver.Exchange)
 	}
-	if deliver.RoutingKey != "telemetry.room1" {
+	if deliver.RoutingKey != testTelemetryRoom1AM {
 		t.Fatalf("expected AMQP routing key telemetry.room1, got %q", deliver.RoutingKey)
 	}
 
@@ -110,7 +128,7 @@ func TestDeliverToClusterMessageClientNotFound(t *testing.T) {
 	b := New(nil, logger)
 
 	err := b.DeliverToClusterMessage(context.Background(), PrefixedClientID("missing"), &cluster.Message{
-		Topic:   "telemetry/room1",
+		Topic:   testTelemetryRoom1,
 		Payload: []byte("hello"),
 	})
 	if err == nil {
@@ -131,23 +149,23 @@ func TestPublishDispatchesToLocalAndCross(t *testing.T) {
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
-		connID:   "conn-1",
+		connID:   testConn1,
 		channels: make(map[uint16]*Channel),
 	}
 	ch := newChannel(c, 1)
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
-		queue:      "telemetry/#",
-		mqttFilter: "telemetry/#",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
+		queue:      testTelemetryWild,
+		mqttFilter: testTelemetryWild,
 		noAck:      true,
 	}
 	c.channels[1] = ch
 	b.connections.Store(c.connID, c)
 
-	if err := b.router.Subscribe(PrefixedClientID(c.connID), "telemetry/#", 1, storage.SubscribeOptions{}); err != nil {
+	if err := b.router.Subscribe(PrefixedClientID(c.connID), testTelemetryWild, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("local subscribe failed: %v", err)
 	}
-	if err := b.router.Subscribe("mqtt-client", "telemetry/#", 1, storage.SubscribeOptions{}); err != nil {
+	if err := b.router.Subscribe("mqtt-client", testTelemetryWild, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("cross subscribe failed: %v", err)
 	}
 
@@ -158,7 +176,7 @@ func TestPublishDispatchesToLocalAndCross(t *testing.T) {
 		gotClientID = clientID
 	})
 
-	if err := b.Publish("telemetry/room1", []byte("hello"), map[string]string{qtypes.PropMessageID: "m1"}); err != nil {
+	if err := b.Publish(testTelemetryRoom1, []byte("hello"), map[string]string{qtypes.PropMessageID: "m1"}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -185,23 +203,23 @@ func TestForwardPublishSkipsCrossProtocolDispatch(t *testing.T) {
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
-		connID:   "conn-1",
+		connID:   testConn1,
 		channels: make(map[uint16]*Channel),
 	}
 	ch := newChannel(c, 1)
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
-		queue:      "telemetry/#",
-		mqttFilter: "telemetry/#",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
+		queue:      testTelemetryWild,
+		mqttFilter: testTelemetryWild,
 		noAck:      true,
 	}
 	c.channels[1] = ch
 	b.connections.Store(c.connID, c)
 
-	if err := b.router.Subscribe(PrefixedClientID(c.connID), "telemetry/#", 1, storage.SubscribeOptions{}); err != nil {
+	if err := b.router.Subscribe(PrefixedClientID(c.connID), testTelemetryWild, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("local subscribe failed: %v", err)
 	}
-	if err := b.router.Subscribe("mqtt-client", "telemetry/#", 1, storage.SubscribeOptions{}); err != nil {
+	if err := b.router.Subscribe("mqtt-client", testTelemetryWild, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("cross subscribe failed: %v", err)
 	}
 
@@ -211,7 +229,7 @@ func TestForwardPublishSkipsCrossProtocolDispatch(t *testing.T) {
 	})
 
 	msg := &cluster.Message{
-		Topic:      "telemetry/room1",
+		Topic:      testTelemetryRoom1,
 		Payload:    []byte("hello"),
 		QoS:        1,
 		Properties: map[string]string{qtypes.PropMessageID: "m1"},

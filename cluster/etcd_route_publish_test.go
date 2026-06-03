@@ -21,7 +21,7 @@ func setupRoutePublishCluster(t *testing.T, stopCh chan struct{}, sendFn func(ct
 	t.Helper()
 
 	c := &EtcdCluster{
-		nodeID:     "node-local",
+		nodeID:     testNodeLocal,
 		transport:  &Transport{},
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		stopCh:     stopCh,
@@ -33,10 +33,10 @@ func setupRoutePublishCluster(t *testing.T, stopCh chan struct{}, sendFn func(ct
 		id   string
 		node string
 	}{
-		{id: "client-a-1", node: "node-a"},
-		{id: "client-a-2", node: "node-a"},
-		{id: "client-b-1", node: "node-b"},
-		{id: "client-local", node: "node-local"},
+		{id: "client-a-1", node: testNodeA},
+		{id: "client-a-2", node: testNodeA},
+		{id: "client-b-1", node: testNodeB},
+		{id: "client-local", node: testNodeLocal},
 	}
 	for _, cinfo := range clients {
 		if err := c.subTrie.Subscribe(cinfo.id, "sensor/temp", 1, storage.SubscribeOptions{}); err != nil {
@@ -80,14 +80,14 @@ func TestRoutePublishQoS1ForwardsSync(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if calls["node-a"] != 1 {
-		t.Fatalf("expected one forward to node-a, got %d", calls["node-a"])
+	if calls[testNodeA] != 1 {
+		t.Fatalf("expected one forward to node-a, got %d", calls[testNodeA])
 	}
-	if calls["node-b"] != 1 {
-		t.Fatalf("expected one forward to node-b, got %d", calls["node-b"])
+	if calls[testNodeB] != 1 {
+		t.Fatalf("expected one forward to node-b, got %d", calls[testNodeB])
 	}
-	if calls["node-local"] != 0 {
-		t.Fatalf("expected no forwards to local node, got %d", calls["node-local"])
+	if calls[testNodeLocal] != 0 {
+		t.Fatalf("expected no forwards to local node, got %d", calls[testNodeLocal])
 	}
 }
 
@@ -97,7 +97,7 @@ func TestRoutePublishQoS1PropagatesError(t *testing.T) {
 
 	errNodeB := errors.New("node-b unavailable")
 	c := setupRoutePublishCluster(t, stopCh, func(ctx context.Context, nodeID string, items []*clusterv1.ForwardPublishRequest) error {
-		if nodeID == "node-b" {
+		if nodeID == testNodeB {
 			return errNodeB
 		}
 		return nil
@@ -135,7 +135,7 @@ func TestRoutePublishQoS0ForwardsAsync(t *testing.T) {
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for {
 		mu.Lock()
-		done := calls["node-a"] == 1 && calls["node-b"] == 1
+		done := calls[testNodeA] == 1 && calls[testNodeB] == 1
 		mu.Unlock()
 		if done {
 			break
@@ -148,11 +148,11 @@ func TestRoutePublishQoS0ForwardsAsync(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if calls["node-a"] != 1 {
-		t.Fatalf("expected one forward to node-a, got %d", calls["node-a"])
+	if calls[testNodeA] != 1 {
+		t.Fatalf("expected one forward to node-a, got %d", calls[testNodeA])
 	}
-	if calls["node-b"] != 1 {
-		t.Fatalf("expected one forward to node-b, got %d", calls["node-b"])
+	if calls[testNodeB] != 1 {
+		t.Fatalf("expected one forward to node-b, got %d", calls[testNodeB])
 	}
 }
 
@@ -175,7 +175,7 @@ func TestRoutePublishNoRemoteNodesSkipsForwarding(t *testing.T) {
 	defer close(stopCh)
 
 	c := &EtcdCluster{
-		nodeID:     "node-local",
+		nodeID:     testNodeLocal,
 		transport:  &Transport{},
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		stopCh:     stopCh,
@@ -186,7 +186,7 @@ func TestRoutePublishNoRemoteNodesSkipsForwarding(t *testing.T) {
 	if err := c.subTrie.Subscribe("client-local", "sensor/temp", 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("subscribe failed: %v", err)
 	}
-	c.ownerCache["client-local"] = "node-local"
+	c.ownerCache["client-local"] = testNodeLocal
 
 	called := false
 	c.forwardBatcher = newNodeBatcher(
@@ -217,7 +217,7 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 	forwarded := make(chan *clusterv1.ForwardPublishRequest, 1)
 
 	c := &EtcdCluster{
-		nodeID:     "node-local",
+		nodeID:     testNodeLocal,
 		transport:  &Transport{},
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		stopCh:     stopCh,
@@ -272,7 +272,7 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 	// Mutate original inputs after RoutePublish returns. Forwarded data must stay unchanged.
 	payload[0] = 'X'
 	properties["trace"] = "two"
-	properties["new"] = "value"
+	properties["new"] = testValue
 
 	select {
 	case got := <-forwarded:

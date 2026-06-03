@@ -11,6 +11,11 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const (
+	testClient1 = "client1"
+	testAB      = "a/b"
+)
+
 func TestMessageStore(t *testing.T) {
 	s := NewMessageStore()
 
@@ -81,7 +86,7 @@ func TestSubscriptionStore(t *testing.T) {
 
 	// Test Add
 	sub1 := &storage.Subscription{
-		ClientID: "client1",
+		ClientID: testClient1,
 		Filter:   "home/+/temp",
 		QoS:      1,
 	}
@@ -122,7 +127,7 @@ func TestSubscriptionStore(t *testing.T) {
 	}
 
 	// Test GetForClient
-	subs, err := s.GetForClient("client1")
+	subs, err := s.GetForClient(testClient1)
 	if err != nil {
 		t.Fatalf("GetForClient failed: %v", err)
 	}
@@ -131,7 +136,7 @@ func TestSubscriptionStore(t *testing.T) {
 	}
 
 	// Test Remove
-	if err := s.Remove("client1", "home/+/temp"); err != nil {
+	if err := s.Remove(testClient1, "home/+/temp"); err != nil {
 		t.Fatalf("Remove failed: %v", err)
 	}
 	if s.Count() != 1 {
@@ -152,8 +157,8 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 	s := NewSubscriptionStore()
 
 	// Add overlapping subscriptions for same client
-	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/#", QoS: 1})      //nolint:errcheck // test setup
-	s.Add(&storage.Subscription{ClientID: "client1", Filter: "home/+/temp", QoS: 2}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: testClient1, Filter: "home/#", QoS: 1})      //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: testClient1, Filter: "home/+/temp", QoS: 2}) //nolint:errcheck // test setup
 
 	matched, err := s.Match("home/bedroom/temp")
 	if err != nil {
@@ -172,11 +177,11 @@ func TestSubscriptionStoreDeduplication(t *testing.T) {
 func TestSubscriptionStoreGetByFilter(t *testing.T) {
 	s := NewSubscriptionStore()
 
-	s.Add(&storage.Subscription{ClientID: "c1", Filter: "a/b", QoS: 0}) //nolint:errcheck // test setup
-	s.Add(&storage.Subscription{ClientID: "c2", Filter: "a/b", QoS: 1}) //nolint:errcheck // test setup
-	s.Add(&storage.Subscription{ClientID: "c3", Filter: "x/y", QoS: 2}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c1", Filter: testAB, QoS: 0}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c2", Filter: testAB, QoS: 1}) //nolint:errcheck // test setup
+	s.Add(&storage.Subscription{ClientID: "c3", Filter: "x/y", QoS: 2})  //nolint:errcheck // test setup
 
-	subs, err := s.GetByFilter("a/b")
+	subs, err := s.GetByFilter(testAB)
 	if err != nil {
 		t.Fatalf("GetByFilter failed: %v", err)
 	}
@@ -187,7 +192,7 @@ func TestSubscriptionStoreGetByFilter(t *testing.T) {
 	clientIDs := map[string]bool{}
 	for _, sub := range subs {
 		clientIDs[sub.ClientID] = true
-		if sub.Filter != "a/b" {
+		if sub.Filter != testAB {
 			t.Fatalf("expected filter a/b, got %q", sub.Filter)
 		}
 	}
@@ -331,7 +336,7 @@ func TestWillStore(t *testing.T) {
 
 	// Test Set and Get
 	will := &storage.WillMessage{
-		ClientID: "client1",
+		ClientID: testClient1,
 		Topic:    "clients/client1/status",
 		Payload:  []byte("offline"),
 		QoS:      1,
@@ -339,11 +344,11 @@ func TestWillStore(t *testing.T) {
 		Delay:    5, // 5 second delay
 	}
 
-	if err := s.Set(ctx, "client1", will); err != nil {
+	if err := s.Set(ctx, testClient1, will); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	got, err := s.Get(ctx, "client1")
+	got, err := s.Get(ctx, testClient1)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -364,7 +369,7 @@ func TestWillStore(t *testing.T) {
 	}
 
 	// Mark as disconnected
-	s.MarkDisconnected("client1") //nolint:errcheck // test setup
+	s.MarkDisconnected(testClient1) //nolint:errcheck // test setup
 
 	// Still not pending (delay not elapsed)
 	pending, _ = s.GetPending(ctx, time.Now())
@@ -379,10 +384,10 @@ func TestWillStore(t *testing.T) {
 	}
 
 	// Test Delete
-	if err := s.Delete(ctx, "client1"); err != nil {
+	if err := s.Delete(ctx, testClient1); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	_, err = s.Get(ctx, "client1")
+	_, err = s.Get(ctx, testClient1)
 	if err != storage.ErrNotFound {
 		t.Errorf("Expected ErrNotFound after delete")
 	}

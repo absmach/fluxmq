@@ -284,7 +284,7 @@ func (b *Broker) snapshotFromStoredSession(ctx context.Context, stored *storage.
 
 func normalizeSessionState(state string) string {
 	switch strings.ToLower(strings.TrimSpace(state)) {
-	case "", "all":
+	case "", sessionStateAll:
 		return ""
 	case sessionStateConnected:
 		return sessionStateConnected

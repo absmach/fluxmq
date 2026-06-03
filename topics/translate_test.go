@@ -15,11 +15,11 @@ func TestAMQPFilterToMQTT(t *testing.T) {
 		filter string
 		want   string
 	}{
-		{name: "amqp wildcard single", filter: "user.*.created", want: "user/+/created"},
+		{name: "amqp wildcard single", filter: "user.*.created", want: testUserPlusCreated},
 		{name: "amqp wildcard multi", filter: "sensor.#", want: "sensor/#"},
 		{name: "mixed", filter: "v1.*.sensor.#", want: "v1/+/sensor/#"},
-		{name: "already mqtt", filter: "user/+/created", want: "user/+/created"},
-		{name: "empty", filter: "", want: ""},
+		{name: "already mqtt", filter: testUserPlusCreated, want: testUserPlusCreated},
+		{name: testEmpty, filter: "", want: ""},
 	}
 
 	for _, tt := range tests {
@@ -37,10 +37,10 @@ func TestAMQPTopicToMQTT(t *testing.T) {
 		topic string
 		want  string
 	}{
-		{name: "amqp topic", topic: "orders.eu.created", want: "orders/eu/created"},
-		{name: "single segment", topic: "orders", want: "orders"},
-		{name: "already mqtt", topic: "orders/eu/created", want: "orders/eu/created"},
-		{name: "empty", topic: "", want: ""},
+		{name: "amqp topic", topic: testOrdersEuCreated, want: testOrdersEuMqtt},
+		{name: "single segment", topic: testOrders, want: testOrders},
+		{name: "already mqtt", topic: testOrdersEuMqtt, want: testOrdersEuMqtt},
+		{name: testEmpty, topic: "", want: ""},
 	}
 
 	for _, tt := range tests {
@@ -58,10 +58,10 @@ func TestMQTTTopicToAMQP(t *testing.T) {
 		topic string
 		want  string
 	}{
-		{name: "mqtt topic", topic: "orders/eu/created", want: "orders.eu.created"},
-		{name: "single segment", topic: "orders", want: "orders"},
-		{name: "already amqp", topic: "orders.eu.created", want: "orders.eu.created"},
-		{name: "empty", topic: "", want: ""},
+		{name: "mqtt topic", topic: testOrdersEuMqtt, want: testOrdersEuCreated},
+		{name: "single segment", topic: testOrders, want: testOrders},
+		{name: "already amqp", topic: testOrdersEuCreated, want: testOrdersEuCreated},
+		{name: testEmpty, topic: "", want: ""},
 	}
 
 	for _, tt := range tests {

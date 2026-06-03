@@ -63,8 +63,8 @@ func TestSendForwardPublishBatch_AllSucceed(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.ForwardPublishRequest{
-		{Topic: "a/b", Payload: []byte("1")},
-		{Topic: "c/d", Payload: []byte("2")},
+		{Topic: testTopicAB, Payload: []byte("1")},
+		{Topic: testTopicCD, Payload: []byte("2")},
 	}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -96,7 +96,7 @@ func TestSendForwardPublishBatch_PartialFailureRetriesSubset(t *testing.T) {
 					Delivered: 2,
 					Error:     "partial failure",
 					Failures: []*clusterv1.ForwardPublishBatchError{
-						{Index: 1, Topic: "b/c", Error: "transient"},
+						{Index: 1, Topic: testTopicBC, Error: "transient"},
 					},
 				}), nil
 			}
@@ -105,7 +105,7 @@ func TestSendForwardPublishBatch_PartialFailureRetriesSubset(t *testing.T) {
 			if len(msgs) != 1 {
 				t.Errorf("call 2: expected 1 message (retry subset), got %d", len(msgs))
 			}
-			if msgs[0].Topic != "b/c" {
+			if msgs[0].Topic != testTopicBC {
 				t.Errorf("call 2: expected topic b/c, got %s", msgs[0].Topic)
 			}
 			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
@@ -117,9 +117,9 @@ func TestSendForwardPublishBatch_PartialFailureRetriesSubset(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.ForwardPublishRequest{
-		{Topic: "a/b", Payload: []byte("1")},
-		{Topic: "b/c", Payload: []byte("2")},
-		{Topic: "c/d", Payload: []byte("3")},
+		{Topic: testTopicAB, Payload: []byte("1")},
+		{Topic: testTopicBC, Payload: []byte("2")},
+		{Topic: testTopicCD, Payload: []byte("3")},
 	}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -137,7 +137,7 @@ func TestSendForwardPublishBatch_TransportError(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "a/b"}}
+	msgs := []*clusterv1.ForwardPublishRequest{{Topic: testTopicAB}}
 	err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs)
 	if err == nil {
 		t.Fatal("expected transport error to propagate")
@@ -153,7 +153,7 @@ func TestSendForwardPublishBatch_ExhaustsPartialRetries(t *testing.T) {
 			// Always fail index 0
 			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
 				Success: false,
-				Error:   "always fails",
+				Error:   testAlwaysFails,
 				Failures: []*clusterv1.ForwardPublishBatchError{
 					{Index: 0, Error: "persistent error"},
 				},
@@ -180,7 +180,7 @@ func TestSendForwardPublishBatch_ExhaustsPartialRetries_QoS1ReturnsError(t *test
 			callCount.Add(1)
 			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
 				Success: false,
-				Error:   "always fails",
+				Error:   testAlwaysFails,
 				Failures: []*clusterv1.ForwardPublishBatchError{
 					{Index: 0, Error: "persistent error"},
 				},
@@ -209,7 +209,7 @@ func TestSendForwardPublishBatch_FailedWithoutIndexedFailures(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "a/b", Qos: 1}}
+	msgs := []*clusterv1.ForwardPublishRequest{{Topic: testTopicAB, Qos: 1}}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err == nil {
 		t.Fatal("expected error when response is unsuccessful without indexed failures")
 	}
@@ -229,8 +229,8 @@ func TestSendPublishBatch_AllSucceed(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.PublishRequest{
-		{ClientId: "c1", Topic: "a/b", Payload: []byte("1")},
-		{ClientId: "c2", Topic: "c/d", Payload: []byte("2")},
+		{ClientId: "c1", Topic: testTopicAB, Payload: []byte("1")},
+		{ClientId: "c2", Topic: testTopicCD, Payload: []byte("2")},
 	}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -314,9 +314,9 @@ func TestSendPublishBatch_ExhaustsPartialRetries_QoS0BestEffort(t *testing.T) {
 			callCount.Add(1)
 			return connect.NewResponse(&clusterv1.PublishBatchResponse{
 				Success: false,
-				Error:   "always fails",
+				Error:   testAlwaysFails,
 				Failures: []*clusterv1.PublishBatchError{
-					{Index: 0, ClientId: "c1", Error: "persistent"},
+					{Index: 0, ClientId: "c1", Error: testPersistent},
 				},
 			}), nil
 		},
@@ -339,9 +339,9 @@ func TestSendPublishBatch_ExhaustsPartialRetries_QoS1ReturnsError(t *testing.T) 
 			callCount.Add(1)
 			return connect.NewResponse(&clusterv1.PublishBatchResponse{
 				Success: false,
-				Error:   "always fails",
+				Error:   testAlwaysFails,
 				Failures: []*clusterv1.PublishBatchError{
-					{Index: 0, ClientId: "c1", Error: "persistent"},
+					{Index: 0, ClientId: "c1", Error: testPersistent},
 				},
 			}), nil
 		},
@@ -418,7 +418,7 @@ func TestSendRouteQueueBatch_PartialFailureRetriesSubset(t *testing.T) {
 				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
 					Success:   false,
 					Delivered: 1,
-					Error:     "partial",
+					Error:     testPartial,
 					Failures: []*clusterv1.RouteQueueBatchError{
 						{Index: 0, ClientId: "c1", QueueName: "q1", Error: "busy"},
 					},
@@ -471,9 +471,9 @@ func TestSendRouteQueueBatch_ExhaustsPartialRetriesReturnsError(t *testing.T) {
 			callCount.Add(1)
 			return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
 				Success: false,
-				Error:   "always fails",
+				Error:   testAlwaysFails,
 				Failures: []*clusterv1.RouteQueueBatchError{
-					{Index: 0, ClientId: "c1", QueueName: "q1", Error: "persistent"},
+					{Index: 0, ClientId: "c1", QueueName: "q1", Error: testPersistent},
 				},
 			}), nil
 		},
@@ -523,7 +523,7 @@ func TestSendRouteQueueBatch_PartialFailureWithNilDeliveryRetriesCorrectSubset(t
 				}
 				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
 					Success: false,
-					Error:   "partial",
+					Error:   testPartial,
 					Failures: []*clusterv1.RouteQueueBatchError{
 						{Index: 0, ClientId: "c1", QueueName: "q1", Error: "transient"},
 					},
@@ -580,11 +580,11 @@ func TestSendForwardPublishBatch_MultipleFailuresRetried(t *testing.T) {
 				return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
 					Success:   false,
 					Delivered: 2,
-					Error:     "partial",
+					Error:     testPartial,
 					Failures: []*clusterv1.ForwardPublishBatchError{
-						{Index: 0, Error: "fail"},
-						{Index: 2, Error: "fail"},
-						{Index: 4, Error: "fail"},
+						{Index: 0, Error: testFail},
+						{Index: 2, Error: testFail},
+						{Index: 4, Error: testFail},
 					},
 				}), nil
 			}
@@ -636,7 +636,7 @@ func TestSendForwardPublishBatch_ShrinkingRetries(t *testing.T) {
 				// All 3 fail
 				failures := make([]*clusterv1.ForwardPublishBatchError, len(msgs))
 				for i := range msgs {
-					failures[i] = &clusterv1.ForwardPublishBatchError{Index: uint32(i), Error: "fail"}
+					failures[i] = &clusterv1.ForwardPublishBatchError{Index: uint32(i), Error: testFail}
 				}
 				return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
 					Success: false, Failures: failures, Error: "all failed",
@@ -647,10 +647,10 @@ func TestSendForwardPublishBatch_ShrinkingRetries(t *testing.T) {
 				}
 				// Index 0 succeeds, 1 and 2 still fail
 				return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
-					Success: false, Delivered: 1, Error: "partial",
+					Success: false, Delivered: 1, Error: testPartial,
 					Failures: []*clusterv1.ForwardPublishBatchError{
-						{Index: 1, Error: "fail"},
-						{Index: 2, Error: "fail"},
+						{Index: 1, Error: testFail},
+						{Index: 2, Error: testFail},
 					},
 				}), nil
 			case 3:

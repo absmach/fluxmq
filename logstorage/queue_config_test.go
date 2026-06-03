@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testQueueName = "test-queue"
+
 func TestQueueConfigStore_NewAndClose(t *testing.T) {
 	dir := t.TempDir()
 
@@ -29,13 +31,13 @@ func TestQueueConfigStore_SaveAndGet(t *testing.T) {
 	defer store.Close()
 
 	config := types.QueueConfig{
-		Name: "test-queue",
+		Name: testQueueName,
 	}
 
 	err = store.Save(config)
 	require.NoError(t, err)
 
-	retrieved, err := store.Get("test-queue")
+	retrieved, err := store.Get(testQueueName)
 	require.NoError(t, err)
 	assert.Equal(t, config.Name, retrieved.Name)
 
@@ -50,16 +52,16 @@ func TestQueueConfigStore_Delete(t *testing.T) {
 	defer store.Close()
 
 	config := types.QueueConfig{
-		Name: "test-queue",
+		Name: testQueueName,
 	}
 
 	err = store.Save(config)
 	require.NoError(t, err)
 
-	err = store.Delete("test-queue")
+	err = store.Delete(testQueueName)
 	require.NoError(t, err)
 
-	_, err = store.Get("test-queue")
+	_, err = store.Get(testQueueName)
 	assert.ErrorIs(t, err, ErrQueueNotFound)
 }
 
@@ -95,7 +97,7 @@ func TestQueueConfigStore_Sync(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = store.Save(types.QueueConfig{
-		Name: "test-queue",
+		Name: testQueueName,
 	})
 	require.NoError(t, err)
 
@@ -144,7 +146,7 @@ func TestQueueConfigStore_Update(t *testing.T) {
 	defer store.Close()
 
 	config := types.QueueConfig{
-		Name: "test-queue",
+		Name: testQueueName,
 	}
 
 	err = store.Save(config)

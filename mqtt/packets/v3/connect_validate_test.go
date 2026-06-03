@@ -18,21 +18,21 @@ func TestConnectValidate(t *testing.T) {
 		{
 			name: "valid v3.1.1 connect",
 			connect: &Connect{
-				ProtocolName:    "MQTT",
+				ProtocolName:    protocolNameV4,
 				ProtocolVersion: 4,
 			},
 		},
 		{
 			name: "valid v3.1 connect",
 			connect: &Connect{
-				ProtocolName:    "MQIsdp",
+				ProtocolName:    protocolNameV3,
 				ProtocolVersion: 3,
 			},
 		},
 		{
 			name: "password without username",
 			connect: &Connect{
-				ProtocolName:    "MQTT",
+				ProtocolName:    protocolNameV4,
 				ProtocolVersion: 4,
 				PasswordFlag:    true,
 			},
@@ -41,7 +41,7 @@ func TestConnectValidate(t *testing.T) {
 		{
 			name: "reserved bit set",
 			connect: &Connect{
-				ProtocolName:    "MQTT",
+				ProtocolName:    protocolNameV4,
 				ProtocolVersion: 4,
 				ReservedBit:     1,
 			},
@@ -50,7 +50,7 @@ func TestConnectValidate(t *testing.T) {
 		{
 			name: "will qos without will flag",
 			connect: &Connect{
-				ProtocolName:    "MQTT",
+				ProtocolName:    protocolNameV4,
 				ProtocolVersion: 4,
 				WillQoS:         1,
 			},
@@ -59,7 +59,7 @@ func TestConnectValidate(t *testing.T) {
 		{
 			name: "invalid protocol name for v4",
 			connect: &Connect{
-				ProtocolName:    "MQIsdp",
+				ProtocolName:    protocolNameV3,
 				ProtocolVersion: 4,
 			},
 			wantErr: ErrInvalidProtocolName,

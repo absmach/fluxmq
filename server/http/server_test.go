@@ -12,6 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testSecret   = "secret"
+	testClientID = "client-id"
+)
+
 func TestBuildPublishMessage(t *testing.T) {
 	t.Run("with external id and content type", func(t *testing.T) {
 		msg := buildPublishMessage("m/d1/c/c1/test", []byte("payload"), 1, true, "http:1.2.3.4:1234", "ext-42", "application/senml+json")
@@ -43,9 +48,9 @@ func TestParseAuthorizationToken(t *testing.T) {
 		want   string
 	}{
 		{name: "empty", header: "", want: ""},
-		{name: "bare token", header: "secret", want: "secret"},
-		{name: "bearer token", header: "Bearer secret", want: "secret"},
-		{name: "client token", header: "Client secret", want: "secret"},
+		{name: "bare token", header: testSecret, want: testSecret},
+		{name: "bearer token", header: "Bearer secret", want: testSecret},
+		{name: "client token", header: "Client secret", want: testSecret},
 		{name: "basic token", header: "Basic dXNlcjpwYXNz", want: ""},
 	}
 
@@ -61,14 +66,14 @@ func TestParseAuthorizationToken(t *testing.T) {
 
 func TestAuthFromRequestBasicAuth(t *testing.T) {
 	req := httptest.NewRequest("POST", "/publish", nil)
-	req.SetBasicAuth("client-id", "client-secret")
+	req.SetBasicAuth(testClientID, "client-secret")
 	req.Header.Set("X-FluxMQ-Username", "header-user")
 
 	clientID, username, password, ok := authFromRequest(req)
 	if !ok {
 		t.Fatal("expected basic auth to be accepted")
 	}
-	if username != "client-id" || password != "client-secret" {
+	if username != testClientID || password != "client-secret" {
 		t.Fatalf("expected basic credentials, got username=%q password=%q", username, password)
 	}
 	if clientID == "" {
@@ -78,7 +83,7 @@ func TestAuthFromRequestBasicAuth(t *testing.T) {
 
 func TestAuthFromRequestHeaderPair(t *testing.T) {
 	req := httptest.NewRequest("POST", "/publish", nil)
-	req.Header.Set("X-FluxMQ-Username", "client-id")
+	req.Header.Set("X-FluxMQ-Username", testClientID)
 	req.Header.Set("Authorization", "Client client-secret")
 	req.Header.Set("X-FluxMQ-Client-ID", "http-client")
 
@@ -86,7 +91,7 @@ func TestAuthFromRequestHeaderPair(t *testing.T) {
 	if !ok {
 		t.Fatal("expected header pair auth to be accepted")
 	}
-	if username != "client-id" || password != "client-secret" {
+	if username != testClientID || password != "client-secret" {
 		t.Fatalf("unexpected credentials username=%q password=%q", username, password)
 	}
 	if clientID != "http-client" {
@@ -108,7 +113,7 @@ func TestAuthFromRequestHeaderPairMissingValues(t *testing.T) {
 		{
 			name: "missing authorization",
 			header: map[string]string{
-				"X-FluxMQ-Username": "client-id",
+				"X-FluxMQ-Username": testClientID,
 			},
 		},
 	}
@@ -215,7 +220,7 @@ func TestAuthForTopicAuthorizationOnlyFallback(t *testing.T) {
 	if !ok {
 		t.Fatal("expected authorization-only fallback to be accepted")
 	}
-	if username != "domain-1" || password != "secret" {
+	if username != "domain-1" || password != testSecret {
 		t.Fatalf("unexpected credentials username=%q password=%q", username, password)
 	}
 	if clientID == "" {

@@ -12,6 +12,9 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
+// headerTopic is the message header key that carries the original topic.
+const headerTopic = "_topic"
+
 var (
 	_ storage.QueueStore         = (*Adapter)(nil)
 	_ storage.ConsumerGroupStore = (*Adapter)(nil)
@@ -197,7 +200,7 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 		headers[k] = []byte(v)
 	}
 
-	headers["_topic"] = []byte(msg.Topic)
+	headers[headerTopic] = []byte(msg.Topic)
 	headers["_id"] = []byte(msg.ID)
 	if msg.State != "" {
 		headers["_state"] = []byte(msg.State)
@@ -230,7 +233,7 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*typ
 			headers[k] = []byte(v)
 		}
 
-		headers["_topic"] = []byte(msg.Topic)
+		headers[headerTopic] = []byte(msg.Topic)
 		headers["_id"] = []byte(msg.ID)
 		if msg.State != "" {
 			headers["_state"] = []byte(msg.State)
@@ -629,7 +632,7 @@ func logMessageToTypes(msg *Message) *types.Message {
 
 	for k, v := range msg.Headers {
 		switch k {
-		case "_topic":
+		case headerTopic:
 			result.Topic = string(v)
 		case "_id":
 			result.ID = string(v)

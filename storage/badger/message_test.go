@@ -13,12 +13,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testTopic          = "test/topic"
+	testAlertsCritical = "alerts/critical"
+	testClient1        = "client-1"
+	testClient2        = "client-2"
+	testClient3        = "client-3"
+	testSensorPlusTemp = "sensor/+/temp"
+	testSensorMulti    = "sensor/#"
+)
+
 func TestMessageStore_StoreInflight(t *testing.T) {
 	store := setupMessageStore(t)
 	defer cleanupMessageStore(t, store)
 
 	msg := &storage.Message{
-		Topic:    "test/topic",
+		Topic:    testTopic,
 		Payload:  []byte("test payload"),
 		QoS:      1,
 		PacketID: 100,
@@ -42,7 +52,7 @@ func TestMessageStore_StoreQueue(t *testing.T) {
 	defer cleanupMessageStore(t, store)
 
 	msg := &storage.Message{
-		Topic:   "test/topic",
+		Topic:   testTopic,
 		Payload: []byte("queued message"),
 		QoS:     2,
 	}
@@ -70,7 +80,7 @@ func TestMessageStore_Delete(t *testing.T) {
 	defer cleanupMessageStore(t, store)
 
 	msg := &storage.Message{
-		Topic:   "test/topic",
+		Topic:   testTopic,
 		Payload: []byte("test"),
 		QoS:     1,
 	}
@@ -115,7 +125,7 @@ func TestMessageStore_DeleteByPrefix(t *testing.T) {
 	// Store multiple messages
 	for i := 0; i < 3; i++ {
 		msg := &storage.Message{
-			Topic:   "test/topic",
+			Topic:   testTopic,
 			Payload: []byte("test"),
 			QoS:     1,
 		}
@@ -186,7 +196,7 @@ func TestMessageStore_QoSLevels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := &storage.Message{
-				Topic:   "test/topic",
+				Topic:   testTopic,
 				Payload: []byte("test"),
 				QoS:     tt.qos,
 			}

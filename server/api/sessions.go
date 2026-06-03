@@ -23,6 +23,8 @@ import (
 const (
 	sessionStateConnected    = "connected"
 	sessionStateDisconnected = "disconnected"
+
+	protocolAMQP091 = "amqp0.9.1"
 )
 
 type sessionSubscriptionResponse struct {
@@ -248,7 +250,7 @@ func amqpSessionResponse(
 		ConnectionName:    connectionName,
 		State:             sessionStateConnected,
 		Connected:         true,
-		Protocol:          "amqp0.9.1",
+		Protocol:          protocolAMQP091,
 		SubscriptionCount: len(subscriptions),
 	}
 
@@ -336,7 +338,7 @@ func protocolLabel(clientID string, version byte) string {
 		return "mqtt5"
 	default:
 		if corebroker.IsAMQP091Client(clientID) {
-			return "amqp0.9.1"
+			return protocolAMQP091
 		}
 		if corebroker.IsAMQP1Client(clientID) {
 			return "amqp1.0"

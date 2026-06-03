@@ -21,6 +21,12 @@ const (
 	statusError    = int32(500)
 )
 
+// Management entity type and operation names.
+const (
+	entityTypeQueue = "queue"
+	opCreate        = "CREATE"
+)
+
 // managementHandler handles AMQP management node requests.
 type managementHandler struct {
 	broker *Broker
@@ -44,14 +50,14 @@ func (h *managementHandler) handleRequest(msg *message.Message) *message.Message
 	entityType, _ := msg.ApplicationProperties["type"].(string)
 	name, _ := msg.ApplicationProperties["name"].(string)
 
-	if entityType != "queue" {
+	if entityType != entityTypeQueue {
 		return h.errorResponse(msg, statusError, fmt.Sprintf("unsupported type: %s", entityType))
 	}
 
 	ctx := context.Background()
 
 	switch operation {
-	case "CREATE":
+	case opCreate:
 		return h.handleCreate(ctx, msg, name)
 	case "DELETE":
 		return h.handleDelete(ctx, msg, name)
@@ -94,7 +100,7 @@ func (h *managementHandler) handleCreate(ctx context.Context, req *message.Messa
 		return h.errorResponse(req, statusError, err.Error())
 	}
 
-	h.logger.Info("queue created via management", slog.String("queue", name))
+	h.logger.Info("queue created via management", slog.String(entityTypeQueue, name))
 	return h.statusResponse(req, statusCreated, "queue created")
 }
 
@@ -122,7 +128,7 @@ func (h *managementHandler) handleDelete(ctx context.Context, req *message.Messa
 		return h.errorResponse(req, statusError, err.Error())
 	}
 
-	h.logger.Info("queue deleted via management", slog.String("queue", name))
+	h.logger.Info("queue deleted via management", slog.String(entityTypeQueue, name))
 	return h.statusResponse(req, statusOK, "queue deleted")
 }
 

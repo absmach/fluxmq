@@ -12,7 +12,7 @@ import (
 func TestNormalizeFuzzyScenarioConfigValid(t *testing.T) {
 	cfg := fuzzyScenarioConfig{
 		Name:                  "fuzzy-valid",
-		Mode:                  "fuzzy",
+		Mode:                  fuzzyMode,
 		Duration:              "90s",
 		DrainTimeout:          "20s",
 		ChurnInterval:         "1500ms",
@@ -79,7 +79,7 @@ func TestNormalizeFuzzyScenarioConfigValid(t *testing.T) {
 func TestNormalizeFuzzyScenarioConfigInvalidDuration(t *testing.T) {
 	cfg := fuzzyScenarioConfig{
 		Name:           "fuzzy-invalid-duration",
-		Mode:           "fuzzy",
+		Mode:           fuzzyMode,
 		Duration:       "bad",
 		MaxPublishers:  10,
 		MaxSubscribers: 10,
@@ -88,7 +88,7 @@ func TestNormalizeFuzzyScenarioConfigInvalidDuration(t *testing.T) {
 				Topic:           "perf/fuzzy/one",
 				MaxPublishers:   5,
 				MaxSubscribers:  5,
-				PublishInterval: "100ms",
+				PublishInterval: testInterval100ms,
 			},
 		},
 	}
@@ -105,7 +105,7 @@ func TestNormalizeFuzzyScenarioConfigInvalidDuration(t *testing.T) {
 func TestNormalizeFuzzyScenarioConfigRejectsMissingProfiles(t *testing.T) {
 	cfg := fuzzyScenarioConfig{
 		Name:           "fuzzy-no-profiles",
-		Mode:           "fuzzy",
+		Mode:           fuzzyMode,
 		Duration:       "60s",
 		MaxPublishers:  10,
 		MaxSubscribers: 10,
@@ -123,7 +123,7 @@ func TestNormalizeFuzzyScenarioConfigRejectsMissingProfiles(t *testing.T) {
 func TestNormalizeFuzzyScenarioConfigClampsMaxTotalConnections(t *testing.T) {
 	cfg := fuzzyScenarioConfig{
 		Name:                "fuzzy-max-total-clamp",
-		Mode:                "fuzzy",
+		Mode:                fuzzyMode,
 		Duration:            "60s",
 		MaxPublishers:       40,
 		MaxSubscribers:      50,
@@ -133,7 +133,7 @@ func TestNormalizeFuzzyScenarioConfigClampsMaxTotalConnections(t *testing.T) {
 				Topic:           "perf/fuzzy/one",
 				MaxPublishers:   40,
 				MaxSubscribers:  50,
-				PublishInterval: "100ms",
+				PublishInterval: testInterval100ms,
 			},
 		},
 	}
@@ -151,7 +151,7 @@ func TestNormalizeFuzzyScenarioConfigClampsMaxTotalConnections(t *testing.T) {
 func TestNormalizeFuzzyScenarioConfigDefaultsMaxTotalAndChurn(t *testing.T) {
 	cfg := fuzzyScenarioConfig{
 		Name:           "fuzzy-defaults",
-		Mode:           "fuzzy",
+		Mode:           fuzzyMode,
 		Duration:       "45s",
 		MaxPublishers:  12,
 		MaxSubscribers: 18,

@@ -20,7 +20,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "basic connect",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       60,
@@ -31,7 +31,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "connect with credentials",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				UsernameFlag:    true,
@@ -46,7 +46,7 @@ func TestConnectEncodeDecode(t *testing.T) {
 			name: "connect with will",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				WillFlag:        true,
@@ -169,7 +169,7 @@ func TestPublishEncodeDecode(t *testing.T) {
 			name: "qos0 publish",
 			pkt: &Publish{
 				FixedHeader: FixedHeader{PacketType: PublishType, QoS: 0},
-				TopicName:   "test/topic",
+				TopicName:   testTopic,
 				Payload:     []byte("hello world"),
 			},
 		},
@@ -177,7 +177,7 @@ func TestPublishEncodeDecode(t *testing.T) {
 			name: "qos1 publish",
 			pkt: &Publish{
 				FixedHeader: FixedHeader{PacketType: PublishType, QoS: 1},
-				TopicName:   "test/topic",
+				TopicName:   testTopic,
 				ID:          12345,
 				Payload:     []byte("qos1 message"),
 			},
@@ -241,7 +241,7 @@ func TestSubscribeEncodeDecode(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 				ID:          1,
 				Topics: []Topic{
-					{Name: "test/topic", QoS: 1},
+					{Name: testTopic, QoS: 1},
 				},
 			},
 		},
@@ -251,9 +251,9 @@ func TestSubscribeEncodeDecode(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 				ID:          2,
 				Topics: []Topic{
-					{Name: "topic/one", QoS: 0},
-					{Name: "topic/two", QoS: 1},
-					{Name: "topic/three", QoS: 2},
+					{Name: testTopicOne, QoS: 0},
+					{Name: testTopicTwo, QoS: 1},
+					{Name: testTopicThree, QoS: 2},
 				},
 			},
 		},
@@ -330,7 +330,7 @@ func TestUnsubscribeEncodeDecode(t *testing.T) {
 	pkt := &Unsubscribe{
 		FixedHeader: FixedHeader{PacketType: UnsubscribeType, QoS: 1},
 		ID:          1,
-		Topics:      []string{"topic/one", "topic/two"},
+		Topics:      []string{testTopicOne, testTopicTwo},
 	}
 
 	encoded := pkt.Encode()

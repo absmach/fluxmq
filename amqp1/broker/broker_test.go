@@ -24,6 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testTopic    = "test/topic"
+	testRecvLink = "recv-link"
+	testSendLink = "send-link"
+)
+
 func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 	t.Helper()
 	b := New(nil, nil, nil)
@@ -210,8 +216,8 @@ func TestAttachDetach(t *testing.T) {
 		Name:   "sender-link",
 		Handle: 0,
 		Role:   performatives.RoleSender,
-		Source: &performatives.Source{Address: "test/topic"},
-		Target: &performatives.Target{Address: "test/topic"},
+		Source: &performatives.Source{Address: testTopic},
+		Target: &performatives.Target{Address: testTopic},
 	}
 	body, err := attach.Encode()
 	require.NoError(t, err)
@@ -252,7 +258,7 @@ func TestPubSubFlow(t *testing.T) {
 
 	// Attach as receiver (broker sends to us)
 	attach := &performatives.Attach{
-		Name:   "recv-link",
+		Name:   testRecvLink,
 		Handle: 0,
 		Role:   performatives.RoleReceiver,
 		Source: &performatives.Source{Address: "test/pubsub"},
@@ -312,7 +318,7 @@ func TestTransferFromClient(t *testing.T) {
 
 	// Attach as sender (broker receives from us)
 	attach := &performatives.Attach{
-		Name:                 "send-link",
+		Name:                 testSendLink,
 		Handle:               0,
 		Role:                 performatives.RoleSender,
 		Target:               &performatives.Target{Address: "test/ingest"},
@@ -373,7 +379,7 @@ func TestTransferFromClientClientIDProperty(t *testing.T) {
 	doBeginSession(t, c, 0)
 
 	attach := &performatives.Attach{
-		Name:                 "send-link",
+		Name:                 testSendLink,
 		Handle:               0,
 		Role:                 performatives.RoleSender,
 		Target:               &performatives.Target{Address: "test.ingest"},
@@ -435,7 +441,7 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 	doBeginSession(t, c, 0)
 
 	attach := &performatives.Attach{
-		Name:                 "send-link",
+		Name:                 testSendLink,
 		Handle:               0,
 		Role:                 performatives.RoleSender,
 		Target:               &performatives.Target{Address: "$queue/orders/process"},
@@ -547,7 +553,7 @@ func TestMultiFrameTransferSend(t *testing.T) {
 
 	// Attach as receiver
 	attach := &performatives.Attach{
-		Name:   "recv-link",
+		Name:   testRecvLink,
 		Handle: 0,
 		Role:   performatives.RoleReceiver,
 		Source: &performatives.Source{Address: "test/big"},
@@ -625,7 +631,7 @@ func TestMultiFrameTransferReceive(t *testing.T) {
 
 	// Attach as sender
 	attach := &performatives.Attach{
-		Name:                 "send-link",
+		Name:                 testSendLink,
 		Handle:               0,
 		Role:                 performatives.RoleSender,
 		Target:               &performatives.Target{Address: "test/bigingest"},
@@ -708,7 +714,7 @@ func TestHandleExceedsMax(t *testing.T) {
 		Name:   "bad-link",
 		Handle: 999,
 		Role:   performatives.RoleSender,
-		Target: &performatives.Target{Address: "test/topic"},
+		Target: &performatives.Target{Address: testTopic},
 	}
 	body, err := attach.Encode()
 	require.NoError(t, err)
@@ -869,7 +875,7 @@ func TestCreditExhaustion(t *testing.T) {
 
 	// Attach as receiver (broker sends to us)
 	attach := &performatives.Attach{
-		Name:   "recv-link",
+		Name:   testRecvLink,
 		Handle: 0,
 		Role:   performatives.RoleReceiver,
 		Source: &performatives.Source{Address: "test/credit"},

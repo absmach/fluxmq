@@ -13,6 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testDescEncodeZero  = "encode and decode zero"
+	testDescEncodeSmall = "encode and decode small number"
+	testDescDecodeEmpty = "decode from empty reader"
+)
+
 var (
 	testString  = "test string"
 	testBytes   = []byte("test bytes")
@@ -130,12 +136,12 @@ func TestEncodeDecodeUint16(t *testing.T) {
 		err   error
 	}{
 		{
-			desc:  "encode and decode zero",
+			desc:  testDescEncodeZero,
 			input: 0,
 			err:   nil,
 		},
 		{
-			desc:  "encode and decode small number",
+			desc:  testDescEncodeSmall,
 			input: 42,
 			err:   nil,
 		},
@@ -183,12 +189,12 @@ func TestEncodeDecodeUint32(t *testing.T) {
 		err   error
 	}{
 		{
-			desc:  "encode and decode zero",
+			desc:  testDescEncodeZero,
 			input: 0,
 			err:   nil,
 		},
 		{
-			desc:  "encode and decode small number",
+			desc:  testDescEncodeSmall,
 			input: 12345,
 			err:   nil,
 		},
@@ -237,13 +243,13 @@ func TestEncodeDecodeVBI(t *testing.T) {
 		err         error
 	}{
 		{
-			desc:        "encode and decode zero",
+			desc:        testDescEncodeZero,
 			input:       0,
 			expectedLen: 1,
 			err:         nil,
 		},
 		{
-			desc:        "encode and decode small number",
+			desc:        testDescEncodeSmall,
 			input:       127,
 			expectedLen: 1,
 			err:         nil,
@@ -347,7 +353,7 @@ func TestDecodeByte(t *testing.T) {
 			err:   nil,
 		},
 		{
-			desc:  "decode from empty reader",
+			desc:  testDescDecodeEmpty,
 			input: []byte{},
 			want:  0,
 			err:   io.EOF,
@@ -375,7 +381,7 @@ func TestDecodeUint16Errors(t *testing.T) {
 		err   error
 	}{
 		{
-			desc:  "decode from empty reader",
+			desc:  testDescDecodeEmpty,
 			input: []byte{},
 			err:   io.EOF,
 		},
@@ -402,7 +408,7 @@ func TestDecodeUint32Errors(t *testing.T) {
 		err   error
 	}{
 		{
-			desc:  "decode from empty reader",
+			desc:  testDescDecodeEmpty,
 			input: []byte{},
 			err:   io.EOF,
 		},
@@ -439,7 +445,7 @@ func TestDecodeBytesErrors(t *testing.T) {
 		err   error
 	}{
 		{
-			desc:  "decode from empty reader",
+			desc:  testDescDecodeEmpty,
 			input: []byte{},
 			err:   io.EOF,
 		},
@@ -476,7 +482,7 @@ func TestDecodeStringErrors(t *testing.T) {
 		err   error
 	}{
 		{
-			desc:  "decode from empty reader",
+			desc:  testDescDecodeEmpty,
 			input: []byte{},
 			err:   io.EOF,
 		},

@@ -12,6 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testExternalID  = "ext-123"
+	testDeviceID    = "device-1"
+	testQueueTasks  = "tasks"
+	testQueueOrders = "orders"
+)
+
 type stubAuthenticator struct {
 	result *AuthnResult
 	err    error
@@ -45,30 +52,30 @@ func TestAuthEngine_Authenticate_NilAuth(t *testing.T) {
 }
 
 func TestAuthEngine_Authenticate_Success_StoresIdentity(t *testing.T) {
-	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "ext-123"}}
+	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: testExternalID}}
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
 	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, "ext-123", externalID)
+	assert.Equal(t, testExternalID, externalID)
 
 	// Authz should receive the resolved external ID, not the MQTT client ID
 	e.CanPublish("mqtt-client-1", "some/topic")
-	assert.Equal(t, "ext-123", authz.receivedClientID)
+	assert.Equal(t, testExternalID, authz.receivedClientID)
 }
 
 func TestAuthEngine_ExternalID_ReturnsStoredIdentity(t *testing.T) {
-	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "ext-123"}}
+	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: testExternalID}}
 	e := NewAuthEngine(authn, nil)
 
 	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, "ext-123", externalID)
+	assert.Equal(t, testExternalID, externalID)
 
-	assert.Equal(t, "ext-123", e.ExternalID("mqtt-client-1"))
+	assert.Equal(t, testExternalID, e.ExternalID("mqtt-client-1"))
 	assert.Equal(t, "", e.ExternalID("missing-client"))
 }
 

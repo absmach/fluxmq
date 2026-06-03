@@ -79,10 +79,10 @@ func TestListSessionsFilterByState(t *testing.T) {
 		state     string
 		wantCount int
 	}{
-		{"all", "", 3},
-		{"connected", "connected", 2},
-		{"disconnected", "disconnected", 1},
-		{"explicit all", "all", 3},
+		{sessionStateAll, "", 3},
+		{sessionStateConnected, sessionStateConnected, 2},
+		{sessionStateDisconnected, sessionStateDisconnected, 1},
+		{"explicit all", sessionStateAll, 3},
 	}
 
 	for _, tt := range tests {
@@ -102,14 +102,14 @@ func TestListSessionsFilterByPrefix(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	sessions, _, err := b.ListSessions(context.Background(), SessionListFilter{Prefix: "client-a"})
+	sessions, _, err := b.ListSessions(context.Background(), SessionListFilter{Prefix: testClientA})
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session with prefix client-a, got %d", len(sessions))
 	}
-	if sessions[0].ClientID != "client-a" {
+	if sessions[0].ClientID != testClientA {
 		t.Fatalf("expected client-a, got %q", sessions[0].ClientID)
 	}
 }
@@ -219,11 +219,11 @@ func TestGetSessionSnapshotLive(t *testing.T) {
 	b, cleanup := newTestBrokerWithSessions(t)
 	defer cleanup()
 
-	snap, err := b.GetSessionSnapshot(context.Background(), "client-a")
+	snap, err := b.GetSessionSnapshot(context.Background(), testClientA)
 	if err != nil {
 		t.Fatalf("GetSessionSnapshot: %v", err)
 	}
-	if snap.ClientID != "client-a" {
+	if snap.ClientID != testClientA {
 		t.Fatalf("expected client-a, got %q", snap.ClientID)
 	}
 	if !snap.Connected {
@@ -248,7 +248,7 @@ func TestGetSessionSnapshotDisconnected(t *testing.T) {
 	if snap.Connected {
 		t.Fatal("expected disconnected")
 	}
-	if snap.State != "disconnected" {
+	if snap.State != sessionStateDisconnected {
 		t.Fatalf("expected state 'disconnected', got %q", snap.State)
 	}
 }
@@ -294,7 +294,7 @@ func newTestBrokerWithSessions(t *testing.T) (*Broker, func()) {
 		connected bool
 		filter    string
 	}{
-		{"client-a", true, "a/topic"},
+		{testClientA, true, "a/topic"},
 		{"client-b", true, "b/topic"},
 		{"client-c", false, "c/topic"},
 	} {

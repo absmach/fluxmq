@@ -32,7 +32,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 
 			// Create a subscriber
 			sub := createBenchSession(b, broker, "subscriber")
-			broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+			broker.subscribe(sub, testTopic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 			payload := make([]byte, size)
 			for i := range payload {
@@ -44,7 +44,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 
 			for b.Loop() {
 				msg := &storage.Message{
-					Topic: "test/topic",
+					Topic: testTopic,
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
@@ -66,7 +66,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 			// Create subscribers
 			for i := 0; i < count; i++ {
 				sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-				broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+				broker.subscribe(sub, testTopic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 			}
 
 			payload := make([]byte, 1024)
@@ -79,7 +79,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 
 			for b.Loop() {
 				msg := &storage.Message{
-					Topic: "test/topic",
+					Topic: testTopic,
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
@@ -95,7 +95,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 	defer broker.Close()
 
 	sub := createBenchSession(b, broker, "subscriber")
-	broker.subscribe(sub, "test/topic", 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+	broker.subscribe(sub, testTopic, 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	payload := make([]byte, 1024)
 	for i := range payload {
@@ -106,7 +106,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 
 	for b.Loop() {
 		msg := &storage.Message{
-			Topic: "test/topic",
+			Topic: testTopic,
 			QoS:   1,
 		}
 		msg.SetPayloadFromBytes(payload)
@@ -120,7 +120,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 	defer broker.Close()
 
 	sub := createBenchSession(b, broker, "subscriber")
-	broker.subscribe(sub, "test/topic", 2, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+	broker.subscribe(sub, testTopic, 2, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 
 	payload := make([]byte, 1024)
 	for i := range payload {
@@ -131,7 +131,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 
 	for b.Loop() {
 		msg := &storage.Message{
-			Topic: "test/topic",
+			Topic: testTopic,
 			QoS:   2,
 		}
 		msg.SetPayloadFromBytes(payload)
@@ -164,7 +164,7 @@ func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 
 			for b.Loop() {
 				msg := &storage.Message{
-					Topic: "test/topic",
+					Topic: testTopic,
 					QoS:   0,
 				}
 				msg.SetPayloadFromBytes(payload)
@@ -182,7 +182,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 	// Create 10 subscribers
 	for i := 0; i < 10; i++ {
 		sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+		broker.subscribe(sub, testTopic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	// Mix of message sizes representing realistic workload:
@@ -207,7 +207,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		payload := payloads[i%len(payloads)]
 		msg := &storage.Message{
-			Topic: "test/topic",
+			Topic: testTopic,
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)
@@ -409,7 +409,7 @@ func BenchmarkMessageDistribute(b *testing.B) {
 	// Create 10 subscribers
 	for i := 0; i < 10; i++ {
 		sub := createBenchSession(b, broker, fmt.Sprintf("sub-%d", i))
-		broker.subscribe(sub, "test/topic", 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
+		broker.subscribe(sub, testTopic, 0, storage.SubscribeOptions{}) //nolint:errcheck // test setup
 	}
 
 	payload := make([]byte, 1024)
@@ -421,7 +421,7 @@ func BenchmarkMessageDistribute(b *testing.B) {
 
 	for b.Loop() {
 		msg := &storage.Message{
-			Topic: "test/topic",
+			Topic: testTopic,
 			QoS:   0,
 		}
 		msg.SetPayloadFromBytes(payload)

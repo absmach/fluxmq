@@ -9,30 +9,43 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+const (
+	testFooBar           = "foo/bar"
+	testFooPlus          = "foo/+"
+	testFoo              = "foo"
+	testFooBarBaz        = "foo/bar/baz"
+	testSysMonitorClient = "$SYS/monitor/Clients"
+	testUserPlusCreated  = "user/+/created"
+	testEmpty            = "empty"
+	testOrdersEuCreated  = "orders.eu.created"
+	testOrdersEuMqtt     = "orders/eu/created"
+	testOrders           = "orders"
+)
+
 func TestTopicMatch(t *testing.T) {
 	tests := []struct {
 		filter string
 		topic  string
 		want   bool
 	}{
-		{"foo/bar", "foo/bar", true},
-		{"foo/+", "foo/bar", true},
-		{"foo/+", "foo/baz", true},
-		{"foo/+", "foo", false},
-		{"foo/+", "foo/bar/baz", false},
-		{"foo/#", "foo/bar/baz", true},
-		{"foo/#", "foo", true},
-		{"#", "foo/bar", true},
+		{testFooBar, testFooBar, true},
+		{testFooPlus, testFooBar, true},
+		{testFooPlus, "foo/baz", true},
+		{testFooPlus, testFoo, false},
+		{testFooPlus, testFooBarBaz, false},
+		{"foo/#", testFooBarBaz, true},
+		{"foo/#", testFoo, true},
+		{"#", testFooBar, true},
 		{"#", "anything", true},
-		{"+/+", "foo/bar", true},
-		{"+/+", "foo/bar/baz", false},
-		{"$SYS/monitor/Clients", "$SYS/monitor/Clients", true},
-		{"$SYS/#", "$SYS/monitor/Clients", true},
-		{"#", "$SYS/monitor/Clients", false},
-		{"+/monitor/Clients", "$SYS/monitor/Clients", false},
-		{"foo/bar", "foo/baz", false},
-		{"", "foo", false},
-		{"foo", "", false},
+		{"+/+", testFooBar, true},
+		{"+/+", testFooBarBaz, false},
+		{testSysMonitorClient, testSysMonitorClient, true},
+		{"$SYS/#", testSysMonitorClient, true},
+		{"#", testSysMonitorClient, false},
+		{"+/monitor/Clients", testSysMonitorClient, false},
+		{testFooBar, "foo/baz", false},
+		{"", testFoo, false},
+		{testFoo, "", false},
 	}
 
 	for _, tt := range tests {

@@ -29,6 +29,12 @@ const (
 	StatusDown = "down"
 )
 
+const (
+	statusNotReady   = "not_ready"
+	detailNotInit    = "not initialized"
+	nodeIDSingleNode = "single-node"
+)
+
 // Config holds health check server configuration.
 type Config struct {
 	Address         string
@@ -182,10 +188,10 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 	// --- Broker ---
 	if s.broker == nil {
-		checks["broker"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
+		checks["broker"] = &CheckResult{Status: StatusDown, Details: detailNotInit}
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
-			Status:  "not_ready",
+			Status:  statusNotReady,
 			Details: "broker not initialized",
 			Checks:  checks,
 		})
@@ -195,10 +201,10 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 	// --- Storage ---
 	if s.store == nil {
-		checks["storage"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
+		checks["storage"] = &CheckResult{Status: StatusDown, Details: detailNotInit}
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
-			Status:  "not_ready",
+			Status:  statusNotReady,
 			Details: "storage not initialized",
 			Checks:  checks,
 		})
@@ -208,7 +214,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		checks["storage"] = &CheckResult{Status: StatusDown, Details: err.Error()}
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
-			Status:  "not_ready",
+			Status:  statusNotReady,
 			Details: "storage unavailable",
 			Checks:  checks,
 		})
@@ -220,10 +226,10 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.clusterEnabled() {
 		nodeID := s.cluster.NodeID()
 		if nodeID == "" {
-			checks["cluster"] = &CheckResult{Status: StatusDown, Details: "not initialized"}
+			checks["cluster"] = &CheckResult{Status: StatusDown, Details: detailNotInit}
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(ReadyResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
-				Status:  "not_ready",
+				Status:  statusNotReady,
 				Details: "cluster not initialized",
 				Checks:  checks,
 			})
@@ -300,7 +306,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Single-node mode
 	if !s.clusterEnabled() {
-		response.NodeID = "single-node"
+		response.NodeID = nodeIDSingleNode
 		response.Sessions = int(s.broker.Stats().GetCurrentConnections())
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response) //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal

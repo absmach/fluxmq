@@ -61,7 +61,7 @@ func TestParseConnAckProperties_Complete(t *testing.T) {
 		ServerKeepAlive:      &serverKeepAlive,
 		ResponseInfo:         "/response/client-123",
 		ServerReference:      "backup.mqtt.example.com",
-		AuthMethod:           "SCRAM-SHA-256",
+		AuthMethod:           testScramSHA256,
 		AuthData:             []byte("auth-data"),
 	}
 
@@ -115,7 +115,7 @@ func TestParseConnAckProperties_Complete(t *testing.T) {
 	if caps.ServerReference != "backup.mqtt.example.com" {
 		t.Errorf("Expected ServerReference 'backup.mqtt.example.com', got %s", caps.ServerReference)
 	}
-	if caps.AuthenticationMethod != "SCRAM-SHA-256" {
+	if caps.AuthenticationMethod != testScramSHA256 {
 		t.Errorf("Expected AuthenticationMethod 'SCRAM-SHA-256', got %s", caps.AuthenticationMethod)
 	}
 	if string(caps.AuthenticationData) != "auth-data" {

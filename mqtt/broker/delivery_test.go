@@ -33,7 +33,7 @@ func TestDeliverToSession_MarkSentAfterWireWrite(t *testing.T) {
 	require.NoError(t, s.Connect(conn))
 
 	msg := storage.AcquireMessage()
-	msg.Topic = "test/topic"
+	msg.Topic = testTopic
 	msg.QoS = 1
 	msg.SetPayloadFromBytes([]byte("payload"))
 

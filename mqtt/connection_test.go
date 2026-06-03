@@ -43,7 +43,7 @@ func TestConnectionReadPacketV3(t *testing.T) {
 	go func() {
 		connect := &v3.Connect{
 			FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
-			ProtocolName:    "MQTT",
+			ProtocolName:    testProtocolNameMQTT,
 			ProtocolVersion: 4,
 			CleanSession:    true,
 			KeepAlive:       60,
@@ -71,7 +71,7 @@ func TestConnectionReadPacketV5(t *testing.T) {
 	go func() {
 		connect := &v5.Connect{
 			FixedHeader:     v5.FixedHeader{PacketType: v5.ConnectType},
-			ProtocolName:    "MQTT",
+			ProtocolName:    testProtocolNameMQTT,
 			ProtocolVersion: v5.V5,
 			CleanStart:      true,
 			KeepAlive:       60,
@@ -99,7 +99,7 @@ func TestConnectionReadPacketForcedV3(t *testing.T) {
 	go func() {
 		connect := &v3.Connect{
 			FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
-			ProtocolName:    "MQTT",
+			ProtocolName:    testProtocolNameMQTT,
 			ProtocolVersion: 4,
 			CleanSession:    true,
 			KeepAlive:       60,
@@ -126,7 +126,7 @@ func TestConnectionReadPacketForcedV5(t *testing.T) {
 	go func() {
 		connect := &v5.Connect{
 			FixedHeader:     v5.FixedHeader{PacketType: v5.ConnectType},
-			ProtocolName:    "MQTT",
+			ProtocolName:    testProtocolNameMQTT,
 			ProtocolVersion: v5.V5,
 			CleanStart:      true,
 			KeepAlive:       60,
@@ -153,7 +153,7 @@ func TestConnectionReadPacketForcedV5WithV3PayloadErrors(t *testing.T) {
 	go func() {
 		connect := &v3.Connect{
 			FixedHeader:     v3.FixedHeader{PacketType: v3.ConnectType},
-			ProtocolName:    "MQTT",
+			ProtocolName:    testProtocolNameMQTT,
 			ProtocolVersion: 4,
 			CleanSession:    true,
 			KeepAlive:       60,

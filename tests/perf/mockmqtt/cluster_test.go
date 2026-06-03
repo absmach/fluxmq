@@ -96,7 +96,7 @@ func startTestCluster(t *testing.T) (*Cluster, []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cluster := New([]string{"127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0"})
+	cluster := New([]string{testLoopbackAny, testLoopbackAny, testLoopbackAny})
 	if err := cluster.Start(ctx); err != nil {
 		t.Fatalf("failed to start cluster: %v", err)
 	}

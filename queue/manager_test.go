@@ -349,14 +349,14 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	cfg.DeliveryBatchSize = 10
 	mgr := NewManager(logStore, groupStore, deliveryTarget, cfg, logger, nil)
 
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
 	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
 	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
-	if err := mgr.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamer", "", cursor); err != nil {
+	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", "client-1", "streamer", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
@@ -379,7 +379,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 		t.Fatal("timed out waiting for delivery")
 	}
 
-	group, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	group, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamer")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("orders", "$queue/orders/#")); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
-	if err := mgr.Subscribe(ctx, "orders", "", "client-1", "workers", ""); err != nil {
+	if err := mgr.Subscribe(ctx, "orders", "", "client-1", testGroupWorkers, ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
@@ -438,13 +438,13 @@ func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), logger, nil)
 
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
 	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	group := types.NewConsumerGroupState("events", "streamer", "")
+	group := types.NewConsumerGroupState(testQueueEvents, "streamer", "")
 	group.Mode = types.GroupModeStream
 	group.AutoCommit = false
 	group.Cursor.Cursor = 1
@@ -453,11 +453,11 @@ func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
 
-	if err := mgr.Ack(context.Background(), "events", "events:0", "streamer"); err != nil {
+	if err := mgr.Ack(context.Background(), testQueueEvents, "events:0", "streamer"); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
 
-	stored, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	stored, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamer")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
@@ -475,22 +475,22 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), logger, nil)
 
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
 	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
 	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
-	if err := mgr.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamer", "", cursor); err != nil {
+	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", "client-1", "streamer", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	if err := mgr.Reject(context.Background(), "events", "events:0", "streamer", "bad message"); err != nil {
+	if err := mgr.Reject(context.Background(), testQueueEvents, "events:0", "streamer", "bad message"); err != nil {
 		t.Fatalf("Reject failed: %v", err)
 	}
 
-	group, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamer")
+	group, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamer")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestRetentionOffsetMessages(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), logger, nil)
 
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestRetentionOffsetMessages(t *testing.T) {
 	}
 
 	queueCfg.Retention.RetentionMessages = 1
-	queueCfg.Name = "events"
+	queueCfg.Name = testQueueEvents
 	offset, ok := mgr.computeRetentionOffset(context.Background(), &queueCfg)
 	if !ok {
 		t.Fatal("expected retention offset")
@@ -1099,8 +1099,8 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	localNodeID := "node-1"  //nolint:goconst // test value
-	remoteNodeID := "node-2" //nolint:goconst // test value
+	localNodeID := "node-1"   //nolint:goconst // test value
+	remoteNodeID := testNode2 //nolint:goconst // test value
 	mockCl := newMockCluster(localNodeID)
 
 	var localDeliveries []string
@@ -1126,12 +1126,12 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	localClientID := "local-client"
-	if err := manager.Subscribe(ctx, "test", "#", localClientID, "", localNodeID); err != nil {
+	if err := manager.Subscribe(ctx, testQueueTest, "#", localClientID, "", localNodeID); err != nil {
 		t.Fatalf("Subscribe local client failed: %v", err)
 	}
 
 	remoteClientID := "remote-client"
-	if err := manager.Subscribe(ctx, "test", "#", remoteClientID, "", remoteNodeID); err != nil {
+	if err := manager.Subscribe(ctx, testQueueTest, "#", remoteClientID, "", remoteNodeID); err != nil {
 		t.Fatalf("Subscribe remote client failed: %v", err)
 	}
 
@@ -1216,11 +1216,11 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	if err := manager.Subscribe(ctx, "tasks", "", "remote-client", "workers", "node-2"); err != nil {
+	if err := manager.Subscribe(ctx, "tasks", "", "remote-client", testGroupWorkers, testNode2); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Enqueue(ctx, "$queue/tasks/new", []byte("job"), map[string]string{"custom": "value"}); err != nil {
+	if err := manager.Enqueue(ctx, testQueueTasksNew, []byte("job"), map[string]string{"custom": testCustomValue}); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -1238,7 +1238,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if msg.message.MessageID != "tasks:0" {
 		t.Fatalf("expected message-id tasks:0, got %q", msg.message.MessageID)
 	}
-	if got := msg.message.GroupID; got != "workers" { //nolint:goconst // test value
+	if got := msg.message.GroupID; got != testGroupWorkers { //nolint:goconst // test value
 		t.Fatalf("expected group-id workers, got %q", got)
 	}
 	if got := msg.message.QueueName; got != "tasks" {
@@ -1247,7 +1247,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if got := msg.message.Sequence; got != 0 {
 		t.Fatalf("expected sequence 0, got %d", got)
 	}
-	if got := msg.message.UserProperties["custom"]; got != "value" {
+	if got := msg.message.UserProperties["custom"]; got != testCustomValue {
 		t.Fatalf("expected user property custom=value, got %q", got)
 	}
 }
@@ -1275,7 +1275,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	ctx := context.Background()
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
 	if err := manager.CreateQueue(ctx, queueCfg); err != nil && err != storage.ErrQueueAlreadyExists {
 		t.Fatalf("CreateQueue failed: %v", err)
@@ -1289,13 +1289,13 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	// Simulate remote stream consumer registration that happens after publish.
 	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
 		{
-			QueueName:    "events",
+			QueueName:    testQueueEvents,
 			GroupID:      "demo-readers@#",
 			ConsumerID:   "remote-consumer-1",
 			ClientID:     "amqp091:conn-remote",
 			Pattern:      "#",
 			Mode:         string(types.GroupModeStream),
-			ProxyNodeID:  "node-2",
+			ProxyNodeID:  testNode2,
 			RegisteredAt: time.Now(),
 		},
 	})
@@ -1368,13 +1368,13 @@ func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
 		nil,
 	)
 
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
 	if err := manager.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	group := types.NewConsumerGroupState("events", "streamers", "")
+	group := types.NewConsumerGroupState(testQueueEvents, "streamers", "")
 	group.Mode = types.GroupModeStream
 	group.Cursor.Cursor = 7
 	group.Cursor.Committed = 7
@@ -1386,11 +1386,11 @@ func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
 		Position: types.CursorDefault,
 		Mode:     types.GroupModeStream,
 	}
-	if err := manager.SubscribeWithCursor(context.Background(), "events", "", "client-1", "streamers", "", cursor); err != nil {
+	if err := manager.SubscribeWithCursor(context.Background(), testQueueEvents, "", "client-1", "streamers", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	stored, err := groupStore.GetConsumerGroup(context.Background(), "events", "streamers")
+	stored, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamers")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
@@ -1410,8 +1410,8 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	mockCl := newMockCluster("node-1")
 	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
 		{
-			QueueName:   "test",
-			ProxyNodeID: "node-2",
+			QueueName:   testQueueTest,
+			ProxyNodeID: testNode2,
 		},
 	})
 
@@ -1425,14 +1425,14 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 
 	manager.SetRaftCoordinator(&mockQueueCoordinator{
 		enabled:           true,
-		replicatedByQueue: map[string]bool{"test": true},
-		leaderByQueue:     map[string]bool{"test": false},
-		leaderIDByQueue:   map[string]string{"test": "node-2"},
-		leaderAddrByQueue: map[string]string{"test": "127.0.0.1:7200"},
+		replicatedByQueue: map[string]bool{testQueueTest: true},
+		leaderByQueue:     map[string]bool{testQueueTest: false},
+		leaderIDByQueue:   map[string]string{testQueueTest: testNode2},
+		leaderAddrByQueue: map[string]string{testQueueTest: "127.0.0.1:7200"},
 	})
 
 	ctx := context.Background()
-	replicated := types.DefaultQueueConfig("test", "$queue/test/#")
+	replicated := types.DefaultQueueConfig(testQueueTest, "$queue/test/#")
 	replicated.Replication.Enabled = true
 	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
 		t.Fatalf("CreateQueue failed: %v", err)
@@ -1455,7 +1455,7 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 		t.Fatalf("expected forward-to-leader call, got forwardToLeader=%v", calls[0].forwardToLeader)
 	}
 
-	if calls[0].nodeID != "node-2" {
+	if calls[0].nodeID != testNode2 {
 		t.Fatalf("expected leader nodeID node-2, got %s", calls[0].nodeID)
 	}
 }
@@ -1477,15 +1477,15 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 
 	coordinator := &mockQueueCoordinator{
 		enabled:           true,
-		replicatedByQueue: map[string]bool{"hot-events": true},
-		leaderByQueue:     map[string]bool{"hot-events": false},
-		leaderIDByQueue:   map[string]string{"hot-events": "node-2"},
-		leaderAddrByQueue: map[string]string{"hot-events": "127.0.0.1:8200"},
+		replicatedByQueue: map[string]bool{testQueueHotEvents: true},
+		leaderByQueue:     map[string]bool{testQueueHotEvents: false},
+		leaderIDByQueue:   map[string]string{testQueueHotEvents: testNode2},
+		leaderAddrByQueue: map[string]string{testQueueHotEvents: "127.0.0.1:8200"},
 	}
 	manager.SetRaftCoordinator(coordinator)
 
 	ctx := context.Background()
-	replicated := types.DefaultQueueConfig("hot-events", "$queue/hot-events/#")
+	replicated := types.DefaultQueueConfig(testQueueHotEvents, "$queue/hot-events/#")
 	replicated.Replication.Enabled = true
 	replicated.Replication.Group = "hot"
 	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
@@ -1507,7 +1507,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 	if !calls[0].forwardToLeader {
 		t.Fatalf("expected forward-to-leader call, got forwardToLeader=%v", calls[0].forwardToLeader)
 	}
-	if calls[0].nodeID != "node-2" {
+	if calls[0].nodeID != testNode2 {
 		t.Fatalf("expected leader nodeID node-2, got %s", calls[0].nodeID)
 	}
 }
@@ -1572,7 +1572,7 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 		enabled:           true,
 		replicatedByQueue: map[string]bool{"q1": true, "q2": true},
 		leaderByQueue:     map[string]bool{"q1": false, "q2": false},
-		leaderIDByQueue:   map[string]string{"q1": "node-2", "q2": "node-3"},
+		leaderIDByQueue:   map[string]string{"q1": testNode2, "q2": "node-3"},
 		leaderAddrByQueue: map[string]string{"q1": "127.0.0.1:8200", "q2": "127.0.0.1:8300"},
 	}
 	manager.SetRaftCoordinator(coordinator)
@@ -1672,7 +1672,7 @@ func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
 	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
 		{
 			QueueName:   "+",
-			ProxyNodeID: "node-2",
+			ProxyNodeID: testNode2,
 		},
 	})
 
@@ -1701,7 +1701,7 @@ func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
 		t.Fatalf("expected forward-to-remote call, got forwardToLeader=%v", calls[0].forwardToLeader)
 	}
 
-	if calls[0].nodeID != "node-2" {
+	if calls[0].nodeID != testNode2 {
 		t.Fatalf("expected remote nodeID node-2, got %s", calls[0].nodeID)
 	}
 }
@@ -1731,8 +1731,8 @@ func TestDeliverQueueMessage(t *testing.T) {
 
 	msg := &cluster.QueueMessage{
 		MessageID:      "msg-123",
-		QueueName:      "test",
-		GroupID:        "workers",
+		QueueName:      testQueueTest,
+		GroupID:        testGroupWorkers,
 		Payload:        []byte("routed payload"),
 		Sequence:       42,
 		UserProperties: map[string]string{"custom": "prop"},
@@ -1765,7 +1765,7 @@ func TestDeliverQueueMessage(t *testing.T) {
 	if deliveredMsg.Properties[types.PropMessageID] != "msg-123" {
 		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Properties[types.PropMessageID])
 	}
-	if deliveredMsg.Properties[types.PropQueueName] != "test" {
+	if deliveredMsg.Properties[types.PropQueueName] != testQueueTest {
 		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties[types.PropQueueName])
 	}
 }
@@ -1820,9 +1820,9 @@ func TestAutoQueueFromTopic(t *testing.T) {
 		},
 		{
 			name:      "regular topic",
-			topic:     "sensors/temp",
-			queueName: "sensors/temp",
-			pattern:   "sensors/temp",
+			topic:     testTopicSensorsTemp,
+			queueName: testTopicSensorsTemp,
+			pattern:   testTopicSensorsTemp,
 		},
 	}
 
@@ -2015,7 +2015,7 @@ func TestEnqueueLocal(t *testing.T) {
 	}
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
-	msgID, err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{"key": "value"})
+	msgID, err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{"key": testCustomValue})
 	if err != nil {
 		t.Fatalf("EnqueueLocal failed: %v", err)
 	}
@@ -2144,24 +2144,24 @@ func TestOnConsumerRemovedCallbackFires(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	if err := manager.CreateQueue(ctx, queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	group := types.NewConsumerGroupState("events", "workers", "")
+	group := types.NewConsumerGroupState(testQueueEvents, testGroupWorkers, "")
 	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
 
 	staleTime := time.Now().Add(-time.Hour)
 	info := &types.ConsumerInfo{
-		ID:            "amqp091:10.0.0.1:5000",
-		ClientID:      "amqp091:10.0.0.1:5000",
+		ID:            testRemoteAMQP091,
+		ClientID:      testRemoteAMQP091,
 		RegisteredAt:  staleTime,
 		LastHeartbeat: staleTime,
 	}
-	if err := groupStore.RegisterConsumer(ctx, "events", "workers", info); err != nil {
+	if err := groupStore.RegisterConsumer(ctx, testQueueEvents, testGroupWorkers, info); err != nil {
 		t.Fatalf("RegisterConsumer failed: %v", err)
 	}
 
@@ -2169,13 +2169,13 @@ func TestOnConsumerRemovedCallbackFires(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if gotQueue != "events" {
+	if gotQueue != testQueueEvents {
 		t.Fatalf("expected queue 'events', got %q", gotQueue)
 	}
-	if gotGroup != "workers" {
+	if gotGroup != testGroupWorkers {
 		t.Fatalf("expected group 'workers', got %q", gotGroup)
 	}
-	if len(gotConsumerIDs) != 1 || gotConsumerIDs[0] != "amqp091:10.0.0.1:5000" {
+	if len(gotConsumerIDs) != 1 || gotConsumerIDs[0] != testRemoteAMQP091 {
 		t.Fatalf("expected [amqp091-10.0.0.1:5000], got %v", gotConsumerIDs)
 	}
 }
@@ -2198,7 +2198,7 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	group := types.NewConsumerGroupState("orders", "workers", "")
+	group := types.NewConsumerGroupState("orders", testGroupWorkers, "")
 	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
@@ -2210,15 +2210,15 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 		RegisteredAt:  before,
 		LastHeartbeat: before,
 	}
-	if err := groupStore.RegisterConsumer(ctx, "orders", "workers", info); err != nil {
+	if err := groupStore.RegisterConsumer(ctx, "orders", testGroupWorkers, info); err != nil {
 		t.Fatalf("RegisterConsumer failed: %v", err)
 	}
 
-	if err := manager.UpdateConsumerHeartbeat(ctx, "orders", "workers", "consumer-1"); err != nil {
+	if err := manager.UpdateConsumerHeartbeat(ctx, "orders", testGroupWorkers, "consumer-1"); err != nil {
 		t.Fatalf("UpdateConsumerHeartbeat failed: %v", err)
 	}
 
-	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", "workers")
+	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", testGroupWorkers)
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
@@ -2322,7 +2322,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 		},
 	}
 
-	mgr.moveToDLQ(ctx, "tasks", "workers", poisonMsg, 6, "$dlq/")
+	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 6, "$dlq/")
 
 	// Verify the DLQ queue was auto-created
 	dlqCfg, err := logStore.GetQueue(ctx, "$dlq/tasks")
@@ -2347,7 +2347,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if msg.Properties["_dlq_original_topic"] != "$queue/tasks/process" {
 		t.Fatalf("expected original topic, got %q", msg.Properties["_dlq_original_topic"])
 	}
-	if msg.Properties["_dlq_group"] != "workers" {
+	if msg.Properties["_dlq_group"] != testGroupWorkers {
 		t.Fatalf("expected group 'workers', got %q", msg.Properties["_dlq_group"])
 	}
 	if msg.Properties["_dlq_delivery_count"] != "6" {
@@ -2384,7 +2384,7 @@ func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	mgr.moveToDLQ(ctx, "tasks", "workers", &types.Message{
+	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
 		ID:      "msg-1",
 		Topic:   "$queue/tasks/test",
 		Payload: []byte("data"),
@@ -2417,7 +2417,7 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	mgr.moveToDLQ(ctx, "tasks", "workers", &types.Message{
+	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
 		ID:      "msg-1",
 		Topic:   "$queue/tasks/test",
 		Payload: []byte("data"),

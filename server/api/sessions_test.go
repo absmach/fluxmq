@@ -25,7 +25,12 @@ import (
 	"github.com/absmach/fluxmq/storage/messages"
 )
 
-const testTopicFilter = "devices/+/events"
+const (
+	testTopicFilter      = "devices/+/events"
+	testProtocolAMQP091  = "amqp0.9.1"
+	testFilterOrders     = "orders.*"
+	testFilterDevicesOne = "devices/one"
+)
 
 type testConn struct{}
 
@@ -136,7 +141,7 @@ func TestSessionDetailEndpointDetectsAMQPProtocolFromClientIDPrefix(t *testing.T
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Protocol != "amqp0.9.1" {
+	if resp.Protocol != testProtocolAMQP091 {
 		t.Fatalf("expected amqp0.9.1 protocol, got %q", resp.Protocol)
 	}
 }
@@ -148,7 +153,7 @@ func TestAMQPSessionResponseIncludesConnectionNameAndSubscriptions(t *testing.T)
 		[]amqpbroker.SubscriptionSnapshot{
 			{
 				ClientID: corebroker.PrefixedAMQP091ClientID("conn-1"),
-				Filter:   "orders.*",
+				Filter:   testFilterOrders,
 				QoS:      1,
 			},
 		},
@@ -161,7 +166,7 @@ func TestAMQPSessionResponseIncludesConnectionNameAndSubscriptions(t *testing.T)
 	if resp.SubscriptionCount != 1 {
 		t.Fatalf("expected subscription count 1, got %d", resp.SubscriptionCount)
 	}
-	if len(resp.Subscriptions) != 1 || resp.Subscriptions[0].Filter != "orders.*" {
+	if len(resp.Subscriptions) != 1 || resp.Subscriptions[0].Filter != testFilterOrders {
 		t.Fatalf("unexpected subscriptions: %#v", resp.Subscriptions)
 	}
 }

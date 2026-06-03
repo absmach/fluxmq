@@ -9,9 +9,9 @@ import (
 )
 
 func TestNewMessage(t *testing.T) {
-	msg := NewMessage("test/topic", []byte("payload"), 1, true)
+	msg := NewMessage(testTopicTest, []byte("payload"), 1, true)
 
-	if msg.Topic != "test/topic" {
+	if msg.Topic != testTopicTest {
 		t.Errorf("expected topic 'test/topic', got %s", msg.Topic)
 	}
 	if string(msg.Payload) != "payload" {
@@ -33,7 +33,7 @@ func TestMessageCopy(t *testing.T) {
 	me := uint32(3600)
 
 	original := &Message{
-		Topic:           "test/topic",
+		Topic:           testTopicTest,
 		Payload:         []byte("payload"),
 		QoS:             2,
 		Retain:          true,
@@ -45,7 +45,7 @@ func TestMessageCopy(t *testing.T) {
 		ContentType:     "application/json",
 		ResponseTopic:   "response/topic",
 		CorrelationData: []byte("correlation"),
-		UserProperties:  map[string]string{"key": "value"},
+		UserProperties:  map[string]string{"key": testValue},
 		SubscriptionIDs: []uint32{1, 2, 3},
 	}
 
@@ -129,7 +129,7 @@ func TestMessageCopyNil(t *testing.T) {
 
 func TestMessageCopyWithNilFields(t *testing.T) {
 	msg := &Message{
-		Topic:   "topic",
+		Topic:   testTopic,
 		Payload: nil,
 	}
 

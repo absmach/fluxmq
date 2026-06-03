@@ -463,8 +463,8 @@ func TestSetFieldByPath(t *testing.T) {
 func TestApplyFieldChanges(t *testing.T) {
 	base := config.Default()
 	changes := []config.FieldChange{
-		{Path: "Log.Level", NewValue: "warn"},
-		{Path: "Log.Format", NewValue: "json"},
+		{Path: "Log.Level", NewValue: logLevelWarn},
+		{Path: "Log.Format", NewValue: logFormatJSON},
 	}
 
 	updated, err := applyFieldChanges(base, changes)
@@ -472,15 +472,15 @@ func TestApplyFieldChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if updated.Log.Level != "warn" { //nolint:goconst // test value
+	if updated.Log.Level != logLevelWarn {
 		t.Errorf("expected 'warn', got %q", updated.Log.Level)
 	}
-	if updated.Log.Format != "json" {
+	if updated.Log.Format != logFormatJSON {
 		t.Errorf("expected 'json', got %q", updated.Log.Format)
 	}
 
 	// Base must not be mutated.
-	if base.Log.Level == "warn" {
+	if base.Log.Level == logLevelWarn {
 		t.Error("applyFieldChanges mutated the base config")
 	}
 }

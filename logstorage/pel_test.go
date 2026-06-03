@@ -11,6 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testConsumer1 = "consumer-1"
+	testConsumer2 = "consumer-2"
+)
+
 func TestPEL_NewAndClose(t *testing.T) {
 	dir := t.TempDir()
 
@@ -32,7 +37,7 @@ func TestPEL_AddAndGet(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		ConsumerID:    "consumer-1",
+		ConsumerID:    testConsumer1,
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
 	}
@@ -59,7 +64,7 @@ func TestPEL_Ack(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		ConsumerID:    "consumer-1",
+		ConsumerID:    testConsumer1,
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
 	}
@@ -85,22 +90,22 @@ func TestPEL_Claim(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		ConsumerID:    "consumer-1",
+		ConsumerID:    testConsumer1,
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
 	}
 	err = pel.Add(entry)
 	require.NoError(t, err)
 
-	err = pel.Claim(100, "consumer-2")
+	err = pel.Claim(100, testConsumer2)
 	require.NoError(t, err)
 
 	retrieved, found := pel.Get(100)
 	require.True(t, found)
-	assert.Equal(t, "consumer-2", retrieved.ConsumerID)
+	assert.Equal(t, testConsumer2, retrieved.ConsumerID)
 	assert.Equal(t, uint16(2), retrieved.DeliveryCount)
 
-	err = pel.Claim(200, "consumer-2")
+	err = pel.Claim(200, testConsumer2)
 	assert.ErrorIs(t, err, ErrPELEntryNotFound)
 }
 
@@ -112,7 +117,7 @@ func TestPEL_IncrementDelivery(t *testing.T) {
 
 	entry := PELEntry{
 		Offset:        100,
-		ConsumerID:    "consumer-1",
+		ConsumerID:    testConsumer1,
 		ClaimedAt:     time.Now().UnixMilli(),
 		DeliveryCount: 1,
 	}
@@ -139,7 +144,7 @@ func TestPEL_GetByConsumer(t *testing.T) {
 	for i := uint64(0); i < 5; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -149,17 +154,17 @@ func TestPEL_GetByConsumer(t *testing.T) {
 	for i := uint64(5); i < 8; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-2",
+			ConsumerID:    testConsumer2,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
 		require.NoError(t, err)
 	}
 
-	c1Entries := pel.GetByConsumer("consumer-1")
+	c1Entries := pel.GetByConsumer(testConsumer1)
 	assert.Len(t, c1Entries, 5)
 
-	c2Entries := pel.GetByConsumer("consumer-2")
+	c2Entries := pel.GetByConsumer(testConsumer2)
 	assert.Len(t, c2Entries, 3)
 
 	c3Entries := pel.GetByConsumer("consumer-3")
@@ -176,7 +181,7 @@ func TestPEL_GetStealable(t *testing.T) {
 	for i := uint64(0); i < 3; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     oldTime,
 			DeliveryCount: 1,
 		})
@@ -186,7 +191,7 @@ func TestPEL_GetStealable(t *testing.T) {
 	for i := uint64(3); i < 5; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-2",
+			ConsumerID:    testConsumer2,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -196,10 +201,10 @@ func TestPEL_GetStealable(t *testing.T) {
 	stealable := pel.GetStealable(1*time.Second, "")
 	assert.Len(t, stealable, 3)
 
-	stealable = pel.GetStealable(1*time.Second, "consumer-1")
+	stealable = pel.GetStealable(1*time.Second, testConsumer1)
 	assert.Len(t, stealable, 0)
 
-	stealable = pel.GetStealable(1*time.Second, "consumer-2")
+	stealable = pel.GetStealable(1*time.Second, testConsumer2)
 	assert.Len(t, stealable, 3)
 }
 
@@ -212,7 +217,7 @@ func TestPEL_CountByConsumer(t *testing.T) {
 	for i := uint64(0); i < 5; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -222,7 +227,7 @@ func TestPEL_CountByConsumer(t *testing.T) {
 	for i := uint64(5); i < 8; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-2",
+			ConsumerID:    testConsumer2,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -231,8 +236,8 @@ func TestPEL_CountByConsumer(t *testing.T) {
 
 	counts := pel.CountByConsumer()
 	assert.Len(t, counts, 2)
-	assert.Equal(t, 5, counts["consumer-1"])
-	assert.Equal(t, 3, counts["consumer-2"])
+	assert.Equal(t, 5, counts[testConsumer1])
+	assert.Equal(t, 3, counts[testConsumer2])
 }
 
 func TestPEL_GetAll(t *testing.T) {
@@ -244,7 +249,7 @@ func TestPEL_GetAll(t *testing.T) {
 	for i := uint64(0); i < 3; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -253,7 +258,7 @@ func TestPEL_GetAll(t *testing.T) {
 
 	all := pel.GetAll()
 	assert.Len(t, all, 1)
-	assert.Len(t, all["consumer-1"], 3)
+	assert.Len(t, all[testConsumer1], 3)
 }
 
 func TestPEL_MinOffset(t *testing.T) {
@@ -267,7 +272,7 @@ func TestPEL_MinOffset(t *testing.T) {
 	for _, offset := range []uint64{100, 50, 200, 75} {
 		err = pel.Add(PELEntry{
 			Offset:        offset,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -286,7 +291,7 @@ func TestPEL_Persistence(t *testing.T) {
 	for i := uint64(0); i < 5; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})
@@ -308,7 +313,7 @@ func TestPEL_Persistence(t *testing.T) {
 		entry, found := pel2.Get(i)
 		require.True(t, found)
 		assert.Equal(t, i, entry.Offset)
-		assert.Equal(t, "consumer-1", entry.ConsumerID)
+		assert.Equal(t, testConsumer1, entry.ConsumerID)
 	}
 }
 
@@ -324,7 +329,7 @@ func TestPEL_Compact(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		err = pel.Add(PELEntry{
 			Offset:        i,
-			ConsumerID:    "consumer-1",
+			ConsumerID:    testConsumer1,
 			ClaimedAt:     time.Now().UnixMilli(),
 			DeliveryCount: 1,
 		})

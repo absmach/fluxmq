@@ -17,6 +17,11 @@ var (
 	ErrInvalidProtocolName = errors.New("invalid protocol name")
 )
 
+const (
+	protocolNameV3 = "MQIsdp"
+	protocolNameV4 = "MQTT"
+)
+
 // Connect represents the MQTT V3.1.1 CONNECT packet.
 type Connect struct {
 	packets.FixedHeader
@@ -173,11 +178,11 @@ func (c *Connect) Validate() error {
 	}
 	switch c.ProtocolVersion {
 	case 3:
-		if c.ProtocolName != "MQIsdp" {
+		if c.ProtocolName != protocolNameV3 {
 			return ErrInvalidProtocolName
 		}
 	case 4:
-		if c.ProtocolName != "MQTT" {
+		if c.ProtocolName != protocolNameV4 {
 			return ErrInvalidProtocolName
 		}
 	default:

@@ -12,9 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testTopic   = "test/topic"
+	testMyQueue = "my-queue"
+)
+
 func TestSourceCapabilitiesSingle(t *testing.T) {
 	s := &Source{
-		Address:      "my-queue",
+		Address:      testMyQueue,
 		Capabilities: []types.Symbol{CapQueue},
 	}
 
@@ -34,14 +39,14 @@ func TestSourceCapabilitiesSingle(t *testing.T) {
 	require.True(t, ok)
 
 	decoded := DecodeSource(fields)
-	assert.Equal(t, "my-queue", decoded.Address)
+	assert.Equal(t, testMyQueue, decoded.Address)
 	require.Len(t, decoded.Capabilities, 1)
 	assert.Equal(t, CapQueue, decoded.Capabilities[0])
 }
 
 func TestSourceCapabilitiesMultiple(t *testing.T) {
 	s := &Source{
-		Address:      "my-queue",
+		Address:      testMyQueue,
 		Capabilities: []types.Symbol{CapQueue, "topic"},
 	}
 
@@ -56,14 +61,14 @@ func TestSourceCapabilitiesMultiple(t *testing.T) {
 	fields := desc.Value.([]any)
 
 	decoded := DecodeSource(fields)
-	assert.Equal(t, "my-queue", decoded.Address)
+	assert.Equal(t, testMyQueue, decoded.Address)
 	require.Len(t, decoded.Capabilities, 2)
 	assert.Equal(t, CapQueue, decoded.Capabilities[0])
 	assert.Equal(t, types.Symbol("topic"), decoded.Capabilities[1])
 }
 
 func TestSourceNoCapabilities(t *testing.T) {
-	s := &Source{Address: "test/topic"}
+	s := &Source{Address: testTopic}
 
 	encoded, err := s.Encode()
 	require.NoError(t, err)
@@ -76,13 +81,13 @@ func TestSourceNoCapabilities(t *testing.T) {
 	fields := desc.Value.([]any)
 
 	decoded := DecodeSource(fields)
-	assert.Equal(t, "test/topic", decoded.Address)
+	assert.Equal(t, testTopic, decoded.Address)
 	assert.Nil(t, decoded.Capabilities)
 }
 
 func TestTargetCapabilities(t *testing.T) {
 	tgt := &Target{
-		Address:      "my-queue",
+		Address:      testMyQueue,
 		Capabilities: []types.Symbol{CapQueue},
 	}
 
@@ -97,13 +102,13 @@ func TestTargetCapabilities(t *testing.T) {
 	fields := desc.Value.([]any)
 
 	decoded := DecodeTarget(fields)
-	assert.Equal(t, "my-queue", decoded.Address)
+	assert.Equal(t, testMyQueue, decoded.Address)
 	require.Len(t, decoded.Capabilities, 1)
 	assert.Equal(t, CapQueue, decoded.Capabilities[0])
 }
 
 func TestTargetNoCapabilities(t *testing.T) {
-	tgt := &Target{Address: "test/topic"}
+	tgt := &Target{Address: testTopic}
 
 	encoded, err := tgt.Encode()
 	require.NoError(t, err)
@@ -116,7 +121,7 @@ func TestTargetNoCapabilities(t *testing.T) {
 	fields := desc.Value.([]any)
 
 	decoded := DecodeTarget(fields)
-	assert.Equal(t, "test/topic", decoded.Address)
+	assert.Equal(t, testTopic, decoded.Address)
 	assert.Nil(t, decoded.Capabilities)
 }
 

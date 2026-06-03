@@ -11,6 +11,7 @@ import (
 const (
 	sessionStateConnected    = "connected"
 	sessionStateDisconnected = "disconnected"
+	sessionStateAll          = "all"
 )
 
 // SubscriptionListFilter controls subscription listing.
@@ -159,10 +160,10 @@ func (b *Broker) ListSubscriptionClients(
 			if live := b.sessionsMap.Get(sub.ClientID); live != nil {
 				connected = live.IsConnected()
 			}
-			if normalizedState == "connected" && !connected {
+			if normalizedState == sessionStateConnected && !connected {
 				continue
 			}
-			if normalizedState == "disconnected" && connected {
+			if normalizedState == sessionStateDisconnected && connected {
 				continue
 			}
 		}

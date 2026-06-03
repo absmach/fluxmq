@@ -138,14 +138,14 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, s.Connect(conn))
 
 	retained := &storage.Message{
-		Topic:    "retain/topic",
+		Topic:    testRetainTopic,
 		ClientID: "publisher",
 		QoS:      1,
 		Retain:   true,
 	}
 	retained.SetPayloadFromBytes([]byte("retained"))
 	require.NoError(t, b.Publish(context.Background(), retained))
-	matchedRetained, err := b.GetRetainedMatching("retain/topic")
+	matchedRetained, err := b.GetRetainedMatching(testRetainTopic)
 	require.NoError(t, err)
 	require.Len(t, matchedRetained, 1)
 
@@ -156,7 +156,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 		ID:          1,
 		Opts: []v5.SubOption{
-			{Topic: "retain/topic", MaxQoS: 1, RetainHandling: &rh0},
+			{Topic: testRetainTopic, MaxQoS: 1, RetainHandling: &rh0},
 		},
 	}
 	require.NoError(t, handler.HandleSubscribe(s, sub1))
@@ -174,7 +174,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 		ID:          2,
 		Opts: []v5.SubOption{
-			{Topic: "retain/topic", MaxQoS: 1, RetainHandling: &rh1},
+			{Topic: testRetainTopic, MaxQoS: 1, RetainHandling: &rh1},
 		},
 	}
 	require.NoError(t, handler.HandleSubscribe(s, sub2))

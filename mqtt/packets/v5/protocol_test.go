@@ -16,8 +16,23 @@ import (
 var (
 	validClientID = "test-client-123"
 	maxPacketID   = uint16(65535)
-	testTopic     = "test/topic"
 	validPayload  = []byte("test payload")
+)
+
+const (
+	testProtocolName    = "MQTT"
+	testWillTopic       = "will/topic"
+	testUserKey1        = "key1"
+	testUserKey2        = "key2"
+	testTopic           = "test/topic"
+	testResponseTopic   = "response/topic"
+	testContentType     = "application/json"
+	testTopicOne        = "topic/one"
+	testTopicTwo        = "topic/two"
+	testAuthMethodSCRAM = "SCRAM-SHA-256"
+	testValueTest       = "test"
+	testUserValue1      = "value1"
+	testUserValue2      = "value2"
 )
 
 func TestConnectV5ProtocolCompliance(t *testing.T) {
@@ -30,7 +45,7 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid connect with all fields",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       60,
@@ -42,7 +57,7 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 				WillFlag:        true,
 				WillQoS:         1,
 				WillRetain:      true,
-				WillTopic:       "will/topic",
+				WillTopic:       testWillTopic,
 				WillPayload:     []byte("gone"),
 			},
 			wantErr: false,
@@ -51,7 +66,7 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid connect with properties",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       60,
@@ -63,8 +78,8 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 					TopicAliasMaximum:     ptr(uint16(10)),
 					RequestResponseInfo:   ptr(byte(1)),
 					RequestProblemInfo:    ptr(byte(1)),
-					User:                  []User{{Key: "key1", Value: "value1"}},
-					AuthMethod:            "SCRAM-SHA-256",
+					User:                  []User{{Key: testUserKey1, Value: testUserValue1}},
+					AuthMethod:            testAuthMethodSCRAM,
 					AuthData:              []byte("auth-data"),
 				},
 			},
@@ -74,7 +89,7 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid connect with will properties",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       60,
@@ -82,13 +97,13 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 				WillFlag:        true,
 				WillQoS:         1,
 				WillRetain:      true,
-				WillTopic:       "will/topic",
+				WillTopic:       testWillTopic,
 				WillPayload:     []byte("gone"),
 				WillProperties: &WillProperties{
 					WillDelayInterval: ptr(uint32(30)),
 					PayloadFormat:     ptr(byte(1)),
 					MessageExpiry:     ptr(uint32(7200)),
-					ContentType:       "application/json",
+					ContentType:       testContentType,
 					ResponseTopic:     "response",
 					CorrelationData:   []byte("correlation"),
 					User:              []User{{Key: "will-key", Value: "will-value"}},
@@ -100,7 +115,7 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid connect minimal",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       0,
@@ -112,7 +127,7 @@ func TestConnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid connect with empty client ID and clean start",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
 				KeepAlive:       60,
@@ -192,7 +207,7 @@ func TestConnAckV5ProtocolCompliance(t *testing.T) {
 					ServerKeepAlive:       ptr(uint16(120)),
 					ResponseInfo:          "response info",
 					ServerReference:       "other-server",
-					AuthMethod:            "SCRAM-SHA-256",
+					AuthMethod:            testAuthMethodSCRAM,
 					AuthData:              []byte("auth-response"),
 				},
 			},
@@ -257,11 +272,11 @@ func TestPublishV5ProtocolCompliance(t *testing.T) {
 					PayloadFormat:   ptr(byte(1)),
 					MessageExpiry:   ptr(uint32(3600)),
 					TopicAlias:      ptr(uint16(5)),
-					ResponseTopic:   "response/topic",
+					ResponseTopic:   testResponseTopic,
 					CorrelationData: []byte("correlation-123"),
 					User:            []User{{Key: "custom", Value: "header"}},
 					SubscriptionID:  ptr(1),
-					ContentType:     "application/json",
+					ContentType:     testContentType,
 				},
 			},
 			wantErr: false,
@@ -356,8 +371,8 @@ func TestSubscribeV5ProtocolCompliance(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: SubscribeType, QoS: 1},
 				ID:          100,
 				Opts: []SubOption{
-					{Topic: "topic/one", MaxQoS: 0},
-					{Topic: "topic/two", MaxQoS: 1, NoLocal: ptr(true)},
+					{Topic: testTopicOne, MaxQoS: 0},
+					{Topic: testTopicTwo, MaxQoS: 1, NoLocal: ptr(true)},
 					{Topic: "topic/three", MaxQoS: 2, RetainAsPublished: ptr(true)},
 				},
 			},
@@ -506,7 +521,7 @@ func TestAuthV5ProtocolCompliance(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: AuthType},
 				ReasonCode:  0x00,
 				Properties: &AuthProperties{
-					AuthMethod:   "SCRAM-SHA-256",
+					AuthMethod:   testAuthMethodSCRAM,
 					AuthData:     []byte("auth-data"),
 					ReasonString: "authentication successful",
 					User:         []User{{Key: "session", Value: "info"}},
@@ -520,7 +535,7 @@ func TestAuthV5ProtocolCompliance(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: AuthType},
 				ReasonCode:  0x18,
 				Properties: &AuthProperties{
-					AuthMethod: "SCRAM-SHA-256",
+					AuthMethod: testAuthMethodSCRAM,
 					AuthData:   []byte("challenge-response"),
 				},
 			},
@@ -532,7 +547,7 @@ func TestAuthV5ProtocolCompliance(t *testing.T) {
 				FixedHeader: FixedHeader{PacketType: AuthType},
 				ReasonCode:  0x19,
 				Properties: &AuthProperties{
-					AuthMethod: "SCRAM-SHA-256",
+					AuthMethod: testAuthMethodSCRAM,
 					AuthData:   []byte("re-auth-data"),
 				},
 			},
@@ -567,13 +582,13 @@ func TestUserProperties(t *testing.T) {
 	}{
 		{
 			desc:  "single user property",
-			users: []User{{Key: "key1", Value: "value1"}},
+			users: []User{{Key: testUserKey1, Value: testUserValue1}},
 		},
 		{
 			desc: "multiple user properties",
 			users: []User{
-				{Key: "key1", Value: "value1"},
-				{Key: "key2", Value: "value2"},
+				{Key: testUserKey1, Value: testUserValue1},
+				{Key: testUserKey2, Value: testUserValue2},
 				{Key: "key3", Value: "value3"},
 			},
 		},
@@ -594,10 +609,10 @@ func TestUserProperties(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			pkt := &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
-				ClientID:        "test",
+				ClientID:        testValueTest,
 				Properties: &ConnectProperties{
 					User: tc.users,
 				},
@@ -707,10 +722,10 @@ func TestV5PacketBoundaryValues(t *testing.T) {
 			desc: "connect with max session expiry",
 			pkt: &Connect{
 				FixedHeader:     FixedHeader{PacketType: ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolName,
 				ProtocolVersion: V5,
 				CleanStart:      true,
-				ClientID:        "test",
+				ClientID:        testValueTest,
 				Properties: &ConnectProperties{
 					SessionExpiryInterval: ptr(uint32(4294967295)),
 				},

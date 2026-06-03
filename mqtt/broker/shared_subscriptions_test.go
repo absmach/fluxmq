@@ -22,7 +22,7 @@ func TestSharedSubscription_GroupCreation(t *testing.T) {
 
 	// Create 3 clients
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 	s3, _, _ := b.CreateSession("client3", 5, session.Options{CleanStart: true})
 
 	// All 3 subscribe to the same shared subscription
@@ -57,7 +57,7 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 	s3, _, _ := b.CreateSession("client3", 5, session.Options{CleanStart: true})
 
 	sharedFilter := "$share/workers/jobs/#"
@@ -70,7 +70,7 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	group := b.sharedSubs.GetGroup("workers/jobs/#")
 
 	// Test round-robin selection
-	expected := []string{"client1", "client2", "client3", "client1", "client2", "client3"}
+	expected := []string{"client1", testClient2, "client3", "client1", testClient2, "client3"}
 	for i, exp := range expected {
 		selected := group.NextSubscriber()
 		if selected != exp {
@@ -86,7 +86,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	sharedFilter := "$share/group1/test/topic"
 	opts := storage.SubscribeOptions{}
@@ -132,7 +132,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	sharedFilter := "$share/mygroup/data/#"
 	opts := storage.SubscribeOptions{}
@@ -151,12 +151,12 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	if len(group.Subscribers) != 1 {
 		t.Fatalf("Expected 1 subscriber after destroy, got %d", len(group.Subscribers))
 	}
-	if group.Subscribers[0] != "client2" {
+	if group.Subscribers[0] != testClient2 {
 		t.Errorf("Expected remaining subscriber to be client2, got %s", group.Subscribers[0])
 	}
 
 	// Destroy client2's session
-	b.DestroySession("client2") //nolint:errcheck // test cleanup
+	b.DestroySession(testClient2) //nolint:errcheck // test cleanup
 
 	// Group should be deleted
 	group = b.sharedSubs.GetGroup("mygroup/data/#")
@@ -172,7 +172,7 @@ func TestSharedSubscription_MultipleGroups(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 	s3, _, _ := b.CreateSession("client3", 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
@@ -206,7 +206,7 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
 
@@ -221,7 +221,7 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	if sensorsGroup == nil || logsGroup == nil {
 		t.Fatal("Both share groups should exist")
 	}
-	if sensorsGroup.Name != "workers" || logsGroup.Name != "workers" {
+	if sensorsGroup.Name != testGroupWorkers || logsGroup.Name != testGroupWorkers {
 		t.Error("Both groups should have the same share name")
 	}
 	if sensorsGroup.TopicFilter != "sensors/#" {
@@ -265,7 +265,7 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
 

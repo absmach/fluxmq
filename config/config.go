@@ -21,6 +21,27 @@ const (
 
 	listenerNamePlain = "plain"
 	raftGroupDefault  = "default"
+
+	listenerNameTLS  = "tls"
+	listenerNameMTLS = "mtls"
+
+	protocolMQTT    = "mqtt"
+	protocolAMQP091 = "amqp091"
+
+	defaultTCPV3Addr = ":1883"
+	defaultTCPV5Addr = ":1884"
+	defaultWSPath    = "/mqtt"
+	defaultNodeID    = "broker-1"
+
+	logLevelDebug = "debug"
+	logLevelInfo  = "info"
+	logLevelWarn  = "warn"
+	logLevelError = "error"
+
+	storageTypeBadger = "badger"
+
+	writePolicyForward = "forward"
+	queueModeSync      = "sync"
 )
 
 // Config holds all configuration for the MQTT broker.
@@ -62,7 +83,7 @@ type AuthConfig struct {
 
 // knownAuthProtocols is the set of valid protocol names for auth config.
 var knownAuthProtocols = map[string]bool{
-	"mqtt": true, "amqp": true, "amqp091": true, "http": true, "coap": true,
+	protocolMQTT: true, "amqp": true, protocolAMQP091: true, "http": true, "coap": true,
 }
 
 // AuthEnabledFor reports whether auth callout is enabled for the given protocol.
@@ -559,14 +580,14 @@ func Default() *Config {
 		Server: ServerConfig{
 			TCP: TCPConfig{
 				V3: TCPListenerConfig{
-					Addr:           ":1883",
+					Addr:           defaultTCPV3Addr,
 					MaxConnections: 10000,
 					ReadTimeout:    60 * time.Second,
 					WriteTimeout:   60 * time.Second,
 					Protocol:       ProtocolModeV3,
 				},
 				V5: TCPListenerConfig{
-					Addr:           ":1884",
+					Addr:           defaultTCPV5Addr,
 					MaxConnections: 10000,
 					ReadTimeout:    60 * time.Second,
 					WriteTimeout:   60 * time.Second,
@@ -588,20 +609,20 @@ func Default() *Config {
 			WebSocket: WebSocketConfig{
 				V3: WSListenerConfig{
 					Addr:     ":8083",
-					Path:     "/mqtt",
+					Path:     defaultWSPath,
 					Protocol: ProtocolModeV3,
 				},
 				V5: WSListenerConfig{
 					Addr:     ":8084",
-					Path:     "/mqtt",
+					Path:     defaultWSPath,
 					Protocol: ProtocolModeV5,
 				},
 				TLS: WSListenerConfig{
-					Path:     "/mqtt",
+					Path:     defaultWSPath,
 					Protocol: ProtocolModeAuto,
 				},
 				MTLS: WSListenerConfig{
-					Path:     "/mqtt",
+					Path:     defaultWSPath,
 					Protocol: ProtocolModeAuto,
 				},
 			},
@@ -674,16 +695,16 @@ func Default() *Config {
 			PendingQueueSize:      1000,
 		},
 		Log: LogConfig{
-			Level:  "info",
+			Level:  logLevelInfo,
 			Format: "text",
 		},
 		Storage: StorageConfig{
-			Type:      "badger",
+			Type:      storageTypeBadger,
 			BadgerDir: "/tmp/fluxmq/data",
 		},
 		Cluster: ClusterConfig{
 			Enabled: true,
-			NodeID:  "broker-1",
+			NodeID:  defaultNodeID,
 			Etcd: EtcdConfig{
 				DataDir:        "/tmp/fluxmq/etcd",
 				BindAddr:       "0.0.0.0:2380",
@@ -706,7 +727,7 @@ func Default() *Config {
 				SyncMode:            true,
 				MinInSyncReplicas:   2,
 				AckTimeout:          5 * time.Second,
-				WritePolicy:         "forward",
+				WritePolicy:         writePolicyForward,
 				DistributionMode:    "replicate",
 				BindAddr:            "127.0.0.1:7100",
 				DataDir:             "/tmp/fluxmq/raft",
@@ -763,7 +784,7 @@ func Default() *Config {
 		},
 		Queues: []QueueConfig{
 			{
-				Name:     "mqtt",
+				Name:     protocolMQTT,
 				Topics:   []string{"$queue/#"},
 				Reserved: true,
 				Limits: QueueLimits{
@@ -783,7 +804,7 @@ func Default() *Config {
 				Replication: QueueReplication{
 					Enabled:           false,
 					ReplicationFactor: 3,
-					Mode:              "sync",
+					Mode:              queueModeSync,
 					MinInSyncReplicas: 2,
 					AckTimeout:        5 * time.Second,
 				},
@@ -830,8 +851,8 @@ func (c *Config) Validate() error {
 	}{
 		{name: "v3", cfg: c.Server.TCP.V3, fixedProtocol: ProtocolModeV3},
 		{name: "v5", cfg: c.Server.TCP.V5, fixedProtocol: ProtocolModeV5},
-		{name: "tls", cfg: c.Server.TCP.TLS, requireClientAuth: false, requireTLS: true},
-		{name: "mtls", cfg: c.Server.TCP.MTLS, requireClientAuth: true, requireTLS: true},
+		{name: listenerNameTLS, cfg: c.Server.TCP.TLS, requireClientAuth: false, requireTLS: true},
+		{name: listenerNameMTLS, cfg: c.Server.TCP.MTLS, requireClientAuth: true, requireTLS: true},
 	}
 
 	wsSlots := []struct {
@@ -843,8 +864,8 @@ func (c *Config) Validate() error {
 	}{
 		{name: "v3", cfg: c.Server.WebSocket.V3, fixedProtocol: ProtocolModeV3},
 		{name: "v5", cfg: c.Server.WebSocket.V5, fixedProtocol: ProtocolModeV5},
-		{name: "tls", cfg: c.Server.WebSocket.TLS, requireTLS: true},
-		{name: "mtls", cfg: c.Server.WebSocket.MTLS, requireTLS: true, requireClientAuth: true},
+		{name: listenerNameTLS, cfg: c.Server.WebSocket.TLS, requireTLS: true},
+		{name: listenerNameMTLS, cfg: c.Server.WebSocket.MTLS, requireTLS: true, requireClientAuth: true},
 	}
 
 	httpSlots := []struct {
@@ -853,8 +874,8 @@ func (c *Config) Validate() error {
 		requireClientAuth bool
 	}{
 		{name: listenerNamePlain, cfg: c.Server.HTTP.Plain, requireClientAuth: false},
-		{name: "tls", cfg: c.Server.HTTP.TLS, requireClientAuth: false},
-		{name: "mtls", cfg: c.Server.HTTP.MTLS, requireClientAuth: true},
+		{name: listenerNameTLS, cfg: c.Server.HTTP.TLS, requireClientAuth: false},
+		{name: listenerNameMTLS, cfg: c.Server.HTTP.MTLS, requireClientAuth: true},
 	}
 
 	hasMQTTListener := false
@@ -974,8 +995,8 @@ func (c *Config) Validate() error {
 		requireClientAuth bool
 	}{
 		{name: listenerNamePlain, cfg: c.Server.AMQP.Plain, requireClientAuth: false},
-		{name: "tls", cfg: c.Server.AMQP.TLS, requireClientAuth: false},
-		{name: "mtls", cfg: c.Server.AMQP.MTLS, requireClientAuth: true},
+		{name: listenerNameTLS, cfg: c.Server.AMQP.TLS, requireClientAuth: false},
+		{name: listenerNameMTLS, cfg: c.Server.AMQP.MTLS, requireClientAuth: true},
 	}
 
 	for _, slot := range amqpSlots {
@@ -1006,8 +1027,8 @@ func (c *Config) Validate() error {
 		requireClientAuth bool
 	}{
 		{name: listenerNamePlain, cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
-		{name: "tls", cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
-		{name: "mtls", cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
+		{name: listenerNameTLS, cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
+		{name: listenerNameMTLS, cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
 	}
 
 	for _, slot := range amqp091Slots {
@@ -1066,7 +1087,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("broker.fan_out_workers cannot be negative")
 	}
 
-	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	validLevels := map[string]bool{logLevelDebug: true, logLevelInfo: true, logLevelWarn: true, logLevelError: true}
 	if !validLevels[c.Log.Level] {
 		return fmt.Errorf("log.level must be one of: debug, info, warn, error")
 	}
@@ -1075,12 +1096,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("log.format must be one of: text, json")
 	}
 
-	validStorage := map[string]bool{"memory": true, "badger": true}
+	validStorage := map[string]bool{"memory": true, storageTypeBadger: true}
 	if !validStorage[c.Storage.Type] {
 		return fmt.Errorf("storage.type must be one of: memory, badger")
 	}
 
-	if c.Storage.Type == "badger" && c.Storage.BadgerDir == "" {
+	if c.Storage.Type == storageTypeBadger && c.Storage.BadgerDir == "" {
 		return fmt.Errorf("storage.badger_dir required when type is badger")
 	}
 
@@ -1136,14 +1157,14 @@ func (c *Config) Validate() error {
 
 		if c.Cluster.Raft.WritePolicy != "" {
 			switch strings.ToLower(c.Cluster.Raft.WritePolicy) {
-			case "local", "reject", "forward":
+			case "local", "reject", writePolicyForward:
 			default:
 				return fmt.Errorf("cluster.raft.write_policy must be one of: local, reject, forward")
 			}
 		}
 		if c.Cluster.Raft.DistributionMode != "" {
 			switch strings.ToLower(c.Cluster.Raft.DistributionMode) {
-			case "forward", "replicate":
+			case writePolicyForward, "replicate":
 			default:
 				return fmt.Errorf("cluster.raft.distribution_mode must be one of: forward, replicate")
 			}
@@ -1288,7 +1309,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("queues[%d].replication.min_in_sync_replicas must be between 1 and replication_factor", i)
 			}
 			switch strings.ToLower(q.Replication.Mode) {
-			case "sync", "async":
+			case queueModeSync, "async":
 			default:
 				return fmt.Errorf("queues[%d].replication.mode must be one of: sync, async", i)
 			}

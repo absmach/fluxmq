@@ -18,6 +18,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testTypeHTTP    = "http"
+	testWebhookURL  = "http://example.com/webhook"
+	testName        = "test"
+	testClientID    = "client-1"
+	testSensorsHash = "sensors/#"
+	testSensorsTemp = "sensors/temp"
+	testSensorsPlus = "sensors/+"
+)
+
 // mockSender implements Sender interface for testing.
 type mockSender struct {
 	mu          sync.Mutex
@@ -57,7 +67,7 @@ func (m *mockSender) resetCount() {
 func TestNewNotifier(t *testing.T) {
 	cfg := config.WebhookConfig{
 		QueueSize:  1000,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    2,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -75,8 +85,8 @@ func TestNewNotifier(t *testing.T) {
 		Endpoints: []config.WebhookEndpoint{
 			{
 				Name: "test-endpoint",
-				Type: "http",
-				URL:  "http://example.com/webhook",
+				Type: testTypeHTTP,
+				URL:  testWebhookURL,
 				Headers: map[string]string{
 					"Authorization": "Bearer token",
 				},
@@ -120,7 +130,7 @@ func TestNotifier_Notify_Success(t *testing.T) {
 	sender := newMockSender()
 	cfg := config.WebhookConfig{
 		QueueSize:  100,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    2,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -138,9 +148,9 @@ func TestNotifier_Notify_Success(t *testing.T) {
 		ShutdownTimeout: 5 * time.Second,
 		Endpoints: []config.WebhookEndpoint{
 			{
-				Name: "test",
-				Type: "http",
-				URL:  "http://example.com/webhook",
+				Name: testName,
+				Type: testTypeHTTP,
+				URL:  testWebhookURL,
 			},
 		},
 	}
@@ -154,7 +164,7 @@ func TestNotifier_Notify_Success(t *testing.T) {
 
 	// Send event
 	event := events.ClientConnected{
-		ClientID:   "client-1",
+		ClientID:   testClientID,
 		Protocol:   "mqtt5",
 		CleanStart: true,
 		KeepAlive:  60,
@@ -178,7 +188,7 @@ func TestNotifier_Notify_EventTypeFilter(t *testing.T) {
 	sender := newMockSender()
 	cfg := config.WebhookConfig{
 		QueueSize:  100,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    1,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -193,9 +203,9 @@ func TestNotifier_Notify_EventTypeFilter(t *testing.T) {
 		ShutdownTimeout: 5 * time.Second,
 		Endpoints: []config.WebhookEndpoint{
 			{
-				Name: "test",
-				Type: "http",
-				URL:  "http://example.com/webhook",
+				Name: testName,
+				Type: testTypeHTTP,
+				URL:  testWebhookURL,
 				Events: []string{
 					events.TypeClientConnected,
 					events.TypeMessagePublished,
@@ -212,11 +222,11 @@ func TestNotifier_Notify_EventTypeFilter(t *testing.T) {
 	defer notifier.Close()
 
 	// Send matching event
-	event1 := events.ClientConnected{ClientID: "client-1"}
+	event1 := events.ClientConnected{ClientID: testClientID}
 	notifier.Notify(context.Background(), event1) //nolint:errcheck // best-effort fire-and-forget in test
 
 	// Send non-matching event
-	event2 := events.ClientDisconnected{ClientID: "client-1"}
+	event2 := events.ClientDisconnected{ClientID: testClientID}
 	notifier.Notify(context.Background(), event2) //nolint:errcheck // best-effort fire-and-forget in test
 
 	// Wait for processing
@@ -232,7 +242,7 @@ func TestNotifier_Notify_TopicFilter(t *testing.T) {
 	sender := newMockSender()
 	cfg := config.WebhookConfig{
 		QueueSize:  100,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    1,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -247,11 +257,11 @@ func TestNotifier_Notify_TopicFilter(t *testing.T) {
 		ShutdownTimeout: 5 * time.Second,
 		Endpoints: []config.WebhookEndpoint{
 			{
-				Name: "test",
-				Type: "http",
-				URL:  "http://example.com/webhook",
+				Name: testName,
+				Type: testTypeHTTP,
+				URL:  testWebhookURL,
 				TopicFilters: []string{
-					"sensors/#",
+					testSensorsHash,
 					"devices/+/telemetry",
 				},
 			},
@@ -282,7 +292,7 @@ func TestNotifier_Notify_TopicFilter(t *testing.T) {
 
 		event := events.MessagePublished{
 			MessageTopic: tt.topic,
-			ClientID:     "client-1",
+			ClientID:     testClientID,
 			QoS:          1,
 		}
 		notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
@@ -311,7 +321,7 @@ func TestNotifier_Retry(t *testing.T) {
 
 	cfg := config.WebhookConfig{
 		QueueSize:  100,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    1,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -329,9 +339,9 @@ func TestNotifier_Retry(t *testing.T) {
 		ShutdownTimeout: 5 * time.Second,
 		Endpoints: []config.WebhookEndpoint{
 			{
-				Name: "test",
-				Type: "http",
-				URL:  "http://example.com/webhook",
+				Name: testName,
+				Type: testTypeHTTP,
+				URL:  testWebhookURL,
 			},
 		},
 	}
@@ -343,7 +353,7 @@ func TestNotifier_Retry(t *testing.T) {
 	}
 	defer notifier.Close()
 
-	event := events.ClientConnected{ClientID: "client-1"}
+	event := events.ClientConnected{ClientID: testClientID}
 	notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 
 	// Wait for retries
@@ -364,7 +374,7 @@ func TestNotifier_QueueOverflow_DropOldest(t *testing.T) {
 
 	cfg := config.WebhookConfig{
 		QueueSize:  5, // Small queue
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    1,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -378,7 +388,7 @@ func TestNotifier_QueueOverflow_DropOldest(t *testing.T) {
 		},
 		ShutdownTimeout: 5 * time.Second,
 		Endpoints: []config.WebhookEndpoint{
-			{Name: "test", Type: "http", URL: "http://example.com/webhook"},
+			{Name: testName, Type: testTypeHTTP, URL: testWebhookURL},
 		},
 	}
 
@@ -391,7 +401,7 @@ func TestNotifier_QueueOverflow_DropOldest(t *testing.T) {
 
 	// Send more events than queue can hold
 	for i := 0; i < 10; i++ {
-		event := events.ClientConnected{ClientID: "client-1"}
+		event := events.ClientConnected{ClientID: testClientID}
 		notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 	}
 
@@ -414,22 +424,22 @@ func TestTopicMatches(t *testing.T) {
 		match  bool
 	}{
 		// Exact matches
-		{"sensors/temp", "sensors/temp", true},
-		{"sensors/temp", "sensors/humidity", false},
+		{testSensorsTemp, testSensorsTemp, true},
+		{testSensorsTemp, "sensors/humidity", false},
 
 		// Single-level wildcard (+)
-		{"sensors/+", "sensors/temp", true},
-		{"sensors/+", "sensors/humidity", true},
-		{"sensors/+", "sensors", false},
-		{"sensors/+", "sensors/temp/room1", false},
+		{testSensorsPlus, testSensorsTemp, true},
+		{testSensorsPlus, "sensors/humidity", true},
+		{testSensorsPlus, "sensors", false},
+		{testSensorsPlus, "sensors/temp/room1", false},
 		{"sensors/+/temp", "sensors/device1/temp", true},
 		{"sensors/+/temp", "sensors/device1/humidity", false},
 
 		// Multi-level wildcard (#)
-		{"sensors/#", "sensors/temp", true},
-		{"sensors/#", "sensors/temp/room1", true},
-		{"sensors/#", "sensors", true},
-		{"sensors/#", "devices/temp", false},
+		{testSensorsHash, testSensorsTemp, true},
+		{testSensorsHash, "sensors/temp/room1", true},
+		{testSensorsHash, "sensors", true},
+		{testSensorsHash, "devices/temp", false},
 		{"sensors/temp/#", "sensors/temp/room1/device1", true},
 
 		// Mixed
@@ -450,7 +460,7 @@ func baseWebhookCfg(workers, queueSize int) config.WebhookConfig {
 		Enabled:    true,
 		Workers:    workers,
 		QueueSize:  queueSize,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
 			Retry:   config.RetryConfig{MaxAttempts: 1},
@@ -460,7 +470,7 @@ func baseWebhookCfg(workers, queueSize int) config.WebhookConfig {
 			},
 		},
 		ShutdownTimeout: 500 * time.Millisecond,
-		Endpoints:       []config.WebhookEndpoint{{Name: "ep", Type: "http", URL: "http://example.com/hook"}},
+		Endpoints:       []config.WebhookEndpoint{{Name: "ep", Type: testTypeHTTP, URL: "http://example.com/hook"}},
 	}
 }
 
@@ -597,7 +607,7 @@ func TestNotifier_GracefulShutdown(t *testing.T) {
 
 	cfg := config.WebhookConfig{
 		QueueSize:  100,
-		DropPolicy: "oldest",
+		DropPolicy: dropPolicyOldest,
 		Workers:    3,
 		Defaults: config.WebhookDefaults{
 			Timeout: 5 * time.Second,
@@ -611,7 +621,7 @@ func TestNotifier_GracefulShutdown(t *testing.T) {
 		},
 		ShutdownTimeout: 1 * time.Second,
 		Endpoints: []config.WebhookEndpoint{
-			{Name: "test", Type: "http", URL: "http://example.com/webhook"},
+			{Name: testName, Type: testTypeHTTP, URL: testWebhookURL},
 		},
 	}
 
@@ -623,7 +633,7 @@ func TestNotifier_GracefulShutdown(t *testing.T) {
 
 	// Send some events
 	for i := 0; i < 5; i++ {
-		event := events.ClientConnected{ClientID: "client-1"}
+		event := events.ClientConnected{ClientID: testClientID}
 		notifier.Notify(context.Background(), event) //nolint:errcheck // best-effort fire-and-forget in test
 	}
 

@@ -55,7 +55,7 @@ func TestDiffRuntimeSafeFields(t *testing.T) {
 	}{
 		{
 			name:   "log level",
-			modify: func(cfg *Config) { cfg.Log.Level = "debug" }, //nolint:goconst // test value
+			modify: func(cfg *Config) { cfg.Log.Level = testLogLevelDebug },
 			path:   "Log.Level",
 		},
 		{
@@ -219,7 +219,7 @@ func TestDiffRestartRequiredFields(t *testing.T) {
 func TestDiffMixedChanges(t *testing.T) {
 	old := Default()
 	new := Default()
-	new.Log.Level = "debug"
+	new.Log.Level = testLogLevelDebug
 	new.Server.TCP.V3.Addr = ":9999"
 	new.RateLimit.Message.Rate = 500
 

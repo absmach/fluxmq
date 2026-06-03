@@ -157,7 +157,7 @@ func TestOptionsValidation(t *testing.T) {
 		},
 		{
 			name:    "no servers",
-			opts:    &Options{ClientID: "test", ProtocolVersion: 4},
+			opts:    &Options{ClientID: testStr, ProtocolVersion: 4},
 			wantErr: ErrNoServers,
 		},
 		{
@@ -167,12 +167,12 @@ func TestOptionsValidation(t *testing.T) {
 		},
 		{
 			name:    "invalid protocol version",
-			opts:    NewOptions().SetClientID("test").SetProtocolVersion(3),
+			opts:    NewOptions().SetClientID(testStr).SetProtocolVersion(3),
 			wantErr: ErrInvalidProtocol,
 		},
 		{
 			name: "protocol version 5",
-			opts: NewOptions().SetClientID("test").SetProtocolVersion(5),
+			opts: NewOptions().SetClientID(testStr).SetProtocolVersion(5),
 		},
 	}
 
@@ -191,7 +191,7 @@ func TestOptionsValidation(t *testing.T) {
 }
 
 func TestOptionsValidationFixesMaxInflight(t *testing.T) {
-	opts := NewOptions().SetClientID("test").SetMaxInflight(-1)
+	opts := NewOptions().SetClientID(testStr).SetMaxInflight(-1)
 	if err := opts.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestOptionsValidationFixesMaxInflight(t *testing.T) {
 
 func TestOptionsValidationNormalizesReconnectAndSlowConsumer(t *testing.T) {
 	opts := NewOptions().
-		SetClientID("test").
+		SetClientID(testStr).
 		SetReconnectJitter(-1 * time.Second).
 		SetMaxReconnectAttempts(-1).
 		SetSlowConsumerPolicy(SlowConsumerPolicy("invalid")).

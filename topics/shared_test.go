@@ -5,6 +5,15 @@ package topics
 
 import "testing"
 
+const (
+	testGroup1       = "group1"
+	testSensorsMulti = "sensors/#"
+	testSharePrefix  = "$share/"
+	testClient1      = "client1"
+	testClient2      = "client2"
+	testClient3      = "client3"
+)
+
 func TestParseShared(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -16,8 +25,8 @@ func TestParseShared(t *testing.T) {
 		{
 			name:             "Valid shared subscription",
 			filter:           "$share/group1/sensors/#",
-			expectedShare:    "group1",
-			expectedTopic:    "sensors/#",
+			expectedShare:    testGroup1,
+			expectedTopic:    testSensorsMulti,
 			expectedIsShared: true,
 		},
 		{
@@ -29,9 +38,9 @@ func TestParseShared(t *testing.T) {
 		},
 		{
 			name:             "Non-shared subscription",
-			filter:           "sensors/#",
+			filter:           testSensorsMulti,
 			expectedShare:    "",
-			expectedTopic:    "sensors/#",
+			expectedTopic:    testSensorsMulti,
 			expectedIsShared: false,
 		},
 		{
@@ -50,9 +59,9 @@ func TestParseShared(t *testing.T) {
 		},
 		{
 			name:             "Share prefix only",
-			filter:           "$share/",
+			filter:           testSharePrefix,
 			expectedShare:    "",
-			expectedTopic:    "$share/",
+			expectedTopic:    testSharePrefix,
 			expectedIsShared: false,
 		},
 	}
@@ -80,8 +89,8 @@ func TestIsShared(t *testing.T) {
 		expected bool
 	}{
 		{"$share/group1/topic", true},
-		{"$share/", true}, // Starts with prefix (ParseShared will validate format)
-		{"sensors/#", false},
+		{testSharePrefix, true}, // Starts with prefix (ParseShared will validate format)
+		{testSensorsMulti, false},
 		{"$topic", false},
 		{"", false},
 	}
@@ -98,13 +107,13 @@ func TestIsShared(t *testing.T) {
 
 func TestShareGroup_AddSubscriber(t *testing.T) {
 	group := &ShareGroup{
-		Name:        "group1",
-		TopicFilter: "sensors/#",
+		Name:        testGroup1,
+		TopicFilter: testSensorsMulti,
 		Subscribers: []string{},
 	}
 
 	// Add first subscriber
-	if !group.AddSubscriber("client1") {
+	if !group.AddSubscriber(testClient1) {
 		t.Error("Expected AddSubscriber to return true for new subscriber")
 	}
 	if len(group.Subscribers) != 1 {
@@ -112,13 +121,13 @@ func TestShareGroup_AddSubscriber(t *testing.T) {
 	}
 
 	// Add second subscriber
-	group.AddSubscriber("client2")
+	group.AddSubscriber(testClient2)
 	if len(group.Subscribers) != 2 {
 		t.Errorf("Expected 2 subscribers, got %d", len(group.Subscribers))
 	}
 
 	// Add duplicate (should not add)
-	if group.AddSubscriber("client1") {
+	if group.AddSubscriber(testClient1) {
 		t.Error("Expected AddSubscriber to return false for duplicate")
 	}
 	if len(group.Subscribers) != 2 {
@@ -128,13 +137,13 @@ func TestShareGroup_AddSubscriber(t *testing.T) {
 
 func TestShareGroup_RemoveSubscriber(t *testing.T) {
 	group := &ShareGroup{
-		Name:        "group1",
-		TopicFilter: "sensors/#",
-		Subscribers: []string{"client1", "client2", "client3"},
+		Name:        testGroup1,
+		TopicFilter: testSensorsMulti,
+		Subscribers: []string{testClient1, testClient2, testClient3},
 	}
 
 	// Remove existing subscriber
-	if !group.RemoveSubscriber("client2") {
+	if !group.RemoveSubscriber(testClient2) {
 		t.Error("Expected RemoveSubscriber to return true")
 	}
 	if len(group.Subscribers) != 2 {
@@ -143,7 +152,7 @@ func TestShareGroup_RemoveSubscriber(t *testing.T) {
 
 	// Verify client2 is gone
 	for _, sub := range group.Subscribers {
-		if sub == "client2" {
+		if sub == testClient2 {
 			t.Error("client2 should have been removed")
 		}
 	}
@@ -156,13 +165,13 @@ func TestShareGroup_RemoveSubscriber(t *testing.T) {
 
 func TestShareGroup_NextSubscriber(t *testing.T) {
 	group := &ShareGroup{
-		Name:        "group1",
-		TopicFilter: "sensors/#",
-		Subscribers: []string{"client1", "client2", "client3"},
+		Name:        testGroup1,
+		TopicFilter: testSensorsMulti,
+		Subscribers: []string{testClient1, testClient2, testClient3},
 	}
 
 	// Test round-robin
-	expected := []string{"client1", "client2", "client3", "client1", "client2"}
+	expected := []string{testClient1, testClient2, testClient3, testClient1, testClient2}
 	for i, exp := range expected {
 		sub := group.NextSubscriber()
 		if sub != exp {
@@ -181,14 +190,14 @@ func TestShareGroup_NextSubscriber(t *testing.T) {
 
 func TestShareGroup_IsEmpty(t *testing.T) {
 	group := &ShareGroup{
-		Subscribers: []string{"client1"},
+		Subscribers: []string{testClient1},
 	}
 
 	if group.IsEmpty() {
 		t.Error("Expected group to not be empty")
 	}
 
-	group.RemoveSubscriber("client1")
+	group.RemoveSubscriber(testClient1)
 	if !group.IsEmpty() {
 		t.Error("Expected group to be empty after removing all subscribers")
 	}

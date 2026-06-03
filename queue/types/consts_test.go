@@ -1,0 +1,6 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package types
+
+const testQueueName = "$queue/test"

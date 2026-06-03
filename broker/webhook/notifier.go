@@ -18,6 +18,8 @@ import (
 	"github.com/sony/gobreaker"
 )
 
+const dropPolicyOldest = "oldest"
+
 var ErrSenderCannotBeNil = errors.New("sender cannot be nil")
 
 // AtomicNotifier wraps a GenericNotifier and supports live reconfiguration
@@ -238,7 +240,7 @@ func (n *GenericNotifier) Notify(ctx context.Context, event events.Event) error 
 			// Successfully queued
 		default:
 			// Queue full, apply drop policy
-			if n.cfg.DropPolicy == "oldest" {
+			if n.cfg.DropPolicy == dropPolicyOldest {
 				// Drop oldest, add newest
 				select {
 				case <-n.eventQueue: // drop oldest

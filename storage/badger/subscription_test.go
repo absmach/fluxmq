@@ -18,8 +18,8 @@ func TestSubscriptionStore_Add(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	sub := &storage.Subscription{
-		ClientID: "client-1",
-		Filter:   "test/topic",
+		ClientID: testClient1,
+		Filter:   testTopic,
 		QoS:      1,
 		Options: storage.SubscribeOptions{
 			NoLocal:           false,
@@ -31,10 +31,10 @@ func TestSubscriptionStore_Add(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify added
-	subs, err := store.GetForClient("client-1")
+	subs, err := store.GetForClient(testClient1)
 	require.NoError(t, err)
 	assert.Len(t, subs, 1)
-	assert.Equal(t, "test/topic", subs[0].Filter)
+	assert.Equal(t, testTopic, subs[0].Filter)
 	assert.Equal(t, byte(1), subs[0].QoS)
 }
 
@@ -43,9 +43,9 @@ func TestSubscriptionStore_AddMultiple(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	subs := []*storage.Subscription{
-		{ClientID: "client-1", Filter: "sensor/+/temp", QoS: 0},
-		{ClientID: "client-1", Filter: "sensor/#", QoS: 1},
-		{ClientID: "client-1", Filter: "alerts/critical", QoS: 2},
+		{ClientID: testClient1, Filter: testSensorPlusTemp, QoS: 0},
+		{ClientID: testClient1, Filter: testSensorMulti, QoS: 1},
+		{ClientID: testClient1, Filter: testAlertsCritical, QoS: 2},
 	}
 
 	for _, sub := range subs {
@@ -53,7 +53,7 @@ func TestSubscriptionStore_AddMultiple(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	retrieved, err := store.GetForClient("client-1")
+	retrieved, err := store.GetForClient(testClient1)
 	require.NoError(t, err)
 	assert.Len(t, retrieved, 3)
 }
@@ -63,7 +63,7 @@ func TestSubscriptionStore_Remove(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	sub := &storage.Subscription{
-		ClientID: "client-2",
+		ClientID: testClient2,
 		Filter:   "test/remove",
 		QoS:      1,
 	}
@@ -71,10 +71,10 @@ func TestSubscriptionStore_Remove(t *testing.T) {
 	err := store.Add(sub)
 	require.NoError(t, err)
 
-	err = store.Remove("client-2", "test/remove")
+	err = store.Remove(testClient2, "test/remove")
 	require.NoError(t, err)
 
-	subs, err := store.GetForClient("client-2")
+	subs, err := store.GetForClient(testClient2)
 	require.NoError(t, err)
 	assert.Empty(t, subs)
 }
@@ -93,7 +93,7 @@ func TestSubscriptionStore_GetForClient(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	// Add subscriptions for multiple clients
-	clients := []string{"client-1", "client-2", "client-3"}
+	clients := []string{testClient1, testClient2, testClient3}
 	for _, clientID := range clients {
 		for i := 0; i < 3; i++ {
 			sub := &storage.Subscription{
@@ -164,7 +164,7 @@ func TestSubscriptionStore_Count(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		sub := &storage.Subscription{
 			ClientID: fmt.Sprintf("client-%d", i),
-			Filter:   "test/topic",
+			Filter:   testTopic,
 			QoS:      1,
 		}
 		err := store.Add(sub)
@@ -189,7 +189,7 @@ func TestSubscriptionStore_DuplicateAdd(t *testing.T) {
 
 	sub := &storage.Subscription{
 		ClientID: "client-dup",
-		Filter:   "test/topic",
+		Filter:   testTopic,
 		QoS:      1,
 	}
 
@@ -214,8 +214,8 @@ func TestSubscriptionStore_WildcardFilters(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	wildcards := []string{
-		"sensor/+/temp",
-		"sensor/#",
+		testSensorPlusTemp,
+		testSensorMulti,
 		"+/+/status",
 		"#",
 	}
@@ -250,7 +250,7 @@ func TestSubscriptionStore_ConcurrentAdd(t *testing.T) {
 		go func(id int) {
 			sub := &storage.Subscription{
 				ClientID: fmt.Sprintf("concurrent-client-%d", id),
-				Filter:   "test/topic",
+				Filter:   testTopic,
 				QoS:      1,
 			}
 			err := store.Add(sub)
@@ -279,7 +279,7 @@ func TestSubscriptionStore_Options(t *testing.T) {
 
 	sub := &storage.Subscription{
 		ClientID: "client-opts",
-		Filter:   "test/topic",
+		Filter:   testTopic,
 		QoS:      1,
 		Options: storage.SubscribeOptions{
 			NoLocal:           true,
@@ -304,8 +304,8 @@ func TestSubscriptionStore_MatchExact(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	subs := []*storage.Subscription{
-		{ClientID: "client-1", Filter: "sensor/temp", QoS: 1},
-		{ClientID: "client-2", Filter: "sensor/humidity", QoS: 1},
+		{ClientID: testClient1, Filter: "sensor/temp", QoS: 1},
+		{ClientID: testClient2, Filter: "sensor/humidity", QoS: 1},
 	}
 
 	for _, sub := range subs {
@@ -316,7 +316,7 @@ func TestSubscriptionStore_MatchExact(t *testing.T) {
 	matched, err := store.Match("sensor/temp")
 	require.NoError(t, err)
 	assert.Len(t, matched, 1)
-	assert.Equal(t, "client-1", matched[0].ClientID)
+	assert.Equal(t, testClient1, matched[0].ClientID)
 }
 
 func TestSubscriptionStore_MatchSingleLevelWildcard(t *testing.T) {
@@ -324,8 +324,8 @@ func TestSubscriptionStore_MatchSingleLevelWildcard(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	subs := []*storage.Subscription{
-		{ClientID: "client-1", Filter: "sensor/+/temp", QoS: 1},
-		{ClientID: "client-2", Filter: "sensor/room1/humidity", QoS: 1},
+		{ClientID: testClient1, Filter: testSensorPlusTemp, QoS: 1},
+		{ClientID: testClient2, Filter: "sensor/room1/humidity", QoS: 1},
 	}
 
 	for _, sub := range subs {
@@ -336,7 +336,7 @@ func TestSubscriptionStore_MatchSingleLevelWildcard(t *testing.T) {
 	matched, err := store.Match("sensor/room1/temp")
 	require.NoError(t, err)
 	assert.Len(t, matched, 1)
-	assert.Equal(t, "client-1", matched[0].ClientID)
+	assert.Equal(t, testClient1, matched[0].ClientID)
 }
 
 func TestSubscriptionStore_MatchMultiLevelWildcard(t *testing.T) {
@@ -344,9 +344,9 @@ func TestSubscriptionStore_MatchMultiLevelWildcard(t *testing.T) {
 	defer cleanupSubscriptionStore(t, store)
 
 	subs := []*storage.Subscription{
-		{ClientID: "client-1", Filter: "sensor/#", QoS: 1},
-		{ClientID: "client-2", Filter: "#", QoS: 1},
-		{ClientID: "client-3", Filter: "alerts/critical", QoS: 1},
+		{ClientID: testClient1, Filter: testSensorMulti, QoS: 1},
+		{ClientID: testClient2, Filter: "#", QoS: 1},
+		{ClientID: testClient3, Filter: testAlertsCritical, QoS: 1},
 	}
 
 	for _, sub := range subs {
@@ -362,8 +362,8 @@ func TestSubscriptionStore_MatchMultiLevelWildcard(t *testing.T) {
 	for _, m := range matched {
 		clientIDs[m.ClientID] = true
 	}
-	assert.True(t, clientIDs["client-1"])
-	assert.True(t, clientIDs["client-2"])
+	assert.True(t, clientIDs[testClient1])
+	assert.True(t, clientIDs[testClient2])
 }
 
 func TestSubscriptionStore_MatchEmpty(t *testing.T) {

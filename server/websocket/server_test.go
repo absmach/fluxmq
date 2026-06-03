@@ -36,7 +36,7 @@ func TestSubprotocolNegotiation(t *testing.T) {
 	// without requiring a full broker.
 	upgrader := websocket.Upgrader{
 		CheckOrigin:  func(r *http.Request) bool { return true },
-		Subprotocols: []string{"mqtt"},
+		Subprotocols: []string{subprotocolMQTT},
 	}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,13 +57,13 @@ func TestSubprotocolNegotiation(t *testing.T) {
 	}{
 		{
 			name:         "mqtt subprotocol negotiated",
-			subprotocols: []string{"mqtt"},
-			wantProtocol: "mqtt",
+			subprotocols: []string{subprotocolMQTT},
+			wantProtocol: subprotocolMQTT,
 		},
 		{
 			name:         "mqtt selected from multiple",
-			subprotocols: []string{"graphql-ws", "mqtt"},
-			wantProtocol: "mqtt",
+			subprotocols: []string{"graphql-ws", subprotocolMQTT},
+			wantProtocol: subprotocolMQTT,
 		},
 		{
 			name:         "no subprotocol requested",
@@ -175,11 +175,11 @@ func TestReadPacketAcrossWebSocketMessages(t *testing.T) {
 
 	want := &v3.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolNameMQTT,
 		ProtocolVersion: 4,
 		CleanSession:    true,
 		KeepAlive:       30,
-		ClientID:        "client1",
+		ClientID:        testClientID1,
 		UsernameFlag:    true,
 		Username:        "user",
 		PasswordFlag:    true,
@@ -231,7 +231,7 @@ func TestReadPacketSequentialMessages(t *testing.T) {
 		for i := range count {
 			pkt := &v3.Connect{
 				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    testProtocolNameMQTT,
 				ProtocolVersion: 4,
 				CleanSession:    true,
 				KeepAlive:       30,
@@ -286,11 +286,11 @@ func TestReadPacketTimeoutDoesNotPoisonWebSocket(t *testing.T) {
 
 	want := &v3.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolNameMQTT,
 		ProtocolVersion: 4,
 		CleanSession:    true,
 		KeepAlive:       30,
-		ClientID:        "client1",
+		ClientID:        testClientID1,
 	}
 
 	go func() {
@@ -319,11 +319,11 @@ func TestSetKeepAliveAfterReadPacketProcessesPong(t *testing.T) {
 
 	connect := &v3.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolNameMQTT,
 		ProtocolVersion: 4,
 		CleanSession:    true,
 		KeepAlive:       30,
-		ClientID:        "client1",
+		ClientID:        testClientID1,
 	}
 
 	go func() {

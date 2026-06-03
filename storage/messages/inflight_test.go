@@ -11,9 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testTopic = "test"
+
 func TestInflightAddInitialSentAtZero(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: "test", QoS: 1}
+	msg := &storage.Message{Topic: testTopic, QoS: 1}
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 
@@ -24,7 +26,7 @@ func TestInflightAddInitialSentAtZero(t *testing.T) {
 
 func TestInflightGetExpiredSkipsUnsent(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: "test", QoS: 1}
+	msg := &storage.Message{Topic: testTopic, QoS: 1}
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 
@@ -34,7 +36,7 @@ func TestInflightGetExpiredSkipsUnsent(t *testing.T) {
 
 func TestInflightMarkSentEnablesExpiry(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: "test", QoS: 1}
+	msg := &storage.Message{Topic: testTopic, QoS: 1}
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 	tracker.MarkSent(1)
@@ -49,7 +51,7 @@ func TestInflightMarkSentEnablesExpiry(t *testing.T) {
 
 func TestInflightMarkRetryUpdatesTimestampAndCount(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: "test", QoS: 1}
+	msg := &storage.Message{Topic: testTopic, QoS: 1}
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 	tracker.MarkSent(1)

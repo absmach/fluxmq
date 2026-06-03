@@ -54,12 +54,12 @@ func TestQueueConsumerCacheIndexingAndList(t *testing.T) {
 	}
 
 	c.upsertQueueConsumerCache(&QueueConsumerInfo{
-		QueueName:  "orders",
+		QueueName:  testOrders,
 		GroupID:    "workers",
 		ConsumerID: "c1",
 	})
 	c.upsertQueueConsumerCache(&QueueConsumerInfo{
-		QueueName:  "orders",
+		QueueName:  testOrders,
 		GroupID:    "workers/eu",
 		ConsumerID: "c2",
 	})
@@ -69,7 +69,7 @@ func TestQueueConsumerCacheIndexingAndList(t *testing.T) {
 		ConsumerID: "c3",
 	})
 
-	orders, err := c.ListQueueConsumers(context.Background(), "orders")
+	orders, err := c.ListQueueConsumers(context.Background(), testOrders)
 	if err != nil {
 		t.Fatalf("ListQueueConsumers failed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestQueueConsumerCacheIndexingAndList(t *testing.T) {
 		t.Fatalf("expected 2 order consumers, got %d", len(orders))
 	}
 
-	workersEU, err := c.ListQueueConsumersByGroup(context.Background(), "orders", "workers/eu")
+	workersEU, err := c.ListQueueConsumersByGroup(context.Background(), testOrders, "workers/eu")
 	if err != nil {
 		t.Fatalf("ListQueueConsumersByGroup failed: %v", err)
 	}
@@ -93,8 +93,8 @@ func TestQueueConsumerCacheIndexingAndList(t *testing.T) {
 		t.Fatalf("expected 3 consumers, got %d", len(all))
 	}
 
-	c.removeQueueConsumerCache("orders", "workers/eu", "c2")
-	workersEU, err = c.ListQueueConsumersByGroup(context.Background(), "orders", "workers/eu")
+	c.removeQueueConsumerCache(testOrders, "workers/eu", "c2")
+	workersEU, err = c.ListQueueConsumersByGroup(context.Background(), testOrders, "workers/eu")
 	if err != nil {
 		t.Fatalf("ListQueueConsumersByGroup failed: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestParseQueueConsumerKeyWithSlashesInGroup(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected parse to succeed")
 	}
-	if queueName != "orders" {
+	if queueName != testOrders {
 		t.Fatalf("unexpected queueName: %q", queueName)
 	}
 	if groupID != "workers/region/eu" {

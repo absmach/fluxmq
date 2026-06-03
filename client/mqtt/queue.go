@@ -13,6 +13,12 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
+// Queue user property keys.
+const (
+	propMessageID = "message-id"
+	propGroupID   = "group-id"
+)
+
 // QueuePublishOptions configures queue message publishing.
 type QueuePublishOptions struct {
 	QueueName  string            // Queue topic name (without $queue/ prefix)
@@ -436,8 +442,8 @@ func (c *Client) sendQueueAck(ctx context.Context, queueName, messageID, groupID
 
 	// Send with message-id user property (MQTT v5)
 	userProps := map[string]string{
-		"message-id": messageID,
-		"group-id":   groupID,
+		propMessageID: messageID,
+		propGroupID:   groupID,
 	}
 	if reason != "" && ackType == "$reject" {
 		userProps["reason"] = reason

@@ -22,20 +22,20 @@ func TestBuildRaftGroupRuntimes(t *testing.T) {
 		SyncMode:          true,
 		MinInSyncReplicas: 2,
 		AckTimeout:        5 * time.Second,
-		BindAddr:          "127.0.0.1:7100",
-		DataDir:           "/tmp/fluxmq/raft",
+		BindAddr:          testRaftBind7100,
+		DataDir:           testRaftDataDir,
 		Peers: map[string]string{
-			"node1": "127.0.0.1:7100",
+			testRaftNode1: testRaftBind7100,
 		},
 		HeartbeatTimeout:  1 * time.Second,
 		ElectionTimeout:   3 * time.Second,
 		SnapshotInterval:  5 * time.Minute,
 		SnapshotThreshold: 8192,
 		Groups: map[string]config.RaftGroupConfig{
-			"hot": {
-				BindAddr:          "127.0.0.1:8100",
+			testGroupHot: {
+				BindAddr:          testRaftBind8100,
 				DataDir:           "/tmp/fluxmq/raft-hot",
-				Peers:             map[string]string{"node1": "127.0.0.1:8100"},
+				Peers:             map[string]string{testRaftNode1: testRaftBind8100},
 				ReplicationFactor: 5,
 				SyncMode:          &enableAsync,
 				MinInSyncReplicas: 3,
@@ -62,15 +62,15 @@ func TestBuildRaftGroupRuntimes(t *testing.T) {
 		switch rt.GroupID {
 		case DefaultGroupID:
 			foundDefault = true
-			if rt.BindAddr != "127.0.0.1:7100" {
+			if rt.BindAddr != testRaftBind7100 {
 				t.Fatalf("unexpected default bind addr: %q", rt.BindAddr)
 			}
 			if rt.ManagerConfig.SyncMode != true {
 				t.Fatalf("unexpected default sync mode: %v", rt.ManagerConfig.SyncMode)
 			}
-		case "hot": //nolint:goconst // test value
+		case testGroupHot: //nolint:goconst // test value
 			foundHot = true
-			if rt.BindAddr != "127.0.0.1:8100" {
+			if rt.BindAddr != testRaftBind8100 {
 				t.Fatalf("unexpected hot bind addr: %q", rt.BindAddr)
 			}
 			if rt.ManagerConfig.ReplicationFactor != 5 {
@@ -93,12 +93,12 @@ func TestBuildRaftGroupRuntimesRejectsDuplicateBind(t *testing.T) {
 		ReplicationFactor: 3,
 		MinInSyncReplicas: 2,
 		AckTimeout:        5 * time.Second,
-		BindAddr:          "127.0.0.1:7100",
-		DataDir:           "/tmp/fluxmq/raft",
+		BindAddr:          testRaftBind7100,
+		DataDir:           testRaftDataDir,
 		Groups: map[string]config.RaftGroupConfig{
-			"hot": {
-				BindAddr: "127.0.0.1:7100",
-				Peers:    map[string]string{"node1": "127.0.0.1:7100"},
+			testGroupHot: {
+				BindAddr: testRaftBind7100,
+				Peers:    map[string]string{testRaftNode1: testRaftBind7100},
 			},
 		},
 	}
@@ -119,15 +119,15 @@ func TestRaftGroupProvisionerDerivesAutoGroupEndpoints(t *testing.T) {
 		ReplicationFactor:   3,
 		MinInSyncReplicas:   2,
 		AckTimeout:          5 * time.Second,
-		BindAddr:            "127.0.0.1:7100",
-		DataDir:             "/tmp/fluxmq/raft",
+		BindAddr:            testRaftBind7100,
+		DataDir:             testRaftDataDir,
 		Peers: map[string]string{
 			"node2": "127.0.0.1:7200",
 		},
 	}
 
-	p := newRaftGroupProvisioner("node1", raftCfg, nil, nil, nil, nil, nil)
-	derived, err := p.deriveAutoGroupConfig("hot")
+	p := newRaftGroupProvisioner(testRaftNode1, raftCfg, nil, nil, nil, nil, nil)
+	derived, err := p.deriveAutoGroupConfig(testGroupHot)
 	if err != nil {
 		t.Fatalf("deriveAutoGroupConfig failed: %v", err)
 	}
@@ -146,15 +146,15 @@ func TestRaftGroupProvisionerRejectsUnknownWhenAutoProvisionDisabled(t *testing.
 		ReplicationFactor:   3,
 		MinInSyncReplicas:   2,
 		AckTimeout:          5 * time.Second,
-		BindAddr:            "127.0.0.1:7100",
-		DataDir:             "/tmp/fluxmq/raft",
+		BindAddr:            testRaftBind7100,
+		DataDir:             testRaftDataDir,
 	}
 
-	p := newRaftGroupProvisioner("node1", raftCfg, nil, nil, map[string]*Manager{
+	p := newRaftGroupProvisioner(testRaftNode1, raftCfg, nil, nil, map[string]*Manager{
 		DefaultGroupID: {},
 	}, nil, nil)
 
-	_, err := p.GetOrCreateGroup(context.Background(), "hot")
+	_, err := p.GetOrCreateGroup(context.Background(), testGroupHot)
 	if err == nil {
 		t.Fatalf("expected unknown group error")
 	}
@@ -165,39 +165,39 @@ func TestRaftGroupProvisionerRejectsUnknownWhenAutoProvisionDisabled(t *testing.
 
 func TestRaftGroupProvisionerTryReleaseGroupSkipsStaticGroups(t *testing.T) {
 	p := newRaftGroupProvisioner(
-		"node1",
+		testRaftNode1,
 		config.RaftConfig{},
 		nil,
 		nil,
 		map[string]*Manager{
 			DefaultGroupID: {},
-			"hot":          {},
+			testGroupHot:   {},
 		},
 		[]RaftGroupRuntime{
-			{GroupID: DefaultGroupID, BindAddr: "127.0.0.1:7100"},
-			{GroupID: "hot", BindAddr: "127.0.0.1:8100"},
+			{GroupID: DefaultGroupID, BindAddr: testRaftBind7100},
+			{GroupID: testGroupHot, BindAddr: testRaftBind8100},
 		},
 		nil,
 	)
 
-	released, err := p.TryReleaseGroup(context.Background(), "hot")
+	released, err := p.TryReleaseGroup(context.Background(), testGroupHot)
 	if err != nil {
 		t.Fatalf("TryReleaseGroup failed: %v", err)
 	}
 	if released {
 		t.Fatalf("expected static group release to be skipped")
 	}
-	if _, ok := p.managers["hot"]; !ok {
+	if _, ok := p.managers[testGroupHot]; !ok {
 		t.Fatalf("expected static group manager to remain")
 	}
-	if got := p.usedBind["127.0.0.1:8100"]; got != "hot" {
+	if got := p.usedBind[testRaftBind8100]; got != testGroupHot {
 		t.Fatalf("expected static bind mapping to remain, got %q", got)
 	}
 }
 
 func TestRaftGroupProvisionerTryReleaseGroupRemovesDynamicTracking(t *testing.T) {
 	p := newRaftGroupProvisioner(
-		"node1",
+		testRaftNode1,
 		config.RaftConfig{},
 		nil,
 		nil,
@@ -205,7 +205,7 @@ func TestRaftGroupProvisionerTryReleaseGroupRemovesDynamicTracking(t *testing.T)
 			DefaultGroupID: {},
 		},
 		[]RaftGroupRuntime{
-			{GroupID: DefaultGroupID, BindAddr: "127.0.0.1:7100"},
+			{GroupID: DefaultGroupID, BindAddr: testRaftBind7100},
 		},
 		nil,
 	)

@@ -69,7 +69,7 @@ func TestRetainedStore_SmallMessageReplication(t *testing.T) {
 		Payload:     []byte("small payload"),
 		QoS:         1,
 		Retain:      true,
-		Properties:  map[string]string{"test": "value"},
+		Properties:  map[string]string{"test": testValue},
 		PublishTime: time.Now(),
 	}
 
@@ -217,7 +217,7 @@ func TestRetainedDataEntry_JSON(t *testing.T) {
 			Timestamp:  time.Now().Truncate(time.Second),
 		},
 		Payload:    "dGVzdCBwYXlsb2Fk", // base64 "test payload"
-		Properties: map[string]string{"key": "value"},
+		Properties: map[string]string{"key": testValue},
 	}
 
 	// Marshal to JSON

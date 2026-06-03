@@ -183,7 +183,7 @@ func TestRestoreStateReplaysSubscriptionsQueueAndOutbound(t *testing.T) {
 
 	c.subscriptions.setBasic("sensors/basic", 1)
 	c.subscriptions.setOption(&SubscribeOption{Topic: "sensors/advanced", QoS: 2, NoLocal: true})
-	c.queueSubs.add("$queue/jobs", &queueSubscription{queueName: "jobs", consumerGroup: "workers"})
+	c.queueSubs.add("$queue/jobs", &queueSubscription{queueName: "jobs", consumerGroup: testWorkers})
 
 	require.NoError(t, c.store.StoreOutbound(9, &Message{Topic: "outbound/qos1", Payload: []byte("qos1"), QoS: 1, PacketID: 9}))
 	require.NoError(t, c.store.StoreOutbound(10, &Message{Topic: "outbound/qos0", Payload: []byte("qos0"), QoS: 0, PacketID: 10}))
@@ -347,7 +347,7 @@ func TestDeliverMessageOrderMattersBlocksWhenChannelFull(t *testing.T) {
 	}
 
 	c.msgCh = make(chan *Message, 1)
-	c.msgCh <- &Message{Topic: "prefill"}
+	c.msgCh <- &Message{Topic: testPrefill}
 
 	done := make(chan struct{})
 	go func() {
@@ -379,14 +379,14 @@ func TestDeliverMessageOrderMattersFalseDropsWithoutBlocking(t *testing.T) {
 	}
 
 	c.msgCh = make(chan *Message, 1)
-	c.msgCh <- &Message{Topic: "prefill"}
+	c.msgCh <- &Message{Topic: testPrefill}
 
 	start := time.Now()
 	c.deliverMessage(&Message{Topic: "dropped"})
 	assert.Less(t, time.Since(start), 50*time.Millisecond, "deliverMessage should not block when OrderMatters=false")
 
 	msg := <-c.msgCh
-	assert.Equal(t, "prefill", msg.Topic, "original message should still be in channel")
+	assert.Equal(t, testPrefill, msg.Topic, "original message should still be in channel")
 }
 
 func TestAsyncAPIsReturnUnderlyingErrors(t *testing.T) {
@@ -409,7 +409,7 @@ func TestSendAuthRequiresV5AndConnection(t *testing.T) {
 	assert.Equal(t, ErrAuthNotV5, c4.SendAuth(0x18, []byte("data")))
 
 	// v5 client not connected should reject auth
-	c5, err := New(NewOptions().SetClientID("auth-v5").SetProtocolVersion(5).SetAuthMethod("SCRAM-SHA-256"))
+	c5, err := New(NewOptions().SetClientID("auth-v5").SetProtocolVersion(5).SetAuthMethod(testScramSHA256))
 	require.NoError(t, err)
 	assert.Equal(t, ErrNotConnected, c5.SendAuth(0x18, []byte("data")))
 
@@ -520,7 +520,7 @@ func TestHandleConnectAuthMethodMismatch(t *testing.T) {
 		FixedHeader: packets.FixedHeader{PacketType: packets.AuthType},
 		ReasonCode:  0x18,
 		Properties: &v5.AuthProperties{
-			AuthMethod: "SCRAM-SHA-256",
+			AuthMethod: testScramSHA256,
 			AuthData:   []byte("challenge"),
 		},
 	}
@@ -579,7 +579,7 @@ func TestQueueWriteRequestTracksEnqueueRuntimeAcrossRuntimeSwap(t *testing.T) {
 	require.NoError(t, err)
 
 	oldWriteCh := make(chan writeRequest, 1)
-	oldWriteCh <- writeRequest{data: []byte("prefill")}
+	oldWriteCh <- writeRequest{data: []byte(testPrefill)}
 	oldRT := &writeRuntime{
 		writeCh:        oldWriteCh,
 		controlWriteCh: make(chan writeRequest, 1),
@@ -882,8 +882,8 @@ func TestSlowConsumerPendingLimitReportsAsyncError(t *testing.T) {
 
 	c.msgCh = make(chan *Message, 1)
 
-	c.deliverMessage(&Message{Topic: "events/1", Payload: []byte("one")})
-	c.deliverMessage(&Message{Topic: "events/2", Payload: []byte("two")})
+	c.deliverMessage(&Message{Topic: testEvents1, Payload: []byte("one")})
+	c.deliverMessage(&Message{Topic: testEvents2, Payload: []byte("two")})
 	c.deliverMessage(&Message{Topic: "events/3", Payload: []byte("three")})
 
 	assert.Equal(t, uint64(2), c.DroppedMessages())
@@ -1134,11 +1134,11 @@ func TestSlowConsumerBlockWithTimeoutWaitsForCapacity(t *testing.T) {
 	c.msgCh = make(chan *Message, 1)
 	c.msgStop = make(chan struct{})
 
-	c.deliverMessage(&Message{Topic: "events/1", Payload: []byte("one")})
+	c.deliverMessage(&Message{Topic: testEvents1, Payload: []byte("one")})
 
 	done := make(chan struct{})
 	go func() {
-		c.deliverMessage(&Message{Topic: "events/2", Payload: []byte("two")})
+		c.deliverMessage(&Message{Topic: testEvents2, Payload: []byte("two")})
 		close(done)
 	}()
 
@@ -1158,7 +1158,7 @@ func TestSlowConsumerBlockWithTimeoutWaitsForCapacity(t *testing.T) {
 	}
 
 	second := <-c.msgCh
-	assert.Equal(t, "events/2", second.Topic)
+	assert.Equal(t, testEvents2, second.Topic)
 }
 
 func TestSlowConsumerBlockWithTimeoutDropsOnTimeout(t *testing.T) {
@@ -1176,16 +1176,16 @@ func TestSlowConsumerBlockWithTimeoutDropsOnTimeout(t *testing.T) {
 	c.msgCh = make(chan *Message, 1)
 	c.msgStop = make(chan struct{})
 
-	c.deliverMessage(&Message{Topic: "events/1", Payload: []byte("one")})
+	c.deliverMessage(&Message{Topic: testEvents1, Payload: []byte("one")})
 
 	start := time.Now()
-	c.deliverMessage(&Message{Topic: "events/2", Payload: []byte("two")})
+	c.deliverMessage(&Message{Topic: testEvents2, Payload: []byte("two")})
 	elapsed := time.Since(start)
 	assert.GreaterOrEqual(t, elapsed, 25*time.Millisecond)
 	assert.Less(t, elapsed, 150*time.Millisecond)
 
 	msg := <-c.msgCh
-	assert.Equal(t, "events/1", msg.Topic)
+	assert.Equal(t, testEvents1, msg.Topic)
 	assert.Equal(t, uint64(1), c.DroppedMessages())
 }
 
@@ -1589,7 +1589,7 @@ func TestDroppedMessageCallbackQueueIsBounded(t *testing.T) {
 
 	c.msgCh = make(chan *Message, 1)
 	c.msgStop = make(chan struct{})
-	c.msgCh <- &Message{Topic: "prefill", Payload: []byte("x")}
+	c.msgCh <- &Message{Topic: testPrefill, Payload: []byte("x")}
 
 	before := runtime.NumGoroutine()
 	for i := 0; i < 300; i++ {

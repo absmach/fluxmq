@@ -50,6 +50,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Listener mode names.
+const (
+	listenerPlain = "plain"
+	listenerTLS   = "tls"
+	listenerMTLS  = "mtls"
+)
+
 func protocolVersionForMode(mode string) int {
 	switch config.NormalizeProtocolMode(mode) {
 	case config.ProtocolModeV3:
@@ -624,8 +631,8 @@ func main() {
 	}{
 		{name: "v3", cfg: cfg.Server.TCP.V3},
 		{name: "v5", cfg: cfg.Server.TCP.V5},
-		{name: "tls", cfg: cfg.Server.TCP.TLS},
-		{name: "mtls", cfg: cfg.Server.TCP.MTLS},
+		{name: listenerTLS, cfg: cfg.Server.TCP.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.TCP.MTLS},
 	}
 
 	for _, slot := range tcpSlots {
@@ -668,8 +675,8 @@ func main() {
 		name string
 		cfg  config.WSListenerConfig
 	}{
-		{name: "tls", cfg: cfg.Server.WebSocket.TLS},
-		{name: "mtls", cfg: cfg.Server.WebSocket.MTLS},
+		{name: listenerTLS, cfg: cfg.Server.WebSocket.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.WebSocket.MTLS},
 	}
 
 	for _, slot := range wsSlots {
@@ -709,9 +716,9 @@ func main() {
 		name string
 		cfg  config.HTTPListenerConfig
 	}{
-		{name: "plain", cfg: cfg.Server.HTTP.Plain},
-		{name: "tls", cfg: cfg.Server.HTTP.TLS},
-		{name: "mtls", cfg: cfg.Server.HTTP.MTLS},
+		{name: listenerPlain, cfg: cfg.Server.HTTP.Plain},
+		{name: listenerTLS, cfg: cfg.Server.HTTP.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.HTTP.MTLS},
 	}
 
 	for _, slot := range httpSlots {
@@ -720,7 +727,7 @@ func main() {
 		}
 
 		var tlsCfg *tls.Config
-		if slot.name != "plain" {
+		if slot.name != listenerPlain {
 			var err error
 			tlsCfg, err = mqtttls.LoadTLSConfig[*tls.Config](&slot.cfg.TLS)
 			if err != nil {
@@ -750,7 +757,7 @@ func main() {
 		name string
 		cfg  config.CoAPListenerConfig
 	}{
-		{name: "plain", cfg: cfg.Server.CoAP.Plain},
+		{name: listenerPlain, cfg: cfg.Server.CoAP.Plain},
 		{name: "dtls", cfg: cfg.Server.CoAP.DTLS},
 		{name: "mdtls", cfg: cfg.Server.CoAP.MDTLS},
 	}
@@ -761,7 +768,7 @@ func main() {
 		}
 
 		var dtlsCfg *piondtls.Config
-		if slot.name != "plain" {
+		if slot.name != listenerPlain {
 			var err error
 			dtlsCfg, err = mqtttls.LoadTLSConfig[*piondtls.Config](&slot.cfg.TLS)
 			if err != nil {
@@ -792,9 +799,9 @@ func main() {
 		name string
 		cfg  config.AMQPListenerConfig
 	}{
-		{name: "plain", cfg: cfg.Server.AMQP.Plain},
-		{name: "tls", cfg: cfg.Server.AMQP.TLS},
-		{name: "mtls", cfg: cfg.Server.AMQP.MTLS},
+		{name: listenerPlain, cfg: cfg.Server.AMQP.Plain},
+		{name: listenerTLS, cfg: cfg.Server.AMQP.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.AMQP.MTLS},
 	}
 
 	for _, slot := range amqpSlots {
@@ -832,9 +839,9 @@ func main() {
 		name string
 		cfg  config.AMQP091ListenerConfig
 	}{
-		{name: "plain", cfg: cfg.Server.AMQP091.Plain},
-		{name: "tls", cfg: cfg.Server.AMQP091.TLS},
-		{name: "mtls", cfg: cfg.Server.AMQP091.MTLS},
+		{name: listenerPlain, cfg: cfg.Server.AMQP091.Plain},
+		{name: listenerTLS, cfg: cfg.Server.AMQP091.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.AMQP091.MTLS},
 	}
 
 	for _, slot := range amqp091Slots {

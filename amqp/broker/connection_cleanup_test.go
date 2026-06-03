@@ -178,8 +178,8 @@ func TestChannelCleanupClusterCallsHaveDeadline(t *testing.T) {
 	_, server := newTestConn(t)
 	conn := newTestConnection(t, b, server)
 	ch := newChannel(conn, 1)
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
 		queue:      "test/topic",
 		mqttFilter: "test/+",
 	}
@@ -228,8 +228,8 @@ func TestChannelCleanupCompletesWhenClusterStalls(t *testing.T) {
 	_, server := newTestConn(t)
 	conn := newTestConnection(t, b, server)
 	ch := newChannel(conn, 1)
-	ch.consumers["ctag"] = &consumer{
-		tag:        "ctag",
+	ch.consumers[testCtag] = &consumer{
+		tag:        testCtag,
 		queue:      "test/topic",
 		mqttFilter: "test/+",
 	}

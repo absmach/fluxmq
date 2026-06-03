@@ -92,7 +92,7 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 		Topic: "$queue/orders/$ack",
 		Properties: map[string]string{
 			qtypes.PropMessageID: "orders:42",
-			qtypes.PropGroupID:   "workers",
+			qtypes.PropGroupID:   testGroupWorkers,
 		},
 	}
 
@@ -101,7 +101,7 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 	require.Len(t, qm.ackCalls, 1)
 	require.Equal(t, "orders", qm.ackCalls[0].queueName)
 	require.Equal(t, "orders:42", qm.ackCalls[0].messageID)
-	require.Equal(t, "workers", qm.ackCalls[0].groupID)
+	require.Equal(t, testGroupWorkers, qm.ackCalls[0].groupID)
 }
 
 func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
@@ -140,7 +140,7 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 		Topic: "$queue/$ack",
 		Properties: map[string]string{
 			qtypes.PropMessageID: "orders:1",
-			qtypes.PropGroupID:   "workers",
+			qtypes.PropGroupID:   testGroupWorkers,
 		},
 	}
 

@@ -16,11 +16,11 @@ func TestTopicMatchesFilter_ExactMatch(t *testing.T) {
 		filter string
 		match  bool
 	}{
-		{"simple exact", "sensor/temp", "sensor/temp", true},
-		{"multi-level exact", "sensor/room1/temp", "sensor/room1/temp", true},
-		{"no match different", "sensor/temp", "sensor/humidity", false},
-		{"no match prefix", "sensor/temp", "sensor/temp/extra", false},
-		{"no match missing level", "sensor/temp/extra", "sensor/temp", false},
+		{"simple exact", testTopicSensorTemp, testTopicSensorTemp, true},
+		{"multi-level exact", testTopicSensorRoom1Temp, testTopicSensorRoom1Temp, true},
+		{"no match different", testTopicSensorTemp, "sensor/humidity", false},
+		{"no match prefix", testTopicSensorTemp, "sensor/temp/extra", false},
+		{"no match missing level", "sensor/temp/extra", testTopicSensorTemp, false},
 	}
 
 	for _, tt := range tests {
@@ -38,12 +38,12 @@ func TestTopicMatchesFilter_SingleLevelWildcard(t *testing.T) {
 		filter string
 		match  bool
 	}{
-		{"single + at end", "sensor/temp", "sensor/+", true},
-		{"single + at start", "sensor/temp", "+/temp", true},
-		{"single + in middle", "sensor/room1/temp", "sensor/+/temp", true},
-		{"multiple +", "sensor/room1/temp", "+/+/+", true},
-		{"+ no match too short", "sensor", "sensor/+", false},
-		{"+ no match too long", "sensor/room1/temp", "sensor/+", false},
+		{"single + at end", testTopicSensorTemp, testFilterSensorPlus, true},
+		{"single + at start", testTopicSensorTemp, "+/temp", true},
+		{"single + in middle", testTopicSensorRoom1Temp, testFilterSensorPlusTemp, true},
+		{"multiple +", testTopicSensorRoom1Temp, "+/+/+", true},
+		{"+ no match too short", testTopicSensor, testFilterSensorPlus, false},
+		{"+ no match too long", testTopicSensorRoom1Temp, testFilterSensorPlus, false},
 		{"+ matches empty level", "/temp", "+/temp", true},
 		{"all +", "a/b/c", "+/+/+", true},
 	}
@@ -63,12 +63,12 @@ func TestTopicMatchesFilter_MultiLevelWildcard(t *testing.T) {
 		filter string
 		match  bool
 	}{
-		{"# matches all", "sensor/room1/temp/high", "#", true},
-		{"# at end matches rest", "sensor/room1/temp", "sensor/#", true},
-		{"# matches single level", "sensor/temp", "sensor/#", true},
-		{"# matches zero levels", "sensor", "sensor/#", true},
-		{"# no match prefix", "alerts/critical", "sensor/#", false},
-		{"# after exact match", "sensor/room1/temp/high", "sensor/room1/#", true},
+		{"# matches all", testTopicSensorRoom1High, "#", true},
+		{"# at end matches rest", testTopicSensorRoom1Temp, testFilterSensorHash, true},
+		{"# matches single level", testTopicSensorTemp, testFilterSensorHash, true},
+		{"# matches zero levels", testTopicSensor, testFilterSensorHash, true},
+		{"# no match prefix", "alerts/critical", testFilterSensorHash, false},
+		{"# after exact match", testTopicSensorRoom1High, "sensor/room1/#", true},
 		{"# matches empty", "", "#", true},
 	}
 
@@ -87,10 +87,10 @@ func TestTopicMatchesFilter_MixedWildcards(t *testing.T) {
 		filter string
 		match  bool
 	}{
-		{"+ before #", "sensor/room1/temp/high", "sensor/+/#", true},
+		{"+ before #", testTopicSensorRoom1High, testFilterSensorPlusHash, true},
 		{"multiple + before #", "sensor/room1/floor2/temp", "+/+/#", true},
-		{"exact then + then #", "sensor/room1/temp/high", "sensor/+/#", true},
-		{"+ and # no match", "alerts/critical", "sensor/+/#", false},
+		{"exact then + then #", testTopicSensorRoom1High, testFilterSensorPlusHash, true},
+		{"+ and # no match", "alerts/critical", testFilterSensorPlusHash, false},
 	}
 
 	for _, tt := range tests {
@@ -110,9 +110,9 @@ func TestTopicMatchesFilter_EdgeCases(t *testing.T) {
 	}{
 		{"both empty", "", "", true},
 		{"empty topic # filter", "", "#", true},
-		{"empty topic exact filter", "", "sensor", false},
-		{"topic with empty level", "sensor//temp", "sensor//temp", true},
-		{"+ matches empty level", "sensor//temp", "sensor/+/temp", true},
+		{"empty topic exact filter", "", testTopicSensor, false},
+		{"topic with empty level", testTopicSensorEmptyTemp, testTopicSensorEmptyTemp, true},
+		{"+ matches empty level", testTopicSensorEmptyTemp, testFilterSensorPlusTemp, true},
 		{"system topic $", "$SYS/broker/stats", "$SYS/broker/stats", true},
 	}
 

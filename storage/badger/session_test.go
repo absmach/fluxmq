@@ -96,9 +96,9 @@ func TestSessionStore_List(t *testing.T) {
 
 	// Save multiple sessions
 	sessions := []storage.Session{
-		{ClientID: "client-1", Version: 5},
-		{ClientID: "client-2", Version: 5},
-		{ClientID: "client-3", Version: 5},
+		{ClientID: testClient1, Version: 5},
+		{ClientID: testClient2, Version: 5},
+		{ClientID: testClient3, Version: 5},
 	}
 
 	for _, session := range sessions {
@@ -116,9 +116,9 @@ func TestSessionStore_List(t *testing.T) {
 	for _, s := range list {
 		clientIDs[s.ClientID] = true
 	}
-	assert.True(t, clientIDs["client-1"])
-	assert.True(t, clientIDs["client-2"])
-	assert.True(t, clientIDs["client-3"])
+	assert.True(t, clientIDs[testClient1])
+	assert.True(t, clientIDs[testClient2])
+	assert.True(t, clientIDs[testClient3])
 }
 
 func TestSessionStore_ListEmpty(t *testing.T) {

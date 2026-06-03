@@ -25,10 +25,10 @@ func buildSubscriptionBenchData(numClients, filtersPerClient int) (map[string]*s
 		for f := 0; f < filtersPerClient; f++ {
 			filter := fmt.Sprintf("sensor/room-%d/temp", (c+f)%numClients)
 			if f%10 == 0 {
-				filter = "sensor/+/temp"
+				filter = testFilterSensorPlusTemp
 			}
 			if f%25 == 0 {
-				filter = "sensor/#"
+				filter = testFilterSensorHash
 			}
 
 			sub := &storage.Subscription{

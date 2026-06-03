@@ -18,6 +18,11 @@ import (
 	"time"
 )
 
+const (
+	pemTypeCertificate = "CERTIFICATE"
+	hostLocalhost      = "localhost"
+)
+
 // TLSTestCerts holds paths to generated test certificates.
 type TLSTestCerts struct {
 	CAFile         string
@@ -64,7 +69,7 @@ func GenerateTestCerts(t *testing.T) *TLSTestCerts {
 	if err != nil {
 		t.Fatalf("Failed to create CA cert file: %v", err)
 	}
-	if err := pem.Encode(caCertFile, &pem.Block{Type: "CERTIFICATE", Bytes: caCertDER}); err != nil {
+	if err := pem.Encode(caCertFile, &pem.Block{Type: pemTypeCertificate, Bytes: caCertDER}); err != nil {
 		t.Fatalf("Failed to write CA cert: %v", err)
 	}
 	caCertFile.Close()
@@ -84,13 +89,13 @@ func GenerateTestCerts(t *testing.T) *TLSTestCerts {
 		SerialNumber: big.NewInt(2),
 		Subject: pkix.Name{
 			Organization: []string{"Test Server"},
-			CommonName:   "localhost",
+			CommonName:   hostLocalhost,
 		},
 		NotBefore:   time.Now(),
 		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"localhost"},
+		DNSNames:    []string{hostLocalhost},
 		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
 
@@ -105,7 +110,7 @@ func GenerateTestCerts(t *testing.T) *TLSTestCerts {
 	if err != nil {
 		t.Fatalf("Failed to create server cert file: %v", err)
 	}
-	if err := pem.Encode(serverCert, &pem.Block{Type: "CERTIFICATE", Bytes: serverCertDER}); err != nil {
+	if err := pem.Encode(serverCert, &pem.Block{Type: pemTypeCertificate, Bytes: serverCertDER}); err != nil {
 		t.Fatalf("Failed to write server cert: %v", err)
 	}
 	serverCert.Close()
@@ -151,7 +156,7 @@ func GenerateTestCerts(t *testing.T) *TLSTestCerts {
 	if err != nil {
 		t.Fatalf("Failed to create client cert file: %v", err)
 	}
-	if err := pem.Encode(clientCert, &pem.Block{Type: "CERTIFICATE", Bytes: clientCertDER}); err != nil {
+	if err := pem.Encode(clientCert, &pem.Block{Type: pemTypeCertificate, Bytes: clientCertDER}); err != nil {
 		t.Fatalf("Failed to write client cert: %v", err)
 	}
 	clientCert.Close()

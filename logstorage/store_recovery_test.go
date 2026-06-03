@@ -21,9 +21,9 @@ func TestNewStore_RecoverOnStartup_CorruptedSegment(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, store.CreateQueue("q1"))
-	_, err = store.Append("q1", []byte("hello"), nil, map[string][]byte{"_topic": []byte("t")})
+	_, err = store.Append("q1", []byte("hello"), nil, map[string][]byte{headerTopic: []byte("t")})
 	require.NoError(t, err)
-	_, err = store.Append("q1", []byte("world"), nil, map[string][]byte{"_topic": []byte("t")})
+	_, err = store.Append("q1", []byte("world"), nil, map[string][]byte{headerTopic: []byte("t")})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -69,7 +69,7 @@ func TestNewStore_RecoverOnStartup_CleanSegments(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, store.CreateQueue("q1"))
-	_, err = store.Append("q1", []byte("ok"), nil, map[string][]byte{"_topic": []byte("t")})
+	_, err = store.Append("q1", []byte("ok"), nil, map[string][]byte{headerTopic: []byte("t")})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
