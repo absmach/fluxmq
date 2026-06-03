@@ -568,10 +568,8 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 		if err == nil {
 			return nil
 		}
-		if corebroker.IsClientNotConnected(err) {
-			return err
-		}
-		// Fall back to single message RPC if batch routing fails.
+		// Batch router errors may be shared across coalesced requests. Fall back
+		// so any stale-client error is tied to this exact delivery.
 	}
 
 	for _, delivery := range deliveries {
