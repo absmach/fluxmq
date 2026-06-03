@@ -25,6 +25,18 @@ import (
 
 const node1 = "node-1"
 
+type targetCheckingDeliverer struct {
+	targets map[string]bool
+}
+
+func (d *targetCheckingDeliverer) Deliver(context.Context, string, *brokerstorage.Message) error {
+	return nil
+}
+
+func (d *targetCheckingDeliverer) HasDeliveryTarget(clientID string) bool {
+	return d.targets[clientID]
+}
+
 // mockGroupStore implements storage.ConsumerGroupStore for testing.
 type mockGroupStore struct {
 	mu     sync.RWMutex
@@ -1937,6 +1949,111 @@ func TestEphemeralQueue_DisconnectAndCleanup(t *testing.T) {
 	}
 	if !cfg.LastConsumerDisconnect.IsZero() {
 		t.Error("Expected LastConsumerDisconnect to be cleared after new consumer subscribes")
+	}
+}
+
+func TestDeliveryStaleConsumerStartsEphemeralExpiry(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	var gotQueue, gotGroup string
+	var gotConsumerIDs []string
+
+	config := DefaultConfig()
+	config.OnConsumerRemoved = func(queueName, groupID string, consumerIDs []string) {
+		gotQueue = queueName
+		gotGroup = groupID
+		gotConsumerIDs = consumerIDs
+	}
+
+	manager := NewManager(
+		logStore,
+		groupStore,
+		&targetCheckingDeliverer{targets: map[string]bool{"dead-client": false}},
+		config,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultEphemeralQueueConfig("ephemeral-events", "$queue/ephemeral-events/#")
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("ephemeral-events", "readers", "")
+	group.SetConsumer("dead-client", &types.ConsumerInfo{ID: "dead-client", ClientID: "dead-client"})
+	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("CreateConsumerGroup failed: %v", err)
+	}
+
+	if manager.deliverQueue(ctx, "ephemeral-events") {
+		t.Fatal("expected no delivery for missing target")
+	}
+
+	cfg, err := logStore.GetQueue(ctx, "ephemeral-events")
+	if err != nil {
+		t.Fatalf("GetQueue failed: %v", err)
+	}
+	if cfg.LastConsumerDisconnect.IsZero() {
+		t.Fatal("expected LastConsumerDisconnect to be set after delivery removed last stale consumer")
+	}
+	if gotQueue != "ephemeral-events" {
+		t.Fatalf("expected callback queue ephemeral-events, got %q", gotQueue)
+	}
+	if gotGroup != "readers" {
+		t.Fatalf("expected callback group readers, got %q", gotGroup)
+	}
+	if len(gotConsumerIDs) != 1 || gotConsumerIDs[0] != "dead-client" {
+		t.Fatalf("expected callback consumers [dead-client], got %v", gotConsumerIDs)
+	}
+}
+
+func TestCleanupStaleConsumersStartsEphemeralExpiry(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+
+	config := DefaultConfig()
+	config.ConsumerTimeout = time.Millisecond
+	manager := NewManager(
+		logStore,
+		groupStore,
+		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		config,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultEphemeralQueueConfig("ephemeral-events", "$queue/ephemeral-events/#")
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	group := types.NewConsumerGroupState("ephemeral-events", "readers", "")
+	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("CreateConsumerGroup failed: %v", err)
+	}
+
+	staleTime := time.Now().Add(-time.Hour)
+	info := &types.ConsumerInfo{
+		ID:            "dead-client",
+		ClientID:      "dead-client",
+		RegisteredAt:  staleTime,
+		LastHeartbeat: staleTime,
+	}
+	if err := groupStore.RegisterConsumer(ctx, "ephemeral-events", "readers", info); err != nil {
+		t.Fatalf("RegisterConsumer failed: %v", err)
+	}
+
+	manager.cleanupStaleConsumers()
+
+	cfg, err := logStore.GetQueue(ctx, "ephemeral-events")
+	if err != nil {
+		t.Fatalf("GetQueue failed: %v", err)
+	}
+	if cfg.LastConsumerDisconnect.IsZero() {
+		t.Fatal("expected LastConsumerDisconnect to be set after heartbeat cleanup removed last stale consumer")
 	}
 }
 

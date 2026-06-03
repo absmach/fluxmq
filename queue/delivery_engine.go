@@ -35,15 +35,16 @@ type RemoteBatchRouter interface {
 // remote consumers. It owns the scheduling loop and delivery state; the
 // Manager delegates all delivery work here.
 type DeliveryEngine struct {
-	queueStore       storage.QueueStore
-	groupStore       storage.ConsumerGroupStore
-	consumerManager  *consumer.Manager
-	local            Deliverer
-	remote           RemoteRouter // nil for single-node
-	localNodeID      string
-	distributionMode DistributionMode
-	batchSize        int
-	logger           *slog.Logger
+	queueStore        storage.QueueStore
+	groupStore        storage.ConsumerGroupStore
+	consumerManager   *consumer.Manager
+	local             Deliverer
+	remote            RemoteRouter // nil for single-node
+	localNodeID       string
+	distributionMode  DistributionMode
+	batchSize         int
+	logger            *slog.Logger
+	onConsumerRemoved func(context.Context, string, string, []string)
 
 	mu       sync.Mutex
 	enqueued map[string]struct{}
@@ -80,6 +81,10 @@ func NewDeliveryEngine(
 		queue:            make(chan string, 4096),
 		stopCh:           make(chan struct{}),
 	}
+}
+
+func (e *DeliveryEngine) setConsumerRemovedCallback(callback func(context.Context, string, string, []string)) {
+	e.onConsumerRemoved = callback
 }
 
 // Start launches the delivery loop goroutine.
@@ -517,15 +522,18 @@ func (e *DeliveryEngine) unregisterConsumer(ctx context.Context, queueName, grou
 	}
 	e.logger.LogAttrs(ctx, slog.LevelWarn, "removing stale queue consumer", attrs...)
 
-	if err := e.consumerManager.UnregisterConsumer(ctx, queueName, groupID, consumerID); err != nil &&
-		err != consumer.ErrConsumerNotFound &&
-		err != storage.ErrConsumerNotFound &&
-		err != storage.ErrQueueNotFound {
-		e.logger.Warn("failed to unregister stale queue consumer",
-			slog.String("queue", queueName),
-			slog.String("group", groupID),
-			slog.String("consumer", consumerID),
-			slog.String("error", err.Error()))
+	if err := e.consumerManager.UnregisterConsumer(ctx, queueName, groupID, consumerID); err != nil {
+		if err != consumer.ErrConsumerNotFound &&
+			err != storage.ErrConsumerNotFound &&
+			err != storage.ErrQueueNotFound {
+			e.logger.Warn("failed to unregister stale queue consumer",
+				slog.String("queue", queueName),
+				slog.String("group", groupID),
+				slog.String("consumer", consumerID),
+				slog.String("error", err.Error()))
+		}
+	} else if e.onConsumerRemoved != nil {
+		e.onConsumerRemoved(ctx, queueName, groupID, []string{consumerID})
 	}
 	if e.remote == nil {
 		return
