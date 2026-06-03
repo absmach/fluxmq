@@ -230,10 +230,15 @@ type wsConnection struct {
 	ws           *websocket.Conn
 	remoteAddr   string
 	reader       io.Reader
+	frameReader  *wsFrameReader
 	version      int
 	mu           sync.RWMutex
+	closeOnce    sync.Once
+	readMu       sync.RWMutex
 	writeMu      sync.Mutex
 	closed       bool
+	closeCh      chan struct{}
+	readDeadline time.Time
 	lastActivity time.Time
 	onDisconnect func(graceful bool)
 	pingStop     chan struct{}
@@ -246,35 +251,31 @@ func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion int)
 		remoteAddr: remoteAddr,
 		version:    protocolVersion,
 		closed:     false,
+		closeCh:    make(chan struct{}),
 	}
 }
 
 func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 	c.Touch()
 
-	messageType, data, err := c.ws.ReadMessage()
-	if err != nil {
-		return nil, err
+	if c.frameReader == nil {
+		c.frameReader = &wsFrameReader{conn: c}
 	}
-
-	if messageType != websocket.BinaryMessage {
-		return nil, ErrExpectedBinaryMessage
+	if c.reader == nil {
+		c.reader = c.frameReader
 	}
-
-	reader := bytes.NewReader(data)
 
 	if c.version == 0 {
-		ver, restored, err := packets.DetectProtocolVersion(reader)
+		ver, restored, err := packets.DetectProtocolVersion(c.reader)
 		if err != nil {
 			return nil, err
 		}
 		c.version = ver
 		c.reader = restored
-	} else {
-		c.reader = reader
 	}
 
 	var pkt packets.ControlPacket
+	var err error
 	switch c.version {
 	case 5:
 		pkt, _, _, err = v5.ReadPacket(c.reader)
@@ -288,6 +289,197 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 		return nil, err
 	}
 	return pkt, nil
+}
+
+type wsFrameReader struct {
+	conn     *wsConnection
+	current  *bytes.Reader
+	reads    chan wsReadResult
+	requests chan struct{}
+	done     chan struct{}
+	once     sync.Once
+	stateMu  sync.Mutex
+	reading  bool
+	errMu    sync.RWMutex
+	err      error
+}
+
+type wsReadResult struct {
+	messageType int
+	data        []byte
+	err         error
+}
+
+func (r *wsFrameReader) Read(p []byte) (int, error) {
+	r.once.Do(r.start)
+
+	for {
+		if r.current != nil && r.current.Len() > 0 {
+			return r.current.Read(p)
+		}
+
+		result, err := r.nextMessage()
+		if err != nil {
+			return 0, err
+		}
+		if result.messageType != websocket.BinaryMessage {
+			return 0, ErrExpectedBinaryMessage
+		}
+		if len(result.data) == 0 {
+			continue
+		}
+
+		r.conn.Touch()
+		r.current = bytes.NewReader(result.data)
+	}
+}
+
+func (r *wsFrameReader) start() {
+	r.reads = make(chan wsReadResult, 1)
+	r.requests = make(chan struct{}, 1)
+	r.done = make(chan struct{})
+	go func() {
+		defer close(r.done)
+		defer close(r.reads)
+		for {
+			select {
+			case <-r.conn.done():
+				return
+			case <-r.requests:
+			}
+
+			messageType, data, err := r.conn.ws.ReadMessage()
+			result := wsReadResult{messageType: messageType, data: data, err: err}
+			if err != nil {
+				r.setErr(err)
+			}
+
+			// Clear the in-flight flag before delivering the result. A consumer
+			// that receives this result must observe reading==false on its next
+			// requestRead, otherwise it would reuse a read that is already done
+			// and block waiting for a request that is never sent.
+			r.finishRead()
+
+			select {
+			case r.reads <- result:
+			case <-r.conn.done():
+				return
+			}
+
+			if err != nil {
+				return
+			}
+		}
+	}()
+}
+
+func (r *wsFrameReader) nextMessage() (wsReadResult, error) {
+	select {
+	case result, ok := <-r.reads:
+		if !ok {
+			r.finishRead()
+			return wsReadResult{}, r.getErr()
+		}
+		return result, result.err
+	default:
+	}
+
+	if err := r.requestRead(); err != nil {
+		return wsReadResult{}, err
+	}
+
+	deadline := r.conn.getReadDeadline()
+	if deadline.IsZero() {
+		select {
+		case result, ok := <-r.reads:
+			if !ok {
+				r.finishRead()
+				return wsReadResult{}, r.getErr()
+			}
+			return result, result.err
+		case <-r.conn.done():
+			return wsReadResult{}, r.getErr()
+		}
+	}
+
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return wsReadResult{}, wsReadTimeoutError{}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case result, ok := <-r.reads:
+		if !ok {
+			r.finishRead()
+			return wsReadResult{}, r.getErr()
+		}
+		return result, result.err
+	case <-timer.C:
+		return wsReadResult{}, wsReadTimeoutError{}
+	case <-r.conn.done():
+		return wsReadResult{}, r.getErr()
+	}
+}
+
+func (r *wsFrameReader) requestRead() error {
+	r.stateMu.Lock()
+	if r.reading {
+		r.stateMu.Unlock()
+		return nil
+	}
+	r.reading = true
+	r.stateMu.Unlock()
+
+	select {
+	case r.requests <- struct{}{}:
+		return nil
+	case <-r.conn.done():
+		r.finishRead()
+		return r.getErr()
+	}
+}
+
+func (r *wsFrameReader) finishRead() {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	r.reading = false
+}
+
+func (r *wsFrameReader) setErr(err error) {
+	r.errMu.Lock()
+	defer r.errMu.Unlock()
+	r.err = err
+}
+
+func (r *wsFrameReader) getErr() error {
+	r.errMu.RLock()
+	defer r.errMu.RUnlock()
+	if r.err != nil {
+		return r.err
+	}
+	select {
+	case <-r.conn.done():
+		return net.ErrClosed
+	default:
+	}
+	return io.EOF
+}
+
+type wsReadTimeoutError struct{}
+
+func (wsReadTimeoutError) Error() string {
+	return "websocket read timeout"
+}
+
+func (wsReadTimeoutError) Timeout() bool {
+	return true
+}
+
+func (wsReadTimeoutError) Temporary() bool {
+	return true
 }
 
 func (c *wsConnection) WritePacket(pkt packets.ControlPacket) error {
@@ -348,6 +540,11 @@ func (c *wsConnection) Close() error {
 	}
 
 	c.closed = true
+	c.closeOnce.Do(func() {
+		if c.closeCh != nil {
+			close(c.closeCh)
+		}
+	})
 	c.pingOnce.Do(func() {
 		if c.pingStop != nil {
 			close(c.pingStop)
@@ -360,6 +557,13 @@ func (c *wsConnection) Close() error {
 	return c.ws.Close()
 }
 
+func (c *wsConnection) done() <-chan struct{} {
+	if c.closeCh == nil {
+		return nil
+	}
+	return c.closeCh
+}
+
 func (c *wsConnection) LocalAddr() net.Addr {
 	return c.ws.LocalAddr()
 }
@@ -369,7 +573,10 @@ func (c *wsConnection) RemoteAddr() net.Addr {
 }
 
 func (c *wsConnection) SetReadDeadline(t time.Time) error {
-	return c.ws.SetReadDeadline(t)
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	c.readDeadline = t
+	return nil
 }
 
 func (c *wsConnection) SetWriteDeadline(t time.Time) error {
@@ -377,10 +584,14 @@ func (c *wsConnection) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *wsConnection) SetDeadline(t time.Time) error {
-	if err := c.ws.SetReadDeadline(t); err != nil {
-		return err
-	}
+	c.SetReadDeadline(t) //nolint:errcheck // local state update cannot fail
 	return c.ws.SetWriteDeadline(t)
+}
+
+func (c *wsConnection) getReadDeadline() time.Time {
+	c.readMu.RLock()
+	defer c.readMu.RUnlock()
+	return c.readDeadline
 }
 
 func (c *wsConnection) SetKeepAlive(d time.Duration) error {
@@ -392,7 +603,7 @@ func (c *wsConnection) SetKeepAlive(d time.Duration) error {
 
 	c.ws.SetPongHandler(func(string) error {
 		c.Touch()
-		return c.ws.SetReadDeadline(time.Now().Add(d + d/2))
+		return c.SetReadDeadline(time.Now().Add(d + d/2))
 	})
 
 	pingInterval := d / 2

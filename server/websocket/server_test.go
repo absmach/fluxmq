@@ -4,6 +4,8 @@
 package websocket
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/mqtt/packets"
+	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	"github.com/gorilla/websocket"
 )
 
@@ -160,6 +164,252 @@ func TestSetKeepAliveZero(t *testing.T) {
 	if conn.pingStop != nil {
 		t.Fatal("expected pingStop to be nil for zero keep-alive")
 	}
+}
+
+func TestReadPacketAcrossWebSocketMessages(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto)
+	defer conn.Close()
+
+	want := &v3.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 4,
+		CleanSession:    true,
+		KeepAlive:       30,
+		ClientID:        "client1",
+		UsernameFlag:    true,
+		Username:        "user",
+		PasswordFlag:    true,
+		Password:        []byte("pass"),
+	}
+	encoded := want.Encode()
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := clientWS.WriteMessage(websocket.BinaryMessage, encoded[:1]); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- clientWS.WriteMessage(websocket.BinaryMessage, encoded[1:])
+	}()
+
+	got, err := conn.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+
+	connect, ok := got.(*v3.Connect)
+	if !ok {
+		t.Fatalf("expected *v3.Connect, got %T", got)
+	}
+	if connect.ClientID != want.ClientID {
+		t.Fatalf("ClientID = %q, want %q", connect.ClientID, want.ClientID)
+	}
+	if connect.Username != want.Username {
+		t.Fatalf("Username = %q, want %q", connect.Username, want.Username)
+	}
+	if string(connect.Password) != string(want.Password) {
+		t.Fatalf("Password = %q, want %q", connect.Password, want.Password)
+	}
+}
+
+func TestReadPacketSequentialMessages(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto)
+	defer conn.Close()
+
+	const count = 50
+	go func() {
+		for i := range count {
+			pkt := &v3.Connect{
+				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+				ProtocolName:    "MQTT",
+				ProtocolVersion: 4,
+				CleanSession:    true,
+				KeepAlive:       30,
+				ClientID:        fmt.Sprintf("client%d", i),
+			}
+			if err := clientWS.WriteMessage(websocket.BinaryMessage, pkt.Encode()); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Each packet arrives in its own WebSocket message, so every ReadPacket
+	// drains r.current and issues a fresh requestRead. This exercises the
+	// finishRead/requestRead handoff that must not deadlock.
+	for i := range count {
+		got, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("ReadPacket %d: %v", i, err)
+		}
+		connect, ok := got.(*v3.Connect)
+		if !ok {
+			t.Fatalf("packet %d: expected *v3.Connect, got %T", i, got)
+		}
+		if want := fmt.Sprintf("client%d", i); connect.ClientID != want {
+			t.Fatalf("packet %d: ClientID = %q, want %q", i, connect.ClientID, want)
+		}
+	}
+}
+
+func TestReadPacketTimeoutDoesNotPoisonWebSocket(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto)
+	defer conn.Close()
+
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, err := conn.ReadPacket()
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	var netErr interface{ Timeout() bool }
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear SetReadDeadline: %v", err)
+	}
+
+	want := &v3.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 4,
+		CleanSession:    true,
+		KeepAlive:       30,
+		ClientID:        "client1",
+	}
+
+	go func() {
+		_ = clientWS.WriteMessage(websocket.BinaryMessage, want.Encode())
+	}()
+
+	got, err := conn.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket after timeout: %v", err)
+	}
+	connect, ok := got.(*v3.Connect)
+	if !ok {
+		t.Fatalf("expected *v3.Connect, got %T", got)
+	}
+	if connect.ClientID != want.ClientID {
+		t.Fatalf("ClientID = %q, want %q", connect.ClientID, want.ClientID)
+	}
+}
+
+func TestSetKeepAliveAfterReadPacketProcessesPong(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto).(*wsConnection)
+	defer conn.Close()
+
+	connect := &v3.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 4,
+		CleanSession:    true,
+		KeepAlive:       30,
+		ClientID:        "client1",
+	}
+
+	go func() {
+		_ = clientWS.WriteMessage(websocket.BinaryMessage, connect.Encode())
+	}()
+
+	if _, err := conn.ReadPacket(); err != nil {
+		t.Fatalf("ReadPacket: %v", err)
+	}
+	if err := conn.SetKeepAlive(30 * time.Second); err != nil {
+		t.Fatalf("SetKeepAlive: %v", err)
+	}
+
+	before := lastActivity(conn)
+	time.Sleep(10 * time.Millisecond)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := conn.ReadPacket()
+		errCh <- err
+	}()
+
+	if err := clientWS.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("client pong: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		return lastActivity(conn).After(before)
+	}, "expected pong handler to update last activity")
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("ReadPacket did not exit after Close")
+	}
+}
+
+func TestReadPumpStopsAfterCloseWithBufferedRead(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto).(*wsConnection)
+	reader := &wsFrameReader{conn: conn}
+	reader.once.Do(reader.start)
+
+	if err := reader.requestRead(); err != nil {
+		t.Fatalf("requestRead: %v", err)
+	}
+	if err := clientWS.WriteMessage(websocket.BinaryMessage, []byte{0}); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		return len(reader.reads) == 1
+	}, "expected buffered read result")
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	select {
+	case <-reader.done:
+	case <-time.After(time.Second):
+		t.Fatal("read pump did not exit after Close")
+	}
+}
+
+func lastActivity(conn *wsConnection) time.Time {
+	conn.mu.RLock()
+	defer conn.mu.RUnlock()
+	return conn.lastActivity
+}
+
+func waitFor(t *testing.T, timeout time.Duration, fn func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal(msg)
 }
 
 // wsConnPair creates a connected pair of WebSocket connections using an in-process
