@@ -354,11 +354,15 @@ func (r *wsFrameReader) start() {
 				r.setErr(err)
 			}
 
+			// Clear the in-flight flag before delivering the result. A consumer
+			// that receives this result must observe reading==false on its next
+			// requestRead, otherwise it would reuse a read that is already done
+			// and block waiting for a request that is never sent.
+			r.finishRead()
+
 			select {
 			case r.reads <- result:
-				r.finishRead()
 			case <-r.conn.done():
-				r.finishRead()
 				return
 			}
 

@@ -5,6 +5,7 @@ package websocket
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -215,6 +216,48 @@ func TestReadPacketAcrossWebSocketMessages(t *testing.T) {
 	}
 	if string(connect.Password) != string(want.Password) {
 		t.Fatalf("Password = %q, want %q", connect.Password, want.Password)
+	}
+}
+
+func TestReadPacketSequentialMessages(t *testing.T) {
+	serverWS, clientWS := wsConnPair(t)
+	defer clientWS.Close()
+
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto)
+	defer conn.Close()
+
+	const count = 50
+	go func() {
+		for i := range count {
+			pkt := &v3.Connect{
+				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+				ProtocolName:    "MQTT",
+				ProtocolVersion: 4,
+				CleanSession:    true,
+				KeepAlive:       30,
+				ClientID:        fmt.Sprintf("client%d", i),
+			}
+			if err := clientWS.WriteMessage(websocket.BinaryMessage, pkt.Encode()); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Each packet arrives in its own WebSocket message, so every ReadPacket
+	// drains r.current and issues a fresh requestRead. This exercises the
+	// finishRead/requestRead handoff that must not deadlock.
+	for i := range count {
+		got, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("ReadPacket %d: %v", i, err)
+		}
+		connect, ok := got.(*v3.Connect)
+		if !ok {
+			t.Fatalf("packet %d: expected *v3.Connect, got %T", i, got)
+		}
+		if want := fmt.Sprintf("client%d", i); connect.ClientID != want {
+			t.Fatalf("packet %d: ClientID = %q, want %q", i, connect.ClientID, want)
+		}
 	}
 }
 
