@@ -92,6 +92,14 @@ func (b *Broker) unregisterConnection(containerID string) {
 	b.connections.Delete(containerID)
 }
 
+// IsClientConnected reports whether the AMQP 1.0 client has a live
+// connection in this broker instance.
+func (b *Broker) IsClientConnected(clientID string) bool {
+	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
+	_, ok := b.connections.Load(containerID)
+	return ok
+}
+
 // Publish routes a message to all subscribers via the shared router.
 // AMQP 1.0 subscribers are delivered locally; others via the cross-deliver callback.
 // The ctx is forwarded to cross-protocol delivery so that connection or broker
@@ -181,7 +189,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 
 	val, ok := b.connections.Load(containerID)
 	if !ok {
-		return fmt.Errorf("AMQP client not found: %s", containerID)
+		return fmt.Errorf("%w: AMQP client not found: %s", corebroker.ErrClientNotConnected, containerID)
 	}
 
 	c := val.(*Connection)
@@ -232,7 +240,7 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
 	val, ok := b.connections.Load(containerID)
 	if !ok {
-		return fmt.Errorf("AMQP client not found: %s", containerID)
+		return fmt.Errorf("%w: AMQP client not found: %s", corebroker.ErrClientNotConnected, containerID)
 	}
 	c := val.(*Connection)
 	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context

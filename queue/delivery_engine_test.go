@@ -5,17 +5,29 @@ package queue
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+)
+
+const (
+	testRemoteConsumerID = "remote-c1"
+	testRemoteClientID   = "remote-client"
+	testEventsTopic      = "$queue/events/new"
+	testDeadClientID     = "dead-client"
+	testOfflineClientID  = "offline-client"
+	testClientOneID      = "client-1"
 )
 
 func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*DeliveryEngine, *memlog.Store, *mockGroupStore) {
@@ -46,6 +58,47 @@ func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*Deliver
 	)
 
 	return engine, logStore, groupStore
+}
+
+type checkingDeliverer struct {
+	mu         sync.Mutex
+	targets    map[string]bool
+	connected  map[string]bool
+	delivered  []*brokerstorage.Message
+	deliverErr error
+}
+
+func (d *checkingDeliverer) Deliver(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	if d.deliverErr != nil {
+		return d.deliverErr
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.delivered = append(d.delivered, msg)
+	return nil
+}
+
+func (d *checkingDeliverer) HasDeliveryTarget(clientID string) bool {
+	if d.targets != nil {
+		return d.targets[clientID]
+	}
+	return d.IsClientConnected(clientID)
+}
+
+func (d *checkingDeliverer) IsClientConnected(clientID string) bool {
+	if d.connected == nil {
+		return true
+	}
+	return d.connected[clientID]
+}
+
+func (d *checkingDeliverer) deliveredMessages() []*brokerstorage.Message {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	result := make([]*brokerstorage.Message, len(d.delivered))
+	copy(result, d.delivered)
+	return result
 }
 
 func TestScheduleDedup(t *testing.T) {
@@ -194,9 +247,9 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 	mockRemote.consumers = []*cluster.QueueConsumerInfo{
 		{
 			QueueName:   "tasks",
-			GroupID:     testGroupWorkers,
-			ConsumerID:  "remote-c1",
-			ClientID:    "remote-client",
+			GroupID:     "workers",
+			ConsumerID:  testRemoteConsumerID,
+			ClientID:    testRemoteClientID,
 			Pattern:     "",
 			Mode:        string(types.GroupModeQueue),
 			ProxyNodeID: testNode2,
@@ -333,8 +386,10 @@ type routedEntry struct {
 
 type mockRemoteRouter struct {
 	mu        sync.Mutex
+	routeErr  error
 	consumers []*cluster.QueueConsumerInfo
 	routed    []routedEntry
+	removed   []routedEntry
 }
 
 func (r *mockRemoteRouter) ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error) {
@@ -359,7 +414,37 @@ func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, client
 		queueName: queueName,
 		msg:       msg,
 	})
+	return r.routeErr
+}
+
+func (r *mockRemoteRouter) UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.removed = append(r.removed, routedEntry{
+		nodeID:    groupID,
+		clientID:  consumerID,
+		queueName: queueName,
+	})
 	return nil
+}
+
+type batchRemoteRouter struct {
+	mockRemoteRouter
+	batchErr error
+}
+
+func (r *batchRemoteRouter) RouteQueueBatch(ctx context.Context, nodeID string, deliveries []cluster.QueueDelivery) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, delivery := range deliveries {
+		r.routed = append(r.routed, routedEntry{
+			nodeID:    nodeID,
+			clientID:  delivery.ClientID,
+			queueName: delivery.QueueName,
+			msg:       delivery.Message,
+		})
+	}
+	return r.batchErr
 }
 
 func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
@@ -600,7 +685,7 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	})
 	logStore.Append(ctx, testQueueEvents, &types.Message{ //nolint:errcheck // test setup
 		ID:      "valid",
-		Topic:   "$queue/events/new",
+		Topic:   testEventsTopic,
 		Payload: []byte("fresh"),
 	})
 
@@ -615,6 +700,266 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	}
 	if string(delivered[0].GetPayload()) != "fresh" {
 		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	}
+}
+
+func TestDeliverStreamDoesNotAdvanceCursorForMissingLocalTarget(t *testing.T) {
+	local := &checkingDeliverer{
+		targets: map[string]bool{testDeadClientID: false},
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testDeadClientID})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   testEventsTopic,
+		Payload: []byte("payload"),
+	})
+
+	if engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected no delivery for disconnected consumer")
+	}
+
+	if got := len(local.deliveredMessages()); got != 0 {
+		t.Fatalf("expected 0 deliveries, got %d", got)
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer("c1") != nil {
+		t.Fatal("expected disconnected consumer to be removed")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
+	}
+}
+
+func TestDeliverStreamKeepsConsumerForQueueableOfflineTarget(t *testing.T) {
+	local := &checkingDeliverer{
+		targets:   map[string]bool{testOfflineClientID: true},
+		connected: map[string]bool{testOfflineClientID: false},
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testOfflineClientID})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   testEventsTopic,
+		Payload: []byte("payload"),
+	})
+
+	if !engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected delivery to queueable offline target")
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer("c1") == nil {
+		t.Fatal("expected queueable offline consumer to remain registered")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
+	}
+}
+
+func TestDeliverStreamCommitsCursorAfterSuccessfulDelivery(t *testing.T) {
+	local := &checkingDeliverer{
+		targets: map[string]bool{testClientOneID: true},
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testClientOneID})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   testEventsTopic,
+		Payload: []byte("payload"),
+	})
+
+	if !engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected successful delivery")
+	}
+
+	if got := len(local.deliveredMessages()); got != 1 {
+		t.Fatalf("expected 1 delivery, got %d", got)
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
+	}
+}
+
+func TestDeliverStreamRemovesConsumerOnClientNotConnectedError(t *testing.T) {
+	local := &checkingDeliverer{
+		targets:    map[string]bool{testClientOneID: true},
+		deliverErr: corebroker.ErrClientNotConnected,
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, local, nil)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testClientOneID})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   testEventsTopic,
+		Payload: []byte("payload"),
+	})
+
+	if engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected no successful delivery")
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer("c1") != nil {
+		t.Fatal("expected stale consumer to be removed")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
+	}
+}
+
+func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *testing.T) {
+	remote := &batchRemoteRouter{
+		mockRemoteRouter: mockRemoteRouter{
+			routeErr: corebroker.ErrClientNotConnected,
+		},
+		batchErr: fmt.Errorf("%w: route queue batch failed after 3 retries: client remote-client queue events", corebroker.ErrClientNotConnected),
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, nil, remote)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer(testRemoteConsumerID, &types.ConsumerInfo{
+		ID:          testRemoteConsumerID,
+		ClientID:    testRemoteClientID,
+		ProxyNodeID: "node-2",
+	})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   testEventsTopic,
+		Payload: []byte("payload"),
+	})
+
+	if engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected no successful delivery")
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer(testRemoteConsumerID) != nil {
+		t.Fatal("expected stale remote consumer to be removed")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
+	}
+	if len(remote.removed) != 1 {
+		t.Fatalf("expected remote unregister, got %d", len(remote.removed))
+	}
+}
+
+func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccessfully(t *testing.T) {
+	remote := &batchRemoteRouter{
+		// Batch fails for a coalesced peer, but the single-RPC fallback for this
+		// consumer succeeds, so the consumer must survive regardless of the cause.
+		batchErr: errors.New("coalesced route queue batch failure"),
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, nil, remote)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer(testRemoteConsumerID, &types.ConsumerInfo{
+		ID:          testRemoteConsumerID,
+		ClientID:    testRemoteClientID,
+		ProxyNodeID: "node-2",
+	})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
+		ID:      "1",
+		Topic:   testEventsTopic,
+		Payload: []byte("payload"),
+	})
+
+	if !engine.DeliverQueue(ctx, "events") {
+		t.Fatal("expected fallback delivery to succeed")
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if updated.GetConsumer(testRemoteConsumerID) == nil {
+		t.Fatal("expected remote consumer to remain registered")
+	}
+	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
+	}
+	if len(remote.removed) != 0 {
+		t.Fatalf("expected no remote unregister, got %d", len(remote.removed))
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
@@ -23,6 +24,7 @@ import (
 type RemoteRouter interface {
 	ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error)
 	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error
+	UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 }
 
 type RemoteBatchRouter interface {
@@ -33,15 +35,16 @@ type RemoteBatchRouter interface {
 // remote consumers. It owns the scheduling loop and delivery state; the
 // Manager delegates all delivery work here.
 type DeliveryEngine struct {
-	queueStore       storage.QueueStore
-	groupStore       storage.ConsumerGroupStore
-	consumerManager  *consumer.Manager
-	local            Deliverer
-	remote           RemoteRouter // nil for single-node
-	localNodeID      string
-	distributionMode DistributionMode
-	batchSize        int
-	logger           *slog.Logger
+	queueStore        storage.QueueStore
+	groupStore        storage.ConsumerGroupStore
+	consumerManager   *consumer.Manager
+	local             Deliverer
+	remote            RemoteRouter // nil for single-node
+	localNodeID       string
+	distributionMode  DistributionMode
+	batchSize         int
+	logger            *slog.Logger
+	onConsumerRemoved func(context.Context, string, string, []string)
 
 	mu       sync.Mutex
 	enqueued map[string]struct{}
@@ -78,6 +81,10 @@ func NewDeliveryEngine(
 		queue:            make(chan string, 4096),
 		stopCh:           make(chan struct{}),
 	}
+}
+
+func (e *DeliveryEngine) setConsumerRemovedCallback(callback func(context.Context, string, string, []string)) {
+	e.onConsumerRemoved = callback
 }
 
 // Start launches the delivery loop goroutine.
@@ -250,20 +257,6 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 
 	delivered := false
 	for _, consumerID := range consumers {
-		var msgs []*types.Message
-		var err error
-		if group.Mode == types.GroupModeStream {
-			msgs, err = e.consumerManager.ClaimBatchStream(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
-		} else {
-			msgs, err = e.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
-		}
-		if err != nil && err != consumer.ErrNoMessages {
-			continue
-		}
-		if len(msgs) > 0 {
-			delivered = true
-		}
-
 		freshGroup, err := e.groupStore.GetConsumerGroup(ctx, config.Name, group.ID)
 		if err != nil {
 			continue
@@ -274,12 +267,35 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			continue
 		}
 
-		if err := e.consumerManager.UpdateHeartbeat(ctx, config.Name, group.ID, consumerID); err != nil {
-			e.logger.Warn("failed to update consumer heartbeat",
-				slog.String("queue", config.Name),
-				slog.String("group", group.ID),
-				slog.String("consumer", consumerID),
-				slog.String("error", err.Error()))
+		remoteTarget := e.isRemoteConsumer(consumerInfo)
+		if !remoteTarget {
+			if e.local == nil {
+				continue
+			}
+			if e.localDeliveryTargetMissing(consumerInfo.ClientID) {
+				e.unregisterConsumer(ctx, config.Name, group.ID, consumerID,
+					corebroker.ErrClientNotConnected)
+				continue
+			}
+		}
+
+		var msgs []*types.Message
+		var nextCursor uint64
+		if group.Mode == types.GroupModeStream {
+			msgs, nextCursor, err = e.consumerManager.PeekBatchStream(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
+		} else {
+			msgs, err = e.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
+		}
+		if err == consumer.ErrNoMessages {
+			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if len(msgs) == 0 {
+			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
+			continue
 		}
 
 		var workCommitted uint64
@@ -288,26 +304,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			workCommitted, hasWorkCommitted = primaryCommitted(group.Pattern)
 		}
 
-		for _, msg := range msgs {
-			if e.remote != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != e.localNodeID {
-				continue
-			}
-			if e.local != nil {
-				deliveryMsg := createDeliveryMessage(msg, group.ID, config.Name)
-				if group.Mode == types.GroupModeStream {
-					decorateStreamDelivery(deliveryMsg, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
-				}
-
-				if err := e.local.Deliver(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
-					e.logger.Warn("queue message delivery failed",
-						slog.String("client", consumerInfo.ClientID),
-						slog.String("topic", msg.Topic),
-						slog.String("error", err.Error()))
-				}
-			}
-		}
-
-		if e.remote != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != e.localNodeID && len(msgs) > 0 {
+		if remoteTarget {
 			deliveries := make([]cluster.QueueDelivery, 0, len(msgs))
 			for _, msg := range msgs {
 				deliveries = append(deliveries, cluster.QueueDelivery{
@@ -331,7 +328,62 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 					slog.String("queue", config.Name),
 					slog.Int("batch_size", len(deliveries)),
 					slog.String("error", err.Error()))
+				if corebroker.IsErrClientNotConnected(err) {
+					e.unregisterConsumer(ctx, config.Name, group.ID, consumerID, err)
+				}
+				continue
 			}
+			if group.Mode == types.GroupModeStream {
+				e.commitStreamCursor(ctx, config.Name, group.ID, nextCursor)
+			}
+			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
+			delivered = true
+			continue
+		}
+
+		var (
+			committedCursor uint64
+			deliveredAny    bool
+			allDelivered    = true
+		)
+		for _, msg := range msgs {
+			if e.local != nil {
+				deliveryMsg := createDeliveryMessage(msg, group.ID, config.Name)
+				if group.Mode == types.GroupModeStream {
+					decorateStreamDelivery(deliveryMsg, msg, workCommitted, hasWorkCommitted, config.PrimaryGroup)
+				}
+
+				if err := e.local.Deliver(ctx, consumerInfo.ClientID, deliveryMsg); err != nil {
+					allDelivered = false
+					e.logger.Warn("queue message delivery failed",
+						slog.String("client", consumerInfo.ClientID),
+						slog.String("topic", msg.Topic),
+						slog.String("error", err.Error()))
+					if corebroker.IsErrClientNotConnected(err) {
+						e.unregisterConsumer(ctx, config.Name, group.ID, consumerID, err)
+						break
+					}
+					if group.Mode == types.GroupModeStream {
+						break
+					}
+					continue
+				}
+				deliveredAny = true
+				delivered = true
+				if group.Mode == types.GroupModeStream {
+					committedCursor = msg.Sequence + 1
+				}
+			}
+		}
+
+		if group.Mode == types.GroupModeStream && deliveredAny {
+			if allDelivered {
+				committedCursor = nextCursor
+			}
+			e.commitStreamCursor(ctx, config.Name, group.ID, committedCursor)
+		}
+		if deliveredAny {
+			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
 		}
 	}
 
@@ -386,17 +438,15 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 
 		for _, consumerInfo := range groupConsumers {
 			var msgs []*types.Message
+			var nextCursor uint64
 			var err error
 			if group.Mode == types.GroupModeStream {
-				msgs, err = e.consumerManager.ClaimBatchStream(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, e.batchSize)
+				msgs, nextCursor, err = e.consumerManager.PeekBatchStream(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, e.batchSize)
 			} else {
 				msgs, err = e.consumerManager.ClaimBatch(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, e.batchSize)
 			}
 			if err != nil {
 				continue
-			}
-			if len(msgs) > 0 {
-				delivered = true
 			}
 
 			if len(msgs) == 0 {
@@ -426,18 +476,95 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 					slog.String("node", consumerInfo.ProxyNodeID),
 					slog.String("queue", config.Name),
 					slog.String("error", err.Error()))
-			} else {
-				e.logger.Debug("routed queue message batch to remote consumer",
-					slog.String("client", consumerInfo.ClientID),
-					slog.String("node", consumerInfo.ProxyNodeID),
-					slog.String("queue", config.Name),
-					slog.Int("batch_size", len(deliveries)),
-					slog.Uint64("last_offset", msgs[len(msgs)-1].Sequence))
+				if corebroker.IsErrClientNotConnected(err) {
+					e.unregisterConsumer(ctx, config.Name, groupID, consumerInfo.ConsumerID, err)
+				}
+				continue
 			}
+
+			if group.Mode == types.GroupModeStream {
+				e.commitStreamCursor(ctx, config.Name, groupID, nextCursor)
+			}
+			delivered = true
+			e.logger.Debug("routed queue message batch to remote consumer",
+				slog.String("client", consumerInfo.ClientID),
+				slog.String("node", consumerInfo.ProxyNodeID),
+				slog.String("queue", config.Name),
+				slog.Int("batch_size", len(deliveries)),
+				slog.Uint64("last_offset", msgs[len(msgs)-1].Sequence))
 		}
 	}
 
 	return delivered
+}
+
+func (e *DeliveryEngine) isRemoteConsumer(consumerInfo *types.ConsumerInfo) bool {
+	return e.remote != nil && consumerInfo.ProxyNodeID != "" && consumerInfo.ProxyNodeID != e.localNodeID
+}
+
+func (e *DeliveryEngine) localDeliveryTargetMissing(clientID string) bool {
+	targetChecker, ok := e.local.(ClientDeliveryTargetChecker)
+	if ok {
+		return !targetChecker.HasDeliveryTarget(clientID)
+	}
+	checker, ok := e.local.(ClientConnectionChecker)
+	return ok && !checker.IsClientConnected(clientID)
+}
+
+func (e *DeliveryEngine) unregisterConsumer(ctx context.Context, queueName, groupID, consumerID string, reason error) {
+	attrs := []slog.Attr{
+		slog.String("queue", queueName),
+		slog.String("group", groupID),
+		slog.String("consumer", consumerID),
+	}
+	if reason != nil {
+		attrs = append(attrs, slog.String("reason", reason.Error()))
+	}
+	e.logger.LogAttrs(ctx, slog.LevelWarn, "removing stale queue consumer", attrs...)
+
+	if err := e.consumerManager.UnregisterConsumer(ctx, queueName, groupID, consumerID); err != nil {
+		if err != consumer.ErrConsumerNotFound &&
+			err != storage.ErrConsumerNotFound &&
+			err != storage.ErrQueueNotFound {
+			e.logger.Warn("failed to unregister stale queue consumer",
+				slog.String("queue", queueName),
+				slog.String("group", groupID),
+				slog.String("consumer", consumerID),
+				slog.String("error", err.Error()))
+		}
+	} else if e.onConsumerRemoved != nil {
+		e.onConsumerRemoved(ctx, queueName, groupID, []string{consumerID})
+	}
+	if e.remote == nil {
+		return
+	}
+	if err := e.remote.UnregisterQueueConsumer(ctx, queueName, groupID, consumerID); err != nil {
+		e.logger.Warn("failed to unregister stale queue consumer from cluster",
+			slog.String("queue", queueName),
+			slog.String("group", groupID),
+			slog.String("consumer", consumerID),
+			slog.String("error", err.Error()))
+	}
+}
+
+func (e *DeliveryEngine) touchConsumerHeartbeat(ctx context.Context, queueName, groupID, consumerID string) {
+	if err := e.consumerManager.UpdateHeartbeat(ctx, queueName, groupID, consumerID); err != nil {
+		e.logger.Warn("failed to update consumer heartbeat",
+			slog.String("queue", queueName),
+			slog.String("group", groupID),
+			slog.String("consumer", consumerID),
+			slog.String("error", err.Error()))
+	}
+}
+
+func (e *DeliveryEngine) commitStreamCursor(ctx context.Context, queueName, groupID string, cursor uint64) {
+	if err := e.consumerManager.CommitStreamCursor(ctx, queueName, groupID, cursor); err != nil {
+		e.logger.Warn("failed to commit stream cursor after delivery",
+			slog.String("queue", queueName),
+			slog.String("group", groupID),
+			slog.Uint64("cursor", cursor),
+			slog.String("error", err.Error()))
+	}
 }
 
 func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, deliveries []cluster.QueueDelivery) error {
@@ -445,10 +572,12 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 		return nil
 	}
 	if batchRouter, ok := e.remote.(RemoteBatchRouter); ok {
-		if err := batchRouter.RouteQueueBatch(ctx, nodeID, deliveries); err == nil {
+		err := batchRouter.RouteQueueBatch(ctx, nodeID, deliveries)
+		if err == nil {
 			return nil
 		}
-		// Fall back to single message RPC if batch routing fails.
+		// Batch router errors may be shared across coalesced requests. Fall back
+		// so any stale-client error is tied to this exact delivery.
 	}
 
 	for _, delivery := range deliveries {

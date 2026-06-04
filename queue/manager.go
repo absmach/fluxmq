@@ -200,6 +200,11 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		config.DeliveryBatchSize,
 		logger,
 	)
+	engine.setConsumerRemovedCallback(func(ctx context.Context, queueName, groupID string, consumerIDs []string) {
+		if mgr != nil {
+			mgr.handleConsumersRemoved(ctx, queueName, groupID, consumerIDs)
+		}
+	})
 
 	mgr = &Manager{
 		queueStore:      queueStore,
@@ -1507,12 +1512,23 @@ func (m *Manager) cleanupStaleConsumers() {
 					slog.Int("count", len(removed)),
 					slog.String("queue", queueConfig.Name),
 					slog.String("group", group.ID))
-				if m.config.OnConsumerRemoved != nil {
-					m.config.OnConsumerRemoved(queueConfig.Name, group.ID, removed)
-				}
+				m.handleConsumersRemoved(ctx, queueConfig.Name, group.ID, removed)
 			}
 		}
 	}
+}
+
+func (m *Manager) handleConsumersRemoved(ctx context.Context, queueName, groupID string, consumerIDs []string) {
+	if len(consumerIDs) == 0 {
+		return
+	}
+	for _, consumerID := range consumerIDs {
+		m.untrackSubscription(consumerID, queueName, groupID)
+	}
+	if m.config.OnConsumerRemoved != nil {
+		m.config.OnConsumerRemoved(queueName, groupID, append([]string(nil), consumerIDs...))
+	}
+	m.checkEphemeralDisconnect(ctx, queueName)
 }
 
 func (m *Manager) runRetentionLoop() {

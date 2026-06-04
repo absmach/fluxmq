@@ -236,10 +236,58 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 		return nil, err
 	}
 
+	messages, newCursor, err := m.peekBatchStreamLocked(ctx, group, filter, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := m.updateStreamCursorLocked(ctx, group, newCursor); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+// PeekBatchStream retrieves stream messages without advancing the consumer
+// group cursor. Call CommitStreamCursor after successful delivery.
+func (m *Manager) PeekBatchStream(ctx context.Context, queueName, groupID, _ string, filter *Filter, limit int) ([]*types.Message, uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 {
+		limit = m.config.ClaimBatchSize
+	}
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return m.peekBatchStreamLocked(ctx, group, filter, limit)
+}
+
+// CommitStreamCursor advances a stream consumer group's cursor after delivery
+// has succeeded.
+func (m *Manager) CommitStreamCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+	if group.Mode != types.GroupModeStream {
+		return ErrCommitOffsetOnlyForStreamMode
+	}
+
+	return m.updateStreamCursorLocked(ctx, group, cursor)
+}
+
+func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.ConsumerGroup, filter *Filter, limit int) ([]*types.Message, uint64, error) {
 	cursor := group.GetCursor()
 	tail, err := m.queueStore.Tail(ctx, group.QueueName)
 	if err != nil {
-		return nil, err
+		return nil, cursor.Cursor, err
 	}
 
 	var messages []*types.Message
@@ -254,7 +302,7 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 			if err == storage.ErrOffsetOutOfRange {
 				continue
 			}
-			return nil, err
+			return nil, cursor.Cursor, err
 		}
 
 		// Skip expired messages
@@ -274,34 +322,39 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 	}
 
 	if len(messages) == 0 {
-		return nil, ErrNoMessages
+		return nil, cursor.Cursor, ErrNoMessages
 	}
 
-	if newCursor > cursor.Cursor {
-		if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, newCursor); err != nil {
-			return nil, err
-		}
-		// Only auto-commit if the group has AutoCommit enabled.
-		if group.AutoCommit {
-			if m.config.AutoCommitInterval <= 0 {
-				if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
-					return nil, err
-				}
-			} else {
-				key := group.QueueName + "/" + group.ID
-				now := time.Now()
-				last, ok := m.lastCommit[key]
-				if !ok || now.Sub(last) >= m.config.AutoCommitInterval {
-					if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
-						return nil, err
-					}
-					m.lastCommit[key] = now
-				}
-			}
-		}
+	return messages, newCursor, nil
+}
+
+func (m *Manager) updateStreamCursorLocked(ctx context.Context, group *types.ConsumerGroup, newCursor uint64) error {
+	cursor := group.GetCursor()
+	if newCursor <= cursor.Cursor {
+		return nil
+	}
+	if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, newCursor); err != nil {
+		return err
 	}
 
-	return messages, nil
+	if !group.AutoCommit {
+		return nil
+	}
+	if m.config.AutoCommitInterval <= 0 {
+		return m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor)
+	}
+
+	key := group.QueueName + "/" + group.ID
+	now := time.Now()
+	last, ok := m.lastCommit[key]
+	if ok && now.Sub(last) < m.config.AutoCommitInterval {
+		return nil
+	}
+	if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
+		return err
+	}
+	m.lastCommit[key] = now
+	return nil
 }
 
 // claimFromCursor tries to claim a message from the cursor position.

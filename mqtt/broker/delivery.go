@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/cluster"
 	core "github.com/absmach/fluxmq/mqtt"
@@ -288,7 +289,7 @@ func isReservedUserPropertyKey(key string) bool {
 func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
 	s := b.Get(clientID)
 	if s == nil {
-		return fmt.Errorf("session not found: %s", clientID)
+		return fmt.Errorf("%w: session not found: %s", corebroker.ErrClientNotConnected, clientID)
 	}
 
 	// cluster.Message comes from cluster - create storage.Message with zero-copy buffer
@@ -310,7 +311,7 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *clus
 func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg any) error {
 	s := b.Get(clientID)
 	if s == nil {
-		return fmt.Errorf("session not found: %s", clientID)
+		return fmt.Errorf("%w: session not found: %s", corebroker.ErrClientNotConnected, clientID)
 	}
 
 	// Convert queue message to storage message

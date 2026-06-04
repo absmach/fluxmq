@@ -213,6 +213,9 @@ message RouteQueueMessageRequest {
 message RouteQueueMessageResponse {
   bool success = 1;
   string error = 2;
+  // client_not_connected signals the delivery target had no live connection,
+  // so the sender can evict the stale consumer without parsing error text.
+  bool client_not_connected = 3;
 }
 
 message RouteQueueBatchRequest {
@@ -224,6 +227,9 @@ message RouteQueueBatchError {
   string client_id = 2;
   string queue_name = 3;
   string error = 4;
+  // client_not_connected signals the delivery target had no live connection,
+  // so the sender can evict the stale consumer without parsing error text.
+  bool client_not_connected = 5;
 }
 
 message RouteQueueBatchResponse {
