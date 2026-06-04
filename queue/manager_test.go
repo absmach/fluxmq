@@ -368,7 +368,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	}
 
 	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
-	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", "client-1", "streamer", "", cursor); err != nil {
+	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", testClientOneID, "streamer", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
@@ -420,7 +420,7 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("orders", "$queue/orders/#")); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
-	if err := mgr.Subscribe(ctx, "orders", "", "client-1", testGroupWorkers, ""); err != nil {
+	if err := mgr.Subscribe(ctx, "orders", "", testClientOneID, testGroupWorkers, ""); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
@@ -494,7 +494,7 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	}
 
 	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
-	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", "client-1", "streamer", "", cursor); err != nil {
+	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", testClientOneID, "streamer", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
@@ -1142,7 +1142,7 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 		t.Fatalf("Subscribe local client failed: %v", err)
 	}
 
-	remoteClientID := "remote-client"
+	remoteClientID := testRemoteClientID
 	if err := manager.Subscribe(ctx, testQueueTest, "#", remoteClientID, "", remoteNodeID); err != nil {
 		t.Fatalf("Subscribe remote client failed: %v", err)
 	}
@@ -1228,7 +1228,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	if err := manager.Subscribe(ctx, "tasks", "", "remote-client", testGroupWorkers, testNode2); err != nil {
+	if err := manager.Subscribe(ctx, "tasks", "", testRemoteClientID, testGroupWorkers, testNode2); err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
@@ -1398,7 +1398,7 @@ func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
 		Position: types.CursorDefault,
 		Mode:     types.GroupModeStream,
 	}
-	if err := manager.SubscribeWithCursor(context.Background(), testQueueEvents, "", "client-1", "streamers", "", cursor); err != nil {
+	if err := manager.SubscribeWithCursor(context.Background(), testQueueEvents, "", testClientOneID, "streamers", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
@@ -1554,7 +1554,7 @@ func TestSubscribeWithCursorReplicatedQueueRoutesStateThroughCoordinator(t *test
 		Position: types.CursorEarliest,
 		Mode:     types.GroupModeStream,
 	}
-	if err := manager.SubscribeWithCursor(ctx, "orders", "#", "client-1", "", "", cursor); err != nil {
+	if err := manager.SubscribeWithCursor(ctx, "orders", "#", testClientOneID, "", "", cursor); err != nil {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
@@ -1969,7 +1969,7 @@ func TestDeliveryStaleConsumerStartsEphemeralExpiry(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		&targetCheckingDeliverer{targets: map[string]bool{"dead-client": false}},
+		&targetCheckingDeliverer{targets: map[string]bool{testDeadClientID: false}},
 		config,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -1982,7 +1982,7 @@ func TestDeliveryStaleConsumerStartsEphemeralExpiry(t *testing.T) {
 	}
 
 	group := types.NewConsumerGroupState("ephemeral-events", "readers", "")
-	group.SetConsumer("dead-client", &types.ConsumerInfo{ID: "dead-client", ClientID: "dead-client"})
+	group.SetConsumer(testDeadClientID, &types.ConsumerInfo{ID: testDeadClientID, ClientID: testDeadClientID})
 	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
@@ -2004,7 +2004,7 @@ func TestDeliveryStaleConsumerStartsEphemeralExpiry(t *testing.T) {
 	if gotGroup != "readers" {
 		t.Fatalf("expected callback group readers, got %q", gotGroup)
 	}
-	if len(gotConsumerIDs) != 1 || gotConsumerIDs[0] != "dead-client" {
+	if len(gotConsumerIDs) != 1 || gotConsumerIDs[0] != testDeadClientID {
 		t.Fatalf("expected callback consumers [dead-client], got %v", gotConsumerIDs)
 	}
 }
@@ -2037,8 +2037,8 @@ func TestCleanupStaleConsumersStartsEphemeralExpiry(t *testing.T) {
 
 	staleTime := time.Now().Add(-time.Hour)
 	info := &types.ConsumerInfo{
-		ID:            "dead-client",
-		ClientID:      "dead-client",
+		ID:            testDeadClientID,
+		ClientID:      testDeadClientID,
 		RegisteredAt:  staleTime,
 		LastHeartbeat: staleTime,
 	}
@@ -2162,22 +2162,22 @@ func TestSubscriptionTrackingReferenceCounts(t *testing.T) {
 		nil,
 	)
 
-	manager.trackSubscription("client-1", "orders", "workers@#")
-	manager.trackSubscription("client-1", "orders", "workers@#")
+	manager.trackSubscription(testClientOneID, "orders", "workers@#")
+	manager.trackSubscription(testClientOneID, "orders", "workers@#")
 
-	targets := manager.getSubscriptionTargets("client-1")
+	targets := manager.getSubscriptionTargets(testClientOneID)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 tracked target after duplicate subscriptions, got %d", len(targets))
 	}
 
-	manager.untrackSubscription("client-1", "orders", "workers@#")
-	targets = manager.getSubscriptionTargets("client-1")
+	manager.untrackSubscription(testClientOneID, "orders", "workers@#")
+	targets = manager.getSubscriptionTargets(testClientOneID)
 	if len(targets) != 1 {
 		t.Fatalf("expected tracked target to remain after first untrack, got %d", len(targets))
 	}
 
-	manager.untrackSubscription("client-1", "orders", "workers@#")
-	targets = manager.getSubscriptionTargets("client-1")
+	manager.untrackSubscription(testClientOneID, "orders", "workers@#")
+	targets = manager.getSubscriptionTargets(testClientOneID)
 	if len(targets) != 0 {
 		t.Fatalf("expected no tracked targets after reference count reaches zero, got %d", len(targets))
 	}
@@ -2196,16 +2196,16 @@ func TestSubscriptionTrackingPrunesStaleEntries(t *testing.T) {
 		nil,
 	)
 
-	manager.trackSubscription("client-1", "orders", "workers@#")
+	manager.trackSubscription(testClientOneID, "orders", "workers@#")
 
 	key := manager.subscriptionRefKey("orders", "workers@#")
 	manager.subscriptionsMu.Lock()
-	manager.subscriptions["client-1"][key].lastSeen = time.Now().Add(-time.Minute)
+	manager.subscriptions[testClientOneID][key].lastSeen = time.Now().Add(-time.Minute)
 	manager.subscriptionsMu.Unlock()
 
 	manager.pruneStaleSubscriptions()
 
-	targets := manager.getSubscriptionTargets("client-1")
+	targets := manager.getSubscriptionTargets(testClientOneID)
 	if len(targets) != 0 {
 		t.Fatalf("expected stale tracked target to be pruned, got %d entries", len(targets))
 	}
@@ -2221,13 +2221,13 @@ func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
 		nil,
 	)
 
-	manager.trackSubscription("client-1", "orders", "workers@#")
+	manager.trackSubscription(testClientOneID, "orders", "workers@#")
 
-	if err := manager.UpdateHeartbeat(context.Background(), "client-1"); err != nil {
+	if err := manager.UpdateHeartbeat(context.Background(), testClientOneID); err != nil {
 		t.Fatalf("UpdateHeartbeat failed: %v", err)
 	}
 
-	targets := manager.getSubscriptionTargets("client-1")
+	targets := manager.getSubscriptionTargets(testClientOneID)
 	if len(targets) != 0 {
 		t.Fatalf("expected stale tracked target to be removed after heartbeat update, got %d entries", len(targets))
 	}
