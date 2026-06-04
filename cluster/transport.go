@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	corebroker "github.com/absmach/fluxmq/broker"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
@@ -523,8 +524,9 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 	err := handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
 	if err != nil {
 		return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
-			Success: false,
-			Error:   err.Error(),
+			Success:            false,
+			Error:              err.Error(),
+			ClientNotConnected: corebroker.IsErrClientNotConnected(err),
 		}), nil
 	}
 
@@ -563,10 +565,11 @@ func (t *Transport) RouteQueueBatch(ctx context.Context, req *RouteQueueBatchReq
 		msg := decodeRouteQueueMessage(wire)
 		if err := handler.DeliverQueueMessage(ctx, wire.ClientId, msg); err != nil {
 			failures = append(failures, &clusterv1.RouteQueueBatchError{
-				Index:     uint32(idx),
-				ClientId:  wire.ClientId,
-				QueueName: wire.QueueName,
-				Error:     err.Error(),
+				Index:              uint32(idx),
+				ClientId:           wire.ClientId,
+				QueueName:          wire.QueueName,
+				Error:              err.Error(),
+				ClientNotConnected: corebroker.IsErrClientNotConnected(err),
 			})
 			continue
 		}
@@ -889,6 +892,9 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 		}
 
 		if !resp.Msg.Success {
+			if resp.Msg.ClientNotConnected {
+				return fmt.Errorf("%w: route queue message failed: %s", corebroker.ErrClientNotConnected, resp.Msg.Error)
+			}
 			return fmt.Errorf("route queue message failed: %s", resp.Msg.Error)
 		}
 
@@ -1014,13 +1020,33 @@ func (t *Transport) SendRouteQueueBatch(ctx context.Context, nodeID string, deli
 	t.logger.Warn("route queue batch partial failure after retries",
 		slog.String("node_id", nodeID),
 		slog.Int("remaining_failures", len(remaining)))
-	return fmt.Errorf("route queue batch failed after %d retries: %d deliveries still failing: %s",
+	batchErr := fmt.Errorf("route queue batch failed after %d retries: %d deliveries still failing: %s",
 		maxPartialRetries, len(remaining), summarizeQueueBatchFailures(failures))
+	// When every remaining failure is a not-connected target, wrap the sentinel
+	// so the caller can evict via errors.Is without parsing the message. Batches
+	// are built per single consumer, so "all" maps to one client.
+	if noClientConnected(failures) {
+		return fmt.Errorf("%w: %s", corebroker.ErrClientNotConnected, batchErr)
+	}
+	return batchErr
+}
+
+func noClientConnected(failures []queueBatchFailure) bool {
+	if len(failures) == 0 {
+		return false
+	}
+	for _, failure := range failures {
+		if !failure.clientNotConnected {
+			return false
+		}
+	}
+	return true
 }
 
 type queueBatchFailure struct {
-	delivery QueueDelivery
-	err      string
+	delivery           QueueDelivery
+	err                string
+	clientNotConnected bool
 }
 
 func (t *Transport) sendRouteQueueBatchOnce(
@@ -1081,8 +1107,9 @@ func (t *Transport) sendRouteQueueBatchOnce(
 			}
 			seen[deliveryIdx] = struct{}{}
 			failures = append(failures, queueBatchFailure{
-				delivery: deliveries[deliveryIdx],
-				err:      f.Error,
+				delivery:           deliveries[deliveryIdx],
+				err:                f.Error,
+				clientNotConnected: f.ClientNotConnected,
 			})
 		}
 		if len(failures) == 0 {

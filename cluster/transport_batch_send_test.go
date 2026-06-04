@@ -5,6 +5,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	corebroker "github.com/absmach/fluxmq/broker"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
 )
@@ -548,6 +550,60 @@ func TestSendRouteQueueBatch_ExhaustsPartialRetriesReturnsError(t *testing.T) {
 	}
 	if c := callCount.Load(); int(c) != maxPartialRetries {
 		t.Fatalf("expected %d partial retry calls, got %d", maxPartialRetries, c)
+	}
+}
+
+func TestSendRouteQueueBatch_WrapsSentinelWhenAllFailuresNotConnected(t *testing.T) {
+	mock := &mockBrokerClient{
+		routeQueueBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {
+			return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+				Success: false,
+				Error:   testAlwaysFails,
+				Failures: []*clusterv1.RouteQueueBatchError{
+					{Index: 0, ClientId: "c1", QueueName: "q1", Error: "session not found", ClientNotConnected: true},
+				},
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	deliveries := []QueueDelivery{
+		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+	}
+	err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries)
+	if err == nil {
+		t.Fatal("expected error after exhausted partial retries")
+	}
+	if !errors.Is(err, corebroker.ErrClientNotConnected) {
+		t.Fatalf("expected wrapped ErrClientNotConnected, got %v", err)
+	}
+}
+
+func TestSendRouteQueueBatch_DoesNotWrapSentinelOnMixedFailures(t *testing.T) {
+	mock := &mockBrokerClient{
+		routeQueueBatchFn: func(_ context.Context, _ *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {
+			return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+				Success: false,
+				Error:   testAlwaysFails,
+				Failures: []*clusterv1.RouteQueueBatchError{
+					{Index: 0, ClientId: "c1", QueueName: "q1", Error: "client not connected", ClientNotConnected: true},
+					{Index: 1, ClientId: "c2", QueueName: "q2", Error: "queue busy", ClientNotConnected: false},
+				},
+			}), nil
+		},
+	}
+	tr := newTestTransport("peer1", mock)
+
+	deliveries := []QueueDelivery{
+		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+		{ClientID: "c2", QueueName: "q2", Message: &QueueMessage{MessageID: "m2", Payload: []byte("2")}},
+	}
+	err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries)
+	if err == nil {
+		t.Fatal("expected error after exhausted partial retries")
+	}
+	if errors.Is(err, corebroker.ErrClientNotConnected) {
+		t.Fatalf("mixed failures must not wrap the not-connected sentinel, got %v", err)
 	}
 }
 

@@ -6,6 +6,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -870,7 +871,7 @@ func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *tes
 		mockRemoteRouter: mockRemoteRouter{
 			routeErr: corebroker.ErrClientNotConnected,
 		},
-		batchErr: errors.New("route queue batch failed after 3 retries: 1 deliveries still failing: client remote-client queue events: client not connected"),
+		batchErr: fmt.Errorf("%w: route queue batch failed after 3 retries: client remote-client queue events", corebroker.ErrClientNotConnected),
 	}
 
 	engine, logStore, groupStore := newTestEngine(t, nil, remote)
@@ -916,7 +917,9 @@ func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *tes
 
 func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccessfully(t *testing.T) {
 	remote := &batchRemoteRouter{
-		batchErr: errors.New("route queue batch failed after 3 retries: 1 deliveries still failing: client other-client queue events: client not connected"),
+		// Batch fails for a coalesced peer, but the single-RPC fallback for this
+		// consumer succeeds, so the consumer must survive regardless of the cause.
+		batchErr: errors.New("coalesced route queue batch failure"),
 	}
 
 	engine, logStore, groupStore := newTestEngine(t, nil, remote)

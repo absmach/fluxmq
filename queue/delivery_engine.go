@@ -328,7 +328,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 					slog.String("queue", config.Name),
 					slog.Int("batch_size", len(deliveries)),
 					slog.String("error", err.Error()))
-				if corebroker.IsClientNotConnected(err) {
+				if corebroker.IsErrClientNotConnected(err) {
 					e.unregisterConsumer(ctx, config.Name, group.ID, consumerID, err)
 				}
 				continue
@@ -359,7 +359,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 						slog.String("client", consumerInfo.ClientID),
 						slog.String("topic", msg.Topic),
 						slog.String("error", err.Error()))
-					if corebroker.IsClientNotConnected(err) {
+					if corebroker.IsErrClientNotConnected(err) {
 						e.unregisterConsumer(ctx, config.Name, group.ID, consumerID, err)
 						break
 					}
@@ -476,7 +476,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 					slog.String("node", consumerInfo.ProxyNodeID),
 					slog.String("queue", config.Name),
 					slog.String("error", err.Error()))
-				if corebroker.IsClientNotConnected(err) {
+				if corebroker.IsErrClientNotConnected(err) {
 					e.unregisterConsumer(ctx, config.Name, groupID, consumerInfo.ConsumerID, err)
 				}
 				continue

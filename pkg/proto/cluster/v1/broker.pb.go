@@ -1353,11 +1353,14 @@ func (x *RouteQueueMessageRequest) GetSequence() int64 {
 }
 
 type RouteQueueMessageResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error   string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// client_not_connected signals the delivery target had no live connection,
+	// so the sender can evict the stale consumer without parsing error text.
+	ClientNotConnected bool `protobuf:"varint,3,opt,name=client_not_connected,json=clientNotConnected,proto3" json:"client_not_connected,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RouteQueueMessageResponse) Reset() {
@@ -1402,6 +1405,13 @@ func (x *RouteQueueMessageResponse) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *RouteQueueMessageResponse) GetClientNotConnected() bool {
+	if x != nil {
+		return x.ClientNotConnected
+	}
+	return false
 }
 
 type RouteQueueBatchRequest struct {
@@ -1449,13 +1459,16 @@ func (x *RouteQueueBatchRequest) GetMessages() []*RouteQueueMessageRequest {
 }
 
 type RouteQueueBatchError struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Index         uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
-	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	QueueName     string                 `protobuf:"bytes,3,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Index     uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	ClientId  string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	QueueName string                 `protobuf:"bytes,3,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
+	Error     string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// client_not_connected signals the delivery target had no live connection,
+	// so the sender can evict the stale consumer without parsing error text.
+	ClientNotConnected bool `protobuf:"varint,5,opt,name=client_not_connected,json=clientNotConnected,proto3" json:"client_not_connected,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RouteQueueBatchError) Reset() {
@@ -1514,6 +1527,13 @@ func (x *RouteQueueBatchError) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *RouteQueueBatchError) GetClientNotConnected() bool {
+	if x != nil {
+		return x.ClientNotConnected
+	}
+	return false
 }
 
 type RouteQueueBatchResponse struct {
@@ -2479,18 +2499,20 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\bsequence\x18\x06 \x01(\x03R\bsequence\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"}\n" +
 	"\x19RouteQueueMessageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"a\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x120\n" +
+	"\x14client_not_connected\x18\x03 \x01(\bR\x12clientNotConnected\"a\n" +
 	"\x16RouteQueueBatchRequest\x12G\n" +
-	"\bmessages\x18\x01 \x03(\v2+.fluxmq.cluster.v1.RouteQueueMessageRequestR\bmessages\"~\n" +
+	"\bmessages\x18\x01 \x03(\v2+.fluxmq.cluster.v1.RouteQueueMessageRequestR\bmessages\"\xb0\x01\n" +
 	"\x14RouteQueueBatchError\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\rR\x05index\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x03 \x01(\tR\tqueueName\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xac\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x120\n" +
+	"\x14client_not_connected\x18\x05 \x01(\bR\x12clientNotConnected\"\xac\x01\n" +
 	"\x17RouteQueueBatchResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1c\n" +
