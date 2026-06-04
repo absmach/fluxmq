@@ -449,6 +449,61 @@ func TestSendRouteQueueBatch_PartialFailureRetriesSubset(t *testing.T) {
 	}
 }
 
+func TestSendRouteQueueBatch_ClearsFailuresBetweenTransportRetries(t *testing.T) {
+	var callCount atomic.Int32
+
+	const (
+		peerID       = "peer-route-retry"
+		failedClient = "retry-route-client"
+		queueName    = "retry-route-queue"
+	)
+
+	mock := &mockBrokerClient{
+		routeQueueBatchFn: func(_ context.Context, req *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {
+			call := callCount.Add(1)
+			switch call {
+			case 1:
+				if len(req.Msg.Messages) != 2 {
+					t.Errorf("call 1: expected 2 messages, got %d", len(req.Msg.Messages))
+				}
+				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+					Success: false,
+					Error:   "partial malformed response",
+					Failures: []*clusterv1.RouteQueueBatchError{
+						{Index: 0, ClientId: failedClient, QueueName: queueName, Error: "busy"},
+						{Index: 99, ClientId: "invalid-route-client", QueueName: queueName, Error: "bad index"},
+					},
+				}), nil
+			case 2:
+				if len(req.Msg.Messages) != 2 {
+					t.Errorf("call 2: expected full batch retry, got %d messages", len(req.Msg.Messages))
+				}
+				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+					Success:   true,
+					Delivered: uint32(len(req.Msg.Messages)),
+				}), nil
+			default:
+				t.Errorf("unexpected route queue batch call %d", call)
+				return connect.NewResponse(&clusterv1.RouteQueueBatchResponse{
+					Success: true,
+				}), nil
+			}
+		},
+	}
+	tr := newTestTransport(peerID, mock)
+
+	deliveries := []QueueDelivery{
+		{ClientID: failedClient, QueueName: queueName, Message: &QueueMessage{MessageID: "retry-route-message", Payload: []byte("retry-route-payload")}},
+		{ClientID: "delivered-route-client", QueueName: queueName, Message: &QueueMessage{MessageID: "delivered-route-message", Payload: []byte("delivered-route-payload")}},
+	}
+	if err := tr.SendRouteQueueBatch(context.Background(), peerID, deliveries); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c := callCount.Load(); c != 2 {
+		t.Fatalf("expected malformed response retry to stop after success, got %d calls", c)
+	}
+}
+
 func TestSendRouteQueueBatch_TransportError(t *testing.T) {
 	mock := &mockBrokerClient{
 		routeQueueBatchFn: func(context.Context, *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error) {

@@ -1055,6 +1055,7 @@ func (t *Transport) sendRouteQueueBatchOnce(
 			return fmt.Errorf("connect call failed: %w", err)
 		}
 
+		failures = nil
 		if resp.Msg.Success {
 			if len(resp.Msg.Failures) > 0 {
 				return fmt.Errorf("route queue batch response marked success with %d failures", len(resp.Msg.Failures))
