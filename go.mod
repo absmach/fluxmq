@@ -2,6 +2,8 @@ module github.com/absmach/fluxmq
 
 go 1.26.3
 
+toolchain go1.26.4
+
 require (
 	connectrpc.com/connect v1.20.0
 	github.com/Azure/go-amqp v1.6.0
