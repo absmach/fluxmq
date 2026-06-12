@@ -19,7 +19,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 FROM alpine:3.24
 
 # wget is provided by busybox in alpine and is used by the HEALTHCHECK.
-RUN apk add --no-cache ca-certificates \
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ca-certificates \
     && addgroup -S fluxmq \
     && adduser -S -G fluxmq fluxmq \
     && mkdir -p /var/lib/fluxmq \
