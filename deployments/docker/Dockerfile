@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w" -o /out/fluxmq ./cmd
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 # wget is provided by busybox in alpine and is used by the HEALTHCHECK.
 RUN apk add --no-cache ca-certificates \
