@@ -5,6 +5,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -318,12 +319,94 @@ func TestAuthEnabledFor(t *testing.T) {
 			protocol: "amqp",
 			want:     false,
 		},
+		{
+			name:     "atom provider enables without callout URL",
+			cfg:      AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{GRPCAddr: "atom:8081", ServiceTokenEnv: "TOKEN"}},
+			protocol: AuthProtocolHTTP,
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.AuthEnabledFor(tt.protocol); got != tt.want {
 				t.Fatalf("AuthEnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthProviderName(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  AuthConfig
+		want string
+	}{
+		{name: "disabled", cfg: AuthConfig{}, want: ""},
+		{name: "legacy url defaults to callout", cfg: AuthConfig{URL: testAuthURL}, want: AuthProviderCallout},
+		{name: "explicit atom", cfg: AuthConfig{Provider: "ATOM"}, want: AuthProviderAtom},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.ProviderName(); got != tt.want {
+				t.Fatalf("ProviderName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateAuthProvider(t *testing.T) {
+	tests := []struct {
+		name    string
+		auth    AuthConfig
+		wantErr string
+	}{
+		{
+			name: "valid atom provider",
+			auth: AuthConfig{
+				Provider: AuthProviderAtom,
+				Atom: AtomAuthConfig{
+					GRPCAddr:        "atom:8081",
+					ServiceTokenEnv: "FLUXMQ_ATOM_SERVICE_TOKEN",
+				},
+			},
+		},
+		{
+			name:    "callout requires url when explicit",
+			auth:    AuthConfig{Provider: AuthProviderCallout},
+			wantErr: "auth.url is required",
+		},
+		{
+			name:    "atom requires grpc address",
+			auth:    AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{ServiceTokenEnv: "TOKEN"}},
+			wantErr: "auth.atom.grpc_addr is required",
+		},
+		{
+			name:    "atom requires service token source",
+			auth:    AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{GRPCAddr: "atom:8081"}},
+			wantErr: "service_token_env or auth.atom.service_token_file is required",
+		},
+		{
+			name:    "unknown provider",
+			auth:    AuthConfig{Provider: "custom"},
+			wantErr: "auth.provider: unsupported provider",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Auth = tt.auth
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
 	}

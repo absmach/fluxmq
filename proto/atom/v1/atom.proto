@@ -1,0 +1,112 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package atom.v1;
+
+option go_package = "github.com/absmach/fluxmq/pkg/proto/atom/v1;atomv1";
+
+// AuthzService evaluates authorization decisions.
+// Call this on every request to protected downstream resources.
+service AuthzService {
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+
+// AuthService validates tokens and returns caller identity.
+// Use this to authenticate incoming requests without decoding JWTs locally.
+service AuthService {
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+}
+
+// CertificateService resolves and revokes Atom certificate credentials for
+// runtime services that terminate mTLS outside Atom.
+service CertificateService {
+  rpc ResolveCertificate(ResolveCertificateRequest) returns (ResolveCertificateResponse);
+  rpc RevokeEntityCertificates(RevokeEntityCertificatesRequest) returns (RevokeEntityCertificatesResponse);
+}
+
+// AliasService resolves human-friendly alias slugs to canonical UUIDs.
+// Atom owns the alias registry and its uniqueness; callers (e.g. a message
+// broker) resolve an alias once, cache the UUID, then authorize by UUID via
+// AuthzService.Check. Resolution is capability-neutral - it reveals only the
+// UUIDs; the Check call is the authorization gate.
+service AliasService {
+  rpc ResolveAlias(ResolveAliasRequest) returns (ResolveAliasResponse);
+}
+
+message CheckRequest {
+  string subject_id  = 1;
+  string action      = 2;  // capability name, e.g. "publish"
+  // Legacy form: identifies a row in the `resources` table. Resolved with
+  // kind = `resources.kind`. Mutually exclusive with object_kind/object_id;
+  // if both are supplied, object_kind/object_id win.
+  string resource_id = 3;
+  // Optional ABAC context - flat string key/value pairs injected into the
+  // evaluation context under the "context" key.
+  // Note: only string values are supported over gRPC; use REST for nested JSON.
+  map<string, string> context = 4;
+  // Explicit form: identifies any first-class protected object.
+  // Supported object_kind values: "resource" (same as resource_id) or
+  // "tenant" (resolved from the `tenants` table; kind = "tenant").
+  // Both fields must be set together, or both empty.
+  string object_kind = 5;
+  string object_id   = 6;
+}
+
+message CheckResponse {
+  bool   allowed = 1;
+  string reason  = 2;
+}
+
+message AuthenticateRequest {
+  // JWT ("eyJ...") or API key ("atom_...") - same as the HTTP Bearer value.
+  string token = 1;
+}
+
+message AuthenticateResponse {
+  string entity_id  = 1;
+  string tenant_id  = 2;  // empty string if entity has no tenant
+  string session_id = 3;  // empty string for API key authentication
+}
+
+message ResolveCertificateRequest {
+  string serial_number = 1;
+  string fingerprint_sha256 = 2;
+}
+
+message ResolveCertificateResponse {
+  string entity_id = 1;
+  string tenant_id = 2;
+  string credential_id = 3;
+  string expires_at = 4;
+}
+
+message RevokeEntityCertificatesRequest {
+  string entity_id = 1;
+  string reason = 2;
+}
+
+message RevokeEntityCertificatesResponse {
+  uint64 revoked = 1;
+}
+
+message ResolveAliasRequest {
+  // Tenant selector - exactly one of tenant_id, tenant_alias, or global must
+  // be set. tenant_alias is the case-folded tenant slug.
+  string tenant_id    = 1;
+  string tenant_alias = 2;
+  // Which table the object alias addresses: "entity" (clients/devices) or
+  // "resource" (channels). Other values are rejected. Generic on purpose -
+  // no domain/channel vocabulary.
+  string object_kind  = 3;
+  // The object's alias slug, unique within the tenant.
+  string object_alias = 4;
+  // Resolve an entity or resource whose tenant_id is NULL.
+  bool global = 5;
+}
+
+message ResolveAliasResponse {
+  string tenant_id = 1; // empty string for global objects
+  string object_id = 2;
+}

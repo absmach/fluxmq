@@ -24,6 +24,7 @@ type Connection struct {
 	broker       *Broker
 	conn         *amqpconn.Connection
 	containerID  string
+	externalID   string
 	maxFrameSize uint32
 	channelMax   uint16
 	idleTimeout  time.Duration
@@ -135,8 +136,12 @@ func (c *Connection) handleSASL() error {
 	}
 
 	// Send SASL mechanisms
+	mechanisms := []types.Symbol{sasl.MechPLAIN, sasl.MechANONYMOUS}
+	if c.broker.auth != nil {
+		mechanisms = []types.Symbol{sasl.MechPLAIN}
+	}
 	mechs := &sasl.Mechanisms{
-		Mechanisms: []types.Symbol{sasl.MechPLAIN, sasl.MechANONYMOUS},
+		Mechanisms: mechanisms,
 	}
 	body, err := mechs.Encode()
 	if err != nil {
@@ -168,7 +173,7 @@ func (c *Connection) handleSASL() error {
 			return fmt.Errorf("PLAIN auth failed: %w", err)
 		}
 		if auth := c.broker.auth; auth != nil {
-			ok, _, authErr := auth.Authenticate(username, username, password)
+			ok, externalID, authErr := auth.Authenticate(username, username, password)
 			if authErr != nil || !ok {
 				c.broker.stats.IncrementAuthErrors()
 				if m := c.broker.metrics; m != nil {
@@ -179,9 +184,15 @@ func (c *Connection) handleSASL() error {
 				c.conn.WriteSASLFrame(body) //nolint:errcheck // best-effort auth failure notification before returning error
 				return fmt.Errorf("PLAIN auth rejected for user %q", username)
 			}
+			c.externalID = externalID
 		}
 	case sasl.MechANONYMOUS:
-		// Anonymous is always accepted
+		if c.broker.auth != nil {
+			outcome := &sasl.Outcome{Code: sasl.CodeAuth}
+			body, _ := outcome.Encode()
+			c.conn.WriteSASLFrame(body) //nolint:errcheck // best-effort auth failure notification before returning error
+			return fmt.Errorf("anonymous SASL rejected while auth is enabled")
+		}
 	default:
 		outcome := &sasl.Outcome{Code: sasl.CodeAuth}
 		body, _ := outcome.Encode()
@@ -210,6 +221,9 @@ func (c *Connection) handleOpen() error {
 
 	clientOpen := perf.(*performatives.Open)
 	c.containerID = clientOpen.ContainerID
+	if auth := c.broker.auth; auth != nil && c.externalID != "" {
+		auth.BindIdentity(PrefixedClientID(c.containerID), c.externalID)
+	}
 
 	// Negotiate max frame size (minimum of both)
 	if clientOpen.MaxFrameSize > 0 && clientOpen.MaxFrameSize < c.maxFrameSize {

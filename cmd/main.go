@@ -18,6 +18,7 @@ import (
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/broker/authatom"
 	"github.com/absmach/fluxmq/broker/authcallout"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
@@ -340,32 +341,17 @@ func main() {
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
 
-	// Configure auth callout
-	if cfg.Auth.URL != "" {
-		transport := cfg.Auth.Transport
-		if transport == "" {
-			transport = "grpc"
+	var httpAuthEngine *corebroker.AuthEngine
+	var coapAuthEngine *corebroker.AuthEngine
+	var authClosers []func() error
+	defer func() {
+		for _, closeFn := range authClosers {
+			_ = closeFn()
 		}
+	}()
 
-		cb := authcallout.DefaultCircuitBreaker(logger)
-		sharedOpts := []authcallout.Option{
-			authcallout.WithTimeout(cfg.Auth.Timeout),
-			authcallout.WithLogger(logger),
-			authcallout.WithCircuitBreaker(cb),
-		}
-
-		newClient := func(proto authcallout.Protocol) (corebroker.Authenticator, corebroker.Authorizer) {
-			opts := append(sharedOpts, authcallout.WithProtocol(proto))
-			switch transport {
-			case "http":
-				c := authcallout.NewHTTPClient(nil, cfg.Auth.URL, opts...)
-				return c, c
-			default:
-				c := authcallout.NewGRPCClient(nil, cfg.Auth.URL, opts...)
-				return c, c
-			}
-		}
-
+	// Configure authentication/authorization provider.
+	if cfg.Auth.Enabled() {
 		cacheSize := cfg.Auth.IdentityCacheSize
 		if cacheSize == 0 {
 			cacheSize = corebroker.DefaultIdentityCacheSize
@@ -378,31 +364,136 @@ func main() {
 			corebroker.WithIdentityCache(cacheSize, cacheTTL),
 		}
 
-		if cfg.Auth.AuthEnabledFor("mqtt") {
-			mqttAuthn, mqttAuthz := newClient(authcallout.ProtocolMQTT)
-			b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz, engineOpts...))
-			slog.Info("Auth callout enabled for mqtt")
-		}
+		switch cfg.Auth.ProviderName() {
+		case config.AuthProviderCallout:
+			transport := strings.ToLower(strings.TrimSpace(cfg.Auth.Transport))
+			if transport == "" {
+				transport = "grpc"
+			}
 
-		if cfg.Auth.AuthEnabledFor("amqp") {
-			amqpAuthn, amqpAuthz := newClient(authcallout.ProtocolAMQP10)
-			amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz, engineOpts...))
-			slog.Info("Auth callout enabled for amqp")
-		}
+			cb := authcallout.DefaultCircuitBreaker(logger)
+			sharedOpts := []authcallout.Option{
+				authcallout.WithTimeout(cfg.Auth.Timeout),
+				authcallout.WithLogger(logger),
+				authcallout.WithCircuitBreaker(cb),
+			}
 
-		if cfg.Auth.AuthEnabledFor("amqp091") {
-			amqp091Authn, amqp091Authz := newClient(authcallout.ProtocolAMQP091)
-			amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz, engineOpts...))
-			slog.Info("Auth callout enabled for amqp091")
-		}
+			newClient := func(proto authcallout.Protocol) (corebroker.Authenticator, corebroker.Authorizer) {
+				opts := append(sharedOpts, authcallout.WithProtocol(proto))
+				switch transport {
+				case "http":
+					c := authcallout.NewHTTPClient(nil, cfg.Auth.URL, opts...)
+					return c, c
+				default:
+					c := authcallout.NewGRPCClient(nil, cfg.Auth.URL, opts...)
+					return c, c
+				}
+			}
 
-		slog.Info("Auth callout configured",
-			"url", cfg.Auth.URL,
-			"transport", transport,
-			"timeout", cfg.Auth.Timeout,
-			"protocols", cfg.Auth.Protocols)
+			newCalloutEngine := func(proto authcallout.Protocol) *corebroker.AuthEngine {
+				authn, authz := newClient(proto)
+				return corebroker.NewAuthEngine(authn, authz, engineOpts...)
+			}
+
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolMQTT) {
+				mqttAuthn, mqttAuthz := newClient(authcallout.ProtocolMQTT)
+				b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz, engineOpts...))
+				slog.Info("Auth callout enabled for mqtt")
+			}
+
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolAMQP) {
+				amqpAuthn, amqpAuthz := newClient(authcallout.ProtocolAMQP10)
+				amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz, engineOpts...))
+				slog.Info("Auth callout enabled for amqp")
+			}
+
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolAMQP091) {
+				amqp091Authn, amqp091Authz := newClient(authcallout.ProtocolAMQP091)
+				amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz, engineOpts...))
+				slog.Info("Auth callout enabled for amqp091")
+			}
+
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolHTTP) {
+				httpAuthEngine = newCalloutEngine(authcallout.ProtocolUnspecified)
+				slog.Info("Auth callout enabled for http")
+			}
+
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolCoAP) {
+				coapAuthEngine = newCalloutEngine(authcallout.ProtocolUnspecified)
+				slog.Info("Auth callout enabled for coap")
+			}
+
+			slog.Info("Auth callout configured",
+				"url", cfg.Auth.URL,
+				"transport", transport,
+				"timeout", cfg.Auth.Timeout,
+				"protocols", cfg.Auth.Protocols)
+		case config.AuthProviderAtom:
+			serviceToken, err := authatom.LoadServiceToken(cfg.Auth.Atom.ServiceTokenEnv, cfg.Auth.Atom.ServiceTokenFile)
+			if err != nil {
+				slog.Error("Failed to load Atom service token", "error", err)
+				os.Exit(1)
+			}
+
+			baseOpts := authatom.Options{
+				GRPCAddr:               cfg.Auth.Atom.GRPCAddr,
+				Insecure:               cfg.Auth.Atom.Insecure,
+				CAFile:                 cfg.Auth.Atom.CAFile,
+				CertFile:               cfg.Auth.Atom.CertFile,
+				KeyFile:                cfg.Auth.Atom.KeyFile,
+				ServiceToken:           serviceToken,
+				Timeout:                cfg.Auth.Timeout,
+				Logger:                 logger,
+				AuthnCacheTTL:          cfg.Auth.Atom.AuthnCacheTTL,
+				AliasCacheTTL:          cfg.Auth.Atom.AliasCacheTTL,
+				DecisionCacheTTL:       cfg.Auth.Atom.DecisionCacheTTL,
+				UnsupportedTopicPolicy: cfg.Auth.Atom.UnsupportedTopicPolicy,
+			}
+
+			newAtomEngine := func(protocol string) *corebroker.AuthEngine {
+				opts := baseOpts
+				opts.Protocol = protocol
+				conn, err := authatom.Dial(context.Background(), opts)
+				if err != nil {
+					slog.Error("Failed to connect to Atom auth provider", "protocol", protocol, "error", err)
+					os.Exit(1)
+				}
+				authClosers = append(authClosers, conn.Close)
+				provider := authatom.New(conn, opts)
+				return corebroker.NewAuthEngine(provider, provider, engineOpts...)
+			}
+
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolMQTT) {
+				b.SetAuthEngine(newAtomEngine(authatom.ProtocolMQTT))
+				slog.Info("Atom auth enabled for mqtt")
+			}
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolHTTP) {
+				httpAuthEngine = newAtomEngine(authatom.ProtocolHTTP)
+				slog.Info("Atom auth enabled for http")
+			}
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolCoAP) {
+				coapAuthEngine = newAtomEngine(authatom.ProtocolCoAP)
+				slog.Info("Atom auth enabled for coap")
+			}
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolAMQP) {
+				amqpBroker.SetAuthEngine(newAtomEngine(authatom.ProtocolAMQP))
+				slog.Info("Atom auth enabled for amqp")
+			}
+			if cfg.Auth.AuthEnabledFor(config.AuthProtocolAMQP091) {
+				amqp091Broker.SetAuthEngine(newAtomEngine(authatom.ProtocolAMQP091))
+				slog.Info("Atom auth enabled for amqp091")
+			}
+
+			slog.Info("Atom auth configured",
+				"grpc_addr", cfg.Auth.Atom.GRPCAddr,
+				"timeout", cfg.Auth.Timeout,
+				"protocols", cfg.Auth.Protocols)
+		default:
+			slog.Error("Unsupported auth provider", "provider", cfg.Auth.ProviderName())
+			os.Exit(1)
+		}
 	} else {
-		slog.Info("Auth callout disabled")
+		slog.Info("Auth disabled")
 	}
 
 	// Shared local pub/sub router (MQTT + AMQP 0.9.1 + AMQP 1.0).
@@ -762,6 +853,7 @@ func main() {
 			Address:         slot.cfg.Addr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			TLSConfig:       tlsCfg,
+			AuthEngine:      httpAuthEngine,
 		}
 		httpServer := http.New(httpCfg, b, logger)
 
@@ -803,6 +895,7 @@ func main() {
 			Address:         slot.cfg.Addr,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
 			TLSConfig:       dtlsCfg,
+			AuthEngine:      coapAuthEngine,
 		}
 		coapServer := coap.New(coapCfg, b, logger)
 

@@ -128,6 +128,16 @@ func (e *AuthEngine) Forget(clientID string) {
 	e.identities.Delete(clientID)
 }
 
+// BindIdentity stores an already-authenticated external identity for a
+// protocol-level client ID. This is useful for protocols where authentication
+// happens before the final broker client ID is known.
+func (e *AuthEngine) BindIdentity(clientID, externalID string) {
+	if externalID == "" {
+		return
+	}
+	e.identities.Store(clientID, externalID)
+}
+
 // ExternalID returns the authenticated external identity for a protocol client ID.
 func (e *AuthEngine) ExternalID(clientID string) string {
 	id, _ := e.identities.Load(clientID)
