@@ -227,7 +227,6 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	qos := p.FixedHeader.QoS
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
-	dup := p.FixedHeader.Dup
 
 	// Downgrade QoS if it exceeds server's maximum (MQTT 5.0 spec 3.3.2-4)
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
@@ -342,12 +341,6 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return sendV5PubAck(s, packetID, v5.PubAckSuccess, "")
 
 	case 2:
-		if dup && s.Inflight().WasReceived(packetID) {
-			return sendV5PubRec(s, packetID, v5.PubRecSuccess, "")
-		}
-
-		s.Inflight().MarkReceived(packetID)
-
 		buf := core.GetBufferWithData(payload)
 		storeMsg := storage.AcquireMessage()
 		storeMsg.Topic = topic
@@ -364,9 +357,11 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		storeMsg.ResponseTopic = responseTopic
 		storeMsg.CorrelationData = correlationData
 		storeMsg.SetPayloadFromBuffer(buf)
-		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
-			storeMsg.ReleasePayload()
+		accepted, err := s.AddInbound(packetID, storeMsg)
+		if !accepted {
 			storage.ReleaseMessage(storeMsg)
+		}
+		if err != nil {
 			return err
 		}
 

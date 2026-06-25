@@ -37,3 +37,18 @@ func TestMessage_PayloadBufNotSerialized_PayloadIs(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &restored2))
 	require.Equal(t, "hello", string(restored2.GetPayload()))
 }
+
+func TestMessagePoolReuseClearsInflightMetadata(t *testing.T) {
+	msg := storage.AcquireMessage()
+	msg.InflightDirection = 1
+	msg.InflightState = 1
+	msg.Reset()
+	require.Zero(t, msg.InflightDirection)
+	require.Zero(t, msg.InflightState)
+	storage.ReleaseMessage(msg)
+
+	reused := storage.AcquireMessage()
+	t.Cleanup(func() { storage.ReleaseMessage(reused) })
+	require.Zero(t, reused.InflightDirection)
+	require.Zero(t, reused.InflightState)
+}

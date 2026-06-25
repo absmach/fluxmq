@@ -146,19 +146,43 @@ func TestInflight_InvalidDirectionReturnsErrorNotPanic(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidDirection)
 }
 
-func TestInflight_DuplicateOnFullWindowAccepted(t *testing.T) {
+func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T) {
 	tr := NewInflightTracker(1)
-	require.NoError(t, tr.Add(7, &storage.Message{Topic: "first"}, Inbound))
+	first := &storage.Message{Topic: "first", Payload: []byte("original")}
+	accepted, err := tr.AddInbound(7, first)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.True(t, tr.WasReceived(7))
+	tr.messages[inflightKey{direction: Inbound, packetID: 7}].State = StatePubRecReceived
 
 	// The inbound window is full (capacity 1). A retransmitted PUBLISH reusing
-	// the same packet ID must be accepted (update), not rejected with
-	// ErrInflightFull.
-	require.NoError(t, tr.Add(7, &storage.Message{Topic: "second"}, Inbound))
+	// the same packet ID is acknowledged without replacing the first accepted
+	// transaction or taking ownership of the duplicate message.
+	duplicate := &storage.Message{Topic: "second", Payload: []byte("replacement")}
+	accepted, err = tr.AddInbound(7, duplicate)
+	require.NoError(t, err)
+	require.False(t, accepted)
+	require.Equal(t, StatePubRecReceived, tr.messages[inflightKey{direction: Inbound, packetID: 7}].State)
 
 	// A different packet ID is still rejected.
-	require.ErrorIs(t, tr.Add(8, &storage.Message{Topic: "t"}, Inbound), ErrInflightFull)
+	accepted, err = tr.AddInbound(8, &storage.Message{Topic: "t"})
+	require.ErrorIs(t, err, ErrInflightFull)
+	require.False(t, accepted)
+	require.False(t, tr.WasReceived(8), "failed admission must not create phantom duplicate state")
 
 	got, err := tr.AckInbound(7)
 	require.NoError(t, err)
-	require.Equal(t, "second", got.Topic)
+	require.Same(t, first, got)
+	require.Equal(t, "first", got.Topic)
+	require.Equal(t, []byte("original"), got.Payload)
+}
+
+func TestInflight_AddInboundRejectsInvalidDirection(t *testing.T) {
+	tr := NewInflightTracker(1)
+
+	accepted, err := tr.addInbound(1, &storage.Message{Topic: "t"}, Outbound)
+	require.ErrorIs(t, err, ErrInvalidDirection)
+	require.False(t, accepted)
+	require.Empty(t, tr.GetAll())
+	require.False(t, tr.WasReceived(1))
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/config"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -158,13 +159,20 @@ type fakeInflight struct {
 	expired                []*messages.InflightMessage
 	retryCalls             []uint16
 	deliveryAttemptedCalls []uint16
+	addCalls               []uint16
+	ackCalls               []uint16
+	ackResult              *storage.Message
 }
 
 func (f *fakeInflight) Add(packetID uint16, msg *storage.Message, direction messages.Direction) error {
+	f.addCalls = append(f.addCalls, packetID)
 	return nil
 }
 
-func (f *fakeInflight) Ack(packetID uint16) (*storage.Message, error) { return nil, nil }
+func (f *fakeInflight) Ack(packetID uint16) (*storage.Message, error) {
+	f.ackCalls = append(f.ackCalls, packetID)
+	return f.ackResult, nil
+}
 
 func (f *fakeInflight) Get(packetID uint16) (*messages.InflightMessage, bool) { return nil, false }
 
@@ -202,6 +210,21 @@ func (f *fakeInflight) MarkRetry(packetID uint16) error {
 func (f *fakeInflight) GetAll() []*messages.InflightMessage { return nil }
 
 func (f *fakeInflight) CleanupExpiredReceived(olderThan time.Duration) {}
+
+func TestInboundOperationsRequireDirectionalExtensions(t *testing.T) {
+	f := &fakeInflight{ackResult: &storage.Message{Topic: "outbound"}}
+	s := New("client", packets.V5, Options{}, f, nil, config.SessionConfig{})
+
+	accepted, err := s.AddInbound(7, &storage.Message{Topic: "inbound"})
+	require.ErrorIs(t, err, messages.ErrInboundUnsupported)
+	require.False(t, accepted)
+	require.Empty(t, f.addCalls, "unsupported inbound admission must not call base Add")
+
+	got, err := s.AckInbound(7)
+	require.ErrorIs(t, err, messages.ErrInboundUnsupported)
+	require.Nil(t, got)
+	require.Empty(t, f.ackCalls, "unsupported PUBREL must not acknowledge an outbound entry")
+}
 
 // queueFullWriter returns ErrSendQueueFull for every TryWriteDataPacket call.
 type queueFullWriter struct{}

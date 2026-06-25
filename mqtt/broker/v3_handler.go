@@ -192,7 +192,6 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	qos := p.FixedHeader.QoS
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
-	dup := p.FixedHeader.Dup
 
 	if err := topics.ValidateTopicName(topic); err != nil {
 		h.broker.telemetry.logger.Warn("v3_publish_invalid_topic",
@@ -260,12 +259,6 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return s.WritePacket(ack)
 
 	case 2:
-		if dup && s.Inflight().WasReceived(packetID) {
-			return sendV3PubRec(s, packetID)
-		}
-
-		s.Inflight().MarkReceived(packetID)
-
 		buf := core.GetBufferWithData(payload)
 		storeMsg := storage.AcquireMessage()
 		storeMsg.Topic = topic
@@ -275,9 +268,11 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		storeMsg.PacketID = packetID
 		storeMsg.Properties = setOriginProperties(storeMsg.Properties, s.ExternalID)
 		storeMsg.SetPayloadFromBuffer(buf)
-		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
-			storeMsg.ReleasePayload()
+		accepted, err := s.AddInbound(packetID, storeMsg)
+		if !accepted {
 			storage.ReleaseMessage(storeMsg)
+		}
+		if err != nil {
 			return err
 		}
 

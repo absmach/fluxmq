@@ -395,14 +395,25 @@ func (s *Session) ReleaseSendQuota(packetID uint16, gen uint64) {
 	s.sendWindow.release(packetID, gen)
 }
 
-// AckInbound acknowledges and removes an inbound message (PUBREL). It uses the
-// tracker's optional directional acknowledgement when available, falling back to
-// Ack for trackers that do not separate directions.
+// AddInbound atomically admits an inbound QoS 2 transaction. accepted reports
+// whether the tracker took ownership of msg. Trackers that do not implement the
+// optional directional extension are rejected explicitly because their base
+// Add implementation may not isolate inbound and outbound packet-ID spaces.
+func (s *Session) AddInbound(packetID uint16, msg *storage.Message) (bool, error) {
+	if ia, ok := s.msgHandler.Inflight().(messages.InboundAdder); ok {
+		return ia.AddInbound(packetID, msg)
+	}
+	return false, messages.ErrInboundUnsupported
+}
+
+// AckInbound acknowledges and removes an inbound message (PUBREL). Trackers
+// that do not implement the optional directional extension are rejected
+// explicitly so an inbound acknowledgement cannot remove an outbound entry.
 func (s *Session) AckInbound(packetID uint16) (*storage.Message, error) {
 	if ib, ok := s.msgHandler.Inflight().(messages.InboundAcker); ok {
 		return ib.AckInbound(packetID)
 	}
-	return s.msgHandler.Inflight().Ack(packetID)
+	return nil, messages.ErrInboundUnsupported
 }
 
 // MarkSentIfEpoch marks the outbound packet as sent only while gen is still the

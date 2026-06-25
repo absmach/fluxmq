@@ -48,9 +48,9 @@ const (
 // MQTT packet identifiers are independent in each direction, so entries are
 // keyed by (direction, packetID). Methods that are inherently one-directional
 // operate on the outbound entries (Get, Has, UpdateState, MarkSent, MarkRetry,
-// MarkDeliveryAttempted, GetExpired); the inbound QoS 2 receive path uses Add
-// with Inbound, Ack with Inbound, and the *Received methods. Ack therefore takes
-// the direction explicitly.
+// MarkDeliveryAttempted, GetExpired). The live inbound QoS 2 receive path uses
+// the optional InboundAdder and InboundAcker extensions so external
+// implementations that do not isolate directions fail explicitly.
 type Inflight interface {
 	Add(packetID uint16, msg *storage.Message, direction Direction) error
 	// Ack acknowledges and removes an outbound message (PUBACK/PUBCOMP).
@@ -69,11 +69,19 @@ type Inflight interface {
 	CleanupExpiredReceived(olderThan time.Duration)
 }
 
+// InboundAdder is an optional extension of Inflight for atomic inbound QoS 2
+// admission. accepted reports whether the tracker took ownership of msg. A
+// duplicate returns accepted=false with no error and preserves the first
+// accepted transaction. Keeping this out of the base Inflight interface
+// preserves source compatibility for external implementations.
+type InboundAdder interface {
+	AddInbound(packetID uint16, msg *storage.Message) (accepted bool, err error)
+}
+
 // InboundAcker is an optional extension of Inflight for directional inbound
 // acknowledgement (PUBREL completing an inbound QoS 2 receive). Keeping it out
 // of the base Inflight interface preserves source compatibility for external
-// implementations; callers type-assert to it and fall back to Ack when absent.
-// The built-in tracker implements it.
+// implementations. The built-in tracker implements it.
 type InboundAcker interface {
 	AckInbound(packetID uint16) (*storage.Message, error)
 }
@@ -142,6 +150,44 @@ func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Directio
 		Direction: direction,
 	}
 	return nil
+}
+
+// AddInbound atomically admits an inbound QoS 2 transaction and records its
+// duplicate-detection state. It never replaces an existing transaction with
+// the same packet ID. accepted is true only when the tracker takes ownership of
+// msg.
+func (t *inflight) AddInbound(packetID uint16, msg *storage.Message) (bool, error) {
+	return t.addInbound(packetID, msg, Inbound)
+}
+
+func (t *inflight) addInbound(packetID uint16, msg *storage.Message, direction Direction) (bool, error) {
+	if direction != Inbound {
+		return false, fmt.Errorf("add inbound packet ID %d: %w", packetID, ErrInvalidDirection)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	key := inflightKey{direction: direction, packetID: packetID}
+	if _, exists := t.messages[key]; exists {
+		return false, nil
+	}
+	if t.counts[direction] >= t.maxSize {
+		return false, ErrInflightFull
+	}
+
+	t.messages[key] = &InflightMessage{
+		PacketID: packetID,
+		Message:  msg,
+		State:    StatePublishSent,
+		// SentAt is intentionally set only after successful socket write.
+		SentAt:    time.Time{},
+		Retries:   0,
+		Direction: direction,
+	}
+	t.counts[direction]++
+	t.receivedIDs[packetID] = time.Now()
+	return true, nil
 }
 
 // Get retrieves an outbound inflight message by packet ID.
