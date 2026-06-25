@@ -213,6 +213,10 @@ func (c *syncConn) writtenPackets() []packets.ControlPacket {
 }
 
 func v5Connect(clientID, willTopic string, willPayload []byte) *v5.Connect {
+	return v5ConnectWillDelay(clientID, willTopic, willPayload, 0)
+}
+
+func v5ConnectWillDelay(clientID, willTopic string, willPayload []byte, willDelay uint32) *v5.Connect {
 	c := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
 		ProtocolName:    protocolNameMQTT,
@@ -225,6 +229,10 @@ func v5Connect(clientID, willTopic string, willPayload []byte) *v5.Connect {
 		c.WillFlag = true
 		c.WillTopic = willTopic
 		c.WillPayload = willPayload
+		if willDelay > 0 {
+			d := willDelay
+			c.WillProperties = &v5.WillProperties{WillDelayInterval: &d}
+		}
 	}
 	return c
 }
@@ -300,7 +308,7 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 
 	// Old runSession goroutine unblocks (its socket was closed) and exits.
 	oldWG.Wait()
-	require.True(t, oldConn.closed.Load(), "takeover must close the old connection")
+	waitFor(t, func() bool { return oldConn.closed.Load() }, "takeover must close the old connection")
 
 	// New connection must own the session and stay connected, even after the
 	// stale old goroutine has fully torn down.
@@ -385,7 +393,7 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 	close(oldConn.releaseRead)
 	oldWG.Wait()
 
-	require.True(t, oldConn.closed.Load(), "old conn closed by takeover")
+	waitFor(t, func() bool { return oldConn.closed.Load() }, "old conn closed by takeover")
 
 	// Give the stale DISCONNECT a chance to (incorrectly) tear down the session.
 	time.Sleep(20 * time.Millisecond)
@@ -451,7 +459,7 @@ func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
 	// The takeover closed the old connection, unblocking its write so its
 	// goroutine exits.
 	oldWG.Wait()
-	require.True(t, oldConn.closed.Load())
+	waitFor(t, func() bool { return oldConn.closed.Load() }, "takeover closes the stalled connection")
 
 	// The superseded goroutine's blocked PINGRESP write failed against its own
 	// closed socket. That is expected teardown and must not be counted as a
@@ -643,6 +651,69 @@ func TestHandleConnect_V5TakeoverNotifiesAndPublishesWill(t *testing.T) {
 		}
 		return false
 	}, "displaced connection's Will is published")
+
+	oldWG.Wait()
+	newConn.Close()
+	newWG.Wait()
+}
+
+// TestHandleConnect_V5TakeoverDelayedWillNotPublished guards finding #1: a Will
+// with a non-zero Will Delay Interval must NOT be published when a takeover
+// closes the connection — the session continues under the new connection, so
+// the delayed Will is cancelled. [MQTT-3.1.2.5].
+func TestHandleConnect_V5TakeoverDelayedWillNotPublished(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "proplet-delay"
+	const willTopic = "devices/proplet-delay/status"
+
+	sub, _, err := b.CreateSession("delay-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	// Old connection with a 60s-delayed Will.
+	oldConn := newSyncConn()
+	var oldWG sync.WaitGroup
+	oldWG.Add(1)
+	go func() {
+		defer oldWG.Done()
+		h.HandleConnect(oldConn, v5ConnectWillDelay(clientID, willTopic, []byte("offline"), 60)) //nolint:errcheck
+	}()
+
+	<-oldConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected()
+	}, "old v5 session connected")
+
+	newConn := newSyncConn()
+	var newWG sync.WaitGroup
+	newWG.Add(1)
+	go func() {
+		defer newWG.Done()
+		h.HandleConnect(newConn, v5Connect(clientID, "", nil)) //nolint:errcheck
+	}()
+
+	<-newConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected() && s.Conn() == newConn
+	}, "new v5 session current")
+
+	// The old connection is still notified and closed, but the delayed Will
+	// must not be published.
+	waitFor(t, func() bool { return oldConn.closed.Load() }, "old connection closed by takeover")
+	time.Sleep(30 * time.Millisecond)
+	for _, p := range subConn.writtenPackets() {
+		if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+			t.Fatal("delayed Will must not be published on takeover")
+		}
+	}
 
 	oldWG.Wait()
 	newConn.Close()

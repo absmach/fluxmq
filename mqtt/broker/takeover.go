@@ -35,20 +35,24 @@ func (b *Broker) drainSuperseded(ctx context.Context, sc *session.Superseded) {
 		return
 	}
 
-	// Notify a displaced MQTT 5 client before closing the connection.
+	// Notify a displaced MQTT 5 client before closing the connection. Wait for
+	// the packet to actually be transmitted (the onSent callback fires after
+	// the send loop writes it to the socket), not merely enqueued, so an
+	// asynchronous send queue does not observe the close before flushing the
+	// DISCONNECT.
 	if sc.Version == core.ProtocolV5 {
 		d := &v5.Disconnect{
 			FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
 			ReasonCode:  reasonSessionTakenOver,
 		}
-		// Bounded best-effort: a stalled client must not delay the close.
-		done := make(chan struct{})
+		sent := make(chan struct{})
 		go func() {
-			sc.Conn.WritePacket(d) //nolint:errcheck // best-effort takeover notification
-			close(done)
+			// WriteControlPacket may block enqueueing on a stalled client.
+			sc.Conn.WriteControlPacket(d, func() { close(sent) }) //nolint:errcheck // best-effort takeover notification
 		}()
+		// Bounded: a stalled client must not delay the close indefinitely.
 		select {
-		case <-done:
+		case <-sent:
 		case <-time.After(supersededNotifyGrace):
 		}
 	}

@@ -186,17 +186,17 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 
 // ConnectOptions carries the per-connection settings negotiated by a CONNECT.
 // They are applied to the session on (re)connect so a persistent session does
-// not retain the previous connection's protocol version, keep-alive, Will, or
-// expiry. [MQTT-3.1.0-2]
+// not retain the previous connection's protocol version, keep-alive, Will,
+// Receive Maximum, or topic-alias maximum. [MQTT-3.1.0-2]
 //
-// ReceiveMaximum is intentionally not included: the inflight window is fixed at
-// session creation (the inflight tracker is sized then), so it is not resized on
-// reconnect.
+// Session expiry is applied separately (see SetExpiryInterval): zero is a valid
+// value that must replace a previous positive one, which a struct field with an
+// "apply when non-zero" rule cannot express.
 type ConnectOptions struct {
 	Version        byte
 	KeepAlive      time.Duration
 	Will           *storage.WillMessage
-	ExpiryInterval uint32
+	ReceiveMaximum uint16
 	TopicAliasMax  uint16
 }
 
@@ -247,15 +247,37 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 		s.Version = opts.Version
 		s.KeepAlive = opts.KeepAlive
 		s.Will = opts.Will
-		if opts.ExpiryInterval > 0 {
-			s.ExpiryInterval = opts.ExpiryInterval
-		}
 		s.TopicAliasMax = opts.TopicAliasMax
 	}
 
 	// Topic alias mappings are scoped to a single network connection and must
 	// not survive a takeover. [MQTT-3.3.2-7]
 	s.msgHandler.ClearAliases()
+
+	// Reset the delivery stop channel for the new connection. If it is already
+	// closed (a prior disconnect) recreate it; on a live takeover, close it
+	// first to release any sender still blocked on the previous connection's
+	// delivery slots so it does not hang on an orphaned channel.
+	stopClosed := false
+	select {
+	case <-s.deliverStop:
+		stopClosed = true
+	default:
+	}
+	if superseded != nil && !stopClosed {
+		close(s.deliverStop)
+		stopClosed = true
+	}
+	if stopClosed {
+		s.deliverStop = make(chan struct{})
+	}
+
+	// Receive Maximum is connection-scoped: reinitialise the send quota to the
+	// newly negotiated value so a reconnect with a lower value cannot exceed it.
+	// [MQTT-3.3.4]
+	if applyOpts {
+		s.reinitSendWindowLocked(opts.ReceiveMaximum)
+	}
 
 	s.epoch++
 	epoch := s.epoch
@@ -264,11 +286,6 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	s.conn = c
 	s.state = StateConnected
 	s.connectedAt = time.Now()
-	select {
-	case <-s.deliverStop:
-		s.deliverStop = make(chan struct{})
-	default:
-	}
 
 	s.mu.Unlock()
 
@@ -281,6 +298,41 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	})
 
 	return epoch, superseded
+}
+
+// reinitSendWindowLocked resizes the session's send window to newMax (the
+// negotiated Receive Maximum). It updates the inflight tracker's capacity and,
+// in backpressure mode, rebuilds the delivery-slot semaphore with the available
+// quota (newMax minus messages already in flight). Caller must hold s.mu.
+func (s *Session) reinitSendWindowLocked(newMax uint16) {
+	capacity := int(newMax)
+	if capacity <= 0 {
+		capacity = 65535
+	}
+	s.ReceiveMaximum = uint16(capacity)
+	s.msgHandler.Inflight().SetMaxSize(capacity)
+
+	if s.deliverSlots == nil {
+		return // not backpressure mode; the tracker capacity is the limit
+	}
+	used := len(s.msgHandler.Inflight().GetAll())
+	if used > capacity {
+		used = capacity
+	}
+	slots := make(chan struct{}, capacity)
+	for range capacity - used {
+		slots <- struct{}{}
+	}
+	s.deliverSlots = slots
+}
+
+// SetExpiryInterval sets the session expiry interval. Unlike the option struct,
+// this applies the value verbatim, so a reconnect carrying expiry 0 (expire on
+// disconnect) replaces a previous positive value. [MQTT-3.1.2.11].
+func (s *Session) SetExpiryInterval(interval uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ExpiryInterval = interval
 }
 
 // Epoch returns the current connection generation. A runSession goroutine

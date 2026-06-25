@@ -111,6 +111,9 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			Retain:     p.WillRetain,
 			Properties: setOriginProperties(nil, externalID),
 		}
+		if p.WillProperties != nil && p.WillProperties.WillDelayInterval != nil {
+			will.Delay = *p.WillProperties.WillDelayInterval
+		}
 	}
 
 	receiveMax := maxReceived
@@ -153,14 +156,21 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	// Apply the negotiated options and take over any existing connection. On a
 	// persistent reconnect this replaces the previous connection's version,
-	// keep-alive, Will, expiry, and topic-alias maximum.
+	// keep-alive, Will, Receive Maximum, and topic-alias maximum.
 	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		Will:           will,
-		ExpiryInterval: sessionExpiry,
+		ReceiveMaximum: receiveMax,
 		TopicAliasMax:  topicAliasMax,
 	})
+	// Session expiry is applied verbatim on reconnect so a new value of 0
+	// (expire on disconnect) replaces a previous positive one. A new session's
+	// expiry, including the server default policy, was already set in
+	// CreateSession.
+	if !isNew {
+		s.SetExpiryInterval(sessionExpiry)
+	}
 	if superseded != nil {
 		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
 	}

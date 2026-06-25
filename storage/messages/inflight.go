@@ -59,6 +59,7 @@ type Inflight interface {
 	MarkRetry(packetID uint16) error
 	GetAll() []*InflightMessage
 	CleanupExpiredReceived(olderThan time.Duration)
+	SetMaxSize(maxSize int)
 }
 
 // inflight tracks QoS 1 and QoS 2 messages in flight.
@@ -81,6 +82,19 @@ func NewInflightTracker(maxSize int) *inflight {
 		maxSize:     maxSize,
 		receivedIDs: make(map[uint16]time.Time),
 	}
+}
+
+// SetMaxSize updates the maximum number of concurrent in-flight messages. Used
+// to reinitialise the send window when a client reconnects with a new Receive
+// Maximum. Messages already in flight are retained even if they exceed the new
+// limit; no new messages are admitted until the count drops below it.
+func (t *inflight) SetMaxSize(maxSize int) {
+	if maxSize <= 0 {
+		maxSize = 65535
+	}
+	t.mu.Lock()
+	t.maxSize = maxSize
+	t.mu.Unlock()
 }
 
 // Add adds a message to the inflight tracker.

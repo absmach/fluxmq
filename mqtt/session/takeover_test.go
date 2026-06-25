@@ -181,15 +181,28 @@ func TestConnectWithOptions_AppliesNewOptionsOnReconnect(t *testing.T) {
 		Version:        5,
 		KeepAlive:      45 * time.Second,
 		Will:           newWill,
-		ExpiryInterval: 120,
+		ReceiveMaximum: 8,
 		TopicAliasMax:  10,
 	})
 
 	require.Equal(t, byte(5), s.Version, "reconnect must adopt the new protocol version")
 	require.Equal(t, 45*time.Second, s.KeepAlive)
 	require.Equal(t, newWill, s.GetWill())
+	require.Equal(t, uint16(8), s.ReceiveMaximum, "reconnect must adopt the new Receive Maximum")
 	require.NotNil(t, superseded)
 	require.Equal(t, byte(4), superseded.Version, "superseded carries the old version")
+}
+
+// TestSetExpiryInterval_ZeroReplacesPositive guards finding #3: a reconnect
+// carrying session expiry 0 (expire on disconnect) must replace a previous
+// positive value, not be ignored.
+func TestSetExpiryInterval_ZeroReplacesPositive(t *testing.T) {
+	s := newTakeoverSession(t)
+	s.SetExpiryInterval(300)
+	require.Equal(t, uint32(300), s.ExpiryInterval)
+
+	s.SetExpiryInterval(0)
+	require.Equal(t, uint32(0), s.ExpiryInterval, "expiry 0 must replace the previous positive value")
 }
 
 // TestConnectWithOptions_ClearsTopicAliases guards finding #4: topic alias

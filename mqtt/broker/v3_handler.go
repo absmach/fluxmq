@@ -129,11 +129,12 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	s.ExternalID = externalID
 
 	// Apply the negotiated options and take over any existing connection. v3
-	// has no session expiry or topic aliases.
+	// has no session expiry, Receive Maximum, or topic aliases.
 	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
-		Version:   p.ProtocolVersion,
-		KeepAlive: time.Duration(p.KeepAlive) * time.Second,
-		Will:      will,
+		Version:        p.ProtocolVersion,
+		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
+		Will:           will,
+		ReceiveMaximum: maxReceived,
 	})
 	if superseded != nil {
 		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
