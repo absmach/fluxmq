@@ -30,7 +30,7 @@ func TestProcessRetriesSkipsInbound(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w)
+	h.ProcessRetries(w, nil)
 
 	require.Empty(t, w.data)
 	require.Empty(t, w.control)
@@ -51,7 +51,7 @@ func TestProcessRetriesOutboundQoS1UsesPublish(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w)
+	h.ProcessRetries(w, nil)
 
 	require.Len(t, w.data, 1)
 	require.IsType(t, &v3.Publish{}, w.data[0])
@@ -73,7 +73,7 @@ func TestProcessRetriesOutboundQoS2PublishSentUsesPublish(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w)
+	h.ProcessRetries(w, nil)
 
 	require.Len(t, w.data, 1)
 	require.IsType(t, &v3.Publish{}, w.data[0])
@@ -95,7 +95,7 @@ func TestProcessRetriesOutboundQoS2PubRecReceivedUsesPubRelV3(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w)
+	h.ProcessRetries(w, nil)
 
 	require.Empty(t, w.data)
 	require.Len(t, w.control, 1)
@@ -117,7 +117,7 @@ func TestProcessRetriesOutboundQoS2PubRecReceivedUsesPubRelV5(t *testing.T) {
 	h := newMessageHandler(f, nil, packets.V5)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w)
+	h.ProcessRetries(w, nil)
 
 	require.Empty(t, w.data)
 	require.Len(t, w.control, 1)
@@ -163,8 +163,6 @@ type fakeInflight struct {
 func (f *fakeInflight) Add(packetID uint16, msg *storage.Message, direction messages.Direction) error {
 	return nil
 }
-
-func (f *fakeInflight) SetMaxSize(maxSize int) {}
 
 func (f *fakeInflight) Ack(packetID uint16) (*storage.Message, error) { return nil, nil }
 
@@ -237,7 +235,7 @@ func TestProcessRetries_ResetsBackoffOnQueueFull(t *testing.T) {
 	}
 	h := newMessageHandler(f, nil, 4)
 
-	h.ProcessRetries(&queueFullWriter{})
+	h.ProcessRetries(&queueFullWriter{}, nil)
 
 	// MarkRetry must NOT be called — the message never reached the wire.
 	require.Empty(t, f.retryCalls)

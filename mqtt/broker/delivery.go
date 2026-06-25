@@ -70,27 +70,40 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 		return 0, err
 	}
 
-	// Backpressure mode: acquire an inflight slot before proceeding.
-	// Blocks until an ACK frees a slot; no-op when deliverSlots is nil.
-	if !s.AcquireDeliverSlot() {
-		// Session disconnected while waiting for a slot.
-		if msg.QoS > 0 {
-			err := s.OfflineQueue().Enqueue(msg)
+	packetID := s.NextPacketID()
+	msg.PacketID = packetID
+
+	// Acquire a send-quota (Receive Maximum) token for this outbound PUBLISH.
+	// Backpressure mode blocks until a token frees; queue mode falls back to the
+	// pending queue when the quota is exhausted.
+	if s.SendBackpressure() {
+		if !s.AcquireSendQuota(packetID) {
+			// Session disconnected while waiting for quota.
+			if msg.QoS > 0 {
+				err := s.OfflineQueue().Enqueue(msg)
+				msg.ReleasePayload()
+				storage.ReleaseMessage(msg)
+				return 0, err
+			}
 			msg.ReleasePayload()
 			storage.ReleaseMessage(msg)
-			return 0, err
+			return 0, nil
+		}
+	} else if !s.TryAcquireSendQuota(packetID) {
+		// Quota exhausted; defer into the pending queue.
+		if s.TryEnqueuePending(msg, nil) {
+			return 0, nil
 		}
 		msg.ReleasePayload()
 		storage.ReleaseMessage(msg)
 		return 0, nil
 	}
 
-	packetID := s.NextPacketID()
-	msg.PacketID = packetID
 	// Inflight storage takes ownership - it will release when message is ACK'd or expires
 	if err := s.Inflight().Add(packetID, msg, messages.Outbound); err != nil {
-		// Inflight is full (pending queue mode or unexpected). Try the pending queue.
-		s.ReleaseDeliverSlot()
+		// Persistent inflight store is full (server cap, bidirectional). Release
+		// the quota token and try the pending queue.
+		s.ReleaseSendQuota(packetID)
 		if s.TryEnqueuePending(msg, nil) {
 			// Deferred delivery; packet ID assigned at drain time.
 			return 0, nil
@@ -142,9 +155,9 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 		storage.ReleaseMessage(msg)
 	}
 
-	// Return the inflight slot (backpressure mode) and pull through one pending
-	// message (pending queue mode) to keep the pipeline full.
-	s.ReleaseDeliverSlot()
+	// Release the send-quota token (PUBACK/PUBCOMP) and pull through one pending
+	// message (queue mode) to keep the pipeline full.
+	s.ReleaseSendQuota(packetID)
 	s.DrainOnePending(func(pending *storage.Message, _ func()) error {
 		_, err := b.DeliverToSession(context.Background(), s, pending)
 		return err

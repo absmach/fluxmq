@@ -86,18 +86,21 @@ type Session struct {
 	wildcardSubAvailable bool
 	sharedSubAvailable   bool
 
-	// deliverSlots is a semaphore with capacity == inflight window size.
-	// Non-nil only when InflightOverflow == InflightOverflowBackpressure.
-	// Callers acquire a slot before adding to inflight; release on ACK.
-	deliverSlots chan struct{}
+	// sendWindow is the outbound QoS 1/2 send quota (Receive Maximum), bounded
+	// by serverMaxInflight. Independent of the bidirectional inflight store.
+	sendWindow *sendWindow
 
-	// pendingCh buffers messages that exceeded the inflight window.
+	// serverMaxInflight is the configured upper bound on the send quota; the
+	// negotiated Receive Maximum is clamped to it on every (re)connect.
+	serverMaxInflight int
+
+	// pendingCh buffers messages that exceeded the send quota.
 	// Non-nil only when InflightOverflow == InflightOverflowQueue.
 	// Drained into inflight as ACKs arrive; spilled to offline on disconnect.
 	pendingCh chan pendingItem
 
 	// deliverStop is closed when the session disconnects to unblock goroutines
-	// waiting in AcquireDeliverSlot.
+	// waiting on the send window.
 	deliverStop chan struct{}
 
 	// lastHeartbeatUpdate tracks the last queue heartbeat update emitted
@@ -160,19 +163,23 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		deliverStop:          make(chan struct{}),
 	}
 
-	inflightCap := int(receiveMax)
+	// serverMaxInflight is the configured cap the send quota is clamped to. The
+	// negotiated receiveMax is already clamped to it by the broker, but the
+	// session re-clamps on reconnect.
+	s.serverMaxInflight = sessionCfg.MaxInflightMessages
+	if s.serverMaxInflight <= 0 {
+		s.serverMaxInflight = 65535
+	}
+	if s.serverMaxInflight > 65535 {
+		s.serverMaxInflight = 65535
+	}
+
+	backpressure := sessionCfg.InflightOverflow == config.InflightOverflowBackpressure
+	s.sendWindow = newSendWindow(int(receiveMax), backpressure)
 
 	switch sessionCfg.InflightOverflow {
 	case config.InflightOverflowBackpressure:
-		slots := make(chan struct{}, inflightCap)
-		used := len(inflight.GetAll())
-		if used > inflightCap {
-			used = inflightCap
-		}
-		for range inflightCap - used {
-			slots <- struct{}{}
-		}
-		s.deliverSlots = slots
+		// Send quota provides the backpressure; no pending queue.
 	case config.InflightOverflowQueue:
 		pendingCap := sessionCfg.PendingQueueSize
 		if pendingCap <= 0 {
@@ -254,29 +261,19 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	// not survive a takeover. [MQTT-3.3.2-7]
 	s.msgHandler.ClearAliases()
 
-	// Reset the delivery stop channel for the new connection. If it is already
-	// closed (a prior disconnect) recreate it; on a live takeover, close it
-	// first to release any sender still blocked on the previous connection's
-	// delivery slots so it does not hang on an orphaned channel.
-	stopClosed := false
-	select {
-	case <-s.deliverStop:
-		stopClosed = true
-	default:
-	}
-	if superseded != nil && !stopClosed {
-		close(s.deliverStop)
-		stopClosed = true
-	}
-	if stopClosed {
-		s.deliverStop = make(chan struct{})
+	if applyOpts {
+		// Receive Maximum is connection-scoped: reinitialise the send quota to
+		// the newly negotiated value (clamped by the server limit), so a
+		// reconnect with a lower value cannot exceed it. reset broadcasts to
+		// any sender blocked on the previous connection's quota, which then
+		// re-evaluates against the new capacity. [MQTT-4.9]
+		s.resetSendWindowLocked(opts.ReceiveMaximum)
 	}
 
-	// Receive Maximum is connection-scoped: reinitialise the send quota to the
-	// newly negotiated value so a reconnect with a lower value cannot exceed it.
-	// [MQTT-3.3.4]
-	if applyOpts {
-		s.reinitSendWindowLocked(opts.ReceiveMaximum)
+	select {
+	case <-s.deliverStop:
+		s.deliverStop = make(chan struct{})
+	default:
 	}
 
 	s.epoch++
@@ -300,30 +297,16 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	return epoch, superseded
 }
 
-// reinitSendWindowLocked resizes the session's send window to newMax (the
-// negotiated Receive Maximum). It updates the inflight tracker's capacity and,
-// in backpressure mode, rebuilds the delivery-slot semaphore with the available
-// quota (newMax minus messages already in flight). Caller must hold s.mu.
-func (s *Session) reinitSendWindowLocked(newMax uint16) {
-	capacity := int(newMax)
-	if capacity <= 0 {
-		capacity = 65535
+// resetSendWindowLocked reinitialises the outbound send quota to the negotiated
+// Receive Maximum, clamped by the configured server limit. Caller must hold
+// s.mu. The persistent bidirectional inflight store is left untouched.
+func (s *Session) resetSendWindowLocked(clientReceiveMax uint16) {
+	capacity := int(clientReceiveMax)
+	if capacity <= 0 || capacity > s.serverMaxInflight {
+		capacity = s.serverMaxInflight
 	}
 	s.ReceiveMaximum = uint16(capacity)
-	s.msgHandler.Inflight().SetMaxSize(capacity)
-
-	if s.deliverSlots == nil {
-		return // not backpressure mode; the tracker capacity is the limit
-	}
-	used := len(s.msgHandler.Inflight().GetAll())
-	if used > capacity {
-		used = capacity
-	}
-	slots := make(chan struct{}, capacity)
-	for range capacity - used {
-		slots <- struct{}{}
-	}
-	s.deliverSlots = slots
+	s.sendWindow.reset(capacity)
 }
 
 // SetExpiryInterval sets the session expiry interval. Unlike the option struct,
@@ -344,39 +327,33 @@ func (s *Session) Epoch() uint64 {
 	return s.epoch
 }
 
-// AcquireDeliverSlot blocks until an inflight slot is available.
-// Returns false if the session disconnects while waiting.
-// Only meaningful when deliverSlots is non-nil (backpressure mode).
-func (s *Session) AcquireDeliverSlot() bool {
-	s.mu.RLock()
-	slots := s.deliverSlots
-	stop := s.deliverStop
-	s.mu.RUnlock()
-
-	if slots == nil {
-		return true
-	}
-
-	select {
-	case <-slots:
-		return true
-	case <-stop:
-		return false
-	}
+// SendBackpressure reports whether outbound delivery blocks on the send quota
+// (vs. falling back to the pending queue) when the quota is exhausted.
+func (s *Session) SendBackpressure() bool {
+	return s.sendWindow.blocking
 }
 
-// ReleaseDeliverSlot returns an inflight slot, potentially unblocking a waiting sender.
-// Only meaningful when deliverSlots is non-nil (backpressure mode).
-func (s *Session) ReleaseDeliverSlot() {
-	if s.deliverSlots == nil {
-		return
-	}
-	select {
-	case s.deliverSlots <- struct{}{}:
-	default:
-		// Channel is full — this can happen if ReleaseDeliverSlot is called
-		// more times than AcquireDeliverSlot (e.g. on session reset). Safe to ignore.
-	}
+// AcquireSendQuota consumes a send-quota token for packetID, blocking until one
+// is available or the session disconnects. A retransmission that already holds a
+// token succeeds immediately. Returns false if the session disconnected while
+// waiting. Used in backpressure mode.
+func (s *Session) AcquireSendQuota(packetID uint16) bool {
+	s.mu.RLock()
+	stop := s.deliverStop
+	s.mu.RUnlock()
+	return s.sendWindow.acquire(packetID, stop)
+}
+
+// TryAcquireSendQuota consumes a send-quota token for packetID without blocking.
+// A retransmission that already holds a token succeeds without consuming another.
+// Returns false if no token is available.
+func (s *Session) TryAcquireSendQuota(packetID uint16) bool {
+	return s.sendWindow.tryAcquire(packetID)
+}
+
+// ReleaseSendQuota returns the token held for packetID (on PUBACK/PUBCOMP).
+func (s *Session) ReleaseSendQuota(packetID uint16) {
+	s.sendWindow.release(packetID)
 }
 
 // TryEnqueuePending attempts to push an overflow item into the pending queue.
@@ -554,7 +531,7 @@ func (s *Session) ProcessRetries() {
 	if conn == nil {
 		return
 	}
-	s.msgHandler.ProcessRetries(conn)
+	s.msgHandler.ProcessRetries(conn, s.sendWindow.tryAcquire)
 }
 
 // ProcessRetriesTo resends due inflight messages on the provided writer rather
@@ -565,7 +542,7 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter) {
 	if w == nil {
 		return
 	}
-	s.msgHandler.ProcessRetries(w)
+	s.msgHandler.ProcessRetries(w, s.sendWindow.tryAcquire)
 }
 
 // WritePacket writes a packet to the connection.

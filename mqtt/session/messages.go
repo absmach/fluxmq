@@ -44,12 +44,22 @@ func newMessageHandler(inflight messages.Inflight, offlineQueue messages.Queue, 
 const RetryTimeout = 20 * time.Second
 
 // ProcessRetries checks for expired inflight messages and resends them.
-// This is called synchronously from the read loop instead of running in a separate goroutine.
-func (h *msgHandler) ProcessRetries(writer core.PacketWriter) {
+// This is called synchronously from the read loop instead of running in a
+// separate goroutine.
+//
+// acquire gates each outbound retransmission against the connection's send quota
+// (Receive Maximum): a message already holding a token resends, otherwise a
+// token is consumed; when none is available the retransmission is deferred to a
+// later cycle. This stops a reconnect from retransmitting more unacknowledged
+// PUBLISH packets at once than the new connection advertised.
+func (h *msgHandler) ProcessRetries(writer core.PacketWriter, acquire func(packetID uint16) bool) {
 	expired := h.inflight.GetExpired(RetryTimeout)
 	for _, inflight := range expired {
 		if inflight.Direction != messages.Outbound {
 			continue
+		}
+		if acquire != nil && !acquire(inflight.PacketID) {
+			continue // no send quota available this cycle; retry later
 		}
 		if err := h.resendMessage(writer, inflight); err != nil {
 			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
