@@ -55,21 +55,21 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 	handler := NewV5Handler(b)
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolMQTT,
 		ProtocolVersion: 5,
-		ClientID:        "test-client",
+		ClientID:        testMQTTClientID,
 		CleanStart:      true,
 		KeepAlive:       60,
 		UsernameFlag:    true,
 		PasswordFlag:    true,
-		Username:        "user",
+		Username:        testMQTTUsername,
 		Password:        []byte("pass"),
 	}
 
 	err := handler.HandleConnect(conn, connect)
 	require.True(t, err == nil || err == io.EOF, "unexpected connect error: %v", err)
 
-	s := b.Get("test-client")
+	s := b.Get(testMQTTClientID)
 	require.NotNil(t, s)
 	require.Equal(t, "ext-123", s.ExternalID)
 }
@@ -119,14 +119,14 @@ func TestV3ConnectRejectsUnauthorizedWill(t *testing.T) {
 	handler := NewV3Handler(b)
 	connect := &v3.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolMQTT,
 		ProtocolVersion: 4,
-		ClientID:        "test-client",
+		ClientID:        testMQTTClientID,
 		CleanSession:    true,
 		KeepAlive:       60,
 		UsernameFlag:    true,
 		PasswordFlag:    true,
-		Username:        "user",
+		Username:        testMQTTUsername,
 		Password:        []byte("pass"),
 		WillFlag:        true,
 		WillTopic:       "m/factory-a/c/telemetry",
@@ -156,14 +156,14 @@ func TestV5ConnectRejectsUnauthorizedWill(t *testing.T) {
 	handler := NewV5Handler(b)
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    testProtocolMQTT,
 		ProtocolVersion: 5,
-		ClientID:        "test-client",
+		ClientID:        testMQTTClientID,
 		CleanStart:      true,
 		KeepAlive:       60,
 		UsernameFlag:    true,
 		PasswordFlag:    true,
-		Username:        "user",
+		Username:        testMQTTUsername,
 		Password:        []byte("pass"),
 		WillFlag:        true,
 		WillTopic:       "m/factory-a/c/telemetry",

@@ -25,7 +25,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(testLogger()))
 
 	// Create session with TopicAliasMax = 10
-	s, _, err := b.CreateSession("test-client", 5, session.Options{
+	s, _, err := b.CreateSession(testMQTTClientID, 5, session.Options{
 		CleanStart: true,
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestTopicAlias_MultipleAliases(t *testing.T) {
 	cl := cluster.NewNoopCluster("test")
 	b := NewBroker(store, cl, WithLogger(testLogger()))
 
-	s, _, err := b.CreateSession("test-client", 5, session.Options{
+	s, _, err := b.CreateSession(testMQTTClientID, 5, session.Options{
 		CleanStart: true,
 	})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestTopicAlias_UpdateExisting(t *testing.T) {
 	cl := cluster.NewNoopCluster("test")
 	b := NewBroker(store, cl, WithLogger(testLogger()))
 
-	s, _, err := b.CreateSession("test-client", 5, session.Options{
+	s, _, err := b.CreateSession(testMQTTClientID, 5, session.Options{
 		CleanStart: true,
 	})
 	if err != nil {

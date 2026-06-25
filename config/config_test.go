@@ -14,6 +14,7 @@ const (
 	testLogLevelDebug = "debug"
 	testBindAddr      = "127.0.0.1:8100"
 	testAuthURL       = "localhost:7016"
+	testAtomGRPCAddr  = "atom:8081"
 	testProfileHot    = "hot"
 )
 
@@ -321,7 +322,7 @@ func TestAuthEnabledFor(t *testing.T) {
 		},
 		{
 			name:     "atom provider enables without callout URL",
-			cfg:      AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{GRPCAddr: "atom:8081", ServiceTokenEnv: "TOKEN"}},
+			cfg:      AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{GRPCAddr: testAtomGRPCAddr, ServiceTokenEnv: "TOKEN"}},
 			protocol: AuthProtocolHTTP,
 			want:     true,
 		},
@@ -367,7 +368,7 @@ func TestValidateAuthProvider(t *testing.T) {
 			auth: AuthConfig{
 				Provider: AuthProviderAtom,
 				Atom: AtomAuthConfig{
-					GRPCAddr:        "atom:8081",
+					GRPCAddr:        testAtomGRPCAddr,
 					ServiceTokenEnv: "FLUXMQ_ATOM_SERVICE_TOKEN",
 				},
 			},
@@ -384,7 +385,7 @@ func TestValidateAuthProvider(t *testing.T) {
 		},
 		{
 			name:    "atom requires service token source",
-			auth:    AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{GRPCAddr: "atom:8081"}},
+			auth:    AuthConfig{Provider: AuthProviderAtom, Atom: AtomAuthConfig{GRPCAddr: testAtomGRPCAddr}},
 			wantErr: "service_token_env or auth.atom.service_token_file is required",
 		},
 		{

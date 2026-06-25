@@ -1195,6 +1195,7 @@ func TestReconnectStopsAfterMaxAttemptsAndCallsFailureCallback(t *testing.T) {
 		NewOptions().
 			SetClientID("reconnect-limit").
 			SetServers("127.0.0.1:1").
+			SetConnectTimeout(15 * time.Millisecond).
 			SetAutoReconnect(true).
 			SetReconnectBackoff(5 * time.Millisecond).
 			SetMaxReconnectWait(5 * time.Millisecond).

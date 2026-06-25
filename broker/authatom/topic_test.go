@@ -9,8 +9,17 @@ import (
 )
 
 const (
-	testTenantID   = "11111111-1111-4111-8111-111111111111"
-	testResourceID = "22222222-2222-4222-8222-222222222222"
+	testTenantID              = "11111111-1111-4111-8111-111111111111"
+	testResourceID            = "22222222-2222-4222-8222-222222222222"
+	testTenantAlias           = "factory-a"
+	testChannelAlias          = "telemetry"
+	testAliasTopicBase        = "m/" + testTenantAlias + "/c/" + testChannelAlias
+	testAliasSubpath          = "line-1/#"
+	testAliasPublishTopic     = testAliasTopicBase + "/temp"
+	testAliasSubscribeFilter  = testAliasTopicBase + "/" + testAliasSubpath
+	testSharedSubscribeFilter = "$share/workers/" + testAliasSubscribeFilter
+	testAMQPSubscribeFilter   = "m." + testTenantAlias + ".c." + testChannelAlias + ".*"
+	testAMQPNormalizedFilter  = testAliasTopicBase + "/+"
 )
 
 func TestParseMagistralaTopic(t *testing.T) {
@@ -37,28 +46,28 @@ func TestParseMagistralaTopic(t *testing.T) {
 		},
 		{
 			name:   "alias route subscribe wildcard after channel",
-			topic:  "m/factory-a/c/telemetry/line-1/#",
+			topic:  testAliasSubscribeFilter,
 			action: actionSubscribe,
 			wantRoute: topicRoute{
-				tenant:       "factory-a",
-				channel:      "telemetry",
-				subpath:      "line-1/#",
-				normalized:   "m/factory-a/c/telemetry/line-1/#",
-				raw:          "m/factory-a/c/telemetry/line-1/#",
+				tenant:       testTenantAlias,
+				channel:      testChannelAlias,
+				subpath:      testAliasSubpath,
+				normalized:   testAliasSubscribeFilter,
+				raw:          testAliasSubscribeFilter,
 				isSubscribe:  true,
-				channelAlias: "telemetry",
-				tenantAlias:  "factory-a",
+				channelAlias: testChannelAlias,
+				tenantAlias:  testTenantAlias,
 			},
 		},
 		{
 			name:    "tenant wildcard denied",
-			topic:   "m/+/c/telemetry",
+			topic:   "m/+/c/" + testChannelAlias,
 			action:  actionSubscribe,
 			wantErr: errUnsupportedTopicFilter,
 		},
 		{
 			name:    "channel wildcard denied",
-			topic:   "m/factory-a/c/#",
+			topic:   "m/" + testTenantAlias + "/c/#",
 			action:  actionSubscribe,
 			wantErr: errUnsupportedTopicFilter,
 		},
@@ -70,7 +79,7 @@ func TestParseMagistralaTopic(t *testing.T) {
 		},
 		{
 			name:    "tenant alias with resource uuid denied",
-			topic:   "m/factory-a/c/" + testResourceID,
+			topic:   "m/" + testTenantAlias + "/c/" + testResourceID,
 			action:  actionPublish,
 			wantErr: errUnsupportedAliasRoute,
 		},
@@ -82,7 +91,7 @@ func TestParseMagistralaTopic(t *testing.T) {
 		},
 		{
 			name:    "hash must be final",
-			topic:   "m/factory-a/c/telemetry/#/extra",
+			topic:   testAliasTopicBase + "/#/extra",
 			action:  actionSubscribe,
 			wantErr: errUnsupportedTopicFilter,
 		},

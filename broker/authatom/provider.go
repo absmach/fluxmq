@@ -348,15 +348,22 @@ func (p *Provider) authorize(externalID, rawTopic string, action topicAction) bo
 }
 
 func (p *Provider) normalizeTopic(topic string, action topicAction) string {
+	normalized := topic
 	switch p.protocol {
 	case ProtocolAMQP, ProtocolAMQP091:
 		if action == actionSubscribe {
-			return topics.AMQPFilterToMQTT(topic)
+			normalized = topics.AMQPFilterToMQTT(topic)
+		} else {
+			normalized = topics.AMQPTopicToMQTT(topic)
 		}
-		return topics.AMQPTopicToMQTT(topic)
-	default:
-		return topic
 	}
+
+	if action == actionSubscribe {
+		if _, innerFilter, ok := topics.ParseShared(normalized); ok {
+			return innerFilter
+		}
+	}
+	return normalized
 }
 
 func (p *Provider) resolveResourceID(ctx context.Context, route topicRoute) (string, error) {

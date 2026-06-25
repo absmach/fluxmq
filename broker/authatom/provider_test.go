@@ -20,9 +20,11 @@ import (
 )
 
 const (
-	testEntityID     = "33333333-3333-4333-8333-333333333333"
-	testCredentialID = "44444444-4444-4444-8444-444444444444"
-	testServiceToken = "atom_service_token"
+	testEntityID         = "33333333-3333-4333-8333-333333333333"
+	testCredentialID     = "44444444-4444-4444-8444-444444444444"
+	testServiceToken     = "atom_service_token"
+	testDeviceIdentifier = "device-1"
+	testDeviceSecret     = "dev1_key"
 )
 
 type fakeAtomServer struct {
@@ -218,15 +220,15 @@ func TestProviderAuthenticateUnavailableReturnsError(t *testing.T) {
 
 func TestProviderAuthenticateMQTTUsesCredentialAuth(t *testing.T) {
 	fake := &fakeAtomServer{
-		credentialIdentifier: "device-1",
-		credentialSecret:     "dev1_key",
+		credentialIdentifier: testDeviceIdentifier,
+		credentialSecret:     testDeviceSecret,
 		credentialKind:       credentialKindPassword,
 	}
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT, AuthnCacheTTL: time.Hour})
 	defer cleanup()
 
 	for i := 0; i < 2; i++ {
-		res, err := provider.Authenticate("client", "device-1", "dev1_key")
+		res, err := provider.Authenticate("client", testDeviceIdentifier, testDeviceSecret)
 		if err != nil {
 			t.Fatalf("Authenticate() error = %v", err)
 		}
@@ -243,8 +245,8 @@ func TestProviderAuthenticateMQTTUsesCredentialAuth(t *testing.T) {
 	if fake.credentialCalls != 1 {
 		t.Fatalf("credential authn calls = %d, want 1", fake.credentialCalls)
 	}
-	if fake.lastCredential.GetIdentifier() != "device-1" ||
-		fake.lastCredential.GetSecret() != "dev1_key" ||
+	if fake.lastCredential.GetIdentifier() != testDeviceIdentifier ||
+		fake.lastCredential.GetSecret() != testDeviceSecret ||
 		fake.lastCredential.GetKind() != credentialKindPassword {
 		t.Fatalf("credential request = %#v", fake.lastCredential)
 	}
@@ -255,14 +257,14 @@ func TestProviderAuthenticateMQTTUsesCredentialAuth(t *testing.T) {
 
 func TestProviderAuthenticateMQTTCredentialDenied(t *testing.T) {
 	fake := &fakeAtomServer{
-		credentialIdentifier: "device-1",
-		credentialSecret:     "dev1_key",
+		credentialIdentifier: testDeviceIdentifier,
+		credentialSecret:     testDeviceSecret,
 		credentialKind:       credentialKindPassword,
 	}
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
 	defer cleanup()
 
-	res, err := provider.Authenticate("client", "device-1", "wrong-key")
+	res, err := provider.Authenticate("client", testDeviceIdentifier, "wrong-key")
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
@@ -281,11 +283,11 @@ func TestProviderAuthenticateMQTTCredentialDenied(t *testing.T) {
 }
 
 func TestProviderAuthenticateMQTTRequiresUsername(t *testing.T) {
-	fake := &fakeAtomServer{authnToken: "dev1_key"}
+	fake := &fakeAtomServer{authnToken: testDeviceSecret}
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
 	defer cleanup()
 
-	res, err := provider.Authenticate("client", "", "dev1_key")
+	res, err := provider.Authenticate("client", "", testDeviceSecret)
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
@@ -312,7 +314,7 @@ func TestProviderCanPublishMapsAliasRouteToAtomCheck(t *testing.T) {
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT, AliasCacheTTL: time.Hour})
 	defer cleanup()
 
-	if !provider.CanPublish(testEntityID, "m/factory-a/c/telemetry/temp") {
+	if !provider.CanPublish(testEntityID, testAliasPublishTopic) {
 		t.Fatalf("CanPublish() = false, want true")
 	}
 
@@ -322,7 +324,7 @@ func TestProviderCanPublishMapsAliasRouteToAtomCheck(t *testing.T) {
 	if fake.aliasCalls != 1 {
 		t.Fatalf("alias calls = %d, want 1", fake.aliasCalls)
 	}
-	if fake.lastAlias.GetTenantAlias() != "factory-a" || fake.lastAlias.GetObjectKind() != objectKindResource || fake.lastAlias.GetObjectAlias() != "telemetry" {
+	if fake.lastAlias.GetTenantAlias() != testTenantAlias || fake.lastAlias.GetObjectKind() != objectKindResource || fake.lastAlias.GetObjectAlias() != testChannelAlias {
 		t.Fatalf("alias request = %#v", fake.lastAlias)
 	}
 	if got := fake.aliasAuthz; len(got) != 1 || got[0] != "Bearer "+testServiceToken {
@@ -337,10 +339,10 @@ func TestProviderCanPublishMapsAliasRouteToAtomCheck(t *testing.T) {
 		t.Fatalf("check request = %#v", check)
 	}
 	if check.GetContext()["protocol"] != ProtocolMQTT ||
-		check.GetContext()["raw_topic"] != "m/factory-a/c/telemetry/temp" ||
-		check.GetContext()["topic"] != "m/factory-a/c/telemetry/temp" ||
-		check.GetContext()["route_tenant"] != "factory-a" ||
-		check.GetContext()["route_channel"] != "telemetry" ||
+		check.GetContext()["raw_topic"] != testAliasPublishTopic ||
+		check.GetContext()["topic"] != testAliasPublishTopic ||
+		check.GetContext()["route_tenant"] != testTenantAlias ||
+		check.GetContext()["route_channel"] != testChannelAlias ||
 		check.GetContext()["subtopic"] != "temp" {
 		t.Fatalf("check context = %#v", check.GetContext())
 	}
@@ -354,14 +356,35 @@ func TestProviderCanSubscribeAllowsWildcardAfterChannel(t *testing.T) {
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
 	defer cleanup()
 
-	if !provider.CanSubscribe(testEntityID, "m/factory-a/c/telemetry/line-1/#") {
+	if !provider.CanSubscribe(testEntityID, testAliasSubscribeFilter) {
 		t.Fatalf("CanSubscribe() = false, want true")
 	}
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.lastCheck.GetContext()["filter"] != "line-1/#" {
+	if fake.lastCheck.GetContext()["filter"] != testAliasSubpath {
 		t.Fatalf("filter context = %#v", fake.lastCheck.GetContext())
+	}
+}
+
+func TestProviderCanSubscribeUnwrapsSharedSubscriptionBeforeAtomCheck(t *testing.T) {
+	fake := &fakeAtomServer{aliasObject: testResourceID, checkAllow: true}
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
+	defer cleanup()
+
+	if !provider.CanSubscribe(testEntityID, testSharedSubscribeFilter) {
+		t.Fatalf("CanSubscribe() = false, want true")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.lastAlias.GetTenantAlias() != testTenantAlias || fake.lastAlias.GetObjectAlias() != testChannelAlias {
+		t.Fatalf("alias request = %#v", fake.lastAlias)
+	}
+	if fake.lastCheck.GetContext()["raw_topic"] != testSharedSubscribeFilter ||
+		fake.lastCheck.GetContext()["topic"] != testAliasSubscribeFilter ||
+		fake.lastCheck.GetContext()["filter"] != testAliasSubpath {
+		t.Fatalf("check context = %#v", fake.lastCheck.GetContext())
 	}
 }
 
@@ -370,13 +393,13 @@ func TestProviderAMQPNormalizesAddressBeforeCheck(t *testing.T) {
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolAMQP})
 	defer cleanup()
 
-	if !provider.CanSubscribe(testEntityID, "m.factory-a.c.telemetry.*") {
+	if !provider.CanSubscribe(testEntityID, testAMQPSubscribeFilter) {
 		t.Fatalf("CanSubscribe() = false, want true")
 	}
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.lastCheck.GetContext()["topic"] != "m/factory-a/c/telemetry/+" {
+	if fake.lastCheck.GetContext()["topic"] != testAMQPNormalizedFilter {
 		t.Fatalf("normalized topic = %q", fake.lastCheck.GetContext()["topic"])
 	}
 	if fake.lastCheck.GetContext()["filter"] != "+" {
@@ -389,7 +412,7 @@ func TestProviderFailsClosedOnDeniedOrUnsupported(t *testing.T) {
 	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
 	defer cleanup()
 
-	if provider.CanPublish(testEntityID, "m/factory-a/c/telemetry/temp") {
+	if provider.CanPublish(testEntityID, testAliasPublishTopic) {
 		t.Fatalf("CanPublish() allowed denied check")
 	}
 	if provider.CanSubscribe(testEntityID, "#") {
