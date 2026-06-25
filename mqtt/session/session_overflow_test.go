@@ -100,7 +100,7 @@ func TestNew_SendWindowCapacityRespectsReceiveMaximum(t *testing.T) {
 	require.Equal(t, 2, s.sendWindow.capacity)
 	require.Equal(t, 0, len(s.sendWindow.held))
 
-	acked, err := inflight.Ack(1, messages.Outbound)
+	acked, err := inflight.Ack(1)
 	require.NoError(t, err)
 	require.NotNil(t, acked)
 	acked.ReleasePayload()

@@ -302,7 +302,12 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		}
 
 		for _, inf := range s.Inflight().GetAll() {
-			key := fmt.Sprintf("%s%s%d", s.ID, inflightPrefix, inf.PacketID)
+			// Key by direction so an inbound and outbound entry sharing a packet
+			// ID do not overwrite each other, and carry the direction and state
+			// on the message so they survive a restore.
+			key := fmt.Sprintf("%s%s%d/%d", s.ID, inflightPrefix, inf.Direction, inf.PacketID)
+			inf.Message.InflightDirection = byte(inf.Direction)
+			inf.Message.InflightState = byte(inf.State)
 			b.stores.messages.Store(key, inf.Message) //nolint:errcheck // best-effort inflight message persistence
 		}
 	}
@@ -346,8 +351,13 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 	}
 
 	for _, msg := range inflightMsgs {
-		if msg.PacketID != 0 {
-			tracker.Add(msg.PacketID, msg, messages.Outbound) //nolint:errcheck // best-effort inflight restore; packet will be retried or dropped
+		if msg.PacketID == 0 {
+			continue
+		}
+		direction := messages.Direction(msg.InflightDirection)
+		tracker.Add(msg.PacketID, msg, direction) //nolint:errcheck // best-effort inflight restore; packet will be retried or dropped
+		if direction == messages.Outbound {
+			tracker.UpdateState(msg.PacketID, messages.InflightState(msg.InflightState)) //nolint:errcheck // restore the QoS 2 delivery phase
 		}
 	}
 
@@ -440,9 +450,13 @@ func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, trac
 			Retain:   msg.Retain,
 			PacketID: uint16(msg.PacketId),
 		}
-		if err := tracker.Add(uint16(msg.PacketId), storeMsg, messages.Outbound); err != nil {
+		direction := messages.Direction(msg.Direction)
+		if err := tracker.Add(uint16(msg.PacketId), storeMsg, direction); err != nil {
 			b.logError("restore_inflight", err, slog.Uint64("packet_id", uint64(msg.PacketId)))
 			continue
+		}
+		if direction == messages.Outbound {
+			tracker.UpdateState(uint16(msg.PacketId), messages.InflightState(msg.State)) //nolint:errcheck // restore the QoS 2 delivery phase
 		}
 	}
 
@@ -547,6 +561,8 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 			Qos:       uint32(msg.Message.QoS),
 			Retain:    msg.Message.Retain,
 			Timestamp: time.Now().Unix(),
+			Direction: uint32(msg.Direction),
+			State:     uint32(msg.State),
 		})
 	}
 

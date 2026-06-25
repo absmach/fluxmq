@@ -135,14 +135,12 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 	s.Inflight().MarkDeliveryAttempted(packetID)
 
 	onSent := func() {
-		// Only mark sent while this generation is still current. If a takeover
-		// superseded the lease and the asynchronously queued packet flushed on
-		// the old connection, leave the inflight entry un-sent so the
-		// replacement connection retransmits it immediately rather than waiting
-		// out the retry timeout.
-		if s.Epoch() == gen {
-			s.Inflight().MarkSent(packetID)
-		}
+		// Mark sent only while this generation is still current, atomically under
+		// the session lock. If a takeover superseded the lease and the
+		// asynchronously queued packet flushed on the old connection, the entry
+		// stays un-sent so the replacement connection retransmits it immediately
+		// rather than waiting out the retry timeout.
+		s.MarkSentIfEpoch(packetID, gen)
 	}
 	if err := b.DeliverMessage(conn, version, msg, onSent); err != nil {
 		if errors.Is(err, core.ErrSendQueueFull) {
@@ -192,7 +190,7 @@ func (b *Broker) deliverOffline(s *session.Session, msg *storage.Message) (uint1
 
 // AckMessage acknowledges a message by packet ID and releases the buffer.
 func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
-	msg, err := s.Inflight().Ack(packetID, messages.Outbound)
+	msg, err := s.Inflight().Ack(packetID)
 	if err != nil {
 		return err
 	}

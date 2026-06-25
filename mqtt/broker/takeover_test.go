@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/absmach/fluxmq/storage/messages"
@@ -915,4 +917,52 @@ func TestDelivery_StaleOnSentDoesNotMarkSent(t *testing.T) {
 
 	oldConn.Close()
 	newConn.Close()
+}
+
+// TestRestoreInflightFromStorage_PreservesDirection guards finding #1: inbound
+// and outbound inflight entries that share a packet ID are persisted under
+// direction-qualified keys and restored to their original directions.
+func TestRestoreInflightFromStorage_PreservesDirection(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	const clientID = "c"
+	out := &storage.Message{Topic: "out", PacketID: 5, QoS: 2, InflightDirection: byte(messages.Outbound)}
+	in := &storage.Message{Topic: "in", PacketID: 5, QoS: 2, InflightDirection: byte(messages.Inbound)}
+	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Outbound, 5), out))
+	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Inbound, 5), in))
+
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromStorage(clientID, tracker))
+
+	gotOut, err := tracker.Ack(5)
+	require.NoError(t, err)
+	require.Equal(t, "out", gotOut.Topic)
+	gotIn, err := tracker.AckInbound(5)
+	require.NoError(t, err)
+	require.Equal(t, "in", gotIn.Topic)
+}
+
+// TestRestoreInflightFromTakeover_PreservesDirection guards finding #1 for the
+// cluster transfer path: the takeover state carries direction, and restoration
+// keeps inbound and outbound entries distinct.
+func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	state := &clusterv1.SessionState{
+		InflightMessages: []*clusterv1.InflightMessage{
+			{PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound)},
+			{PacketId: 5, Topic: "in", Qos: 2, Direction: uint32(messages.Inbound)},
+		},
+	}
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromTakeover(state, tracker))
+
+	gotOut, err := tracker.Ack(5)
+	require.NoError(t, err)
+	require.Equal(t, "out", gotOut.Topic)
+	gotIn, err := tracker.AckInbound(5)
+	require.NoError(t, err)
+	require.Equal(t, "in", gotIn.Topic)
 }

@@ -129,11 +129,11 @@ func TestInflight_DirectionalKeysDoNotCollide(t *testing.T) {
 	require.NoError(t, tr.Add(5, out, Outbound))
 	require.NoError(t, tr.Add(5, in, Inbound)) // same packet ID, opposite direction
 
-	gotOut, err := tr.Ack(5, Outbound)
+	gotOut, err := tr.Ack(5)
 	require.NoError(t, err)
 	require.Equal(t, "outbound", gotOut.Topic, "inbound add must not overwrite the outbound entry")
 
-	gotIn, err := tr.Ack(5, Inbound)
+	gotIn, err := tr.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "inbound", gotIn.Topic)
 }

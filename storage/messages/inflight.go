@@ -53,7 +53,11 @@ const (
 // the direction explicitly.
 type Inflight interface {
 	Add(packetID uint16, msg *storage.Message, direction Direction) error
-	Ack(packetID uint16, direction Direction) (*storage.Message, error)
+	// Ack acknowledges and removes an outbound message (PUBACK/PUBCOMP).
+	Ack(packetID uint16) (*storage.Message, error)
+	// AckInbound acknowledges and removes an inbound message (PUBREL completes
+	// an inbound QoS 2 receive).
+	AckInbound(packetID uint16) (*storage.Message, error)
 	Get(packetID uint16) (*InflightMessage, bool)
 	Has(packetID uint16) bool
 	WasReceived(packetID uint16) bool
@@ -164,9 +168,17 @@ func (t *inflight) UpdateState(packetID uint16, state InflightState) error {
 	return nil
 }
 
-// Ack acknowledges and removes a message in the given direction (outbound for
-// PUBACK/PUBCOMP, inbound for PUBREL).
-func (t *inflight) Ack(packetID uint16, direction Direction) (*storage.Message, error) {
+// Ack acknowledges and removes an outbound message (PUBACK/PUBCOMP).
+func (t *inflight) Ack(packetID uint16) (*storage.Message, error) {
+	return t.ackDirection(packetID, Outbound)
+}
+
+// AckInbound acknowledges and removes an inbound message (PUBREL).
+func (t *inflight) AckInbound(packetID uint16) (*storage.Message, error) {
+	return t.ackDirection(packetID, Inbound)
+}
+
+func (t *inflight) ackDirection(packetID uint16, direction Direction) (*storage.Message, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

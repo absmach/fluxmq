@@ -395,6 +395,19 @@ func (s *Session) ReleaseSendQuota(packetID uint16, gen uint64) {
 	s.sendWindow.release(packetID, gen)
 }
 
+// MarkSentIfEpoch marks the outbound packet as sent only while gen is still the
+// current connection generation, atomically under the session lock. This closes
+// the window where a takeover between an epoch check and MarkSent would let a
+// stale onSent (a packet flushed on a displaced connection) postpone
+// retransmission to the replacement connection.
+func (s *Session) MarkSentIfEpoch(packetID uint16, gen uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch == gen {
+		s.msgHandler.Inflight().MarkSent(packetID)
+	}
+}
+
 // TryEnqueuePending attempts to push an overflow item into the pending queue.
 // Returns true on success, false if the pending queue is also full (caller drops).
 // Only meaningful when pendingCh is non-nil (pending queue mode).

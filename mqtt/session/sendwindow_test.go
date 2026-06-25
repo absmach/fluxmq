@@ -195,3 +195,27 @@ func TestNew_SendWindowClampedByServerMaxInflight(t *testing.T) {
 	require.Equal(t, uint16(256), s.ReceiveMaximum)
 	require.Equal(t, 256, s.sendWindow.capacity)
 }
+
+// TestMarkSentIfEpoch_StaleGenerationNoOp guards finding #2: marking sent is
+// scoped to the connection generation under the session lock, so a stale onSent
+// from a displaced connection cannot mark the shared inflight entry as sent.
+func TestMarkSentIfEpoch_StaleGenerationNoOp(t *testing.T) {
+	s := newTakeoverSession(t)
+	_, err := s.Connect(&testConn{})
+	require.NoError(t, err)
+	gen := s.Epoch()
+
+	require.NoError(t, s.Inflight().Add(1, &storage.Message{Topic: "t", QoS: 1}, messages.Outbound))
+
+	// Stale generation: must not mark sent.
+	s.MarkSentIfEpoch(1, gen-1)
+	inf, ok := s.Inflight().Get(1)
+	require.True(t, ok)
+	require.True(t, inf.SentAt.IsZero(), "stale generation must not mark sent")
+
+	// Current generation: marks sent.
+	s.MarkSentIfEpoch(1, gen)
+	inf, ok = s.Inflight().Get(1)
+	require.True(t, ok)
+	require.False(t, inf.SentAt.IsZero(), "current generation marks sent")
+}
