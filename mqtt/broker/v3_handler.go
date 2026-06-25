@@ -331,7 +331,7 @@ func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	packetID := p.ID
 
 	// Distribute stored message now that publisher has committed with PUBREL.
-	msg, err := s.Inflight().Ack(packetID)
+	msg, err := s.Inflight().Ack(packetID, messages.Inbound)
 	if err != nil {
 		h.broker.telemetry.logger.Warn("v3_pubrel_unknown_packet",
 			slog.String("client_id", s.ID),

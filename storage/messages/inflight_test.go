@@ -84,7 +84,7 @@ func TestGetExpired_NeverSentEligibleAfterDelay(t *testing.T) {
 	require.Empty(t, tracker.GetExpired(20*time.Second))
 
 	// Backdate to simulate neverSentRetryDelay elapsed.
-	tracker.messages[1].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
+	tracker.messages[inflightKey{direction: Outbound, packetID: 1}].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
 
 	expired := tracker.GetExpired(20 * time.Second)
 	require.Len(t, expired, 1)
@@ -97,7 +97,7 @@ func TestMarkDeliveryAttempted_ResetsBackoffTimer(t *testing.T) {
 
 	// Simulate: delay elapsed, message is eligible.
 	tracker.MarkDeliveryAttempted(1)
-	tracker.messages[1].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
+	tracker.messages[inflightKey{direction: Outbound, packetID: 1}].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
 	require.Len(t, tracker.GetExpired(20*time.Second), 1)
 
 	// Simulate failed retry: reset backoff.
@@ -105,4 +105,35 @@ func TestMarkDeliveryAttempted_ResetsBackoffTimer(t *testing.T) {
 
 	// No longer eligible — timer reset to now.
 	require.Empty(t, tracker.GetExpired(20*time.Second))
+}
+
+func TestInflight_IndependentDirectionalCapacity(t *testing.T) {
+	tr := NewInflightTracker(2)
+
+	require.NoError(t, tr.Add(1, &storage.Message{Topic: "t"}, Outbound))
+	require.NoError(t, tr.Add(2, &storage.Message{Topic: "t"}, Outbound))
+	require.ErrorIs(t, tr.Add(3, &storage.Message{Topic: "t"}, Outbound), ErrInflightFull)
+
+	// Inbound has its own capacity; a full outbound direction must not reject
+	// inbound up to the advertised Receive Maximum.
+	require.NoError(t, tr.Add(1, &storage.Message{Topic: "t"}, Inbound))
+	require.NoError(t, tr.Add(2, &storage.Message{Topic: "t"}, Inbound))
+	require.ErrorIs(t, tr.Add(3, &storage.Message{Topic: "t"}, Inbound), ErrInflightFull)
+}
+
+func TestInflight_DirectionalKeysDoNotCollide(t *testing.T) {
+	tr := NewInflightTracker(8)
+
+	out := &storage.Message{Topic: "outbound"}
+	in := &storage.Message{Topic: "inbound"}
+	require.NoError(t, tr.Add(5, out, Outbound))
+	require.NoError(t, tr.Add(5, in, Inbound)) // same packet ID, opposite direction
+
+	gotOut, err := tr.Ack(5, Outbound)
+	require.NoError(t, err)
+	require.Equal(t, "outbound", gotOut.Topic, "inbound add must not overwrite the outbound entry")
+
+	gotIn, err := tr.Ack(5, Inbound)
+	require.NoError(t, err)
+	require.Equal(t, "inbound", gotIn.Topic)
 }

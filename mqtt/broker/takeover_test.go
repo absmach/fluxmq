@@ -833,3 +833,86 @@ func TestConnAck_AdvertisesServerReceiveMaximum(t *testing.T) {
 	conn.Close()
 	wg.Wait()
 }
+
+// deferConn captures the onSent callback of the last data write without invoking
+// it, so a test can fire it after a takeover to simulate an asynchronous flush
+// on the displaced connection.
+type deferConn struct {
+	mockConnection
+	mu        sync.Mutex
+	onSent    func()
+	reading   chan struct{}
+	closeCh   chan struct{}
+	readOnce  sync.Once
+	closeOnce sync.Once
+}
+
+func newDeferConn() *deferConn {
+	return &deferConn{reading: make(chan struct{}), closeCh: make(chan struct{})}
+}
+
+func (c *deferConn) capture(onSent func()) error {
+	c.mu.Lock()
+	c.onSent = onSent
+	c.mu.Unlock()
+	return nil
+}
+func (c *deferConn) WritePacket(packets.ControlPacket) error                    { return nil }
+func (c *deferConn) WriteControlPacket(_ packets.ControlPacket, f func()) error { return c.capture(f) }
+func (c *deferConn) WriteDataPacket(_ packets.ControlPacket, f func()) error    { return c.capture(f) }
+func (c *deferConn) TryWriteDataPacket(_ packets.ControlPacket, f func()) error { return c.capture(f) }
+func (c *deferConn) ReadPacket() (packets.ControlPacket, error) {
+	c.readOnce.Do(func() { close(c.reading) })
+	<-c.closeCh
+	return nil, io.EOF
+}
+
+func (c *deferConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closeCh) })
+	return nil
+}
+
+func (c *deferConn) fireOnSent() {
+	c.mu.Lock()
+	f := c.onSent
+	c.mu.Unlock()
+	if f != nil {
+		f()
+	}
+}
+
+// TestDelivery_StaleOnSentDoesNotMarkSent guards finding #3: if a queued packet
+// flushes on the displaced connection after a takeover, its onSent must not mark
+// the shared inflight entry as recently sent, or the replacement connection
+// would wait out the retry timeout before retransmitting.
+func TestDelivery_StaleOnSentDoesNotMarkSent(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	s, _, err := b.CreateSession("c", 5, session.Options{CleanStart: true, ReceiveMaximum: 4})
+	require.NoError(t, err)
+	oldConn := newDeferConn()
+	_, err = s.Connect(oldConn)
+	require.NoError(t, err)
+
+	msg := &storage.Message{Topic: "t", QoS: 1}
+	msg.SetPayloadFromBytes([]byte("x"))
+	pid, err := b.DeliverToSession(context.Background(), s, msg)
+	require.NoError(t, err)
+	require.NotZero(t, pid)
+
+	// Takeover: the inflight entry now belongs to the new generation.
+	newConn := newDeferConn()
+	_, _ = s.ConnectWithOptions(newConn, session.ConnectOptions{Version: 5, ReceiveMaximum: 4})
+
+	// The old connection flushes the queued PUBLISH after the takeover.
+	oldConn.fireOnSent()
+
+	inf, ok := s.Inflight().Get(pid)
+	require.True(t, ok)
+	require.True(t, inf.SentAt.IsZero(),
+		"a stale-generation onSent must not mark the inflight entry as sent")
+
+	oldConn.Close()
+	newConn.Close()
+}
