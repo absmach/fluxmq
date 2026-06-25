@@ -131,6 +131,19 @@ func DefaultOptions() Options {
 	}
 }
 
+// clampServerMaxInflight normalises a configured MaxInflightMessages value:
+// values <= 0 fall back to the shared default, and the result is capped at the
+// 16-bit packet-ID space.
+func clampServerMaxInflight(maxInflight int) int {
+	if maxInflight <= 0 {
+		maxInflight = config.DefaultMaxInflightMessages
+	}
+	if maxInflight > 65535 {
+		maxInflight = 65535
+	}
+	return maxInflight
+}
+
 // New creates a new session with injected dependencies.
 // The inflight tracker and offline queue should be created and restored by the Manager.
 func New(clientID string, version byte, opts Options, inflight messages.Inflight, offlineQueue messages.Queue, sessionCfg config.SessionConfig) *Session {
@@ -165,17 +178,14 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 
 	// serverMaxInflight is the configured cap the send quota is clamped to. The
 	// negotiated receiveMax is already clamped to it by the broker, but the
-	// session re-clamps on reconnect.
-	s.serverMaxInflight = sessionCfg.MaxInflightMessages
-	if s.serverMaxInflight <= 0 {
-		s.serverMaxInflight = 65535
-	}
-	if s.serverMaxInflight > 65535 {
-		s.serverMaxInflight = 65535
-	}
+	// session re-clamps on reconnect. Uses the same default as the broker so the
+	// clamp is consistent across the first CONNECT.
+	s.serverMaxInflight = clampServerMaxInflight(sessionCfg.MaxInflightMessages)
 
 	backpressure := sessionCfg.InflightOverflow == config.InflightOverflowBackpressure
-	s.sendWindow = newSendWindow(int(receiveMax), backpressure)
+	// gen 0: no connection yet. attach sets the generation to the connection
+	// epoch on (re)connect.
+	s.sendWindow = newSendWindow(int(receiveMax), 0, backpressure)
 
 	switch sessionCfg.InflightOverflow {
 	case config.InflightOverflowBackpressure:
@@ -261,15 +271,6 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	// not survive a takeover. [MQTT-3.3.2-7]
 	s.msgHandler.ClearAliases()
 
-	if applyOpts {
-		// Receive Maximum is connection-scoped: reinitialise the send quota to
-		// the newly negotiated value (clamped by the server limit), so a
-		// reconnect with a lower value cannot exceed it. reset broadcasts to
-		// any sender blocked on the previous connection's quota, which then
-		// re-evaluates against the new capacity. [MQTT-4.9]
-		s.resetSendWindowLocked(opts.ReceiveMaximum)
-	}
-
 	select {
 	case <-s.deliverStop:
 		s.deliverStop = make(chan struct{})
@@ -278,6 +279,15 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 
 	s.epoch++
 	epoch := s.epoch
+
+	// Bind the send quota to this connection generation. Receive Maximum is
+	// connection-scoped, so on a reconnect (applyOpts) the capacity is the newly
+	// negotiated value (clamped by the server limit); otherwise the existing
+	// capacity is kept. Advancing the generation invalidates any lease held by a
+	// superseded delivery or retry, so it can neither consume nor free this
+	// generation's quota. [MQTT-4.9]
+	s.resetSendWindowLocked(opts.ReceiveMaximum, applyOpts)
+
 	keepAlive := s.KeepAlive
 
 	s.conn = c
@@ -297,16 +307,24 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	return epoch, superseded
 }
 
-// resetSendWindowLocked reinitialises the outbound send quota to the negotiated
-// Receive Maximum, clamped by the configured server limit. Caller must hold
-// s.mu. The persistent bidirectional inflight store is left untouched.
-func (s *Session) resetSendWindowLocked(clientReceiveMax uint16) {
-	capacity := int(clientReceiveMax)
-	if capacity <= 0 || capacity > s.serverMaxInflight {
-		capacity = s.serverMaxInflight
+// resetSendWindowLocked rebinds the outbound send quota to the current
+// connection generation (s.epoch). When applyCapacity is set it also resizes the
+// quota to the negotiated Receive Maximum, clamped by the configured server
+// limit; otherwise the existing capacity is kept. Caller must hold s.mu. The
+// persistent bidirectional inflight store is left untouched.
+func (s *Session) resetSendWindowLocked(clientReceiveMax uint16, applyCapacity bool) {
+	capacity := int(s.ReceiveMaximum)
+	if applyCapacity {
+		capacity = int(clientReceiveMax)
+		if capacity <= 0 || capacity > s.serverMaxInflight {
+			capacity = s.serverMaxInflight
+		}
+	}
+	if capacity < 1 {
+		capacity = 1
 	}
 	s.ReceiveMaximum = uint16(capacity)
-	s.sendWindow.reset(capacity)
+	s.sendWindow.reset(capacity, s.epoch)
 }
 
 // SetExpiryInterval sets the session expiry interval. Unlike the option struct,
@@ -333,27 +351,39 @@ func (s *Session) SendBackpressure() bool {
 	return s.sendWindow.blocking
 }
 
-// AcquireSendQuota consumes a send-quota token for packetID, blocking until one
-// is available or the session disconnects. A retransmission that already holds a
-// token succeeds immediately. Returns false if the session disconnected while
-// waiting. Used in backpressure mode.
-func (s *Session) AcquireSendQuota(packetID uint16) bool {
+// ConnEpoch atomically captures the current connection and its generation. A
+// delivery uses these as a lease: it acquires send quota for the generation and
+// writes to the captured connection, so a takeover landing mid-delivery cannot
+// make it write to, or consume the quota of, the replacement connection.
+func (s *Session) ConnEpoch() (core.Connection, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.conn, s.epoch
+}
+
+// AcquireSendQuota consumes a send-quota token for packetID in generation gen,
+// blocking until one is available, the generation is superseded by a takeover,
+// or the session disconnects. A retransmission that already holds a token in the
+// generation succeeds immediately. Returns false if gen is no longer current or
+// the session disconnected while waiting. Used in backpressure mode.
+func (s *Session) AcquireSendQuota(packetID uint16, gen uint64) bool {
 	s.mu.RLock()
 	stop := s.deliverStop
 	s.mu.RUnlock()
-	return s.sendWindow.acquire(packetID, stop)
+	return s.sendWindow.acquire(packetID, gen, stop)
 }
 
-// TryAcquireSendQuota consumes a send-quota token for packetID without blocking.
-// A retransmission that already holds a token succeeds without consuming another.
-// Returns false if no token is available.
-func (s *Session) TryAcquireSendQuota(packetID uint16) bool {
-	return s.sendWindow.tryAcquire(packetID)
+// TryAcquireSendQuota consumes a send-quota token for packetID in generation gen
+// without blocking. Returns false if gen is superseded or no token is available.
+func (s *Session) TryAcquireSendQuota(packetID uint16, gen uint64) bool {
+	return s.sendWindow.tryAcquire(packetID, gen)
 }
 
-// ReleaseSendQuota returns the token held for packetID (on PUBACK/PUBCOMP).
-func (s *Session) ReleaseSendQuota(packetID uint16) {
-	s.sendWindow.release(packetID)
+// ReleaseSendQuota returns the token held for packetID in generation gen (on
+// PUBACK/PUBCOMP, or to roll back a failed delivery). A release carrying a
+// superseded generation is a no-op.
+func (s *Session) ReleaseSendQuota(packetID uint16, gen uint64) {
+	s.sendWindow.release(packetID, gen)
 }
 
 // TryEnqueuePending attempts to push an overflow item into the pending queue.
@@ -521,28 +551,36 @@ func (s *Session) NextPacketID() uint16 {
 	return s.msgHandler.NextPacketID()
 }
 
-// ProcessRetries checks for expired inflight messages and resends them.
-// This should be called periodically from the read loop.
+// ProcessRetries checks for expired inflight messages and resends them on the
+// current connection, gated by the current generation's send quota.
 func (s *Session) ProcessRetries() {
 	s.mu.RLock()
 	conn := s.conn
+	gen := s.epoch
 	s.mu.RUnlock()
 
 	if conn == nil {
 		return
 	}
-	s.msgHandler.ProcessRetries(conn, s.sendWindow.tryAcquire)
+	s.msgHandler.ProcessRetries(conn, s.sendQuotaAcquirer(gen))
 }
 
-// ProcessRetriesTo resends due inflight messages on the provided writer rather
-// than the session's current connection. Used to bind retry delivery to a
-// specific connection generation. [[runSession]] uses this via connCtx so a
-// superseded goroutine cannot redeliver onto a replacement connection.
-func (s *Session) ProcessRetriesTo(w core.PacketWriter) {
+// ProcessRetriesTo resends due inflight messages on the provided writer, gated
+// by the send quota for generation gen. runSession uses this via connCtx so a
+// superseded goroutine can neither redeliver onto the replacement connection nor
+// consume the replacement generation's quota.
+func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 	if w == nil {
 		return
 	}
-	s.msgHandler.ProcessRetries(w, s.sendWindow.tryAcquire)
+	s.msgHandler.ProcessRetries(w, s.sendQuotaAcquirer(gen))
+}
+
+// sendQuotaAcquirer returns a retry-gate bound to generation gen.
+func (s *Session) sendQuotaAcquirer(gen uint64) func(packetID uint16) bool {
+	return func(packetID uint16) bool {
+		return s.sendWindow.tryAcquire(packetID, gen)
+	}
 }
 
 // WritePacket writes a packet to the connection.

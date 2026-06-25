@@ -120,13 +120,14 @@ func TestAcquireSendQuota_UnblocksOnDisconnect(t *testing.T) {
 	)
 	_, errConn := s.Connect(&testConn{})
 	require.NoError(t, errConn)
+	gen := s.Epoch()
 
 	// Consume the only token, then a second acquire must block until disconnect.
-	require.True(t, s.AcquireSendQuota(1))
+	require.True(t, s.AcquireSendQuota(1, gen))
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- s.AcquireSendQuota(2)
+		result <- s.AcquireSendQuota(2, gen)
 	}()
 
 	time.Sleep(20 * time.Millisecond)

@@ -51,8 +51,25 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 		return 0, nil
 	}
 
+	// Capture the target connection and its generation as a delivery lease. The
+	// quota is acquired for this generation and the PUBLISH is written to this
+	// connection, so a takeover landing mid-delivery cannot make this delivery
+	// write through, or consume the quota of, the replacement connection.
+	conn, gen := s.ConnEpoch()
+	if conn == nil {
+		if msg.QoS > 0 {
+			err := s.OfflineQueue().Enqueue(msg)
+			msg.ReleasePayload()
+			storage.ReleaseMessage(msg)
+			return 0, err
+		}
+		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
+		return 0, nil
+	}
+
 	if msg.QoS == 0 {
-		err := b.DeliverMessage(s, msg, nil)
+		err := b.DeliverMessage(conn, s, msg, nil)
 		if err == nil {
 			// Webhook: message delivered (QoS 0)
 			if b.telemetry.webhooks != nil {
@@ -77,8 +94,9 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	// Backpressure mode blocks until a token frees; queue mode falls back to the
 	// pending queue when the quota is exhausted.
 	if s.SendBackpressure() {
-		if !s.AcquireSendQuota(packetID) {
-			// Session disconnected while waiting for quota.
+		if !s.AcquireSendQuota(packetID, gen) {
+			// Generation superseded by a takeover, or session disconnected
+			// while waiting. Re-queue for the (new) connection.
 			if msg.QoS > 0 {
 				err := s.OfflineQueue().Enqueue(msg)
 				msg.ReleasePayload()
@@ -89,8 +107,8 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 			storage.ReleaseMessage(msg)
 			return 0, nil
 		}
-	} else if !s.TryAcquireSendQuota(packetID) {
-		// Quota exhausted; defer into the pending queue.
+	} else if !s.TryAcquireSendQuota(packetID, gen) {
+		// Quota exhausted (or generation superseded); defer into the pending queue.
 		if s.TryEnqueuePending(msg, nil) {
 			return 0, nil
 		}
@@ -103,7 +121,7 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	if err := s.Inflight().Add(packetID, msg, messages.Outbound); err != nil {
 		// Persistent inflight store is full (server cap, bidirectional). Release
 		// the quota token and try the pending queue.
-		s.ReleaseSendQuota(packetID)
+		s.ReleaseSendQuota(packetID, gen)
 		if s.TryEnqueuePending(msg, nil) {
 			// Deferred delivery; packet ID assigned at drain time.
 			return 0, nil
@@ -121,7 +139,7 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	onSent := func() {
 		s.Inflight().MarkSent(packetID)
 	}
-	if err := b.DeliverMessage(s, msg, onSent); err != nil {
+	if err := b.DeliverMessage(conn, s, msg, onSent); err != nil {
 		if errors.Is(err, core.ErrSendQueueFull) {
 			// Send queue full; message stays in inflight and will be retried
 			// by ProcessRetries once the queue drains.
@@ -155,9 +173,11 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 		storage.ReleaseMessage(msg)
 	}
 
-	// Release the send-quota token (PUBACK/PUBCOMP) and pull through one pending
+	// Release the send-quota token (PUBACK/PUBCOMP) under the current generation
+	// — the live token is always held by the current connection (a retransmit
+	// re-acquires under the new generation) — and pull through one pending
 	// message (queue mode) to keep the pipeline full.
-	s.ReleaseSendQuota(packetID)
+	s.ReleaseSendQuota(packetID, s.Epoch())
 	s.DrainOnePending(func(pending *storage.Message, _ func()) error {
 		_, err := b.DeliverToSession(context.Background(), s, pending)
 		return err
@@ -166,8 +186,11 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	return nil
 }
 
-// DeliverMessage sends a message packet to the session's connection.
-func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent func()) error {
+// DeliverMessage sends a message packet to the given connection (the delivery
+// lease's captured connection), using s only for protocol version and packet
+// shaping. Writing to the captured connection rather than the session's current
+// one keeps a delivery bound to the generation it acquired quota for.
+func (b *Broker) DeliverMessage(conn core.Connection, s *session.Session, msg *storage.Message, onSent func()) error {
 	b.telemetry.stats.IncrementPublishSent()
 	b.telemetry.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
@@ -216,7 +239,7 @@ func (b *Broker) DeliverMessage(s *session.Session, msg *storage.Message, onSent
 
 	// The send loop calls pub.Release() after Pack() completes.
 	// onSent carries only application-level callbacks (e.g. MarkSent).
-	err := s.TryWriteDataPacket(pub, onSent)
+	err := conn.TryWriteDataPacket(pub, onSent)
 	if err != nil {
 		// TryWriteDataPacket failed without enqueuing; release immediately.
 		pub.Release()

@@ -64,7 +64,7 @@ func (c *connCtx) ProcessRetries() {
 	if c.conn == nil {
 		return
 	}
-	c.Session.ProcessRetriesTo(c.conn)
+	c.Session.ProcessRetriesTo(c.conn, c.epoch)
 }
 
 // Disconnect tears down only if this is still the current connection

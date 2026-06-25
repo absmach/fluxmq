@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
+	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
 )
 
@@ -718,4 +720,28 @@ func TestHandleConnect_V5TakeoverDelayedWillNotPublished(t *testing.T) {
 	oldWG.Wait()
 	newConn.Close()
 	newWG.Wait()
+}
+
+// TestCreateSession_InflightTrackerSizedByServerLimit guards finding #2: the
+// persistent bidirectional inflight store is sized by the server limit, not the
+// client's outbound Receive Maximum, so inbound QoS 2 transactions are not
+// starved by a small advertised Receive Maximum.
+func TestCreateSession_InflightTrackerSizedByServerLimit(t *testing.T) {
+	b := NewBroker(memory.New(), nil, WithSessionConfig(config.SessionConfig{
+		MaxInflightMessages: 10,
+		InflightOverflow:    config.InflightOverflowBackpressure,
+	}))
+	defer b.Close()
+
+	s, _, err := b.CreateSession("c", 5, session.Options{CleanStart: true, ReceiveMaximum: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), s.ReceiveMaximum, "outbound send quota is clamped to the client Receive Maximum")
+
+	// The store accepts several inbound QoS 2 transactions even though the
+	// outbound send quota is one.
+	for i := uint16(1); i <= 5; i++ {
+		m := &storage.Message{Topic: "t", QoS: 2}
+		require.NoError(t, s.Inflight().Add(i, m, messages.Inbound),
+			"inbound QoS 2 must not be limited by the client's outbound Receive Maximum")
+	}
 }

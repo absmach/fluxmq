@@ -89,7 +89,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 	serverReceiveMax := sessionCfg.MaxInflightMessages
 	if serverReceiveMax <= 0 {
-		serverReceiveMax = 256
+		serverReceiveMax = config.DefaultMaxInflightMessages
 	}
 	if serverReceiveMax > 65535 {
 		serverReceiveMax = 65535
@@ -98,7 +98,11 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	if receiveMax == 0 || int(receiveMax) > serverReceiveMax {
 		receiveMax = uint16(serverReceiveMax)
 	}
-	inflight := messages.NewInflightTracker(int(receiveMax))
+	// The persistent inflight store is the bidirectional server-side limit; it
+	// must not be sized by the client's outbound Receive Maximum, or an inbound
+	// QoS 2 transaction from a client advertising a small Receive Maximum could
+	// starve outbound delivery. The outbound quota is the session's send window.
+	inflight := messages.NewInflightTracker(serverReceiveMax)
 	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == config.OfflineQueuePolicyEvict)
 
 	// Restore from takeover state if present
