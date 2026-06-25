@@ -48,39 +48,44 @@ func maybeUpdateQueueHeartbeat(b *Broker, s *session.Session) {
 }
 
 // Handler is the interface for packet handlers (V3, V5, etc).
+//
+// Post-CONNECT handlers receive a *connCtx rather than a *session.Session: it
+// binds response writes and teardown to the specific connection generation that
+// read the packet, so a superseded connection's leftover goroutine cannot write
+// to or disconnect the connection that replaced it.
 type Handler interface {
 	// HandleConnect handles CONNECT packets.
 	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
 
 	// HandlePublish handles PUBLISH packets.
-	HandlePublish(s *session.Session, pkt packets.ControlPacket) error
+	HandlePublish(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandlePubAck handles PUBACK packets.
-	HandlePubAck(s *session.Session, pkt packets.ControlPacket) error
+	HandlePubAck(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandlePubRec handles PUBREC packets.
-	HandlePubRec(s *session.Session, pkt packets.ControlPacket) error
+	HandlePubRec(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandlePubRel handles PUBREL packets.
-	HandlePubRel(s *session.Session, pkt packets.ControlPacket) error
+	HandlePubRel(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandlePubComp handles PUBCOMP packets.
-	HandlePubComp(s *session.Session, pkt packets.ControlPacket) error
+	HandlePubComp(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandleSubscribe handles SUBSCRIBE packets.
-	HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error
+	HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandleUnsubscribe handles UNSUBSCRIBE packets.
-	HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error
+	HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandlePingReq handles PINGREQ packets.
-	HandlePingReq(s *session.Session) error
+	HandlePingReq(s *connCtx) error
 
 	// HandleDisconnect handles DISCONNECT packets.
-	HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error
+	HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error
 
 	// HandleAuth handles AUTH packets.
-	HandleAuth(s *session.Session, pkt packets.ControlPacket) error
+	HandleAuth(s *connCtx, pkt packets.ControlPacket) error
 }
 
 // Router is the message routing interface.

@@ -26,6 +26,14 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 		return nil
 	}
 
+	// Bind all response writes and teardown to this connection generation.
+	// After a takeover, cc.conn is the closed old socket and cc.epoch is stale,
+	// so a superseded goroutine's writes fail harmlessly and its Disconnect is a
+	// no-op — it can neither write to nor disconnect the replacement connection.
+	// This replaces holding a lock across handler work, so a blocked write on a
+	// stalled old connection never prevents a takeover.
+	cc := &connCtx{Session: s, conn: conn, epoch: epoch}
+
 	lastActivity := time.Now()
 	lastRetryCheck := time.Now()
 
@@ -58,13 +66,9 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 					}
 				}
 				// Just a retry check interval timeout - process retries and
-				// continue. Guarded so a superseded goroutine cannot resend
-				// inflight messages onto the replacement connection.
-				if !s.BeginProcessing(epoch) {
-					return nil
-				}
-				s.ProcessRetries()
-				s.EndProcessing()
+				// continue. Retry resends go through cc, so a superseded
+				// goroutine cannot deliver onto the replacement connection.
+				cc.ProcessRetries()
 				lastRetryCheck = time.Now()
 				continue
 			}
@@ -84,24 +88,14 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 		b.telemetry.stats.IncrementMessagesReceived()
 		s.Touch()
 
-		// Bind processing to this connection generation. If a takeover swapped
-		// in a newer connection, stop now: the session belongs to the new
-		// connection and dispatching here would write to or disconnect it.
-		if !s.BeginProcessing(epoch) {
-			return nil
-		}
-
 		// Throttled retry check: under sustained traffic the read loop never
 		// times out, so we check retries here but at most once per interval.
 		if time.Since(lastRetryCheck) >= retryCheckInterval {
-			s.ProcessRetries()
+			cc.ProcessRetries()
 			lastRetryCheck = time.Now()
 		}
 
-		dispatchErr := dispatchPacket(handler, s, pkt)
-		s.EndProcessing()
-
-		if dispatchErr != nil {
+		if dispatchErr := dispatchPacket(handler, cc, pkt); dispatchErr != nil {
 			if dispatchErr == io.EOF {
 				b.telemetry.stats.DecrementConnections()
 				return nil
@@ -114,7 +108,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 	}
 }
 
-func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPacket) error {
+func dispatchPacket(handler Handler, s *connCtx, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
 	case packets.PublishType:
 		return handler.HandlePublish(s, pkt)

@@ -72,13 +72,7 @@ type Session struct {
 	// generation so a stale runSession goroutine (from a superseded connection)
 	// can detect that the session has moved on and avoid tearing down the new
 	// connection. Guarded by mu.
-	epoch uint64
-	// procMu serializes packet processing (dispatch and retry) for the active
-	// connection against a takeover (Connect). A superseded runSession
-	// goroutine can never run a handler concurrently with, or after, the swap
-	// to a new connection, so it cannot write to or disconnect the replacement.
-	// Lock order: procMu before mu.
-	procMu               sync.Mutex
+	epoch                uint64
 	ExpiryInterval       uint32
 	MaxPacketSize        uint32
 	ReceiveMaximum       uint16
@@ -200,11 +194,6 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 // here. This honors [MQTT-3.1.4-2] (the server must disconnect the existing
 // connection) and performs a local same-node session takeover.
 func (s *Session) Connect(c core.Connection) (uint64, error) {
-	// Hold procMu across the swap so a superseded runSession goroutine that is
-	// mid-dispatch finishes (against the old connection) before the swap, and
-	// any dispatch it attempts after the swap fails its epoch check. This makes
-	// takeover atomic with respect to packet processing.
-	s.procMu.Lock()
 	s.mu.Lock()
 
 	// Local takeover: detach any connection still attached to this session.
@@ -223,9 +212,8 @@ func (s *Session) Connect(c core.Connection) (uint64, error) {
 	}
 
 	s.mu.Unlock()
-	s.procMu.Unlock()
 
-	// Close the superseded connection OUTSIDE the locks. Some transports
+	// Close the superseded connection OUTSIDE the lock. Some transports
 	// (WebSocket) invoke onDisconnect synchronously from Close(), which calls
 	// back into DisconnectIf and would deadlock if we still held s.mu. The
 	// superseded runSession goroutine observes the closed socket and tears down
@@ -246,26 +234,13 @@ func (s *Session) Connect(c core.Connection) (uint64, error) {
 	return epoch, nil
 }
 
-// BeginProcessing acquires the processing lock for the connection generation
-// identified by epoch. It returns true if epoch is still current — in which
-// case the caller owns the lock and MUST call EndProcessing — or false if the
-// connection has been superseded by a takeover, in which case no lock is held
-// and the caller must stop processing.
-func (s *Session) BeginProcessing(epoch uint64) bool {
-	s.procMu.Lock()
+// Epoch returns the current connection generation. A runSession goroutine
+// captures this at connect time and uses it to bind writes and teardown to its
+// own connection, so a superseded goroutine cannot affect the replacement.
+func (s *Session) Epoch() uint64 {
 	s.mu.RLock()
-	current := s.epoch
-	s.mu.RUnlock()
-	if current != epoch {
-		s.procMu.Unlock()
-		return false
-	}
-	return true
-}
-
-// EndProcessing releases the processing lock acquired by BeginProcessing.
-func (s *Session) EndProcessing() {
-	s.procMu.Unlock()
+	defer s.mu.RUnlock()
+	return s.epoch
 }
 
 // AcquireDeliverSlot blocks until an inflight slot is available.
@@ -479,6 +454,17 @@ func (s *Session) ProcessRetries() {
 		return
 	}
 	s.msgHandler.ProcessRetries(conn)
+}
+
+// ProcessRetriesTo resends due inflight messages on the provided writer rather
+// than the session's current connection. Used to bind retry delivery to a
+// specific connection generation. [[runSession]] uses this via connCtx so a
+// superseded goroutine cannot redeliver onto a replacement connection.
+func (s *Session) ProcessRetriesTo(w core.PacketWriter) {
+	if w == nil {
+		return
+	}
+	s.msgHandler.ProcessRetries(w)
 }
 
 // WritePacket writes a packet to the connection.

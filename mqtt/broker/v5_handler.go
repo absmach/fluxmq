@@ -182,7 +182,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 }
 
 // HandlePublish handles PUBLISH packets.
-func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Publish)
 	if !ok {
@@ -367,18 +367,18 @@ func (h *V5Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 }
 
 // HandlePubAck handles PUBACK packets.
-func (h *V5Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubAck)
 	if !ok {
 		return ErrInvalidPacketType
 	}
 
 	h.broker.telemetry.logger.Debug("v5_puback", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
-	return h.broker.AckMessage(s, p.ID)
+	return h.broker.AckMessage(s.Session, p.ID)
 }
 
 // HandlePubRec handles PUBREC packets.
-func (h *V5Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubRec)
 	if !ok {
 		return ErrInvalidPacketType
@@ -397,7 +397,7 @@ func (h *V5Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 }
 
 // HandlePubRel handles PUBREL packets.
-func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubRel)
 	if !ok {
 		return ErrInvalidPacketType
@@ -459,18 +459,18 @@ func (h *V5Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 }
 
 // HandlePubComp handles PUBCOMP packets.
-func (h *V5Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubComp)
 	if !ok {
 		return ErrInvalidPacketType
 	}
 
 	h.broker.telemetry.logger.Debug("v5_pubcomp", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
-	return h.broker.AckMessage(s, p.ID)
+	return h.broker.AckMessage(s.Session, p.ID)
 }
 
 // HandleSubscribe handles SUBSCRIBE packets.
-func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Subscribe)
 	if !ok {
@@ -536,7 +536,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			grantedQoS = maxQoS
 		}
 
-		if err := h.broker.subscribe(s, t.Topic, grantedQoS, opts); err != nil {
+		if err := h.broker.subscribe(s.Session, t.Topic, grantedQoS, opts); err != nil {
 			reasonCodes[i] = v5.SubAckImplementationSpecificError
 			continue
 		}
@@ -571,7 +571,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 						// Legacy fallback for messages without PayloadBuf
 						deliverMsg.SetPayloadFromBytes(msg.Payload)
 					}
-					h.broker.DeliverToSession(context.Background(), s, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
+					h.broker.DeliverToSession(context.Background(), s.Session, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
 				}
 			}
 		}
@@ -591,7 +591,7 @@ func (h *V5Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
-func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Unsubscribe)
 	if !ok {
@@ -602,7 +602,7 @@ func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 
 	reasonCodes := make([]byte, len(p.Topics))
 	for i, filter := range p.Topics {
-		if err := h.broker.unsubscribeInternal(s, filter); err != nil {
+		if err := h.broker.unsubscribeInternal(s.Session, filter); err != nil {
 			reasonCodes[i] = v5.ConnAckUnspecifiedError
 		} else {
 			reasonCodes[i] = v5.ConnAckSuccess
@@ -623,13 +623,13 @@ func (h *V5Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 }
 
 // HandlePingReq handles PINGREQ packets.
-func (h *V5Handler) HandlePingReq(s *session.Session) error {
+func (h *V5Handler) HandlePingReq(s *connCtx) error {
 	h.broker.telemetry.logger.Debug("v5_pingreq", slog.String("client_id", s.ID))
 
 	// Update heartbeat for queue consumers
 	// Fire and forget - don't block PINGRESP on this.
 	// Updates are interval-limited to avoid goroutine storms under ping floods.
-	maybeUpdateQueueHeartbeat(h.broker, s)
+	maybeUpdateQueueHeartbeat(h.broker, s.Session)
 
 	resp := &v5.PingResp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
@@ -638,7 +638,7 @@ func (h *V5Handler) HandlePingReq(s *session.Session) error {
 }
 
 // HandleDisconnect handles DISCONNECT packets.
-func (h *V5Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
 	_, ok := pkt.(*v5.Disconnect)
 	if !ok {
 		return ErrInvalidPacketType
@@ -650,7 +650,7 @@ func (h *V5Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 }
 
 // HandleAuth handles AUTH packets.
-func (h *V5Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) error {
+func (h *V5Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
 	_, ok := pkt.(*v5.Auth)
 	if !ok {
 		return ErrInvalidPacketType
@@ -712,7 +712,7 @@ func mapV5ConnectValidationReason(code byte) byte {
 	}
 }
 
-func sendV5PublishError(s *session.Session, qos byte, packetID uint16, reasonCode byte, reasonString string, qos0Err error) error {
+func sendV5PublishError(s *connCtx, qos byte, packetID uint16, reasonCode byte, reasonString string, qos0Err error) error {
 	switch qos {
 	case 1:
 		return sendV5PubAck(s, packetID, reasonCode, reasonString)
@@ -726,7 +726,7 @@ func sendV5PublishError(s *session.Session, qos byte, packetID uint16, reasonCod
 	}
 }
 
-func sendV5PubAck(s *session.Session, packetID uint16, reasonCode byte, reasonString string) error {
+func sendV5PubAck(s *connCtx, packetID uint16, reasonCode byte, reasonString string) error {
 	rc := reasonCode
 	ack := &v5.PubAck{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubAckType},
@@ -737,7 +737,7 @@ func sendV5PubAck(s *session.Session, packetID uint16, reasonCode byte, reasonSt
 	return s.WritePacket(ack)
 }
 
-func sendV5PubRec(s *session.Session, packetID uint16, reasonCode byte, reasonString string) error {
+func sendV5PubRec(s *connCtx, packetID uint16, reasonCode byte, reasonString string) error {
 	rc := reasonCode
 	rec := &v5.PubRec{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},

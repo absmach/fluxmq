@@ -81,7 +81,7 @@ func TestMaxQoS_V5Handler_Downgrade_QoS2to0(t *testing.T) {
 
 	// HandlePublish will downgrade the QoS to 0 before publishing
 	// QoS 0 doesn't require acknowledgment so no connection needed
-	err := handler.HandlePublish(s, pub)
+	err := handler.HandlePublish(bindConn(s), pub)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestMaxQoS_V5Handler_Downgrade_QoS1to0(t *testing.T) {
 		ID:          1,
 	}
 
-	err := handler.HandlePublish(s, pub)
+	err := handler.HandlePublish(bindConn(s), pub)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestMaxQoS_V5Handler_NoDowngrade(t *testing.T) {
 		Payload:     []byte("test data"),
 	}
 
-	err := handler.HandlePublish(s, pub)
+	err := handler.HandlePublish(bindConn(s), pub)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestMaxQoS_V3Handler_Downgrade(t *testing.T) {
 		ID:          1,
 	}
 
-	err := handler.HandlePublish(s, pub)
+	err := handler.HandlePublish(bindConn(s), pub)
 	if err != nil {
 		t.Fatalf("HandlePublish failed: %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,6 +84,74 @@ func (c *scriptedConn) ReadPacket() (packets.ControlPacket, error) {
 func (c *scriptedConn) Close() error {
 	c.closed.Store(true)
 	return nil
+}
+
+// blockingWriteConn delivers one packet, then blocks in WritePacket until it is
+// closed — modelling a client that has stopped reading (full socket buffer) on
+// a high-latency link. A takeover must not stall behind such a write.
+type blockingWriteConn struct {
+	mockConnection
+	pkt         packets.ControlPacket
+	releaseRead chan struct{}
+	reading     chan struct{}
+	writing     chan struct{} // closed when WritePacket is first entered
+	closeCh     chan struct{}
+	delivered   atomic.Bool
+	closed      atomic.Bool
+	readOnce    sync.Once
+	writeOnce   sync.Once
+	closeOnce   sync.Once
+}
+
+func newBlockingWriteConn(pkt packets.ControlPacket) *blockingWriteConn {
+	return &blockingWriteConn{
+		pkt:         pkt,
+		releaseRead: make(chan struct{}),
+		reading:     make(chan struct{}),
+		writing:     make(chan struct{}),
+		closeCh:     make(chan struct{}),
+	}
+}
+
+func (c *blockingWriteConn) ReadPacket() (packets.ControlPacket, error) {
+	c.readOnce.Do(func() { close(c.reading) })
+	if !c.delivered.Swap(true) {
+		select {
+		case <-c.releaseRead:
+			return c.pkt, nil
+		case <-c.closeCh:
+			return nil, io.EOF
+		}
+	}
+	<-c.closeCh
+	return nil, io.EOF
+}
+
+func (c *blockingWriteConn) WritePacket(packets.ControlPacket) error {
+	if !c.delivered.Load() {
+		return nil // let the CONNACK (written before the PINGREQ) through
+	}
+	c.writeOnce.Do(func() { close(c.writing) })
+	<-c.closeCh // block until closed, like a peer that stopped reading
+	return io.ErrClosedPipe
+}
+
+func (c *blockingWriteConn) WriteControlPacket(pkt packets.ControlPacket, _ func()) error {
+	return c.WritePacket(pkt)
+}
+
+func (c *blockingWriteConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		close(c.closeCh)
+	})
+	return nil
+}
+
+// bindConn wraps a session in a connCtx bound to its current connection
+// generation, for tests that call Handle* methods directly.
+func bindConn(s *session.Session) *connCtx {
+	return &connCtx{Session: s, conn: s.Conn(), epoch: s.Epoch()}
 }
 
 const protocolNameMQTT = "MQTT"
@@ -169,9 +238,17 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 	require.True(t, s.IsConnected(), "new connection must survive the stale goroutine's teardown")
 	require.False(t, newConn.closed.Load())
 
+	// Exactly one active connection: the superseded goroutine must have
+	// decremented the counter on its way out, not leaked it.
+	require.Equal(t, uint64(1), b.telemetry.stats.GetCurrentConnections(),
+		"active-connection count must be 1 after takeover")
+
 	// Cleanup: release the new connection so its runSession exits.
 	newConn.Close()
 	newWG.Wait()
+	waitFor(t, func() bool {
+		return b.telemetry.stats.GetCurrentConnections() == 0
+	}, "active-connection count drains to zero")
 }
 
 // TestHandleConnect_StaleDisconnectDoesNotCloseReplacement reproduces the
@@ -220,9 +297,10 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 		return s != nil && s.IsConnected() && s.Conn() == newConn
 	}, "new session connected and current")
 
-	// Now let the old connection deliver its stale DISCONNECT. Its goroutine
-	// must observe the superseded epoch and skip dispatch — without the guard
-	// it would call s.Disconnect() and close newConn.
+	// Now let the old connection deliver its stale DISCONNECT. Its connCtx is
+	// bound to the superseded generation, so connCtx.Disconnect is a no-op via
+	// DisconnectIf — without that binding it would call Disconnect and close
+	// newConn.
 	close(oldConn.releaseRead)
 	oldWG.Wait()
 
@@ -235,7 +313,109 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 	require.True(t, s.IsConnected(), "stale DISCONNECT must not disconnect the replacement")
 	require.Equal(t, newConn, s.Conn())
 	require.False(t, newConn.closed.Load())
+	require.Equal(t, uint64(1), b.telemetry.stats.GetCurrentConnections(),
+		"active-connection count must be 1 after stale-DISCONNECT takeover")
 
 	newConn.Close()
 	newWG.Wait()
+}
+
+// TestHandleConnect_TakeoverNotBlockedByStalledWrite guards finding #1: a
+// takeover must complete even while the superseded connection's handler is
+// blocked writing to a peer that stopped reading. The previous design held a
+// processing lock across handler work, so the takeover deadlocked behind the
+// blocked write; generation-safe writes hold no such lock.
+func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+	h := NewV3Handler(b)
+
+	const clientID = "proplet-stalled"
+
+	// Old connection: delivers a PINGREQ, whose PINGRESP write then blocks.
+	pingreq := &v3.PingReq{FixedHeader: packets.FixedHeader{PacketType: packets.PingReqType}}
+	oldConn := newBlockingWriteConn(pingreq)
+	var oldWG sync.WaitGroup
+	oldWG.Add(1)
+	go func() {
+		defer oldWG.Done()
+		h.HandleConnect(oldConn, v3Connect(clientID)) //nolint:errcheck
+	}()
+
+	<-oldConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected()
+	}, "old session connected")
+
+	// Deliver the PINGREQ and wait until the handler is stuck in the write.
+	close(oldConn.releaseRead)
+	<-oldConn.writing
+
+	// Take over while the old handler is blocked writing. This must not hang.
+	newConn := newBlockingConn()
+	var newWG sync.WaitGroup
+	newWG.Add(1)
+	go func() {
+		defer newWG.Done()
+		h.HandleConnect(newConn, v3Connect(clientID)) //nolint:errcheck
+	}()
+
+	<-newConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected() && s.Conn() == newConn
+	}, "takeover completes despite stalled write on old connection")
+
+	// The takeover closed the old connection, unblocking its write so its
+	// goroutine exits.
+	oldWG.Wait()
+	require.True(t, oldConn.closed.Load())
+
+	newConn.Close()
+	newWG.Wait()
+}
+
+// TestHandleConnect_RepeatedTakeoversDoNotLeakConnectionCount guards finding #2:
+// every superseded runSession goroutine must decrement the active-connection
+// counter exactly once. Repeated reconnects of the same client ID must leave
+// the count at one live connection, never inflating it.
+func TestHandleConnect_RepeatedTakeoversDoNotLeakConnectionCount(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+	h := NewV3Handler(b)
+
+	const clientID = "proplet-loop"
+	const rounds = 8
+
+	var wg sync.WaitGroup
+	conns := make([]*blockingConn, rounds)
+
+	for i := range rounds {
+		conns[i] = newBlockingConn()
+		wg.Add(1)
+		go func(c *blockingConn) {
+			defer wg.Done()
+			h.HandleConnect(c, v3Connect(clientID)) //nolint:errcheck
+		}(conns[i])
+
+		<-conns[i].reading
+		// Wait until this connection owns the session and the previous
+		// goroutine has exited (count back to exactly one).
+		current := conns[i]
+		waitFor(t, func() bool {
+			s := b.sessionsMap.Get(clientID)
+			return s != nil && s.IsConnected() && s.Conn() == current &&
+				b.telemetry.stats.GetCurrentConnections() == 1
+		}, "single live connection after takeover round")
+	}
+
+	require.Equal(t, uint64(1), b.telemetry.stats.GetCurrentConnections())
+
+	// Close the surviving connection; count must drain to zero.
+	conns[rounds-1].Close()
+	wg.Wait()
+	waitFor(t, func() bool {
+		return b.telemetry.stats.GetCurrentConnections() == 0
+	}, "active-connection count drains to zero")
 }

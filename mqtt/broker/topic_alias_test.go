@@ -46,7 +46,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 		},
 	}
 
-	if err := handler.HandlePublish(s, pub1); err != nil {
+	if err := handler.HandlePublish(bindConn(s), pub1); err != nil {
 		t.Fatalf("Failed to handle PUBLISH with alias registration: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 		},
 	}
 
-	if err := handler.HandlePublish(s, pub2); err != nil {
+	if err := handler.HandlePublish(bindConn(s), pub2); err != nil {
 		t.Fatalf("Failed to handle PUBLISH with alias resolution: %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 		},
 	}
 
-	err = handler.HandlePublish(s, pub3)
+	err = handler.HandlePublish(bindConn(s), pub3)
 	if err == nil {
 		t.Fatal("Expected error when alias exceeds TopicAliasMax, got nil")
 	}
@@ -102,7 +102,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 		},
 	}
 
-	err = handler.HandlePublish(s, pub4)
+	err = handler.HandlePublish(bindConn(s), pub4)
 	if err == nil {
 		t.Fatal("Expected error when using unregistered alias, got nil")
 	}
@@ -141,7 +141,7 @@ func TestTopicAlias_MultipleAliases(t *testing.T) {
 			},
 		}
 
-		if err := handler.HandlePublish(s, pub); err != nil {
+		if err := handler.HandlePublish(bindConn(s), pub); err != nil {
 			t.Fatalf("Failed to register alias %d: %v", alias, err)
 		}
 	}
@@ -169,7 +169,7 @@ func TestTopicAlias_MultipleAliases(t *testing.T) {
 			},
 		}
 
-		if err := handler.HandlePublish(s, pub); err != nil {
+		if err := handler.HandlePublish(bindConn(s), pub); err != nil {
 			t.Fatalf("Failed to use alias %d: %v", alias, err)
 		}
 	}
@@ -201,7 +201,7 @@ func TestTopicAlias_UpdateExisting(t *testing.T) {
 		},
 	}
 
-	if err := handler.HandlePublish(s, pub1); err != nil {
+	if err := handler.HandlePublish(bindConn(s), pub1); err != nil {
 		t.Fatalf("Failed to register alias: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestTopicAlias_UpdateExisting(t *testing.T) {
 		},
 	}
 
-	if err := handler.HandlePublish(s, pub2); err != nil {
+	if err := handler.HandlePublish(bindConn(s), pub2); err != nil {
 		t.Fatalf("Failed to update alias: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestTopicAlias_SessionIsolation(t *testing.T) {
 			TopicAlias: &alias,
 		},
 	}
-	handler.HandlePublish(s1, pub1) //nolint:errcheck // best-effort
+	handler.HandlePublish(bindConn(s1), pub1) //nolint:errcheck // best-effort
 
 	// Register alias 1 in session 2 with different topic
 	pub2 := &v5.Publish{
@@ -264,7 +264,7 @@ func TestTopicAlias_SessionIsolation(t *testing.T) {
 			TopicAlias: &alias,
 		},
 	}
-	handler.HandlePublish(s2, pub2) //nolint:errcheck // best-effort
+	handler.HandlePublish(bindConn(s2), pub2) //nolint:errcheck // best-effort
 
 	// Verify aliases are isolated
 	topic1, _ := s1.ResolveInboundAlias(1)

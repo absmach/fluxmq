@@ -83,7 +83,7 @@ func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, handler.HandlePublish(s, pub))
+	require.NoError(t, handler.HandlePublish(bindConn(s), pub))
 	require.NotNil(t, gotProps)
 	require.Equal(t, "mqtt-client", gotProps[corebroker.ClientIDProperty])
 	require.Equal(t, "ext-456", gotProps[corebroker.ExternalIDProperty])

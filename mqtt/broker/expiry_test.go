@@ -98,7 +98,7 @@ func TestMessageExpiry_V5Handler(t *testing.T) {
 	}
 
 	// Publish message
-	err := handler.HandlePublish(s, pub)
+	err := handler.HandlePublish(bindConn(s), pub)
 	if err != nil {
 		t.Fatalf("Failed to handle PUBLISH with expiry: %v", err)
 	}
