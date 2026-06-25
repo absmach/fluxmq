@@ -149,15 +149,20 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		return err
 	}
 
-	s.TopicAliasMax = topicAliasMax
-
 	s.ExternalID = externalID
 
-	epoch, err := s.Connect(conn)
-	if err != nil {
-		h.broker.telemetry.stats.IncrementProtocolErrors()
-		conn.Close()
-		return err
+	// Apply the negotiated options and take over any existing connection. On a
+	// persistent reconnect this replaces the previous connection's version,
+	// keep-alive, Will, expiry, and topic-alias maximum.
+	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
+		Version:        p.ProtocolVersion,
+		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
+		Will:           will,
+		ExpiryInterval: sessionExpiry,
+		TopicAliasMax:  topicAliasMax,
+	})
+	if superseded != nil {
+		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
 	}
 	h.broker.persistSessionInfo(s)
 

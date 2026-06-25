@@ -12,6 +12,7 @@ import (
 
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -148,6 +149,84 @@ func (c *blockingWriteConn) Close() error {
 		close(c.closeCh)
 	})
 	return nil
+}
+
+// syncConn is a blocking-read connection that records written packets under a
+// mutex, so a test can safely inspect packets written from another goroutine
+// (e.g. the takeover drain goroutine).
+type syncConn struct {
+	mockConnection
+	mu        sync.Mutex
+	written   []packets.ControlPacket
+	closeOnce sync.Once
+	closeCh   chan struct{}
+	closed    atomic.Bool
+	reading   chan struct{}
+	readOnce  sync.Once
+}
+
+func newSyncConn() *syncConn {
+	return &syncConn{closeCh: make(chan struct{}), reading: make(chan struct{})}
+}
+
+func (c *syncConn) record(p packets.ControlPacket, onSent func()) error {
+	c.mu.Lock()
+	c.written = append(c.written, p)
+	c.mu.Unlock()
+	if onSent != nil {
+		onSent()
+	}
+	return nil
+}
+
+func (c *syncConn) WritePacket(p packets.ControlPacket) error { return c.record(p, nil) }
+func (c *syncConn) WriteControlPacket(p packets.ControlPacket, onSent func()) error {
+	return c.record(p, onSent)
+}
+
+func (c *syncConn) WriteDataPacket(p packets.ControlPacket, onSent func()) error {
+	return c.record(p, onSent)
+}
+
+func (c *syncConn) TryWriteDataPacket(p packets.ControlPacket, onSent func()) error {
+	return c.record(p, onSent)
+}
+
+func (c *syncConn) ReadPacket() (packets.ControlPacket, error) {
+	c.readOnce.Do(func() { close(c.reading) })
+	<-c.closeCh
+	return nil, io.EOF
+}
+
+func (c *syncConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		close(c.closeCh)
+	})
+	return nil
+}
+
+func (c *syncConn) writtenPackets() []packets.ControlPacket {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]packets.ControlPacket(nil), c.written...)
+}
+
+func v5Connect(clientID, willTopic string, willPayload []byte) *v5.Connect {
+	c := &v5.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    protocolNameMQTT,
+		ProtocolVersion: 5,
+		ClientID:        clientID,
+		CleanStart:      false,
+		KeepAlive:       60,
+	}
+	if willTopic != "" {
+		c.WillFlag = true
+		c.WillTopic = willTopic
+		c.WillPayload = willPayload
+	}
+	return c
 }
 
 // bindConn wraps a session in a connCtx bound to its current connection
@@ -491,6 +570,81 @@ func TestHandleConnect_StalePublishNotDispatched(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	require.Empty(t, subConn.packets, "stale PUBLISH must not be delivered to subscribers")
 
+	newConn.Close()
+	newWG.Wait()
+}
+
+// TestHandleConnect_V5TakeoverNotifiesAndPublishesWill guards finding #2: an
+// MQTT 5 takeover must send the displaced client a DISCONNECT with reason 0x8E
+// (session taken over) and publish that connection's zero-delay Will.
+// References: OASIS MQTT 5.0, sections 3.1.4 and 3.1.2.5.
+func TestHandleConnect_V5TakeoverNotifiesAndPublishesWill(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "proplet-v5"
+	const willTopic = "devices/proplet-v5/status"
+
+	// Subscriber that should receive the displaced connection's Will.
+	sub, _, err := b.CreateSession("will-subscriber", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	// Old connection with a zero-delay Will.
+	oldConn := newSyncConn()
+	var oldWG sync.WaitGroup
+	oldWG.Add(1)
+	go func() {
+		defer oldWG.Done()
+		h.HandleConnect(oldConn, v5Connect(clientID, willTopic, []byte("offline"))) //nolint:errcheck
+	}()
+
+	<-oldConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected()
+	}, "old v5 session connected")
+
+	// Take over with a new connection (no Will).
+	newConn := newSyncConn()
+	var newWG sync.WaitGroup
+	newWG.Add(1)
+	go func() {
+		defer newWG.Done()
+		h.HandleConnect(newConn, v5Connect(clientID, "", nil)) //nolint:errcheck
+	}()
+
+	<-newConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected() && s.Conn() == newConn
+	}, "new v5 session current")
+
+	// The drain runs asynchronously: the old connection gets a DISCONNECT 0x8E.
+	waitFor(t, func() bool {
+		for _, p := range oldConn.writtenPackets() {
+			if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == reasonSessionTakenOver {
+				return true
+			}
+		}
+		return false
+	}, "displaced client receives DISCONNECT 0x8E")
+
+	// The displaced connection's zero-delay Will is published to the subscriber.
+	waitFor(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return true
+			}
+		}
+		return false
+	}, "displaced connection's Will is published")
+
+	oldWG.Wait()
 	newConn.Close()
 	newWG.Wait()
 }

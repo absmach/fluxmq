@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
 )
@@ -160,6 +161,57 @@ func TestConnect_WebSocketStyleSyncOnDisconnectNoDeadlock(t *testing.T) {
 	require.True(t, oldConn.closed.Load(), "old ws conn must be closed by takeover")
 	require.True(t, s.IsConnected())
 	require.False(t, newConn.closed.Load())
+}
+
+// TestConnectWithOptions_AppliesNewOptionsOnReconnect guards finding #1: a
+// persistent reconnect must adopt the new connection's options (notably the
+// protocol version, which drives packet encoding) and return the displaced
+// connection's old version and Will.
+func TestConnectWithOptions_AppliesNewOptionsOnReconnect(t *testing.T) {
+	s := newTakeoverSession(t) // version 4
+
+	oldConn := &recordingConn{}
+	_, err := s.Connect(oldConn)
+	require.NoError(t, err)
+	require.Equal(t, byte(4), s.Version)
+
+	newWill := &storage.WillMessage{Topic: "will/new", Payload: []byte("x")}
+	newConn := &recordingConn{}
+	_, superseded := s.ConnectWithOptions(newConn, ConnectOptions{
+		Version:        5,
+		KeepAlive:      45 * time.Second,
+		Will:           newWill,
+		ExpiryInterval: 120,
+		TopicAliasMax:  10,
+	})
+
+	require.Equal(t, byte(5), s.Version, "reconnect must adopt the new protocol version")
+	require.Equal(t, 45*time.Second, s.KeepAlive)
+	require.Equal(t, newWill, s.GetWill())
+	require.NotNil(t, superseded)
+	require.Equal(t, byte(4), superseded.Version, "superseded carries the old version")
+}
+
+// TestConnectWithOptions_ClearsTopicAliases guards finding #4: topic alias
+// mappings are scoped to a single connection and must not survive a takeover.
+// [MQTT-3.3.2-7].
+func TestConnectWithOptions_ClearsTopicAliases(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	c1 := &recordingConn{}
+	_, err := s.Connect(c1)
+	require.NoError(t, err)
+
+	s.SetInboundAlias(1, "devices/a")
+	topic, ok := s.ResolveInboundAlias(1)
+	require.True(t, ok)
+	require.Equal(t, "devices/a", topic)
+
+	c2 := &recordingConn{}
+	s.ConnectWithOptions(c2, ConnectOptions{Version: 5, TopicAliasMax: 10})
+
+	_, ok = s.ResolveInboundAlias(1)
+	require.False(t, ok, "topic aliases must not carry across a takeover")
 }
 
 // TestConnect_ConcurrentReconnectKeepsLatest stress-checks that under many

@@ -90,6 +90,15 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 		// (publish, (un)subscribe, ack inflight, topic aliases, retained
 		// delivery). Drop it and exit — our own socket has already been closed
 		// by the takeover.
+		//
+		// Known limitation: this is a point-in-time check, not held across
+		// dispatch. A takeover landing between this check and a mutation deep
+		// in a handler can still let that one in-flight packet commit. We
+		// accept that bounded window: the packet was genuinely sent by the
+		// client on the old connection just before it reconnected, and the
+		// only fully-closed alternatives are holding a lock across handler work
+		// (which deadlocks when a response write blocks on a stalled client) or
+		// threading a generation check into every shared-state commit point.
 		if !cc.current() {
 			b.telemetry.stats.DecrementConnections()
 			return nil

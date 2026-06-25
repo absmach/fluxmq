@@ -184,23 +184,82 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 	return s
 }
 
-// Connect attaches a connection to the session and returns the connection's
-// epoch. The caller must pass this epoch to runSession so that teardown is
-// scoped to this specific connection generation.
+// ConnectOptions carries the per-connection settings negotiated by a CONNECT.
+// They are applied to the session on (re)connect so a persistent session does
+// not retain the previous connection's protocol version, keep-alive, Will, or
+// expiry. [MQTT-3.1.0-2]
 //
-// If a previous connection is still attached — which happens when a client
-// reconnects with the same client ID before the old socket's FIN has been
-// processed (common on high-latency links) — the old connection is closed
-// here. This honors [MQTT-3.1.4-2] (the server must disconnect the existing
-// connection) and performs a local same-node session takeover.
+// ReceiveMaximum is intentionally not included: the inflight window is fixed at
+// session creation (the inflight tracker is sized then), so it is not resized on
+// reconnect.
+type ConnectOptions struct {
+	Version        byte
+	KeepAlive      time.Duration
+	Will           *storage.WillMessage
+	ExpiryInterval uint32
+	TopicAliasMax  uint16
+}
+
+// Superseded describes a connection displaced by a takeover, so the broker can
+// drain it outside the session lock: notify the displaced MQTT 5 client with a
+// DISCONNECT (0x8E), close the socket, and publish its Will if required.
+type Superseded struct {
+	Conn    core.Connection
+	Version byte
+	Will    *storage.WillMessage
+}
+
+// Connect attaches a connection using the session's existing options. The
+// superseded connection, if any, is closed here. Intended for callers that are
+// not (re)negotiating connection parameters (e.g. tests); the broker uses
+// ConnectWithOptions.
 func (s *Session) Connect(c core.Connection) (uint64, error) {
+	epoch, superseded := s.attach(c, ConnectOptions{}, false)
+	if superseded != nil && superseded.Conn != nil {
+		superseded.Conn.Close() //nolint:errcheck // best-effort close of superseded connection
+	}
+	return epoch, nil
+}
+
+// ConnectWithOptions attaches a connection and applies the negotiated options,
+// performing a local same-node takeover of any existing connection. It returns
+// the connection epoch and the superseded connection (if any). The caller MUST
+// drain the superseded connection (notify, close, Will). [MQTT-3.1.4-2].
+func (s *Session) ConnectWithOptions(c core.Connection, opts ConnectOptions) (uint64, *Superseded) {
+	return s.attach(c, opts, true)
+}
+
+// attach swaps in connection c under the lock: it bumps the epoch, applies
+// options when applyOpts is set, and clears per-connection topic aliases (they
+// never carry across connections, MQTT-3.3.2-7). It returns the new epoch and
+// any superseded connection. The superseded connection is NOT closed here —
+// closing while holding the lock can deadlock transports (e.g. WebSocket) whose
+// Close synchronously invokes onDisconnect.
+func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool) (uint64, *Superseded) {
 	s.mu.Lock()
 
-	// Local takeover: detach any connection still attached to this session.
-	old := s.conn
+	var superseded *Superseded
+	if s.conn != nil {
+		superseded = &Superseded{Conn: s.conn, Version: s.Version, Will: s.Will}
+	}
+
+	if applyOpts {
+		s.Version = opts.Version
+		s.KeepAlive = opts.KeepAlive
+		s.Will = opts.Will
+		if opts.ExpiryInterval > 0 {
+			s.ExpiryInterval = opts.ExpiryInterval
+		}
+		s.TopicAliasMax = opts.TopicAliasMax
+	}
+
+	// Topic alias mappings are scoped to a single network connection and must
+	// not survive a takeover. [MQTT-3.3.2-7]
+	s.msgHandler.ClearAliases()
 
 	s.epoch++
 	epoch := s.epoch
+	keepAlive := s.KeepAlive
 
 	s.conn = c
 	s.state = StateConnected
@@ -213,17 +272,7 @@ func (s *Session) Connect(c core.Connection) (uint64, error) {
 
 	s.mu.Unlock()
 
-	// Close the superseded connection OUTSIDE the lock. Some transports
-	// (WebSocket) invoke onDisconnect synchronously from Close(), which calls
-	// back into DisconnectIf and would deadlock if we still held s.mu. The
-	// superseded runSession goroutine observes the closed socket and tears down
-	// via DisconnectIf, which no-ops because the epoch has advanced.
-	// [MQTT-3.1.4-2]
-	if old != nil {
-		old.Close() //nolint:errcheck // best-effort close of superseded connection
-	}
-
-	c.SetKeepAlive(s.KeepAlive) //nolint:errcheck // keepalive timer setup; connection already validated at this point
+	c.SetKeepAlive(keepAlive) //nolint:errcheck // keepalive timer setup; connection already validated at this point
 
 	// Set callback to handle connection loss/keepalive expiry. Scoped to this
 	// epoch so a stale callback cannot disconnect a newer connection.
@@ -231,7 +280,7 @@ func (s *Session) Connect(c core.Connection) (uint64, error) {
 		s.DisconnectIf(graceful, epoch) //nolint:errcheck // disconnect callback; session cleanup is best-effort
 	})
 
-	return epoch, nil
+	return epoch, superseded
 }
 
 // Epoch returns the current connection generation. A runSession goroutine

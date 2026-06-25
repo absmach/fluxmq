@@ -128,11 +128,15 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	s.ExternalID = externalID
 
-	epoch, err := s.Connect(conn)
-	if err != nil {
-		h.broker.telemetry.stats.IncrementProtocolErrors()
-		conn.Close()
-		return err
+	// Apply the negotiated options and take over any existing connection. v3
+	// has no session expiry or topic aliases.
+	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
+		Version:   p.ProtocolVersion,
+		KeepAlive: time.Duration(p.KeepAlive) * time.Second,
+		Will:      will,
+	})
+	if superseded != nil {
+		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
 	}
 	h.broker.persistSessionInfo(s)
 
