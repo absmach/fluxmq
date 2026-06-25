@@ -17,6 +17,7 @@ service AuthzService {
 // Use this to authenticate incoming requests without decoding JWTs locally.
 service AuthService {
   rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+  rpc AuthenticateCredential(AuthenticateCredentialRequest) returns (AuthenticateCredentialResponse);
 }
 
 // CertificateService resolves and revokes Atom certificate credentials for
@@ -68,6 +69,25 @@ message AuthenticateResponse {
   string entity_id  = 1;
   string tenant_id  = 2;  // empty string if entity has no tenant
   string session_id = 3;  // empty string for API key authentication
+}
+
+message AuthenticateCredentialRequest {
+  // Username-style identifier supplied by protocol adapters such as MQTT
+  // brokers. For password credentials this may be an entity UUID, email, name,
+  // or a tenant-scoped entity alias.
+  string identifier   = 1;
+  // Plaintext secret supplied by the caller. Atom only stores its hash.
+  string secret       = 2;
+  // Empty is treated as "password" for MQTT ergonomics.
+  string kind         = 3;
+  string tenant_id    = 4;
+  string tenant_alias = 5;
+}
+
+message AuthenticateCredentialResponse {
+  string entity_id     = 1;
+  string tenant_id     = 2;
+  string credential_id = 3;
 }
 
 message ResolveCertificateRequest {

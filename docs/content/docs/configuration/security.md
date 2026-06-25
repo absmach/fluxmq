@@ -42,10 +42,14 @@ auth:
     unsupported_topic_policy: "deny"
 ```
 
-Client passwords, bearer tokens, and bridge token fields are treated as Atom
-JWTs or API keys. FluxMQ parses `m/<tenant>/c/<channel>` topics, resolves Atom
-aliases when needed, then calls Atom `AuthzService.Check` with action
-`publish` or `subscribe` and object kind `resource`.
+For MQTT, FluxMQ treats the CONNECT username and password as an Atom password
+credential: username is sent as the credential identifier, password is sent as
+the secret, and Atom verifies it through `AuthService.AuthenticateCredential`.
+For HTTP, CoAP, AMQP 1.0, and AMQP 0.9.1, client passwords, bearer tokens, and
+bridge token fields continue to be treated as Atom JWTs or API keys. FluxMQ
+parses `m/<tenant>/c/<channel>` topics, resolves Atom aliases when needed, then
+calls Atom `AuthzService.Check` with action `publish` or `subscribe` and object
+kind `resource`.
 
 ### Auth Callout
 

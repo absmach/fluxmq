@@ -21,6 +21,7 @@ import (
 
 const (
 	testEntityID     = "33333333-3333-4333-8333-333333333333"
+	testCredentialID = "44444444-4444-4444-8444-444444444444"
 	testServiceToken = "atom_service_token"
 )
 
@@ -34,6 +35,16 @@ type fakeAtomServer struct {
 	authnToken string
 	authnErr   error
 	authnCalls int
+
+	credentialIdentifier  string
+	credentialSecret      string
+	credentialKind        string
+	credentialTenantID    string
+	credentialTenantAlias string
+	credentialErr         error
+	credentialCalls       int
+	lastCredential        *atomv1.AuthenticateCredentialRequest
+	credentialAuthz       []string
 
 	aliasErr    error
 	aliasObject string
@@ -60,6 +71,31 @@ func (s *fakeAtomServer) Authenticate(_ context.Context, req *atomv1.Authenticat
 		return nil, status.Error(codes.Unauthenticated, "invalid token")
 	}
 	return &atomv1.AuthenticateResponse{EntityId: testEntityID}, nil
+}
+
+func (s *fakeAtomServer) AuthenticateCredential(ctx context.Context, req *atomv1.AuthenticateCredentialRequest) (*atomv1.AuthenticateCredentialResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.credentialCalls++
+	s.lastCredential = req
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		s.credentialAuthz = md.Get("authorization")
+	}
+	if s.credentialErr != nil {
+		return nil, s.credentialErr
+	}
+	if req.GetIdentifier() != s.credentialIdentifier ||
+		req.GetSecret() != s.credentialSecret ||
+		req.GetKind() != s.credentialKind ||
+		req.GetTenantId() != s.credentialTenantID ||
+		req.GetTenantAlias() != s.credentialTenantAlias {
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+	}
+	return &atomv1.AuthenticateCredentialResponse{
+		EntityId:     testEntityID,
+		CredentialId: testCredentialID,
+	}, nil
 }
 
 func (s *fakeAtomServer) ResolveAlias(ctx context.Context, req *atomv1.ResolveAliasRequest) (*atomv1.ResolveAliasResponse, error) {
@@ -132,7 +168,7 @@ func newTestProvider(t *testing.T, fake *fakeAtomServer, opts Options) (*Provide
 
 func TestProviderAuthenticateSuccessCachesToken(t *testing.T) {
 	fake := &fakeAtomServer{authnToken: "client-token"}
-	provider, cleanup := newTestProvider(t, fake, Options{AuthnCacheTTL: time.Hour})
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolHTTP, AuthnCacheTTL: time.Hour})
 	defer cleanup()
 
 	for i := 0; i < 2; i++ {
@@ -154,7 +190,7 @@ func TestProviderAuthenticateSuccessCachesToken(t *testing.T) {
 
 func TestProviderAuthenticateInvalidToken(t *testing.T) {
 	fake := &fakeAtomServer{authnToken: "good-token"}
-	provider, cleanup := newTestProvider(t, fake, Options{})
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolHTTP})
 	defer cleanup()
 
 	res, err := provider.Authenticate("client", "ignored", "bad-token")
@@ -168,7 +204,7 @@ func TestProviderAuthenticateInvalidToken(t *testing.T) {
 
 func TestProviderAuthenticateUnavailableReturnsError(t *testing.T) {
 	fake := &fakeAtomServer{authnErr: status.Error(codes.Unavailable, "down")}
-	provider, cleanup := newTestProvider(t, fake, Options{})
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolHTTP})
 	defer cleanup()
 
 	res, err := provider.Authenticate("client", "ignored", "client-token")
@@ -177,6 +213,93 @@ func TestProviderAuthenticateUnavailableReturnsError(t *testing.T) {
 	}
 	if res.Authenticated {
 		t.Fatalf("Authenticate() authenticated unavailable Atom")
+	}
+}
+
+func TestProviderAuthenticateMQTTUsesCredentialAuth(t *testing.T) {
+	fake := &fakeAtomServer{
+		credentialIdentifier: "device-1",
+		credentialSecret:     "dev1_key",
+		credentialKind:       credentialKindPassword,
+	}
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT, AuthnCacheTTL: time.Hour})
+	defer cleanup()
+
+	for i := 0; i < 2; i++ {
+		res, err := provider.Authenticate("client", "device-1", "dev1_key")
+		if err != nil {
+			t.Fatalf("Authenticate() error = %v", err)
+		}
+		if !res.Authenticated || res.ID != testEntityID {
+			t.Fatalf("Authenticate() = %#v", res)
+		}
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.authnCalls != 0 {
+		t.Fatalf("token authn calls = %d, want 0", fake.authnCalls)
+	}
+	if fake.credentialCalls != 1 {
+		t.Fatalf("credential authn calls = %d, want 1", fake.credentialCalls)
+	}
+	if fake.lastCredential.GetIdentifier() != "device-1" ||
+		fake.lastCredential.GetSecret() != "dev1_key" ||
+		fake.lastCredential.GetKind() != credentialKindPassword {
+		t.Fatalf("credential request = %#v", fake.lastCredential)
+	}
+	if got := fake.credentialAuthz; len(got) != 1 || got[0] != "Bearer "+testServiceToken {
+		t.Fatalf("credential authorization metadata = %v", got)
+	}
+}
+
+func TestProviderAuthenticateMQTTCredentialDenied(t *testing.T) {
+	fake := &fakeAtomServer{
+		credentialIdentifier: "device-1",
+		credentialSecret:     "dev1_key",
+		credentialKind:       credentialKindPassword,
+	}
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
+	defer cleanup()
+
+	res, err := provider.Authenticate("client", "device-1", "wrong-key")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if res.Authenticated {
+		t.Fatalf("Authenticate() authenticated invalid credential")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.authnCalls != 0 {
+		t.Fatalf("token authn calls = %d, want 0", fake.authnCalls)
+	}
+	if fake.credentialCalls != 1 {
+		t.Fatalf("credential authn calls = %d, want 1", fake.credentialCalls)
+	}
+}
+
+func TestProviderAuthenticateMQTTRequiresUsername(t *testing.T) {
+	fake := &fakeAtomServer{authnToken: "dev1_key"}
+	provider, cleanup := newTestProvider(t, fake, Options{Protocol: ProtocolMQTT})
+	defer cleanup()
+
+	res, err := provider.Authenticate("client", "", "dev1_key")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if res.Authenticated {
+		t.Fatalf("Authenticate() authenticated without MQTT username")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.authnCalls != 0 {
+		t.Fatalf("token authn calls = %d, want 0", fake.authnCalls)
+	}
+	if fake.credentialCalls != 0 {
+		t.Fatalf("credential authn calls = %d, want 0", fake.credentialCalls)
 	}
 }
 

@@ -675,7 +675,7 @@ Atom provider fields:
 | `atom.service_token_env`                | `""`    | Environment variable containing the FluxMQ service API key for Atom.      |
 | `atom.service_token_file`               | `""`    | File containing the FluxMQ service API key for Atom.                      |
 | `atom.topic_format`                     | `""`    | Topic parser. Currently only `magistrala` is supported.                   |
-| `atom.authn_cache_ttl`                  | `0`     | Successful token-to-entity cache TTL. Zero disables this cache.           |
+| `atom.authn_cache_ttl`                  | `0`     | Successful credential/token-to-entity cache TTL. Zero disables this cache. |
 | `atom.alias_cache_ttl`                  | `0`     | Alias-to-resource cache TTL. Zero disables this cache.                    |
 | `atom.decision_cache_ttl`               | `0`     | Authz decision cache TTL. Zero disables this cache.                       |
 | `atom.unsupported_topic_policy`         | `""`    | Unsupported topic behavior. Currently only `deny` is supported.           |

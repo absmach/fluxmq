@@ -35,7 +35,8 @@ const (
 	ProtocolAMQP    = "amqp"
 	ProtocolAMQP091 = "amqp091"
 
-	objectKindResource = "resource"
+	objectKindResource     = "resource"
+	credentialKindPassword = "password"
 )
 
 var (
@@ -149,8 +150,68 @@ func New(conn grpc.ClientConnInterface, opts Options) *Provider {
 	}
 }
 
-// Authenticate validates a protocol credential as an Atom JWT or API key.
+// Authenticate validates protocol credentials against Atom.
 func (p *Provider) Authenticate(clientID, username, secret string) (*broker.AuthnResult, error) {
+	if p.protocol == ProtocolMQTT {
+		return p.authenticateCredential(clientID, username, secret)
+	}
+	return p.authenticateToken(clientID, secret)
+}
+
+func (p *Provider) authenticateCredential(clientID, identifier, secret string) (*broker.AuthnResult, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" || secret == "" {
+		return &broker.AuthnResult{}, nil
+	}
+
+	cacheKey := credentialCacheKey(identifier, secret)
+	if entityID, ok := p.authnCache.Get(cacheKey); ok {
+		return &broker.AuthnResult{Authenticated: true, ID: entityID}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	ctx = p.withServiceToken(ctx)
+
+	res, err := p.authn.AuthenticateCredential(ctx, &atomv1.AuthenticateCredentialRequest{
+		Identifier: identifier,
+		Secret:     secret,
+		Kind:       credentialKindPassword,
+	})
+	if err != nil {
+		if isAuthnDeny(err) {
+			p.logger.Info("atom_authenticate",
+				slog.String("client_id", clientID),
+				slog.String("protocol", p.protocol),
+				slog.String("method", "credential"),
+				slog.String("status", "denied"))
+			return &broker.AuthnResult{}, nil
+		}
+		p.logger.Info("atom_authenticate",
+			slog.String("client_id", clientID),
+			slog.String("protocol", p.protocol),
+			slog.String("method", "credential"),
+			slog.String("status", "error"),
+			slog.String("error", err.Error()))
+		return &broker.AuthnResult{}, err
+	}
+
+	entityID := strings.TrimSpace(res.GetEntityId())
+	if entityID == "" {
+		return &broker.AuthnResult{}, nil
+	}
+	p.authnCache.Set(cacheKey, entityID)
+
+	p.logger.Info("atom_authenticate",
+		slog.String("client_id", clientID),
+		slog.String("protocol", p.protocol),
+		slog.String("method", "credential"),
+		slog.String("status", "ok"))
+
+	return &broker.AuthnResult{Authenticated: true, ID: entityID}, nil
+}
+
+func (p *Provider) authenticateToken(clientID, secret string) (*broker.AuthnResult, error) {
 	token := normalizeBearerToken(secret)
 	if token == "" {
 		return &broker.AuthnResult{}, nil
@@ -170,12 +231,14 @@ func (p *Provider) Authenticate(clientID, username, secret string) (*broker.Auth
 			p.logger.Info("atom_authenticate",
 				slog.String("client_id", clientID),
 				slog.String("protocol", p.protocol),
+				slog.String("method", "token"),
 				slog.String("status", "denied"))
 			return &broker.AuthnResult{}, nil
 		}
 		p.logger.Info("atom_authenticate",
 			slog.String("client_id", clientID),
 			slog.String("protocol", p.protocol),
+			slog.String("method", "token"),
 			slog.String("status", "error"),
 			slog.String("error", err.Error()))
 		return &broker.AuthnResult{}, err
@@ -190,6 +253,7 @@ func (p *Provider) Authenticate(clientID, username, secret string) (*broker.Auth
 	p.logger.Info("atom_authenticate",
 		slog.String("client_id", clientID),
 		slog.String("protocol", p.protocol),
+		slog.String("method", "token"),
 		slog.String("status", "ok"))
 
 	return &broker.AuthnResult{Authenticated: true, ID: entityID}, nil
@@ -358,6 +422,11 @@ func normalizeBearerToken(secret string) string {
 func tokenCacheKey(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func credentialCacheKey(identifier, secret string) string {
+	sum := sha256.Sum256([]byte(identifier + "\x00" + secret))
+	return "credential:" + hex.EncodeToString(sum[:])
 }
 
 func aliasCacheKey(route topicRoute) string {
