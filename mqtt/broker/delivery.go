@@ -51,42 +51,44 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 		return 0, nil
 	}
 
-	// Capture the target connection and its generation as a delivery lease. The
-	// quota is acquired for this generation and the PUBLISH is written to this
-	// connection, so a takeover landing mid-delivery cannot make this delivery
-	// write through, or consume the quota of, the replacement connection.
-	conn, gen := s.ConnEpoch()
+	// Capture the target connection, protocol version, and generation as a
+	// delivery lease. The PUBLISH is encoded for the captured version and
+	// written to the captured connection, and quota is acquired for the captured
+	// generation — so a takeover landing mid-delivery cannot make this delivery
+	// write to, encode for, or consume the quota of, the replacement connection.
+	conn, version, gen := s.DeliveryLease()
 	if conn == nil {
-		if msg.QoS > 0 {
-			err := s.OfflineQueue().Enqueue(msg)
-			msg.ReleasePayload()
-			storage.ReleaseMessage(msg)
-			return 0, err
-		}
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
-		return 0, nil
+		return b.deliverOffline(s, msg)
 	}
 
 	if msg.QoS == 0 {
-		err := b.DeliverMessage(conn, s, msg, nil)
-		if err == nil {
-			// Webhook: message delivered (QoS 0)
-			if b.telemetry.webhooks != nil {
-				b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
-					ClientID:     s.ID,
-					MessageTopic: msg.Topic,
-					QoS:          msg.QoS,
-					PayloadSize:  len(msg.GetPayload()),
-				})
-			}
+		err := b.DeliverMessage(conn, version, msg, nil)
+		if err == nil && b.telemetry.webhooks != nil {
+			b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
+				ClientID:     s.ID,
+				MessageTopic: msg.Topic,
+				QoS:          msg.QoS,
+				PayloadSize:  len(msg.GetPayload()),
+			})
 		}
-		// QoS 0 message delivered - release buffer and return message to pool
 		msg.ReleasePayload()
 		storage.ReleaseMessage(msg)
 		return 0, err
 	}
 
+	return b.deliverQoS(ctx, s, msg, conn, version, gen, 0)
+}
+
+// maxLeaseRetries bounds how many times a delivery re-leases against a newer
+// connection generation before giving up to the offline queue, so a takeover
+// storm cannot spin forever.
+const maxLeaseRetries = 8
+
+// deliverQoS delivers a QoS 1/2 message under the lease (conn, version, gen). If
+// the generation is superseded by a takeover, it re-leases against the current
+// connection and retries, rather than mis-routing the message to capacity
+// handling that the replacement connection may never drain.
+func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storage.Message, conn core.Connection, version byte, gen uint64, attempt int) (uint16, error) {
 	packetID := s.NextPacketID()
 	msg.PacketID = packetID
 
@@ -95,20 +97,16 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	// pending queue when the quota is exhausted.
 	if s.SendBackpressure() {
 		if !s.AcquireSendQuota(packetID, gen) {
-			// Generation superseded by a takeover, or session disconnected
-			// while waiting. Re-queue for the (new) connection.
-			if msg.QoS > 0 {
-				err := s.OfflineQueue().Enqueue(msg)
-				msg.ReleasePayload()
-				storage.ReleaseMessage(msg)
-				return 0, err
-			}
-			msg.ReleasePayload()
-			storage.ReleaseMessage(msg)
-			return 0, nil
+			return b.releaseLease(ctx, s, msg, gen, attempt)
 		}
 	} else if !s.TryAcquireSendQuota(packetID, gen) {
-		// Quota exhausted (or generation superseded); defer into the pending queue.
+		// A superseded generation must be retried against the current connection,
+		// not treated as capacity exhaustion (the replacement may never produce
+		// an ACK to drain the pending queue).
+		if newConn, newVersion, curGen := s.DeliveryLease(); curGen != gen && newConn != nil && attempt < maxLeaseRetries {
+			return b.deliverQoS(ctx, s, msg, newConn, newVersion, curGen, attempt+1)
+		}
+		// Genuine quota exhaustion: defer into the pending queue.
 		if s.TryEnqueuePending(msg, nil) {
 			return 0, nil
 		}
@@ -139,7 +137,7 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	onSent := func() {
 		s.Inflight().MarkSent(packetID)
 	}
-	if err := b.DeliverMessage(conn, s, msg, onSent); err != nil {
+	if err := b.DeliverMessage(conn, version, msg, onSent); err != nil {
 		if errors.Is(err, core.ErrSendQueueFull) {
 			// Send queue full; message stays in inflight and will be retried
 			// by ProcessRetries once the queue drains.
@@ -160,6 +158,29 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	}
 
 	return packetID, nil
+}
+
+// releaseLease handles a backpressure acquire that returned false: a takeover
+// (retry against the new generation) or a disconnect (offline queue).
+func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *storage.Message, gen uint64, attempt int) (uint16, error) {
+	if newConn, newVersion, curGen := s.DeliveryLease(); curGen != gen && newConn != nil && attempt < maxLeaseRetries {
+		return b.deliverQoS(ctx, s, msg, newConn, newVersion, curGen, attempt+1)
+	}
+	return b.deliverOffline(s, msg)
+}
+
+// deliverOffline parks a message for an offline (or unreachable) session: QoS>0
+// goes to the offline queue, QoS 0 is dropped.
+func (b *Broker) deliverOffline(s *session.Session, msg *storage.Message) (uint16, error) {
+	if msg.QoS > 0 {
+		err := s.OfflineQueue().Enqueue(msg)
+		msg.ReleasePayload()
+		storage.ReleaseMessage(msg)
+		return 0, err
+	}
+	msg.ReleasePayload()
+	storage.ReleaseMessage(msg)
+	return 0, nil
 }
 
 // AckMessage acknowledges a message by packet ID and releases the buffer.
@@ -186,17 +207,18 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	return nil
 }
 
-// DeliverMessage sends a message packet to the given connection (the delivery
-// lease's captured connection), using s only for protocol version and packet
-// shaping. Writing to the captured connection rather than the session's current
-// one keeps a delivery bound to the generation it acquired quota for.
-func (b *Broker) DeliverMessage(conn core.Connection, s *session.Session, msg *storage.Message, onSent func()) error {
+// DeliverMessage encodes a message for the given protocol version and writes it
+// to the given connection — both captured in the delivery lease — so a delivery
+// stays bound to the generation it acquired quota for, and a cross-version
+// takeover cannot encode a packet for one protocol and write it to a connection
+// of the other.
+func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *storage.Message, onSent func()) error {
 	b.telemetry.stats.IncrementPublishSent()
 	b.telemetry.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
 	var pub packets.ControlPacket
 
-	switch s.Version {
+	switch version {
 	case 5:
 		p := v5.AcquirePublish()
 

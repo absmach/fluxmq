@@ -684,7 +684,10 @@ func (h *v5Handler) deliverOfflineMessages(s *session.Session) {
 }
 
 func sendV5ConnAckWithProperties(conn core.Connection, s *session.Session, sessionPresent bool, reasonCode byte, maxQoS byte) error {
-	receiveMax := maxReceived
+	// Advertise the server's actual inbound Receive Maximum (the bidirectional
+	// inflight store capacity), not the protocol default, so the client does not
+	// send more concurrent QoS 1/2 PUBLISH packets than the broker accepts.
+	receiveMax := uint16(s.ServerMaxInflight())
 	topicAliasMax := s.TopicAliasMax
 	retainAvailable := byte(1)
 	wildcardSubAvailable := byte(1)

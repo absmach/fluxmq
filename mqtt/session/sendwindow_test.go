@@ -141,8 +141,9 @@ func TestSendQuota_LeaseIsGenerationBound(t *testing.T) {
 	require.NoError(t, err)
 	gen0 := s.Epoch()
 
-	conn0, capturedGen := s.ConnEpoch()
+	conn0, version0, capturedGen := s.DeliveryLease()
 	require.NotNil(t, conn0)
+	require.Equal(t, byte(4), version0)
 	require.Equal(t, gen0, capturedGen)
 	require.True(t, s.TryAcquireSendQuota(1, gen0))
 

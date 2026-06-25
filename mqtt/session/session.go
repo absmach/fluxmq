@@ -351,14 +351,23 @@ func (s *Session) SendBackpressure() bool {
 	return s.sendWindow.blocking
 }
 
-// ConnEpoch atomically captures the current connection and its generation. A
-// delivery uses these as a lease: it acquires send quota for the generation and
-// writes to the captured connection, so a takeover landing mid-delivery cannot
-// make it write to, or consume the quota of, the replacement connection.
-func (s *Session) ConnEpoch() (core.Connection, uint64) {
+// DeliveryLease atomically captures the current connection, its protocol
+// version, and its generation. A delivery uses these together: it acquires send
+// quota for the generation, encodes the PUBLISH for the captured version, and
+// writes it to the captured connection. Capturing the version with the
+// connection prevents a cross-version takeover (v3<->v5) from encoding a packet
+// for one protocol and writing it to a connection of the other.
+func (s *Session) DeliveryLease() (conn core.Connection, version byte, gen uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.conn, s.epoch
+	return s.conn, s.Version, s.epoch
+}
+
+// ServerMaxInflight returns the configured upper bound on concurrent inflight
+// messages. It is the server's inbound Receive Maximum advertised in CONNACK and
+// the capacity of the bidirectional inflight store.
+func (s *Session) ServerMaxInflight() int {
+	return s.serverMaxInflight
 }
 
 // AcquireSendQuota consumes a send-quota token for packetID in generation gen,

@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -744,4 +745,91 @@ func TestCreateSession_InflightTrackerSizedByServerLimit(t *testing.T) {
 		require.NoError(t, s.Inflight().Add(i, m, messages.Inbound),
 			"inbound QoS 2 must not be limited by the client's outbound Receive Maximum")
 	}
+}
+
+// TestDeliverMessage_EncodesForLeaseVersion guards finding #1: the PUBLISH is
+// encoded for the version captured in the delivery lease, not the session's
+// mutable version, so a cross-version takeover cannot encode for one protocol
+// and write to a connection of the other.
+func TestDeliverMessage_EncodesForLeaseVersion(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	v3msg := &storage.Message{Topic: "t", QoS: 1, PacketID: 1}
+	v3msg.SetPayloadFromBytes([]byte("x"))
+	v3conn := newSyncConn()
+	require.NoError(t, b.DeliverMessage(v3conn, 4, v3msg, nil))
+	require.Len(t, v3conn.writtenPackets(), 1)
+	require.IsType(t, &v3.Publish{}, v3conn.writtenPackets()[0])
+
+	v5msg := &storage.Message{Topic: "t", QoS: 1, PacketID: 2}
+	v5msg.SetPayloadFromBytes([]byte("x"))
+	v5conn := newSyncConn()
+	require.NoError(t, b.DeliverMessage(v5conn, 5, v5msg, nil))
+	require.Len(t, v5conn.writtenPackets(), 1)
+	require.IsType(t, &v5.Publish{}, v5conn.writtenPackets()[0])
+}
+
+// TestDeliverQoS_SupersededLeaseRetriesCurrentGeneration guards finding #2: a
+// delivery whose lease was superseded must retry against the current generation
+// and reach the connection, not be parked where nothing drains it.
+func TestDeliverQoS_SupersededLeaseRetriesCurrentGeneration(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	s, _, err := b.CreateSession("c", 5, session.Options{CleanStart: true, ReceiveMaximum: 4})
+	require.NoError(t, err)
+	conn := newSyncConn()
+	_, err = s.Connect(conn)
+	require.NoError(t, err)
+	gen := s.Epoch()
+
+	msg := &storage.Message{Topic: "t", QoS: 1}
+	msg.SetPayloadFromBytes([]byte("x"))
+
+	// Deliver under a stale (superseded) generation: it must re-lease against the
+	// current generation and deliver, not fall back to the offline/pending path.
+	pid, err := b.deliverQoS(context.Background(), s, msg, conn, 5, gen-1, 0)
+	require.NoError(t, err)
+	require.NotZero(t, pid, "delivery must succeed against the current generation")
+	require.Len(t, conn.writtenPackets(), 1, "message must reach the live connection")
+}
+
+// TestConnAck_AdvertisesServerReceiveMaximum guards finding #3: CONNACK
+// advertises the server's actual inbound Receive Maximum, not the protocol
+// default of 65535.
+func TestConnAck_AdvertisesServerReceiveMaximum(t *testing.T) {
+	b := NewBroker(memory.New(), nil, WithSessionConfig(config.SessionConfig{
+		MaxInflightMessages: 50,
+		InflightOverflow:    config.InflightOverflowBackpressure,
+	}))
+	defer b.Close()
+	h := newV5Handler(b)
+
+	conn := newSyncConn()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.HandleConnect(conn, v5Connect("c", "", nil)) //nolint:errcheck
+	}()
+
+	<-conn.reading
+	var ack *v5.ConnAck
+	waitFor(t, func() bool {
+		for _, p := range conn.writtenPackets() {
+			if a, ok := p.(*v5.ConnAck); ok {
+				ack = a
+				return true
+			}
+		}
+		return false
+	}, "CONNACK written")
+
+	require.NotNil(t, ack.Properties)
+	require.NotNil(t, ack.Properties.ReceiveMax)
+	require.Equal(t, uint16(50), *ack.Properties.ReceiveMax)
+
+	conn.Close()
+	wg.Wait()
 }
