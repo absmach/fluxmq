@@ -55,9 +55,6 @@ type Inflight interface {
 	Add(packetID uint16, msg *storage.Message, direction Direction) error
 	// Ack acknowledges and removes an outbound message (PUBACK/PUBCOMP).
 	Ack(packetID uint16) (*storage.Message, error)
-	// AckInbound acknowledges and removes an inbound message (PUBREL completes
-	// an inbound QoS 2 receive).
-	AckInbound(packetID uint16) (*storage.Message, error)
 	Get(packetID uint16) (*InflightMessage, bool)
 	Has(packetID uint16) bool
 	WasReceived(packetID uint16) bool
@@ -70,6 +67,15 @@ type Inflight interface {
 	MarkRetry(packetID uint16) error
 	GetAll() []*InflightMessage
 	CleanupExpiredReceived(olderThan time.Duration)
+}
+
+// InboundAcker is an optional extension of Inflight for directional inbound
+// acknowledgement (PUBREL completing an inbound QoS 2 receive). Keeping it out
+// of the base Inflight interface preserves source compatibility for external
+// implementations; callers type-assert to it and fall back to Ack when absent.
+// The built-in tracker implements it.
+type InboundAcker interface {
+	AckInbound(packetID uint16) (*storage.Message, error)
 }
 
 // inflightKey identifies an inflight entry. Inbound and outbound flows have
@@ -108,15 +114,22 @@ func NewInflightTracker(maxSize int) *inflight {
 // Add adds a message to the inflight tracker. Each direction is capped at
 // maxSize independently.
 func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Direction) error {
+	if direction != Outbound && direction != Inbound {
+		return fmt.Errorf("add packet ID %d: %w", packetID, ErrInvalidDirection)
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.counts[direction] >= t.maxSize {
-		return ErrInflightFull
-	}
-
 	key := inflightKey{direction: direction, packetID: packetID}
-	if _, exists := t.messages[key]; !exists {
+	_, exists := t.messages[key]
+	// Capacity only gates new keys. An existing key (e.g. a retransmitted QoS 2
+	// PUBLISH with a known packet ID) must be accepted even when the direction
+	// is at capacity, so duplicates are not rejected with ErrInflightFull.
+	if !exists {
+		if t.counts[direction] >= t.maxSize {
+			return ErrInflightFull
+		}
 		t.counts[direction]++
 	}
 	t.messages[key] = &InflightMessage{

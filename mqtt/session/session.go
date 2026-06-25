@@ -395,6 +395,16 @@ func (s *Session) ReleaseSendQuota(packetID uint16, gen uint64) {
 	s.sendWindow.release(packetID, gen)
 }
 
+// AckInbound acknowledges and removes an inbound message (PUBREL). It uses the
+// tracker's optional directional acknowledgement when available, falling back to
+// Ack for trackers that do not separate directions.
+func (s *Session) AckInbound(packetID uint16) (*storage.Message, error) {
+	if ib, ok := s.msgHandler.Inflight().(messages.InboundAcker); ok {
+		return ib.AckInbound(packetID)
+	}
+	return s.msgHandler.Inflight().Ack(packetID)
+}
+
 // MarkSentIfEpoch marks the outbound packet as sent only while gen is still the
 // current connection generation, atomically under the session lock. This closes
 // the window where a takeover between an epoch check and MarkSent would let a

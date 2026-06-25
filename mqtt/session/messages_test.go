@@ -164,8 +164,7 @@ func (f *fakeInflight) Add(packetID uint16, msg *storage.Message, direction mess
 	return nil
 }
 
-func (f *fakeInflight) Ack(packetID uint16) (*storage.Message, error)        { return nil, nil }
-func (f *fakeInflight) AckInbound(packetID uint16) (*storage.Message, error) { return nil, nil }
+func (f *fakeInflight) Ack(packetID uint16) (*storage.Message, error) { return nil, nil }
 
 func (f *fakeInflight) Get(packetID uint16) (*messages.InflightMessage, bool) { return nil, false }
 

@@ -137,3 +137,28 @@ func TestInflight_DirectionalKeysDoNotCollide(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "inbound", gotIn.Topic)
 }
+
+func TestInflight_InvalidDirectionReturnsErrorNotPanic(t *testing.T) {
+	tr := NewInflightTracker(4)
+	// A corrupt/out-of-range direction must be rejected, not index counts[] out
+	// of range and panic.
+	err := tr.Add(1, &storage.Message{Topic: "t"}, Direction(99))
+	require.ErrorIs(t, err, ErrInvalidDirection)
+}
+
+func TestInflight_DuplicateOnFullWindowAccepted(t *testing.T) {
+	tr := NewInflightTracker(1)
+	require.NoError(t, tr.Add(7, &storage.Message{Topic: "first"}, Inbound))
+
+	// The inbound window is full (capacity 1). A retransmitted PUBLISH reusing
+	// the same packet ID must be accepted (update), not rejected with
+	// ErrInflightFull.
+	require.NoError(t, tr.Add(7, &storage.Message{Topic: "second"}, Inbound))
+
+	// A different packet ID is still rejected.
+	require.ErrorIs(t, tr.Add(8, &storage.Message{Topic: "t"}, Inbound), ErrInflightFull)
+
+	got, err := tr.AckInbound(7)
+	require.NoError(t, err)
+	require.Equal(t, "second", got.Topic)
+}

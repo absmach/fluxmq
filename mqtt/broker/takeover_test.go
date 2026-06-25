@@ -952,8 +952,8 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 
 	state := &clusterv1.SessionState{
 		InflightMessages: []*clusterv1.InflightMessage{
-			{PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound)},
-			{PacketId: 5, Topic: "in", Qos: 2, Direction: uint32(messages.Inbound)},
+			{PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound), Payload: []byte("op")},
+			{PacketId: 5, Topic: "in", Qos: 2, Direction: uint32(messages.Inbound), Payload: []byte("ip")},
 		},
 	}
 	tracker := messages.NewInflightTracker(16)
@@ -962,7 +962,42 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	gotOut, err := tracker.Ack(5)
 	require.NoError(t, err)
 	require.Equal(t, "out", gotOut.Topic)
+	require.Equal(t, "op", string(gotOut.GetPayload()), "payload must survive cluster transfer")
 	gotIn, err := tracker.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "in", gotIn.Topic)
+	require.Equal(t, "ip", string(gotIn.GetPayload()))
+}
+
+// TestRestoreInflightFromTakeover_SkipsInvalidDirection guards finding #2: a
+// corrupt direction from transferred state is skipped, not panicking.
+func TestRestoreInflightFromTakeover_SkipsInvalidDirection(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	state := &clusterv1.SessionState{
+		InflightMessages: []*clusterv1.InflightMessage{
+			{PacketId: 1, Topic: "ok", Qos: 1, Direction: uint32(messages.Outbound)},
+			{PacketId: 2, Topic: "bad", Qos: 1, Direction: 99}, // corrupt
+		},
+	}
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromTakeover(state, tracker))
+
+	require.True(t, tracker.Has(1))
+	require.False(t, tracker.Has(2), "entry with invalid direction must be skipped")
+}
+
+// TestSession_AckInbound_UsesDirectionalAck guards finding #3: inbound
+// acknowledgement is reachable without the base Inflight interface declaring it.
+func TestSession_AckInbound_UsesDirectionalAck(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	s, _, err := b.CreateSession("c", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+
+	require.NoError(t, s.Inflight().Add(9, &storage.Message{Topic: "in"}, messages.Inbound))
+	got, err := s.AckInbound(9)
+	require.NoError(t, err)
+	require.Equal(t, "in", got.Topic)
 }
