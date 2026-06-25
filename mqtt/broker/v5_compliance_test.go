@@ -78,7 +78,8 @@ func TestV5NoLocalPreventsSelfDelivery(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := &captureConnection{}
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 	require.NoError(t, b.subscribe(s, "devices/one", 1, storage.SubscribeOptions{NoLocal: true}))
 
 	msg := &storage.Message{
@@ -102,8 +103,10 @@ func TestV5RetainAsPublishedAffectsDeliveryFlag(t *testing.T) {
 
 	conn1 := &captureConnection{}
 	conn2 := &captureConnection{}
-	require.NoError(t, s1.Connect(conn1))
-	require.NoError(t, s2.Connect(conn2))
+	_, errConn1 := s1.Connect(conn1)
+	require.NoError(t, errConn1)
+	_, errConn2 := s2.Connect(conn2)
+	require.NoError(t, errConn2)
 
 	require.NoError(t, b.subscribe(s1, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: false}))
 	require.NoError(t, b.subscribe(s2, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: true}))
@@ -135,7 +138,8 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := &captureConnection{}
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 
 	retained := &storage.Message{
 		Topic:    testRetainTopic,
@@ -191,7 +195,8 @@ func TestV5PublishErrorResponseMatchesQoS(t *testing.T) {
 	s.TopicAliasMax = 1
 
 	conn := &captureConnection{}
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 
 	handler := NewV5Handler(b)
 

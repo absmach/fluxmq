@@ -30,7 +30,8 @@ func TestDeliverToSession_MarkSentAfterWireWrite(t *testing.T) {
 	})
 
 	conn := core.NewConnection(serverConn, 1, false)
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 
 	msg := storage.AcquireMessage()
 	msg.Topic = testTopic

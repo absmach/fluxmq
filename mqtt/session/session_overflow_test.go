@@ -114,7 +114,8 @@ func TestAcquireDeliverSlot_UnblocksOnDisconnect(t *testing.T) {
 			InflightOverflow: config.InflightOverflowBackpressure,
 		},
 	)
-	require.NoError(t, s.Connect(&testConn{}))
+	_, errConn := s.Connect(&testConn{})
+	require.NoError(t, errConn)
 
 	require.True(t, s.AcquireDeliverSlot())
 
@@ -146,7 +147,8 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 			PendingQueueSize: 8,
 		},
 	)
-	require.NoError(t, s.Connect(&testConn{}))
+	_, errConn := s.Connect(&testConn{})
+	require.NoError(t, errConn)
 
 	msg := storage.AcquireMessage()
 	msg.Topic = "topic"

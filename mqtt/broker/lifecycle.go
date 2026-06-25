@@ -20,7 +20,7 @@ const retryCheckInterval = 1 * time.Second
 // runSession runs the main packet loop for a session using a Handler.
 // It handles both packet reading and message retry checking in a single goroutine
 // by using short read deadlines and processing retries on timeout.
-func (b *Broker) runSession(handler Handler, s *session.Session) error {
+func (b *Broker) runSession(handler Handler, s *session.Session, epoch uint64) error {
 	conn := s.Conn()
 	if conn == nil {
 		return nil
@@ -38,7 +38,11 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 		}
 		conn.SetReadDeadline(time.Now().Add(readTimeout)) //nolint:errcheck // fails only on closed connection
 
-		pkt, err := s.ReadPacket()
+		// Read from this goroutine's own connection, not s.conn. A local
+		// takeover may have swapped s.conn to a newer connection; reading our
+		// captured conn ensures a superseded goroutine never touches the new
+		// socket and simply errors out when its own (closed) conn is torn down.
+		pkt, err := conn.ReadPacket()
 		if err != nil {
 			// Check if this is a timeout (expected for retry checking)
 			var netErr net.Error
@@ -49,7 +53,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 					if time.Since(lastActivity) > keepAliveDeadline {
 						// Real keep-alive timeout - client is unresponsive
 						b.telemetry.stats.DecrementConnections()
-						s.Disconnect(false) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
+						s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
 						return err
 					}
 				}
@@ -64,7 +68,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 				b.telemetry.stats.IncrementPacketErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
-			s.Disconnect(false) //nolint:errcheck // disconnect on read error; connection already failed
+			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on read error; connection already failed
 			return err
 		}
 
@@ -88,7 +92,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 			}
 			b.telemetry.stats.IncrementProtocolErrors()
 			b.telemetry.stats.DecrementConnections()
-			s.Disconnect(false) //nolint:errcheck // disconnect on protocol error; connection is being terminated
+			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on protocol error; connection is being terminated
 			return err
 		}
 	}

@@ -153,7 +153,8 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	s.ExternalID = externalID
 
-	if err := s.Connect(conn); err != nil {
+	epoch, err := s.Connect(conn)
+	if err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		conn.Close()
 		return err
@@ -162,7 +163,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {
-		s.Disconnect(false) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
+		s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
 
@@ -177,7 +178,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	h.deliverOfflineMessages(s)
 
-	return h.broker.runSession(h, s)
+	return h.broker.runSession(h, s, epoch)
 }
 
 // HandlePublish handles PUBLISH packets.

@@ -56,18 +56,23 @@ type Session struct {
 	connectedAt    time.Time
 	disconnectedAt time.Time
 
-	ID                   string
-	ExternalID           string
-	authMethod           string
-	authState            any
-	conn                 core.Connection
-	msgHandler           *msgHandler
-	Will                 *storage.WillMessage
-	subscriptions        map[string]storage.SubscribeOptions
-	subscriptionIDs      map[string][]uint32
-	onDisconnect         func(s *Session, graceful bool)
-	KeepAlive            time.Duration
-	state                State
+	ID              string
+	ExternalID      string
+	authMethod      string
+	authState       any
+	conn            core.Connection
+	msgHandler      *msgHandler
+	Will            *storage.WillMessage
+	subscriptions   map[string]storage.SubscribeOptions
+	subscriptionIDs map[string][]uint32
+	onDisconnect    func(s *Session, graceful bool)
+	KeepAlive       time.Duration
+	state           State
+	// epoch is bumped on every Connect. It identifies the current connection
+	// generation so a stale runSession goroutine (from a superseded connection)
+	// can detect that the session has moved on and avoid tearing down the new
+	// connection. Guarded by mu.
+	epoch                uint64
 	ExpiryInterval       uint32
 	MaxPacketSize        uint32
 	ReceiveMaximum       uint16
@@ -179,10 +184,28 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 	return s
 }
 
-// Connect attaches a connection to the session.
-func (s *Session) Connect(c core.Connection) error {
+// Connect attaches a connection to the session and returns the connection's
+// epoch. The caller must pass this epoch to runSession so that teardown is
+// scoped to this specific connection generation.
+//
+// If a previous connection is still attached — which happens when a client
+// reconnects with the same client ID before the old socket's FIN has been
+// processed (common on high-latency links) — the old connection is closed
+// here. This honors [MQTT-3.1.4-2] (the server must disconnect the existing
+// connection) and performs a local same-node session takeover.
+func (s *Session) Connect(c core.Connection) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Local takeover: kick any connection still attached to this session.
+	// The superseded runSession goroutine will observe the closed socket and
+	// tear down via DisconnectIf, which no-ops because the epoch has advanced.
+	if s.conn != nil {
+		s.conn.Close() //nolint:errcheck // best-effort close of superseded connection
+	}
+
+	s.epoch++
+	epoch := s.epoch
 
 	s.conn = c
 	s.state = StateConnected
@@ -195,12 +218,13 @@ func (s *Session) Connect(c core.Connection) error {
 
 	c.SetKeepAlive(s.KeepAlive) //nolint:errcheck // keepalive timer setup; connection already validated at this point
 
-	// Set callback to handle connection loss/keepalive expiry
+	// Set callback to handle connection loss/keepalive expiry. Scoped to this
+	// epoch so a stale callback cannot disconnect a newer connection.
 	c.SetOnDisconnect(func(graceful bool) {
-		s.Disconnect(graceful) //nolint:errcheck // disconnect callback; session cleanup is best-effort
+		s.DisconnectIf(graceful, epoch) //nolint:errcheck // disconnect callback; session cleanup is best-effort
 	})
 
-	return nil
+	return epoch, nil
 }
 
 // AcquireDeliverSlot blocks until an inflight slot is available.
@@ -297,11 +321,28 @@ func (s *Session) drainPendingToOffline() {
 	}
 }
 
-// Disconnect disconnects the session.
+// Disconnect disconnects the session unconditionally.
 func (s *Session) Disconnect(graceful bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.disconnectLocked(graceful)
+}
 
+// DisconnectIf disconnects the session only if epoch still matches the current
+// connection generation. A stale runSession goroutine (whose connection has
+// been superseded by a local takeover) passes its own epoch here and becomes a
+// no-op, so it cannot tear down the connection that replaced it.
+func (s *Session) DisconnectIf(graceful bool, epoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch {
+		return nil
+	}
+	return s.disconnectLocked(graceful)
+}
+
+// disconnectLocked performs the disconnect. Caller must hold s.mu.
+func (s *Session) disconnectLocked(graceful bool) error {
 	if s.state != StateConnected {
 		return nil
 	}
