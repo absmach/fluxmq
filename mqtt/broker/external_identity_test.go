@@ -35,7 +35,7 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 	}, nil))
 
 	conn := &mockConnection{}
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
 		ProtocolName:    "MQTT",
@@ -73,7 +73,7 @@ func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 	require.NoError(t, err)
 	s.ExternalID = "ext-456"
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 	pub := &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
 		TopicName:   "telemetry/room1",

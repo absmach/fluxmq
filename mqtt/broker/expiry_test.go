@@ -81,7 +81,7 @@ func TestMessageExpiry_V5Handler(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	// Subscribe to test topic
 	b.subscribe(s, testTopic, 1, storage.SubscribeOptions{}) //nolint:errcheck // test setup

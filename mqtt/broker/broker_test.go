@@ -102,8 +102,8 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 		KeepAlive:       60,
 	}
 
-	t.Log("Calling HandleConnect via V5Handler")
-	handler := NewV5Handler(b)
+	t.Log("Calling HandleConnect via v5Handler")
+	handler := newV5Handler(b)
 	err := handler.HandleConnect(conn, connect)
 	t.Logf("HandleConnect returned: %v", err)
 

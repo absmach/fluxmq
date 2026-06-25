@@ -25,20 +25,20 @@ const (
 	noSessionExpiry = uint32(0)
 )
 
-var _ Handler = (*V5Handler)(nil)
+var _ protocolHandler = (*v5Handler)(nil)
 
-// V5Handler is a stateless adapter that translates MQTT v5 packets to broker domain operations.
-type V5Handler struct {
+// v5Handler is a stateless adapter that translates MQTT v5 packets to broker domain operations.
+type v5Handler struct {
 	broker *Broker
 }
 
-// NewV5Handler creates a new V5 protocol handler.
-func NewV5Handler(broker *Broker) *V5Handler {
-	return &V5Handler{broker: broker}
+// newV5Handler creates a new V5 protocol handler.
+func newV5Handler(broker *Broker) *v5Handler {
+	return &v5Handler{broker: broker}
 }
 
 // HandleConnect handles CONNECT packets.
-func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Connect)
 	if !ok {
@@ -182,7 +182,7 @@ func (h *V5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 }
 
 // HandlePublish handles PUBLISH packets.
-func (h *V5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Publish)
 	if !ok {
@@ -367,7 +367,7 @@ func (h *V5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubAck handles PUBACK packets.
-func (h *V5Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubAck)
 	if !ok {
 		return ErrInvalidPacketType
@@ -378,7 +378,7 @@ func (h *V5Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubRec handles PUBREC packets.
-func (h *V5Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubRec)
 	if !ok {
 		return ErrInvalidPacketType
@@ -397,7 +397,7 @@ func (h *V5Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubRel handles PUBREL packets.
-func (h *V5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubRel)
 	if !ok {
 		return ErrInvalidPacketType
@@ -459,7 +459,7 @@ func (h *V5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubComp handles PUBCOMP packets.
-func (h *V5Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v5.PubComp)
 	if !ok {
 		return ErrInvalidPacketType
@@ -470,7 +470,7 @@ func (h *V5Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandleSubscribe handles SUBSCRIBE packets.
-func (h *V5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Subscribe)
 	if !ok {
@@ -591,7 +591,7 @@ func (h *V5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
-func (h *V5Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v5.Unsubscribe)
 	if !ok {
@@ -623,7 +623,7 @@ func (h *V5Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 }
 
 // HandlePingReq handles PINGREQ packets.
-func (h *V5Handler) HandlePingReq(s *connCtx) error {
+func (h *v5Handler) HandlePingReq(s *connCtx) error {
 	h.broker.telemetry.logger.Debug("v5_pingreq", slog.String("client_id", s.ID))
 
 	// Update heartbeat for queue consumers
@@ -638,7 +638,7 @@ func (h *V5Handler) HandlePingReq(s *connCtx) error {
 }
 
 // HandleDisconnect handles DISCONNECT packets.
-func (h *V5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
 	_, ok := pkt.(*v5.Disconnect)
 	if !ok {
 		return ErrInvalidPacketType
@@ -650,7 +650,7 @@ func (h *V5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 }
 
 // HandleAuth handles AUTH packets.
-func (h *V5Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v5Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
 	_, ok := pkt.(*v5.Auth)
 	if !ok {
 		return ErrInvalidPacketType
@@ -661,7 +661,7 @@ func (h *V5Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // deliverOfflineMessages sends queued messages to reconnected client.
-func (h *V5Handler) deliverOfflineMessages(s *session.Session) {
+func (h *v5Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
 		h.broker.DeliverToSession(context.Background(), s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal

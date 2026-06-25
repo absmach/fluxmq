@@ -19,20 +19,20 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
-var _ Handler = (*V3Handler)(nil)
+var _ protocolHandler = (*v3Handler)(nil)
 
-// V3Handler is a stateless adapter that translates MQTT v3/v4 packets to broker domain operations.
-type V3Handler struct {
+// v3Handler is a stateless adapter that translates MQTT v3/v4 packets to broker domain operations.
+type v3Handler struct {
 	broker *Broker
 }
 
-// NewV3Handler creates a new V3 protocol handler.
-func NewV3Handler(broker *Broker) *V3Handler {
-	return &V3Handler{broker: broker}
+// newV3Handler creates a new V3 protocol handler.
+func newV3Handler(broker *Broker) *v3Handler {
+	return &v3Handler{broker: broker}
 }
 
 // HandleConnect handles CONNECT packets.
-func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Connect)
 	if !ok {
@@ -157,7 +157,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 }
 
 // HandlePublish handles PUBLISH packets.
-func (h *V3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Publish)
 	if !ok {
@@ -288,7 +288,7 @@ func (h *V3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubAck handles PUBACK packets.
-func (h *V3Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubAck)
 	if !ok {
 		return ErrInvalidPacketType
@@ -299,7 +299,7 @@ func (h *V3Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubRec handles PUBREC packets.
-func (h *V3Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubRec)
 	if !ok {
 		return ErrInvalidPacketType
@@ -315,7 +315,7 @@ func (h *V3Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubRel handles PUBREL packets.
-func (h *V3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubRel)
 	if !ok {
 		return ErrInvalidPacketType
@@ -374,7 +374,7 @@ func (h *V3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandlePubComp handles PUBCOMP packets.
-func (h *V3Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubComp)
 	if !ok {
 		return ErrInvalidPacketType
@@ -385,7 +385,7 @@ func (h *V3Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // HandleSubscribe handles SUBSCRIBE packets.
-func (h *V3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Subscribe)
 	if !ok {
@@ -474,7 +474,7 @@ func (h *V3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
-func (h *V3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Unsubscribe)
 	if !ok {
@@ -500,7 +500,7 @@ func (h *V3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 }
 
 // HandlePingReq handles PINGREQ packets.
-func (h *V3Handler) HandlePingReq(s *connCtx) error {
+func (h *v3Handler) HandlePingReq(s *connCtx) error {
 	h.broker.telemetry.logger.Debug("v3_pingreq", slog.String("client_id", s.ID))
 
 	// Update heartbeat for queue consumers
@@ -515,7 +515,7 @@ func (h *V3Handler) HandlePingReq(s *connCtx) error {
 }
 
 // HandleDisconnect handles DISCONNECT packets.
-func (h *V3Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
 	_, ok := pkt.(*v3.Disconnect)
 	if !ok {
 		return ErrInvalidPacketType
@@ -527,12 +527,12 @@ func (h *V3Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 }
 
 // HandleAuth - not supported in V3.
-func (h *V3Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
 	return ErrInvalidPacketType
 }
 
 // deliverOfflineMessages sends queued messages to reconnected client.
-func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
+func (h *v3Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
 		h.broker.DeliverToSession(context.Background(), s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal

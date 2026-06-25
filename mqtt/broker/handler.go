@@ -47,13 +47,13 @@ func maybeUpdateQueueHeartbeat(b *Broker, s *session.Session) {
 	_ = b.queueManager.UpdateHeartbeat(ctx, s.ID)
 }
 
-// Handler is the interface for packet handlers (V3, V5, etc).
+// protocolHandler is the interface for packet handlers (V3, V5, etc).
 //
 // Post-CONNECT handlers receive a *connCtx rather than a *session.Session: it
 // binds response writes and teardown to the specific connection generation that
 // read the packet, so a superseded connection's leftover goroutine cannot write
 // to or disconnect the connection that replaced it.
-type Handler interface {
+type protocolHandler interface {
 	// HandleConnect handles CONNECT packets.
 	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
 

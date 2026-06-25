@@ -33,7 +33,7 @@ func TestTopicAlias_RegisterAndResolve(t *testing.T) {
 	}
 	s.TopicAliasMax = 10
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	// Test 1: Register alias with first PUBLISH (topic + alias)
 	alias1 := uint16(1)
@@ -121,7 +121,7 @@ func TestTopicAlias_MultipleAliases(t *testing.T) {
 	}
 	s.TopicAliasMax = 100
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	// Register multiple aliases
 	aliases := map[uint16]string{
@@ -188,7 +188,7 @@ func TestTopicAlias_UpdateExisting(t *testing.T) {
 	}
 	s.TopicAliasMax = 10
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	// Register alias 1 with topic A
 	alias := uint16(1)
@@ -241,7 +241,7 @@ func TestTopicAlias_SessionIsolation(t *testing.T) {
 	s2, _, _ := b.CreateSession("client2", 5, session.Options{CleanStart: true})
 	s2.TopicAliasMax = 10
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	// Register alias 1 in session 1
 	alias := uint16(1)

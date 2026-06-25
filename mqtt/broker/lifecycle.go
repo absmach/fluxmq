@@ -18,10 +18,10 @@ import (
 // retryCheckInterval is how often we check for expired inflight messages.
 const retryCheckInterval = 1 * time.Second
 
-// runSession runs the main packet loop for a session using a Handler.
+// runSession runs the main packet loop for a session using a protocolHandler.
 // It handles both packet reading and message retry checking in a single goroutine
 // by using short read deadlines and processing retries on timeout.
-func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Connection, epoch uint64) error {
+func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn core.Connection, epoch uint64) error {
 	if conn == nil {
 		return nil
 	}
@@ -84,6 +84,17 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 			return err
 		}
 
+		// Bind this packet to our connection generation. A takeover may have
+		// superseded us while the packet was in flight; dispatching it would
+		// mutate session state now owned by the replacement connection
+		// (publish, (un)subscribe, ack inflight, topic aliases, retained
+		// delivery). Drop it and exit — our own socket has already been closed
+		// by the takeover.
+		if !cc.current() {
+			b.telemetry.stats.DecrementConnections()
+			return nil
+		}
+
 		// Packet received - update activity time
 		lastActivity = time.Now()
 
@@ -115,7 +126,7 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 	}
 }
 
-func dispatchPacket(handler Handler, s *connCtx, pkt packets.ControlPacket) error {
+func dispatchPacket(handler protocolHandler, s *connCtx, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
 	case packets.PublishType:
 		return handler.HandlePublish(s, pkt)

@@ -13,6 +13,8 @@ import (
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	"github.com/absmach/fluxmq/mqtt/session"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/require"
 )
 
@@ -187,7 +189,7 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 	b := NewBroker(nil, nil)
 	defer b.Close()
-	h := NewV3Handler(b)
+	h := newV3Handler(b)
 
 	const clientID = "proplet-1"
 
@@ -259,7 +261,7 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 	b := NewBroker(nil, nil)
 	defer b.Close()
-	h := NewV3Handler(b)
+	h := newV3Handler(b)
 
 	const clientID = "proplet-2"
 
@@ -328,7 +330,7 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
 	b := NewBroker(nil, nil)
 	defer b.Close()
-	h := NewV3Handler(b)
+	h := newV3Handler(b)
 
 	const clientID = "proplet-stalled"
 
@@ -389,7 +391,7 @@ func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
 func TestHandleConnect_RepeatedTakeoversDoNotLeakConnectionCount(t *testing.T) {
 	b := NewBroker(nil, nil)
 	defer b.Close()
-	h := NewV3Handler(b)
+	h := newV3Handler(b)
 
 	const clientID = "proplet-loop"
 	const rounds = 8
@@ -424,4 +426,71 @@ func TestHandleConnect_RepeatedTakeoversDoNotLeakConnectionCount(t *testing.T) {
 	waitFor(t, func() bool {
 		return b.telemetry.stats.GetCurrentConnections() == 0
 	}, "active-connection count drains to zero")
+}
+
+// TestHandleConnect_StalePublishNotDispatched guards finding #1: a PUBLISH read
+// on the old connection but processed after a takeover must not mutate shared
+// state — here, it must not be routed to subscribers through the broker. The
+// generation check drops the packet before dispatch.
+func TestHandleConnect_StalePublishNotDispatched(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV3Handler(b)
+
+	const pubID = "publisher"
+	const topic = "devices/telemetry"
+
+	// A subscriber on a separate session; its connection captures deliveries.
+	sub, _, err := b.CreateSession("subscriber", 4, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := &captureConnection{}
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, topic, 0, storage.SubscribeOptions{}))
+
+	// Publisher's old connection has a QoS0 PUBLISH queued, released only after
+	// the takeover.
+	pub := &v3.Publish{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
+		TopicName:   topic,
+		Payload:     []byte("stale"),
+	}
+	oldConn := newScriptedConn(pub)
+	var oldWG sync.WaitGroup
+	oldWG.Add(1)
+	go func() {
+		defer oldWG.Done()
+		h.HandleConnect(oldConn, v3Connect(pubID)) //nolint:errcheck
+	}()
+
+	<-oldConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(pubID)
+		return s != nil && s.IsConnected()
+	}, "old publisher session connected")
+
+	// Take over the publisher's client ID before the PUBLISH is processed.
+	newConn := newBlockingConn()
+	var newWG sync.WaitGroup
+	newWG.Add(1)
+	go func() {
+		defer newWG.Done()
+		h.HandleConnect(newConn, v3Connect(pubID)) //nolint:errcheck
+	}()
+
+	<-newConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(pubID)
+		return s != nil && s.IsConnected() && s.Conn() == newConn
+	}, "new publisher session current")
+
+	// Release the stale PUBLISH. It must be dropped, not routed.
+	close(oldConn.releaseRead)
+	oldWG.Wait()
+
+	time.Sleep(20 * time.Millisecond)
+	require.Empty(t, subConn.packets, "stale PUBLISH must not be delivered to subscribers")
+
+	newConn.Close()
+	newWG.Wait()
 }

@@ -153,7 +153,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, matchedRetained, 1)
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	rh0 := byte(0)
 	sub1 := &v5.Subscribe{
@@ -198,7 +198,7 @@ func TestV5PublishErrorResponseMatchesQoS(t *testing.T) {
 	_, errConn := s.Connect(conn)
 	require.NoError(t, errConn)
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	alias2 := uint16(2)
 	pub0 := &v5.Publish{
