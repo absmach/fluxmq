@@ -372,6 +372,12 @@ func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
 	oldWG.Wait()
 	require.True(t, oldConn.closed.Load())
 
+	// The superseded goroutine's blocked PINGRESP write failed against its own
+	// closed socket. That is expected teardown and must not be counted as a
+	// protocol error on the broker.
+	require.Equal(t, uint64(0), b.telemetry.stats.GetProtocolErrors(),
+		"stale write failure must not be counted as a protocol error")
+
 	newConn.Close()
 	newWG.Wait()
 }

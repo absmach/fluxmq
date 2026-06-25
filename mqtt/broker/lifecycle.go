@@ -73,8 +73,10 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 				continue
 			}
 
-			// Real error (EOF, connection closed, etc.)
-			if err != io.EOF && err != session.ErrNotConnected {
+			// Real error (EOF, connection closed, etc.). Only count it as a
+			// packet error on the live connection: a superseded goroutine's
+			// read fails because its own socket was closed by the takeover.
+			if err != io.EOF && err != session.ErrNotConnected && cc.current() {
 				b.telemetry.stats.IncrementPacketErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
@@ -100,7 +102,12 @@ func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Conne
 				b.telemetry.stats.DecrementConnections()
 				return nil
 			}
-			b.telemetry.stats.IncrementProtocolErrors()
+			// Only a live connection's dispatch failure is a protocol error.
+			// A superseded goroutine's handler write fails against its own
+			// closed socket; that is expected teardown, not a protocol error.
+			if cc.current() {
+				b.telemetry.stats.IncrementProtocolErrors()
+			}
 			b.telemetry.stats.DecrementConnections()
 			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on protocol error; connection is being terminated
 			return dispatchErr

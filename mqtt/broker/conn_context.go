@@ -72,3 +72,11 @@ func (c *connCtx) ProcessRetries() {
 func (c *connCtx) Disconnect(graceful bool) error {
 	return c.Session.DisconnectIf(graceful, c.epoch)
 }
+
+// current reports whether this is still the active connection generation. A
+// superseded goroutine reads and writes its own closed socket, so its read and
+// dispatch failures are expected teardown — not packet or protocol errors —
+// and must not be counted as such.
+func (c *connCtx) current() bool {
+	return c.Session.Epoch() == c.epoch
+}
