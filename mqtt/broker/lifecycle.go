@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/mqtt/session"
 )
@@ -20,8 +21,7 @@ const retryCheckInterval = 1 * time.Second
 // runSession runs the main packet loop for a session using a Handler.
 // It handles both packet reading and message retry checking in a single goroutine
 // by using short read deadlines and processing retries on timeout.
-func (b *Broker) runSession(handler Handler, s *session.Session, epoch uint64) error {
-	conn := s.Conn()
+func (b *Broker) runSession(handler Handler, s *session.Session, conn core.Connection, epoch uint64) error {
 	if conn == nil {
 		return nil
 	}
@@ -57,8 +57,14 @@ func (b *Broker) runSession(handler Handler, s *session.Session, epoch uint64) e
 						return err
 					}
 				}
-				// Just a retry check interval timeout - process retries and continue
+				// Just a retry check interval timeout - process retries and
+				// continue. Guarded so a superseded goroutine cannot resend
+				// inflight messages onto the replacement connection.
+				if !s.BeginProcessing(epoch) {
+					return nil
+				}
 				s.ProcessRetries()
+				s.EndProcessing()
 				lastRetryCheck = time.Now()
 				continue
 			}
@@ -78,6 +84,13 @@ func (b *Broker) runSession(handler Handler, s *session.Session, epoch uint64) e
 		b.telemetry.stats.IncrementMessagesReceived()
 		s.Touch()
 
+		// Bind processing to this connection generation. If a takeover swapped
+		// in a newer connection, stop now: the session belongs to the new
+		// connection and dispatching here would write to or disconnect it.
+		if !s.BeginProcessing(epoch) {
+			return nil
+		}
+
 		// Throttled retry check: under sustained traffic the read loop never
 		// times out, so we check retries here but at most once per interval.
 		if time.Since(lastRetryCheck) >= retryCheckInterval {
@@ -85,15 +98,18 @@ func (b *Broker) runSession(handler Handler, s *session.Session, epoch uint64) e
 			lastRetryCheck = time.Now()
 		}
 
-		if err := dispatchPacket(handler, s, pkt); err != nil {
-			if err == io.EOF {
+		dispatchErr := dispatchPacket(handler, s, pkt)
+		s.EndProcessing()
+
+		if dispatchErr != nil {
+			if dispatchErr == io.EOF {
 				b.telemetry.stats.DecrementConnections()
 				return nil
 			}
 			b.telemetry.stats.IncrementProtocolErrors()
 			b.telemetry.stats.DecrementConnections()
 			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on protocol error; connection is being terminated
-			return err
+			return dispatchErr
 		}
 	}
 }

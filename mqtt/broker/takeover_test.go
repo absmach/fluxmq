@@ -49,6 +49,42 @@ func (c *blockingConn) Close() error {
 	return nil
 }
 
+// scriptedConn delivers exactly one packet, but only after releaseRead is
+// closed. This lets a test sequence a read so it completes *after* a takeover
+// has already swapped in the replacement connection — reproducing a stale
+// in-flight packet.
+type scriptedConn struct {
+	mockConnection
+	pkt         packets.ControlPacket
+	releaseRead chan struct{}
+	delivered   atomic.Bool
+	closed      atomic.Bool
+	reading     chan struct{}
+	readOnce    sync.Once
+}
+
+func newScriptedConn(pkt packets.ControlPacket) *scriptedConn {
+	return &scriptedConn{
+		pkt:         pkt,
+		releaseRead: make(chan struct{}),
+		reading:     make(chan struct{}),
+	}
+}
+
+func (c *scriptedConn) ReadPacket() (packets.ControlPacket, error) {
+	c.readOnce.Do(func() { close(c.reading) })
+	if !c.delivered.Swap(true) {
+		<-c.releaseRead // deliver the scripted packet only when the test allows
+		return c.pkt, nil
+	}
+	return nil, io.EOF
+}
+
+func (c *scriptedConn) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
 const protocolNameMQTT = "MQTT"
 
 func v3Connect(clientID string) *v3.Connect {
@@ -134,6 +170,72 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 	require.False(t, newConn.closed.Load())
 
 	// Cleanup: release the new connection so its runSession exits.
+	newConn.Close()
+	newWG.Wait()
+}
+
+// TestHandleConnect_StaleDisconnectDoesNotCloseReplacement reproduces the
+// second half of propeller#241: a DISCONNECT read on the old connection but
+// processed *after* the takeover must not tear down the replacement
+// connection. The processing guard skips dispatch for the superseded
+// generation, so the new connection survives.
+func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+	h := NewV3Handler(b)
+
+	const clientID = "proplet-2"
+
+	// Old connection has a DISCONNECT queued, released only after takeover.
+	disconnect := &v3.Disconnect{
+		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
+	}
+	oldConn := newScriptedConn(disconnect)
+	var oldWG sync.WaitGroup
+	oldWG.Add(1)
+	go func() {
+		defer oldWG.Done()
+		h.HandleConnect(oldConn, v3Connect(clientID)) //nolint:errcheck
+	}()
+
+	<-oldConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected()
+	}, "old session connected")
+
+	// Take over with a new connection. This completes the swap before the old
+	// goroutine ever returns from its read.
+	newConn := newBlockingConn()
+	var newWG sync.WaitGroup
+	newWG.Add(1)
+	go func() {
+		defer newWG.Done()
+		h.HandleConnect(newConn, v3Connect(clientID)) //nolint:errcheck
+	}()
+
+	<-newConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected() && s.Conn() == newConn
+	}, "new session connected and current")
+
+	// Now let the old connection deliver its stale DISCONNECT. Its goroutine
+	// must observe the superseded epoch and skip dispatch — without the guard
+	// it would call s.Disconnect() and close newConn.
+	close(oldConn.releaseRead)
+	oldWG.Wait()
+
+	require.True(t, oldConn.closed.Load(), "old conn closed by takeover")
+
+	// Give the stale DISCONNECT a chance to (incorrectly) tear down the session.
+	time.Sleep(20 * time.Millisecond)
+	s := b.sessionsMap.Get(clientID)
+	require.NotNil(t, s)
+	require.True(t, s.IsConnected(), "stale DISCONNECT must not disconnect the replacement")
+	require.Equal(t, newConn, s.Conn())
+	require.False(t, newConn.closed.Load())
+
 	newConn.Close()
 	newWG.Wait()
 }

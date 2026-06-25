@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/storage/messages"
@@ -23,6 +24,24 @@ type recordingConn struct {
 
 func (c *recordingConn) Close() error {
 	c.closed.Store(true)
+	return nil
+}
+
+// wsLikeConn models a WebSocket connection whose Close() synchronously invokes
+// the onDisconnect callback (as server/websocket does), which calls back into
+// the session. Used to guard against re-entrant lock deadlock on takeover.
+type wsLikeConn struct {
+	testConn
+	closed atomic.Bool
+}
+
+func (c *wsLikeConn) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+	if c.onDisconnect != nil {
+		c.onDisconnect(false) // synchronous, like the WebSocket transport
+	}
 	return nil
 }
 
@@ -111,6 +130,35 @@ func TestConnect_OnDisconnectCallbackScopedToEpoch(t *testing.T) {
 	oldCallback(false)
 
 	require.True(t, s.IsConnected(), "old conn callback must not disconnect after takeover")
+	require.False(t, newConn.closed.Load())
+}
+
+// TestConnect_WebSocketStyleSyncOnDisconnectNoDeadlock verifies that a takeover
+// of a connection whose Close() synchronously calls onDisconnect (WebSocket)
+// does not deadlock by re-entering the session lock.
+func TestConnect_WebSocketStyleSyncOnDisconnectNoDeadlock(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	oldConn := &wsLikeConn{}
+	_, err := s.Connect(oldConn)
+	require.NoError(t, err)
+
+	newConn := &wsLikeConn{}
+	done := make(chan struct{})
+	go func() {
+		_, err := s.Connect(newConn) // would deadlock if Close re-entered s.mu
+		require.NoError(t, err)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Connect deadlocked on WebSocket-style synchronous onDisconnect")
+	}
+
+	require.True(t, oldConn.closed.Load(), "old ws conn must be closed by takeover")
+	require.True(t, s.IsConnected())
 	require.False(t, newConn.closed.Load())
 }
 

@@ -153,7 +153,7 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	h.deliverOfflineMessages(s)
 
-	return h.broker.runSession(h, s, epoch)
+	return h.broker.runSession(h, s, conn, epoch)
 }
 
 // HandlePublish handles PUBLISH packets.
