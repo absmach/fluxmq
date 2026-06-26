@@ -275,6 +275,7 @@ func (b *Broker) Close() error {
 			b.persistOfflineQueue(s)
 		}
 	})
+	b.sessionsMap.Clear()
 
 	// Drain and stop async fan-out workers after sessions are closed.
 	if b.fanOutPool != nil {

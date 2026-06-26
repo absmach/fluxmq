@@ -34,6 +34,9 @@ type Cache interface {
 
 	// ConnectedCount returns the number of connected sessions.
 	ConnectedCount() int
+
+	// Clear removes all sessions from the cache.
+	Clear()
 }
 
 const numShards = 64
@@ -117,6 +120,18 @@ func (c *ShardedCache) ForEach(fn func(*Session)) {
 // Count returns the total number of sessions.
 func (c *ShardedCache) Count() int {
 	return int(c.count.Load())
+}
+
+// Clear removes all sessions from the cache.
+func (c *ShardedCache) Clear() {
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.Lock()
+		cleared := len(s.sessions)
+		s.sessions = make(map[string]*Session)
+		s.mu.Unlock()
+		c.count.Add(-int64(cleared))
+	}
 }
 
 // ConnectedCount returns the number of connected sessions.

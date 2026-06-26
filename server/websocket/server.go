@@ -557,7 +557,10 @@ func (c *wsConnection) Close() error {
 		go c.onDisconnect(false)
 	}
 
-	return c.ws.Close()
+	_ = c.ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(100*time.Millisecond))
+	time.Sleep(50 * time.Millisecond)
+	_ = c.ws.UnderlyingConn().Close()
+	return nil
 }
 
 func (c *wsConnection) done() <-chan struct{} {

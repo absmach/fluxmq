@@ -11,6 +11,7 @@ import (
 	"github.com/absmach/fluxmq/config"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
@@ -508,6 +509,17 @@ func (s *Session) DisconnectIf(graceful bool, epoch uint64) error {
 	return s.disconnectLocked(graceful)
 }
 
+func (s *Session) sendDisconnect() {
+	if s.conn == nil || s.Version != 5 {
+		return
+	}
+	disc := &v5.Disconnect{
+		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
+		ReasonCode:  0x8B, // The Server is shutting down.
+	}
+	_ = s.conn.WritePacket(disc)
+}
+
 // disconnectLocked performs the disconnect. Caller must hold s.mu.
 func (s *Session) disconnectLocked(graceful bool) error {
 	if s.state != StateConnected {
@@ -527,6 +539,7 @@ func (s *Session) disconnectLocked(graceful bool) error {
 		// If connection tracks its own timestamps, we might want to sync,
 		// but since we are closing it here, "now" is correct.
 
+		s.sendDisconnect()
 		s.conn.Close()
 		s.conn = nil
 	}
