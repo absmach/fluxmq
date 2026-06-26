@@ -22,12 +22,27 @@ updates:
       timezone: "Europe/Paris"
 
   - package-ecosystem: "docker"
-    directory: "./deployments/docker"
+    directories:
+      - "./ui/docker"
+      - "./deployments/docker"
     schedule:
       interval: "weekly"
       day: "monday"
       timezone: "Europe/Paris"
     groups:
       docker-dependency:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directories:
+      - "./ui"
+      - "./docs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Paris"
+    groups:
+      npm-dependency:
         patterns:
           - "*"
