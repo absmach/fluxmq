@@ -122,6 +122,10 @@ message InflightMessage {
   uint32 qos = 4;
   bool retain = 5;
   int64 timestamp = 6;
+  // direction: 0 = outbound (server->client), 1 = inbound (client->server).
+  uint32 direction = 7;
+  // state: inflight delivery state (0 = publish sent, 1 = pubrec received).
+  uint32 state = 8;
 }
 
 message QueuedMessage {

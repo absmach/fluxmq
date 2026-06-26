@@ -19,20 +19,20 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
-var _ Handler = (*V3Handler)(nil)
+var _ protocolHandler = (*v3Handler)(nil)
 
-// V3Handler is a stateless adapter that translates MQTT v3/v4 packets to broker domain operations.
-type V3Handler struct {
+// v3Handler is a stateless adapter that translates MQTT v3/v4 packets to broker domain operations.
+type v3Handler struct {
 	broker *Broker
 }
 
-// NewV3Handler creates a new V3 protocol handler.
-func NewV3Handler(broker *Broker) *V3Handler {
-	return &V3Handler{broker: broker}
+// newV3Handler creates a new V3 protocol handler.
+func newV3Handler(broker *Broker) *v3Handler {
+	return &v3Handler{broker: broker}
 }
 
 // HandleConnect handles CONNECT packets.
-func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Connect)
 	if !ok {
@@ -128,16 +128,22 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	s.ExternalID = externalID
 
-	if err := s.Connect(conn); err != nil {
-		h.broker.telemetry.stats.IncrementProtocolErrors()
-		conn.Close()
-		return err
+	// Apply the negotiated options and take over any existing connection. v3
+	// has no session expiry, Receive Maximum, or topic aliases.
+	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
+		Version:        p.ProtocolVersion,
+		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
+		Will:           will,
+		ReceiveMaximum: maxReceived,
+	})
+	if superseded != nil {
+		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
 	}
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {
-		s.Disconnect(false) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
+		s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
 
@@ -152,11 +158,11 @@ func (h *V3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	h.deliverOfflineMessages(s)
 
-	return h.broker.runSession(h, s)
+	return h.broker.runSession(h, s, conn, epoch, time.Duration(p.KeepAlive)*time.Second)
 }
 
 // HandlePublish handles PUBLISH packets.
-func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Publish)
 	if !ok {
@@ -186,7 +192,6 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 	qos := p.FixedHeader.QoS
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
-	dup := p.FixedHeader.Dup
 
 	if err := topics.ValidateTopicName(topic); err != nil {
 		h.broker.telemetry.logger.Warn("v3_publish_invalid_topic",
@@ -254,12 +259,6 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		return s.WritePacket(ack)
 
 	case 2:
-		if dup && s.Inflight().WasReceived(packetID) {
-			return sendV3PubRec(s, packetID)
-		}
-
-		s.Inflight().MarkReceived(packetID)
-
 		buf := core.GetBufferWithData(payload)
 		storeMsg := storage.AcquireMessage()
 		storeMsg.Topic = topic
@@ -269,9 +268,11 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 		storeMsg.PacketID = packetID
 		storeMsg.Properties = setOriginProperties(storeMsg.Properties, s.ExternalID)
 		storeMsg.SetPayloadFromBuffer(buf)
-		if err := s.Inflight().Add(packetID, storeMsg, messages.Inbound); err != nil {
-			storeMsg.ReleasePayload()
+		accepted, err := s.AddInbound(packetID, storeMsg)
+		if !accepted {
 			storage.ReleaseMessage(storeMsg)
+		}
+		if err != nil {
 			return err
 		}
 
@@ -287,18 +288,18 @@ func (h *V3Handler) HandlePublish(s *session.Session, pkt packets.ControlPacket)
 }
 
 // HandlePubAck handles PUBACK packets.
-func (h *V3Handler) HandlePubAck(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubAck(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubAck)
 	if !ok {
 		return ErrInvalidPacketType
 	}
 
 	h.broker.telemetry.logger.Debug("v3_puback", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
-	return h.broker.AckMessage(s, p.ID)
+	return h.broker.AckMessage(s.Session, p.ID)
 }
 
 // HandlePubRec handles PUBREC packets.
-func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubRec(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubRec)
 	if !ok {
 		return ErrInvalidPacketType
@@ -314,7 +315,7 @@ func (h *V3Handler) HandlePubRec(s *session.Session, pkt packets.ControlPacket) 
 }
 
 // HandlePubRel handles PUBREL packets.
-func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubRel)
 	if !ok {
 		return ErrInvalidPacketType
@@ -325,13 +326,12 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 	packetID := p.ID
 
 	// Distribute stored message now that publisher has committed with PUBREL.
-	msg, err := s.Inflight().Ack(packetID)
+	msg, err := s.AckInbound(packetID)
 	if err != nil {
 		h.broker.telemetry.logger.Warn("v3_pubrel_unknown_packet",
 			slog.String("client_id", s.ID),
 			slog.Int("packet_id", int(packetID)))
 	}
-	s.Inflight().ClearReceived(packetID)
 
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
@@ -373,18 +373,18 @@ func (h *V3Handler) HandlePubRel(s *session.Session, pkt packets.ControlPacket) 
 }
 
 // HandlePubComp handles PUBCOMP packets.
-func (h *V3Handler) HandlePubComp(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandlePubComp(s *connCtx, pkt packets.ControlPacket) error {
 	p, ok := pkt.(*v3.PubComp)
 	if !ok {
 		return ErrInvalidPacketType
 	}
 
 	h.broker.telemetry.logger.Debug("v3_pubcomp", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
-	return h.broker.AckMessage(s, p.ID)
+	return h.broker.AckMessage(s.Session, p.ID)
 }
 
 // HandleSubscribe handles SUBSCRIBE packets.
-func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Subscribe)
 	if !ok {
@@ -427,7 +427,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 			grantedQoS = maxQoS
 		}
 
-		if err := h.broker.subscribe(s, t.Name, grantedQoS, opts); err != nil {
+		if err := h.broker.subscribe(s.Session, t.Name, grantedQoS, opts); err != nil {
 			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
@@ -455,7 +455,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 					// Legacy fallback for messages without PayloadBuf
 					deliverMsg.SetPayloadFromBytes(msg.Payload)
 				}
-				h.broker.DeliverToSession(context.Background(), s, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
+				h.broker.DeliverToSession(context.Background(), s.Session, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
 			}
 		}
 	}
@@ -473,7 +473,7 @@ func (h *V3Handler) HandleSubscribe(s *session.Session, pkt packets.ControlPacke
 }
 
 // HandleUnsubscribe handles UNSUBSCRIBE packets.
-func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Unsubscribe)
 	if !ok {
@@ -483,7 +483,7 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 	h.broker.telemetry.logger.Info("v3_unsubscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
 
 	for _, filter := range p.Topics {
-		h.broker.unsubscribeInternal(s, filter) //nolint:errcheck // best-effort unsubscribe; errors are non-fatal
+		h.broker.unsubscribeInternal(s.Session, filter) //nolint:errcheck // best-effort unsubscribe; errors are non-fatal
 	}
 
 	h.broker.telemetry.logger.Info("v3_unsubscribe_complete",
@@ -499,13 +499,13 @@ func (h *V3Handler) HandleUnsubscribe(s *session.Session, pkt packets.ControlPac
 }
 
 // HandlePingReq handles PINGREQ packets.
-func (h *V3Handler) HandlePingReq(s *session.Session) error {
+func (h *v3Handler) HandlePingReq(s *connCtx) error {
 	h.broker.telemetry.logger.Debug("v3_pingreq", slog.String("client_id", s.ID))
 
 	// Update heartbeat for queue consumers
 	// Fire and forget - don't block PINGRESP on this.
 	// Updates are interval-limited to avoid goroutine storms under ping floods.
-	maybeUpdateQueueHeartbeat(h.broker, s)
+	maybeUpdateQueueHeartbeat(h.broker, s.Session)
 
 	resp := &v3.PingResp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType},
@@ -514,7 +514,7 @@ func (h *V3Handler) HandlePingReq(s *session.Session) error {
 }
 
 // HandleDisconnect handles DISCONNECT packets.
-func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
 	_, ok := pkt.(*v3.Disconnect)
 	if !ok {
 		return ErrInvalidPacketType
@@ -526,19 +526,19 @@ func (h *V3Handler) HandleDisconnect(s *session.Session, pkt packets.ControlPack
 }
 
 // HandleAuth - not supported in V3.
-func (h *V3Handler) HandleAuth(s *session.Session, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
 	return ErrInvalidPacketType
 }
 
 // deliverOfflineMessages sends queued messages to reconnected client.
-func (h *V3Handler) deliverOfflineMessages(s *session.Session) {
+func (h *v3Handler) deliverOfflineMessages(s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
 		h.broker.DeliverToSession(context.Background(), s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
 	}
 }
 
-func sendV3PubRec(s *session.Session, packetID uint16) error {
+func sendV3PubRec(s *connCtx, packetID uint16) error {
 	rec := &v3.PubRec{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubRecType},
 		ID:          packetID,

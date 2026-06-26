@@ -89,7 +89,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 	serverReceiveMax := sessionCfg.MaxInflightMessages
 	if serverReceiveMax <= 0 {
-		serverReceiveMax = 256
+		serverReceiveMax = config.DefaultMaxInflightMessages
 	}
 	if serverReceiveMax > 65535 {
 		serverReceiveMax = 65535
@@ -98,7 +98,11 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	if receiveMax == 0 || int(receiveMax) > serverReceiveMax {
 		receiveMax = uint16(serverReceiveMax)
 	}
-	inflight := messages.NewInflightTracker(int(receiveMax))
+	// The persistent inflight store is the bidirectional server-side limit; it
+	// must not be sized by the client's outbound Receive Maximum, or an inbound
+	// QoS 2 transaction from a client advertising a small Receive Maximum could
+	// starve outbound delivery. The outbound quota is the session's send window.
+	inflight := messages.NewInflightTracker(serverReceiveMax)
 	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == config.OfflineQueuePolicyEvict)
 
 	// Restore from takeover state if present
@@ -294,11 +298,20 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		msgs := s.OfflineQueue().Drain()
 		for i, msg := range msgs {
 			key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
+			// Materialise the payload into the serialized Payload field: the
+			// zero-copy PayloadBuf is not persisted (json:"-").
+			msg.Payload = append([]byte(nil), msg.GetPayload()...)
 			b.stores.messages.Store(key, msg) //nolint:errcheck // best-effort offline message persistence
 		}
 
 		for _, inf := range s.Inflight().GetAll() {
-			key := fmt.Sprintf("%s%s%d", s.ID, inflightPrefix, inf.PacketID)
+			// Key by direction so an inbound and outbound entry sharing a packet
+			// ID do not overwrite each other, and carry the direction and state
+			// on the message so they survive a restore.
+			key := fmt.Sprintf("%s%s%d/%d", s.ID, inflightPrefix, inf.Direction, inf.PacketID)
+			inf.Message.Payload = append([]byte(nil), inf.Message.GetPayload()...)
+			inf.Message.InflightDirection = byte(inf.Direction)
+			inf.Message.InflightState = byte(inf.State)
 			b.stores.messages.Store(key, inf.Message) //nolint:errcheck // best-effort inflight message persistence
 		}
 	}
@@ -330,6 +343,38 @@ func (b *Broker) persistSessionInfo(s *session.Session) {
 	}
 }
 
+// restoreInflightEntry adds a restored inflight message to the tracker with a
+// validated direction and state. An invalid direction (corrupt persisted or
+// transferred value) is skipped rather than risking an out-of-range panic. The
+// (direction, packetID) entry the Add restores is itself the inbound QoS 2
+// duplicate-detection state, so a retransmitted PUBLISH after restore is
+// recognised.
+func restoreInflightEntry(tracker messages.Inflight, packetID uint16, msg *storage.Message, rawDirection, rawState uint32) {
+	var direction messages.Direction
+	switch messages.Direction(rawDirection) {
+	case messages.Outbound:
+		direction = messages.Outbound
+	case messages.Inbound:
+		direction = messages.Inbound
+	default:
+		return // unknown/corrupt direction: skip
+	}
+
+	if err := tracker.Add(packetID, msg, direction); err != nil {
+		return
+	}
+
+	if direction == messages.Inbound {
+		return // inbound entries carry no extra delivery state
+	}
+
+	state := messages.StatePublishSent
+	if messages.InflightState(rawState) == messages.StatePubRecReceived {
+		state = messages.StatePubRecReceived
+	}
+	tracker.UpdateState(packetID, state) //nolint:errcheck // restore the QoS 2 delivery phase
+}
+
 // restoreInflightFromStorage restores inflight messages from storage.
 func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.Inflight) error {
 	if b.stores.messages == nil {
@@ -342,9 +387,10 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 	}
 
 	for _, msg := range inflightMsgs {
-		if msg.PacketID != 0 {
-			tracker.Add(msg.PacketID, msg, messages.Outbound) //nolint:errcheck // best-effort inflight restore; packet will be retried or dropped
+		if msg.PacketID == 0 {
+			continue
 		}
+		restoreInflightEntry(tracker, msg.PacketID, msg, uint32(msg.InflightDirection), uint32(msg.InflightState))
 	}
 
 	if err := b.stores.messages.DeleteByPrefix(clientID + inflightPrefix); err != nil {
@@ -431,15 +477,12 @@ func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, trac
 	for _, msg := range state.InflightMessages {
 		storeMsg := &storage.Message{
 			Topic:    msg.Topic,
-			Payload:  msg.Payload,
+			Payload:  msg.GetPayload(),
 			QoS:      byte(msg.Qos),
 			Retain:   msg.Retain,
 			PacketID: uint16(msg.PacketId),
 		}
-		if err := tracker.Add(uint16(msg.PacketId), storeMsg, messages.Outbound); err != nil {
-			b.logError("restore_inflight", err, slog.Uint64("packet_id", uint64(msg.PacketId)))
-			continue
-		}
+		restoreInflightEntry(tracker, uint16(msg.PacketId), storeMsg, msg.Direction, msg.State)
 	}
 
 	return nil
@@ -539,10 +582,12 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 		state.InflightMessages = append(state.InflightMessages, &clusterv1.InflightMessage{
 			PacketId:  uint32(msg.PacketID),
 			Topic:     msg.Message.Topic,
-			Payload:   msg.Message.Payload,
+			Payload:   msg.Message.GetPayload(),
 			Qos:       uint32(msg.Message.QoS),
 			Retain:    msg.Message.Retain,
 			Timestamp: time.Now().Unix(),
+			Direction: uint32(msg.Direction),
+			State:     uint32(msg.State),
 		})
 	}
 

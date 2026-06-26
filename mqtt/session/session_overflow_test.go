@@ -72,7 +72,7 @@ func (c *testConn) Touch() {}
 
 var _ core.Connection = (*testConn)(nil)
 
-func TestNew_BackpressureSlotsRespectReceiveMaximumAndRestoredInflight(t *testing.T) {
+func TestNew_SendWindowCapacityRespectsReceiveMaximum(t *testing.T) {
 	inflight := messages.NewInflightTracker(16)
 	msg := storage.AcquireMessage()
 	msg.Topic = "topic"
@@ -87,14 +87,18 @@ func TestNew_BackpressureSlotsRespectReceiveMaximumAndRestoredInflight(t *testin
 		inflight,
 		messages.NewMessageQueue(16, true),
 		config.SessionConfig{
-			MaxInflightMessages: 128, // must be ignored in favor of negotiated ReceiveMaximum.
+			MaxInflightMessages: 128,
 			InflightOverflow:    config.InflightOverflowBackpressure,
 		},
 	)
 
-	require.NotNil(t, s.deliverSlots)
-	require.Equal(t, 2, cap(s.deliverSlots))
-	require.Equal(t, 1, len(s.deliverSlots))
+	// The send window is the connection send quota, separate from the
+	// persistent inflight store: capacity == negotiated Receive Maximum, and
+	// no token is pre-consumed for restored inflight (those consume on
+	// retransmission).
+	require.NotNil(t, s.sendWindow)
+	require.Equal(t, 2, s.sendWindow.capacity)
+	require.Equal(t, 0, len(s.sendWindow.held))
 
 	acked, err := inflight.Ack(1)
 	require.NoError(t, err)
@@ -103,7 +107,7 @@ func TestNew_BackpressureSlotsRespectReceiveMaximumAndRestoredInflight(t *testin
 	storage.ReleaseMessage(acked)
 }
 
-func TestAcquireDeliverSlot_UnblocksOnDisconnect(t *testing.T) {
+func TestAcquireSendQuota_UnblocksOnDisconnect(t *testing.T) {
 	s := New(
 		"client-2",
 		packets.V5,
@@ -114,13 +118,16 @@ func TestAcquireDeliverSlot_UnblocksOnDisconnect(t *testing.T) {
 			InflightOverflow: config.InflightOverflowBackpressure,
 		},
 	)
-	require.NoError(t, s.Connect(&testConn{}))
+	_, errConn := s.Connect(&testConn{})
+	require.NoError(t, errConn)
+	gen := s.Epoch()
 
-	require.True(t, s.AcquireDeliverSlot())
+	// Consume the only token, then a second acquire must block until disconnect.
+	require.True(t, s.AcquireSendQuota(1, gen))
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- s.AcquireDeliverSlot()
+		result <- s.AcquireSendQuota(2, gen)
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -130,7 +137,7 @@ func TestAcquireDeliverSlot_UnblocksOnDisconnect(t *testing.T) {
 	case ok := <-result:
 		require.False(t, ok)
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("AcquireDeliverSlot did not unblock after disconnect")
+		t.Fatal("AcquireSendQuota did not unblock after disconnect")
 	}
 }
 
@@ -146,7 +153,8 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 			PendingQueueSize: 8,
 		},
 	)
-	require.NoError(t, s.Connect(&testConn{}))
+	_, errConn := s.Connect(&testConn{})
+	require.NoError(t, errConn)
 
 	msg := storage.AcquireMessage()
 	msg.Topic = "topic"

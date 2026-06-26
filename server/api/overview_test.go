@@ -35,7 +35,7 @@ func TestOverviewCombinesStatsClusterSessions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create session %s: %v", id, err)
 		}
-		if err := s.Connect(&testConn{}); err != nil {
+		if _, err := s.Connect(&testConn{}); err != nil {
 			t.Fatalf("connect session %s: %v", id, err)
 		}
 	}

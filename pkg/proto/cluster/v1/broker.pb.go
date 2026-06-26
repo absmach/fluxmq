@@ -545,13 +545,17 @@ func (x *SessionState) GetWill() *WillMessage {
 }
 
 type InflightMessage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PacketId      uint32                 `protobuf:"varint,1,opt,name=packet_id,json=packetId,proto3" json:"packet_id,omitempty"`
-	Topic         string                 `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
-	Qos           uint32                 `protobuf:"varint,4,opt,name=qos,proto3" json:"qos,omitempty"`
-	Retain        bool                   `protobuf:"varint,5,opt,name=retain,proto3" json:"retain,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	PacketId  uint32                 `protobuf:"varint,1,opt,name=packet_id,json=packetId,proto3" json:"packet_id,omitempty"`
+	Topic     string                 `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
+	Payload   []byte                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	Qos       uint32                 `protobuf:"varint,4,opt,name=qos,proto3" json:"qos,omitempty"`
+	Retain    bool                   `protobuf:"varint,5,opt,name=retain,proto3" json:"retain,omitempty"`
+	Timestamp int64                  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	// direction: 0 = outbound (server->client), 1 = inbound (client->server).
+	Direction uint32 `protobuf:"varint,7,opt,name=direction,proto3" json:"direction,omitempty"`
+	// state: inflight delivery state (0 = publish sent, 1 = pubrec received).
+	State         uint32 `protobuf:"varint,8,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -624,6 +628,20 @@ func (x *InflightMessage) GetRetain() bool {
 func (x *InflightMessage) GetTimestamp() int64 {
 	if x != nil {
 		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *InflightMessage) GetDirection() uint32 {
+	if x != nil {
+		return x.Direction
+	}
+	return 0
+}
+
+func (x *InflightMessage) GetState() uint32 {
+	if x != nil {
+		return x.State
 	}
 	return 0
 }
@@ -2421,14 +2439,16 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x11inflight_messages\x18\x03 \x03(\v2\".fluxmq.cluster.v1.InflightMessageR\x10inflightMessages\x12I\n" +
 	"\x0fqueued_messages\x18\x04 \x03(\v2 .fluxmq.cluster.v1.QueuedMessageR\x0equeuedMessages\x12E\n" +
 	"\rsubscriptions\x18\x05 \x03(\v2\x1f.fluxmq.cluster.v1.SubscriptionR\rsubscriptions\x122\n" +
-	"\x04will\x18\x06 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\x04will\"\xa6\x01\n" +
+	"\x04will\x18\x06 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\x04will\"\xda\x01\n" +
 	"\x0fInflightMessage\x12\x1b\n" +
 	"\tpacket_id\x18\x01 \x01(\rR\bpacketId\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x10\n" +
 	"\x03qos\x18\x04 \x01(\rR\x03qos\x12\x16\n" +
 	"\x06retain\x18\x05 \x01(\bR\x06retain\x12\x1c\n" +
-	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\"\x87\x01\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12\x1c\n" +
+	"\tdirection\x18\a \x01(\rR\tdirection\x12\x14\n" +
+	"\x05state\x18\b \x01(\rR\x05state\"\x87\x01\n" +
 	"\rQueuedMessage\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x10\n" +

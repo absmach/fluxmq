@@ -84,7 +84,7 @@ func TestGetExpired_NeverSentEligibleAfterDelay(t *testing.T) {
 	require.Empty(t, tracker.GetExpired(20*time.Second))
 
 	// Backdate to simulate neverSentRetryDelay elapsed.
-	tracker.messages[1].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
+	tracker.messages[inflightKey{direction: Outbound, packetID: 1}].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
 
 	expired := tracker.GetExpired(20 * time.Second)
 	require.Len(t, expired, 1)
@@ -97,7 +97,7 @@ func TestMarkDeliveryAttempted_ResetsBackoffTimer(t *testing.T) {
 
 	// Simulate: delay elapsed, message is eligible.
 	tracker.MarkDeliveryAttempted(1)
-	tracker.messages[1].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
+	tracker.messages[inflightKey{direction: Outbound, packetID: 1}].DeliveryAttemptedAt = time.Now().Add(-neverSentRetryDelay - time.Millisecond)
 	require.Len(t, tracker.GetExpired(20*time.Second), 1)
 
 	// Simulate failed retry: reset backoff.
@@ -105,4 +105,84 @@ func TestMarkDeliveryAttempted_ResetsBackoffTimer(t *testing.T) {
 
 	// No longer eligible — timer reset to now.
 	require.Empty(t, tracker.GetExpired(20*time.Second))
+}
+
+func TestInflight_IndependentDirectionalCapacity(t *testing.T) {
+	tr := NewInflightTracker(2)
+
+	require.NoError(t, tr.Add(1, &storage.Message{Topic: "t"}, Outbound))
+	require.NoError(t, tr.Add(2, &storage.Message{Topic: "t"}, Outbound))
+	require.ErrorIs(t, tr.Add(3, &storage.Message{Topic: "t"}, Outbound), ErrInflightFull)
+
+	// Inbound has its own capacity; a full outbound direction must not reject
+	// inbound up to the advertised Receive Maximum.
+	require.NoError(t, tr.Add(1, &storage.Message{Topic: "t"}, Inbound))
+	require.NoError(t, tr.Add(2, &storage.Message{Topic: "t"}, Inbound))
+	require.ErrorIs(t, tr.Add(3, &storage.Message{Topic: "t"}, Inbound), ErrInflightFull)
+}
+
+func TestInflight_DirectionalKeysDoNotCollide(t *testing.T) {
+	tr := NewInflightTracker(8)
+
+	out := &storage.Message{Topic: "outbound"}
+	in := &storage.Message{Topic: "inbound"}
+	require.NoError(t, tr.Add(5, out, Outbound))
+	require.NoError(t, tr.Add(5, in, Inbound)) // same packet ID, opposite direction
+
+	gotOut, err := tr.Ack(5)
+	require.NoError(t, err)
+	require.Equal(t, "outbound", gotOut.Topic, "inbound add must not overwrite the outbound entry")
+
+	gotIn, err := tr.AckInbound(5)
+	require.NoError(t, err)
+	require.Equal(t, "inbound", gotIn.Topic)
+}
+
+func TestInflight_InvalidDirectionReturnsErrorNotPanic(t *testing.T) {
+	tr := NewInflightTracker(4)
+	// A corrupt/out-of-range direction must be rejected, not index counts[] out
+	// of range and panic.
+	err := tr.Add(1, &storage.Message{Topic: "t"}, Direction(99))
+	require.ErrorIs(t, err, ErrInvalidDirection)
+}
+
+func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T) {
+	tr := NewInflightTracker(1)
+	first := &storage.Message{Topic: "first", Payload: []byte("original")}
+	accepted, err := tr.AddInbound(7, first)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.Contains(t, tr.messages, inflightKey{direction: Inbound, packetID: 7})
+	tr.messages[inflightKey{direction: Inbound, packetID: 7}].State = StatePubRecReceived
+
+	// The inbound window is full (capacity 1). A retransmitted PUBLISH reusing
+	// the same packet ID is acknowledged without replacing the first accepted
+	// transaction or taking ownership of the duplicate message.
+	duplicate := &storage.Message{Topic: "second", Payload: []byte("replacement")}
+	accepted, err = tr.AddInbound(7, duplicate)
+	require.NoError(t, err)
+	require.False(t, accepted)
+	require.Equal(t, StatePubRecReceived, tr.messages[inflightKey{direction: Inbound, packetID: 7}].State)
+
+	// A different packet ID is still rejected.
+	accepted, err = tr.AddInbound(8, &storage.Message{Topic: "t"})
+	require.ErrorIs(t, err, ErrInflightFull)
+	require.False(t, accepted)
+	require.NotContains(t, tr.messages, inflightKey{direction: Inbound, packetID: 8}, "failed admission must not create phantom duplicate state")
+
+	got, err := tr.AckInbound(7)
+	require.NoError(t, err)
+	require.Same(t, first, got)
+	require.Equal(t, "first", got.Topic)
+	require.Equal(t, []byte("original"), got.Payload)
+}
+
+func TestInflight_AddInboundRejectsInvalidDirection(t *testing.T) {
+	tr := NewInflightTracker(1)
+
+	accepted, err := tr.addInbound(1, &storage.Message{Topic: "t"}, Outbound)
+	require.ErrorIs(t, err, ErrInvalidDirection)
+	require.False(t, accepted)
+	require.Empty(t, tr.GetAll())
+	require.NotContains(t, tr.messages, inflightKey{direction: Inbound, packetID: 1})
 }

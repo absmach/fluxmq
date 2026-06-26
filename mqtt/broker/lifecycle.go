@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/mqtt/session"
 )
@@ -17,14 +18,21 @@ import (
 // retryCheckInterval is how often we check for expired inflight messages.
 const retryCheckInterval = 1 * time.Second
 
-// runSession runs the main packet loop for a session using a Handler.
+// runSession runs the main packet loop for a session using a protocolHandler.
 // It handles both packet reading and message retry checking in a single goroutine
 // by using short read deadlines and processing retries on timeout.
-func (b *Broker) runSession(handler Handler, s *session.Session) error {
-	conn := s.Conn()
+func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn core.Connection, epoch uint64, keepAlive time.Duration) error {
 	if conn == nil {
 		return nil
 	}
+
+	// Bind all response writes and teardown to this connection generation.
+	// After a takeover, cc.conn is the closed old socket and cc.epoch is stale,
+	// so a superseded goroutine's writes fail harmlessly and its Disconnect is a
+	// no-op — it can neither write to nor disconnect the replacement connection.
+	// This replaces holding a lock across handler work, so a blocked write on a
+	// stalled old connection never prevents a takeover.
+	cc := &connCtx{Session: s, conn: conn, epoch: epoch}
 
 	lastActivity := time.Now()
 	lastRetryCheck := time.Now()
@@ -33,39 +41,67 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 		// Calculate read deadline: minimum of keep-alive and retry check interval
 		// This allows us to check retries periodically while respecting keep-alive
 		readTimeout := retryCheckInterval
-		if s.KeepAlive > 0 && s.KeepAlive < readTimeout {
-			readTimeout = s.KeepAlive
+		if keepAlive > 0 && keepAlive < readTimeout {
+			readTimeout = keepAlive
 		}
 		conn.SetReadDeadline(time.Now().Add(readTimeout)) //nolint:errcheck // fails only on closed connection
 
-		pkt, err := s.ReadPacket()
+		// Read from this goroutine's own connection, not s.conn. A local
+		// takeover may have swapped s.conn to a newer connection; reading our
+		// captured conn ensures a superseded goroutine never touches the new
+		// socket and simply errors out when its own (closed) conn is torn down.
+		pkt, err := conn.ReadPacket()
 		if err != nil {
 			// Check if this is a timeout (expected for retry checking)
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				// Check if keep-alive has actually expired
-				if s.KeepAlive > 0 {
-					keepAliveDeadline := s.KeepAlive + s.KeepAlive/2
+				if keepAlive > 0 {
+					keepAliveDeadline := keepAlive + keepAlive/2
 					if time.Since(lastActivity) > keepAliveDeadline {
 						// Real keep-alive timeout - client is unresponsive
 						b.telemetry.stats.DecrementConnections()
-						s.Disconnect(false) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
+						s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
 						return err
 					}
 				}
-				// Just a retry check interval timeout - process retries and continue
-				s.ProcessRetries()
+				// Just a retry check interval timeout - process retries and
+				// continue. Retry resends go through cc, so a superseded
+				// goroutine cannot deliver onto the replacement connection.
+				cc.ProcessRetries()
 				lastRetryCheck = time.Now()
 				continue
 			}
 
-			// Real error (EOF, connection closed, etc.)
-			if err != io.EOF && err != session.ErrNotConnected {
+			// Real error (EOF, connection closed, etc.). Only count it as a
+			// packet error on the live connection: a superseded goroutine's
+			// read fails because its own socket was closed by the takeover.
+			if err != io.EOF && err != session.ErrNotConnected && cc.current() {
 				b.telemetry.stats.IncrementPacketErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
-			s.Disconnect(false) //nolint:errcheck // disconnect on read error; connection already failed
+			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on read error; connection already failed
 			return err
+		}
+
+		// Bind this packet to our connection generation. A takeover may have
+		// superseded us while the packet was in flight; dispatching it would
+		// mutate session state now owned by the replacement connection
+		// (publish, (un)subscribe, ack inflight, topic aliases, retained
+		// delivery). Drop it and exit — our own socket has already been closed
+		// by the takeover.
+		//
+		// Known limitation: this is a point-in-time check, not held across
+		// dispatch. A takeover landing between this check and a mutation deep
+		// in a handler can still let that one in-flight packet commit. We
+		// accept that bounded window: the packet was genuinely sent by the
+		// client on the old connection just before it reconnected, and the
+		// only fully-closed alternatives are holding a lock across handler work
+		// (which deadlocks when a response write blocks on a stalled client) or
+		// threading a generation check into every shared-state commit point.
+		if !cc.current() {
+			b.telemetry.stats.DecrementConnections()
+			return nil
 		}
 
 		// Packet received - update activity time
@@ -77,24 +113,29 @@ func (b *Broker) runSession(handler Handler, s *session.Session) error {
 		// Throttled retry check: under sustained traffic the read loop never
 		// times out, so we check retries here but at most once per interval.
 		if time.Since(lastRetryCheck) >= retryCheckInterval {
-			s.ProcessRetries()
+			cc.ProcessRetries()
 			lastRetryCheck = time.Now()
 		}
 
-		if err := dispatchPacket(handler, s, pkt); err != nil {
-			if err == io.EOF {
+		if dispatchErr := dispatchPacket(handler, cc, pkt); dispatchErr != nil {
+			if dispatchErr == io.EOF {
 				b.telemetry.stats.DecrementConnections()
 				return nil
 			}
-			b.telemetry.stats.IncrementProtocolErrors()
+			// Only a live connection's dispatch failure is a protocol error.
+			// A superseded goroutine's handler write fails against its own
+			// closed socket; that is expected teardown, not a protocol error.
+			if cc.current() {
+				b.telemetry.stats.IncrementProtocolErrors()
+			}
 			b.telemetry.stats.DecrementConnections()
-			s.Disconnect(false) //nolint:errcheck // disconnect on protocol error; connection is being terminated
-			return err
+			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on protocol error; connection is being terminated
+			return dispatchErr
 		}
 	}
 }
 
-func dispatchPacket(handler Handler, s *session.Session, pkt packets.ControlPacket) error {
+func dispatchPacket(handler protocolHandler, s *connCtx, pkt packets.ControlPacket) error {
 	switch pkt.Type() {
 	case packets.PublishType:
 		return handler.HandlePublish(s, pkt)

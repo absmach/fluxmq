@@ -14,7 +14,6 @@ import (
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
 
@@ -44,19 +43,38 @@ func newMessageHandler(inflight messages.Inflight, offlineQueue messages.Queue, 
 const RetryTimeout = 20 * time.Second
 
 // ProcessRetries checks for expired inflight messages and resends them.
-// This is called synchronously from the read loop instead of running in a separate goroutine.
-func (h *msgHandler) ProcessRetries(writer core.PacketWriter) {
+// This is called synchronously from the read loop instead of running in a
+// separate goroutine.
+//
+// acquire gates each outbound retransmission against the connection's send quota
+// (Receive Maximum): a message already holding a token resends, otherwise a
+// token is consumed; when none is available the retransmission is deferred to a
+// later cycle. This stops a reconnect from retransmitting more unacknowledged
+// PUBLISH packets at once than the new connection advertised.
+func (h *msgHandler) ProcessRetries(writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
+	if version == 0 {
+		version = h.version
+	}
+	if markRetry == nil {
+		markRetry = func(packetID uint16) {
+			if err := h.inflight.MarkRetry(packetID); err != nil {
+				slog.Debug("Failed to mark retry", "packet_id", packetID, "error", err)
+			}
+		}
+	}
+
 	expired := h.inflight.GetExpired(RetryTimeout)
 	for _, inflight := range expired {
 		if inflight.Direction != messages.Outbound {
 			continue
 		}
-		if err := h.resendMessage(writer, inflight); err != nil {
+		if acquire != nil && !acquire(inflight.PacketID) {
+			continue // no send quota available this cycle; retry later
+		}
+		if err := h.resendMessage(writer, inflight, version, markRetry); err != nil {
 			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
 		}
 	}
-
-	h.inflight.CleanupExpiredReceived(30 * time.Minute)
 }
 
 // Inflight returns the inflight tracker.
@@ -121,24 +139,24 @@ func (h *msgHandler) ClearAliases() {
 	h.inboundAliases = make(map[uint16]string)
 }
 
-func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage) error {
+func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage, version byte, markRetry func(packetID uint16)) error {
 	msg := inflight.Message
 	if msg == nil {
 		return nil
 	}
 
 	onSent := func() {
-		if err := h.inflight.MarkRetry(inflight.PacketID); err != nil {
-			slog.Debug("Failed to mark retry", "packet_id", inflight.PacketID, "error", err)
-		}
+		markRetry(inflight.PacketID)
 	}
 
 	if msg.QoS == 2 && inflight.State == messages.StatePubRecReceived {
-		rel := h.newPubRelPacket(inflight.PacketID)
+		rel := h.newPubRelPacket(inflight.PacketID, version)
 		return writer.WriteControlPacket(rel, onSent)
 	}
 
-	pub := h.acquirePublishPacket(msg, inflight.PacketID)
+	// dup=true: this is a retransmission. EncodePublish carries the v5 PUBLISH
+	// properties so a resent message is not stripped of them.
+	pub := EncodePublish(msg, inflight.PacketID, version, true)
 	err := writer.TryWriteDataPacket(pub, onSent)
 	if errors.Is(err, core.ErrSendQueueFull) {
 		pub.Release()
@@ -151,36 +169,8 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 	return err
 }
 
-func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16) packets.ControlPacket {
-	payload := msg.GetPayload()
-	if h.version == packets.V5 {
-		p := v5.AcquirePublish()
-		p.FixedHeader = packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-			Dup:        true,
-		}
-		p.TopicName = msg.Topic
-		p.Payload = payload
-		p.ID = packetID
-		return p
-	}
-	p := v3.AcquirePublish()
-	p.FixedHeader = packets.FixedHeader{
-		PacketType: packets.PublishType,
-		QoS:        msg.QoS,
-		Retain:     msg.Retain,
-		Dup:        true,
-	}
-	p.TopicName = msg.Topic
-	p.Payload = payload
-	p.ID = packetID
-	return p
-}
-
-func (h *msgHandler) newPubRelPacket(packetID uint16) packets.ControlPacket {
-	if h.version == packets.V5 {
+func (h *msgHandler) newPubRelPacket(packetID uint16, version byte) packets.ControlPacket {
+	if version == packets.V5 {
 		return &v5.PubRel{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,

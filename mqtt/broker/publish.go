@@ -127,7 +127,17 @@ func (b *Broker) PublishWill(ctx context.Context, clientID string) error {
 		return err
 	}
 
-	// Create message from will (will payload is []byte, not RefCountedBuffer)
+	if err := b.publishWillMessage(ctx, will); err != nil {
+		return err
+	}
+
+	return b.stores.wills.Delete(ctx, clientID)
+}
+
+// publishWillMessage distributes a Will message. Used both for stored Wills
+// (PublishWill) and for the Will of a connection displaced by a takeover.
+func (b *Broker) publishWillMessage(ctx context.Context, will *storage.WillMessage) error {
+	// Will payload is []byte, not a RefCountedBuffer.
 	msg := &storage.Message{
 		Topic:      will.Topic,
 		ClientID:   will.ClientID,
@@ -137,15 +147,9 @@ func (b *Broker) PublishWill(ctx context.Context, clientID string) error {
 	}
 	msg.SetPayloadFromBytes(will.Payload)
 
-	if err := b.distribute(ctx, msg); err != nil {
-		msg.ReleasePayload()
-		return err
-	}
-
-	// Release the message buffer after distribution
+	err := b.distribute(ctx, msg)
 	msg.ReleasePayload()
-
-	return b.stores.wills.Delete(ctx, clientID)
+	return err
 }
 
 // handleRetained stores or clears a retained message.

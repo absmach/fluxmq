@@ -36,7 +36,7 @@ func HandleConnection(ctx context.Context, broker *Broker, conn core.Connection)
 			conn.Close()
 			return
 		}
-		handler := NewV3Handler(broker)
+		handler := newV3Handler(broker)
 		handler.HandleConnect(conn, p3) //nolint:errcheck,contextcheck // handler manages connection lifecycle; disconnect cleanup uses background context
 		return
 	}
@@ -49,7 +49,7 @@ func HandleConnection(ctx context.Context, broker *Broker, conn core.Connection)
 			conn.Close()
 			return
 		}
-		handler := NewV5Handler(broker)
+		handler := newV5Handler(broker)
 		handler.HandleConnect(conn, p5) //nolint:errcheck,contextcheck // handler manages connection lifecycle; disconnect cleanup uses background context
 		return
 	}

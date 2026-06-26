@@ -47,7 +47,7 @@ type Message struct {
 	Expiry          time.Time
 	PublishTime     time.Time
 	Payload         []byte                 // Deprecated: Use PayloadBuf for zero-copy
-	PayloadBuf      *core.RefCountedBuffer // Zero-copy payload buffer (preferred)
+	PayloadBuf      *core.RefCountedBuffer `json:"-"` // Zero-copy payload buffer; not serialized (use Payload for persistence)
 	CorrelationData []byte
 	SubscriptionIDs []uint32
 	Topic           string
@@ -61,6 +61,13 @@ type Message struct {
 	PacketID        uint16
 	QoS             byte
 	Retain          bool
+
+	// InflightDirection and InflightState carry inflight metadata when a message
+	// is persisted as an inflight entry (0 for non-inflight messages): direction
+	// distinguishes inbound from outbound so a restored QoS 2 transaction keeps
+	// its direction, and state preserves the QoS 2 delivery phase.
+	InflightDirection byte
+	InflightState     byte
 }
 
 // GetPayload returns the message payload, preferring PayloadBuf if available.
@@ -120,15 +127,17 @@ func CopyMessage(msg *Message) *Message {
 	}
 
 	cp := &Message{
-		Topic:         msg.Topic,
-		ClientID:      msg.ClientID,
-		QoS:           msg.QoS,
-		Retain:        msg.Retain,
-		PacketID:      msg.PacketID,
-		Expiry:        msg.Expiry,
-		ContentType:   msg.ContentType,
-		ResponseTopic: msg.ResponseTopic,
-		PublishTime:   msg.PublishTime,
+		Topic:             msg.Topic,
+		ClientID:          msg.ClientID,
+		QoS:               msg.QoS,
+		Retain:            msg.Retain,
+		PacketID:          msg.PacketID,
+		Expiry:            msg.Expiry,
+		ContentType:       msg.ContentType,
+		ResponseTopic:     msg.ResponseTopic,
+		PublishTime:       msg.PublishTime,
+		InflightDirection: msg.InflightDirection,
+		InflightState:     msg.InflightState,
 	}
 
 	if msg.MessageExpiry != nil {

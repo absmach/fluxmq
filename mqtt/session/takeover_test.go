@@ -1,0 +1,261 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package session
+
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/storage/messages"
+	"github.com/stretchr/testify/require"
+)
+
+// recordingConn is a testConn that records whether it was closed and exposes
+// the onDisconnect callback the session installed on it.
+type recordingConn struct {
+	testConn
+	closed atomic.Bool
+}
+
+func (c *recordingConn) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+// wsLikeConn models a WebSocket connection whose Close() synchronously invokes
+// the onDisconnect callback (as server/websocket does), which calls back into
+// the session. Used to guard against re-entrant lock deadlock on takeover.
+type wsLikeConn struct {
+	testConn
+	closed atomic.Bool
+}
+
+func (c *wsLikeConn) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+	if c.onDisconnect != nil {
+		c.onDisconnect(false) // synchronous, like the WebSocket transport
+	}
+	return nil
+}
+
+func newTakeoverSession(t *testing.T) *Session {
+	t.Helper()
+	return New(
+		"taker",
+		4,
+		Options{CleanStart: false, ReceiveMaximum: 16},
+		messages.NewInflightTracker(16),
+		messages.NewMessageQueue(16, true),
+		config.SessionConfig{},
+	)
+}
+
+// TestConnect_LocalTakeoverClosesOldConn verifies that attaching a new
+// connection to a session that already has one closes the old connection
+// (MQTT-3.1.4-2) and advances the epoch.
+func TestConnect_LocalTakeoverClosesOldConn(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	oldConn := &recordingConn{}
+	oldEpoch, err := s.Connect(oldConn)
+	require.NoError(t, err)
+	require.False(t, oldConn.closed.Load(), "old conn must be open after first Connect")
+
+	newConn := &recordingConn{}
+	newEpoch, err := s.Connect(newConn)
+	require.NoError(t, err)
+
+	require.True(t, oldConn.closed.Load(), "takeover must close the superseded connection")
+	require.False(t, newConn.closed.Load(), "new conn must remain open")
+	require.Greater(t, newEpoch, oldEpoch, "epoch must advance on takeover")
+	require.True(t, s.IsConnected())
+	got, ok := s.Conn().(*recordingConn)
+	require.True(t, ok)
+	require.Same(t, newConn, got)
+}
+
+// TestDisconnectIf_StaleEpochIsNoOp is the core race guard. After a local
+// takeover, a superseded runSession goroutine calling DisconnectIf with its
+// old epoch must NOT tear down the session — otherwise it would kill the new
+// connection. This reproduces the high-latency reconnect failure from
+// propeller#241.
+func TestDisconnectIf_StaleEpochIsNoOp(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	oldConn := &recordingConn{}
+	oldEpoch, err := s.Connect(oldConn)
+	require.NoError(t, err)
+
+	newConn := &recordingConn{}
+	newEpoch, err := s.Connect(newConn)
+	require.NoError(t, err)
+
+	// Stale goroutine from the old connection tears down with its old epoch.
+	require.NoError(t, s.DisconnectIf(false, oldEpoch))
+
+	// New connection must be untouched and the session still connected.
+	require.True(t, s.IsConnected(), "stale epoch teardown must not disconnect the session")
+	require.False(t, newConn.closed.Load(), "stale epoch teardown must not close the new conn")
+
+	// The current epoch's teardown does disconnect.
+	require.NoError(t, s.DisconnectIf(false, newEpoch))
+	require.False(t, s.IsConnected())
+	require.True(t, newConn.closed.Load())
+}
+
+// TestConnect_OnDisconnectCallbackScopedToEpoch verifies the conn-level
+// onDisconnect callback installed by Connect is scoped to its epoch, so the
+// old socket dying after takeover cannot disconnect the new connection.
+func TestConnect_OnDisconnectCallbackScopedToEpoch(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	oldConn := &recordingConn{}
+	_, err := s.Connect(oldConn)
+	require.NoError(t, err)
+	oldCallback := oldConn.onDisconnect
+	require.NotNil(t, oldCallback)
+
+	newConn := &recordingConn{}
+	_, err = s.Connect(newConn)
+	require.NoError(t, err)
+
+	// Old socket's death fires the old callback. It must be a no-op.
+	oldCallback(false)
+
+	require.True(t, s.IsConnected(), "old conn callback must not disconnect after takeover")
+	require.False(t, newConn.closed.Load())
+}
+
+// TestConnect_WebSocketStyleSyncOnDisconnectNoDeadlock verifies that a takeover
+// of a connection whose Close() synchronously calls onDisconnect (WebSocket)
+// does not deadlock by re-entering the session lock.
+func TestConnect_WebSocketStyleSyncOnDisconnectNoDeadlock(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	oldConn := &wsLikeConn{}
+	_, err := s.Connect(oldConn)
+	require.NoError(t, err)
+
+	newConn := &wsLikeConn{}
+	done := make(chan struct{})
+	go func() {
+		_, err := s.Connect(newConn) // would deadlock if Close re-entered s.mu
+		require.NoError(t, err)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Connect deadlocked on WebSocket-style synchronous onDisconnect")
+	}
+
+	require.True(t, oldConn.closed.Load(), "old ws conn must be closed by takeover")
+	require.True(t, s.IsConnected())
+	require.False(t, newConn.closed.Load())
+}
+
+// TestConnectWithOptions_AppliesNewOptionsOnReconnect guards finding #1: a
+// persistent reconnect must adopt the new connection's options (notably the
+// protocol version, which drives packet encoding) and return the displaced
+// connection's old version and Will.
+func TestConnectWithOptions_AppliesNewOptionsOnReconnect(t *testing.T) {
+	s := newTakeoverSession(t) // version 4
+
+	oldConn := &recordingConn{}
+	_, err := s.Connect(oldConn)
+	require.NoError(t, err)
+	require.Equal(t, byte(4), s.Version)
+
+	newWill := &storage.WillMessage{Topic: "will/new", Payload: []byte("x")}
+	newConn := &recordingConn{}
+	_, superseded := s.ConnectWithOptions(newConn, ConnectOptions{
+		Version:        5,
+		KeepAlive:      45 * time.Second,
+		Will:           newWill,
+		ReceiveMaximum: 8,
+		TopicAliasMax:  10,
+	})
+
+	require.Equal(t, byte(5), s.Version, "reconnect must adopt the new protocol version")
+	require.Equal(t, 45*time.Second, s.KeepAlive)
+	require.Equal(t, newWill, s.GetWill())
+	require.Equal(t, uint16(8), s.ReceiveMaximum, "reconnect must adopt the new Receive Maximum")
+	require.NotNil(t, superseded)
+	require.Equal(t, byte(4), superseded.Version, "superseded carries the old version")
+}
+
+// TestSetExpiryInterval_ZeroReplacesPositive guards finding #3: a reconnect
+// carrying session expiry 0 (expire on disconnect) must replace a previous
+// positive value, not be ignored.
+func TestSetExpiryInterval_ZeroReplacesPositive(t *testing.T) {
+	s := newTakeoverSession(t)
+	s.SetExpiryInterval(300)
+	require.Equal(t, uint32(300), s.ExpiryInterval)
+
+	s.SetExpiryInterval(0)
+	require.Equal(t, uint32(0), s.ExpiryInterval, "expiry 0 must replace the previous positive value")
+}
+
+// TestConnectWithOptions_ClearsTopicAliases guards finding #4: topic alias
+// mappings are scoped to a single connection and must not survive a takeover.
+// [MQTT-3.3.2-7].
+func TestConnectWithOptions_ClearsTopicAliases(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	c1 := &recordingConn{}
+	_, err := s.Connect(c1)
+	require.NoError(t, err)
+
+	s.SetInboundAlias(1, "devices/a")
+	topic, ok := s.ResolveInboundAlias(1)
+	require.True(t, ok)
+	require.Equal(t, "devices/a", topic)
+
+	c2 := &recordingConn{}
+	s.ConnectWithOptions(c2, ConnectOptions{Version: 5, TopicAliasMax: 10})
+
+	_, ok = s.ResolveInboundAlias(1)
+	require.False(t, ok, "topic aliases must not carry across a takeover")
+}
+
+// TestConnect_ConcurrentReconnectKeepsLatest stress-checks that under many
+// concurrent reconnects exactly one connection survives and the session is
+// left in a consistent connected state.
+func TestConnect_ConcurrentReconnectKeepsLatest(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	const n = 64
+	conns := make([]*recordingConn, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+
+	for i := range n {
+		conns[i] = &recordingConn{}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.Connect(conns[i])
+		}(i)
+	}
+	wg.Wait()
+	require.NoError(t, errors.Join(errs...))
+
+	// Exactly one conn (the highest epoch winner) should be open and current.
+	openCount := 0
+	for _, c := range conns {
+		if !c.closed.Load() {
+			openCount++
+		}
+	}
+	require.Equal(t, 1, openCount, "exactly one connection must survive concurrent takeover")
+	require.True(t, s.IsConnected())
+}

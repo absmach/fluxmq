@@ -78,7 +78,8 @@ func TestV5NoLocalPreventsSelfDelivery(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := &captureConnection{}
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 	require.NoError(t, b.subscribe(s, "devices/one", 1, storage.SubscribeOptions{NoLocal: true}))
 
 	msg := &storage.Message{
@@ -102,8 +103,10 @@ func TestV5RetainAsPublishedAffectsDeliveryFlag(t *testing.T) {
 
 	conn1 := &captureConnection{}
 	conn2 := &captureConnection{}
-	require.NoError(t, s1.Connect(conn1))
-	require.NoError(t, s2.Connect(conn2))
+	_, errConn1 := s1.Connect(conn1)
+	require.NoError(t, errConn1)
+	_, errConn2 := s2.Connect(conn2)
+	require.NoError(t, errConn2)
 
 	require.NoError(t, b.subscribe(s1, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: false}))
 	require.NoError(t, b.subscribe(s2, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: true}))
@@ -135,7 +138,8 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := &captureConnection{}
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 
 	retained := &storage.Message{
 		Topic:    testRetainTopic,
@@ -149,7 +153,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, matchedRetained, 1)
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	rh0 := byte(0)
 	sub1 := &v5.Subscribe{
@@ -159,7 +163,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 			{Topic: testRetainTopic, MaxQoS: 1, RetainHandling: &rh0},
 		},
 	}
-	require.NoError(t, handler.HandleSubscribe(s, sub1))
+	require.NoError(t, handler.HandleSubscribe(bindConn(s), sub1))
 	require.Len(t, conn.packets, 2)
 
 	_, ok := conn.packets[0].(*v5.Publish)
@@ -177,7 +181,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 			{Topic: testRetainTopic, MaxQoS: 1, RetainHandling: &rh1},
 		},
 	}
-	require.NoError(t, handler.HandleSubscribe(s, sub2))
+	require.NoError(t, handler.HandleSubscribe(bindConn(s), sub2))
 	require.Len(t, conn.packets, 1)
 	_, ok = conn.packets[0].(*v5.SubAck)
 	require.True(t, ok)
@@ -191,9 +195,10 @@ func TestV5PublishErrorResponseMatchesQoS(t *testing.T) {
 	s.TopicAliasMax = 1
 
 	conn := &captureConnection{}
-	require.NoError(t, s.Connect(conn))
+	_, errConn := s.Connect(conn)
+	require.NoError(t, errConn)
 
-	handler := NewV5Handler(b)
+	handler := newV5Handler(b)
 
 	alias2 := uint16(2)
 	pub0 := &v5.Publish{
@@ -204,7 +209,7 @@ func TestV5PublishErrorResponseMatchesQoS(t *testing.T) {
 			TopicAlias: &alias2,
 		},
 	}
-	err = handler.HandlePublish(s, pub0)
+	err = handler.HandlePublish(bindConn(s), pub0)
 	require.ErrorIs(t, err, ErrTopicInvalid)
 	require.Len(t, conn.packets, 0)
 
@@ -217,7 +222,7 @@ func TestV5PublishErrorResponseMatchesQoS(t *testing.T) {
 			TopicAlias: &alias2,
 		},
 	}
-	require.NoError(t, handler.HandlePublish(s, pub2))
+	require.NoError(t, handler.HandlePublish(bindConn(s), pub2))
 	require.Len(t, conn.packets, 1)
 	_, ok := conn.packets[0].(*v5.PubRec)
 	require.True(t, ok)

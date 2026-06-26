@@ -36,7 +36,7 @@ func TestPersistSessionInfoTracksConnectedState(t *testing.T) {
 		t.Fatalf("expected stored session to start disconnected")
 	}
 
-	if err := s.Connect(&mockConnection{}); err != nil {
+	if _, err := s.Connect(&mockConnection{}); err != nil {
 		t.Fatalf("failed to connect session: %v", err)
 	}
 
@@ -311,7 +311,7 @@ func newTestBrokerWithSessions(t *testing.T) (*Broker, func()) {
 		}
 		s.AddSubscription(tc.filter, storage.SubscribeOptions{})
 
-		if err := s.Connect(&mockConnection{}); err != nil {
+		if _, err := s.Connect(&mockConnection{}); err != nil {
 			t.Fatalf("Connect(%q): %v", tc.id, err)
 		}
 		b.persistSessionInfo(s)

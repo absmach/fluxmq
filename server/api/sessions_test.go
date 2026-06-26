@@ -456,7 +456,7 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 	}
 	s.AddSubscription(filter, storage.SubscribeOptions{})
 
-	if err := s.Connect(&testConn{}); err != nil {
+	if _, err := s.Connect(&testConn{}); err != nil {
 		t.Fatalf("failed to connect session: %v", err)
 	}
 

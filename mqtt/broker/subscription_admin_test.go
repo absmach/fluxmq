@@ -288,7 +288,7 @@ func newTestBrokerWithSharedSubs(t *testing.T) (*Broker, func()) {
 			s.AddSubscription(sub.filter, storage.SubscribeOptions{})
 		}
 
-		if err := s.Connect(&mockConnection{}); err != nil {
+		if _, err := s.Connect(&mockConnection{}); err != nil {
 			t.Fatalf("Connect(%q): %v", tc.id, err)
 		}
 		b.persistSessionInfo(s)

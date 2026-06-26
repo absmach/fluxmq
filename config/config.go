@@ -317,6 +317,11 @@ type AMQP091Config struct {
 	MTLS  AMQP091ListenerConfig `yaml:"mtls"`
 }
 
+// DefaultMaxInflightMessages is the fallback for Session.MaxInflightMessages
+// when it is unset (<= 0). Shared by the broker and the session so the
+// send-quota clamp is consistent across the first CONNECT.
+const DefaultMaxInflightMessages = 256
+
 // InflightOverflowMode controls what happens when a session's inflight window is full.
 type InflightOverflowMode int
 

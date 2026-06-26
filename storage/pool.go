@@ -67,4 +67,6 @@ func (m *Message) Reset() {
 	m.PacketID = 0
 	m.QoS = 0
 	m.Retain = false
+	m.InflightDirection = 0
+	m.InflightState = 0
 }

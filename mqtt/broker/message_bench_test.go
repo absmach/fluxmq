@@ -544,7 +544,7 @@ func createBenchSession(tb testing.TB, broker *Broker, clientID string) *session
 
 	// Create a mock connection
 	conn := &mockBenchConn{clientID: clientID}
-	if err := s.Connect(conn); err != nil {
+	if _, err := s.Connect(conn); err != nil {
 		tb.Fatalf("Failed to connect session: %v", err)
 	}
 
