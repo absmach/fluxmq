@@ -558,7 +558,6 @@ func (c *wsConnection) Close() error {
 	}
 
 	_ = c.ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(100*time.Millisecond))
-	time.Sleep(50 * time.Millisecond)
 	_ = c.ws.UnderlyingConn().Close()
 	return nil
 }
