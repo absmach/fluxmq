@@ -65,6 +65,11 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 						return err
 					}
 				}
+				if b.shuttingDown.Load() {
+					b.telemetry.stats.DecrementConnections()
+					s.DisconnectIf(false, epoch) //nolint:errcheck // shutdown in progress
+					return err
+				}
 				// Just a retry check interval timeout - process retries and
 				// continue. Retry resends go through cc, so a superseded
 				// goroutine cannot deliver onto the replacement connection.
