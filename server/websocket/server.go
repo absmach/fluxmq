@@ -554,7 +554,7 @@ func (c *wsConnection) Close() error {
 		}
 	})
 	if c.onDisconnect != nil {
-		c.onDisconnect(false)
+		go c.onDisconnect(false)
 	}
 
 	return c.ws.Close()
