@@ -14,7 +14,6 @@ import (
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
 
@@ -155,7 +154,9 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 		return writer.WriteControlPacket(rel, onSent)
 	}
 
-	pub := h.acquirePublishPacket(msg, inflight.PacketID, version)
+	// dup=true: this is a retransmission. EncodePublish carries the v5 PUBLISH
+	// properties so a resent message is not stripped of them.
+	pub := EncodePublish(msg, inflight.PacketID, version, true)
 	err := writer.TryWriteDataPacket(pub, onSent)
 	if errors.Is(err, core.ErrSendQueueFull) {
 		pub.Release()
@@ -166,34 +167,6 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 		pub.Release()
 	}
 	return err
-}
-
-func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16, version byte) packets.ControlPacket {
-	payload := msg.GetPayload()
-	if version == packets.V5 {
-		p := v5.AcquirePublish()
-		p.FixedHeader = packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-			Dup:        true,
-		}
-		p.TopicName = msg.Topic
-		p.Payload = payload
-		p.ID = packetID
-		return p
-	}
-	p := v3.AcquirePublish()
-	p.FixedHeader = packets.FixedHeader{
-		PacketType: packets.PublishType,
-		QoS:        msg.QoS,
-		Retain:     msg.Retain,
-		Dup:        true,
-	}
-	p.TopicName = msg.Topic
-	p.Payload = payload
-	p.ID = packetID
-	return p
 }
 
 func (h *msgHandler) newPubRelPacket(packetID uint16, version byte) packets.ControlPacket {

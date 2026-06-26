@@ -5,20 +5,15 @@ package broker
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/cluster"
 	core "github.com/absmach/fluxmq/mqtt"
-	"github.com/absmach/fluxmq/mqtt/packets"
-	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
-	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
@@ -231,48 +226,9 @@ func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *storage
 	b.telemetry.stats.IncrementPublishSent()
 	b.telemetry.stats.AddBytesSent(uint64(len(msg.GetPayload())))
 
-	var pub packets.ControlPacket
-
-	switch version {
-	case 5:
-		p := v5.AcquirePublish()
-
-		// Calculate remaining message expiry interval
-		if msg.MessageExpiry != nil && !msg.Expiry.IsZero() {
-			remaining := time.Until(msg.Expiry)
-
-			if remaining > 0 {
-				// Send remaining expiry in seconds
-				remainingSec := uint32(remaining.Seconds())
-				p.Properties.MessageExpiry = &remainingSec
-			}
-		}
-
-		p.FixedHeader = packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-		}
-		p.TopicName = msg.Topic
-		p.Payload = msg.GetPayload()
-		p.ID = msg.PacketID
-		applyPublishProperties(p.Properties, msg)
-
-		pub = p
-	default:
-		p := v3.AcquirePublish()
-
-		p.FixedHeader = packets.FixedHeader{
-			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
-		}
-		p.TopicName = msg.Topic
-		p.Payload = msg.GetPayload()
-		p.ID = msg.PacketID
-
-		pub = p
-	}
+	// First send (dup=false). EncodePublish is the single encoder shared with the
+	// retransmission path so the two cannot drift on v5 properties.
+	pub := session.EncodePublish(msg, msg.PacketID, version, false)
 
 	// The send loop calls pub.Release() after Pack() completes.
 	// onSent carries only application-level callbacks (e.g. MarkSent).
@@ -282,80 +238,6 @@ func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *storage
 		pub.Release()
 	}
 	return err
-}
-
-func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
-	if props == nil || msg == nil {
-		return
-	}
-
-	// Prefer explicit fields; fall back to mapped properties.
-	if msg.ContentType != "" {
-		props.ContentType = msg.ContentType
-	} else if v := msg.Properties["content-type"]; v != "" {
-		props.ContentType = v
-	}
-
-	if msg.ResponseTopic != "" {
-		props.ResponseTopic = msg.ResponseTopic
-	} else if v := msg.Properties["response-topic"]; v != "" {
-		props.ResponseTopic = v
-	}
-
-	if len(msg.CorrelationData) > 0 {
-		props.CorrelationData = msg.CorrelationData
-	} else if v := msg.Properties["correlation-id"]; v != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
-			props.CorrelationData = decoded
-		} else {
-			props.CorrelationData = []byte(v)
-		}
-	}
-
-	if msg.PayloadFormat != nil {
-		props.PayloadFormat = msg.PayloadFormat
-	} else if v := msg.Properties["payload-format"]; v != "" {
-		if n, err := strconv.ParseUint(v, 10, 8); err == nil {
-			pf := byte(n)
-			props.PayloadFormat = &pf
-		}
-	}
-
-	// Build User properties slice directly without intermediate map.
-	// Skip entirely when no properties exist (common case).
-	var userCount int
-	if msg.Properties != nil {
-		for k := range msg.Properties {
-			if !isReservedUserPropertyKey(k) {
-				userCount++
-			}
-		}
-	}
-	userCount += len(msg.UserProperties)
-
-	if userCount > 0 {
-		props.User = make([]v5.User, 0, userCount)
-		if msg.Properties != nil {
-			for k, v := range msg.Properties {
-				if isReservedUserPropertyKey(k) {
-					continue
-				}
-				props.User = append(props.User, v5.User{Key: k, Value: v})
-			}
-		}
-		for k, v := range msg.UserProperties {
-			props.User = append(props.User, v5.User{Key: k, Value: v})
-		}
-	}
-}
-
-func isReservedUserPropertyKey(key string) bool {
-	switch key {
-	case "content-type", "response-topic", "correlation-id", "payload-format":
-		return true
-	default:
-		return false
-	}
 }
 
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.
