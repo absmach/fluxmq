@@ -84,6 +84,18 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 // storm cannot spin forever.
 const maxLeaseRetries = 8
 
+// retrySupersededLease re-leases against the current connection generation and
+// retries delivery when gen was superseded by a takeover. retried reports
+// whether a retry was performed (bounded by maxLeaseRetries); when it is false
+// the caller handles genuine quota exhaustion or an offline session.
+func (b *Broker) retrySupersededLease(ctx context.Context, s *session.Session, msg *storage.Message, gen uint64, attempt int) (packetID uint16, retried bool, err error) {
+	if newConn, newVersion, curGen := s.DeliveryLease(); curGen != gen && newConn != nil && attempt < maxLeaseRetries {
+		packetID, err = b.deliverQoS(ctx, s, msg, newConn, newVersion, curGen, attempt+1)
+		return packetID, true, err
+	}
+	return 0, false, nil
+}
+
 // deliverQoS delivers a QoS 1/2 message under the lease (conn, version, gen). If
 // the generation is superseded by a takeover, it re-leases against the current
 // connection and retries, rather than mis-routing the message to capacity
@@ -103,8 +115,8 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 		// A superseded generation must be retried against the current connection,
 		// not treated as capacity exhaustion (the replacement may never produce
 		// an ACK to drain the pending queue).
-		if newConn, newVersion, curGen := s.DeliveryLease(); curGen != gen && newConn != nil && attempt < maxLeaseRetries {
-			return b.deliverQoS(ctx, s, msg, newConn, newVersion, curGen, attempt+1)
+		if pid, retried, err := b.retrySupersededLease(ctx, s, msg, gen, attempt); retried {
+			return pid, err
 		}
 		// Genuine quota exhaustion: defer into the pending queue.
 		if s.TryEnqueuePending(msg, nil) {
@@ -168,8 +180,8 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 // releaseLease handles a backpressure acquire that returned false: a takeover
 // (retry against the new generation) or a disconnect (offline queue).
 func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *storage.Message, gen uint64, attempt int) (uint16, error) {
-	if newConn, newVersion, curGen := s.DeliveryLease(); curGen != gen && newConn != nil && attempt < maxLeaseRetries {
-		return b.deliverQoS(ctx, s, msg, newConn, newVersion, curGen, attempt+1)
+	if pid, retried, err := b.retrySupersededLease(ctx, s, msg, gen, attempt); retried {
+		return pid, err
 	}
 	return b.deliverOffline(s, msg)
 }
@@ -177,15 +189,13 @@ func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *stor
 // deliverOffline parks a message for an offline (or unreachable) session: QoS>0
 // goes to the offline queue, QoS 0 is dropped.
 func (b *Broker) deliverOffline(s *session.Session, msg *storage.Message) (uint16, error) {
+	var err error
 	if msg.QoS > 0 {
-		err := s.OfflineQueue().Enqueue(msg)
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
-		return 0, err
+		err = s.OfflineQueue().Enqueue(msg)
 	}
 	msg.ReleasePayload()
 	storage.ReleaseMessage(msg)
-	return 0, nil
+	return 0, err
 }
 
 // AckMessage acknowledges a message by packet ID and releases the buffer.

@@ -34,6 +34,12 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 	// stalled old connection never prevents a takeover.
 	cc := &connCtx{Session: s, conn: conn, epoch: epoch}
 
+	// Capture keep-alive once: it is fixed for this connection's lifetime. A
+	// concurrent local takeover rebinds s.KeepAlive under the session lock while
+	// this (soon-to-be-superseded) goroutine is still running, so reading the
+	// field in the loop would race the takeover.
+	keepAlive := s.KeepAlive
+
 	lastActivity := time.Now()
 	lastRetryCheck := time.Now()
 
@@ -41,8 +47,8 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 		// Calculate read deadline: minimum of keep-alive and retry check interval
 		// This allows us to check retries periodically while respecting keep-alive
 		readTimeout := retryCheckInterval
-		if s.KeepAlive > 0 && s.KeepAlive < readTimeout {
-			readTimeout = s.KeepAlive
+		if keepAlive > 0 && keepAlive < readTimeout {
+			readTimeout = keepAlive
 		}
 		conn.SetReadDeadline(time.Now().Add(readTimeout)) //nolint:errcheck // fails only on closed connection
 
@@ -56,8 +62,8 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				// Check if keep-alive has actually expired
-				if s.KeepAlive > 0 {
-					keepAliveDeadline := s.KeepAlive + s.KeepAlive/2
+				if keepAlive > 0 {
+					keepAliveDeadline := keepAlive + keepAlive/2
 					if time.Since(lastActivity) > keepAliveDeadline {
 						// Real keep-alive timeout - client is unresponsive
 						b.telemetry.stats.DecrementConnections()

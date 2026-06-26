@@ -36,27 +36,6 @@ func (c *connCtx) WritePacket(pkt packets.ControlPacket) error {
 	return c.conn.WritePacket(pkt)
 }
 
-func (c *connCtx) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
-	if c.conn == nil {
-		return session.ErrNotConnected
-	}
-	return c.conn.WriteControlPacket(pkt, onSent)
-}
-
-func (c *connCtx) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
-	if c.conn == nil {
-		return session.ErrNotConnected
-	}
-	return c.conn.WriteDataPacket(pkt, onSent)
-}
-
-func (c *connCtx) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
-	if c.conn == nil {
-		return session.ErrNotConnected
-	}
-	return c.conn.TryWriteDataPacket(pkt, onSent)
-}
-
 // ProcessRetries resends due inflight messages on the bound connection rather
 // than the session's current connection, so a superseded goroutine cannot
 // redeliver onto the replacement.

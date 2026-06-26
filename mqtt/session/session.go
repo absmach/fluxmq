@@ -594,20 +594,6 @@ func (s *Session) NextPacketID() uint16 {
 	return s.msgHandler.NextPacketID()
 }
 
-// ProcessRetries checks for expired inflight messages and resends them on the
-// current connection, gated by the current generation's send quota.
-func (s *Session) ProcessRetries() {
-	s.mu.RLock()
-	conn := s.conn
-	gen := s.epoch
-	s.mu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-	s.msgHandler.ProcessRetries(conn, s.sendQuotaAcquirer(gen))
-}
-
 // ProcessRetriesTo resends due inflight messages on the provided writer, gated
 // by the send quota for generation gen. runSession uses this via connCtx so a
 // superseded goroutine can neither redeliver onto the replacement connection nor
