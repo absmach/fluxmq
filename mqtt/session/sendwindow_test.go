@@ -135,13 +135,13 @@ func TestProcessRetries_GatedBySendQuota(t *testing.T) {
 	quota := newSendWindow(1, gen, false)
 	acquire := func(packetID uint16) bool { return quota.tryAcquire(packetID, gen) }
 
-	h.ProcessRetries(w, acquire)
+	h.ProcessRetries(w, 0, acquire, nil)
 	require.Len(t, w.data, 1, "only one of three expired messages fits the quota of one")
 
 	// Even on a later cycle the quota of one still admits a single PUBLISH
 	// (the one holding the token); packets 2 and 3 stay gated.
 	w2 := &mockWriter{}
-	h.ProcessRetries(w2, acquire)
+	h.ProcessRetries(w2, 0, acquire, nil)
 	require.Len(t, w2.data, 1, "quota of one limits each retry cycle to one PUBLISH")
 }
 

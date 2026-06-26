@@ -21,7 +21,7 @@ const retryCheckInterval = 1 * time.Second
 // runSession runs the main packet loop for a session using a protocolHandler.
 // It handles both packet reading and message retry checking in a single goroutine
 // by using short read deadlines and processing retries on timeout.
-func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn core.Connection, epoch uint64) error {
+func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn core.Connection, epoch uint64, keepAlive time.Duration) error {
 	if conn == nil {
 		return nil
 	}
@@ -33,12 +33,6 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 	// This replaces holding a lock across handler work, so a blocked write on a
 	// stalled old connection never prevents a takeover.
 	cc := &connCtx{Session: s, conn: conn, epoch: epoch}
-
-	// Capture keep-alive once: it is fixed for this connection's lifetime. A
-	// concurrent local takeover rebinds s.KeepAlive under the session lock while
-	// this (soon-to-be-superseded) goroutine is still running, so reading the
-	// field in the loop would race the takeover.
-	keepAlive := s.KeepAlive
 
 	lastActivity := time.Now()
 	lastRetryCheck := time.Now()

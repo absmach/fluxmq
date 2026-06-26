@@ -31,7 +31,7 @@ func TestProcessRetriesSkipsInbound(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w, nil)
+	h.ProcessRetries(w, 0, nil, nil)
 
 	require.Empty(t, w.data)
 	require.Empty(t, w.control)
@@ -52,7 +52,7 @@ func TestProcessRetriesOutboundQoS1UsesPublish(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w, nil)
+	h.ProcessRetries(w, 0, nil, nil)
 
 	require.Len(t, w.data, 1)
 	require.IsType(t, &v3.Publish{}, w.data[0])
@@ -74,7 +74,7 @@ func TestProcessRetriesOutboundQoS2PublishSentUsesPublish(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w, nil)
+	h.ProcessRetries(w, 0, nil, nil)
 
 	require.Len(t, w.data, 1)
 	require.IsType(t, &v3.Publish{}, w.data[0])
@@ -96,7 +96,7 @@ func TestProcessRetriesOutboundQoS2PubRecReceivedUsesPubRelV3(t *testing.T) {
 	h := newMessageHandler(f, nil, 4)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w, nil)
+	h.ProcessRetries(w, 0, nil, nil)
 
 	require.Empty(t, w.data)
 	require.Len(t, w.control, 1)
@@ -118,12 +118,66 @@ func TestProcessRetriesOutboundQoS2PubRecReceivedUsesPubRelV5(t *testing.T) {
 	h := newMessageHandler(f, nil, packets.V5)
 	w := &mockWriter{}
 
-	h.ProcessRetries(w, nil)
+	h.ProcessRetries(w, 0, nil, nil)
 
 	require.Empty(t, w.data)
 	require.Len(t, w.control, 1)
 	require.IsType(t, &v5.PubRel{}, w.control[0])
 	require.Equal(t, []uint16{40}, f.retryCalls)
+}
+
+func TestProcessRetriesTo_EncodesForConnectionVersionAfterReconnect(t *testing.T) {
+	f := &fakeInflight{
+		expired: []*messages.InflightMessage{
+			{
+				PacketID:  50,
+				Direction: messages.Outbound,
+				State:     messages.StatePublishSent,
+				Message:   &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")},
+			},
+		},
+	}
+	s := New("client", packets.V311, Options{ReceiveMaximum: 8}, f, nil, config.SessionConfig{MaxInflightMessages: 8})
+
+	gen, _ := s.ConnectWithOptions(&testConn{}, ConnectOptions{Version: packets.V5, ReceiveMaximum: 8})
+	w := &mockWriter{}
+
+	s.ProcessRetriesTo(w, gen)
+
+	require.Len(t, w.data, 1)
+	require.IsType(t, &v5.Publish{}, w.data[0])
+	require.Equal(t, []uint16{50}, f.retryCalls)
+}
+
+func TestProcessRetriesTo_StaleOnSentDoesNotMarkRetry(t *testing.T) {
+	f := &fakeInflight{
+		expired: []*messages.InflightMessage{
+			{
+				PacketID:  60,
+				Direction: messages.Outbound,
+				State:     messages.StatePublishSent,
+				Message:   &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")},
+			},
+		},
+	}
+	s := New("client", packets.V5, Options{ReceiveMaximum: 8}, f, nil, config.SessionConfig{MaxInflightMessages: 8})
+	gen0, err := s.Connect(&testConn{})
+	require.NoError(t, err)
+
+	oldWriter := &captureOnSentWriter{}
+	s.ProcessRetriesTo(oldWriter, gen0)
+	require.Len(t, oldWriter.data, 1)
+	require.Empty(t, f.retryCalls)
+
+	_, _ = s.ConnectWithOptions(&testConn{}, ConnectOptions{Version: packets.V5, ReceiveMaximum: 8})
+	oldWriter.fire()
+	require.Empty(t, f.retryCalls, "stale retry callback must not update current-generation retry state")
+
+	currentWriter := &captureOnSentWriter{}
+	s.ProcessRetriesTo(currentWriter, s.Epoch())
+	require.Len(t, currentWriter.data, 1)
+	currentWriter.fire()
+	require.Equal(t, []uint16{60}, f.retryCalls)
 }
 
 type mockWriter struct {
@@ -153,6 +207,38 @@ func (w *mockWriter) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 
 func (w *mockWriter) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
 	return w.WriteDataPacket(pkt, onSent)
+}
+
+type captureOnSentWriter struct {
+	control []packets.ControlPacket
+	data    []packets.ControlPacket
+	onSent  func()
+}
+
+func (w *captureOnSentWriter) WritePacket(pkt packets.ControlPacket) error {
+	return w.WriteControlPacket(pkt, nil)
+}
+
+func (w *captureOnSentWriter) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
+	w.control = append(w.control, pkt)
+	w.onSent = onSent
+	return nil
+}
+
+func (w *captureOnSentWriter) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	w.data = append(w.data, pkt)
+	w.onSent = onSent
+	return nil
+}
+
+func (w *captureOnSentWriter) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
+	return w.WriteDataPacket(pkt, onSent)
+}
+
+func (w *captureOnSentWriter) fire() {
+	if w.onSent != nil {
+		w.onSent()
+	}
 }
 
 type fakeInflight struct {
@@ -250,7 +336,7 @@ func TestProcessRetries_ResetsBackoffOnQueueFull(t *testing.T) {
 	}
 	h := newMessageHandler(f, nil, 4)
 
-	h.ProcessRetries(&queueFullWriter{}, nil)
+	h.ProcessRetries(&queueFullWriter{}, 0, nil, nil)
 
 	// MarkRetry must NOT be called — the message never reached the wire.
 	require.Empty(t, f.retryCalls)

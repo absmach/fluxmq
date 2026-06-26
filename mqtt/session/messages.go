@@ -52,7 +52,18 @@ const RetryTimeout = 20 * time.Second
 // token is consumed; when none is available the retransmission is deferred to a
 // later cycle. This stops a reconnect from retransmitting more unacknowledged
 // PUBLISH packets at once than the new connection advertised.
-func (h *msgHandler) ProcessRetries(writer core.PacketWriter, acquire func(packetID uint16) bool) {
+func (h *msgHandler) ProcessRetries(writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
+	if version == 0 {
+		version = h.version
+	}
+	if markRetry == nil {
+		markRetry = func(packetID uint16) {
+			if err := h.inflight.MarkRetry(packetID); err != nil {
+				slog.Debug("Failed to mark retry", "packet_id", packetID, "error", err)
+			}
+		}
+	}
+
 	expired := h.inflight.GetExpired(RetryTimeout)
 	for _, inflight := range expired {
 		if inflight.Direction != messages.Outbound {
@@ -61,7 +72,7 @@ func (h *msgHandler) ProcessRetries(writer core.PacketWriter, acquire func(packe
 		if acquire != nil && !acquire(inflight.PacketID) {
 			continue // no send quota available this cycle; retry later
 		}
-		if err := h.resendMessage(writer, inflight); err != nil {
+		if err := h.resendMessage(writer, inflight, version, markRetry); err != nil {
 			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
 		}
 	}
@@ -129,24 +140,22 @@ func (h *msgHandler) ClearAliases() {
 	h.inboundAliases = make(map[uint16]string)
 }
 
-func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage) error {
+func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.InflightMessage, version byte, markRetry func(packetID uint16)) error {
 	msg := inflight.Message
 	if msg == nil {
 		return nil
 	}
 
 	onSent := func() {
-		if err := h.inflight.MarkRetry(inflight.PacketID); err != nil {
-			slog.Debug("Failed to mark retry", "packet_id", inflight.PacketID, "error", err)
-		}
+		markRetry(inflight.PacketID)
 	}
 
 	if msg.QoS == 2 && inflight.State == messages.StatePubRecReceived {
-		rel := h.newPubRelPacket(inflight.PacketID)
+		rel := h.newPubRelPacket(inflight.PacketID, version)
 		return writer.WriteControlPacket(rel, onSent)
 	}
 
-	pub := h.acquirePublishPacket(msg, inflight.PacketID)
+	pub := h.acquirePublishPacket(msg, inflight.PacketID, version)
 	err := writer.TryWriteDataPacket(pub, onSent)
 	if errors.Is(err, core.ErrSendQueueFull) {
 		pub.Release()
@@ -159,9 +168,9 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 	return err
 }
 
-func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16) packets.ControlPacket {
+func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16, version byte) packets.ControlPacket {
 	payload := msg.GetPayload()
-	if h.version == packets.V5 {
+	if version == packets.V5 {
 		p := v5.AcquirePublish()
 		p.FixedHeader = packets.FixedHeader{
 			PacketType: packets.PublishType,
@@ -187,8 +196,8 @@ func (h *msgHandler) acquirePublishPacket(msg *storage.Message, packetID uint16)
 	return p
 }
 
-func (h *msgHandler) newPubRelPacket(packetID uint16) packets.ControlPacket {
-	if h.version == packets.V5 {
+func (h *msgHandler) newPubRelPacket(packetID uint16, version byte) packets.ControlPacket {
+	if version == packets.V5 {
 		return &v5.PubRel{
 			FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
 			ID:          packetID,

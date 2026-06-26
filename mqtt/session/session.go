@@ -594,21 +594,43 @@ func (s *Session) NextPacketID() uint16 {
 	return s.msgHandler.NextPacketID()
 }
 
-// ProcessRetriesTo resends due inflight messages on the provided writer, gated
-// by the send quota for generation gen. runSession uses this via connCtx so a
-// superseded goroutine can neither redeliver onto the replacement connection nor
-// consume the replacement generation's quota.
+// ProcessRetriesTo resends due inflight messages on the provided writer,
+// encoded for generation gen's protocol version and gated by that generation's
+// send quota. runSession uses this via connCtx so a superseded goroutine can
+// neither redeliver onto the replacement connection nor consume or update the
+// replacement generation's retry state.
 func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 	if w == nil {
 		return
 	}
-	s.msgHandler.ProcessRetries(w, s.sendQuotaAcquirer(gen))
+	s.mu.RLock()
+	if s.epoch != gen {
+		s.mu.RUnlock()
+		return
+	}
+	version := s.Version
+	s.mu.RUnlock()
+
+	s.msgHandler.ProcessRetries(w, version, s.sendQuotaAcquirer(gen), s.markRetryIfEpoch(gen))
 }
 
 // sendQuotaAcquirer returns a retry-gate bound to generation gen.
 func (s *Session) sendQuotaAcquirer(gen uint64) func(packetID uint16) bool {
 	return func(packetID uint16) bool {
 		return s.sendWindow.tryAcquire(packetID, gen)
+	}
+}
+
+// markRetryIfEpoch marks a retransmission as sent only while gen is still the
+// current connection generation. A retry flushed by a superseded connection must
+// not postpone redelivery on the replacement connection.
+func (s *Session) markRetryIfEpoch(gen uint64) func(packetID uint16) {
+	return func(packetID uint16) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.epoch == gen {
+			_ = s.msgHandler.Inflight().MarkRetry(packetID)
+		}
 	}
 }
 

@@ -193,7 +193,7 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	h.deliverOfflineMessages(s)
 
-	return h.broker.runSession(h, s, conn, epoch)
+	return h.broker.runSession(h, s, conn, epoch, time.Duration(p.KeepAlive)*time.Second)
 }
 
 // HandlePublish handles PUBLISH packets.
