@@ -345,9 +345,10 @@ func (b *Broker) persistSessionInfo(s *session.Session) {
 
 // restoreInflightEntry adds a restored inflight message to the tracker with a
 // validated direction and state. An invalid direction (corrupt persisted or
-// transferred value) is skipped rather than risking an out-of-range panic. For
-// inbound entries it rebuilds duplicate-detection state so a retransmitted QoS 2
-// PUBLISH after restore is recognised.
+// transferred value) is skipped rather than risking an out-of-range panic. The
+// (direction, packetID) entry the Add restores is itself the inbound QoS 2
+// duplicate-detection state, so a retransmitted PUBLISH after restore is
+// recognised.
 func restoreInflightEntry(tracker messages.Inflight, packetID uint16, msg *storage.Message, rawDirection, rawState uint32) {
 	var direction messages.Direction
 	switch messages.Direction(rawDirection) {
@@ -364,8 +365,7 @@ func restoreInflightEntry(tracker messages.Inflight, packetID uint16, msg *stora
 	}
 
 	if direction == messages.Inbound {
-		tracker.MarkReceived(packetID) // rebuild QoS 2 duplicate detection
-		return
+		return // inbound entries carry no extra delivery state
 	}
 
 	state := messages.StatePublishSent

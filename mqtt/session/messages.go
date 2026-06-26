@@ -65,8 +65,6 @@ func (h *msgHandler) ProcessRetries(writer core.PacketWriter, acquire func(packe
 			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
 		}
 	}
-
-	h.inflight.CleanupExpiredReceived(30 * time.Minute)
 }
 
 // Inflight returns the inflight tracker.

@@ -325,8 +325,9 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 
 	require.False(t, newConn.closed.Load(), "new connection must remain open after takeover")
 
-	// Give any stale teardown a chance to (incorrectly) fire, then re-assert.
-	time.Sleep(20 * time.Millisecond)
+	// oldWG.Wait above already guaranteed the superseded goroutine ran its
+	// teardown (DisconnectIf) and exited, so this re-assert is deterministic: the
+	// stale teardown has had its chance to (incorrectly) fire.
 	s := b.sessionsMap.Get(clientID)
 	require.NotNil(t, s)
 	require.True(t, s.IsConnected(), "new connection must survive the stale goroutine's teardown")
@@ -400,8 +401,9 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 
 	waitFor(t, func() bool { return oldConn.closed.Load() }, "old conn closed by takeover")
 
-	// Give the stale DISCONNECT a chance to (incorrectly) tear down the session.
-	time.Sleep(20 * time.Millisecond)
+	// oldWG.Wait above guaranteed the stale DISCONNECT was dispatched (a no-op via
+	// connCtx.Disconnect/DisconnectIf) and the goroutine exited, so this assert is
+	// deterministic.
 	s := b.sessionsMap.Get(clientID)
 	require.NotNil(t, s)
 	require.True(t, s.IsConnected(), "stale DISCONNECT must not disconnect the replacement")
@@ -576,11 +578,12 @@ func TestHandleConnect_StalePublishNotDispatched(t *testing.T) {
 		return s != nil && s.IsConnected() && s.Conn() == newConn
 	}, "new publisher session current")
 
-	// Release the stale PUBLISH. It must be dropped, not routed.
+	// Release the stale PUBLISH. It must be dropped, not routed. The drop happens
+	// synchronously in the old runSession goroutine (the cc.current() check
+	// precedes dispatch), so oldWG.Wait guarantees the decision is final.
 	close(oldConn.releaseRead)
 	oldWG.Wait()
 
-	time.Sleep(20 * time.Millisecond)
 	require.Empty(t, subConn.packets, "stale PUBLISH must not be delivered to subscribers")
 
 	newConn.Close()
@@ -713,12 +716,19 @@ func TestHandleConnect_V5TakeoverDelayedWillNotPublished(t *testing.T) {
 	// The old connection is still notified and closed, but the delayed Will
 	// must not be published.
 	waitFor(t, func() bool { return oldConn.closed.Load() }, "old connection closed by takeover")
-	time.Sleep(30 * time.Millisecond)
-	for _, p := range subConn.writtenPackets() {
-		if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
-			t.Fatal("delayed Will must not be published on takeover")
+
+	// The Will is published (if at all) by the asynchronous drainSuperseded
+	// goroutine, which the test cannot join. require.Never polls the subscriber
+	// throughout a settle window, asserting the delayed Will never arrives —
+	// deterministic where a single sleep+check would only sample one instant.
+	require.Never(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return true
+			}
 		}
-	}
+		return false
+	}, 100*time.Millisecond, 5*time.Millisecond, "delayed Will must not be published on takeover")
 
 	oldWG.Wait()
 	newConn.Close()

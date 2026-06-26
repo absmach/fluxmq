@@ -14,6 +14,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// waitForBlockedWaiter blocks until a goroutine has registered as a blocked
+// sender in w (waiters incremented under the lock before it parks on the ready
+// channel). This is a deterministic replacement for sleeping to "let the
+// goroutine reach acquire": once waiters > 0 the goroutine has already captured
+// the current ready channel, so a subsequent release/reset broadcast cannot be
+// missed.
+func waitForBlockedWaiter(t *testing.T, w *sendWindow) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.waiters > 0
+	}, time.Second, time.Millisecond, "sender did not block in acquire")
+}
+
 func TestSendWindow_TryAcquireRespectsCapacity(t *testing.T) {
 	const gen = 1
 	w := newSendWindow(2, gen, false)
@@ -71,7 +86,7 @@ func TestSendWindow_AcquireUnblocksOnRelease(t *testing.T) {
 	got := make(chan bool, 1)
 	go func() { got <- w.acquire(2, gen, stop) }()
 
-	time.Sleep(20 * time.Millisecond)
+	waitForBlockedWaiter(t, w)
 	w.release(1, gen) // frees a token; the blocked acquire must proceed
 
 	select {
@@ -91,7 +106,7 @@ func TestSendWindow_AcquireUnblocksWhenSuperseded(t *testing.T) {
 	got := make(chan bool, 1)
 	go func() { got <- w.acquire(2, gen, stop) }()
 
-	time.Sleep(20 * time.Millisecond)
+	waitForBlockedWaiter(t, w)
 	w.reset(1, 2) // takeover: the blocked gen-1 acquire must return false
 
 	select {

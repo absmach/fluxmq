@@ -178,13 +178,7 @@ func (f *fakeInflight) Get(packetID uint16) (*messages.InflightMessage, bool) { 
 
 func (f *fakeInflight) Has(packetID uint16) bool { return false }
 
-func (f *fakeInflight) WasReceived(packetID uint16) bool { return false }
-
-func (f *fakeInflight) MarkReceived(packetID uint16) {}
-
 func (f *fakeInflight) UpdateState(packetID uint16, state messages.InflightState) error { return nil }
-
-func (f *fakeInflight) ClearReceived(packetID uint16) {}
 
 func (f *fakeInflight) GetExpired(expiry time.Duration) []*messages.InflightMessage {
 	return f.expired
@@ -208,8 +202,6 @@ func (f *fakeInflight) MarkRetry(packetID uint16) error {
 }
 
 func (f *fakeInflight) GetAll() []*messages.InflightMessage { return nil }
-
-func (f *fakeInflight) CleanupExpiredReceived(olderThan time.Duration) {}
 
 func TestInboundOperationsRequireDirectionalExtensions(t *testing.T) {
 	f := &fakeInflight{ackResult: &storage.Message{Topic: "outbound"}}

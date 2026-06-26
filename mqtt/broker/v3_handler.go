@@ -332,7 +332,6 @@ func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 			slog.String("client_id", s.ID),
 			slog.Int("packet_id", int(packetID)))
 	}
-	s.Inflight().ClearReceived(packetID)
 
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},

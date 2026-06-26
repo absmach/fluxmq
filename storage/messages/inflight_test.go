@@ -152,7 +152,7 @@ func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T)
 	accepted, err := tr.AddInbound(7, first)
 	require.NoError(t, err)
 	require.True(t, accepted)
-	require.True(t, tr.WasReceived(7))
+	require.Contains(t, tr.messages, inflightKey{direction: Inbound, packetID: 7})
 	tr.messages[inflightKey{direction: Inbound, packetID: 7}].State = StatePubRecReceived
 
 	// The inbound window is full (capacity 1). A retransmitted PUBLISH reusing
@@ -168,7 +168,7 @@ func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T)
 	accepted, err = tr.AddInbound(8, &storage.Message{Topic: "t"})
 	require.ErrorIs(t, err, ErrInflightFull)
 	require.False(t, accepted)
-	require.False(t, tr.WasReceived(8), "failed admission must not create phantom duplicate state")
+	require.NotContains(t, tr.messages, inflightKey{direction: Inbound, packetID: 8}, "failed admission must not create phantom duplicate state")
 
 	got, err := tr.AckInbound(7)
 	require.NoError(t, err)
@@ -184,5 +184,5 @@ func TestInflight_AddInboundRejectsInvalidDirection(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidDirection)
 	require.False(t, accepted)
 	require.Empty(t, tr.GetAll())
-	require.False(t, tr.WasReceived(1))
+	require.NotContains(t, tr.messages, inflightKey{direction: Inbound, packetID: 1})
 }

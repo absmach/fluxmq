@@ -45,17 +45,9 @@ func (f *duplicateRejectingInflight) Has(uint16) bool {
 	return false
 }
 
-func (f *duplicateRejectingInflight) WasReceived(uint16) bool {
-	return false
-}
-
-func (f *duplicateRejectingInflight) MarkReceived(uint16) {}
-
 func (f *duplicateRejectingInflight) UpdateState(uint16, messages.InflightState) error {
 	return nil
 }
-
-func (f *duplicateRejectingInflight) ClearReceived(uint16) {}
 
 func (f *duplicateRejectingInflight) GetExpired(time.Duration) []*messages.InflightMessage {
 	return nil
@@ -72,8 +64,6 @@ func (f *duplicateRejectingInflight) MarkRetry(uint16) error {
 func (f *duplicateRejectingInflight) GetAll() []*messages.InflightMessage {
 	return nil
 }
-
-func (f *duplicateRejectingInflight) CleanupExpiredReceived(time.Duration) {}
 
 func newDuplicateReleaseSession(t *testing.T, version byte, inflight messages.Inflight) (*session.Session, *captureConnection) {
 	t.Helper()

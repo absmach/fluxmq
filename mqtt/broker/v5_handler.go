@@ -424,7 +424,6 @@ func (h *v5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 			slog.String("client_id", s.ID),
 			slog.Int("packet_id", int(packetID)))
 	}
-	s.Inflight().ClearReceived(packetID)
 
 	rc := byte(0x00)
 	comp := &v5.PubComp{

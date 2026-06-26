@@ -57,16 +57,12 @@ type Inflight interface {
 	Ack(packetID uint16) (*storage.Message, error)
 	Get(packetID uint16) (*InflightMessage, bool)
 	Has(packetID uint16) bool
-	WasReceived(packetID uint16) bool
-	MarkReceived(packetID uint16)
 	UpdateState(packetID uint16, state InflightState) error
-	ClearReceived(packetID uint16)
 	GetExpired(expiry time.Duration) []*InflightMessage
 	MarkSent(packetID uint16)
 	MarkDeliveryAttempted(packetID uint16)
 	MarkRetry(packetID uint16) error
 	GetAll() []*InflightMessage
-	CleanupExpiredReceived(olderThan time.Duration)
 }
 
 // InboundAdder is an optional extension of Inflight for atomic inbound QoS 2
@@ -102,9 +98,6 @@ type inflight struct {
 	// Receive Maximum the broker advertises, and vice versa.
 	counts  [2]int
 	maxSize int
-
-	// For QoS 2 inbound: track received packet IDs to detect duplicates
-	receivedIDs map[uint16]time.Time
 }
 
 // NewInflightTracker creates a new inflight tracker.
@@ -113,9 +106,8 @@ func NewInflightTracker(maxSize int) *inflight {
 		maxSize = 65535
 	}
 	return &inflight{
-		messages:    make(map[inflightKey]*InflightMessage),
-		maxSize:     maxSize,
-		receivedIDs: make(map[uint16]time.Time),
+		messages: make(map[inflightKey]*InflightMessage),
+		maxSize:  maxSize,
 	}
 }
 
@@ -152,9 +144,9 @@ func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Directio
 	return nil
 }
 
-// AddInbound atomically admits an inbound QoS 2 transaction and records its
-// duplicate-detection state. It never replaces an existing transaction with
-// the same packet ID. accepted is true only when the tracker takes ownership of
+// AddInbound atomically admits an inbound QoS 2 transaction, rejecting a
+// duplicate by packet ID. It never replaces an existing transaction with the
+// same packet ID. accepted is true only when the tracker takes ownership of
 // msg.
 func (t *inflight) AddInbound(packetID uint16, msg *storage.Message) (bool, error) {
 	return t.addInbound(packetID, msg, Inbound)
@@ -186,7 +178,6 @@ func (t *inflight) addInbound(packetID uint16, msg *storage.Message, direction D
 		Direction: direction,
 	}
 	t.counts[direction]++
-	t.receivedIDs[packetID] = time.Now()
 	return true, nil
 }
 
@@ -372,40 +363,4 @@ func (t *inflight) Clear() {
 	defer t.mu.Unlock()
 	t.messages = make(map[inflightKey]*InflightMessage)
 	t.counts = [2]int{}
-	t.receivedIDs = make(map[uint16]time.Time)
-}
-
-// MarkReceived marks a packet ID as received (for QoS 2 duplicate detection).
-func (t *inflight) MarkReceived(packetID uint16) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.receivedIDs[packetID] = time.Now()
-}
-
-// WasReceived returns true if the packet ID was previously received.
-func (t *inflight) WasReceived(packetID uint16) bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	_, ok := t.receivedIDs[packetID]
-	return ok
-}
-
-// ClearReceived clears a received packet ID (after PUBCOMP sent).
-func (t *inflight) ClearReceived(packetID uint16) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	delete(t.receivedIDs, packetID)
-}
-
-// CleanupExpiredReceived removes old received IDs.
-func (t *inflight) CleanupExpiredReceived(olderThan time.Duration) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	cutoff := time.Now().Add(-olderThan)
-	for id, received := range t.receivedIDs {
-		if received.Before(cutoff) {
-			delete(t.receivedIDs, id)
-		}
-	}
 }
