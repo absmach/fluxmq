@@ -317,7 +317,7 @@ func newTestBrokerWithSessions(t *testing.T) (*Broker, func()) {
 		b.persistSessionInfo(s)
 
 		if !tc.connected {
-			if err := s.Disconnect(true); err != nil {
+			if err := s.Disconnect(true, 0x00); err != nil {
 				t.Fatalf("Disconnect(%q): %v", tc.id, err)
 			}
 			// Wait briefly for async disconnect callback to persist state

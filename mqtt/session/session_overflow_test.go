@@ -131,7 +131,7 @@ func TestAcquireSendQuota_UnblocksOnDisconnect(t *testing.T) {
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	require.NoError(t, s.Disconnect(false))
+	require.NoError(t, s.Disconnect(false, 0x00))
 
 	select {
 	case ok := <-result:
@@ -165,7 +165,7 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 	require.Equal(t, int32(1), buf.RefCount())
 
 	require.True(t, s.TryEnqueuePending(msg, nil))
-	require.NoError(t, s.Disconnect(false))
+	require.NoError(t, s.Disconnect(false, 0x00))
 
 	require.Equal(t, 1, s.OfflineQueue().Len())
 	require.Equal(t, int32(1), buf.RefCount())

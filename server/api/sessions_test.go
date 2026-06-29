@@ -477,7 +477,7 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 		}); err != nil {
 			t.Fatalf("failed to enqueue offline message: %v", err)
 		}
-		if err := s.Disconnect(false); err != nil {
+		if err := s.Disconnect(false, 0x00); err != nil {
 			t.Fatalf("failed to disconnect session: %v", err)
 		}
 	}

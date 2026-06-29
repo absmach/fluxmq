@@ -61,13 +61,13 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 					if time.Since(lastActivity) > keepAliveDeadline {
 						// Real keep-alive timeout - client is unresponsive
 						b.telemetry.stats.DecrementConnections()
-						s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
+						s.DisconnectIf(false, epoch, 0x8D) //nolint:errcheck // disconnect during keepalive timeout; connection already dead
 						return err
 					}
 				}
 				if b.shuttingDown.Load() {
 					b.telemetry.stats.DecrementConnections()
-					s.DisconnectIf(false, epoch) //nolint:errcheck // shutdown in progress
+					s.DisconnectIf(false, epoch, 0x8B) //nolint:errcheck // shutdown in progress
 					return err
 				}
 				// Just a retry check interval timeout - process retries and
@@ -85,7 +85,7 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 				b.telemetry.stats.IncrementPacketErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
-			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on read error; connection already failed
+			s.DisconnectIf(false, epoch, 0x80) //nolint:errcheck // disconnect on read error; connection already failed
 			return err
 		}
 
@@ -134,7 +134,7 @@ func (b *Broker) runSession(handler protocolHandler, s *session.Session, conn co
 				b.telemetry.stats.IncrementProtocolErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
-			s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on protocol error; connection is being terminated
+			s.DisconnectIf(false, epoch, 0x82) //nolint:errcheck // disconnect on protocol error; connection is being terminated
 			return dispatchErr
 		}
 	}
@@ -269,7 +269,7 @@ func (b *Broker) Close() error {
 
 	b.sessionsMap.ForEach(func(s *session.Session) {
 		if s.IsConnected() {
-			s.Disconnect(false) //nolint:errcheck // best-effort disconnect during broker close
+			s.Disconnect(false, 0x8B) //nolint:errcheck // best-effort disconnect during broker close
 		} else {
 			// For already-disconnected sessions, persist any queued messages
 			b.persistOfflineQueue(s)

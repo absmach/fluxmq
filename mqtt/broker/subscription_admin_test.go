@@ -294,7 +294,7 @@ func newTestBrokerWithSharedSubs(t *testing.T) (*Broker, func()) {
 		b.persistSessionInfo(s)
 
 		if !tc.connected {
-			if err := s.Disconnect(true); err != nil {
+			if err := s.Disconnect(true, 0x00); err != nil {
 				t.Fatalf("Disconnect(%q): %v", tc.id, err)
 			}
 			time.Sleep(10 * time.Millisecond)

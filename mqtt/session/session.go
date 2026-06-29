@@ -302,7 +302,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	// Set callback to handle connection loss/keepalive expiry. Scoped to this
 	// epoch so a stale callback cannot disconnect a newer connection.
 	c.SetOnDisconnect(func(graceful bool) {
-		s.DisconnectIf(graceful, epoch) //nolint:errcheck // disconnect callback; session cleanup is best-effort
+		s.DisconnectIf(graceful, epoch, 0x00) //nolint:errcheck // disconnect callback; session cleanup is best-effort
 	})
 
 	return epoch, superseded
@@ -490,38 +490,38 @@ func (s *Session) drainPendingToOffline() {
 }
 
 // Disconnect disconnects the session unconditionally.
-func (s *Session) Disconnect(graceful bool) error {
+func (s *Session) Disconnect(graceful bool, reasonCode byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.disconnectLocked(graceful)
+	return s.disconnectLocked(graceful, reasonCode)
 }
 
 // DisconnectIf disconnects the session only if epoch still matches the current
 // connection generation. A stale runSession goroutine (whose connection has
 // been superseded by a local takeover) passes its own epoch here and becomes a
 // no-op, so it cannot tear down the connection that replaced it.
-func (s *Session) DisconnectIf(graceful bool, epoch uint64) error {
+func (s *Session) DisconnectIf(graceful bool, epoch uint64, reasonCode byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.epoch != epoch {
 		return nil
 	}
-	return s.disconnectLocked(graceful)
+	return s.disconnectLocked(graceful, reasonCode)
 }
 
-func (s *Session) sendDisconnect() {
+func (s *Session) sendDisconnect(reasonCode byte) {
 	if s.conn == nil || s.Version != 5 {
 		return
 	}
 	disc := &v5.Disconnect{
 		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
-		ReasonCode:  0x8B, // The Server is shutting down.
+		ReasonCode:  reasonCode,
 	}
 	_ = s.conn.WritePacket(disc)
 }
 
 // disconnectLocked performs the disconnect. Caller must hold s.mu.
-func (s *Session) disconnectLocked(graceful bool) error {
+func (s *Session) disconnectLocked(graceful bool, reasonCode byte) error {
 	if s.state != StateConnected {
 		return nil
 	}
@@ -539,7 +539,7 @@ func (s *Session) disconnectLocked(graceful bool) error {
 		// If connection tracks its own timestamps, we might want to sync,
 		// but since we are closing it here, "now" is correct.
 
-		s.sendDisconnect()
+		s.sendDisconnect(reasonCode)
 		s.conn.Close()
 		s.conn = nil
 	}

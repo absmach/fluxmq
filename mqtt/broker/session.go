@@ -203,7 +203,7 @@ func (b *Broker) DestroySession(clientID string) error {
 // destroySessionLocked destroys a session. Must be called with the session's key lock held.
 func (b *Broker) destroySessionLocked(ctx context.Context, s *session.Session) error {
 	if s.IsConnected() {
-		s.Disconnect(false) //nolint:errcheck // disconnect during session destroy; connection is being removed
+		s.Disconnect(false, 0x98) //nolint:errcheck // disconnect during session destroy; connection is being removed
 	}
 
 	if b.stores.sessions != nil {
