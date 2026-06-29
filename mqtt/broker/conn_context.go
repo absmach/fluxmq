@@ -48,8 +48,8 @@ func (c *connCtx) ProcessRetries() {
 
 // Disconnect tears down only if this is still the current connection
 // generation, so a stale DISCONNECT cannot close the replacement connection.
-func (c *connCtx) Disconnect(graceful bool) error {
-	return c.Session.DisconnectIf(graceful, c.epoch)
+func (c *connCtx) Disconnect(graceful bool, reasonCode byte) error {
+	return c.Session.DisconnectIf(graceful, c.epoch, reasonCode)
 }
 
 // current reports whether this is still the active connection generation. A

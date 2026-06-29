@@ -976,6 +976,8 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
 
+	cancel()
+
 	if err := b.Shutdown(shutdownCtx, cfg.Server.ShutdownTimeout); err != nil {
 		slog.Error("Error during shutdown", "error", err)
 	}
@@ -989,8 +991,6 @@ func main() {
 			slog.Info("OpenTelemetry shutdown complete")
 		}
 	}
-
-	cancel()
 
 	wg.Wait()
 	slog.Info("MQTT broker stopped")

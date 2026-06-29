@@ -12,6 +12,47 @@ import (
 	"github.com/absmach/fluxmq/mqtt/packets"
 )
 
+// DISCONNECT Reason Codes (MQTT 5.0, section 3.14.2.1).
+const (
+	DisconnectNormalDisconnection                 byte = 0x00
+	DisconnectDisconnectWithWillMessage           byte = 0x04
+	DisconnectUnspecifiedError                    byte = 0x80
+	DisconnectMalformedPacket                     byte = 0x81
+	DisconnectProtocolError                       byte = 0x82
+	DisconnectImplementationSpecificError         byte = 0x83
+	DisconnectUnsupportedProtocolVersion          byte = 0x84
+	DisconnectClientIdentifierNotValid            byte = 0x85
+	DisconnectBadUserNameOrPassword               byte = 0x86
+	DisconnectNotAuthorized                       byte = 0x87
+	DisconnectServerUnavailable                   byte = 0x88
+	DisconnectServerBusy                          byte = 0x89
+	DisconnectBanned                              byte = 0x8A
+	DisconnectServerShuttingDown                  byte = 0x8B
+	DisconnectBadAuthenticationMethod             byte = 0x8C
+	DisconnectKeepAliveTimeout                    byte = 0x8D
+	DisconnectSessionTakenOver                    byte = 0x8E
+	DisconnectTopicFilterInvalid                  byte = 0x8F
+	DisconnectTopicNameInvalid                    byte = 0x90
+	DisconnectPacketIdentifierInUse               byte = 0x91
+	DisconnectPacketIdentifierNotFound            byte = 0x92
+	DisconnectReceiveMaximumExceeded              byte = 0x93
+	DisconnectTopicAliasInvalid                   byte = 0x94
+	DisconnectPacketTooLarge                      byte = 0x95
+	DisconnectMessageRateTooHigh                  byte = 0x96
+	DisconnectQuotaExceeded                       byte = 0x97
+	DisconnectAdministrativeAction                byte = 0x98
+	DisconnectPayloadFormatInvalid                byte = 0x99
+	DisconnectRetainNotSupported                  byte = 0x9A
+	DisconnectQoSNotSupported                     byte = 0x9B
+	DisconnectUseAnotherServer                    byte = 0x9C
+	DisconnectServerMoved                         byte = 0x9D
+	DisconnectSharedSubscriptionsNotSupported     byte = 0x9E
+	DisconnectConnectionRateExceeded              byte = 0x9F
+	DisconnectMaximumConnectTime                  byte = 0xA0
+	DisconnectSubscriptionIdentifiersNotSupported byte = 0xA1
+	DisconnectWildcardSubscriptionsNotSupported   byte = 0xA2
+)
+
 // Disconnect is an internal representation of the fields of the DISCONNECT MQTT packet.
 type Disconnect struct {
 	packets.FixedHeader

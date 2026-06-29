@@ -178,7 +178,7 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {
-		s.DisconnectIf(false, epoch) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
+		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
 
@@ -654,7 +654,7 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 	}
 
 	h.broker.telemetry.logger.Info("v5_disconnect", slog.String("client_id", s.ID))
-	s.Disconnect(true) //nolint:errcheck // graceful disconnect initiated by client
+	s.Disconnect(true, v5.DisconnectNormalDisconnection) //nolint:errcheck // graceful disconnect initiated by client
 	return io.EOF
 }
 

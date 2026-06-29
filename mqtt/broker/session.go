@@ -11,6 +11,7 @@ import (
 
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/config"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -203,7 +204,7 @@ func (b *Broker) DestroySession(clientID string) error {
 // destroySessionLocked destroys a session. Must be called with the session's key lock held.
 func (b *Broker) destroySessionLocked(ctx context.Context, s *session.Session) error {
 	if s.IsConnected() {
-		s.Disconnect(false) //nolint:errcheck // disconnect during session destroy; connection is being removed
+		s.Disconnect(false, v5.DisconnectAdministrativeAction) //nolint:errcheck // disconnect during session destroy; connection is being removed
 	}
 
 	if b.stores.sessions != nil {

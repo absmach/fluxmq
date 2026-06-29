@@ -19,6 +19,7 @@ import (
 	mqtt "github.com/absmach/fluxmq/mqtt"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -477,7 +478,7 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 		}); err != nil {
 			t.Fatalf("failed to enqueue offline message: %v", err)
 		}
-		if err := s.Disconnect(false); err != nil {
+		if err := s.Disconnect(false, v5.DisconnectNormalDisconnection); err != nil {
 			t.Fatalf("failed to disconnect session: %v", err)
 		}
 	}
