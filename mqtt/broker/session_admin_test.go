@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -317,7 +318,7 @@ func newTestBrokerWithSessions(t *testing.T) (*Broker, func()) {
 		b.persistSessionInfo(s)
 
 		if !tc.connected {
-			if err := s.Disconnect(true, 0x00); err != nil {
+			if err := s.Disconnect(true, v5.DisconnectNormalDisconnection); err != nil {
 				t.Fatalf("Disconnect(%q): %v", tc.id, err)
 			}
 			// Wait briefly for async disconnect callback to persist state

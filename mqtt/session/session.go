@@ -220,7 +220,7 @@ type ConnectOptions struct {
 
 // Superseded describes a connection displaced by a takeover, so the broker can
 // drain it outside the session lock: notify the displaced MQTT 5 client with a
-// DISCONNECT (0x8E), close the socket, and publish its Will if required.
+// DISCONNECT (DisconnectSessionTakenOver), close the socket, and publish its Will if required.
 type Superseded struct {
 	Conn    core.Connection
 	Version byte
@@ -302,7 +302,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	// Set callback to handle connection loss/keepalive expiry. Scoped to this
 	// epoch so a stale callback cannot disconnect a newer connection.
 	c.SetOnDisconnect(func(graceful bool) {
-		s.DisconnectIf(graceful, epoch, 0x00) //nolint:errcheck // disconnect callback; session cleanup is best-effort
+		s.DisconnectIf(graceful, epoch, v5.DisconnectNormalDisconnection) //nolint:errcheck // disconnect callback; session cleanup is best-effort
 	})
 
 	return epoch, superseded

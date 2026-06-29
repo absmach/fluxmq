@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	. "github.com/absmach/fluxmq/mqtt/packets/v5"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
 // Helper to create pointer to value.
@@ -575,14 +576,14 @@ func TestDisconnectEncodeDecode(t *testing.T) {
 			name: "basic disconnect",
 			pkt: &Disconnect{
 				FixedHeader: FixedHeader{PacketType: DisconnectType},
-				ReasonCode:  0,
+				ReasonCode:  v5.DisconnectNormalDisconnection,
 			},
 		},
 		{
 			name: "disconnect with properties",
 			pkt: &Disconnect{
 				FixedHeader: FixedHeader{PacketType: DisconnectType},
-				ReasonCode:  0x04, // Disconnect with will message
+				ReasonCode:  v5.DisconnectDisconnectWithWillMessage,
 				Properties: &DisconnectProperties{
 					SessionExpiryInterval: ptr(uint32(0)),
 					ReasonString:          "normal disconnect",

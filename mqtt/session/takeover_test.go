@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
@@ -99,14 +100,14 @@ func TestDisconnectIf_StaleEpochIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 
 	// Stale goroutine from the old connection tears down with its old epoch.
-	require.NoError(t, s.DisconnectIf(false, oldEpoch, 0x00))
+	require.NoError(t, s.DisconnectIf(false, oldEpoch, v5.DisconnectNormalDisconnection))
 
 	// New connection must be untouched and the session still connected.
 	require.True(t, s.IsConnected(), "stale epoch teardown must not disconnect the session")
 	require.False(t, newConn.closed.Load(), "stale epoch teardown must not close the new conn")
 
 	// The current epoch's teardown does disconnect.
-	require.NoError(t, s.DisconnectIf(false, newEpoch, 0x00))
+	require.NoError(t, s.DisconnectIf(false, newEpoch, v5.DisconnectNormalDisconnection))
 	require.False(t, s.IsConnected())
 	require.True(t, newConn.closed.Load())
 }

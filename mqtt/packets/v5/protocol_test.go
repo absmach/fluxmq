@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	. "github.com/absmach/fluxmq/mqtt/packets/v5"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -453,7 +454,7 @@ func TestDisconnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid disconnect normal",
 			pkt: &Disconnect{
 				FixedHeader: FixedHeader{PacketType: DisconnectType},
-				ReasonCode:  0x00,
+				ReasonCode:  v5.DisconnectNormalDisconnection,
 			},
 			wantErr: false,
 		},
@@ -461,7 +462,7 @@ func TestDisconnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid disconnect with will message",
 			pkt: &Disconnect{
 				FixedHeader: FixedHeader{PacketType: DisconnectType},
-				ReasonCode:  0x04,
+				ReasonCode:  v5.DisconnectDisconnectWithWillMessage,
 			},
 			wantErr: false,
 		},
@@ -469,7 +470,7 @@ func TestDisconnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid disconnect with properties",
 			pkt: &Disconnect{
 				FixedHeader: FixedHeader{PacketType: DisconnectType},
-				ReasonCode:  0x00,
+				ReasonCode:  v5.DisconnectNormalDisconnection,
 				Properties: &DisconnectProperties{
 					SessionExpiryInterval: ptr(uint32(0)),
 					ReasonString:          "client shutdown",
@@ -483,7 +484,7 @@ func TestDisconnectV5ProtocolCompliance(t *testing.T) {
 			desc: "valid disconnect unspecified error",
 			pkt: &Disconnect{
 				FixedHeader: FixedHeader{PacketType: DisconnectType},
-				ReasonCode:  0x80,
+				ReasonCode:  v5.DisconnectUnspecifiedError,
 			},
 			wantErr: false,
 		},

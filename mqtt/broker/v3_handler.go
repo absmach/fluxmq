@@ -13,6 +13,7 @@ import (
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
@@ -143,7 +144,7 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {
-		s.DisconnectIf(false, epoch, 0x80) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
+		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
 
@@ -521,7 +522,7 @@ func (h *v3Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 	}
 
 	h.broker.telemetry.logger.Info("v3_disconnect", slog.String("client_id", s.ID))
-	s.Disconnect(true, 0x00) //nolint:errcheck // graceful disconnect initiated by client
+	s.Disconnect(true, v5.DisconnectNormalDisconnection) //nolint:errcheck // graceful disconnect initiated by client
 	return io.EOF
 }
 

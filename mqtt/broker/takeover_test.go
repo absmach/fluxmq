@@ -643,7 +643,7 @@ func TestHandleConnect_V5TakeoverNotifiesAndPublishesWill(t *testing.T) {
 	// The drain runs asynchronously: the old connection gets a DISCONNECT 0x8E.
 	waitFor(t, func() bool {
 		for _, p := range oldConn.writtenPackets() {
-			if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == reasonSessionTakenOver {
+			if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == v5.DisconnectSessionTakenOver {
 				return true
 			}
 		}
