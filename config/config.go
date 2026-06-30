@@ -25,8 +25,21 @@ const (
 	listenerNameTLS  = "tls"
 	listenerNameMTLS = "mtls"
 
-	protocolMQTT    = "mqtt"
-	protocolAMQP091 = "amqp091"
+	AuthProviderCallout = "callout"
+	AuthProviderAtom    = "atom"
+
+	AuthProtocolMQTT    = "mqtt"
+	AuthProtocolAMQP    = "amqp"
+	AuthProtocolAMQP091 = "amqp091"
+	AuthProtocolHTTP    = "http"
+	AuthProtocolCoAP    = "coap"
+
+	AtomTopicFormatMagistrala      = "magistrala"
+	AtomUnsupportedTopicPolicyDeny = "deny"
+	authTransportGRPC              = "grpc"
+	authTransportHTTP              = "http"
+	protocolMQTT                   = AuthProtocolMQTT
+	protocolAMQP091                = AuthProtocolAMQP091
 
 	defaultTCPV3Addr = ":1883"
 	defaultTCPV5Addr = ":1884"
@@ -59,10 +72,14 @@ type Config struct {
 	Auth         AuthConfig         `yaml:"auth"`
 }
 
-// AuthConfig configures the external authentication/authorization callout.
+// AuthConfig configures external authentication and authorization.
 type AuthConfig struct {
+	// Provider selects the auth backend: "callout" or "atom".
+	// Empty provider keeps the legacy behavior: URL set means callout,
+	// URL empty means auth disabled.
+	Provider string `yaml:"provider"`
 	// URL is the auth service address (e.g. "http://localhost:9090").
-	// When empty, auth callout is disabled.
+	// Used by the callout provider.
 	URL string `yaml:"url"`
 	// Transport selects the callout wire format: "grpc" (default) or "http".
 	Transport string        `yaml:"transport"`
@@ -79,18 +96,57 @@ type AuthConfig struct {
 	// IdentityCacheTTL bounds how long a cached identity may live without re-auth.
 	// Zero or negative disables TTL eviction.
 	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
+
+	Atom AtomAuthConfig `yaml:"atom"`
+}
+
+// AtomAuthConfig configures the direct Atom gRPC auth provider.
+type AtomAuthConfig struct {
+	GRPCAddr string `yaml:"grpc_addr"`
+	// Insecure dials Atom without TLS. Production deployments should use TLS
+	// once service-to-service certificates are configured.
+	Insecure bool   `yaml:"insecure"`
+	CAFile   string `yaml:"ca_file"`
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+
+	ServiceTokenEnv  string `yaml:"service_token_env"`
+	ServiceTokenFile string `yaml:"service_token_file"`
+
+	TopicFormat            string        `yaml:"topic_format"`
+	AuthnCacheTTL          time.Duration `yaml:"authn_cache_ttl"`
+	AliasCacheTTL          time.Duration `yaml:"alias_cache_ttl"`
+	DecisionCacheTTL       time.Duration `yaml:"decision_cache_ttl"`
+	UnsupportedTopicPolicy string        `yaml:"unsupported_topic_policy"`
 }
 
 // knownAuthProtocols is the set of valid protocol names for auth config.
 var knownAuthProtocols = map[string]bool{
-	protocolMQTT: true, "amqp": true, protocolAMQP091: true, "http": true, "coap": true,
+	AuthProtocolMQTT: true, AuthProtocolAMQP: true, AuthProtocolAMQP091: true, AuthProtocolHTTP: true, AuthProtocolCoAP: true,
 }
 
-// AuthEnabledFor reports whether auth callout is enabled for the given protocol.
-// Returns true when auth is globally enabled (URL is set) and either no per-protocol
+// ProviderName returns the effective auth provider.
+func (a AuthConfig) ProviderName() string {
+	provider := strings.ToLower(strings.TrimSpace(a.Provider))
+	if provider != "" {
+		return provider
+	}
+	if strings.TrimSpace(a.URL) != "" {
+		return AuthProviderCallout
+	}
+	return ""
+}
+
+// Enabled reports whether any auth provider is configured.
+func (a AuthConfig) Enabled() bool {
+	return a.ProviderName() != ""
+}
+
+// AuthEnabledFor reports whether auth is enabled for the given protocol.
+// Returns true when auth is globally enabled and either no per-protocol
 // filter is configured or the protocol is explicitly set to true.
 func (a AuthConfig) AuthEnabledFor(protocol string) bool {
-	if a.URL == "" {
+	if !a.Enabled() {
 		return false
 	}
 	if len(a.Protocols) == 0 {
@@ -1062,6 +1118,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("auth.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
 	}
+	if err := c.validateAuth(); err != nil {
+		return err
+	}
 
 	if c.Broker.MaxMessageSize < 1024 {
 		return fmt.Errorf("broker.max_message_size must be at least 1KB")
@@ -1321,6 +1380,63 @@ func (c *Config) Validate() error {
 			if q.Replication.AckTimeout <= 0 {
 				return fmt.Errorf("queues[%d].replication.ack_timeout must be > 0", i)
 			}
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateAuth() error {
+	provider := c.Auth.ProviderName()
+	switch provider {
+	case "", AuthProviderCallout, AuthProviderAtom:
+	default:
+		return fmt.Errorf("auth.provider: unsupported provider %q (valid: callout, atom)", c.Auth.Provider)
+	}
+
+	if c.Auth.Timeout < 0 {
+		return fmt.Errorf("auth.timeout cannot be negative")
+	}
+	if c.Auth.IdentityCacheSize < 0 {
+		return fmt.Errorf("auth.identity_cache_size cannot be negative")
+	}
+	if c.Auth.IdentityCacheTTL < 0 {
+		return fmt.Errorf("auth.identity_cache_ttl cannot be negative")
+	}
+
+	switch provider {
+	case AuthProviderCallout:
+		if strings.TrimSpace(c.Auth.URL) == "" {
+			return fmt.Errorf("auth.url is required when auth.provider is callout")
+		}
+		transport := strings.ToLower(strings.TrimSpace(c.Auth.Transport))
+		if transport != "" && transport != authTransportGRPC && transport != authTransportHTTP {
+			return fmt.Errorf("auth.transport: unsupported transport %q (valid: grpc, http)", c.Auth.Transport)
+		}
+	case AuthProviderAtom:
+		atom := c.Auth.Atom
+		if strings.TrimSpace(atom.GRPCAddr) == "" {
+			return fmt.Errorf("auth.atom.grpc_addr is required when auth.provider is atom")
+		}
+		if strings.TrimSpace(atom.ServiceTokenEnv) == "" && strings.TrimSpace(atom.ServiceTokenFile) == "" {
+			return fmt.Errorf("auth.atom.service_token_env or auth.atom.service_token_file is required when auth.provider is atom")
+		}
+		topicFormat := strings.ToLower(strings.TrimSpace(atom.TopicFormat))
+		if topicFormat != "" && topicFormat != AtomTopicFormatMagistrala {
+			return fmt.Errorf("auth.atom.topic_format: unsupported format %q (valid: magistrala)", atom.TopicFormat)
+		}
+		unsupportedPolicy := strings.ToLower(strings.TrimSpace(atom.UnsupportedTopicPolicy))
+		if unsupportedPolicy != "" && unsupportedPolicy != AtomUnsupportedTopicPolicyDeny {
+			return fmt.Errorf("auth.atom.unsupported_topic_policy: unsupported policy %q (valid: deny)", atom.UnsupportedTopicPolicy)
+		}
+		if atom.AuthnCacheTTL < 0 {
+			return fmt.Errorf("auth.atom.authn_cache_ttl cannot be negative")
+		}
+		if atom.AliasCacheTTL < 0 {
+			return fmt.Errorf("auth.atom.alias_cache_ttl cannot be negative")
+		}
+		if atom.DecisionCacheTTL < 0 {
+			return fmt.Errorf("auth.atom.decision_cache_ttl cannot be negative")
 		}
 	}
 

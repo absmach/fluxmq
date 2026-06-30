@@ -429,6 +429,7 @@ func TestIntegrationSASLPlainAuth(t *testing.T) {
 		require.NoError(t, err)
 		mechs := val.(*sasl.Mechanisms)
 		assert.Contains(t, mechs.Mechanisms, types.Symbol("PLAIN"))
+		assert.NotContains(t, mechs.Mechanisms, types.Symbol("ANONYMOUS"))
 
 		initFrame := &sasl.Init{
 			Mechanism:       sasl.MechPLAIN,

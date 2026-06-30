@@ -1,20 +1,65 @@
 ---
 title: Security
-description: Auth callout, TLS/mTLS listeners, inter-broker TLS, and rate limiting
+description: Atom auth, auth callout, TLS/mTLS listeners, inter-broker TLS, and rate limiting
 ---
 
 # Security Configuration
 
-**Last Updated:** 2026-03-17
+**Last Updated:** 2026-06-24
 
-## Auth Callout
+## Auth Providers
 
-FluxMQ delegates authentication and authorization to an external service via
-gRPC or HTTP callout. When `auth.url` is set, every client connection is
-verified against the external service before being accepted.
+FluxMQ can delegate authentication and authorization to either a legacy
+callout service or Atom over gRPC. When auth is enabled, client credentials are
+checked during connect and publish/subscribe permissions are checked before the
+broker accepts the operation.
+
+### Atom Provider
+
+Use the Atom provider when FluxMQ should talk directly to Atom without a
+`fluxmq-auth` bridge.
 
 ```yaml
 auth:
+  provider: atom
+  timeout: 2s
+  protocols:
+    mqtt: true
+    http: true
+    coap: true
+    amqp: true
+    amqp091: true
+  identity_cache_size: 50000
+  identity_cache_ttl: 1h
+  atom:
+    grpc_addr: "atom:8081"
+    insecure: true
+    service_token_env: "FLUXMQ_ATOM_SERVICE_TOKEN"
+    topic_format: "magistrala"
+    authn_cache_ttl: 30s
+    alias_cache_ttl: 5m
+    decision_cache_ttl: 0s
+    unsupported_topic_policy: "deny"
+```
+
+For MQTT, FluxMQ treats the CONNECT username and password as an Atom password
+credential: username is sent as the credential identifier, password is sent as
+the secret, and Atom verifies it through `AuthService.AuthenticateCredential`.
+For HTTP, CoAP, AMQP 1.0, and AMQP 0.9.1, client passwords, bearer tokens, and
+bridge token fields continue to be treated as Atom JWTs or API keys. FluxMQ
+parses `m/<tenant>/c/<channel>` topics, resolves Atom aliases when needed, then
+calls Atom `AuthzService.Check` with action `publish` or `subscribe` and object
+kind `resource`.
+
+### Auth Callout
+
+FluxMQ delegates authentication and authorization to an external service via
+gRPC or HTTP callout. Empty `provider` plus `auth.url` keeps the legacy callout
+behavior.
+
+```yaml
+auth:
+  provider: callout
   url: "auth-service:7016"
   transport: "grpc"     # "grpc" (default) or "http"
   timeout: 5s
@@ -22,14 +67,15 @@ auth:
 
 ### Per-Protocol Auth
 
-By default, all protocols require auth when `auth.url` is set. The `protocols`
-map lets you selectively enable or disable auth per protocol. This is useful
+By default, all protocols require auth when a provider is configured. The
+`protocols` map lets you selectively enable or disable auth per protocol. This is useful
 when some listeners handle internal traffic that doesn't need external auth
 (e.g., an AMQP 0.9.1 listener used exclusively for service-to-service event
 sourcing).
 
 ```yaml
 auth:
+  provider: callout
   url: "auth-service:7016"
   transport: "grpc"
   timeout: 5s

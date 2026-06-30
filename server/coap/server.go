@@ -28,6 +28,7 @@ import (
 type Config struct {
 	Address         string
 	ShutdownTimeout time.Duration
+	AuthEngine      *corebroker.AuthEngine
 
 	// DTLS configuration (if nil, runs plain UDP)
 	TLSConfig *piondtls.Config
@@ -55,6 +56,7 @@ func buildPublishMessage(topic string, payload []byte, clientID, externalID, con
 type Server struct {
 	config Config
 	broker *broker.Broker
+	auth   *corebroker.AuthEngine
 	logger *slog.Logger
 	mux    *mux.Router
 }
@@ -96,6 +98,7 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	s := &Server{
 		config: cfg,
 		broker: b,
+		auth:   cfg.AuthEngine,
 		logger: logger,
 		mux:    mux.NewRouter(),
 	}
@@ -241,23 +244,26 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		remoteAddr = addr.String()
 	}
 
-	// Placeholder bridge-level auth hook. A concrete SuperMQ-backed auth
-	// implementation will be wired in a follow-up step.
-	clientID, username, password := authFromQuery(r, remoteAddr)
-	authenticated, externalID, err := s.broker.Authenticate(clientID, username, password)
-	if err != nil || !authenticated {
-		s.logger.Warn("coap_publish_auth_failed",
-			slog.String("client_id", clientID),
-			slog.String("topic", topic))
-		s.sendResponse(w, r, codes.Unauthorized, "unauthorized")
-		return
-	}
-	if !s.broker.CanPublish(clientID, topic) {
-		s.logger.Warn("coap_publish_forbidden",
-			slog.String("client_id", clientID),
-			slog.String("topic", topic))
-		s.sendResponse(w, r, codes.Forbidden, "forbidden")
-		return
+	clientID := corebroker.CoAPClientPrefix + remoteAddr
+	externalID := ""
+	if s.auth != nil {
+		clientID, username, password := authFromQuery(r, remoteAddr)
+		authenticated, resolvedID, err := s.auth.Authenticate(clientID, username, password)
+		if err != nil || !authenticated {
+			s.logger.Warn("coap_publish_auth_failed",
+				slog.String("client_id", clientID),
+				slog.String("topic", topic))
+			s.sendResponse(w, r, codes.Unauthorized, "unauthorized")
+			return
+		}
+		externalID = resolvedID
+		if !s.auth.CanPublish(clientID, topic) {
+			s.logger.Warn("coap_publish_forbidden",
+				slog.String("client_id", clientID),
+				slog.String("topic", topic))
+			s.sendResponse(w, r, codes.Forbidden, "forbidden")
+			return
+		}
 	}
 
 	contentType := ""

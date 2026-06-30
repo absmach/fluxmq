@@ -101,6 +101,12 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			conn.Close()
 			return ErrTopicInvalid
 		}
+		if h.broker.auth != nil && !h.broker.auth.CanPublish(clientID, p.WillTopic) {
+			h.broker.telemetry.stats.IncrementAuthErrors()
+			sendV5ConnAck(conn, false, v5.ConnAckNotAuthorized, nil) //nolint:errcheck // best-effort rejection reply before closing
+			conn.Close()
+			return ErrNotAuthorized
+		}
 		// Note: Will payload is stored as []byte in storage.WillMessage
 		//nolint:godox // TODO: Consider zero-copy for will messages in future
 		will = &storage.WillMessage{

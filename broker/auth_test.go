@@ -118,6 +118,17 @@ func TestAuthEngine_Forget_RemovesMapping(t *testing.T) {
 	assert.Equal(t, "mqtt-client-2", authz.receivedClientID)
 }
 
+func TestAuthEngine_BindIdentity_StoresExternalID(t *testing.T) {
+	authz := &stubAuthorizer{allow: true}
+	e := NewAuthEngine(nil, authz)
+
+	e.BindIdentity("amqp:container-1", "ext-789")
+	e.CanPublish("amqp:container-1", "some/topic")
+
+	assert.Equal(t, "ext-789", authz.receivedClientID)
+	assert.Equal(t, "ext-789", e.ExternalID("amqp:container-1"))
+}
+
 func TestAuthEngine_ResolveID_NoMapping(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(nil, authz)

@@ -6,14 +6,14 @@
 #
 # Required out-of-band setup:
 #   - TLS certificate + key, plus CA bundle for client mTLS
-#   - External auth callout reachable on auth.internal:9090 (or disable)
+#   - Atom reachable on atom:8081, with FLUXMQ_ATOM_SERVICE_TOKEN set
 #   - OTLP-compatible collector reachable on otel.internal:4317
 #   - Persistent volume mounted at /var/lib/fluxmq
 #
 # What this profile enables vs. examples/config.yaml:
 #   - TLS on every public listener; plaintext listeners are commented out
 #   - mTLS on the admin API and inter-cluster gRPC paths
-#   - External auth callout with bounded identity cache
+#   - Direct Atom auth with bounded identity cache
 #   - Rate-limit on connections, messages, and subscriptions
 #   - Webhook notifier with worker pool + circuit breaker
 #   - OTel traces + metrics over TLS
@@ -130,12 +130,11 @@ storage:
   type: "badger"
   badger_dir: "/var/lib/fluxmq/data"
 
-# External auth callout. Required for any multi-tenant deployment.
+# Direct Atom auth. Required for any multi-tenant deployment.
 # IdentityCacheSize bounds memory; IdentityCacheTTL forces re-auth on a
 # schedule so revoked tokens are eventually rejected.
 auth:
-  url: "https://auth.internal:9090"
-  transport: "grpc"
+  provider: "atom"
   timeout: "2s"
   protocols:
     mqtt: true
@@ -145,6 +144,16 @@ auth:
     coap: true
   identity_cache_size: 50000
   identity_cache_ttl: "1h"
+  atom:
+    grpc_addr: "atom:8081"
+    insecure: true
+    service_token_env: "FLUXMQ_ATOM_SERVICE_TOKEN"
+    service_token_file: ""
+    topic_format: "magistrala"
+    authn_cache_ttl: "30s"
+    alias_cache_ttl: "5m"
+    decision_cache_ttl: "0s"
+    unsupported_topic_policy: "deny"
 
 # Per-IP / per-client rate limits. Always enable in production.
 ratelimit:
@@ -196,7 +205,7 @@ log:
 # Notes for operators:
 #   1. Run the broker container with read_only rootfs, cap_drop ALL, and
 #      no-new-privileges (see deployments/docker/compose.yaml).
-#   2. Rotate server certs and the auth-callout client cert separately.
+#   2. Rotate server certs and the Atom service token separately.
 #   3. /api/v1/reload is exposed on admin_api_addr — never bind that to a
 #      public interface; put mTLS or a token middleware in front.
 #   4. Verify the image signature before pulling:

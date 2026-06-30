@@ -55,6 +55,7 @@ type Config struct {
 	Address           string
 	ShutdownTimeout   time.Duration
 	TLSConfig         *tls.Config
+	AuthEngine        *corebroker.AuthEngine
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -75,6 +76,7 @@ func (c Config) maxBodySize() int64 {
 type Server struct {
 	config Config
 	broker *broker.Broker
+	auth   *corebroker.AuthEngine
 	logger *slog.Logger
 	server *http.Server
 }
@@ -87,6 +89,7 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	s := &Server{
 		config: cfg,
 		broker: b,
+		auth:   cfg.AuthEngine,
 		logger: logger,
 	}
 
@@ -322,29 +325,37 @@ func (s *Server) handleLegacyPublish(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, payload []byte, qos byte, retain bool) {
-	clientID, username, password, ok := authForTopic(r, topic)
-	if !ok {
-		s.logger.Warn("http_publish_auth_missing",
-			slog.String("client_id", clientID),
-			slog.String("topic", topic))
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
+	clientID := clientIDFromRequest(r)
+	externalID := ""
 
-	authenticated, externalID, err := s.broker.Authenticate(clientID, username, password)
-	if err != nil || !authenticated {
-		s.logger.Warn("http_publish_auth_failed",
-			slog.String("client_id", clientID),
-			slog.String("topic", topic))
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if !s.broker.CanPublish(clientID, topic) {
-		s.logger.Warn("http_publish_forbidden",
-			slog.String("client_id", clientID),
-			slog.String("topic", topic))
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
+	if s.auth != nil {
+		var username, password string
+		var ok bool
+		clientID, username, password, ok = authForTopic(r, topic)
+		if !ok {
+			s.logger.Warn("http_publish_auth_missing",
+				slog.String("client_id", clientID),
+				slog.String("topic", topic))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		authenticated, resolvedID, err := s.auth.Authenticate(clientID, username, password)
+		if err != nil || !authenticated {
+			s.logger.Warn("http_publish_auth_failed",
+				slog.String("client_id", clientID),
+				slog.String("topic", topic))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		externalID = resolvedID
+		if !s.auth.CanPublish(clientID, topic) {
+			s.logger.Warn("http_publish_forbidden",
+				slog.String("client_id", clientID),
+				slog.String("topic", topic))
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	msg := buildPublishMessage(topic, payload, qos, retain, clientID, externalID, r.Header.Get("Content-Type"))

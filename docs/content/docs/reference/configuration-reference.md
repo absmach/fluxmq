@@ -635,8 +635,7 @@ ratelimit:
 
 ```yaml
 auth:
-  url: "auth-service:7016"
-  transport: "grpc"
+  provider: "atom"
   timeout: 5s
   protocols:
     mqtt: true
@@ -644,14 +643,42 @@ auth:
     coap: true
     amqp: true
     amqp091: false
+  atom:
+    grpc_addr: "atom:8081"
+    insecure: true
+    service_token_env: "FLUXMQ_ATOM_SERVICE_TOKEN"
+    topic_format: "magistrala"
+    authn_cache_ttl: 30s
+    alias_cache_ttl: 5m
+    decision_cache_ttl: 0s
+    unsupported_topic_policy: "deny"
 ```
 
-| Field       | Default | Description                                                                                               |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `url`       | `""`    | Auth service address. Empty disables auth callout entirely.                                               |
-| `transport` | `grpc`  | Wire format for callout: `grpc` or `http`.                                                                |
-| `timeout`   | `0`     | Per-call timeout (e.g. `5s`). Zero uses the transport default.                                            |
-| `protocols` | `{}`    | Per-protocol auth toggle. Empty map = all protocols require auth. When set, only `true` entries get auth. |
+| Field                 | Default | Description                                                                                               |
+| --------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| `provider`            | `""`    | Auth provider: `atom` or `callout`. Empty plus `url` keeps legacy callout behavior.                       |
+| `url`                 | `""`    | Callout service address. Used only by the callout provider.                                               |
+| `transport`           | `grpc`  | Callout wire format: `grpc` or `http`.                                                                    |
+| `timeout`             | `0`     | Per-call timeout (e.g. `5s`). Zero uses the provider default.                                             |
+| `protocols`           | `{}`    | Per-protocol auth toggle. Empty map = all protocols require auth. When set, only `true` entries get auth. |
+| `identity_cache_size` | `10000` | Cached protocol client ID to external identity mappings.                                                  |
+| `identity_cache_ttl`  | `24h`   | Maximum lifetime of cached protocol client ID to external identity mappings.                              |
+
+Atom provider fields:
+
+| Field                                   | Default | Description                                                               |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------- |
+| `atom.grpc_addr`                        | `""`    | Atom gRPC address, for example `atom:8081`. Required for `provider: atom`. |
+| `atom.insecure`                         | `false` | Dial Atom without TLS.                                                    |
+| `atom.ca_file`                          | `""`    | CA bundle for TLS Atom gRPC.                                              |
+| `atom.cert_file` / `atom.key_file`      | `""`    | Optional client certificate pair for Atom gRPC.                           |
+| `atom.service_token_env`                | `""`    | Environment variable containing the FluxMQ service API key for Atom.      |
+| `atom.service_token_file`               | `""`    | File containing the FluxMQ service API key for Atom.                      |
+| `atom.topic_format`                     | `""`    | Topic parser. Currently only `magistrala` is supported.                   |
+| `atom.authn_cache_ttl`                  | `0`     | Successful credential/token-to-entity cache TTL. Zero disables this cache. |
+| `atom.alias_cache_ttl`                  | `0`     | Alias-to-resource cache TTL. Zero disables this cache.                    |
+| `atom.decision_cache_ttl`               | `0`     | Authz decision cache TTL. Zero disables this cache.                       |
+| `atom.unsupported_topic_policy`         | `""`    | Unsupported topic behavior. Currently only `deny` is supported.           |
 
 Valid `protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
 

@@ -13,4 +13,7 @@ const (
 	testSharedTopic   = "shared/topic"
 	testSubA          = "sub-a"
 	testRetainTopic   = "retain/topic"
+	testProtocolMQTT  = "MQTT"
+	testMQTTClientID  = "test-client"
+	testMQTTUsername  = "user"
 )
