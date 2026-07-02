@@ -4,10 +4,17 @@
 package http
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
+	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,6 +23,36 @@ const (
 	testSecret   = "secret"
 	testClientID = "client-id"
 )
+
+type normalizingHookProvider struct {
+	aliasTopic     string
+	canonicalTopic string
+}
+
+func (n *normalizingHookProvider) HandleHook(_ context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookResult, error) {
+	switch req.Topic {
+	case n.aliasTopic, n.canonicalTopic:
+		return corebroker.BlockingHookResult{Allowed: true, Topic: n.canonicalTopic}, nil
+	default:
+		return corebroker.BlockingHookResult{Allowed: true}, nil
+	}
+}
+
+type publishHook struct {
+	topic   string
+	payload []byte
+}
+
+func (h *publishHook) OnConnect(context.Context, string, string, string) error { return nil }
+func (h *publishHook) OnDisconnect(context.Context, string, string) error      { return nil }
+func (h *publishHook) OnSubscribe(context.Context, string, string, byte) error { return nil }
+func (h *publishHook) OnUnsubscribe(context.Context, string, string) error     { return nil }
+func (h *publishHook) OnPublish(_ context.Context, _ string, topic string, _ byte, payload []byte) error {
+	h.topic = topic
+	h.payload = append(h.payload[:0], payload...)
+	return nil
+}
+func (h *publishHook) Close() error { return nil }
 
 func TestBuildPublishMessage(t *testing.T) {
 	t.Run("with external id and content type", func(t *testing.T) {
@@ -131,6 +168,31 @@ func TestAuthFromRequestHeaderPairMissingValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLegacyPublishUsesHookTopic(t *testing.T) {
+	aliasTopic := "m/d1/c/ch1/messages"
+	canonicalTopic := "m/26ad5c3f-cd91-4ff0-9685-0c3115643174/c/cdc8f55f-0c54-4a9f-b4aa-8c69d4a8ce15/messages"
+	b := mqttbroker.NewBroker(memory.New(), nil)
+	defer b.Close()
+	b.SetAuthEngine(corebroker.NewAuthEngine(nil, nil))
+	b.SetBlockingHooks(corebroker.NewBlockingHookEngine(&normalizingHookProvider{
+		aliasTopic:     aliasTopic,
+		canonicalTopic: canonicalTopic,
+	}, corebroker.HookFailDeny, nil, nil, nil))
+	hook := &publishHook{}
+	b.SetEventHook(hook)
+
+	srv := New(Config{}, b, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodPost, "/"+aliasTopic, bytes.NewReader([]byte("payload")))
+	req.SetBasicAuth("device-id", "shared-key")
+	rec := httptest.NewRecorder()
+
+	srv.handleLegacyPublish(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, canonicalTopic, hook.topic)
+	require.Equal(t, []byte("payload"), hook.payload)
 }
 
 func TestParseQoS(t *testing.T) {

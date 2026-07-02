@@ -51,6 +51,7 @@ type Broker struct {
 	routeResolver       *corebroker.RoutingResolver
 	queueManager        channelQueueManager
 	auth                *corebroker.AuthEngine
+	hooks               *corebroker.BlockingHookEngine
 	cluster             cluster.Cluster
 	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration
@@ -85,12 +86,49 @@ func (b *Broker) SetAuthEngine(auth *corebroker.AuthEngine) {
 	b.auth = auth
 }
 
+// SetBlockingHooks sets the optional blocking hook engine.
+func (b *Broker) SetBlockingHooks(h *corebroker.BlockingHookEngine) {
+	b.hooks = h
+}
+
 // ExternalID returns the cached external identity for a protocol-level client ID.
 func (b *Broker) ExternalID(clientID string) string {
 	if b.auth == nil {
 		return ""
 	}
 	return b.auth.ExternalID(clientID)
+}
+
+// ApplyHook runs the optional blocking hook.
+func (b *Broker) ApplyHook(ctx context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookRequest, bool) {
+	if b.hooks == nil {
+		return req, true
+	}
+	req.Protocol = corebroker.HookProtocolAMQP091
+	return b.hooks.Handle(ctx, req)
+}
+
+// ApplyPublishHooks runs the optional auth_on_publish hook.
+func (b *Broker) ApplyPublishHooks(ctx context.Context, clientID, externalID, topic string, payload []byte, props map[string]string) (corebroker.BlockingHookRequest, bool) {
+	return b.ApplyHook(ctx, corebroker.BlockingHookRequest{
+		Hook:       corebroker.HookAuthOnPublish,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Topic:      topic,
+		Payload:    payload,
+		Properties: props,
+	})
+}
+
+// ApplySubscribeHooks runs the optional auth_on_subscribe hook.
+func (b *Broker) ApplySubscribeHooks(ctx context.Context, clientID, externalID, filter string) (string, bool) {
+	req, ok := b.ApplyHook(ctx, corebroker.BlockingHookRequest{
+		Hook:       corebroker.HookAuthOnSubscribe,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Topic:      filter,
+	})
+	return req.Topic, ok
 }
 
 // SetCluster sets the cluster reference for cross-node pub/sub routing.

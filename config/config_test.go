@@ -213,6 +213,39 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid blocking hook protocols",
+			modify: func(c *Config) {
+				c.Hooks.URL = testAuthURL
+				c.Hooks.Protocols = map[string]bool{protocolMQTT: true, protocolAMQP: true, protocolAMQP091: false}
+				c.Hooks.Events = map[string]bool{"auth_on_publish": true}
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown blocking hook protocol",
+			modify: func(c *Config) {
+				c.Hooks.URL = testAuthURL
+				c.Hooks.Protocols = map[string]bool{protocolMQTT: true, "websocket": true}
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown blocking hook event",
+			modify: func(c *Config) {
+				c.Hooks.URL = testAuthURL
+				c.Hooks.Events = map[string]bool{"auth_publish": true}
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid blocking hook fail mode",
+			modify: func(c *Config) {
+				c.Hooks.URL = testAuthURL
+				c.Hooks.FailMode = "open"
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -324,6 +357,54 @@ func TestAuthEnabledFor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.AuthEnabledFor(tt.protocol); got != tt.want {
 				t.Fatalf("AuthEnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHooksEnabledFor(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      HooksConfig
+		protocol string
+		want     bool
+	}{
+		{
+			name:     "no URL disables all",
+			cfg:      HooksConfig{},
+			protocol: protocolMQTT,
+			want:     false,
+		},
+		{
+			name:     "URL set, empty protocols enables all",
+			cfg:      HooksConfig{URL: testAuthURL},
+			protocol: protocolAMQP091,
+			want:     true,
+		},
+		{
+			name:     "protocol explicitly enabled",
+			cfg:      HooksConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
+			protocol: protocolMQTT,
+			want:     true,
+		},
+		{
+			name:     "protocol explicitly disabled",
+			cfg:      HooksConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
+			protocol: protocolAMQP091,
+			want:     false,
+		},
+		{
+			name:     "protocol not in map defaults to false",
+			cfg:      HooksConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true}},
+			protocol: protocolAMQP,
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.EnabledFor(tt.protocol); got != tt.want {
+				t.Fatalf("EnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
 			}
 		})
 	}

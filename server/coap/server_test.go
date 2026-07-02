@@ -30,6 +30,36 @@ type stubConn struct {
 	done chan struct{}
 }
 
+type normalizingHookProvider struct {
+	aliasTopic     string
+	canonicalTopic string
+}
+
+func (n *normalizingHookProvider) HandleHook(_ context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookResult, error) {
+	switch req.Topic {
+	case n.aliasTopic, n.canonicalTopic:
+		return corebroker.BlockingHookResult{Allowed: true, Topic: n.canonicalTopic}, nil
+	default:
+		return corebroker.BlockingHookResult{Allowed: true}, nil
+	}
+}
+
+type publishHook struct {
+	topic   string
+	payload []byte
+}
+
+func (h *publishHook) OnConnect(context.Context, string, string, string) error { return nil }
+func (h *publishHook) OnDisconnect(context.Context, string, string) error      { return nil }
+func (h *publishHook) OnSubscribe(context.Context, string, string, byte) error { return nil }
+func (h *publishHook) OnUnsubscribe(context.Context, string, string) error     { return nil }
+func (h *publishHook) OnPublish(_ context.Context, _ string, topic string, _ byte, payload []byte) error {
+	h.topic = topic
+	h.payload = append(h.payload[:0], payload...)
+	return nil
+}
+func (h *publishHook) Close() error { return nil }
+
 func newStubConn() *stubConn {
 	return &stubConn{done: make(chan struct{})}
 }
@@ -291,6 +321,37 @@ func TestHandlePublish(t *testing.T) {
 			t.Fatalf("expected body %q, got %q", "ok", string(body))
 		}
 	})
+}
+
+func TestHandlePublishUsesHookTopic(t *testing.T) {
+	aliasTopic := "m/d1/c/ch1/messages"
+	canonicalTopic := "m/26ad5c3f-cd91-4ff0-9685-0c3115643174/c/cdc8f55f-0c54-4a9f-b4aa-8c69d4a8ce15/messages"
+	store := memory.New()
+	cl := cluster.NewNoopCluster("test-node")
+	stats := broker.NewStats()
+	b := broker.NewBroker(store, cl, broker.WithLogger(slog.Default()), broker.WithStats(stats))
+	defer b.Close()
+	b.SetAuthEngine(corebroker.NewAuthEngine(nil, nil))
+	b.SetBlockingHooks(corebroker.NewBlockingHookEngine(&normalizingHookProvider{
+		aliasTopic:     aliasTopic,
+		canonicalTopic: canonicalTopic,
+	}, corebroker.HookFailDeny, nil, nil, nil))
+	hook := &publishHook{}
+	b.SetEventHook(hook)
+
+	server := New(Config{}, b, slog.Default())
+	conn := newStubConn()
+	writer := &stubResponseWriter{conn: conn}
+	reqMsg := pool.NewMessage(context.Background())
+	reqMsg.MustSetPath("/mqtt/publish/" + aliasTopic)
+	reqMsg.SetBody(bytes.NewReader([]byte("payload")))
+
+	server.handlePublish(writer, &mux.Message{Message: reqMsg})
+
+	require.NotNil(t, conn.last)
+	require.Equal(t, codes.Changed, conn.last.Code())
+	require.Equal(t, canonicalTopic, hook.topic)
+	require.Equal(t, []byte("payload"), hook.payload)
 }
 
 func TestBuildPublishMessage(t *testing.T) {

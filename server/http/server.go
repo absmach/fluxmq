@@ -339,6 +339,28 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	props := map[string]string{corebroker.ProtocolProperty: corebroker.ProtocolHTTP}
+	if externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
+	}
+	hookReq, ok := s.broker.ApplyPublishHooks(r.Context(), corebroker.BlockingHookRequest{
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Protocol:   corebroker.HookProtocolHTTP,
+		Topic:      topic,
+		Payload:    payload,
+		QoS:        qos,
+		Retain:     retain,
+		Properties: props,
+	})
+	if !ok {
+		s.logger.Warn("http_publish_hook_denied",
+			slog.String("client_id", clientID),
+			slog.String("topic", topic))
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	topic, payload, qos, retain, props = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, hookReq.Properties
 	if !s.broker.CanPublish(clientID, topic) {
 		s.logger.Warn("http_publish_forbidden",
 			slog.String("client_id", clientID),
@@ -348,6 +370,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 	}
 
 	msg := buildPublishMessage(topic, payload, qos, retain, clientID, externalID, r.Header.Get("Content-Type"))
+	msg.Properties = props
 
 	s.logger.Debug("http_publish",
 		slog.String("topic", topic),

@@ -252,6 +252,28 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		s.sendResponse(w, r, codes.Unauthorized, "unauthorized")
 		return
 	}
+	props := map[string]string{corebroker.ProtocolProperty: corebroker.ProtocolCoAP}
+	if externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
+	}
+	hookReq, ok := s.broker.ApplyPublishHooks(r.Context(), corebroker.BlockingHookRequest{
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Protocol:   corebroker.HookProtocolCoAP,
+		Topic:      topic,
+		Payload:    payload,
+		QoS:        0,
+		Retain:     false,
+		Properties: props,
+	})
+	if !ok {
+		s.logger.Warn("coap_publish_hook_denied",
+			slog.String("client_id", clientID),
+			slog.String("topic", topic))
+		s.sendResponse(w, r, codes.Forbidden, "forbidden")
+		return
+	}
+	topic, payload, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
 	if !s.broker.CanPublish(clientID, topic) {
 		s.logger.Warn("coap_publish_forbidden",
 			slog.String("client_id", clientID),
@@ -266,6 +288,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	}
 
 	msg := buildPublishMessage(topic, payload, clientID, externalID, contentType)
+	msg.Properties = props
 
 	s.logger.Debug("coap_publish",
 		slog.String("topic", topic),

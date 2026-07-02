@@ -24,6 +24,9 @@ type Link struct {
 	handle   uint32
 	isSender bool // true = broker sends TO client (client role = receiver)
 	address  string
+	// normalizedAddress is the broker routing address after auth callout
+	// normalization. Empty means address is used as-is.
+	normalizedAddress string
 
 	// Flow control (for sender links)
 	credit        uint32
@@ -145,14 +148,25 @@ func parseCursor(val any) *qtypes.CursorOption {
 
 // subscribe registers this link with the router or queue manager.
 func (l *Link) subscribe() {
-	// Check subscribe authorization
+	address := l.address
 	auth := l.session.conn.broker.auth
+	clientID := PrefixedClientID(l.session.conn.containerID)
+	externalID := ""
 	if auth != nil {
-		clientID := PrefixedClientID(l.session.conn.containerID)
-		if !auth.CanSubscribe(clientID, l.address) {
-			l.logger.Warn("subscribe denied", "client", clientID, "address", l.address)
-			return
-		}
+		externalID = auth.ExternalID(clientID)
+	}
+	var ok bool
+	address, ok = l.session.conn.broker.ApplySubscribeHooks(l.session.conn.ctx, clientID, externalID, address)
+	if !ok {
+		l.logger.Warn("subscribe hook denied", "client", clientID, "address", address)
+		return
+	}
+	if auth != nil && !auth.CanSubscribe(clientID, address) {
+		l.logger.Warn("subscribe denied", "client", clientID, "address", address)
+		return
+	}
+	if address != l.address {
+		l.normalizedAddress = address
 	}
 
 	if l.isQueue {
@@ -183,7 +197,7 @@ func (l *Link) subscribe() {
 	} else {
 		// Regular pub/sub via the shared router.
 		// Translate AMQP address (dot-separated, * wildcard) to MQTT filter (slash-separated, + wildcard).
-		mqttFilter := topics.AMQPFilterToMQTT(l.address)
+		mqttFilter := topics.AMQPFilterToMQTT(address)
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		l.session.conn.broker.router.Subscribe( //nolint:errcheck // subscribe errors are non-fatal; link will simply not receive messages
 			clientID,
@@ -194,7 +208,7 @@ func (l *Link) subscribe() {
 
 		if cl := l.session.conn.broker.cluster; cl != nil {
 			if err := cl.AddSubscription(context.Background(), clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
-				l.logger.Error("cluster add subscription failed", "address", l.address, "error", err)
+				l.logger.Error("cluster add subscription failed", "address", address, "error", err)
 			}
 		}
 	}
@@ -210,13 +224,17 @@ func (l *Link) detach() {
 			qm.Unsubscribe(ctx, l.queueName, "", clientID, l.consumerGroup) //nolint:errcheck // best-effort cleanup during link detach
 		}
 	} else if l.isSender {
-		mqttFilter := topics.AMQPFilterToMQTT(l.address)
+		address := l.normalizedAddress
+		if address == "" {
+			address = l.address
+		}
+		mqttFilter := topics.AMQPFilterToMQTT(address)
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		l.session.conn.broker.router.Unsubscribe(clientID, mqttFilter) //nolint:errcheck // best-effort cleanup during link detach
 
 		if cl := l.session.conn.broker.cluster; cl != nil {
 			if err := cl.RemoveSubscription(context.Background(), clientID, mqttFilter); err != nil {
-				l.logger.Error("cluster remove subscription failed", "address", l.address, "error", err)
+				l.logger.Error("cluster remove subscription failed", "address", address, "error", err)
 			}
 		}
 	}
@@ -258,13 +276,10 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	// Check publish authorization
 	auth := l.session.conn.broker.auth
 	clientID := PrefixedClientID(l.session.conn.containerID)
+	externalID := ""
 	if auth != nil {
-		if !auth.CanPublish(clientID, topic) {
-			l.logger.Warn("publish denied", "client", clientID, "topic", topic)
-			return
-		}
+		externalID = auth.ExternalID(clientID)
 	}
-
 	props := make(map[string]string, len(msg.ApplicationProperties)+1)
 	for k, v := range msg.ApplicationProperties {
 		if s, ok := v.(string); ok {
@@ -281,6 +296,16 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 				props[corebroker.ExternalIDProperty] = externalID
 			}
 		}
+	}
+	hookReq, ok := l.session.conn.broker.ApplyPublishHooks(l.session.conn.ctx, clientID, externalID, topic, data, props)
+	if !ok {
+		l.logger.Warn("publish hook denied", "client", clientID, "topic", topic)
+		return
+	}
+	topic, data, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
+	if auth != nil && !auth.CanPublish(clientID, topic) {
+		l.logger.Warn("publish denied", "client", clientID, "topic", topic)
+		return
 	}
 
 	resolver := l.session.conn.broker.routeResolver

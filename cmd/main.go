@@ -19,6 +19,7 @@ import (
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/authcallout"
+	"github.com/absmach/fluxmq/broker/hookcallout"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
@@ -403,6 +404,43 @@ func main() {
 			"protocols", cfg.Auth.Protocols)
 	} else {
 		slog.Info("Auth callout disabled")
+	}
+
+	// Configure optional blocking hook callout.
+	if cfg.Hooks.URL != "" {
+		transport := cfg.Hooks.Transport
+		if transport == "" {
+			transport = "grpc"
+		}
+
+		newHookProvider := func() corebroker.BlockingHookProvider {
+			opts := []hookcallout.Option{
+				hookcallout.WithTimeout(cfg.Hooks.Timeout),
+				hookcallout.WithLogger(logger),
+			}
+			switch transport {
+			case "http":
+				return hookcallout.NewHTTPClient(nil, cfg.Hooks.URL, opts...)
+			default:
+				return hookcallout.NewGRPCClient(nil, cfg.Hooks.URL, opts...)
+			}
+		}
+		newEngine := func() *corebroker.BlockingHookEngine {
+			return corebroker.NewBlockingHookEngine(newHookProvider(), cfg.Hooks.FailMode, logger, cfg.Hooks.Protocols, cfg.Hooks.Events)
+		}
+
+		b.SetBlockingHooks(newEngine())
+		amqpBroker.SetBlockingHooks(newEngine())
+		amqp091Broker.SetBlockingHooks(newEngine())
+		slog.Info("Blocking hooks configured",
+			"url", cfg.Hooks.URL,
+			"transport", transport,
+			"timeout", cfg.Hooks.Timeout,
+			"fail_mode", cfg.Hooks.FailMode,
+			"protocols", cfg.Hooks.Protocols,
+			"events", cfg.Hooks.Events)
+	} else {
+		slog.Info("Blocking hooks disabled")
 	}
 
 	// Shared local pub/sub router (MQTT + AMQP 0.9.1 + AMQP 1.0).

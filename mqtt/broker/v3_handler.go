@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -91,6 +92,14 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		}
 		externalID = resolvedID
 	}
+	hookExternalID, ok := h.broker.ApplyRegisterHooks(context.Background(), clientID, externalID, p.Username, string(p.Password), corebroker.HookProtocolMQTT)
+	if !ok {
+		h.broker.telemetry.stats.IncrementAuthErrors()
+		sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+		conn.Close()
+		return ErrNotAuthorized
+	}
+	externalID = hookExternalID
 
 	var will *storage.WillMessage
 	if p.WillFlag {
@@ -211,7 +220,35 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		qos = maxQoS
 	}
 
-	if h.broker.auth != nil && !h.broker.auth.CanPublish(s.ID, topic) {
+	props := setOriginProperties(nil, s.ExternalID)
+	requestedTopic := topic
+	hookReq, ok := h.broker.ApplyPublishHooks(context.Background(), corebroker.BlockingHookRequest{
+		ClientID:   s.ID,
+		ExternalID: s.ExternalID,
+		Protocol:   corebroker.HookProtocolMQTT,
+		Topic:      topic,
+		Payload:    payload,
+		QoS:        qos,
+		Retain:     retain,
+		Properties: props,
+	})
+	if !ok {
+		h.broker.telemetry.stats.IncrementAuthzErrors()
+		return ErrNotAuthorized
+	}
+	topic, payload, qos, retain, props = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
+	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
+		qos = maxQoS
+	}
+	if topic != requestedTopic {
+		if err := topics.ValidateTopicName(topic); err != nil {
+			h.broker.telemetry.logger.Warn("v3_publish_invalid_hook_topic",
+				slog.String("client_id", s.ID),
+				slog.String("topic", topic))
+			return ErrTopicInvalid
+		}
+	}
+	if h.broker.auth != nil && !h.broker.CanPublish(s.ID, topic) {
 		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
@@ -224,7 +261,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
-		msg.Properties = setOriginProperties(msg.Properties, s.ExternalID)
+		msg.Properties = props
 		msg.SetPayloadFromBuffer(buf)
 		err := h.broker.Publish(context.Background(), msg)
 		storage.ReleaseMessage(msg)
@@ -242,7 +279,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		msg.ClientID = s.ID
 		msg.QoS = qos
 		msg.Retain = retain
-		msg.Properties = setOriginProperties(msg.Properties, s.ExternalID)
+		msg.Properties = props
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			storage.ReleaseMessage(msg)
@@ -267,7 +304,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		storeMsg.QoS = qos
 		storeMsg.Retain = retain
 		storeMsg.PacketID = packetID
-		storeMsg.Properties = setOriginProperties(storeMsg.Properties, s.ExternalID)
+		storeMsg.Properties = props
 		storeMsg.SetPayloadFromBuffer(buf)
 		accepted, err := s.AddInbound(packetID, storeMsg)
 		if !accepted {
@@ -407,7 +444,26 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 			continue
 		}
 
-		if h.broker.auth != nil && !h.broker.auth.CanSubscribe(s.ID, t.Name) {
+		filter := t.Name
+		subQoS := t.QoS
+		filter, subQoS, ok = h.broker.ApplySubscribeHooks(context.Background(), s.ID, s.ExternalID, corebroker.HookProtocolMQTT, filter, subQoS)
+		if !ok {
+			h.broker.telemetry.stats.IncrementAuthzErrors()
+			reasonCodes[i] = v3.SubAckFailure
+			continue
+		}
+		if subQoS > 2 {
+			reasonCodes[i] = v3.SubAckFailure
+			continue
+		}
+		if filter != t.Name {
+			if err := topics.ValidateTopicFilter(filter); err != nil {
+				reasonCodes[i] = v3.SubAckFailure
+				continue
+			}
+			s.AddSubscriptionAlias(t.Name, filter)
+		}
+		if h.broker.auth != nil && !h.broker.CanSubscribe(s.ID, filter) {
 			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v3.SubAckFailure
 			continue
@@ -417,18 +473,18 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 		if h.broker.rateLimiter != nil && !h.broker.rateLimiter.AllowSubscribe(s.ID) {
 			h.broker.telemetry.logger.Warn("v3_subscribe_rate_limit",
 				slog.String("client_id", s.ID),
-				slog.String("topic", t.Name))
+				slog.String("topic", filter))
 			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
 
 		opts := storage.SubscribeOptions{}
-		grantedQoS := t.QoS
+		grantedQoS := subQoS
 		if maxQoS := h.broker.MaxQoS(); grantedQoS > maxQoS {
 			grantedQoS = maxQoS
 		}
 
-		if err := h.broker.subscribe(s.Session, t.Name, grantedQoS, opts); err != nil {
+		if err := h.broker.subscribe(s.Session, filter, grantedQoS, opts); err != nil {
 			reasonCodes[i] = v3.SubAckFailure
 			continue
 		}
@@ -436,7 +492,7 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 		reasonCodes[i] = grantedQoS
 
 		// Send retained messages matching the subscription filter
-		retained, err := h.broker.GetRetainedMatching(t.Name)
+		retained, err := h.broker.GetRetainedMatching(filter)
 		if err == nil {
 			for _, msg := range retained {
 				deliverQoS := msg.QoS
@@ -484,6 +540,15 @@ func (h *v3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 	h.broker.telemetry.logger.Info("v3_unsubscribe", slog.String("client_id", s.ID), slog.Int("topics", len(p.Topics)))
 
 	for _, filter := range p.Topics {
+		if resolved := s.ResolveSubscriptionAlias(filter); resolved != filter {
+			filter = resolved
+		} else {
+			filter, ok = h.broker.ApplyUnsubscribeHooks(context.Background(), s.ID, s.ExternalID, corebroker.HookProtocolMQTT, filter)
+			if !ok {
+				h.broker.telemetry.stats.IncrementAuthzErrors()
+				continue
+			}
+		}
 		h.broker.unsubscribeInternal(s.Session, filter) //nolint:errcheck // best-effort unsubscribe; errors are non-fatal
 	}
 
