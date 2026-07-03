@@ -19,7 +19,7 @@ import (
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/authcallout"
-	"github.com/absmach/fluxmq/broker/hookcallout"
+	"github.com/absmach/fluxmq/broker/hook"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
@@ -414,15 +414,15 @@ func main() {
 		}
 
 		newHookProvider := func() corebroker.BlockingHookProvider {
-			opts := []hookcallout.Option{
-				hookcallout.WithTimeout(cfg.Hooks.Timeout),
-				hookcallout.WithLogger(logger),
+			opts := []hook.Option{
+				hook.WithTimeout(cfg.Hooks.Timeout),
+				hook.WithLogger(logger),
 			}
 			switch transport {
 			case "http":
-				return hookcallout.NewHTTPClient(nil, cfg.Hooks.URL, opts...)
+				return hook.NewHTTPClient(nil, cfg.Hooks.URL, opts...)
 			default:
-				return hookcallout.NewGRPCClient(nil, cfg.Hooks.URL, opts...)
+				return hook.NewGRPCClient(nil, cfg.Hooks.URL, opts...)
 			}
 		}
 		newEngine := func() *corebroker.BlockingHookEngine {
