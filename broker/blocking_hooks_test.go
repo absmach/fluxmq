@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testTopic = "topic"
+
 type stubBlockingHookProvider struct {
 	result BlockingHookResult
 	err    error
@@ -81,7 +83,7 @@ func TestBlockingHookEngine_EmptyMutationKeepsOriginal(t *testing.T) {
 func TestBlockingHookEngine_DenyStopsProcessing(t *testing.T) {
 	engine := NewBlockingHookEngine(&stubBlockingHookProvider{result: BlockingHookResult{Allowed: false, Reason: "blocked"}}, HookFailDeny, discardBlockingHookLogger(), nil, nil)
 
-	_, ok := engine.Handle(context.Background(), BlockingHookRequest{Hook: HookAuthOnPublish, Protocol: HookProtocolMQTT, Topic: "topic"})
+	_, ok := engine.Handle(context.Background(), BlockingHookRequest{Hook: HookAuthOnPublish, Protocol: HookProtocolMQTT, Topic: testTopic})
 
 	require.False(t, ok)
 }
@@ -90,14 +92,14 @@ func TestBlockingHookEngine_ErrorHonorsFailMode(t *testing.T) {
 	provider := &stubBlockingHookProvider{err: errors.New("resolver unavailable")}
 
 	req, ok := NewBlockingHookEngine(provider, HookFailDeny, discardBlockingHookLogger(), nil, nil).
-		Handle(context.Background(), BlockingHookRequest{Hook: HookAuthOnPublish, Protocol: HookProtocolMQTT, Topic: "topic"})
+		Handle(context.Background(), BlockingHookRequest{Hook: HookAuthOnPublish, Protocol: HookProtocolMQTT, Topic: testTopic})
 	require.False(t, ok)
 	require.Equal(t, "topic", req.Topic)
 
 	req, ok = NewBlockingHookEngine(provider, HookFailAllow, discardBlockingHookLogger(), nil, nil).
-		Handle(context.Background(), BlockingHookRequest{Hook: HookAuthOnPublish, Protocol: HookProtocolMQTT, Topic: "topic"})
+		Handle(context.Background(), BlockingHookRequest{Hook: HookAuthOnPublish, Protocol: HookProtocolMQTT, Topic: testTopic})
 	require.True(t, ok)
-	require.Equal(t, "topic", req.Topic)
+	require.Equal(t, testTopic, req.Topic)
 }
 
 func TestBlockingHookEngine_FiltersDisabledProtocolAndHook(t *testing.T) {
