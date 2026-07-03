@@ -80,6 +80,9 @@ FluxMQ is a multi-protocol message broker built around a shared queue manager. M
 - **Observability**: `server/otel/`
   - OpenTelemetry metrics and tracing setup
 
+- **Blocking Hooks**: `broker/hook/`
+  - Synchronous allow/deny and request normalization callouts
+
 - **Webhook Notifier**: `broker/webhook/`
   - Asynchronous event delivery with retries and circuit breaker
 
@@ -103,6 +106,7 @@ If you are debugging data persistence, start here:
 ## Related Docs
 
 - [Routing internals](/architecture/routing)
+- [Blocking hooks](/architecture/hooks)
 - [Webhooks](/architecture/webhooks)
 - [Storage internals](/architecture/storage)
 - [Clustering internals](/architecture/clustering)

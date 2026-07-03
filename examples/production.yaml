@@ -146,6 +146,26 @@ auth:
   identity_cache_size: 50000
   identity_cache_ttl: "1h"
 
+# Optional blocking hooks. Enable only when an external policy/normalization
+# service must decide before FluxMQ continues the operation.
+#
+# hooks:
+#   url: "https://hooks.internal:7017"
+#   transport: "grpc"
+#   timeout: "500ms"
+#   fail_mode: "deny"
+#   protocols:
+#     mqtt: true
+#     amqp: true
+#     amqp091: true
+#     http: true
+#     coap: false
+#   events:
+#     auth_on_register: true
+#     auth_on_publish: true
+#     auth_on_subscribe: true
+#     auth_on_unsubscribe: true
+
 # Per-IP / per-client rate limits. Always enable in production.
 ratelimit:
   enabled: true

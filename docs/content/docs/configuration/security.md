@@ -47,6 +47,34 @@ When the `protocols` map is omitted or empty, all protocols require auth
 (backward compatible). When the map is present, only protocols set to `true`
 get auth; all others allow connections without authentication.
 
+## Blocking Hooks
+
+Blocking hooks are optional synchronous callouts for operations that need an
+external allow/deny or normalization decision before FluxMQ continues. Hooks
+run after authentication and before final authorization of the effective topic
+or filter.
+
+```yaml
+hooks:
+  url: "https://hooks.internal:7017"
+  transport: "grpc"
+  timeout: "500ms"
+  fail_mode: "deny"
+  protocols:
+    mqtt: true
+    amqp: true
+    amqp091: true
+    http: true
+    coap: false
+  events:
+    auth_on_register: true
+    auth_on_publish: true
+    auth_on_subscribe: true
+    auth_on_unsubscribe: true
+```
+
+See [Blocking Hooks](/architecture/hooks) for request and response details.
+
 ## TLS and mTLS
 
 Listeners share TLS fields across `tls` and `mtls` blocks.
