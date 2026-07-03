@@ -350,7 +350,14 @@ func (ch *Channel) completePublish() {
 	props = corebroker.AddClientIDProperty(props, clientID)
 	originalTopic := topic
 
-	hookReq, ok := ch.conn.broker.ApplyPublishHooks(context.Background(), clientID, ch.conn.broker.ExternalID(clientID), topic, body, props)
+	hookReq, ok := ch.conn.broker.ApplyHook(context.Background(), corebroker.BlockingHookRequest{
+		Hook:       corebroker.HookAuthOnPublish,
+		ClientID:   clientID,
+		ExternalID: ch.conn.broker.ExternalID(clientID),
+		Topic:      topic,
+		Payload:    body,
+		Properties: props,
+	})
 	if !ok {
 		ch.conn.logger.Warn("publish hook denied", "client_id", clientID, "topic", topic)
 		_ = ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "publish hook denied", codec.ClassBasic, codec.MethodBasicPublish)
@@ -1058,11 +1065,19 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	clientID := PrefixedClientID(ch.conn.connID)
 	externalID := ch.conn.broker.ExternalID(clientID)
 	queueFilter := m.Queue
-	var ok bool
-	if queueFilter, ok = ch.conn.broker.ApplySubscribeHooks(context.Background(), clientID, externalID, queueFilter); !ok {
+
+	req, ok := ch.conn.broker.ApplyHook(context.Background(), corebroker.BlockingHookRequest{
+		Hook:       corebroker.HookAuthOnSubscribe,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Topic:      queueFilter,
+	})
+	if !ok {
 		ch.conn.logger.Warn("subscribe hook denied", "client_id", clientID, "filter", queueFilter)
 		return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe hook denied", codec.ClassBasic, codec.MethodBasicConsume)
 	}
+	queueFilter = req.Topic
+
 	if auth := ch.conn.broker.auth; auth != nil {
 		if !auth.CanSubscribe(clientID, queueFilter) {
 			ch.conn.logger.Warn("subscribe denied", "client_id", clientID, "filter", queueFilter)

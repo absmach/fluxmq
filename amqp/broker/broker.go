@@ -108,29 +108,6 @@ func (b *Broker) ApplyHook(ctx context.Context, req corebroker.BlockingHookReque
 	return b.hooks.Handle(ctx, req)
 }
 
-// ApplyPublishHooks runs the optional auth_on_publish hook.
-func (b *Broker) ApplyPublishHooks(ctx context.Context, clientID, externalID, topic string, payload []byte, props map[string]string) (corebroker.BlockingHookRequest, bool) {
-	return b.ApplyHook(ctx, corebroker.BlockingHookRequest{
-		Hook:       corebroker.HookAuthOnPublish,
-		ClientID:   clientID,
-		ExternalID: externalID,
-		Topic:      topic,
-		Payload:    payload,
-		Properties: props,
-	})
-}
-
-// ApplySubscribeHooks runs the optional auth_on_subscribe hook.
-func (b *Broker) ApplySubscribeHooks(ctx context.Context, clientID, externalID, filter string) (string, bool) {
-	req, ok := b.ApplyHook(ctx, corebroker.BlockingHookRequest{
-		Hook:       corebroker.HookAuthOnSubscribe,
-		ClientID:   clientID,
-		ExternalID: externalID,
-		Topic:      filter,
-	})
-	return req.Topic, ok
-}
-
 // SetCluster sets the cluster reference for cross-node pub/sub routing.
 func (b *Broker) SetCluster(cl cluster.Cluster) {
 	b.cluster = cl
