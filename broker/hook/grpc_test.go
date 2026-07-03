@@ -72,7 +72,7 @@ func TestGRPCClient_HandleHookRejectsUnknownResult(t *testing.T) {
 	_, err := client.HandleHook(context.Background(), broker.BlockingHookRequest{
 		Hook:     broker.HookAuthOnPublish,
 		Protocol: broker.HookProtocolMQTT,
-		Topic:    "topic",
+		Topic:    topic,
 	})
 
 	require.Error(t, err)

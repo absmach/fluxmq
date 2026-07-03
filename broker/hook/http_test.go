@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const topic = "topic"
+
 func TestHTTPClient_HandleHookParsesMutations(t *testing.T) {
 	var got hookRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +67,7 @@ func TestHTTPClient_HandleHookHTTPError(t *testing.T) {
 	_, err := client.HandleHook(context.Background(), broker.BlockingHookRequest{
 		Hook:     broker.HookAuthOnPublish,
 		Protocol: broker.HookProtocolHTTP,
-		Topic:    "topic",
+		Topic:    topic,
 	})
 
 	require.Error(t, err)
@@ -81,7 +83,7 @@ func TestHTTPClient_HandleHookRejectsUnknownResult(t *testing.T) {
 	_, err := client.HandleHook(context.Background(), broker.BlockingHookRequest{
 		Hook:     broker.HookAuthOnPublish,
 		Protocol: broker.HookProtocolHTTP,
-		Topic:    "topic",
+		Topic:    topic,
 	})
 
 	require.Error(t, err)

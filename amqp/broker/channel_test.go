@@ -18,6 +18,8 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const eventsExchange = "events"
+
 type mockChannelQueueManager struct {
 	lastCursor    *qtypes.CursorOption
 	lastPublish   qtypes.PublishRequest
@@ -345,10 +347,10 @@ func TestExchangePublishUsesHookRoutingKeyForBindings(t *testing.T) {
 	mockQM := &mockChannelQueueManager{}
 	ch.conn.broker.queueManager = mockQM
 
-	ch.exchanges["events"] = &exchange{name: "events", typ: "direct"}
+	ch.exchanges["events"] = &exchange{name: eventsExchange, typ: "direct"}
 	ch.bindings = append(ch.bindings, binding{
 		queue:      testOrders,
-		exchange:   "events",
+		exchange:   eventsExchange,
 		routingKey: "canonical",
 	})
 
@@ -358,7 +360,7 @@ func TestExchangePublishUsesHookRoutingKeyForBindings(t *testing.T) {
 	}, corebroker.HookFailDeny, nil, nil, nil))
 
 	payload := []byte("payload")
-	ch.pendingMethod = &codec.BasicPublish{Exchange: "events", RoutingKey: "alias"}
+	ch.pendingMethod = &codec.BasicPublish{Exchange: eventsExchange, RoutingKey: "alias"}
 	ch.pendingHeader = &codec.ContentHeader{
 		ClassID:  codec.ClassBasic,
 		Weight:   0,
