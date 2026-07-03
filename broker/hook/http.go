@@ -54,10 +54,11 @@ type HTTPClient struct {
 	Options
 }
 
-// NewHTTPClient creates an HTTP hook callout client.
+// NewHTTPClient creates an HTTP hook callout client. A nil httpClient selects
+// a default transport tuned for concurrent callouts to a single host.
 func NewHTTPClient(httpClient *http.Client, baseURL string, opts ...Option) *HTTPClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = defaultHTTPClient()
 	}
 	return &HTTPClient{
 		httpClient: httpClient,
@@ -68,9 +69,6 @@ func NewHTTPClient(httpClient *http.Client, baseURL string, opts ...Option) *HTT
 
 // HandleHook executes a blocking hook remotely.
 func (c *HTTPClient) HandleHook(ctx context.Context, req broker.BlockingHookRequest) (broker.BlockingHookResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
-	defer cancel()
-
 	body := hookRequest{
 		Hook:       hookToString(req.Hook),
 		ClientID:   req.ClientID,
@@ -89,62 +87,52 @@ func (c *HTTPClient) HandleHook(ctx context.Context, req broker.BlockingHookRequ
 	if err != nil {
 		return broker.BlockingHookResult{}, err
 	}
+
+	res, err := c.execute(func() (any, error) {
+		return c.post(ctx, payload)
+	})
+	if err != nil {
+		logHookCall(ctx, c.Logger, req, "error", slog.String("error", err.Error()))
+		return broker.BlockingHookResult{}, err
+	}
+
+	result, err := hookResponseToResult(res.(hookResponse))
+	if err != nil {
+		logHookCall(ctx, c.Logger, req, "error", slog.String("error", err.Error()))
+		return broker.BlockingHookResult{}, err
+	}
+	logHookCall(ctx, c.Logger, req, "ok",
+		slog.Bool("allowed", result.Allowed),
+		slog.String("effective_topic", result.Topic))
+	return result, nil
+}
+
+func (c *HTTPClient) post(ctx context.Context, payload []byte) (hookResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
+	defer cancel()
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/hooks", bytes.NewReader(payload))
 	if err != nil {
-		return broker.BlockingHookResult{}, err
+		return hookResponse{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	res, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		c.Logger.Info("hook_callout",
-			slog.String("hook", req.Hook),
-			slog.String("client_id", req.ClientID),
-			slog.String("protocol", req.Protocol),
-			slog.String("topic", req.Topic),
-			slog.String("status", "error"),
-			slog.String("error", err.Error()))
-		return broker.BlockingHookResult{}, err
+		return hookResponse{}, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		err := fmt.Errorf("hook status %d: %s", res.StatusCode, string(msg))
-		c.Logger.Info("hook_callout",
-			slog.String("hook", req.Hook),
-			slog.String("client_id", req.ClientID),
-			slog.String("protocol", req.Protocol),
-			slog.String("topic", req.Topic),
-			slog.String("status", "error"),
-			slog.String("error", err.Error()))
-		return broker.BlockingHookResult{}, err
+		return hookResponse{}, fmt.Errorf("hook status %d: %s", res.StatusCode, string(msg))
 	}
 
 	var out hookResponse
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
-		return broker.BlockingHookResult{}, err
+		return hookResponse{}, err
 	}
-	result, err := hookResponseToResult(out)
-	if err != nil {
-		c.Logger.Info("hook_callout",
-			slog.String("hook", req.Hook),
-			slog.String("client_id", req.ClientID),
-			slog.String("protocol", req.Protocol),
-			slog.String("topic", req.Topic),
-			slog.String("status", "error"),
-			slog.String("error", err.Error()))
-		return broker.BlockingHookResult{}, err
-	}
-	c.Logger.Info("hook_callout",
-		slog.String("hook", req.Hook),
-		slog.String("client_id", req.ClientID),
-		slog.String("protocol", req.Protocol),
-		slog.String("topic", req.Topic),
-		slog.String("status", "ok"),
-		slog.Bool("allowed", result.Allowed),
-		slog.String("effective_topic", result.Topic))
-	return result, nil
+	return out, nil
 }
 
 func hookResponseToResult(out hookResponse) (broker.BlockingHookResult, error) {
@@ -172,4 +160,20 @@ func hookResponseToResult(out hookResponse) (broker.BlockingHookResult, error) {
 		Reason:     out.Reason,
 		ReasonCode: out.ReasonCode,
 	}, nil
+}
+
+// logHookCall logs one hook callout at debug level. The engine owns
+// warn/info-level logging; provider logs carry transport detail only.
+func logHookCall(ctx context.Context, logger *slog.Logger, req broker.BlockingHookRequest, status string, attrs ...slog.Attr) {
+	if logger == nil || !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	base := []slog.Attr{
+		slog.String("hook", req.Hook),
+		slog.String("client_id", req.ClientID),
+		slog.String("protocol", req.Protocol),
+		slog.String("topic", req.Topic),
+		slog.String("status", status),
+	}
+	logger.LogAttrs(ctx, slog.LevelDebug, "hook_callout", append(base, attrs...)...)
 }

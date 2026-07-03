@@ -22,10 +22,11 @@ type GRPCClient struct {
 	Options
 }
 
-// NewGRPCClient creates a gRPC hook callout client.
+// NewGRPCClient creates a gRPC hook callout client. A nil httpClient selects a
+// default transport: h2c for plaintext base URLs, HTTP/2 over TLS otherwise.
 func NewGRPCClient(httpClient *http.Client, baseURL string, opts ...Option) *GRPCClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = defaultGRPCClient(baseURL)
 	}
 	return &GRPCClient{
 		svc:     authv1connect.NewHookServiceClient(httpClient, baseURL, connect.WithGRPC()),
@@ -35,10 +36,7 @@ func NewGRPCClient(httpClient *http.Client, baseURL string, opts ...Option) *GRP
 
 // HandleHook executes a blocking hook remotely.
 func (c *GRPCClient) HandleHook(ctx context.Context, req broker.BlockingHookRequest) (broker.BlockingHookResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
-	defer cancel()
-
-	res, err := c.svc.Handle(ctx, connect.NewRequest(&authv1.HookReq{
+	connReq := connect.NewRequest(&authv1.HookReq{
 		Hook:       hookToProto(req.Hook),
 		ClientId:   req.ClientID,
 		ExternalId: req.ExternalID,
@@ -50,35 +48,24 @@ func (c *GRPCClient) HandleHook(ctx context.Context, req broker.BlockingHookRequ
 		Properties: req.Properties,
 		Username:   req.Username,
 		Password:   req.Password,
-	}))
+	})
+
+	res, err := c.execute(func() (any, error) {
+		callCtx, cancel := context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
+		return c.svc.Handle(callCtx, connReq)
+	})
 	if err != nil {
-		c.Logger.Info("hook_callout",
-			slog.String("hook", req.Hook),
-			slog.String("client_id", req.ClientID),
-			slog.String("protocol", req.Protocol),
-			slog.String("topic", req.Topic),
-			slog.String("status", "error"),
-			slog.String("error", err.Error()))
+		logHookCall(ctx, c.Logger, req, "error", slog.String("error", err.Error()))
 		return broker.BlockingHookResult{}, err
 	}
 
-	result, err := resultFromProto(res.Msg)
+	result, err := resultFromProto(res.(*connect.Response[authv1.HookRes]).Msg)
 	if err != nil {
-		c.Logger.Info("hook_callout",
-			slog.String("hook", req.Hook),
-			slog.String("client_id", req.ClientID),
-			slog.String("protocol", req.Protocol),
-			slog.String("topic", req.Topic),
-			slog.String("status", "error"),
-			slog.String("error", err.Error()))
+		logHookCall(ctx, c.Logger, req, "error", slog.String("error", err.Error()))
 		return broker.BlockingHookResult{}, err
 	}
-	c.Logger.Info("hook_callout",
-		slog.String("hook", req.Hook),
-		slog.String("client_id", req.ClientID),
-		slog.String("protocol", req.Protocol),
-		slog.String("topic", req.Topic),
-		slog.String("status", "ok"),
+	logHookCall(ctx, c.Logger, req, "ok",
 		slog.Bool("allowed", result.Allowed),
 		slog.String("effective_topic", result.Topic))
 	return result, nil

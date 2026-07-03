@@ -90,7 +90,9 @@ callout path.
 ### gRPC / Connect
 
 With `transport: "grpc"`, FluxMQ calls `HookService.Handle` from
-`proto/auth/v1/auth.proto` using Connect gRPC.
+`proto/auth/v1/auth.proto` using Connect gRPC. Plaintext `http://` URLs use
+unencrypted HTTP/2 (h2c); `https://` URLs negotiate HTTP/2 through TLS ALPN.
+The hook service must accept HTTP/2.
 
 The service receives `HookReq` and returns `HookRes`. The response result must
 be `HookResultOk` or `HookResultDeny`; `HookResultUnspecified` is treated as a
@@ -189,6 +191,12 @@ responses, invalid responses, or gRPC failures.
 
 Denials returned by the hook service always reject the operation regardless of
 `fail_mode`.
+
+A circuit breaker protects the broker from a failing hook service. After 5
+consecutive callout failures the breaker opens for 10 seconds and hook calls
+fail immediately without waiting for the timeout; `fail_mode` decides whether
+those fast failures allow or deny the operation. In half-open state up to 3
+probe requests test whether the service has recovered.
 
 ## Operational Guidance
 

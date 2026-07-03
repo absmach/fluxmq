@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/absmach/fluxmq/broker"
+	"github.com/sony/gobreaker"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,6 +73,36 @@ func TestHTTPClient_HandleHookHTTPError(t *testing.T) {
 	})
 
 	require.Error(t, err)
+}
+
+func TestHTTPClient_CircuitBreakerOpensAndFailsFast(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+		Name: "test",
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 2
+		},
+	})
+	client := NewHTTPClient(srv.Client(), srv.URL, WithCircuitBreaker(cb))
+	req := broker.BlockingHookRequest{
+		Hook:     broker.HookAuthOnPublish,
+		Protocol: broker.HookProtocolHTTP,
+		Topic:    topic,
+	}
+
+	for range 2 {
+		_, err := client.HandleHook(context.Background(), req)
+		require.Error(t, err)
+	}
+	_, err := client.HandleHook(context.Background(), req)
+	require.ErrorIs(t, err, gobreaker.ErrOpenState)
+	require.Equal(t, int32(2), hits.Load(), "open breaker must not reach the hook service")
 }
 
 func TestHTTPClient_HandleHookRejectsUnknownResult(t *testing.T) {
