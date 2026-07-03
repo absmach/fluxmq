@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/internal/httpclient"
 	authv1 "github.com/absmach/fluxmq/pkg/proto/auth/v1"
 	"github.com/absmach/fluxmq/pkg/proto/auth/v1/authv1connect"
 )
@@ -28,10 +29,12 @@ type GRPCClient struct {
 
 // NewGRPCClient creates a callout client that dials the given base URL.
 // The URL should be the ConnectRPC/gRPC server address
-// (e.g. "http://localhost:9090").
+// (e.g. "http://localhost:9090"). A nil httpClient selects a default
+// transport: unencrypted HTTP/2 for plaintext base URLs, HTTP/2 over TLS
+// otherwise.
 func NewGRPCClient(httpClient *http.Client, baseURL string, opts ...Option) *GRPCClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = httpclient.DefaultGRPC(baseURL)
 	}
 
 	o := DefaultOptions(opts...)

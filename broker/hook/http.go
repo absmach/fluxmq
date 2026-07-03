@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/internal/httpclient"
 )
 
 var _ broker.BlockingHookProvider = (*HTTPClient)(nil)
@@ -58,7 +59,7 @@ type HTTPClient struct {
 // a default transport tuned for concurrent callouts to a single host.
 func NewHTTPClient(httpClient *http.Client, baseURL string, opts ...Option) *HTTPClient {
 	if httpClient == nil {
-		httpClient = defaultHTTPClient()
+		httpClient = httpclient.Default()
 	}
 	return &HTTPClient{
 		httpClient: httpClient,

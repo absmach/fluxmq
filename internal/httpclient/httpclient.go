@@ -1,7 +1,9 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package hook
+// Package httpclient provides default HTTP clients for broker callout
+// services (auth callout, blocking hooks).
+package httpclient
 
 import (
 	"net/http"
@@ -14,17 +16,17 @@ const (
 	defaultIdleConnTimeout = 90 * time.Second
 )
 
-// defaultHTTPClient returns an HTTP client tuned for concurrent hook callouts
-// to a single host. http.DefaultTransport keeps only two idle connections per
-// host, which churns connections under publish-path concurrency.
-func defaultHTTPClient() *http.Client {
+// Default returns an HTTP client tuned for concurrent callouts to a single
+// host. http.DefaultTransport keeps only two idle connections per host, which
+// churns connections under publish-path concurrency.
+func Default() *http.Client {
 	return &http.Client{Transport: defaultTransport()}
 }
 
-// defaultGRPCClient returns an HTTP client able to carry gRPC, which requires
+// DefaultGRPC returns an HTTP client able to carry gRPC, which requires
 // HTTP/2. Plaintext http:// base URLs use unencrypted HTTP/2; https URLs
 // negotiate HTTP/2 through TLS ALPN.
-func defaultGRPCClient(baseURL string) *http.Client {
+func DefaultGRPC(baseURL string) *http.Client {
 	transport := defaultTransport()
 	if strings.HasPrefix(baseURL, "http://") {
 		protocols := new(http.Protocols)

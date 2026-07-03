@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/internal/httpclient"
 	authv1 "github.com/absmach/fluxmq/pkg/proto/auth/v1"
 	"github.com/absmach/fluxmq/pkg/proto/auth/v1/authv1connect"
 )
@@ -26,7 +27,7 @@ type GRPCClient struct {
 // default transport: h2c for plaintext base URLs, HTTP/2 over TLS otherwise.
 func NewGRPCClient(httpClient *http.Client, baseURL string, opts ...Option) *GRPCClient {
 	if httpClient == nil {
-		httpClient = defaultGRPCClient(baseURL)
+		httpClient = httpclient.DefaultGRPC(baseURL)
 	}
 	return &GRPCClient{
 		svc:     authv1connect.NewHookServiceClient(httpClient, baseURL, connect.WithGRPC()),
