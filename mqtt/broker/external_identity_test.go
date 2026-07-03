@@ -115,13 +115,14 @@ func TestV5AliasSubscribeReceivesCanonicalPublish(t *testing.T) {
 	sub, _, err := b.CreateSession("subscriber", 5, session.Options{CleanStart: true})
 	require.NoError(t, err)
 	subConn := &captureConnection{}
-	require.NoError(t, sub.Connect(subConn))
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
 
 	pub, _, err := b.CreateSession("publisher", 5, session.Options{CleanStart: true})
 	require.NoError(t, err)
 
-	handler := NewV5Handler(b)
-	require.NoError(t, handler.HandleSubscribe(sub, &v5.Subscribe{
+	handler := newV5Handler(b)
+	require.NoError(t, handler.HandleSubscribe(bindConn(sub), &v5.Subscribe{
 		FixedHeader: packets.FixedHeader{PacketType: packets.SubscribeType, QoS: 1},
 		ID:          1,
 		Opts: []v5.SubOption{
@@ -133,7 +134,7 @@ func TestV5AliasSubscribeReceivesCanonicalPublish(t *testing.T) {
 	require.True(t, ok)
 	subConn.packets = nil
 
-	require.NoError(t, handler.HandlePublish(pub, &v5.Publish{
+	require.NoError(t, handler.HandlePublish(bindConn(pub), &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
 		TopicName:   canonicalTopic,
 		Payload:     []byte("payload"),
