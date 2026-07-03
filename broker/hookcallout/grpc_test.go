@@ -61,3 +61,19 @@ func TestGRPCClient_HandleHookParsesMutations(t *testing.T) {
 	require.True(t, res.QoSSet)
 	require.Equal(t, "yes", res.Properties["x-hook"])
 }
+
+func TestGRPCClient_HandleHookRejectsUnknownResult(t *testing.T) {
+	handler := &fakeHookServer{result: &authv1.HookRes{}}
+	_, h := authv1connect.NewHookServiceHandler(handler)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	client := NewGRPCClient(srv.Client(), srv.URL)
+	_, err := client.HandleHook(context.Background(), broker.BlockingHookRequest{
+		Hook:     broker.HookAuthOnPublish,
+		Protocol: broker.HookProtocolMQTT,
+		Topic:    "topic",
+	})
+
+	require.Error(t, err)
+}

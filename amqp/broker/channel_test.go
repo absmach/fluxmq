@@ -340,6 +340,45 @@ func TestPublishUsesHookTopic(t *testing.T) {
 	}
 }
 
+func TestExchangePublishUsesHookRoutingKeyForBindings(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+
+	ch.exchanges["events"] = &exchange{name: "events", typ: "direct"}
+	ch.bindings = append(ch.bindings, binding{
+		queue:      testOrders,
+		exchange:   "events",
+		routingKey: "canonical",
+	})
+
+	ch.conn.broker.SetBlockingHooks(corebroker.NewBlockingHookEngine(&normalizingHookProvider{
+		aliasTopic:     "events/alias",
+		canonicalTopic: "events/canonical",
+	}, corebroker.HookFailDeny, nil, nil, nil))
+
+	payload := []byte("payload")
+	ch.pendingMethod = &codec.BasicPublish{Exchange: "events", RoutingKey: "alias"}
+	ch.pendingHeader = &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		Weight:   0,
+		BodySize: uint64(len(payload)),
+	}
+	ch.pendingBody = payload
+
+	ch.completePublish()
+
+	if mockQM.publishCalls != 1 {
+		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
+	}
+	if mockQM.lastPublish.Topic != "$queue/orders/canonical" {
+		t.Fatalf("expected normalized queue topic, got %q", mockQM.lastPublish.Topic)
+	}
+	if !bytes.Equal(mockQM.lastPublish.Payload, payload) {
+		t.Fatalf("expected payload %q, got %q", payload, mockQM.lastPublish.Payload)
+	}
+}
+
 func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	ch, _ := newTestChannel(t)
 	mockQM := &mockChannelQueueManager{}

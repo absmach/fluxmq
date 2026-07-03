@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/absmach/fluxmq/broker"
 )
@@ -124,7 +125,17 @@ func (c *HTTPClient) HandleHook(ctx context.Context, req broker.BlockingHookRequ
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		return broker.BlockingHookResult{}, err
 	}
-	result := hookResponseToResult(out)
+	result, err := hookResponseToResult(out)
+	if err != nil {
+		c.Logger.Info("hook_callout",
+			slog.String("hook", req.Hook),
+			slog.String("client_id", req.ClientID),
+			slog.String("protocol", req.Protocol),
+			slog.String("topic", req.Topic),
+			slog.String("status", "error"),
+			slog.String("error", err.Error()))
+		return broker.BlockingHookResult{}, err
+	}
 	c.Logger.Info("hook_callout",
 		slog.String("hook", req.Hook),
 		slog.String("client_id", req.ClientID),
@@ -136,9 +147,19 @@ func (c *HTTPClient) HandleHook(ctx context.Context, req broker.BlockingHookRequ
 	return result, nil
 }
 
-func hookResponseToResult(out hookResponse) broker.BlockingHookResult {
+func hookResponseToResult(out hookResponse) (broker.BlockingHookResult, error) {
+	var allowed bool
+	switch strings.ToLower(strings.TrimSpace(out.Result)) {
+	case "ok":
+		allowed = true
+	case "deny":
+		allowed = false
+	default:
+		return broker.BlockingHookResult{}, fmt.Errorf("unknown hook result %q", out.Result)
+	}
+
 	return broker.BlockingHookResult{
-		Allowed:    out.Result != "deny",
+		Allowed:    allowed,
 		Topic:      out.Topic,
 		Payload:    append([]byte(nil), out.Payload...),
 		PayloadSet: out.PayloadSet,
@@ -150,5 +171,5 @@ func hookResponseToResult(out hookResponse) broker.BlockingHookResult {
 		ExternalID: out.ExternalID,
 		Reason:     out.Reason,
 		ReasonCode: out.ReasonCode,
-	}
+	}, nil
 }

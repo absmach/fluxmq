@@ -281,6 +281,13 @@ func (b *Broker) ApplyRegisterHooks(ctx context.Context, clientID, externalID, u
 		Username:   username,
 		Password:   password,
 	})
+	if b.auth != nil {
+		if !ok {
+			b.auth.Forget(clientID)
+		} else {
+			b.auth.SetExternalID(clientID, req.ExternalID)
+		}
+	}
 	return req.ExternalID, ok
 }
 

@@ -62,7 +62,17 @@ func (c *GRPCClient) HandleHook(ctx context.Context, req broker.BlockingHookRequ
 		return broker.BlockingHookResult{}, err
 	}
 
-	result := resultFromProto(res.Msg)
+	result, err := resultFromProto(res.Msg)
+	if err != nil {
+		c.Logger.Info("hook_callout",
+			slog.String("hook", req.Hook),
+			slog.String("client_id", req.ClientID),
+			slog.String("protocol", req.Protocol),
+			slog.String("topic", req.Topic),
+			slog.String("status", "error"),
+			slog.String("error", err.Error()))
+		return broker.BlockingHookResult{}, err
+	}
 	c.Logger.Info("hook_callout",
 		slog.String("hook", req.Hook),
 		slog.String("client_id", req.ClientID),

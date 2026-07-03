@@ -348,6 +348,7 @@ func (ch *Channel) completePublish() {
 
 	clientID := PrefixedClientID(ch.conn.connID)
 	props = corebroker.AddClientIDProperty(props, clientID)
+	originalTopic := topic
 
 	hookReq, ok := ch.conn.broker.ApplyPublishHooks(context.Background(), clientID, ch.conn.broker.ExternalID(clientID), topic, body, props)
 	if !ok {
@@ -404,12 +405,22 @@ func (ch *Channel) completePublish() {
 	}
 	ch.exchangeMu.RUnlock()
 
+	bindingRoutingKey, checkExchangeBindings := routingKey, true
+	if exchangeName != "" && topic != originalTopic {
+		prefix := exchangeName + "/"
+		if strings.HasPrefix(topic, prefix) {
+			bindingRoutingKey = strings.TrimPrefix(topic, prefix)
+		} else {
+			checkExchangeBindings = false
+		}
+	}
+
 	for _, b := range bindings {
-		if ch.routingKeyMatches(b.routingKey, routingKey, exchangeName) {
+		if checkExchangeBindings && ch.routingKeyMatches(b.routingKey, bindingRoutingKey, exchangeName) {
 			// Route to the bound queue
 			qm := ch.conn.broker.queueManager
 			if qm != nil {
-				queueTopic := resolver.QueueTopic(b.queue, routingKey)
+				queueTopic := resolver.QueueTopic(b.queue, bindingRoutingKey)
 				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
 					ClientID:   clientID,
 					Topic:      queueTopic,

@@ -4,6 +4,7 @@
 package hookcallout
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/absmach/fluxmq/broker"
@@ -50,12 +51,23 @@ func hookToString(hook string) string {
 	return strings.ToLower(hook)
 }
 
-func resultFromProto(res *authv1.HookRes) broker.BlockingHookResult {
+func resultFromProto(res *authv1.HookRes) (broker.BlockingHookResult, error) {
 	if res == nil {
-		return broker.BlockingHookResult{Allowed: true}
+		return broker.BlockingHookResult{}, fmt.Errorf("nil hook response")
 	}
+
+	var allowed bool
+	switch res.GetResult() {
+	case authv1.HookResult_HookResultOk:
+		allowed = true
+	case authv1.HookResult_HookResultDeny:
+		allowed = false
+	default:
+		return broker.BlockingHookResult{}, fmt.Errorf("unknown hook result %s", res.GetResult().String())
+	}
+
 	return broker.BlockingHookResult{
-		Allowed:    res.GetResult() != authv1.HookResult_HookResultDeny,
+		Allowed:    allowed,
 		Topic:      res.GetTopic(),
 		Payload:    append([]byte(nil), res.GetPayload()...),
 		PayloadSet: res.GetPayloadSet(),
@@ -67,5 +79,5 @@ func resultFromProto(res *authv1.HookRes) broker.BlockingHookResult {
 		ExternalID: res.GetExternalId(),
 		Reason:     res.GetReason(),
 		ReasonCode: res.GetReasonCode(),
-	}
+	}, nil
 }

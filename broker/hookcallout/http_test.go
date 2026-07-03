@@ -70,3 +70,19 @@ func TestHTTPClient_HandleHookHTTPError(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+func TestHTTPClient_HandleHookRejectsUnknownResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(hookResponse{}) //nolint:errcheck // best-effort response
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.Client(), srv.URL)
+	_, err := client.HandleHook(context.Background(), broker.BlockingHookRequest{
+		Hook:     broker.HookAuthOnPublish,
+		Protocol: broker.HookProtocolHTTP,
+		Topic:    "topic",
+	})
+
+	require.Error(t, err)
+}

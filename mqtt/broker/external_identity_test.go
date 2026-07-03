@@ -26,6 +26,19 @@ func (a *externalIDAuthenticator) Authenticate(clientID, username, secret string
 	return a.result, a.err
 }
 
+type captureAuthorizer struct {
+	publishID string
+}
+
+func (a *captureAuthorizer) CanPublish(clientID string, _ string) bool {
+	a.publishID = clientID
+	return true
+}
+
+func (a *captureAuthorizer) CanSubscribe(clientID string, _ string) bool {
+	return a.CanPublish(clientID, "")
+}
+
 type normalizingHookProvider struct {
 	aliasTopic     string
 	canonicalTopic string
@@ -38,6 +51,28 @@ func (n *normalizingHookProvider) HandleHook(_ context.Context, req corebroker.B
 	default:
 		return corebroker.BlockingHookResult{Allowed: true}, nil
 	}
+}
+
+type registerIdentityHookProvider struct {
+	externalID string
+}
+
+func (p *registerIdentityHookProvider) HandleHook(_ context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookResult, error) {
+	if req.Hook == corebroker.HookAuthOnRegister {
+		return corebroker.BlockingHookResult{Allowed: true, ExternalID: p.externalID}, nil
+	}
+	return corebroker.BlockingHookResult{Allowed: true}, nil
+}
+
+type qosMutatingHookProvider struct {
+	qos byte
+}
+
+func (p *qosMutatingHookProvider) HandleHook(_ context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookResult, error) {
+	if req.Hook == corebroker.HookAuthOnPublish {
+		return corebroker.BlockingHookResult{Allowed: true, QoS: p.qos, QoSSet: true}, nil
+	}
+	return corebroker.BlockingHookResult{Allowed: true}, nil
 }
 
 func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
@@ -71,6 +106,30 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 	require.Equal(t, "ext-123", s.ExternalID)
 }
 
+func TestRegisterHookExternalIDOverridesAuthzIdentity(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	authz := &captureAuthorizer{}
+	b.SetAuthEngine(corebroker.NewAuthEngine(&externalIDAuthenticator{
+		result: &corebroker.AuthnResult{Authenticated: true, ID: "auth-id"},
+	}, authz))
+	b.SetBlockingHooks(corebroker.NewBlockingHookEngine(&registerIdentityHookProvider{
+		externalID: "hook-id",
+	}, corebroker.HookFailDeny, nil, nil, nil))
+
+	authenticated, externalID, err := b.Authenticate("client-1", "user", "pass")
+	require.NoError(t, err)
+	require.True(t, authenticated)
+	require.Equal(t, "auth-id", externalID)
+
+	hookID, ok := b.ApplyRegisterHooks(context.Background(), "client-1", externalID, "user", "pass", corebroker.HookProtocolMQTT)
+	require.True(t, ok)
+	require.Equal(t, "hook-id", hookID)
+	require.True(t, b.CanPublish("client-1", "topic"))
+	require.Equal(t, "hook-id", authz.publishID)
+}
+
 func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 	b := NewBroker(nil, nil)
 	defer b.Close()
@@ -101,6 +160,34 @@ func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 	require.NotNil(t, gotProps)
 	require.Equal(t, "mqtt-client", gotProps[corebroker.ClientIDProperty])
 	require.Equal(t, "ext-456", gotProps[corebroker.ExternalIDProperty])
+}
+
+func TestV5PublishRejectsHookQoSMutation(t *testing.T) {
+	b := newComplianceTestBroker(t)
+	b.SetBlockingHooks(corebroker.NewBlockingHookEngine(&qosMutatingHookProvider{
+		qos: 0,
+	}, corebroker.HookFailDeny, nil, nil, nil))
+
+	s, _, err := b.CreateSession("publisher", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	conn := &captureConnection{}
+	_, err = s.Connect(conn)
+	require.NoError(t, err)
+
+	handler := newV5Handler(b)
+	err = handler.HandlePublish(bindConn(s), &v5.Publish{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
+		ID:          7,
+		TopicName:   "telemetry/room1",
+		Payload:     []byte("payload"),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, conn.packets, 1)
+	ack, ok := conn.packets[0].(*v5.PubAck)
+	require.True(t, ok)
+	require.NotNil(t, ack.ReasonCode)
+	require.Equal(t, byte(v5.PubAckImplementationSpecificError), *ack.ReasonCode)
 }
 
 func TestV5AliasSubscribeReceivesCanonicalPublish(t *testing.T) {

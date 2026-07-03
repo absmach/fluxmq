@@ -306,6 +306,15 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return sendV5PublishError(s, qos, packetID, v5.PubAckNotAuthorized, "Not authorized", nil)
 	}
+	if hookReq.QoS != qos {
+		h.broker.telemetry.logger.Warn("v5_publish_hook_qos_mutation_rejected",
+			slog.String("client_id", s.ID),
+			slog.String("topic", topic),
+			slog.Int("requested_qos", int(qos)),
+			slog.Int("hook_qos", int(hookReq.QoS)))
+		h.broker.telemetry.stats.IncrementProtocolErrors()
+		return sendV5PublishError(s, qos, packetID, v5.PubAckImplementationSpecificError, "QoS mutation not supported", ErrProtocolViolation)
+	}
 	topic, payload, qos, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
 		qos = maxQoS

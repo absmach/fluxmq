@@ -236,6 +236,15 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
+	if hookReq.QoS != qos {
+		h.broker.telemetry.logger.Warn("v3_publish_hook_qos_mutation_rejected",
+			slog.String("client_id", s.ID),
+			slog.String("topic", topic),
+			slog.Int("requested_qos", int(qos)),
+			slog.Int("hook_qos", int(hookReq.QoS)))
+		h.broker.telemetry.stats.IncrementProtocolErrors()
+		return ErrProtocolViolation
+	}
 	topic, payload, qos, retain, props = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
 		qos = maxQoS
