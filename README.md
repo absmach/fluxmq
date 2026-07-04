@@ -230,13 +230,14 @@ hardware. See `benchmarks/README.md` for commands and guidance.
 
 ## Documentation
 
-| Document                                                                                 | Description                                       |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Document                                                                                              | Description                                       |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | [Architecture](https://www.absmach.eu/products/fluxmq/docs/architecture/overview)                     | Detailed system design                            |
 | [Scaling & Performance](https://www.absmach.eu/products/fluxmq/docs/deployment/running-in-production) | Benchmarking and tuning guidance                  |
 | [Clustering](https://www.absmach.eu/products/fluxmq/docs/architecture/clustering)                     | Distributed broker design                         |
 | [Client Library](https://www.absmach.eu/products/fluxmq/docs/clients/go-client)                       | Go MQTT and AMQP 0.9.1 clients with queue support |
 | [Broker Internals](https://www.absmach.eu/products/fluxmq/docs/architecture/routing)                  | Message routing, sessions                         |
+| [Blocking Hooks](https://www.absmach.eu/products/fluxmq/docs/architecture/hooks)                      | Synchronous allow/deny and mutation callouts      |
 | [Durable Queues](https://www.absmach.eu/products/fluxmq/docs/messaging/durable-queues)                | Queue configuration, consumer groups              |
 | [Configuration](https://www.absmach.eu/products/fluxmq/docs/reference/configuration-reference)        | Complete config reference                         |
 | [Webhooks](https://www.absmach.eu/products/fluxmq/docs/architecture/webhooks)                         | Webhook event system                              |

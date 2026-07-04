@@ -128,6 +128,15 @@ func (e *AuthEngine) Forget(clientID string) {
 	e.identities.Delete(clientID)
 }
 
+// SetExternalID stores or replaces the resolved external identity for a client.
+func (e *AuthEngine) SetExternalID(clientID, externalID string) {
+	if externalID == "" {
+		e.identities.Delete(clientID)
+		return
+	}
+	e.identities.Store(clientID, externalID)
+}
+
 // ExternalID returns the authenticated external identity for a protocol client ID.
 func (e *AuthEngine) ExternalID(clientID string) string {
 	id, _ := e.identities.Load(clientID)

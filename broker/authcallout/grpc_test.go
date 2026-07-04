@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testExternalID = "ext-id-1"
+
 type fakeAuthServer struct {
 	authnResult *authv1.AuthnRes
 	authzResult *authv1.AuthzRes
@@ -54,18 +56,40 @@ func startTestServer(t *testing.T, handler authv1connect.AuthServiceHandler) (*h
 	return srv, client
 }
 
+func TestGRPCClient_DefaultClientPlaintextH2C(t *testing.T) {
+	handler := &fakeAuthServer{authnResult: &authv1.AuthnRes{Authenticated: true, Id: testExternalID}}
+	mux := http.NewServeMux()
+	path, h := authv1connect.NewAuthServiceHandler(handler)
+	mux.Handle(path, h)
+	srv := httptest.NewUnstartedServer(mux)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	srv.Config.Protocols = protocols
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	client := NewGRPCClient(nil, srv.URL,
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+	)
+	result, err := client.Authenticate("mqtt-client", "user", "pass")
+	require.NoError(t, err)
+	assert.True(t, result.Authenticated)
+	assert.Equal(t, testExternalID, result.ID)
+}
+
 func TestGRPCClient_Authenticate_Success(t *testing.T) {
 	_, client := startTestServer(t, &fakeAuthServer{
 		authnResult: &authv1.AuthnRes{
 			Authenticated: true,
-			Id:            "ext-id-1",
+			Id:            testExternalID,
 		},
 	})
 
 	result, err := client.Authenticate("mqtt-client", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, result.Authenticated)
-	assert.Equal(t, "ext-id-1", result.ID)
+	assert.Equal(t, testExternalID, result.ID)
 }
 
 func TestGRPCClient_Authenticate_Denied(t *testing.T) {
@@ -97,7 +121,7 @@ func TestGRPCClient_CanPublish_Allowed(t *testing.T) {
 		authzResult: &authv1.AuthzRes{Authorized: true},
 	})
 
-	assert.True(t, client.CanPublish("ext-id-1", "m/domain/c/channel/temp"))
+	assert.True(t, client.CanPublish(testExternalID, "m/domain/c/channel/temp"))
 }
 
 func TestGRPCClient_CanPublish_Denied(t *testing.T) {
@@ -109,7 +133,7 @@ func TestGRPCClient_CanPublish_Denied(t *testing.T) {
 		},
 	})
 
-	assert.False(t, client.CanPublish("ext-id-1", "m/domain/c/channel/temp"))
+	assert.False(t, client.CanPublish(testExternalID, "m/domain/c/channel/temp"))
 }
 
 func TestGRPCClient_CanSubscribe_Allowed(t *testing.T) {
@@ -117,7 +141,7 @@ func TestGRPCClient_CanSubscribe_Allowed(t *testing.T) {
 		authzResult: &authv1.AuthzRes{Authorized: true},
 	})
 
-	assert.True(t, client.CanSubscribe("ext-id-1", "m/domain/c/channel/#"))
+	assert.True(t, client.CanSubscribe(testExternalID, "m/domain/c/channel/#"))
 }
 
 func TestGRPCClient_CanSubscribe_ServerError(t *testing.T) {
@@ -125,7 +149,7 @@ func TestGRPCClient_CanSubscribe_ServerError(t *testing.T) {
 		authzErr: connect.NewError(connect.CodeUnavailable, nil),
 	})
 
-	assert.False(t, client.CanSubscribe("ext-id-1", "m/domain/c/channel"))
+	assert.False(t, client.CanSubscribe(testExternalID, "m/domain/c/channel"))
 }
 
 func TestGRPCClient_ImplementsInterfaces(t *testing.T) {

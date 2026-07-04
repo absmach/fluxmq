@@ -254,6 +254,7 @@ flowchart TD
 ## Optional Subsystems
 
 - **Auth/Authz**: pluggable interfaces in `broker/auth.go`
+- **Blocking hooks**: synchronous allow/deny and mutation callouts via `broker/hook/`
 - **Rate limiting**: per-IP and per-client limits in `ratelimit/`
 - **Webhooks**: event delivery via `broker/webhook/`
 - **OTel metrics/tracing**: optional, configured via `server` settings
@@ -262,6 +263,7 @@ flowchart TD
 
 - `broker.*` for broker limits (max message size, max QoS, retry policy)
 - `session.*` for session storage and offline queue limits
+- `hooks.*` for blocking hook callouts
 - `ratelimit.*` for rate limiting
 - `webhook.*` for webhook delivery
 

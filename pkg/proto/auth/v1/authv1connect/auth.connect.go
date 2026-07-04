@@ -26,6 +26,8 @@ const _ = connect.IsAtLeastVersion1_13_0
 const (
 	// AuthServiceName is the fully-qualified name of the AuthService service.
 	AuthServiceName = "fluxmq.auth.v1.AuthService"
+	// HookServiceName is the fully-qualified name of the HookService service.
+	HookServiceName = "fluxmq.auth.v1.HookService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -41,6 +43,8 @@ const (
 	AuthServiceAuthenticateProcedure = "/fluxmq.auth.v1.AuthService/Authenticate"
 	// AuthServiceAuthorizeProcedure is the fully-qualified name of the AuthService's Authorize RPC.
 	AuthServiceAuthorizeProcedure = "/fluxmq.auth.v1.AuthService/Authorize"
+	// HookServiceHandleProcedure is the fully-qualified name of the HookService's Handle RPC.
+	HookServiceHandleProcedure = "/fluxmq.auth.v1.HookService/Handle"
 )
 
 // AuthServiceClient is a client for the fluxmq.auth.v1.AuthService service.
@@ -51,8 +55,8 @@ type AuthServiceClient interface {
 	// calls.
 	Authenticate(context.Context, *connect.Request[v1.AuthnReq]) (*connect.Response[v1.AuthnRes], error)
 	// Authorize checks whether a previously authenticated identity is allowed
-	// to perform a given action on a topic. The topic is passed as-is; any
-	// parsing, route resolution, or mapping is the server's responsibility.
+	// to perform a given action on the effective topic/filter. When the optional
+	// topic normalizer is configured, the broker authorizes the normalized value.
 	Authorize(context.Context, *connect.Request[v1.AuthzReq]) (*connect.Response[v1.AuthzRes], error)
 }
 
@@ -106,8 +110,8 @@ type AuthServiceHandler interface {
 	// calls.
 	Authenticate(context.Context, *connect.Request[v1.AuthnReq]) (*connect.Response[v1.AuthnRes], error)
 	// Authorize checks whether a previously authenticated identity is allowed
-	// to perform a given action on a topic. The topic is passed as-is; any
-	// parsing, route resolution, or mapping is the server's responsibility.
+	// to perform a given action on the effective topic/filter. When the optional
+	// topic normalizer is configured, the broker authorizes the normalized value.
 	Authorize(context.Context, *connect.Request[v1.AuthzReq]) (*connect.Response[v1.AuthzRes], error)
 }
 
@@ -151,4 +155,74 @@ func (UnimplementedAuthServiceHandler) Authenticate(context.Context, *connect.Re
 
 func (UnimplementedAuthServiceHandler) Authorize(context.Context, *connect.Request[v1.AuthzReq]) (*connect.Response[v1.AuthzRes], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.auth.v1.AuthService.Authorize is not implemented"))
+}
+
+// HookServiceClient is a client for the fluxmq.auth.v1.HookService service.
+type HookServiceClient interface {
+	Handle(context.Context, *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error)
+}
+
+// NewHookServiceClient constructs a client for the fluxmq.auth.v1.HookService service. By default,
+// it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and
+// sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC()
+// or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewHookServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) HookServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	hookServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("HookService").Methods()
+	return &hookServiceClient{
+		handle: connect.NewClient[v1.HookReq, v1.HookRes](
+			httpClient,
+			baseURL+HookServiceHandleProcedure,
+			connect.WithSchema(hookServiceMethods.ByName("Handle")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// hookServiceClient implements HookServiceClient.
+type hookServiceClient struct {
+	handle *connect.Client[v1.HookReq, v1.HookRes]
+}
+
+// Handle calls fluxmq.auth.v1.HookService.Handle.
+func (c *hookServiceClient) Handle(ctx context.Context, req *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error) {
+	return c.handle.CallUnary(ctx, req)
+}
+
+// HookServiceHandler is an implementation of the fluxmq.auth.v1.HookService service.
+type HookServiceHandler interface {
+	Handle(context.Context, *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error)
+}
+
+// NewHookServiceHandler builds an HTTP handler from the service implementation. It returns the path
+// on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewHookServiceHandler(svc HookServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	hookServiceMethods := v1.File_auth_v1_auth_proto.Services().ByName("HookService").Methods()
+	hookServiceHandleHandler := connect.NewUnaryHandler(
+		HookServiceHandleProcedure,
+		svc.Handle,
+		connect.WithSchema(hookServiceMethods.ByName("Handle")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/fluxmq.auth.v1.HookService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case HookServiceHandleProcedure:
+			hookServiceHandleHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedHookServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedHookServiceHandler struct{}
+
+func (UnimplementedHookServiceHandler) Handle(context.Context, *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.auth.v1.HookService.Handle is not implemented"))
 }

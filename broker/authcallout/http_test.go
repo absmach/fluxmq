@@ -47,7 +47,7 @@ func TestHTTPClient_Authenticate_Success(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(authnResponse{ //nolint:errcheck // best-effort
 				Authenticated: true,
-				ID:            "ext-id-1",
+				ID:            testExternalID,
 			})
 		}, nil)
 
@@ -59,7 +59,7 @@ func TestHTTPClient_Authenticate_Success(t *testing.T) {
 	result, err := client.Authenticate("client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, result.Authenticated)
-	assert.Equal(t, "ext-id-1", result.ID)
+	assert.Equal(t, testExternalID, result.ID)
 }
 
 func TestHTTPClient_Authenticate_Denied(t *testing.T) {
@@ -99,7 +99,7 @@ func TestHTTPClient_CanPublish_Allowed(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			var req authzRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			assert.Equal(t, "ext-id-1", req.ExternalID)
+			assert.Equal(t, testExternalID, req.ExternalID)
 			assert.Equal(t, "sensors/temp", req.Topic)
 			assert.Equal(t, "publish", req.Action)
 
@@ -108,7 +108,7 @@ func TestHTTPClient_CanPublish_Allowed(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.True(t, client.CanPublish("ext-id-1", "sensors/temp"))
+	assert.True(t, client.CanPublish(testExternalID, "sensors/temp"))
 }
 
 func TestHTTPClient_CanPublish_Denied(t *testing.T) {
@@ -123,7 +123,7 @@ func TestHTTPClient_CanPublish_Denied(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.False(t, client.CanPublish("ext-id-1", "sensors/temp"))
+	assert.False(t, client.CanPublish(testExternalID, "sensors/temp"))
 }
 
 func TestHTTPClient_CanSubscribe_Allowed(t *testing.T) {
@@ -138,7 +138,7 @@ func TestHTTPClient_CanSubscribe_Allowed(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.True(t, client.CanSubscribe("ext-id-1", "sensors/#"))
+	assert.True(t, client.CanSubscribe(testExternalID, "sensors/#"))
 }
 
 func TestHTTPClient_CanSubscribe_ServerError(t *testing.T) {
@@ -148,7 +148,7 @@ func TestHTTPClient_CanSubscribe_ServerError(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.False(t, client.CanSubscribe("ext-id-1", "sensors/#"))
+	assert.False(t, client.CanSubscribe(testExternalID, "sensors/#"))
 }
 
 func TestHTTPClient_ProtocolStrings(t *testing.T) {

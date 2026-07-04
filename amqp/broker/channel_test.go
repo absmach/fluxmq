@@ -18,6 +18,8 @@ import (
 	"github.com/absmach/fluxmq/storage"
 )
 
+const eventsExchange = "events"
+
 type mockChannelQueueManager struct {
 	lastCursor    *qtypes.CursorOption
 	lastPublish   qtypes.PublishRequest
@@ -74,6 +76,20 @@ func (m *mockChannelQueueManager) UpdateQueue(_ context.Context, cfg qtypes.Queu
 
 func (m *mockChannelQueueManager) CommitOffset(context.Context, string, string, uint64) error {
 	return nil
+}
+
+type normalizingHookProvider struct {
+	aliasTopic     string
+	canonicalTopic string
+}
+
+func (n *normalizingHookProvider) HandleHook(_ context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookResult, error) {
+	switch req.Topic {
+	case n.aliasTopic, n.canonicalTopic:
+		return corebroker.BlockingHookResult{Allowed: true, Topic: n.canonicalTopic}, nil
+	default:
+		return corebroker.BlockingHookResult{Allowed: true}, nil
+	}
 }
 
 func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
@@ -285,6 +301,83 @@ func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 	}
 	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
 		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), gotProps[corebroker.ClientIDProperty])
+	}
+}
+
+func TestPublishUsesHookTopic(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	aliasTopic := "m/d1/c/ch1/messages"
+	canonicalTopic := "m/26ad5c3f-cd91-4ff0-9685-0c3115643174/c/cdc8f55f-0c54-4a9f-b4aa-8c69d4a8ce15/messages"
+	ch.conn.broker.SetBlockingHooks(corebroker.NewBlockingHookEngine(&normalizingHookProvider{
+		aliasTopic:     aliasTopic,
+		canonicalTopic: canonicalTopic,
+	}, corebroker.HookFailDeny, nil, nil, nil))
+	if err := ch.conn.broker.router.Subscribe("mqtt-client", canonicalTopic, 1, storage.SubscribeOptions{}); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	var gotTopic string
+	var gotPayload []byte
+	ch.conn.broker.SetCrossDeliver(func(ctx context.Context, clientID string, topic string, payload []byte, qos byte, props map[string]string) {
+		gotTopic = topic
+		gotPayload = append([]byte(nil), payload...)
+	})
+
+	payload := []byte("payload")
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: aliasTopic}
+	ch.pendingHeader = &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		Weight:   0,
+		BodySize: uint64(len(payload)),
+	}
+	ch.pendingBody = payload
+
+	ch.completePublish()
+
+	if gotTopic != canonicalTopic {
+		t.Fatalf("expected topic %q, got %q", canonicalTopic, gotTopic)
+	}
+	if !bytes.Equal(gotPayload, payload) {
+		t.Fatalf("expected payload %q, got %q", payload, gotPayload)
+	}
+}
+
+func TestExchangePublishUsesHookRoutingKeyForBindings(t *testing.T) {
+	ch, _ := newTestChannel(t)
+	mockQM := &mockChannelQueueManager{}
+	ch.conn.broker.queueManager = mockQM
+
+	ch.exchanges["events"] = &exchange{name: eventsExchange, typ: "direct"}
+	ch.bindings = append(ch.bindings, binding{
+		queue:      testOrders,
+		exchange:   eventsExchange,
+		routingKey: "canonical",
+	})
+
+	ch.conn.broker.SetBlockingHooks(corebroker.NewBlockingHookEngine(&normalizingHookProvider{
+		aliasTopic:     "events/alias",
+		canonicalTopic: "events/canonical",
+	}, corebroker.HookFailDeny, nil, nil, nil))
+
+	payload := []byte("payload")
+	ch.pendingMethod = &codec.BasicPublish{Exchange: eventsExchange, RoutingKey: "alias"}
+	ch.pendingHeader = &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		Weight:   0,
+		BodySize: uint64(len(payload)),
+	}
+	ch.pendingBody = payload
+
+	ch.completePublish()
+
+	if mockQM.publishCalls != 1 {
+		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
+	}
+	if mockQM.lastPublish.Topic != "$queue/orders/canonical" {
+		t.Fatalf("expected normalized queue topic, got %q", mockQM.lastPublish.Topic)
+	}
+	if !bytes.Equal(mockQM.lastPublish.Payload, payload) {
+		t.Fatalf("expected payload %q, got %q", payload, mockQM.lastPublish.Payload)
 	}
 }
 

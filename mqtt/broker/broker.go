@@ -130,6 +130,7 @@ type Broker struct {
 	crossDeliver  broker.CrossDeliverFunc // nil if cross-protocol local pub/sub disabled
 	routeResolver *broker.RoutingResolver // shared routing policy
 	auth          *broker.AuthEngine
+	hooks         *broker.BlockingHookEngine
 	rateLimiter   broker.RateLimiter // nil if rate limiting disabled
 	eventHook     broker.EventHook   // nil if no event hooks configured
 	stopCh        chan struct{}
@@ -204,6 +205,11 @@ func (b *Broker) SetCrossDeliver(fn broker.CrossDeliverFunc) {
 	b.crossDeliver = fn
 }
 
+// SetBlockingHooks sets the optional blocking hook engine.
+func (b *Broker) SetBlockingHooks(h *broker.BlockingHookEngine) {
+	b.hooks = h
+}
+
 // GetQueueManager returns the queue manager.
 func (b *Broker) GetQueueManager() broker.QueueManager {
 	qm, _ := b.queueManager.(broker.QueueManager)
@@ -254,6 +260,73 @@ func (b *Broker) CanPublish(clientID, topic string) bool {
 		return true
 	}
 	return b.auth.CanPublish(clientID, topic)
+}
+
+// CanSubscribe checks subscribe authorization for a client/filter pair.
+// Returns true when authz is not configured.
+func (b *Broker) CanSubscribe(clientID, filter string) bool {
+	if b.auth == nil {
+		return true
+	}
+	return b.auth.CanSubscribe(clientID, filter)
+}
+
+// ApplyRegisterHooks runs the optional auth_on_register hook.
+func (b *Broker) ApplyRegisterHooks(ctx context.Context, clientID, externalID, username, password, protocol string) (string, bool) {
+	req, ok := b.applyBlockingHook(ctx, broker.BlockingHookRequest{
+		Hook:       broker.HookAuthOnRegister,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Protocol:   protocol,
+		Username:   username,
+		Password:   password,
+	})
+	if b.auth != nil {
+		if !ok {
+			b.auth.Forget(clientID)
+		} else {
+			b.auth.SetExternalID(clientID, req.ExternalID)
+		}
+	}
+	return req.ExternalID, ok
+}
+
+// ApplyPublishHooks runs the optional auth_on_publish hook.
+func (b *Broker) ApplyPublishHooks(ctx context.Context, req broker.BlockingHookRequest) (broker.BlockingHookRequest, bool) {
+	req.Hook = broker.HookAuthOnPublish
+	return b.applyBlockingHook(ctx, req)
+}
+
+// ApplySubscribeHooks runs the optional auth_on_subscribe hook.
+func (b *Broker) ApplySubscribeHooks(ctx context.Context, clientID, externalID, protocol, filter string, qos byte) (string, byte, bool) {
+	req, ok := b.applyBlockingHook(ctx, broker.BlockingHookRequest{
+		Hook:       broker.HookAuthOnSubscribe,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Protocol:   protocol,
+		Topic:      filter,
+		QoS:        qos,
+	})
+	return req.Topic, req.QoS, ok
+}
+
+// ApplyUnsubscribeHooks runs the optional auth_on_unsubscribe hook.
+func (b *Broker) ApplyUnsubscribeHooks(ctx context.Context, clientID, externalID, protocol, filter string) (string, bool) {
+	req, ok := b.applyBlockingHook(ctx, broker.BlockingHookRequest{
+		Hook:       broker.HookAuthOnUnsubscribe,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Protocol:   protocol,
+		Topic:      filter,
+	})
+	return req.Topic, ok
+}
+
+func (b *Broker) applyBlockingHook(ctx context.Context, req broker.BlockingHookRequest) (broker.BlockingHookRequest, bool) {
+	if b.hooks == nil {
+		return req, true
+	}
+	return b.hooks.Handle(ctx, req)
 }
 
 // ExternalID returns the authenticated external identity for a client.

@@ -26,6 +26,7 @@ const (
 	listenerNameMTLS = "mtls"
 
 	protocolMQTT    = "mqtt"
+	protocolAMQP    = "amqp"
 	protocolAMQP091 = "amqp091"
 
 	defaultTCPV3Addr = ":1883"
@@ -57,6 +58,7 @@ type Config struct {
 	QueueManager QueueManagerConfig `yaml:"queue_manager"`
 	Queues       []QueueConfig      `yaml:"queues"`
 	Auth         AuthConfig         `yaml:"auth"`
+	Hooks        HooksConfig        `yaml:"hooks"`
 }
 
 // AuthConfig configures the external authentication/authorization callout.
@@ -81,9 +83,35 @@ type AuthConfig struct {
 	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
 }
 
+// HooksConfig configures the optional blocking hook callout.
+type HooksConfig struct {
+	// URL is the hook service address. Empty disables blocking hooks.
+	URL string `yaml:"url"`
+	// Transport selects the callout wire format: "grpc" (default) or "http".
+	Transport string `yaml:"transport"`
+	// Timeout is the per-call timeout. Zero uses the hook client default.
+	Timeout time.Duration `yaml:"timeout"`
+	// FailMode controls behavior when a blocking hook errors: "deny" (default)
+	// blocks the operation; "allow" keeps the original topic/filter.
+	FailMode string `yaml:"fail_mode"`
+	// Protocols controls which protocols use blocking hooks. Empty or nil means
+	// all protocols run hooks when URL is set.
+	Protocols map[string]bool `yaml:"protocols"`
+	// Events controls which blocking hooks are enabled. Empty or nil means all
+	// supported blocking hooks run when URL is set.
+	Events map[string]bool `yaml:"events"`
+}
+
 // knownAuthProtocols is the set of valid protocol names for auth config.
 var knownAuthProtocols = map[string]bool{
-	protocolMQTT: true, "amqp": true, protocolAMQP091: true, "http": true, "coap": true,
+	protocolMQTT: true, protocolAMQP: true, protocolAMQP091: true, "http": true, "coap": true,
+}
+
+var knownBlockingHooks = map[string]bool{
+	"auth_on_register":    true,
+	"auth_on_publish":     true,
+	"auth_on_subscribe":   true,
+	"auth_on_unsubscribe": true,
 }
 
 // AuthEnabledFor reports whether auth callout is enabled for the given protocol.
@@ -97,6 +125,17 @@ func (a AuthConfig) AuthEnabledFor(protocol string) bool {
 		return true
 	}
 	return a.Protocols[protocol]
+}
+
+// EnabledFor reports whether blocking hooks are enabled for the given protocol.
+func (c HooksConfig) EnabledFor(protocol string) bool {
+	if c.URL == "" {
+		return false
+	}
+	if len(c.Protocols) == 0 {
+		return true
+	}
+	return c.Protocols[protocol]
 }
 
 // QueueConfig defines configuration for a persistent queue.
@@ -1061,6 +1100,21 @@ func (c *Config) Validate() error {
 		if !knownAuthProtocols[proto] {
 			return fmt.Errorf("auth.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
+	}
+	for proto := range c.Hooks.Protocols {
+		if !knownAuthProtocols[proto] {
+			return fmt.Errorf("hooks.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
+		}
+	}
+	for hook := range c.Hooks.Events {
+		if !knownBlockingHooks[hook] {
+			return fmt.Errorf("hooks.events: unknown hook %q (valid: auth_on_register, auth_on_publish, auth_on_subscribe, auth_on_unsubscribe)", hook)
+		}
+	}
+	switch c.Hooks.FailMode {
+	case "", "deny", "allow":
+	default:
+		return fmt.Errorf("hooks.fail_mode must be \"deny\" or \"allow\"")
 	}
 
 	if c.Broker.MaxMessageSize < 1024 {

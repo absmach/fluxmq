@@ -17,9 +17,16 @@ service AuthService {
   rpc Authenticate(AuthnReq) returns (AuthnRes);
 
   // Authorize checks whether a previously authenticated identity is allowed
-  // to perform a given action on a topic. The topic is passed as-is; any
-  // parsing, route resolution, or mapping is the server's responsibility.
+  // to perform a given action on the effective topic/filter. When the optional
+  // topic normalizer is configured, the broker authorizes the normalized value.
   rpc Authorize(AuthzReq) returns (AuthzRes);
+}
+
+// HookService is an optional callout service for blocking broker hooks.
+// Hook handlers may allow, deny, or mutate only the fields supported by the
+// hook point before the broker continues processing.
+service HookService {
+  rpc Handle(HookReq) returns (HookRes);
 }
 
 // Protocol identifies which messaging protocol the client connected with.
@@ -28,6 +35,8 @@ enum Protocol {
   MQTT = 1;
   AMQP_1_0 = 2;
   AMQP_0_9_1 = 3;
+  HTTP = 4;
+  CoAP = 5;
 }
 
 message AuthnReq {
@@ -75,4 +84,56 @@ message AuthzRes {
   uint32 reason_code = 2;
   // Human-readable reason for rejection (empty on success).
   string reason = 3;
+}
+
+enum HookType {
+  HookTypeUnspecified = 0;
+  AuthOnRegister = 1;
+  AuthOnPublish = 2;
+  AuthOnSubscribe = 3;
+  AuthOnUnsubscribe = 4;
+}
+
+enum HookResult {
+  HookResultUnspecified = 0;
+  HookResultOk = 1;
+  HookResultDeny = 2;
+}
+
+message HookReq {
+  HookType hook = 1;
+  // Protocol-level client identifier.
+  string client_id = 2;
+  // External identity returned from AuthnRes.id when available.
+  string external_id = 3;
+  // Protocol the client connected with.
+  Protocol protocol = 4;
+  // Topic, topic filter, or address being handled.
+  string topic = 5;
+  // Publish payload. Empty for non-publish hooks.
+  bytes payload = 6;
+  uint32 qos = 7;
+  bool retain = 8;
+  map<string, string> properties = 9;
+  // Username/password are populated only for register/authenticate hooks.
+  string username = 10;
+  string password = 11;
+}
+
+message HookRes {
+  HookResult result = 1;
+  // Empty means keep the requested topic/filter.
+  string topic = 2;
+  bytes payload = 3;
+  bool payload_set = 4;
+  uint32 qos = 5;
+  bool qos_set = 6;
+  bool retain = 7;
+  bool retain_set = 8;
+  // Properties are merged into the current properties map.
+  map<string, string> properties = 9;
+  uint32 reason_code = 10;
+  string reason = 11;
+  // AuthOnRegister may set or override the external identity.
+  string external_id = 12;
 }

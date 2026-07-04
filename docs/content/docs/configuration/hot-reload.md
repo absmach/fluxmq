@@ -65,8 +65,8 @@ These fields can be changed without restart:
 
 All rate limit fields are runtime-safe. Changing any rate limit field replaces the entire rate limiter — existing per-IP/per-client token buckets are reset.
 
-| Field                                    | Description                      |
-| ---------------------------------------- | -------------------------------- |
+| Field                                   | Description                      |
+| --------------------------------------- | -------------------------------- |
 | `ratelimit.enabled`                     | Global rate limit toggle         |
 | `ratelimit.connection.enabled`          | Connection rate limit toggle     |
 | `ratelimit.connection.rate`             | Connections per second per IP    |
@@ -81,9 +81,9 @@ All rate limit fields are runtime-safe. Changing any rate limit field replaces t
 
 ### Broker Tuning
 
-| Field                          | Description                    |
-| ------------------------------ | ------------------------------ |
-| `broker.max_qos`               | Maximum QoS level (0, 1, 2)    |
+| Field            | Description                 |
+| ---------------- | --------------------------- |
+| `broker.max_qos` | Maximum QoS level (0, 1, 2) |
 
 ## Restart-Required Fields
 
@@ -95,6 +95,7 @@ All other fields require a full restart to take effect. These include:
 - **Session**: session defaults (affects existing connections)
 - **Webhook**: webhook worker pool configuration
 - **Auth**: authentication and authorization settings
+- **Hooks**: blocking hook callout configuration
 - **AMQP / AMQP 0.9.1**: all protocol-level settings
 
 When restart-required fields are changed in the config file, the reload response lists them in `restart_required` so you know a restart is needed to pick them up.

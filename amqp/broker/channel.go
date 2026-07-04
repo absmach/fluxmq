@@ -348,7 +348,22 @@ func (ch *Channel) completePublish() {
 
 	clientID := PrefixedClientID(ch.conn.connID)
 	props = corebroker.AddClientIDProperty(props, clientID)
+	originalTopic := topic
 
+	hookReq, ok := ch.conn.broker.ApplyHook(context.Background(), corebroker.BlockingHookRequest{
+		Hook:       corebroker.HookAuthOnPublish,
+		ClientID:   clientID,
+		ExternalID: ch.conn.broker.ExternalID(clientID),
+		Topic:      topic,
+		Payload:    body,
+		Properties: props,
+	})
+	if !ok {
+		ch.conn.logger.Warn("publish hook denied", "client_id", clientID, "topic", topic)
+		_ = ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "publish hook denied", codec.ClassBasic, codec.MethodBasicPublish)
+		return
+	}
+	topic, body, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
 	if auth := ch.conn.broker.auth; auth != nil {
 		if !auth.CanPublish(clientID, topic) {
 			ch.conn.logger.Warn("publish denied", "client_id", clientID, "topic", topic)
@@ -360,7 +375,7 @@ func (ch *Channel) completePublish() {
 	// Route through resolver for default-exchange queue operations.
 	resolver := ch.conn.broker.routeResolver
 	if exchangeName == "" {
-		route := resolver.Resolve(routingKey)
+		route := resolver.Resolve(topic)
 		switch route.Kind {
 		case corebroker.RouteQueueCommit:
 			ch.handleQueueCommit(route, header)
@@ -379,8 +394,8 @@ func (ch *Channel) completePublish() {
 	}
 
 	// RabbitMQ-style stream queue publish: default exchange with routingKey == queue name.
-	if exchangeName == "" && ch.isStreamQueue(routingKey) {
-		queueTopic := resolver.QueueTopic(routingKey)
+	if exchangeName == "" && ch.isStreamQueue(topic) {
+		queueTopic := resolver.QueueTopic(topic)
 		ch.handleQueuePublish(queueTopic, body, props, clientID)
 		return
 	}
@@ -397,12 +412,22 @@ func (ch *Channel) completePublish() {
 	}
 	ch.exchangeMu.RUnlock()
 
+	bindingRoutingKey, checkExchangeBindings := routingKey, true
+	if exchangeName != "" && topic != originalTopic {
+		prefix := exchangeName + "/"
+		if strings.HasPrefix(topic, prefix) {
+			bindingRoutingKey = strings.TrimPrefix(topic, prefix)
+		} else {
+			checkExchangeBindings = false
+		}
+	}
+
 	for _, b := range bindings {
-		if ch.routingKeyMatches(b.routingKey, routingKey, exchangeName) {
+		if checkExchangeBindings && ch.routingKeyMatches(b.routingKey, bindingRoutingKey, exchangeName) {
 			// Route to the bound queue
 			qm := ch.conn.broker.queueManager
 			if qm != nil {
-				queueTopic := resolver.QueueTopic(b.queue, routingKey)
+				queueTopic := resolver.QueueTopic(b.queue, bindingRoutingKey)
 				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
 					ClientID:   clientID,
 					Topic:      queueTopic,
@@ -1037,21 +1062,35 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		tag = fmt.Sprintf("ctag-%s-%d", ch.conn.connID, ch.nextTag.Add(1))
 	}
 
+	clientID := PrefixedClientID(ch.conn.connID)
+	externalID := ch.conn.broker.ExternalID(clientID)
 	queueFilter := m.Queue
+
+	req, ok := ch.conn.broker.ApplyHook(context.Background(), corebroker.BlockingHookRequest{
+		Hook:       corebroker.HookAuthOnSubscribe,
+		ClientID:   clientID,
+		ExternalID: externalID,
+		Topic:      queueFilter,
+	})
+	if !ok {
+		ch.conn.logger.Warn("subscribe hook denied", "client_id", clientID, "filter", queueFilter)
+		return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe hook denied", codec.ClassBasic, codec.MethodBasicConsume)
+	}
+	queueFilter = req.Topic
+
+	if auth := ch.conn.broker.auth; auth != nil {
+		if !auth.CanSubscribe(clientID, queueFilter) {
+			ch.conn.logger.Warn("subscribe denied", "client_id", clientID, "filter", queueFilter)
+			return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe not authorized", codec.ClassBasic, codec.MethodBasicConsume)
+		}
+	}
+
 	route := ch.conn.broker.routeResolver.Resolve(queueFilter)
 	isQueue := route.Kind == corebroker.RouteQueue
 	queueName, pattern := route.QueueName, route.Pattern
 	mqttFilter := ""
 	if !isQueue {
 		mqttFilter = topics.AMQPFilterToMQTT(queueFilter)
-	}
-
-	if auth := ch.conn.broker.auth; auth != nil {
-		clientID := PrefixedClientID(ch.conn.connID)
-		if !auth.CanSubscribe(clientID, queueFilter) {
-			ch.conn.logger.Warn("subscribe denied", "client_id", clientID, "filter", queueFilter)
-			return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe not authorized", codec.ClassBasic, codec.MethodBasicConsume)
-		}
 	}
 
 	qm := ch.conn.broker.queueManager

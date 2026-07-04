@@ -51,6 +51,7 @@ type Broker struct {
 	routeResolver       *corebroker.RoutingResolver
 	queueManager        channelQueueManager
 	auth                *corebroker.AuthEngine
+	hooks               *corebroker.BlockingHookEngine
 	cluster             cluster.Cluster
 	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration
@@ -85,12 +86,26 @@ func (b *Broker) SetAuthEngine(auth *corebroker.AuthEngine) {
 	b.auth = auth
 }
 
+// SetBlockingHooks sets the optional blocking hook engine.
+func (b *Broker) SetBlockingHooks(h *corebroker.BlockingHookEngine) {
+	b.hooks = h
+}
+
 // ExternalID returns the cached external identity for a protocol-level client ID.
 func (b *Broker) ExternalID(clientID string) string {
 	if b.auth == nil {
 		return ""
 	}
 	return b.auth.ExternalID(clientID)
+}
+
+// ApplyHook runs the optional blocking hook.
+func (b *Broker) ApplyHook(ctx context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookRequest, bool) {
+	if b.hooks == nil {
+		return req, true
+	}
+	req.Protocol = corebroker.HookProtocolAMQP091
+	return b.hooks.Handle(ctx, req)
 }
 
 // SetCluster sets the cluster reference for cross-node pub/sub routing.

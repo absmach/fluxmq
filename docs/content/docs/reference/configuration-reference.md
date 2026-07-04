@@ -34,6 +34,7 @@ Top-level keys:
 - `storage`
 - `cluster`
 - `auth`
+- `hooks`
 - `webhook`
 - `ratelimit`
 - `log`
@@ -508,6 +509,51 @@ Implementation notes:
 
 - FluxMQ supports multiple Raft replication groups; queues choose group via `queues[].replication.group`.
 - Group membership comes from peer configuration. `replication_factor` and `min_in_sync_replicas` are validated and used by policy logic, but do not replace Raft quorum mechanics.
+
+## Blocking Hooks
+
+```yaml
+hooks:
+  url: "https://hooks.internal:7017"
+  transport: "grpc"       # grpc or http
+  timeout: "500ms"
+  fail_mode: "deny"       # deny or allow
+
+  protocols:
+    mqtt: true
+    http: true
+    coap: false
+    amqp: true
+    amqp091: true
+
+  events:
+    auth_on_register: true
+    auth_on_publish: true
+    auth_on_subscribe: true
+    auth_on_unsubscribe: true
+```
+
+Blocking hooks are synchronous callouts that run before selected broker
+operations continue. They can allow, deny, or return supported mutations such
+as a normalized topic/filter, publish payload, MQTT subscribe QoS, retained
+flag, properties, or an MQTT register external identity.
+
+| Field       | Default | Description                                                                                                           |
+| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `url`       | `""`    | Hook service base URL. Empty disables blocking hooks.                                                                 |
+| `transport` | `grpc`  | Wire format for callout: `grpc` or `http`. HTTP sends `POST {url}/hooks`.                                             |
+| `timeout`   | `0`     | Per-call timeout. Zero uses the hook client default (`500ms`).                                                        |
+| `fail_mode` | `deny`  | Error behavior for hook timeouts/invalid responses: `deny` rejects the operation, `allow` keeps the original request. |
+| `protocols` | `{}`    | Per-protocol hook toggle. Empty map = all protocols run hooks when `url` is set.                                      |
+| `events`    | `{}`    | Per-hook event toggle. Empty map = all supported blocking hooks run when `url` is set.                                |
+
+Valid `protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
+
+Valid `events` keys: `auth_on_register`, `auth_on_publish`,
+`auth_on_subscribe`, `auth_on_unsubscribe`.
+
+See [Blocking Hooks](/architecture/hooks) for the request/response schema,
+mutation support, and operational guidance.
 
 ## Webhooks
 

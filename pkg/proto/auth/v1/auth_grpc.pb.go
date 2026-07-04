@@ -41,8 +41,8 @@ type AuthServiceClient interface {
 	// calls.
 	Authenticate(ctx context.Context, in *AuthnReq, opts ...grpc.CallOption) (*AuthnRes, error)
 	// Authorize checks whether a previously authenticated identity is allowed
-	// to perform a given action on a topic. The topic is passed as-is; any
-	// parsing, route resolution, or mapping is the server's responsibility.
+	// to perform a given action on the effective topic/filter. When the optional
+	// topic normalizer is configured, the broker authorizes the normalized value.
 	Authorize(ctx context.Context, in *AuthzReq, opts ...grpc.CallOption) (*AuthzRes, error)
 }
 
@@ -89,8 +89,8 @@ type AuthServiceServer interface {
 	// calls.
 	Authenticate(context.Context, *AuthnReq) (*AuthnRes, error)
 	// Authorize checks whether a previously authenticated identity is allowed
-	// to perform a given action on a topic. The topic is passed as-is; any
-	// parsing, route resolution, or mapping is the server's responsibility.
+	// to perform a given action on the effective topic/filter. When the optional
+	// topic normalizer is configured, the broker authorizes the normalized value.
 	Authorize(context.Context, *AuthzReq) (*AuthzRes, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }
@@ -179,6 +179,116 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Authorize",
 			Handler:    _AuthService_Authorize_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "auth/v1/auth.proto",
+}
+
+const (
+	HookService_Handle_FullMethodName = "/fluxmq.auth.v1.HookService/Handle"
+)
+
+// HookServiceClient is the client API for HookService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// HookService is an optional callout service for blocking broker hooks.
+// Hook handlers may allow, deny, or mutate only the fields supported by the
+// hook point before the broker continues processing.
+type HookServiceClient interface {
+	Handle(ctx context.Context, in *HookReq, opts ...grpc.CallOption) (*HookRes, error)
+}
+
+type hookServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewHookServiceClient(cc grpc.ClientConnInterface) HookServiceClient {
+	return &hookServiceClient{cc}
+}
+
+func (c *hookServiceClient) Handle(ctx context.Context, in *HookReq, opts ...grpc.CallOption) (*HookRes, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HookRes)
+	err := c.cc.Invoke(ctx, HookService_Handle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// HookServiceServer is the server API for HookService service.
+// All implementations must embed UnimplementedHookServiceServer
+// for forward compatibility.
+//
+// HookService is an optional callout service for blocking broker hooks.
+// Hook handlers may allow, deny, or mutate only the fields supported by the
+// hook point before the broker continues processing.
+type HookServiceServer interface {
+	Handle(context.Context, *HookReq) (*HookRes, error)
+	mustEmbedUnimplementedHookServiceServer()
+}
+
+// UnimplementedHookServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedHookServiceServer struct{}
+
+func (UnimplementedHookServiceServer) Handle(context.Context, *HookReq) (*HookRes, error) {
+	return nil, status.Error(codes.Unimplemented, "method Handle not implemented")
+}
+func (UnimplementedHookServiceServer) mustEmbedUnimplementedHookServiceServer() {}
+func (UnimplementedHookServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeHookServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to HookServiceServer will
+// result in compilation errors.
+type UnsafeHookServiceServer interface {
+	mustEmbedUnimplementedHookServiceServer()
+}
+
+func RegisterHookServiceServer(s grpc.ServiceRegistrar, srv HookServiceServer) {
+	// If the following call panics, it indicates UnimplementedHookServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&HookService_ServiceDesc, srv)
+}
+
+func _HookService_Handle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HookReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HookServiceServer).Handle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HookService_Handle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HookServiceServer).Handle(ctx, req.(*HookReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// HookService_ServiceDesc is the grpc.ServiceDesc for HookService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var HookService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "fluxmq.auth.v1.HookService",
+	HandlerType: (*HookServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Handle",
+			Handler:    _HookService_Handle_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

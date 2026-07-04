@@ -57,18 +57,19 @@ type Session struct {
 	connectedAt    time.Time
 	disconnectedAt time.Time
 
-	ID              string
-	ExternalID      string
-	authMethod      string
-	authState       any
-	conn            core.Connection
-	msgHandler      *msgHandler
-	Will            *storage.WillMessage
-	subscriptions   map[string]storage.SubscribeOptions
-	subscriptionIDs map[string][]uint32
-	onDisconnect    func(s *Session, graceful bool)
-	KeepAlive       time.Duration
-	state           State
+	ID                  string
+	ExternalID          string
+	authMethod          string
+	authState           any
+	conn                core.Connection
+	msgHandler          *msgHandler
+	Will                *storage.WillMessage
+	subscriptions       map[string]storage.SubscribeOptions
+	subscriptionAliases map[string]string
+	subscriptionIDs     map[string][]uint32
+	onDisconnect        func(s *Session, graceful bool)
+	KeepAlive           time.Duration
+	state               State
 	// epoch is bumped on every Connect. It identifies the current connection
 	// generation so a stale runSession goroutine (from a superseded connection)
 	// can detect that the session has moved on and avoid tearing down the new
@@ -168,6 +169,7 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 		KeepAlive:            opts.KeepAlive,
 		Will:                 opts.Will,
 		subscriptions:        make(map[string]storage.SubscribeOptions),
+		subscriptionAliases:  make(map[string]string),
 		subscriptionIDs:      make(map[string][]uint32),
 		retainAvailable:      true,
 		wildcardSubAvailable: true,
@@ -726,11 +728,39 @@ func (s *Session) AddSubscription(filter string, opts storage.SubscribeOptions) 
 	s.subscriptions[filter] = opts
 }
 
+// AddSubscriptionAlias records the original filter a client used for a
+// normalized subscription filter. It is used to normalize later unsubscribe
+// packets that repeat the original alias filter.
+func (s *Session) AddSubscriptionAlias(original, normalized string) {
+	if original == "" || normalized == "" || original == normalized {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptionAliases[original] = normalized
+}
+
+// ResolveSubscriptionAlias returns the normalized filter for a previously
+// normalized subscription filter, or the original value when no mapping exists.
+func (s *Session) ResolveSubscriptionAlias(filter string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if normalized := s.subscriptionAliases[filter]; normalized != "" {
+		return normalized
+	}
+	return filter
+}
+
 // RemoveSubscription removes a subscription from the cache.
 func (s *Session) RemoveSubscription(filter string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subscriptions, filter)
+	for original, normalized := range s.subscriptionAliases {
+		if normalized == filter || original == filter {
+			delete(s.subscriptionAliases, original)
+		}
+	}
 }
 
 // GetSubscriptions returns all subscriptions.

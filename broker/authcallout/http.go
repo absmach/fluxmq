@@ -13,6 +13,7 @@ import (
 	"net/http"
 
 	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/internal/httpclient"
 	authv1 "github.com/absmach/fluxmq/pkg/proto/auth/v1"
 )
 
@@ -61,7 +62,7 @@ type HTTPClient struct {
 // {baseURL}/auth/authorize.
 func NewHTTPClient(httpClient *http.Client, baseURL string, opts ...Option) *HTTPClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = httpclient.Default()
 	}
 
 	o := DefaultOptions(opts...)

@@ -3,6 +3,7 @@
   "pages": [
     "overview",
     "routing",
+    "hooks",
     "webhooks",
     "storage",
     "raft-groups",

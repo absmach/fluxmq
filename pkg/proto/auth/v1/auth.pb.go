@@ -32,6 +32,8 @@ const (
 	Protocol_MQTT        Protocol = 1
 	Protocol_AMQP_1_0    Protocol = 2
 	Protocol_AMQP_0_9_1  Protocol = 3
+	Protocol_HTTP        Protocol = 4
+	Protocol_CoAP        Protocol = 5
 )
 
 // Enum value maps for Protocol.
@@ -41,12 +43,16 @@ var (
 		1: "MQTT",
 		2: "AMQP_1_0",
 		3: "AMQP_0_9_1",
+		4: "HTTP",
+		5: "CoAP",
 	}
 	Protocol_value = map[string]int32{
 		"Unspecified": 0,
 		"MQTT":        1,
 		"AMQP_1_0":    2,
 		"AMQP_0_9_1":  3,
+		"HTTP":        4,
+		"CoAP":        5,
 	}
 )
 
@@ -124,6 +130,110 @@ func (x Action) Number() protoreflect.EnumNumber {
 // Deprecated: Use Action.Descriptor instead.
 func (Action) EnumDescriptor() ([]byte, []int) {
 	return file_auth_v1_auth_proto_rawDescGZIP(), []int{1}
+}
+
+type HookType int32
+
+const (
+	HookType_HookTypeUnspecified HookType = 0
+	HookType_AuthOnRegister      HookType = 1
+	HookType_AuthOnPublish       HookType = 2
+	HookType_AuthOnSubscribe     HookType = 3
+	HookType_AuthOnUnsubscribe   HookType = 4
+)
+
+// Enum value maps for HookType.
+var (
+	HookType_name = map[int32]string{
+		0: "HookTypeUnspecified",
+		1: "AuthOnRegister",
+		2: "AuthOnPublish",
+		3: "AuthOnSubscribe",
+		4: "AuthOnUnsubscribe",
+	}
+	HookType_value = map[string]int32{
+		"HookTypeUnspecified": 0,
+		"AuthOnRegister":      1,
+		"AuthOnPublish":       2,
+		"AuthOnSubscribe":     3,
+		"AuthOnUnsubscribe":   4,
+	}
+)
+
+func (x HookType) Enum() *HookType {
+	p := new(HookType)
+	*p = x
+	return p
+}
+
+func (x HookType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (HookType) Descriptor() protoreflect.EnumDescriptor {
+	return file_auth_v1_auth_proto_enumTypes[2].Descriptor()
+}
+
+func (HookType) Type() protoreflect.EnumType {
+	return &file_auth_v1_auth_proto_enumTypes[2]
+}
+
+func (x HookType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use HookType.Descriptor instead.
+func (HookType) EnumDescriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{2}
+}
+
+type HookResult int32
+
+const (
+	HookResult_HookResultUnspecified HookResult = 0
+	HookResult_HookResultOk          HookResult = 1
+	HookResult_HookResultDeny        HookResult = 2
+)
+
+// Enum value maps for HookResult.
+var (
+	HookResult_name = map[int32]string{
+		0: "HookResultUnspecified",
+		1: "HookResultOk",
+		2: "HookResultDeny",
+	}
+	HookResult_value = map[string]int32{
+		"HookResultUnspecified": 0,
+		"HookResultOk":          1,
+		"HookResultDeny":        2,
+	}
+)
+
+func (x HookResult) Enum() *HookResult {
+	p := new(HookResult)
+	*p = x
+	return p
+}
+
+func (x HookResult) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (HookResult) Descriptor() protoreflect.EnumDescriptor {
+	return file_auth_v1_auth_proto_enumTypes[3].Descriptor()
+}
+
+func (HookResult) Type() protoreflect.EnumType {
+	return &file_auth_v1_auth_proto_enumTypes[3]
+}
+
+func (x HookResult) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use HookResult.Descriptor instead.
+func (HookResult) EnumDescriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{3}
 }
 
 type AuthnReq struct {
@@ -397,6 +507,271 @@ func (x *AuthzRes) GetReason() string {
 	return ""
 }
 
+type HookReq struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Hook  HookType               `protobuf:"varint,1,opt,name=hook,proto3,enum=fluxmq.auth.v1.HookType" json:"hook,omitempty"`
+	// Protocol-level client identifier.
+	ClientId string `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// External identity returned from AuthnRes.id when available.
+	ExternalId string `protobuf:"bytes,3,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	// Protocol the client connected with.
+	Protocol Protocol `protobuf:"varint,4,opt,name=protocol,proto3,enum=fluxmq.auth.v1.Protocol" json:"protocol,omitempty"`
+	// Topic, topic filter, or address being handled.
+	Topic string `protobuf:"bytes,5,opt,name=topic,proto3" json:"topic,omitempty"`
+	// Publish payload. Empty for non-publish hooks.
+	Payload    []byte            `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
+	Qos        uint32            `protobuf:"varint,7,opt,name=qos,proto3" json:"qos,omitempty"`
+	Retain     bool              `protobuf:"varint,8,opt,name=retain,proto3" json:"retain,omitempty"`
+	Properties map[string]string `protobuf:"bytes,9,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Username/password are populated only for register/authenticate hooks.
+	Username      string `protobuf:"bytes,10,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string `protobuf:"bytes,11,opt,name=password,proto3" json:"password,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HookReq) Reset() {
+	*x = HookReq{}
+	mi := &file_auth_v1_auth_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookReq) ProtoMessage() {}
+
+func (x *HookReq) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookReq.ProtoReflect.Descriptor instead.
+func (*HookReq) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *HookReq) GetHook() HookType {
+	if x != nil {
+		return x.Hook
+	}
+	return HookType_HookTypeUnspecified
+}
+
+func (x *HookReq) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *HookReq) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
+	}
+	return ""
+}
+
+func (x *HookReq) GetProtocol() Protocol {
+	if x != nil {
+		return x.Protocol
+	}
+	return Protocol_Unspecified
+}
+
+func (x *HookReq) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *HookReq) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *HookReq) GetQos() uint32 {
+	if x != nil {
+		return x.Qos
+	}
+	return 0
+}
+
+func (x *HookReq) GetRetain() bool {
+	if x != nil {
+		return x.Retain
+	}
+	return false
+}
+
+func (x *HookReq) GetProperties() map[string]string {
+	if x != nil {
+		return x.Properties
+	}
+	return nil
+}
+
+func (x *HookReq) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *HookReq) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+type HookRes struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Result HookResult             `protobuf:"varint,1,opt,name=result,proto3,enum=fluxmq.auth.v1.HookResult" json:"result,omitempty"`
+	// Empty means keep the requested topic/filter.
+	Topic      string `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
+	Payload    []byte `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	PayloadSet bool   `protobuf:"varint,4,opt,name=payload_set,json=payloadSet,proto3" json:"payload_set,omitempty"`
+	Qos        uint32 `protobuf:"varint,5,opt,name=qos,proto3" json:"qos,omitempty"`
+	QosSet     bool   `protobuf:"varint,6,opt,name=qos_set,json=qosSet,proto3" json:"qos_set,omitempty"`
+	Retain     bool   `protobuf:"varint,7,opt,name=retain,proto3" json:"retain,omitempty"`
+	RetainSet  bool   `protobuf:"varint,8,opt,name=retain_set,json=retainSet,proto3" json:"retain_set,omitempty"`
+	// Properties are merged into the current properties map.
+	Properties map[string]string `protobuf:"bytes,9,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ReasonCode uint32            `protobuf:"varint,10,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"`
+	Reason     string            `protobuf:"bytes,11,opt,name=reason,proto3" json:"reason,omitempty"`
+	// AuthOnRegister may set or override the external identity.
+	ExternalId    string `protobuf:"bytes,12,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HookRes) Reset() {
+	*x = HookRes{}
+	mi := &file_auth_v1_auth_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HookRes) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HookRes) ProtoMessage() {}
+
+func (x *HookRes) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_v1_auth_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HookRes.ProtoReflect.Descriptor instead.
+func (*HookRes) Descriptor() ([]byte, []int) {
+	return file_auth_v1_auth_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *HookRes) GetResult() HookResult {
+	if x != nil {
+		return x.Result
+	}
+	return HookResult_HookResultUnspecified
+}
+
+func (x *HookRes) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
+}
+
+func (x *HookRes) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *HookRes) GetPayloadSet() bool {
+	if x != nil {
+		return x.PayloadSet
+	}
+	return false
+}
+
+func (x *HookRes) GetQos() uint32 {
+	if x != nil {
+		return x.Qos
+	}
+	return 0
+}
+
+func (x *HookRes) GetQosSet() bool {
+	if x != nil {
+		return x.QosSet
+	}
+	return false
+}
+
+func (x *HookRes) GetRetain() bool {
+	if x != nil {
+		return x.Retain
+	}
+	return false
+}
+
+func (x *HookRes) GetRetainSet() bool {
+	if x != nil {
+		return x.RetainSet
+	}
+	return false
+}
+
+func (x *HookRes) GetProperties() map[string]string {
+	if x != nil {
+		return x.Properties
+	}
+	return nil
+}
+
+func (x *HookRes) GetReasonCode() uint32 {
+	if x != nil {
+		return x.ReasonCode
+	}
+	return 0
+}
+
+func (x *HookRes) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *HookRes) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
+	}
+	return ""
+}
+
 var File_auth_v1_auth_proto protoreflect.FileDescriptor
 
 const file_auth_v1_auth_proto_rawDesc = "" +
@@ -424,20 +799,77 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"authorized\x12\x1f\n" +
 	"\vreason_code\x18\x02 \x01(\rR\n" +
 	"reasonCode\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason*C\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xc5\x03\n" +
+	"\aHookReq\x12,\n" +
+	"\x04hook\x18\x01 \x01(\x0e2\x18.fluxmq.auth.v1.HookTypeR\x04hook\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1f\n" +
+	"\vexternal_id\x18\x03 \x01(\tR\n" +
+	"externalId\x124\n" +
+	"\bprotocol\x18\x04 \x01(\x0e2\x18.fluxmq.auth.v1.ProtocolR\bprotocol\x12\x14\n" +
+	"\x05topic\x18\x05 \x01(\tR\x05topic\x12\x18\n" +
+	"\apayload\x18\x06 \x01(\fR\apayload\x12\x10\n" +
+	"\x03qos\x18\a \x01(\rR\x03qos\x12\x16\n" +
+	"\x06retain\x18\b \x01(\bR\x06retain\x12G\n" +
+	"\n" +
+	"properties\x18\t \x03(\v2'.fluxmq.auth.v1.HookReq.PropertiesEntryR\n" +
+	"properties\x12\x1a\n" +
+	"\busername\x18\n" +
+	" \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\v \x01(\tR\bpassword\x1a=\n" +
+	"\x0fPropertiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd2\x03\n" +
+	"\aHookRes\x122\n" +
+	"\x06result\x18\x01 \x01(\x0e2\x1a.fluxmq.auth.v1.HookResultR\x06result\x12\x14\n" +
+	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x18\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload\x12\x1f\n" +
+	"\vpayload_set\x18\x04 \x01(\bR\n" +
+	"payloadSet\x12\x10\n" +
+	"\x03qos\x18\x05 \x01(\rR\x03qos\x12\x17\n" +
+	"\aqos_set\x18\x06 \x01(\bR\x06qosSet\x12\x16\n" +
+	"\x06retain\x18\a \x01(\bR\x06retain\x12\x1d\n" +
+	"\n" +
+	"retain_set\x18\b \x01(\bR\tretainSet\x12G\n" +
+	"\n" +
+	"properties\x18\t \x03(\v2'.fluxmq.auth.v1.HookRes.PropertiesEntryR\n" +
+	"properties\x12\x1f\n" +
+	"\vreason_code\x18\n" +
+	" \x01(\rR\n" +
+	"reasonCode\x12\x16\n" +
+	"\x06reason\x18\v \x01(\tR\x06reason\x12\x1f\n" +
+	"\vexternal_id\x18\f \x01(\tR\n" +
+	"externalId\x1a=\n" +
+	"\x0fPropertiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*W\n" +
 	"\bProtocol\x12\x0f\n" +
 	"\vUnspecified\x10\x00\x12\b\n" +
 	"\x04MQTT\x10\x01\x12\f\n" +
 	"\bAMQP_1_0\x10\x02\x12\x0e\n" +
 	"\n" +
-	"AMQP_0_9_1\x10\x03*.\n" +
+	"AMQP_0_9_1\x10\x03\x12\b\n" +
+	"\x04HTTP\x10\x04\x12\b\n" +
+	"\x04CoAP\x10\x05*.\n" +
 	"\x06Action\x12\b\n" +
 	"\x04None\x10\x00\x12\v\n" +
 	"\aPublish\x10\x01\x12\r\n" +
-	"\tSubscribe\x10\x022\x92\x01\n" +
+	"\tSubscribe\x10\x02*v\n" +
+	"\bHookType\x12\x17\n" +
+	"\x13HookTypeUnspecified\x10\x00\x12\x12\n" +
+	"\x0eAuthOnRegister\x10\x01\x12\x11\n" +
+	"\rAuthOnPublish\x10\x02\x12\x13\n" +
+	"\x0fAuthOnSubscribe\x10\x03\x12\x15\n" +
+	"\x11AuthOnUnsubscribe\x10\x04*M\n" +
+	"\n" +
+	"HookResult\x12\x19\n" +
+	"\x15HookResultUnspecified\x10\x00\x12\x10\n" +
+	"\fHookResultOk\x10\x01\x12\x12\n" +
+	"\x0eHookResultDeny\x10\x022\x92\x01\n" +
 	"\vAuthService\x12B\n" +
 	"\fAuthenticate\x12\x18.fluxmq.auth.v1.AuthnReq\x1a\x18.fluxmq.auth.v1.AuthnRes\x12?\n" +
-	"\tAuthorize\x12\x18.fluxmq.auth.v1.AuthzReq\x1a\x18.fluxmq.auth.v1.AuthzResB\xad\x01\n" +
+	"\tAuthorize\x12\x18.fluxmq.auth.v1.AuthzReq\x1a\x18.fluxmq.auth.v1.AuthzRes2I\n" +
+	"\vHookService\x12:\n" +
+	"\x06Handle\x12\x17.fluxmq.auth.v1.HookReq\x1a\x17.fluxmq.auth.v1.HookResB\xad\x01\n" +
 	"\x12com.fluxmq.auth.v1B\tAuthProtoP\x01Z2github.com/absmach/fluxmq/pkg/proto/auth/v1;authv1\xa2\x02\x03FAX\xaa\x02\x0eFluxmq.Auth.V1\xca\x02\x0eFluxmq\\Auth\\V1\xe2\x02\x1aFluxmq\\Auth\\V1\\GPBMetadata\xea\x02\x10Fluxmq::Auth::V1b\x06proto3"
 
 var (
@@ -452,28 +884,41 @@ func file_auth_v1_auth_proto_rawDescGZIP() []byte {
 	return file_auth_v1_auth_proto_rawDescData
 }
 
-var file_auth_v1_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_auth_v1_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_auth_v1_auth_proto_goTypes = []any{
 	(Protocol)(0),    // 0: fluxmq.auth.v1.Protocol
 	(Action)(0),      // 1: fluxmq.auth.v1.Action
-	(*AuthnReq)(nil), // 2: fluxmq.auth.v1.AuthnReq
-	(*AuthnRes)(nil), // 3: fluxmq.auth.v1.AuthnRes
-	(*AuthzReq)(nil), // 4: fluxmq.auth.v1.AuthzReq
-	(*AuthzRes)(nil), // 5: fluxmq.auth.v1.AuthzRes
+	(HookType)(0),    // 2: fluxmq.auth.v1.HookType
+	(HookResult)(0),  // 3: fluxmq.auth.v1.HookResult
+	(*AuthnReq)(nil), // 4: fluxmq.auth.v1.AuthnReq
+	(*AuthnRes)(nil), // 5: fluxmq.auth.v1.AuthnRes
+	(*AuthzReq)(nil), // 6: fluxmq.auth.v1.AuthzReq
+	(*AuthzRes)(nil), // 7: fluxmq.auth.v1.AuthzRes
+	(*HookReq)(nil),  // 8: fluxmq.auth.v1.HookReq
+	(*HookRes)(nil),  // 9: fluxmq.auth.v1.HookRes
+	nil,              // 10: fluxmq.auth.v1.HookReq.PropertiesEntry
+	nil,              // 11: fluxmq.auth.v1.HookRes.PropertiesEntry
 }
 var file_auth_v1_auth_proto_depIdxs = []int32{
-	0, // 0: fluxmq.auth.v1.AuthnReq.protocol:type_name -> fluxmq.auth.v1.Protocol
-	1, // 1: fluxmq.auth.v1.AuthzReq.action:type_name -> fluxmq.auth.v1.Action
-	2, // 2: fluxmq.auth.v1.AuthService.Authenticate:input_type -> fluxmq.auth.v1.AuthnReq
-	4, // 3: fluxmq.auth.v1.AuthService.Authorize:input_type -> fluxmq.auth.v1.AuthzReq
-	3, // 4: fluxmq.auth.v1.AuthService.Authenticate:output_type -> fluxmq.auth.v1.AuthnRes
-	5, // 5: fluxmq.auth.v1.AuthService.Authorize:output_type -> fluxmq.auth.v1.AuthzRes
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0,  // 0: fluxmq.auth.v1.AuthnReq.protocol:type_name -> fluxmq.auth.v1.Protocol
+	1,  // 1: fluxmq.auth.v1.AuthzReq.action:type_name -> fluxmq.auth.v1.Action
+	2,  // 2: fluxmq.auth.v1.HookReq.hook:type_name -> fluxmq.auth.v1.HookType
+	0,  // 3: fluxmq.auth.v1.HookReq.protocol:type_name -> fluxmq.auth.v1.Protocol
+	10, // 4: fluxmq.auth.v1.HookReq.properties:type_name -> fluxmq.auth.v1.HookReq.PropertiesEntry
+	3,  // 5: fluxmq.auth.v1.HookRes.result:type_name -> fluxmq.auth.v1.HookResult
+	11, // 6: fluxmq.auth.v1.HookRes.properties:type_name -> fluxmq.auth.v1.HookRes.PropertiesEntry
+	4,  // 7: fluxmq.auth.v1.AuthService.Authenticate:input_type -> fluxmq.auth.v1.AuthnReq
+	6,  // 8: fluxmq.auth.v1.AuthService.Authorize:input_type -> fluxmq.auth.v1.AuthzReq
+	8,  // 9: fluxmq.auth.v1.HookService.Handle:input_type -> fluxmq.auth.v1.HookReq
+	5,  // 10: fluxmq.auth.v1.AuthService.Authenticate:output_type -> fluxmq.auth.v1.AuthnRes
+	7,  // 11: fluxmq.auth.v1.AuthService.Authorize:output_type -> fluxmq.auth.v1.AuthzRes
+	9,  // 12: fluxmq.auth.v1.HookService.Handle:output_type -> fluxmq.auth.v1.HookRes
+	10, // [10:13] is the sub-list for method output_type
+	7,  // [7:10] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_auth_v1_auth_proto_init() }
@@ -486,10 +931,10 @@ func file_auth_v1_auth_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_v1_auth_proto_rawDesc), len(file_auth_v1_auth_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   4,
+			NumEnums:      4,
+			NumMessages:   8,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_auth_v1_auth_proto_goTypes,
 		DependencyIndexes: file_auth_v1_auth_proto_depIdxs,
