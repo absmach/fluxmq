@@ -1,0 +1,68 @@
+diff --git a/dist/playground/components/result-display.js b/dist/playground/components/result-display.js
+index 18f268acec113083fd54ad4bda4040eca3e2928f..f5970b535a60667bca99835d301591dffe6fe603 100644
+--- a/dist/playground/components/result-display.js
++++ b/dist/playground/components/result-display.js
+@@ -2,7 +2,13 @@
+ import { useStatusInfo } from "../status-info.js";
+ import { cn } from "../../utils/cn.js";
+ import { ClientCodeBlock } from "../../ui/components/codeblock.js";
+-import { require_fast_content_type_parse } from "../../node_modules/.pnpm/fast-content-type-parse@3.0.0/node_modules/fast-content-type-parse/index.js";
++// Patched: the published bundle imports a vendored copy under dist/node_modules,
++// which pnpm can dedup/strip during install (breaks under pnpm/Cloudflare with a
++// "does not provide an export named 'require_*'" error). Import the real
++// dependency (a direct dep of the docs package) via a plain static default
++// import so it works in both Node and the browser bundle.
++import __fluxmq_fast_content_type_parse from "fast-content-type-parse";
++const require_fast_content_type_parse = () => __fluxmq_fast_content_type_parse;
+ import { useEffect, useMemo, useState } from "react";
+ import { jsx, jsxs } from "react/jsx-runtime";
+ import { CircleX } from "lucide-react";
+diff --git a/dist/requests/media/adapter.js b/dist/requests/media/adapter.js
+index 82d10101cddcd11703db989ec634c74038ceb135..c1abc69def992bd5cfda507a998750c829fba376 100644
+--- a/dist/requests/media/adapter.js
++++ b/dist/requests/media/adapter.js
+@@ -1,5 +1,11 @@
+ import { __toESM } from "../../_virtual/_rolldown/runtime.js";
+-import { require_js2xml } from "../../node_modules/.pnpm/xml-js@1.6.11/node_modules/xml-js/lib/js2xml.js";
++// Patched: the published bundle imports a vendored xml-js wrapper under
++// dist/node_modules, which pnpm can dedup/strip during install (breaks under
++// pnpm/Cloudflare with "does not provide an export named 'require_js2xml'").
++// Import the real xml-js dependency (a direct dep of the docs package) via a
++// plain static default import so it works in both Node and the browser bundle.
++import __fluxmq_js2xml from "xml-js/lib/js2xml.js";
++const require_js2xml = () => __fluxmq_js2xml;
+ import { backtickQuote, inputToString, tripleDoubleQuote } from "../string-utils.js";
+ import "./resolve-adapter.js";
+ //#region src/requests/media/adapter.ts
+diff --git a/dist/requests/string-utils.js b/dist/requests/string-utils.js
+index dee672f417d6b5fe123037c0c1e8b5152bf88fbf..03bbf4abd9260b2e9d0544f766b44d0ce650c727 100644
+--- a/dist/requests/string-utils.js
++++ b/dist/requests/string-utils.js
+@@ -1,5 +1,11 @@
+ import { __toESM } from "../_virtual/_rolldown/runtime.js";
+-import { require_js2xml } from "../node_modules/.pnpm/xml-js@1.6.11/node_modules/xml-js/lib/js2xml.js";
++// Patched: the published bundle imports a vendored xml-js wrapper under
++// dist/node_modules, which pnpm can dedup/strip during install (breaks under
++// pnpm/Cloudflare with "does not provide an export named 'require_js2xml'").
++// Import the real xml-js dependency (a direct dep of the docs package) via a
++// plain static default import so it works in both Node and the browser bundle.
++import __fluxmq_js2xml from "xml-js/lib/js2xml.js";
++const require_js2xml = () => __fluxmq_js2xml;
+ //#region src/requests/string-utils.ts
+ var import_js2xml = /* @__PURE__ */ __toESM(require_js2xml(), 1);
+ /**
+diff --git a/dist/utils/document/load.js b/dist/utils/document/load.js
+index 8fa1a94fcac5409483b05b4091781d8ff9d833a8..5375086b7a8c80d1e91d3452732a8febffe3ef90 100644
+--- a/dist/utils/document/load.js
++++ b/dist/utils/document/load.js
+@@ -1,4 +1,9 @@
+-import { upgrade } from "../../node_modules/.pnpm/@scalar_openapi-upgrader@0.2.9/node_modules/@scalar/openapi-upgrader/dist/upgrade.js";
++// Patched: the published bundle imports a vendored copy under dist/node_modules,
++// which pnpm can dedup/strip during install (breaks under pnpm/Cloudflare with
++// "does not provide an export named 'upgrade'"). Import from the real package
++// root (a direct dep of the docs package) instead — its `exports` map blocks the
++// `/dist/upgrade.js` subpath, so the bare specifier is required.
++import { upgrade } from "@scalar/openapi-upgrader";
+ import { bundle } from "@fumadocs/api-docs/schema/bundle";
+ //#region src/utils/document/load.ts
+ /**

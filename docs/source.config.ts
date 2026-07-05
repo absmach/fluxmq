@@ -28,6 +28,11 @@ export default defineConfig({
         light: "github-light",
         dark: "github-dark",
       },
+      // Preload every language used in the docs. Setting `langAlias` makes
+      // fumadocs build a custom highlighter whose bundled-language set no longer
+      // lazy-loads these on demand, which otherwise fails with
+      // "Language `bash` not found" during the build.
+      langs: ["go", "bash", "yaml", "json"],
       langAlias: {
         promql: "text",
       },
