@@ -1,0 +1,30 @@
+diff --git a/dist/requests/media/adapter.js b/dist/requests/media/adapter.js
+index 82d10101cddcd11703db989ec634c74038ceb135..b4c02025bdc1bc38842c3bbe1f44191567ecdf34 100644
+--- a/dist/requests/media/adapter.js
++++ b/dist/requests/media/adapter.js
+@@ -1,5 +1,9 @@
+ import { __toESM } from "../../_virtual/_rolldown/runtime.js";
+-import { require_js2xml } from "../../node_modules/.pnpm/xml-js@1.6.11/node_modules/xml-js/lib/js2xml.js";
++import { createRequire as __fluxmqCreateRequire } from "node:module";
++// Patched: the published bundle imports a bundled xml-js wrapper under
++// dist/node_modules, which pnpm can strip/dedup during install (breaks under
++// pnpm/Cloudflare). Resolve the real xml-js dependency instead.
++const require_js2xml = () => __fluxmqCreateRequire(import.meta.url)("xml-js/lib/js2xml.js");
+ import { backtickQuote, inputToString, tripleDoubleQuote } from "../string-utils.js";
+ import "./resolve-adapter.js";
+ //#region src/requests/media/adapter.ts
+diff --git a/dist/requests/string-utils.js b/dist/requests/string-utils.js
+index dee672f417d6b5fe123037c0c1e8b5152bf88fbf..242f891733a05aef49c78fad8a7ba85938873981 100644
+--- a/dist/requests/string-utils.js
++++ b/dist/requests/string-utils.js
+@@ -1,5 +1,9 @@
+ import { __toESM } from "../_virtual/_rolldown/runtime.js";
+-import { require_js2xml } from "../node_modules/.pnpm/xml-js@1.6.11/node_modules/xml-js/lib/js2xml.js";
++import { createRequire as __fluxmqCreateRequire } from "node:module";
++// Patched: the published bundle imports a bundled xml-js wrapper under
++// dist/node_modules, which pnpm can strip/dedup during install (breaks under
++// pnpm/Cloudflare). Resolve the real xml-js dependency instead.
++const require_js2xml = () => __fluxmqCreateRequire(import.meta.url)("xml-js/lib/js2xml.js");
+ //#region src/requests/string-utils.ts
+ var import_js2xml = /* @__PURE__ */ __toESM(require_js2xml(), 1);
+ /**
