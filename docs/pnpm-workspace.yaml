@@ -1,2 +1,4 @@
 patchedDependencies:
+  '@fumadocs/api-docs@0.0.4': patches/@fumadocs__api-docs@0.0.4.patch
   fumadocs-openapi@11.0.6: patches/fumadocs-openapi@11.0.6.patch
+  fumadocs-ui@16.10.7: patches/fumadocs-ui@16.10.7.patch

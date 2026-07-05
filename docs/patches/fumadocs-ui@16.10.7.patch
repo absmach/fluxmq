@@ -1,0 +1,16 @@
+diff --git a/dist/components/image-zoom.js b/dist/components/image-zoom.js
+index 07f8e3c888c8db777e47ae3f6a213387cfd5f9ec..e35c719fb1ed8594e200b1cbb331041cb95f217c 100644
+--- a/dist/components/image-zoom.js
++++ b/dist/components/image-zoom.js
+@@ -1,5 +1,10 @@
+ "use client";
+-import { Uncontrolled } from "../node_modules/.pnpm/react-medium-image-zoom@5.4.8_react-dom@19.2.7_react@19.2.7__react@19.2.7/node_modules/react-medium-image-zoom/dist/uncontrolled.js";
++// Patched: the published bundle imports a vendored copy under dist/node_modules,
++// which pnpm can dedup/strip during install (breaks under pnpm/Cloudflare with
++// "does not provide an export named 'Uncontrolled'"). The real package (a direct
++// dep of the docs package) blocks the `/dist/uncontrolled.js` subpath in its
++// `exports` map and exposes the uncontrolled component as its default export.
++import Uncontrolled from "react-medium-image-zoom";
+ import "./image-zoom2.css";
+ import { Image } from "fumadocs-core/framework";
+ import { jsx } from "react/jsx-runtime";

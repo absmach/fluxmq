@@ -1,0 +1,35 @@
+diff --git a/dist/components/playground/schema.js b/dist/components/playground/schema.js
+index 114e5b8e6475d060e31eab9772b67e00541767df..19026ea85da888e57f1195991680031f32bfc50f 100644
+--- a/dist/components/playground/schema.js
++++ b/dist/components/playground/schema.js
+@@ -2,7 +2,13 @@ import { dereferenceShallow } from "../../schema/dereference.js";
+ import { mergeAllOf } from "../../schema/merge.js";
+ import { sample } from "../../schema/sample.js";
+ import { schemaToString } from "../../schema/to-string.js";
+-import { require__2020 } from "../../node_modules/.pnpm/ajv@8.20.0/node_modules/ajv/dist/2020.js";
++// Patched: the published bundle imports a vendored copy under dist/node_modules,
++// which pnpm can dedup/strip during install (breaks under pnpm/Cloudflare with a
++// "does not provide an export named 'require_*'" error). Import the real
++// dependency (a direct dep of the docs package) via a plain static default
++// import so it works in both Node and the browser bundle.
++import __fluxmq_ajv2020 from "ajv/dist/2020.js";
++const require__2020 = () => __fluxmq_ajv2020;
+ import { createContext, use, useMemo } from "react";
+ import { jsx } from "react/jsx-runtime";
+ import { useDataEngine, useFieldValue, useNamespace } from "@fumari/stf";
+diff --git a/dist/utils/deep-merge.js b/dist/utils/deep-merge.js
+index fe3f96af5c4a664a87cca11e04fd55c5d29e6388..f9fab4282a33ad34fb72bed1c5dbde74d4bfe957 100644
+--- a/dist/utils/deep-merge.js
++++ b/dist/utils/deep-merge.js
+@@ -1,4 +1,10 @@
+-import { require_deepmerge } from "../node_modules/.pnpm/@fastify_deepmerge@3.2.1/node_modules/@fastify/deepmerge/index.js";
++// Patched: the published bundle imports a vendored copy under dist/node_modules,
++// which pnpm can dedup/strip during install (breaks under pnpm/Cloudflare with a
++// "does not provide an export named 'require_*'" error). Import the real
++// dependency (a direct dep of the docs package) via a plain static default
++// import so it works in both Node and the browser bundle.
++import __fluxmq_deepmerge from "@fastify/deepmerge";
++const require_deepmerge = () => __fluxmq_deepmerge;
+ import { isPlainObject } from "./is-plain-object.js";
+ const mergeDeep = (0, require_deepmerge().deepmerge)({
+ 	all: true,
