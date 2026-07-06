@@ -240,10 +240,10 @@ go.etcd.io/etcd/client/pkg/v3 v3.6.13 h1:7QeMOisYByx8dBA7/CKcwCaPWfjb5C0xpmrIov/
 go.etcd.io/etcd/client/pkg/v3 v3.6.13/go.mod h1:Dn2zUBOCu/6xYcd6iAjB7LgoY16OTQjDZfWHLwvuQj4=
 go.etcd.io/etcd/client/v3 v3.6.13 h1:0E+9ZYGpMsi9KlOJVoCdONh9PUDawKDTy5mSNY8wOEI=
 go.etcd.io/etcd/client/v3 v3.6.13/go.mod h1:rtVI3vwobljb8xlTGcp1Yhz7hBIuBWULXwB848kqJGw=
-go.etcd.io/etcd/pkg/v3 v3.6.12 h1:rewjbWPC/H5GHK0yxPbU0lzdFdQR9RlpZL7XmLYm2BE=
-go.etcd.io/etcd/pkg/v3 v3.6.12/go.mod h1:qDFIetmpC8TTZfkZkDzpNrXtVqVsyYumRWNPFXFhcpQ=
-go.etcd.io/etcd/server/v3 v3.6.12 h1:PAcIHCcTjPM1sbePiu7fCzNKQvOBFEaGnu2JFhgaGJQ=
-go.etcd.io/etcd/server/v3 v3.6.12/go.mod h1:iiREo2DGRVjtiAjQeA3LQyYCk6YDFo3uS30/vImHdtk=
+go.etcd.io/etcd/pkg/v3 v3.6.13 h1:Xqb4lSvcBg0el4xRa493+MTNRtMX10MsVoxoOr+O7z8=
+go.etcd.io/etcd/pkg/v3 v3.6.13/go.mod h1:YDonhdT0PCdcd/av/IyhXLNNcZk/nVCGZ38iyYFfAHU=
+go.etcd.io/etcd/server/v3 v3.6.13 h1:gEGFSiJlYwzhvhZjfglj1oqe2LG8bmX47hSizwedAOs=
+go.etcd.io/etcd/server/v3 v3.6.13/go.mod h1:9NsHlIEPZFq27IzVfLKyU15HVF/gVAk3gEe4feD7qsk=
 go.etcd.io/raft/v3 v3.6.0 h1:5NtvbDVYpnfZWcIHgGRk9DyzkBIXOi8j+DDp1IcnUWQ=
 go.etcd.io/raft/v3 v3.6.0/go.mod h1:nLvLevg6+xrVtHUmVaTcTz603gQPHfh7kUAwV6YpfGo=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
