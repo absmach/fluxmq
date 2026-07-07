@@ -89,9 +89,12 @@ type EtcdCluster struct {
 	subTrie    *router.TrieRouter
 	subCacheMu sync.RWMutex
 
-	// Local session owner cache to avoid etcd roundtrips in RoutePublish
-	ownerCache   map[string]string // clientID -> nodeID
-	ownerCacheMu sync.RWMutex
+	// Local session owner cache to avoid etcd roundtrips in RoutePublish.
+	// ownerCacheRev is the etcd revision the cache was loaded at; the owner
+	// watch resumes from it so no event is missed between load and watch.
+	ownerCache    map[string]string // clientID -> nodeID
+	ownerCacheRev int64
+	ownerCacheMu  sync.RWMutex
 
 	// Local queue consumer cache for fast queue delivery/routing lookups.
 	queueConsumersAll     map[string]*QueueConsumerInfo                       // key: queue|group|consumer
@@ -1999,6 +2002,7 @@ func (c *EtcdCluster) loadSessionOwnerCache() error {
 	c.ownerCacheMu.Lock()
 	prevSize := len(c.ownerCache)
 	c.ownerCache = fresh
+	c.ownerCacheRev = resp.Header.Revision
 	c.ownerCacheMu.Unlock()
 
 	if staleRemoved := prevSize - len(fresh); staleRemoved > 0 {
@@ -2091,7 +2095,19 @@ func (c *EtcdCluster) getLeasedKey(key string) (string, bool) {
 // watchSessionOwners watches etcd for session owner changes and updates the local cache.
 func (c *EtcdCluster) watchSessionOwners() {
 	for {
-		watchCh := c.client.Watch(c.lifecycleCtx, sessionsPrefix, clientv3.WithPrefix())
+		// Resume from the revision the cache was loaded at so events that
+		// land between the load and the watch registration are replayed
+		// instead of lost. A compacted revision surfaces as a watch error,
+		// which reloads the cache and restarts from the new revision.
+		c.ownerCacheMu.RLock()
+		rev := c.ownerCacheRev
+		c.ownerCacheMu.RUnlock()
+
+		opts := []clientv3.OpOption{clientv3.WithPrefix()}
+		if rev > 0 {
+			opts = append(opts, clientv3.WithRev(rev+1))
+		}
+		watchCh := c.client.Watch(c.lifecycleCtx, sessionsPrefix, opts...)
 
 		for {
 			select {
