@@ -83,11 +83,14 @@ type EtcdCluster struct {
 
 	logger *slog.Logger
 
-	// Local subscription cache for fast topic matching
-	subCache   map[string]*storage.Subscription // key: clientID|filter
-	clientSubs map[string][]string              // clientID → []cacheKey (reverse index)
-	subTrie    *router.TrieRouter
-	subCacheMu sync.RWMutex
+	// Local subscription cache for fast topic matching.
+	// subCacheRev is the etcd revision the cache was loaded at; the watch
+	// resumes from it so no event is missed between load and watch.
+	subCache    map[string]*storage.Subscription // key: clientID|filter
+	clientSubs  map[string][]string              // clientID → []cacheKey (reverse index)
+	subTrie     *router.TrieRouter
+	subCacheRev int64
+	subCacheMu  sync.RWMutex
 
 	// Local session owner cache to avoid etcd roundtrips in RoutePublish.
 	// ownerCacheRev is the etcd revision the cache was loaded at; the owner
@@ -97,10 +100,12 @@ type EtcdCluster struct {
 	ownerCacheMu  sync.RWMutex
 
 	// Local queue consumer cache for fast queue delivery/routing lookups.
-	queueConsumersAll     map[string]*QueueConsumerInfo                       // key: queue|group|consumer
-	queueConsumersByQueue map[string]map[string]*QueueConsumerInfo            // queue -> key -> info
-	queueConsumersByGroup map[string]map[string]map[string]*QueueConsumerInfo // queue -> group -> key -> info
-	queueConsumersCacheMu sync.RWMutex
+	// queueConsumersCacheRev: see subCacheRev.
+	queueConsumersAll      map[string]*QueueConsumerInfo                       // key: queue|group|consumer
+	queueConsumersByQueue  map[string]map[string]*QueueConsumerInfo            // queue -> key -> info
+	queueConsumersByGroup  map[string]map[string]map[string]*QueueConsumerInfo // queue -> group -> key -> info
+	queueConsumersCacheRev int64
+	queueConsumersCacheMu  sync.RWMutex
 
 	routeBatchMaxSize      int
 	routeBatchMaxDelay     time.Duration
@@ -108,9 +113,11 @@ type EtcdCluster struct {
 	forwardBatcher         *nodeBatcher[*clusterv1.ForwardPublishRequest]
 	queueBatcher           *nodeBatcher[QueueDelivery]
 
-	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained)
-	retainedCache   map[string]*storage.Message // key: topic
-	retainedCacheMu sync.RWMutex
+	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained).
+	// retainedCacheRev: see subCacheRev.
+	retainedCache    map[string]*storage.Message // key: topic
+	retainedCacheRev int64
+	retainedCacheMu  sync.RWMutex
 
 	// Hybrid storage
 	localStore     storage.Store  // BadgerDB for local payload storage
@@ -580,6 +587,7 @@ func (c *EtcdCluster) loadRetainedCache() error {
 		topic := strings.TrimPrefix(string(kv.Key), retainedPrefix)
 		c.retainedCache[topic] = &msg
 	}
+	c.retainedCacheRev = resp.Header.Revision
 
 	c.logger.Info("loaded retained messages into cache", slog.Int("count", len(c.retainedCache)))
 	return nil
@@ -588,7 +596,10 @@ func (c *EtcdCluster) loadRetainedCache() error {
 // watchRetained watches etcd for retained message changes and updates the local cache.
 func (c *EtcdCluster) watchRetained() {
 	for {
-		watchCh := c.client.Watch(c.lifecycleCtx, retainedPrefix, clientv3.WithPrefix())
+		c.retainedCacheMu.RLock()
+		rev := c.retainedCacheRev
+		c.retainedCacheMu.RUnlock()
+		watchCh := c.client.Watch(c.lifecycleCtx, retainedPrefix, prefixWatchOpts(rev)...)
 
 		for {
 			select {
@@ -841,6 +852,18 @@ func (c *EtcdCluster) reregisterLeasedKeysLocked(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// prefixWatchOpts returns watch options that resume right after the given
+// revision, so events landing between a cache load and the watch registration
+// are replayed instead of lost. A compacted revision surfaces as a watch
+// error, which the callers handle by reloading the cache and re-watching.
+func prefixWatchOpts(rev int64) []clientv3.OpOption {
+	opts := []clientv3.OpOption{clientv3.WithPrefix()}
+	if rev > 0 {
+		opts = append(opts, clientv3.WithRev(rev+1))
+	}
+	return opts
 }
 
 func isLeaseNotFoundErr(err error) bool {
@@ -1787,6 +1810,7 @@ func (c *EtcdCluster) loadQueueConsumerCache() error {
 	c.queueConsumersAll = freshAll
 	c.queueConsumersByQueue = freshByQueue
 	c.queueConsumersByGroup = freshByGroup
+	c.queueConsumersCacheRev = resp.Header.Revision
 	c.queueConsumersCacheMu.Unlock()
 
 	c.logger.Info("loaded queue consumers into cache", slog.Int("cache_len", len(freshAll)))
@@ -1795,7 +1819,10 @@ func (c *EtcdCluster) loadQueueConsumerCache() error {
 
 func (c *EtcdCluster) watchQueueConsumers() {
 	for {
-		watchCh := c.client.Watch(c.lifecycleCtx, queueConsumersPrefix, clientv3.WithPrefix())
+		c.queueConsumersCacheMu.RLock()
+		rev := c.queueConsumersCacheRev
+		c.queueConsumersCacheMu.RUnlock()
+		watchCh := c.client.Watch(c.lifecycleCtx, queueConsumersPrefix, prefixWatchOpts(rev)...)
 
 		for {
 			select {
@@ -2095,19 +2122,10 @@ func (c *EtcdCluster) getLeasedKey(key string) (string, bool) {
 // watchSessionOwners watches etcd for session owner changes and updates the local cache.
 func (c *EtcdCluster) watchSessionOwners() {
 	for {
-		// Resume from the revision the cache was loaded at so events that
-		// land between the load and the watch registration are replayed
-		// instead of lost. A compacted revision surfaces as a watch error,
-		// which reloads the cache and restarts from the new revision.
 		c.ownerCacheMu.RLock()
 		rev := c.ownerCacheRev
 		c.ownerCacheMu.RUnlock()
-
-		opts := []clientv3.OpOption{clientv3.WithPrefix()}
-		if rev > 0 {
-			opts = append(opts, clientv3.WithRev(rev+1))
-		}
-		watchCh := c.client.Watch(c.lifecycleCtx, sessionsPrefix, opts...)
+		watchCh := c.client.Watch(c.lifecycleCtx, sessionsPrefix, prefixWatchOpts(rev)...)
 
 		for {
 			select {
@@ -2229,6 +2247,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 	c.subCache = fresh
 	c.clientSubs = freshClientSubs
 	c.subTrie = freshTrie
+	c.subCacheRev = resp.Header.Revision
 	c.subCacheMu.Unlock()
 
 	if staleRemoved := prevSize - len(fresh); staleRemoved > 0 {
@@ -2267,7 +2286,10 @@ func (c *EtcdCluster) reconcileSubscriptionCache() {
 // watchSubscriptions watches etcd for subscription changes and updates the local cache.
 func (c *EtcdCluster) watchSubscriptions() {
 	for {
-		watchCh := c.client.Watch(c.lifecycleCtx, subscriptionsPrefix, clientv3.WithPrefix())
+		c.subCacheMu.RLock()
+		rev := c.subCacheRev
+		c.subCacheMu.RUnlock()
+		watchCh := c.client.Watch(c.lifecycleCtx, subscriptionsPrefix, prefixWatchOpts(rev)...)
 
 		for {
 			select {
