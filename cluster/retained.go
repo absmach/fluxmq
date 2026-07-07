@@ -153,33 +153,39 @@ func (h *RetainedStore) loadMetadataCache() error {
 
 // Set stores a retained message using the hybrid strategy.
 func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
+	// Materialize the payload: publish-path messages carry it in a pooled
+	// PayloadBuf (with the legacy Payload field cleared), while a retained
+	// message must outlive the buffer and survive serialization.
+	payload := msg.GetPayload()
+
 	// Empty payload = delete
-	if len(msg.Payload) == 0 {
+	if len(payload) == 0 {
 		return h.Delete(ctx, topic)
 	}
 
+	stored := *msg
+	stored.PayloadBuf = nil
+	stored.Payload = append([]byte(nil), payload...)
+
 	// Always write to local BadgerDB first
-	if err := h.localStore.Set(ctx, topic, msg); err != nil {
+	if err := h.localStore.Set(ctx, topic, &stored); err != nil {
 		return fmt.Errorf("failed to write to local store: %w", err)
 	}
-
-	// Calculate payload size
-	payloadSize := len(msg.Payload)
 
 	// Create metadata
 	metadata := &RetainedMetadata{
 		NodeID:     h.nodeID,
 		Topic:      topic,
 		QoS:        msg.QoS,
-		Size:       payloadSize,
-		Replicated: payloadSize < h.sizeThreshold,
+		Size:       len(payload),
+		Replicated: len(payload) < h.sizeThreshold,
 		Timestamp:  time.Now(),
 	}
 
 	// Publish to etcd based on size
 	var etcdErr error
 	if metadata.Replicated {
-		etcdErr = h.publishReplicatedMessage(ctx, topic, msg, metadata)
+		etcdErr = h.publishReplicatedMessage(ctx, topic, &stored, metadata)
 	} else {
 		etcdErr = h.publishMetadata(ctx, topic, metadata)
 	}

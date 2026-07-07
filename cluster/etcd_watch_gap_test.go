@@ -284,6 +284,39 @@ func TestRetainedWatchSeesEarlyPut(t *testing.T) {
 	}, recoveryWait, pollInterval, "retained message written before watch registration never reached the cache")
 }
 
+func TestRetainedStoreSetHandlesBufferBackedPayload(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridRetained)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Publish-path messages carry the payload in PayloadBuf with the
+	// legacy Payload field cleared.
+	topic := "gap/retained-buffer"
+	msg := &storage.Message{Topic: topic, QoS: 1, Retain: true}
+	msg.SetPayloadFromBytes([]byte("buffered"))
+
+	require.NoError(t, c.hybridRetained.Set(ctx, topic, msg))
+	msg.ReleasePayload()
+
+	// The replicated etcd entry must contain the payload.
+	resp, err := c.client.Get(ctx, retainedDataPrefix+topic)
+	require.NoError(t, err)
+	require.Len(t, resp.Kvs, 1)
+	var entry RetainedDataEntry
+	require.NoError(t, json.Unmarshal(resp.Kvs[0].Value, &entry))
+	decoded, err := base64.StdEncoding.DecodeString(entry.Payload)
+	require.NoError(t, err)
+	require.Equal(t, "buffered", string(decoded))
+
+	// And the message must be readable after the pooled buffer is gone.
+	got, err := c.hybridRetained.Get(ctx, topic)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "buffered", string(got.GetPayload()))
+}
+
 func TestRetainedCacheReloadEvictsStaleEntries(t *testing.T) {
 	c := newSingleNodeEtcdCluster(t)
 
