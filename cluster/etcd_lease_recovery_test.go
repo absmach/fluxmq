@@ -21,6 +21,7 @@ const (
 	testQueueName    = "events"
 	testGroupID      = "workers@#"
 	testConsumerMode = "stream"
+	testOtherNode    = "other-node"
 )
 
 func sessionOwnerKey(clientID string) string {
@@ -151,13 +152,13 @@ func TestWatchDeleteEvictsUntrackedOwnerKey(t *testing.T) {
 	// A key owned by another node: present in etcd and cache, not tracked.
 	clientID := "watch-evict-client"
 	key := sessionOwnerKey(clientID)
-	_, err := c.client.Put(ctx, key, "other-node")
+	_, err := c.client.Put(ctx, key, testOtherNode)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
 		c.ownerCacheMu.RLock()
 		defer c.ownerCacheMu.RUnlock()
-		return c.ownerCache[clientID] == "other-node"
+		return c.ownerCache[clientID] == testOtherNode
 	}, recoveryWait, pollInterval)
 
 	_, err = c.client.Delete(ctx, key)

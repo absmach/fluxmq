@@ -5,6 +5,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -61,7 +62,7 @@ func TestQueueConsumerWatchSeesEarlyPut(t *testing.T) {
 		ClientID:     "gap-consumer-client",
 		Pattern:      "#",
 		Mode:         testConsumerMode,
-		ProxyNodeID:  "other-node",
+		ProxyNodeID:  testOtherNode,
 		RegisteredAt: time.Now(),
 	}
 	data, err := json.Marshal(info)
@@ -83,6 +84,136 @@ func TestQueueConsumerWatchSeesEarlyPut(t *testing.T) {
 		}
 		return false
 	}, recoveryWait, pollInterval, "queue consumer written before watch registration never reached the cache")
+}
+
+func retainedDataEntryJSON(t *testing.T, topic, payload string) string {
+	t.Helper()
+
+	entry := RetainedDataEntry{
+		Metadata: RetainedMetadata{
+			NodeID:     testOtherNode,
+			Topic:      topic,
+			QoS:        1,
+			Size:       len(payload),
+			Replicated: true,
+			Timestamp:  time.Now(),
+		},
+		Payload: base64.StdEncoding.EncodeToString([]byte(payload)),
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func willDataEntryJSON(t *testing.T, clientID string) string {
+	t.Helper()
+
+	entry := WillDataEntry{
+		Metadata: WillMetadata{
+			NodeID:         testOtherNode,
+			ClientID:       clientID,
+			Replicated:     true,
+			DisconnectedAt: time.Now().Add(-time.Minute),
+			Delay:          0,
+		},
+		Will: &storage.WillMessage{
+			ClientID: clientID,
+			Topic:    "will/" + clientID,
+			Payload:  []byte("gone"),
+			QoS:      1,
+		},
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func TestRetainedStoreWatchSeesEarlyPut(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridRetained)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	topic := "gap/retained-store"
+	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, topic, "hello"))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		msg, err := c.hybridRetained.Get(context.Background(), topic)
+		return err == nil && msg != nil && string(msg.Payload) == "hello"
+	}, recoveryWait, pollInterval, "retained entry written before watch registration never became readable")
+}
+
+func TestRetainedStoreLoadSeesPreexistingEntries(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridRetained)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	topic := "gap/retained-preexisting"
+	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, topic, "old"))
+	require.NoError(t, err)
+
+	// Reload as a restarting node would; the entry must become readable
+	// even if the watch never saw the put.
+	require.NoError(t, c.hybridRetained.loadMetadataCache())
+
+	msg, err := c.hybridRetained.Get(ctx, topic)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	require.Equal(t, "old", string(msg.Payload))
+}
+
+func TestWillStoreWatchSeesEarlyPut(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridWill)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientID := "gap-will-client"
+	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, clientID))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		pending, err := c.hybridWill.GetPending(context.Background(), time.Now())
+		if err != nil {
+			return false
+		}
+		for _, will := range pending {
+			if will.ClientID == clientID {
+				return true
+			}
+		}
+		return false
+	}, recoveryWait, pollInterval, "will written before watch registration never became pending")
+}
+
+func TestWillStoreLoadSeesPreexistingEntries(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridWill)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientID := "gap-will-preexisting"
+	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, clientID))
+	require.NoError(t, err)
+
+	require.NoError(t, c.hybridWill.loadMetadataCache())
+
+	pending, err := c.hybridWill.GetPending(ctx, time.Now())
+	require.NoError(t, err)
+	found := false
+	for _, will := range pending {
+		if will.ClientID == clientID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "preexisting will not visible after cache load")
 }
 
 func TestRetainedWatchSeesEarlyPut(t *testing.T) {

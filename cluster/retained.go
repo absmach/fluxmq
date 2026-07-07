@@ -51,8 +51,12 @@ type RetainedStore struct {
 	transport     *Transport
 	sizeThreshold int
 
-	// Metadata cache (synced from etcd)
+	// Metadata cache (synced from etcd). dataRev/indexRev are the etcd
+	// revisions the cache was loaded at; the watches resume from them so no
+	// event is missed between load and watch registration.
 	metadataCache   map[string]*RetainedMetadata // key: topic
+	dataRev         int64
+	indexRev        int64
 	metadataCacheMu sync.RWMutex
 
 	logger *slog.Logger
@@ -84,11 +88,67 @@ func NewRetainedStore(
 		stopCh:        make(chan struct{}),
 	}
 
+	// Load existing metadata before watching so restarts see retained
+	// messages set while this node was down.
+	if err := h.loadMetadataCache(); err != nil {
+		logger.Warn("failed to load retained metadata cache", slog.String("error", err.Error()))
+	}
+
 	// Start background watchers for etcd updates
 	h.wg.Add(1)
 	go h.watchRetainedData()
 
 	return h
+}
+
+// loadMetadataCache rebuilds the metadata cache from both etcd prefixes and
+// records the revisions the watches must resume from.
+func (h *RetainedStore) loadMetadataCache() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dataResp, err := h.etcdClient.Get(ctx, retainedDataPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load retained data entries: %w", err)
+	}
+	indexResp, err := h.etcdClient.Get(ctx, retainedIndexPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load retained index entries: %w", err)
+	}
+
+	fresh := make(map[string]*RetainedMetadata, len(dataResp.Kvs)+len(indexResp.Kvs))
+	for _, kv := range dataResp.Kvs {
+		topic := string(kv.Key)[len(retainedDataPrefix):]
+		var entry RetainedDataEntry
+		if err := json.Unmarshal(kv.Value, &entry); err != nil {
+			h.logger.Warn("failed to unmarshal retained data entry during load",
+				slog.String("topic", topic),
+				slog.String("error", err.Error()))
+			continue
+		}
+		fresh[topic] = &entry.Metadata
+		h.storeReplicatedEntry(ctx, topic, &entry)
+	}
+	for _, kv := range indexResp.Kvs {
+		topic := string(kv.Key)[len(retainedIndexPrefix):]
+		var metadata RetainedMetadata
+		if err := json.Unmarshal(kv.Value, &metadata); err != nil {
+			h.logger.Warn("failed to unmarshal retained metadata during load",
+				slog.String("topic", topic),
+				slog.String("error", err.Error()))
+			continue
+		}
+		fresh[topic] = &metadata
+	}
+
+	h.metadataCacheMu.Lock()
+	h.metadataCache = fresh
+	h.dataRev = dataResp.Header.Revision
+	h.indexRev = indexResp.Header.Revision
+	h.metadataCacheMu.Unlock()
+
+	h.logger.Info("loaded retained metadata into cache", slog.Int("count", len(fresh)))
+	return nil
 }
 
 // Set stores a retained message using the hybrid strategy.
@@ -338,49 +398,75 @@ func (h *RetainedStore) fetchRemoteRetained(ctx context.Context, topic, nodeID s
 	return msg, nil
 }
 
-// watchRetainedData watches etcd for retained message updates and updates local cache/store.
+// watchRetainedData watches etcd for retained message updates and updates
+// local cache/store. Watches resume from the cache-load revisions; any
+// channel close or watch error triggers a cache reload and a re-watch so no
+// event is lost across the interruption.
 func (h *RetainedStore) watchRetainedData() {
 	defer h.wg.Done()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Watch both prefixes
-	dataChan := h.etcdClient.Watch(ctx, retainedDataPrefix, clientv3.WithPrefix())
-	indexChan := h.etcdClient.Watch(ctx, retainedIndexPrefix, clientv3.WithPrefix())
-
 	for {
+		h.metadataCacheMu.RLock()
+		dataRev, indexRev := h.dataRev, h.indexRev
+		h.metadataCacheMu.RUnlock()
+
+		dataChan := h.etcdClient.Watch(ctx, retainedDataPrefix, prefixWatchOpts(dataRev)...)
+		indexChan := h.etcdClient.Watch(ctx, retainedIndexPrefix, prefixWatchOpts(indexRev)...)
+
+		if !h.consumeWatchEvents(dataChan, indexChan) {
+			return
+		}
+
+		if err := h.loadMetadataCache(); err != nil {
+			h.logger.Error("failed to reload retained metadata cache",
+				slog.String("error", err.Error()))
+		}
 		select {
 		case <-h.stopCh:
 			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// consumeWatchEvents processes both watch streams until one breaks. Returns
+// false when the store is shutting down, true when the watches must be
+// re-established.
+func (h *RetainedStore) consumeWatchEvents(dataChan, indexChan clientv3.WatchChan) bool {
+	for {
+		select {
+		case <-h.stopCh:
+			return false
 
 		case resp, ok := <-dataChan:
-			if !ok {
-				h.logger.Warn("watch channel closed on retained-data, restarting")
-				dataChan = h.etcdClient.Watch(ctx, retainedDataPrefix, clientv3.WithPrefix())
-				continue
-			}
-			if resp.Err() != nil {
-				h.logger.Error("watch error on retained-data",
-					slog.String("error", resp.Err().Error()))
-				continue
+			if !ok || resp.Err() != nil {
+				h.logWatchBreak("retained-data", ok, resp)
+				return true
 			}
 			h.handleDataWatchEvents(resp.Events)
 
 		case resp, ok := <-indexChan:
-			if !ok {
-				h.logger.Warn("watch channel closed on retained-index, restarting")
-				indexChan = h.etcdClient.Watch(ctx, retainedIndexPrefix, clientv3.WithPrefix())
-				continue
-			}
-			if resp.Err() != nil {
-				h.logger.Error("watch error on retained-index",
-					slog.String("error", resp.Err().Error()))
-				continue
+			if !ok || resp.Err() != nil {
+				h.logWatchBreak("retained-index", ok, resp)
+				return true
 			}
 			h.handleIndexWatchEvents(resp.Events)
 		}
 	}
+}
+
+func (h *RetainedStore) logWatchBreak(name string, ok bool, resp clientv3.WatchResponse) {
+	if !ok {
+		h.logger.Warn("watch channel closed, reloading cache and re-watching",
+			slog.String("watch", name))
+		return
+	}
+	h.logger.Error("watch error, reloading cache and re-watching",
+		slog.String("watch", name),
+		slog.String("error", resp.Err().Error()))
 }
 
 // handleDataWatchEvents processes watch events for replicated small messages.
@@ -413,32 +499,38 @@ func (h *RetainedStore) handleDataWatchEvents(events []*clientv3.Event) {
 		h.metadataCache[topic] = &entry.Metadata
 		h.metadataCacheMu.Unlock()
 
-		// If replicated and not from this node, store payload locally
-		if entry.Metadata.Replicated && entry.Metadata.NodeID != h.nodeID {
-			payload, err := base64.StdEncoding.DecodeString(entry.Payload)
-			if err != nil {
-				h.logger.Warn("failed to decode payload",
-					slog.String("topic", topic),
-					slog.String("error", err.Error()))
-				continue
-			}
+		h.storeReplicatedEntry(context.Background(), topic, &entry)
+	}
+}
 
-			msg := &storage.Message{
-				Topic:       topic,
-				Payload:     payload,
-				QoS:         entry.Metadata.QoS,
-				Retain:      true,
-				Properties:  entry.Properties,
-				PublishTime: entry.Metadata.Timestamp,
-			}
+// storeReplicatedEntry persists the payload of a small replicated message
+// from another node into the local store.
+func (h *RetainedStore) storeReplicatedEntry(ctx context.Context, topic string, entry *RetainedDataEntry) {
+	if !entry.Metadata.Replicated || entry.Metadata.NodeID == h.nodeID {
+		return
+	}
 
-			ctx := context.Background()
-			if err := h.localStore.Set(ctx, topic, msg); err != nil {
-				h.logger.Warn("failed to store replicated message locally",
-					slog.String("topic", topic),
-					slog.String("error", err.Error()))
-			}
-		}
+	payload, err := base64.StdEncoding.DecodeString(entry.Payload)
+	if err != nil {
+		h.logger.Warn("failed to decode payload",
+			slog.String("topic", topic),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	msg := &storage.Message{
+		Topic:       topic,
+		Payload:     payload,
+		QoS:         entry.Metadata.QoS,
+		Retain:      true,
+		Properties:  entry.Properties,
+		PublishTime: entry.Metadata.Timestamp,
+	}
+
+	if err := h.localStore.Set(ctx, topic, msg); err != nil {
+		h.logger.Warn("failed to store replicated message locally",
+			slog.String("topic", topic),
+			slog.String("error", err.Error()))
 	}
 }
 
