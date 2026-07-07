@@ -395,10 +395,16 @@ func (h *WillStore) watchWillData() {
 		dataRev, indexRev := h.dataRev, h.indexRev
 		h.metadataCacheMu.RUnlock()
 
-		dataChan := h.etcdClient.Watch(ctx, willDataPrefix, prefixWatchOpts(dataRev)...)
-		indexChan := h.etcdClient.Watch(ctx, willIndexPrefix, prefixWatchOpts(indexRev)...)
+		// Per-iteration context: when one stream breaks, the surviving
+		// watch must be cancelled too, or abandoned watches accumulate on
+		// the etcd server across restarts.
+		iterCtx, iterCancel := context.WithCancel(ctx)
+		dataChan := h.etcdClient.Watch(iterCtx, willDataPrefix, prefixWatchOpts(dataRev)...)
+		indexChan := h.etcdClient.Watch(iterCtx, willIndexPrefix, prefixWatchOpts(indexRev)...)
 
-		if !h.consumeWatchEvents(dataChan, indexChan) {
+		alive := h.consumeWatchEvents(dataChan, indexChan)
+		iterCancel()
+		if !alive {
 			return
 		}
 
@@ -481,14 +487,20 @@ func (h *WillStore) handleDataWatchEvents(events []*clientv3.Event) {
 		h.metadataCache[clientID] = &entry.Metadata
 		h.metadataCacheMu.Unlock()
 
-		h.storeReplicatedWill(context.Background(), clientID, &entry)
+		// Own writes are already in the local store.
+		if entry.Metadata.NodeID != h.nodeID {
+			h.storeReplicatedWill(context.Background(), clientID, &entry)
+		}
 	}
 }
 
-// storeReplicatedWill persists a small replicated will from another node
-// into the local store.
+// storeReplicatedWill persists a small replicated will into the local store.
+// Callers decide whether own-node entries apply: the watch path skips them
+// (Set already wrote the will locally), while the startup load includes them
+// so a node restarting with a fresh local store recovers its own replicated
+// wills from etcd.
 func (h *WillStore) storeReplicatedWill(ctx context.Context, clientID string, entry *WillDataEntry) {
-	if !entry.Metadata.Replicated || entry.Metadata.NodeID == h.nodeID {
+	if !entry.Metadata.Replicated {
 		return
 	}
 

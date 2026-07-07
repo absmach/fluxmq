@@ -413,10 +413,16 @@ func (h *RetainedStore) watchRetainedData() {
 		dataRev, indexRev := h.dataRev, h.indexRev
 		h.metadataCacheMu.RUnlock()
 
-		dataChan := h.etcdClient.Watch(ctx, retainedDataPrefix, prefixWatchOpts(dataRev)...)
-		indexChan := h.etcdClient.Watch(ctx, retainedIndexPrefix, prefixWatchOpts(indexRev)...)
+		// Per-iteration context: when one stream breaks, the surviving
+		// watch must be cancelled too, or abandoned watches accumulate on
+		// the etcd server across restarts.
+		iterCtx, iterCancel := context.WithCancel(ctx)
+		dataChan := h.etcdClient.Watch(iterCtx, retainedDataPrefix, prefixWatchOpts(dataRev)...)
+		indexChan := h.etcdClient.Watch(iterCtx, retainedIndexPrefix, prefixWatchOpts(indexRev)...)
 
-		if !h.consumeWatchEvents(dataChan, indexChan) {
+		alive := h.consumeWatchEvents(dataChan, indexChan)
+		iterCancel()
+		if !alive {
 			return
 		}
 
@@ -499,14 +505,20 @@ func (h *RetainedStore) handleDataWatchEvents(events []*clientv3.Event) {
 		h.metadataCache[topic] = &entry.Metadata
 		h.metadataCacheMu.Unlock()
 
-		h.storeReplicatedEntry(context.Background(), topic, &entry)
+		// Own writes are already in the local store.
+		if entry.Metadata.NodeID != h.nodeID {
+			h.storeReplicatedEntry(context.Background(), topic, &entry)
+		}
 	}
 }
 
 // storeReplicatedEntry persists the payload of a small replicated message
-// from another node into the local store.
+// into the local store. Callers decide whether own-node entries apply: the
+// watch path skips them (Set already wrote the payload locally), while the
+// startup load includes them so a node restarting with a fresh local store
+// recovers its own replicated messages from etcd.
 func (h *RetainedStore) storeReplicatedEntry(ctx context.Context, topic string, entry *RetainedDataEntry) {
-	if !entry.Metadata.Replicated || entry.Metadata.NodeID == h.nodeID {
+	if !entry.Metadata.Replicated {
 		return
 	}
 

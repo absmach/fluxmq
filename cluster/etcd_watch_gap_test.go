@@ -86,12 +86,12 @@ func TestQueueConsumerWatchSeesEarlyPut(t *testing.T) {
 	}, recoveryWait, pollInterval, "queue consumer written before watch registration never reached the cache")
 }
 
-func retainedDataEntryJSON(t *testing.T, topic, payload string) string {
+func retainedDataEntryJSON(t *testing.T, nodeID, topic, payload string) string {
 	t.Helper()
 
 	entry := RetainedDataEntry{
 		Metadata: RetainedMetadata{
-			NodeID:     testOtherNode,
+			NodeID:     nodeID,
 			Topic:      topic,
 			QoS:        1,
 			Size:       len(payload),
@@ -105,12 +105,12 @@ func retainedDataEntryJSON(t *testing.T, topic, payload string) string {
 	return string(data)
 }
 
-func willDataEntryJSON(t *testing.T, clientID string) string {
+func willDataEntryJSON(t *testing.T, nodeID, clientID string) string {
 	t.Helper()
 
 	entry := WillDataEntry{
 		Metadata: WillMetadata{
-			NodeID:         testOtherNode,
+			NodeID:         nodeID,
 			ClientID:       clientID,
 			Replicated:     true,
 			DisconnectedAt: time.Now().Add(-time.Minute),
@@ -136,7 +136,7 @@ func TestRetainedStoreWatchSeesEarlyPut(t *testing.T) {
 	defer cancel()
 
 	topic := "gap/retained-store"
-	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, topic, "hello"))
+	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, testOtherNode, topic, "hello"))
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -153,7 +153,7 @@ func TestRetainedStoreLoadSeesPreexistingEntries(t *testing.T) {
 	defer cancel()
 
 	topic := "gap/retained-preexisting"
-	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, topic, "old"))
+	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, testOtherNode, topic, "old"))
 	require.NoError(t, err)
 
 	// Reload as a restarting node would; the entry must become readable
@@ -166,6 +166,53 @@ func TestRetainedStoreLoadSeesPreexistingEntries(t *testing.T) {
 	require.Equal(t, "old", string(msg.Payload))
 }
 
+func TestRetainedStoreLoadRestoresOwnNodeEntries(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridRetained)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Entry owned by this node, but absent from the local store — the
+	// cold-start case where the node restarted with a fresh disk while its
+	// replicated entries survived in etcd.
+	topic := "gap/retained-own-node"
+	_, err := c.client.Put(ctx, retainedDataPrefix+topic, retainedDataEntryJSON(t, c.nodeID, topic, "mine"))
+	require.NoError(t, err)
+
+	require.NoError(t, c.hybridRetained.loadMetadataCache())
+
+	msg, err := c.hybridRetained.Get(ctx, topic)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	require.Equal(t, "mine", string(msg.Payload))
+}
+
+func TestWillStoreLoadRestoresOwnNodeEntries(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+	require.NotNil(t, c.hybridWill)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientID := "gap-will-own-node"
+	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, c.nodeID, clientID))
+	require.NoError(t, err)
+
+	require.NoError(t, c.hybridWill.loadMetadataCache())
+
+	pending, err := c.hybridWill.GetPending(ctx, time.Now())
+	require.NoError(t, err)
+	found := false
+	for _, will := range pending {
+		if will.ClientID == clientID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "own-node will not restored after cache load")
+}
+
 func TestWillStoreWatchSeesEarlyPut(t *testing.T) {
 	c := newSingleNodeEtcdCluster(t)
 	require.NotNil(t, c.hybridWill)
@@ -174,7 +221,7 @@ func TestWillStoreWatchSeesEarlyPut(t *testing.T) {
 	defer cancel()
 
 	clientID := "gap-will-client"
-	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, clientID))
+	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, testOtherNode, clientID))
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -199,7 +246,7 @@ func TestWillStoreLoadSeesPreexistingEntries(t *testing.T) {
 	defer cancel()
 
 	clientID := "gap-will-preexisting"
-	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, clientID))
+	_, err := c.client.Put(ctx, willDataPrefix+clientID, willDataEntryJSON(t, testOtherNode, clientID))
 	require.NoError(t, err)
 
 	require.NoError(t, c.hybridWill.loadMetadataCache())
@@ -235,4 +282,21 @@ func TestRetainedWatchSeesEarlyPut(t *testing.T) {
 		defer c.retainedCacheMu.RUnlock()
 		return c.retainedCache[topic] != nil
 	}, recoveryWait, pollInterval, "retained message written before watch registration never reached the cache")
+}
+
+func TestRetainedCacheReloadEvictsStaleEntries(t *testing.T) {
+	c := newSingleNodeEtcdCluster(t)
+
+	// Simulate a topic whose delete event was missed while the watch was
+	// down: present in the cache, absent from etcd.
+	stale := "gap/retained-stale"
+	c.retainedCacheMu.Lock()
+	c.retainedCache[stale] = &storage.Message{Topic: stale}
+	c.retainedCacheMu.Unlock()
+
+	require.NoError(t, c.loadRetainedCache())
+
+	c.retainedCacheMu.RLock()
+	defer c.retainedCacheMu.RUnlock()
+	require.NotContains(t, c.retainedCache, stale, "reload must evict entries deleted while the watch was down")
 }

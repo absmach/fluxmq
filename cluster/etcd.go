@@ -19,6 +19,7 @@ import (
 	"github.com/absmach/fluxmq/broker/router"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.etcd.io/etcd/server/v3/embed"
@@ -573,9 +574,9 @@ func (c *EtcdCluster) loadRetainedCache() error {
 		return fmt.Errorf("failed to load retained messages: %w", err)
 	}
 
-	c.retainedCacheMu.Lock()
-	defer c.retainedCacheMu.Unlock()
-
+	// Rebuild from scratch so reloads after watch interruptions also evict
+	// entries whose delete events were missed.
+	fresh := make(map[string]*storage.Message, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		var msg storage.Message
 		if err := json.Unmarshal(kv.Value, &msg); err != nil {
@@ -585,11 +586,15 @@ func (c *EtcdCluster) loadRetainedCache() error {
 
 		// Extract topic from key (remove prefix)
 		topic := strings.TrimPrefix(string(kv.Key), retainedPrefix)
-		c.retainedCache[topic] = &msg
+		fresh[topic] = &msg
 	}
-	c.retainedCacheRev = resp.Header.Revision
 
-	c.logger.Info("loaded retained messages into cache", slog.Int("count", len(c.retainedCache)))
+	c.retainedCacheMu.Lock()
+	c.retainedCache = fresh
+	c.retainedCacheRev = resp.Header.Revision
+	c.retainedCacheMu.Unlock()
+
+	c.logger.Info("loaded retained messages into cache", slog.Int("count", len(fresh)))
 	return nil
 }
 
@@ -867,7 +872,7 @@ func prefixWatchOpts(rev int64) []clientv3.OpOption {
 }
 
 func isLeaseNotFoundErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "requested lease not found")
+	return err != nil && errors.Is(rpctypes.Error(err), rpctypes.ErrLeaseNotFound)
 }
 
 func (c *EtcdCluster) putWithSessionLease(ctx context.Context, key, value string) error {
