@@ -450,6 +450,15 @@ func (c *EtcdCluster) Stop() error {
 	}
 	c.leaseMu.Unlock()
 
+	// Stop hybrid store watchers before closing the etcd client so they
+	// don't keep retrying against a closed client.
+	if c.hybridRetained != nil {
+		c.hybridRetained.Close() //nolint:errcheck // best-effort shutdown
+	}
+	if c.hybridWill != nil {
+		c.hybridWill.Close() //nolint:errcheck // best-effort shutdown
+	}
+
 	// Stop gRPC transport
 	if c.transport != nil {
 		c.transport.Stop() //nolint:errcheck // best-effort shutdown; transport is being discarded
