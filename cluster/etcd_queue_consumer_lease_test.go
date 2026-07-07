@@ -63,12 +63,12 @@ func TestRegisterQueueConsumerStoresLeasedKey(t *testing.T) {
 	defer cancel()
 
 	info := &QueueConsumerInfo{
-		QueueName:    "events",
-		GroupID:      "workers@#",
+		QueueName:    testQueueName,
+		GroupID:      testGroupID,
 		ConsumerID:   "consumer-1",
 		ClientID:     "client-1",
 		Pattern:      "#",
-		Mode:         "stream",
+		Mode:         testConsumerMode,
 		ProxyNodeID:  c.nodeID,
 		RegisteredAt: time.Now(),
 	}
@@ -101,12 +101,12 @@ func TestRegisterQueueConsumerRefreshesExpiredLease(t *testing.T) {
 	require.NoError(t, err)
 
 	info := &QueueConsumerInfo{
-		QueueName:    "events",
-		GroupID:      "workers@#",
+		QueueName:    testQueueName,
+		GroupID:      testGroupID,
 		ConsumerID:   "consumer-2",
 		ClientID:     "client-2",
 		Pattern:      "#",
-		Mode:         "stream",
+		Mode:         testConsumerMode,
 		ProxyNodeID:  c.nodeID,
 		RegisteredAt: time.Now(),
 	}
