@@ -138,6 +138,9 @@ type Broker struct {
 	closed        atomic.Bool
 	sharedSubs    *SharedSubscriptionManager
 	fanOutPool    *fanOutPool // non-nil only when AsyncFanOut is true
+
+	// Throttles the unroutable-forward warning (unix nanos of last log).
+	lastUnroutableWarn atomic.Int64
 }
 
 // NewBroker creates a new broker instance.

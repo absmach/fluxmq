@@ -44,8 +44,12 @@ type WillStore struct {
 	transport     *Transport
 	sizeThreshold int
 
-	// Metadata cache (synced from etcd)
+	// Metadata cache (synced from etcd). dataRev/indexRev are the etcd
+	// revisions the cache was loaded at; the watches resume from them so no
+	// event is missed between load and watch registration.
 	metadataCache   map[string]*WillMetadata // key: clientID
+	dataRev         int64
+	indexRev        int64
 	metadataCacheMu sync.RWMutex
 
 	logger *slog.Logger
@@ -77,11 +81,67 @@ func NewWillStore(
 		stopCh:        make(chan struct{}),
 	}
 
+	// Load existing metadata before watching so restarts see wills set
+	// while this node was down.
+	if err := h.loadMetadataCache(); err != nil {
+		logger.Warn("failed to load will metadata cache", slog.String("error", err.Error()))
+	}
+
 	// Start background watchers for etcd updates
 	h.wg.Add(1)
 	go h.watchWillData()
 
 	return h
+}
+
+// loadMetadataCache rebuilds the metadata cache from both etcd prefixes and
+// records the revisions the watches must resume from.
+func (h *WillStore) loadMetadataCache() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dataResp, err := h.etcdClient.Get(ctx, willDataPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load will data entries: %w", err)
+	}
+	indexResp, err := h.etcdClient.Get(ctx, willIndexPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return fmt.Errorf("failed to load will index entries: %w", err)
+	}
+
+	fresh := make(map[string]*WillMetadata, len(dataResp.Kvs)+len(indexResp.Kvs))
+	for _, kv := range dataResp.Kvs {
+		clientID := string(kv.Key)[len(willDataPrefix):]
+		var entry WillDataEntry
+		if err := json.Unmarshal(kv.Value, &entry); err != nil {
+			h.logger.Warn("failed to unmarshal will data entry during load",
+				slog.String("client_id", clientID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		fresh[clientID] = &entry.Metadata
+		h.storeReplicatedWill(ctx, clientID, &entry)
+	}
+	for _, kv := range indexResp.Kvs {
+		clientID := string(kv.Key)[len(willIndexPrefix):]
+		var metadata WillMetadata
+		if err := json.Unmarshal(kv.Value, &metadata); err != nil {
+			h.logger.Warn("failed to unmarshal will metadata during load",
+				slog.String("client_id", clientID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		fresh[clientID] = &metadata
+	}
+
+	h.metadataCacheMu.Lock()
+	h.metadataCache = fresh
+	h.dataRev = dataResp.Header.Revision
+	h.indexRev = indexResp.Header.Revision
+	h.metadataCacheMu.Unlock()
+
+	h.logger.Info("loaded will metadata into cache", slog.Int("count", len(fresh)))
+	return nil
 }
 
 // Set stores a will message using the hybrid strategy.
@@ -320,48 +380,81 @@ func (h *WillStore) fetchRemoteWill(ctx context.Context, clientID, nodeID string
 }
 
 // watchWillData watches etcd for will message updates and updates local cache/store.
+// watchWillData watches etcd for will updates and updates local cache/store.
+// Watches resume from the cache-load revisions; any channel close or watch
+// error triggers a cache reload and a re-watch so no event is lost across
+// the interruption.
 func (h *WillStore) watchWillData() {
 	defer h.wg.Done()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Watch both prefixes
-	dataChan := h.etcdClient.Watch(ctx, willDataPrefix, clientv3.WithPrefix())
-	indexChan := h.etcdClient.Watch(ctx, willIndexPrefix, clientv3.WithPrefix())
-
 	for {
+		h.metadataCacheMu.RLock()
+		dataRev, indexRev := h.dataRev, h.indexRev
+		h.metadataCacheMu.RUnlock()
+
+		// Per-iteration context: when one stream breaks, the surviving
+		// watch must be cancelled too, or abandoned watches accumulate on
+		// the etcd server across restarts.
+		iterCtx, iterCancel := context.WithCancel(ctx)
+		dataChan := h.etcdClient.Watch(iterCtx, willDataPrefix, prefixWatchOpts(dataRev)...)
+		indexChan := h.etcdClient.Watch(iterCtx, willIndexPrefix, prefixWatchOpts(indexRev)...)
+
+		alive := h.consumeWatchEvents(dataChan, indexChan)
+		iterCancel()
+		if !alive {
+			return
+		}
+
+		if err := h.loadMetadataCache(); err != nil {
+			h.logger.Error("failed to reload will metadata cache",
+				slog.String("error", err.Error()))
+		}
 		select {
 		case <-h.stopCh:
 			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// consumeWatchEvents processes both watch streams until one breaks. Returns
+// false when the store is shutting down, true when the watches must be
+// re-established.
+func (h *WillStore) consumeWatchEvents(dataChan, indexChan clientv3.WatchChan) bool {
+	for {
+		select {
+		case <-h.stopCh:
+			return false
 
 		case resp, ok := <-dataChan:
-			if !ok {
-				h.logger.Warn("watch channel closed on will-data, restarting")
-				dataChan = h.etcdClient.Watch(ctx, willDataPrefix, clientv3.WithPrefix())
-				continue
-			}
-			if resp.Err() != nil {
-				h.logger.Error("watch error on will-data",
-					slog.String("error", resp.Err().Error()))
-				continue
+			if !ok || resp.Err() != nil {
+				h.logWatchBreak("will-data", ok, resp)
+				return true
 			}
 			h.handleDataWatchEvents(resp.Events)
 
 		case resp, ok := <-indexChan:
-			if !ok {
-				h.logger.Warn("watch channel closed on will-index, restarting")
-				indexChan = h.etcdClient.Watch(ctx, willIndexPrefix, clientv3.WithPrefix())
-				continue
-			}
-			if resp.Err() != nil {
-				h.logger.Error("watch error on will-index",
-					slog.String("error", resp.Err().Error()))
-				continue
+			if !ok || resp.Err() != nil {
+				h.logWatchBreak("will-index", ok, resp)
+				return true
 			}
 			h.handleIndexWatchEvents(resp.Events)
 		}
 	}
+}
+
+func (h *WillStore) logWatchBreak(name string, ok bool, resp clientv3.WatchResponse) {
+	if !ok {
+		h.logger.Warn("watch channel closed, reloading cache and re-watching",
+			slog.String("watch", name))
+		return
+	}
+	h.logger.Error("watch error, reloading cache and re-watching",
+		slog.String("watch", name),
+		slog.String("error", resp.Err().Error()))
 }
 
 // handleDataWatchEvents processes watch events for replicated small wills.
@@ -394,15 +487,27 @@ func (h *WillStore) handleDataWatchEvents(events []*clientv3.Event) {
 		h.metadataCache[clientID] = &entry.Metadata
 		h.metadataCacheMu.Unlock()
 
-		// If replicated and not from this node, store will locally
-		if entry.Metadata.Replicated && entry.Metadata.NodeID != h.nodeID {
-			ctx := context.Background()
-			if err := h.localStore.Set(ctx, clientID, entry.Will); err != nil {
-				h.logger.Warn("failed to store replicated will locally",
-					slog.String("client_id", clientID),
-					slog.String("error", err.Error()))
-			}
+		// Own writes are already in the local store.
+		if entry.Metadata.NodeID != h.nodeID {
+			h.storeReplicatedWill(context.Background(), clientID, &entry)
 		}
+	}
+}
+
+// storeReplicatedWill persists a small replicated will into the local store.
+// Callers decide whether own-node entries apply: the watch path skips them
+// (Set already wrote the will locally), while the startup load includes them
+// so a node restarting with a fresh local store recovers its own replicated
+// wills from etcd.
+func (h *WillStore) storeReplicatedWill(ctx context.Context, clientID string, entry *WillDataEntry) {
+	if !entry.Metadata.Replicated {
+		return
+	}
+
+	if err := h.localStore.Set(ctx, clientID, entry.Will); err != nil {
+		h.logger.Warn("failed to store replicated will locally",
+			slog.String("client_id", clientID),
+			slog.String("error", err.Error()))
 	}
 }
 

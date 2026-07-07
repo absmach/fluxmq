@@ -218,7 +218,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
 	msg.Properties = broker.AddClientIDProperty(msg.Properties, msg.ClientID)
 
-	if err := b.distributeLocal(ctx, msg, true); err != nil {
+	if _, err := b.distributeLocal(ctx, msg, true); err != nil {
 		return err
 	}
 
@@ -244,14 +244,15 @@ func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
 	return nil
 }
 
-// distributeLocal delivers a message to local subscribers.
+// distributeLocal delivers a message to local subscribers and returns the
+// number of matched subscriptions.
 // allowCross controls whether cross-protocol delivery callbacks may run.
-func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allowCross bool) error {
+func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allowCross bool) (int, error) {
 	matched := router.AcquireSubscriptionSlice()
 	defer router.ReleaseSubscriptionSlice(matched)
 
 	if err := b.router.MatchInto(msg.Topic, matched); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Track which share groups have already received the message (lazy init)
@@ -359,7 +360,7 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allo
 		}
 	}
 
-	return nil
+	return len(*matched), nil
 }
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.
@@ -373,9 +374,27 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 	storeMsg.ClientID = broker.ClientIDFromProperties(msg.Properties)
 	storeMsg.SetPayloadFromBytes(msg.Payload)
 
-	err := b.distributeLocal(ctx, storeMsg, false)
+	matched, err := b.distributeLocal(ctx, storeMsg, false)
 	storeMsg.ReleasePayload()
+	if err == nil && matched == 0 {
+		// The sending node believed a subscriber lives here (stale owner
+		// route); without this the message vanishes with no trace.
+		b.warnUnroutableForward(msg.Topic)
+	}
 	return err
+}
+
+// warnUnroutableForward logs (at most once per 10s) that a forwarded publish
+// matched no local subscription.
+func (b *Broker) warnUnroutableForward(topic string) {
+	const throttle = int64(10 * time.Second)
+	now := time.Now().UnixNano()
+	last := b.lastUnroutableWarn.Load()
+	if now-last < throttle || !b.lastUnroutableWarn.CompareAndSwap(last, now) {
+		return
+	}
+	b.telemetry.logger.Warn("forwarded publish matched no local subscription",
+		slog.String("topic", topic))
 }
 
 // handleQueueAck handles queue acknowledgment messages ($ack, $nack, $reject).
