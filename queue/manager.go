@@ -787,7 +787,7 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 
 	dlqMsg := &types.Message{
 		ID:         generateMessageID(),
-		Payload:    msg.GetPayload(),
+		Payload:    msg.StablePayload(),
 		Topic:      dlqTopic,
 		Properties: props,
 		State:      types.StateDLQ,

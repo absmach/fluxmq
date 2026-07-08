@@ -5,6 +5,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -77,6 +78,28 @@ func (m *Message) GetPayload() []byte {
 		return m.PayloadBuf.Bytes()
 	}
 	return m.Payload
+}
+
+// StablePayload returns the effective payload as a slice that stays valid
+// after ReleasePayload. Buffer-backed payloads are copied out of the pooled
+// buffer; plain payloads are returned as-is without allocating.
+func (m *Message) StablePayload() []byte {
+	if m.PayloadBuf != nil {
+		return append([]byte(nil), m.PayloadBuf.Bytes()...)
+	}
+	return m.Payload
+}
+
+// MarshalJSON serializes the in-memory zero-copy payload as the legacy Payload
+// field so JSON-backed stores do not lose buffer-backed messages.
+// No copy is made: encoding/json reads the slice synchronously and does not
+// retain it. Always marshal via *Message — marshaling a non-addressable
+// Message value bypasses this method and drops buffer-backed payloads.
+func (m *Message) MarshalJSON() ([]byte, error) {
+	type messageAlias Message
+	cp := messageAlias(*m)
+	cp.Payload = m.GetPayload()
+	return json.Marshal(cp)
 }
 
 // SetPayloadFromBuffer sets the payload from a RefCountedBuffer.

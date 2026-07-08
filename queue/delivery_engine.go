@@ -639,7 +639,7 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 		MessageID:      queueName + ":" + strconv.FormatUint(msg.Sequence, 10),
 		QueueName:      queueName,
 		GroupID:        groupID,
-		Payload:        msg.GetPayload(),
+		Payload:        msg.StablePayload(),
 		Sequence:       int64(msg.Sequence),
 		UserProperties: userProps,
 		Stream:         stream,

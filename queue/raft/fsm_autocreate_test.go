@@ -5,11 +5,13 @@ package raft
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -118,6 +120,48 @@ func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 	}
 }
 
+func TestLogFSM_ApplyAppendWithPayloadBufferAfterJSONRoundTrip(t *testing.T) {
+	fsm, store := newTestLogFSM()
+	ctx := context.Background()
+	queueName := "demo-buffered"
+
+	msg := &types.Message{
+		ID:        "buffered-msg-1",
+		Topic:     "$queue/" + queueName,
+		State:     types.StateQueued,
+		CreatedAt: time.Now(),
+	}
+	msg.SetPayloadFromBuffer(core.GetBufferWithData([]byte("buffered payload")))
+	defer msg.ReleasePayload()
+
+	data, err := json.Marshal(&Operation{
+		Type:      OpAppend,
+		QueueName: queueName,
+		Message:   msg,
+	})
+	if err != nil {
+		t.Fatalf("marshal append operation failed: %v", err)
+	}
+
+	var decoded Operation
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal append operation failed: %v", err)
+	}
+
+	result := fsm.applyAppend(ctx, &decoded)
+	if result.Error != nil {
+		t.Fatalf("applyAppend returned error: %v", result.Error)
+	}
+
+	got, err := store.Read(ctx, queueName, 0)
+	if err != nil {
+		t.Fatalf("expected appended message at offset 0, got error: %v", err)
+	}
+	if gotPayload := string(got.GetPayload()); gotPayload != "buffered payload" {
+		t.Fatalf("expected buffered payload, got %q", gotPayload)
+	}
+}
+
 func TestLogFSM_ApplyAppendBatchAutoCreatesMissingQueue(t *testing.T) {
 	fsm, store := newTestLogFSM()
 	ctx := context.Background()
@@ -155,5 +199,53 @@ func TestLogFSM_ApplyAppendBatchAutoCreatesMissingQueue(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("expected 2 messages, got %d", count)
+	}
+}
+
+func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterJSONRoundTrip(t *testing.T) {
+	fsm, store := newTestLogFSM()
+	ctx := context.Background()
+	queueName := "demo-buffered-batch"
+
+	first := &types.Message{ID: "batch-msg-1", Topic: "$queue/" + queueName, State: types.StateQueued, CreatedAt: time.Now()}
+	first.SetPayloadFromBuffer(core.GetBufferWithData([]byte("one")))
+	defer first.ReleasePayload()
+	second := &types.Message{ID: "batch-msg-2", Topic: "$queue/" + queueName, State: types.StateQueued, CreatedAt: time.Now()}
+	second.SetPayloadFromBuffer(core.GetBufferWithData([]byte("two")))
+	defer second.ReleasePayload()
+
+	data, err := json.Marshal(&Operation{
+		Type:      OpAppendBatch,
+		QueueName: queueName,
+		Messages:  []*types.Message{first, second},
+	})
+	if err != nil {
+		t.Fatalf("marshal append batch operation failed: %v", err)
+	}
+
+	var decoded Operation
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal append batch operation failed: %v", err)
+	}
+
+	result := fsm.applyAppendBatch(ctx, &decoded)
+	if result.Error != nil {
+		t.Fatalf("applyAppendBatch returned error: %v", result.Error)
+	}
+
+	got, err := store.Read(ctx, queueName, 0)
+	if err != nil {
+		t.Fatalf("expected first appended message, got error: %v", err)
+	}
+	if gotPayload := string(got.GetPayload()); gotPayload != "one" {
+		t.Fatalf("expected first payload one, got %q", gotPayload)
+	}
+
+	got, err = store.Read(ctx, queueName, 1)
+	if err != nil {
+		t.Fatalf("expected second appended message, got error: %v", err)
+	}
+	if gotPayload := string(got.GetPayload()); gotPayload != "two" {
+		t.Fatalf("expected second payload two, got %q", gotPayload)
 	}
 }

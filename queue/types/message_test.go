@@ -1,13 +1,17 @@
 // Copyright (c) Abstract Machines
 // SPDX-License-Identifier: Apache-2.0
 
-package types
+package types_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMessage_IsExpired(t *testing.T) {
@@ -35,8 +39,23 @@ func TestMessage_IsExpired(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := &Message{ExpiresAt: tt.expiresAt}
+			msg := &types.Message{ExpiresAt: tt.expiresAt}
 			assert.Equal(t, tt.expected, msg.IsExpired())
 		})
 	}
+}
+
+func TestMessageJSONMaterializesPayloadBuf(t *testing.T) {
+	msg := &types.Message{ID: "msg-1", Topic: "$queue/events"}
+	msg.SetPayloadFromBuffer(core.GetBufferWithData([]byte("queued payload")))
+	defer msg.ReleasePayload()
+
+	data, err := json.Marshal(msg)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "PayloadBuf")
+
+	var restored types.Message
+	require.NoError(t, json.Unmarshal(data, &restored))
+	require.Equal(t, "queued payload", string(restored.GetPayload()))
+	require.Equal(t, "queued payload", string(msg.GetPayload()), "marshal must not consume the live buffer")
 }

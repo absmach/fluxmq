@@ -35,6 +35,26 @@ func TestRetainedStore_Set(t *testing.T) {
 	assert.Equal(t, msg.QoS, retrieved.QoS)
 }
 
+func TestRetainedStore_SetWithPayloadBuffer(t *testing.T) {
+	store := setupRetainedStore(t)
+	defer cleanupRetainedStore(t, store)
+
+	msg := &storage.Message{
+		Topic: testTopic,
+		QoS:   1,
+	}
+	msg.SetPayloadFromBytes([]byte("buffered retained"))
+	defer msg.ReleasePayload()
+
+	err := store.Set(ctx, testTopic, msg)
+	require.NoError(t, err)
+
+	retrieved, err := store.Get(ctx, testTopic)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("buffered retained"), retrieved.GetPayload())
+	assert.Equal(t, byte(1), retrieved.QoS)
+}
+
 func TestRetainedStore_SetEmptyPayload(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)

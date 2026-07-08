@@ -14,6 +14,7 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
 	queueraft "github.com/absmach/fluxmq/queue/raft"
@@ -2431,15 +2432,19 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	}
 
 	poisonMsg := &types.Message{
-		ID:      "bad-msg-1",
-		Topic:   "$queue/tasks/process",
-		Payload: []byte("poison-payload"),
+		ID:    "bad-msg-1",
+		Topic: "$queue/tasks/process",
 		Properties: map[string]string{
 			"custom-key": "custom-val",
 		},
 	}
+	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
+	poisonMsg.SetPayloadFromBuffer(pool.GetWithData([]byte("poison-payload")))
 
 	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 6, "$dlq/")
+	poisonMsg.ReleasePayload()
+	reused := pool.GetWithData([]byte("reused-buffer!"))
+	defer reused.Release()
 
 	// Verify the DLQ queue was auto-created
 	dlqCfg, err := logStore.GetQueue(ctx, "$dlq/tasks")

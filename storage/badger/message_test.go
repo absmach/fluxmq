@@ -67,6 +67,25 @@ func TestMessageStore_StoreQueue(t *testing.T) {
 	assert.Equal(t, msg.Payload, retrieved.Payload)
 }
 
+func TestMessageStore_StoreWithPayloadBuffer(t *testing.T) {
+	store := setupMessageStore(t)
+	defer cleanupMessageStore(t, store)
+
+	msg := &storage.Message{
+		Topic: testTopic,
+		QoS:   1,
+	}
+	msg.SetPayloadFromBytes([]byte("buffered message"))
+	defer msg.ReleasePayload()
+
+	err := store.Store("client-1/queue/buffered", msg)
+	require.NoError(t, err)
+
+	retrieved, err := store.Get("client-1/queue/buffered")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("buffered message"), retrieved.GetPayload())
+}
+
 func TestMessageStore_GetNotFound(t *testing.T) {
 	store := setupMessageStore(t)
 	defer cleanupMessageStore(t, store)

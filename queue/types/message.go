@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/json"
 	"time"
 
 	core "github.com/absmach/fluxmq/mqtt"
@@ -24,7 +25,7 @@ const (
 type Message struct {
 	ID         string
 	Payload    []byte                 // Deprecated: Use PayloadBuf for zero-copy
-	PayloadBuf *core.RefCountedBuffer // Zero-copy payload buffer (preferred)
+	PayloadBuf *core.RefCountedBuffer `json:"-"` // Zero-copy payload buffer (preferred)
 	Topic      string
 	Sequence   uint64
 	Properties map[string]string
@@ -51,6 +52,28 @@ func (m *Message) GetPayload() []byte {
 		return m.PayloadBuf.Bytes()
 	}
 	return m.Payload
+}
+
+// StablePayload returns the effective payload as a slice that stays valid
+// after ReleasePayload. Buffer-backed payloads are copied out of the pooled
+// buffer; plain payloads are returned as-is without allocating.
+func (m *Message) StablePayload() []byte {
+	if m.PayloadBuf != nil {
+		return append([]byte(nil), m.PayloadBuf.Bytes()...)
+	}
+	return m.Payload
+}
+
+// MarshalJSON serializes the in-memory zero-copy payload as Payload so queue
+// Raft operations and log snapshots never drop buffer-backed payloads.
+// No copy is made: encoding/json reads the slice synchronously and does not
+// retain it. Always marshal via *Message — marshaling a non-addressable
+// Message value bypasses this method and drops buffer-backed payloads.
+func (m *Message) MarshalJSON() ([]byte, error) {
+	type messageAlias Message
+	cp := messageAlias(*m)
+	cp.Payload = m.GetPayload()
+	return json.Marshal(cp)
 }
 
 // SetPayloadFromBuffer sets the payload from a RefCountedBuffer.

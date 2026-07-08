@@ -30,7 +30,7 @@ func NewRetainedStore(db *badger.DB) *RetainedStore {
 // Empty payload deletes the retained message.
 func (r *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
 	// Empty payload means delete
-	if len(msg.Payload) == 0 {
+	if len(msg.GetPayload()) == 0 {
 		return r.Delete(ctx, topic)
 	}
 

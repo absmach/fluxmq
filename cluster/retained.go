@@ -153,10 +153,10 @@ func (h *RetainedStore) loadMetadataCache() error {
 
 // Set stores a retained message using the hybrid strategy.
 func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
-	// Materialize the payload: publish-path messages carry it in a pooled
+	// Stabilize the payload: publish-path messages carry it in a pooled
 	// PayloadBuf (with the legacy Payload field cleared), while a retained
 	// message must outlive the buffer and survive serialization.
-	payload := msg.GetPayload()
+	payload := msg.StablePayload()
 
 	// Empty payload = delete
 	if len(payload) == 0 {
@@ -165,7 +165,7 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 
 	stored := *msg
 	stored.PayloadBuf = nil
-	stored.Payload = append([]byte(nil), payload...)
+	stored.Payload = payload
 
 	// Always write to local BadgerDB first
 	if err := h.localStore.Set(ctx, topic, &stored); err != nil {

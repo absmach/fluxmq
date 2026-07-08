@@ -15,6 +15,7 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/queue/consumer"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -700,6 +701,25 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	}
 	if string(delivered[0].GetPayload()) != "fresh" {
 		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	}
+}
+
+func TestCreateRoutedQueueMessageCopiesPayloadBuffer(t *testing.T) {
+	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
+	msg := &types.Message{
+		ID:       "routed-msg-1",
+		Topic:    testEventsTopic,
+		Sequence: 7,
+	}
+	msg.SetPayloadFromBuffer(pool.GetWithData([]byte("remote-payload")))
+
+	routeMsg := createRoutedQueueMessage(msg, "readers", testQueueEvents, false, 0, false, "")
+	msg.ReleasePayload()
+	reused := pool.GetWithData([]byte("overwritten!!!"))
+	defer reused.Release()
+
+	if got := string(routeMsg.Payload); got != "remote-payload" {
+		t.Fatalf("expected routed payload copy, got %q", got)
 	}
 }
 

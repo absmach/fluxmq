@@ -1229,7 +1229,7 @@ func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *storage.
 	key := retainedPrefix + topic
 
 	// Empty payload means delete
-	if len(msg.Payload) == 0 {
+	if len(msg.GetPayload()) == 0 {
 		return s.Delete(ctx, topic)
 	}
 
