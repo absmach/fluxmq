@@ -93,11 +93,12 @@ func (m *Message) StablePayload() []byte {
 // MarshalJSON serializes the in-memory zero-copy payload as the legacy Payload
 // field so JSON-backed stores do not lose buffer-backed messages.
 // No copy is made: encoding/json reads the slice synchronously and does not
-// retain it. Always marshal via *Message — marshaling a non-addressable
-// Message value bypasses this method and drops buffer-backed payloads.
-func (m *Message) MarshalJSON() ([]byte, error) {
+// retain it. The value receiver ensures non-addressable Message values (map
+// entries, plain values) also route through this method rather than dropping
+// the buffer-backed payload.
+func (m Message) MarshalJSON() ([]byte, error) {
 	type messageAlias Message
-	cp := messageAlias(*m)
+	cp := messageAlias(m)
 	cp.Payload = m.GetPayload()
 	return json.Marshal(cp)
 }

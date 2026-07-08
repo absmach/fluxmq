@@ -59,3 +59,20 @@ func TestMessageJSONMaterializesPayloadBuf(t *testing.T) {
 	require.Equal(t, "queued payload", string(restored.GetPayload()))
 	require.Equal(t, "queued payload", string(msg.GetPayload()), "marshal must not consume the live buffer")
 }
+
+// TestMessageJSONValueMarshalPreservesPayloadBuf guards the value receiver on
+// MarshalJSON: a non-addressable Message value (here a map entry) must still
+// route through MarshalJSON rather than dropping the buffer-backed payload.
+func TestMessageJSONValueMarshalPreservesPayloadBuf(t *testing.T) {
+	msg := types.Message{ID: "msg-1", Topic: "$queue/events"}
+	msg.SetPayloadFromBuffer(core.GetBufferWithData([]byte("queued payload")))
+	defer msg.ReleasePayload()
+
+	data, err := json.Marshal(map[string]types.Message{"m": msg})
+	require.NoError(t, err)
+
+	var restored map[string]types.Message
+	require.NoError(t, json.Unmarshal(data, &restored))
+	got := restored["m"]
+	require.Equal(t, "queued payload", string(got.GetPayload()))
+}

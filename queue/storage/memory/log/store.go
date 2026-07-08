@@ -156,6 +156,20 @@ func (s *Store) FindMatchingQueues(ctx context.Context, topic string) ([]string,
 	return s.topicIndex.FindMatching(topic), nil
 }
 
+// stabilizeForStore returns a message safe for the log to retain after the
+// caller releases its payload buffer. A buffer-backed payload is copied into a
+// detached shallow copy so the log never aliases pooled memory; a plain payload
+// is returned unchanged (no allocation).
+func stabilizeForStore(msg *types.Message) *types.Message {
+	if msg.PayloadBuf == nil {
+		return msg
+	}
+	cp := *msg
+	cp.PayloadBuf = nil
+	cp.Payload = msg.StablePayload()
+	return &cp
+}
+
 // Append adds a message to the end of a queue's log.
 func (s *Store) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
 	sl, err := s.getQueueLog(queueName)
@@ -173,7 +187,7 @@ func (s *Store) Append(ctx context.Context, queueName string, msg *types.Message
 	msg.Sequence = offset
 
 	// Append to log
-	sl.messages = append(sl.messages, msg)
+	sl.messages = append(sl.messages, stabilizeForStore(msg))
 
 	return offset, nil
 }
@@ -199,9 +213,8 @@ func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*types
 		sl.tail++
 
 		msg.Sequence = offset
+		sl.messages = append(sl.messages, stabilizeForStore(msg))
 	}
-
-	sl.messages = append(sl.messages, msgs...)
 
 	return firstOffset, nil
 }
