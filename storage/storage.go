@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/absmach/fluxmq/internal/payload"
 	core "github.com/absmach/fluxmq/mqtt"
 )
 
@@ -74,20 +75,14 @@ type Message struct {
 // GetPayload returns the message payload, preferring PayloadBuf if available.
 // This provides backward compatibility during migration to zero-copy.
 func (m *Message) GetPayload() []byte {
-	if m.PayloadBuf != nil {
-		return m.PayloadBuf.Bytes()
-	}
-	return m.Payload
+	return payload.Get(m.Payload, m.PayloadBuf)
 }
 
 // StablePayload returns the effective payload as a slice that stays valid
 // after ReleasePayload. Buffer-backed payloads are copied out of the pooled
 // buffer; plain payloads are returned as-is without allocating.
 func (m *Message) StablePayload() []byte {
-	if m.PayloadBuf != nil {
-		return append([]byte(nil), m.PayloadBuf.Bytes()...)
-	}
-	return m.Payload
+	return payload.Stable(m.Payload, m.PayloadBuf)
 }
 
 // MarshalJSON serializes the in-memory zero-copy payload as the legacy Payload
@@ -106,42 +101,25 @@ func (m Message) MarshalJSON() ([]byte, error) {
 // SetPayloadFromBuffer sets the payload from a RefCountedBuffer.
 // The message takes ownership of one reference.
 func (m *Message) SetPayloadFromBuffer(buf *core.RefCountedBuffer) {
-	if m.PayloadBuf != nil {
-		m.PayloadBuf.Release() // Release previous buffer
-	}
-	m.PayloadBuf = buf
-	m.Payload = nil // Clear legacy field
+	m.Payload, m.PayloadBuf = payload.FromBuffer(m.PayloadBuf, buf)
 }
 
 // SetPayloadFromBytes creates a new buffer from bytes (for backward compatibility).
 // This will eventually be phased out in favor of direct buffer creation.
 func (m *Message) SetPayloadFromBytes(data []byte) {
-	if m.PayloadBuf != nil {
-		m.PayloadBuf.Release()
-	}
-	if len(data) > 0 {
-		m.PayloadBuf = core.GetBufferWithData(data)
-	} else {
-		m.PayloadBuf = nil
-	}
-	m.Payload = nil
+	m.Payload, m.PayloadBuf = payload.FromBytes(m.PayloadBuf, data)
 }
 
 // ReleasePayload releases the payload buffer if using zero-copy.
 // Must be called when message is no longer needed.
 func (m *Message) ReleasePayload() {
-	if m.PayloadBuf != nil {
-		m.PayloadBuf.Release()
-		m.PayloadBuf = nil
-	}
+	m.PayloadBuf = payload.ReleaseBuffer(m.PayloadBuf)
 }
 
 // RetainPayload increments the reference count for sharing the message.
 // Must be called before passing message to another goroutine.
 func (m *Message) RetainPayload() {
-	if m.PayloadBuf != nil {
-		m.PayloadBuf.Retain()
-	}
+	payload.Retain(m.PayloadBuf)
 }
 
 // CopyMessage creates a deep copy of a message.
