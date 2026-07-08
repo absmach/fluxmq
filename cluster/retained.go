@@ -4,24 +4,32 @@
 package cluster
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
 	retainedDataPrefix   = "/mqtt/retained-data/"  // For small messages (<1KB) with full payload
 	retainedIndexPrefix  = "/mqtt/retained-index/" // For large messages (≥1KB) metadata only
 	defaultSizeThreshold = 1024                    // 1KB threshold for replication vs fetch-on-demand
+
+	// retainedMatchConcurrency bounds parallel payload fetches during Match so a
+	// wildcard subscribe over many large (remote) retained messages resolves in
+	// roughly one round-trip instead of N sequential ones.
+	retainedMatchConcurrency = 16
 )
 
 // RetainedMetadata contains metadata about a retained message stored in etcd.
@@ -39,6 +47,13 @@ type RetainedDataEntry struct {
 	Metadata   RetainedMetadata  `json:"metadata"`
 	Payload    string            `json:"payload"` // base64 encoded
 	Properties map[string]string `json:"properties"`
+}
+
+// retainedRef pairs a matched topic with the metadata pointer observed during
+// Match, so pruning can skip entries that changed concurrently.
+type retainedRef struct {
+	topic string
+	meta  *RetainedMetadata
 }
 
 // RetainedStore implements storage.RetainedStore using hybrid storage strategy:
@@ -254,45 +269,113 @@ func (h *RetainedStore) Delete(ctx context.Context, topic string) error {
 }
 
 // Match returns all retained messages matching the given topic filter.
+//
+// Matching topics are resolved in sorted order and their payloads are fetched
+// concurrently: sequential per-topic remote fetches could exceed the caller's
+// deadline and return a different partial subset on every call. Fetching in
+// parallel keeps the wall-clock cost close to a single round-trip so the full
+// set resolves within budget and in a stable order.
 func (h *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
-	var messages []*storage.Message
-	var fetchErrors []error
-
-	// Get matching topics from metadata cache
+	// Snapshot matching topics (with their metadata pointer) from the cache.
 	h.metadataCacheMu.RLock()
-	var matchingTopics []string
-	for topic := range h.metadataCache {
+	refs := make([]retainedRef, 0, len(h.metadataCache))
+	for topic, meta := range h.metadataCache {
 		if topics.TopicMatch(filter, topic) {
-			matchingTopics = append(matchingTopics, topic)
+			refs = append(refs, retainedRef{topic: topic, meta: meta})
 		}
 	}
 	h.metadataCacheMu.RUnlock()
 
-	// Fetch each matching message
-	for _, topic := range matchingTopics {
-		msg, err := h.Get(ctx, topic)
-		if err != nil {
-			if err != storage.ErrNotFound {
-				fetchErrors = append(fetchErrors, fmt.Errorf("topic %s: %w", topic, err))
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	// Stable order so repeated calls deliver the same set identically.
+	slices.SortFunc(refs, func(a, b retainedRef) int {
+		return cmp.Compare(a.topic, b.topic)
+	})
+
+	// Resolve payloads concurrently, preserving the sorted order by index.
+	results := make([]*storage.Message, len(refs))
+	fetchErrs := make([]error, len(refs))
+	missing := make([]bool, len(refs))
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(retainedMatchConcurrency)
+	for i := range refs {
+		g.Go(func() error {
+			msg, err := h.Get(gctx, refs[i].topic)
+			switch {
+			case err == nil:
+				results[i] = msg
+			case errors.Is(err, storage.ErrNotFound):
+				// Payload is genuinely gone (owner lost it, e.g. wiped on
+				// restart). Mark for pruning so it stops matching.
+				missing[i] = true
+			default:
+				fetchErrs[i] = fmt.Errorf("topic %s: %w", refs[i].topic, err)
 			}
-			continue
+			return nil
+		})
+	}
+	_ = g.Wait() // per-topic outcomes are recorded above; no worker returns an error
+
+	messages := make([]*storage.Message, 0, len(refs))
+	var errs []error
+	var prune []retainedRef
+	for i := range refs {
+		switch {
+		case results[i] != nil:
+			messages = append(messages, results[i])
+		case missing[i]:
+			prune = append(prune, refs[i])
+		case fetchErrs[i] != nil:
+			errs = append(errs, fetchErrs[i])
 		}
-		messages = append(messages, msg)
 	}
 
-	// If all fetches failed, return error
-	if len(fetchErrors) > 0 && len(messages) == 0 {
-		return nil, fmt.Errorf("failed to fetch retained messages: %w", errors.Join(fetchErrors...))
+	if len(prune) > 0 {
+		h.pruneMissingMetadata(prune...)
 	}
 
-	// Log warnings for partial failures but still return successful fetches
-	if len(fetchErrors) > 0 {
+	// Preserve the original contract: only fail hard when nothing resolved and
+	// the reason was a real fetch error (not merely missing/pruned entries).
+	if len(errs) > 0 && len(messages) == 0 {
+		return nil, fmt.Errorf("failed to fetch retained messages: %w", errors.Join(errs...))
+	}
+
+	// Partial transient failures: deliver what resolved, but log loudly so the
+	// gap is visible rather than a silent, per-call-random drop.
+	if len(errs) > 0 {
 		h.logger.Warn("some retained messages failed to fetch",
-			slog.Int("failed", len(fetchErrors)),
+			slog.Int("failed", len(errs)),
 			slog.Int("succeeded", len(messages)))
 	}
 
 	return messages, nil
+}
+
+// pruneMissingMetadata drops metadata-cache entries whose payload could not be
+// found anywhere (the owner lost it, e.g. on a restart with ephemeral storage).
+// An entry is removed only if its cached pointer is unchanged since Match
+// observed it, so a concurrent Set for the same topic is never clobbered. This
+// is in-memory only; durable removal happens when the message is properly
+// deleted via an empty retained publish.
+func (h *RetainedStore) pruneMissingMetadata(refs ...retainedRef) {
+	h.metadataCacheMu.Lock()
+	pruned := 0
+	for _, ref := range refs {
+		if h.metadataCache[ref.topic] == ref.meta {
+			delete(h.metadataCache, ref.topic)
+			pruned++
+		}
+	}
+	h.metadataCacheMu.Unlock()
+
+	if pruned > 0 {
+		h.logger.Warn("pruned stale retained metadata (payload unavailable)",
+			slog.Int("count", pruned))
+	}
 }
 
 // Close stops the hybrid store and cleans up resources.
