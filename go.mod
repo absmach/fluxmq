@@ -7,7 +7,7 @@ toolchain go1.26.4
 require (
 	connectrpc.com/connect v1.20.0
 	github.com/Azure/go-amqp v1.7.0
-	github.com/dgraph-io/badger/v4 v4.9.2
+	github.com/dgraph-io/badger/v4 v4.9.4
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
