@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:26.4.0-alpine AS base
+FROM node:26.5.0-alpine AS base
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
