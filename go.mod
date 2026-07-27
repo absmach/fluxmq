@@ -18,7 +18,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.12.0
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
-	go.etcd.io/etcd/api/v3 v3.7.0
+	go.etcd.io/etcd/api/v3 v3.7.1
 	go.etcd.io/etcd/client/v3 v3.7.0
 	go.etcd.io/etcd/server/v3 v3.7.0
 	go.opentelemetry.io/otel v1.44.0
