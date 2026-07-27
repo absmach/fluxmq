@@ -46,3 +46,10 @@ updates:
       npm-dependency:
         patterns:
           - "*"
+    ignore:
+      # TypeScript 7 is the native (Go) compiler and no longer ships the
+      # JavaScript compiler API at typescript/lib/typescript.js, which
+      # `next build` and @typescript-eslint both require. Unpin once Next.js
+      # and typescript-eslint support it.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
