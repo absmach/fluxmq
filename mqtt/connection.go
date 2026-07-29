@@ -48,6 +48,12 @@ type Connection interface {
 }
 
 // PacketWriter is an interface for writing packets.
+//
+// Every method takes ownership of pkt: the packet is released on all paths,
+// including every error return, and the caller must not touch it (or the
+// payload it points into) afterwards. Packets are pooled and may carry a
+// reference to a pooled payload buffer, so a caller that also released would
+// hand the same packet or buffer to two owners.
 type PacketWriter interface {
 	WritePacket(pkt packets.ControlPacket) error
 	WriteControlPacket(pkt packets.ControlPacket, onSent func()) error
@@ -74,7 +80,11 @@ const sendBufSize = 32 * 1024
 
 // connection wraps a net.Conn and provides MQTT packet-level I/O with state management.
 type connection struct {
-	conn    net.Conn
+	conn net.Conn
+	// sock is where packet bytes are written. It is conn itself, or a wrapper
+	// that stamps a write deadline on each socket write when a write timeout is
+	// configured. Built once so the write path never allocates.
+	sock    io.Writer
 	reader  io.Reader
 	writer  *bufio.Writer // buffered writer for sendLoop; nil in sync mode
 	version int           // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
@@ -87,6 +97,8 @@ type connection struct {
 	closeCh          chan struct{}
 	closeOnce        sync.Once
 	sendWg           sync.WaitGroup
+	writeTimeout     time.Duration // 0 = no write deadline
+	maxPacketSize    int           // 0 = unlimited
 	disconnectOnFull bool
 	closed           atomic.Bool
 
@@ -95,20 +107,66 @@ type connection struct {
 	onDisconnect func(graceful bool)
 }
 
+// ConnOption configures optional connection behaviour.
+type ConnOption func(*connection)
+
+// WithMaxPacketSize rejects inbound packets whose remaining length exceeds
+// maxSize bytes, before any memory is reserved for the body. A value <= 0
+// leaves packets unbounded (the protocol ceiling of ~256 MiB).
+func WithMaxPacketSize(maxSize int) ConnOption {
+	return func(c *connection) {
+		if maxSize > 0 {
+			c.maxPacketSize = maxSize
+		}
+	}
+}
+
+// WithWriteTimeout bounds how long a single socket write may take. Without it a
+// peer that stops reading can park a broker goroutine on a blocked write for as
+// long as it likes. A value <= 0 leaves writes without a deadline.
+func WithWriteTimeout(d time.Duration) ConnOption {
+	return func(c *connection) {
+		if d > 0 {
+			c.writeTimeout = d
+		}
+	}
+}
+
+// deadlineWriter stamps the connection's write timeout on every socket write.
+// The deadline is absolute and refreshed per write, so it never needs clearing.
+type deadlineWriter struct {
+	c *connection
+}
+
+func (w deadlineWriter) Write(p []byte) (int, error) {
+	if err := w.c.conn.SetWriteDeadline(time.Now().Add(w.c.writeTimeout)); err != nil {
+		return 0, err
+	}
+	return w.c.conn.Write(p)
+}
+
 // NewConnection creates a new MQTT connection wrapping a network connection.
 // queueSize <= 0 keeps synchronous writes; queueSize > 0 enables asynchronous queued writes.
-func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool) Connection {
-	return NewConnectionWithVersion(conn, queueSize, disconnectOnFull, ProtocolAuto)
+func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool, opts ...ConnOption) Connection {
+	return NewConnectionWithVersion(conn, queueSize, disconnectOnFull, ProtocolAuto, opts...)
 }
 
 // NewConnectionWithVersion creates a new MQTT connection with an optional forced protocol version.
 // version = ProtocolAuto enables detection; ProtocolV3 or ProtocolV5 force decoding mode.
-func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull bool, version int) Connection {
+func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull bool, version int, opts ...ConnOption) Connection {
 	c := &connection{
 		conn:             conn,
 		reader:           conn,
 		version:          version,
 		disconnectOnFull: disconnectOnFull,
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	c.sock = conn
+	if c.writeTimeout > 0 {
+		c.sock = deadlineWriter{c: c}
 	}
 
 	if queueSize > 0 {
@@ -119,7 +177,7 @@ func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull boo
 		c.controlCh = make(chan sendItem, controlCap)
 		c.dataCh = make(chan sendItem, queueSize)
 		c.closeCh = make(chan struct{})
-		c.writer = bufio.NewWriterSize(conn, sendBufSize)
+		c.writer = bufio.NewWriterSize(c.sock, sendBufSize)
 
 		c.sendWg.Add(1)
 		go c.sendLoop()
@@ -146,10 +204,10 @@ func (c *connection) ReadPacket() (packets.ControlPacket, error) {
 
 	switch c.version {
 	case 5:
-		pkt, _, _, err = v5.ReadPacket(c.reader)
+		pkt, _, _, err = v5.ReadPacketLimit(c.reader, c.maxPacketSize)
 	case 3, 4:
 		// v4 is MQTT 3.1.1, v3 is MQTT 3.1
-		pkt, err = v3.ReadPacket(c.reader)
+		pkt, err = v3.ReadPacketLimit(c.reader, c.maxPacketSize)
 	default:
 		err = ErrUnsupportedProtocolVersion
 	}
@@ -177,6 +235,7 @@ func (c *connection) WriteControlPacket(pkt packets.ControlPacket, onSent func()
 	}
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -185,6 +244,7 @@ func (c *connection) WriteControlPacket(pkt packets.ControlPacket, onSent func()
 	case c.controlCh <- item:
 		return nil
 	case <-c.closeCh:
+		pkt.Release()
 		return net.ErrClosed
 	}
 }
@@ -199,6 +259,7 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 	}
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -208,10 +269,12 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 		case c.dataCh <- item:
 			return nil
 		case <-c.closeCh:
+			pkt.Release()
 			return net.ErrClosed
 		default:
 			c.markClosed()
 			_ = c.conn.Close()
+			pkt.Release()
 			return ErrSendQueueFull
 		}
 	}
@@ -220,6 +283,7 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 	case c.dataCh <- item:
 		return nil
 	case <-c.closeCh:
+		pkt.Release()
 		return net.ErrClosed
 	}
 }
@@ -234,6 +298,7 @@ func (c *connection) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()
 	}
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -242,18 +307,21 @@ func (c *connection) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()
 	case c.dataCh <- item:
 		return nil
 	case <-c.closeCh:
+		pkt.Release()
 		return net.ErrClosed
 	default:
 		if c.disconnectOnFull {
 			c.markClosed()
 			_ = c.conn.Close()
 		}
+		pkt.Release()
 		return ErrSendQueueFull
 	}
 }
 
 func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -261,10 +329,11 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 	defer c.sendMu.Unlock()
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
-	if err := pkt.Pack(c.conn); err != nil {
+	if err := pkt.Pack(c.sock); err != nil {
 		pkt.Release()
 		return err
 	}
@@ -277,6 +346,7 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 
 func (c *connection) sendLoop() {
 	defer c.sendWg.Done()
+	defer c.drainSendQueues()
 	w := c.writer
 	// Reusable slice for onSent callbacks; fired after flush.
 	var pending []func()
@@ -374,6 +444,24 @@ func (c *connection) sendLoop() {
 		// priority: once one item is taken from an idle loop, we write it out
 		// before potentially packing additional queued data.
 		if !c.flushAndNotify(w, &pending) {
+			return
+		}
+	}
+}
+
+// drainSendQueues releases packets left queued when the send loop exits, so a
+// torn-down connection returns its pooled packets and payload buffers instead
+// of stranding them in the channels. A producer that wins the race against
+// markClosed can still enqueue after this runs; that packet is simply collected
+// by the GC rather than pooled.
+func (c *connection) drainSendQueues() {
+	for {
+		select {
+		case item := <-c.controlCh:
+			item.pkt.Release()
+		case item := <-c.dataCh:
+			item.pkt.Release()
+		default:
 			return
 		}
 	}

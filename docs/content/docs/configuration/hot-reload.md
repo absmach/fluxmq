@@ -85,6 +85,13 @@ All rate limit fields are runtime-safe. Changing any rate limit field replaces t
 | ---------------- | --------------------------- |
 | `broker.max_qos` | Maximum QoS level (0, 1, 2) |
 
+`broker.max_qos` applies to connections established after the reload. Each
+connection is held to the maximum it was admitted under, which for MQTT 5 is the
+value its CONNACK advertised and which MQTT 3.1.1 has no way to communicate at
+all. Lowering the limit therefore does not disconnect connected publishers, and
+does not refuse them a QoS they were granted; they pick up the new limit when
+they reconnect. Raising it is likewise not visible until then.
+
 ### Local AMQP Principals
 
 The `auth.local_principals` snapshot and the contents of its current and

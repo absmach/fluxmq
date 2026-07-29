@@ -218,6 +218,10 @@ type ConnectOptions struct {
 	Will           *storage.WillMessage
 	ReceiveMaximum uint16
 	TopicAliasMax  uint16
+	// MaxQoS is the maximum QoS advertised to this connection. It is applied
+	// with the epoch bump so a superseded CONNECT cannot overwrite the value a
+	// replacement connection was granted.
+	MaxQoS byte
 }
 
 // Superseded describes a connection displaced by a takeover, so the broker can
@@ -268,6 +272,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 		s.KeepAlive = opts.KeepAlive
 		s.Will = opts.Will
 		s.TopicAliasMax = opts.TopicAliasMax
+		s.maxQoS = opts.MaxQoS
 	}
 
 	// Topic alias mappings are scoped to a single network connection and must
@@ -654,41 +659,55 @@ func (s *Session) WritePacket(pkt packets.ControlPacket) error {
 	return s.WriteControlPacket(pkt, nil)
 }
 
-// WriteControlPacket writes a control packet to the connection.
+// WriteControlPacket writes a control packet to the connection. Like the
+// underlying core.PacketWriter, it takes ownership of pkt on every path.
 func (s *Session) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn == nil {
+		releasePacket(pkt)
 		return ErrNotConnected
 	}
 	return conn.WriteControlPacket(pkt, onSent)
 }
 
-// WriteDataPacket writes a data packet (PUBLISH path) to the connection.
+// WriteDataPacket writes a data packet (PUBLISH path) to the connection. It
+// takes ownership of pkt on every path.
 func (s *Session) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn == nil {
+		releasePacket(pkt)
 		return ErrNotConnected
 	}
 	return conn.WriteDataPacket(pkt, onSent)
 }
 
 // TryWriteDataPacket is a non-blocking variant that returns ErrSendQueueFull
-// immediately if the send queue is full, without blocking or disconnecting.
+// immediately if the send queue is full, without blocking or disconnecting. It
+// takes ownership of pkt on every path.
 func (s *Session) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn == nil {
+		releasePacket(pkt)
 		return ErrNotConnected
 	}
 	return conn.TryWriteDataPacket(pkt, onSent)
+}
+
+// releasePacket returns a packet that never reached a connection to its pool,
+// dropping any payload reference it holds.
+func releasePacket(pkt packets.ControlPacket) {
+	if pkt != nil {
+		pkt.Release()
+	}
 }
 
 // ReadPacket reads a packet from the connection.
@@ -973,4 +992,11 @@ func (s *Session) ServerCapabilities() (maxQoS byte, retainAvailable, wildcardSu
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxQoS, s.retainAvailable, s.wildcardSubAvailable, s.sharedSubAvailable
+}
+
+// MaxQoS returns the maximum QoS advertised to this connection at CONNECT.
+func (s *Session) MaxQoS() byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxQoS
 }

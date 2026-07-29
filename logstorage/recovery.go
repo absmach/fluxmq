@@ -15,7 +15,10 @@ type RecoveryResult struct {
 	SegmentsRecovered int
 	SegmentsTruncated int
 	IndexesRebuilt    int
-	MessagesLost      uint64
+	// MessagesRecovered counts the records in the batches that survived
+	// truncation. How many records the discarded bytes held is not knowable:
+	// they are discarded precisely because they could not be parsed.
+	MessagesRecovered uint64
 	BytesTruncated    int64
 	Errors            []error
 }
@@ -95,17 +98,25 @@ func RecoverSegment(dir string, baseOffset uint64) (*RecoveryResult, error) {
 		pos = lastValidPos
 	}
 
-	// Truncate if needed
+	// Truncate if needed. The truncation must reach the disk before the segment
+	// is reopened and appended to: a crash between the two would otherwise leave
+	// the damaged tail in place with the append position already past it.
 	if lastValidPos < info.Size() {
 		result.SegmentsTruncated = 1
-		result.MessagesLost = messagesRecovered // Estimate, actual may differ
 
 		if err := file.Truncate(lastValidPos); err != nil {
 			return result, fmt.Errorf("failed to truncate segment: %w", err)
 		}
+		if err := file.Sync(); err != nil {
+			return result, fmt.Errorf("failed to sync truncated segment: %w", err)
+		}
+		if err := SyncDir(dir); err != nil {
+			return result, fmt.Errorf("failed to sync segment directory: %w", err)
+		}
 	}
 
 	result.SegmentsRecovered = 1
+	result.MessagesRecovered = messagesRecovered
 
 	// Rebuild indexes
 	if err := rebuildIndexes(dir, baseOffset); err != nil {
@@ -194,7 +205,7 @@ func RecoverSegments(dir string) (*RecoveryResult, error) {
 		result.SegmentsRecovered += segResult.SegmentsRecovered
 		result.SegmentsTruncated += segResult.SegmentsTruncated
 		result.IndexesRebuilt += segResult.IndexesRebuilt
-		result.MessagesLost += segResult.MessagesLost
+		result.MessagesRecovered += segResult.MessagesRecovered
 		result.BytesTruncated += segResult.BytesTruncated
 		result.Errors = append(result.Errors, segResult.Errors...)
 	}

@@ -166,12 +166,17 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	// Apply the negotiated options and take over any existing connection. On a
 	// persistent reconnect this replaces the previous connection's version,
 	// keep-alive, Will, Receive Maximum, and topic-alias maximum.
+	// The advertised maximum QoS is applied with the epoch, so a takeover racing
+	// a configuration reload cannot leave the connection enforcing a limit other
+	// than the one its CONNACK announced.
+	sessionMaxQoS := h.broker.MaxQoS()
 	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		Will:           will,
 		ReceiveMaximum: receiveMax,
 		TopicAliasMax:  topicAliasMax,
+		MaxQoS:         sessionMaxQoS,
 	})
 	// Session expiry is applied verbatim on reconnect so a new value of 0
 	// (expire on disconnect) replaces a previous positive one. A new session's
@@ -186,7 +191,7 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
-	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {
+	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, sessionMaxQoS); err != nil {
 		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
@@ -237,14 +242,33 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
 
-	// Downgrade QoS if it exceeds server's maximum (MQTT 5.0 spec 3.3.2-4)
-	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		h.broker.telemetry.logger.Debug("v5_publish_qos_downgrade",
+	// The inbound QoS selects the acknowledgement handshake, so it must stay as
+	// the client sent it. Downgrading it here would answer a QoS 2 PUBLISH with
+	// a PUBACK — or, at Maximum QoS 0, with nothing at all — leaving the
+	// publisher retransmitting forever. The client was told the limit in the
+	// CONNACK Maximum QoS property, so exceeding it is a protocol error:
+	// [MQTT-3.2.2-11] requires DISCONNECT with 0x9B (QoS not supported).
+	if maxQoS := s.MaxQoS(); qos > maxQoS {
+		h.broker.telemetry.logger.Warn("v5_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),
 			slog.Int("server_max_qos", int(maxQoS)),
 		)
-		qos = maxQoS
+		s.Disconnect(false, v5.DisconnectQoSNotSupported) //nolint:errcheck // connection is being terminated
+		return ErrQoSNotSupported
+	}
+
+	// The transports cap the whole packet, with an allowance for the topic and
+	// properties. This is the limit broker.max_message_size actually documents:
+	// the application payload.
+	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
+		h.broker.telemetry.logger.Warn("v5_publish_payload_too_large",
+			slog.String("client_id", s.ID),
+			slog.Int("payload_size", len(payload)),
+			slog.Int("max_message_size", maxSize),
+		)
+		s.Disconnect(false, v5.DisconnectPacketTooLarge) //nolint:errcheck // connection is being terminated
+		return ErrPacketTooLarge
 	}
 
 	if p.Properties != nil && p.Properties.TopicAlias != nil {
@@ -315,9 +339,20 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		return sendV5PublishError(s, qos, packetID, v5.PubAckImplementationSpecificError, "QoS mutation not supported", ErrProtocolViolation)
 	}
-	topic, payload, qos, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
-	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		qos = maxQoS
+	// QoS is carried through unchanged: hooks that mutate it were rejected
+	// above, and the wire QoS still owns the acknowledgement handshake.
+	topic, payload, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
+	// A hook can rewrite the payload, so the limit is re-checked on the result.
+	// Overshooting here is the hook's doing, not the client's, so the publish is
+	// refused without tearing the connection down.
+	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
+		h.broker.telemetry.logger.Warn("v5_publish_hook_payload_too_large",
+			slog.String("client_id", s.ID),
+			slog.String("topic", topic),
+			slog.Int("payload_size", len(payload)),
+			slog.Int("max_message_size", maxSize))
+		h.broker.telemetry.stats.IncrementProtocolErrors()
+		return sendV5PublishError(s, qos, packetID, v5.PubAckImplementationSpecificError, "Payload exceeds maximum size", ErrPacketTooLarge)
 	}
 	if topic != requestedTopic {
 		if err := topics.ValidateTopicName(topic); err != nil {

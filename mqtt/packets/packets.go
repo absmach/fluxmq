@@ -15,6 +15,10 @@ import (
 var (
 	ErrFailRemaining      = errors.New("remaining data length does not match data size")
 	ErrInvalidFixedHeader = errors.New("invalid fixed header flags")
+	// ErrPacketTooLarge indicates the advertised remaining length exceeds the
+	// maximum packet size the connection accepts. It is reported from the fixed
+	// header, before any memory is reserved for the body.
+	ErrPacketTooLarge = errors.New("packet exceeds maximum allowed size")
 )
 
 // Protocol version constants.
@@ -110,6 +114,16 @@ type Detailer interface {
 // Resetter is an optional interface for packets that support pooling.
 type Resetter interface {
 	Reset()
+}
+
+// PayloadRef owns the memory a packet's Payload slice points into. A PUBLISH
+// built from a pooled, reference-counted payload buffer holds one reference for
+// as long as the packet is alive; releasing the packet drops it. This keeps the
+// bytes valid until Pack() has copied them out, even when the packet sits in an
+// asynchronous send queue after the publisher has already dropped its own
+// reference.
+type PayloadRef interface {
+	Release()
 }
 
 // User represents a user property key-value pair (MQTT 5.0).

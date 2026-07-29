@@ -6,7 +6,6 @@ package logstorage
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -249,34 +248,46 @@ func WriteFileSynced(path string, data []byte, perm os.FileMode) error {
 }
 
 // scan reads through the segment to build batch positions and determine state.
+//
+// It fails closed on structural damage rather than stopping at the corruption
+// point and reporting success. The scan position becomes the next append offset,
+// so silently accepting a truncated or mis-framed segment would write over — or
+// past — whatever follows the damage, turning a detectable problem into
+// unrecoverable data loss. Discarding data is the exclusive job of explicit
+// recovery (RecoverSegment, enabled by storage.recover_on_startup), which
+// truncates at the last valid batch and durably rewrites the segment.
+//
+// Batch framing is validated here; record contents are validated by their CRC
+// when the batch is read, so opening a segment stays proportional to the number
+// of batches rather than to the bytes they hold.
 func (s *Segment) scan() error {
 	s.batchPositions = make([]batchPosition, 0, 64)
 
-	var pos int64 = 0
+	fileSize := s.size
+	var pos int64
 	header := make([]byte, BatchHeaderSize)
 
-	for {
-		n, err := s.file.ReadAt(header, pos)
-		if err == io.EOF {
-			break
+	for pos < fileSize {
+		if remaining := fileSize - pos; remaining < BatchHeaderSize {
+			return fmt.Errorf("%w: %d trailing bytes at position %d are too short for a batch header: %w",
+				ErrSegmentCorrupted, remaining, pos, errRecoveryHint)
 		}
-		if err != nil {
-			return err
-		}
-		if n < BatchHeaderSize {
-			break
+		if _, err := s.file.ReadAt(header, pos); err != nil {
+			return fmt.Errorf("failed to read batch header at position %d: %w", pos, err)
 		}
 
-		// Validate magic
-		magic := GetUint32(header[0:4])
-		if magic != SegmentMagic {
-			// Possibly corrupted, stop here
-			break
+		if magic := GetUint32(header[0:4]); magic != SegmentMagic {
+			return fmt.Errorf("%w: bad magic 0x%08x at position %d: %w",
+				ErrSegmentCorrupted, magic, pos, errRecoveryHint)
 		}
 
 		// Read batch length (bytes 16-19)
 		batchLen := GetUint32(header[16:20])
-		totalSize := BatchHeaderSize + int(batchLen)
+		totalSize := int64(BatchHeaderSize) + int64(batchLen)
+		if pos+totalSize > fileSize {
+			return fmt.Errorf("%w: batch at position %d declares %d bytes but only %d remain: %w",
+				ErrSegmentCorrupted, pos, totalSize, fileSize-pos, errRecoveryHint)
+		}
 
 		// Read base offset (bytes 8-15) and count (bytes 20-21)
 		baseOffset := GetUint64(header[8:16])
@@ -286,19 +297,23 @@ func (s *Segment) scan() error {
 		s.batchPositions = append(s.batchPositions, batchPosition{
 			offset:   baseOffset,
 			position: pos,
-			size:     totalSize,
+			size:     int(totalSize),
 		})
 
 		// Update segment state
 		s.nextOffset = baseOffset + uint64(count)
 		s.msgCount += uint64(count)
 
-		pos += int64(totalSize)
+		pos += totalSize
 	}
 
 	s.size = pos
 	return nil
 }
+
+// errRecoveryHint points an operator at the only supported way to discard a
+// damaged segment tail.
+var errRecoveryHint = errors.New("set storage.recover_on_startup to truncate the damaged tail")
 
 // Append writes a batch to the segment and returns the base offset.
 func (s *Segment) Append(batch *Batch) (uint64, error) {

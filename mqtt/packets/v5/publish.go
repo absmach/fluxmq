@@ -23,6 +23,9 @@ type Publish struct {
 	ID         uint16
 	TopicName  string
 	Properties *PublishProperties
+	// PayloadRef, when non-nil, owns the memory Payload points into and is
+	// released together with the packet. See packets.PayloadRef.
+	PayloadRef packets.PayloadRef
 	Payload    []byte
 }
 

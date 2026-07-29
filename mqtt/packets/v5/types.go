@@ -127,9 +127,17 @@ func NewControlPacketWithHeader(fh FixedHeader) (ControlPacket, error) {
 	return nil, fmt.Errorf("unsupported packet type 0x%x", fh.PacketType)
 }
 
-// ReadPacket reads an MQTT 5.0 packet from the reader.
+// ReadPacket reads an MQTT 5.0 packet from the reader, with no size limit.
 // Returns the packet, encoded fixed header, packet body bytes, and any error.
 func ReadPacket(r io.Reader) (ControlPacket, []byte, []byte, error) {
+	return ReadPacketLimit(r, 0)
+}
+
+// ReadPacketLimit reads an MQTT 5.0 packet from the reader, rejecting any packet
+// whose remaining length exceeds maxSize (0 disables the limit). The check
+// happens before the body buffer is allocated, so a peer cannot make the broker
+// reserve memory by advertising a large length it never sends.
+func ReadPacketLimit(r io.Reader, maxSize int) (ControlPacket, []byte, []byte, error) {
 	var fh FixedHeader
 	b := make([]byte, 1)
 
@@ -141,6 +149,10 @@ func ReadPacket(r io.Reader) (ControlPacket, []byte, []byte, error) {
 	err = fh.Decode(b[0], r)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	if maxSize > 0 && fh.RemainingLength > maxSize {
+		return nil, nil, nil, packets.ErrPacketTooLarge
 	}
 
 	cp, err := NewControlPacketWithHeader(fh)

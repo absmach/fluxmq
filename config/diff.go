@@ -71,6 +71,9 @@ var runtimeSafeFields = map[string]struct{}{
 	"RateLimit.Subscribe.Burst":            {},
 
 	// Broker tuning (implemented): MaxQoS.
+	// Applies to connections established after the reload: each connection is
+	// held to the maximum QoS it was admitted under, so lowering the limit
+	// cannot refuse a connected client a QoS its CONNACK granted.
 	"Broker.MaxQoS": {},
 
 	// Session — all fields apply only to new sessions, so reload is safe.

@@ -15,8 +15,11 @@ import (
 type Publish struct {
 	packets.FixedHeader
 	TopicName string
-	ID        uint16 // Packet Identifier
-	Payload   []byte
+	// PayloadRef, when non-nil, owns the memory Payload points into and is
+	// released together with the packet. See packets.PayloadRef.
+	PayloadRef packets.PayloadRef
+	ID         uint16 // Packet Identifier
+	Payload    []byte
 }
 
 func (p *Publish) String() string {

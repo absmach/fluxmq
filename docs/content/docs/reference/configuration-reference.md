@@ -64,10 +64,21 @@ server:
     mtls: {}
 
   websocket:
-    plain:
+    v3:
       addr: ":8083"
       path: "/mqtt"
-      protocol: "auto" # auto | v3 | v5
+      protocol: "v3"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      allowed_origins: ["https://app.example.com"]
+    v5:
+      addr: ":8084"
+      path: "/mqtt"
+      protocol: "v5"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
       allowed_origins: ["https://app.example.com"]
     tls: {}
     mtls: {}
@@ -129,9 +140,9 @@ These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v
 | Field             | Description                                                                                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `addr`            | Listener bind address (`"<host>:<port>"` or `":<port>"`). Empty string disables that listener.                                                 |
-| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on `server.amqp091.internal`, where a positive cap is required. Applies to TCP/AMQP/AMQP091 listeners. |
-| `read_timeout`    | Read timeout for TCP listeners (`time.Duration`).                                                                                              |
-| `write_timeout`   | Write timeout for TCP listeners (`time.Duration`).                                                                                             |
+| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on `server.amqp091.internal`, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
+| `read_timeout`    | Bounds the phase before an MQTT session starts (`time.Duration`, `>= 0`). On TCP that is the TLS handshake, protocol sniff and CONNECT; on WebSocket it also bounds the HTTP request and TLS handshake that precede the upgrade. Once the session starts it sets its own read deadlines from the negotiated keep-alive. TCP and WebSocket listeners. |
+| `write_timeout`   | Bounds a single socket write for the life of the connection (`time.Duration`, `>= 0`). TCP and WebSocket listeners.                            |
 | `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
 | `path`            | HTTP path for MQTT-over-WebSocket endpoint.                                                                                                    |
 | `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production.                                               |
@@ -178,11 +189,11 @@ broker:
 
 | Field                   | Default   | Description                                                                                  |
 | ----------------------- | --------- | -------------------------------------------------------------------------------------------- |
-| `max_message_size`      | `1048576` | Maximum PUBLISH payload size in bytes (`>= 1024`).                                           |
+| `max_message_size`      | `1048576` | Maximum PUBLISH payload size in bytes (`>= 1024`). Also bounds what a peer can make the broker buffer before it is authenticated: an MQTT packet is rejected from its fixed header, and an AMQP 0.9.1 body from its content header, before the payload is read. The packet check allows for the topic name and properties on top of this size, so a payload of exactly `max_message_size` still fits. Restart required. |
 | `max_retained_messages` | `10000`   | Cap on retained messages in the store.                                                       |
 | `retry_interval`        | `20s`     | QoS 1/2 retry interval for unacknowledged outbound messages (`>= 1s`).                       |
 | `max_retries`           | `0`       | Maximum retries before dropping; `0` = unlimited.                                            |
-| `max_qos`               | `2`       | Maximum QoS accepted from publishers (`0`, `1`, or `2`).                                     |
+| `max_qos`               | `2`       | Maximum QoS accepted from publishers (`0`, `1`, or `2`). A publisher that exceeds it is disconnected — MQTT 5 with reason code `0x9B` (QoS not supported), MQTT 3.1.1 by closing the connection — rather than having its QoS silently downgraded, which would leave its PUBLISH unacknowledged. Each connection is held to the maximum advertised in its CONNACK; see [Hot Reload](/configuration/hot-reload). |
 | `async_fan_out`         | `false`   | When `true`, sends PUBCOMP immediately after PUBREL and dispatches fan-out to a worker pool. |
 | `fan_out_workers`       | `0`       | Async fan-out worker count; `0` = `GOMAXPROCS`.                                              |
 
@@ -352,7 +363,16 @@ storage:
 | `type`               | `badger`           | Storage backend: `memory` or `badger`.                                                                                 |
 | `badger_dir`         | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`).                                                       |
 | `sync_writes`        | `false`            | If `true`, fsync-like durability on write path; if `false`, better throughput.                                         |
-| `recover_on_startup` | `false`            | Run segment recovery before loading queues. Truncates corrupted segments at the last valid batch and rebuilds indexes. |
+| `recover_on_startup` | `false`            | Run segment recovery before loading queues: truncate each corrupted segment at its last valid batch, sync, and rebuild indexes. See the note below on startup behaviour when this is `false`. |
+
+A corrupted segment fails startup when `recover_on_startup` is `false`. The
+scan position becomes the next append offset, so continuing past damage would
+overwrite or write beyond it — turning a detectable problem into unrecoverable
+data loss. Discarding data is deliberate, so it is left to this setting. On a
+startup failure naming a corrupted segment, take a backup of the data directory,
+then enable `recover_on_startup` to truncate the damaged tail. Records in the
+discarded bytes are lost; the log reports the bytes truncated and the records
+that survived.
 
 ## Cluster
 

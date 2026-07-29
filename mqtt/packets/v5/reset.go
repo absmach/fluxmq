@@ -40,6 +40,7 @@ func (pkt *Publish) Reset() {
 	pkt.TopicName = ""
 	pkt.Properties = nil
 	pkt.Payload = nil
+	pkt.PayloadRef = nil
 }
 
 // Reset clears all fields in the PubAck packet for reuse.

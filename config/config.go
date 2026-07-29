@@ -425,6 +425,9 @@ type WSListenerConfig struct {
 	Addr           string         `yaml:"addr"`
 	Path           string         `yaml:"path"`
 	Protocol       string         `yaml:"protocol"`
+	MaxConnections int            `yaml:"max_connections"`
+	ReadTimeout    time.Duration  `yaml:"read_timeout"`
+	WriteTimeout   time.Duration  `yaml:"write_timeout"`
 	AllowedOrigins []string       `yaml:"allowed_origins"`
 	TLS            mqtttls.Config `yaml:",inline"`
 }
@@ -515,7 +518,10 @@ const (
 
 // BrokerConfig holds broker-specific settings.
 type BrokerConfig struct {
-	// Maximum message size in bytes
+	// MaxMessageSize is the maximum message payload in bytes. It also bounds
+	// what a peer may make the broker buffer: AMQP 0.9.1 rejects a larger
+	// advertised body, and the MQTT listeners reject a packet whose remaining
+	// length exceeds this size plus an allowance for topic and properties.
 	MaxMessageSize int `yaml:"max_message_size"`
 
 	// Retained message limits
@@ -788,22 +794,34 @@ func Default() *Config {
 			},
 			WebSocket: WebSocketConfig{
 				V3: WSListenerConfig{
-					Addr:     ":8083",
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeV3,
+					Addr:           ":8083",
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeV3,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 				V5: WSListenerConfig{
-					Addr:     ":8084",
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeV5,
+					Addr:           ":8084",
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeV5,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 				TLS: WSListenerConfig{
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeAuto,
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeAuto,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 				MTLS: WSListenerConfig{
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeAuto,
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeAuto,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 			},
 			HTTP: HTTPConfig{
@@ -1125,6 +1143,12 @@ func (c *Config) Validate() error {
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
 		}
+		if slot.cfg.ReadTimeout < 0 {
+			return fmt.Errorf("server.tcp.%s.read_timeout cannot be negative", slot.name)
+		}
+		if slot.cfg.WriteTimeout < 0 {
+			return fmt.Errorf("server.tcp.%s.write_timeout cannot be negative", slot.name)
+		}
 		if slot.requireTLS {
 			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
@@ -1150,6 +1174,15 @@ func (c *Config) Validate() error {
 		}
 
 		hasMessagingListener = true
+		if slot.cfg.MaxConnections < 0 {
+			return fmt.Errorf("server.websocket.%s.max_connections cannot be negative", slot.name)
+		}
+		if slot.cfg.ReadTimeout < 0 {
+			return fmt.Errorf("server.websocket.%s.read_timeout cannot be negative", slot.name)
+		}
+		if slot.cfg.WriteTimeout < 0 {
+			return fmt.Errorf("server.websocket.%s.write_timeout cannot be negative", slot.name)
+		}
 		if slot.requireTLS {
 			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err

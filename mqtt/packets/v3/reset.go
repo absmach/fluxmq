@@ -35,6 +35,7 @@ func (p *Publish) Reset() {
 	p.TopicName = ""
 	p.ID = 0
 	p.Payload = nil
+	p.PayloadRef = nil
 }
 
 func (p *PubAck) Reset() {
