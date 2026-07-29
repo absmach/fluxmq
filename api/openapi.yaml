@@ -664,6 +664,10 @@ components:
           type: integer
           format: uint64
           description: Publications NACKed because the durable append did not complete in time
+        publish_rejections:
+          type: integer
+          format: uint64
+          description: Publications refused because the stream already had the maximum durable appends waiting on storage
         authentication:
           $ref: "#/components/schemas/AMQPLocalAuthenticationStats"
         authorization:

@@ -119,7 +119,10 @@ Publisher confirms are sent only after the append and its durability barrier
 complete. The wait for that barrier is bounded: an fsync cannot be cancelled
 once started, so FluxMQ stops waiting after the internal publish timeout and
 NACKs rather than leaving the connection stalled. An abandoned append may still
-complete, so a NACK does not prove the record was not written.
+complete, so a NACK does not prove the record was not written. The number of
+abandoned appends waiting on one stream is capped; publications beyond that cap
+are refused before any storage work starts, and both outcomes close the channel
+so a stalled stream cannot accumulate retries.
 
 Local principals are publish-only. Subscription ACLs are not implemented, so
 `permissions.subscribe` must remain `[]`; every consume or `Basic.Get`

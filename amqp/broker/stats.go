@@ -36,6 +36,7 @@ type Stats struct {
 	localReloadFailures    atomic.Uint64
 	localForcedDisconnects atomic.Uint64
 	localPublishTimeouts   atomic.Uint64
+	localPublishRejections atomic.Uint64
 }
 
 func NewStats() *Stats {
@@ -87,6 +88,10 @@ func (s *Stats) IncrementLocalPublishTimeouts() {
 	s.localPublishTimeouts.Add(1)
 }
 
+func (s *Stats) IncrementLocalPublishRejections() {
+	s.localPublishRejections.Add(1)
+}
+
 func (s *Stats) AddLocalForcedDisconnects(n uint64) {
 	s.localForcedDisconnects.Add(n)
 }
@@ -121,6 +126,10 @@ func (s *Stats) GetLocalReloadFailures() uint64 {
 
 func (s *Stats) GetLocalPublishTimeouts() uint64 {
 	return s.localPublishTimeouts.Load()
+}
+
+func (s *Stats) GetLocalPublishRejections() uint64 {
+	return s.localPublishRejections.Load()
 }
 
 func (s *Stats) GetLocalForcedDisconnects() uint64 {

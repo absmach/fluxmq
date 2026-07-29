@@ -255,9 +255,16 @@ down, the publication is NACKed and the connection stays responsive instead of
 a stalled disk holding an internal-listener slot open. The abandoned append can
 still complete afterwards and become visible to consumers. A NACK therefore
 never proves the record was not written, and the at-least-once retry and
-deduplication rules below apply to it. While storage is stalled, further
-publications to that stream keep timing out until the stall clears; the
-`publish_timeouts` counter reports how often this happened.
+deduplication rules below apply to it.
+
+An abandoned append keeps running and keeps its message, so FluxMQ also caps
+how many may be waiting on one stream at a time. Publications beyond that cap
+are refused before any storage work starts, which stops a publisher retrying
+against unresponsive storage from accumulating barriers and payloads. Both
+outcomes close the channel after the NACK: a publisher must reconnect rather
+than retry into a stream whose storage has not recovered. The
+`publish_timeouts` and `publish_rejections` counters report how often each
+happened; sustained growth means storage, not the publisher, is the fault.
 
 Delivery is at least once. Atom may retry after a NACK or an ambiguous
 disconnect, so the same event can be appended more than once. Atom must keep a

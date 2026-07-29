@@ -69,6 +69,7 @@ type amqpStats struct {
 type amqpLocalPrincipalStats struct {
 	ActiveConnections uint64                       `json:"active_connections"`
 	PublishTimeouts   uint64                       `json:"publish_timeouts"`
+	PublishRejections uint64                       `json:"publish_rejections"`
 	Authentication    amqpLocalAuthenticationStats `json:"authentication"`
 	Authorization     amqpLocalAuthorizationStats  `json:"authorization"`
 	Reloads           amqpLocalReloadStats         `json:"reloads"`
@@ -190,6 +191,7 @@ func (s *Server) buildStatsResponse() statsResponse {
 			LocalPrincipals: amqpLocalPrincipalStats{
 				ActiveConnections: ast.GetLocalConnections(),
 				PublishTimeouts:   ast.GetLocalPublishTimeouts(),
+				PublishRejections: ast.GetLocalPublishRejections(),
 				Authentication: amqpLocalAuthenticationStats{
 					Success: ast.GetLocalAuthSuccess(),
 					Failure: ast.GetLocalAuthFailures(),

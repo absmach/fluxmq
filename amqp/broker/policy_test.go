@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -440,6 +441,155 @@ func (m *blockingStreamQueueManager) PublishToDurableStream(_ context.Context, _
 	return nil
 }
 
+// stalledStreamQueueManager never completes an append, the way storage that has
+// stopped responding behaves, and records how many appends were running at once.
+type stalledStreamQueueManager struct {
+	mockChannelQueueManager
+	release  chan struct{}
+	entered  chan struct{}
+	current  atomic.Int64
+	peak     atomic.Int64
+	attempts atomic.Int64
+}
+
+func (m *stalledStreamQueueManager) PublishToDurableStream(_ context.Context, _ string, _ qtypes.PublishRequest) error {
+	m.attempts.Add(1)
+	running := m.current.Add(1)
+	for {
+		peak := m.peak.Load()
+		if running <= peak || m.peak.CompareAndSwap(peak, running) {
+			break
+		}
+	}
+	select {
+	case m.entered <- struct{}{}:
+	default:
+	}
+	<-m.release
+	m.current.Add(-1)
+	return nil
+}
+
+// assertAbandonedPublishResponse checks the response to a publication FluxMQ
+// stopped waiting for: a NACK, then a channel close so the publisher cannot
+// keep retrying into storage that has not recovered.
+func assertAbandonedPublishResponse(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 2 {
+		t.Fatalf("frames = %d, want 2 (nack and channel close)", len(frames))
+	}
+	nack, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode publisher response: %v", err)
+	}
+	if _, ok := nack.(*codec.BasicNack); !ok {
+		t.Fatalf("first response = %T, want BasicNack", nack)
+	}
+	closeMethod, err := frames[1].Decode()
+	if err != nil {
+		t.Fatalf("decode channel close: %v", err)
+	}
+	if _, ok := closeMethod.(*codec.ChannelClose); !ok {
+		t.Fatalf("second response = %T, want ChannelClose", closeMethod)
+	}
+}
+
+func TestLocalDurableStreamPublishBoundsAbandonedAppends(t *testing.T) {
+	previousTimeout := localPublishTimeout
+	previousLimit := maxOutstandingDurableAppends
+	localPublishTimeout = 20 * time.Millisecond
+	maxOutstandingDurableAppends = 2
+	t.Cleanup(func() {
+		localPublishTimeout = previousTimeout
+		maxOutstandingDurableAppends = previousLimit
+	})
+
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentity(conn)
+	qm := &stalledStreamQueueManager{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 1),
+	}
+	releaseOnce := sync.Once{}
+	release := func() { releaseOnce.Do(func() { close(qm.release) }) }
+	t.Cleanup(release)
+	conn.broker.queueManager = qm
+
+	// A publisher that keeps retrying against storage that never recovers must
+	// not be able to accumulate barriers, each holding its payload.
+	const attempts = 8
+	for i := range attempts {
+		ch := newChannel(conn, uint16(i+1))
+		ch.confirmMode = true
+		ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+		ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+		ch.pendingBody = []byte("{}")
+		ch.completePublish()
+	}
+
+	if peak := qm.peak.Load(); peak > int64(maxOutstandingDurableAppends) {
+		t.Fatalf("concurrent durable appends peaked at %d, want at most %d", peak, maxOutstandingDurableAppends)
+	}
+	if started := qm.attempts.Load(); started != int64(maxOutstandingDurableAppends) {
+		t.Fatalf("started appends = %d, want %d; later attempts must be refused before starting work", started, maxOutstandingDurableAppends)
+	}
+	if outstanding := conn.broker.durableAppends.outstandingFor(testAuditQueue); outstanding != maxOutstandingDurableAppends {
+		t.Fatalf("outstanding appends = %d, want %d", outstanding, maxOutstandingDurableAppends)
+	}
+	if timeouts := conn.broker.stats.GetLocalPublishTimeouts(); timeouts != uint64(maxOutstandingDurableAppends) {
+		t.Fatalf("publish timeouts = %d, want %d", timeouts, maxOutstandingDurableAppends)
+	}
+	if rejections := conn.broker.stats.GetLocalPublishRejections(); rejections != attempts-uint64(maxOutstandingDurableAppends) {
+		t.Fatalf("publish rejections = %d, want %d", rejections, attempts-maxOutstandingDurableAppends)
+	}
+
+	// Every attempt is answered, and each channel is closed so the publisher
+	// cannot keep retrying into storage that has not recovered.
+	nacks, closes := 0, 0
+	for _, frame := range readFramesFrom(t, buf, 0) {
+		decoded, err := frame.Decode()
+		if err != nil {
+			t.Fatalf("decode publisher response: %v", err)
+		}
+		switch decoded.(type) {
+		case *codec.BasicNack:
+			nacks++
+		case *codec.ChannelClose:
+			closes++
+		default:
+			t.Fatalf("unexpected response %T", decoded)
+		}
+	}
+	if nacks != attempts || closes != attempts {
+		t.Fatalf("nacks = %d, channel closes = %d, want %d of each", nacks, closes, attempts)
+	}
+
+	// Once storage recovers, the slots are returned and publishing resumes.
+	release()
+	deadline := time.After(5 * time.Second)
+	for conn.broker.durableAppends.outstandingFor(testAuditQueue) != 0 {
+		select {
+		case <-deadline:
+			t.Fatal("durable append slots were not released after storage recovered")
+		default:
+		}
+	}
+
+	localPublishTimeout = previousTimeout
+	healthy := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+	conn.broker.queueManager = healthy
+	ch := newChannel(conn, attempts+1)
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+	ch.pendingBody = []byte("{}")
+	ch.completePublish()
+	if healthy.exactPublishCalls != 1 {
+		t.Fatalf("publish calls after recovery = %d, want 1", healthy.exactPublishCalls)
+	}
+}
+
 func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
 	previousTimeout := localPublishTimeout
 	localPublishTimeout = 50 * time.Millisecond
@@ -478,17 +628,7 @@ func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
 		t.Fatal("publish did not return while the durable barrier was stalled")
 	}
 
-	frames := readFramesFrom(t, buf, 0)
-	if len(frames) != 1 {
-		t.Fatalf("frames = %d, want 1", len(frames))
-	}
-	decoded, err := frames[0].Decode()
-	if err != nil {
-		t.Fatalf("decode publisher response: %v", err)
-	}
-	if _, ok := decoded.(*codec.BasicNack); !ok {
-		t.Fatalf("response = %T, want BasicNack", decoded)
-	}
+	assertAbandonedPublishResponse(t, buf)
 	if count := conn.broker.stats.GetLocalPublishTimeouts(); count != 1 {
 		t.Fatalf("publish timeouts = %d, want 1", count)
 	}
@@ -511,17 +651,7 @@ func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
 	ch.pendingBody = []byte("{}")
 	ch.completePublish()
 
-	frames := readFramesFrom(t, buf, 0)
-	if len(frames) != 1 {
-		t.Fatalf("frames = %d, want 1", len(frames))
-	}
-	decoded, err := frames[0].Decode()
-	if err != nil {
-		t.Fatalf("decode publisher response: %v", err)
-	}
-	if _, ok := decoded.(*codec.BasicNack); !ok {
-		t.Fatalf("response = %T, want BasicNack", decoded)
-	}
+	assertAbandonedPublishResponse(t, buf)
 }
 
 func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {

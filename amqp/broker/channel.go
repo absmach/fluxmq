@@ -1659,6 +1659,20 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 		ch.rejectLocalStreamPublish(fmt.Errorf("durable exact stream publisher is unavailable"))
 		return
 	}
+	// Abandoned appends keep running and keep their payload, so a stream that
+	// already has the maximum waiting on storage refuses new work outright
+	// rather than starting a barrier that nothing will wait for.
+	if !ch.conn.broker.durableAppends.acquire(queueName) {
+		ch.conn.broker.stats.IncrementLocalPublishRejections()
+		ch.conn.logger.Warn("amqp091_local_publish",
+			"auth_mode", "local",
+			"outcome", "rejected",
+			"reason", "durable_append_backlog",
+			"queue", queueName)
+		ch.abandonLocalStreamPublish(fmt.Errorf("stream %q already has the maximum durable appends waiting on storage", queueName))
+		return
+	}
+
 	props = corebroker.AddClientIDProperty(props, clientID)
 	ctx, cancel := context.WithTimeout(ch.conn.publishContext(), localPublishTimeout)
 	defer cancel()
@@ -1669,9 +1683,11 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 	// deadline passes: the connection goroutine stays responsive and the session
 	// can be closed, instead of a stalled disk holding a listener slot open
 	// indefinitely. The abandoned append may still complete and become visible,
-	// which is why a NACK is not proof that the record was not written.
+	// which is why a NACK is not proof that the record was not written. The slot
+	// is released only when the barrier really finishes.
 	result := make(chan error, 1)
 	go func() {
+		defer ch.conn.broker.durableAppends.release(queueName)
 		result <- publisher.PublishToDurableStream(ctx, queueName, qtypes.PublishRequest{
 			ClientID:   clientID,
 			Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
@@ -1691,10 +1707,13 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 		}
 	case <-ctx.Done():
 		ch.conn.broker.stats.IncrementLocalPublishTimeouts()
-		ch.rejectLocalStreamPublish(fmt.Errorf("durable stream barrier did not complete: %w", ctx.Err()))
+		ch.abandonLocalStreamPublish(fmt.Errorf("durable stream barrier did not complete: %w", ctx.Err()))
 	}
 }
 
+// rejectLocalStreamPublish reports a publication that storage refused. The
+// channel stays usable because the outcome is final and the publisher can
+// retry on it.
 func (ch *Channel) rejectLocalStreamPublish(err error) {
 	ch.conn.logger.Error("local durable stream publish failed", "error", err)
 	if ch.confirmMode {
@@ -1703,6 +1722,20 @@ func (ch *Channel) rejectLocalStreamPublish(err error) {
 	}
 	_ = ch.sendChannelClose(codec.InternalError,
 		"durable stream publish failed", codec.ClassBasic, codec.MethodBasicPublish)
+}
+
+// abandonLocalStreamPublish reports a publication whose outcome FluxMQ no
+// longer knows, because it stopped waiting for the barrier or refused to start
+// one. The channel is closed after the NACK: retrying on it would queue more
+// work behind storage that has not recovered, and the publisher must treat the
+// record as undetermined rather than failed.
+func (ch *Channel) abandonLocalStreamPublish(err error) {
+	ch.conn.logger.Error("local durable stream publish abandoned", "error", err)
+	if ch.confirmMode {
+		ch.sendPublisherNack()
+	}
+	_ = ch.sendChannelClose(codec.InternalError,
+		"durable stream publish abandoned", codec.ClassBasic, codec.MethodBasicPublish)
 }
 
 // handleQueueCommit processes a stream offset commit routed via the resolver.

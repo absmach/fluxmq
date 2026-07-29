@@ -65,6 +65,7 @@ type Broker struct {
 	cluster             cluster.Cluster
 	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration
+	durableAppends      durableAppendLimiter
 	stats               *Stats
 	logger              *slog.Logger
 }
