@@ -17,12 +17,21 @@ Production readiness is workload-dependent. Use the benchmark suites in `benchma
 
 ## Practical Tuning Levers
 
-- `server.tcp.v3.max_connections` / `server.tcp.v5.max_connections`: protect the broker from excess concurrent connections
+- `max_connections` on every listener you expose (`server.tcp.*`, `server.websocket.*`, `server.amqp*`): protect the broker from excess concurrent connections. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota
+- `read_timeout` and `write_timeout` on `server.tcp.*` and `server.websocket.*`: evict peers that stall before a session starts, or that stop reading afterwards. Both default to `60s`; leaving them at `0` removes the bound
 - `session.max_sessions`: cap active MQTT sessions
-- `broker.max_message_size`: limit payload size
+- `broker.max_message_size`: limit payload size, and with it the memory a peer can make the broker buffer before it is authenticated
 - `session.max_offline_queue_size` and `session.max_inflight_messages`: control per-client memory usage
 - `session.max_send_queue_size` and `session.disconnect_on_full`: tune slow-subscriber behavior under fan-out
 - `queues.*.limits`: bound queue depth, message size, and TTL
+
+## Durability
+
+- `storage.recover_on_startup` is `false` by default, which means a corrupted
+  log segment fails startup rather than being silently truncated. Keep it that
+  way: it turns silent data loss into a startup error you can act on. Enable it
+  deliberately, after taking a backup, when you have decided to discard the
+  damaged tail. See [Storage](/reference/configuration-reference).
 
 ## OS and Runtime Considerations
 
