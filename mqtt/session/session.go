@@ -988,3 +988,19 @@ func (s *Session) ServerCapabilities() (maxQoS byte, retainAvailable, wildcardSu
 	defer s.mu.RUnlock()
 	return s.maxQoS, s.retainAvailable, s.wildcardSubAvailable, s.sharedSubAvailable
 }
+
+// SetMaxQoS records the maximum QoS the server advertised to this connection.
+// It is snapshotted at CONNECT so a later configuration reload cannot hold a
+// client to a limit it was never told about.
+func (s *Session) SetMaxQoS(maxQoS byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxQoS = maxQoS
+}
+
+// MaxQoS returns the maximum QoS advertised to this connection at CONNECT.
+func (s *Session) MaxQoS() byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxQoS
+}

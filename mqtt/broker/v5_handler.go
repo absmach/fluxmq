@@ -186,7 +186,11 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
-	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, h.broker.MaxQoS()); err != nil {
+	// Snapshot the maximum QoS this connection is told about, so a later
+	// configuration reload cannot hold the client to a limit it never saw.
+	sessionMaxQoS := h.broker.MaxQoS()
+	s.SetMaxQoS(sessionMaxQoS)
+	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, sessionMaxQoS); err != nil {
 		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
 	}
@@ -243,7 +247,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// publisher retransmitting forever. The client was told the limit in the
 	// CONNACK Maximum QoS property, so exceeding it is a protocol error:
 	// [MQTT-3.2.2-11] requires DISCONNECT with 0x9B (QoS not supported).
-	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
+	if maxQoS := s.MaxQoS(); qos > maxQoS {
 		h.broker.telemetry.logger.Warn("v5_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),

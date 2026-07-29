@@ -152,6 +152,11 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
+	// Snapshot the maximum QoS in force when the connection was accepted. MQTT
+	// 3.1.1 cannot advertise it, so a client has no way to learn about a later
+	// configuration reload; holding it to the value it connected under keeps
+	// enforcement stable for the life of the connection.
+	s.SetMaxQoS(h.broker.MaxQoS())
 	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {
 		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
@@ -215,7 +220,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// a PUBACK — or, at Maximum QoS 0, with nothing at all — leaving the
 	// publisher retransmitting forever. MQTT 3.1.1 has no way to advertise a
 	// maximum QoS or to report one in a response, so the connection is closed.
-	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
+	if maxQoS := s.MaxQoS(); qos > maxQoS {
 		h.broker.telemetry.logger.Warn("v3_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),

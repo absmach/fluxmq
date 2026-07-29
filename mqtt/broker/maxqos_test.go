@@ -77,6 +77,10 @@ func newMaxQoSBroker(t *testing.T, maxQoS byte, clientVersion byte) (*Broker, *c
 	require.NoError(t, err)
 	require.NoError(t, b.subscribe(s, testTopic, 2, storage.SubscribeOptions{}))
 
+	// CONNECT snapshots the advertised maximum onto the session; the handlers
+	// enforce that snapshot, so the helper has to mirror what CONNECT does.
+	s.SetMaxQoS(b.MaxQoS())
+
 	conn := &mockConnection{}
 	return b, &connCtx{Session: s, conn: conn, epoch: s.Epoch()}, conn
 }
@@ -172,4 +176,38 @@ func TestMaxQoS_QoS0IsAlwaysAccepted(t *testing.T) {
 			assert.Empty(t, ackTypes(conn), "QoS 0 publishes are not acknowledged")
 		})
 	}
+}
+
+// TestMaxQoS_ReloadDoesNotAffectConnectedClients covers hot reload: a client is
+// told the maximum QoS once, in its CONNACK. Lowering the limit afterwards must
+// not disconnect it for publishing at the QoS it was granted — only connections
+// established after the change see the new limit.
+func TestMaxQoS_ReloadDoesNotAffectConnectedClients(t *testing.T) {
+	b, cc, conn := newMaxQoSBroker(t, 2, 5)
+
+	// The configuration is lowered while the client is connected.
+	b.SetMaxQoS(1)
+
+	err := newV5Handler(b).HandlePublish(cc, &v5.Publish{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
+		TopicName:   testTopic,
+		Payload:     []byte("test data"),
+		ID:          1,
+	})
+	require.NoError(t, err, "a client must not be refused a QoS it was granted at CONNECT")
+	assert.Contains(t, ackTypes(conn), byte(packets.PubRecType))
+
+	// A connection established after the change is held to the new limit.
+	s2, _, err := b.CreateSession("client2", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	s2.SetMaxQoS(b.MaxQoS())
+	cc2 := &connCtx{Session: s2, conn: &mockConnection{}, epoch: s2.Epoch()}
+
+	err = newV5Handler(b).HandlePublish(cc2, &v5.Publish{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
+		TopicName:   testTopic,
+		Payload:     []byte("test data"),
+		ID:          1,
+	})
+	require.ErrorIs(t, err, ErrQoSNotSupported)
 }
