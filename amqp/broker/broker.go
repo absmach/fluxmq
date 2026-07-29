@@ -223,6 +223,11 @@ func (b *Broker) DisconnectInvalidLocalSessions(isValid func(LocalSessionIdentit
 		return 0
 	}
 
+	// Each disconnect writes a Connection.Close under a write deadline, so an
+	// unresponsive peer costs up to that deadline. Revocation runs while the
+	// reload holds its lock, so disconnect concurrently: the cost stays one
+	// deadline in total rather than one per stalled peer.
+	var revoked sync.WaitGroup
 	disconnected := 0
 	b.connections.Range(func(_, value any) bool {
 		conn, ok := value.(*Connection)
@@ -234,9 +239,14 @@ func (b *Broker) DisconnectInvalidLocalSessions(isValid func(LocalSessionIdentit
 			return true
 		}
 		disconnected++
-		conn.disconnect(codec.AccessRefused, "local principal credentials revoked")
+		revoked.Add(1)
+		go func() {
+			defer revoked.Done()
+			conn.disconnect(codec.AccessRefused, "local principal credentials revoked")
+		}()
 		return true
 	})
+	revoked.Wait()
 	if disconnected > 0 {
 		b.stats.AddLocalForcedDisconnects(uint64(disconnected))
 		b.logger.Warn("amqp091_local_sessions_disconnected",
