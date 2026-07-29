@@ -107,6 +107,12 @@ username, and local secret to match one configured principal. Permissions are
 exact-match allowlists. Port `5683` must remain on a private network and must
 not be published to the host or Internet.
 
+The listener is single-node only. Its publications are durable on the receiving
+node and are never forwarded to other nodes, so configuring it together with
+`cluster.enabled` is a startup error rather than a deployment whose records
+some consumers cannot reach. `cluster.enabled` defaults to true, so it must be
+set to false explicitly.
+
 Publish permissions support only the default exchange (`exchange: ""`) and an
 exact, non-empty routing key. Other exchanges and wildcard routing keys are
 rejected when the configuration is loaded. At publish time the ACL is applied

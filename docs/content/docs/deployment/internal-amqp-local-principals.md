@@ -209,6 +209,17 @@ only. Enabling replication on a local publish target fails startup. Supporting
 a clustered audit stream requires a future end-to-end quorum durability
 barrier before FluxMQ can ACK the publication.
 
+The internal listener therefore cannot run on a clustered node, and FluxMQ
+refuses that configuration at startup: `server.amqp091.internal.addr` together
+with `cluster.enabled` is a validation error. A local publication is appended
+and synced on the receiving node only and is never forwarded to other nodes,
+because forwarding would acknowledge a publisher on a barrier no single node
+established. In a cluster those records would be unreachable from consumers
+attached to any other node, with nothing to signal it, so the combination fails
+closed instead. Note that `cluster.enabled` defaults to true, so a deployment
+enabling the internal listener must set it to false explicitly, as the shipped
+`config-local-principal.yaml` does.
+
 The `atom-audit-publisher` may open connections and channels, enable publisher
 confirms, and publish only to the default exchange with the exact routing key
 `atom-audit`. It cannot consume, get, declare or modify queues or exchanges,

@@ -1297,8 +1297,19 @@ func (c *Config) Validate() error {
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
 	}
-	if hasAddr(c.Server.AMQP091.Internal.Addr) && len(c.Auth.LocalPrincipals) == 0 {
-		return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.internal.addr is configured")
+	if hasAddr(c.Server.AMQP091.Internal.Addr) {
+		if len(c.Auth.LocalPrincipals) == 0 {
+			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.internal.addr is configured")
+		}
+		// A local publication is appended and synced on the receiving node only,
+		// and is deliberately never forwarded to other nodes: forwarding would
+		// acknowledge a publisher on a barrier no single node established. In a
+		// cluster that makes the records unreachable from consumers attached
+		// elsewhere, with nothing to signal it, so refuse the combination rather
+		// than serve a listener whose records only some readers can see.
+		if c.Cluster.Enabled {
+			return fmt.Errorf("server.amqp091.internal.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run the internal listener on a single-node deployment")
+		}
 	}
 	for proto := range c.Hooks.Protocols {
 		if !knownAuthProtocols[proto] {

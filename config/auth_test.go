@@ -269,9 +269,10 @@ func TestValidateLocalPrincipals(t *testing.T) {
 
 func TestValidateInternalAMQP091Listener(t *testing.T) {
 	tests := []struct {
-		name      string
-		configure func(*AMQP091ListenerConfig)
-		wantError string
+		name           string
+		configure      func(*AMQP091ListenerConfig)
+		clusterEnabled bool
+		wantError      string
 	}{
 		{
 			name:      "disabled by default",
@@ -331,6 +332,19 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 			wantError: "auth.local_principals must contain at least one principal",
 		},
 		{
+			name: "rejects clustering",
+			configure: func(listener *AMQP091ListenerConfig) {
+				listener.Addr = testInternalAddr
+				listener.MaxConnections = 32
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
+				listener.TLS.ClientCAFile = testClientCA
+				listener.TLS.ClientAuth = clientAuthRequire
+			},
+			clusterEnabled: true,
+			wantError:      "cannot be combined with cluster.enabled",
+		},
+		{
 			name: "valid mandatory mTLS",
 			configure: func(listener *AMQP091ListenerConfig) {
 				listener.Addr = testInternalAddr
@@ -346,8 +360,12 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Default()
+			// Local principals are a single-node feature, so these cases
+			// configure clustering explicitly rather than inheriting the
+			// clustered default.
+			cfg.Cluster.Enabled = tt.clusterEnabled
 			tt.configure(&cfg.Server.AMQP091.Internal)
-			if tt.wantError == "" && cfg.Server.AMQP091.Internal.Addr != "" {
+			if (tt.wantError == "" || tt.clusterEnabled) && cfg.Server.AMQP091.Internal.Addr != "" {
 				cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
 					Name:              testPrincipalName,
 					CertificateURISAN: testPrincipalSAN,
