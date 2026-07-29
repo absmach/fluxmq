@@ -257,6 +257,19 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return ErrQoSNotSupported
 	}
 
+	// The transports cap the whole packet, with an allowance for the topic and
+	// properties. This is the limit broker.max_message_size actually documents:
+	// the application payload.
+	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
+		h.broker.telemetry.logger.Warn("v5_publish_payload_too_large",
+			slog.String("client_id", s.ID),
+			slog.Int("payload_size", len(payload)),
+			slog.Int("max_message_size", maxSize),
+		)
+		s.Disconnect(false, v5.DisconnectPacketTooLarge) //nolint:errcheck // connection is being terminated
+		return ErrPacketTooLarge
+	}
+
 	if p.Properties != nil && p.Properties.TopicAlias != nil {
 		alias := *p.Properties.TopicAlias
 		if alias > s.TopicAliasMax {
@@ -328,6 +341,18 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// QoS is carried through unchanged: hooks that mutate it were rejected
 	// above, and the wire QoS still owns the acknowledgement handshake.
 	topic, payload, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
+	// A hook can rewrite the payload, so the limit is re-checked on the result.
+	// Overshooting here is the hook's doing, not the client's, so the publish is
+	// refused without tearing the connection down.
+	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
+		h.broker.telemetry.logger.Warn("v5_publish_hook_payload_too_large",
+			slog.String("client_id", s.ID),
+			slog.String("topic", topic),
+			slog.Int("payload_size", len(payload)),
+			slog.Int("max_message_size", maxSize))
+		h.broker.telemetry.stats.IncrementProtocolErrors()
+		return sendV5PublishError(s, qos, packetID, v5.PubAckImplementationSpecificError, "Payload exceeds maximum size", ErrPacketTooLarge)
+	}
 	if topic != requestedTopic {
 		if err := topics.ValidateTopicName(topic); err != nil {
 			return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic name invalid", ErrTopicInvalid)

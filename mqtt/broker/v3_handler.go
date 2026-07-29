@@ -229,6 +229,18 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return ErrQoSNotSupported
 	}
 
+	// The transports cap the whole packet, with an allowance for the topic. This
+	// is the limit broker.max_message_size actually documents: the application
+	// payload. MQTT 3.1.1 has no way to report it, so the connection is closed.
+	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
+		h.broker.telemetry.logger.Warn("v3_publish_payload_too_large",
+			slog.String("client_id", s.ID),
+			slog.Int("payload_size", len(payload)),
+			slog.Int("max_message_size", maxSize),
+		)
+		return ErrPacketTooLarge
+	}
+
 	props := setOriginProperties(nil, s.ExternalID)
 	requestedTopic := topic
 	hookReq, ok := h.broker.ApplyPublishHooks(context.Background(), corebroker.BlockingHookRequest{
@@ -257,6 +269,16 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// QoS is carried through unchanged: hooks that mutate it were rejected
 	// above, and the wire QoS still owns the acknowledgement handshake.
 	topic, payload, retain, props = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
+	// A hook can rewrite the payload, so the limit is re-checked on the result.
+	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
+		h.broker.telemetry.logger.Warn("v3_publish_hook_payload_too_large",
+			slog.String("client_id", s.ID),
+			slog.String("topic", topic),
+			slog.Int("payload_size", len(payload)),
+			slog.Int("max_message_size", maxSize))
+		h.broker.telemetry.stats.IncrementProtocolErrors()
+		return ErrPacketTooLarge
+	}
 	if topic != requestedTopic {
 		if err := topics.ValidateTopicName(topic); err != nil {
 			h.broker.telemetry.logger.Warn("v3_publish_invalid_hook_topic",

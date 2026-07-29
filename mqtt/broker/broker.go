@@ -56,6 +56,7 @@ type brokerTelemetry struct {
 type brokerConfig struct {
 	maxQoS              atomic.Uint32                        // accessed atomically for hot-reload safety
 	sessionCfg          atomic.Pointer[config.SessionConfig] // accessed atomically for hot-reload safety
+	maxMessageSize      int
 	routePublishTimeout time.Duration
 	asyncFanOut         bool
 }
@@ -104,14 +105,22 @@ func WithTransportConfig(c config.TransportConfig) Option {
 	return func(b *Broker) { b.cfg.routePublishTimeout = c.RoutePublishTimeout }
 }
 
-// WithBrokerConfig sets broker-level settings (fan-out, etc).
+// WithBrokerConfig sets broker-level settings (fan-out, message size, etc).
 func WithBrokerConfig(c config.BrokerConfig) Option {
 	return func(b *Broker) {
 		b.cfg.asyncFanOut = c.AsyncFanOut
+		b.cfg.maxMessageSize = c.MaxMessageSize
 		if c.AsyncFanOut {
 			b.fanOutPool = newFanOutPool(c.FanOutWorkers)
 		}
 	}
+}
+
+// MaxMessageSize returns the maximum accepted payload in bytes, or 0 when
+// payloads are unbounded. The transports separately cap the whole packet; this
+// is the limit on the application payload the configuration documents.
+func (b *Broker) MaxMessageSize() int {
+	return b.cfg.maxMessageSize
 }
 
 // Broker is the core MQTT broker with clean domain methods.
