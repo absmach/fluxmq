@@ -15,7 +15,7 @@ require (
 	github.com/klauspost/compress v1.19.0
 	github.com/pion/dtls/v3 v3.1.5
 	github.com/plgd-dev/go-coap/v3 v3.5.4
-	github.com/rabbitmq/amqp091-go v1.12.0
+	github.com/rabbitmq/amqp091-go v1.13.0
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/etcd/api/v3 v3.7.0
