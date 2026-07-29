@@ -282,6 +282,13 @@ disconnect, so the same event can be appended more than once. Atom must keep a
 stable event ID across retries, and every consumer must deduplicate by that
 event ID.
 
+Stream offsets order appends, not publications. In normal operation the two
+agree, because a publisher is answered before its next publication is
+processed. While storage is stalled they can diverge: an abandoned append that
+completes later can land after a publication that was accepted after it.
+Consumers that care about event order must use a field in the event, not the
+stream offset.
+
 ## Rotation and revocation
 
 Local-principal definitions and secret-file contents reload on `SIGHUP`. A
