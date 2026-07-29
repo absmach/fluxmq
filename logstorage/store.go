@@ -108,7 +108,7 @@ func recoverAllQueues(baseDir string, logFn func(string, ...any)) {
 				"segments_recovered", result.SegmentsRecovered,
 				"segments_truncated", result.SegmentsTruncated,
 				"indexes_rebuilt", result.IndexesRebuilt,
-				"messages_lost", result.MessagesLost,
+				"messages_recovered", result.MessagesRecovered,
 				"bytes_truncated", result.BytesTruncated,
 				"errors", len(result.Errors))
 		}
@@ -875,7 +875,7 @@ func (s *Store) Recover() (*RecoveryResult, error) {
 		result.SegmentsRecovered += queueResult.SegmentsRecovered
 		result.SegmentsTruncated += queueResult.SegmentsTruncated
 		result.IndexesRebuilt += queueResult.IndexesRebuilt
-		result.MessagesLost += queueResult.MessagesLost
+		result.MessagesRecovered += queueResult.MessagesRecovered
 		result.BytesTruncated += queueResult.BytesTruncated
 		result.Errors = append(result.Errors, queueResult.Errors...)
 	}

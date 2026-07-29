@@ -137,6 +137,8 @@ func TestRecoverSegmentTruncatesThenOpens(t *testing.T) {
 	result, err := RecoverSegment(dir, 0)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SegmentsTruncated)
+	assert.Equal(t, uint64(2), result.MessagesRecovered,
+		"recovery must report the records it kept, not a guess at what it discarded")
 
 	truncated, err := os.Stat(path)
 	require.NoError(t, err)
