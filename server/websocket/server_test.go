@@ -19,7 +19,7 @@ import (
 )
 
 func TestNewWSConnectionProtocolVersion(t *testing.T) {
-	conn := newWSConnection(nil, "127.0.0.1:1111", core.ProtocolV5, 0)
+	conn := newWSConnection(nil, "127.0.0.1:1111", core.ProtocolV5, 0, 0)
 
 	wsConn, ok := conn.(*wsConnection)
 	if !ok {
@@ -170,7 +170,7 @@ func TestReadPacketAcrossWebSocketMessages(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0)
 	defer conn.Close()
 
 	want := &v3.Connect{
@@ -223,7 +223,7 @@ func TestReadPacketSequentialMessages(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0)
 	defer conn.Close()
 
 	const count = 50
@@ -265,7 +265,7 @@ func TestReadPacketTimeoutDoesNotPoisonWebSocket(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0)
 	defer conn.Close()
 
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
@@ -314,7 +314,7 @@ func TestSetKeepAliveAfterReadPacketProcessesPong(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0).(*wsConnection)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0).(*wsConnection)
 	defer conn.Close()
 
 	connect := &v3.Connect{
@@ -368,7 +368,7 @@ func TestReadPumpStopsAfterCloseWithBufferedRead(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0).(*wsConnection)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0).(*wsConnection)
 	reader := &wsFrameReader{conn: conn}
 	reader.once.Do(reader.start)
 

@@ -1006,6 +1006,9 @@ func main() {
 			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
 			AllowedOrigins:  slot.cfg.AllowedOrigins,
 			MaxPacketSize:   maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			ReadTimeout:     slot.cfg.ReadTimeout,
+			WriteTimeout:    slot.cfg.WriteTimeout,
+			MaxConnections:  slot.cfg.MaxConnections,
 		}
 		wsCfg.IPRateLimiter = rateLimitManager
 

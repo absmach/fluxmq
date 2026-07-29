@@ -425,6 +425,9 @@ type WSListenerConfig struct {
 	Addr           string         `yaml:"addr"`
 	Path           string         `yaml:"path"`
 	Protocol       string         `yaml:"protocol"`
+	MaxConnections int            `yaml:"max_connections"`
+	ReadTimeout    time.Duration  `yaml:"read_timeout"`
+	WriteTimeout   time.Duration  `yaml:"write_timeout"`
 	AllowedOrigins []string       `yaml:"allowed_origins"`
 	TLS            mqtttls.Config `yaml:",inline"`
 }
@@ -791,22 +794,34 @@ func Default() *Config {
 			},
 			WebSocket: WebSocketConfig{
 				V3: WSListenerConfig{
-					Addr:     ":8083",
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeV3,
+					Addr:           ":8083",
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeV3,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 				V5: WSListenerConfig{
-					Addr:     ":8084",
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeV5,
+					Addr:           ":8084",
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeV5,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 				TLS: WSListenerConfig{
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeAuto,
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeAuto,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 				MTLS: WSListenerConfig{
-					Path:     defaultWSPath,
-					Protocol: ProtocolModeAuto,
+					Path:           defaultWSPath,
+					Protocol:       ProtocolModeAuto,
+					MaxConnections: 10000,
+					ReadTimeout:    60 * time.Second,
+					WriteTimeout:   60 * time.Second,
 				},
 			},
 			HTTP: HTTPConfig{

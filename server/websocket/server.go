@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -28,6 +29,9 @@ import (
 
 // subprotocolMQTT is the WebSocket subprotocol name for MQTT.
 const subprotocolMQTT = "mqtt"
+
+// defaultPath is the URL path served when the configuration leaves it empty.
+const defaultPath = "/mqtt"
 
 var (
 	ErrExpectedBinaryMessage      = errors.New("expected binary message")
@@ -53,6 +57,14 @@ type Config struct {
 	// MaxPacketSize bounds an inbound MQTT packet's remaining length, and the
 	// WebSocket message that carries it. 0 leaves both unbounded.
 	MaxPacketSize int
+	// ReadTimeout bounds the pre-session phase of an upgraded connection: the
+	// protocol version sniff and the CONNECT packet. Once the session starts it
+	// sets its own read deadlines from the negotiated keep-alive.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds a single socket write for the life of the connection.
+	WriteTimeout time.Duration
+	// MaxConnections caps concurrently upgraded connections. 0 means unlimited.
+	MaxConnections int
 }
 
 type Server struct {
@@ -64,6 +76,13 @@ type Server struct {
 	allowedOrigins map[string]bool
 	allowAll       bool
 	ipRateLimiter  IPRateLimiter
+	connSem        chan struct{}
+
+	// activeMu guards active, the set of upgraded connections. http.Server's
+	// Shutdown neither closes nor waits for hijacked connections, so these are
+	// tracked and closed explicitly.
+	activeMu sync.Mutex
+	active   map[*websocket.Conn]struct{}
 }
 
 func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
@@ -72,7 +91,18 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	}
 
 	if cfg.Path == "" {
-		cfg.Path = "/mqtt"
+		cfg.Path = defaultPath
+	}
+	if cfg.ReadTimeout == 0 {
+		cfg.ReadTimeout = 60 * time.Second
+	}
+	if cfg.WriteTimeout == 0 {
+		cfg.WriteTimeout = 60 * time.Second
+	}
+
+	var connSem chan struct{}
+	if cfg.MaxConnections > 0 {
+		connSem = make(chan struct{}, cfg.MaxConnections)
 	}
 
 	s := &Server{
@@ -81,6 +111,8 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 		logger:         logger,
 		allowedOrigins: make(map[string]bool),
 		ipRateLimiter:  cfg.IPRateLimiter,
+		connSem:        connSem,
+		active:         make(map[*websocket.Conn]struct{}),
 	}
 
 	// Build allowed origins lookup
@@ -166,9 +198,19 @@ func (s *Server) checkOrigin(r *http.Request) bool {
 }
 
 func (s *Server) Listen(ctx context.Context) error {
+	listener, err := net.Listen("tcp", s.config.Address)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", s.config.Address, err)
+	}
+	return s.serveListener(ctx, listener)
+}
+
+// serveListener serves upgrades on an already-bound listener and shuts down when
+// ctx is cancelled.
+func (s *Server) serveListener(ctx context.Context, listener net.Listener) error {
 	tlsEnabled := s.config.TLSConfig != nil
 	s.logger.Info("websocket_server_starting",
-		slog.String("addr", s.config.Address),
+		slog.String("addr", listener.Addr().String()),
 		slog.String("path", s.config.Path),
 		slog.Bool("tls_enabled", tlsEnabled))
 
@@ -177,10 +219,10 @@ func (s *Server) Listen(ctx context.Context) error {
 		var err error
 		if s.config.TLSConfig != nil {
 			s.server.TLSConfig = s.config.TLSConfig
-			// ListenAndServeTLS with empty cert/key paths because TLS config is already set
-			err = s.server.ListenAndServeTLS("", "")
+			// ServeTLS with empty cert/key paths because TLS config is already set
+			err = s.server.ServeTLS(listener, "", "")
 		} else {
-			err = s.server.ListenAndServe()
+			err = s.server.Serve(listener)
 		}
 		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
@@ -195,13 +237,69 @@ func (s *Server) Listen(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout) //nolint:contextcheck // intentionally creates new context for graceful shutdown
 		defer cancel()
 
-		if err := s.server.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // intentionally creates new context for graceful shutdown
+		err := s.server.Shutdown(shutdownCtx) //nolint:contextcheck // intentionally creates new context for graceful shutdown
+
+		// Shutdown neither closes nor waits for hijacked connections, so an
+		// upgraded WebSocket outlives it. Close them so their goroutines, which
+		// are parked in a socket read, can exit.
+		if closed := s.closeActiveConns(); closed > 0 {
+			s.logger.Warn("closing upgraded websocket connections", slog.Int("connections", closed))
+		}
+
+		if err != nil {
 			s.logger.Error("websocket_server_shutdown_error", slog.String("error", err.Error()))
 			return err
 		}
 
 		s.logger.Info("websocket_server_stopped")
 		return nil
+	}
+}
+
+// trackConn registers an upgraded connection so shutdown can close it.
+func (s *Server) trackConn(ws *websocket.Conn) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	s.active[ws] = struct{}{}
+}
+
+func (s *Server) untrackConn(ws *websocket.Conn) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	delete(s.active, ws)
+}
+
+// closeActiveConns closes every upgraded connection and reports how many.
+func (s *Server) closeActiveConns() int {
+	s.activeMu.Lock()
+	conns := make([]*websocket.Conn, 0, len(s.active))
+	for ws := range s.active {
+		conns = append(conns, ws)
+	}
+	s.activeMu.Unlock()
+
+	for _, ws := range conns {
+		ws.Close() //nolint:errcheck // forced shutdown; the connection goroutine reports the resulting error
+	}
+	return len(conns)
+}
+
+// tryAcquireConnectionSlot reserves one of the configured connection slots.
+func (s *Server) tryAcquireConnectionSlot() bool {
+	if s.connSem == nil {
+		return true
+	}
+	select {
+	case s.connSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseConnectionSlot() {
+	if s.connSem != nil {
+		<-s.connSem
 	}
 }
 
@@ -218,15 +316,36 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ws, err := s.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		s.logger.Warn("websocket_upgrade_failed", slog.String("error", err.Error()))
+	if !s.tryAcquireConnectionSlot() {
+		s.logger.Warn("websocket_connection_limit_reached",
+			slog.String("remote_addr", r.RemoteAddr))
+		http.Error(w, "connection limit reached", http.StatusServiceUnavailable)
 		return
 	}
 
+	ws, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.releaseConnectionSlot()
+		s.logger.Warn("websocket_upgrade_failed", slog.String("error", err.Error()))
+		return
+	}
+	defer s.releaseConnectionSlot()
+	defer ws.Close() //nolint:errcheck // best-effort close once the session ends
+
+	s.trackConn(ws)
+	defer s.untrackConn(ws)
+
 	s.logger.Debug("websocket_connection_accepted", slog.String("remote_addr", r.RemoteAddr))
 
-	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion, s.config.MaxPacketSize)
+	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion, s.config.MaxPacketSize, s.config.WriteTimeout)
+
+	// Bound the pre-session phase: an upgraded client that never sends a CONNECT
+	// would otherwise hold a goroutine and a connection slot indefinitely. The
+	// session replaces this deadline on every packet read once it starts.
+	if s.config.ReadTimeout > 0 {
+		conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout)) //nolint:errcheck // local state update cannot fail
+	}
+
 	defer connguard.Recover(s.logger, "mqtt-ws", r.RemoteAddr)
 	broker.HandleConnection(r.Context(), s.broker, conn)
 }
@@ -249,7 +368,8 @@ type wsConnection struct {
 	onDisconnect  func(graceful bool)
 	pingStop      chan struct{}
 	pingOnce      sync.Once
-	maxPacketSize int // 0 = unlimited
+	maxPacketSize int           // 0 = unlimited
+	writeTimeout  time.Duration // 0 = no write deadline
 }
 
 // wsFrameOverhead allows an MQTT packet's fixed header (up to 5 bytes) to fit
@@ -258,7 +378,7 @@ type wsConnection struct {
 // tearing the connection down first.
 const wsFrameOverhead = 5
 
-func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, maxPacketSize int) core.Connection {
+func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, maxPacketSize int, writeTimeout time.Duration) core.Connection {
 	if ws != nil && maxPacketSize > 0 {
 		ws.SetReadLimit(int64(maxPacketSize) + wsFrameOverhead)
 	}
@@ -269,6 +389,7 @@ func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, max
 		closed:        false,
 		closeCh:       make(chan struct{}),
 		maxPacketSize: maxPacketSize,
+		writeTimeout:  writeTimeout,
 	}
 }
 
@@ -528,6 +649,14 @@ func (c *wsConnection) writePacket(pkt packets.ControlPacket, onSent func()) err
 	pkt.Release()
 
 	c.writeMu.Lock()
+	// Refresh the deadline per write: without it a peer that stops reading parks
+	// this goroutine on the socket write for as long as it likes.
+	if c.writeTimeout > 0 {
+		if err := c.ws.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			c.writeMu.Unlock()
+			return err
+		}
+	}
 	err := c.ws.WriteMessage(websocket.BinaryMessage, buf.Bytes())
 	c.writeMu.Unlock()
 	if err != nil {
