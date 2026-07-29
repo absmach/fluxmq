@@ -237,14 +237,20 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	retain := p.FixedHeader.Retain
 	packetID := p.ID
 
-	// Downgrade QoS if it exceeds server's maximum (MQTT 5.0 spec 3.3.2-4)
+	// The inbound QoS selects the acknowledgement handshake, so it must stay as
+	// the client sent it. Downgrading it here would answer a QoS 2 PUBLISH with
+	// a PUBACK — or, at Maximum QoS 0, with nothing at all — leaving the
+	// publisher retransmitting forever. The client was told the limit in the
+	// CONNACK Maximum QoS property, so exceeding it is a protocol error:
+	// [MQTT-3.2.2-11] requires DISCONNECT with 0x9B (QoS not supported).
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		h.broker.telemetry.logger.Debug("v5_publish_qos_downgrade",
+		h.broker.telemetry.logger.Warn("v5_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),
 			slog.Int("server_max_qos", int(maxQoS)),
 		)
-		qos = maxQoS
+		s.Disconnect(false, v5.DisconnectQoSNotSupported) //nolint:errcheck // connection is being terminated
+		return ErrQoSNotSupported
 	}
 
 	if p.Properties != nil && p.Properties.TopicAlias != nil {
@@ -315,10 +321,9 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		return sendV5PublishError(s, qos, packetID, v5.PubAckImplementationSpecificError, "QoS mutation not supported", ErrProtocolViolation)
 	}
-	topic, payload, qos, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
-	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		qos = maxQoS
-	}
+	// QoS is carried through unchanged: hooks that mutate it were rejected
+	// above, and the wire QoS still owns the acknowledgement handshake.
+	topic, payload, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
 	if topic != requestedTopic {
 		if err := topics.ValidateTopicName(topic); err != nil {
 			return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic name invalid", ErrTopicInvalid)

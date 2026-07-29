@@ -28,6 +28,7 @@ var (
 	ErrMaxSessionsExceeded = errors.New("maximum sessions exceeded")
 	ErrInvalidPacketType   = errors.New("invalid packet type")
 	ErrSessionNotFound     = errors.New("session not found")
+	ErrQoSNotSupported     = errors.New("QoS not supported")
 )
 
 const (

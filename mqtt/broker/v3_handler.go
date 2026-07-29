@@ -210,14 +210,18 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return ErrTopicInvalid
 	}
 
-	// Downgrade QoS if it exceeds server's maximum
+	// The inbound QoS selects the acknowledgement handshake, so it must stay as
+	// the client sent it. Downgrading it here would answer a QoS 2 PUBLISH with
+	// a PUBACK — or, at Maximum QoS 0, with nothing at all — leaving the
+	// publisher retransmitting forever. MQTT 3.1.1 has no way to advertise a
+	// maximum QoS or to report one in a response, so the connection is closed.
 	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		h.broker.telemetry.logger.Debug("v3_publish_qos_downgrade",
+		h.broker.telemetry.logger.Warn("v3_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),
 			slog.Int("server_max_qos", int(maxQoS)),
 		)
-		qos = maxQoS
+		return ErrQoSNotSupported
 	}
 
 	props := setOriginProperties(nil, s.ExternalID)
@@ -245,10 +249,9 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		return ErrProtocolViolation
 	}
-	topic, payload, qos, retain, props = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
-	if maxQoS := h.broker.MaxQoS(); qos > maxQoS {
-		qos = maxQoS
-	}
+	// QoS is carried through unchanged: hooks that mutate it were rejected
+	// above, and the wire QoS still owns the acknowledgement handshake.
+	topic, payload, retain, props = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
 	if topic != requestedTopic {
 		if err := topics.ValidateTopicName(topic); err != nil {
 			h.broker.telemetry.logger.Warn("v3_publish_invalid_hook_topic",
