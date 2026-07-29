@@ -4,7 +4,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,18 +81,18 @@ func TestValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "no MQTT listeners configured",
-			modify: func(c *Config) {
-				c.Server.TCP.V3.Addr = ""
-				c.Server.TCP.V5.Addr = ""
-				c.Server.TCP.TLS.Addr = ""
-				c.Server.TCP.MTLS.Addr = ""
-				c.Server.WebSocket.V3.Addr = ""
-				c.Server.WebSocket.V5.Addr = ""
-				c.Server.WebSocket.TLS.Addr = ""
-				c.Server.WebSocket.MTLS.Addr = ""
-			},
+			name:    "no messaging listeners configured",
+			modify:  disableMessagingListeners,
 			wantErr: true,
+		},
+		{
+			name: "AMQP 0.9.1-only deployment is valid",
+			modify: func(c *Config) {
+				disableMessagingListeners(c)
+				c.Server.AMQP091.Plain.Addr = ":5682"
+				c.Server.AMQP091.Plain.MaxConnections = 100
+			},
+			wantErr: false,
 		},
 		{
 			name: "TCP TLS listener without cert",
@@ -200,16 +202,16 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid auth protocols",
 			modify: func(c *Config) {
-				c.Auth.URL = testAuthURL
-				c.Auth.Protocols = map[string]bool{protocolMQTT: true, protocolAMQP091: false}
+				c.Auth.External.URL = testAuthURL
+				c.Auth.External.Protocols = map[string]bool{protocolMQTT: true, protocolAMQP091: false}
 			},
 			wantErr: false,
 		},
 		{
 			name: "unknown auth protocol",
 			modify: func(c *Config) {
-				c.Auth.URL = testAuthURL
-				c.Auth.Protocols = map[string]bool{protocolMQTT: true, "websocket": true}
+				c.Auth.External.URL = testAuthURL
+				c.Auth.External.Protocols = map[string]bool{protocolMQTT: true, "websocket": true}
 			},
 			wantErr: true,
 		},
@@ -259,6 +261,30 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func disableMessagingListeners(c *Config) {
+	c.Server.TCP.V3.Addr = ""
+	c.Server.TCP.V5.Addr = ""
+	c.Server.TCP.TLS.Addr = ""
+	c.Server.TCP.MTLS.Addr = ""
+	c.Server.WebSocket.V3.Addr = ""
+	c.Server.WebSocket.V5.Addr = ""
+	c.Server.WebSocket.TLS.Addr = ""
+	c.Server.WebSocket.MTLS.Addr = ""
+	c.Server.HTTP.Plain.Addr = ""
+	c.Server.HTTP.TLS.Addr = ""
+	c.Server.HTTP.MTLS.Addr = ""
+	c.Server.CoAP.Plain.Addr = ""
+	c.Server.CoAP.DTLS.Addr = ""
+	c.Server.CoAP.MDTLS.Addr = ""
+	c.Server.AMQP.Plain.Addr = ""
+	c.Server.AMQP.TLS.Addr = ""
+	c.Server.AMQP.MTLS.Addr = ""
+	c.Server.AMQP091.Plain.Addr = ""
+	c.Server.AMQP091.TLS.Addr = ""
+	c.Server.AMQP091.MTLS.Addr = ""
+	c.Server.AMQP091.Internal.Addr = ""
 }
 
 func TestLoadNonExistent(t *testing.T) {
@@ -314,40 +340,40 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
-func TestAuthEnabledFor(t *testing.T) {
+func TestExternalAuthEnabledFor(t *testing.T) {
 	tests := []struct {
 		name     string
-		cfg      AuthConfig
+		cfg      ExternalAuthConfig
 		protocol string
 		want     bool
 	}{
 		{
 			name:     "no URL disables all",
-			cfg:      AuthConfig{},
+			cfg:      ExternalAuthConfig{},
 			protocol: protocolMQTT,
 			want:     false,
 		},
 		{
 			name:     "URL set, empty protocols enables all",
-			cfg:      AuthConfig{URL: testAuthURL},
+			cfg:      ExternalAuthConfig{URL: testAuthURL},
 			protocol: protocolAMQP091,
 			want:     true,
 		},
 		{
 			name:     "protocol explicitly enabled",
-			cfg:      AuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
+			cfg:      ExternalAuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
 			protocol: protocolMQTT,
 			want:     true,
 		},
 		{
 			name:     "protocol explicitly disabled",
-			cfg:      AuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
+			cfg:      ExternalAuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true, protocolAMQP091: false}},
 			protocol: protocolAMQP091,
 			want:     false,
 		},
 		{
 			name:     "protocol not in map defaults to false",
-			cfg:      AuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true}},
+			cfg:      ExternalAuthConfig{URL: testAuthURL, Protocols: map[string]bool{protocolMQTT: true}},
 			protocol: "amqp",
 			want:     false,
 		},
@@ -355,8 +381,8 @@ func TestAuthEnabledFor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.AuthEnabledFor(tt.protocol); got != tt.want {
-				t.Fatalf("AuthEnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
+			if got := tt.cfg.EnabledFor(tt.protocol); got != tt.want {
+				t.Fatalf("EnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
 			}
 		})
 	}
@@ -421,7 +447,23 @@ func TestExampleConfigsValid(t *testing.T) {
 
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
-			if _, err := Load(f); err != nil {
+			loadPath := f
+			contents, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatalf("read example %s: %v", f, err)
+			}
+			if strings.Contains(string(contents), "/run/secrets/atom_audit_secret_") {
+				dir := t.TempDir()
+				current := writeSecret(t, dir, "current", strings.Repeat("a", 32))
+				previous := writeSecret(t, dir, "previous", strings.Repeat("b", 32))
+				rewritten := strings.ReplaceAll(string(contents), "/run/secrets/atom_audit_secret_current", current)
+				rewritten = strings.ReplaceAll(rewritten, "/run/secrets/atom_audit_secret_previous", previous)
+				loadPath = filepath.Join(dir, filepath.Base(f))
+				if err := os.WriteFile(loadPath, []byte(rewritten), 0o600); err != nil {
+					t.Fatalf("write rewritten example: %v", err)
+				}
+			}
+			if _, err := Load(loadPath); err != nil {
 				t.Fatalf("Load(%s): %v", f, err)
 			}
 		})

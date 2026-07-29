@@ -99,6 +99,11 @@ var runtimeSafeFields = map[string]struct{}{
 	"Webhook.Defaults.CircuitBreaker.FailureThreshold": {},
 	"Webhook.Defaults.CircuitBreaker.ResetTimeout":     {},
 	"Webhook.Endpoints":                                {},
+
+	// Local principals and their ACL/secret-file references are swapped as one
+	// validated immutable snapshot. Listener and external-callout changes still
+	// require a restart.
+	"Auth.LocalPrincipals": {},
 }
 
 // fieldClassification maps each leaf config field path to its reload

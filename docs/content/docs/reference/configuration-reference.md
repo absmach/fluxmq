@@ -5,7 +5,7 @@ description: Comprehensive YAML configuration reference for server, broker, stor
 
 # Configuration Reference
 
-**Last Updated:** 2026-02-25
+**Last Updated:** 2026-07-29
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 
@@ -80,7 +80,7 @@ server:
 
   coap:
     plain:
-      addr: ":5683"
+      addr: ":5685"
     dtls: {}
     mdtls: {}
 
@@ -97,6 +97,13 @@ server:
       max_connections: 10000
     tls: {}
     mtls: {}
+    internal:
+      addr: ":5683"
+      max_connections: 32
+      cert_file: "/run/secrets/fluxmq_server_cert"
+      key_file: "/run/secrets/fluxmq_server_key"
+      ca_file: "/run/secrets/local_client_ca"
+      client_auth: "require"
 
   health_enabled: true
   health_addr: ":8081"
@@ -117,12 +124,12 @@ server:
 
 ### Listener Fields
 
-These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on).
+These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.internal` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks.
 
 | Field             | Description                                                                                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `addr`            | Listener bind address (`"<host>:<port>"` or `":<port>"`). Empty string disables that listener.                                                 |
-| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap. Applies to TCP/AMQP/AMQP091 listeners.                                   |
+| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on `server.amqp091.internal`, where a positive cap is required. Applies to TCP/AMQP/AMQP091 listeners. |
 | `read_timeout`    | Read timeout for TCP listeners (`time.Duration`).                                                                                              |
 | `write_timeout`   | Write timeout for TCP listeners (`time.Duration`).                                                                                             |
 | `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
@@ -681,25 +688,49 @@ ratelimit:
 
 ```yaml
 auth:
-  url: "auth-service:7016"
-  transport: "grpc"
-  timeout: 5s
-  protocols:
-    mqtt: true
-    http: true
-    coap: true
-    amqp: true
-    amqp091: false
+  external:
+    url: "https://auth-service.internal:7016"
+    transport: "grpc"
+    timeout: 5s
+    protocols:
+      mqtt: true
+      http: true
+      coap: true
+      amqp: true
+      amqp091: true
+    identity_cache_size: 50000
+    identity_cache_ttl: "1h"
+
+  local_principals:
+    - name: "atom-audit-publisher"
+      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      current_secret_file: "/run/secrets/atom_audit_secret_current"
+      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: "atom-audit"
+        subscribe: []
 ```
 
-| Field       | Default | Description                                                                                               |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `url`       | `""`    | Auth service address. Empty disables auth callout entirely.                                               |
-| `transport` | `grpc`  | Wire format for callout: `grpc` or `http`.                                                                |
-| `timeout`   | `0`     | Per-call timeout (e.g. `5s`). Zero uses the transport default.                                            |
-| `protocols` | `{}`    | Per-protocol auth toggle. Empty map = all protocols require auth. When set, only `true` entries get auth. |
+| Field                                           | Default | Description |
+| ----------------------------------------------- | ------- | ----------- |
+| `external.url`                                  | `""`    | External auth service address. Empty disables the callout. |
+| `external.transport`                            | `grpc`  | Callout transport: `grpc` or `http`. |
+| `external.timeout`                              | `0`     | Per-call timeout. Zero uses the transport default. |
+| `external.protocols`                            | `{}`    | External-auth protocol toggle. Empty means every protocol. |
+| `external.identity_cache_size`                  | `0`     | Maximum cached external identities; zero selects the broker default (`10000`), while a negative value disables size eviction. |
+| `external.identity_cache_ttl`                   | `0`     | External identity cache TTL; zero selects the broker default (`24h`), while a negative value disables TTL eviction. |
+| `local_principals[].name`                       | —       | Unique SASL username for the local principal. |
+| `local_principals[].certificate_uri_san`        | —       | Exact URI SAN required on a CA-verified client certificate. |
+| `local_principals[].current_secret_file`        | —       | File containing an active high-entropy printable value of at least 32 characters, without embedded CR/LF or NUL. One terminal newline is stripped. |
+| `local_principals[].previous_secret_file`       | `""`    | Optional old secret with the same printable-value requirements, accepted during rotation overlap. |
+| `local_principals[].permissions.publish`        | `[]`    | Exact AMQP publish targets. `exchange` must be `""` (the default exchange); `routing_key` must be exact and non-empty. |
+| `local_principals[].permissions.subscribe`      | `[]`    | Unsupported for local principals; it must remain empty. Local principals are publish-only. |
 
-Valid `protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
+Valid `external.protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
+The old flat `auth.url`, `auth.transport`, `auth.timeout`, `auth.protocols`, and
+cache fields are invalid.
 
 See [Security configuration](/configuration/security) for detailed examples.
 

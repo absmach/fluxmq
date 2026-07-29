@@ -5,7 +5,7 @@ description: Change configuration at runtime without restarting the broker
 
 # Hot Reload
 
-**Last Updated:** 2026-03-18
+**Last Updated:** 2026-07-29
 
 FluxMQ supports changing a subset of configuration fields at runtime without restarting the broker. Changes are applied atomically per subsystem with automatic rollback on failure.
 
@@ -85,6 +85,17 @@ All rate limit fields are runtime-safe. Changing any rate limit field replaces t
 | ---------------- | --------------------------- |
 | `broker.max_qos` | Maximum QoS level (0, 1, 2) |
 
+### Local AMQP Principals
+
+The `auth.local_principals` snapshot and the contents of its current and
+previous secret files reload on every `SIGHUP`, even when the configured file
+paths are unchanged. The entire replacement snapshot is validated before it is
+made visible. A failed reload leaves the old snapshot active.
+
+Removing a principal, certificate URI SAN, or secret disconnects connections
+authenticated with the removed credential. ACL reductions apply to existing
+connections immediately.
+
 ## Restart-Required Fields
 
 All other fields require a full restart to take effect. These include:
@@ -94,7 +105,8 @@ All other fields require a full restart to take effect. These include:
 - **Cluster**: cluster topology and transport
 - **Session**: session defaults (affects existing connections)
 - **Webhook**: webhook worker pool configuration
-- **Auth**: authentication and authorization settings
+- **External auth**: `auth.external` callout and cache settings
+- **Local listener transport**: `server.amqp091.internal` address, limits, and TLS settings
 - **Hooks**: blocking hook callout configuration
 - **AMQP / AMQP 0.9.1**: all protocol-level settings
 

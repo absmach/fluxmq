@@ -162,8 +162,8 @@ func TestDiffRestartRequiredFields(t *testing.T) {
 		},
 		{
 			name:   "auth url",
-			modify: func(cfg *Config) { cfg.Auth.URL = "http://auth:9090" },
-			path:   "Auth.URL",
+			modify: func(cfg *Config) { cfg.Auth.External.URL = "http://auth:9090" },
+			path:   "Auth.External.URL",
 		},
 		{
 			name:   "broker async fanout",

@@ -253,6 +253,18 @@ func (s *Store) Append(queueName string, value []byte, key []byte, headers map[s
 	return manager.AppendMessage(value, key, headers)
 }
 
+// AppendAndSync appends a message and establishes its durability barrier as one
+// queue operation. The queue's segment manager prevents rotation until the
+// segment containing the appended message has been synced.
+func (s *Store) AppendAndSync(queueName string, value []byte, key []byte, headers map[string][]byte) (uint64, error) {
+	manager, err := s.getOrCreateQueue(queueName)
+	if err != nil {
+		return 0, err
+	}
+
+	return manager.AppendMessageAndSync(value, key, headers)
+}
+
 // AppendBatch appends a batch of messages to a queue.
 func (s *Store) AppendBatch(queueName string, batch *Batch) (uint64, error) {
 	manager, err := s.getOrCreateQueue(queueName)
@@ -809,6 +821,17 @@ func (s *Store) Sync() error {
 	}
 
 	return nil
+}
+
+// SyncQueue flushes the current active segment for one queue. Callers that need
+// a durability guarantee for a specific append must use AppendAndSync so a
+// concurrent segment rotation cannot move the active-segment pointer first.
+func (s *Store) SyncQueue(queueName string) error {
+	manager, err := s.getQueue(queueName)
+	if err != nil {
+		return err
+	}
+	return manager.Sync()
 }
 
 // Compact compacts all consumer state.

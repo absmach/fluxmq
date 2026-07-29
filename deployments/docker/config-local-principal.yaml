@@ -1,0 +1,107 @@
+# Production-shaped single-node configuration for the dedicated Atom audit
+# publisher listener. Use with compose.local-principal.yaml.
+
+server:
+  # This deployment is AMQP 0.9.1-only. These explicit empty addresses
+  # override listeners that are enabled by FluxMQ defaults.
+  tcp:
+    v3:
+      addr: ""
+    v5:
+      addr: ""
+  websocket:
+    v3:
+      addr: ""
+    v5:
+      addr: ""
+  http:
+    plain:
+      addr: ""
+  coap:
+    plain:
+      addr: ""
+  amqp:
+    plain:
+      addr: ""
+
+  amqp091:
+    # Existing remote listener. All authentication and authorization uses the
+    # external callout below; it never checks local principals.
+    plain:
+      addr: ""
+    tls:
+      addr: ":5682"
+      max_connections: 10000
+      cert_file: "/run/secrets/fluxmq_server_cert"
+      key_file: "/run/secrets/fluxmq_server_key"
+      min_version: "TLS1.2"
+
+    # Bind only to FluxMQ's fixed address on the private atom-internal Docker
+    # network. Do not replace this with :5683 in a multi-network container.
+    internal:
+      addr: "172.30.0.2:5683"
+      max_connections: 32
+      cert_file: "/run/secrets/fluxmq_server_cert"
+      key_file: "/run/secrets/fluxmq_server_key"
+      ca_file: "/run/secrets/atom_client_ca"
+      client_auth: "require"
+      min_version: "TLS1.2"
+
+  health_enabled: true
+  health_addr: ":8081"
+  admin_api_addr: ":8082"
+  shutdown_timeout: "30s"
+
+broker:
+  max_message_size: 1048576
+
+storage:
+  type: "badger"
+  badger_dir: "/var/lib/fluxmq/data"
+  sync_writes: true
+
+cluster:
+  enabled: false
+
+auth:
+  external:
+    # fluxmq-auth is a required external dependency and is intentionally not
+    # defined by the Compose example. Its certificate must be trusted by the
+    # FluxMQ container. A service-mesh-protected loopback endpoint is another
+    # valid deployment choice.
+    url: "https://fluxmq-auth:8181"
+    transport: "http"
+    timeout: "2s"
+    protocols:
+      amqp091: true
+    identity_cache_size: 50000
+    identity_cache_ttl: "1h"
+
+  local_principals:
+    - name: "atom-audit-publisher"
+      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      current_secret_file: "/run/secrets/atom_audit_secret_current"
+      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: "atom-audit"
+        subscribe: []
+
+queues:
+  - name: "atom-audit"
+    topics:
+      - "$queue/atom-audit/#"
+    reserved: true
+    type: "stream"
+    retention:
+      max_age: "720h"
+      max_length_bytes: 10737418240
+      max_length_messages: 0
+    limits:
+      max_message_size: 1048576
+      message_ttl: "720h"
+
+log:
+  level: "info"
+  format: "json"

@@ -4,7 +4,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,8 +24,9 @@ const (
 	listenerNamePlain = "plain"
 	raftGroupDefault  = "default"
 
-	listenerNameTLS  = "tls"
-	listenerNameMTLS = "mtls"
+	listenerNameTLS      = "tls"
+	listenerNameMTLS     = "mtls"
+	listenerNameInternal = "internal"
 
 	protocolMQTT    = "mqtt"
 	protocolAMQP    = "amqp"
@@ -61,8 +64,14 @@ type Config struct {
 	Hooks        HooksConfig        `yaml:"hooks"`
 }
 
-// AuthConfig configures the external authentication/authorization callout.
+// AuthConfig configures external callouts and broker-local principals.
 type AuthConfig struct {
+	External        ExternalAuthConfig     `yaml:"external"`
+	LocalPrincipals []LocalPrincipalConfig `yaml:"local_principals"`
+}
+
+// ExternalAuthConfig configures the external authentication/authorization callout.
+type ExternalAuthConfig struct {
 	// URL is the auth service address (e.g. "http://localhost:9090").
 	// When empty, auth callout is disabled.
 	URL string `yaml:"url"`
@@ -81,6 +90,124 @@ type AuthConfig struct {
 	// IdentityCacheTTL bounds how long a cached identity may live without re-auth.
 	// Zero or negative disables TTL eviction.
 	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
+}
+
+// LocalPrincipalConfig configures a principal authenticated by FluxMQ itself.
+type LocalPrincipalConfig struct {
+	Name               string                 `yaml:"name"`
+	CertificateURISAN  string                 `yaml:"certificate_uri_san"`
+	CurrentSecretFile  string                 `yaml:"current_secret_file"`
+	PreviousSecretFile string                 `yaml:"previous_secret_file,omitempty"`
+	Permissions        LocalPermissionsConfig `yaml:"permissions"`
+}
+
+// LocalPermissionsConfig contains exact-match publish and subscribe ACLs.
+type LocalPermissionsConfig struct {
+	Publish   []LocalPublishPermission `yaml:"publish"`
+	Subscribe []string                 `yaml:"subscribe"`
+}
+
+// LocalPublishPermission grants publish access to one exact AMQP target.
+type LocalPublishPermission struct {
+	Exchange   string `yaml:"exchange"`
+	RoutingKey string `yaml:"routing_key"`
+}
+
+// UnmarshalYAML keeps the auth subtree strict without changing the historical
+// permissive decoding behavior of unrelated configuration sections.
+func (a *AuthConfig) UnmarshalYAML(node *yaml.Node) error {
+	if err := validateAuthYAML(node); err != nil {
+		return err
+	}
+	type plainAuthConfig AuthConfig
+	var decoded plainAuthConfig
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*a = AuthConfig(decoded)
+	return nil
+}
+
+func validateAuthYAML(node *yaml.Node) error {
+	return validateYAMLMapping(node, "auth", map[string]func(*yaml.Node) error{
+		"external": func(external *yaml.Node) error {
+			return validateYAMLMapping(external, "auth.external", map[string]func(*yaml.Node) error{
+				"url":                 nil,
+				"transport":           nil,
+				"timeout":             nil,
+				"protocols":           nil,
+				"identity_cache_size": nil,
+				"identity_cache_ttl":  nil,
+			})
+		},
+		"local_principals": func(principals *yaml.Node) error {
+			return validateYAMLSequence(principals, "auth.local_principals", validateLocalPrincipalYAML)
+		},
+	})
+}
+
+func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
+	return validateYAMLMapping(node, path, map[string]func(*yaml.Node) error{
+		"name":                 nil,
+		"certificate_uri_san":  nil,
+		"current_secret_file":  nil,
+		"previous_secret_file": nil,
+		"permissions": func(permissions *yaml.Node) error {
+			return validateYAMLMapping(permissions, path+".permissions", map[string]func(*yaml.Node) error{
+				"publish": func(publish *yaml.Node) error {
+					return validateYAMLSequence(publish, path+".permissions.publish", func(entry *yaml.Node, entryPath string) error {
+						return validateYAMLMapping(entry, entryPath, map[string]func(*yaml.Node) error{
+							"exchange":    nil,
+							"routing_key": nil,
+						})
+					})
+				},
+				"subscribe": func(subscribe *yaml.Node) error {
+					return validateYAMLSequence(subscribe, path+".permissions.subscribe", nil)
+				},
+			})
+		},
+	})
+}
+
+func validateYAMLMapping(node *yaml.Node, path string, fields map[string]func(*yaml.Node) error) error {
+	if node.Tag == "!!null" {
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("%s must be a mapping", path)
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		name := node.Content[i].Value
+		validate, ok := fields[name]
+		if !ok {
+			return fmt.Errorf("%s: field %s not found", path, name)
+		}
+		if validate != nil {
+			if err := validate(node.Content[i+1]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateYAMLSequence(node *yaml.Node, path string, validate func(*yaml.Node, string) error) error {
+	if node.Tag == "!!null" {
+		return nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return fmt.Errorf("%s must be a sequence", path)
+	}
+	if validate == nil {
+		return nil
+	}
+	for i, entry := range node.Content {
+		if err := validate(entry, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // HooksConfig configures the optional blocking hook callout.
@@ -114,10 +241,10 @@ var knownBlockingHooks = map[string]bool{
 	"auth_on_unsubscribe": true,
 }
 
-// AuthEnabledFor reports whether auth callout is enabled for the given protocol.
+// EnabledFor reports whether the external auth callout is enabled for the given protocol.
 // Returns true when auth is globally enabled (URL is set) and either no per-protocol
 // filter is configured or the protocol is explicitly set to true.
-func (a AuthConfig) AuthEnabledFor(protocol string) bool {
+func (a ExternalAuthConfig) EnabledFor(protocol string) bool {
 	if a.URL == "" {
 		return false
 	}
@@ -351,9 +478,10 @@ type AMQP091ListenerConfig struct {
 
 // AMQP091Config groups AMQP 0.9.1 listeners by mode.
 type AMQP091Config struct {
-	Plain AMQP091ListenerConfig `yaml:"plain"`
-	TLS   AMQP091ListenerConfig `yaml:"tls"`
-	MTLS  AMQP091ListenerConfig `yaml:"mtls"`
+	Plain    AMQP091ListenerConfig `yaml:"plain"`
+	TLS      AMQP091ListenerConfig `yaml:"tls"`
+	MTLS     AMQP091ListenerConfig `yaml:"mtls"`
+	Internal AMQP091ListenerConfig `yaml:"internal"`
 }
 
 // DefaultMaxInflightMessages is the fallback for Session.MaxInflightMessages
@@ -703,6 +831,7 @@ func Default() *Config {
 				MTLS: AMQP091ListenerConfig{
 					MaxConnections: 10000,
 				},
+				Internal: AMQP091ListenerConfig{},
 			},
 			HealthAddr:      ":8081",
 			HealthEnabled:   true,
@@ -873,6 +1002,10 @@ func Load(filename string) (*Config, error) {
 	}
 
 	cfg := Default()
+	if err := rejectLegacyAuthKeys(data); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
@@ -882,6 +1015,47 @@ func Load(filename string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+var legacyAuthKeys = map[string]string{
+	"url":                 "auth.external.url",
+	"transport":           "auth.external.transport",
+	"timeout":             "auth.external.timeout",
+	"protocols":           "auth.external.protocols",
+	"identity_cache_size": "auth.external.identity_cache_size",
+	"identity_cache_ttl":  "auth.external.identity_cache_ttl",
+}
+
+func rejectLegacyAuthKeys(data []byte) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	if len(document.Content) == 0 {
+		return nil
+	}
+
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "auth" {
+			continue
+		}
+		auth := root.Content[i+1]
+		if auth.Kind != yaml.MappingNode {
+			return nil
+		}
+		for j := 0; j+1 < len(auth.Content); j += 2 {
+			key := auth.Content[j].Value
+			if replacement, ok := legacyAuthKeys[key]; ok {
+				return fmt.Errorf("auth.%s is no longer supported; use %s", key, replacement)
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // Validate checks if the configuration is valid.
@@ -922,7 +1096,7 @@ func (c *Config) Validate() error {
 		{name: listenerNameMTLS, cfg: c.Server.HTTP.MTLS, requireClientAuth: true},
 	}
 
-	hasMQTTListener := false
+	hasMessagingListener := false
 
 	for _, slot := range tcpSlots {
 		if err := validateListenerProtocol("server.tcp."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
@@ -939,7 +1113,7 @@ func (c *Config) Validate() error {
 			continue
 		}
 
-		hasMQTTListener = true
+		hasMessagingListener = true
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
 		}
@@ -967,7 +1141,7 @@ func (c *Config) Validate() error {
 			continue
 		}
 
-		hasMQTTListener = true
+		hasMessagingListener = true
 		if slot.requireTLS {
 			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
@@ -975,10 +1149,6 @@ func (c *Config) Validate() error {
 		} else if tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
 		}
-	}
-
-	if !hasMQTTListener {
-		return fmt.Errorf("at least one TCP or WebSocket listener must be configured")
 	}
 
 	c.Server.AdminAPIAddr = strings.TrimSpace(c.Server.AdminAPIAddr)
@@ -993,6 +1163,7 @@ func (c *Config) Validate() error {
 			}
 			continue
 		}
+		hasMessagingListener = true
 
 		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.http.%s TLS fields are not supported for plain listeners", slot.name)
@@ -1021,6 +1192,7 @@ func (c *Config) Validate() error {
 			}
 			continue
 		}
+		hasMessagingListener = true
 
 		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.coap.%s TLS fields are not supported for plain listeners", slot.name)
@@ -1050,6 +1222,7 @@ func (c *Config) Validate() error {
 			}
 			continue
 		}
+		hasMessagingListener = true
 
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.amqp.%s.max_connections cannot be negative", slot.name)
@@ -1066,13 +1239,15 @@ func (c *Config) Validate() error {
 
 	// AMQP 0.9.1 validation
 	amqp091Slots := []struct {
-		name              string
-		cfg               AMQP091ListenerConfig
-		requireClientAuth bool
+		name                   string
+		cfg                    AMQP091ListenerConfig
+		requireClientAuth      bool
+		requireExactClientAuth bool
 	}{
 		{name: listenerNamePlain, cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
 		{name: listenerNameTLS, cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
 		{name: listenerNameMTLS, cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
+		{name: listenerNameInternal, cfg: c.Server.AMQP091.Internal, requireClientAuth: true, requireExactClientAuth: true},
 	}
 
 	for _, slot := range amqp091Slots {
@@ -1082,7 +1257,11 @@ func (c *Config) Validate() error {
 			}
 			continue
 		}
+		hasMessagingListener = true
 
+		if slot.name == listenerNameInternal && slot.cfg.MaxConnections <= 0 {
+			return fmt.Errorf("server.amqp091.%s.max_connections must be positive", slot.name)
+		}
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.amqp091.%s.max_connections cannot be negative", slot.name)
 		}
@@ -1093,13 +1272,25 @@ func (c *Config) Validate() error {
 			if err := validateListenerTLS("server.amqp091."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
+			if slot.requireExactClientAuth && strings.ToLower(strings.TrimSpace(slot.cfg.TLS.ClientAuth)) != "require" {
+				return fmt.Errorf("server.amqp091.%s.client_auth must be \"require\"", slot.name)
+			}
 		}
 	}
+	if !hasMessagingListener {
+		return fmt.Errorf("at least one messaging listener must be configured")
+	}
 
-	for proto := range c.Auth.Protocols {
+	for proto := range c.Auth.External.Protocols {
 		if !knownAuthProtocols[proto] {
-			return fmt.Errorf("auth.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
+			return fmt.Errorf("auth.external.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
+	}
+	if err := validateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
+		return err
+	}
+	if hasAddr(c.Server.AMQP091.Internal.Addr) && len(c.Auth.LocalPrincipals) == 0 {
+		return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.internal.addr is configured")
 	}
 	for proto := range c.Hooks.Protocols {
 		if !knownAuthProtocols[proto] {
@@ -1392,6 +1583,120 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 		return fmt.Errorf("%s.ca_file required", prefix)
 	}
 	return nil
+}
+
+func validateLocalPrincipals(principals []LocalPrincipalConfig) error {
+	names := make(map[string]struct{}, len(principals))
+	uriSANs := make(map[string]struct{}, len(principals))
+
+	for i, principal := range principals {
+		prefix := fmt.Sprintf("auth.local_principals[%d]", i)
+		name := strings.TrimSpace(principal.Name)
+		if name == "" {
+			return fmt.Errorf("%s.name cannot be empty", prefix)
+		}
+		if name != principal.Name {
+			return fmt.Errorf("%s.name cannot have leading or trailing whitespace", prefix)
+		}
+		if _, exists := names[name]; exists {
+			return fmt.Errorf("%s.name %q is duplicated", prefix, name)
+		}
+		names[name] = struct{}{}
+
+		uriSAN := strings.TrimSpace(principal.CertificateURISAN)
+		if uriSAN == "" {
+			return fmt.Errorf("%s.certificate_uri_san cannot be empty", prefix)
+		}
+		if uriSAN != principal.CertificateURISAN {
+			return fmt.Errorf("%s.certificate_uri_san cannot have leading or trailing whitespace", prefix)
+		}
+		parsedURI, err := url.Parse(uriSAN)
+		if err != nil || parsedURI.Scheme == "" {
+			return fmt.Errorf("%s.certificate_uri_san must be an absolute URI", prefix)
+		}
+		if _, exists := uriSANs[uriSAN]; exists {
+			return fmt.Errorf("%s.certificate_uri_san %q is duplicated", prefix, uriSAN)
+		}
+		uriSANs[uriSAN] = struct{}{}
+
+		if err := validateLocalSecretFile(prefix+".current_secret_file", principal.CurrentSecretFile, true); err != nil {
+			return err
+		}
+		if err := validateLocalSecretFile(prefix+".previous_secret_file", principal.PreviousSecretFile, false); err != nil {
+			return err
+		}
+
+		publishTargets := make(map[LocalPublishPermission]struct{}, len(principal.Permissions.Publish))
+		for j, permission := range principal.Permissions.Publish {
+			permissionPrefix := fmt.Sprintf("%s.permissions.publish[%d]", prefix, j)
+			if permission.Exchange != "" {
+				return fmt.Errorf("%s.exchange must be empty; local principals may publish only through the AMQP default exchange", permissionPrefix)
+			}
+			if permission.RoutingKey == "" {
+				return fmt.Errorf("%s.routing_key cannot be empty", permissionPrefix)
+			}
+			if containsWildcard(permission.Exchange) {
+				return fmt.Errorf("%s.exchange must be an exact value without wildcards", permissionPrefix)
+			}
+			if containsWildcard(permission.RoutingKey) {
+				return fmt.Errorf("%s.routing_key must be an exact value without wildcards", permissionPrefix)
+			}
+			if _, exists := publishTargets[permission]; exists {
+				return fmt.Errorf("%s duplicates an earlier publish permission", permissionPrefix)
+			}
+			publishTargets[permission] = struct{}{}
+		}
+
+		if len(principal.Permissions.Subscribe) != 0 {
+			return fmt.Errorf("%s.permissions.subscribe is unsupported; local principals are publish-only", prefix)
+		}
+	}
+
+	return nil
+}
+
+func validateLocalSecretFile(field, filename string, required bool) error {
+	if strings.TrimSpace(filename) == "" {
+		if required || filename != "" {
+			return fmt.Errorf("%s cannot be empty", field)
+		}
+		return nil
+	}
+
+	secret, err := readLocalSecretFile(filename)
+	if err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	defer clear(secret)
+	if len(secret) < 32 {
+		return fmt.Errorf("%s must contain at least 32 bytes", field)
+	}
+	return nil
+}
+
+func readLocalSecretFile(filename string) ([]byte, error) {
+	secret, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read secret file: %w", err)
+	}
+	if len(secret) > 0 && secret[len(secret)-1] == '\n' {
+		secret = secret[:len(secret)-1]
+		if len(secret) > 0 && secret[len(secret)-1] == '\r' {
+			secret = secret[:len(secret)-1]
+		}
+	}
+	if bytes.ContainsAny(secret, "\r\n") {
+		return nil, fmt.Errorf("secret file may contain only one terminal newline")
+	}
+	if bytes.IndexByte(secret, 0) >= 0 {
+		clear(secret)
+		return nil, fmt.Errorf("secret file must not contain NUL bytes")
+	}
+	return secret, nil
+}
+
+func containsWildcard(value string) bool {
+	return strings.ContainsAny(value, "#*+")
 }
 
 // NormalizeProtocolMode normalizes and defaults MQTT listener protocol mode.

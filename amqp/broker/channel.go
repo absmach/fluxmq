@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/bufpool"
+	queuepkg "github.com/absmach/fluxmq/queue"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
@@ -105,7 +107,8 @@ type Channel struct {
 	// Queue sequence for server-generated names
 	queueSeq atomic.Uint64
 
-	closed atomic.Bool
+	serverClosing atomic.Bool
+	closed        atomic.Bool
 }
 
 type unackedDelivery struct {
@@ -137,6 +140,24 @@ func newChannel(c *Connection, id uint16) *Channel {
 }
 
 func (ch *Channel) handleMethod(decoded any) error {
+	if ch.serverClosing.Load() {
+		switch decoded.(type) {
+		case *codec.ChannelClose, *codec.ChannelCloseOk:
+		default:
+			return nil
+		}
+	}
+
+	if ch.conn.connectionPolicy().mode == ConnectionPolicyLocalPublishOnly {
+		allowed, err := ch.authorizeLocalMethod(decoded)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return nil
+		}
+	}
+
 	switch m := decoded.(type) {
 	// Channel
 	case *codec.ChannelFlow:
@@ -187,14 +208,14 @@ func (ch *Channel) handleMethod(decoded any) error {
 		return ch.handleBasicCancel(m)
 	case *codec.BasicPublish:
 		if ch.pendingMethod != nil || ch.pendingHeader != nil {
-			_ = ch.conn.sendChannelClose(ch.id, codec.CommandInvalid,
+			_ = ch.sendChannelClose(codec.CommandInvalid,
 				"publish in progress", codec.ClassBasic, codec.MethodBasicPublish)
 			ch.resetPendingPublish()
 			return nil
 		}
-		m.Exchange = normalizeExchange(m.Exchange)
-		if m.Exchange != "" && !ch.exchangeExists(m.Exchange) {
-			_ = ch.conn.sendChannelClose(ch.id, codec.NotFound,
+		exchangeName := normalizeExchange(m.Exchange)
+		if exchangeName != "" && !ch.exchangeExists(exchangeName) {
+			_ = ch.sendChannelClose(codec.NotFound,
 				"exchange not found", codec.ClassBasic, codec.MethodBasicPublish)
 			ch.resetPendingPublish()
 			return nil
@@ -235,10 +256,103 @@ func (ch *Channel) handleMethod(decoded any) error {
 	}
 }
 
+func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
+	principalID := ""
+	if ch.conn.localIdentity != nil {
+		principalID = ch.conn.localIdentity.PrincipalID
+	}
+	switch method := decoded.(type) {
+	case *codec.ChannelFlow, *codec.ChannelClose, *codec.ChannelCloseOk, *codec.ConfirmSelect:
+		return true, nil
+	case *codec.BasicPublish:
+		if ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
+			return true, nil
+		}
+		ch.conn.broker.stats.IncrementLocalPublishDenials()
+		ch.conn.logger.Warn("amqp091_local_authorization",
+			"auth_mode", "local",
+			"outcome", "denied",
+			"reason", "publish_acl_mismatch",
+			"principal_id", principalID,
+			"exchange", method.Exchange,
+			"routing_key", method.RoutingKey)
+		return false, ch.sendChannelClose(codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
+	default:
+		classID, methodID := methodIdentifier(decoded)
+		ch.conn.broker.stats.IncrementLocalOperationDenials()
+		ch.conn.logger.Warn("amqp091_local_authorization",
+			"auth_mode", "local",
+			"outcome", "denied",
+			"reason", "operation_not_permitted",
+			"principal_id", principalID,
+			"class_id", classID,
+			"method_id", methodID)
+		return false, ch.sendChannelClose(codec.AccessRefused, "operation not permitted for local publisher", classID, methodID)
+	}
+}
+
+func (ch *Channel) sendChannelClose(code uint16, text string, classID, methodID uint16) error {
+	ch.serverClosing.Store(true)
+	ch.resetPendingPublish()
+	return ch.conn.sendChannelClose(ch.id, code, text, classID, methodID)
+}
+
+func methodIdentifier(method any) (uint16, uint16) {
+	switch method.(type) {
+	case *codec.ExchangeDeclare:
+		return codec.ClassExchange, codec.MethodExchangeDeclare
+	case *codec.ExchangeDelete:
+		return codec.ClassExchange, codec.MethodExchangeDelete
+	case *codec.ExchangeBind:
+		return codec.ClassExchange, codec.MethodExchangeBind
+	case *codec.ExchangeUnbind:
+		return codec.ClassExchange, codec.MethodExchangeUnbind
+	case *codec.QueueDeclare:
+		return codec.ClassQueue, codec.MethodQueueDeclare
+	case *codec.QueueBind:
+		return codec.ClassQueue, codec.MethodQueueBind
+	case *codec.QueueUnbind:
+		return codec.ClassQueue, codec.MethodQueueUnbind
+	case *codec.QueuePurge:
+		return codec.ClassQueue, codec.MethodQueuePurge
+	case *codec.QueueDelete:
+		return codec.ClassQueue, codec.MethodQueueDelete
+	case *codec.BasicQos:
+		return codec.ClassBasic, codec.MethodBasicQos
+	case *codec.BasicConsume:
+		return codec.ClassBasic, codec.MethodBasicConsume
+	case *codec.BasicCancel:
+		return codec.ClassBasic, codec.MethodBasicCancel
+	case *codec.BasicGet:
+		return codec.ClassBasic, codec.MethodBasicGet
+	case *codec.BasicAck:
+		return codec.ClassBasic, codec.MethodBasicAck
+	case *codec.BasicReject:
+		return codec.ClassBasic, codec.MethodBasicReject
+	case *codec.BasicNack:
+		return codec.ClassBasic, codec.MethodBasicNack
+	case *codec.BasicRecover:
+		return codec.ClassBasic, codec.MethodBasicRecover
+	case *codec.BasicRecoverAsync:
+		return codec.ClassBasic, codec.MethodBasicRecoverAsync
+	case *codec.TxSelect:
+		return codec.ClassTx, codec.MethodTxSelect
+	case *codec.TxCommit:
+		return codec.ClassTx, codec.MethodTxCommit
+	case *codec.TxRollback:
+		return codec.ClassTx, codec.MethodTxRollback
+	default:
+		return 0, 0
+	}
+}
+
 // handleHeaderFrame processes a content header frame (part of a publish).
 func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
+	if ch.serverClosing.Load() {
+		return
+	}
 	if ch.pendingMethod == nil || ch.pendingHeader != nil {
-		_ = ch.conn.sendChannelClose(ch.id, codec.UnexpectedFrame,
+		_ = ch.sendChannelClose(codec.UnexpectedFrame,
 			"unexpected content header", codec.ClassBasic, codec.MethodBasicPublish)
 		ch.resetPendingPublish()
 		return
@@ -248,6 +362,12 @@ func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
 	header, err := codec.ReadContentHeader(r)
 	if err != nil {
 		ch.conn.logger.Error("failed to read content header", "error", err)
+		return
+	}
+	if limit := ch.conn.connectionPolicy().maxMessageSize; limit > 0 && header.BodySize > limit {
+		_ = ch.sendChannelClose(codec.ContentTooLarge,
+			"message exceeds maximum size", codec.ClassBasic, codec.MethodBasicPublish)
+		ch.resetPendingPublish()
 		return
 	}
 	ch.pendingHeader = header
@@ -267,8 +387,11 @@ func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
 
 // handleBodyFrame processes a content body frame.
 func (ch *Channel) handleBodyFrame(frame *codec.Frame) {
+	if ch.serverClosing.Load() {
+		return
+	}
 	if ch.pendingMethod == nil || ch.pendingHeader == nil {
-		_ = ch.conn.sendChannelClose(ch.id, codec.UnexpectedFrame,
+		_ = ch.sendChannelClose(codec.UnexpectedFrame,
 			"unexpected content body", codec.ClassBasic, codec.MethodBasicPublish)
 		ch.resetPendingPublish()
 		return
@@ -276,7 +399,7 @@ func (ch *Channel) handleBodyFrame(frame *codec.Frame) {
 
 	nextSize := ch.pendingBodyReceived + uint64(len(frame.Payload))
 	if nextSize > ch.pendingBodySize {
-		_ = ch.conn.sendChannelClose(ch.id, codec.ContentTooLarge,
+		_ = ch.sendChannelClose(codec.ContentTooLarge,
 			"content body larger than header", codec.ClassBasic, codec.MethodBasicPublish)
 		ch.resetPendingPublish()
 		return
@@ -326,9 +449,14 @@ func (ch *Channel) completePublish() {
 		props["type"] = header.Properties.Type
 	}
 
-	if v, ok := header.Properties.Headers[corebroker.ExternalIDProperty].(string); ok && v != "" {
+	clientID := PrefixedClientID(ch.conn.connID)
+	if ch.conn.connectionPolicy().mode == ConnectionPolicyLocalPublishOnly {
+		if principalID := ch.conn.externalID(clientID); principalID != "" {
+			props[corebroker.ExternalIDProperty] = principalID
+		}
+	} else if v, ok := header.Properties.Headers[corebroker.ExternalIDProperty].(string); ok && v != "" {
 		props[corebroker.ExternalIDProperty] = v
-	} else if externalID := ch.conn.broker.ExternalID(PrefixedClientID(ch.conn.connID)); externalID != "" {
+	} else if externalID := ch.conn.externalID(clientID); externalID != "" {
 		props[corebroker.ExternalIDProperty] = externalID
 	}
 	if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
@@ -346,30 +474,55 @@ func (ch *Channel) completePublish() {
 		topic = exchangeName + "/" + routingKey
 	}
 
-	clientID := PrefixedClientID(ch.conn.connID)
 	props = corebroker.AddClientIDProperty(props, clientID)
 	originalTopic := topic
 
-	hookReq, ok := ch.conn.broker.ApplyHook(context.Background(), corebroker.BlockingHookRequest{
-		Hook:       corebroker.HookAuthOnPublish,
-		ClientID:   clientID,
-		ExternalID: ch.conn.broker.ExternalID(clientID),
-		Topic:      topic,
-		Payload:    body,
-		Properties: props,
-	})
-	if !ok {
-		ch.conn.logger.Warn("publish hook denied", "client_id", clientID, "topic", topic)
-		_ = ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "publish hook denied", codec.ClassBasic, codec.MethodBasicPublish)
-		return
-	}
-	topic, body, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
-	if auth := ch.conn.broker.auth; auth != nil {
-		if !auth.CanPublish(clientID, topic) {
-			ch.conn.logger.Warn("publish denied", "client_id", clientID, "topic", topic)
-			_ = ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
+	policy := ch.conn.connectionPolicy()
+	if policy.mode == ConnectionPolicyLocalPublishOnly {
+		// Re-evaluate at completion so an ACL reduction made while content frames
+		// are in flight takes effect immediately.
+		if !ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
+			ch.conn.broker.stats.IncrementLocalPublishDenials()
+			ch.conn.logger.Warn("amqp091_local_authorization",
+				"auth_mode", "local",
+				"outcome", "denied",
+				"reason", "publish_acl_changed",
+				"principal_id", ch.conn.externalID(clientID),
+				"exchange", method.Exchange,
+				"routing_key", method.RoutingKey)
+			_ = ch.sendChannelClose(codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
 			return
 		}
+	} else {
+		hookReq, ok := ch.conn.applyHook(context.Background(), corebroker.BlockingHookRequest{
+			Hook:       corebroker.HookAuthOnPublish,
+			ClientID:   clientID,
+			ExternalID: ch.conn.externalID(clientID),
+			Topic:      topic,
+			Payload:    body,
+			Properties: props,
+		})
+		if !ok {
+			ch.conn.logger.Warn("publish hook denied", "client_id", clientID, "topic", topic)
+			_ = ch.sendChannelClose(codec.AccessRefused, "publish hook denied", codec.ClassBasic, codec.MethodBasicPublish)
+			return
+		}
+		topic, body, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
+		if auth := policy.externalAuth; auth != nil {
+			if !auth.CanPublish(clientID, topic) {
+				ch.conn.logger.Warn("publish denied", "client_id", clientID, "topic", topic)
+				_ = ch.sendChannelClose(codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
+				return
+			}
+		}
+	}
+	if policy.mode == ConnectionPolicyLocalPublishOnly {
+		if exchangeName != "" {
+			ch.rejectLocalStreamPublish(fmt.Errorf("local durable stream publish requires the default exchange"))
+			return
+		}
+		ch.handleLocalDurableStreamPublish(routingKey, body, props, clientID)
+		return
 	}
 
 	// Route through resolver for default-exchange queue operations.
@@ -813,7 +966,7 @@ func (ch *Channel) handleExchangeDeclare(m *codec.ExchangeDeclare) error {
 	m.Exchange = normalizeExchange(m.Exchange)
 	if m.Passive {
 		if !ch.exchangeExists(m.Exchange) {
-			return ch.conn.sendChannelClose(ch.id, codec.NotFound,
+			return ch.sendChannelClose(codec.NotFound,
 				"exchange not found", codec.ClassExchange, codec.MethodExchangeDeclare)
 		}
 		if !m.NoWait {
@@ -895,7 +1048,7 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 		_, exists := ch.queues[m.Queue]
 		ch.exchangeMu.RUnlock()
 		if !exists {
-			return ch.conn.sendChannelClose(ch.id, codec.NotFound,
+			return ch.sendChannelClose(codec.NotFound,
 				"queue not found", codec.ClassQueue, codec.MethodQueueDeclare)
 		}
 		if !m.NoWait {
@@ -942,6 +1095,10 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 		}
 
 		if err := qm.CreateQueue(context.Background(), cfg); err != nil {
+			if errors.Is(err, queuepkg.ErrProtectedQueueMutation) {
+				return ch.sendChannelClose(codec.PreconditionFailed,
+					"protected queue contract cannot be changed", codec.ClassQueue, codec.MethodQueueDeclare)
+			}
 			if existing, getErr := qm.GetQueue(context.Background(), m.Queue); getErr == nil && existing != nil {
 				existing.Type = qtypes.QueueType(queueType)
 				if queueType == string(qtypes.QueueTypeStream) {
@@ -957,6 +1114,10 @@ func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 					}
 				}
 				if err := qm.UpdateQueue(context.Background(), *existing); err != nil {
+					if errors.Is(err, queuepkg.ErrProtectedQueueMutation) {
+						return ch.sendChannelClose(codec.PreconditionFailed,
+							"protected queue contract cannot be changed", codec.ClassQueue, codec.MethodQueueDeclare)
+					}
 					ch.conn.logger.Warn("failed to update queue config", "queue", m.Queue, "error", err)
 				}
 			}
@@ -1063,10 +1224,10 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	}
 
 	clientID := PrefixedClientID(ch.conn.connID)
-	externalID := ch.conn.broker.ExternalID(clientID)
+	externalID := ch.conn.externalID(clientID)
 	queueFilter := m.Queue
 
-	req, ok := ch.conn.broker.ApplyHook(context.Background(), corebroker.BlockingHookRequest{
+	req, ok := ch.conn.applyHook(context.Background(), corebroker.BlockingHookRequest{
 		Hook:       corebroker.HookAuthOnSubscribe,
 		ClientID:   clientID,
 		ExternalID: externalID,
@@ -1074,14 +1235,14 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	})
 	if !ok {
 		ch.conn.logger.Warn("subscribe hook denied", "client_id", clientID, "filter", queueFilter)
-		return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe hook denied", codec.ClassBasic, codec.MethodBasicConsume)
+		return ch.sendChannelClose(codec.AccessRefused, "subscribe hook denied", codec.ClassBasic, codec.MethodBasicConsume)
 	}
 	queueFilter = req.Topic
 
-	if auth := ch.conn.broker.auth; auth != nil {
+	if auth := ch.conn.connectionPolicy().externalAuth; auth != nil {
 		if !auth.CanSubscribe(clientID, queueFilter) {
 			ch.conn.logger.Warn("subscribe denied", "client_id", clientID, "filter", queueFilter)
-			return ch.conn.sendChannelClose(ch.id, codec.AccessRefused, "subscribe not authorized", codec.ClassBasic, codec.MethodBasicConsume)
+			return ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", codec.ClassBasic, codec.MethodBasicConsume)
 		}
 	}
 
@@ -1115,7 +1276,7 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	ch.consumersMu.Lock()
 	if _, exists := ch.consumers[tag]; exists {
 		ch.consumersMu.Unlock()
-		return ch.conn.sendChannelClose(ch.id, codec.NotAllowed,
+		return ch.sendChannelClose(codec.NotAllowed,
 			fmt.Sprintf("consumer tag %q already exists", tag), codec.ClassBasic, codec.MethodBasicConsume)
 	}
 	ch.consumers[tag] = &consumer{
@@ -1491,6 +1652,39 @@ func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[
 	}
 }
 
+func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte, props map[string]string, clientID string) {
+	qm := ch.conn.broker.queueManager
+	publisher, ok := qm.(durableStreamQueuePublisher)
+	if qm == nil || !ok {
+		ch.rejectLocalStreamPublish(fmt.Errorf("durable exact stream publisher is unavailable"))
+		return
+	}
+	props = corebroker.AddClientIDProperty(props, clientID)
+	err := publisher.PublishToDurableStream(context.Background(), queueName, qtypes.PublishRequest{
+		ClientID:   clientID,
+		Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
+		Payload:    body,
+		Properties: props,
+	})
+	if err != nil {
+		ch.rejectLocalStreamPublish(err)
+		return
+	}
+	if ch.confirmMode {
+		ch.sendPublisherAck()
+	}
+}
+
+func (ch *Channel) rejectLocalStreamPublish(err error) {
+	ch.conn.logger.Error("local durable stream publish failed", "error", err)
+	if ch.confirmMode {
+		ch.sendPublisherNack()
+		return
+	}
+	_ = ch.sendChannelClose(codec.InternalError,
+		"durable stream publish failed", codec.ClassBasic, codec.MethodBasicPublish)
+}
+
 // handleQueueCommit processes a stream offset commit routed via the resolver.
 func (ch *Channel) handleQueueCommit(route corebroker.RouteResult, header *codec.ContentHeader) {
 	qm := ch.conn.broker.queueManager
@@ -1554,9 +1748,21 @@ func (ch *Channel) isStreamQueue(name string) bool {
 	if info := ch.getQueueInfo(name); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
 		return true
 	}
+	queueNames := []string{name}
 	if queueName, _ := corebroker.ParseQueueFilter(name); queueName != "" {
 		if info := ch.getQueueInfo(queueName); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
 			return true
+		}
+		if queueName != name {
+			queueNames = append(queueNames, queueName)
+		}
+	}
+	if qm := ch.conn.broker.queueManager; qm != nil {
+		for _, queueName := range queueNames {
+			cfg, err := qm.GetQueue(context.Background(), queueName)
+			if err == nil && cfg != nil && cfg.Type == qtypes.QueueTypeStream {
+				return true
+			}
 		}
 	}
 	return false

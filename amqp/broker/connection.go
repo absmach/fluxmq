@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	"github.com/absmach/fluxmq/amqp1/sasl"
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/bufpool"
 )
 
@@ -28,9 +30,11 @@ const (
 	defaultFrameMax   = uint32(131072)
 	defaultChannelMax = uint16(2047)
 	defaultHeartbeat  = uint16(60)
+	frameOverhead     = uint64(8)
 
 	// clusterOpTimeout prevents a slow/partitioned peer from blocking setup or shutdown.
-	clusterOpTimeout = 5 * time.Second
+	clusterOpTimeout       = 5 * time.Second
+	disconnectWriteTimeout = time.Second
 )
 
 // Connection represents a single AMQP 0.9.1 client connection.
@@ -39,9 +43,14 @@ type Connection struct {
 	conn   net.Conn
 	reader *bufio.Reader
 	writer *bufio.Writer
+	ctx    context.Context
+	policy *ConnectionPolicy
+	peer   VerifiedPeerIdentity
 
 	connID         string
 	connectionName string // human-readable label from AMQP ClientProperties "connection_name"
+	localIdentity  *LocalSessionIdentity
+	registered     bool
 	frameMax       uint32
 	channelMax     uint16
 	heartbeat      uint16
@@ -59,12 +68,17 @@ type Connection struct {
 	logger *slog.Logger
 }
 
-func newConnection(b *Broker, netConn net.Conn) *Connection {
-	return &Connection{
+func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *ConnectionPolicy) *Connection {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c := &Connection{
 		broker:     b,
 		conn:       netConn,
 		reader:     bufio.NewReaderSize(netConn, 65536),
 		writer:     bufio.NewWriterSize(netConn, 65536),
+		ctx:        ctx,
+		policy:     policy,
 		frameMax:   defaultFrameMax,
 		channelMax: defaultChannelMax,
 		heartbeat:  defaultHeartbeat,
@@ -72,6 +86,95 @@ func newConnection(b *Broker, netConn net.Conn) *Connection {
 		closeCh:    make(chan struct{}),
 		logger:     b.logger,
 	}
+	c.connID = b.nextConnectionID(netConn.RemoteAddr())
+	if policy != nil && policy.mode == ConnectionPolicyLocalPublishOnly {
+		if tlsConn, ok := netConn.(*tls.Conn); ok {
+			c.peer = verifiedPeerIdentity(tlsConn)
+		}
+	}
+	return c
+}
+
+func (c *Connection) connectionPolicy() *ConnectionPolicy {
+	if c.policy != nil {
+		return c.policy
+	}
+	// A nil per-connection policy is the compatibility path used by existing
+	// embedded callers and tests. Listener-aware servers always pass a policy.
+	return &ConnectionPolicy{
+		mode:         ConnectionPolicyExternal,
+		externalAuth: c.broker.auth,
+		hooks:        c.broker.hooks,
+	}
+}
+
+func (c *Connection) externalID(clientID string) string {
+	if c.localIdentity != nil {
+		return c.localIdentity.PrincipalID
+	}
+	auth := c.connectionPolicy().externalAuth
+	if auth == nil {
+		return ""
+	}
+	return auth.ExternalID(clientID)
+}
+
+func (c *Connection) applyHook(ctx context.Context, req corebroker.BlockingHookRequest) (corebroker.BlockingHookRequest, bool) {
+	hooks := c.connectionPolicy().hooks
+	if hooks == nil {
+		return req, true
+	}
+	req.Protocol = corebroker.HookProtocolAMQP091
+	return hooks.Handle(ctx, req)
+}
+
+func (c *Connection) localSessionIdentity() (LocalSessionIdentity, bool) {
+	if c.localIdentity == nil {
+		return LocalSessionIdentity{}, false
+	}
+	return *c.localIdentity, true
+}
+
+func (c *Connection) canPublishLocal(exchange, routingKey string) bool {
+	policy := c.connectionPolicy()
+	if policy.mode != ConnectionPolicyLocalPublishOnly || policy.localAuthz == nil || c.localIdentity == nil {
+		return false
+	}
+	return policy.localAuthz.CanPublishLocal(*c.localIdentity, exchange, routingKey)
+}
+
+func (c *Connection) registerAndValidate() error {
+	c.broker.registerConnection(c.connID, c)
+	c.registered = true
+	c.broker.stats.IncrementConnections()
+
+	if c.connectionPolicy().mode != ConnectionPolicyLocalPublishOnly {
+		return nil
+	}
+	c.broker.stats.IncrementLocalConnections()
+	identity, bound := c.localSessionIdentity()
+	validator := c.connectionPolicy().localSessions
+	if !bound || validator == nil || !validator.IsSessionActive(identity) {
+		c.broker.stats.AddLocalForcedDisconnects(1)
+		c.logger.Warn("amqp091_local_connection",
+			"auth_mode", "local",
+			"outcome", "denied",
+			"reason", "credentials_retired_before_registration",
+			"principal_id", identity.PrincipalID)
+		c.disconnect(codec.AccessRefused, "local principal credentials revoked")
+		return fmt.Errorf("local principal session became inactive during handshake")
+	}
+	return nil
+}
+
+func (c *Connection) disconnect(code uint16, reason string) {
+	if c.closed.Load() {
+		return
+	}
+	_ = c.conn.SetWriteDeadline(time.Now().Add(disconnectWriteTimeout))
+	_ = c.sendConnectionClose(code, reason, codec.ClassConnection, codec.MethodConnectionClose)
+	c.close()
+	_ = c.conn.Close()
 }
 
 func (c *Connection) nextDeliveryTag() uint64 {
@@ -81,7 +184,6 @@ func (c *Connection) nextDeliveryTag() uint64 {
 // run executes the full connection lifecycle.
 func (c *Connection) run() error {
 	defer c.cleanup()
-	c.connID = c.conn.RemoteAddr().String()
 
 	if err := c.negotiateProtocol(); err != nil {
 		return fmt.Errorf("protocol negotiation: %w", err)
@@ -90,9 +192,20 @@ func (c *Connection) run() error {
 	if err := c.connectionHandshake(); err != nil {
 		return fmt.Errorf("connection handshake: %w", err)
 	}
+	if err := c.conn.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clearing handshake deadline: %w", err)
+	}
 
-	c.broker.registerConnection(c.connID, c)
-	c.broker.stats.IncrementConnections()
+	if err := c.registerAndValidate(); err != nil {
+		return err
+	}
+	if c.localIdentity != nil {
+		c.logger.Info("amqp091_local_connection",
+			"auth_mode", "local",
+			"outcome", "opened",
+			"principal_id", c.localIdentity.PrincipalID,
+			"active_connections", c.broker.stats.GetLocalConnections())
+	}
 	if cl := c.broker.cluster; cl != nil {
 		clientID := PrefixedClientID(c.connID)
 		ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
@@ -155,7 +268,7 @@ func (c *Connection) connectionHandshake() error {
 	}
 
 	// Read Connection.StartOk
-	frame, err := codec.ReadFrame(c.reader)
+	frame, err := c.readFrame()
 	if err != nil {
 		return err
 	}
@@ -185,7 +298,7 @@ func (c *Connection) connectionHandshake() error {
 	}
 
 	// Read Connection.TuneOk
-	frame, err = codec.ReadFrame(c.reader)
+	frame, err = c.readFrame()
 	if err != nil {
 		return err
 	}
@@ -210,7 +323,7 @@ func (c *Connection) connectionHandshake() error {
 	}
 
 	// Read Connection.Open
-	frame, err = codec.ReadFrame(c.reader)
+	frame, err = c.readFrame()
 	if err != nil {
 		return err
 	}
@@ -229,33 +342,96 @@ func (c *Connection) connectionHandshake() error {
 }
 
 func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
-	auth := c.broker.auth
-	if auth == nil {
+	policy := c.connectionPolicy()
+	if policy.mode == ConnectionPolicyExternal && policy.externalAuth == nil {
+		// Preserve the existing unauthenticated-listener behavior.
 		return nil
 	}
 
-	// Placeholder credential extraction for PLAIN/AMQPLAIN during migration.
-	// This will be replaced by SuperMQ-backed authenticator wiring.
 	mechanism := strings.ToUpper(strings.TrimSpace(start.Mechanism))
 	switch mechanism {
 	case "PLAIN", "AMQPLAIN":
 		_, username, password, err := sasl.ParsePLAIN([]byte(start.Response))
 		if err != nil {
+			if policy.mode == ConnectionPolicyLocalPublishOnly {
+				c.recordLocalAuthFailure("invalid_sasl_response")
+			}
 			_ = c.sendConnectionClose(codec.AccessRefused, "invalid auth response", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("invalid %s auth response: %w", mechanism, err)
 		}
 
-		clientID := PrefixedClientID(c.connID)
-		ok, _, err := auth.Authenticate(clientID, username, password)
-		if err != nil || !ok {
-			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
-			return fmt.Errorf("%s auth rejected for user %q", mechanism, username)
-		}
-		return nil
+		return c.authenticateCredentials(mechanism, username, password)
 	default:
+		if policy.mode == ConnectionPolicyLocalPublishOnly {
+			c.recordLocalAuthFailure("unsupported_sasl_mechanism")
+		}
 		_ = c.sendConnectionClose(codec.CommandInvalid, "unsupported auth mechanism", codec.ClassConnection, codec.MethodConnectionStartOk)
 		return fmt.Errorf("unsupported auth mechanism %q", start.Mechanism)
 	}
+}
+
+func (c *Connection) authenticateCredentials(mechanism, username, password string) error {
+	policy := c.connectionPolicy()
+	clientID := PrefixedClientID(c.connID)
+	if policy.mode == ConnectionPolicyLocalPublishOnly {
+		if policy.localAuth == nil {
+			c.recordLocalAuthFailure("authenticator_unavailable")
+			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
+			return fmt.Errorf("%s local auth unavailable", mechanism)
+		}
+		principalID, credentialFingerprint, certificateURI, ok, err := policy.localAuth.AuthenticateLocal(
+			c.ctx, clientID, username, password, c.peer,
+		)
+		if err != nil {
+			c.recordLocalAuthFailure("authenticator_error")
+			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
+			return fmt.Errorf("%s local auth failed for user %q", mechanism, username)
+		}
+		if !ok {
+			c.recordLocalAuthFailure("credentials_rejected")
+			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
+			return fmt.Errorf("%s local auth rejected for user %q", mechanism, username)
+		}
+		if principalID == "" || credentialFingerprint == "" || certificateURI == "" ||
+			c.peer.CertificateFingerprint == "" || !containsURISAN(c.peer, certificateURI) {
+			c.recordLocalAuthFailure("identity_binding_rejected")
+			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
+			return fmt.Errorf("%s local auth rejected for user %q", mechanism, username)
+		}
+		c.localIdentity = &LocalSessionIdentity{
+			PrincipalID:            principalID,
+			CredentialFingerprint:  credentialFingerprint,
+			CertificateURI:         certificateURI,
+			CertificateFingerprint: c.peer.CertificateFingerprint,
+		}
+		c.broker.stats.IncrementLocalAuthSuccess()
+		c.logger.Info("amqp091_local_authentication",
+			"auth_mode", "local",
+			"outcome", "success",
+			"reason", "credentials_and_certificate_verified",
+			"client_id", clientID,
+			"principal_id", principalID)
+		return nil
+	}
+
+	if policy.externalAuth == nil {
+		return nil
+	}
+	ok, _, err := policy.externalAuth.Authenticate(clientID, username, password)
+	if err != nil || !ok {
+		_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
+		return fmt.Errorf("%s auth rejected for user %q", mechanism, username)
+	}
+	return nil
+}
+
+func (c *Connection) recordLocalAuthFailure(reason string) {
+	c.broker.stats.IncrementLocalAuthFailures()
+	c.logger.Warn("amqp091_local_authentication",
+		"auth_mode", "local",
+		"outcome", "failure",
+		"reason", reason,
+		"client_id", PrefixedClientID(c.connID))
 }
 
 // processFrames is the main frame processing loop.
@@ -272,7 +448,7 @@ func (c *Connection) processFrames() error {
 			c.conn.SetReadDeadline(deadline) //nolint:errcheck // fails only on closed connection
 		}
 
-		frame, err := codec.ReadFrame(c.reader)
+		frame, err := c.readFrame()
 		if err != nil {
 			if c.closed.Load() {
 				return nil
@@ -303,6 +479,39 @@ func (c *Connection) processFrames() error {
 			c.logger.Warn("unknown frame type", "type", frame.Type)
 		}
 	}
+}
+
+// readFrame enforces the negotiated frame maximum before allocating the frame
+// payload. codec.ReadFrame cannot apply a per-connection limit because it does
+// not know the AMQP tune result.
+func (c *Connection) readFrame() (*codec.Frame, error) {
+	frameType, err := codec.ReadOctet(c.reader)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := codec.ReadShort(c.reader)
+	if err != nil {
+		return nil, err
+	}
+	size, err := codec.ReadLong(c.reader)
+	if err != nil {
+		return nil, err
+	}
+	if c.frameMax > 0 && uint64(size)+frameOverhead > uint64(c.frameMax) {
+		return nil, codec.NewErr(codec.FrameError, "frame exceeds negotiated maximum", nil)
+	}
+	payload := make([]byte, size)
+	if _, err := io.ReadFull(c.reader, payload); err != nil {
+		return nil, err
+	}
+	frameEnd, err := codec.ReadOctet(c.reader)
+	if err != nil {
+		return nil, err
+	}
+	if frameEnd != codec.FrameEnd {
+		return nil, codec.NewErr(codec.FrameError, "malformed frame: incorrect frame-end marker", nil)
+	}
+	return &codec.Frame{Type: frameType, Channel: channel, Payload: payload}, nil
 }
 
 func (c *Connection) handleMethodFrame(frame *codec.Frame) error {
@@ -344,6 +553,10 @@ func (c *Connection) handleChannelOpen(chID uint16) error {
 	c.channelsMu.Lock()
 	defer c.channelsMu.Unlock()
 
+	if chID == 0 || chID > c.channelMax {
+		return c.sendConnectionClose(codec.ChannelError,
+			fmt.Sprintf("channel %d exceeds negotiated channel maximum %d", chID, c.channelMax), 0, 0)
+	}
 	if uint16(len(c.channels)) >= c.channelMax {
 		return c.sendConnectionClose(codec.ChannelError, "channel limit exceeded", 0, 0)
 	}
@@ -523,10 +736,23 @@ func (c *Connection) cleanup() {
 		ch.cleanup()
 	}
 
-	c.broker.stats.DecrementConnections()
+	if c.registered {
+		c.broker.stats.DecrementConnections()
+		if c.localIdentity != nil {
+			c.broker.stats.DecrementLocalConnections()
+			c.logger.Info("amqp091_local_connection",
+				"auth_mode", "local",
+				"outcome", "closed",
+				"principal_id", c.localIdentity.PrincipalID,
+				"active_connections", c.broker.stats.GetLocalConnections())
+		}
+	}
 	if c.connID != "" {
+		clientID := PrefixedClientID(c.connID)
+		if auth := c.connectionPolicy().externalAuth; auth != nil {
+			auth.Forget(clientID)
+		}
 		if cl := c.broker.cluster; cl != nil {
-			clientID := PrefixedClientID(c.connID)
 			ctx, cancel := context.WithTimeout(context.Background(), clusterOpTimeout)
 			defer cancel()
 			if err := cl.RemoveAllSubscriptions(ctx, clientID); err != nil {

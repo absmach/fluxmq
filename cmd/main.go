@@ -6,10 +6,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +23,7 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/authcallout"
 	"github.com/absmach/fluxmq/broker/hook"
+	"github.com/absmach/fluxmq/broker/localauth"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
@@ -31,6 +35,7 @@ import (
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 	"github.com/absmach/fluxmq/queue"
 	qraft "github.com/absmach/fluxmq/queue/raft"
+	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/ratelimit"
 	"github.com/absmach/fluxmq/reload"
@@ -73,6 +78,182 @@ type brokerDeliveryTarget struct {
 	mqtt    *broker.Broker
 	amqp    *amqp1broker.Broker
 	amqp091 *amqpbroker.Broker
+}
+
+type localAMQPPolicy struct {
+	store *localauth.Store
+}
+
+func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, username, secret string, peer amqpbroker.VerifiedPeerIdentity) (string, string, string, bool, error) {
+	if p == nil || p.store == nil {
+		return "", "", "", false, nil
+	}
+	for _, uriSAN := range peer.URISANs {
+		authentication, ok := p.store.Authenticate(username, secret, uriSAN)
+		if !ok {
+			continue
+		}
+		return authentication.Principal,
+			hex.EncodeToString(authentication.CredentialFingerprint[:]),
+			authentication.CertificateURISAN,
+			true,
+			nil
+	}
+	return "", "", "", false, nil
+}
+
+func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) bool {
+	authentication, ok := localAuthentication(identity)
+	return ok && p != nil && p.store != nil && p.store.CanPublishAuthenticated(authentication, exchange, routingKey)
+}
+
+func (p *localAMQPPolicy) IsSessionActive(identity amqpbroker.LocalSessionIdentity) bool {
+	if p == nil || p.store == nil {
+		return false
+	}
+	authentication, ok := localAuthentication(identity)
+	return ok && p.store.IsActive(authentication)
+}
+
+func localAuthentication(identity amqpbroker.LocalSessionIdentity) (localauth.Authentication, bool) {
+	rawFingerprint, err := hex.DecodeString(identity.CredentialFingerprint)
+	if err != nil || len(rawFingerprint) != len(localauth.CredentialFingerprint{}) {
+		return localauth.Authentication{}, false
+	}
+	var fingerprint localauth.CredentialFingerprint
+	copy(fingerprint[:], rawFingerprint)
+	return localauth.Authentication{
+		Principal:             identity.PrincipalID,
+		CertificateURISAN:     identity.CertificateURI,
+		CredentialFingerprint: fingerprint,
+	}, true
+}
+
+func reloadLocalPrincipals(
+	ctx context.Context,
+	store *localauth.Store,
+	principals []config.LocalPrincipalConfig,
+	configuredQueues []queueTypes.QueueConfig,
+	queueManager *queue.Manager,
+) (bool, error) {
+	if store == nil {
+		return false, fmt.Errorf("local principal store is not configured")
+	}
+	if queueManager == nil {
+		return false, fmt.Errorf("local principal queue manager is not configured")
+	}
+	contracts, err := localPrincipalPublishTargetContracts(principals, configuredQueues)
+	if err != nil {
+		return false, err
+	}
+	if err := validateLocalPrincipalPublishTargets(ctx, principals, configuredQueues, queueManager.QueueStore()); err != nil {
+		return false, err
+	}
+
+	previousContracts := queueManager.ProtectedQueueContracts()
+	unionContracts := mergeQueueContracts(previousContracts, contracts)
+	if err := queueManager.ReplaceProtectedQueueContracts(ctx, unionContracts); err != nil {
+		return false, err
+	}
+	changed, err := store.Reload(principals)
+	if err != nil {
+		if restoreErr := queueManager.ReplaceProtectedQueueContracts(ctx, previousContracts); restoreErr != nil {
+			return false, fmt.Errorf("reload local principals: %v; restore protected queue contracts: %w", err, restoreErr)
+		}
+		return false, err
+	}
+	if err := queueManager.NarrowProtectedQueueContracts(contracts); err != nil {
+		return false, fmt.Errorf("finalize protected queue contracts after local-principal reload: %w", err)
+	}
+	return changed, nil
+}
+
+func mergeQueueContracts(first, second []queueTypes.QueueConfig) []queueTypes.QueueConfig {
+	byName := make(map[string]queueTypes.QueueConfig, len(first)+len(second))
+	for _, contract := range first {
+		byName[contract.Name] = contract
+	}
+	for _, contract := range second {
+		byName[contract.Name] = contract
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	contracts := make([]queueTypes.QueueConfig, 0, len(names))
+	for _, name := range names {
+		contracts = append(contracts, byName[name])
+	}
+	return contracts
+}
+
+// validateLocalPrincipalPublishTargets verifies the persisted queue topology
+// after the queue manager has created its reserved queues. Local publishers do
+// not have topology permissions, so FluxMQ must fail startup instead of serving
+// a stale or unsafe target definition.
+func validateLocalPrincipalPublishTargets(
+	ctx context.Context,
+	principals []config.LocalPrincipalConfig,
+	configuredQueues []queueTypes.QueueConfig,
+	queueStore queueStorage.QueueStore,
+) error {
+	contracts, err := localPrincipalPublishTargetContracts(principals, configuredQueues)
+	if err != nil {
+		return err
+	}
+	if len(contracts) == 0 {
+		return nil
+	}
+	if queueStore == nil {
+		return fmt.Errorf("local principal publish targets require a queue store")
+	}
+	if _, ok := queueStore.(queueStorage.DurableQueueStore); !ok {
+		return fmt.Errorf("local principal publish targets require a queue store with durable sync support")
+	}
+
+	for _, expected := range contracts {
+		persisted, err := queueStore.GetQueue(ctx, expected.Name)
+		if err != nil {
+			return fmt.Errorf("load persisted local principal publish target %q: %w", expected.Name, err)
+		}
+		if persisted == nil {
+			return fmt.Errorf("load persisted local principal publish target %q: queue not found", expected.Name)
+		}
+		if err := queue.ValidateProtectedQueueContract(expected, *persisted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func localPrincipalPublishTargetContracts(principals []config.LocalPrincipalConfig, configuredQueues []queueTypes.QueueConfig) ([]queueTypes.QueueConfig, error) {
+	targets := make(map[string]struct{})
+	for _, principal := range principals {
+		for _, permission := range principal.Permissions.Publish {
+			targets[permission.RoutingKey] = struct{}{}
+		}
+	}
+
+	configuredByName := make(map[string]queueTypes.QueueConfig, len(configuredQueues))
+	for _, queueConfig := range configuredQueues {
+		configuredByName[queueConfig.Name] = queueConfig
+	}
+	targetNames := make([]string, 0, len(targets))
+	for target := range targets {
+		targetNames = append(targetNames, target)
+	}
+	sort.Strings(targetNames)
+
+	contracts := make([]queueTypes.QueueConfig, 0, len(targetNames))
+	for _, target := range targetNames {
+		contract, ok := configuredByName[target]
+		if !ok {
+			return nil, fmt.Errorf("local principal publish target %q has no matching queues entry", target)
+		}
+		contracts = append(contracts, contract)
+	}
+	return contracts, nil
 }
 
 func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg *storage.Message) error {
@@ -129,6 +310,13 @@ func main() {
 	logger := slog.New(handler).With("local_node_id", nodeID)
 	slog.SetDefault(logger)
 
+	localPrincipalStore, err := localauth.New(cfg.Auth.LocalPrincipals)
+	if err != nil {
+		slog.Error("Failed to initialize local principals", "error", err)
+		os.Exit(1)
+	}
+	localPolicyAdapter := &localAMQPPolicy{store: localPrincipalStore}
+
 	slog.Info("Starting MQTT broker", "version", "0.1.0")
 	slog.Info("Configuration loaded",
 		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
@@ -151,6 +339,7 @@ func main() {
 		"amqp091_plain_listener", cfg.Server.AMQP091.Plain.Addr,
 		"amqp091_tls_listener", cfg.Server.AMQP091.TLS.Addr,
 		"amqp091_mtls_listener", cfg.Server.AMQP091.MTLS.Addr,
+		"amqp091_internal_listener", cfg.Server.AMQP091.Internal.Addr,
 		"admin_api_addr", cfg.Server.AdminAPIAddr,
 		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
@@ -340,17 +529,21 @@ func main() {
 	// Create AMQP 0.9.1 broker (needs queue manager set later)
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
+	var (
+		amqp091ExternalAuth  *corebroker.AuthEngine
+		amqp091ExternalHooks *corebroker.BlockingHookEngine
+	)
 
 	// Configure auth callout
-	if cfg.Auth.URL != "" {
-		transport := cfg.Auth.Transport
+	if cfg.Auth.External.URL != "" {
+		transport := cfg.Auth.External.Transport
 		if transport == "" {
 			transport = "grpc"
 		}
 
 		cb := authcallout.DefaultCircuitBreaker(logger)
 		sharedOpts := []authcallout.Option{
-			authcallout.WithTimeout(cfg.Auth.Timeout),
+			authcallout.WithTimeout(cfg.Auth.External.Timeout),
 			authcallout.WithLogger(logger),
 			authcallout.WithCircuitBreaker(cb),
 		}
@@ -359,19 +552,19 @@ func main() {
 			opts := append(sharedOpts, authcallout.WithProtocol(proto))
 			switch transport {
 			case "http":
-				c := authcallout.NewHTTPClient(nil, cfg.Auth.URL, opts...)
+				c := authcallout.NewHTTPClient(nil, cfg.Auth.External.URL, opts...)
 				return c, c
 			default:
-				c := authcallout.NewGRPCClient(nil, cfg.Auth.URL, opts...)
+				c := authcallout.NewGRPCClient(nil, cfg.Auth.External.URL, opts...)
 				return c, c
 			}
 		}
 
-		cacheSize := cfg.Auth.IdentityCacheSize
+		cacheSize := cfg.Auth.External.IdentityCacheSize
 		if cacheSize == 0 {
 			cacheSize = corebroker.DefaultIdentityCacheSize
 		}
-		cacheTTL := cfg.Auth.IdentityCacheTTL
+		cacheTTL := cfg.Auth.External.IdentityCacheTTL
 		if cacheTTL == 0 {
 			cacheTTL = corebroker.DefaultIdentityCacheTTL
 		}
@@ -379,29 +572,30 @@ func main() {
 			corebroker.WithIdentityCache(cacheSize, cacheTTL),
 		}
 
-		if cfg.Auth.AuthEnabledFor("mqtt") {
+		if cfg.Auth.External.EnabledFor("mqtt") {
 			mqttAuthn, mqttAuthz := newClient(authcallout.ProtocolMQTT)
 			b.SetAuthEngine(corebroker.NewAuthEngine(mqttAuthn, mqttAuthz, engineOpts...))
 			slog.Info("Auth callout enabled for mqtt")
 		}
 
-		if cfg.Auth.AuthEnabledFor("amqp") {
+		if cfg.Auth.External.EnabledFor("amqp") {
 			amqpAuthn, amqpAuthz := newClient(authcallout.ProtocolAMQP10)
 			amqpBroker.SetAuthEngine(corebroker.NewAuthEngine(amqpAuthn, amqpAuthz, engineOpts...))
 			slog.Info("Auth callout enabled for amqp")
 		}
 
-		if cfg.Auth.AuthEnabledFor("amqp091") {
+		if cfg.Auth.External.EnabledFor("amqp091") {
 			amqp091Authn, amqp091Authz := newClient(authcallout.ProtocolAMQP091)
-			amqp091Broker.SetAuthEngine(corebroker.NewAuthEngine(amqp091Authn, amqp091Authz, engineOpts...))
+			amqp091ExternalAuth = corebroker.NewAuthEngine(amqp091Authn, amqp091Authz, engineOpts...)
+			amqp091Broker.SetAuthEngine(amqp091ExternalAuth)
 			slog.Info("Auth callout enabled for amqp091")
 		}
 
 		slog.Info("Auth callout configured",
-			"url", cfg.Auth.URL,
+			"url", cfg.Auth.External.URL,
 			"transport", transport,
-			"timeout", cfg.Auth.Timeout,
-			"protocols", cfg.Auth.Protocols)
+			"timeout", cfg.Auth.External.Timeout,
+			"protocols", cfg.Auth.External.Protocols)
 	} else {
 		slog.Info("Auth callout disabled")
 	}
@@ -431,7 +625,8 @@ func main() {
 
 		b.SetBlockingHooks(newEngine())
 		amqpBroker.SetBlockingHooks(newEngine())
-		amqp091Broker.SetBlockingHooks(newEngine())
+		amqp091ExternalHooks = newEngine()
+		amqp091Broker.SetBlockingHooks(amqp091ExternalHooks)
 		slog.Info("Blocking hooks configured",
 			"url", cfg.Hooks.URL,
 			"transport", transport,
@@ -450,8 +645,9 @@ func main() {
 	amqpBroker.SetRouter(sharedRouter)
 
 	var (
-		qm            *queue.Manager
-		queueLogStore *logStorage.Adapter
+		qm                       *queue.Manager
+		queueLogStore            *logStorage.Adapter
+		configuredQueueContracts []queueTypes.QueueConfig
 	)
 
 	if metrics != nil {
@@ -566,6 +762,16 @@ func main() {
 				Replication: replication,
 			}))
 		}
+		configuredQueueContracts = append(configuredQueueContracts, queueCfg.QueueConfigs...)
+		protectedQueueContracts, err := localPrincipalPublishTargetContracts(
+			cfg.Auth.LocalPrincipals,
+			configuredQueueContracts,
+		)
+		if err != nil {
+			slog.Error("Invalid local principal publish target", "error", err)
+			os.Exit(1)
+		}
+		queueCfg.ProtectedQueueContracts = protectedQueueContracts
 
 		// Notify AMQP 0.9.1 clients when their consumers are removed by stale cleanup
 		queueCfg.OnConsumerRemoved = func(queueName, groupID string, consumerIDs []string) {
@@ -622,6 +828,15 @@ func main() {
 
 		if err := b.SetQueueManager(qm); err != nil {
 			slog.Error("Failed to set queue manager", "error", err)
+			os.Exit(1)
+		}
+		if err := validateLocalPrincipalPublishTargets(
+			context.Background(),
+			cfg.Auth.LocalPrincipals,
+			configuredQueueContracts,
+			qm.QueueStore(),
+		); err != nil {
+			slog.Error("Invalid local principal publish target", "error", err)
 			os.Exit(1)
 		}
 
@@ -896,16 +1111,36 @@ func main() {
 		}(slot.name, slot.cfg.Addr, amqpSrv)
 	}
 
-	// AMQP 0.9.1 servers
+	// AMQP 0.9.1 servers. The public listeners receive only the external
+	// callout policy; the internal listener receives only the local-principal
+	// policy. There is deliberately no fallback between these policies.
+	maxAMQP091MessageSize := uint64(0)
+	if cfg.Broker.MaxMessageSize > 0 {
+		maxAMQP091MessageSize = uint64(cfg.Broker.MaxMessageSize)
+	}
+	externalAMQP091Policy := amqpbroker.NewExternalConnectionPolicy(
+		amqp091ExternalAuth,
+		amqp091ExternalHooks,
+		maxAMQP091MessageSize,
+	)
+	internalAMQP091Policy := amqpbroker.NewLocalPublishOnlyConnectionPolicy(
+		localPolicyAdapter,
+		localPolicyAdapter,
+		localPolicyAdapter,
+		maxAMQP091MessageSize,
+	)
 	amqp091Slots := []struct {
-		name string
-		cfg  config.AMQP091ListenerConfig
+		name   string
+		cfg    config.AMQP091ListenerConfig
+		policy *amqpbroker.ConnectionPolicy
 	}{
-		{name: listenerPlain, cfg: cfg.Server.AMQP091.Plain},
-		{name: listenerTLS, cfg: cfg.Server.AMQP091.TLS},
-		{name: listenerMTLS, cfg: cfg.Server.AMQP091.MTLS},
+		{name: listenerPlain, cfg: cfg.Server.AMQP091.Plain, policy: externalAMQP091Policy},
+		{name: listenerTLS, cfg: cfg.Server.AMQP091.TLS, policy: externalAMQP091Policy},
+		{name: listenerMTLS, cfg: cfg.Server.AMQP091.MTLS, policy: externalAMQP091Policy},
+		{name: "internal", cfg: cfg.Server.AMQP091.Internal, policy: internalAMQP091Policy},
 	}
 
+	var amqp091Ready []<-chan struct{}
 	for _, slot := range amqp091Slots {
 		if strings.TrimSpace(slot.cfg.Addr) == "" {
 			continue
@@ -918,13 +1153,16 @@ func main() {
 		}
 
 		amqp091Cfg := amqpserver.Config{
-			Address:         slot.cfg.Addr,
-			TLSConfig:       tlsCfg,
-			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			MaxConnections:  slot.cfg.MaxConnections,
-			Logger:          logger,
+			Address:          slot.cfg.Addr,
+			TLSConfig:        tlsCfg,
+			HandshakeTimeout: 10 * time.Second,
+			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
+			MaxConnections:   slot.cfg.MaxConnections,
+			ConnectionPolicy: slot.policy,
+			Logger:           logger,
 		}
 		amqp091Srv := amqpserver.New(amqp091Cfg, amqp091Broker)
+		amqp091Ready = append(amqp091Ready, amqp091Srv.Ready())
 
 		wg.Add(1)
 		go func(name, addr string, server *amqpserver.Server) {
@@ -934,6 +1172,18 @@ func main() {
 				serverErr <- err
 			}
 		}(slot.name, slot.cfg.Addr, amqp091Srv)
+	}
+
+	for _, ready := range amqp091Ready {
+		select {
+		case <-ready:
+		case err := <-serverErr:
+			slog.Error("AMQP 0.9.1 listener failed during startup", "error", err)
+			os.Exit(1)
+		case <-time.After(10 * time.Second):
+			slog.Error("Timed out waiting for AMQP 0.9.1 listener readiness")
+			os.Exit(1)
+		}
 	}
 
 	if cfg.Server.HealthEnabled {
@@ -960,6 +1210,32 @@ func main() {
 		reload.WithBroker(b),
 		reload.WithSessionTuner(b),
 		reload.WithWebhookTuner(webhookNotifier),
+		reload.WithLocalPrincipalsReloadFailure(func(error) {
+			amqp091Broker.RecordLocalPrincipalReload(false)
+		}),
+		reload.WithLocalPrincipalsReload(func(principals []config.LocalPrincipalConfig) (bool, error) {
+			changed, err := reloadLocalPrincipals(
+				context.Background(),
+				localPrincipalStore,
+				principals,
+				configuredQueueContracts,
+				qm,
+			)
+			if err != nil {
+				amqp091Broker.RecordLocalPrincipalReload(false)
+				return false, err
+			}
+			amqp091Broker.RecordLocalPrincipalReload(true)
+			if !changed {
+				return false, nil
+			}
+			disconnected := amqp091Broker.DisconnectInvalidLocalSessions(localPolicyAdapter.IsSessionActive)
+			slog.Info("Local principals reloaded",
+				"outcome", "success",
+				"generation", localPrincipalStore.Generation(),
+				"disconnected_sessions", disconnected)
+			return true, nil
+		}),
 	)
 
 	// Start Admin API server (HTTP + Connect/gRPC queue service)

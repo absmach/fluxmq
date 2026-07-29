@@ -1,0 +1,333 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+// Package localauth authenticates and authorizes principals configured locally
+// in FluxMQ. It never delegates an unknown or invalid principal to an external
+// authentication service.
+package localauth
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/absmach/fluxmq/config"
+)
+
+const minimumSecretBytes = 32
+
+// CredentialFingerprint identifies the exact local secret used by a session.
+// It is comparable, so connection registries can use it to revoke sessions
+// after a credential rotation.
+type CredentialFingerprint [sha256.Size]byte
+
+// String returns a short non-secret identifier suitable for diagnostics.
+func (f CredentialFingerprint) String() string {
+	return hex.EncodeToString(f[:8])
+}
+
+// Authentication describes a successfully authenticated local principal.
+type Authentication struct {
+	Principal             string
+	CertificateURISAN     string
+	CredentialFingerprint CredentialFingerprint
+}
+
+// PublishTarget is an exact AMQP exchange and routing-key pair.
+type PublishTarget struct {
+	Exchange   string
+	RoutingKey string
+}
+
+// Store holds an atomically replaceable local-principal snapshot.
+type Store struct {
+	reloadMu sync.Mutex
+	current  atomic.Pointer[snapshot]
+}
+
+type snapshot struct {
+	generation uint64
+	principals map[string]*principal
+}
+
+type principal struct {
+	certificateURISAN string
+	current           CredentialFingerprint
+	previous          *CredentialFingerprint
+	publish           map[PublishTarget]struct{}
+}
+
+// New loads and validates a local-principal snapshot.
+func New(configs []config.LocalPrincipalConfig) (*Store, error) {
+	store := &Store{}
+	if _, err := store.Reload(configs); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// Reload builds and validates a complete replacement before atomically making
+// it visible. It reports false without swapping when the loaded credentials
+// and ACLs are semantically identical. If loading fails, the current snapshot
+// remains unchanged.
+func (s *Store) Reload(configs []config.LocalPrincipalConfig) (bool, error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
+	next, err := buildSnapshot(configs, 0)
+	if err != nil {
+		return false, err
+	}
+	current := s.current.Load()
+	if current != nil && snapshotsEqual(current, next) {
+		return false, nil
+	}
+	if current == nil {
+		next.generation = 1
+	} else {
+		next.generation = current.generation + 1
+	}
+	s.current.Store(next)
+	return true, nil
+}
+
+// Generation returns the active snapshot generation. Every successful reload
+// increments it; a failed reload leaves it unchanged.
+func (s *Store) Generation() uint64 {
+	current := s.current.Load()
+	if current == nil {
+		return 0
+	}
+	return current.generation
+}
+
+// Authenticate verifies username, SASL secret, and certificate URI SAN
+// together. The secret is checked in constant time against both rotation slots.
+func (s *Store) Authenticate(username, secret, certificateURISAN string) (Authentication, bool) {
+	current := s.current.Load()
+	if current == nil {
+		return Authentication{}, false
+	}
+	principal, ok := current.principals[username]
+	if !ok || principal.certificateURISAN != certificateURISAN {
+		return Authentication{}, false
+	}
+
+	candidate := CredentialFingerprint(sha256.Sum256([]byte(secret)))
+	matched := subtle.ConstantTimeCompare(candidate[:], principal.current[:])
+	if principal.previous != nil {
+		matched |= subtle.ConstantTimeCompare(candidate[:], principal.previous[:])
+	}
+	if matched != 1 {
+		return Authentication{}, false
+	}
+
+	return Authentication{
+		Principal:             username,
+		CertificateURISAN:     certificateURISAN,
+		CredentialFingerprint: candidate,
+	}, true
+}
+
+// IsActive reports whether an authenticated session is still valid in the
+// latest snapshot. It detects removed principals, SAN changes, and retired
+// credentials.
+func (s *Store) IsActive(authentication Authentication) bool {
+	current := s.current.Load()
+	return authenticationActive(current, authentication)
+}
+
+// CanPublishAuthenticated checks the session credential and exact publish ACL
+// against one immutable snapshot. Loading both independently would leave a
+// revocation race when a reload lands between the two checks.
+func (s *Store) CanPublishAuthenticated(authentication Authentication, exchange, routingKey string) bool {
+	current := s.current.Load()
+	if !authenticationActive(current, authentication) {
+		return false
+	}
+	principal := current.principals[authentication.Principal]
+	_, allowed := principal.publish[PublishTarget{Exchange: exchange, RoutingKey: routingKey}]
+	return allowed
+}
+
+func authenticationActive(current *snapshot, authentication Authentication) bool {
+	if current == nil {
+		return false
+	}
+	principal, ok := current.principals[authentication.Principal]
+	if !ok || principal.certificateURISAN != authentication.CertificateURISAN {
+		return false
+	}
+	if subtle.ConstantTimeCompare(authentication.CredentialFingerprint[:], principal.current[:]) == 1 {
+		return true
+	}
+	return principal.previous != nil && subtle.ConstantTimeCompare(authentication.CredentialFingerprint[:], principal.previous[:]) == 1
+}
+
+func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*snapshot, error) {
+	principals := make(map[string]*principal, len(configs))
+	uriSANs := make(map[string]struct{}, len(configs))
+
+	for i, principalConfig := range configs {
+		prefix := fmt.Sprintf("auth.local_principals[%d]", i)
+		name := strings.TrimSpace(principalConfig.Name)
+		if name == "" {
+			return nil, fmt.Errorf("%s.name cannot be empty", prefix)
+		}
+		if name != principalConfig.Name {
+			return nil, fmt.Errorf("%s.name cannot have leading or trailing whitespace", prefix)
+		}
+		if _, exists := principals[name]; exists {
+			return nil, fmt.Errorf("%s.name %q is duplicated", prefix, name)
+		}
+
+		uriSAN := strings.TrimSpace(principalConfig.CertificateURISAN)
+		parsedURI, err := url.Parse(uriSAN)
+		if uriSAN == "" || err != nil || parsedURI.Scheme == "" {
+			return nil, fmt.Errorf("%s.certificate_uri_san must be an absolute URI", prefix)
+		}
+		if uriSAN != principalConfig.CertificateURISAN {
+			return nil, fmt.Errorf("%s.certificate_uri_san cannot have leading or trailing whitespace", prefix)
+		}
+		if _, exists := uriSANs[uriSAN]; exists {
+			return nil, fmt.Errorf("%s.certificate_uri_san %q is duplicated", prefix, uriSAN)
+		}
+		uriSANs[uriSAN] = struct{}{}
+
+		current, err := loadFingerprint(prefix+".current_secret_file", principalConfig.CurrentSecretFile, true)
+		if err != nil {
+			return nil, err
+		}
+		previous, err := loadOptionalFingerprint(prefix+".previous_secret_file", principalConfig.PreviousSecretFile)
+		if err != nil {
+			return nil, err
+		}
+		if previous != nil && subtle.ConstantTimeCompare(current[:], previous[:]) == 1 {
+			return nil, fmt.Errorf("%s.current_secret_file and previous_secret_file must contain different secrets", prefix)
+		}
+
+		publish := make(map[PublishTarget]struct{}, len(principalConfig.Permissions.Publish))
+		for j, permission := range principalConfig.Permissions.Publish {
+			permissionPrefix := fmt.Sprintf("%s.permissions.publish[%d]", prefix, j)
+			if permission.Exchange != "" {
+				return nil, fmt.Errorf("%s.exchange must be empty; local principals may publish only through the AMQP default exchange", permissionPrefix)
+			}
+			if permission.RoutingKey == "" {
+				return nil, fmt.Errorf("%s.routing_key cannot be empty", permissionPrefix)
+			}
+			if containsWildcard(permission.Exchange) || containsWildcard(permission.RoutingKey) {
+				return nil, fmt.Errorf("%s must use exact exchange and routing_key values without wildcards", permissionPrefix)
+			}
+			target := PublishTarget{Exchange: permission.Exchange, RoutingKey: permission.RoutingKey}
+			if _, exists := publish[target]; exists {
+				return nil, fmt.Errorf("%s duplicates an earlier publish permission", permissionPrefix)
+			}
+			publish[target] = struct{}{}
+		}
+
+		if len(principalConfig.Permissions.Subscribe) != 0 {
+			return nil, fmt.Errorf("%s.permissions.subscribe is unsupported; local principals are publish-only", prefix)
+		}
+
+		principals[name] = &principal{
+			certificateURISAN: uriSAN,
+			current:           current,
+			previous:          previous,
+			publish:           publish,
+		}
+	}
+
+	return &snapshot{generation: generation, principals: principals}, nil
+}
+
+func snapshotsEqual(left, right *snapshot) bool {
+	if len(left.principals) != len(right.principals) {
+		return false
+	}
+	for name, leftPrincipal := range left.principals {
+		rightPrincipal, ok := right.principals[name]
+		if !ok || !principalsEqual(leftPrincipal, rightPrincipal) {
+			return false
+		}
+	}
+	return true
+}
+
+func principalsEqual(left, right *principal) bool {
+	if left.certificateURISAN != right.certificateURISAN || left.current != right.current {
+		return false
+	}
+	if (left.previous == nil) != (right.previous == nil) {
+		return false
+	}
+	if left.previous != nil && *left.previous != *right.previous {
+		return false
+	}
+	if len(left.publish) != len(right.publish) {
+		return false
+	}
+	for target := range left.publish {
+		if _, ok := right.publish[target]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func loadOptionalFingerprint(field, filename string) (*CredentialFingerprint, error) {
+	if filename == "" {
+		return nil, nil
+	}
+	fingerprint, err := loadFingerprint(field, filename, false)
+	if err != nil {
+		return nil, err
+	}
+	return &fingerprint, nil
+}
+
+func loadFingerprint(field, filename string, required bool) (CredentialFingerprint, error) {
+	var zero CredentialFingerprint
+	if strings.TrimSpace(filename) == "" {
+		if required || filename != "" {
+			return zero, fmt.Errorf("%s cannot be empty", field)
+		}
+		return zero, nil
+	}
+
+	secret, err := os.ReadFile(filename)
+	if err != nil {
+		return zero, fmt.Errorf("%s: failed to read secret file: %w", field, err)
+	}
+	if len(secret) > 0 && secret[len(secret)-1] == '\n' {
+		secret = secret[:len(secret)-1]
+		if len(secret) > 0 && secret[len(secret)-1] == '\r' {
+			secret = secret[:len(secret)-1]
+		}
+	}
+	if bytes.ContainsAny(secret, "\r\n") {
+		clear(secret)
+		return zero, fmt.Errorf("%s: secret file may contain only one terminal newline", field)
+	}
+	if bytes.IndexByte(secret, 0) >= 0 {
+		clear(secret)
+		return zero, fmt.Errorf("%s: secret file must not contain NUL bytes", field)
+	}
+	if len(secret) < minimumSecretBytes {
+		clear(secret)
+		return zero, fmt.Errorf("%s must contain at least %d bytes", field, minimumSecretBytes)
+	}
+	fingerprint := CredentialFingerprint(sha256.Sum256(secret))
+	clear(secret)
+	return fingerprint, nil
+}
+
+func containsWildcard(value string) bool {
+	return strings.ContainsAny(value, "#*+")
+}

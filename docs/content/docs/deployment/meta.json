@@ -3,6 +3,7 @@
   "pages": [
     "running-cluster",
     "running-in-production",
+    "internal-amqp-local-principals",
     "health-readiness",
     "performance-tuning"
   ]

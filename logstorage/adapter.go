@@ -17,6 +17,7 @@ const headerTopic = "_topic"
 
 var (
 	_ storage.QueueStore         = (*Adapter)(nil)
+	_ storage.DurableQueueStore  = (*Adapter)(nil)
 	_ storage.ConsumerGroupStore = (*Adapter)(nil)
 )
 
@@ -186,12 +187,7 @@ func (a *Adapter) queueConfigExists(queueName string) error {
 	return nil
 }
 
-// Append adds a message to the end of a queue's log.
-func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
-	if err := a.queueConfigExists(queueName); err != nil {
-		return 0, err
-	}
-
+func encodeMessage(msg *types.Message) ([]byte, []byte, map[string][]byte) {
 	value := msg.GetPayload()
 	key := []byte{}
 
@@ -209,7 +205,34 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 		headers["_expires_at"] = []byte(strconv.FormatInt(msg.ExpiresAt.UnixMilli(), 10))
 	}
 
+	return value, key, headers
+}
+
+// Append adds a message to the end of a queue's log.
+func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	if err := a.queueConfigExists(queueName); err != nil {
+		return 0, err
+	}
+
+	value, key, headers := encodeMessage(msg)
 	return a.store.Append(queueName, value, key, headers)
+}
+
+// AppendAndSync appends a message and syncs the exact segment containing it as
+// one operation. It is the durability primitive used before publisher ACKs.
+func (a *Adapter) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	if err := a.queueConfigExists(queueName); err != nil {
+		return 0, err
+	}
+
+	value, key, headers := encodeMessage(msg)
+	return a.store.AppendAndSync(queueName, value, key, headers)
+}
+
+// SyncQueue flushes the queue's current active segment. AppendAndSync must be
+// used when the caller needs a barrier tied to one particular append.
+func (a *Adapter) SyncQueue(_ context.Context, queueName string) error {
+	return a.store.SyncQueue(queueName)
 }
 
 // AppendBatch adds multiple messages to a queue's log.

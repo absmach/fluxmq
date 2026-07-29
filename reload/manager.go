@@ -44,6 +44,16 @@ type WebhookTuner interface {
 	Reconfigure(cfg config.WebhookConfig) error
 }
 
+// LocalPrincipalsReloadFunc validates and atomically swaps the complete local
+// principal snapshot. changed reports whether secret material or effective
+// principal policy changed, including changes to mounted files whose paths are
+// unchanged in YAML.
+type LocalPrincipalsReloadFunc func(principals []config.LocalPrincipalConfig) (changed bool, err error)
+
+// LocalPrincipalsReloadFailureFunc observes a configuration-load failure while
+// local principals are active. The current immutable snapshot remains active.
+type LocalPrincipalsReloadFailureFunc func(err error)
+
 // ErrShuttingDown indicates reload was rejected because shutdown has started.
 var ErrShuttingDown = errors.New("server is shutting down")
 
@@ -66,11 +76,13 @@ type Manager struct {
 	shuttingDown atomic.Bool
 
 	// Subsystem references for direct calls (decision #1 from eng review).
-	rateLimiter  *ratelimit.AtomicManager
-	broker       BrokerTuner
-	sessionTuner SessionTuner
-	webhookTuner WebhookTuner
-	logSetup     func(cfg config.LogConfig)
+	rateLimiter           *ratelimit.AtomicManager
+	broker                BrokerTuner
+	sessionTuner          SessionTuner
+	webhookTuner          WebhookTuner
+	localPrincipalsReload LocalPrincipalsReloadFunc
+	localPrincipalsFailed LocalPrincipalsReloadFailureFunc
+	logSetup              func(cfg config.LogConfig)
 }
 
 // Option configures the Manager.
@@ -94,6 +106,17 @@ func WithSessionTuner(t SessionTuner) Option {
 // WithWebhookTuner sets the webhook tuner for reload updates.
 func WithWebhookTuner(t WebhookTuner) Option {
 	return func(m *Manager) { m.webhookTuner = t }
+}
+
+// WithLocalPrincipalsReload sets the atomic local-principal reload callback.
+func WithLocalPrincipalsReload(fn LocalPrincipalsReloadFunc) Option {
+	return func(m *Manager) { m.localPrincipalsReload = fn }
+}
+
+// WithLocalPrincipalsReloadFailure sets the observer for load failures that
+// prevent an active local-principal configuration from reaching its callback.
+func WithLocalPrincipalsReloadFailure(fn LocalPrincipalsReloadFailureFunc) Option {
+	return func(m *Manager) { m.localPrincipalsFailed = fn }
 }
 
 // WithLogSetup sets the function called to reconfigure logging.
@@ -149,10 +172,24 @@ func (m *Manager) Reload(ctx context.Context) (*ReloadResult, error) {
 
 	newCfg, err := config.Load(m.configFile)
 	if err != nil {
+		if m.localPrincipalsFailed != nil && len(m.current.Auth.LocalPrincipals) > 0 {
+			m.localPrincipalsFailed(err)
+		}
 		return nil, fmt.Errorf("reload failed: %w", err)
 	}
 
 	diff := config.Diff(m.current, newCfg)
+	if m.localPrincipalsReload != nil && !hasFieldChange(diff.RuntimeSafe, "Auth.LocalPrincipals") {
+		// Secret files can change without their configured paths changing. Probe
+		// the immutable local-principal snapshot on every reload and retain this
+		// synthetic change only when the callback reports an effective change.
+		diff.RuntimeSafe = append(diff.RuntimeSafe, config.FieldChange{
+			Path:     "Auth.LocalPrincipals",
+			OldValue: m.current.Auth.LocalPrincipals,
+			NewValue: newCfg.Auth.LocalPrincipals,
+			Class:    config.RuntimeSafe,
+		})
+	}
 	if !diff.HasChanges() {
 		result.Duration = time.Since(start)
 		slog.Info("config reload: no changes detected", "version", m.version)
@@ -183,6 +220,11 @@ func (m *Manager) Reload(ctx context.Context) (*ReloadResult, error) {
 		m.current = updated
 		m.version++
 	}
+	if len(result.Applied) == 0 && len(result.RestartRequired) == 0 {
+		result.Duration = time.Since(start)
+		slog.Info("config reload: no changes detected", "version", m.version)
+		return result, nil
+	}
 	result.Version = m.version
 	result.Duration = time.Since(start)
 
@@ -210,7 +252,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 	}
 
 	// Partition changes by subsystem.
-	var logChanges, rateLimitChanges, brokerChanges, sessionChanges, webhookChanges []config.FieldChange
+	var logChanges, rateLimitChanges, brokerChanges, sessionChanges, webhookChanges, localPrincipalChanges []config.FieldChange
 	for _, c := range changes {
 		switch {
 		case isLogField(c.Path):
@@ -223,6 +265,8 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			sessionChanges = append(sessionChanges, c)
 		case isWebhookField(c.Path):
 			webhookChanges = append(webhookChanges, c)
+		case c.Path == "Auth.LocalPrincipals":
+			localPrincipalChanges = append(localPrincipalChanges, c)
 		}
 	}
 
@@ -283,7 +327,39 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}
 	}
 
+	if len(localPrincipalChanges) > 0 {
+		if m.localPrincipalsReload == nil {
+			errs = append(errs, "Auth.LocalPrincipals: local-principal reload is not configured")
+			for i := len(rollbacks) - 1; i >= 0; i-- {
+				rollbacks[i]()
+			}
+			return nil, errs
+		}
+
+		changed, err := m.localPrincipalsReload(new.Auth.LocalPrincipals)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("Auth.LocalPrincipals: %v", err))
+			for i := len(rollbacks) - 1; i >= 0; i-- {
+				rollbacks[i]()
+			}
+			return nil, errs
+		}
+		configChanged := !reflect.DeepEqual(localPrincipalChanges[0].OldValue, localPrincipalChanges[0].NewValue)
+		if changed || configChanged {
+			applied = append(applied, localPrincipalChanges...)
+		}
+	}
+
 	return applied, errs
+}
+
+func hasFieldChange(changes []config.FieldChange, path string) bool {
+	for _, change := range changes {
+		if change.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func configToRatelimit(cfg config.RateLimitConfig) ratelimit.Config {
@@ -347,10 +423,9 @@ func isSessionField(path string) bool   { return len(path) > 8 && path[:8] == "S
 func isWebhookField(path string) bool   { return len(path) > 8 && path[:8] == "Webhook." }
 
 // applyFieldChanges returns a new Config with only the given field changes
-// applied on top of base. The shallow copy is safe because all current
-// runtime-safe fields (log, ratelimit, broker tuning) are value types.
-// If a slice/map-typed field is ever promoted to runtime-safe, this must
-// be updated to deep-copy the relevant section.
+// applied on top of base. Scalar runtime fields are replaced by value and
+// Auth.LocalPrincipals is replaced as one immutable slice; runtime code never
+// mutates the stored configuration slice.
 func applyFieldChanges(base *config.Config, changes []config.FieldChange) (*config.Config, error) {
 	updated := *base
 

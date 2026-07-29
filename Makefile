@@ -111,6 +111,13 @@ test-client-integration:
 	# Optional override: FLUXMQ_AMQP_TEST_HOST=<docker-host-ip-or-name>
 	$(GO) test ./client/... -tags=integration -run RabbitMQ -count=1 -v -timeout 10m
 
+# Build and start the real broker, then exercise the dedicated mTLS AMQP 0.9.1
+# local-principal path, external-callout isolation, rotation, and persistence.
+.PHONY: smoke-local-auth
+smoke-local-auth: build
+	FLUXMQ_SMOKE_BINARY=$(CURDIR)/$(BUILD_DIR)/$(BINARY) \
+		$(GO) test -tags=smoke -count=1 -v -timeout 3m ./tests/smoke
+
 # Run full tests (including stress)
 .PHONY: test-full
 test-full:
