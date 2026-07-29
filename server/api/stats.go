@@ -68,6 +68,7 @@ type amqpStats struct {
 // certificate, URI, routing-key, or tenant values become metric dimensions.
 type amqpLocalPrincipalStats struct {
 	ActiveConnections uint64                       `json:"active_connections"`
+	PublishTimeouts   uint64                       `json:"publish_timeouts"`
 	Authentication    amqpLocalAuthenticationStats `json:"authentication"`
 	Authorization     amqpLocalAuthorizationStats  `json:"authorization"`
 	Reloads           amqpLocalReloadStats         `json:"reloads"`
@@ -188,6 +189,7 @@ func (s *Server) buildStatsResponse() statsResponse {
 			Errors:      errorStats{Protocol: ast.GetProtocolErrors()},
 			LocalPrincipals: amqpLocalPrincipalStats{
 				ActiveConnections: ast.GetLocalConnections(),
+				PublishTimeouts:   ast.GetLocalPublishTimeouts(),
 				Authentication: amqpLocalAuthenticationStats{
 					Success: ast.GetLocalAuthSuccess(),
 					Failure: ast.GetLocalAuthFailures(),

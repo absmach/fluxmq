@@ -425,6 +425,75 @@ func TestLocalDurableStreamPublishIsBounded(t *testing.T) {
 	}
 }
 
+// blockingStreamQueueManager stalls inside the durable append the way an
+// unresponsive disk does: the barrier cannot be interrupted, so the deadline
+// has to be enforced by the caller waiting on it.
+type blockingStreamQueueManager struct {
+	mockChannelQueueManager
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingStreamQueueManager) PublishToDurableStream(_ context.Context, _ string, _ qtypes.PublishRequest) error {
+	close(m.entered)
+	<-m.release
+	return nil
+}
+
+func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
+	previousTimeout := localPublishTimeout
+	localPublishTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { localPublishTimeout = previousTimeout })
+
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentity(conn)
+	qm := &blockingStreamQueueManager{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	t.Cleanup(func() { close(qm.release) })
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	ch.confirmMode = true
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+	ch.pendingBody = []byte("{}")
+
+	completed := make(chan struct{})
+	go func() {
+		ch.completePublish()
+		close(completed)
+	}()
+
+	select {
+	case <-qm.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("durable append was never entered")
+	}
+	select {
+	case <-completed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publish did not return while the durable barrier was stalled")
+	}
+
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode publisher response: %v", err)
+	}
+	if _, ok := decoded.(*codec.BasicNack); !ok {
+		t.Fatalf("response = %T, want BasicNack", decoded)
+	}
+	if count := conn.broker.stats.GetLocalPublishTimeouts(); count != 1 {
+		t.Fatalf("publish timeouts = %d, want 1", count)
+	}
+}
+
 func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))

@@ -116,8 +116,10 @@ or as `amq.default`.
 A publish target must be a pre-provisioned protected stream on a queue store
 that provides real crash durability; the in-memory queue store cannot back one.
 Publisher confirms are sent only after the append and its durability barrier
-complete, and are bounded by an internal timeout that NACKs rather than
-stalling the connection.
+complete. The wait for that barrier is bounded: an fsync cannot be cancelled
+once started, so FluxMQ stops waiting after the internal publish timeout and
+NACKs rather than leaving the connection stalled. An abandoned append may still
+complete, so a NACK does not prove the record was not written.
 
 Local principals are publish-only. Subscription ACLs are not implemented, so
 `permissions.subscribe` must remain `[]`; every consume or `Basic.Get`

@@ -660,6 +660,10 @@ components:
           type: integer
           format: uint64
           description: Active connections authenticated as local principals
+        publish_timeouts:
+          type: integer
+          format: uint64
+          description: Publications NACKed because the durable append did not complete in time
         authentication:
           $ref: "#/components/schemas/AMQPLocalAuthenticationStats"
         authorization:

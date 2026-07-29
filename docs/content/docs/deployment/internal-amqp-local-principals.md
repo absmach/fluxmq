@@ -247,11 +247,17 @@ atomic append: startup aborts, and a reload is rejected, when the configured
 store cannot make a single append survive a machine crash. An in-memory queue
 store therefore cannot serve a local publish target.
 
-One append and its sync are bounded. If the barrier does not complete within
-the internal publish timeout, or the process is shutting down, the publication
-is NACKed instead of holding the connection open indefinitely. A NACK is not
-proof that the record was not written, so the at-least-once retry and
-deduplication rules below still apply.
+The confirm a publisher waits for is bounded, but the barrier underneath it is
+not interruptible. An fsync that has already started cannot be cancelled, so
+FluxMQ enforces the deadline by giving up on the wait: when the append and sync
+do not complete within the internal publish timeout, or the process is shutting
+down, the publication is NACKed and the connection stays responsive instead of
+a stalled disk holding an internal-listener slot open. The abandoned append can
+still complete afterwards and become visible to consumers. A NACK therefore
+never proves the record was not written, and the at-least-once retry and
+deduplication rules below apply to it. While storage is stalled, further
+publications to that stream keep timing out until the stall clears; the
+`publish_timeouts` counter reports how often this happened.
 
 Delivery is at least once. Atom may retry after a NACK or an ambiguous
 disconnect, so the same event can be appended more than once. Atom must keep a

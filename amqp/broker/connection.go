@@ -26,6 +26,11 @@ import (
 // AMQP 0.9.1 protocol header: "AMQP" followed by 0, 0, 9, 1.
 var protocolHeader = []byte{'A', 'M', 'Q', 'P', 0, 0, 9, 1}
 
+// localPublishTimeout bounds how long a local publisher waits for one exact
+// durable-stream append and its fsync. It is a variable only so tests can
+// shorten it; production code must not reassign it.
+var localPublishTimeout = 10 * time.Second
+
 const (
 	defaultFrameMax   = uint32(131072)
 	defaultChannelMax = uint16(2047)
@@ -33,10 +38,7 @@ const (
 	frameOverhead     = uint64(8)
 
 	// clusterOpTimeout prevents a slow/partitioned peer from blocking setup or shutdown.
-	clusterOpTimeout = 5 * time.Second
-	// localPublishTimeout bounds one exact durable-stream append and its fsync so
-	// a stalled disk cannot pin the connection goroutine past shutdown.
-	localPublishTimeout    = 10 * time.Second
+	clusterOpTimeout       = 5 * time.Second
 	disconnectWriteTimeout = time.Second
 	saslMechanismPlain     = "PLAIN"
 	saslMechanismAMQPlain  = "AMQPLAIN"

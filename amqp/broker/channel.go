@@ -1662,18 +1662,36 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 	props = corebroker.AddClientIDProperty(props, clientID)
 	ctx, cancel := context.WithTimeout(ch.conn.publishContext(), localPublishTimeout)
 	defer cancel()
-	err := publisher.PublishToDurableStream(ctx, queueName, qtypes.PublishRequest{
-		ClientID:   clientID,
-		Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
-		Payload:    body,
-		Properties: props,
-	})
-	if err != nil {
-		ch.rejectLocalStreamPublish(err)
-		return
-	}
-	if ch.confirmMode {
-		ch.sendPublisherAck()
+
+	// The append and its fsync cannot be interrupted once the storage layer has
+	// entered them, so the deadline is enforced here rather than inside the
+	// store. Run the barrier on its own goroutine and stop waiting when the
+	// deadline passes: the connection goroutine stays responsive and the session
+	// can be closed, instead of a stalled disk holding a listener slot open
+	// indefinitely. The abandoned append may still complete and become visible,
+	// which is why a NACK is not proof that the record was not written.
+	result := make(chan error, 1)
+	go func() {
+		result <- publisher.PublishToDurableStream(ctx, queueName, qtypes.PublishRequest{
+			ClientID:   clientID,
+			Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
+			Payload:    body,
+			Properties: props,
+		})
+	}()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			ch.rejectLocalStreamPublish(err)
+			return
+		}
+		if ch.confirmMode {
+			ch.sendPublisherAck()
+		}
+	case <-ctx.Done():
+		ch.conn.broker.stats.IncrementLocalPublishTimeouts()
+		ch.rejectLocalStreamPublish(fmt.Errorf("durable stream barrier did not complete: %w", ctx.Err()))
 	}
 }
 
