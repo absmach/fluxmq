@@ -30,6 +30,7 @@ type mockChannelQueueManager struct {
 	exactPublish      qtypes.PublishRequest
 	exactPublishCalls int
 	exactPublishErr   error
+	exactPublishCtx   context.Context
 	queueCfg          *qtypes.QueueConfig
 	createdQueues     []qtypes.QueueConfig
 	updatedQueues     []qtypes.QueueConfig
@@ -43,10 +44,14 @@ func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.Publ
 	return nil
 }
 
-func (m *mockChannelQueueManager) PublishToDurableStream(_ context.Context, queueName string, publish qtypes.PublishRequest) error {
+func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error {
 	m.exactStreamName = queueName
 	m.exactPublish = publish
+	m.exactPublishCtx = ctx
 	m.exactPublishCalls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return m.exactPublishErr
 }
 

@@ -398,6 +398,61 @@ func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
 	}
 }
 
+func TestLocalDurableStreamPublishIsBounded(t *testing.T) {
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentity(conn)
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+	ch.pendingBody = []byte("{}")
+	ch.completePublish()
+
+	if qm.exactPublishCtx == nil {
+		t.Fatal("durable stream publish did not receive a context")
+	}
+	deadline, ok := qm.exactPublishCtx.Deadline()
+	if !ok {
+		t.Fatal("durable stream publish context has no deadline; a stalled disk would pin the connection goroutine")
+	}
+	if remaining := time.Until(deadline); remaining > localPublishTimeout {
+		t.Fatalf("deadline in %v, want at most %v", remaining, localPublishTimeout)
+	}
+}
+
+func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentity(conn)
+	ctx, cancel := context.WithCancel(context.Background())
+	conn.ctx = ctx
+	cancel()
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	ch.confirmMode = true
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+	ch.pendingBody = []byte("{}")
+	ch.completePublish()
+
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode publisher response: %v", err)
+	}
+	if _, ok := decoded.(*codec.BasicNack); !ok {
+		t.Fatalf("response = %T, want BasicNack", decoded)
+	}
+}
+
 func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))

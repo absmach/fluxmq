@@ -1660,7 +1660,9 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 		return
 	}
 	props = corebroker.AddClientIDProperty(props, clientID)
-	err := publisher.PublishToDurableStream(context.Background(), queueName, qtypes.PublishRequest{
+	ctx, cancel := context.WithTimeout(ch.conn.publishContext(), localPublishTimeout)
+	defer cancel()
+	err := publisher.PublishToDurableStream(ctx, queueName, qtypes.PublishRequest{
 		ClientID:   clientID,
 		Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
 		Payload:    body,

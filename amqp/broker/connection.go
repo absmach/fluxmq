@@ -33,7 +33,10 @@ const (
 	frameOverhead     = uint64(8)
 
 	// clusterOpTimeout prevents a slow/partitioned peer from blocking setup or shutdown.
-	clusterOpTimeout       = 5 * time.Second
+	clusterOpTimeout = 5 * time.Second
+	// localPublishTimeout bounds one exact durable-stream append and its fsync so
+	// a stalled disk cannot pin the connection goroutine past shutdown.
+	localPublishTimeout    = 10 * time.Second
 	disconnectWriteTimeout = time.Second
 	saslMechanismPlain     = "PLAIN"
 	saslMechanismAMQPlain  = "AMQPLAIN"
@@ -125,6 +128,16 @@ func (c *Connection) applyHook(ctx context.Context, req corebroker.BlockingHookR
 	}
 	req.Protocol = corebroker.HookProtocolAMQP091
 	return hooks.Handle(ctx, req)
+}
+
+// publishContext returns the context that bounds one publish. Embedded callers
+// may construct a connection without one, so fall back to a background context
+// rather than panicking on a nil parent.
+func (c *Connection) publishContext() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 func (c *Connection) localSessionIdentity() (LocalSessionIdentity, bool) {
