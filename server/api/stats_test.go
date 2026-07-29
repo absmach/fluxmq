@@ -82,6 +82,14 @@ func TestStatsAMQPOnly(t *testing.T) {
 	ab.GetStats().IncrementMessagesReceived()
 	ab.GetStats().IncrementChannels()
 	ab.GetStats().IncrementConsumers()
+	ab.GetStats().IncrementLocalConnections()
+	ab.GetStats().IncrementLocalAuthSuccess()
+	ab.GetStats().IncrementLocalAuthFailures()
+	ab.GetStats().IncrementLocalPublishDenials()
+	ab.GetStats().IncrementLocalOperationDenials()
+	ab.GetStats().IncrementLocalReloadSuccess()
+	ab.GetStats().IncrementLocalReloadFailures()
+	ab.GetStats().AddLocalForcedDisconnects(2)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	rec := httptest.NewRecorder()
@@ -113,6 +121,19 @@ func TestStatsAMQPOnly(t *testing.T) {
 	}
 	if resp.ByProtocol.AMQP.Consumers != 1 {
 		t.Fatalf("expected amqp consumers 1, got %d", resp.ByProtocol.AMQP.Consumers)
+	}
+	local := resp.ByProtocol.AMQP.LocalPrincipals
+	if local.ActiveConnections != 1 {
+		t.Fatalf("expected one active local-principal connection, got %d", local.ActiveConnections)
+	}
+	if local.Authentication.Success != 1 || local.Authentication.Failure != 1 {
+		t.Fatalf("unexpected local authentication stats: %+v", local.Authentication)
+	}
+	if local.Authorization.PublishDenied != 1 || local.Authorization.OperationDenied != 1 {
+		t.Fatalf("unexpected local authorization stats: %+v", local.Authorization)
+	}
+	if local.Reloads.Success != 1 || local.Reloads.Failure != 1 || local.Reloads.ForcedDisconnects != 2 {
+		t.Fatalf("unexpected local reload stats: %+v", local.Reloads)
 	}
 }
 

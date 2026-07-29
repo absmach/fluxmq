@@ -149,7 +149,7 @@ func newTestConnection(t *testing.T, b *Broker, serverConn net.Conn) *Connection
 		writer:   bufio.NewWriter(io.Discard),
 		closeCh:  make(chan struct{}),
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		connID:   "test-conn",
+		connID:   testConnectionID,
 		channels: make(map[uint16]*Channel),
 	}
 }

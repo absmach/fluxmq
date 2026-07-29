@@ -163,7 +163,89 @@ func CreateSegment(dir string, baseOffset uint64, config SegmentConfig) (*Segmen
 		return nil, fmt.Errorf("failed to create time index: %w", err)
 	}
 
+	// Make the new directory entries durable. Syncing a file only flushes its
+	// contents; without this, a crash can lose the whole segment even after a
+	// caller observed a successful Sync, which would break the durability
+	// barrier AppendAndSync promises.
+	if err := SyncDir(dir); err != nil {
+		file.Close()
+		seg.index.Close()
+		seg.timeIndex.Close()
+		os.Remove(path)
+		os.Remove(indexPath)
+		os.Remove(timeIndexPath)
+		return nil, fmt.Errorf("failed to sync segment directory: %w", err)
+	}
+
 	return seg, nil
+}
+
+// SyncDir flushes a directory entry so files created inside it survive a crash.
+// Directory fsync is a no-op on filesystems that do not need it, and returns
+// ErrInvalid on platforms that do not allow opening a directory for sync; both
+// are reported as success because there is nothing further the caller can do.
+func SyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	if err := d.Sync(); err != nil && !errors.Is(err, os.ErrInvalid) && !errors.Is(err, errors.ErrUnsupported) {
+		return err
+	}
+	return nil
+}
+
+// MkdirAllSynced creates a directory and every missing parent, syncing each
+// parent as its child appears in it. os.MkdirAll leaves those new entries in
+// the page cache, so a crash can lose a whole queue directory even though the
+// segment inside it was synced.
+func MkdirAllSynced(path string, perm os.FileMode) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", path)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+
+	parent := filepath.Dir(path)
+	if parent != path {
+		if err := MkdirAllSynced(parent, perm); err != nil {
+			return err
+		}
+	}
+
+	if err := os.Mkdir(path, perm); err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return err
+	}
+	return SyncDir(parent)
+}
+
+// WriteFileSynced writes a file and flushes its contents before returning. It
+// is the durable half of a write-then-rename replacement; the caller must still
+// sync the containing directory after the rename.
+func WriteFileSynced(path string, data []byte, perm os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 // scan reads through the segment to build batch positions and determine state.

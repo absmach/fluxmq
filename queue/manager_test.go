@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/logstorage"
 	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
@@ -24,10 +26,100 @@ import (
 	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
-const node1 = "node-1"
+var (
+	errTestAppend = errors.New("append failed")
+	errTestSync   = errors.New("sync failed")
+)
+
+const (
+	node1                = "node-1"
+	testAuditQueueName   = "atom-audit"
+	testAuditQueueTopic  = "$queue/atom-audit"
+	testAuditQueueFilter = "$queue/atom-audit/#"
+)
 
 type targetCheckingDeliverer struct {
 	targets map[string]bool
+}
+
+type recordingDurableQueueStore struct {
+	storage.QueueStore
+	mu         sync.Mutex
+	appendErr  error
+	syncErr    error
+	operations []string
+}
+
+// queueStoreWithoutDurableSync deliberately narrows the wrapped store to the
+// QueueStore contract so its atomic durable-append method is not exposed to the
+// manager.
+type queueStoreWithoutDurableSync struct {
+	storage.QueueStore
+}
+
+type getErrorQueueStore struct {
+	storage.QueueStore
+	getErr error
+}
+
+func (s *getErrorQueueStore) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.QueueStore.GetQueue(ctx, queueName)
+}
+
+func (s *recordingDurableQueueStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	s.mu.Lock()
+	s.operations = append(s.operations, "append:"+queueName)
+	err := s.appendErr
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+func (s *recordingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	s.mu.Lock()
+	s.operations = append(s.operations, "append:"+queueName)
+	appendErr := s.appendErr
+	syncErr := s.syncErr
+	s.mu.Unlock()
+	if appendErr != nil {
+		return 0, appendErr
+	}
+
+	if syncErr != nil {
+		offset, err := s.QueueStore.Append(ctx, queueName, msg)
+		if err != nil {
+			return offset, err
+		}
+		s.mu.Lock()
+		s.operations = append(s.operations, "sync:"+queueName)
+		s.mu.Unlock()
+		return offset, syncErr
+	}
+
+	durableStore, ok := s.QueueStore.(storage.DurableQueueStore)
+	if !ok {
+		return 0, ErrDurableSyncUnsupported
+	}
+	offset, err := durableStore.AppendAndSync(ctx, queueName, msg)
+	s.mu.Lock()
+	s.operations = append(s.operations, "sync:"+queueName)
+	s.mu.Unlock()
+	return offset, err
+}
+
+// SupportsDurableSync reports true so the manager treats this test double as a
+// crash-durable store; the wrapped in-memory store never is.
+func (s *recordingDurableQueueStore) SupportsDurableSync() bool { return true }
+
+func (s *recordingDurableQueueStore) Operations() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.operations...)
 }
 
 func (d *targetCheckingDeliverer) Deliver(context.Context, string, *brokerstorage.Message) error {
@@ -36,6 +128,22 @@ func (d *targetCheckingDeliverer) Deliver(context.Context, string, *brokerstorag
 
 func (d *targetCheckingDeliverer) HasDeliveryTarget(clientID string) bool {
 	return d.targets[clientID]
+}
+
+func protectedAuditQueueConfig() types.QueueConfig {
+	config := types.DefaultQueueConfig(testAuditQueueName, testAuditQueueFilter)
+	config.Type = types.QueueTypeStream
+	config.Reserved = true
+	config.Retention.RetentionTime = 30 * 24 * time.Hour
+	config.Retention.RetentionBytes = 10 * 1024 * 1024 * 1024
+	config.MessageTTL = 30 * 24 * time.Hour
+	return config
+}
+
+func managerConfigWithProtectedQueue(contract types.QueueConfig) Config {
+	config := DefaultConfig()
+	config.ProtectedQueueContracts = []types.QueueConfig{contract}
+	return config
 }
 
 // mockGroupStore implements storage.ConsumerGroupStore for testing.
@@ -344,6 +452,539 @@ func TestWildcardQueueSubscription(t *testing.T) {
 			t.Logf("Group state: %s cursor=%v", g.ID, g.Cursor)
 		}
 		t.Fatal("Timeout waiting for message delivery")
+	}
+}
+
+func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	newManager := func() (*Manager, *recordingDurableQueueStore) {
+		store := &recordingDurableQueueStore{QueueStore: memlog.New()}
+		return NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil), store
+	}
+
+	t.Run("missing", func(t *testing.T) {
+		manager, store := newManager()
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+			Topic:   testAuditQueueTopic,
+			Payload: []byte("{}"),
+		})
+		if !errors.Is(err, storage.ErrQueueNotFound) {
+			t.Fatalf("error = %v, want queue not found", err)
+		}
+		if operations := store.Operations(); len(operations) != 0 {
+			t.Fatalf("operations = %v, want none", operations)
+		}
+	})
+
+	t.Run("classic", func(t *testing.T) {
+		manager, store := newManager()
+		queueConfig := types.DefaultQueueConfig(testAuditQueueName, testAuditQueueFilter)
+		queueConfig.Reserved = true
+		if err := store.QueueStore.CreateQueue(ctx, queueConfig); err != nil {
+			t.Fatalf("create classic queue: %v", err)
+		}
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+			Topic:   testAuditQueueTopic,
+			Payload: []byte("{}"),
+		})
+		if !errors.Is(err, ErrProtectedQueueContractDrift) {
+			t.Fatalf("error = %v, want ErrProtectedQueueContractDrift", err)
+		}
+		if operations := store.Operations(); len(operations) != 0 {
+			t.Fatalf("operations = %v, want none", operations)
+		}
+	})
+}
+
+// volatileDurableQueueStore implements the durable-append method without real
+// crash durability, the shape an in-memory store has.
+type volatileDurableQueueStore struct {
+	storage.QueueStore
+	appendAndSyncCalls int
+}
+
+func (s *volatileDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	s.appendAndSyncCalls++
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+func (s *volatileDurableQueueStore) SupportsDurableSync() bool { return false }
+
+func TestProtectedQueuesRejectStoreWithoutRealDurableSync(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	store := &volatileDurableQueueStore{QueueStore: memlog.New()}
+	if err := store.CreateQueue(ctx, expected); err != nil {
+		t.Fatalf("create protected queue: %v", err)
+	}
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+		Topic:   testAuditQueueTopic,
+		Payload: []byte("{}"),
+	})
+	if !errors.Is(err, ErrDurableSyncUnsupported) {
+		t.Fatalf("error = %v, want ErrDurableSyncUnsupported", err)
+	}
+	if store.appendAndSyncCalls != 0 {
+		t.Fatalf("appendAndSync calls = %d, want 0; a publisher must never be acknowledged on a volatile store", store.appendAndSyncCalls)
+	}
+	if err := manager.ValidateProtectedQueueContracts(ctx); !errors.Is(err, ErrDurableSyncUnsupported) {
+		t.Fatalf("ValidateProtectedQueueContracts() error = %v, want ErrDurableSyncUnsupported", err)
+	}
+}
+
+// blockingDurableQueueStore holds AppendAndSync open until the test releases
+// it, standing in for a slow fsync.
+type blockingDurableQueueStore struct {
+	storage.QueueStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	close(s.started)
+	<-s.release
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+func (s *blockingDurableQueueStore) SupportsDurableSync() bool { return true }
+
+func TestPublishToDurableStreamDoesNotBlockContractReload(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	store := &blockingDurableQueueStore{
+		QueueStore: memlog.New(),
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	if err := store.CreateQueue(ctx, expected); err != nil {
+		t.Fatalf("create protected queue: %v", err)
+	}
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	publishErr := make(chan error, 1)
+	go func() {
+		publishErr <- manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+			Topic:   testAuditQueueTopic,
+			Payload: []byte("{}"),
+		})
+	}()
+
+	select {
+	case <-store.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the durable append to start")
+	}
+
+	reloaded := make(chan error, 1)
+	go func() {
+		reloaded <- manager.ReplaceProtectedQueueContracts(ctx, []types.QueueConfig{expected})
+	}()
+
+	select {
+	case err := <-reloaded:
+		if err != nil {
+			t.Fatalf("ReplaceProtectedQueueContracts() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(store.release)
+		t.Fatal("contract reload blocked behind an in-flight durable append")
+	}
+
+	close(store.release)
+	if err := <-publishErr; err != nil {
+		t.Fatalf("PublishToDurableStream() error = %v", err)
+	}
+}
+
+func TestPublishToDurableStreamRejectsUnsafeConfigurationBeforeAppend(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		configure     func(expected, persisted *types.QueueConfig)
+		withoutSyncer bool
+		wantErr       error
+	}{
+		{
+			name: "non-reserved stream",
+			configure: func(_, persisted *types.QueueConfig) {
+				persisted.Reserved = false
+			},
+			wantErr: ErrProtectedQueueContractDrift,
+		},
+		{
+			name: "non-durable stream",
+			configure: func(_, persisted *types.QueueConfig) {
+				persisted.Durable = false
+			},
+			wantErr: ErrProtectedQueueContractDrift,
+		},
+		{
+			name: "replicated stream",
+			configure: func(_, persisted *types.QueueConfig) {
+				persisted.Replication.Enabled = true
+			},
+			wantErr: ErrProtectedQueueContractDrift,
+		},
+		{
+			name: "message exceeds queue maximum",
+			configure: func(expected, persisted *types.QueueConfig) {
+				expected.MaxMessageSize = 1
+				persisted.MaxMessageSize = 1
+			},
+			wantErr: ErrQueueMessageTooLarge,
+		},
+		{
+			name:          "store without durable sync",
+			withoutSyncer: true,
+			wantErr:       ErrDurableSyncUnsupported,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := memlog.New()
+			expected := protectedAuditQueueConfig()
+			persisted := expected
+			if tc.configure != nil {
+				tc.configure(&expected, &persisted)
+			}
+			if err := base.CreateQueue(ctx, expected); err != nil {
+				t.Fatalf("create stream: %v", err)
+			}
+			if err := base.UpdateQueue(ctx, persisted); err != nil {
+				t.Fatalf("inject stored queue configuration: %v", err)
+			}
+
+			store := &recordingDurableQueueStore{QueueStore: base}
+			var managerStore storage.QueueStore = store
+			if tc.withoutSyncer {
+				managerStore = &queueStoreWithoutDurableSync{QueueStore: base}
+			}
+			manager := NewManager(managerStore, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+				Topic:   testAuditQueueTopic,
+				Payload: []byte("{}"),
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
+			}
+			if operations := store.Operations(); len(operations) != 0 {
+				t.Fatalf("operations = %v, want none", operations)
+			}
+			tail, tailErr := base.Tail(ctx, testAuditQueueName)
+			if tailErr != nil || tail != 0 {
+				t.Fatalf("tail = %d, error = %v, want empty queue", tail, tailErr)
+			}
+		})
+	}
+}
+
+func TestProtectedQueueRejectsContractMutationsAndDelete(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	tests := []struct {
+		name   string
+		mutate func(*types.QueueConfig)
+	}{
+		{name: "topics", mutate: func(config *types.QueueConfig) { config.Topics = []string{"#"} }},
+		{name: "type", mutate: func(config *types.QueueConfig) { config.Type = types.QueueTypeClassic }},
+		{name: "durable", mutate: func(config *types.QueueConfig) { config.Durable = false }},
+		{name: "reserved", mutate: func(config *types.QueueConfig) { config.Reserved = false }},
+		{name: "replication", mutate: func(config *types.QueueConfig) { config.Replication.Enabled = true }},
+		{name: "retention age", mutate: func(config *types.QueueConfig) { config.Retention.RetentionTime-- }},
+		{name: "retention bytes", mutate: func(config *types.QueueConfig) { config.Retention.RetentionBytes-- }},
+		{name: "retention messages", mutate: func(config *types.QueueConfig) { config.Retention.RetentionMessages++ }},
+		{name: "maximum message size", mutate: func(config *types.QueueConfig) { config.MaxMessageSize-- }},
+		{name: "message TTL", mutate: func(config *types.QueueConfig) { config.MessageTTL-- }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := memlog.New()
+			manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
+			if err := manager.CreateQueue(ctx, expected); err != nil {
+				t.Fatalf("create protected queue: %v", err)
+			}
+			updated := expected
+			tc.mutate(&updated)
+			if err := manager.UpdateQueue(ctx, updated); !errors.Is(err, ErrProtectedQueueMutation) {
+				t.Fatalf("UpdateQueue() error = %v, want ErrProtectedQueueMutation", err)
+			}
+			persisted, err := store.GetQueue(ctx, expected.Name)
+			if err != nil {
+				t.Fatalf("GetQueue() error = %v", err)
+			}
+			if err := ValidateProtectedQueueContract(expected, *persisted); err != nil {
+				t.Fatalf("rejected update changed persisted contract: %v", err)
+			}
+		})
+	}
+
+	t.Run("delete", func(t *testing.T) {
+		store := memlog.New()
+		manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
+		if err := manager.CreateQueue(ctx, expected); err != nil {
+			t.Fatalf("create protected queue: %v", err)
+		}
+		if err := manager.DeleteQueue(ctx, expected.Name); !errors.Is(err, ErrProtectedQueueMutation) {
+			t.Fatalf("DeleteQueue() error = %v, want ErrProtectedQueueMutation", err)
+		}
+		if _, err := store.GetQueue(ctx, expected.Name); err != nil {
+			t.Fatalf("protected queue was deleted: %v", err)
+		}
+	})
+
+	t.Run("MaxDepth is not protected", func(t *testing.T) {
+		store := memlog.New()
+		manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
+		if err := manager.CreateQueue(ctx, expected); err != nil {
+			t.Fatalf("create protected queue: %v", err)
+		}
+		updated := expected
+		updated.MaxDepth++
+		if err := manager.UpdateQueue(ctx, updated); err != nil {
+			t.Fatalf("MaxDepth-only update rejected: %v", err)
+		}
+	})
+
+	t.Run("other reserved queue remains mutable", func(t *testing.T) {
+		store := memlog.New()
+		manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
+		other := types.DefaultQueueConfig("other-reserved", "other/#")
+		other.Reserved = true
+		if err := manager.CreateQueue(ctx, other); err != nil {
+			t.Fatalf("create other reserved queue: %v", err)
+		}
+		other.MessageTTL++
+		other.Reserved = false
+		if err := manager.UpdateQueue(ctx, other); err != nil {
+			t.Fatalf("update other reserved queue: %v", err)
+		}
+		if err := manager.DeleteQueue(ctx, other.Name); err != nil {
+			t.Fatalf("delete other reserved queue: %v", err)
+		}
+	})
+}
+
+func TestNarrowProtectedQueueContractsDoesNotReadStorage(t *testing.T) {
+	ctx := context.Background()
+	base := memlog.New()
+	audit := protectedAuditQueueConfig()
+	security := protectedAuditQueueConfig()
+	security.Name = "atom-security"
+	security.Topics = []string{"$queue/atom-security/#"}
+	for _, contract := range []types.QueueConfig{audit, security} {
+		if err := base.CreateQueue(ctx, contract); err != nil {
+			t.Fatalf("create queue %q: %v", contract.Name, err)
+		}
+	}
+	store := &getErrorQueueStore{QueueStore: base}
+	config := DefaultConfig()
+	config.ProtectedQueueContracts = []types.QueueConfig{audit, security}
+	manager := NewManager(store, newMockGroupStore(), nil, config, nil, nil)
+
+	store.getErr = errors.New("queue store unavailable")
+	if err := manager.NarrowProtectedQueueContracts([]types.QueueConfig{security}); err != nil {
+		t.Fatalf("NarrowProtectedQueueContracts() performed storage I/O: %v", err)
+	}
+	contracts := manager.ProtectedQueueContracts()
+	if len(contracts) != 1 || contracts[0].Name != security.Name {
+		t.Fatalf("protected contracts = %+v, want only %q", contracts, security.Name)
+	}
+}
+
+func TestPublishToDurableStreamRejectsPersistedContractDrift(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	tests := []struct {
+		name   string
+		mutate func(*types.QueueConfig)
+	}{
+		{name: "topics", mutate: func(config *types.QueueConfig) { config.Topics = []string{"#"} }},
+		{name: "retention age", mutate: func(config *types.QueueConfig) { config.Retention.RetentionTime-- }},
+		{name: "retention bytes", mutate: func(config *types.QueueConfig) { config.Retention.RetentionBytes-- }},
+		{name: "retention messages", mutate: func(config *types.QueueConfig) { config.Retention.RetentionMessages++ }},
+		{name: "maximum message size", mutate: func(config *types.QueueConfig) { config.MaxMessageSize++ }},
+		{name: "message TTL", mutate: func(config *types.QueueConfig) { config.MessageTTL-- }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := memlog.New()
+			if err := base.CreateQueue(ctx, expected); err != nil {
+				t.Fatalf("create queue: %v", err)
+			}
+			drifted := expected
+			tc.mutate(&drifted)
+			if err := base.UpdateQueue(ctx, drifted); err != nil {
+				t.Fatalf("inject persisted drift: %v", err)
+			}
+			store := &recordingDurableQueueStore{QueueStore: base}
+			manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
+			err := manager.PublishToDurableStream(ctx, expected.Name, types.PublishRequest{Payload: []byte("{}")})
+			if !errors.Is(err, ErrProtectedQueueContractDrift) {
+				t.Fatalf("PublishToDurableStream() error = %v, want ErrProtectedQueueContractDrift", err)
+			}
+			if operations := store.Operations(); len(operations) != 0 {
+				t.Fatalf("operations = %v, want no append", operations)
+			}
+		})
+	}
+
+	t.Run("MaxDepth drift is ignored", func(t *testing.T) {
+		base := memlog.New()
+		drifted := expected
+		drifted.MaxDepth++
+		if err := base.CreateQueue(ctx, drifted); err != nil {
+			t.Fatalf("create queue: %v", err)
+		}
+		store := &recordingDurableQueueStore{QueueStore: base}
+		manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
+		if err := manager.PublishToDurableStream(ctx, expected.Name, types.PublishRequest{Payload: []byte("{}")}); err != nil {
+			t.Fatalf("PublishToDurableStream() rejected MaxDepth drift: %v", err)
+		}
+	})
+}
+
+func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T) {
+	ctx := context.Background()
+	base := memlog.New()
+	store := &recordingDurableQueueStore{QueueStore: base}
+	audit := protectedAuditQueueConfig()
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(audit), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	overlap := types.DefaultQueueConfig("overlap", "$queue/#")
+	overlap.Type = types.QueueTypeStream
+	for _, queueConfig := range []types.QueueConfig{audit, overlap} {
+		if err := manager.CreateQueue(ctx, queueConfig); err != nil {
+			t.Fatalf("create queue %q: %v", queueConfig.Name, err)
+		}
+	}
+
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+		Topic:   testAuditQueueTopic,
+		Payload: []byte("audit-event"),
+	}); err != nil {
+		t.Fatalf("durable stream publish: %v", err)
+	}
+	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom-audit sync:atom-audit]" {
+		t.Fatalf("operations = %v, want append then sync for atom-audit", operations)
+	}
+	auditTail, err := base.Tail(ctx, testAuditQueueName)
+	if err != nil || auditTail != 1 {
+		t.Fatalf("atom-audit tail = %d, error = %v, want 1", auditTail, err)
+	}
+	overlapTail, err := base.Tail(ctx, "overlap")
+	if err != nil || overlapTail != 0 {
+		t.Fatalf("overlap tail = %d, error = %v, want 0", overlapTail, err)
+	}
+}
+
+// TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords is the
+// end-to-end form of the ACK contract: when the publish call returns success,
+// the record must be recoverable from storage alone, with none of the
+// publishing process's in-memory state. It uses the real file-backed store
+// rather than a double, because the point under test is what reached disk.
+func TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	queueConfig := protectedAuditQueueConfig()
+
+	store, err := logstorage.NewAdapter(dir, logstorage.DefaultAdapterConfig())
+	if err != nil {
+		t.Fatalf("open queue store: %v", err)
+	}
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(queueConfig), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err := manager.CreateQueue(ctx, queueConfig); err != nil {
+		t.Fatalf("create protected stream: %v", err)
+	}
+
+	payload := []byte(`{"id":"durability-1"}`)
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+		Topic:   testAuditQueueTopic,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("PublishToDurableStream() error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close queue store: %v", err)
+	}
+
+	reopened, err := logstorage.NewAdapter(dir, logstorage.DefaultAdapterConfig())
+	if err != nil {
+		t.Fatalf("reopen queue store: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+
+	count, err := reopened.Count(ctx, testAuditQueueName)
+	if err != nil {
+		t.Fatalf("Count() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("persisted records = %d, want 1", count)
+	}
+	msg, err := reopened.Read(ctx, testAuditQueueName, 0)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if string(msg.Payload) != string(payload) {
+		t.Fatalf("persisted payload = %q, want %q", msg.Payload, payload)
+	}
+}
+
+func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name           string
+		appendErr      error
+		syncErr        error
+		wantErr        error
+		wantOperations string
+	}{
+		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom-audit]"},
+		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom-audit sync:atom-audit]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := memlog.New()
+			store := &recordingDurableQueueStore{QueueStore: base, appendErr: tc.appendErr, syncErr: tc.syncErr}
+			queueConfig := protectedAuditQueueConfig()
+			manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(queueConfig), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+			if err := manager.CreateQueue(ctx, queueConfig); err != nil {
+				t.Fatalf("create stream: %v", err)
+			}
+
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+				Topic:   testAuditQueueTopic,
+				Payload: []byte("{}"),
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
+			}
+			if operations := fmt.Sprint(store.Operations()); operations != tc.wantOperations {
+				t.Fatalf("operations = %s, want %s", operations, tc.wantOperations)
+			}
+		})
+	}
+}
+
+func TestPublishPropagatesQueueAppendFailure(t *testing.T) {
+	ctx := context.Background()
+	base := memlog.New()
+	store := &recordingDurableQueueStore{QueueStore: base, appendErr: errTestAppend}
+	manager := NewManager(store, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	queueConfig := types.DefaultQueueConfig("events", "events/#")
+	if err := manager.CreateQueue(ctx, queueConfig); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	err := manager.Publish(ctx, types.PublishRequest{Topic: "events/created", Payload: []byte("event")})
+	if !errors.Is(err, errTestAppend) {
+		t.Fatalf("error = %v, want append failure", err)
 	}
 }
 

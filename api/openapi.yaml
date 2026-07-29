@@ -609,6 +609,71 @@ components:
           example: 15
         errors:
           $ref: "#/components/schemas/ErrorStats"
+        local_principals:
+          $ref: "#/components/schemas/AMQPLocalPrincipalStats"
+
+    AMQPLocalAuthenticationStats:
+      type: object
+      properties:
+        success:
+          type: integer
+          format: uint64
+          description: Successful local-principal authentications
+        failure:
+          type: integer
+          format: uint64
+          description: Failed local-principal authentications
+
+    AMQPLocalAuthorizationStats:
+      type: object
+      properties:
+        publish_denied:
+          type: integer
+          format: uint64
+          description: Local-principal publications denied by the exact-match ACL
+        operation_denied:
+          type: integer
+          format: uint64
+          description: Non-publish AMQP operations denied on the internal listener
+
+    AMQPLocalReloadStats:
+      type: object
+      properties:
+        success:
+          type: integer
+          format: uint64
+          description: Successful local-principal snapshot reloads
+        failure:
+          type: integer
+          format: uint64
+          description: Failed local-principal snapshot reloads
+        forced_disconnects:
+          type: integer
+          format: uint64
+          description: Sessions disconnected after principal, credential, or ACL revocation
+
+    AMQPLocalPrincipalStats:
+      type: object
+      description: Bounded internal-listener counters without principal-derived dimensions
+      properties:
+        active_connections:
+          type: integer
+          format: uint64
+          description: Active connections authenticated as local principals
+        publish_timeouts:
+          type: integer
+          format: uint64
+          description: Publications NACKed because the durable append did not complete in time
+        publish_rejections:
+          type: integer
+          format: uint64
+          description: Publications refused because the stream already had the maximum durable appends waiting on storage
+        authentication:
+          $ref: "#/components/schemas/AMQPLocalAuthenticationStats"
+        authorization:
+          $ref: "#/components/schemas/AMQPLocalAuthorizationStats"
+        reloads:
+          $ref: "#/components/schemas/AMQPLocalReloadStats"
 
     ByProtocolStats:
       type: object

@@ -55,12 +55,40 @@ type mqttErrorStats struct {
 
 // amqpStats holds AMQP 0.9.1-specific counters.
 type amqpStats struct {
-	Connections connectionStats `json:"connections"`
-	Messages    messageStats    `json:"messages"`
-	Bytes       byteStats       `json:"bytes"`
-	Channels    uint64          `json:"channels"`
-	Consumers   uint64          `json:"consumers"`
-	Errors      errorStats      `json:"errors"`
+	Connections     connectionStats         `json:"connections"`
+	Messages        messageStats            `json:"messages"`
+	Bytes           byteStats               `json:"bytes"`
+	Channels        uint64                  `json:"channels"`
+	Consumers       uint64                  `json:"consumers"`
+	Errors          errorStats              `json:"errors"`
+	LocalPrincipals amqpLocalPrincipalStats `json:"local_principals"`
+}
+
+// amqpLocalPrincipalStats uses a fixed set of counters. No principal,
+// certificate, URI, routing-key, or tenant values become metric dimensions.
+type amqpLocalPrincipalStats struct {
+	ActiveConnections uint64                       `json:"active_connections"`
+	PublishTimeouts   uint64                       `json:"publish_timeouts"`
+	PublishRejections uint64                       `json:"publish_rejections"`
+	Authentication    amqpLocalAuthenticationStats `json:"authentication"`
+	Authorization     amqpLocalAuthorizationStats  `json:"authorization"`
+	Reloads           amqpLocalReloadStats         `json:"reloads"`
+}
+
+type amqpLocalAuthenticationStats struct {
+	Success uint64 `json:"success"`
+	Failure uint64 `json:"failure"`
+}
+
+type amqpLocalAuthorizationStats struct {
+	PublishDenied   uint64 `json:"publish_denied"`
+	OperationDenied uint64 `json:"operation_denied"`
+}
+
+type amqpLocalReloadStats struct {
+	Success           uint64 `json:"success"`
+	Failure           uint64 `json:"failure"`
+	ForcedDisconnects uint64 `json:"forced_disconnects"`
 }
 
 type byProtocolStats struct {
@@ -160,6 +188,24 @@ func (s *Server) buildStatsResponse() statsResponse {
 			Channels:    ast.GetCurrentChannels(),
 			Consumers:   ast.GetConsumers(),
 			Errors:      errorStats{Protocol: ast.GetProtocolErrors()},
+			LocalPrincipals: amqpLocalPrincipalStats{
+				ActiveConnections: ast.GetLocalConnections(),
+				PublishTimeouts:   ast.GetLocalPublishTimeouts(),
+				PublishRejections: ast.GetLocalPublishRejections(),
+				Authentication: amqpLocalAuthenticationStats{
+					Success: ast.GetLocalAuthSuccess(),
+					Failure: ast.GetLocalAuthFailures(),
+				},
+				Authorization: amqpLocalAuthorizationStats{
+					PublishDenied:   ast.GetLocalPublishDenials(),
+					OperationDenied: ast.GetLocalOperationDenials(),
+				},
+				Reloads: amqpLocalReloadStats{
+					Success:           ast.GetLocalReloadSuccess(),
+					Failure:           ast.GetLocalReloadFailures(),
+					ForcedDisconnects: ast.GetLocalForcedDisconnects(),
+				},
+			},
 		}
 	}
 

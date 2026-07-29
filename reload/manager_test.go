@@ -6,12 +6,14 @@ package reload
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/absmach/fluxmq/broker/localauth"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/ratelimit"
 )
@@ -55,6 +57,166 @@ func TestReloadNoChanges(t *testing.T) {
 	}
 	if m.Version() != 1 {
 		t.Errorf("version should remain 1, got %d", m.Version())
+	}
+}
+
+func TestReloadLocalPrincipalSecretContent(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "local-secret")
+	const (
+		initialSecret = "0123456789abcdef0123456789abcdef"
+		nextSecret    = "abcdef0123456789abcdef0123456789"
+	)
+	if err := os.WriteFile(secretPath, []byte(initialSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := writeConfig(t, dir, fmt.Sprintf(`auth:
+  local_principals:
+    - name: atom-audit-publisher
+      certificate_uri_san: spiffe://absmach/atom/audit-publisher
+      current_secret_file: %q
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: atom-audit
+        subscribe: []
+`, secretPath))
+	initial, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := localauth.New(initial.Auth.LocalPrincipals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reloadFailures atomic.Int64
+	m := New(path, initial,
+		WithLocalPrincipalsReload(store.Reload),
+		WithLocalPrincipalsReloadFailure(func(error) { reloadFailures.Add(1) }),
+	)
+
+	noChange, err := m.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(noChange.Applied) != 0 || m.Version() != 1 || store.Generation() != 1 {
+		t.Fatalf("no-op reload changed state: result=%+v version=%d generation=%d", noChange, m.Version(), store.Generation())
+	}
+
+	oldAuthentication, ok := store.Authenticate("atom-audit-publisher", initialSecret, "spiffe://absmach/atom/audit-publisher")
+	if !ok {
+		t.Fatal("initial local authentication failed")
+	}
+	if err := os.WriteFile(secretPath, []byte(nextSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := m.Reload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Applied) != 1 || result.Applied[0].Path != localPrincipalsPath {
+		t.Fatalf("unexpected applied changes: %+v", result.Applied)
+	}
+	if m.Version() != 2 || store.Generation() != 2 {
+		t.Fatalf("secret reload did not advance state: version=%d generation=%d", m.Version(), store.Generation())
+	}
+	if store.IsActive(oldAuthentication) {
+		t.Fatal("retired local credential remains active")
+	}
+	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+		t.Fatal("reloaded local credential was rejected")
+	}
+
+	if err := os.WriteFile(secretPath, []byte("too-short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(context.Background()); err == nil {
+		t.Fatal("invalid local secret reload succeeded")
+	}
+	if reloadFailures.Load() != 1 {
+		t.Fatalf("local reload failure notifications = %d, want 1", reloadFailures.Load())
+	}
+	if m.Version() != 2 || store.Generation() != 2 {
+		t.Fatalf("failed reload changed state: version=%d generation=%d", m.Version(), store.Generation())
+	}
+	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+		t.Fatal("failed reload replaced the last valid local-principal snapshot")
+	}
+}
+
+// TestReloadLocalPrincipalsRegisterRollback pins the ordering contract of
+// applyRuntimeChanges: a subsystem that fails after the credential swap must
+// see that swap undone. Nothing runs after local principals today, so the test
+// drives applyRuntimeChanges directly with a failing subsystem appended.
+func TestReloadLocalPrincipalsRegisterRollback(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "local-secret")
+	const (
+		initialSecret = "0123456789abcdef0123456789abcdef"
+		nextSecret    = "abcdef0123456789abcdef0123456789"
+	)
+	if err := os.WriteFile(secretPath, []byte(initialSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, dir, fmt.Sprintf(`auth:
+  local_principals:
+    - name: atom-audit-publisher
+      certificate_uri_san: spiffe://absmach/atom/audit-publisher
+      current_secret_file: %q
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: atom-audit
+        subscribe: []
+`, secretPath))
+	initial, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := localauth.New(initial.Auth.LocalPrincipals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(path, initial, WithLocalPrincipalsReload(store.Reload))
+
+	if err := os.WriteFile(secretPath, []byte(nextSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied, rollbacks, errs := m.applyRuntimeChanges(context.Background(), initial, updated, []config.FieldChange{{
+		Path:     localPrincipalsPath,
+		OldValue: initial.Auth.LocalPrincipals,
+		NewValue: updated.Auth.LocalPrincipals,
+		Class:    config.RuntimeSafe,
+	}})
+	if len(errs) != 0 || len(applied) == 0 {
+		t.Fatalf("applyRuntimeChanges() applied=%v errs=%v, want the swap to succeed", applied, errs)
+	}
+	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+		t.Fatal("reloaded credential was not activated")
+	}
+
+	// Restore the file so the registered rollback has something to load, then
+	// run it the way a later failing subsystem would.
+	if err := os.WriteFile(secretPath, []byte(initialSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if len(rollbacks) != 1 {
+		t.Fatalf("registered rollbacks = %d, want 1; a later subsystem could not undo the credential swap", len(rollbacks))
+	}
+	rollbacks[0]()
+
+	if _, ok := store.Authenticate("atom-audit-publisher", initialSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+		t.Fatal("rollback did not restore the previous local-principal snapshot")
+	}
+	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); ok {
+		t.Fatal("rollback left the rolled-back credential active")
 	}
 }
 

@@ -5,8 +5,11 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +23,36 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
+)
+
+var (
+	// ErrQueueNotStream is returned when an exact stream publish targets a
+	// queue that exists but is not configured as a stream.
+	ErrQueueNotStream = errors.New("queue is not a stream")
+	// ErrQueueNotDurable is returned when an exact durable publish targets an
+	// ephemeral queue.
+	ErrQueueNotDurable = errors.New("queue is not durable")
+	// ErrQueueNotReserved is returned when an exact internal publish targets a
+	// queue that is no longer protected as a statically reserved queue.
+	ErrQueueNotReserved = errors.New("queue is not reserved")
+	// ErrQueueMessageTooLarge is returned before append when an exact stream
+	// publish exceeds the target queue's configured maximum message size.
+	ErrQueueMessageTooLarge = errors.New("message exceeds queue maximum size")
+	// ErrQueueNotProtected is returned when the exact durable stream publish
+	// path is used for a queue without a registered immutable contract.
+	ErrQueueNotProtected = errors.New("queue has no protected contract")
+	// ErrProtectedQueueMutation is returned when a create, update, or delete
+	// would violate a registered queue contract.
+	ErrProtectedQueueMutation = errors.New("protected queue mutation rejected")
+	// ErrProtectedQueueContractDrift is returned when a protected queue's
+	// persisted configuration no longer matches its registered contract.
+	ErrProtectedQueueContractDrift = errors.New("protected queue contract drift")
+	// ErrDurableSyncUnsupported is returned before append when the configured
+	// queue store cannot establish a per-queue durability barrier.
+	ErrDurableSyncUnsupported = errors.New("queue store does not support durable sync")
+	// ErrDurableReplicatedStreamUnsupported prevents a false durability ACK in
+	// clustered mode until the same barrier is carried through leader forwarding.
+	ErrDurableReplicatedStreamUnsupported = errors.New("durable exact stream publish does not support replication")
 )
 
 type queueCluster interface {
@@ -46,6 +79,13 @@ type Manager struct {
 	config           Config
 	writePolicy      WritePolicy
 	distributionMode DistributionMode
+
+	// protectedQueueContracts contains only queues that back exact internal
+	// publishers. Its lock spans both contract checks and queue mutations so a
+	// runtime contract replacement cannot race an administrative mutation.
+	protectedQueuesMu       sync.RWMutex
+	protectedQueueContracts map[string]types.QueueConfig
+	protectedQueueConfigErr error
 
 	// Raft replication coordinator (queue -> raft group routing).
 	raftCoordinator queueRaftCoordinator
@@ -108,6 +148,11 @@ type Config struct {
 
 	// Queue configurations from main config
 	QueueConfigs []types.QueueConfig
+
+	// ProtectedQueueContracts are immutable runtime contracts for queues used
+	// by exact internal publishers. Only explicitly listed queues are protected;
+	// Reserved alone does not make a queue immutable.
+	ProtectedQueueContracts []types.QueueConfig
 
 	// OnConsumerRemoved is called when stale consumers are removed during
 	// heartbeat cleanup. The callback receives the queue name, group ID,
@@ -185,6 +230,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	distMode := normalizeDistributionMode(config.DistributionMode)
+	protectedQueueContracts, protectedQueueConfigErr := buildProtectedQueueContracts(config.ProtectedQueueContracts)
 
 	var remote RemoteRouter
 	if cl != nil {
@@ -213,16 +259,18 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		consumerManager: consumerMgr,
 		deliveryTarget:  dt,
 
-		logger:           logger,
-		config:           config,
-		writePolicy:      normalizeWritePolicy(config.WritePolicy),
-		distributionMode: distMode,
-		cluster:          cl,
-		localNodeID:      localNodeID,
-		subscriptions:    make(map[string]map[string]*subscriptionRef),
-		stopCh:           make(chan struct{}),
-		delivery:         engine,
-		metrics:          metrics,
+		logger:                  logger,
+		config:                  config,
+		writePolicy:             normalizeWritePolicy(config.WritePolicy),
+		distributionMode:        distMode,
+		protectedQueueContracts: protectedQueueContracts,
+		protectedQueueConfigErr: protectedQueueConfigErr,
+		cluster:                 cl,
+		localNodeID:             localNodeID,
+		subscriptions:           make(map[string]map[string]*subscriptionRef),
+		stopCh:                  make(chan struct{}),
+		delivery:                engine,
+		metrics:                 metrics,
 	}
 
 	return mgr
@@ -242,6 +290,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Ensure reserved queues exist
 	if err := m.ensureReservedQueues(ctx); err != nil {
 		return fmt.Errorf("failed to create reserved queues: %w", err)
+	}
+	if err := m.ValidateProtectedQueueContracts(ctx); err != nil {
+		return fmt.Errorf("invalid protected queue contract: %w", err)
 	}
 
 	// Cleanup ephemeral queues that expired while broker was down
@@ -374,6 +425,225 @@ func (m *Manager) QueueStore() storage.QueueStore {
 	return m.queueStore
 }
 
+// ProtectedQueueContracts returns a snapshot of the currently registered
+// immutable queue contracts.
+func (m *Manager) ProtectedQueueContracts() []types.QueueConfig {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+
+	contracts := make([]types.QueueConfig, 0, len(m.protectedQueueContracts))
+	for _, contract := range m.protectedQueueContracts {
+		contracts = append(contracts, cloneQueueConfig(contract))
+	}
+	return contracts
+}
+
+// ReplaceProtectedQueueContracts validates and atomically replaces the
+// immutable queue-contract registry. Queue mutations and exact publishes are
+// blocked for the duration, so no operation can enter between persisted-state
+// validation and the registry swap.
+func (m *Manager) ReplaceProtectedQueueContracts(ctx context.Context, contracts []types.QueueConfig) error {
+	next, err := buildProtectedQueueContracts(contracts)
+	if err != nil {
+		return err
+	}
+
+	m.protectedQueuesMu.Lock()
+	defer m.protectedQueuesMu.Unlock()
+	if err := m.validateProtectedQueueContractsLocked(ctx, next); err != nil {
+		return err
+	}
+	m.protectedQueueContracts = next
+	m.protectedQueueConfigErr = nil
+	return nil
+}
+
+// NarrowProtectedQueueContracts replaces the registry with an exact subset of
+// the already-installed contracts without reading queue storage. It is used to
+// remove stale contracts after another subsystem has atomically committed its
+// new authorization snapshot; unlike ReplaceProtectedQueueContracts, this
+// finalization step cannot fail because of storage I/O.
+func (m *Manager) NarrowProtectedQueueContracts(contracts []types.QueueConfig) error {
+	next, err := buildProtectedQueueContracts(contracts)
+	if err != nil {
+		return err
+	}
+
+	m.protectedQueuesMu.Lock()
+	defer m.protectedQueuesMu.Unlock()
+	for name, contract := range next {
+		installed, ok := m.protectedQueueContracts[name]
+		if !ok {
+			return fmt.Errorf("protected queue contract %q is not installed", name)
+		}
+		if err := protectedQueueContractMismatch(installed, contract); err != nil {
+			return fmt.Errorf("protected queue contract %q differs from installed contract: %w", name, err)
+		}
+	}
+	m.protectedQueueContracts = next
+	m.protectedQueueConfigErr = nil
+	return nil
+}
+
+// ValidateProtectedQueueContracts verifies every registered contract against
+// the persisted queue configuration.
+func (m *Manager) ValidateProtectedQueueContracts(ctx context.Context) error {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if m.protectedQueueConfigErr != nil {
+		return m.protectedQueueConfigErr
+	}
+	return m.validateProtectedQueueContractsLocked(ctx, m.protectedQueueContracts)
+}
+
+func buildProtectedQueueContracts(contracts []types.QueueConfig) (map[string]types.QueueConfig, error) {
+	protected := make(map[string]types.QueueConfig, len(contracts))
+	for _, contract := range contracts {
+		if contract.Name == "" {
+			return nil, fmt.Errorf("protected queue contract name cannot be empty")
+		}
+		if _, exists := protected[contract.Name]; exists {
+			return nil, fmt.Errorf("protected queue contract %q is duplicated", contract.Name)
+		}
+		if err := protectedQueueContractMismatch(contract, contract); err != nil {
+			return nil, fmt.Errorf("invalid protected queue contract %q: %w", contract.Name, err)
+		}
+		protected[contract.Name] = cloneQueueConfig(contract)
+	}
+	return protected, nil
+}
+
+func (m *Manager) validateProtectedQueueContractsLocked(ctx context.Context, contracts map[string]types.QueueConfig) error {
+	if len(contracts) > 0 {
+		if _, err := m.durableQueueStore(); err != nil {
+			return err
+		}
+	}
+
+	names := make([]string, 0, len(contracts))
+	for name := range contracts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		persisted, err := m.queueStore.GetQueue(ctx, name)
+		if err != nil {
+			return fmt.Errorf("%w: load queue %q: %v", ErrProtectedQueueContractDrift, name, err)
+		}
+		if persisted == nil {
+			return fmt.Errorf("%w: load queue %q: %v", ErrProtectedQueueContractDrift, name, storage.ErrQueueNotFound)
+		}
+		if err := protectedQueueContractMismatch(contracts[name], *persisted); err != nil {
+			return fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
+		}
+	}
+	return nil
+}
+
+// protectedQueueContract copies one registered contract out of the registry so
+// callers can do storage work without holding protectedQueuesMu.
+func (m *Manager) protectedQueueContract(queueName string) (types.QueueConfig, bool) {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+
+	contract, protected := m.protectedQueueContracts[queueName]
+	if !protected {
+		return types.QueueConfig{}, false
+	}
+	return cloneQueueConfig(contract), true
+}
+
+// durableQueueStore returns the queue store only when it can actually make a
+// single append durable. A store that implements DurableQueueStore without real
+// crash durability must not back a protected queue, because publishers are
+// acknowledged on the strength of that barrier.
+func (m *Manager) durableQueueStore() (storage.DurableQueueStore, error) {
+	durableStore, ok := m.queueStore.(storage.DurableQueueStore)
+	if !ok || !durableStore.SupportsDurableSync() {
+		return nil, fmt.Errorf("%w: protected queues require durable sync support with atomic append", ErrDurableSyncUnsupported)
+	}
+	return durableStore, nil
+}
+
+func (m *Manager) validateProtectedQueueMutationLocked(config types.QueueConfig) error {
+	expected, protected := m.protectedQueueContracts[config.Name]
+	if !protected {
+		return nil
+	}
+	if err := protectedQueueContractMismatch(expected, config); err != nil {
+		return fmt.Errorf("%w: %v", ErrProtectedQueueMutation, err)
+	}
+	return nil
+}
+
+// ValidateProtectedQueueContract compares the persisted fields that define an
+// exact internal publisher's safety and replay guarantees. MaxDepth is
+// deliberately excluded because stream depth is not currently enforced.
+func ValidateProtectedQueueContract(expected, persisted types.QueueConfig) error {
+	if err := protectedQueueContractMismatch(expected, persisted); err != nil {
+		return fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
+	}
+	return nil
+}
+
+func protectedQueueContractMismatch(expected, persisted types.QueueConfig) error {
+	target := expected.Name
+	switch {
+	case expected.Type != types.QueueTypeStream:
+		return fmt.Errorf("protected queue %q must be configured as a stream, got %q", target, expected.Type)
+	case !expected.Durable:
+		return fmt.Errorf("protected queue %q must be configured as durable", target)
+	case !expected.Reserved:
+		return fmt.Errorf("protected queue %q must be configured as reserved", target)
+	case expected.Replication.Enabled:
+		return fmt.Errorf("protected queue %q must not configure replication", target)
+	case expected.MaxMessageSize <= 0:
+		return fmt.Errorf("protected queue %q must configure a positive limits.max_message_size", target)
+	case persisted.Name != expected.Name:
+		return protectedQueueFieldMismatch(target, "name", persisted.Name, expected.Name)
+	case !slices.Equal(persisted.Topics, expected.Topics):
+		return protectedQueueFieldMismatch(target, "topics", persisted.Topics, expected.Topics)
+	case persisted.Type != types.QueueTypeStream:
+		return fmt.Errorf("protected queue %q must be a stream, got %q", target, persisted.Type)
+	case !persisted.Durable:
+		return fmt.Errorf("protected queue %q must be durable", target)
+	case !persisted.Reserved:
+		return fmt.Errorf("protected queue %q must be reserved", target)
+	case persisted.Replication.Enabled:
+		return fmt.Errorf("protected queue %q must not enable replication", target)
+	case persisted.Type != expected.Type:
+		return protectedQueueFieldMismatch(target, "type", persisted.Type, expected.Type)
+	case persisted.Durable != expected.Durable:
+		return protectedQueueFieldMismatch(target, "durable", persisted.Durable, expected.Durable)
+	case persisted.Reserved != expected.Reserved:
+		return protectedQueueFieldMismatch(target, "reserved", persisted.Reserved, expected.Reserved)
+	case persisted.Replication.Enabled != expected.Replication.Enabled:
+		return protectedQueueFieldMismatch(target, "replication.enabled", persisted.Replication.Enabled, expected.Replication.Enabled)
+	case persisted.Retention.RetentionTime != expected.Retention.RetentionTime:
+		return protectedQueueFieldMismatch(target, "retention.max_age", persisted.Retention.RetentionTime, expected.Retention.RetentionTime)
+	case persisted.Retention.RetentionBytes != expected.Retention.RetentionBytes:
+		return protectedQueueFieldMismatch(target, "retention.max_length_bytes", persisted.Retention.RetentionBytes, expected.Retention.RetentionBytes)
+	case persisted.Retention.RetentionMessages != expected.Retention.RetentionMessages:
+		return protectedQueueFieldMismatch(target, "retention.max_length_messages", persisted.Retention.RetentionMessages, expected.Retention.RetentionMessages)
+	case persisted.MaxMessageSize != expected.MaxMessageSize:
+		return protectedQueueFieldMismatch(target, "limits.max_message_size", persisted.MaxMessageSize, expected.MaxMessageSize)
+	case persisted.MessageTTL != expected.MessageTTL:
+		return protectedQueueFieldMismatch(target, "limits.message_ttl", persisted.MessageTTL, expected.MessageTTL)
+	default:
+		return nil
+	}
+}
+
+func protectedQueueFieldMismatch(target, field string, got, want any) error {
+	return fmt.Errorf("protected queue %q field %s is %v, want %v", target, field, got, want)
+}
+
+func cloneQueueConfig(config types.QueueConfig) types.QueueConfig {
+	config.Topics = append([]string(nil), config.Topics...)
+	return config
+}
+
 // GroupStore returns the consumer group store used by the manager.
 func (m *Manager) GroupStore() storage.ConsumerGroupStore {
 	return m.groupStore
@@ -383,6 +653,12 @@ func (m *Manager) GroupStore() storage.ConsumerGroupStore {
 
 // CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
+		return err
+	}
+
 	if config.Replication.Enabled && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
 		if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
 			return err
@@ -415,6 +691,12 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue.
 func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
+		return err
+	}
+
 	current, err := m.queueStore.GetQueue(ctx, config.Name)
 	if err != nil {
 		return err
@@ -476,6 +758,12 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 
 // DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if _, protected := m.protectedQueueContracts[queueName]; protected {
+		return fmt.Errorf("%w: queue %q cannot be deleted", ErrProtectedQueueMutation, queueName)
+	}
+
 	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
 		return err
@@ -594,6 +882,67 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 	return nil
 }
 
+// PublishToDurableStream appends to exactly queueName and establishes a
+// per-queue durability barrier before returning success. The target must be a
+// reserved, durable, non-replicated stream. This method never performs topic
+// fanout and never auto-creates a queue.
+//
+// The contract snapshot is copied out of the registry before any storage work
+// starts. Holding protectedQueuesMu across the append would let one fsync block
+// every contract reload, and a reload waiting for the write lock would in turn
+// stall every subsequent publish.
+func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) error {
+	expected, protected := m.protectedQueueContract(queueName)
+	if !protected {
+		return fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
+	}
+
+	publish = normalizePublishRequest(publish)
+	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil {
+		return fmt.Errorf("get exact stream %q: %w", queueName, err)
+	}
+	if queueConfig == nil {
+		return fmt.Errorf("get exact stream %q: %w", queueName, storage.ErrQueueNotFound)
+	}
+	if err := protectedQueueContractMismatch(expected, *queueConfig); err != nil {
+		return fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
+	}
+	if !queueConfig.Reserved {
+		return fmt.Errorf("%w: %s", ErrQueueNotReserved, queueName)
+	}
+	if queueConfig.Type != types.QueueTypeStream {
+		return fmt.Errorf("%w: %s", ErrQueueNotStream, queueName)
+	}
+	if !queueConfig.Durable {
+		return fmt.Errorf("%w: %s", ErrQueueNotDurable, queueName)
+	}
+	if queueConfig.Replication.Enabled {
+		return fmt.Errorf("%w: %s", ErrDurableReplicatedStreamUnsupported, queueName)
+	}
+	durableStore, err := m.durableQueueStore()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, queueName)
+	}
+	if queueConfig.MaxMessageSize <= 0 || int64(len(publish.Payload)) > queueConfig.MaxMessageSize {
+		return fmt.Errorf(
+			"%w: queue %s accepts at most %d bytes, got %d",
+			ErrQueueMessageTooLarge,
+			queueName,
+			queueConfig.MaxMessageSize,
+			len(publish.Payload),
+		)
+	}
+
+	msg := newQueuedMessage(publish, queueConfig)
+	offset, err := durableStore.AppendAndSync(ctx, queueName, msg)
+	if err := m.completeAppend(queueName, publish.Topic, offset, err); err != nil {
+		return err
+	}
+	m.delivery.Schedule(queueName)
+	return nil
+}
+
 // HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
 func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishRequest, mode types.PublishMode) error {
 	publish = normalizePublishRequest(publish)
@@ -685,65 +1034,77 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 }
 
 func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
-	cleanProps := cloneWithoutForwardingMeta(publish.Properties)
-
+	errs := make([]error, 0)
 	for _, target := range targets {
-		queueName := target.name
-		queueConfig := target.config
-		if queueConfig == nil {
+		if err := m.appendLocalTarget(ctx, publish, target); err != nil {
+			errs = append(errs, err)
 			continue
 		}
-
-		// Create message for this queue
-		now := time.Now()
-		msg := &types.Message{
-			ID:         generateMessageID(),
-			Payload:    publish.Payload,
-			Topic:      publish.Topic,
-			Properties: cleanProps,
-			State:      types.StateQueued,
-			CreatedAt:  now,
-		}
-		if queueConfig.MessageTTL > 0 {
-			msg.ExpiresAt = now.Add(queueConfig.MessageTTL)
-		}
-
-		var (
-			offset uint64
-			err    error
-		)
-
-		replicated := queueConfig.Replication.Enabled
-		if replicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
-			syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
-			offset, err = m.raftCoordinator.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
-				SyncMode:   &syncMode,
-				AckTimeout: queueConfig.Replication.AckTimeout,
-			})
-		} else {
-			if replicated && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
-				m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
-					slog.String("queue", queueName))
-			}
-			offset, err = m.queueStore.Append(ctx, queueName, msg)
-		}
-
-		if err != nil {
-			m.logger.Warn("failed to append to queue",
-				slog.String("queue", queueName),
-				slog.String("topic", publish.Topic),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		m.logger.Debug("message published",
-			slog.String("queue", queueName),
-			slog.String("topic", publish.Topic),
-			slog.Uint64("offset", offset))
-
-		m.delivery.Schedule(queueName)
+		m.delivery.Schedule(target.name)
 	}
 
+	return errors.Join(errs...)
+}
+
+func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRequest, target queuePublishTarget) error {
+	queueName := target.name
+	queueConfig := target.config
+	if queueConfig == nil {
+		return fmt.Errorf("append to queue %q: missing queue configuration", queueName)
+	}
+
+	msg := newQueuedMessage(publish, queueConfig)
+
+	var (
+		offset uint64
+		err    error
+	)
+	replicated := queueConfig.Replication.Enabled
+	if replicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+		syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
+		offset, err = m.raftCoordinator.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
+			SyncMode:   &syncMode,
+			AckTimeout: queueConfig.Replication.AckTimeout,
+		})
+	} else {
+		if replicated && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
+			m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
+				slog.String("queue", queueName))
+		}
+		offset, err = m.queueStore.Append(ctx, queueName, msg)
+	}
+	return m.completeAppend(queueName, publish.Topic, offset, err)
+}
+
+func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConfig) *types.Message {
+	now := time.Now()
+	msg := &types.Message{
+		ID:         generateMessageID(),
+		Payload:    publish.Payload,
+		Topic:      publish.Topic,
+		Properties: cloneWithoutForwardingMeta(publish.Properties),
+		State:      types.StateQueued,
+		CreatedAt:  now,
+	}
+	if queueConfig.MessageTTL > 0 {
+		msg.ExpiresAt = now.Add(queueConfig.MessageTTL)
+	}
+	return msg
+}
+
+func (m *Manager) completeAppend(queueName, topic string, offset uint64, err error) error {
+	if err != nil {
+		m.logger.Warn("failed to append to queue",
+			slog.String("queue", queueName),
+			slog.String("topic", topic),
+			slog.String("error", err.Error()))
+		return fmt.Errorf("append to queue %q: %w", queueName, err)
+	}
+
+	m.logger.Debug("message published",
+		slog.String("queue", queueName),
+		slog.String("topic", topic),
+		slog.Uint64("offset", offset))
 	return nil
 }
 

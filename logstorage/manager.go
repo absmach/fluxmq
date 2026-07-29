@@ -5,7 +5,6 @@ package logstorage
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -57,8 +56,9 @@ func DefaultManagerConfig() ManagerConfig {
 
 // NewSegmentManager creates a new segment manager for the given directory.
 func NewSegmentManager(dir string, config ManagerConfig) (*SegmentManager, error) {
-	// Ensure directory exists
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Ensure the directory and every missing parent are durable before any
+	// segment inside them can be synced on a publisher's behalf.
+	if err := MkdirAllSynced(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create segment directory: %w", err)
 	}
 
@@ -190,8 +190,12 @@ func (m *SegmentManager) createSegment(baseOffset uint64) error {
 	return nil
 }
 
-// Append appends a batch to the log and returns the base offset.
-func (m *SegmentManager) Append(batch *Batch) (uint64, error) {
+// appendWithBarrier appends a batch and, when barrier is non-nil, runs the
+// barrier against the exact segment that accepted the batch before releasing
+// the manager lock. Keeping the lock across both operations prevents another
+// append from rotating the active segment between the write and its durability
+// barrier.
+func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) error) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -210,15 +214,35 @@ func (m *SegmentManager) Append(batch *Batch) (uint64, error) {
 	batch.BaseOffset = m.tailOffset
 	batch.Compression = m.config.Compression
 
-	// Append to active segment
-	offset, err := m.activeSegment.Append(batch)
+	// Capture the target so a durability barrier always applies to the segment
+	// containing this batch, even if rotation behavior changes in the future.
+	target := m.activeSegment
+	offset, err := target.Append(batch)
 	if err != nil {
 		return 0, err
 	}
 
 	m.tailOffset = batch.NextOffset()
+	if barrier != nil {
+		if err := barrier(target); err != nil {
+			return offset, fmt.Errorf("durability barrier for offset %d: %w", offset, err)
+		}
+	}
 
 	return offset, nil
+}
+
+// Append appends a batch to the log and returns the base offset.
+func (m *SegmentManager) Append(batch *Batch) (uint64, error) {
+	return m.appendWithBarrier(batch, nil)
+}
+
+// AppendAndSync appends a batch and syncs the exact segment containing it
+// before returning. Segment rotation is serialized with the entire operation.
+func (m *SegmentManager) AppendAndSync(batch *Batch) (uint64, error) {
+	return m.appendWithBarrier(batch, func(segment *Segment) error {
+		return segment.Sync()
+	})
 }
 
 // AppendMessage appends a single message and returns its offset.
@@ -226,6 +250,14 @@ func (m *SegmentManager) AppendMessage(value []byte, key []byte, headers map[str
 	batch := NewBatch(0)
 	batch.Append(value, key, headers)
 	return m.Append(batch)
+}
+
+// AppendMessageAndSync appends one message and syncs the exact segment
+// containing it before returning.
+func (m *SegmentManager) AppendMessageAndSync(value []byte, key []byte, headers map[string][]byte) (uint64, error) {
+	batch := NewBatch(0)
+	batch.Append(value, key, headers)
+	return m.AppendAndSync(batch)
 }
 
 // shouldRotate checks if the active segment should be rotated.

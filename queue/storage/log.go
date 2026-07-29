@@ -70,6 +70,21 @@ type QueueStore interface {
 	Count(ctx context.Context, queueName string) (uint64, error)
 }
 
+// DurableQueueStore atomically appends and establishes a durability barrier for
+// the exact record written to a single queue. Implementations must serialize
+// segment rotation with the entire operation; Append followed by a separate
+// active-segment sync does not satisfy this contract.
+type DurableQueueStore interface {
+	AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error)
+
+	// SupportsDurableSync reports whether AppendAndSync survives process and
+	// machine crashes. Implementing the interface is not sufficient evidence:
+	// a volatile store can order an append without making it durable, so
+	// callers that acknowledge writes on behalf of a publisher must consult
+	// this method before promising durability.
+	SupportsDurableSync() bool
+}
+
 // ConsumerGroupStore manages cursor-based consumer groups with PEL tracking.
 type ConsumerGroupStore interface {
 	// CreateConsumerGroup creates a new consumer group for a queue.

@@ -5,7 +5,7 @@ description: Configure listeners, WebSocket path, health checks, and OpenTelemet
 
 # Server Configuration
 
-**Last Updated:** 2026-02-25
+**Last Updated:** 2026-07-29
 
 `server` controls network listeners and telemetry endpoints. Example:
 
@@ -32,6 +32,13 @@ server:
   amqp091:
     plain:
       addr: ":5682"
+    internal:
+      addr: ":5683"
+      max_connections: 32
+      cert_file: "/run/secrets/fluxmq_server_cert"
+      key_file: "/run/secrets/fluxmq_server_key"
+      ca_file: "/run/secrets/local_client_ca"
+      client_auth: "require"
 
   health_enabled: true
   health_addr: ":8081"
@@ -49,6 +56,11 @@ server:
 ## Key Fields
 
 - Listener families: `tcp`, `websocket`, `http`, `coap`, `amqp`, `amqp091`.
+- `amqp091.internal` is a private mTLS listener reserved for
+  `auth.local_principals`; it never uses external auth or blocking hooks and
+  requires a positive `max_connections` cap. It carries service-to-service
+  traffic from a fixed set of statically configured internal producers, such as
+  audit or event streams — not general client, device, or tenant connections.
 - Listener addresses: `addr` (empty disables the specific listener).
 - MQTT parser mode per listener: TCP `v3`/`v5` listeners are protocol-pinned; WebSocket listeners can use `protocol` (`auto`, `v3`, `v5`).
 - Listener limits/timeouts: `max_connections`, `read_timeout`, `write_timeout`.

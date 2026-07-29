@@ -253,3 +253,27 @@ func TestPrefixedClientIDUsesCorePrefix(t *testing.T) {
 		t.Fatalf("PrefixedClientID mismatch: got %q", got)
 	}
 }
+
+func TestConnectionIDsAreUniqueForSameRemoteAddress(t *testing.T) {
+	b := New(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	firstTransport := &memoryConn{}
+	secondTransport := &memoryConn{}
+	first := newConnection(context.Background(), b, firstTransport, nil)
+	second := newConnection(context.Background(), b, secondTransport, nil)
+
+	if first.connID == second.connID {
+		t.Fatalf("connections sharing RemoteAddr received the same ID %q", first.connID)
+	}
+	if !IsAMQP091Client(PrefixedClientID(first.connID)) || !IsAMQP091Client(PrefixedClientID(second.connID)) {
+		t.Fatal("unique connection IDs lost the AMQP 0.9.1 client prefix")
+	}
+	b.registerConnection(first.connID, first)
+	b.registerConnection(second.connID, second)
+	if got := len(b.ConnectionIDs()); got != 2 {
+		t.Fatalf("active connection count = %d, want 2", got)
+	}
+	b.unregisterConnection(first.connID)
+	if !b.HasConnection(second.connID) {
+		t.Fatal("unregistering one connection removed the other connection with the same RemoteAddr")
+	}
+}

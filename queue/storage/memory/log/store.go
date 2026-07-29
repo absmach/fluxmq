@@ -15,6 +15,8 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
+var _ storage.DurableQueueStore = (*Store)(nil)
+
 // Store implements queueStore and ConsumerGroupStore using in-memory data structures.
 type Store struct {
 	logs       sync.Map // map[string]*Log
@@ -191,6 +193,17 @@ func (s *Store) Append(ctx context.Context, queueName string, msg *types.Message
 
 	return offset, nil
 }
+
+// AppendAndSync serializes the write under the queue lock, matching the
+// ordering half of the durable-append contract. Nothing in this store survives
+// process exit, so SupportsDurableSync reports false and callers must not
+// acknowledge writes as durable on top of it.
+func (s *Store) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	return s.Append(ctx, queueName, msg)
+}
+
+// SupportsDurableSync reports false: this store is in-memory only.
+func (s *Store) SupportsDurableSync() bool { return false }
 
 // AppendBatch adds multiple messages to a queue's log.
 func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error) {

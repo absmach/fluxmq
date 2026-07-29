@@ -72,6 +72,59 @@ func TestSegmentManager_RotateAndRead(t *testing.T) {
 	assert.Equal(t, []byte("b"), rangeMsgs[1].Value)
 }
 
+func TestSegmentManager_DurableAppendSerializesConcurrentRotation(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.MaxSegmentSize = 1
+	cfg.MaxSegmentAge = 0
+	cfg.SyncInterval = 0
+	cfg.Compression = CompressionNone
+
+	mgr := newTestManager(t, cfg)
+	defer mgr.Close()
+
+	batch := NewBatch(0)
+	batch.Append([]byte("durable"), nil, nil)
+
+	rotationAttempted := make(chan struct{})
+	rotationResult := make(chan error, 1)
+	var syncedSegment *Segment
+	offset, err := mgr.appendWithBarrier(batch, func(target *Segment) error {
+		syncedSegment = target
+
+		// The old two-call Append/SyncQueue path released this lock here,
+		// allowing the concurrent append to rotate target to readonly before
+		// Sync selected the active segment. The atomic path must retain it.
+		if mgr.mu.TryLock() {
+			mgr.mu.Unlock()
+			t.Fatal("segment manager lock was released before durability barrier")
+		}
+		if mgr.activeSegment != target {
+			t.Fatal("active segment changed before durability barrier")
+		}
+
+		rotationBatch := NewBatch(0)
+		rotationBatch.Append([]byte("rotate"), nil, nil)
+		go func() {
+			close(rotationAttempted)
+			_, appendErr := mgr.Append(rotationBatch)
+			rotationResult <- appendErr
+		}()
+		<-rotationAttempted
+		return target.Sync()
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), offset)
+	require.NoError(t, <-rotationResult)
+
+	require.NotNil(t, syncedSegment)
+	assert.Equal(t, uint64(0), syncedSegment.BaseOffset())
+	segments := mgr.Segments()
+	require.Len(t, segments, 2)
+	assert.Equal(t, uint64(0), segments[0].BaseOffset)
+	assert.Equal(t, uint64(1), segments[1].BaseOffset)
+	assert.Equal(t, uint64(2), mgr.Tail())
+}
+
 func TestSegmentManager_Truncate(t *testing.T) {
 	cfg := DefaultManagerConfig()
 	cfg.MaxSegmentSize = 1

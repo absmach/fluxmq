@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
@@ -34,6 +36,13 @@ type channelQueueManager interface {
 	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
 }
 
+// durableStreamQueuePublisher is intentionally separate from the general
+// queue-manager interface. The local-principal listener fails closed unless
+// the concrete manager can target and durably sync one exact stream.
+type durableStreamQueuePublisher interface {
+	PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error
+}
+
 // IsAMQP091Client checks if a client ID belongs to an AMQP 0.9.1 client.
 func IsAMQP091Client(clientID string) bool {
 	return corebroker.IsAMQP091Client(clientID)
@@ -47,6 +56,7 @@ func PrefixedClientID(connID string) string {
 // Broker is the core AMQP 0.9.1 broker.
 type Broker struct {
 	connections         sync.Map // connID -> *Connection
+	connectionSeq       atomic.Uint64
 	router              *router.TrieRouter
 	routeResolver       *corebroker.RoutingResolver
 	queueManager        channelQueueManager
@@ -55,8 +65,17 @@ type Broker struct {
 	cluster             cluster.Cluster
 	crossDeliver        corebroker.CrossDeliverFunc
 	routePublishTimeout time.Duration
+	durableAppends      durableAppendLimiter
 	stats               *Stats
 	logger              *slog.Logger
+}
+
+func (b *Broker) nextConnectionID(remote net.Addr) string {
+	remoteAddress := "unknown"
+	if remote != nil {
+		remoteAddress = remote.String()
+	}
+	return fmt.Sprintf("%s@%d", remoteAddress, b.connectionSeq.Add(1))
 }
 
 // New creates a new AMQP 0.9.1 broker.
@@ -133,7 +152,18 @@ func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
 
 // HandleConnection handles a new raw TCP connection through the full AMQP 0.9.1 lifecycle.
 func (b *Broker) HandleConnection(ctx context.Context, netConn net.Conn) {
-	c := newConnection(b, netConn)
+	b.handleConnection(ctx, netConn, nil)
+}
+
+// HandleConnectionWithPolicy handles a connection using an immutable,
+// listener-scoped security policy. This is the entry point for servers that
+// expose multiple AMQP listeners with different trust boundaries.
+func (b *Broker) HandleConnectionWithPolicy(ctx context.Context, netConn net.Conn, policy *ConnectionPolicy) {
+	b.handleConnection(ctx, netConn, policy)
+}
+
+func (b *Broker) handleConnection(ctx context.Context, netConn net.Conn, policy *ConnectionPolicy) {
+	c := newConnection(ctx, b, netConn, policy)
 	if err := c.run(); err != nil { //nolint:contextcheck // connection lifecycle manages its own context for cleanup
 		b.logger.Debug("AMQP 0.9.1 connection ended", "remote", netConn.RemoteAddr(), "error", err)
 	}
@@ -181,6 +211,69 @@ func (b *Broker) ConnectionName(connID string) string {
 		return ""
 	}
 	return v.(*Connection).connectionName
+}
+
+// DisconnectInvalidLocalSessions disconnects every local-principal session for
+// which isValid returns false. It is intended for atomic credential/ACL reloads
+// and never evaluates or mutates external-auth sessions.
+//
+// The returned value is the number of connections selected for disconnection.
+func (b *Broker) DisconnectInvalidLocalSessions(isValid func(LocalSessionIdentity) bool) int {
+	if isValid == nil {
+		return 0
+	}
+
+	// Each disconnect writes a Connection.Close under a write deadline, so an
+	// unresponsive peer costs up to that deadline. Revocation runs while the
+	// reload holds its lock, so disconnect concurrently: the cost stays one
+	// deadline in total rather than one per stalled peer.
+	var revoked sync.WaitGroup
+	disconnected := 0
+	b.connections.Range(func(_, value any) bool {
+		conn, ok := value.(*Connection)
+		if !ok {
+			return true
+		}
+		identity, ok := conn.localSessionIdentity()
+		if !ok || isValid(identity) {
+			return true
+		}
+		disconnected++
+		revoked.Add(1)
+		go func() {
+			defer revoked.Done()
+			conn.disconnect(codec.AccessRefused, "local principal credentials revoked")
+		}()
+		return true
+	})
+	revoked.Wait()
+	if disconnected > 0 {
+		b.stats.AddLocalForcedDisconnects(uint64(disconnected))
+		b.logger.Warn("amqp091_local_sessions_disconnected",
+			"auth_mode", "local",
+			"outcome", "disconnected",
+			"reason", "credentials_or_policy_revoked",
+			"count", disconnected)
+	}
+	return disconnected
+}
+
+// RecordLocalPrincipalReload records one completed local-principal reload
+// attempt. Successful no-op reloads count as successes because mounted secret
+// files are intentionally revalidated on every attempt.
+func (b *Broker) RecordLocalPrincipalReload(success bool) {
+	if success {
+		b.stats.IncrementLocalReloadSuccess()
+		b.logger.Info("amqp091_local_principal_reload",
+			"auth_mode", "local",
+			"outcome", "success")
+		return
+	}
+	b.stats.IncrementLocalReloadFailures()
+	b.logger.Warn("amqp091_local_principal_reload",
+		"auth_mode", "local",
+		"outcome", "failure",
+		"reason", "validation_or_load_failed")
 }
 
 // Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.

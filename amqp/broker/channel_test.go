@@ -14,6 +14,8 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
+	queuepkg "github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -21,18 +23,36 @@ import (
 const eventsExchange = "events"
 
 type mockChannelQueueManager struct {
-	lastCursor    *qtypes.CursorOption
-	lastPublish   qtypes.PublishRequest
-	publishCalls  int
-	queueCfg      *qtypes.QueueConfig
-	createdQueues []qtypes.QueueConfig
-	updatedQueues []qtypes.QueueConfig
+	lastCursor        *qtypes.CursorOption
+	lastPublish       qtypes.PublishRequest
+	publishCalls      int
+	exactStreamName   string
+	exactPublish      qtypes.PublishRequest
+	exactPublishCalls int
+	exactPublishErr   error
+	exactPublishCtx   context.Context
+	queueCfg          *qtypes.QueueConfig
+	createdQueues     []qtypes.QueueConfig
+	updatedQueues     []qtypes.QueueConfig
+	createQueueErr    error
+	updateQueueErr    error
 }
 
 func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
 	m.lastPublish = publish
 	m.publishCalls++
 	return nil
+}
+
+func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error {
+	m.exactStreamName = queueName
+	m.exactPublish = publish
+	m.exactPublishCtx = ctx
+	m.exactPublishCalls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.exactPublishErr
 }
 
 func (m *mockChannelQueueManager) Subscribe(context.Context, string, string, string, string, string) error {
@@ -62,7 +82,7 @@ func (m *mockChannelQueueManager) Reject(context.Context, string, string, string
 
 func (m *mockChannelQueueManager) CreateQueue(_ context.Context, cfg qtypes.QueueConfig) error {
 	m.createdQueues = append(m.createdQueues, cfg)
-	return nil
+	return m.createQueueErr
 }
 
 func (m *mockChannelQueueManager) GetQueue(context.Context, string) (*qtypes.QueueConfig, error) {
@@ -71,7 +91,7 @@ func (m *mockChannelQueueManager) GetQueue(context.Context, string) (*qtypes.Que
 
 func (m *mockChannelQueueManager) UpdateQueue(_ context.Context, cfg qtypes.QueueConfig) error {
 	m.updatedQueues = append(m.updatedQueues, cfg)
-	return nil
+	return m.updateQueueErr
 }
 
 func (m *mockChannelQueueManager) CommitOffset(context.Context, string, string, uint64) error {
@@ -103,7 +123,7 @@ func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
-		connID:   "test-conn",
+		connID:   testConnectionID,
 		channels: make(map[uint16]*Channel),
 	}
 	ch := newChannel(c, 1)
@@ -299,8 +319,8 @@ func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected 1 cross-deliver call, got %d", calls)
 	}
-	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
-		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), gotProps[corebroker.ClientIDProperty])
+	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), gotProps[corebroker.ClientIDProperty])
 	}
 }
 
@@ -386,19 +406,19 @@ func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	mockQM := &mockChannelQueueManager{}
 	ch.conn.broker.queueManager = mockQM
 
-	ch.handleQueuePublish("$queue/orders/process", []byte("hello"), map[string]string{"trace": "1"}, PrefixedClientID("test-conn"))
+	ch.handleQueuePublish("$queue/orders/process", []byte("hello"), map[string]string{"trace": "1"}, PrefixedClientID(testConnectionID))
 
 	if mockQM.publishCalls != 1 {
 		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
 	}
-	if mockQM.lastPublish.ClientID != PrefixedClientID("test-conn") {
-		t.Fatalf("expected client ID %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.ClientID)
+	if mockQM.lastPublish.ClientID != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.ClientID)
 	}
 	if mockQM.lastPublish.Properties["trace"] != "1" {
 		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.Properties["trace"])
 	}
-	if mockQM.lastPublish.Properties[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
-		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.Properties[corebroker.ClientIDProperty])
+	if mockQM.lastPublish.Properties[corebroker.ClientIDProperty] != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.Properties[corebroker.ClientIDProperty])
 	}
 }
 
@@ -771,6 +791,48 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 	}
 	if cfg.Retention.RetentionTime != 7*24*time.Hour {
 		t.Fatalf("expected RetentionTime=7d, got %v", cfg.Retention.RetentionTime)
+	}
+}
+
+func TestQueueRedeclareProtectedQueueClosesChannel(t *testing.T) {
+	ch, buf := newTestChannel(t)
+	existing := qtypes.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	existing.Type = qtypes.QueueTypeStream
+	existing.Reserved = true
+	mockQM := &mockChannelQueueManager{
+		queueCfg:       &existing,
+		createQueueErr: qstorage.ErrQueueAlreadyExists,
+		updateQueueErr: queuepkg.ErrProtectedQueueMutation,
+	}
+	ch.conn.broker.queueManager = mockQM
+
+	if err := ch.handleQueueDeclare(&codec.QueueDeclare{
+		Queue:   existing.Name,
+		Durable: true,
+		Arguments: map[string]any{
+			"x-queue-type": "classic",
+		},
+	}); err != nil {
+		t.Fatalf("handleQueueDeclare() error = %v", err)
+	}
+
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want one ChannelClose", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	closeMessage, ok := decoded.(*codec.ChannelClose)
+	if !ok {
+		t.Fatalf("method = %T, want *codec.ChannelClose", decoded)
+	}
+	if closeMessage.ReplyCode != codec.PreconditionFailed {
+		t.Fatalf("reply code = %d, want %d", closeMessage.ReplyCode, codec.PreconditionFailed)
+	}
+	if closeMessage.ClassID != codec.ClassQueue || closeMessage.MethodID != codec.MethodQueueDeclare {
+		t.Fatalf("close method = %d/%d, want queue.declare", closeMessage.ClassID, closeMessage.MethodID)
 	}
 }
 

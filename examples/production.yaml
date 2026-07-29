@@ -7,6 +7,8 @@
 # Required out-of-band setup:
 #   - TLS certificate + key, plus CA bundle for client mTLS
 #   - External auth callout reachable on auth.internal:9090 (or disable)
+#   - Atom client CA + 32-byte local-principal secret files when enabling
+#     the internal AMQP audit listener
 #   - OTLP-compatible collector reachable on otel.internal:4317
 #   - Persistent volume mounted at /var/lib/fluxmq
 #
@@ -78,8 +80,19 @@ server:
   amqp091:
     tls:
       addr: ":5681"
+      max_connections: 10000
       cert_file: "/etc/fluxmq/certs/server.crt"
       key_file: "/etc/fluxmq/certs/server.key"
+    # Private, mTLS-only listener for local service principals. Never expose
+    # this port through a public load balancer.
+    internal:
+      addr: ":5683"
+      max_connections: 32
+      cert_file: "/run/secrets/fluxmq_internal_server_cert"
+      key_file: "/run/secrets/fluxmq_internal_server_key"
+      ca_file: "/run/secrets/atom_client_ca"
+      client_auth: "require"
+      min_version: "TLS1.2"
 
   coap:
     mdtls:
@@ -134,17 +147,31 @@ storage:
 # IdentityCacheSize bounds memory; IdentityCacheTTL forces re-auth on a
 # schedule so revoked tokens are eventually rejected.
 auth:
-  url: "https://auth.internal:9090"
-  transport: "grpc"
-  timeout: "2s"
-  protocols:
-    mqtt: true
-    amqp: true
-    amqp091: true
-    http: true
-    coap: true
-  identity_cache_size: 50000
-  identity_cache_ttl: "1h"
+  external:
+    url: "https://auth.internal:9090"
+    transport: "grpc"
+    timeout: "2s"
+    protocols:
+      mqtt: true
+      amqp: true
+      amqp091: true
+      http: true
+      coap: true
+    identity_cache_size: 50000
+    identity_cache_ttl: "1h"
+
+  # Local principals are valid only on server.amqp091.internal. Unknown
+  # principals fail closed and never fall back to auth.external.
+  local_principals:
+    - name: "atom-audit-publisher"
+      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      current_secret_file: "/run/secrets/atom_audit_secret_current"
+      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: "atom-audit"
+        subscribe: []
 
 # Optional blocking hooks. Enable only when an external policy/normalization
 # service must decide before FluxMQ continues the operation.
@@ -212,6 +239,23 @@ cluster:
 log:
   level: "info"
   format: "json"
+
+# Pre-provisioned stream used by the restricted Atom publisher. The publisher
+# is not permitted to declare or mutate broker topology.
+queues:
+  - name: "atom-audit"
+    topics:
+      - "$queue/atom-audit/#"
+    reserved: true
+    type: "stream"
+    retention:
+      max_age: "720h"
+      max_length_bytes: 10737418240
+      max_length_messages: 0
+    limits:
+      max_message_size: 1048576
+      # Keep per-message expiry aligned with the 30-day retention window.
+      message_ttl: "720h"
 
 # Notes for operators:
 #   1. Run the broker container with read_only rootfs, cap_drop ALL, and

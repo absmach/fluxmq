@@ -176,6 +176,49 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	}
 }
 
+func TestProtectedQueueAdminUpdateAndDeleteFailPrecondition(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	contract := types.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	contract.Type = types.QueueTypeStream
+	contract.Reserved = true
+	contract.Retention.RetentionTime = 30 * 24 * time.Hour
+	contract.Retention.RetentionBytes = 10 * 1024 * 1024 * 1024
+	contract.MessageTTL = 30 * 24 * time.Hour
+	managerConfig := queuepkg.DefaultConfig()
+	managerConfig.ProtectedQueueContracts = []types.QueueConfig{contract}
+	manager := queuepkg.NewManager(store, noopGroupStore{}, nil, managerConfig, nil, nil)
+	if err := manager.CreateQueue(ctx, contract); err != nil {
+		t.Fatalf("create protected queue: %v", err)
+	}
+	h := NewHandler(manager, nil, nil, nil)
+
+	_, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
+		Name: contract.Name,
+		Config: &queuev1.QueueConfig{
+			MaxMessageSize: uint32(contract.MaxMessageSize - 1),
+		},
+	}))
+	if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+		t.Fatalf("UpdateQueue() code = %s, error = %v, want failed_precondition", got, err)
+	}
+	persisted, getErr := store.GetQueue(ctx, contract.Name)
+	if getErr != nil {
+		t.Fatalf("GetQueue() error = %v", getErr)
+	}
+	if persisted.MaxMessageSize != contract.MaxMessageSize {
+		t.Fatalf("rejected update changed max message size to %d", persisted.MaxMessageSize)
+	}
+
+	_, err = h.DeleteQueue(ctx, connect.NewRequest(&queuev1.DeleteQueueRequest{Name: contract.Name}))
+	if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+		t.Fatalf("DeleteQueue() code = %s, error = %v, want failed_precondition", got, err)
+	}
+	if _, getErr := store.GetQueue(ctx, contract.Name); getErr != nil {
+		t.Fatalf("protected queue was deleted: %v", getErr)
+	}
+}
+
 func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	t.Parallel()
 
