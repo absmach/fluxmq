@@ -5,7 +5,6 @@ package logstorage
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -57,8 +56,9 @@ func DefaultManagerConfig() ManagerConfig {
 
 // NewSegmentManager creates a new segment manager for the given directory.
 func NewSegmentManager(dir string, config ManagerConfig) (*SegmentManager, error) {
-	// Ensure directory exists
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// Ensure the directory and every missing parent are durable before any
+	// segment inside them can be synced on a publisher's behalf.
+	if err := MkdirAllSynced(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create segment directory: %w", err)
 	}
 

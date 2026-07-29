@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -234,4 +235,59 @@ func TestAdapter_AppendAndSyncHonorsContextAndReportsDurability(t *testing.T) {
 func TestSyncDirRejectsMissingDirectory(t *testing.T) {
 	require.NoError(t, SyncDir(t.TempDir()))
 	require.Error(t, SyncDir(filepath.Join(t.TempDir(), "absent")))
+}
+
+func TestAdapter_CreateQueueRestoresMetadataLostAfterCrash(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("audit", "$queue/audit/#")
+	cfg.Type = types.QueueTypeStream
+	cfg.Reserved = true
+
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+	_, err = adapter.AppendAndSync(ctx, "audit", &types.Message{ID: "1", Topic: "t", Payload: []byte("a")})
+	require.NoError(t, err)
+	require.NoError(t, adapter.Close())
+
+	// A crash between the log directory reaching disk and its metadata doing so
+	// leaves the acknowledged record present but the queue invisible.
+	require.NoError(t, os.Remove(filepath.Join(dir, "config", "queues.json")))
+
+	reopened, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+
+	_, err = reopened.GetQueue(ctx, "audit")
+	require.ErrorIs(t, err, storage.ErrQueueNotFound, "precondition: metadata is gone")
+
+	require.NoError(t, reopened.CreateQueue(ctx, cfg), "recreating the queue must repair the lost metadata")
+
+	restored, err := reopened.GetQueue(ctx, "audit")
+	require.NoError(t, err)
+	assert.Equal(t, cfg.Name, restored.Name)
+
+	msg, err := reopened.Read(ctx, "audit", 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("a"), msg.Payload)
+
+	// A queue whose metadata is intact is still reported as already existing.
+	assert.ErrorIs(t, reopened.CreateQueue(ctx, cfg), storage.ErrQueueAlreadyExists)
+}
+
+func TestMkdirAllSyncedCreatesNestedDirectories(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "queues", "audit", "segments")
+	require.NoError(t, MkdirAllSynced(nested, 0o755))
+
+	info, err := os.Stat(nested)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+
+	require.NoError(t, MkdirAllSynced(nested, 0o755), "existing directories are accepted")
+
+	file := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
+	require.Error(t, MkdirAllSynced(file, 0o755), "a file in the path must not be reported as a directory")
 }

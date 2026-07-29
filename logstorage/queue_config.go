@@ -37,7 +37,7 @@ const (
 // NewQueueConfigStore creates or opens a queue config store.
 func NewQueueConfigStore(baseDir string) (*QueueConfigStore, error) {
 	dir := filepath.Join(baseDir, "config")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := MkdirAllSynced(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -159,14 +159,22 @@ func (s *QueueConfigStore) saveUnlocked() error {
 		return fmt.Errorf("failed to marshal queue config state: %w", err)
 	}
 
+	// Queue metadata must reach disk before the queue it describes can be used
+	// to acknowledge a publisher: an atomic rename makes the replacement
+	// all-or-nothing, but not durable. Sync the replacement, then the directory
+	// that now names it.
 	tempPath := s.configPath() + TempExtension
-	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
+	if err := WriteFileSynced(tempPath, data, 0o644); err != nil {
 		return fmt.Errorf("failed to write queue config file: %w", err)
 	}
 
 	if err := os.Rename(tempPath, s.configPath()); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to rename queue config file: %w", err)
+	}
+
+	if err := SyncDir(s.dir); err != nil {
+		return fmt.Errorf("failed to sync queue config directory: %w", err)
 	}
 
 	s.dirty = false

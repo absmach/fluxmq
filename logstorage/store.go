@@ -49,7 +49,7 @@ func DefaultStoreConfig() StoreConfig {
 
 // NewStore creates a new AOL store.
 func NewStore(baseDir string, config StoreConfig) (*Store, error) {
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+	if err := MkdirAllSynced(baseDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 

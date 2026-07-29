@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
@@ -117,12 +118,20 @@ func (a *Adapter) OffsetBySize(ctx context.Context, queueName string, retentionB
 // QueueStore interface implementation
 
 // CreateQueue creates a new queue with the given configuration.
+//
+// A queue is two pieces of state: its log directory and its metadata. A crash
+// between the two leaves a log with no metadata, which every other API reads as
+// a queue that does not exist. Treat that case as a repair and write the
+// missing metadata rather than reporting the queue as already created, so a
+// torn creation cannot strand records that were acknowledged as durable.
 func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := a.store.CreateQueue(config.Name); err != nil {
-		if err == ErrAlreadyExists {
+		if !errors.Is(err, ErrAlreadyExists) {
+			return err
+		}
+		if _, getErr := a.queueStore.Get(config.Name); getErr == nil {
 			return storage.ErrQueueAlreadyExists
 		}
-		return err
 	}
 
 	if err := a.queueStore.Save(config); err != nil {

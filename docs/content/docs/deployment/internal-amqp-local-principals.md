@@ -232,6 +232,15 @@ when the segment is created, so the record cannot be acknowledged while its
 file is still only in the page cache. FluxMQ sends a NACK when the append or
 sync fails.
 
+Durability covers the whole queue, not only the record. A queue's log directory
+and its ancestors are synced as they are created, and queue metadata is written
+to a synced temporary file, renamed, and followed by a directory sync. Without
+that, a crash could leave an acknowledged record inside a directory or behind a
+metadata file that never reached disk. If a crash still lands between the log
+directory and its metadata, recreating the queue from the same configuration
+repairs the metadata rather than reporting the queue as already existing, so
+acknowledged records stay reachable.
+
 Only a queue store that provides a real crash-durability barrier may back a
 protected stream. FluxMQ checks this capability, not just the presence of an
 atomic append: startup aborts, and a reload is rejected, when the configured

@@ -197,6 +197,57 @@ func SyncDir(dir string) error {
 	return nil
 }
 
+// MkdirAllSynced creates a directory and every missing parent, syncing each
+// parent as its child appears in it. os.MkdirAll leaves those new entries in
+// the page cache, so a crash can lose a whole queue directory even though the
+// segment inside it was synced.
+func MkdirAllSynced(path string, perm os.FileMode) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", path)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+
+	parent := filepath.Dir(path)
+	if parent != path {
+		if err := MkdirAllSynced(parent, perm); err != nil {
+			return err
+		}
+	}
+
+	if err := os.Mkdir(path, perm); err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return err
+	}
+	return SyncDir(parent)
+}
+
+// WriteFileSynced writes a file and flushes its contents before returning. It
+// is the durable half of a write-then-rename replacement; the caller must still
+// sync the containing directory after the rename.
+func WriteFileSynced(path string, data []byte, perm os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
 // scan reads through the segment to build batch positions and determine state.
 func (s *Segment) scan() error {
 	s.batchPositions = make([]batchPosition, 0, 64)
