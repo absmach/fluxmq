@@ -201,7 +201,7 @@ func (m *Manager) Reload(ctx context.Context) (*ReloadResult, error) {
 	result.RestartRequired = diff.RestartRequired
 
 	if len(diff.RuntimeSafe) > 0 {
-		applied, errs := m.applyRuntimeChanges(ctx, m.current, newCfg, diff.RuntimeSafe)
+		applied, _, errs := m.applyRuntimeChanges(ctx, m.current, newCfg, diff.RuntimeSafe)
 		result.Applied = applied
 		if len(errs) > 0 {
 			result.Errors = errs
@@ -234,9 +234,11 @@ func (m *Manager) Reload(ctx context.Context) (*ReloadResult, error) {
 	return result, nil
 }
 
-func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config, changes []config.FieldChange) (applied []config.FieldChange, errs []string) {
-	var rollbacks []func()
-
+// applyRuntimeChanges applies every runtime-safe change, rolling back the
+// subsystems it already applied if a later one fails. On success it returns the
+// undo functions in application order, so a caller that extends the sequence
+// can still unwind it; the reload path itself has nothing left to unwind.
+func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config, changes []config.FieldChange) (applied []config.FieldChange, rollbacks []func(), errs []string) {
 	// applySubsystem applies one subsystem-level change. On failure, rolls back
 	// all previously applied subsystems and returns false.
 	applySubsystem := func(subsystemChanges []config.FieldChange, applyFn func() error, rollbackFn func()) bool {
@@ -279,7 +281,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}, func() {
 			m.logSetup(old.Log)
 		}) {
-			return applied, errs
+			return applied, nil, errs
 		}
 	}
 
@@ -292,7 +294,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			oldManager := ratelimit.NewManager(configToRatelimit(old.RateLimit))
 			m.rateLimiter.Swap(oldManager)
 		}) {
-			return applied, errs
+			return applied, nil, errs
 		}
 	}
 
@@ -304,7 +306,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}, func() {
 			m.broker.SetMaxQoS(oldQoS)
 		}) {
-			return applied, errs
+			return applied, nil, errs
 		}
 	}
 
@@ -315,7 +317,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}, func() {
 			m.sessionTuner.SetSessionConfig(old.Session)
 		}) {
-			return applied, errs
+			return applied, nil, errs
 		}
 	}
 
@@ -325,7 +327,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 		}, func() {
 			_ = m.webhookTuner.Reconfigure(old.Webhook)
 		}) {
-			return applied, errs
+			return applied, nil, errs
 		}
 	}
 
@@ -335,7 +337,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			for i := len(rollbacks) - 1; i >= 0; i-- {
 				rollbacks[i]()
 			}
-			return nil, errs
+			return nil, nil, errs
 		}
 
 		changed, err := m.localPrincipalsReload(new.Auth.LocalPrincipals)
@@ -344,15 +346,25 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			for i := len(rollbacks) - 1; i >= 0; i-- {
 				rollbacks[i]()
 			}
-			return nil, errs
+			return nil, nil, errs
 		}
+		// Register the undo even though nothing runs after this block today.
+		// Without it, a subsystem added later would roll back everything except
+		// the credential swap, leaving the process authenticating against
+		// principals the rest of the configuration no longer describes.
+		rollbacks = append(rollbacks, func() {
+			if _, restoreErr := m.localPrincipalsReload(old.Auth.LocalPrincipals); restoreErr != nil {
+				slog.Error("config reload: failed to restore local principals during rollback",
+					"error", restoreErr)
+			}
+		})
 		configChanged := !reflect.DeepEqual(localPrincipalChanges[0].OldValue, localPrincipalChanges[0].NewValue)
 		if changed || configChanged {
 			applied = append(applied, localPrincipalChanges...)
 		}
 	}
 
-	return applied, errs
+	return applied, rollbacks, errs
 }
 
 func hasFieldChange(changes []config.FieldChange, path string) bool {

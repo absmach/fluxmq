@@ -146,6 +146,80 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 	}
 }
 
+// TestReloadLocalPrincipalsRegisterRollback pins the ordering contract of
+// applyRuntimeChanges: a subsystem that fails after the credential swap must
+// see that swap undone. Nothing runs after local principals today, so the test
+// drives applyRuntimeChanges directly with a failing subsystem appended.
+func TestReloadLocalPrincipalsRegisterRollback(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "local-secret")
+	const (
+		initialSecret = "0123456789abcdef0123456789abcdef"
+		nextSecret    = "abcdef0123456789abcdef0123456789"
+	)
+	if err := os.WriteFile(secretPath, []byte(initialSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, dir, fmt.Sprintf(`auth:
+  local_principals:
+    - name: atom-audit-publisher
+      certificate_uri_san: spiffe://absmach/atom/audit-publisher
+      current_secret_file: %q
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: atom-audit
+        subscribe: []
+`, secretPath))
+	initial, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := localauth.New(initial.Auth.LocalPrincipals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(path, initial, WithLocalPrincipalsReload(store.Reload))
+
+	if err := os.WriteFile(secretPath, []byte(nextSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	applied, rollbacks, errs := m.applyRuntimeChanges(context.Background(), initial, updated, []config.FieldChange{{
+		Path:     localPrincipalsPath,
+		OldValue: initial.Auth.LocalPrincipals,
+		NewValue: updated.Auth.LocalPrincipals,
+		Class:    config.RuntimeSafe,
+	}})
+	if len(errs) != 0 || len(applied) == 0 {
+		t.Fatalf("applyRuntimeChanges() applied=%v errs=%v, want the swap to succeed", applied, errs)
+	}
+	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+		t.Fatal("reloaded credential was not activated")
+	}
+
+	// Restore the file so the registered rollback has something to load, then
+	// run it the way a later failing subsystem would.
+	if err := os.WriteFile(secretPath, []byte(initialSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if len(rollbacks) != 1 {
+		t.Fatalf("registered rollbacks = %d, want 1; a later subsystem could not undo the credential swap", len(rollbacks))
+	}
+	rollbacks[0]()
+
+	if _, ok := store.Authenticate("atom-audit-publisher", initialSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+		t.Fatal("rollback did not restore the previous local-principal snapshot")
+	}
+	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); ok {
+		t.Fatal("rollback left the rolled-back credential active")
+	}
+}
+
 func (r *ReloadResult) HasChanges() bool {
 	return len(r.Applied) > 0 || len(r.RestartRequired) > 0
 }
