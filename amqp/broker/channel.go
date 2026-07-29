@@ -1746,28 +1746,42 @@ func (ch *Channel) getQueueInfo(name string) *queueInfo {
 	return ch.queues[name]
 }
 
+// isStreamQueue reports whether a publish target is a stream, checking the
+// names this channel declared before falling back to the globally configured
+// queues. It runs on every default-exchange publication, so it resolves the at
+// most two candidate names in place rather than building a slice of them.
 func (ch *Channel) isStreamQueue(name string) bool {
-	if info := ch.getQueueInfo(name); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
+	if ch.isDeclaredStreamQueue(name) {
 		return true
 	}
-	queueNames := []string{name}
-	if queueName, _ := corebroker.ParseQueueFilter(name); queueName != "" {
-		if info := ch.getQueueInfo(queueName); info != nil && info.queueType == string(qtypes.QueueTypeStream) {
-			return true
-		}
-		if queueName != name {
-			queueNames = append(queueNames, queueName)
-		}
+
+	queueName, _ := corebroker.ParseQueueFilter(name)
+	sameName := queueName == "" || queueName == name
+	if !sameName && ch.isDeclaredStreamQueue(queueName) {
+		return true
 	}
-	if qm := ch.conn.broker.queueManager; qm != nil {
-		for _, queueName := range queueNames {
-			cfg, err := qm.GetQueue(context.Background(), queueName)
-			if err == nil && cfg != nil && cfg.Type == qtypes.QueueTypeStream {
-				return true
-			}
-		}
+
+	qm := ch.conn.broker.queueManager
+	if qm == nil {
+		return false
 	}
-	return false
+	if ch.isConfiguredStreamQueue(qm, name) {
+		return true
+	}
+	return !sameName && ch.isConfiguredStreamQueue(qm, queueName)
+}
+
+// isDeclaredStreamQueue checks the queues declared on this channel.
+func (ch *Channel) isDeclaredStreamQueue(name string) bool {
+	info := ch.getQueueInfo(name)
+	return info != nil && info.queueType == string(qtypes.QueueTypeStream)
+}
+
+// isConfiguredStreamQueue checks queues that exist without a channel-local
+// declaration, such as streams provisioned from the broker configuration.
+func (ch *Channel) isConfiguredStreamQueue(qm channelQueueManager, name string) bool {
+	cfg, err := qm.GetQueue(ch.conn.publishContext(), name)
+	return err == nil && cfg != nil && cfg.Type == qtypes.QueueTypeStream
 }
 
 func extractQueueType(args map[string]any) string {
