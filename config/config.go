@@ -515,7 +515,10 @@ const (
 
 // BrokerConfig holds broker-specific settings.
 type BrokerConfig struct {
-	// Maximum message size in bytes
+	// MaxMessageSize is the maximum message payload in bytes. It also bounds
+	// what a peer may make the broker buffer: AMQP 0.9.1 rejects a larger
+	// advertised body, and the MQTT listeners reject a packet whose remaining
+	// length exceeds this size plus an allowance for topic and properties.
 	MaxMessageSize int `yaml:"max_message_size"`
 
 	// Retained message limits

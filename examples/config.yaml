@@ -48,7 +48,9 @@ server:
 
 # Broker Configuration
 broker:
-  # Maximum message size in bytes
+  # Maximum message size in bytes. Also caps what an unauthenticated peer can
+  # make the broker buffer: oversized MQTT packets and AMQP bodies are rejected
+  # from their headers, before the payload is read.
   max_message_size: 1048576 # 1MB
 
   # Maximum retained messages

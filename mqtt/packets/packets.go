@@ -15,6 +15,10 @@ import (
 var (
 	ErrFailRemaining      = errors.New("remaining data length does not match data size")
 	ErrInvalidFixedHeader = errors.New("invalid fixed header flags")
+	// ErrPacketTooLarge indicates the advertised remaining length exceeds the
+	// maximum packet size the connection accepts. It is reported from the fixed
+	// header, before any memory is reserved for the body.
+	ErrPacketTooLarge = errors.New("packet exceeds maximum allowed size")
 )
 
 // Protocol version constants.

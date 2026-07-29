@@ -93,6 +93,7 @@ type connection struct {
 	closeCh          chan struct{}
 	closeOnce        sync.Once
 	sendWg           sync.WaitGroup
+	maxPacketSize    int // 0 = unlimited
 	disconnectOnFull bool
 	closed           atomic.Bool
 
@@ -101,20 +102,37 @@ type connection struct {
 	onDisconnect func(graceful bool)
 }
 
+// ConnOption configures optional connection behaviour.
+type ConnOption func(*connection)
+
+// WithMaxPacketSize rejects inbound packets whose remaining length exceeds
+// maxSize bytes, before any memory is reserved for the body. A value <= 0
+// leaves packets unbounded (the protocol ceiling of ~256 MiB).
+func WithMaxPacketSize(maxSize int) ConnOption {
+	return func(c *connection) {
+		if maxSize > 0 {
+			c.maxPacketSize = maxSize
+		}
+	}
+}
+
 // NewConnection creates a new MQTT connection wrapping a network connection.
 // queueSize <= 0 keeps synchronous writes; queueSize > 0 enables asynchronous queued writes.
-func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool) Connection {
-	return NewConnectionWithVersion(conn, queueSize, disconnectOnFull, ProtocolAuto)
+func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool, opts ...ConnOption) Connection {
+	return NewConnectionWithVersion(conn, queueSize, disconnectOnFull, ProtocolAuto, opts...)
 }
 
 // NewConnectionWithVersion creates a new MQTT connection with an optional forced protocol version.
 // version = ProtocolAuto enables detection; ProtocolV3 or ProtocolV5 force decoding mode.
-func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull bool, version int) Connection {
+func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull bool, version int, opts ...ConnOption) Connection {
 	c := &connection{
 		conn:             conn,
 		reader:           conn,
 		version:          version,
 		disconnectOnFull: disconnectOnFull,
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 
 	if queueSize > 0 {
@@ -152,10 +170,10 @@ func (c *connection) ReadPacket() (packets.ControlPacket, error) {
 
 	switch c.version {
 	case 5:
-		pkt, _, _, err = v5.ReadPacket(c.reader)
+		pkt, _, _, err = v5.ReadPacketLimit(c.reader, c.maxPacketSize)
 	case 3, 4:
 		// v4 is MQTT 3.1.1, v3 is MQTT 3.1
-		pkt, err = v3.ReadPacket(c.reader)
+		pkt, err = v3.ReadPacketLimit(c.reader, c.maxPacketSize)
 	default:
 		err = ErrUnsupportedProtocolVersion
 	}

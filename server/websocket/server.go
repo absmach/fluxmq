@@ -50,6 +50,9 @@ type Config struct {
 	ProtocolVersion int
 	AllowedOrigins  []string      // Allowed origins for CORS (empty = allow all, use "*" for explicit wildcard)
 	IPRateLimiter   IPRateLimiter // Optional IP-based rate limiter
+	// MaxPacketSize bounds an inbound MQTT packet's remaining length, and the
+	// WebSocket message that carries it. 0 leaves both unbounded.
+	MaxPacketSize int
 }
 
 type Server struct {
@@ -223,38 +226,49 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Debug("websocket_connection_accepted", slog.String("remote_addr", r.RemoteAddr))
 
-	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion)
+	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion, s.config.MaxPacketSize)
 	defer connguard.Recover(s.logger, "mqtt-ws", r.RemoteAddr)
 	broker.HandleConnection(r.Context(), s.broker, conn)
 }
 
 // wsConnection implements core.Connection for WebSocket transport.
 type wsConnection struct {
-	ws           *websocket.Conn
-	remoteAddr   string
-	reader       io.Reader
-	frameReader  *wsFrameReader
-	version      int
-	mu           sync.RWMutex
-	closeOnce    sync.Once
-	readMu       sync.RWMutex
-	writeMu      sync.Mutex
-	closed       bool
-	closeCh      chan struct{}
-	readDeadline time.Time
-	lastActivity time.Time
-	onDisconnect func(graceful bool)
-	pingStop     chan struct{}
-	pingOnce     sync.Once
+	ws            *websocket.Conn
+	remoteAddr    string
+	reader        io.Reader
+	frameReader   *wsFrameReader
+	version       int
+	mu            sync.RWMutex
+	closeOnce     sync.Once
+	readMu        sync.RWMutex
+	writeMu       sync.Mutex
+	closed        bool
+	closeCh       chan struct{}
+	readDeadline  time.Time
+	lastActivity  time.Time
+	onDisconnect  func(graceful bool)
+	pingStop      chan struct{}
+	pingOnce      sync.Once
+	maxPacketSize int // 0 = unlimited
 }
 
-func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion int) core.Connection {
+// wsFrameOverhead allows an MQTT packet's fixed header (up to 5 bytes) to fit
+// inside the WebSocket read limit derived from the packet-size limit, so the
+// packet-level check reports the oversized packet rather than the frame reader
+// tearing the connection down first.
+const wsFrameOverhead = 5
+
+func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, maxPacketSize int) core.Connection {
+	if ws != nil && maxPacketSize > 0 {
+		ws.SetReadLimit(int64(maxPacketSize) + wsFrameOverhead)
+	}
 	return &wsConnection{
-		ws:         ws,
-		remoteAddr: remoteAddr,
-		version:    protocolVersion,
-		closed:     false,
-		closeCh:    make(chan struct{}),
+		ws:            ws,
+		remoteAddr:    remoteAddr,
+		version:       protocolVersion,
+		closed:        false,
+		closeCh:       make(chan struct{}),
+		maxPacketSize: maxPacketSize,
 	}
 }
 
@@ -281,9 +295,9 @@ func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 	var err error
 	switch c.version {
 	case 5:
-		pkt, _, _, err = v5.ReadPacket(c.reader)
+		pkt, _, _, err = v5.ReadPacketLimit(c.reader, c.maxPacketSize)
 	case 3, 4:
-		pkt, err = v3.ReadPacket(c.reader)
+		pkt, err = v3.ReadPacketLimit(c.reader, c.maxPacketSize)
 	default:
 		err = ErrUnsupportedProtocolVersion
 	}

@@ -74,6 +74,27 @@ func protocolVersionForMode(mode string) int {
 	}
 }
 
+// mqttPacketHeadroom is added to the configured maximum message size to derive
+// the maximum accepted MQTT packet size. broker.max_message_size bounds the
+// application payload, while an MQTT packet also carries the topic name (up to
+// 64 KiB), a packet identifier, and — for v5 — properties, so a payload of
+// exactly max_message_size must still fit.
+const mqttPacketHeadroom = 64 * 1024
+
+// maxMQTTRemainingLength is the protocol ceiling on an MQTT packet's remaining
+// length, imposed by its 4-byte variable byte integer encoding.
+const maxMQTTRemainingLength = 268435455
+
+// maxMQTTPacketSize converts the configured maximum message size into the
+// remaining-length limit enforced by the MQTT decoders. A non-positive size, or
+// one already at the protocol ceiling, leaves packets unbounded.
+func maxMQTTPacketSize(maxMessageSize int) int {
+	if maxMessageSize <= 0 || maxMessageSize >= maxMQTTRemainingLength-mqttPacketHeadroom {
+		return 0
+	}
+	return maxMessageSize + mqttPacketHeadroom
+}
+
 type brokerDeliveryTarget struct {
 	mqtt    *broker.Broker
 	amqp    *amqp1broker.Broker
@@ -940,6 +961,7 @@ func main() {
 			SendQueueSize:    cfg.Session.MaxSendQueueSize,
 			DisconnectOnFull: cfg.Session.DisconnectOnFull,
 			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
+			MaxPacketSize:    maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
 			Logger:           logger,
 		}
 		tcpCfg.IPRateLimiter = rateLimitManager
@@ -983,6 +1005,7 @@ func main() {
 			TLSConfig:       tlsCfg,
 			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
 			AllowedOrigins:  slot.cfg.AllowedOrigins,
+			MaxPacketSize:   maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
 		}
 		wsCfg.IPRateLimiter = rateLimitManager
 

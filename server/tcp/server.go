@@ -43,6 +43,11 @@ type Config struct {
 	SendQueueSize    int
 	DisconnectOnFull bool
 	ProtocolVersion  int
+	// MaxPacketSize bounds an inbound MQTT packet's remaining length. The limit
+	// is applied from the fixed header, before the body is buffered, so an
+	// unauthenticated peer cannot reserve memory by advertising a large length.
+	// 0 leaves packets unbounded (the protocol ceiling of ~256 MiB).
+	MaxPacketSize int
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
@@ -231,7 +236,8 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	}
 
 	// core.NewConnection accepts any net.Conn (TCP or TLS)
-	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion)
+	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion,
+		core.WithMaxPacketSize(s.config.MaxPacketSize))
 	broker.HandleConnection(connCtx, s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",
