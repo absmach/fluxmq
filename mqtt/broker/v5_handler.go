@@ -166,12 +166,17 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	// Apply the negotiated options and take over any existing connection. On a
 	// persistent reconnect this replaces the previous connection's version,
 	// keep-alive, Will, Receive Maximum, and topic-alias maximum.
+	// The advertised maximum QoS is applied with the epoch, so a takeover racing
+	// a configuration reload cannot leave the connection enforcing a limit other
+	// than the one its CONNACK announced.
+	sessionMaxQoS := h.broker.MaxQoS()
 	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		Will:           will,
 		ReceiveMaximum: receiveMax,
 		TopicAliasMax:  topicAliasMax,
+		MaxQoS:         sessionMaxQoS,
 	})
 	// Session expiry is applied verbatim on reconnect so a new value of 0
 	// (expire on disconnect) replaces a previous positive one. A new session's
@@ -186,10 +191,6 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
-	// Snapshot the maximum QoS this connection is told about, so a later
-	// configuration reload cannot hold the client to a limit it never saw.
-	sessionMaxQoS := h.broker.MaxQoS()
-	s.SetMaxQoS(sessionMaxQoS)
 	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, sessionMaxQoS); err != nil {
 		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err

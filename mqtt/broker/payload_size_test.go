@@ -36,9 +36,14 @@ func newPayloadLimitBroker(t *testing.T, maxSize int, clientVersion byte) (*Brok
 	s, _, err := b.CreateSession("client1", clientVersion, session.Options{CleanStart: true})
 	require.NoError(t, err)
 	require.NoError(t, b.subscribe(s, testTopic, 0, storage.SubscribeOptions{}))
-	s.SetMaxQoS(b.MaxQoS())
 
-	return b, &connCtx{Session: s, conn: &mockConnection{}, epoch: s.Epoch()}
+	conn := &mockConnection{}
+	epoch, _ := s.ConnectWithOptions(conn, session.ConnectOptions{
+		Version:        clientVersion,
+		ReceiveMaximum: 65535,
+		MaxQoS:         b.MaxQoS(),
+	})
+	return b, &connCtx{Session: s, conn: conn, epoch: epoch}
 }
 
 // TestPublishEnforcesMaxMessageSize guards the limit broker.max_message_size

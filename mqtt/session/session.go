@@ -218,6 +218,10 @@ type ConnectOptions struct {
 	Will           *storage.WillMessage
 	ReceiveMaximum uint16
 	TopicAliasMax  uint16
+	// MaxQoS is the maximum QoS advertised to this connection. It is applied
+	// with the epoch bump so a superseded CONNECT cannot overwrite the value a
+	// replacement connection was granted.
+	MaxQoS byte
 }
 
 // Superseded describes a connection displaced by a takeover, so the broker can
@@ -268,6 +272,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 		s.KeepAlive = opts.KeepAlive
 		s.Will = opts.Will
 		s.TopicAliasMax = opts.TopicAliasMax
+		s.maxQoS = opts.MaxQoS
 	}
 
 	// Topic alias mappings are scoped to a single network connection and must
@@ -987,15 +992,6 @@ func (s *Session) ServerCapabilities() (maxQoS byte, retainAvailable, wildcardSu
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxQoS, s.retainAvailable, s.wildcardSubAvailable, s.sharedSubAvailable
-}
-
-// SetMaxQoS records the maximum QoS the server advertised to this connection.
-// It is snapshotted at CONNECT so a later configuration reload cannot hold a
-// client to a limit it was never told about.
-func (s *Session) SetMaxQoS(maxQoS byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.maxQoS = maxQoS
 }
 
 // MaxQoS returns the maximum QoS advertised to this connection at CONNECT.

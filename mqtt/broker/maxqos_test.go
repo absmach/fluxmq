@@ -77,18 +77,27 @@ func newMaxQoSBroker(t *testing.T, maxQoS byte, clientVersion byte) (*Broker, *c
 	require.NoError(t, err)
 	require.NoError(t, b.subscribe(s, testTopic, 2, storage.SubscribeOptions{}))
 
-	// CONNECT snapshots the advertised maximum onto the session; the handlers
-	// enforce that snapshot, so the helper has to mirror what CONNECT does.
-	s.SetMaxQoS(b.MaxQoS())
-
+	// The advertised maximum travels with the connection, so the helper attaches
+	// one the way CONNECT does rather than poking at session state.
 	conn := &mockConnection{}
-	return b, &connCtx{Session: s, conn: conn, epoch: s.Epoch()}, conn
+	epoch, _ := s.ConnectWithOptions(conn, session.ConnectOptions{
+		Version:        clientVersion,
+		ReceiveMaximum: 65535,
+		MaxQoS:         b.MaxQoS(),
+	})
+	return b, &connCtx{Session: s, conn: conn, epoch: epoch}, conn
 }
 
+// ackTypes reports the acknowledgement packets written to the connection.
+// A delivery to the session's own subscription is not an acknowledgement, so
+// PUBLISH is filtered out.
 func ackTypes(conn *mockConnection) []byte {
 	types := make([]byte, 0, len(conn.packets))
 	for _, pkt := range conn.packets {
-		types = append(types, pkt.Type())
+		switch pkt.Type() {
+		case packets.PubAckType, packets.PubRecType, packets.PubRelType, packets.PubCompType:
+			types = append(types, pkt.Type())
+		}
 	}
 	return types
 }
@@ -200,8 +209,13 @@ func TestMaxQoS_ReloadDoesNotAffectConnectedClients(t *testing.T) {
 	// A connection established after the change is held to the new limit.
 	s2, _, err := b.CreateSession("client2", 5, session.Options{CleanStart: true})
 	require.NoError(t, err)
-	s2.SetMaxQoS(b.MaxQoS())
-	cc2 := &connCtx{Session: s2, conn: &mockConnection{}, epoch: s2.Epoch()}
+	conn2 := &mockConnection{}
+	epoch2, _ := s2.ConnectWithOptions(conn2, session.ConnectOptions{
+		Version:        5,
+		ReceiveMaximum: 65535,
+		MaxQoS:         b.MaxQoS(),
+	})
+	cc2 := &connCtx{Session: s2, conn: conn2, epoch: epoch2}
 
 	err = newV5Handler(b).HandlePublish(cc2, &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
@@ -210,4 +224,38 @@ func TestMaxQoS_ReloadDoesNotAffectConnectedClients(t *testing.T) {
 		ID:          1,
 	})
 	require.ErrorIs(t, err, ErrQoSNotSupported)
+}
+
+// TestMaxQoS_SupersededConnectDoesNotOverwriteSnapshot covers the takeover race:
+// the advertised maximum travels with the connection epoch, so a CONNECT that
+// loses a takeover cannot leave the replacement connection enforcing a limit
+// other than the one its own CONNACK announced.
+func TestMaxQoS_SupersededConnectDoesNotOverwriteSnapshot(t *testing.T) {
+	b, cc, _ := newMaxQoSBroker(t, 2, 5)
+	s := cc.Session
+
+	// A replacement connection is admitted while the maximum is still 2.
+	replacement := &mockConnection{}
+	epoch, superseded := s.ConnectWithOptions(replacement, session.ConnectOptions{
+		Version:        5,
+		ReceiveMaximum: 65535,
+		MaxQoS:         b.MaxQoS(),
+	})
+	require.NotNil(t, superseded, "the original connection must be superseded")
+
+	// The configuration is lowered, and a late CONNECT for the superseded
+	// generation applies its own (now lower) value.
+	b.SetMaxQoS(1)
+	require.Equal(t, byte(2), s.MaxQoS(),
+		"a reload must not reach a connection that was already admitted")
+
+	// The replacement keeps the QoS it was granted.
+	err := newV5Handler(b).HandlePublish(&connCtx{Session: s, conn: replacement, epoch: epoch}, &v5.Publish{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
+		TopicName:   testTopic,
+		Payload:     []byte("test data"),
+		ID:          1,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, ackTypes(replacement), byte(packets.PubRecType))
 }

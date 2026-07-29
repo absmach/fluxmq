@@ -140,11 +140,17 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	// Apply the negotiated options and take over any existing connection. v3
 	// has no session expiry, Receive Maximum, or topic aliases.
+	// The maximum QoS in force when the connection is accepted is applied with
+	// the epoch, so a takeover racing a configuration reload cannot leave the
+	// connection enforcing a different limit than it was admitted under. MQTT
+	// 3.1.1 cannot advertise the value, so a client has no way to learn about a
+	// later change.
 	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		Will:           will,
 		ReceiveMaximum: maxReceived,
+		MaxQoS:         h.broker.MaxQoS(),
 	})
 	if superseded != nil {
 		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
@@ -152,11 +158,6 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
-	// Snapshot the maximum QoS in force when the connection was accepted. MQTT
-	// 3.1.1 cannot advertise it, so a client has no way to learn about a later
-	// configuration reload; holding it to the value it connected under keeps
-	// enforcement stable for the life of the connection.
-	s.SetMaxQoS(h.broker.MaxQoS())
 	if err := sendV3ConnAck(conn, sessionPresent, v3.ConnAckAccepted); err != nil {
 		s.DisconnectIf(false, epoch, v5.DisconnectUnspecifiedError) //nolint:errcheck // disconnect on failed CONNACK; connection is already broken
 		return err
