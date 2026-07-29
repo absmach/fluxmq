@@ -76,6 +76,13 @@ type QueueStore interface {
 // active-segment sync does not satisfy this contract.
 type DurableQueueStore interface {
 	AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error)
+
+	// SupportsDurableSync reports whether AppendAndSync survives process and
+	// machine crashes. Implementing the interface is not sufficient evidence:
+	// a volatile store can order an append without making it durable, so
+	// callers that acknowledge writes on behalf of a publisher must consult
+	// this method before promising durability.
+	SupportsDurableSync() bool
 }
 
 // ConsumerGroupStore manages cursor-based consumer groups with PEL tracking.

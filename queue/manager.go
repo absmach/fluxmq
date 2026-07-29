@@ -515,8 +515,8 @@ func buildProtectedQueueContracts(contracts []types.QueueConfig) (map[string]typ
 
 func (m *Manager) validateProtectedQueueContractsLocked(ctx context.Context, contracts map[string]types.QueueConfig) error {
 	if len(contracts) > 0 {
-		if _, ok := m.queueStore.(storage.DurableQueueStore); !ok {
-			return fmt.Errorf("%w: protected queues require durable sync support with atomic append", ErrDurableSyncUnsupported)
+		if _, err := m.durableQueueStore(); err != nil {
+			return err
 		}
 	}
 
@@ -539,6 +539,31 @@ func (m *Manager) validateProtectedQueueContractsLocked(ctx context.Context, con
 		}
 	}
 	return nil
+}
+
+// protectedQueueContract copies one registered contract out of the registry so
+// callers can do storage work without holding protectedQueuesMu.
+func (m *Manager) protectedQueueContract(queueName string) (types.QueueConfig, bool) {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+
+	contract, protected := m.protectedQueueContracts[queueName]
+	if !protected {
+		return types.QueueConfig{}, false
+	}
+	return cloneQueueConfig(contract), true
+}
+
+// durableQueueStore returns the queue store only when it can actually make a
+// single append durable. A store that implements DurableQueueStore without real
+// crash durability must not back a protected queue, because publishers are
+// acknowledged on the strength of that barrier.
+func (m *Manager) durableQueueStore() (storage.DurableQueueStore, error) {
+	durableStore, ok := m.queueStore.(storage.DurableQueueStore)
+	if !ok || !durableStore.SupportsDurableSync() {
+		return nil, fmt.Errorf("%w: protected queues require durable sync support with atomic append", ErrDurableSyncUnsupported)
+	}
+	return durableStore, nil
 }
 
 func (m *Manager) validateProtectedQueueMutationLocked(config types.QueueConfig) error {
@@ -861,10 +886,13 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 // per-queue durability barrier before returning success. The target must be a
 // reserved, durable, non-replicated stream. This method never performs topic
 // fanout and never auto-creates a queue.
+//
+// The contract snapshot is copied out of the registry before any storage work
+// starts. Holding protectedQueuesMu across the append would let one fsync block
+// every contract reload, and a reload waiting for the write lock would in turn
+// stall every subsequent publish.
 func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) error {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-	expected, protected := m.protectedQueueContracts[queueName]
+	expected, protected := m.protectedQueueContract(queueName)
 	if !protected {
 		return fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
 	}
@@ -892,9 +920,9 @@ func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, 
 	if queueConfig.Replication.Enabled {
 		return fmt.Errorf("%w: %s", ErrDurableReplicatedStreamUnsupported, queueName)
 	}
-	durableStore, ok := m.queueStore.(storage.DurableQueueStore)
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrDurableSyncUnsupported, queueName)
+	durableStore, err := m.durableQueueStore()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, queueName)
 	}
 	if queueConfig.MaxMessageSize <= 0 || int64(len(publish.Payload)) > queueConfig.MaxMessageSize {
 		return fmt.Errorf(

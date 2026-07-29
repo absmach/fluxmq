@@ -15,6 +15,7 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/logstorage"
 	core "github.com/absmach/fluxmq/mqtt"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
@@ -110,6 +111,10 @@ func (s *recordingDurableQueueStore) AppendAndSync(ctx context.Context, queueNam
 	s.mu.Unlock()
 	return offset, err
 }
+
+// SupportsDurableSync reports true so the manager treats this test double as a
+// crash-durable store; the wrapped in-memory store never is.
+func (s *recordingDurableQueueStore) SupportsDurableSync() bool { return true }
 
 func (s *recordingDurableQueueStore) Operations() []string {
 	s.mu.Lock()
@@ -492,6 +497,108 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 	})
 }
 
+// volatileDurableQueueStore implements the durable-append method without real
+// crash durability, the shape an in-memory store has.
+type volatileDurableQueueStore struct {
+	storage.QueueStore
+	appendAndSyncCalls int
+}
+
+func (s *volatileDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	s.appendAndSyncCalls++
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+func (s *volatileDurableQueueStore) SupportsDurableSync() bool { return false }
+
+func TestProtectedQueuesRejectStoreWithoutRealDurableSync(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	store := &volatileDurableQueueStore{QueueStore: memlog.New()}
+	if err := store.CreateQueue(ctx, expected); err != nil {
+		t.Fatalf("create protected queue: %v", err)
+	}
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+		Topic:   testAuditQueueTopic,
+		Payload: []byte("{}"),
+	})
+	if !errors.Is(err, ErrDurableSyncUnsupported) {
+		t.Fatalf("error = %v, want ErrDurableSyncUnsupported", err)
+	}
+	if store.appendAndSyncCalls != 0 {
+		t.Fatalf("appendAndSync calls = %d, want 0; a publisher must never be acknowledged on a volatile store", store.appendAndSyncCalls)
+	}
+	if err := manager.ValidateProtectedQueueContracts(ctx); !errors.Is(err, ErrDurableSyncUnsupported) {
+		t.Fatalf("ValidateProtectedQueueContracts() error = %v, want ErrDurableSyncUnsupported", err)
+	}
+}
+
+// blockingDurableQueueStore holds AppendAndSync open until the test releases
+// it, standing in for a slow fsync.
+type blockingDurableQueueStore struct {
+	storage.QueueStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	close(s.started)
+	<-s.release
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+func (s *blockingDurableQueueStore) SupportsDurableSync() bool { return true }
+
+func TestPublishToDurableStreamDoesNotBlockContractReload(t *testing.T) {
+	ctx := context.Background()
+	expected := protectedAuditQueueConfig()
+	store := &blockingDurableQueueStore{
+		QueueStore: memlog.New(),
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	if err := store.CreateQueue(ctx, expected); err != nil {
+		t.Fatalf("create protected queue: %v", err)
+	}
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	publishErr := make(chan error, 1)
+	go func() {
+		publishErr <- manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+			Topic:   testAuditQueueTopic,
+			Payload: []byte("{}"),
+		})
+	}()
+
+	select {
+	case <-store.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the durable append to start")
+	}
+
+	reloaded := make(chan error, 1)
+	go func() {
+		reloaded <- manager.ReplaceProtectedQueueContracts(ctx, []types.QueueConfig{expected})
+	}()
+
+	select {
+	case err := <-reloaded:
+		if err != nil {
+			t.Fatalf("ReplaceProtectedQueueContracts() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(store.release)
+		t.Fatal("contract reload blocked behind an in-flight durable append")
+	}
+
+	close(store.release)
+	if err := <-publishErr; err != nil {
+		t.Fatalf("PublishToDurableStream() error = %v", err)
+	}
+}
+
 func TestPublishToDurableStreamRejectsUnsafeConfigurationBeforeAppend(t *testing.T) {
 	ctx := context.Background()
 
@@ -774,6 +881,58 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 	overlapTail, err := base.Tail(ctx, "overlap")
 	if err != nil || overlapTail != 0 {
 		t.Fatalf("overlap tail = %d, error = %v, want 0", overlapTail, err)
+	}
+}
+
+// TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords is the
+// end-to-end form of the ACK contract: when the publish call returns success,
+// the record must be recoverable from storage alone, with none of the
+// publishing process's in-memory state. It uses the real file-backed store
+// rather than a double, because the point under test is what reached disk.
+func TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	queueConfig := protectedAuditQueueConfig()
+
+	store, err := logstorage.NewAdapter(dir, logstorage.DefaultAdapterConfig())
+	if err != nil {
+		t.Fatalf("open queue store: %v", err)
+	}
+	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(queueConfig), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err := manager.CreateQueue(ctx, queueConfig); err != nil {
+		t.Fatalf("create protected stream: %v", err)
+	}
+
+	payload := []byte(`{"id":"durability-1"}`)
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+		Topic:   testAuditQueueTopic,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("PublishToDurableStream() error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close queue store: %v", err)
+	}
+
+	reopened, err := logstorage.NewAdapter(dir, logstorage.DefaultAdapterConfig())
+	if err != nil {
+		t.Fatalf("reopen queue store: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+
+	count, err := reopened.Count(ctx, testAuditQueueName)
+	if err != nil {
+		t.Fatalf("Count() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("persisted records = %d, want 1", count)
+	}
+	msg, err := reopened.Read(ctx, testAuditQueueName, 0)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if string(msg.Payload) != string(payload) {
+		t.Fatalf("persisted payload = %q, want %q", msg.Payload, payload)
 	}
 }
 

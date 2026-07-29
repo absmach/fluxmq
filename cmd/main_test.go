@@ -180,6 +180,19 @@ type queueStoreWithoutDurableSync struct {
 	queueStorage.QueueStore
 }
 
+// durableMemoryQueueStore presents the in-memory log as a crash-durable store.
+// The real deployment uses the file-based adapter; only the memory store's
+// missing fsync is being stubbed out here, not the append semantics.
+type durableMemoryQueueStore struct {
+	*memoryLog.Store
+}
+
+func (durableMemoryQueueStore) SupportsDurableSync() bool { return true }
+
+func newDurableTestQueueStore() durableMemoryQueueStore {
+	return durableMemoryQueueStore{Store: memoryLog.New()}
+}
+
 func TestValidateLocalPrincipalPublishTargets(t *testing.T) {
 	principal := config.LocalPrincipalConfig{
 		Name: testLocalPrincipal,
@@ -293,7 +306,7 @@ func TestValidateLocalPrincipalPublishTargets(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			store := memoryLog.New()
+			store := newDurableTestQueueStore()
 			if !tc.omitPersisted {
 				if err := store.CreateQueue(context.Background(), expected); err != nil {
 					t.Fatalf("CreateQueue() error = %v", err)
@@ -343,7 +356,7 @@ func TestValidateLocalPrincipalPublishTargetsSortsTargetErrors(t *testing.T) {
 		context.Background(),
 		[]config.LocalPrincipalConfig{principal},
 		nil,
-		memoryLog.New(),
+		newDurableTestQueueStore(),
 	)
 	if err == nil || !strings.Contains(err.Error(), `"a-target"`) {
 		t.Fatalf("validateLocalPrincipalPublishTargets() error = %v, want first sorted target", err)
@@ -381,7 +394,7 @@ func TestReloadLocalPrincipalsRejectsInvalidTargetBeforeSwap(t *testing.T) {
 	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
-	queueStore := memoryLog.New()
+	queueStore := newDurableTestQueueStore()
 	if err := queueStore.CreateQueue(context.Background(), auditQueue); err != nil {
 		t.Fatalf("CreateQueue() error = %v", err)
 	}
@@ -442,7 +455,7 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 	securityQueue.Reserved = true
 	securityQueue.Type = queueTypes.QueueTypeStream
 	configuredQueues := []queueTypes.QueueConfig{auditQueue, securityQueue}
-	queueStore := memoryLog.New()
+	queueStore := newDurableTestQueueStore()
 	for _, contract := range configuredQueues {
 		if err := queueStore.CreateQueue(ctx, contract); err != nil {
 			t.Fatalf("CreateQueue(%q) error = %v", contract.Name, err)
@@ -519,7 +532,7 @@ func TestReloadLocalPrincipalsRestoresProtectionWhenSecretLoadFails(t *testing.T
 	securityQueue.Reserved = true
 	securityQueue.Type = queueTypes.QueueTypeStream
 	configuredQueues := []queueTypes.QueueConfig{auditQueue, securityQueue}
-	queueStore := memoryLog.New()
+	queueStore := newDurableTestQueueStore()
 	for _, contract := range configuredQueues {
 		if err := queueStore.CreateQueue(ctx, contract); err != nil {
 			t.Fatalf("CreateQueue(%q) error = %v", contract.Name, err)

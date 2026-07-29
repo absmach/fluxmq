@@ -216,7 +216,8 @@ func validateLocalPrincipalPublishTargets(
 	if queueStore == nil {
 		return fmt.Errorf("local principal publish targets require a queue store")
 	}
-	if _, ok := queueStore.(queueStorage.DurableQueueStore); !ok {
+	durableStore, ok := queueStore.(queueStorage.DurableQueueStore)
+	if !ok || !durableStore.SupportsDurableSync() {
 		return fmt.Errorf("local principal publish targets require a queue store with durable sync support")
 	}
 
