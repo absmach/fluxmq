@@ -69,6 +69,14 @@ AMQP 0.9.1 can expose a separate mTLS-only listener for tightly scoped service
 identities. This listener does not call external auth or blocking hooks and
 does not fall back to external auth for unknown identities.
 
+This is a service-to-service path for a fixed set of first-party producers
+declared in FluxMQ's own configuration — audit and event streams, internal
+telemetry, and similar broker-adjacent pipelines. Principals are static: adding
+one is a configuration and secret-provisioning change followed by `SIGHUP`,
+never a runtime registration. There is no dynamic, per-tenant, or per-user
+identity here, and each entry grants exactly one publish target. Remote
+clients, devices, and tenants authenticate through `auth.external`.
+
 ```yaml
 server:
   amqp091:
@@ -101,7 +109,15 @@ not be published to the host or Internet.
 
 Publish permissions support only the default exchange (`exchange: ""`) and an
 exact, non-empty routing key. Other exchanges and wildcard routing keys are
-rejected when the configuration is loaded.
+rejected when the configuration is loaded. At publish time the ACL is applied
+to the resolved exchange, so a client may address the default exchange as `""`
+or as `amq.default`.
+
+A publish target must be a pre-provisioned protected stream on a queue store
+that provides real crash durability; the in-memory queue store cannot back one.
+Publisher confirms are sent only after the append and its durability barrier
+complete, and are bounded by an internal timeout that NACKs rather than
+stalling the connection.
 
 Local principals are publish-only. Subscription ACLs are not implemented, so
 `permissions.subscribe` must remain `[]`; every consume or `Basic.Get`

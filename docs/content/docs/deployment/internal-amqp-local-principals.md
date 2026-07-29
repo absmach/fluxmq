@@ -12,6 +12,34 @@ This document describes the implementation and acceptance contract for publishin
 Atom audit events to FluxMQ without sending those publications through Atom's
 own external authorization callout.
 
+## What this feature is for
+
+Local principals are a service-to-service ingress for a small, fixed set of
+first-party producers that are part of the deployment itself — audit and event
+streams, internal telemetry, and similar broker-adjacent pipelines. Every
+identity, its certificate URI SAN, and its exact publish target are declared in
+FluxMQ's own configuration and mounted secrets, so the set of local principals
+is known before the process starts and changes only through a deliberate
+configuration change plus `SIGHUP`.
+
+It is deliberately not a general client authentication mechanism:
+
+- there is no registration, discovery, or self-service enrollment;
+- there is no per-tenant, per-user, or dynamic identity — adding a principal is
+  a configuration and secret-provisioning change, not an API call;
+- the ACL grants exactly one `(default exchange, routing key)` pair per entry,
+  with no wildcards, patterns, or hierarchy;
+- the principal is publish-only into a pre-provisioned protected stream, so it
+  cannot consume, discover topology, or create anything;
+- it scales to a handful of principals, not to a client population. Remote
+  clients, devices, and tenants continue to authenticate through
+  `auth.external`.
+
+Use it when a service that FluxMQ's own authorization path depends on has to
+publish into FluxMQ — the case where routing that publication through the
+external callout would add remote-auth latency to every event or create a
+feedback loop. For everything else, use `auth.external`.
+
 ## Goal
 
 Run two independent AMQP 0.9.1 authentication paths in one FluxMQ process:
@@ -182,10 +210,14 @@ a clustered audit stream requires a future end-to-end quorum durability
 barrier before FluxMQ can ACK the publication.
 
 The `atom-audit-publisher` may open connections and channels, enable publisher
-confirms, and publish only to the default exchange (`""`) with the exact
-routing key `atom-audit`. It cannot consume, get, declare or modify queues or
-exchanges, bind topology, purge, delete, or use transactions. A denied channel
-operation returns AMQP `403 Access Refused`.
+confirms, and publish only to the default exchange with the exact routing key
+`atom-audit`. It cannot consume, get, declare or modify queues or exchanges,
+bind topology, purge, delete, or use transactions. A denied channel operation
+returns AMQP `403 Access Refused`.
+
+The ACL is evaluated against the exchange the router resolves, so a client may
+name the default exchange either as `""` or as its `amq.default` alias. The
+configuration itself accepts only `exchange: ""`.
 
 Local principals are publish-only. `permissions.subscribe` is unsupported and
 must remain empty (`[]`).
@@ -195,7 +227,22 @@ publisher never needs `QueueDeclare` permission. A publisher confirm is an ACK
 only after the exact configured stream append succeeds and that queue's
 durable storage sync completes. The append and durability barrier are one
 storage operation: segment rotation is serialized until the segment containing
-that record is synced. FluxMQ sends a NACK when the append or sync fails.
+that record is synced, and a newly created segment's directory entry is synced
+when the segment is created, so the record cannot be acknowledged while its
+file is still only in the page cache. FluxMQ sends a NACK when the append or
+sync fails.
+
+Only a queue store that provides a real crash-durability barrier may back a
+protected stream. FluxMQ checks this capability, not just the presence of an
+atomic append: startup aborts, and a reload is rejected, when the configured
+store cannot make a single append survive a machine crash. An in-memory queue
+store therefore cannot serve a local publish target.
+
+One append and its sync are bounded. If the barrier does not complete within
+the internal publish timeout, or the process is shutting down, the publication
+is NACKed instead of holding the connection open indefinitely. A NACK is not
+proof that the record was not written, so the at-least-once retry and
+deduplication rules below still apply.
 
 Delivery is at least once. Atom may retry after a NACK or an ambiguous
 disconnect, so the same event can be appended more than once. Atom must keep a
@@ -338,7 +385,13 @@ printf '{"id":"%s","action":"entity.create"}\n' "${AUDIT_EVENT_ID}" |
 
 The command must exit with status zero. `--confirms` waits for FluxMQ's broker
 ACK, which this listener sends only after the exact stream append and durable
-sync succeed. `--mandatory` also fails an unroutable publication.
+sync succeed.
+
+`--mandatory` is kept for parity with the remote listener but does not add a
+check here: the internal listener routes only to its protected stream, so an
+unroutable or rejected publication is reported as a NACK rather than a
+`Basic.Return`. Treat the confirm result, not a returned message, as the
+authoritative outcome.
 
 Prove that the local ACL remains exact and publish-only. Both commands must
 exit non-zero with AMQP `403 Access Refused`:

@@ -58,7 +58,9 @@ server:
 - Listener families: `tcp`, `websocket`, `http`, `coap`, `amqp`, `amqp091`.
 - `amqp091.internal` is a private mTLS listener reserved for
   `auth.local_principals`; it never uses external auth or blocking hooks and
-  requires a positive `max_connections` cap.
+  requires a positive `max_connections` cap. It carries service-to-service
+  traffic from a fixed set of statically configured internal producers, such as
+  audit or event streams — not general client, device, or tenant connections.
 - Listener addresses: `addr` (empty disables the specific listener).
 - MQTT parser mode per listener: TCP `v3`/`v5` listeners are protocol-pinned; WebSocket listeners can use `protocol` (`auto`, `v3`, `v5`).
 - Listener limits/timeouts: `max_connections`, `read_timeout`, `write_timeout`.
