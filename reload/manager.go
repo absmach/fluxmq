@@ -24,6 +24,8 @@ const (
 	logLevelDebug = "debug"
 	logLevelWarn  = "warn"
 	logFormatJSON = "json"
+
+	localPrincipalsPath = "Auth.LocalPrincipals"
 )
 
 // BrokerTuner applies broker-level config changes atomically.
@@ -179,12 +181,12 @@ func (m *Manager) Reload(ctx context.Context) (*ReloadResult, error) {
 	}
 
 	diff := config.Diff(m.current, newCfg)
-	if m.localPrincipalsReload != nil && !hasFieldChange(diff.RuntimeSafe, "Auth.LocalPrincipals") {
+	if m.localPrincipalsReload != nil && !hasFieldChange(diff.RuntimeSafe, localPrincipalsPath) {
 		// Secret files can change without their configured paths changing. Probe
 		// the immutable local-principal snapshot on every reload and retain this
 		// synthetic change only when the callback reports an effective change.
 		diff.RuntimeSafe = append(diff.RuntimeSafe, config.FieldChange{
-			Path:     "Auth.LocalPrincipals",
+			Path:     localPrincipalsPath,
 			OldValue: m.current.Auth.LocalPrincipals,
 			NewValue: newCfg.Auth.LocalPrincipals,
 			Class:    config.RuntimeSafe,
@@ -265,7 +267,7 @@ func (m *Manager) applyRuntimeChanges(_ context.Context, old, new *config.Config
 			sessionChanges = append(sessionChanges, c)
 		case isWebhookField(c.Path):
 			webhookChanges = append(webhookChanges, c)
-		case c.Path == "Auth.LocalPrincipals":
+		case c.Path == localPrincipalsPath:
 			localPrincipalChanges = append(localPrincipalChanges, c)
 		}
 	}

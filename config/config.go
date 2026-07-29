@@ -46,6 +46,14 @@ const (
 
 	writePolicyForward = "forward"
 	queueModeSync      = "sync"
+
+	authURLField               = "url"
+	authTransportField         = "transport"
+	authTimeoutField           = "timeout"
+	authProtocolsField         = "protocols"
+	authIdentityCacheSizeField = "identity_cache_size"
+	authIdentityCacheTTLField  = "identity_cache_ttl"
+	clientAuthRequire          = "require"
 )
 
 // Config holds all configuration for the MQTT broker.
@@ -132,12 +140,12 @@ func validateAuthYAML(node *yaml.Node) error {
 	return validateYAMLMapping(node, "auth", map[string]func(*yaml.Node) error{
 		"external": func(external *yaml.Node) error {
 			return validateYAMLMapping(external, "auth.external", map[string]func(*yaml.Node) error{
-				"url":                 nil,
-				"transport":           nil,
-				"timeout":             nil,
-				"protocols":           nil,
-				"identity_cache_size": nil,
-				"identity_cache_ttl":  nil,
+				authURLField:               nil,
+				authTransportField:         nil,
+				authTimeoutField:           nil,
+				authProtocolsField:         nil,
+				authIdentityCacheSizeField: nil,
+				authIdentityCacheTTLField:  nil,
 			})
 		},
 		"local_principals": func(principals *yaml.Node) error {
@@ -1018,12 +1026,12 @@ func Load(filename string) (*Config, error) {
 }
 
 var legacyAuthKeys = map[string]string{
-	"url":                 "auth.external.url",
-	"transport":           "auth.external.transport",
-	"timeout":             "auth.external.timeout",
-	"protocols":           "auth.external.protocols",
-	"identity_cache_size": "auth.external.identity_cache_size",
-	"identity_cache_ttl":  "auth.external.identity_cache_ttl",
+	authURLField:               "auth.external.url",
+	authTransportField:         "auth.external.transport",
+	authTimeoutField:           "auth.external.timeout",
+	authProtocolsField:         "auth.external.protocols",
+	authIdentityCacheSizeField: "auth.external.identity_cache_size",
+	authIdentityCacheTTLField:  "auth.external.identity_cache_ttl",
 }
 
 func rejectLegacyAuthKeys(data []byte) error {
@@ -1272,7 +1280,7 @@ func (c *Config) Validate() error {
 			if err := validateListenerTLS("server.amqp091."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
-			if slot.requireExactClientAuth && strings.ToLower(strings.TrimSpace(slot.cfg.TLS.ClientAuth)) != "require" {
+			if slot.requireExactClientAuth && strings.ToLower(strings.TrimSpace(slot.cfg.TLS.ClientAuth)) != clientAuthRequire {
 				return fmt.Errorf("server.amqp091.%s.client_auth must be \"require\"", slot.name)
 			}
 		}

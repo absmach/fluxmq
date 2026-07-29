@@ -15,6 +15,11 @@ import (
 const (
 	testPrincipalName = "atom-audit-publisher"
 	testPrincipalSAN  = "spiffe://absmach/atom/audit-publisher"
+	testAuditQueue    = "atom-audit"
+	testInternalAddr  = ":5683"
+	testServerCert    = "server.crt"
+	testServerKey     = "server.key"
+	testClientCA      = "clients.crt"
 )
 
 func TestLoadNestedAuth(t *testing.T) {
@@ -67,19 +72,19 @@ auth:
 	if principal.Name != testPrincipalName || principal.CertificateURISAN != testPrincipalSAN {
 		t.Fatalf("unexpected local principal: %+v", principal)
 	}
-	if len(principal.Permissions.Publish) != 1 || principal.Permissions.Publish[0].RoutingKey != "atom-audit" {
+	if len(principal.Permissions.Publish) != 1 || principal.Permissions.Publish[0].RoutingKey != testAuditQueue {
 		t.Fatalf("unexpected publish permissions: %+v", principal.Permissions.Publish)
 	}
 }
 
 func TestLoadRejectsLegacyAuthKeys(t *testing.T) {
 	tests := map[string]string{
-		"url":                 "auth.external.url",
-		"transport":           "auth.external.transport",
-		"timeout":             "auth.external.timeout",
-		"protocols":           "auth.external.protocols",
-		"identity_cache_size": "auth.external.identity_cache_size",
-		"identity_cache_ttl":  "auth.external.identity_cache_ttl",
+		authURLField:               "auth.external.url",
+		authTransportField:         "auth.external.transport",
+		authTimeoutField:           "auth.external.timeout",
+		authProtocolsField:         "auth.external.protocols",
+		authIdentityCacheSizeField: "auth.external.identity_cache_size",
+		authIdentityCacheTTLField:  "auth.external.identity_cache_ttl",
 	}
 
 	for key, replacement := range tests {
@@ -129,7 +134,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			CurrentSecretFile:  current,
 			PreviousSecretFile: previous,
 			Permissions: LocalPermissionsConfig{
-				Publish: []LocalPublishPermission{{Exchange: "", RoutingKey: "atom-audit"}},
+				Publish: []LocalPublishPermission{{Exchange: "", RoutingKey: testAuditQueue}},
 			},
 		}
 	}
@@ -237,7 +242,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			name: "subscribe permissions are unsupported",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
-				principal.Permissions.Subscribe = []string{"atom-audit"}
+				principal.Permissions.Subscribe = []string{testAuditQueue}
 				return []LocalPrincipalConfig{principal}
 			},
 			wantError: "subscribe is unsupported; local principals are publish-only",
@@ -275,7 +280,7 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 		{
 			name: "requires certificate",
 			configure: func(listener *AMQP091ListenerConfig) {
-				listener.Addr = ":5683"
+				listener.Addr = testInternalAddr
 				listener.MaxConnections = 32
 			},
 			wantError: "server.amqp091.internal.cert_file required",
@@ -283,21 +288,21 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 		{
 			name: "requires client CA",
 			configure: func(listener *AMQP091ListenerConfig) {
-				listener.Addr = ":5683"
+				listener.Addr = testInternalAddr
 				listener.MaxConnections = 32
-				listener.TLS.CertFile = "server.crt"
-				listener.TLS.KeyFile = "server.key"
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
 			},
 			wantError: "server.amqp091.internal.ca_file required",
 		},
 		{
 			name: "requires exact client auth mode",
 			configure: func(listener *AMQP091ListenerConfig) {
-				listener.Addr = ":5683"
+				listener.Addr = testInternalAddr
 				listener.MaxConnections = 32
-				listener.TLS.CertFile = "server.crt"
-				listener.TLS.KeyFile = "server.key"
-				listener.TLS.ClientCAFile = "clients.crt"
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
+				listener.TLS.ClientCAFile = testClientCA
 				listener.TLS.ClientAuth = "require-and-verify"
 			},
 			wantError: "server.amqp091.internal.client_auth must be \"require\"",
@@ -305,35 +310,35 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 		{
 			name: "requires a positive connection limit",
 			configure: func(listener *AMQP091ListenerConfig) {
-				listener.Addr = ":5683"
-				listener.TLS.CertFile = "server.crt"
-				listener.TLS.KeyFile = "server.key"
-				listener.TLS.ClientCAFile = "clients.crt"
-				listener.TLS.ClientAuth = "require"
+				listener.Addr = testInternalAddr
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
+				listener.TLS.ClientCAFile = testClientCA
+				listener.TLS.ClientAuth = clientAuthRequire
 			},
 			wantError: "server.amqp091.internal.max_connections must be positive",
 		},
 		{
 			name: "requires a local principal",
 			configure: func(listener *AMQP091ListenerConfig) {
-				listener.Addr = ":5683"
+				listener.Addr = testInternalAddr
 				listener.MaxConnections = 32
-				listener.TLS.CertFile = "server.crt"
-				listener.TLS.KeyFile = "server.key"
-				listener.TLS.ClientCAFile = "clients.crt"
-				listener.TLS.ClientAuth = "require"
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
+				listener.TLS.ClientCAFile = testClientCA
+				listener.TLS.ClientAuth = clientAuthRequire
 			},
 			wantError: "auth.local_principals must contain at least one principal",
 		},
 		{
 			name: "valid mandatory mTLS",
 			configure: func(listener *AMQP091ListenerConfig) {
-				listener.Addr = ":5683"
+				listener.Addr = testInternalAddr
 				listener.MaxConnections = 32
-				listener.TLS.CertFile = "server.crt"
-				listener.TLS.KeyFile = "server.key"
-				listener.TLS.ClientCAFile = "clients.crt"
-				listener.TLS.ClientAuth = "require"
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
+				listener.TLS.ClientCAFile = testClientCA
+				listener.TLS.ClientAuth = clientAuthRequire
 			},
 		},
 	}

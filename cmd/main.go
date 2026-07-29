@@ -84,9 +84,9 @@ type localAMQPPolicy struct {
 	store *localauth.Store
 }
 
-func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, username, secret string, peer amqpbroker.VerifiedPeerIdentity) (string, string, string, bool, error) {
+func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, username, secret string, peer amqpbroker.VerifiedPeerIdentity) (string, string, string, string, bool, error) {
 	if p == nil || p.store == nil {
-		return "", "", "", false, nil
+		return "", "", "", "", false, nil
 	}
 	for _, uriSAN := range peer.URISANs {
 		authentication, ok := p.store.Authenticate(username, secret, uriSAN)
@@ -95,11 +95,12 @@ func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, usernam
 		}
 		return authentication.Principal,
 			hex.EncodeToString(authentication.CredentialFingerprint[:]),
+			hex.EncodeToString(authentication.PublishPermissionsFingerprint[:]),
 			authentication.CertificateURISAN,
 			true,
 			nil
 	}
-	return "", "", "", false, nil
+	return "", "", "", "", false, nil
 }
 
 func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) bool {
@@ -116,16 +117,23 @@ func (p *localAMQPPolicy) IsSessionActive(identity amqpbroker.LocalSessionIdenti
 }
 
 func localAuthentication(identity amqpbroker.LocalSessionIdentity) (localauth.Authentication, bool) {
-	rawFingerprint, err := hex.DecodeString(identity.CredentialFingerprint)
-	if err != nil || len(rawFingerprint) != len(localauth.CredentialFingerprint{}) {
+	rawCredentialFingerprint, err := hex.DecodeString(identity.CredentialFingerprint)
+	if err != nil || len(rawCredentialFingerprint) != len(localauth.CredentialFingerprint{}) {
 		return localauth.Authentication{}, false
 	}
-	var fingerprint localauth.CredentialFingerprint
-	copy(fingerprint[:], rawFingerprint)
+	rawPermissionsFingerprint, err := hex.DecodeString(identity.PermissionsFingerprint)
+	if err != nil || len(rawPermissionsFingerprint) != len(localauth.PermissionsFingerprint{}) {
+		return localauth.Authentication{}, false
+	}
+	var credentialFingerprint localauth.CredentialFingerprint
+	copy(credentialFingerprint[:], rawCredentialFingerprint)
+	var permissionsFingerprint localauth.PermissionsFingerprint
+	copy(permissionsFingerprint[:], rawPermissionsFingerprint)
 	return localauth.Authentication{
-		Principal:             identity.PrincipalID,
-		CertificateURISAN:     identity.CertificateURI,
-		CredentialFingerprint: fingerprint,
+		Principal:                     identity.PrincipalID,
+		CertificateURISAN:             identity.CertificateURI,
+		CredentialFingerprint:         credentialFingerprint,
+		PublishPermissionsFingerprint: permissionsFingerprint,
 	}, true
 }
 

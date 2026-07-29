@@ -30,7 +30,12 @@ var (
 	errTestSync   = errors.New("sync failed")
 )
 
-const node1 = "node-1"
+const (
+	node1                = "node-1"
+	testAuditQueueName   = "atom-audit"
+	testAuditQueueTopic  = "$queue/atom-audit"
+	testAuditQueueFilter = "$queue/atom-audit/#"
+)
 
 type targetCheckingDeliverer struct {
 	targets map[string]bool
@@ -121,7 +126,7 @@ func (d *targetCheckingDeliverer) HasDeliveryTarget(clientID string) bool {
 }
 
 func protectedAuditQueueConfig() types.QueueConfig {
-	config := types.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	config := types.DefaultQueueConfig(testAuditQueueName, testAuditQueueFilter)
 	config.Type = types.QueueTypeStream
 	config.Reserved = true
 	config.Retention.RetentionTime = 30 * 24 * time.Hour
@@ -455,8 +460,8 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		manager, store := newManager()
-		err := manager.PublishToDurableStream(ctx, "atom-audit", types.PublishRequest{
-			Topic:   "$queue/atom-audit",
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+			Topic:   testAuditQueueTopic,
 			Payload: []byte("{}"),
 		})
 		if !errors.Is(err, storage.ErrQueueNotFound) {
@@ -469,13 +474,13 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 
 	t.Run("classic", func(t *testing.T) {
 		manager, store := newManager()
-		queueConfig := types.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+		queueConfig := types.DefaultQueueConfig(testAuditQueueName, testAuditQueueFilter)
 		queueConfig.Reserved = true
 		if err := store.QueueStore.CreateQueue(ctx, queueConfig); err != nil {
 			t.Fatalf("create classic queue: %v", err)
 		}
-		err := manager.PublishToDurableStream(ctx, "atom-audit", types.PublishRequest{
-			Topic:   "$queue/atom-audit",
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+			Topic:   testAuditQueueTopic,
 			Payload: []byte("{}"),
 		})
 		if !errors.Is(err, ErrProtectedQueueContractDrift) {
@@ -554,8 +559,8 @@ func TestPublishToDurableStreamRejectsUnsafeConfigurationBeforeAppend(t *testing
 			}
 			manager := NewManager(managerStore, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-			err := manager.PublishToDurableStream(ctx, "atom-audit", types.PublishRequest{
-				Topic:   "$queue/atom-audit",
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+				Topic:   testAuditQueueTopic,
 				Payload: []byte("{}"),
 			})
 			if !errors.Is(err, tc.wantErr) {
@@ -564,7 +569,7 @@ func TestPublishToDurableStreamRejectsUnsafeConfigurationBeforeAppend(t *testing
 			if operations := store.Operations(); len(operations) != 0 {
 				t.Fatalf("operations = %v, want none", operations)
 			}
-			tail, tailErr := base.Tail(ctx, "atom-audit")
+			tail, tailErr := base.Tail(ctx, testAuditQueueName)
 			if tailErr != nil || tail != 0 {
 				t.Fatalf("tail = %d, error = %v, want empty queue", tail, tailErr)
 			}
@@ -753,8 +758,8 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 		}
 	}
 
-	if err := manager.PublishToDurableStream(ctx, "atom-audit", types.PublishRequest{
-		Topic:   "$queue/atom-audit",
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+		Topic:   testAuditQueueTopic,
 		Payload: []byte("audit-event"),
 	}); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
@@ -762,7 +767,7 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom-audit sync:atom-audit]" {
 		t.Fatalf("operations = %v, want append then sync for atom-audit", operations)
 	}
-	auditTail, err := base.Tail(ctx, "atom-audit")
+	auditTail, err := base.Tail(ctx, testAuditQueueName)
 	if err != nil || auditTail != 1 {
 		t.Fatalf("atom-audit tail = %d, error = %v, want 1", auditTail, err)
 	}
@@ -794,8 +799,8 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 				t.Fatalf("create stream: %v", err)
 			}
 
-			err := manager.PublishToDurableStream(ctx, "atom-audit", types.PublishRequest{
-				Topic:   "$queue/atom-audit",
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
+				Topic:   testAuditQueueTopic,
 				Payload: []byte("{}"),
 			})
 			if !errors.Is(err, tc.wantErr) {

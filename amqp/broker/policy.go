@@ -35,10 +35,10 @@ type VerifiedPeerIdentity struct {
 
 // LocalPrincipalAuthenticator authenticates credentials against a verified TLS
 // peer identity. certificateURI must name the URI SAN selected from peer.URISANs.
-// credentialFingerprint is an opaque, non-secret identifier used to revoke
-// sessions after credential rotation.
+// credentialFingerprint and permissionsFingerprint are opaque, non-secret
+// identifiers used to revoke sessions after credential or publish-ACL changes.
 type LocalPrincipalAuthenticator interface {
-	AuthenticateLocal(ctx context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (principalID, credentialFingerprint, certificateURI string, authenticated bool, err error)
+	AuthenticateLocal(ctx context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (principalID, credentialFingerprint, permissionsFingerprint, certificateURI string, authenticated bool, err error)
 }
 
 // LocalPrincipalAuthorizer makes exact AMQP publish decisions for a fully
@@ -48,10 +48,11 @@ type LocalPrincipalAuthorizer interface {
 	CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) bool
 }
 
-// LocalSessionValidator checks whether the immutable credential and certificate
-// binding established during authentication is still active in the current
-// local-principal snapshot. It closes the authenticate-before-register reload
-// race; publish authorization remains a separate per-method check.
+// LocalSessionValidator checks whether the immutable credential, permissions,
+// and certificate binding established during authentication is still active in
+// the current local-principal snapshot. It closes the
+// authenticate-before-register reload race; publish authorization remains a
+// separate per-method check.
 type LocalSessionValidator interface {
 	IsSessionActive(identity LocalSessionIdentity) bool
 }
@@ -61,6 +62,7 @@ type LocalSessionValidator interface {
 type LocalSessionIdentity struct {
 	PrincipalID            string
 	CredentialFingerprint  string
+	PermissionsFingerprint string
 	CertificateURI         string
 	CertificateFingerprint string
 }

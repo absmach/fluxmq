@@ -64,9 +64,11 @@ func (s *Stats) IncrementLocalAuthSuccess() { s.localAuthSuccess.Add(1) }
 func (s *Stats) IncrementLocalAuthFailures() {
 	s.localAuthFailures.Add(1)
 }
+
 func (s *Stats) IncrementLocalPublishDenials() {
 	s.localPublishDenials.Add(1)
 }
+
 func (s *Stats) IncrementLocalOperationDenials() {
 	s.localOperationDenials.Add(1)
 }
@@ -75,9 +77,11 @@ func (s *Stats) DecrementLocalConnections() { s.localConnections.Add(^uint64(0))
 func (s *Stats) IncrementLocalReloadSuccess() {
 	s.localReloadSuccess.Add(1)
 }
+
 func (s *Stats) IncrementLocalReloadFailures() {
 	s.localReloadFailures.Add(1)
 }
+
 func (s *Stats) AddLocalForcedDisconnects(n uint64) {
 	s.localForcedDisconnects.Add(n)
 }
@@ -97,6 +101,7 @@ func (s *Stats) GetLocalAuthFailures() uint64  { return s.localAuthFailures.Load
 func (s *Stats) GetLocalPublishDenials() uint64 {
 	return s.localPublishDenials.Load()
 }
+
 func (s *Stats) GetLocalOperationDenials() uint64 {
 	return s.localOperationDenials.Load()
 }
@@ -104,9 +109,11 @@ func (s *Stats) GetLocalConnections() uint64 { return s.localConnections.Load() 
 func (s *Stats) GetLocalReloadSuccess() uint64 {
 	return s.localReloadSuccess.Load()
 }
+
 func (s *Stats) GetLocalReloadFailures() uint64 {
 	return s.localReloadFailures.Load()
 }
+
 func (s *Stats) GetLocalForcedDisconnects() uint64 {
 	return s.localForcedDisconnects.Load()
 }

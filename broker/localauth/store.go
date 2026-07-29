@@ -10,10 +10,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,11 +35,16 @@ func (f CredentialFingerprint) String() string {
 	return hex.EncodeToString(f[:8])
 }
 
+// PermissionsFingerprint identifies the exact publish ACL bound to a session.
+// It is comparable and contains no credential material.
+type PermissionsFingerprint [sha256.Size]byte
+
 // Authentication describes a successfully authenticated local principal.
 type Authentication struct {
-	Principal             string
-	CertificateURISAN     string
-	CredentialFingerprint CredentialFingerprint
+	Principal                     string
+	CertificateURISAN             string
+	CredentialFingerprint         CredentialFingerprint
+	PublishPermissionsFingerprint PermissionsFingerprint
 }
 
 // PublishTarget is an exact AMQP exchange and routing-key pair.
@@ -58,10 +65,11 @@ type snapshot struct {
 }
 
 type principal struct {
-	certificateURISAN string
-	current           CredentialFingerprint
-	previous          *CredentialFingerprint
-	publish           map[PublishTarget]struct{}
+	certificateURISAN  string
+	current            CredentialFingerprint
+	previous           *CredentialFingerprint
+	publish            map[PublishTarget]struct{}
+	publishPermissions PermissionsFingerprint
 }
 
 // New loads and validates a local-principal snapshot.
@@ -130,15 +138,16 @@ func (s *Store) Authenticate(username, secret, certificateURISAN string) (Authen
 	}
 
 	return Authentication{
-		Principal:             username,
-		CertificateURISAN:     certificateURISAN,
-		CredentialFingerprint: candidate,
+		Principal:                     username,
+		CertificateURISAN:             certificateURISAN,
+		CredentialFingerprint:         candidate,
+		PublishPermissionsFingerprint: principal.publishPermissions,
 	}, true
 }
 
 // IsActive reports whether an authenticated session is still valid in the
-// latest snapshot. It detects removed principals, SAN changes, and retired
-// credentials.
+// latest snapshot. It detects removed principals, SAN or publish-permission
+// changes, and retired credentials.
 func (s *Store) IsActive(authentication Authentication) bool {
 	current := s.current.Load()
 	return authenticationActive(current, authentication)
@@ -163,6 +172,9 @@ func authenticationActive(current *snapshot, authentication Authentication) bool
 	}
 	principal, ok := current.principals[authentication.Principal]
 	if !ok || principal.certificateURISAN != authentication.CertificateURISAN {
+		return false
+	}
+	if subtle.ConstantTimeCompare(authentication.PublishPermissionsFingerprint[:], principal.publishPermissions[:]) != 1 {
 		return false
 	}
 	if subtle.ConstantTimeCompare(authentication.CredentialFingerprint[:], principal.current[:]) == 1 {
@@ -237,10 +249,11 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 		}
 
 		principals[name] = &principal{
-			certificateURISAN: uriSAN,
-			current:           current,
-			previous:          previous,
-			publish:           publish,
+			certificateURISAN:  uriSAN,
+			current:            current,
+			previous:           previous,
+			publish:            publish,
+			publishPermissions: fingerprintPublishPermissions(publish),
 		}
 	}
 
@@ -330,4 +343,29 @@ func loadFingerprint(field, filename string, required bool) (CredentialFingerpri
 
 func containsWildcard(value string) bool {
 	return strings.ContainsAny(value, "#*+")
+}
+
+func fingerprintPublishPermissions(publish map[PublishTarget]struct{}) PermissionsFingerprint {
+	targets := make([]PublishTarget, 0, len(publish))
+	for target := range publish {
+		targets = append(targets, target)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Exchange == targets[j].Exchange {
+			return targets[i].RoutingKey < targets[j].RoutingKey
+		}
+		return targets[i].Exchange < targets[j].Exchange
+	})
+
+	serialized := make([]byte, 0)
+	for _, target := range targets {
+		serialized = appendLengthPrefixed(serialized, target.Exchange)
+		serialized = appendLengthPrefixed(serialized, target.RoutingKey)
+	}
+	return PermissionsFingerprint(sha256.Sum256(serialized))
+}
+
+func appendLengthPrefixed(destination []byte, value string) []byte {
+	destination = binary.BigEndian.AppendUint64(destination, uint64(len(value)))
+	return append(destination, value...)
 }

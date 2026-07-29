@@ -118,7 +118,7 @@ func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
-		connID:   "test-conn",
+		connID:   testConnectionID,
 		channels: make(map[uint16]*Channel),
 	}
 	ch := newChannel(c, 1)
@@ -314,8 +314,8 @@ func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected 1 cross-deliver call, got %d", calls)
 	}
-	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
-		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), gotProps[corebroker.ClientIDProperty])
+	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), gotProps[corebroker.ClientIDProperty])
 	}
 }
 
@@ -401,19 +401,19 @@ func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	mockQM := &mockChannelQueueManager{}
 	ch.conn.broker.queueManager = mockQM
 
-	ch.handleQueuePublish("$queue/orders/process", []byte("hello"), map[string]string{"trace": "1"}, PrefixedClientID("test-conn"))
+	ch.handleQueuePublish("$queue/orders/process", []byte("hello"), map[string]string{"trace": "1"}, PrefixedClientID(testConnectionID))
 
 	if mockQM.publishCalls != 1 {
 		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
 	}
-	if mockQM.lastPublish.ClientID != PrefixedClientID("test-conn") {
-		t.Fatalf("expected client ID %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.ClientID)
+	if mockQM.lastPublish.ClientID != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.ClientID)
 	}
 	if mockQM.lastPublish.Properties["trace"] != "1" {
 		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.Properties["trace"])
 	}
-	if mockQM.lastPublish.Properties[corebroker.ClientIDProperty] != PrefixedClientID("test-conn") {
-		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID("test-conn"), mockQM.lastPublish.Properties[corebroker.ClientIDProperty])
+	if mockQM.lastPublish.Properties[corebroker.ClientIDProperty] != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.Properties[corebroker.ClientIDProperty])
 	}
 }
 

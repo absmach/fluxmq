@@ -25,7 +25,10 @@ import (
 const (
 	testLocalPrincipal = "atom-audit-publisher"
 	testCredentialFP   = "credential-fingerprint"
+	testPermissionsFP  = "permissions-fingerprint"
 	testCertificateURI = "spiffe://absmach/atom/audit-publisher"
+	testConnectionID   = "test-conn"
+	testAuditQueue     = "atom-audit"
 )
 
 type localAuthenticatorStub struct {
@@ -37,12 +40,13 @@ type localAuthenticatorStub struct {
 	peer           VerifiedPeerIdentity
 	principalID    string
 	credentialFP   string
+	permissionsFP  string
 	certificateURI string
 	authenticated  bool
 	err            error
 }
 
-func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (string, string, string, bool, error) {
+func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (string, string, string, string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -50,7 +54,7 @@ func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, 
 	s.username = username
 	s.secret = secret
 	s.peer = peer
-	return s.principalID, s.credentialFP, s.certificateURI, s.authenticated, s.err
+	return s.principalID, s.credentialFP, s.permissionsFP, s.certificateURI, s.authenticated, s.err
 }
 
 type localAuthorizerStub struct {
@@ -119,7 +123,7 @@ func newPolicyTestConnection(t *testing.T, policy *ConnectionPolicy) (*Connectio
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
-		connID:   "test-conn",
+		connID:   testConnectionID,
 		channels: make(map[uint16]*Channel),
 		peer: VerifiedPeerIdentity{
 			URISANs:                []string{testCertificateURI},
@@ -132,6 +136,7 @@ func bindLocalIdentity(conn *Connection) {
 	conn.localIdentity = &LocalSessionIdentity{
 		PrincipalID:            testLocalPrincipal,
 		CredentialFingerprint:  testCredentialFP,
+		PermissionsFingerprint: testPermissionsFP,
 		CertificateURI:         testCertificateURI,
 		CertificateFingerprint: "certificate-fingerprint",
 	}
@@ -158,6 +163,7 @@ func TestLocalAuthenticationBindsVerifiedIdentity(t *testing.T) {
 	authn := &localAuthenticatorStub{
 		principalID:    testLocalPrincipal,
 		credentialFP:   testCredentialFP,
+		permissionsFP:  testPermissionsFP,
 		certificateURI: testCertificateURI,
 		authenticated:  true,
 	}
@@ -165,7 +171,7 @@ func TestLocalAuthenticationBindsVerifiedIdentity(t *testing.T) {
 	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
 	globalExternal := &externalAuthenticatorStub{}
 	conn.broker.SetAuthEngine(corebroker.NewAuthEngine(globalExternal, nil))
-	start := &codec.ConnectionStartOk{Mechanism: "PLAIN", Response: "\x00atom-audit-publisher\x00secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
 	if err := conn.authenticate(start); err != nil {
 		t.Fatalf("authenticate failed: %v", err)
 	}
@@ -185,7 +191,7 @@ func TestLocalAuthenticationBindsVerifiedIdentity(t *testing.T) {
 	if !ok {
 		t.Fatal("expected local session identity")
 	}
-	if identity.PrincipalID != testLocalPrincipal || identity.CredentialFingerprint != testCredentialFP || identity.CertificateURI != testCertificateURI {
+	if identity.PrincipalID != testLocalPrincipal || identity.CredentialFingerprint != testCredentialFP || identity.PermissionsFingerprint != testPermissionsFP || identity.CertificateURI != testCertificateURI {
 		t.Fatalf("unexpected identity: %+v", identity)
 	}
 }
@@ -194,12 +200,13 @@ func TestLocalAuthenticationRejectsUnverifiedSelectedURI(t *testing.T) {
 	authn := &localAuthenticatorStub{
 		principalID:    testLocalPrincipal,
 		credentialFP:   testCredentialFP,
+		permissionsFP:  testPermissionsFP,
 		certificateURI: "spiffe://attacker.invalid/publisher",
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{}
 	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
-	start := &codec.ConnectionStartOk{Mechanism: "PLAIN", Response: "\x00atom-audit-publisher\x00secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
 	if err := conn.authenticate(start); err == nil {
 		t.Fatal("expected authentication rejection")
 	}
@@ -217,7 +224,7 @@ func TestExternalPolicyUsesOnlyExternalAuth(t *testing.T) {
 	conn, _ := newPolicyTestConnection(t, NewExternalConnectionPolicy(engine, nil, 0))
 	globalExternal := &externalAuthenticatorStub{}
 	conn.broker.SetAuthEngine(corebroker.NewAuthEngine(globalExternal, nil))
-	start := &codec.ConnectionStartOk{Mechanism: "PLAIN", Response: "\x00remote-user\x00remote-secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00remote-user\x00remote-secret"}
 	if err := conn.authenticate(start); err != nil {
 		t.Fatalf("external authentication failed: %v", err)
 	}
@@ -240,12 +247,12 @@ func TestLocalPublishOnlyMethodAllowlist(t *testing.T) {
 		id     uint16
 	}{
 		{"exchange declare", &codec.ExchangeDeclare{Exchange: "events"}, codec.ClassExchange, codec.MethodExchangeDeclare},
-		{"queue declare", &codec.QueueDeclare{Queue: "atom-audit"}, codec.ClassQueue, codec.MethodQueueDeclare},
-		{"consume", &codec.BasicConsume{Queue: "atom-audit"}, codec.ClassBasic, codec.MethodBasicConsume},
-		{"get", &codec.BasicGet{Queue: "atom-audit"}, codec.ClassBasic, codec.MethodBasicGet},
+		{"queue declare", &codec.QueueDeclare{Queue: testAuditQueue}, codec.ClassQueue, codec.MethodQueueDeclare},
+		{"consume", &codec.BasicConsume{Queue: testAuditQueue}, codec.ClassBasic, codec.MethodBasicConsume},
+		{"get", &codec.BasicGet{Queue: testAuditQueue}, codec.ClassBasic, codec.MethodBasicGet},
 		{"transaction", &codec.TxSelect{}, codec.ClassTx, codec.MethodTxSelect},
 	}
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	for _, tc := range denied {
 		t.Run(tc.name, func(t *testing.T) {
 			conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
@@ -266,18 +273,18 @@ func TestLocalPublishOnlyMethodAllowlist(t *testing.T) {
 }
 
 func TestServerClosedChannelIgnoresPublishAfterDeniedMethod(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	ch := newChannel(conn, 1)
 
-	if err := ch.handleMethod(&codec.QueueDeclare{Queue: "atom-audit"}); err != nil {
+	if err := ch.handleMethod(&codec.QueueDeclare{Queue: testAuditQueue}); err != nil {
 		t.Fatalf("deny queue declare: %v", err)
 	}
 	if !ch.serverClosing.Load() {
 		t.Fatal("channel did not enter server-closing state after denial")
 	}
-	if err := ch.handleMethod(&codec.BasicPublish{RoutingKey: "atom-audit"}); err != nil {
+	if err := ch.handleMethod(&codec.BasicPublish{RoutingKey: testAuditQueue}); err != nil {
 		t.Fatalf("publish while closing: %v", err)
 	}
 	if ch.pendingMethod != nil {
@@ -298,17 +305,17 @@ func TestServerClosedChannelIgnoresPublishAfterDeniedMethod(t *testing.T) {
 }
 
 func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
-	authz := &localAuthorizerStub{allowExchange: "", allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowExchange: "", allowRoutingKey: testAuditQueue}
 	tests := []struct {
 		name       string
 		exchange   string
 		routingKey string
 		allowed    bool
 	}{
-		{"exact target", "", "atom-audit", true},
-		{"explicit default alias is not exact", "amq.default", "atom-audit", false},
+		{"exact target", "", testAuditQueue, true},
+		{"explicit default alias is not exact", "amq.default", testAuditQueue, false},
 		{"wrong routing key", "", "other", false},
-		{"wrong exchange", "events", "atom-audit", false},
+		{"wrong exchange", "events", testAuditQueue, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -336,16 +343,16 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 }
 
 func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	hook := &hookCounter{}
 	conn.broker.SetBlockingHooks(corebroker.NewBlockingHookEngine(hook, corebroker.HookFailDeny, nil, nil, nil))
-	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: "atom-audit", Type: qtypes.QueueTypeStream}}
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
 
 	ch := newChannel(conn, 1)
-	ch.pendingMethod = &codec.BasicPublish{RoutingKey: "atom-audit"}
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
 	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
 	ch.pendingBody = []byte("{}")
 	ch.completePublish()
@@ -356,26 +363,26 @@ func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	if qm.publishCalls != 0 {
 		t.Fatalf("general queue publish calls = %d, want 0", qm.publishCalls)
 	}
-	if qm.exactPublishCalls != 1 || qm.exactStreamName != "atom-audit" || qm.exactPublish.Topic != "$queue/atom-audit" {
+	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/atom-audit" {
 		t.Fatalf("unexpected exact stream publish: calls=%d queue=%q request=%+v", qm.exactPublishCalls, qm.exactStreamName, qm.exactPublish)
 	}
 }
 
 func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{exactPublishErr: errors.New("disk full")}
 	conn.broker.queueManager = qm
 	ch := newChannel(conn, 1)
 	ch.confirmMode = true
-	ch.pendingMethod = &codec.BasicPublish{RoutingKey: "atom-audit"}
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
 	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
 	ch.pendingBody = []byte("{}")
 
 	ch.completePublish()
 
-	if qm.publishCalls != 0 || qm.exactPublishCalls != 1 || qm.exactStreamName != "atom-audit" {
+	if qm.publishCalls != 0 || qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue {
 		t.Fatalf("unexpected routing: general=%d exact=%d queue=%q", qm.publishCalls, qm.exactPublishCalls, qm.exactStreamName)
 	}
 	frames := readFramesFrom(t, buf, 0)
@@ -392,20 +399,20 @@ func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
 }
 
 func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{exactPublishErr: queue.ErrQueueMessageTooLarge}
 	conn.broker.queueManager = qm
 	ch := newChannel(conn, 1)
 	ch.confirmMode = true
-	ch.pendingMethod = &codec.BasicPublish{RoutingKey: "atom-audit"}
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
 	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
 	ch.pendingBody = []byte("{}")
 
 	ch.completePublish()
 
-	if qm.publishCalls != 0 || qm.exactPublishCalls != 1 || qm.exactStreamName != "atom-audit" {
+	if qm.publishCalls != 0 || qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue {
 		t.Fatalf("unexpected routing: general=%d exact=%d queue=%q", qm.publishCalls, qm.exactPublishCalls, qm.exactStreamName)
 	}
 	frames := readFramesFrom(t, buf, 0)
@@ -422,20 +429,20 @@ func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
 }
 
 func TestLocalDurableStreamSuccessAcksExactQueueOnly(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{}
 	conn.broker.queueManager = qm
 	ch := newChannel(conn, 1)
 	ch.confirmMode = true
-	ch.pendingMethod = &codec.BasicPublish{RoutingKey: "atom-audit"}
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
 	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
 	ch.pendingBody = []byte("{}")
 
 	ch.completePublish()
 
-	if qm.publishCalls != 0 || qm.exactPublishCalls != 1 || qm.exactStreamName != "atom-audit" {
+	if qm.publishCalls != 0 || qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue {
 		t.Fatalf("unexpected routing: general=%d exact=%d queue=%q", qm.publishCalls, qm.exactPublishCalls, qm.exactStreamName)
 	}
 	frames := readFramesFrom(t, buf, 0)
@@ -452,13 +459,13 @@ func TestLocalDurableStreamSuccessAcksExactQueueOnly(t *testing.T) {
 }
 
 func TestLocalPublishRechecksAuthorizationAfterContent(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
-	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: "atom-audit", Type: qtypes.QueueTypeStream}}
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
 	ch := newChannel(conn, 1)
-	if err := ch.handleMethod(&codec.BasicPublish{RoutingKey: "atom-audit"}); err != nil {
+	if err := ch.handleMethod(&codec.BasicPublish{RoutingKey: testAuditQueue}); err != nil {
 		t.Fatalf("start publish: %v", err)
 	}
 	authz.allowRoutingKey = "revoked"
@@ -478,16 +485,17 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 	authn := &localAuthenticatorStub{
 		principalID:    testLocalPrincipal,
 		credentialFP:   testCredentialFP,
+		permissionsFP:  testPermissionsFP,
 		certificateURI: testCertificateURI,
 		authenticated:  true,
 	}
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
 	transport := &memoryConn{}
 	conn.conn = transport
 	conn.writer = bufio.NewWriter(transport)
 	conn.closeCh = make(chan struct{})
-	start := &codec.ConnectionStartOk{Mechanism: "PLAIN", Response: "\x00atom-audit-publisher\x00old-secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00old-secret"}
 	if err := conn.authenticate(start); err != nil {
 		t.Fatalf("authenticate before reload: %v", err)
 	}
@@ -526,13 +534,13 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 }
 
 func TestLocalPublishRejectsCredentialRetiredDuringContent(t *testing.T) {
-	authz := &localAuthorizerStub{allowRoutingKey: "atom-audit"}
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
-	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: "atom-audit", Type: qtypes.QueueTypeStream}}
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
 	ch := newChannel(conn, 1)
-	if err := ch.handleMethod(&codec.BasicPublish{RoutingKey: "atom-audit"}); err != nil {
+	if err := ch.handleMethod(&codec.BasicPublish{RoutingKey: testAuditQueue}); err != nil {
 		t.Fatalf("start publish: %v", err)
 	}
 
@@ -557,12 +565,12 @@ func TestExplicitExternalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	conn.broker.SetCrossDeliver(func(context.Context, string, string, []byte, byte, map[string]string) {
 		delivered++
 	})
-	if err := conn.broker.router.Subscribe("mqtt-client", "atom-audit", 1, storage.SubscribeOptions{}); err != nil {
+	if err := conn.broker.router.Subscribe("mqtt-client", testAuditQueue, 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("subscribe test route: %v", err)
 	}
 
 	ch := newChannel(conn, 1)
-	ch.pendingMethod = &codec.BasicPublish{RoutingKey: "atom-audit"}
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
 	ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
 	ch.pendingBody = []byte("{}")
 	ch.completePublish()
@@ -579,7 +587,7 @@ func TestMessageSizeRejectedBeforeBodyAllocation(t *testing.T) {
 	policy := NewExternalConnectionPolicy(nil, nil, 1024)
 	conn, buf := newPolicyTestConnection(t, policy)
 	ch := newChannel(conn, 1)
-	ch.pendingMethod = &codec.BasicPublish{RoutingKey: "atom-audit"}
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
 	header := &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 1025}
 	var payload bytes.Buffer
 	if err := header.WriteContentHeader(&payload); err != nil {
@@ -637,9 +645,9 @@ func TestChannelIDCannotExceedNegotiatedMaximum(t *testing.T) {
 func TestPreconfiguredStreamDetectedThroughQueueManager(t *testing.T) {
 	conn, _ := newPolicyTestConnection(t, NewExternalConnectionPolicy(nil, nil, 0))
 	conn.broker.queueManager = &mockChannelQueueManager{
-		queueCfg: &qtypes.QueueConfig{Name: "atom-audit", Type: qtypes.QueueTypeStream},
+		queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream},
 	}
-	if !newChannel(conn, 1).isStreamQueue("atom-audit") {
+	if !newChannel(conn, 1).isStreamQueue(testAuditQueue) {
 		t.Fatal("expected globally preconfigured stream to be detected")
 	}
 }

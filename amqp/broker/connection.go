@@ -35,6 +35,8 @@ const (
 	// clusterOpTimeout prevents a slow/partitioned peer from blocking setup or shutdown.
 	clusterOpTimeout       = 5 * time.Second
 	disconnectWriteTimeout = time.Second
+	saslMechanismPlain     = "PLAIN"
+	saslMechanismAMQPlain  = "AMQPLAIN"
 )
 
 // Connection represents a single AMQP 0.9.1 client connection.
@@ -69,9 +71,6 @@ type Connection struct {
 }
 
 func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *ConnectionPolicy) *Connection {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	c := &Connection{
 		broker:     b,
 		conn:       netConn,
@@ -260,7 +259,7 @@ func (c *Connection) connectionHandshake() error {
 				"connection.blocked":         true,
 			},
 		},
-		Mechanisms: "PLAIN",
+		Mechanisms: saslMechanismPlain,
 		Locales:    "en_US",
 	}
 	if err := c.writeMethod(0, start); err != nil {
@@ -350,7 +349,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 
 	mechanism := strings.ToUpper(strings.TrimSpace(start.Mechanism))
 	switch mechanism {
-	case "PLAIN", "AMQPLAIN":
+	case saslMechanismPlain, saslMechanismAMQPlain:
 		_, username, password, err := sasl.ParsePLAIN([]byte(start.Response))
 		if err != nil {
 			if policy.mode == ConnectionPolicyLocalPublishOnly {
@@ -379,7 +378,7 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("%s local auth unavailable", mechanism)
 		}
-		principalID, credentialFingerprint, certificateURI, ok, err := policy.localAuth.AuthenticateLocal(
+		principalID, credentialFingerprint, permissionsFingerprint, certificateURI, ok, err := policy.localAuth.AuthenticateLocal(
 			c.ctx, clientID, username, password, c.peer,
 		)
 		if err != nil {
@@ -392,7 +391,7 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("%s local auth rejected for user %q", mechanism, username)
 		}
-		if principalID == "" || credentialFingerprint == "" || certificateURI == "" ||
+		if principalID == "" || credentialFingerprint == "" || permissionsFingerprint == "" || certificateURI == "" ||
 			c.peer.CertificateFingerprint == "" || !containsURISAN(c.peer, certificateURI) {
 			c.recordLocalAuthFailure("identity_binding_rejected")
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
@@ -401,6 +400,7 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 		c.localIdentity = &LocalSessionIdentity{
 			PrincipalID:            principalID,
 			CredentialFingerprint:  credentialFingerprint,
+			PermissionsFingerprint: permissionsFingerprint,
 			CertificateURI:         certificateURI,
 			CertificateFingerprint: c.peer.CertificateFingerprint,
 		}

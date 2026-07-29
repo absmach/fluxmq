@@ -26,16 +26,19 @@ import (
 	"github.com/absmach/fluxmq/amqp/codec"
 )
 
-const testLocalCertificateURI = "spiffe://absmach/atom/audit-publisher"
+const (
+	testLocalCertificateURI = "spiffe://absmach/atom/audit-publisher"
+	testServerName          = "localhost"
+)
 
 type reloadRaceLocalPolicy struct {
 	authenticated chan struct{}
 	retired       atomic.Bool
 }
 
-func (p *reloadRaceLocalPolicy) AuthenticateLocal(_ context.Context, _, _, _ string, _ amqpbroker.VerifiedPeerIdentity) (string, string, string, bool, error) {
+func (p *reloadRaceLocalPolicy) AuthenticateLocal(_ context.Context, _, _, _ string, _ amqpbroker.VerifiedPeerIdentity) (string, string, string, string, bool, error) {
 	close(p.authenticated)
-	return "atom-audit-publisher", "old-credential-fingerprint", testLocalCertificateURI, true, nil
+	return "atom-audit-publisher", "old-credential-fingerprint", "old-permissions-fingerprint", testLocalCertificateURI, true, nil
 }
 
 func (p *reloadRaceLocalPolicy) CanPublishLocal(amqpbroker.LocalSessionIdentity, string, string) bool {
@@ -332,8 +335,8 @@ func testMutualTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
 
 	serverCertificate := issueTestCertificate(t, caCertificate, caKey, &x509.Certificate{
 		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "localhost"},
-		DNSNames:     []string{"localhost"},
+		Subject:      pkix.Name{CommonName: testServerName},
+		DNSNames:     []string{testServerName},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -362,7 +365,7 @@ func testMutualTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
 			ClientCAs:    caPool,
 		}, &tls.Config{
 			MinVersion:   tls.VersionTLS12,
-			ServerName:   "localhost",
+			ServerName:   testServerName,
 			RootCAs:      caPool,
 			Certificates: []tls.Certificate{clientCertificate},
 		}
@@ -400,12 +403,12 @@ func testTLSCertificate(t *testing.T) tls.Certificate {
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "localhost"},
+		Subject:      pkix.Name{CommonName: testServerName},
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{testServerName},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {

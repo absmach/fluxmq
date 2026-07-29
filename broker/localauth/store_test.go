@@ -149,6 +149,43 @@ func TestReloadIsAtomicAndRevokesRemovedCredentials(t *testing.T) {
 	}
 }
 
+func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+	principal := principalConfig(current, "")
+	store, err := New([]config.LocalPrincipalConfig{principal})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	if !ok {
+		t.Fatal("initial authentication failed")
+	}
+
+	principal.Permissions.Publish[0].RoutingKey = "atom-audit-v2"
+	changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("publish ACL replacement was reported as unchanged")
+	}
+	if store.IsActive(authentication) {
+		t.Fatal("session authenticated against the replaced publish ACL remains active")
+	}
+	if store.CanPublishAuthenticated(authentication, "", "atom-audit-v2") {
+		t.Fatal("session authenticated against the old ACL used the replacement ACL")
+	}
+
+	reauthenticated, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	if !ok {
+		t.Fatal("authentication against the replacement ACL failed")
+	}
+	if !store.IsActive(reauthenticated) || !store.CanPublishAuthenticated(reauthenticated, "", "atom-audit-v2") {
+		t.Fatal("session authenticated against the replacement ACL is not active")
+	}
+}
+
 func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	current := writeSecret(t, dir, "current", currentSecret)

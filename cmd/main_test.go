@@ -27,6 +27,7 @@ const (
 	testLocalSAN       = "spiffe://absmach/atom/audit-publisher"
 	testLocalSecret    = "0123456789abcdef0123456789abcdef"
 	testNextSecret     = "abcdef0123456789abcdef0123456789"
+	testAuditQueue     = "atom-audit"
 )
 
 func TestLocalAMQPPolicyAdapter(t *testing.T) {
@@ -40,7 +41,7 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 		CertificateURISAN: testLocalSAN,
 		CurrentSecretFile: currentPath,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: testAuditQueue}},
 		},
 	}
 	store, err := localauth.New([]config.LocalPrincipalConfig{principalConfig})
@@ -53,7 +54,7 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 		CertificateFingerprint: strings.Repeat("a", 64),
 	}
 
-	principalID, fingerprint, certificateURI, authenticated, err := adapter.AuthenticateLocal(
+	principalID, credentialFingerprint, permissionsFingerprint, certificateURI, authenticated, err := adapter.AuthenticateLocal(
 		context.Background(), "amqp091:client", testLocalPrincipal, testLocalSecret, peer,
 	)
 	if err != nil {
@@ -62,19 +63,24 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 	if !authenticated || principalID != testLocalPrincipal || certificateURI != testLocalSAN {
 		t.Fatalf("unexpected authentication result: principal=%q certificate_uri=%q authenticated=%v", principalID, certificateURI, authenticated)
 	}
-	decodedFingerprint, err := hex.DecodeString(fingerprint)
-	if err != nil || len(decodedFingerprint) != len(localauth.CredentialFingerprint{}) {
-		t.Fatalf("invalid credential fingerprint %q: %v", fingerprint, err)
+	decodedCredentialFingerprint, err := hex.DecodeString(credentialFingerprint)
+	if err != nil || len(decodedCredentialFingerprint) != len(localauth.CredentialFingerprint{}) {
+		t.Fatalf("invalid credential fingerprint %q: %v", credentialFingerprint, err)
+	}
+	decodedPermissionsFingerprint, err := hex.DecodeString(permissionsFingerprint)
+	if err != nil || len(decodedPermissionsFingerprint) != len(localauth.PermissionsFingerprint{}) {
+		t.Fatalf("invalid permissions fingerprint %q: %v", permissionsFingerprint, err)
 	}
 	identity := amqpbroker.LocalSessionIdentity{
-		PrincipalID:           principalID,
-		CredentialFingerprint: fingerprint,
-		CertificateURI:        certificateURI,
+		PrincipalID:            principalID,
+		CredentialFingerprint:  credentialFingerprint,
+		PermissionsFingerprint: permissionsFingerprint,
+		CertificateURI:         certificateURI,
 	}
-	if !adapter.CanPublishLocal(identity, "", "atom-audit") {
+	if !adapter.CanPublishLocal(identity, "", testAuditQueue) {
 		t.Fatal("exact configured publish target was denied")
 	}
-	if adapter.CanPublishLocal(identity, "events", "atom-audit") || adapter.CanPublishLocal(identity, "", "atom-audit.other") {
+	if adapter.CanPublishLocal(identity, "events", testAuditQueue) || adapter.CanPublishLocal(identity, "", "atom-audit.other") {
 		t.Fatal("non-exact publish target was allowed")
 	}
 
@@ -97,21 +103,76 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 	if adapter.IsSessionActive(identity) {
 		t.Fatal("session authenticated with the removed secret remains active")
 	}
-	if adapter.CanPublishLocal(identity, "", "atom-audit") {
+	if adapter.CanPublishLocal(identity, "", testAuditQueue) {
 		t.Fatal("session authenticated before reload can publish with the removed secret")
 	}
 }
 
 func TestLocalAMQPPolicyAdapterFailsClosed(t *testing.T) {
 	adapter := &localAMQPPolicy{}
-	if _, _, _, authenticated, err := adapter.AuthenticateLocal(context.Background(), "client", "user", "secret", amqpbroker.VerifiedPeerIdentity{}); err != nil || authenticated {
+	if _, _, _, _, authenticated, err := adapter.AuthenticateLocal(context.Background(), "client", "user", "secret", amqpbroker.VerifiedPeerIdentity{}); err != nil || authenticated {
 		t.Fatalf("nil local store must fail closed: authenticated=%v err=%v", authenticated, err)
 	}
-	if adapter.CanPublishLocal(amqpbroker.LocalSessionIdentity{PrincipalID: "principal"}, "", "atom-audit") {
+	if adapter.CanPublishLocal(amqpbroker.LocalSessionIdentity{PrincipalID: "principal"}, "", testAuditQueue) {
 		t.Fatal("nil local store authorized a publication")
 	}
 	if adapter.IsSessionActive(amqpbroker.LocalSessionIdentity{}) {
 		t.Fatal("nil local store reported an active session")
+	}
+}
+
+func TestLocalAMQPPolicyAdapterRevokesChangedPermissions(t *testing.T) {
+	dir := t.TempDir()
+	currentPath := filepath.Join(dir, "current")
+	if err := os.WriteFile(currentPath, []byte(testLocalSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	principalConfig := config.LocalPrincipalConfig{
+		Name:              testLocalPrincipal,
+		CertificateURISAN: testLocalSAN,
+		CurrentSecretFile: currentPath,
+		Permissions: config.LocalPermissionsConfig{
+			Publish: []config.LocalPublishPermission{{RoutingKey: testAuditQueue}},
+		},
+	}
+	store, err := localauth.New([]config.LocalPrincipalConfig{principalConfig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &localAMQPPolicy{store: store}
+	principalID, credentialFingerprint, permissionsFingerprint, certificateURI, authenticated, err := adapter.AuthenticateLocal(
+		context.Background(),
+		"amqp091:client",
+		testLocalPrincipal,
+		testLocalSecret,
+		amqpbroker.VerifiedPeerIdentity{URISANs: []string{testLocalSAN}},
+	)
+	if err != nil || !authenticated {
+		t.Fatalf("AuthenticateLocal() authenticated=%v error=%v", authenticated, err)
+	}
+	identity := amqpbroker.LocalSessionIdentity{
+		PrincipalID:            principalID,
+		CredentialFingerprint:  credentialFingerprint,
+		PermissionsFingerprint: permissionsFingerprint,
+		CertificateURI:         certificateURI,
+	}
+	if !adapter.IsSessionActive(identity) {
+		t.Fatal("freshly authenticated session was not active")
+	}
+
+	principalConfig.Permissions.Publish[0].RoutingKey = "atom-audit-v2"
+	changed, err := store.Reload([]config.LocalPrincipalConfig{principalConfig})
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("publish ACL replacement was reported as unchanged")
+	}
+	if adapter.IsSessionActive(identity) {
+		t.Fatal("session authenticated against the replaced publish ACL remains active")
+	}
+	if adapter.CanPublishLocal(identity, "", "atom-audit-v2") {
+		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 }
 
@@ -123,10 +184,10 @@ func TestValidateLocalPrincipalPublishTargets(t *testing.T) {
 	principal := config.LocalPrincipalConfig{
 		Name: testLocalPrincipal,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{RoutingKey: testAuditQueue}},
 		},
 	}
-	expected := queueTypes.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	expected := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
 	expected.Reserved = true
 	expected.Type = queueTypes.QueueTypeStream
 	expected.Retention = queueTypes.RetentionPolicy{
@@ -305,7 +366,7 @@ func TestReloadLocalPrincipalsRejectsInvalidTargetBeforeSwap(t *testing.T) {
 		CertificateURISAN: testLocalSAN,
 		CurrentSecretFile: secretPath,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{RoutingKey: testAuditQueue}},
 		},
 	}
 	localStore, err := localauth.New([]config.LocalPrincipalConfig{principal})
@@ -317,7 +378,7 @@ func TestReloadLocalPrincipalsRejectsInvalidTargetBeforeSwap(t *testing.T) {
 		t.Fatal("initial principal did not authenticate")
 	}
 
-	auditQueue := queueTypes.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
 	queueStore := memoryLog.New()
@@ -346,7 +407,7 @@ func TestReloadLocalPrincipalsRejectsInvalidTargetBeforeSwap(t *testing.T) {
 	if localStore.Generation() != generation {
 		t.Fatalf("generation changed after rejected reload: got %d, want %d", localStore.Generation(), generation)
 	}
-	if !localStore.CanPublishAuthenticated(authentication, "", "atom-audit") {
+	if !localStore.CanPublishAuthenticated(authentication, "", testAuditQueue) {
 		t.Fatal("rejected reload replaced the previous valid snapshot")
 	}
 }
@@ -362,7 +423,7 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 		CertificateURISAN: testLocalSAN,
 		CurrentSecretFile: secretPath,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{RoutingKey: testAuditQueue}},
 		},
 	}
 	localStore, err := localauth.New([]config.LocalPrincipalConfig{principal})
@@ -374,7 +435,7 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 		t.Fatal("initial principal did not authenticate")
 	}
 
-	auditQueue := queueTypes.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
 	securityQueue := queueTypes.DefaultQueueConfig("atom-security", "$queue/atom-security/#")
@@ -413,7 +474,14 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 	if localStore.CanPublishAuthenticated(authentication, "", auditQueue.Name) {
 		t.Fatal("old publish target remained authorized")
 	}
-	if !localStore.CanPublishAuthenticated(authentication, "", securityQueue.Name) {
+	if localStore.IsActive(authentication) {
+		t.Fatal("session authenticated against the replaced publish ACL remains active")
+	}
+	reauthenticated, ok := localStore.Authenticate(testLocalPrincipal, testLocalSecret, testLocalSAN)
+	if !ok {
+		t.Fatal("principal did not reauthenticate against the replacement publish ACL")
+	}
+	if !localStore.CanPublishAuthenticated(reauthenticated, "", securityQueue.Name) {
 		t.Fatal("new publish target was not authorized")
 	}
 	if err := queueManager.PublishToDurableStream(ctx, auditQueue.Name, queueTypes.PublishRequest{Payload: []byte("{}")}); !errors.Is(err, queuepkg.ErrQueueNotProtected) {
@@ -436,7 +504,7 @@ func TestReloadLocalPrincipalsRestoresProtectionWhenSecretLoadFails(t *testing.T
 		CertificateURISAN: testLocalSAN,
 		CurrentSecretFile: secretPath,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{RoutingKey: testAuditQueue}},
 		},
 	}
 	localStore, err := localauth.New([]config.LocalPrincipalConfig{principal})
@@ -444,7 +512,7 @@ func TestReloadLocalPrincipalsRestoresProtectionWhenSecretLoadFails(t *testing.T
 		t.Fatalf("localauth.New() error = %v", err)
 	}
 
-	auditQueue := queueTypes.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
 	securityQueue := queueTypes.DefaultQueueConfig("atom-security", "$queue/atom-security/#")

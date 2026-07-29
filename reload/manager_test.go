@@ -116,7 +116,7 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 1 || result.Applied[0].Path != "Auth.LocalPrincipals" {
+	if len(result.Applied) != 1 || result.Applied[0].Path != localPrincipalsPath {
 		t.Fatalf("unexpected applied changes: %+v", result.Applied)
 	}
 	if m.Version() != 2 || store.Generation() != 2 {
