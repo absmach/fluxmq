@@ -13,7 +13,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -183,35 +182,20 @@ func authenticationActive(current *snapshot, authentication Authentication) bool
 	return principal.previous != nil && subtle.ConstantTimeCompare(authentication.CredentialFingerprint[:], principal.previous[:]) == 1
 }
 
+// buildSnapshot turns validated configuration into the immutable runtime
+// snapshot. The declarative rules live in config.ValidateLocalPrincipals so the
+// startup check and this reload path cannot disagree about what is acceptable;
+// only the credential material that config deliberately does not retain is
+// loaded here.
 func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*snapshot, error) {
+	if err := config.ValidateLocalPrincipals(configs); err != nil {
+		return nil, err
+	}
+
 	principals := make(map[string]*principal, len(configs))
-	uriSANs := make(map[string]struct{}, len(configs))
 
 	for i, principalConfig := range configs {
 		prefix := fmt.Sprintf("auth.local_principals[%d]", i)
-		name := strings.TrimSpace(principalConfig.Name)
-		if name == "" {
-			return nil, fmt.Errorf("%s.name cannot be empty", prefix)
-		}
-		if name != principalConfig.Name {
-			return nil, fmt.Errorf("%s.name cannot have leading or trailing whitespace", prefix)
-		}
-		if _, exists := principals[name]; exists {
-			return nil, fmt.Errorf("%s.name %q is duplicated", prefix, name)
-		}
-
-		uriSAN := strings.TrimSpace(principalConfig.CertificateURISAN)
-		parsedURI, err := url.Parse(uriSAN)
-		if uriSAN == "" || err != nil || parsedURI.Scheme == "" {
-			return nil, fmt.Errorf("%s.certificate_uri_san must be an absolute URI", prefix)
-		}
-		if uriSAN != principalConfig.CertificateURISAN {
-			return nil, fmt.Errorf("%s.certificate_uri_san cannot have leading or trailing whitespace", prefix)
-		}
-		if _, exists := uriSANs[uriSAN]; exists {
-			return nil, fmt.Errorf("%s.certificate_uri_san %q is duplicated", prefix, uriSAN)
-		}
-		uriSANs[uriSAN] = struct{}{}
 
 		current, err := loadFingerprint(prefix+".current_secret_file", principalConfig.CurrentSecretFile, true)
 		if err != nil {
@@ -226,30 +210,12 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 		}
 
 		publish := make(map[PublishTarget]struct{}, len(principalConfig.Permissions.Publish))
-		for j, permission := range principalConfig.Permissions.Publish {
-			permissionPrefix := fmt.Sprintf("%s.permissions.publish[%d]", prefix, j)
-			if permission.Exchange != "" {
-				return nil, fmt.Errorf("%s.exchange must be empty; local principals may publish only through the AMQP default exchange", permissionPrefix)
-			}
-			if permission.RoutingKey == "" {
-				return nil, fmt.Errorf("%s.routing_key cannot be empty", permissionPrefix)
-			}
-			if containsWildcard(permission.Exchange) || containsWildcard(permission.RoutingKey) {
-				return nil, fmt.Errorf("%s must use exact exchange and routing_key values without wildcards", permissionPrefix)
-			}
-			target := PublishTarget{Exchange: permission.Exchange, RoutingKey: permission.RoutingKey}
-			if _, exists := publish[target]; exists {
-				return nil, fmt.Errorf("%s duplicates an earlier publish permission", permissionPrefix)
-			}
-			publish[target] = struct{}{}
+		for _, permission := range principalConfig.Permissions.Publish {
+			publish[PublishTarget{Exchange: permission.Exchange, RoutingKey: permission.RoutingKey}] = struct{}{}
 		}
 
-		if len(principalConfig.Permissions.Subscribe) != 0 {
-			return nil, fmt.Errorf("%s.permissions.subscribe is unsupported; local principals are publish-only", prefix)
-		}
-
-		principals[name] = &principal{
-			certificateURISAN:  uriSAN,
+		principals[principalConfig.Name] = &principal{
+			certificateURISAN:  principalConfig.CertificateURISAN,
 			current:            current,
 			previous:           previous,
 			publish:            publish,
@@ -339,10 +305,6 @@ func loadFingerprint(field, filename string, required bool) (CredentialFingerpri
 	fingerprint := CredentialFingerprint(sha256.Sum256(secret))
 	clear(secret)
 	return fingerprint, nil
-}
-
-func containsWildcard(value string) bool {
-	return strings.ContainsAny(value, "#*+")
 }
 
 func fingerprintPublishPermissions(publish map[PublishTarget]struct{}) PermissionsFingerprint {

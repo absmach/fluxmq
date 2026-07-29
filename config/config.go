@@ -1294,7 +1294,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("auth.external.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
 	}
-	if err := validateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
+	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
 	}
 	if hasAddr(c.Server.AMQP091.Internal.Addr) && len(c.Auth.LocalPrincipals) == 0 {
@@ -1593,7 +1593,12 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 	return nil
 }
 
-func validateLocalPrincipals(principals []LocalPrincipalConfig) error {
+// ValidateLocalPrincipals checks the declarative rules for local principals:
+// unique non-blank names and absolute URI SANs, readable high-entropy secret
+// files, and exact publish-only permissions. It is the single definition of
+// those rules, shared with the runtime store that loads the same section, so
+// startup validation and a SIGHUP reload cannot drift apart.
+func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 	names := make(map[string]struct{}, len(principals))
 	uriSANs := make(map[string]struct{}, len(principals))
 
