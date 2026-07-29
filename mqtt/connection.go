@@ -80,7 +80,11 @@ const sendBufSize = 32 * 1024
 
 // connection wraps a net.Conn and provides MQTT packet-level I/O with state management.
 type connection struct {
-	conn    net.Conn
+	conn net.Conn
+	// sock is where packet bytes are written. It is conn itself, or a wrapper
+	// that stamps a write deadline on each socket write when a write timeout is
+	// configured. Built once so the write path never allocates.
+	sock    io.Writer
 	reader  io.Reader
 	writer  *bufio.Writer // buffered writer for sendLoop; nil in sync mode
 	version int           // 0 = unknown, 3/4 = v3.1/v3.1.1, 5 = v5
@@ -93,7 +97,8 @@ type connection struct {
 	closeCh          chan struct{}
 	closeOnce        sync.Once
 	sendWg           sync.WaitGroup
-	maxPacketSize    int // 0 = unlimited
+	writeTimeout     time.Duration // 0 = no write deadline
+	maxPacketSize    int           // 0 = unlimited
 	disconnectOnFull bool
 	closed           atomic.Bool
 
@@ -116,6 +121,30 @@ func WithMaxPacketSize(maxSize int) ConnOption {
 	}
 }
 
+// WithWriteTimeout bounds how long a single socket write may take. Without it a
+// peer that stops reading can park a broker goroutine on a blocked write for as
+// long as it likes. A value <= 0 leaves writes without a deadline.
+func WithWriteTimeout(d time.Duration) ConnOption {
+	return func(c *connection) {
+		if d > 0 {
+			c.writeTimeout = d
+		}
+	}
+}
+
+// deadlineWriter stamps the connection's write timeout on every socket write.
+// The deadline is absolute and refreshed per write, so it never needs clearing.
+type deadlineWriter struct {
+	c *connection
+}
+
+func (w deadlineWriter) Write(p []byte) (int, error) {
+	if err := w.c.conn.SetWriteDeadline(time.Now().Add(w.c.writeTimeout)); err != nil {
+		return 0, err
+	}
+	return w.c.conn.Write(p)
+}
+
 // NewConnection creates a new MQTT connection wrapping a network connection.
 // queueSize <= 0 keeps synchronous writes; queueSize > 0 enables asynchronous queued writes.
 func NewConnection(conn net.Conn, queueSize int, disconnectOnFull bool, opts ...ConnOption) Connection {
@@ -135,6 +164,11 @@ func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull boo
 		opt(c)
 	}
 
+	c.sock = conn
+	if c.writeTimeout > 0 {
+		c.sock = deadlineWriter{c: c}
+	}
+
 	if queueSize > 0 {
 		controlCap := queueSize / 4
 		if controlCap < 1 {
@@ -143,7 +177,7 @@ func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull boo
 		c.controlCh = make(chan sendItem, controlCap)
 		c.dataCh = make(chan sendItem, queueSize)
 		c.closeCh = make(chan struct{})
-		c.writer = bufio.NewWriterSize(conn, sendBufSize)
+		c.writer = bufio.NewWriterSize(c.sock, sendBufSize)
 
 		c.sendWg.Add(1)
 		go c.sendLoop()
@@ -299,7 +333,7 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 		return net.ErrClosed
 	}
 
-	if err := pkt.Pack(c.conn); err != nil {
+	if err := pkt.Pack(c.sock); err != nil {
 		pkt.Release()
 		return err
 	}

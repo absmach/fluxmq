@@ -234,9 +234,6 @@ func TestDefaultConfigApplied(t *testing.T) {
 	if server.config.WriteTimeout == 0 {
 		t.Fatal("expected default WriteTimeout to be set")
 	}
-	if server.config.IdleTimeout == 0 {
-		t.Fatal("expected default IdleTimeout to be set")
-	}
 	if server.config.BufferSize == 0 {
 		t.Fatal("expected default BufferSize to be set")
 	}

@@ -28,13 +28,16 @@ type IPRateLimiter interface {
 
 // Config holds the TCP server configuration.
 type Config struct {
-	Address          string
-	TLSConfig        *tls.Config
-	Logger           *slog.Logger
-	ShutdownTimeout  time.Duration
-	ReadTimeout      time.Duration
+	Address         string
+	TLSConfig       *tls.Config
+	Logger          *slog.Logger
+	ShutdownTimeout time.Duration
+	// ReadTimeout bounds the pre-session phase of a connection: the TLS
+	// handshake, protocol version sniff, and CONNECT packet. Once the session
+	// starts it sets its own read deadlines from the negotiated keep-alive.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds a single socket write for the life of the connection.
 	WriteTimeout     time.Duration
-	IdleTimeout      time.Duration
 	TCPKeepAlive     time.Duration
 	MaxConnections   int
 	BufferSize       int
@@ -60,6 +63,12 @@ type Server struct {
 	listener      net.Listener
 	connSem       chan struct{}
 	ipRateLimiter IPRateLimiter
+
+	// activeMu guards active, the set of accepted sockets. Cancelling the
+	// connection context does not interrupt a goroutine blocked in a socket
+	// read, so a forced shutdown closes these directly.
+	activeMu sync.Mutex
+	active   map[net.Conn]struct{}
 }
 
 // New creates a new TCP server with the given configuration and broker.
@@ -75,9 +84,6 @@ func New(cfg Config, h *broker.Broker) *Server {
 	}
 	if cfg.WriteTimeout == 0 {
 		cfg.WriteTimeout = 60 * time.Second
-	}
-	if cfg.IdleTimeout == 0 {
-		cfg.IdleTimeout = 300 * time.Second
 	}
 	if cfg.BufferSize == 0 {
 		cfg.BufferSize = 8192 // 8KB default for performance
@@ -96,7 +102,37 @@ func New(cfg Config, h *broker.Broker) *Server {
 		handler:       h,
 		connSem:       connSem,
 		ipRateLimiter: cfg.IPRateLimiter,
+		active:        make(map[net.Conn]struct{}),
 	}
+}
+
+// trackConn registers an accepted socket so a forced shutdown can close it.
+func (s *Server) trackConn(conn net.Conn) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	s.active[conn] = struct{}{}
+}
+
+func (s *Server) untrackConn(conn net.Conn) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	delete(s.active, conn)
+}
+
+// closeActiveConns closes every tracked socket, unblocking connection
+// goroutines parked in a read or write that context cancellation cannot reach.
+func (s *Server) closeActiveConns() int {
+	s.activeMu.Lock()
+	conns := make([]net.Conn, 0, len(s.active))
+	for conn := range s.active {
+		conns = append(conns, conn)
+	}
+	s.activeMu.Unlock()
+
+	for _, conn := range conns {
+		conn.Close() //nolint:errcheck // forced shutdown; the goroutine reports the resulting error
+	}
+	return len(conns)
 }
 
 // Listen starts the TCP server and blocks until the context is cancelled.
@@ -221,23 +257,41 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	defer conn.Close()
 	defer connguard.Recover(s.config.Logger, "mqtt-tcp", conn.RemoteAddr().String())
 
+	s.trackConn(conn)
+	defer s.untrackConn(conn)
+
 	s.config.Logger.Debug("connection established",
 		slog.String("remote", conn.RemoteAddr().String()))
 
+	// Bound everything that happens before the session's own read deadlines take
+	// over: the TLS handshake, the protocol version sniff, and the CONNECT
+	// packet. Without it an unauthenticated peer can hold a connection slot open
+	// indefinitely by opening a socket and sending nothing.
+	if s.config.ReadTimeout > 0 {
+		if err := conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout)); err != nil {
+			s.config.Logger.Error("failed to set connect deadline", slog.String("error", err.Error()))
+			return
+		}
+	}
+
 	// For TLS connections, the handshake happens during the first Read/Write
-	// from the TLS listener, but we need to ensure it's complete before using the connection
+	// from the TLS listener, but we need to ensure it's complete before using
+	// the connection. HandshakeContext aborts it when the server is shutting
+	// down rather than waiting out the read deadline.
 	if tlsConn, ok := conn.(*tls.Conn); ok {
-		// Force handshake to complete now to validate client certificates
-		if err := tlsConn.Handshake(); err != nil {
+		if err := tlsConn.HandshakeContext(connCtx); err != nil {
 			s.config.Logger.Error("TLS handshake failed", slog.String("error", err.Error()))
 			return
 		}
 		s.config.Logger.Debug("TLS handshake successful")
 	}
 
-	// core.NewConnection accepts any net.Conn (TCP or TLS)
+	// core.NewConnection accepts any net.Conn (TCP or TLS). The session replaces
+	// the read deadline on every packet read; the write deadline is applied per
+	// socket write by the connection itself.
 	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion,
-		core.WithMaxPacketSize(s.config.MaxPacketSize))
+		core.WithMaxPacketSize(s.config.MaxPacketSize),
+		core.WithWriteTimeout(s.config.WriteTimeout))
 	broker.HandleConnection(connCtx, s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",
@@ -267,6 +321,10 @@ func (s *Server) gracefulShutdown(listener net.Listener, acceptDone <-chan struc
 	case <-time.After(s.config.ShutdownTimeout):
 		s.config.Logger.Warn("shutdown timeout exceeded, forcing connection closure")
 		connCancel()
+		// Cancellation alone does not interrupt a goroutine blocked in a socket
+		// read, so close the sockets out from under them.
+		s.config.Logger.Warn("closing active connections",
+			slog.Int("connections", s.closeActiveConns()))
 
 		select {
 		case <-done:
