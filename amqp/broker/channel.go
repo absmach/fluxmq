@@ -361,7 +361,13 @@ func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
 	r := bytes.NewReader(frame.Payload)
 	header, err := codec.ReadContentHeader(r)
 	if err != nil {
+		// A header that cannot be parsed leaves the channel mid-publish with no
+		// way to frame what follows, so close it rather than waiting for body
+		// frames that can never be matched.
 		ch.conn.logger.Error("failed to read content header", "error", err)
+		_ = ch.sendChannelClose(codec.FrameError,
+			"malformed content header", codec.ClassBasic, codec.MethodBasicPublish)
+		ch.resetPendingPublish()
 		return
 	}
 	if limit := ch.conn.connectionPolicy().maxMessageSize; limit > 0 && header.BodySize > limit {
@@ -373,16 +379,33 @@ func (ch *Channel) handleHeaderFrame(frame *codec.Frame) {
 	ch.pendingHeader = header
 	ch.pendingBodySize = header.BodySize
 	ch.pendingBodyReceived = 0
-	capHint := 0
-	if maxInt := uint64(^uint(0) >> 1); header.BodySize <= maxInt {
-		capHint = int(header.BodySize)
-	}
-	ch.pendingBody = make([]byte, 0, capHint)
+	// Reserve for what has arrived, not for what was promised. The advertised
+	// body size is attacker-controlled up to max_message_size, so allocating it
+	// up front lets stalled publishers reserve max_connections × that size
+	// without sending a single body byte. append grows the buffer as frames
+	// actually arrive, which keeps a publisher's memory cost proportional to
+	// the bytes it transmits.
+	ch.pendingBody = make([]byte, 0, initialBodyCapacity(header.BodySize))
 
 	// If body size is 0, the message is complete
 	if header.BodySize == 0 {
 		ch.completePublish()
 	}
+}
+
+// maxInitialBodyCapacity caps the buffer reserved for an incoming message body
+// before any of it has arrived. Bodies at or below it are still allocated once,
+// so the common small-message path does not grow; larger ones grow as frames
+// arrive.
+const maxInitialBodyCapacity = 64 * 1024
+
+// initialBodyCapacity converts an advertised body size into the capacity to
+// reserve for it up front.
+func initialBodyCapacity(bodySize uint64) int {
+	if bodySize > maxInitialBodyCapacity {
+		return maxInitialBodyCapacity
+	}
+	return int(bodySize)
 }
 
 // handleBodyFrame processes a content body frame.
