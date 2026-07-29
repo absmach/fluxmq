@@ -25,6 +25,7 @@ import (
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/netutil"
 )
 
 // subprotocolMQTT is the WebSocket subprotocol name for MQTT.
@@ -76,7 +77,6 @@ type Server struct {
 	allowedOrigins map[string]bool
 	allowAll       bool
 	ipRateLimiter  IPRateLimiter
-	connSem        chan struct{}
 
 	// activeMu guards active, the set of upgraded connections. http.Server's
 	// Shutdown neither closes nor waits for hijacked connections, so these are
@@ -100,18 +100,12 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 		cfg.WriteTimeout = 60 * time.Second
 	}
 
-	var connSem chan struct{}
-	if cfg.MaxConnections > 0 {
-		connSem = make(chan struct{}, cfg.MaxConnections)
-	}
-
 	s := &Server{
 		config:         cfg,
 		broker:         b,
 		logger:         logger,
 		allowedOrigins: make(map[string]bool),
 		ipRateLimiter:  cfg.IPRateLimiter,
-		connSem:        connSem,
 		active:         make(map[*websocket.Conn]struct{}),
 	}
 
@@ -145,6 +139,13 @@ func New(cfg Config, b *broker.Broker, logger *slog.Logger) *Server {
 	s.server = &http.Server{
 		Addr:    cfg.Address,
 		Handler: mux,
+		// Bound the request phase that precedes the upgrade. This also bounds
+		// the TLS handshake, which net/http deadlines from the longest of the
+		// server's read and write timeouts. Without it a peer can hold a socket
+		// open indefinitely by dribbling headers or stalling the handshake.
+		// gorilla clears the deadline once it hijacks, so a live WebSocket
+		// session is unaffected.
+		ReadHeaderTimeout: cfg.ReadTimeout,
 	}
 
 	return s
@@ -202,7 +203,18 @@ func (s *Server) Listen(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.config.Address, err)
 	}
-	return s.serveListener(ctx, listener)
+	return s.serveListener(ctx, s.limitListener(listener))
+}
+
+// limitListener caps concurrently accepted sockets. The cap belongs on the
+// listener rather than on the upgrade handler: a peer that opens a socket and
+// never completes the HTTP request would otherwise consume no quota at all
+// while still holding a connection.
+func (s *Server) limitListener(listener net.Listener) net.Listener {
+	if s.config.MaxConnections <= 0 {
+		return listener
+	}
+	return netutil.LimitListener(listener, s.config.MaxConnections)
 }
 
 // serveListener serves upgrades on an already-bound listener and shuts down when
@@ -284,25 +296,6 @@ func (s *Server) closeActiveConns() int {
 	return len(conns)
 }
 
-// tryAcquireConnectionSlot reserves one of the configured connection slots.
-func (s *Server) tryAcquireConnectionSlot() bool {
-	if s.connSem == nil {
-		return true
-	}
-	select {
-	case s.connSem <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Server) releaseConnectionSlot() {
-	if s.connSem != nil {
-		<-s.connSem
-	}
-}
-
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Check IP rate limit before upgrade
 	if s.ipRateLimiter != nil {
@@ -316,20 +309,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !s.tryAcquireConnectionSlot() {
-		s.logger.Warn("websocket_connection_limit_reached",
-			slog.String("remote_addr", r.RemoteAddr))
-		http.Error(w, "connection limit reached", http.StatusServiceUnavailable)
-		return
-	}
-
 	ws, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		s.releaseConnectionSlot()
 		s.logger.Warn("websocket_upgrade_failed", slog.String("error", err.Error()))
 		return
 	}
-	defer s.releaseConnectionSlot()
+	// Closing the hijacked connection also releases its listener slot.
 	defer ws.Close() //nolint:errcheck // best-effort close once the session ends
 
 	s.trackConn(ws)

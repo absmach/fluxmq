@@ -71,13 +71,28 @@ func TestWSConnectDeadlineDropsSilentClient(t *testing.T) {
 	}, 5*time.Second, time.Millisecond, "dropped connection must be untracked")
 }
 
-// TestWSConnectionLimitRejectsUpgrade checks upgraded connections are capped, so
-// a peer cannot open unbounded goroutines by upgrading repeatedly.
-func TestWSConnectionLimitRejectsUpgrade(t *testing.T) {
-	s, url := newTestWSServer(t, Config{MaxConnections: 1, ReadTimeout: 5 * time.Second})
+// TestWSConnectionLimitAppliesToSockets checks the cap is enforced on accepted
+// sockets rather than on completed upgrades. A peer that opens a socket and
+// stalls before finishing its HTTP request must still consume quota, otherwise
+// the limit protects nothing.
+func TestWSConnectionLimitAppliesToSockets(t *testing.T) {
+	b := broker.NewBroker(nil, nil)
+	t.Cleanup(func() { b.Close() }) //nolint:errcheck // best-effort teardown
 
-	first, _ := dialWS(t, url)
-	require.NotNil(t, first, "first connection must be accepted")
+	s := New(Config{Path: defaultPath, MaxConnections: 1, ReadTimeout: 5 * time.Second}, b, nil)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := listener.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- s.serveListener(ctx, s.limitListener(listener)) }()
+
+	first, _, err := websocket.DefaultDialer.Dial("ws://"+addr+defaultPath, nil)
+	require.NoError(t, err, "first connection must be accepted")
+	t.Cleanup(func() { first.Close() }) //nolint:errcheck // best-effort teardown
 
 	require.Eventually(t, func() bool {
 		s.activeMu.Lock()
@@ -85,10 +100,57 @@ func TestWSConnectionLimitRejectsUpgrade(t *testing.T) {
 		return len(s.active) == 1
 	}, 5*time.Second, time.Millisecond)
 
-	second, resp := dialWS(t, url)
-	assert.Nil(t, second, "second connection must be refused at the limit")
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	// At the cap the listener stops accepting, so the second handshake cannot
+	// complete while the first connection holds the slot.
+	dialer := &websocket.Dialer{HandshakeTimeout: 300 * time.Millisecond}
+	second, _, err := dialer.Dial("ws://"+addr+defaultPath, nil)
+	if second != nil {
+		second.Close() //nolint:errcheck // only reached when the assertion below fails
+	}
+	require.Error(t, err, "second connection must not be served while the limit is held")
+
+	// Releasing the first connection frees the slot for the next one.
+	first.Close() //nolint:errcheck // handing the slot back
+
+	require.Eventually(t, func() bool {
+		conn, _, err := dialer.Dial("ws://"+addr+defaultPath, nil)
+		if err != nil {
+			return false
+		}
+		conn.Close() //nolint:errcheck // best-effort teardown
+		return true
+	}, 5*time.Second, 20*time.Millisecond, "a freed slot must admit the next connection")
+}
+
+// TestWSReadHeaderTimeoutDropsStalledRequest covers the phase before the
+// upgrade: a peer that opens a socket and dribbles HTTP headers never reaches
+// the handler, so only an HTTP-level deadline can evict it.
+func TestWSReadHeaderTimeoutDropsStalledRequest(t *testing.T) {
+	b := broker.NewBroker(nil, nil)
+	t.Cleanup(func() { b.Close() }) //nolint:errcheck // best-effort teardown
+
+	s := New(Config{Path: defaultPath, ReadTimeout: 150 * time.Millisecond}, b, nil)
+	require.Equal(t, 150*time.Millisecond, s.server.ReadHeaderTimeout,
+		"the read timeout must bound the pre-upgrade request phase")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { s.serveListener(ctx, listener) }() //nolint:errcheck // shutdown asserted elsewhere
+
+	raw, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	t.Cleanup(func() { raw.Close() }) //nolint:errcheck // best-effort teardown
+
+	// A request line with no terminating blank line: headers never complete.
+	_, err = raw.Write([]byte("GET " + defaultPath + " HTTP/1.1\r\nHost: localhost\r\n"))
+	require.NoError(t, err)
+
+	raw.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck // test client
+	_, err = raw.Read(make([]byte, 1))
+	assert.Error(t, err, "stalled request was never dropped: no header deadline applied")
 }
 
 // TestWSShutdownClosesUpgradedConnections covers shutdown: http.Server.Shutdown
