@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -200,4 +201,37 @@ func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
 	got1, err := adapter.Read(ctx, "q1", 1)
 	require.NoError(t, err)
 	assert.True(t, got1.ExpiresAt.IsZero())
+}
+
+func TestAdapter_AppendAndSyncHonorsContextAndReportsDurability(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	assert.True(t, adapter.SupportsDurableSync())
+
+	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("audit", "$queue/audit/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = adapter.AppendAndSync(cancelled, "audit", &types.Message{ID: "1", Topic: "t", Payload: []byte("a")})
+	require.ErrorIs(t, err, context.Canceled)
+
+	count, err := adapter.Count(ctx, "audit")
+	require.NoError(t, err)
+	assert.Zero(t, count, "cancelled publish must not reach the log")
+
+	_, err = adapter.AppendAndSync(ctx, "audit", &types.Message{ID: "2", Topic: "t", Payload: []byte("b")})
+	require.NoError(t, err)
+	count, err = adapter.Count(ctx, "audit")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), count)
+}
+
+func TestSyncDirRejectsMissingDirectory(t *testing.T) {
+	require.NoError(t, SyncDir(t.TempDir()))
+	require.Error(t, SyncDir(filepath.Join(t.TempDir(), "absent")))
 }

@@ -220,7 +220,13 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 
 // AppendAndSync appends a message and syncs the exact segment containing it as
 // one operation. It is the durability primitive used before publisher ACKs.
+// A cancelled context aborts before the append, so the caller can NACK without
+// the record ever reaching the log; the append and its fsync are not
+// interruptible once started.
 func (a *Adapter) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if err := a.queueConfigExists(queueName); err != nil {
 		return 0, err
 	}
@@ -228,6 +234,11 @@ func (a *Adapter) AppendAndSync(ctx context.Context, queueName string, msg *type
 	value, key, headers := encodeMessage(msg)
 	return a.store.AppendAndSync(queueName, value, key, headers)
 }
+
+// SupportsDurableSync reports that AppendAndSync establishes a real crash
+// durability barrier: the segment file and its directory entry are fsynced
+// before it returns.
+func (a *Adapter) SupportsDurableSync() bool { return true }
 
 // SyncQueue flushes the queue's current active segment. AppendAndSync must be
 // used when the caller needs a barrier tied to one particular append.
