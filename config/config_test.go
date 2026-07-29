@@ -104,6 +104,41 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "negative websocket max_connections",
+			modify: func(c *Config) {
+				c.Server.WebSocket.V3.MaxConnections = -1
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative websocket read_timeout",
+			modify: func(c *Config) {
+				c.Server.WebSocket.V3.ReadTimeout = -time.Second
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative websocket write_timeout",
+			modify: func(c *Config) {
+				c.Server.WebSocket.V3.WriteTimeout = -time.Second
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative tcp read_timeout",
+			modify: func(c *Config) {
+				c.Server.TCP.V3.ReadTimeout = -time.Second
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative tcp write_timeout",
+			modify: func(c *Config) {
+				c.Server.TCP.V3.WriteTimeout = -time.Second
+			},
+			wantErr: true,
+		},
+		{
 			name: "message size too small",
 			modify: func(c *Config) {
 				c.Broker.MaxMessageSize = 100

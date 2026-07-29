@@ -1143,6 +1143,12 @@ func (c *Config) Validate() error {
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
 		}
+		if slot.cfg.ReadTimeout < 0 {
+			return fmt.Errorf("server.tcp.%s.read_timeout cannot be negative", slot.name)
+		}
+		if slot.cfg.WriteTimeout < 0 {
+			return fmt.Errorf("server.tcp.%s.write_timeout cannot be negative", slot.name)
+		}
 		if slot.requireTLS {
 			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
@@ -1168,6 +1174,15 @@ func (c *Config) Validate() error {
 		}
 
 		hasMessagingListener = true
+		if slot.cfg.MaxConnections < 0 {
+			return fmt.Errorf("server.websocket.%s.max_connections cannot be negative", slot.name)
+		}
+		if slot.cfg.ReadTimeout < 0 {
+			return fmt.Errorf("server.websocket.%s.read_timeout cannot be negative", slot.name)
+		}
+		if slot.cfg.WriteTimeout < 0 {
+			return fmt.Errorf("server.websocket.%s.write_timeout cannot be negative", slot.name)
+		}
 		if slot.requireTLS {
 			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err

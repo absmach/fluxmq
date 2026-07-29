@@ -64,10 +64,21 @@ server:
     mtls: {}
 
   websocket:
-    plain:
+    v3:
       addr: ":8083"
       path: "/mqtt"
-      protocol: "auto" # auto | v3 | v5
+      protocol: "v3"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
+      allowed_origins: ["https://app.example.com"]
+    v5:
+      addr: ":8084"
+      path: "/mqtt"
+      protocol: "v5"
+      max_connections: 10000
+      read_timeout: "60s"
+      write_timeout: "60s"
       allowed_origins: ["https://app.example.com"]
     tls: {}
     mtls: {}
@@ -129,9 +140,9 @@ These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v
 | Field             | Description                                                                                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `addr`            | Listener bind address (`"<host>:<port>"` or `":<port>"`). Empty string disables that listener.                                                 |
-| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on `server.amqp091.internal`, where a positive cap is required. Applies to TCP/AMQP/AMQP091 listeners. |
-| `read_timeout`    | Read timeout for TCP listeners (`time.Duration`).                                                                                              |
-| `write_timeout`   | Write timeout for TCP listeners (`time.Duration`).                                                                                             |
+| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on `server.amqp091.internal`, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
+| `read_timeout`    | Bounds the phase before an MQTT session starts (`time.Duration`, `>= 0`). On TCP that is the TLS handshake, protocol sniff and CONNECT; on WebSocket it also bounds the HTTP request and TLS handshake that precede the upgrade. Once the session starts it sets its own read deadlines from the negotiated keep-alive. TCP and WebSocket listeners. |
+| `write_timeout`   | Bounds a single socket write for the life of the connection (`time.Duration`, `>= 0`). TCP and WebSocket listeners.                            |
 | `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
 | `path`            | HTTP path for MQTT-over-WebSocket endpoint.                                                                                                    |
 | `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production.                                               |
