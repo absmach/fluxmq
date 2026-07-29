@@ -313,7 +313,9 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 		allowed    bool
 	}{
 		{"exact target", "", testAuditQueue, true},
-		{"explicit default alias is not exact", "amq.default", testAuditQueue, false},
+		// amq.default names the same default exchange the router resolves "" to,
+		// so the ACL must reach the same decision for both spellings.
+		{"explicit default alias", "amq.default", testAuditQueue, true},
 		{"wrong routing key", "", "other", false},
 		{"wrong exchange", "events", testAuditQueue, false},
 	}
