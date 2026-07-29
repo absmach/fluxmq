@@ -230,14 +230,11 @@ func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *storage
 	// retransmission path so the two cannot drift on v5 properties.
 	pub := session.EncodePublish(msg, msg.PacketID, version, false)
 
-	// The send loop calls pub.Release() after Pack() completes.
-	// onSent carries only application-level callbacks (e.g. MarkSent).
-	err := conn.TryWriteDataPacket(pub, onSent)
-	if err != nil {
-		// TryWriteDataPacket failed without enqueuing; release immediately.
-		pub.Release()
-	}
-	return err
+	// TryWriteDataPacket owns pub from here on and releases it on every path,
+	// which is also what keeps the payload buffer alive until Pack() has copied
+	// the bytes out. onSent carries only application-level callbacks (e.g.
+	// MarkSent).
+	return conn.TryWriteDataPacket(pub, onSent)
 }
 
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.

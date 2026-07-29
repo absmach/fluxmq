@@ -33,6 +33,12 @@ func ReleasePublish(p *Publish) {
 	if p == nil {
 		return
 	}
+	// Drop the payload reference first, so the bytes stay valid for exactly as
+	// long as the packet does.
+	if p.PayloadRef != nil {
+		p.PayloadRef.Release()
+	}
+
 	// Keep the Properties pointer to avoid reallocation
 	props := p.Properties
 

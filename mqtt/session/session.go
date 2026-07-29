@@ -654,41 +654,55 @@ func (s *Session) WritePacket(pkt packets.ControlPacket) error {
 	return s.WriteControlPacket(pkt, nil)
 }
 
-// WriteControlPacket writes a control packet to the connection.
+// WriteControlPacket writes a control packet to the connection. Like the
+// underlying core.PacketWriter, it takes ownership of pkt on every path.
 func (s *Session) WriteControlPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn == nil {
+		releasePacket(pkt)
 		return ErrNotConnected
 	}
 	return conn.WriteControlPacket(pkt, onSent)
 }
 
-// WriteDataPacket writes a data packet (PUBLISH path) to the connection.
+// WriteDataPacket writes a data packet (PUBLISH path) to the connection. It
+// takes ownership of pkt on every path.
 func (s *Session) WriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn == nil {
+		releasePacket(pkt)
 		return ErrNotConnected
 	}
 	return conn.WriteDataPacket(pkt, onSent)
 }
 
 // TryWriteDataPacket is a non-blocking variant that returns ErrSendQueueFull
-// immediately if the send queue is full, without blocking or disconnecting.
+// immediately if the send queue is full, without blocking or disconnecting. It
+// takes ownership of pkt on every path.
 func (s *Session) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()) error {
 	s.mu.RLock()
 	conn := s.conn
 	s.mu.RUnlock()
 
 	if conn == nil {
+		releasePacket(pkt)
 		return ErrNotConnected
 	}
 	return conn.TryWriteDataPacket(pkt, onSent)
+}
+
+// releasePacket returns a packet that never reached a connection to its pool,
+// dropping any payload reference it holds.
+func releasePacket(pkt packets.ControlPacket) {
+	if pkt != nil {
+		pkt.Release()
+	}
 }
 
 // ReadPacket reads a packet from the connection.

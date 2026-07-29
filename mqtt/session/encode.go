@@ -23,6 +23,11 @@ import (
 //
 // This is the single encoder shared by the first-send path (broker delivery)
 // and the retransmission path (ProcessRetries), so the two cannot diverge.
+//
+// The payload is not copied: the packet points into the message's buffer and
+// takes its own reference to it, which pkt.Release() drops. The caller may
+// therefore release the message as soon as this returns, even though the packet
+// may not be serialized until later on an asynchronous send queue.
 func EncodePublish(msg *storage.Message, packetID uint16, version byte, dup bool) packets.ControlPacket {
 	if version == packets.V5 {
 		p := v5.AcquirePublish()
@@ -34,6 +39,7 @@ func EncodePublish(msg *storage.Message, packetID uint16, version byte, dup bool
 		}
 		p.TopicName = msg.Topic
 		p.Payload = msg.GetPayload()
+		p.PayloadRef = retainPayload(msg)
 		p.ID = packetID
 
 		// Send the remaining message-expiry interval, not the original.
@@ -56,8 +62,20 @@ func EncodePublish(msg *storage.Message, packetID uint16, version byte, dup bool
 	}
 	p.TopicName = msg.Topic
 	p.Payload = msg.GetPayload()
+	p.PayloadRef = retainPayload(msg)
 	p.ID = packetID
 	return p
+}
+
+// retainPayload takes a reference to the message's payload buffer on behalf of
+// an outbound packet. It returns nil for messages whose payload is a plain
+// slice, which is owned by the message and needs no reference counting.
+func retainPayload(msg *storage.Message) packets.PayloadRef {
+	if msg.PayloadBuf == nil {
+		return nil
+	}
+	msg.PayloadBuf.Retain()
+	return msg.PayloadBuf
 }
 
 func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {

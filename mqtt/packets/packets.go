@@ -112,6 +112,16 @@ type Resetter interface {
 	Reset()
 }
 
+// PayloadRef owns the memory a packet's Payload slice points into. A PUBLISH
+// built from a pooled, reference-counted payload buffer holds one reference for
+// as long as the packet is alive; releasing the packet drops it. This keeps the
+// bytes valid until Pack() has copied them out, even when the packet sits in an
+// asynchronous send queue after the publisher has already dropped its own
+// reference.
+type PayloadRef interface {
+	Release()
+}
+
 // User represents a user property key-value pair (MQTT 5.0).
 type User struct {
 	Key, Value string

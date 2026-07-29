@@ -157,14 +157,11 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 	// dup=true: this is a retransmission. EncodePublish carries the v5 PUBLISH
 	// properties so a resent message is not stripped of them.
 	pub := EncodePublish(msg, inflight.PacketID, version, true)
+	// TryWriteDataPacket owns pub on every path, including its error returns.
 	err := writer.TryWriteDataPacket(pub, onSent)
 	if errors.Is(err, core.ErrSendQueueFull) {
-		pub.Release()
 		h.inflight.MarkDeliveryAttempted(inflight.PacketID)
 		return nil
-	}
-	if err != nil {
-		pub.Release()
 	}
 	return err
 }

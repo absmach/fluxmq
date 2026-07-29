@@ -48,6 +48,12 @@ type Connection interface {
 }
 
 // PacketWriter is an interface for writing packets.
+//
+// Every method takes ownership of pkt: the packet is released on all paths,
+// including every error return, and the caller must not touch it (or the
+// payload it points into) afterwards. Packets are pooled and may carry a
+// reference to a pooled payload buffer, so a caller that also released would
+// hand the same packet or buffer to two owners.
 type PacketWriter interface {
 	WritePacket(pkt packets.ControlPacket) error
 	WriteControlPacket(pkt packets.ControlPacket, onSent func()) error
@@ -177,6 +183,7 @@ func (c *connection) WriteControlPacket(pkt packets.ControlPacket, onSent func()
 	}
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -185,6 +192,7 @@ func (c *connection) WriteControlPacket(pkt packets.ControlPacket, onSent func()
 	case c.controlCh <- item:
 		return nil
 	case <-c.closeCh:
+		pkt.Release()
 		return net.ErrClosed
 	}
 }
@@ -199,6 +207,7 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 	}
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -208,10 +217,12 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 		case c.dataCh <- item:
 			return nil
 		case <-c.closeCh:
+			pkt.Release()
 			return net.ErrClosed
 		default:
 			c.markClosed()
 			_ = c.conn.Close()
+			pkt.Release()
 			return ErrSendQueueFull
 		}
 	}
@@ -220,6 +231,7 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 	case c.dataCh <- item:
 		return nil
 	case <-c.closeCh:
+		pkt.Release()
 		return net.ErrClosed
 	}
 }
@@ -234,6 +246,7 @@ func (c *connection) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()
 	}
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -242,18 +255,21 @@ func (c *connection) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()
 	case c.dataCh <- item:
 		return nil
 	case <-c.closeCh:
+		pkt.Release()
 		return net.ErrClosed
 	default:
 		if c.disconnectOnFull {
 			c.markClosed()
 			_ = c.conn.Close()
 		}
+		pkt.Release()
 		return ErrSendQueueFull
 	}
 }
 
 func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -261,6 +277,7 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 	defer c.sendMu.Unlock()
 
 	if c.closed.Load() {
+		pkt.Release()
 		return net.ErrClosed
 	}
 
@@ -277,6 +294,7 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 
 func (c *connection) sendLoop() {
 	defer c.sendWg.Done()
+	defer c.drainSendQueues()
 	w := c.writer
 	// Reusable slice for onSent callbacks; fired after flush.
 	var pending []func()
@@ -374,6 +392,24 @@ func (c *connection) sendLoop() {
 		// priority: once one item is taken from an idle loop, we write it out
 		// before potentially packing additional queued data.
 		if !c.flushAndNotify(w, &pending) {
+			return
+		}
+	}
+}
+
+// drainSendQueues releases packets left queued when the send loop exits, so a
+// torn-down connection returns its pooled packets and payload buffers instead
+// of stranding them in the channels. A producer that wins the race against
+// markClosed can still enqueue after this runs; that packet is simply collected
+// by the GC rather than pooled.
+func (c *connection) drainSendQueues() {
+	for {
+		select {
+		case item := <-c.controlCh:
+			item.pkt.Release()
+		case item := <-c.dataCh:
+			item.pkt.Release()
+		default:
 			return
 		}
 	}

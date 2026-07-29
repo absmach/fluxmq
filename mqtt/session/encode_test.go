@@ -23,7 +23,7 @@ func TestEncodePublish_V5RetransmitCarriesProperties(t *testing.T) {
 	pf := byte(1)
 	expiry := uint32(120)
 	msg := &storage.Message{
-		Topic:           "sensors/temp",
+		Topic:           testTopic,
 		QoS:             1,
 		Retain:          true,
 		ContentType:     "application/json",
@@ -42,7 +42,7 @@ func TestEncodePublish_V5RetransmitCarriesProperties(t *testing.T) {
 	defer pub.Release()
 
 	require.Equal(t, uint16(42), pub.ID)
-	require.Equal(t, "sensors/temp", pub.TopicName)
+	require.Equal(t, testTopic, pub.TopicName)
 	require.True(t, pub.FixedHeader.Dup, "retransmission must set the DUP flag")
 	require.Equal(t, byte(1), pub.FixedHeader.QoS)
 	require.True(t, pub.FixedHeader.Retain)

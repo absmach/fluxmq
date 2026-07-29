@@ -31,6 +31,9 @@ type connCtx struct {
 
 func (c *connCtx) WritePacket(pkt packets.ControlPacket) error {
 	if c.conn == nil {
+		if pkt != nil {
+			pkt.Release()
+		}
 		return session.ErrNotConnected
 	}
 	return c.conn.WritePacket(pkt)
