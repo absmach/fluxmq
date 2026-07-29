@@ -82,8 +82,8 @@ func TestStress_HighThroughputPublish(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&m2)
 
-	memIncrease := m2.Alloc - m1.Alloc
-	memIncreasePerMsg := float64(memIncrease) / float64(totalMessages)
+	memIncrease := heapDelta(m1, m2)
+	memIncreasePerMsg := bytesPerUnit(memIncrease, totalMessages)
 
 	t.Logf("Completed: %d messages in %v (%.0f msg/s)", totalMessages, elapsed, actualRate)
 	t.Logf("Memory: %d KB increase, %.2f bytes/msg", memIncrease/1024, memIncreasePerMsg)
@@ -434,7 +434,7 @@ func TestStress_FanOutExtreme(t *testing.T) {
 
 	totalDeliveries := uint64(numMessages * numSubscribers)
 	deliveriesPerSec := float64(totalDeliveries) / elapsed.Seconds()
-	memIncrease := m2.Alloc - m1.Alloc
+	memIncrease := heapDelta(m1, m2)
 
 	t.Logf("Completed: %d messages × %d subscribers = %d deliveries",
 		numMessages, numSubscribers, totalDeliveries)
@@ -442,7 +442,7 @@ func TestStress_FanOutExtreme(t *testing.T) {
 	t.Logf("Memory increase: %d MB", memIncrease/1024/1024)
 
 	// With zero-copy, memory should not increase proportionally to number of subscribers
-	bytesPerDelivery := float64(memIncrease) / float64(totalDeliveries)
+	bytesPerDelivery := bytesPerUnit(memIncrease, totalDeliveries)
 	t.Logf("Memory per delivery: %.2f bytes", bytesPerDelivery)
 
 	// Should be well under the message size since we're sharing buffers
@@ -529,4 +529,22 @@ func TestStress_RapidSubscribeUnsubscribe(t *testing.T) {
 
 	assert.Greater(t, subCount.Load(), uint64(0))
 	assert.Equal(t, subCount.Load(), unsubCount.Load())
+}
+
+// heapDelta reports how much live heap the test added, as a signed value.
+// MemStats.Alloc is the live heap after a GC, so it can legitimately end lower
+// than it started; subtracting the two as uint64 wraps to ~2^64 and turns a
+// shrinking heap into an astronomical apparent leak.
+func heapDelta(before, after runtime.MemStats) int64 {
+	return int64(after.Alloc) - int64(before.Alloc)
+}
+
+// bytesPerUnit converts a heap delta into bytes per message or delivery. A heap
+// that did not grow reports zero rather than a negative rate, and a run that
+// produced nothing reports zero rather than NaN.
+func bytesPerUnit(delta int64, units uint64) float64 {
+	if delta <= 0 || units == 0 {
+		return 0
+	}
+	return float64(delta) / float64(units)
 }
