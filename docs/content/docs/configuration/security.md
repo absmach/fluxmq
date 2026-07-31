@@ -107,11 +107,16 @@ username, and local secret to match one configured principal. Permissions are
 exact-match allowlists. Port `5683` must remain on a private network and must
 not be published to the host or Internet.
 
-Local-principal listeners are single-node only. Their publications are durable
-on the receiving node and are never forwarded to other nodes, so configuring one
-together with `cluster.enabled` is a startup error rather than a deployment whose records
-some consumers cannot reach. `cluster.enabled` defaults to true, so it must be
-set to false explicitly.
+An **exact** publish target is single-node only. It is appended and synced on
+the receiving node and never forwarded, so granting one together with
+`cluster.enabled` is a startup error rather than a deployment whose records some
+consumers cannot reach. `cluster.enabled` defaults to true, so a principal
+holding an exact target needs it set to false explicitly.
+
+A **prefix** publish target names no queue and is an ordinary topic publish,
+which the cluster forwards like any other message, so a principal holding only
+prefix permissions runs clustered without restriction. The permission decides
+this, exactly as it decides how the publication is routed.
 
 Publish permissions support only the default exchange (`exchange: ""`) and an
 exact, non-empty routing key. Other exchanges and wildcard routing keys are
@@ -219,9 +224,9 @@ reconnect.
 matches a configured principal. It confers no capability of its own. Configure
 more than one local listener only when you want, say, the audit path and the
 service path on separate network segments; one is enough otherwise. Each
-requires a configured principal and each refuses to run alongside
-`cluster.enabled`, because local publications are durable on the receiving node
-only.
+requires a configured principal. Whether a deployment may run clustered is a
+question about the permissions its principals hold, not about the listener: see
+the exact-versus-prefix distinction above.
 
 `server.amqp091.internal` and `server.amqp091.service` are deprecated aliases
 for `local`. They behave identically to it and to each other, and FluxMQ logs a

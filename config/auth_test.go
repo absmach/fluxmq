@@ -469,6 +469,9 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 					Name:              testPrincipalName,
 					CertificateURISAN: testPrincipalSAN,
 					CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
+					Permissions: LocalPermissionsConfig{
+						Publish: []LocalPublishPermission{{RoutingKey: testAuditQueue}},
+					},
 				}}
 			}
 			err := cfg.Validate()
@@ -512,6 +515,7 @@ func TestValidateLocalAMQP091Listeners(t *testing.T) {
 		configure      func(*AMQP091ListenerConfig)
 		clusterEnabled bool
 		withPrincipal  bool
+		publish        []LocalPublishPermission
 		wantError      string
 	}{
 		{
@@ -537,11 +541,23 @@ func TestValidateLocalAMQP091Listeners(t *testing.T) {
 			wantError: "auth.local_principals must contain at least one principal when server.amqp091.",
 		},
 		{
-			name:           "rejects clustering",
+			// An exact target is appended on the receiving node only, so a
+			// cluster would hide those records from consumers elsewhere.
+			name:           "rejects clustering with an exact publish target",
 			configure:      configureValid,
 			clusterEnabled: true,
 			withPrincipal:  true,
+			publish:        []LocalPublishPermission{{RoutingKey: testAuditQueue}},
 			wantError:      "cannot be combined with cluster.enabled",
+		},
+		{
+			// A prefix names no queue and is an ordinary topic publish, which
+			// the cluster forwards like any other, so it may run clustered.
+			name:           "allows clustering with prefix permissions only",
+			configure:      configureValid,
+			clusterEnabled: true,
+			withPrincipal:  true,
+			publish:        []LocalPublishPermission{{RoutingKeyPrefix: "m."}},
 		},
 		{
 			name:          "valid mandatory mTLS",
@@ -553,7 +569,7 @@ func TestValidateLocalAMQP091Listeners(t *testing.T) {
 	for key, selector := range keys {
 		for _, tt := range tests {
 			t.Run(key+"/"+tt.name, func(t *testing.T) {
-				runLocalListenerCase(t, selector, tt.configure, tt.clusterEnabled, tt.withPrincipal, tt.wantError)
+				runLocalListenerCase(t, selector, tt.configure, tt.clusterEnabled, tt.withPrincipal, tt.publish, tt.wantError)
 			})
 		}
 	}
@@ -593,6 +609,7 @@ func runLocalListenerCase(
 	selector func(*Config) *AMQP091ListenerConfig,
 	configure func(*AMQP091ListenerConfig),
 	clusterEnabled, withPrincipal bool,
+	publish []LocalPublishPermission,
 	wantError string,
 ) {
 	t.Helper()
@@ -604,6 +621,7 @@ func runLocalListenerCase(
 			Name:              testPrincipalName,
 			CertificateURISAN: testPrincipalSAN,
 			CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
+			Permissions:       LocalPermissionsConfig{Publish: publish},
 		}}
 	}
 	err := cfg.Validate()

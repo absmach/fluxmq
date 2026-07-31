@@ -208,6 +208,19 @@ func validateAuthYAML(node *yaml.Node) error {
 	})
 }
 
+// firstExactPublishTarget reports the first principal granting an exact publish
+// target, naming it so the operator can find the entry to change.
+func firstExactPublishTarget(principals []LocalPrincipalConfig) (principal, target string, found bool) {
+	for _, candidate := range principals {
+		for _, permission := range candidate.Permissions.Publish {
+			if !permission.IsPrefix() {
+				return candidate.Name, permission.RoutingKey, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
 	return validateYAMLMapping(node, path, map[string]func(*yaml.Node) error{
 		"name":                 nil,
@@ -1435,21 +1448,28 @@ func (c *Config) Validate() error {
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
 	}
-	// Every local-principal listener authenticates against the same store and
-	// publishes through the same durable path, so the requirements that follow
-	// apply to whichever key configured one.
+	// Every local-principal listener authenticates against the same store, so a
+	// listener under any of the keys requires the store to be populated.
 	for _, listener := range c.Server.AMQP091.LocalListeners() {
 		if len(c.Auth.LocalPrincipals) == 0 {
 			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.%s.addr is configured", listener.Name)
 		}
-		// A local publication is appended and synced on the receiving node only,
-		// and is deliberately never forwarded to other nodes: forwarding would
-		// acknowledge a publisher on a barrier no single node established. In a
-		// cluster that makes the records unreachable from consumers attached
-		// elsewhere, with nothing to signal it, so refuse the combination rather
-		// than serve a listener whose records only some readers can see.
+		// An exact publish target is appended and synced on the receiving node
+		// only, and is deliberately never forwarded to other nodes: forwarding
+		// would acknowledge a publisher on a barrier no single node established.
+		// In a cluster that makes those records unreachable from consumers
+		// attached elsewhere, with nothing to signal it, so refuse the
+		// combination rather than serve a principal whose records only some
+		// readers can see.
+		//
+		// The permission decides this, not the listener, exactly as it decides
+		// how a publication is routed. A prefix permission names no queue and is
+		// an ordinary topic publish, which the cluster forwards like any other,
+		// so a principal holding only prefix permissions may run clustered.
 		if c.Cluster.Enabled {
-			return fmt.Errorf("server.amqp091.%s.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run local-principal listeners on a single-node deployment", listener.Name)
+			if name, target, found := firstExactPublishTarget(c.Auth.LocalPrincipals); found {
+				return fmt.Errorf("auth.local_principals %q grants the exact publish target %q, which cannot be combined with cluster.enabled: an exact target is durable on the receiving node only and is not forwarded to other nodes; grant permissions.publish[].routing_key_prefix instead, or run server.amqp091.%s on a single-node deployment", name, target, listener.Name)
+			}
 		}
 	}
 	for proto := range c.Hooks.Protocols {
