@@ -26,6 +26,7 @@ const (
 	eventsExchange   = "events"
 	testRuleTrace    = `["rule-a"]`
 	testCustomHeader = "x-custom"
+	testOtherTarget  = "other"
 	testHeaderValue  = "value"
 )
 
@@ -1058,6 +1059,18 @@ func TestDeliveryReservedHeadersEgressTrustBoundary(t *testing.T) {
 			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
 		},
 		{
+			name: "service policy reveals reserved property to a first-party consumer",
+			// The reason the boundary has an inward direction at all: without a
+			// consumer that may read them, reserved properties would be write-only.
+			policy: NewLocalServiceConnectionPolicy(nil, nil, nil, 0),
+			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
+		},
+		{
+			name:   "publish-only policy still reveals nothing it cannot consume",
+			policy: NewLocalPublishOnlyConnectionPolicy(nil, nil, nil, 0),
+			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
+		},
+		{
 			name:   "external policy hides reserved property",
 			policy: NewExternalConnectionPolicy(nil, nil, 0),
 			want:   map[string]any{testCustomHeader: testHeaderValue},
@@ -1205,4 +1218,105 @@ func TestCancelConsumerByQueue(t *testing.T) {
 			t.Fatal("expected no frames to be written on closed channel")
 		}
 	})
+}
+
+// The consumer lifecycle is admitted only on a listener that permits consumers,
+// and only for a queue the principal's own subscribe ACL names. A publish-only
+// principal keeps its existing, narrower method set.
+func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
+	const allowedQueue = "m"
+
+	servicePolicy := func(authz LocalPrincipalAuthorizer) *ConnectionPolicy {
+		return NewLocalServiceConnectionPolicy(nil, authz, nil, 0)
+	}
+	publishOnlyPolicy := func(authz LocalPrincipalAuthorizer) *ConnectionPolicy {
+		return NewLocalPublishOnlyConnectionPolicy(nil, authz, nil, 0)
+	}
+
+	tests := []struct {
+		name        string
+		policy      func(LocalPrincipalAuthorizer) *ConnectionPolicy
+		method      any
+		wantAllowed bool
+	}{
+		{
+			name:        "service consumes a permitted queue",
+			policy:      servicePolicy,
+			method:      &codec.BasicConsume{Queue: allowedQueue},
+			wantAllowed: true,
+		},
+		{
+			name:   "service is refused a queue outside its ACL",
+			policy: servicePolicy,
+			method: &codec.BasicConsume{Queue: testOtherTarget},
+		},
+		{
+			name:        "service declares a permitted queue",
+			policy:      servicePolicy,
+			method:      &codec.QueueDeclare{Queue: allowedQueue},
+			wantAllowed: true,
+		},
+		{
+			name:   "service is refused declaring a queue outside its ACL",
+			policy: servicePolicy,
+			method: &codec.QueueDeclare{Queue: testOtherTarget},
+		},
+		{
+			name:        "service acknowledges a delivery",
+			policy:      servicePolicy,
+			method:      &codec.BasicAck{},
+			wantAllowed: true,
+		},
+		{
+			name:   "publish-only principal may not consume",
+			policy: publishOnlyPolicy,
+			method: &codec.BasicConsume{Queue: allowedQueue},
+		},
+		{
+			name:   "publish-only principal may not declare a queue",
+			policy: publishOnlyPolicy,
+			method: &codec.QueueDeclare{Queue: allowedQueue},
+		},
+		{
+			name:   "publish-only principal may not acknowledge",
+			policy: publishOnlyPolicy,
+			method: &codec.BasicAck{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowQueue: allowedQueue}
+			ch, _ := newTestChannelWithPolicy(t, tc.policy(authz))
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: "rules-engine"}
+
+			allowed, err := ch.authorizeLocalMethod(tc.method)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAllowed, allowed)
+		})
+	}
+}
+
+// A service listener is trusted, so it exchanges reserved properties, and it
+// relays origin identity because the messages it republishes are not its own.
+func TestLocalServicePolicyTrust(t *testing.T) {
+	policy := NewLocalServiceConnectionPolicy(nil, nil, nil, 0)
+
+	assert.True(t, policy.carriesReservedProperties())
+	assert.True(t, policy.usesLocalPrincipalAuth())
+	assert.True(t, policy.permitsConsumers())
+	assert.True(t, policy.propagatesOriginIdentity(),
+		"a service relays messages it did not originate, so it may state their true origin")
+}
+
+// The publish-only listener stays exactly as it was: trusted for reserved
+// properties, but never a consumer and never able to relay an origin.
+func TestLocalPublishOnlyPolicyUnchanged(t *testing.T) {
+	policy := NewLocalPublishOnlyConnectionPolicy(nil, nil, nil, 0)
+
+	assert.True(t, policy.carriesReservedProperties())
+	assert.True(t, policy.usesLocalPrincipalAuth())
+	assert.False(t, policy.permitsConsumers())
+	assert.False(t, policy.propagatesOriginIdentity(),
+		"an audit publisher must not attribute its records to another origin")
 }

@@ -27,6 +27,7 @@ const (
 	listenerNameTLS      = "tls"
 	listenerNameMTLS     = "mtls"
 	listenerNameInternal = "internal"
+	listenerNameService  = "service"
 
 	protocolMQTT    = "mqtt"
 	protocolAMQP    = "amqp"
@@ -493,6 +494,9 @@ type AMQP091Config struct {
 	TLS      AMQP091ListenerConfig `yaml:"tls"`
 	MTLS     AMQP091ListenerConfig `yaml:"mtls"`
 	Internal AMQP091ListenerConfig `yaml:"internal"`
+	// Service admits first-party services under the same mTLS local-principal
+	// rules as Internal, and additionally permits the consumer lifecycle.
+	Service AMQP091ListenerConfig `yaml:"service"`
 }
 
 // DefaultMaxInflightMessages is the fallback for Session.MaxInflightMessages
@@ -858,6 +862,7 @@ func Default() *Config {
 					MaxConnections: 10000,
 				},
 				Internal: AMQP091ListenerConfig{},
+				Service:  AMQP091ListenerConfig{},
 			},
 			HealthAddr:      ":8081",
 			HealthEnabled:   true,
@@ -1289,6 +1294,7 @@ func (c *Config) Validate() error {
 		{name: listenerNameTLS, cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
 		{name: listenerNameMTLS, cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
 		{name: listenerNameInternal, cfg: c.Server.AMQP091.Internal, requireClientAuth: true, requireExactClientAuth: true},
+		{name: listenerNameService, cfg: c.Server.AMQP091.Service, requireClientAuth: true, requireExactClientAuth: true},
 	}
 
 	for _, slot := range amqp091Slots {
@@ -1300,7 +1306,7 @@ func (c *Config) Validate() error {
 		}
 		hasMessagingListener = true
 
-		if slot.name == listenerNameInternal && slot.cfg.MaxConnections <= 0 {
+		if (slot.name == listenerNameInternal || slot.name == listenerNameService) && slot.cfg.MaxConnections <= 0 {
 			return fmt.Errorf("server.amqp091.%s.max_connections must be positive", slot.name)
 		}
 		if slot.cfg.MaxConnections < 0 {
@@ -1704,8 +1710,22 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			publishTargets[permission] = struct{}{}
 		}
 
-		if len(principal.Permissions.Subscribe) != 0 {
-			return fmt.Errorf("%s.permissions.subscribe is unsupported; local principals are publish-only", prefix)
+		subscribeQueues := make(map[string]struct{}, len(principal.Permissions.Subscribe))
+		for j, queue := range principal.Permissions.Subscribe {
+			permissionPrefix := fmt.Sprintf("%s.permissions.subscribe[%d]", prefix, j)
+			if queue == "" {
+				return fmt.Errorf("%s cannot be empty", permissionPrefix)
+			}
+			if strings.TrimSpace(queue) != queue {
+				return fmt.Errorf("%s cannot have leading or trailing whitespace", permissionPrefix)
+			}
+			if containsWildcard(queue) {
+				return fmt.Errorf("%s must be an exact queue name without wildcards", permissionPrefix)
+			}
+			if _, exists := subscribeQueues[queue]; exists {
+				return fmt.Errorf("%s duplicates an earlier subscribe permission", permissionPrefix)
+			}
+			subscribeQueues[queue] = struct{}{}
 		}
 	}
 

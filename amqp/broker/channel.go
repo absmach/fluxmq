@@ -148,7 +148,7 @@ func (ch *Channel) handleMethod(decoded any) error {
 		}
 	}
 
-	if ch.conn.connectionPolicy().mode == ConnectionPolicyLocalPublishOnly {
+	if ch.conn.connectionPolicy().usesLocalPrincipalAuth() {
 		allowed, err := ch.authorizeLocalMethod(decoded)
 		if err != nil {
 			return err
@@ -264,6 +264,17 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 	switch method := decoded.(type) {
 	case *codec.ChannelFlow, *codec.ChannelClose, *codec.ChannelCloseOk, *codec.ConfirmSelect:
 		return true, nil
+	case *codec.QueueDeclare:
+		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
+	case *codec.BasicConsume:
+		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
+	case *codec.BasicQos, *codec.BasicCancel, *codec.BasicAck, *codec.BasicNack, *codec.BasicReject:
+		// Channel-scoped consumer lifecycle. These name no queue of their own;
+		// they can only affect a consumer the subscribe ACL already allowed.
+		if ch.conn.connectionPolicy().permitsConsumers() {
+			return true, nil
+		}
+		return ch.denyLocalMethod(decoded, principalID)
 	case *codec.BasicPublish:
 		if ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
 			return true, nil
@@ -278,17 +289,43 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 			"routing_key", method.RoutingKey)
 		return false, ch.sendChannelClose(codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
 	default:
-		classID, methodID := methodIdentifier(decoded)
-		ch.conn.broker.stats.IncrementLocalOperationDenials()
-		ch.conn.logger.Warn("amqp091_local_authorization",
-			"auth_mode", "local",
-			"outcome", "denied",
-			"reason", "operation_not_permitted",
-			"principal_id", principalID,
-			"class_id", classID,
-			"method_id", methodID)
-		return false, ch.sendChannelClose(codec.AccessRefused, "operation not permitted for local publisher", classID, methodID)
+		return ch.denyLocalMethod(decoded, principalID)
 	}
+}
+
+// authorizeLocalSubscribe admits a queue-scoped consumer operation only on a
+// listener that permits consumers and only for a queue the principal's own
+// subscribe ACL names.
+func (ch *Channel) authorizeLocalSubscribe(queue, principalID string, decoded any) (bool, error) {
+	if !ch.conn.connectionPolicy().permitsConsumers() {
+		return ch.denyLocalMethod(decoded, principalID)
+	}
+	if ch.conn.canSubscribeLocal(queue) {
+		return true, nil
+	}
+
+	classID, methodID := methodIdentifier(decoded)
+	ch.conn.broker.stats.IncrementLocalSubscribeDenials()
+	ch.conn.logger.Warn("amqp091_local_authorization",
+		"auth_mode", "local",
+		"outcome", "denied",
+		"reason", "subscribe_acl_mismatch",
+		"principal_id", principalID,
+		"queue", queue)
+	return false, ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", classID, methodID)
+}
+
+func (ch *Channel) denyLocalMethod(decoded any, principalID string) (bool, error) {
+	classID, methodID := methodIdentifier(decoded)
+	ch.conn.broker.stats.IncrementLocalOperationDenials()
+	ch.conn.logger.Warn("amqp091_local_authorization",
+		"auth_mode", "local",
+		"outcome", "denied",
+		"reason", "operation_not_permitted",
+		"principal_id", principalID,
+		"class_id", classID,
+		"method_id", methodID)
+	return false, ch.sendChannelClose(codec.AccessRefused, "operation not permitted for local principal", classID, methodID)
 }
 
 func (ch *Channel) sendChannelClose(code uint16, text string, classID, methodID uint16) error {
@@ -522,7 +559,7 @@ func (ch *Channel) completePublish() {
 	props = corebroker.AddClientIDProperty(props, clientID)
 	originalTopic := topic
 
-	if policy.mode == ConnectionPolicyLocalPublishOnly {
+	if policy.usesLocalPrincipalAuth() {
 		// Re-evaluate at completion so an ACL reduction made while content frames
 		// are in flight takes effect immediately.
 		if !ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {

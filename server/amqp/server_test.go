@@ -45,6 +45,10 @@ func (p *reloadRaceLocalPolicy) CanPublishLocal(amqpbroker.LocalSessionIdentity,
 	return !p.retired.Load()
 }
 
+func (p *reloadRaceLocalPolicy) CanSubscribeLocal(amqpbroker.LocalSessionIdentity, string) bool {
+	return false
+}
+
 func (p *reloadRaceLocalPolicy) IsSessionActive(amqpbroker.LocalSessionIdentity) bool {
 	return !p.retired.Load()
 }

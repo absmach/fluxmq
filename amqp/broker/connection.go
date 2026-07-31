@@ -91,7 +91,7 @@ func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *Con
 		logger:     b.logger,
 	}
 	c.connID = b.nextConnectionID(netConn.RemoteAddr())
-	if policy != nil && policy.mode == ConnectionPolicyLocalPublishOnly {
+	if policy.usesLocalPrincipalAuth() {
 		if tlsConn, ok := netConn.(*tls.Conn); ok {
 			c.peer = verifiedPeerIdentity(tlsConn)
 		}
@@ -154,10 +154,21 @@ func (c *Connection) localSessionIdentity() (LocalSessionIdentity, bool) {
 // disagree about which exchange a publication targets.
 func (c *Connection) canPublishLocal(exchange, routingKey string) bool {
 	policy := c.connectionPolicy()
-	if policy.mode != ConnectionPolicyLocalPublishOnly || policy.localAuthz == nil || c.localIdentity == nil {
+	if !policy.usesLocalPrincipalAuth() || policy.localAuthz == nil || c.localIdentity == nil {
 		return false
 	}
 	return policy.localAuthz.CanPublishLocal(*c.localIdentity, normalizeExchange(exchange), routingKey)
+}
+
+// canSubscribeLocal authorizes a consumer for a local-principal session. A
+// principal that declares no subscribe permission is refused here even on a
+// listener whose policy permits consumers at all.
+func (c *Connection) canSubscribeLocal(queue string) bool {
+	policy := c.connectionPolicy()
+	if !policy.permitsConsumers() || policy.localAuthz == nil || c.localIdentity == nil {
+		return false
+	}
+	return policy.localAuthz.CanSubscribeLocal(*c.localIdentity, queue)
 }
 
 func (c *Connection) registerAndValidate() error {
@@ -165,7 +176,7 @@ func (c *Connection) registerAndValidate() error {
 	c.registered = true
 	c.broker.stats.IncrementConnections()
 
-	if c.connectionPolicy().mode != ConnectionPolicyLocalPublishOnly {
+	if !c.connectionPolicy().usesLocalPrincipalAuth() {
 		return nil
 	}
 	c.broker.stats.IncrementLocalConnections()
@@ -370,7 +381,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 	case saslMechanismPlain, saslMechanismAMQPlain:
 		_, username, password, err := sasl.ParsePLAIN([]byte(start.Response))
 		if err != nil {
-			if policy.mode == ConnectionPolicyLocalPublishOnly {
+			if policy.usesLocalPrincipalAuth() {
 				c.recordLocalAuthFailure("invalid_sasl_response")
 			}
 			_ = c.sendConnectionClose(codec.AccessRefused, "invalid auth response", codec.ClassConnection, codec.MethodConnectionStartOk)
@@ -379,7 +390,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 
 		return c.authenticateCredentials(mechanism, username, password)
 	default:
-		if policy.mode == ConnectionPolicyLocalPublishOnly {
+		if policy.usesLocalPrincipalAuth() {
 			c.recordLocalAuthFailure("unsupported_sasl_mechanism")
 		}
 		_ = c.sendConnectionClose(codec.CommandInvalid, "unsupported auth mechanism", codec.ClassConnection, codec.MethodConnectionStartOk)
@@ -390,7 +401,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 func (c *Connection) authenticateCredentials(mechanism, username, password string) error {
 	policy := c.connectionPolicy()
 	clientID := PrefixedClientID(c.connID)
-	if policy.mode == ConnectionPolicyLocalPublishOnly {
+	if policy.usesLocalPrincipalAuth() {
 		if policy.localAuth == nil {
 			c.recordLocalAuthFailure("authenticator_unavailable")
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)

@@ -58,9 +58,10 @@ import (
 
 // Listener mode names.
 const (
-	listenerPlain = "plain"
-	listenerTLS   = "tls"
-	listenerMTLS  = "mtls"
+	listenerPlain   = "plain"
+	listenerTLS     = "tls"
+	listenerMTLS    = "mtls"
+	listenerService = "service"
 )
 
 func protocolVersionForMode(mode string) int {
@@ -116,7 +117,7 @@ func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, usernam
 		}
 		return authentication.Principal,
 			hex.EncodeToString(authentication.CredentialFingerprint[:]),
-			hex.EncodeToString(authentication.PublishPermissionsFingerprint[:]),
+			hex.EncodeToString(authentication.PermissionsFingerprint[:]),
 			authentication.CertificateURISAN,
 			true,
 			nil
@@ -127,6 +128,11 @@ func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, usernam
 func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) bool {
 	authentication, ok := localAuthentication(identity)
 	return ok && p != nil && p.store != nil && p.store.CanPublishAuthenticated(authentication, exchange, routingKey)
+}
+
+func (p *localAMQPPolicy) CanSubscribeLocal(identity amqpbroker.LocalSessionIdentity, queue string) bool {
+	authentication, ok := localAuthentication(identity)
+	return ok && p != nil && p.store != nil && p.store.CanSubscribeAuthenticated(authentication, queue)
 }
 
 func (p *localAMQPPolicy) IsSessionActive(identity amqpbroker.LocalSessionIdentity) bool {
@@ -151,10 +157,10 @@ func localAuthentication(identity amqpbroker.LocalSessionIdentity) (localauth.Au
 	var permissionsFingerprint localauth.PermissionsFingerprint
 	copy(permissionsFingerprint[:], rawPermissionsFingerprint)
 	return localauth.Authentication{
-		Principal:                     identity.PrincipalID,
-		CertificateURISAN:             identity.CertificateURI,
-		CredentialFingerprint:         credentialFingerprint,
-		PublishPermissionsFingerprint: permissionsFingerprint,
+		Principal:              identity.PrincipalID,
+		CertificateURISAN:      identity.CertificateURI,
+		CredentialFingerprint:  credentialFingerprint,
+		PermissionsFingerprint: permissionsFingerprint,
 	}, true
 }
 
@@ -1164,6 +1170,12 @@ func main() {
 		localPolicyAdapter,
 		maxAMQP091MessageSize,
 	)
+	serviceAMQP091Policy := amqpbroker.NewLocalServiceConnectionPolicy(
+		localPolicyAdapter,
+		localPolicyAdapter,
+		localPolicyAdapter,
+		maxAMQP091MessageSize,
+	)
 	amqp091Slots := []struct {
 		name   string
 		cfg    config.AMQP091ListenerConfig
@@ -1173,6 +1185,7 @@ func main() {
 		{name: listenerTLS, cfg: cfg.Server.AMQP091.TLS, policy: externalAMQP091Policy},
 		{name: listenerMTLS, cfg: cfg.Server.AMQP091.MTLS, policy: externalAMQP091Policy},
 		{name: "internal", cfg: cfg.Server.AMQP091.Internal, policy: internalAMQP091Policy},
+		{name: listenerService, cfg: cfg.Server.AMQP091.Service, policy: serviceAMQP091Policy},
 	}
 
 	var amqp091Ready []<-chan struct{}

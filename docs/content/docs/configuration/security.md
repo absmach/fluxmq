@@ -151,7 +151,7 @@ state passed between first-party services. They are not part of the client
 API, and no client may set or read one.
 
 The boundary is the listener's trust policy, not the protocol. Only the AMQP
-0.9.1 internal listener described above is trusted, because it admits solely
+0.9.1 `internal` and `service` listeners are trusted, because they admit solely
 mTLS peers whose verified certificate URI SAN matches a principal declared in
 FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
 1.0, and AMQP 0.9.1 on the remote listener — is treated as a tenant or device:
@@ -161,10 +161,51 @@ FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
 - **Egress**: reserved properties are omitted from deliveries to untrusted
   consumers, so a client cannot observe state another service set.
 
-Local principals are publish-only, so no connection currently consumes
-reserved properties; today they travel from a trusted service into the broker
-only. Speaking AMQP does not by itself confer trust, and an externally
-authenticated AMQP client is never treated as a service.
+Speaking AMQP does not by itself confer trust, and an externally authenticated
+AMQP client is never treated as a service.
+
+### Service Listener
+
+`server.amqp091.internal` admits publish-only principals: it exists for audit
+records, so a principal there may publish to the targets its ACL names and
+nothing else, and may never relay an origin identity.
+
+`server.amqp091.service` admits the same kind of mTLS local principal but also
+permits the consumer lifecycle, so a first-party service can subscribe and read
+the reserved properties another service set. It is what makes the namespace
+useful in both directions rather than write-only.
+
+A service listener grants no blanket access. Every operation is still authorized
+against the principal's own ACL:
+
+```yaml
+auth:
+  local_principals:
+    - name: rules-engine
+      certificate_uri_san: spiffe://absmach/magistrala/rules-engine
+      current_secret_file: /run/secrets/re-current
+      permissions:
+        publish:
+          - routing_key: m
+        subscribe:
+          - m
+```
+
+`subscribe` names exact queues; wildcards, duplicates, blank entries, and
+surrounding whitespace are rejected at load. A principal declaring no
+`subscribe` entry is refused a consumer even on the service listener, and one
+declaring no `publish` entry cannot publish. Unlike publish targets, subscribe
+targets need no matching `queues` entry: the durability contract that publish
+targets carry exists because local publishes are acknowledged as crash-durable,
+which does not apply to reading.
+
+Publish and subscribe ACLs share one permissions fingerprint, so narrowing
+either revokes the sessions that authenticated under the wider one, exactly as a
+credential rotation does.
+
+A service relays messages it did not originate, so unlike a publish-only
+principal it may state a message's true `external_id` and `protocol` rather than
+having its own identity stamped on them.
 
 The admin API (`server.api`) is exempt because it is an operator plane, not a
 client plane: it is unauthenticated and already exposes session inspection and

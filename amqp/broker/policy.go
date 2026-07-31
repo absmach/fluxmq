@@ -23,6 +23,12 @@ const (
 	// ConnectionPolicyLocalPublishOnly enables local-principal authentication
 	// and restricts the connection to publisher lifecycle operations.
 	ConnectionPolicyLocalPublishOnly
+	// ConnectionPolicyLocalService enables local-principal authentication and
+	// additionally permits the consumer lifecycle, so a first-party service can
+	// both publish and subscribe. Every operation remains authorized against the
+	// principal's own ACL, so a principal declaring no subscribe permission is
+	// still refused a consumer.
+	ConnectionPolicyLocalService
 )
 
 // VerifiedPeerIdentity contains identity material from a TLS certificate chain
@@ -41,11 +47,12 @@ type LocalPrincipalAuthenticator interface {
 	AuthenticateLocal(ctx context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (principalID, credentialFingerprint, permissionsFingerprint, certificateURI string, authenticated bool, err error)
 }
 
-// LocalPrincipalAuthorizer makes exact AMQP publish decisions for a fully
-// authenticated local session. Implementations must validate both the bound
-// session credential and the target against one current policy snapshot.
+// LocalPrincipalAuthorizer makes exact AMQP publish and subscribe decisions for
+// a fully authenticated local session. Implementations must validate both the
+// bound session credential and the target against one current policy snapshot.
 type LocalPrincipalAuthorizer interface {
 	CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) bool
+	CanSubscribeLocal(identity LocalSessionIdentity, queue string) bool
 }
 
 // LocalSessionValidator checks whether the immutable credential, permissions,
@@ -93,6 +100,24 @@ func (p *ConnectionPolicy) carriesReservedProperties() bool {
 	return p != nil && p.trusted
 }
 
+// usesLocalPrincipalAuth reports whether connections under this policy
+// authenticate against the local-principal store rather than the external auth
+// engine. It is the authentication boundary, distinct from which operations the
+// resulting session may perform.
+func (p *ConnectionPolicy) usesLocalPrincipalAuth() bool {
+	if p == nil {
+		return false
+	}
+	return p.mode == ConnectionPolicyLocalPublishOnly || p.mode == ConnectionPolicyLocalService
+}
+
+// permitsConsumers reports whether a session under this policy may run the
+// consumer lifecycle. Whether it may consume any particular queue is a separate
+// per-principal ACL decision.
+func (p *ConnectionPolicy) permitsConsumers() bool {
+	return p != nil && p.mode == ConnectionPolicyLocalService
+}
+
 // propagatesOriginIdentity reports whether a publisher under this policy may
 // state the external identity and origin protocol of a message it relays,
 // rather than having its own authenticated identity stamped on it.
@@ -104,6 +129,31 @@ func (p *ConnectionPolicy) carriesReservedProperties() bool {
 // that actually authenticated.
 func (p *ConnectionPolicy) propagatesOriginIdentity() bool {
 	return p.carriesReservedProperties() && p.mode != ConnectionPolicyLocalPublishOnly
+}
+
+// NewLocalServiceConnectionPolicy constructs a fail-closed local-principal
+// policy that also permits the consumer lifecycle. It never invokes an external
+// auth engine or blocking hook.
+//
+// The policy is trusted on the same grounds as the publish-only one: the
+// listener admits only mTLS peers whose verified certificate URI SAN matches a
+// principal declared in FluxMQ's own configuration. Unlike an audit publisher, a
+// service relays messages it did not originate, so it may state their true
+// origin rather than having its own identity stamped on them.
+func NewLocalServiceConnectionPolicy(
+	auth LocalPrincipalAuthenticator,
+	authz LocalPrincipalAuthorizer,
+	sessions LocalSessionValidator,
+	maxMessageSize uint64,
+) *ConnectionPolicy {
+	return &ConnectionPolicy{
+		mode:           ConnectionPolicyLocalService,
+		trusted:        true,
+		localAuth:      auth,
+		localAuthz:     authz,
+		localSessions:  sessions,
+		maxMessageSize: maxMessageSize,
+	}
 }
 
 // NewExternalConnectionPolicy constructs a policy using only the existing

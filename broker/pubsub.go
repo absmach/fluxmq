@@ -26,10 +26,9 @@ const (
 // marks it trusted. Every other connection has them stripped on ingress, so it
 // cannot forge one, and on egress, so it cannot observe one another service
 // set. MQTT, HTTP, CoAP, and AMQP 1.0 have no trusted listener and are
-// therefore stripped in both directions; only the AMQP 0.9.1 internal
-// listener is trusted, and only for ingress, because local principals are
-// publish-only. A reserved property consequently reaches the broker from a
-// trusted service today but is never handed back out to any connection.
+// therefore stripped in both directions. The trusted listeners are the AMQP
+// 0.9.1 internal and service listeners; only the service listener permits
+// consumers, so it is the one that both receives and reveals them.
 const ReservedPropertyPrefix = "_flux."
 
 // IsReservedProperty reports whether key names a broker-internal property.

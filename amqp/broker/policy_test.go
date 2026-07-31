@@ -61,15 +61,23 @@ func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, 
 type localAuthorizerStub struct {
 	allowExchange   string
 	allowRoutingKey string
+	allowQueue      string
 	retired         bool
 	lastIdentity    LocalSessionIdentity
 	calls           int
+	subscribeCalls  int
 }
 
 func (s *localAuthorizerStub) CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) bool {
 	s.calls++
 	s.lastIdentity = identity
 	return !s.retired && exchange == s.allowExchange && routingKey == s.allowRoutingKey
+}
+
+func (s *localAuthorizerStub) CanSubscribeLocal(identity LocalSessionIdentity, queue string) bool {
+	s.subscribeCalls++
+	s.lastIdentity = identity
+	return !s.retired && queue != "" && queue == s.allowQueue
 }
 
 func (s *localAuthorizerStub) IsSessionActive(identity LocalSessionIdentity) bool {
@@ -317,7 +325,7 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 		// amq.default names the same default exchange the router resolves "" to,
 		// so the ACL must reach the same decision for both spellings.
 		{"explicit default alias", "amq.default", testAuditQueue, true},
-		{"wrong routing key", "", "other", false},
+		{"wrong routing key", "", testOtherTarget, false},
 		{"wrong exchange", "events", testAuditQueue, false},
 	}
 	for _, tc := range tests {

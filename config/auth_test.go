@@ -239,13 +239,40 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			wantError: "exchange must be empty; local principals may publish only through the AMQP default exchange",
 		},
 		{
-			name: "subscribe permissions are unsupported",
+			name: "subscribe permission cannot be empty",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
-				principal.Permissions.Subscribe = []string{testAuditQueue}
+				principal.Permissions.Subscribe = []string{""}
 				return []LocalPrincipalConfig{principal}
 			},
-			wantError: "subscribe is unsupported; local principals are publish-only",
+			wantError: "permissions.subscribe[0] cannot be empty",
+		},
+		{
+			name: "subscribe permission cannot contain wildcards",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Subscribe = []string{testAuditQueue + ".*"}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must be an exact queue name without wildcards",
+		},
+		{
+			name: "subscribe permission cannot have surrounding whitespace",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Subscribe = []string{" " + testAuditQueue}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "cannot have leading or trailing whitespace",
+		},
+		{
+			name: "subscribe permission cannot be duplicated",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Subscribe = []string{testAuditQueue, testAuditQueue}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "duplicates an earlier subscribe permission",
 		},
 	}
 

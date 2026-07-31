@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -20,6 +22,7 @@ const (
 	currentSecret  = "0123456789abcdef0123456789abcdef"
 	previousSecret = "abcdef0123456789abcdef0123456789"
 	nextSecret     = "fedcba9876543210fedcba9876543210"
+	auditQueue     = "atom-audit"
 )
 
 func TestAuthenticateAndAuthorize(t *testing.T) {
@@ -255,13 +258,22 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			wantError: "exchange must be empty; local principals may publish only through the AMQP default exchange",
 		},
 		{
-			name: "subscribe ACL is unsupported",
+			name: "subscribe ACL entry cannot be empty",
 			configs: func() []config.LocalPrincipalConfig {
 				principal := principalConfig(current, "")
-				principal.Permissions.Subscribe = []string{"atom-audit"}
+				principal.Permissions.Subscribe = []string{""}
 				return []config.LocalPrincipalConfig{principal}
 			},
-			wantError: "subscribe is unsupported; local principals are publish-only",
+			wantError: "permissions.subscribe[0] cannot be empty",
+		},
+		{
+			name: "subscribe ACL entry cannot be duplicated",
+			configs: func() []config.LocalPrincipalConfig {
+				principal := principalConfig(current, "")
+				principal.Permissions.Subscribe = []string{auditQueue, auditQueue}
+				return []config.LocalPrincipalConfig{principal}
+			},
+			wantError: "duplicates an earlier subscribe permission",
 		},
 	}
 
@@ -328,4 +340,76 @@ func writeSecret(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write secret: %v", err)
 	}
 	return filename
+}
+
+// A principal may consume only the queues its own ACL names, and narrowing that
+// ACL must revoke sessions that authenticated under the wider one.
+func TestSubscribeACL(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	withSubscribe := func(queues ...string) []config.LocalPrincipalConfig {
+		principal := principalConfig(current, "")
+		principal.Permissions.Subscribe = queues
+		return []config.LocalPrincipalConfig{principal}
+	}
+
+	store, err := New(withSubscribe(auditQueue, "m"))
+	require.NoError(t, err)
+
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok, "current secret was rejected")
+
+	t.Run("named queue is allowed", func(t *testing.T) {
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "m"))
+	})
+	t.Run("unnamed queue is refused", func(t *testing.T) {
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "other"))
+	})
+	t.Run("empty queue is refused", func(t *testing.T) {
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, ""))
+	})
+
+	t.Run("narrowing the ACL revokes the session", func(t *testing.T) {
+		changed, err := store.Reload(withSubscribe(auditQueue))
+		require.NoError(t, err)
+		require.True(t, changed, "dropping a subscribe target must be seen as a change")
+
+		assert.False(t, store.IsActive(authentication),
+			"a session bound to the wider ACL must not survive it")
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueue),
+			"the retired session must not consume even a still-permitted queue")
+	})
+
+	t.Run("publish ACL is unaffected by subscribe permissions", func(t *testing.T) {
+		reauthenticated, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		assert.True(t, store.CanPublishAuthenticated(reauthenticated, "", auditQueue))
+		assert.False(t, store.CanSubscribeAuthenticated(reauthenticated, "m"))
+	})
+}
+
+// The two ACLs share one fingerprint, so swapping a target between them must
+// not produce the same digest.
+func TestPermissionsFingerprintSeparatesACLs(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, publish []config.LocalPublishPermission, subscribe []string) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Permissions.Publish = publish
+		principal.Permissions.Subscribe = subscribe
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	publishOnly := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKey: "shared"}}, nil)
+	subscribeOnly := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKey: "other"}}, []string{"shared"})
+
+	assert.NotEqual(t, publishOnly, subscribeOnly,
+		"a target moved between the publish and subscribe ACLs must change the fingerprint")
 }
