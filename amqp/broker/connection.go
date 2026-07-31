@@ -152,10 +152,10 @@ func (c *Connection) localSessionIdentity() (LocalSessionIdentity, bool) {
 // canPublishLocal authorizes the exchange name the router will actually use.
 // Authorizing the raw wire value would let the ACL and the routing decision
 // disagree about which exchange a publication targets.
-func (c *Connection) canPublishLocal(exchange, routingKey string) bool {
+func (c *Connection) canPublishLocal(exchange, routingKey string) LocalPublishGrant {
 	policy := c.connectionPolicy()
 	if !policy.usesLocalPrincipalAuth() || policy.localAuthz == nil || c.localIdentity == nil {
-		return false
+		return LocalPublishGrantNone
 	}
 	return policy.localAuthz.CanPublishLocal(*c.localIdentity, normalizeExchange(exchange), routingKey)
 }

@@ -1251,15 +1251,33 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 			method: &codec.BasicConsume{Queue: testOtherTarget},
 		},
 		{
-			name:        "service declares a permitted queue",
+			name:        "service gets from a permitted queue",
 			policy:      servicePolicy,
-			method:      &codec.QueueDeclare{Queue: allowedQueue},
+			method:      &codec.BasicGet{Queue: allowedQueue},
 			wantAllowed: true,
 		},
 		{
-			name:   "service is refused declaring a queue outside its ACL",
+			name:   "service is refused getting from a queue outside its ACL",
 			policy: servicePolicy,
-			method: &codec.QueueDeclare{Queue: testOtherTarget},
+			method: &codec.BasicGet{Queue: testOtherTarget},
+		},
+		{
+			name:        "service passively declares a permitted queue",
+			policy:      servicePolicy,
+			method:      &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
+			wantAllowed: true,
+		},
+		{
+			name:   "service is refused passively declaring a queue outside its ACL",
+			policy: servicePolicy,
+			method: &codec.QueueDeclare{Queue: testOtherTarget, Passive: true},
+		},
+		{
+			// A non-passive declare rewrites queue configuration, which the
+			// subscribe ACL does not grant even for a queue it names.
+			name:   "service is refused declaring a permitted queue non-passively",
+			policy: servicePolicy,
+			method: &codec.QueueDeclare{Queue: allowedQueue},
 		},
 		{
 			name:        "service acknowledges a delivery",
@@ -1275,7 +1293,12 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 		{
 			name:   "publish-only principal may not declare a queue",
 			policy: publishOnlyPolicy,
-			method: &codec.QueueDeclare{Queue: allowedQueue},
+			method: &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
+		},
+		{
+			name:   "publish-only principal may not get",
+			policy: publishOnlyPolicy,
+			method: &codec.BasicGet{Queue: allowedQueue},
 		},
 		{
 			name:   "publish-only principal may not acknowledge",

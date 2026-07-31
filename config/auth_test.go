@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -17,6 +20,7 @@ const (
 	testPrincipalSAN  = "spiffe://absmach/atom/audit-publisher"
 	testAuditQueue    = "atom-audit"
 	testInternalAddr  = ":5683"
+	testServiceAddr   = ":5684"
 	testServerCert    = "server.crt"
 	testServerKey     = "server.key"
 	testClientCA      = "clients.crt"
@@ -451,6 +455,88 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 	}
 }
 
+// The service listener authenticates against the same principal store and
+// publishes through the same single-node durable path as the internal one, so
+// it carries the same deployment requirements.
+func TestValidateServiceAMQP091Listener(t *testing.T) {
+	configureValid := func(listener *AMQP091ListenerConfig) {
+		listener.Addr = testServiceAddr
+		listener.MaxConnections = 32
+		listener.TLS.CertFile = testServerCert
+		listener.TLS.KeyFile = testServerKey
+		listener.TLS.ClientCAFile = testClientCA
+		listener.TLS.ClientAuth = clientAuthRequire
+	}
+
+	tests := []struct {
+		name           string
+		configure      func(*AMQP091ListenerConfig)
+		clusterEnabled bool
+		withPrincipal  bool
+		wantError      string
+	}{
+		{
+			name:      "disabled by default",
+			configure: func(*AMQP091ListenerConfig) {},
+		},
+		{
+			name: "requires exact client auth mode",
+			configure: func(listener *AMQP091ListenerConfig) {
+				configureValid(listener)
+				listener.TLS.ClientAuth = "verify-if-given"
+			},
+			wantError: "server.amqp091.service.client_auth must be \"require\"",
+		},
+		{
+			name:      "requires a positive connection limit",
+			configure: func(listener *AMQP091ListenerConfig) { configureValid(listener); listener.MaxConnections = 0 },
+			wantError: "server.amqp091.service.max_connections must be positive",
+		},
+		{
+			name:      "requires a local principal",
+			configure: configureValid,
+			wantError: "auth.local_principals must contain at least one principal when server.amqp091.service.addr is configured",
+		},
+		{
+			name:           "rejects clustering",
+			configure:      configureValid,
+			clusterEnabled: true,
+			withPrincipal:  true,
+			wantError:      "server.amqp091.service.addr cannot be combined with cluster.enabled",
+		},
+		{
+			name:          "valid mandatory mTLS",
+			configure:     configureValid,
+			withPrincipal: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Cluster.Enabled = tt.clusterEnabled
+			tt.configure(&cfg.Server.AMQP091.Service)
+			if tt.withPrincipal {
+				cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
+					Name:              testPrincipalName,
+					CertificateURISAN: testPrincipalSAN,
+					CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
+				}}
+			}
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func writeSecret(t *testing.T, dir, name, contents string) string {
 	t.Helper()
 	filename := filepath.Join(dir, name)
@@ -458,4 +544,45 @@ func writeSecret(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write secret: %v", err)
 	}
 	return filename
+}
+
+// The auth subtree is decoded strictly, so a permission field the allowlist
+// omits is rejected at parse time however valid the struct would be. Parsing
+// real YAML is the only thing that catches that; validating a struct built in
+// Go never reaches the decoder.
+func TestLoadAcceptsPublishPermissionFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		permission string
+	}{
+		{name: "exact routing key", permission: "routing_key: \"atom-audit\""},
+		{name: "routing key prefix", permission: "routing_key_prefix: \"m.\""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			secret := filepath.Join(dir, "secret")
+			require.NoError(t, os.WriteFile(secret, []byte(strings.Repeat("a", 32)), 0o600))
+
+			filename := filepath.Join(dir, "config.yaml")
+			body := "auth:\n" +
+				"  local_principals:\n" +
+				"    - name: \"svc\"\n" +
+				"      certificate_uri_san: \"spiffe://absmach/svc\"\n" +
+				"      current_secret_file: \"" + secret + "\"\n" +
+				"      permissions:\n" +
+				"        publish:\n" +
+				"          - " + tc.permission + "\n" +
+				"        subscribe:\n" +
+				"          - \"m\"\n"
+			require.NoError(t, os.WriteFile(filename, []byte(body), 0o600))
+
+			cfg, err := Load(filename)
+			require.NoError(t, err)
+			require.Len(t, cfg.Auth.LocalPrincipals, 1)
+			require.Len(t, cfg.Auth.LocalPrincipals[0].Permissions.Publish, 1)
+			assert.Equal(t, []string{"m"}, cfg.Auth.LocalPrincipals[0].Permissions.Subscribe)
+		})
+	}
 }

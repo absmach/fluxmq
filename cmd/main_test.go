@@ -77,10 +77,10 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 		PermissionsFingerprint: permissionsFingerprint,
 		CertificateURI:         certificateURI,
 	}
-	if !adapter.CanPublishLocal(identity, "", testAuditQueue) {
+	if !adapter.CanPublishLocal(identity, "", testAuditQueue).Allowed() {
 		t.Fatal("exact configured publish target was denied")
 	}
-	if adapter.CanPublishLocal(identity, "events", testAuditQueue) || adapter.CanPublishLocal(identity, "", "atom-audit.other") {
+	if adapter.CanPublishLocal(identity, "events", testAuditQueue).Allowed() || adapter.CanPublishLocal(identity, "", "atom-audit.other").Allowed() {
 		t.Fatal("non-exact publish target was allowed")
 	}
 
@@ -103,7 +103,7 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 	if adapter.IsSessionActive(identity) {
 		t.Fatal("session authenticated with the removed secret remains active")
 	}
-	if adapter.CanPublishLocal(identity, "", testAuditQueue) {
+	if adapter.CanPublishLocal(identity, "", testAuditQueue).Allowed() {
 		t.Fatal("session authenticated before reload can publish with the removed secret")
 	}
 }
@@ -113,7 +113,7 @@ func TestLocalAMQPPolicyAdapterFailsClosed(t *testing.T) {
 	if _, _, _, _, authenticated, err := adapter.AuthenticateLocal(context.Background(), "client", "user", "secret", amqpbroker.VerifiedPeerIdentity{}); err != nil || authenticated {
 		t.Fatalf("nil local store must fail closed: authenticated=%v err=%v", authenticated, err)
 	}
-	if adapter.CanPublishLocal(amqpbroker.LocalSessionIdentity{PrincipalID: "principal"}, "", testAuditQueue) {
+	if adapter.CanPublishLocal(amqpbroker.LocalSessionIdentity{PrincipalID: "principal"}, "", testAuditQueue).Allowed() {
 		t.Fatal("nil local store authorized a publication")
 	}
 	if adapter.IsSessionActive(amqpbroker.LocalSessionIdentity{}) {
@@ -171,7 +171,7 @@ func TestLocalAMQPPolicyAdapterRevokesChangedPermissions(t *testing.T) {
 	if adapter.IsSessionActive(identity) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if adapter.CanPublishLocal(identity, "", "atom-audit-v2") {
+	if adapter.CanPublishLocal(identity, "", "atom-audit-v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 }
@@ -420,7 +420,7 @@ func TestReloadLocalPrincipalsRejectsInvalidTargetBeforeSwap(t *testing.T) {
 	if localStore.Generation() != generation {
 		t.Fatalf("generation changed after rejected reload: got %d, want %d", localStore.Generation(), generation)
 	}
-	if !localStore.CanPublishAuthenticated(authentication, "", testAuditQueue) {
+	if !localStore.AuthorizePublish(authentication, "", testAuditQueue).Allowed() {
 		t.Fatal("rejected reload replaced the previous valid snapshot")
 	}
 }
@@ -484,7 +484,7 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 	if len(contracts) != 1 || contracts[0].Name != securityQueue.Name {
 		t.Fatalf("protected contracts = %+v, want only %q", contracts, securityQueue.Name)
 	}
-	if localStore.CanPublishAuthenticated(authentication, "", auditQueue.Name) {
+	if localStore.AuthorizePublish(authentication, "", auditQueue.Name).Allowed() {
 		t.Fatal("old publish target remained authorized")
 	}
 	if localStore.IsActive(authentication) {
@@ -494,7 +494,7 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 	if !ok {
 		t.Fatal("principal did not reauthenticate against the replacement publish ACL")
 	}
-	if !localStore.CanPublishAuthenticated(reauthenticated, "", securityQueue.Name) {
+	if !localStore.AuthorizePublish(reauthenticated, "", securityQueue.Name).Allowed() {
 		t.Fatal("new publish target was not authorized")
 	}
 	if err := queueManager.PublishToDurableStream(ctx, auditQueue.Name, queueTypes.PublishRequest{Payload: []byte("{}")}); !errors.Is(err, queuepkg.ErrQueueNotProtected) {

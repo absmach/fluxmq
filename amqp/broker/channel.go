@@ -265,8 +265,18 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 	case *codec.ChannelFlow, *codec.ChannelClose, *codec.ChannelCloseOk, *codec.ConfirmSelect:
 		return true, nil
 	case *codec.QueueDeclare:
+		// A non-passive declare creates the queue and, when it already exists,
+		// rewrites its type, retention, TTL and durability. That is a
+		// configuration write, and the subscribe ACL grants reads: a principal
+		// permitted to consume a queue must not be able to reshape it. Services
+		// consume pre-provisioned queues, so they only need to assert existence.
+		if !method.Passive {
+			return ch.denyLocalMethod(decoded, principalID)
+		}
 		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
 	case *codec.BasicConsume:
+		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
+	case *codec.BasicGet:
 		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
 	case *codec.BasicQos, *codec.BasicCancel, *codec.BasicAck, *codec.BasicNack, *codec.BasicReject:
 		// Channel-scoped consumer lifecycle. These name no queue of their own;
@@ -276,7 +286,7 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 		}
 		return ch.denyLocalMethod(decoded, principalID)
 	case *codec.BasicPublish:
-		if ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
+		if ch.conn.canPublishLocal(method.Exchange, method.RoutingKey).Allowed() {
 			return true, nil
 		}
 		ch.conn.broker.stats.IncrementLocalPublishDenials()
@@ -559,10 +569,13 @@ func (ch *Channel) completePublish() {
 	props = corebroker.AddClientIDProperty(props, clientID)
 	originalTopic := topic
 
+	grant := LocalPublishGrantNone
 	if policy.usesLocalPrincipalAuth() {
 		// Re-evaluate at completion so an ACL reduction made while content frames
-		// are in flight takes effect immediately.
-		if !ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
+		// are in flight takes effect immediately. The grant this returns is also
+		// what selects the delivery path below, so both come from one snapshot.
+		grant = ch.conn.canPublishLocal(method.Exchange, method.RoutingKey)
+		if !grant.Allowed() {
 			ch.conn.broker.stats.IncrementLocalPublishDenials()
 			ch.conn.logger.Warn("amqp091_local_authorization",
 				"auth_mode", "local",
@@ -597,7 +610,13 @@ func (ch *Channel) completePublish() {
 			}
 		}
 	}
-	if policy.mode == ConnectionPolicyLocalPublishOnly {
+	// The permission that authorized the publication decides how it is routed,
+	// not the listener it arrived on. An exact routing key names a protected
+	// durable stream and is appended and synced before the publisher is
+	// confirmed; a prefix names no queue and is an ordinary topic publish. Both
+	// listeners must agree, or one permissions.publish entry would mean two
+	// different delivery contracts depending on which port the principal used.
+	if grant == LocalPublishGrantExactTarget {
 		if exchangeName != "" {
 			ch.rejectLocalStreamPublish(fmt.Errorf("local durable stream publish requires the default exchange"))
 			return

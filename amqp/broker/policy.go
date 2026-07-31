@@ -47,11 +47,38 @@ type LocalPrincipalAuthenticator interface {
 	AuthenticateLocal(ctx context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (principalID, credentialFingerprint, permissionsFingerprint, certificateURI string, authenticated bool, err error)
 }
 
+// LocalPublishGrant reports which kind of publish permission authorized a
+// publication. The two kinds carry different delivery contracts, so the grant
+// decides how the publication is routed.
+type LocalPublishGrant uint8
+
+const (
+	// LocalPublishGrantNone means no permission matched and the publish is denied.
+	LocalPublishGrantNone LocalPublishGrant = iota
+	// LocalPublishGrantExactTarget matched an exact routing key. It names a
+	// protected durable stream, so the publication is appended and synced before
+	// the publisher is confirmed.
+	LocalPublishGrantExactTarget
+	// LocalPublishGrantPrefix matched a routing-key prefix. It names no queue and
+	// is checked against no durability contract, so the publication is routed as
+	// an ordinary topic publish.
+	LocalPublishGrantPrefix
+)
+
+// Allowed reports whether the grant authorizes the publication at all.
+func (g LocalPublishGrant) Allowed() bool {
+	return g != LocalPublishGrantNone
+}
+
 // LocalPrincipalAuthorizer makes exact AMQP publish and subscribe decisions for
 // a fully authenticated local session. Implementations must validate both the
 // bound session credential and the target against one current policy snapshot.
+//
+// CanPublishLocal returns the matching grant rather than a bare bool so the
+// caller can route by permission kind without a second lookup, which would
+// reopen the revocation race a single snapshot read closes.
 type LocalPrincipalAuthorizer interface {
-	CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) bool
+	CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) LocalPublishGrant
 	CanSubscribeLocal(identity LocalSessionIdentity, queue string) bool
 }
 

@@ -62,13 +62,13 @@ func TestAuthenticateAndAuthorize(t *testing.T) {
 		t.Fatal("wrong certificate URI SAN was accepted")
 	}
 
-	if !store.CanPublishAuthenticated(authentication, "", "atom-audit") {
+	if !store.AuthorizePublish(authentication, "", "atom-audit").Allowed() {
 		t.Fatal("configured publish target was denied")
 	}
-	if store.CanPublishAuthenticated(authentication, "events", "atom-audit") {
+	if store.AuthorizePublish(authentication, "events", "atom-audit").Allowed() {
 		t.Fatal("wrong exchange was allowed")
 	}
-	if store.CanPublishAuthenticated(authentication, "", "atom-audit.other") {
+	if store.AuthorizePublish(authentication, "", "atom-audit.other").Allowed() {
 		t.Fatal("prefix routing key was allowed")
 	}
 }
@@ -137,7 +137,7 @@ func TestReloadIsAtomicAndRevokesRemovedCredentials(t *testing.T) {
 	if store.IsActive(oldAuthentication) {
 		t.Fatal("removed previous credential remains active")
 	}
-	if store.CanPublishAuthenticated(oldAuthentication, "", "atom-audit") {
+	if store.AuthorizePublish(oldAuthentication, "", "atom-audit").Allowed() {
 		t.Fatal("session authenticated before reload can still publish with a retired credential")
 	}
 	if !store.IsActive(newAuthentication) {
@@ -176,7 +176,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if store.IsActive(authentication) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if store.CanPublishAuthenticated(authentication, "", "atom-audit-v2") {
+	if store.AuthorizePublish(authentication, "", "atom-audit-v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 
@@ -184,7 +184,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if !ok {
 		t.Fatal("authentication against the replacement ACL failed")
 	}
-	if !store.IsActive(reauthenticated) || !store.CanPublishAuthenticated(reauthenticated, "", "atom-audit-v2") {
+	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "atom-audit-v2").Allowed() {
 		t.Fatal("session authenticated against the replacement ACL is not active")
 	}
 }
@@ -304,7 +304,7 @@ func TestConcurrentAuthenticationAndReload(t *testing.T) {
 			for range 500 {
 				authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 				if ok {
-					_ = store.CanPublishAuthenticated(authentication, "", "atom-audit")
+					_ = store.AuthorizePublish(authentication, "", "atom-audit")
 				}
 			}
 		}()
@@ -384,7 +384,7 @@ func TestSubscribeACL(t *testing.T) {
 	t.Run("publish ACL is unaffected by subscribe permissions", func(t *testing.T) {
 		reauthenticated, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 		require.True(t, ok)
-		assert.True(t, store.CanPublishAuthenticated(reauthenticated, "", auditQueue))
+		assert.True(t, store.AuthorizePublish(reauthenticated, "", auditQueue).Allowed())
 		assert.False(t, store.CanSubscribeAuthenticated(reauthenticated, "m"))
 	})
 }
@@ -432,24 +432,26 @@ func TestPublishPrefixACL(t *testing.T) {
 	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 	require.True(t, ok)
 
+	// The grant kind matters as much as the yes or no: an exact target is
+	// appended to a durable stream, a prefix is published as an ordinary topic.
 	tests := []struct {
 		name       string
 		exchange   string
 		routingKey string
-		want       bool
+		want       PublishGrant
 	}{
-		{name: "exact permission still matches", routingKey: auditQueue, want: true},
-		{name: "key under the prefix", routingKey: "m.domain.c.channel.temp", want: true},
-		{name: "prefix itself", routingKey: "m.", want: true},
-		{name: "key outside the prefix", routingKey: "other.domain", want: false},
-		{name: "prefix must match at the start", routingKey: "x.m.domain", want: false},
-		{name: "partial prefix is not enough", routingKey: "m", want: false},
-		{name: "prefix does not reach another exchange", exchange: "events", routingKey: "m.domain", want: false},
+		{name: "exact permission still matches", routingKey: auditQueue, want: PublishGrantExactTarget},
+		{name: "key under the prefix", routingKey: "m.domain.c.channel.temp", want: PublishGrantPrefix},
+		{name: "prefix itself", routingKey: "m.", want: PublishGrantPrefix},
+		{name: "key outside the prefix", routingKey: "other.domain", want: PublishGrantNone},
+		{name: "prefix must match at the start", routingKey: "x.m.domain", want: PublishGrantNone},
+		{name: "partial prefix is not enough", routingKey: "m", want: PublishGrantNone},
+		{name: "prefix does not reach another exchange", exchange: "events", routingKey: "m.domain", want: PublishGrantNone},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, store.CanPublishAuthenticated(authentication, tc.exchange, tc.routingKey))
+			assert.Equal(t, tc.want, store.AuthorizePublish(authentication, tc.exchange, tc.routingKey))
 		})
 	}
 
@@ -461,7 +463,7 @@ func TestPublishPrefixACL(t *testing.T) {
 		require.True(t, changed, "dropping a prefix permission must be seen as a change")
 
 		assert.False(t, store.IsActive(authentication))
-		assert.False(t, store.CanPublishAuthenticated(authentication, "", "m.domain.c.channel.temp"))
+		assert.False(t, store.AuthorizePublish(authentication, "", "m.domain.c.channel.temp").Allowed())
 	})
 }
 

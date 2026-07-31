@@ -54,7 +54,7 @@ func BenchmarkLocalAMQPPolicyCanPublish(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		if !adapter.CanPublishLocal(identity, "", testAuditQueue) {
+		if !adapter.CanPublishLocal(identity, "", testAuditQueue).Allowed() {
 			b.Fatal("configured publish target was denied")
 		}
 	}

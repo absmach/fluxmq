@@ -130,15 +130,16 @@ abandoned appends waiting on one stream is capped; publications beyond that cap
 are refused before any storage work starts, and both outcomes close the channel
 so a stalled stream cannot accumulate retries.
 
-Local principals are publish-only. Subscription ACLs are not implemented, so
-`permissions.subscribe` must remain `[]`; every consume or `Basic.Get`
-operation is denied.
+On this listener a principal is publish-only: every consume, `basic.get`, and
+`queue.declare` is denied whatever `permissions.subscribe` says. Consumers
+require the [service listener](#service-listener) below.
 
 Local-principal counters are exposed under
 `by_protocol.amqp.local_principals` in `GET /api/v1/stats`. They cover active
-connections, authentication success/failure, publish and operation denials,
-reload success/failure, and forced disconnects. The counters are bounded and
-do not use principal names, certificate values, or routing keys as dimensions.
+connections, authentication success/failure, publish, subscribe and operation
+denials, reload success/failure, and forced disconnects. The counters are
+bounded and do not use principal names, certificate values, or routing keys as
+dimensions.
 
 See [Internal AMQP Local Principals](/deployment/internal-amqp-local-principals)
 for the complete production configuration, rotation process, tests, and
@@ -194,10 +195,18 @@ auth:
 `subscribe` names exact queues; wildcards, duplicates, blank entries, and
 surrounding whitespace are rejected at load. A principal declaring no
 `subscribe` entry is refused a consumer even on the service listener, and one
-declaring no `publish` entry cannot publish. Unlike publish targets, subscribe
-targets need no matching `queues` entry: the durability contract that publish
-targets carry exists because local publishes are acknowledged as crash-durable,
-which does not apply to reading.
+declaring no `publish` entry cannot publish. Unlike exact publish targets,
+subscribe targets need no matching `queues` entry: the durability contract those
+carry exists because local publishes are acknowledged as crash-durable, which
+does not apply to reading.
+
+A subscribe permission grants reads and nothing else. `basic.consume` and
+`basic.get` are allowed for the queues it names, and `queue.declare` is allowed
+only in its passive form, to assert that a queue exists. A non-passive declare
+creates a queue and rewrites the type, retention, TTL and durability of one that
+already exists, which is a configuration write: services consume queues that
+were provisioned for them, so they never need it. `queue.bind`, `queue.unbind`,
+`queue.purge`, and `queue.delete` are refused on both listeners.
 
 #### Publish targets: exact keys and prefixes
 
@@ -213,6 +222,13 @@ exists because a service publishes to topics built from its own runtime data —
 a tenant identifier, a channel identifier, a subtopic — which cannot be
 enumerated in broker configuration. The Rules Engine republishing a rule output
 to `m.<domain>.c.<channel>.<subtopic>` is the motivating case.
+
+The permission that matched decides how the publication is delivered, on either
+listener. An exact target is appended to its protected stream and synced before
+the publisher confirm; a prefix match is routed as an ordinary topic publish and
+carries no durability barrier. This is a property of the permission, not of the
+port the principal connected to, so one `permissions.publish` entry means the
+same thing everywhere.
 
 A prefix is a wildcard by construction and must never be written as one:
 `m.#` is rejected, because accepting it would silently grant the literal `#`

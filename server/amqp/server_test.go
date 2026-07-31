@@ -41,8 +41,11 @@ func (p *reloadRaceLocalPolicy) AuthenticateLocal(_ context.Context, _, _, _ str
 	return "atom-audit-publisher", "old-credential-fingerprint", "old-permissions-fingerprint", testLocalCertificateURI, true, nil
 }
 
-func (p *reloadRaceLocalPolicy) CanPublishLocal(amqpbroker.LocalSessionIdentity, string, string) bool {
-	return !p.retired.Load()
+func (p *reloadRaceLocalPolicy) CanPublishLocal(amqpbroker.LocalSessionIdentity, string, string) amqpbroker.LocalPublishGrant {
+	if p.retired.Load() {
+		return amqpbroker.LocalPublishGrantNone
+	}
+	return amqpbroker.LocalPublishGrantExactTarget
 }
 
 func (p *reloadRaceLocalPolicy) CanSubscribeLocal(amqpbroker.LocalSessionIdentity, string) bool {

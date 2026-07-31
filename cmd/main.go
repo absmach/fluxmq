@@ -125,9 +125,19 @@ func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, usernam
 	return "", "", "", "", false, nil
 }
 
-func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) bool {
+func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) amqpbroker.LocalPublishGrant {
 	authentication, ok := localAuthentication(identity)
-	return ok && p != nil && p.store != nil && p.store.CanPublishAuthenticated(authentication, exchange, routingKey)
+	if !ok || p == nil || p.store == nil {
+		return amqpbroker.LocalPublishGrantNone
+	}
+	switch p.store.AuthorizePublish(authentication, exchange, routingKey) {
+	case localauth.PublishGrantExactTarget:
+		return amqpbroker.LocalPublishGrantExactTarget
+	case localauth.PublishGrantPrefix:
+		return amqpbroker.LocalPublishGrantPrefix
+	default:
+		return amqpbroker.LocalPublishGrantNone
+	}
 }
 
 func (p *localAMQPPolicy) CanSubscribeLocal(identity amqpbroker.LocalSessionIdentity, queue string) bool {

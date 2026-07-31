@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -59,19 +60,29 @@ func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, 
 }
 
 type localAuthorizerStub struct {
-	allowExchange   string
-	allowRoutingKey string
-	allowQueue      string
-	retired         bool
-	lastIdentity    LocalSessionIdentity
-	calls           int
-	subscribeCalls  int
+	allowExchange         string
+	allowRoutingKey       string
+	allowRoutingKeyPrefix string
+	allowQueue            string
+	retired               bool
+	lastIdentity          LocalSessionIdentity
+	calls                 int
+	subscribeCalls        int
 }
 
-func (s *localAuthorizerStub) CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) bool {
+func (s *localAuthorizerStub) CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) LocalPublishGrant {
 	s.calls++
 	s.lastIdentity = identity
-	return !s.retired && exchange == s.allowExchange && routingKey == s.allowRoutingKey
+	if s.retired {
+		return LocalPublishGrantNone
+	}
+	if exchange == s.allowExchange && routingKey == s.allowRoutingKey {
+		return LocalPublishGrantExactTarget
+	}
+	if s.allowRoutingKeyPrefix != "" && exchange == "" && strings.HasPrefix(routingKey, s.allowRoutingKeyPrefix) {
+		return LocalPublishGrantPrefix
+	}
+	return LocalPublishGrantNone
 }
 
 func (s *localAuthorizerStub) CanSubscribeLocal(identity LocalSessionIdentity, queue string) bool {
@@ -387,6 +398,73 @@ func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 	}
 	if got := qm.exactPublish.Properties[corebroker.ProtocolProperty]; got != corebroker.ProtocolAMQP091 {
 		t.Fatalf("protocol = %q, want %q", got, corebroker.ProtocolAMQP091)
+	}
+}
+
+// The matched permission, not the listener, selects the delivery path. An exact
+// target names a protected stream and is appended durably; a prefix names no
+// queue and is published as an ordinary topic. Routing by listener instead would
+// make one permissions.publish entry mean two different contracts.
+func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
+	const prefixedKey = "m.domain.c.channel"
+
+	tests := []struct {
+		name             string
+		policy           func(*localAuthorizerStub) *ConnectionPolicy
+		routingKey       string
+		wantDurableCalls int
+	}{
+		{
+			name: "publish-only exact target appends durably",
+			policy: func(a *localAuthorizerStub) *ConnectionPolicy {
+				return NewLocalPublishOnlyConnectionPolicy(nil, a, a, 0)
+			},
+			routingKey:       testAuditQueue,
+			wantDurableCalls: 1,
+		},
+		{
+			name:             "service exact target appends durably",
+			policy:           func(a *localAuthorizerStub) *ConnectionPolicy { return NewLocalServiceConnectionPolicy(nil, a, a, 0) },
+			routingKey:       testAuditQueue,
+			wantDurableCalls: 1,
+		},
+		{
+			name:             "service prefix publishes as an ordinary topic",
+			policy:           func(a *localAuthorizerStub) *ConnectionPolicy { return NewLocalServiceConnectionPolicy(nil, a, a, 0) },
+			routingKey:       prefixedKey,
+			wantDurableCalls: 0,
+		},
+		{
+			name: "publish-only prefix publishes as an ordinary topic",
+			policy: func(a *localAuthorizerStub) *ConnectionPolicy {
+				return NewLocalPublishOnlyConnectionPolicy(nil, a, a, 0)
+			},
+			routingKey:       prefixedKey,
+			wantDurableCalls: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue, allowRoutingKeyPrefix: "m."}
+			conn, _ := newPolicyTestConnection(t, tc.policy(authz))
+			bindLocalIdentity(conn)
+			qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+			conn.broker.queueManager = qm
+
+			ch := newChannel(conn, 1)
+			ch.pendingMethod = &codec.BasicPublish{RoutingKey: tc.routingKey}
+			ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+			ch.pendingBody = []byte("{}")
+			ch.completePublish()
+
+			if qm.exactPublishCalls != tc.wantDurableCalls {
+				t.Fatalf("durable stream publish calls = %d, want %d", qm.exactPublishCalls, tc.wantDurableCalls)
+			}
+			if tc.wantDurableCalls > 0 && qm.exactStreamName != tc.routingKey {
+				t.Fatalf("durable stream = %q, want %q", qm.exactStreamName, tc.routingKey)
+			}
+		})
 	}
 }
 

@@ -187,8 +187,9 @@ func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
 				"publish": func(publish *yaml.Node) error {
 					return validateYAMLSequence(publish, path+".permissions.publish", func(entry *yaml.Node, entryPath string) error {
 						return validateYAMLMapping(entry, entryPath, map[string]func(*yaml.Node) error{
-							"exchange":    nil,
-							"routing_key": nil,
+							"exchange":           nil,
+							"routing_key":        nil,
+							"routing_key_prefix": nil,
 						})
 					})
 				},
@@ -1357,9 +1358,21 @@ func (c *Config) Validate() error {
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
 	}
-	if hasAddr(c.Server.AMQP091.Internal.Addr) {
+	// Both local-principal listeners authenticate against the same store and
+	// publish through the same durable path, so the requirements that follow
+	// apply to either being configured.
+	for _, listener := range []struct {
+		name string
+		addr string
+	}{
+		{name: listenerNameInternal, addr: c.Server.AMQP091.Internal.Addr},
+		{name: listenerNameService, addr: c.Server.AMQP091.Service.Addr},
+	} {
+		if !hasAddr(listener.addr) {
+			continue
+		}
 		if len(c.Auth.LocalPrincipals) == 0 {
-			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.internal.addr is configured")
+			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.%s.addr is configured", listener.name)
 		}
 		// A local publication is appended and synced on the receiving node only,
 		// and is deliberately never forwarded to other nodes: forwarding would
@@ -1368,7 +1381,7 @@ func (c *Config) Validate() error {
 		// elsewhere, with nothing to signal it, so refuse the combination rather
 		// than serve a listener whose records only some readers can see.
 		if c.Cluster.Enabled {
-			return fmt.Errorf("server.amqp091.internal.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run the internal listener on a single-node deployment")
+			return fmt.Errorf("server.amqp091.%s.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run local-principal listeners on a single-node deployment", listener.name)
 		}
 	}
 	for proto := range c.Hooks.Protocols {

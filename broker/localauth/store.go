@@ -159,33 +159,56 @@ func (s *Store) IsActive(authentication Authentication) bool {
 	return authenticationActive(current, authentication)
 }
 
-// CanPublishAuthenticated checks the session credential and exact publish ACL
-// against one immutable snapshot. Loading both independently would leave a
-// revocation race when a reload lands between the two checks.
-func (s *Store) CanPublishAuthenticated(authentication Authentication, exchange, routingKey string) bool {
+// PublishGrant reports which kind of publish permission matched. The caller
+// needs the kind and not merely a yes or no, because an exact target names a
+// durable stream while a prefix names no queue at all.
+type PublishGrant uint8
+
+const (
+	// PublishGrantNone means no permission matched.
+	PublishGrantNone PublishGrant = iota
+	// PublishGrantExactTarget matched an exact exchange and routing-key pair,
+	// which must also appear under queues as a protected durable stream.
+	PublishGrantExactTarget
+	// PublishGrantPrefix matched a routing-key prefix, which is checked against
+	// no queues entry.
+	PublishGrantPrefix
+)
+
+// Allowed reports whether the grant authorizes the publication.
+func (g PublishGrant) Allowed() bool {
+	return g != PublishGrantNone
+}
+
+// AuthorizePublish checks the session credential and publish ACL against one
+// immutable snapshot, returning the matching grant. Loading both independently
+// would leave a revocation race when a reload lands between the two checks, and
+// returning the grant rather than a bool spares the caller a second lookup that
+// would reopen the same race.
+func (s *Store) AuthorizePublish(authentication Authentication, exchange, routingKey string) PublishGrant {
 	current := s.current.Load()
 	if !authenticationActive(current, authentication) {
-		return false
+		return PublishGrantNone
 	}
 	principal := current.principals[authentication.Principal]
 	if _, allowed := principal.publish[PublishTarget{Exchange: exchange, RoutingKey: routingKey}]; allowed {
-		return true
+		return PublishGrantExactTarget
 	}
 	// A prefix permission grants the default exchange only, matching the
 	// exchange restriction config already enforces on every publish permission.
 	if exchange != "" {
-		return false
+		return PublishGrantNone
 	}
 	for _, publishPrefix := range principal.publishPrefixes {
 		if strings.HasPrefix(routingKey, publishPrefix) {
-			return true
+			return PublishGrantPrefix
 		}
 	}
-	return false
+	return PublishGrantNone
 }
 
 // CanSubscribeAuthenticated checks the session credential and exact subscribe
-// ACL against one immutable snapshot, for the same reason CanPublishAuthenticated
+// ACL against one immutable snapshot, for the same reason AuthorizePublish
 // does: loading both independently would leave a revocation race when a reload
 // lands between the two checks.
 func (s *Store) CanSubscribeAuthenticated(authentication Authentication, queue string) bool {
