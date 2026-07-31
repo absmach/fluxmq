@@ -23,6 +23,8 @@ import (
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -34,6 +36,7 @@ const (
 	testAuditQueue     = "atom-audit"
 	testServiceQueue   = "$queue/m"
 	testConsumerTag    = "reader"
+	testSiblingTag     = "sibling-reader"
 )
 
 type localAuthenticatorStub struct {
@@ -638,6 +641,68 @@ func TestLocalConsumeFailureRollsBackAndClosesChannel(t *testing.T) {
 	}
 	if closeMethod.ClassID != codec.ClassBasic || closeMethod.MethodID != codec.MethodBasicConsume {
 		t.Fatalf("close method = %d/%d, want basic.consume", closeMethod.ClassID, closeMethod.MethodID)
+	}
+}
+
+// The manager unregisters a client from a queue and group, not a single
+// consumer, so a failed consume must not compensate while a sibling consumer
+// still holds that registration. It would otherwise stop delivering to a
+// consumer whose own subscribe succeeded, without reporting anything.
+func TestLocalConsumeFailureKeepsSiblingSubscription(t *testing.T) {
+	const provisioned = "m"
+
+	tests := []struct {
+		name            string
+		withSibling     bool
+		wantUnsubscribe bool
+	}{
+		{
+			name:            "sole consumer compensates",
+			wantUnsubscribe: true,
+		},
+		{
+			name:        "sibling on the same registration is left alone",
+			withSibling: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowQueue: provisioned}
+			conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+			bindLocalIdentityAs(conn, LocalRoleService)
+			qm := &mockChannelQueueManager{
+				queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+			}
+			conn.broker.queueManager = qm
+
+			ch := newChannel(conn, 1)
+			if tc.withSibling {
+				// A consumer whose own subscribe succeeded, sharing the queue and
+				// group the failing one is about to use.
+				require.NoError(t, ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testSiblingTag}))
+				require.Empty(t, qm.unsubscribes, "a successful consume must not unsubscribe")
+			}
+
+			// The second subscribe fails after the manager began registering, which
+			// is the only case that still compensates.
+			qm.existingSubErr = errors.New("group store unavailable")
+			require.NoError(t, ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testConsumerTag}))
+
+			ch.consumersMu.RLock()
+			_, failedRemains := ch.consumers[testConsumerTag]
+			_, siblingRemains := ch.consumers[testSiblingTag]
+			ch.consumersMu.RUnlock()
+
+			assert.False(t, failedRemains, "the failed consumer must not stay registered")
+			assert.Equal(t, tc.withSibling, siblingRemains, "the sibling must survive its neighbour's failure")
+
+			if tc.wantUnsubscribe {
+				assert.Equal(t, []string{provisioned + "/"}, qm.unsubscribes)
+			} else {
+				assert.Empty(t, qm.unsubscribes, "compensating here would revoke the sibling's registration")
+			}
+		})
 	}
 }
 

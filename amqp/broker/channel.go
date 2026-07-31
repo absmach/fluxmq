@@ -1482,13 +1482,25 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	ch.consumersMu.Unlock()
 
 	ch.conn.broker.stats.IncrementConsumers()
-	rollbackConsumer := func() {
+	// rollbackConsumer drops the reservation and reports whether another
+	// consumer on this channel still holds the same registration. The manager
+	// unregisters a client from a queue and group rather than a single consumer,
+	// so compensating for a failed subscribe while a sibling remains would stop
+	// delivering to that sibling without telling anyone.
+	rollbackConsumer := func() (siblingRemains bool) {
 		ch.consumersMu.Lock()
+		defer ch.consumersMu.Unlock()
+
 		if current, exists := ch.consumers[tag]; exists && current == cons {
 			delete(ch.consumers, tag)
 			ch.conn.broker.stats.DecrementConsumers()
 		}
-		ch.consumersMu.Unlock()
+		for _, other := range ch.consumers {
+			if other.queueName == queueName && other.groupID == groupID && other.pattern == pattern {
+				return true
+			}
+		}
+		return false
 	}
 
 	// Subscribe to the queue via queue manager
@@ -1538,10 +1550,12 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		}
 
 		if subscribeErr != nil {
-			rollbackConsumer()
+			siblingRemains := rollbackConsumer()
 			// A manager can fail after partially registering group state. Cleanup is
-			// best effort; errors raised before registration need no cleanup.
-			if subscriptionStarted && !errors.Is(subscribeErr, qstorage.ErrQueueNotFound) && !errors.Is(subscribeErr, queuepkg.ErrQueueNotStream) {
+			// best effort; errors raised before registration need no cleanup, and a
+			// sibling consumer sharing this registration owns it now.
+			if subscriptionStarted && !siblingRemains &&
+				!errors.Is(subscribeErr, qstorage.ErrQueueNotFound) && !errors.Is(subscribeErr, queuepkg.ErrQueueNotStream) {
 				_ = qm.Unsubscribe(context.Background(), queueName, pattern, clientID, subGroupID)
 			}
 			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", subscribeErr)

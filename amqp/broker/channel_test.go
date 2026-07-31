@@ -47,6 +47,7 @@ type mockChannelQueueManager struct {
 	existingSubErr       error
 	existingSubs         int
 	existingCursorSubs   int
+	unsubscribes         []string
 	createdQueues        []qtypes.QueueConfig
 	updatedQueues        []qtypes.QueueConfig
 	createQueueErr       error
@@ -92,7 +93,8 @@ func (m *mockChannelQueueManager) SubscribeExistingWithCursor(_ context.Context,
 	return m.existingSubErr
 }
 
-func (m *mockChannelQueueManager) Unsubscribe(context.Context, string, string, string, string) error {
+func (m *mockChannelQueueManager) Unsubscribe(_ context.Context, queueName, _, _, groupID string) error {
+	m.unsubscribes = append(m.unsubscribes, queueName+"/"+groupID)
 	return nil
 }
 
