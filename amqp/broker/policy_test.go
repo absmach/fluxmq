@@ -20,6 +20,7 @@ import (
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -31,6 +32,8 @@ const (
 	testCertificateURI = "spiffe://absmach/atom/audit-publisher"
 	testConnectionID   = "test-conn"
 	testAuditQueue     = "atom-audit"
+	testServiceQueue   = "$queue/m"
+	testConsumerTag    = "reader"
 )
 
 type localAuthenticatorStub struct {
@@ -544,7 +547,7 @@ func TestPassiveDeclareResolvesProvisionedQueue(t *testing.T) {
 	}
 
 	ch := newChannel(conn, 1)
-	if err := ch.handleQueueDeclare(&codec.QueueDeclare{Queue: provisioned, Passive: true}); err != nil {
+	if err := ch.handleMethod(&codec.QueueDeclare{Queue: provisioned, Passive: true}); err != nil {
 		t.Fatalf("passive declare of a provisioned queue: %v", err)
 	}
 	if err := conn.writer.Flush(); err != nil {
@@ -561,6 +564,112 @@ func TestPassiveDeclareResolvesProvisionedQueue(t *testing.T) {
 	}
 	if _, ok := decoded.(*codec.QueueDeclareOk); !ok {
 		t.Fatalf("expected QueueDeclareOk, got %T", decoded)
+	}
+}
+
+func TestLocalConsumeUsesNonMutatingQueueSubscription(t *testing.T) {
+	const provisioned = "m"
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+	}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testConsumerTag}); err != nil {
+		t.Fatalf("consume provisioned queue: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if qm.existingSubs != 1 || qm.existingCursorSubs != 0 {
+		t.Fatalf("existing subscription calls = %d/%d, want 1/0", qm.existingSubs, qm.existingCursorSubs)
+	}
+	if qm.subscribeCalls != 0 || qm.cursorSubscribeCalls != 0 {
+		t.Fatalf("mutating subscription calls = %d/%d, want 0/0", qm.subscribeCalls, qm.cursorSubscribeCalls)
+	}
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want one BasicConsumeOk", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := decoded.(*codec.BasicConsumeOk); !ok {
+		t.Fatalf("method = %T, want *codec.BasicConsumeOk", decoded)
+	}
+}
+
+func TestLocalConsumeFailureRollsBackAndClosesChannel(t *testing.T) {
+	const provisioned = "m"
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		getQueueErr:    qstorage.ErrQueueNotFound,
+		existingSubErr: qstorage.ErrQueueNotFound,
+	}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testConsumerTag}); err != nil {
+		t.Fatalf("consume missing queue: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	ch.consumersMu.RLock()
+	consumerCount := len(ch.consumers)
+	ch.consumersMu.RUnlock()
+	if consumerCount != 0 {
+		t.Fatalf("consumer registrations = %d, want 0 after failed subscribe", consumerCount)
+	}
+	if got := conn.broker.stats.GetConsumers(); got != 0 {
+		t.Fatalf("consumer stat = %d, want 0 after failed subscribe", got)
+	}
+	closeMethod := decodeSingleChannelClose(t, buf)
+	if closeMethod.ReplyCode != codec.NotFound {
+		t.Fatalf("reply code = %d, want %d", closeMethod.ReplyCode, codec.NotFound)
+	}
+	if closeMethod.ClassID != codec.ClassBasic || closeMethod.MethodID != codec.MethodBasicConsume {
+		t.Fatalf("close method = %d/%d, want basic.consume", closeMethod.ClassID, closeMethod.MethodID)
+	}
+}
+
+func TestLocalStreamConsumeCannotChangeClassicQueueType(t *testing.T) {
+	const provisioned = "m"
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		queueCfg:       &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+		existingSubErr: queue.ErrQueueNotStream,
+	}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.BasicConsume{
+		Queue:       testServiceQueue,
+		ConsumerTag: testConsumerTag,
+		Arguments:   map[string]any{"x-stream-offset": "first"},
+	}); err != nil {
+		t.Fatalf("consume classic queue with stream cursor: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	closeMethod := decodeSingleChannelClose(t, buf)
+	if closeMethod.ReplyCode != codec.PreconditionFailed {
+		t.Fatalf("reply code = %d, want %d", closeMethod.ReplyCode, codec.PreconditionFailed)
+	}
+	if qm.existingCursorSubs != 1 || qm.cursorSubscribeCalls != 0 {
+		t.Fatalf("cursor subscription calls = existing:%d mutating:%d, want 1/0", qm.existingCursorSubs, qm.cursorSubscribeCalls)
 	}
 }
 

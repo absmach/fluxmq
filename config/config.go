@@ -223,7 +223,10 @@ func ValidateAgainstRuntime(running, next *Config) error {
 	if running == nil || next == nil || !running.Cluster.Enabled {
 		return nil
 	}
-	if len(next.Server.AMQP091.LocalListeners()) == 0 {
+	// Listener changes are restart-required too. Ask whether the running
+	// process has a local listener; removing it from the desired file does not
+	// stop that listener before the runtime-safe principal snapshot is applied.
+	if len(running.Server.AMQP091.LocalListeners()) == 0 {
 		return nil
 	}
 	name, target, found := firstExactPublishTarget(next.Auth.LocalPrincipals)

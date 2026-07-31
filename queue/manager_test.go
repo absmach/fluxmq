@@ -1086,6 +1086,41 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 	}
 }
 
+func TestSubscribeExistingDoesNotCreateMissingQueue(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+
+	err := mgr.SubscribeExisting(context.Background(), "missing", "", testClientOneID, testGroupWorkers, "")
+	if !errors.Is(err, storage.ErrQueueNotFound) {
+		t.Fatalf("SubscribeExisting() error = %v, want %v", err, storage.ErrQueueNotFound)
+	}
+	if _, err := logStore.GetQueue(context.Background(), "missing"); !errors.Is(err, storage.ErrQueueNotFound) {
+		t.Fatalf("missing queue was created: GetQueue() error = %v", err)
+	}
+}
+
+func TestSubscribeExistingWithCursorDoesNotChangeQueueType(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
+	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue() error = %v", err)
+	}
+
+	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
+	err := mgr.SubscribeExistingWithCursor(context.Background(), testQueueEvents, "", testClientOneID, "streamer", "", cursor)
+	if !errors.Is(err, ErrQueueNotStream) {
+		t.Fatalf("SubscribeExistingWithCursor() error = %v, want %v", err, ErrQueueNotStream)
+	}
+	stored, err := mgr.GetQueue(context.Background(), testQueueEvents)
+	if err != nil {
+		t.Fatalf("GetQueue() error = %v", err)
+	}
+	if stored.Type != types.QueueTypeClassic {
+		t.Fatalf("queue type = %q, want %q", stored.Type, types.QueueTypeClassic)
+	}
+}
+
 func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()

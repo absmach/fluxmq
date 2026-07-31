@@ -119,11 +119,12 @@ prefix permissions runs clustered without restriction. The permission decides
 this, exactly as it decides how the publication is routed.
 
 The same rule is applied to reloads against the running node rather than the
-new file. `auth.local_principals` reloads at runtime while `cluster.enabled`
-requires a restart, so a single edit that disables clustering and adds an exact
-target would otherwise apply the target immediately while the node stayed
-clustered. Such a reload is refused; make the two changes in separate steps,
-restarting in between.
+new file. `auth.local_principals` reloads at runtime while `cluster.enabled` and
+local listener changes require a restart. A single edit that disables
+clustering or removes the local listener while adding an exact target would
+otherwise apply the target immediately while the node stayed clustered and its
+listener stayed active. Such a reload is refused; make the changes in separate
+steps, restarting in between.
 
 Publish permissions support only the default exchange (`exchange: ""`) and an
 exact, non-empty routing key. Other exchanges and wildcard routing keys are
@@ -257,10 +258,17 @@ exists, which is a configuration write: services consume queues that were
 provisioned for them, so they never need it. `basic.get`, `queue.bind`,
 `queue.unbind`, `queue.purge`, and `queue.delete` are refused.
 
+Consumption also uses a non-mutating queue-manager operation: it fails if the
+queue does not exist and a stream cursor is refused for a queue not already
+configured as a stream. A read grant therefore cannot create a queue or change
+its type indirectly through `basic.consume`.
+
 `subscribe` names queues, but a client addresses one through the queue prefix,
 so `subscribe: [m]` authorizes `basic.consume` on `$queue/m`. The wire value is
 resolved before it is matched, and an address that resolves to no queue —
 a bare `m`, or a pub/sub filter — is refused, because no entry grants one.
+`queue.declare` follows AMQP queue-name semantics instead: its passive assertion
+uses the bare name `m`, which is matched directly against the same ACL entry.
 
 #### Publish targets: exact keys and prefixes
 

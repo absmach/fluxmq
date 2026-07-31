@@ -31,19 +31,26 @@ const (
 )
 
 type mockChannelQueueManager struct {
-	lastCursor        *qtypes.CursorOption
-	lastPublish       qtypes.PublishRequest
-	publishCalls      int
-	exactStreamName   string
-	exactPublish      qtypes.PublishRequest
-	exactPublishCalls int
-	exactPublishErr   error
-	exactPublishCtx   context.Context
-	queueCfg          *qtypes.QueueConfig
-	createdQueues     []qtypes.QueueConfig
-	updatedQueues     []qtypes.QueueConfig
-	createQueueErr    error
-	updateQueueErr    error
+	lastCursor           *qtypes.CursorOption
+	lastPublish          qtypes.PublishRequest
+	publishCalls         int
+	exactStreamName      string
+	exactPublish         qtypes.PublishRequest
+	exactPublishCalls    int
+	exactPublishErr      error
+	exactPublishCtx      context.Context
+	queueCfg             *qtypes.QueueConfig
+	getQueueErr          error
+	subscribeErr         error
+	subscribeCalls       int
+	cursorSubscribeCalls int
+	existingSubErr       error
+	existingSubs         int
+	existingCursorSubs   int
+	createdQueues        []qtypes.QueueConfig
+	updatedQueues        []qtypes.QueueConfig
+	createQueueErr       error
+	updateQueueErr       error
 }
 
 func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
@@ -64,12 +71,25 @@ func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, qu
 }
 
 func (m *mockChannelQueueManager) Subscribe(context.Context, string, string, string, string, string) error {
-	return nil
+	m.subscribeCalls++
+	return m.subscribeErr
 }
 
 func (m *mockChannelQueueManager) SubscribeWithCursor(_ context.Context, _ string, _ string, _ string, _ string, _ string, cursor *qtypes.CursorOption) error {
+	m.cursorSubscribeCalls++
 	m.lastCursor = cursor
-	return nil
+	return m.subscribeErr
+}
+
+func (m *mockChannelQueueManager) SubscribeExisting(context.Context, string, string, string, string, string) error {
+	m.existingSubs++
+	return m.existingSubErr
+}
+
+func (m *mockChannelQueueManager) SubscribeExistingWithCursor(_ context.Context, _ string, _ string, _ string, _ string, _ string, cursor *qtypes.CursorOption) error {
+	m.existingCursorSubs++
+	m.lastCursor = cursor
+	return m.existingSubErr
 }
 
 func (m *mockChannelQueueManager) Unsubscribe(context.Context, string, string, string, string) error {
@@ -94,7 +114,7 @@ func (m *mockChannelQueueManager) CreateQueue(_ context.Context, cfg qtypes.Queu
 }
 
 func (m *mockChannelQueueManager) GetQueue(context.Context, string) (*qtypes.QueueConfig, error) {
-	return m.queueCfg, nil
+	return m.queueCfg, m.getQueueErr
 }
 
 func (m *mockChannelQueueManager) UpdateQueue(_ context.Context, cfg qtypes.QueueConfig) error {
@@ -1221,8 +1241,9 @@ func TestCancelConsumerByQueue(t *testing.T) {
 // consumers, and only for a queue its own subscribe ACL names. Both roles run on
 // the same listener policy, so the capability comes from the principal alone.
 func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
-	// The ACL names a queue; a client addresses it through the queue prefix, and
-	// authorization resolves the wire value before comparing.
+	// The ACL names a queue. Basic.Consume addresses it through the queue prefix
+	// and is resolved before comparison; passive Queue.Declare uses the bare AMQP
+	// queue name.
 	const (
 		allowedQueue   = "m"
 		allowedAddress = "$queue/m"
@@ -1262,20 +1283,20 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 		{
 			name:        "service passively declares a permitted queue",
 			role:        LocalRoleService,
-			method:      &codec.QueueDeclare{Queue: allowedAddress, Passive: true},
+			method:      &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
 			wantAllowed: true,
 		},
 		{
 			name:   "service is refused passively declaring a queue outside its ACL",
 			role:   LocalRoleService,
-			method: &codec.QueueDeclare{Queue: "$queue/" + testOtherTarget, Passive: true},
+			method: &codec.QueueDeclare{Queue: testOtherTarget, Passive: true},
 		},
 		{
 			// A non-passive declare rewrites queue configuration, which the
 			// subscribe ACL does not grant even for a queue it names.
 			name:   "service is refused declaring a permitted queue non-passively",
 			role:   LocalRoleService,
-			method: &codec.QueueDeclare{Queue: allowedAddress},
+			method: &codec.QueueDeclare{Queue: allowedQueue},
 		},
 		{
 			name:        "service acknowledges a delivery",
@@ -1291,7 +1312,7 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 		{
 			name:   "publish-only principal may not declare a queue",
 			role:   LocalRolePublisher,
-			method: &codec.QueueDeclare{Queue: allowedAddress, Passive: true},
+			method: &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
 		},
 		{
 			name:   "publish-only principal may not get",

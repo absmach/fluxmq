@@ -115,6 +115,8 @@ type Manager struct {
 	metrics *consumer.Metrics
 }
 
+var _ corebroker.ExistingQueueSubscriber = (*Manager)(nil)
+
 // Config holds configuration for the queue-based queue manager.
 type Config struct {
 	// Consumer configuration
@@ -1270,6 +1272,16 @@ func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, pro
 
 // SubscribeWithCursor adds a consumer with explicit cursor positioning.
 func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error {
+	return m.subscribeWithCursor(ctx, queueName, pattern, clientID, groupID, proxyNodeID, cursor, true)
+}
+
+// SubscribeExistingWithCursor adds a consumer to an existing queue without
+// creating the queue or changing its configured type.
+func (m *Manager) SubscribeExistingWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error {
+	return m.subscribeWithCursor(ctx, queueName, pattern, clientID, groupID, proxyNodeID, cursor, false)
+}
+
+func (m *Manager) subscribeWithCursor(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, cursor *types.CursorOption, allowQueueMutation bool) error {
 	if proxyNodeID == "" && m.localNodeID != "" {
 		proxyNodeID = m.localNodeID
 	}
@@ -1280,18 +1292,31 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 	}
 	if cursor == nil || cursor.Position == types.CursorDefault {
 		if mode != types.GroupModeStream {
-			return m.Subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID)
+			return m.subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID, allowQueueMutation)
 		}
 		cursor = &types.CursorOption{Position: types.CursorDefault, Mode: mode}
 	}
 
-	// Ensure queue exists
-	queueTopicPattern := "$queue/" + queueName + "/#"
-	queueCfg, err := m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
-	if err != nil {
-		return fmt.Errorf("failed to get or create queue: %w", err)
+	var (
+		queueCfg *types.QueueConfig
+		err      error
+	)
+	if allowQueueMutation {
+		queueTopicPattern := "$queue/" + queueName + "/#"
+		queueCfg, err = m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
+	} else {
+		queueCfg, err = m.GetQueue(ctx, queueName)
 	}
-	if mode == types.GroupModeStream && queueCfg != nil && queueCfg.Type != types.QueueTypeStream {
+	if err != nil {
+		return fmt.Errorf("failed to resolve queue for subscription: %w", err)
+	}
+	if queueCfg == nil {
+		return fmt.Errorf("failed to resolve queue for subscription: %w", storage.ErrQueueNotFound)
+	}
+	if mode == types.GroupModeStream && queueCfg.Type != types.QueueTypeStream {
+		if !allowQueueMutation {
+			return fmt.Errorf("%w: %q has type %q", ErrQueueNotStream, queueName, queueCfg.Type)
+		}
 		queueCfg.Type = types.QueueTypeStream
 		if err := m.UpdateQueue(ctx, *queueCfg); err != nil {
 			m.logger.Warn("failed to update stream queue config",
@@ -1395,16 +1420,36 @@ func (m *Manager) SubscribeWithCursor(ctx context.Context, queueName, pattern st
 
 // Subscribe adds a consumer to a stream with optional pattern matching.
 func (m *Manager) Subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
+	return m.subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID, true)
+}
+
+// SubscribeExisting adds a consumer to an existing queue without creating it.
+func (m *Manager) SubscribeExisting(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string) error {
+	return m.subscribe(ctx, queueName, pattern, clientID, groupID, proxyNodeID, false)
+}
+
+func (m *Manager) subscribe(ctx context.Context, queueName, pattern string, clientID, groupID, proxyNodeID string, allowQueueCreation bool) error {
 	if proxyNodeID == "" && m.localNodeID != "" {
 		proxyNodeID = m.localNodeID
 	}
 
-	// Ensure queue exists (auto-create if not)
-	// Use $queue/<name>/# as the topic pattern so messages published to $queue/<name>/... are captured
-	queueTopicPattern := "$queue/" + queueName + "/#"
-	_, err := m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
+	var (
+		queueCfg *types.QueueConfig
+		err      error
+	)
+	if allowQueueCreation {
+		// Use $queue/<name>/# as the topic pattern so messages published to
+		// $queue/<name>/... are captured.
+		queueTopicPattern := "$queue/" + queueName + "/#"
+		queueCfg, err = m.GetOrCreateQueue(ctx, queueName, queueTopicPattern)
+	} else {
+		queueCfg, err = m.GetQueue(ctx, queueName)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to get or create queue: %w", err)
+		return fmt.Errorf("failed to resolve queue for subscription: %w", err)
+	}
+	if queueCfg == nil {
+		return fmt.Errorf("failed to resolve queue for subscription: %w", storage.ErrQueueNotFound)
 	}
 
 	// Default group ID to client prefix

@@ -22,6 +22,7 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/bufpool"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
@@ -273,7 +274,7 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 		if !method.Passive {
 			return ch.denyLocalMethod(decoded, principalID)
 		}
-		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
+		return ch.authorizeLocalQueueName(method.Queue, principalID, decoded)
 	case *codec.BasicConsume:
 		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
 	case *codec.BasicQos, *codec.BasicCancel, *codec.BasicAck, *codec.BasicNack, *codec.BasicReject:
@@ -299,6 +300,29 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 	default:
 		return ch.denyLocalMethod(decoded, principalID)
 	}
+}
+
+// authorizeLocalQueueName authorizes AMQP methods whose queue field is the
+// queue name itself. Queue.Declare uses the bare name "m"; unlike
+// Basic.Consume, its field is not a "$queue/m" subscription address.
+func (ch *Channel) authorizeLocalQueueName(queue, principalID string, decoded any) (bool, error) {
+	if !ch.conn.permitsConsumers() {
+		return ch.denyLocalMethod(decoded, principalID)
+	}
+	if queue != "" && ch.conn.canSubscribeLocal(queue) {
+		return true, nil
+	}
+
+	classID, methodID := methodIdentifier(decoded)
+	ch.conn.broker.stats.IncrementLocalSubscribeDenials()
+	ch.conn.logger.Warn("amqp091_local_authorization",
+		"auth_mode", "local",
+		"outcome", "denied",
+		"reason", "subscribe_acl_mismatch",
+		"principal_id", principalID,
+		"queue", queue,
+		"resolved_queue", queue)
+	return false, ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", classID, methodID)
 }
 
 // authorizeLocalSubscribe admits a queue-scoped consumer operation only for a
@@ -1434,13 +1458,7 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		groupID = tag
 	}
 
-	ch.consumersMu.Lock()
-	if _, exists := ch.consumers[tag]; exists {
-		ch.consumersMu.Unlock()
-		return ch.sendChannelClose(codec.NotAllowed,
-			fmt.Sprintf("consumer tag %q already exists", tag), codec.ClassBasic, codec.MethodBasicConsume)
-	}
-	ch.consumers[tag] = &consumer{
+	cons := &consumer{
 		tag:        tag,
 		queue:      queueFilter,
 		mqttFilter: mqttFilter,
@@ -1450,14 +1468,41 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		noAck:      m.NoAck,
 		exclusive:  m.Exclusive,
 	}
+
+	ch.consumersMu.Lock()
+	if _, exists := ch.consumers[tag]; exists {
+		ch.consumersMu.Unlock()
+		return ch.sendChannelClose(codec.NotAllowed,
+			fmt.Sprintf("consumer tag %q already exists", tag), codec.ClassBasic, codec.MethodBasicConsume)
+	}
+	// Reserve the consumer before subscribing because queue delivery can begin
+	// as soon as the manager registers it. A failed subscription removes this
+	// reservation before the channel reports the failure.
+	ch.consumers[tag] = cons
 	ch.consumersMu.Unlock()
 
 	ch.conn.broker.stats.IncrementConsumers()
+	rollbackConsumer := func() {
+		ch.consumersMu.Lock()
+		if current, exists := ch.consumers[tag]; exists && current == cons {
+			delete(ch.consumers, tag)
+			ch.conn.broker.stats.DecrementConsumers()
+		}
+		ch.consumersMu.Unlock()
+	}
 
 	// Subscribe to the queue via queue manager
-	if qm != nil && (isQueue || isStream) && queueName != "" {
-		clientID := PrefixedClientID(ch.conn.connID)
+	if (isQueue || isStream) && queueName != "" {
+		if qm == nil {
+			rollbackConsumer()
+			return ch.sendChannelClose(codec.InternalError, "queue manager unavailable", codec.ClassBasic, codec.MethodBasicConsume)
+		}
+
 		subGroupID := groupID
+		var (
+			subscribeErr        error
+			subscriptionStarted bool
+		)
 		if isStream {
 			cursor := streamCursor
 			if cursor == nil {
@@ -1467,11 +1512,47 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 			if autoCommit := extractAutoCommit(m.Arguments); autoCommit != nil {
 				cursor.AutoCommit = autoCommit
 			}
-			if err := qm.SubscribeWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor); err != nil {
-				ch.conn.logger.Error("queue subscribe with cursor failed", "queue", queueName, "error", err)
+			if ch.conn.connectionPolicy().usesLocalPrincipalAuth() {
+				existing, ok := qm.(corebroker.ExistingQueueSubscriber)
+				if !ok {
+					subscribeErr = fmt.Errorf("queue manager does not support non-mutating subscriptions")
+				} else {
+					subscriptionStarted = true
+					subscribeErr = existing.SubscribeExistingWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor)
+				}
+			} else {
+				subscriptionStarted = true
+				subscribeErr = qm.SubscribeWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor)
 			}
-		} else if err := qm.Subscribe(context.Background(), queueName, pattern, clientID, subGroupID, ""); err != nil {
-			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", err)
+		} else if ch.conn.connectionPolicy().usesLocalPrincipalAuth() {
+			existing, ok := qm.(corebroker.ExistingQueueSubscriber)
+			if !ok {
+				subscribeErr = fmt.Errorf("queue manager does not support non-mutating subscriptions")
+			} else {
+				subscriptionStarted = true
+				subscribeErr = existing.SubscribeExisting(context.Background(), queueName, pattern, clientID, subGroupID, "")
+			}
+		} else {
+			subscriptionStarted = true
+			subscribeErr = qm.Subscribe(context.Background(), queueName, pattern, clientID, subGroupID, "")
+		}
+
+		if subscribeErr != nil {
+			rollbackConsumer()
+			// A manager can fail after partially registering group state. Cleanup is
+			// best effort; errors raised before registration need no cleanup.
+			if subscriptionStarted && !errors.Is(subscribeErr, qstorage.ErrQueueNotFound) && !errors.Is(subscribeErr, queuepkg.ErrQueueNotStream) {
+				_ = qm.Unsubscribe(context.Background(), queueName, pattern, clientID, subGroupID)
+			}
+			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", subscribeErr)
+			switch {
+			case errors.Is(subscribeErr, qstorage.ErrQueueNotFound):
+				return ch.sendChannelClose(codec.NotFound, "queue not found", codec.ClassBasic, codec.MethodBasicConsume)
+			case errors.Is(subscribeErr, queuepkg.ErrQueueNotStream):
+				return ch.sendChannelClose(codec.PreconditionFailed, "queue is not a stream", codec.ClassBasic, codec.MethodBasicConsume)
+			default:
+				return ch.sendChannelClose(codec.InternalError, "queue subscription failed", codec.ClassBasic, codec.MethodBasicConsume)
+			}
 		}
 	}
 

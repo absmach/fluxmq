@@ -724,9 +724,17 @@ func TestValidateAgainstRuntimeRefusesExactTargetWhileClustered(t *testing.T) {
 		assert.NoError(t, ValidateAgainstRuntime(withPermission(false, prefixOnly), withPermission(false, exact)))
 	})
 
-	t.Run("no local listener means no local publication to strand", func(t *testing.T) {
+	t.Run("removing the running listener does not make the reload safe", func(t *testing.T) {
 		next := withPermission(false, exact)
 		next.Server.AMQP091.Local = AMQP091ListenerConfig{}
-		assert.NoError(t, ValidateAgainstRuntime(withPermission(true, prefixOnly), next))
+		err := ValidateAgainstRuntime(withPermission(true, prefixOnly), next)
+		require.Error(t, err, "the running listener remains active until restart")
+		assert.Contains(t, err.Error(), "while the running node is clustered")
+	})
+
+	t.Run("no running local listener means no local publication to strand", func(t *testing.T) {
+		running := withPermission(true, prefixOnly)
+		running.Server.AMQP091.Local = AMQP091ListenerConfig{}
+		assert.NoError(t, ValidateAgainstRuntime(running, withPermission(false, exact)))
 	})
 }

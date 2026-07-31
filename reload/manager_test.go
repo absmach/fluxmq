@@ -60,6 +60,49 @@ func TestReloadNoChanges(t *testing.T) {
 	}
 }
 
+func TestReloadRejectsExactGrantWhenDesiredConfigRemovesRunningListener(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "local-secret")
+	if err := os.WriteFile(secretPath, []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, dir, fmt.Sprintf(`auth:
+  local_principals:
+    - name: service
+      certificate_uri_san: spiffe://absmach/service
+      current_secret_file: %q
+      permissions:
+        publish:
+          - routing_key: audit
+        subscribe: []
+`, secretPath))
+
+	running := config.Default()
+	running.Cluster.Enabled = true
+	running.Server.AMQP091.Local.Addr = ":5683"
+	running.Auth.LocalPrincipals = []config.LocalPrincipalConfig{{
+		Name:              "service",
+		CertificateURISAN: "spiffe://absmach/service",
+		CurrentSecretFile: secretPath,
+		Permissions: config.LocalPermissionsConfig{Publish: []config.LocalPublishPermission{{
+			RoutingKeyPrefix: "m.",
+		}}},
+	}}
+
+	var callbackCalls atomic.Int64
+	m := New(path, running, WithLocalPrincipalsReload(func([]config.LocalPrincipalConfig) (bool, error) {
+		callbackCalls.Add(1)
+		return true, nil
+	}))
+	_, err := m.Reload(context.Background())
+	if err == nil {
+		t.Fatal("Reload() succeeded while the clustered runtime still had a local listener")
+	}
+	if callbackCalls.Load() != 0 {
+		t.Fatalf("local-principal callback calls = %d, want 0", callbackCalls.Load())
+	}
+}
+
 func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 	dir := t.TempDir()
 	secretPath := filepath.Join(dir, "local-secret")
