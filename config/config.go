@@ -208,6 +208,31 @@ func validateAuthYAML(node *yaml.Node) error {
 	})
 }
 
+// ValidateAgainstRuntime checks the rules that depend on what the process is
+// actually running rather than on what the new file asks for.
+//
+// Validate sees one config and answers for a fresh start. A reload is different:
+// its runtime-safe fields take effect immediately while restart-required ones do
+// not, so the two halves of a cross-field rule can come from different
+// configurations. Clustering is restart-required and local principals are
+// runtime-safe, so a reload that disables clustering and adds an exact publish
+// target in the same edit would pass Validate and then apply the target inside a
+// still-clustered runtime, writing records no other node forwards. Ask the
+// cluster question of the running config.
+func ValidateAgainstRuntime(running, next *Config) error {
+	if running == nil || next == nil || !running.Cluster.Enabled {
+		return nil
+	}
+	if len(next.Server.AMQP091.LocalListeners()) == 0 {
+		return nil
+	}
+	name, target, found := firstExactPublishTarget(next.Auth.LocalPrincipals)
+	if !found {
+		return nil
+	}
+	return fmt.Errorf("auth.local_principals %q grants the exact publish target %q, which cannot be applied while the running node is clustered: clustering is restart-required, so disabling it in the same reload does not take effect until restart; restart the node to change both together", name, target)
+}
+
 // firstExactPublishTarget reports the first principal granting an exact publish
 // target, naming it so the operator can find the entry to change.
 func firstExactPublishTarget(principals []LocalPrincipalConfig) (principal, target string, found bool) {

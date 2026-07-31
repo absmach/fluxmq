@@ -180,6 +180,15 @@ func (m *Manager) Reload(ctx context.Context) (*ReloadResult, error) {
 		return nil, fmt.Errorf("reload failed: %w", err)
 	}
 
+	// Cross-field rules whose two halves reload at different speeds have to be
+	// asked of the running process, not of the file alone.
+	if err := config.ValidateAgainstRuntime(m.current, newCfg); err != nil {
+		if m.localPrincipalsFailed != nil && len(m.current.Auth.LocalPrincipals) > 0 {
+			m.localPrincipalsFailed(err)
+		}
+		return nil, fmt.Errorf("reload failed: %w", err)
+	}
+
 	diff := config.Diff(m.current, newCfg)
 	if m.localPrincipalsReload != nil && !hasFieldChange(diff.RuntimeSafe, localPrincipalsPath) {
 		// Secret files can change without their configured paths changing. Probe

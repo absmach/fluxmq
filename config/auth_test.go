@@ -686,3 +686,47 @@ func TestLoadAcceptsPublishPermissionFields(t *testing.T) {
 		})
 	}
 }
+
+// Clustering is restart-required while local principals are runtime-safe, so a
+// reload that disables clustering and adds an exact publish target in one edit
+// would otherwise apply the target inside a still-clustered runtime.
+func TestValidateAgainstRuntimeRefusesExactTargetWhileClustered(t *testing.T) {
+	dir := t.TempDir()
+	secret := writeSecret(t, dir, "current", strings.Repeat("a", 32))
+
+	withPermission := func(clusterEnabled bool, permission LocalPublishPermission) *Config {
+		cfg := Default()
+		cfg.Cluster.Enabled = clusterEnabled
+		cfg.Server.AMQP091.Local.Addr = testInternalAddr
+		cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
+			Name:              testPrincipalName,
+			CertificateURISAN: testPrincipalSAN,
+			CurrentSecretFile: secret,
+			Permissions:       LocalPermissionsConfig{Publish: []LocalPublishPermission{permission}},
+		}}
+		return cfg
+	}
+
+	prefixOnly := LocalPublishPermission{RoutingKeyPrefix: "m."}
+	exact := LocalPublishPermission{RoutingKey: testAuditQueue}
+
+	t.Run("adding an exact target under a clustered runtime is refused", func(t *testing.T) {
+		err := ValidateAgainstRuntime(withPermission(true, prefixOnly), withPermission(false, exact))
+		require.Error(t, err, "the desired config disables clustering, but the running node has not restarted")
+		assert.Contains(t, err.Error(), "while the running node is clustered")
+	})
+
+	t.Run("keeping only prefixes under a clustered runtime is allowed", func(t *testing.T) {
+		assert.NoError(t, ValidateAgainstRuntime(withPermission(true, prefixOnly), withPermission(true, prefixOnly)))
+	})
+
+	t.Run("an exact target on an unclustered runtime is allowed", func(t *testing.T) {
+		assert.NoError(t, ValidateAgainstRuntime(withPermission(false, prefixOnly), withPermission(false, exact)))
+	})
+
+	t.Run("no local listener means no local publication to strand", func(t *testing.T) {
+		next := withPermission(false, exact)
+		next.Server.AMQP091.Local = AMQP091ListenerConfig{}
+		assert.NoError(t, ValidateAgainstRuntime(withPermission(true, prefixOnly), next))
+	})
+}

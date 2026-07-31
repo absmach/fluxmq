@@ -118,6 +118,13 @@ which the cluster forwards like any other message, so a principal holding only
 prefix permissions runs clustered without restriction. The permission decides
 this, exactly as it decides how the publication is routed.
 
+The same rule is applied to reloads against the running node rather than the
+new file. `auth.local_principals` reloads at runtime while `cluster.enabled`
+requires a restart, so a single edit that disables clustering and adds an exact
+target would otherwise apply the target immediately while the node stayed
+clustered. Such a reload is refused; make the two changes in separate steps,
+restarting in between.
+
 Publish permissions support only the default exchange (`exchange: ""`) and an
 exact, non-empty routing key. Other exchanges and wildcard routing keys are
 rejected when the configuration is loaded. At publish time the ACL is applied

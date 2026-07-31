@@ -238,12 +238,12 @@ func TestClassifyFieldDefault(t *testing.T) {
 	}
 }
 
-// Local-principal ACLs are runtime-safe while the listener that serves them is
-// not. That asymmetry is what keeps a reload from applying node-local durable
-// grants inside a still-clustered runtime: a local listener cannot be brought
-// up without a restart, and startup refuses to bring one up alongside
-// clustering at all. Making a listener field runtime-safe would open that
-// window, so pin both classifications.
+// Local-principal ACLs are runtime-safe while clustering and the listener that
+// serves them are not. That asymmetry is why a reload cannot be validated
+// against the file alone: an exact publish target would apply immediately while
+// a clustering change in the same edit waits for restart. ValidateAgainstRuntime
+// closes that window; these classifications are what make it necessary, so pin
+// them and fail loudly if any of them moves.
 func TestLocalListenerCannotStartWithoutRestart(t *testing.T) {
 	for _, field := range []string{
 		"Server",
