@@ -239,6 +239,44 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			wantError: "exchange must be empty; local principals may publish only through the AMQP default exchange",
 		},
 		{
+			name: "publish permission cannot set both an exact key and a prefix",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{
+					{RoutingKey: testAuditQueue, RoutingKeyPrefix: "m."},
+				}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "cannot set both routing_key and routing_key_prefix",
+		},
+		{
+			name: "publish permission must set one of them",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{{}}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must set either routing_key or routing_key_prefix",
+		},
+		{
+			name: "publish prefix cannot contain wildcards",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{{RoutingKeyPrefix: "m.#"}}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must not contain wildcards",
+		},
+		{
+			name: "publish prefix cannot have surrounding whitespace",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{{RoutingKeyPrefix: " m."}}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "cannot have leading or trailing whitespace",
+		},
+		{
 			name: "subscribe permission cannot be empty",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()

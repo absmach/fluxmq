@@ -186,7 +186,7 @@ auth:
       current_secret_file: /run/secrets/re-current
       permissions:
         publish:
-          - routing_key: m
+          - routing_key_prefix: "m."
         subscribe:
           - m
 ```
@@ -198,6 +198,33 @@ declaring no `publish` entry cannot publish. Unlike publish targets, subscribe
 targets need no matching `queues` entry: the durability contract that publish
 targets carry exists because local publishes are acknowledged as crash-durable,
 which does not apply to reading.
+
+#### Publish targets: exact keys and prefixes
+
+A publish permission sets exactly one of `routing_key` or `routing_key_prefix`.
+
+`routing_key` names one exact target. It is what a durable-stream publisher
+needs, because the routing key is the queue it appends to, so it must also
+appear under `queues`. The audit publisher uses this form.
+
+`routing_key_prefix` grants every routing key beneath it and is checked against
+no queue, so it authorizes topic publishing rather than a durable append. It
+exists because a service publishes to topics built from its own runtime data —
+a tenant identifier, a channel identifier, a subtopic — which cannot be
+enumerated in broker configuration. The Rules Engine republishing a rule output
+to `m.<domain>.c.<channel>.<subtopic>` is the motivating case.
+
+A prefix is a wildcard by construction and must never be written as one:
+`m.#` is rejected, because accepting it would silently grant the literal `#`
+as well. Prefix matching is a plain string prefix over the routing key and
+applies only to the default exchange, the same restriction every publish
+permission carries.
+
+Keep the prefix as narrow as the service's topic namespace allows. It is what
+separates one service's reach from another's, so `m.` is a meaningful boundary
+while an empty or single-character prefix is not. The same string as an exact
+key and as a prefix are different grants and produce different permissions
+fingerprints, so narrowing one into the other revokes existing sessions.
 
 Publish and subscribe ACLs share one permissions fingerprint, so narrowing
 either revokes the sessions that authenticated under the wider one, exactly as a

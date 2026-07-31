@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -69,8 +70,12 @@ type principal struct {
 	current           CredentialFingerprint
 	previous          *CredentialFingerprint
 	publish           map[PublishTarget]struct{}
-	subscribe         map[string]struct{}
-	permissions       PermissionsFingerprint
+	// publishPrefixes is sorted, so the fingerprint is stable and matching is
+	// deterministic. It holds a handful of entries at most, which is why a
+	// linear scan is preferred to another map.
+	publishPrefixes []string
+	subscribe       map[string]struct{}
+	permissions     PermissionsFingerprint
 }
 
 // New loads and validates a local-principal snapshot.
@@ -163,8 +168,20 @@ func (s *Store) CanPublishAuthenticated(authentication Authentication, exchange,
 		return false
 	}
 	principal := current.principals[authentication.Principal]
-	_, allowed := principal.publish[PublishTarget{Exchange: exchange, RoutingKey: routingKey}]
-	return allowed
+	if _, allowed := principal.publish[PublishTarget{Exchange: exchange, RoutingKey: routingKey}]; allowed {
+		return true
+	}
+	// A prefix permission grants the default exchange only, matching the
+	// exchange restriction config already enforces on every publish permission.
+	if exchange != "" {
+		return false
+	}
+	for _, publishPrefix := range principal.publishPrefixes {
+		if strings.HasPrefix(routingKey, publishPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // CanSubscribeAuthenticated checks the session credential and exact subscribe
@@ -226,9 +243,15 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 		}
 
 		publish := make(map[PublishTarget]struct{}, len(principalConfig.Permissions.Publish))
+		var publishPrefixes []string
 		for _, permission := range principalConfig.Permissions.Publish {
+			if permission.IsPrefix() {
+				publishPrefixes = append(publishPrefixes, permission.RoutingKeyPrefix)
+				continue
+			}
 			publish[PublishTarget{Exchange: permission.Exchange, RoutingKey: permission.RoutingKey}] = struct{}{}
 		}
+		sort.Strings(publishPrefixes)
 
 		subscribe := make(map[string]struct{}, len(principalConfig.Permissions.Subscribe))
 		for _, queue := range principalConfig.Permissions.Subscribe {
@@ -240,8 +263,9 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 			current:           current,
 			previous:          previous,
 			publish:           publish,
+			publishPrefixes:   publishPrefixes,
 			subscribe:         subscribe,
-			permissions:       fingerprintPermissions(publish, subscribe),
+			permissions:       fingerprintPermissions(publish, publishPrefixes, subscribe),
 		}
 	}
 
@@ -278,6 +302,9 @@ func principalsEqual(left, right *principal) bool {
 		if _, ok := right.publish[target]; !ok {
 			return false
 		}
+	}
+	if !slices.Equal(left.publishPrefixes, right.publishPrefixes) {
+		return false
 	}
 	if len(left.subscribe) != len(right.subscribe) {
 		return false
@@ -337,7 +364,7 @@ func loadFingerprint(field, filename string, required bool) (CredentialFingerpri
 	return fingerprint, nil
 }
 
-func fingerprintPermissions(publish map[PublishTarget]struct{}, subscribe map[string]struct{}) PermissionsFingerprint {
+func fingerprintPermissions(publish map[PublishTarget]struct{}, publishPrefixes []string, subscribe map[string]struct{}) PermissionsFingerprint {
 	targets := make([]PublishTarget, 0, len(publish))
 	for target := range publish {
 		targets = append(targets, target)
@@ -355,12 +382,16 @@ func fingerprintPermissions(publish map[PublishTarget]struct{}, subscribe map[st
 	}
 	sort.Strings(queues)
 
-	// The two ACLs are length-prefixed and separated by their own counts, so no
+	// Each ACL is length-prefixed and preceded by its own count, so no
 	// rearrangement of entries between them can produce a colliding digest.
 	serialized := binary.BigEndian.AppendUint64(nil, uint64(len(targets)))
 	for _, target := range targets {
 		serialized = appendLengthPrefixed(serialized, target.Exchange)
 		serialized = appendLengthPrefixed(serialized, target.RoutingKey)
+	}
+	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(publishPrefixes)))
+	for _, publishPrefix := range publishPrefixes {
+		serialized = appendLengthPrefixed(serialized, publishPrefix)
 	}
 	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(queues)))
 	for _, queue := range queues {

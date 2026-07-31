@@ -413,3 +413,78 @@ func TestPermissionsFingerprintSeparatesACLs(t *testing.T) {
 	assert.NotEqual(t, publishOnly, subscribeOnly,
 		"a target moved between the publish and subscribe ACLs must change the fingerprint")
 }
+
+// A service publishes to topics derived from its own runtime data, so its ACL
+// names a routing-key prefix rather than keys that cannot be enumerated in
+// configuration. The prefix must bound the grant, not dissolve it.
+func TestPublishPrefixACL(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	principal := principalConfig(current, "")
+	principal.Permissions.Publish = []config.LocalPublishPermission{
+		{RoutingKey: auditQueue},
+		{RoutingKeyPrefix: "m."},
+	}
+	store, err := New([]config.LocalPrincipalConfig{principal})
+	require.NoError(t, err)
+
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok)
+
+	tests := []struct {
+		name       string
+		exchange   string
+		routingKey string
+		want       bool
+	}{
+		{name: "exact permission still matches", routingKey: auditQueue, want: true},
+		{name: "key under the prefix", routingKey: "m.domain.c.channel.temp", want: true},
+		{name: "prefix itself", routingKey: "m.", want: true},
+		{name: "key outside the prefix", routingKey: "other.domain", want: false},
+		{name: "prefix must match at the start", routingKey: "x.m.domain", want: false},
+		{name: "partial prefix is not enough", routingKey: "m", want: false},
+		{name: "prefix does not reach another exchange", exchange: "events", routingKey: "m.domain", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, store.CanPublishAuthenticated(authentication, tc.exchange, tc.routingKey))
+		})
+	}
+
+	t.Run("dropping the prefix revokes the session", func(t *testing.T) {
+		narrowed := principalConfig(current, "")
+		narrowed.Permissions.Publish = []config.LocalPublishPermission{{RoutingKey: auditQueue}}
+		changed, err := store.Reload([]config.LocalPrincipalConfig{narrowed})
+		require.NoError(t, err)
+		require.True(t, changed, "dropping a prefix permission must be seen as a change")
+
+		assert.False(t, store.IsActive(authentication))
+		assert.False(t, store.CanPublishAuthenticated(authentication, "", "m.domain.c.channel.temp"))
+	})
+}
+
+// A prefix and an exact key spelling the same grant must not share a digest,
+// or narrowing one into the other would leave sessions alive.
+func TestPermissionsFingerprintSeparatesPrefixFromExact(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, publish []config.LocalPublishPermission) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Permissions.Publish = publish
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	exact := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKey: "m."}})
+	prefixed := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKeyPrefix: "m."}})
+
+	assert.NotEqual(t, exact, prefixed,
+		"the same string as an exact key and as a prefix are different grants")
+}

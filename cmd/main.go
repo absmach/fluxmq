@@ -267,6 +267,11 @@ func localPrincipalPublishTargetContracts(principals []config.LocalPrincipalConf
 	targets := make(map[string]struct{})
 	for _, principal := range principals {
 		for _, permission := range principal.Permissions.Publish {
+			// A prefix permission authorizes topic publishing, not an append to
+			// one durable stream, so there is no single queue to contract with.
+			if permission.IsPrefix() {
+				continue
+			}
 			targets[permission.RoutingKey] = struct{}{}
 		}
 	}

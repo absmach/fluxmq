@@ -110,16 +110,37 @@ type LocalPrincipalConfig struct {
 	Permissions        LocalPermissionsConfig `yaml:"permissions"`
 }
 
-// LocalPermissionsConfig contains exact-match publish and subscribe ACLs.
+// LocalPermissionsConfig contains the publish and subscribe ACLs of one local
+// principal. Subscribe entries are exact queue names.
 type LocalPermissionsConfig struct {
 	Publish   []LocalPublishPermission `yaml:"publish"`
 	Subscribe []string                 `yaml:"subscribe"`
 }
 
-// LocalPublishPermission grants publish access to one exact AMQP target.
+// LocalPublishPermission grants publish access to an AMQP target, named either
+// exactly or by routing-key prefix. Exactly one of RoutingKey and
+// RoutingKeyPrefix must be set.
+//
+// An exact permission is what a durable-stream publisher needs: the routing key
+// names the queue it appends to, so it must also appear under queues.
+//
+// A prefix permission exists because a service publishes to topics derived from
+// its own runtime data — a tenant identifier, a channel identifier — which
+// cannot be enumerated in broker configuration. It grants every routing key
+// under the prefix and is checked against no queue, so it authorizes topic
+// publishing rather than a durable append. Keep the prefix as narrow as the
+// service's topic namespace allows: it is what separates one service's reach
+// from another's.
 type LocalPublishPermission struct {
-	Exchange   string `yaml:"exchange"`
-	RoutingKey string `yaml:"routing_key"`
+	Exchange         string `yaml:"exchange"`
+	RoutingKey       string `yaml:"routing_key,omitempty"`
+	RoutingKeyPrefix string `yaml:"routing_key_prefix,omitempty"`
+}
+
+// IsPrefix reports whether the permission grants a routing-key prefix rather
+// than one exact routing key.
+func (p LocalPublishPermission) IsPrefix() bool {
+	return p.RoutingKeyPrefix != ""
 }
 
 // UnmarshalYAML keeps the auth subtree strict without changing the historical
@@ -1695,14 +1716,28 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			if permission.Exchange != "" {
 				return fmt.Errorf("%s.exchange must be empty; local principals may publish only through the AMQP default exchange", permissionPrefix)
 			}
-			if permission.RoutingKey == "" {
-				return fmt.Errorf("%s.routing_key cannot be empty", permissionPrefix)
-			}
 			if containsWildcard(permission.Exchange) {
 				return fmt.Errorf("%s.exchange must be an exact value without wildcards", permissionPrefix)
 			}
-			if containsWildcard(permission.RoutingKey) {
-				return fmt.Errorf("%s.routing_key must be an exact value without wildcards", permissionPrefix)
+			if permission.RoutingKey != "" && permission.RoutingKeyPrefix != "" {
+				return fmt.Errorf("%s cannot set both routing_key and routing_key_prefix", permissionPrefix)
+			}
+			// A prefix is a wildcard by construction, so it must never be written
+			// as one: accepting "m.#" would silently grant the literal "#" too.
+			if permission.IsPrefix() {
+				if containsWildcard(permission.RoutingKeyPrefix) {
+					return fmt.Errorf("%s.routing_key_prefix must not contain wildcards; it already matches every routing key beneath it", permissionPrefix)
+				}
+				if strings.TrimSpace(permission.RoutingKeyPrefix) != permission.RoutingKeyPrefix {
+					return fmt.Errorf("%s.routing_key_prefix cannot have leading or trailing whitespace", permissionPrefix)
+				}
+			} else {
+				if permission.RoutingKey == "" {
+					return fmt.Errorf("%s must set either routing_key or routing_key_prefix", permissionPrefix)
+				}
+				if containsWildcard(permission.RoutingKey) {
+					return fmt.Errorf("%s.routing_key must be an exact value without wildcards", permissionPrefix)
+				}
 			}
 			if _, exists := publishTargets[permission]; exists {
 				return fmt.Errorf("%s duplicates an earlier publish permission", permissionPrefix)
