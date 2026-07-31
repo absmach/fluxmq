@@ -235,9 +235,10 @@ The ACL is evaluated against the exchange the router resolves, so a client may
 name the default exchange either as `""` or as its `amq.default` alias. The
 configuration itself accepts only `exchange: ""`.
 
-A principal with the default `publisher` role is publish-only, and for one
-`permissions.subscribe` is unsupported and
-must remain empty (`[]`).
+A principal with the default `publisher` role is publish-only:
+`permissions.subscribe` is rejected at load for it and must stay empty (`[]`).
+Consuming requires `role: service`, described in
+[Principal Roles](/configuration/security#principal-roles).
 
 FluxMQ resolves the preconfigured stream through the shared queue manager; the
 publisher never needs `QueueDeclare` permission. A publisher confirm is an ACK

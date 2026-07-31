@@ -169,9 +169,8 @@ API, and no client may set or read one.
 
 The boundary is the listener's trust policy, not the protocol. Only the AMQP
 0.9.1 `local` listener and its deprecated `internal` and `service` aliases are
-trusted, because they admit solely
-mTLS peers whose verified certificate URI SAN matches a principal declared in
-FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
+trusted, because they admit solely mTLS peers whose verified certificate URI
+SAN matches a principal declared in FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
 1.0, and AMQP 0.9.1 on the remote listener — is treated as a tenant or device:
 
 - **Ingress**: reserved properties supplied by an untrusted publisher are
