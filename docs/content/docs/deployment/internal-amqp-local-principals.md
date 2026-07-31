@@ -29,7 +29,8 @@ It is deliberately not a general client authentication mechanism:
   a configuration and secret-provisioning change, not an API call;
 - the ACL grants exactly one `(default exchange, routing key)` pair per entry,
   with no wildcards, patterns, or hierarchy;
-- the principal is publish-only into a pre-provisioned protected stream, so it
+- the principal has the default `publisher` role and writes into a
+  pre-provisioned protected stream, so it
   cannot consume, discover topology, or create anything;
 - it scales to a handful of principals, not to a client population. Remote
   clients, devices, and tenants continue to authenticate through
@@ -94,7 +95,7 @@ server:
       min_version: "TLS1.2"
 
     # Private listener. Never expose it through a public load balancer.
-    internal:
+    local:
       addr: ":5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
@@ -210,7 +211,7 @@ a clustered audit stream requires a future end-to-end quorum durability
 barrier before FluxMQ can ACK the publication.
 
 The internal listener therefore cannot run on a clustered node, and FluxMQ
-refuses that configuration at startup: `server.amqp091.internal.addr` together
+refuses that configuration at startup: `server.amqp091.local.addr` together
 with `cluster.enabled` is a validation error. A local publication is appended
 and synced on the receiving node only and is never forwarded to other nodes,
 because forwarding would acknowledge a publisher on a barrier no single node
@@ -230,7 +231,8 @@ The ACL is evaluated against the exchange the router resolves, so a client may
 name the default exchange either as `""` or as its `amq.default` alias. The
 configuration itself accepts only `exchange: ""`.
 
-Local principals are publish-only. `permissions.subscribe` is unsupported and
+A principal with the default `publisher` role is publish-only, and for one
+`permissions.subscribe` is unsupported and
 must remain empty (`[]`).
 
 FluxMQ resolves the preconfigured stream through the shared queue manager; the
@@ -309,7 +311,7 @@ process restart.
 
 ## Implemented behavior
 
-- Bind a dedicated `server.amqp091.internal` mTLS listener on port `5683`.
+- Bind a dedicated `server.amqp091.local` mTLS listener on port `5683`.
 - Pass listener-scoped authentication, authorization, and hook policies into
   AMQP connections instead of selecting them from broker-global state.
 - Keep remote AMQP on `auth.external`; do not add a local lookup to that path.

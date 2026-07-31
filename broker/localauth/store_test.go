@@ -261,6 +261,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			name: "subscribe ACL entry cannot be empty",
 			configs: func() []config.LocalPrincipalConfig {
 				principal := principalConfig(current, "")
+				principal.Role = config.LocalRoleService
 				principal.Permissions.Subscribe = []string{""}
 				return []config.LocalPrincipalConfig{principal}
 			},
@@ -270,6 +271,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			name: "subscribe ACL entry cannot be duplicated",
 			configs: func() []config.LocalPrincipalConfig {
 				principal := principalConfig(current, "")
+				principal.Role = config.LocalRoleService
 				principal.Permissions.Subscribe = []string{auditQueue, auditQueue}
 				return []config.LocalPrincipalConfig{principal}
 			},
@@ -350,6 +352,7 @@ func TestSubscribeACL(t *testing.T) {
 
 	withSubscribe := func(queues ...string) []config.LocalPrincipalConfig {
 		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
 		principal.Permissions.Subscribe = queues
 		return []config.LocalPrincipalConfig{principal}
 	}
@@ -391,6 +394,63 @@ func TestSubscribeACL(t *testing.T) {
 
 // The two ACLs share one fingerprint, so swapping a target between them must
 // not produce the same digest.
+// The role is a capability, so narrowing it must revoke sessions that
+// authenticated under the wider one, exactly as narrowing an ACL does.
+// Otherwise a demoted service would keep consuming until it reconnected.
+func TestReloadRevokesNarrowedRole(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+	principal := principalConfig(current, "")
+	principal.Role = config.LocalRoleService
+	principal.Permissions.Subscribe = []string{auditQueue}
+
+	store, err := New([]config.LocalPrincipalConfig{principal})
+	require.NoError(t, err)
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok)
+	require.Equal(t, config.LocalRoleService, authentication.Role)
+	require.True(t, store.CanSubscribeAuthenticated(authentication, auditQueue))
+
+	narrowed := principalConfig(current, "")
+	changed, err := store.Reload([]config.LocalPrincipalConfig{narrowed})
+	require.NoError(t, err)
+	require.True(t, changed, "demoting a service to a publisher must be seen as a change")
+
+	assert.False(t, store.IsActive(authentication))
+	assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueue))
+
+	reauthenticated, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok)
+	assert.Equal(t, config.LocalRolePublisher, reauthenticated.Role)
+}
+
+// A role and an ACL entry spelling the same string must not collide in the
+// digest, or a change from one to the other would leave sessions alive.
+func TestPermissionsFingerprintSeparatesRoleFromACLs(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, role string, subscribe []string) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Role = role
+		principal.Permissions.Subscribe = subscribe
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	service := fingerprintFor(t, config.LocalRoleService, nil)
+	publisher := fingerprintFor(t, config.LocalRolePublisher, nil)
+	assert.NotEqual(t, service, publisher, "a role change must change the fingerprint")
+
+	roleNamedQueue := fingerprintFor(t, config.LocalRoleService, []string{config.LocalRoleService})
+	assert.NotEqual(t, service, roleNamedQueue,
+		"a queue spelled like the role must not collide with the role itself")
+}
+
 func TestPermissionsFingerprintSeparatesACLs(t *testing.T) {
 	dir := t.TempDir()
 	current := writeSecret(t, dir, "current", currentSecret)
@@ -399,6 +459,7 @@ func TestPermissionsFingerprintSeparatesACLs(t *testing.T) {
 		t.Helper()
 		principal := principalConfig(current, "")
 		principal.Permissions.Publish = publish
+		principal.Role = config.LocalRoleService
 		principal.Permissions.Subscribe = subscribe
 		store, err := New([]config.LocalPrincipalConfig{principal})
 		require.NoError(t, err)

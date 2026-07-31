@@ -1059,15 +1059,12 @@ func TestDeliveryReservedHeadersEgressTrustBoundary(t *testing.T) {
 			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
 		},
 		{
-			name: "service policy reveals reserved property to a first-party consumer",
 			// The reason the boundary has an inward direction at all: without a
-			// consumer that may read them, reserved properties would be write-only.
-			policy: NewLocalServiceConnectionPolicy(nil, nil, nil, 0),
-			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
-		},
-		{
-			name:   "publish-only policy still reveals nothing it cannot consume",
-			policy: NewLocalPublishOnlyConnectionPolicy(nil, nil, nil, 0),
+			// first-party consumer that may read them, reserved properties would
+			// be write-only. Trust is the listener's, so both roles see them; the
+			// role decides only whether a consumer can be run in the first place.
+			name:   "local policy reveals reserved property to a first-party consumer",
+			policy: NewLocalConnectionPolicy(nil, nil, nil, 0),
 			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
 		},
 		{
@@ -1220,89 +1217,82 @@ func TestCancelConsumerByQueue(t *testing.T) {
 	})
 }
 
-// The consumer lifecycle is admitted only on a listener that permits consumers,
-// and only for a queue the principal's own subscribe ACL names. A publish-only
-// principal keeps its existing, narrower method set.
+// The consumer lifecycle is admitted only to a principal whose role permits
+// consumers, and only for a queue its own subscribe ACL names. Both roles run on
+// the same listener policy, so the capability comes from the principal alone.
 func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 	const allowedQueue = "m"
 
-	servicePolicy := func(authz LocalPrincipalAuthorizer) *ConnectionPolicy {
-		return NewLocalServiceConnectionPolicy(nil, authz, nil, 0)
-	}
-	publishOnlyPolicy := func(authz LocalPrincipalAuthorizer) *ConnectionPolicy {
-		return NewLocalPublishOnlyConnectionPolicy(nil, authz, nil, 0)
-	}
-
 	tests := []struct {
 		name        string
-		policy      func(LocalPrincipalAuthorizer) *ConnectionPolicy
+		role        LocalPrincipalRole
 		method      any
 		wantAllowed bool
 	}{
 		{
 			name:        "service consumes a permitted queue",
-			policy:      servicePolicy,
+			role:        LocalRoleService,
 			method:      &codec.BasicConsume{Queue: allowedQueue},
 			wantAllowed: true,
 		},
 		{
 			name:   "service is refused a queue outside its ACL",
-			policy: servicePolicy,
+			role:   LocalRoleService,
 			method: &codec.BasicConsume{Queue: testOtherTarget},
 		},
 		{
 			name:        "service gets from a permitted queue",
-			policy:      servicePolicy,
+			role:        LocalRoleService,
 			method:      &codec.BasicGet{Queue: allowedQueue},
 			wantAllowed: true,
 		},
 		{
 			name:   "service is refused getting from a queue outside its ACL",
-			policy: servicePolicy,
+			role:   LocalRoleService,
 			method: &codec.BasicGet{Queue: testOtherTarget},
 		},
 		{
 			name:        "service passively declares a permitted queue",
-			policy:      servicePolicy,
+			role:        LocalRoleService,
 			method:      &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
 			wantAllowed: true,
 		},
 		{
 			name:   "service is refused passively declaring a queue outside its ACL",
-			policy: servicePolicy,
+			role:   LocalRoleService,
 			method: &codec.QueueDeclare{Queue: testOtherTarget, Passive: true},
 		},
 		{
 			// A non-passive declare rewrites queue configuration, which the
 			// subscribe ACL does not grant even for a queue it names.
 			name:   "service is refused declaring a permitted queue non-passively",
-			policy: servicePolicy,
+			role:   LocalRoleService,
 			method: &codec.QueueDeclare{Queue: allowedQueue},
 		},
 		{
 			name:        "service acknowledges a delivery",
-			policy:      servicePolicy,
+			role:        LocalRoleService,
 			method:      &codec.BasicAck{},
 			wantAllowed: true,
 		},
 		{
 			name:   "publish-only principal may not consume",
-			policy: publishOnlyPolicy,
+			role:   LocalRolePublisher,
 			method: &codec.BasicConsume{Queue: allowedQueue},
 		},
 		{
 			name:   "publish-only principal may not declare a queue",
-			policy: publishOnlyPolicy,
+			role:   LocalRolePublisher,
 			method: &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
 		},
 		{
 			name:   "publish-only principal may not get",
-			policy: publishOnlyPolicy,
+			role:   LocalRolePublisher,
 			method: &codec.BasicGet{Queue: allowedQueue},
 		},
 		{
 			name:   "publish-only principal may not acknowledge",
-			policy: publishOnlyPolicy,
+			role:   LocalRolePublisher,
 			method: &codec.BasicAck{},
 		},
 	}
@@ -1310,8 +1300,8 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			authz := &localAuthorizerStub{allowQueue: allowedQueue}
-			ch, _ := newTestChannelWithPolicy(t, tc.policy(authz))
-			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: "rules-engine"}
+			ch, _ := newTestChannelWithPolicy(t, NewLocalConnectionPolicy(nil, authz, nil, 0))
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: "rules-engine", Role: tc.role}
 
 			allowed, err := ch.authorizeLocalMethod(tc.method)
 			require.NoError(t, err)
@@ -1320,26 +1310,69 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 	}
 }
 
-// A service listener is trusted, so it exchanges reserved properties, and it
-// relays origin identity because the messages it republishes are not its own.
-func TestLocalServicePolicyTrust(t *testing.T) {
-	policy := NewLocalServiceConnectionPolicy(nil, nil, nil, 0)
-
+// Capability is carried by the authenticated principal, so the same connection
+// policy yields different answers per role. The listener contributes only trust
+// and the choice of credential store.
+func TestLocalRoleCapabilities(t *testing.T) {
+	policy := NewLocalConnectionPolicy(nil, nil, nil, 0)
 	assert.True(t, policy.carriesReservedProperties())
 	assert.True(t, policy.usesLocalPrincipalAuth())
-	assert.True(t, policy.permitsConsumers())
-	assert.True(t, policy.propagatesOriginIdentity(),
-		"a service relays messages it did not originate, so it may state their true origin")
+
+	tests := []struct {
+		name                string
+		role                LocalPrincipalRole
+		wantConsumers       bool
+		wantPropagateOrigin bool
+	}{
+		{
+			name:                "service consumes and relays origin",
+			role:                LocalRoleService,
+			wantConsumers:       true,
+			wantPropagateOrigin: true,
+		},
+		{
+			name: "publisher does neither",
+			role: LocalRolePublisher,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch, _ := newTestChannelWithPolicy(t, policy)
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: testLocalPrincipal, Role: tc.role}
+
+			assert.Equal(t, tc.wantConsumers, ch.conn.permitsConsumers())
+			assert.Equal(t, tc.wantPropagateOrigin, ch.conn.propagatesOriginIdentity(),
+				"an audit publisher must not attribute its records to another origin")
+		})
+	}
 }
 
-// The publish-only listener stays exactly as it was: trusted for reserved
-// properties, but never a consumer and never able to relay an origin.
-func TestLocalPublishOnlyPolicyUnchanged(t *testing.T) {
-	policy := NewLocalPublishOnlyConnectionPolicy(nil, nil, nil, 0)
+// Nothing binds a principal to a listener, so a capability the listener granted
+// would be granted to every principal able to reach that port. A publisher must
+// therefore stay a publisher on whichever local listener it authenticates to.
+func TestLocalCapabilityIsIndependentOfListener(t *testing.T) {
+	listeners := map[string]*ConnectionPolicy{
+		"first local listener":  NewLocalConnectionPolicy(nil, nil, nil, 0),
+		"second local listener": NewLocalConnectionPolicy(nil, nil, nil, 0),
+	}
 
-	assert.True(t, policy.carriesReservedProperties())
-	assert.True(t, policy.usesLocalPrincipalAuth())
-	assert.False(t, policy.permitsConsumers())
-	assert.False(t, policy.propagatesOriginIdentity(),
-		"an audit publisher must not attribute its records to another origin")
+	for name, policy := range listeners {
+		t.Run(name, func(t *testing.T) {
+			ch, _ := newTestChannelWithPolicy(t, policy)
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: testLocalPrincipal, Role: LocalRolePublisher}
+
+			assert.False(t, ch.conn.permitsConsumers())
+			assert.False(t, ch.conn.propagatesOriginIdentity())
+		})
+	}
+}
+
+// An unauthenticated connection has no role, and the zero value is the least
+// privileged one, so a capability cannot be reached before authentication.
+func TestLocalCapabilityDeniedWithoutIdentity(t *testing.T) {
+	ch, _ := newTestChannelWithPolicy(t, NewLocalConnectionPolicy(nil, nil, nil, 0))
+
+	assert.False(t, ch.conn.permitsConsumers())
+	assert.False(t, ch.conn.propagatesOriginIdentity())
 }

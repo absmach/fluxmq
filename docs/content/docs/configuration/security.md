@@ -38,7 +38,7 @@ that mesh, never for cross-host traffic.
 By default, all protocols require auth when `auth.external.url` is set. The
 `protocols` map lets you selectively enable or disable the external callout per
 protocol. Internal AMQP services that need local authentication use
-`server.amqp091.internal`; they do not disable authentication on a remote
+`server.amqp091.local`; they do not disable authentication on a remote
 listener.
 
 ```yaml
@@ -74,13 +74,13 @@ declared in FluxMQ's own configuration — audit and event streams, internal
 telemetry, and similar broker-adjacent pipelines. Principals are static: adding
 one is a configuration and secret-provisioning change followed by `SIGHUP`,
 never a runtime registration. There is no dynamic, per-tenant, or per-user
-identity here, and each entry grants exactly one publish target. Remote
+identity here, and each entry grants exactly the targets it names. Remote
 clients, devices, and tenants authenticate through `auth.external`.
 
 ```yaml
 server:
   amqp091:
-    internal:
+    local:
       addr: ":5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
@@ -107,9 +107,9 @@ username, and local secret to match one configured principal. Permissions are
 exact-match allowlists. Port `5683` must remain on a private network and must
 not be published to the host or Internet.
 
-The listener is single-node only. Its publications are durable on the receiving
-node and are never forwarded to other nodes, so configuring it together with
-`cluster.enabled` is a startup error rather than a deployment whose records
+Local-principal listeners are single-node only. Their publications are durable
+on the receiving node and are never forwarded to other nodes, so configuring one
+together with `cluster.enabled` is a startup error rather than a deployment whose records
 some consumers cannot reach. `cluster.enabled` defaults to true, so it must be
 set to false explicitly.
 
@@ -130,9 +130,9 @@ abandoned appends waiting on one stream is capped; publications beyond that cap
 are refused before any storage work starts, and both outcomes close the channel
 so a stalled stream cannot accumulate retries.
 
-On this listener a principal is publish-only: every consume, `basic.get`, and
-`queue.declare` is denied whatever `permissions.subscribe` says. Consumers
-require the [service listener](#service-listener) below.
+What a principal may do here is decided by its [role](#principal-roles), not by
+this listener. A `publisher` is refused every consume, `basic.get`, and
+`queue.declare`; a `service` is admitted subject to its own subscribe ACL.
 
 Local-principal counters are exposed under
 `by_protocol.amqp.local_principals` in `GET /api/v1/stats`. They cover active
@@ -165,25 +165,37 @@ FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
 Speaking AMQP does not by itself confer trust, and an externally authenticated
 AMQP client is never treated as a service.
 
-### Service Listener
+### Principal Roles
 
-`server.amqp091.internal` admits publish-only principals: it exists for audit
-records, so a principal there may publish to the targets its ACL names and
-nothing else, and may never relay an origin identity.
+A local principal carries a **role**, and the role is what decides its
+capability. Roles live on the principal rather than on a listener because
+nothing binds a principal to a listener: any principal with a valid certificate
+and secret can connect to any local listener, so a capability granted by a port
+would be granted to every principal able to reach that port.
 
-`server.amqp091.service` admits the same kind of mTLS local principal but also
-permits the consumer lifecycle, so a first-party service can subscribe and read
-the reserved properties another service set. It is what makes the namespace
-useful in both directions rather than write-only.
+| Role | May publish | May consume | May relay an origin identity |
+| --- | --- | --- | --- |
+| `publisher` (default) | yes, per its ACL | no | no |
+| `service` | yes, per its ACL | yes, per its ACL | yes |
 
-A service listener grants no blanket access. Every operation is still authorized
-against the principal's own ACL:
+`publisher` is the default when `role` is omitted, so an unspecified principal
+gets the least privilege. It is the audit-publisher shape: its publications are
+its own records, so it may never attribute one to another origin.
+
+`service` additionally runs consumers and may relay the true origin of messages
+it did not author. It is what makes the reserved-property namespace useful in
+both directions rather than write-only, because a service can read what another
+service set.
+
+A role grants no blanket access. Every operation is still authorized against the
+principal's own ACL:
 
 ```yaml
 auth:
   local_principals:
     - name: rules-engine
       certificate_uri_san: spiffe://absmach/magistrala/rules-engine
+      role: service
       current_secret_file: /run/secrets/re-current
       permissions:
         publish:
@@ -192,9 +204,34 @@ auth:
           - m
 ```
 
+Declaring `permissions.subscribe` on a `publisher` is rejected at load rather
+than silently ignored, so a principal's configuration cannot suggest a
+capability it does not have.
+
+The role joins the permissions fingerprint, so demoting a `service` to a
+`publisher` revokes its live sessions exactly as narrowing an ACL or rotating a
+credential does. A demoted principal does not keep consuming until it happens to
+reconnect.
+
+### Listeners
+
+`server.amqp091.local` admits mTLS peers whose verified certificate URI SAN
+matches a configured principal. It confers no capability of its own. Configure
+more than one local listener only when you want, say, the audit path and the
+service path on separate network segments; one is enough otherwise. Each
+requires a configured principal and each refuses to run alongside
+`cluster.enabled`, because local publications are durable on the receiving node
+only.
+
+`server.amqp091.internal` and `server.amqp091.service` are deprecated aliases
+for `local`. They behave identically to it and to each other, and FluxMQ logs a
+warning naming any that are still in use. They exist because capability used to
+be a property of the listener; it is now a property of the principal, so the
+distinction they drew no longer means anything.
+
 `subscribe` names exact queues; wildcards, duplicates, blank entries, and
 surrounding whitespace are rejected at load. A principal declaring no
-`subscribe` entry is refused a consumer even on the service listener, and one
+`subscribe` entry is refused a consumer even with the `service` role, and one
 declaring no `publish` entry cannot publish. Unlike exact publish targets,
 subscribe targets need no matching `queues` entry: the durability contract those
 carry exists because local publishes are acknowledged as crash-durable, which
@@ -242,13 +279,9 @@ while an empty or single-character prefix is not. The same string as an exact
 key and as a prefix are different grants and produce different permissions
 fingerprints, so narrowing one into the other revokes existing sessions.
 
-Publish and subscribe ACLs share one permissions fingerprint, so narrowing
-either revokes the sessions that authenticated under the wider one, exactly as a
+The role and both ACLs share one permissions fingerprint, so narrowing any of
+them revokes the sessions that authenticated under the wider one, exactly as a
 credential rotation does.
-
-A service relays messages it did not originate, so unlike a publish-only
-principal it may state a message's true `external_id` and `protocol` rather than
-having its own identity stamped on them.
 
 The admin API (`server.api`) is exempt because it is an operator plane, not a
 client plane: it is unauthenticated and already exposes session inspection and
@@ -263,18 +296,16 @@ properties describing who published it and over which transport. These are
 stamped from the authenticated connection, so a publisher cannot attribute its
 message to another principal or claim it arrived over another protocol.
 
-A trusted AMQP 0.9.1 service relaying a message on behalf of an original
-publisher may override `external_id` and `protocol` to preserve the true
-origin, by setting them as message headers. The same trust rule as reserved
-properties applies, with one addition: a **local principal may not** relay an
-origin either. Its identity is fixed by configuration and its publications are
-audit records, so relaying would make the record disagree with the peer that
-actually authenticated. Untrusted connections on every protocol — including
-AMQP 0.9.1 remote and AMQP 1.0 — have any supplied value discarded and
-replaced with their own authenticated identity.
+A local principal with the `service` role may relay a message it did not
+author, overriding `external_id` and `protocol` with the true origin by setting
+them as message headers. A `publisher` may not: its publications are its own
+records, and a relayed origin would make one disagree with the principal that
+authenticated. Because the rule follows the role rather than the listener, a
+publisher stays a publisher on whichever local listener it connects to.
 
-Ordinary user properties are unaffected and continue to flow in both
-directions on every protocol that supports them.
+Untrusted connections on every protocol — including AMQP 0.9.1 remote and AMQP
+1.0 — have any supplied value discarded and replaced with their own
+authenticated identity.
 
 ## Blocking Hooks
 

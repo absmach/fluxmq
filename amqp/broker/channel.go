@@ -281,7 +281,7 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 	case *codec.BasicQos, *codec.BasicCancel, *codec.BasicAck, *codec.BasicNack, *codec.BasicReject:
 		// Channel-scoped consumer lifecycle. These name no queue of their own;
 		// they can only affect a consumer the subscribe ACL already allowed.
-		if ch.conn.connectionPolicy().permitsConsumers() {
+		if ch.conn.permitsConsumers() {
 			return true, nil
 		}
 		return ch.denyLocalMethod(decoded, principalID)
@@ -307,7 +307,7 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 // listener that permits consumers and only for a queue the principal's own
 // subscribe ACL names.
 func (ch *Channel) authorizeLocalSubscribe(queue, principalID string, decoded any) (bool, error) {
-	if !ch.conn.connectionPolicy().permitsConsumers() {
+	if !ch.conn.permitsConsumers() {
 		return ch.denyLocalMethod(decoded, principalID)
 	}
 	if ch.conn.canSubscribeLocal(queue) {
@@ -526,7 +526,7 @@ func (ch *Channel) completePublish() {
 	// else gets their own authenticated identity stamped, so a publisher cannot
 	// attribute a message to another principal or to another protocol.
 	relayedID := ""
-	if policy.propagatesOriginIdentity() {
+	if ch.conn.propagatesOriginIdentity() {
 		relayedID, _ = header.Properties.Headers[corebroker.ExternalIDProperty].(string)
 	}
 	if relayedID != "" {
@@ -536,7 +536,7 @@ func (ch *Channel) completePublish() {
 	}
 
 	props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
-	if policy.propagatesOriginIdentity() {
+	if ch.conn.propagatesOriginIdentity() {
 		if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
 			props[corebroker.ProtocolProperty] = v
 		}

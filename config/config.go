@@ -26,6 +26,7 @@ const (
 
 	listenerNameTLS      = "tls"
 	listenerNameMTLS     = "mtls"
+	listenerNameLocal    = "local"
 	listenerNameInternal = "internal"
 	listenerNameService  = "service"
 
@@ -46,6 +47,7 @@ const (
 	storageTypeBadger = "badger"
 
 	writePolicyForward = "forward"
+	writePolicyLocal   = "local"
 	queueModeSync      = "sync"
 
 	authURLField               = "url"
@@ -101,13 +103,43 @@ type ExternalAuthConfig struct {
 	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
 }
 
+// Local principal roles. A role is the capability a principal carries on every
+// listener it authenticates to, so it cannot be widened by choosing a port.
+const (
+	// LocalRolePublisher may only publish. It runs no consumer and may not
+	// relay an origin identity, because its publications are its own records.
+	LocalRolePublisher = "publisher"
+	// LocalRoleService may additionally consume, subject to its subscribe ACL,
+	// and may relay the origin identity of messages it did not author.
+	LocalRoleService = "service"
+)
+
+var knownLocalRoles = map[string]struct{}{
+	LocalRolePublisher: {},
+	LocalRoleService:   {},
+}
+
 // LocalPrincipalConfig configures a principal authenticated by FluxMQ itself.
 type LocalPrincipalConfig struct {
-	Name               string                 `yaml:"name"`
-	CertificateURISAN  string                 `yaml:"certificate_uri_san"`
+	Name              string `yaml:"name"`
+	CertificateURISAN string `yaml:"certificate_uri_san"`
+	// Role is the principal's capability, defaulting to the least privileged
+	// one. It lives here rather than on a listener because nothing binds a
+	// principal to a listener: a capability granted by a port would be granted
+	// to every principal that can reach it.
+	Role               string                 `yaml:"role,omitempty"`
 	CurrentSecretFile  string                 `yaml:"current_secret_file"`
 	PreviousSecretFile string                 `yaml:"previous_secret_file,omitempty"`
 	Permissions        LocalPermissionsConfig `yaml:"permissions"`
+}
+
+// EffectiveRole returns the configured role, defaulting to the least
+// privileged one when unset.
+func (c LocalPrincipalConfig) EffectiveRole() string {
+	if c.Role == "" {
+		return LocalRolePublisher
+	}
+	return c.Role
 }
 
 // LocalPermissionsConfig contains the publish and subscribe ACLs of one local
@@ -180,6 +212,7 @@ func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
 	return validateYAMLMapping(node, path, map[string]func(*yaml.Node) error{
 		"name":                 nil,
 		"certificate_uri_san":  nil,
+		"role":                 nil,
 		"current_secret_file":  nil,
 		"previous_secret_file": nil,
 		"permissions": func(permissions *yaml.Node) error {
@@ -512,13 +545,55 @@ type AMQP091ListenerConfig struct {
 
 // AMQP091Config groups AMQP 0.9.1 listeners by mode.
 type AMQP091Config struct {
-	Plain    AMQP091ListenerConfig `yaml:"plain"`
-	TLS      AMQP091ListenerConfig `yaml:"tls"`
-	MTLS     AMQP091ListenerConfig `yaml:"mtls"`
+	Plain AMQP091ListenerConfig `yaml:"plain"`
+	TLS   AMQP091ListenerConfig `yaml:"tls"`
+	MTLS  AMQP091ListenerConfig `yaml:"mtls"`
+	// Local admits principals declared in auth.local_principals over mTLS. It
+	// confers no capability of its own: what a principal may do comes from its
+	// role. Configure more than one only to place them on separate networks.
+	Local AMQP091ListenerConfig `yaml:"local"`
+	// Internal and Service are deprecated aliases for Local, kept so existing
+	// configurations keep working. They behave identically to it and to each
+	// other; new configurations should use Local.
 	Internal AMQP091ListenerConfig `yaml:"internal"`
-	// Service admits first-party services under the same mTLS local-principal
-	// rules as Internal, and additionally permits the consumer lifecycle.
-	Service AMQP091ListenerConfig `yaml:"service"`
+	Service  AMQP091ListenerConfig `yaml:"service"`
+}
+
+// LocalListeners returns every configured local-principal listener with the
+// configuration key that named it, so callers do not have to know which of the
+// deprecated aliases an operator used.
+func (c AMQP091Config) LocalListeners() []NamedAMQP091Listener {
+	candidates := []NamedAMQP091Listener{
+		{Name: listenerNameLocal, Config: c.Local},
+		{Name: listenerNameInternal, Config: c.Internal},
+		{Name: listenerNameService, Config: c.Service},
+	}
+	listeners := make([]NamedAMQP091Listener, 0, len(candidates))
+	for _, candidate := range candidates {
+		if hasAddr(candidate.Config.Addr) {
+			listeners = append(listeners, candidate)
+		}
+	}
+	return listeners
+}
+
+// DeprecatedLocalListenerNames returns the deprecated keys an operator used, so
+// startup can name them in a warning.
+func (c AMQP091Config) DeprecatedLocalListenerNames() []string {
+	var names []string
+	if hasAddr(c.Internal.Addr) {
+		names = append(names, listenerNameInternal)
+	}
+	if hasAddr(c.Service.Addr) {
+		names = append(names, listenerNameService)
+	}
+	return names
+}
+
+// NamedAMQP091Listener pairs a listener with the configuration key that named it.
+type NamedAMQP091Listener struct {
+	Name   string
+	Config AMQP091ListenerConfig
 }
 
 // DefaultMaxInflightMessages is the fallback for Session.MaxInflightMessages
@@ -883,6 +958,7 @@ func Default() *Config {
 				MTLS: AMQP091ListenerConfig{
 					MaxConnections: 10000,
 				},
+				Local:    AMQP091ListenerConfig{},
 				Internal: AMQP091ListenerConfig{},
 				Service:  AMQP091ListenerConfig{},
 			},
@@ -1315,6 +1391,7 @@ func (c *Config) Validate() error {
 		{name: listenerNamePlain, cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
 		{name: listenerNameTLS, cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
 		{name: listenerNameMTLS, cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
+		{name: listenerNameLocal, cfg: c.Server.AMQP091.Local, requireClientAuth: true, requireExactClientAuth: true},
 		{name: listenerNameInternal, cfg: c.Server.AMQP091.Internal, requireClientAuth: true, requireExactClientAuth: true},
 		{name: listenerNameService, cfg: c.Server.AMQP091.Service, requireClientAuth: true, requireExactClientAuth: true},
 	}
@@ -1328,7 +1405,7 @@ func (c *Config) Validate() error {
 		}
 		hasMessagingListener = true
 
-		if (slot.name == listenerNameInternal || slot.name == listenerNameService) && slot.cfg.MaxConnections <= 0 {
+		if slot.requireExactClientAuth && slot.cfg.MaxConnections <= 0 {
 			return fmt.Errorf("server.amqp091.%s.max_connections must be positive", slot.name)
 		}
 		if slot.cfg.MaxConnections < 0 {
@@ -1358,21 +1435,12 @@ func (c *Config) Validate() error {
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
 	}
-	// Both local-principal listeners authenticate against the same store and
-	// publish through the same durable path, so the requirements that follow
-	// apply to either being configured.
-	for _, listener := range []struct {
-		name string
-		addr string
-	}{
-		{name: listenerNameInternal, addr: c.Server.AMQP091.Internal.Addr},
-		{name: listenerNameService, addr: c.Server.AMQP091.Service.Addr},
-	} {
-		if !hasAddr(listener.addr) {
-			continue
-		}
+	// Every local-principal listener authenticates against the same store and
+	// publishes through the same durable path, so the requirements that follow
+	// apply to whichever key configured one.
+	for _, listener := range c.Server.AMQP091.LocalListeners() {
 		if len(c.Auth.LocalPrincipals) == 0 {
-			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.%s.addr is configured", listener.name)
+			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.%s.addr is configured", listener.Name)
 		}
 		// A local publication is appended and synced on the receiving node only,
 		// and is deliberately never forwarded to other nodes: forwarding would
@@ -1381,7 +1449,7 @@ func (c *Config) Validate() error {
 		// elsewhere, with nothing to signal it, so refuse the combination rather
 		// than serve a listener whose records only some readers can see.
 		if c.Cluster.Enabled {
-			return fmt.Errorf("server.amqp091.%s.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run local-principal listeners on a single-node deployment", listener.name)
+			return fmt.Errorf("server.amqp091.%s.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run local-principal listeners on a single-node deployment", listener.Name)
 		}
 	}
 	for proto := range c.Hooks.Protocols {
@@ -1499,7 +1567,7 @@ func (c *Config) Validate() error {
 
 		if c.Cluster.Raft.WritePolicy != "" {
 			switch strings.ToLower(c.Cluster.Raft.WritePolicy) {
-			case "local", "reject", writePolicyForward:
+			case writePolicyLocal, "reject", writePolicyForward:
 			default:
 				return fmt.Errorf("cluster.raft.write_policy must be one of: local, reject, forward")
 			}
@@ -1699,6 +1767,13 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			return fmt.Errorf("%s.name %q is duplicated", prefix, name)
 		}
 		names[name] = struct{}{}
+
+		if _, known := knownLocalRoles[principal.EffectiveRole()]; !known {
+			return fmt.Errorf("%s.role %q is unknown (valid: %s, %s)", prefix, principal.Role, LocalRolePublisher, LocalRoleService)
+		}
+		if principal.EffectiveRole() == LocalRolePublisher && len(principal.Permissions.Subscribe) != 0 {
+			return fmt.Errorf("%s.permissions.subscribe requires role %q; a publisher runs no consumer", prefix, LocalRoleService)
+		}
 
 		uriSAN := strings.TrimSpace(principal.CertificateURISAN)
 		if uriSAN == "" {

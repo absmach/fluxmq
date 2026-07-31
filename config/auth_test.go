@@ -284,6 +284,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			name: "subscribe permission cannot be empty",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
+				principal.Role = LocalRoleService
 				principal.Permissions.Subscribe = []string{""}
 				return []LocalPrincipalConfig{principal}
 			},
@@ -293,6 +294,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			name: "subscribe permission cannot contain wildcards",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
+				principal.Role = LocalRoleService
 				principal.Permissions.Subscribe = []string{testAuditQueue + ".*"}
 				return []LocalPrincipalConfig{principal}
 			},
@@ -302,15 +304,43 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			name: "subscribe permission cannot have surrounding whitespace",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
+				principal.Role = LocalRoleService
 				principal.Permissions.Subscribe = []string{" " + testAuditQueue}
 				return []LocalPrincipalConfig{principal}
 			},
 			wantError: "cannot have leading or trailing whitespace",
 		},
 		{
+			name: "subscribe permission requires the service role",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Subscribe = []string{testAuditQueue}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "permissions.subscribe requires role \"service\"",
+		},
+		{
+			name: "unknown role is rejected",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = "administrator"
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "role \"administrator\" is unknown",
+		},
+		{
+			name: "role defaults to the least privileged one",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = ""
+				return []LocalPrincipalConfig{principal}
+			},
+		},
+		{
 			name: "subscribe permission cannot be duplicated",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
+				principal.Role = LocalRoleService
 				principal.Permissions.Subscribe = []string{testAuditQueue, testAuditQueue}
 				return []LocalPrincipalConfig{principal}
 			},
@@ -458,7 +488,16 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 // The service listener authenticates against the same principal store and
 // publishes through the same single-node durable path as the internal one, so
 // it carries the same deployment requirements.
-func TestValidateServiceAMQP091Listener(t *testing.T) {
+// local is the current key; internal and service are deprecated aliases that
+// must stay exactly equivalent, or an operator migrating between them would get
+// a different security posture from the same file.
+func TestValidateLocalAMQP091Listeners(t *testing.T) {
+	keys := map[string]func(*Config) *AMQP091ListenerConfig{
+		listenerNameLocal:    func(c *Config) *AMQP091ListenerConfig { return &c.Server.AMQP091.Local },
+		listenerNameInternal: func(c *Config) *AMQP091ListenerConfig { return &c.Server.AMQP091.Internal },
+		listenerNameService:  func(c *Config) *AMQP091ListenerConfig { return &c.Server.AMQP091.Service },
+	}
+
 	configureValid := func(listener *AMQP091ListenerConfig) {
 		listener.Addr = testServiceAddr
 		listener.MaxConnections = 32
@@ -485,24 +524,24 @@ func TestValidateServiceAMQP091Listener(t *testing.T) {
 				configureValid(listener)
 				listener.TLS.ClientAuth = "verify-if-given"
 			},
-			wantError: "server.amqp091.service.client_auth must be \"require\"",
+			wantError: "client_auth must be \"require\"",
 		},
 		{
 			name:      "requires a positive connection limit",
 			configure: func(listener *AMQP091ListenerConfig) { configureValid(listener); listener.MaxConnections = 0 },
-			wantError: "server.amqp091.service.max_connections must be positive",
+			wantError: "max_connections must be positive",
 		},
 		{
 			name:      "requires a local principal",
 			configure: configureValid,
-			wantError: "auth.local_principals must contain at least one principal when server.amqp091.service.addr is configured",
+			wantError: "auth.local_principals must contain at least one principal when server.amqp091.",
 		},
 		{
 			name:           "rejects clustering",
 			configure:      configureValid,
 			clusterEnabled: true,
 			withPrincipal:  true,
-			wantError:      "server.amqp091.service.addr cannot be combined with cluster.enabled",
+			wantError:      "cannot be combined with cluster.enabled",
 		},
 		{
 			name:          "valid mandatory mTLS",
@@ -511,29 +550,71 @@ func TestValidateServiceAMQP091Listener(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Default()
-			cfg.Cluster.Enabled = tt.clusterEnabled
-			tt.configure(&cfg.Server.AMQP091.Service)
-			if tt.withPrincipal {
-				cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
-					Name:              testPrincipalName,
-					CertificateURISAN: testPrincipalSAN,
-					CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
-				}}
-			}
-			err := cfg.Validate()
-			if tt.wantError == "" {
-				if err != nil {
-					t.Fatalf("Validate() error = %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
-				t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantError)
-			}
-		})
+	for key, selector := range keys {
+		for _, tt := range tests {
+			t.Run(key+"/"+tt.name, func(t *testing.T) {
+				runLocalListenerCase(t, selector, tt.configure, tt.clusterEnabled, tt.withPrincipal, tt.wantError)
+			})
+		}
+	}
+}
+
+// The keys name listeners, not capabilities, so configuring several is a
+// network-placement choice and every one of them must be served.
+func TestLocalListenersEnumeratesEveryKey(t *testing.T) {
+	cfg := Default()
+	cfg.Server.AMQP091.Local.Addr = ":5683"
+	cfg.Server.AMQP091.Internal.Addr = ":5684"
+	cfg.Server.AMQP091.Service.Addr = ":5685"
+
+	listeners := cfg.Server.AMQP091.LocalListeners()
+	names := make([]string, 0, len(listeners))
+	for _, listener := range listeners {
+		names = append(names, listener.Name)
+	}
+	assert.Equal(t, []string{listenerNameLocal, listenerNameInternal, listenerNameService}, names)
+
+	assert.Equal(t, []string{listenerNameInternal, listenerNameService}, cfg.Server.AMQP091.DeprecatedLocalListenerNames(),
+		"only the aliases are reported for the deprecation warning")
+}
+
+func TestLocalListenersOmitsUnconfiguredKeys(t *testing.T) {
+	cfg := Default()
+	cfg.Server.AMQP091.Local.Addr = ":5683"
+
+	listeners := cfg.Server.AMQP091.LocalListeners()
+	require.Len(t, listeners, 1)
+	assert.Equal(t, listenerNameLocal, listeners[0].Name)
+	assert.Empty(t, cfg.Server.AMQP091.DeprecatedLocalListenerNames())
+}
+
+func runLocalListenerCase(
+	t *testing.T,
+	selector func(*Config) *AMQP091ListenerConfig,
+	configure func(*AMQP091ListenerConfig),
+	clusterEnabled, withPrincipal bool,
+	wantError string,
+) {
+	t.Helper()
+	cfg := Default()
+	cfg.Cluster.Enabled = clusterEnabled
+	configure(selector(cfg))
+	if withPrincipal {
+		cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
+			Name:              testPrincipalName,
+			CertificateURISAN: testPrincipalSAN,
+			CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
+		}}
+	}
+	err := cfg.Validate()
+	if wantError == "" {
+		if err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), wantError) {
+		t.Fatalf("Validate() error = %v, want it to contain %q", err, wantError)
 	}
 }
 
@@ -570,6 +651,7 @@ func TestLoadAcceptsPublishPermissionFields(t *testing.T) {
 				"  local_principals:\n" +
 				"    - name: \"svc\"\n" +
 				"      certificate_uri_san: \"spiffe://absmach/svc\"\n" +
+				"      role: \"service\"\n" +
 				"      current_secret_file: \"" + secret + "\"\n" +
 				"      permissions:\n" +
 				"        publish:\n" +

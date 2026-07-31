@@ -41,6 +41,7 @@ type localAuthenticatorStub struct {
 	secret         string
 	peer           VerifiedPeerIdentity
 	principalID    string
+	role           LocalPrincipalRole
 	credentialFP   string
 	permissionsFP  string
 	certificateURI string
@@ -48,7 +49,7 @@ type localAuthenticatorStub struct {
 	err            error
 }
 
-func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (string, string, string, string, bool, error) {
+func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (LocalAuthentication, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -56,7 +57,13 @@ func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, 
 	s.username = username
 	s.secret = secret
 	s.peer = peer
-	return s.principalID, s.credentialFP, s.permissionsFP, s.certificateURI, s.authenticated, s.err
+	return LocalAuthentication{
+		PrincipalID:            s.principalID,
+		Role:                   s.role,
+		CredentialFingerprint:  s.credentialFP,
+		PermissionsFingerprint: s.permissionsFP,
+		CertificateURI:         s.certificateURI,
+	}, s.authenticated, s.err
 }
 
 type localAuthorizerStub struct {
@@ -153,7 +160,14 @@ func newPolicyTestConnection(t *testing.T, policy *ConnectionPolicy) (*Connectio
 }
 
 func bindLocalIdentity(conn *Connection) {
+	bindLocalIdentityAs(conn, LocalRolePublisher)
+}
+
+// bindLocalIdentityAs binds an authenticated identity carrying role, which is
+// what decides a session's capability now that listeners no longer do.
+func bindLocalIdentityAs(conn *Connection, role LocalPrincipalRole) {
 	conn.localIdentity = &LocalSessionIdentity{
+		Role:                   role,
 		PrincipalID:            testLocalPrincipal,
 		CredentialFingerprint:  testCredentialFP,
 		PermissionsFingerprint: testPermissionsFP,
@@ -188,7 +202,7 @@ func TestLocalAuthenticationBindsVerifiedIdentity(t *testing.T) {
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	globalExternal := &externalAuthenticatorStub{}
 	conn.broker.SetAuthEngine(corebroker.NewAuthEngine(globalExternal, nil))
 	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
@@ -225,7 +239,7 @@ func TestLocalAuthenticationRejectsUnverifiedSelectedURI(t *testing.T) {
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
 	if err := conn.authenticate(start); err == nil {
 		t.Fatal("expected authentication rejection")
@@ -275,7 +289,7 @@ func TestLocalPublishOnlyMethodAllowlist(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	for _, tc := range denied {
 		t.Run(tc.name, func(t *testing.T) {
-			conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+			conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 			bindLocalIdentity(conn)
 			ch := newChannel(conn, 1)
 			if err := ch.handleMethod(tc.method); err != nil {
@@ -294,7 +308,7 @@ func TestLocalPublishOnlyMethodAllowlist(t *testing.T) {
 
 func TestServerClosedChannelIgnoresPublishAfterDeniedMethod(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	ch := newChannel(conn, 1)
 
@@ -341,7 +355,7 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+			conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 			bindLocalIdentity(conn)
 			ch := newChannel(conn, 1)
 			err := ch.handleMethod(&codec.BasicPublish{Exchange: tc.exchange, RoutingKey: tc.routingKey})
@@ -370,7 +384,7 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 // peer that actually authenticated.
 func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -410,35 +424,31 @@ func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		policy           func(*localAuthorizerStub) *ConnectionPolicy
+		role             LocalPrincipalRole
 		routingKey       string
 		wantDurableCalls int
 	}{
 		{
-			name: "publish-only exact target appends durably",
-			policy: func(a *localAuthorizerStub) *ConnectionPolicy {
-				return NewLocalPublishOnlyConnectionPolicy(nil, a, a, 0)
-			},
+			name:             "publisher exact target appends durably",
+			role:             LocalRolePublisher,
 			routingKey:       testAuditQueue,
 			wantDurableCalls: 1,
 		},
 		{
 			name:             "service exact target appends durably",
-			policy:           func(a *localAuthorizerStub) *ConnectionPolicy { return NewLocalServiceConnectionPolicy(nil, a, a, 0) },
+			role:             LocalRoleService,
 			routingKey:       testAuditQueue,
 			wantDurableCalls: 1,
 		},
 		{
 			name:             "service prefix publishes as an ordinary topic",
-			policy:           func(a *localAuthorizerStub) *ConnectionPolicy { return NewLocalServiceConnectionPolicy(nil, a, a, 0) },
+			role:             LocalRoleService,
 			routingKey:       prefixedKey,
 			wantDurableCalls: 0,
 		},
 		{
-			name: "publish-only prefix publishes as an ordinary topic",
-			policy: func(a *localAuthorizerStub) *ConnectionPolicy {
-				return NewLocalPublishOnlyConnectionPolicy(nil, a, a, 0)
-			},
+			name:             "publisher prefix publishes as an ordinary topic",
+			role:             LocalRolePublisher,
 			routingKey:       prefixedKey,
 			wantDurableCalls: 0,
 		},
@@ -447,8 +457,8 @@ func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue, allowRoutingKeyPrefix: "m."}
-			conn, _ := newPolicyTestConnection(t, tc.policy(authz))
-			bindLocalIdentity(conn)
+			conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+			bindLocalIdentityAs(conn, tc.role)
 			qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 			conn.broker.queueManager = qm
 
@@ -470,7 +480,7 @@ func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
 
 func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	hook := &hookCounter{}
 	conn.broker.SetBlockingHooks(corebroker.NewBlockingHookEngine(hook, corebroker.HookFailDeny, nil, nil, nil))
@@ -496,7 +506,7 @@ func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 
 func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{exactPublishErr: errors.New("disk full")}
 	conn.broker.queueManager = qm
@@ -526,7 +536,7 @@ func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
 
 func TestLocalDurableStreamPublishIsBounded(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -629,7 +639,7 @@ func TestLocalDurableStreamPublishBoundsAbandonedAppends(t *testing.T) {
 	})
 
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &stalledStreamQueueManager{
 		release: make(chan struct{}),
@@ -719,7 +729,7 @@ func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
 	t.Cleanup(func() { localPublishTimeout = previousTimeout })
 
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &blockingStreamQueueManager{
 		entered: make(chan struct{}),
@@ -759,7 +769,7 @@ func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
 
 func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	ctx, cancel := context.WithCancel(context.Background())
 	conn.ctx = ctx
@@ -779,7 +789,7 @@ func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
 
 func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{exactPublishErr: queue.ErrQueueMessageTooLarge}
 	conn.broker.queueManager = qm
@@ -809,7 +819,7 @@ func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
 
 func TestLocalDurableStreamSuccessAcksExactQueueOnly(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{}
 	conn.broker.queueManager = qm
@@ -839,7 +849,7 @@ func TestLocalDurableStreamSuccessAcksExactQueueOnly(t *testing.T) {
 
 func TestLocalPublishRechecksAuthorizationAfterContent(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -869,7 +879,7 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	transport := &memoryConn{}
 	conn.conn = transport
 	conn.writer = bufio.NewWriter(transport)
@@ -914,7 +924,7 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 
 func TestLocalPublishRejectsCredentialRetiredDuringContent(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -947,7 +957,7 @@ func TestConnectionPolicyReservedPropertyTrust(t *testing.T) {
 	}{
 		{
 			name:   "local publish only policy is trusted",
-			policy: NewLocalPublishOnlyConnectionPolicy(nil, nil, nil, 0),
+			policy: NewLocalConnectionPolicy(nil, nil, nil, 0),
 			want:   true,
 		},
 		{

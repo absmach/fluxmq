@@ -20,16 +20,51 @@ const (
 	// ConnectionPolicyExternal preserves the existing remote auth-callout and
 	// blocking-hook behavior.
 	ConnectionPolicyExternal ConnectionPolicyMode = iota
-	// ConnectionPolicyLocalPublishOnly enables local-principal authentication
-	// and restricts the connection to publisher lifecycle operations.
-	ConnectionPolicyLocalPublishOnly
-	// ConnectionPolicyLocalService enables local-principal authentication and
-	// additionally permits the consumer lifecycle, so a first-party service can
-	// both publish and subscribe. Every operation remains authorized against the
-	// principal's own ACL, so a principal declaring no subscribe permission is
-	// still refused a consumer.
-	ConnectionPolicyLocalService
+	// ConnectionPolicyLocal enables local-principal authentication. It selects
+	// the credential store, not the capability: what a session may then do comes
+	// from the authenticated principal's own role, so a listener cannot widen a
+	// principal and a principal cannot be widened by choosing a listener.
+	ConnectionPolicyLocal
 )
+
+// LocalPrincipalRole is the capability carried by an authenticated local
+// principal. It is bound to the session at authentication and travels with it,
+// because nothing binds a principal to a listener: a capability granted by a
+// port would be granted to every principal able to reach that port.
+type LocalPrincipalRole uint8
+
+const (
+	// LocalRolePublisher may publish only. It is the zero value, so an
+	// unspecified role is the least privileged one.
+	LocalRolePublisher LocalPrincipalRole = iota
+	// LocalRoleService may additionally run consumers, subject to its own
+	// subscribe ACL.
+	LocalRoleService
+)
+
+// String returns the role name used in configuration and diagnostics.
+func (r LocalPrincipalRole) String() string {
+	if r == LocalRoleService {
+		return "service"
+	}
+	return "publisher"
+}
+
+// PermitsConsumers reports whether the role may run the consumer lifecycle.
+// Whether it may consume a particular queue is a separate ACL decision.
+func (r LocalPrincipalRole) PermitsConsumers() bool {
+	return r == LocalRoleService
+}
+
+// PropagatesOriginIdentity reports whether the role may state the external
+// identity and origin protocol of a message it relays.
+//
+// A service relays messages it did not author, so it may name their true
+// origin. A publisher may not: its publications are its own records, and a
+// relayed origin would make one disagree with the principal that authenticated.
+func (r LocalPrincipalRole) PropagatesOriginIdentity() bool {
+	return r == LocalRoleService
+}
 
 // VerifiedPeerIdentity contains identity material from a TLS certificate chain
 // that was successfully verified by the listener. Unverified peer certificate
@@ -39,12 +74,23 @@ type VerifiedPeerIdentity struct {
 	CertificateFingerprint string
 }
 
+// LocalAuthentication is what a local-principal authenticator establishes about
+// a peer. CertificateURI must name a URI SAN the listener already verified;
+// the caller rejects any other value. CredentialFingerprint and
+// PermissionsFingerprint are opaque, non-secret identifiers used to revoke
+// sessions after a credential, role, or ACL change.
+type LocalAuthentication struct {
+	PrincipalID            string
+	Role                   LocalPrincipalRole
+	CredentialFingerprint  string
+	PermissionsFingerprint string
+	CertificateURI         string
+}
+
 // LocalPrincipalAuthenticator authenticates credentials against a verified TLS
-// peer identity. certificateURI must name the URI SAN selected from peer.URISANs.
-// credentialFingerprint and permissionsFingerprint are opaque, non-secret
-// identifiers used to revoke sessions after credential or publish-ACL changes.
+// peer identity.
 type LocalPrincipalAuthenticator interface {
-	AuthenticateLocal(ctx context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (principalID, credentialFingerprint, permissionsFingerprint, certificateURI string, authenticated bool, err error)
+	AuthenticateLocal(ctx context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (LocalAuthentication, bool, error)
 }
 
 // LocalPublishGrant reports which kind of publish permission authorized a
@@ -92,9 +138,11 @@ type LocalSessionValidator interface {
 }
 
 // LocalSessionIdentity is the immutable security identity bound to a local
-// AMQP connection after authentication.
+// AMQP connection after authentication. Role is part of it, so a session's
+// capability is fixed by who authenticated rather than by where they connected.
 type LocalSessionIdentity struct {
 	PrincipalID            string
+	Role                   LocalPrincipalRole
 	CredentialFingerprint  string
 	PermissionsFingerprint string
 	CertificateURI         string
@@ -103,7 +151,7 @@ type LocalSessionIdentity struct {
 
 // ConnectionPolicy is an immutable listener-scoped AMQP security policy.
 // Construct policies with NewExternalConnectionPolicy or
-// NewLocalPublishOnlyConnectionPolicy and do not mutate them after serving.
+// NewLocalConnectionPolicy and do not mutate them after serving.
 type ConnectionPolicy struct {
 	mode           ConnectionPolicyMode
 	trusted        bool
@@ -129,58 +177,10 @@ func (p *ConnectionPolicy) carriesReservedProperties() bool {
 
 // usesLocalPrincipalAuth reports whether connections under this policy
 // authenticate against the local-principal store rather than the external auth
-// engine. It is the authentication boundary, distinct from which operations the
-// resulting session may perform.
+// engine. It is the authentication boundary; what the resulting session may do
+// comes from the authenticated principal's role, not from here.
 func (p *ConnectionPolicy) usesLocalPrincipalAuth() bool {
-	if p == nil {
-		return false
-	}
-	return p.mode == ConnectionPolicyLocalPublishOnly || p.mode == ConnectionPolicyLocalService
-}
-
-// permitsConsumers reports whether a session under this policy may run the
-// consumer lifecycle. Whether it may consume any particular queue is a separate
-// per-principal ACL decision.
-func (p *ConnectionPolicy) permitsConsumers() bool {
-	return p != nil && p.mode == ConnectionPolicyLocalService
-}
-
-// propagatesOriginIdentity reports whether a publisher under this policy may
-// state the external identity and origin protocol of a message it relays,
-// rather than having its own authenticated identity stamped on it.
-//
-// Only a trusted service may: for an externally authenticated client, naming
-// another principal is impersonation. A local principal may not either. Its
-// identity is fixed by FluxMQ's configuration and its publications are audit
-// records, so a relayed origin would make the record disagree with the peer
-// that actually authenticated.
-func (p *ConnectionPolicy) propagatesOriginIdentity() bool {
-	return p.carriesReservedProperties() && p.mode != ConnectionPolicyLocalPublishOnly
-}
-
-// NewLocalServiceConnectionPolicy constructs a fail-closed local-principal
-// policy that also permits the consumer lifecycle. It never invokes an external
-// auth engine or blocking hook.
-//
-// The policy is trusted on the same grounds as the publish-only one: the
-// listener admits only mTLS peers whose verified certificate URI SAN matches a
-// principal declared in FluxMQ's own configuration. Unlike an audit publisher, a
-// service relays messages it did not originate, so it may state their true
-// origin rather than having its own identity stamped on them.
-func NewLocalServiceConnectionPolicy(
-	auth LocalPrincipalAuthenticator,
-	authz LocalPrincipalAuthorizer,
-	sessions LocalSessionValidator,
-	maxMessageSize uint64,
-) *ConnectionPolicy {
-	return &ConnectionPolicy{
-		mode:           ConnectionPolicyLocalService,
-		trusted:        true,
-		localAuth:      auth,
-		localAuthz:     authz,
-		localSessions:  sessions,
-		maxMessageSize: maxMessageSize,
-	}
+	return p != nil && p.mode == ConnectionPolicyLocal
 }
 
 // NewExternalConnectionPolicy constructs a policy using only the existing
@@ -195,21 +195,26 @@ func NewExternalConnectionPolicy(auth *corebroker.AuthEngine, hooks *corebroker.
 	}
 }
 
-// NewLocalPublishOnlyConnectionPolicy constructs a fail-closed local-principal
-// policy. It never invokes an external auth engine or blocking hook.
+// NewLocalConnectionPolicy constructs a fail-closed local-principal policy. It
+// never invokes an external auth engine or blocking hook.
 //
 // The policy is trusted: the listener admits only mTLS peers whose verified
 // certificate URI SAN matches a principal declared in FluxMQ's own
 // configuration, so a reserved property arriving on it came from a first-party
 // service rather than from a tenant or device.
-func NewLocalPublishOnlyConnectionPolicy(
+//
+// It grants no capability of its own. Publishing, consuming, and relaying an
+// origin identity are decided by the authenticated principal's role and ACLs,
+// so every local listener is equivalent and a principal cannot widen itself by
+// choosing one.
+func NewLocalConnectionPolicy(
 	auth LocalPrincipalAuthenticator,
 	authz LocalPrincipalAuthorizer,
 	sessions LocalSessionValidator,
 	maxMessageSize uint64,
 ) *ConnectionPolicy {
 	return &ConnectionPolicy{
-		mode:           ConnectionPolicyLocalPublishOnly,
+		mode:           ConnectionPolicyLocal,
 		trusted:        true,
 		localAuth:      auth,
 		localAuthz:     authz,

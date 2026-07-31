@@ -54,28 +54,28 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 		CertificateFingerprint: strings.Repeat("a", 64),
 	}
 
-	principalID, credentialFingerprint, permissionsFingerprint, certificateURI, authenticated, err := adapter.AuthenticateLocal(
+	authentication, authenticated, err := adapter.AuthenticateLocal(
 		context.Background(), "amqp091:client", testLocalPrincipal, testLocalSecret, peer,
 	)
 	if err != nil {
 		t.Fatalf("AuthenticateLocal() error = %v", err)
 	}
-	if !authenticated || principalID != testLocalPrincipal || certificateURI != testLocalSAN {
-		t.Fatalf("unexpected authentication result: principal=%q certificate_uri=%q authenticated=%v", principalID, certificateURI, authenticated)
+	if !authenticated || authentication.PrincipalID != testLocalPrincipal || authentication.CertificateURI != testLocalSAN {
+		t.Fatalf("unexpected authentication result: principal=%q certificate_uri=%q authenticated=%v", authentication.PrincipalID, authentication.CertificateURI, authenticated)
 	}
-	decodedCredentialFingerprint, err := hex.DecodeString(credentialFingerprint)
+	decodedCredentialFingerprint, err := hex.DecodeString(authentication.CredentialFingerprint)
 	if err != nil || len(decodedCredentialFingerprint) != len(localauth.CredentialFingerprint{}) {
-		t.Fatalf("invalid credential fingerprint %q: %v", credentialFingerprint, err)
+		t.Fatalf("invalid credential fingerprint %q: %v", authentication.CredentialFingerprint, err)
 	}
-	decodedPermissionsFingerprint, err := hex.DecodeString(permissionsFingerprint)
+	decodedPermissionsFingerprint, err := hex.DecodeString(authentication.PermissionsFingerprint)
 	if err != nil || len(decodedPermissionsFingerprint) != len(localauth.PermissionsFingerprint{}) {
-		t.Fatalf("invalid permissions fingerprint %q: %v", permissionsFingerprint, err)
+		t.Fatalf("invalid permissions fingerprint %q: %v", authentication.PermissionsFingerprint, err)
 	}
 	identity := amqpbroker.LocalSessionIdentity{
-		PrincipalID:            principalID,
-		CredentialFingerprint:  credentialFingerprint,
-		PermissionsFingerprint: permissionsFingerprint,
-		CertificateURI:         certificateURI,
+		PrincipalID:            authentication.PrincipalID,
+		CredentialFingerprint:  authentication.CredentialFingerprint,
+		PermissionsFingerprint: authentication.PermissionsFingerprint,
+		CertificateURI:         authentication.CertificateURI,
 	}
 	if !adapter.CanPublishLocal(identity, "", testAuditQueue).Allowed() {
 		t.Fatal("exact configured publish target was denied")
@@ -110,7 +110,7 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 
 func TestLocalAMQPPolicyAdapterFailsClosed(t *testing.T) {
 	adapter := &localAMQPPolicy{}
-	if _, _, _, _, authenticated, err := adapter.AuthenticateLocal(context.Background(), "client", "user", "secret", amqpbroker.VerifiedPeerIdentity{}); err != nil || authenticated {
+	if _, authenticated, err := adapter.AuthenticateLocal(context.Background(), "client", "user", "secret", amqpbroker.VerifiedPeerIdentity{}); err != nil || authenticated {
 		t.Fatalf("nil local store must fail closed: authenticated=%v err=%v", authenticated, err)
 	}
 	if adapter.CanPublishLocal(amqpbroker.LocalSessionIdentity{PrincipalID: "principal"}, "", testAuditQueue).Allowed() {
@@ -140,7 +140,7 @@ func TestLocalAMQPPolicyAdapterRevokesChangedPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := &localAMQPPolicy{store: store}
-	principalID, credentialFingerprint, permissionsFingerprint, certificateURI, authenticated, err := adapter.AuthenticateLocal(
+	authentication, authenticated, err := adapter.AuthenticateLocal(
 		context.Background(),
 		"amqp091:client",
 		testLocalPrincipal,
@@ -151,10 +151,10 @@ func TestLocalAMQPPolicyAdapterRevokesChangedPermissions(t *testing.T) {
 		t.Fatalf("AuthenticateLocal() authenticated=%v error=%v", authenticated, err)
 	}
 	identity := amqpbroker.LocalSessionIdentity{
-		PrincipalID:            principalID,
-		CredentialFingerprint:  credentialFingerprint,
-		PermissionsFingerprint: permissionsFingerprint,
-		CertificateURI:         certificateURI,
+		PrincipalID:            authentication.PrincipalID,
+		CredentialFingerprint:  authentication.CredentialFingerprint,
+		PermissionsFingerprint: authentication.PermissionsFingerprint,
+		CertificateURI:         authentication.CertificateURI,
 	}
 	if !adapter.IsSessionActive(identity) {
 		t.Fatal("freshly authenticated session was not active")

@@ -113,7 +113,7 @@ All other fields require a full restart to take effect. These include:
 - **Session**: session defaults (affects existing connections)
 - **Webhook**: webhook worker pool configuration
 - **External auth**: `auth.external` callout and cache settings
-- **Local listener transport**: `server.amqp091.internal` address, limits, and TLS settings
+- **Local listener transport**: `server.amqp091.local` address, limits, and TLS settings
 - **Hooks**: blocking hook callout configuration
 - **AMQP / AMQP 0.9.1**: all protocol-level settings
 

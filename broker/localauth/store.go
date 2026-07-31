@@ -35,15 +35,17 @@ func (f CredentialFingerprint) String() string {
 	return hex.EncodeToString(f[:8])
 }
 
-// PermissionsFingerprint identifies the exact publish and subscribe ACLs bound
-// to a session. It is comparable and contains no credential material. Both ACLs
-// share one fingerprint so that narrowing either revokes the session.
+// PermissionsFingerprint identifies the role and the exact publish and
+// subscribe ACLs bound to a session. It is comparable and contains no
+// credential material. All three share one fingerprint so that narrowing any of
+// them revokes the session, exactly as a credential rotation does.
 type PermissionsFingerprint [sha256.Size]byte
 
 // Authentication describes a successfully authenticated local principal.
 type Authentication struct {
 	Principal              string
 	CertificateURISAN      string
+	Role                   string
 	CredentialFingerprint  CredentialFingerprint
 	PermissionsFingerprint PermissionsFingerprint
 }
@@ -67,6 +69,7 @@ type snapshot struct {
 
 type principal struct {
 	certificateURISAN string
+	role              string
 	current           CredentialFingerprint
 	previous          *CredentialFingerprint
 	publish           map[PublishTarget]struct{}
@@ -146,6 +149,7 @@ func (s *Store) Authenticate(username, secret, certificateURISAN string) (Authen
 	return Authentication{
 		Principal:              username,
 		CertificateURISAN:      certificateURISAN,
+		Role:                   principal.role,
 		CredentialFingerprint:  candidate,
 		PermissionsFingerprint: principal.permissions,
 	}, true
@@ -281,14 +285,16 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 			subscribe[queue] = struct{}{}
 		}
 
+		role := principalConfig.EffectiveRole()
 		principals[principalConfig.Name] = &principal{
 			certificateURISAN: principalConfig.CertificateURISAN,
+			role:              role,
 			current:           current,
 			previous:          previous,
 			publish:           publish,
 			publishPrefixes:   publishPrefixes,
 			subscribe:         subscribe,
-			permissions:       fingerprintPermissions(publish, publishPrefixes, subscribe),
+			permissions:       fingerprintPermissions(role, publish, publishPrefixes, subscribe),
 		}
 	}
 
@@ -309,7 +315,7 @@ func snapshotsEqual(left, right *snapshot) bool {
 }
 
 func principalsEqual(left, right *principal) bool {
-	if left.certificateURISAN != right.certificateURISAN || left.current != right.current {
+	if left.certificateURISAN != right.certificateURISAN || left.role != right.role || left.current != right.current {
 		return false
 	}
 	if (left.previous == nil) != (right.previous == nil) {
@@ -387,7 +393,7 @@ func loadFingerprint(field, filename string, required bool) (CredentialFingerpri
 	return fingerprint, nil
 }
 
-func fingerprintPermissions(publish map[PublishTarget]struct{}, publishPrefixes []string, subscribe map[string]struct{}) PermissionsFingerprint {
+func fingerprintPermissions(role string, publish map[PublishTarget]struct{}, publishPrefixes []string, subscribe map[string]struct{}) PermissionsFingerprint {
 	targets := make([]PublishTarget, 0, len(publish))
 	for target := range publish {
 		targets = append(targets, target)
@@ -405,9 +411,12 @@ func fingerprintPermissions(publish map[PublishTarget]struct{}, publishPrefixes 
 	}
 	sort.Strings(queues)
 
-	// Each ACL is length-prefixed and preceded by its own count, so no
-	// rearrangement of entries between them can produce a colliding digest.
-	serialized := binary.BigEndian.AppendUint64(nil, uint64(len(targets)))
+	// The role leads, and each ACL is length-prefixed and preceded by its own
+	// count, so no rearrangement of entries between them can produce a colliding
+	// digest. Narrowing a role therefore revokes sessions the way an ACL change
+	// does, which is the property that keeps a capability from outliving it.
+	serialized := appendLengthPrefixed(nil, role)
+	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(targets)))
 	for _, target := range targets {
 		serialized = appendLengthPrefixed(serialized, target.Exchange)
 		serialized = appendLengthPrefixed(serialized, target.RoutingKey)

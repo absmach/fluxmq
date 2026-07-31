@@ -35,7 +35,7 @@ func BenchmarkLocalAMQPPolicyCanPublish(b *testing.B) {
 		b.Fatal(err)
 	}
 	adapter := &localAMQPPolicy{store: store}
-	principalID, credentialFingerprint, permissionsFingerprint, certificateURI, ok, err := adapter.AuthenticateLocal(
+	authentication, ok, err := adapter.AuthenticateLocal(
 		context.Background(),
 		"amqp091:client",
 		testLocalPrincipal,
@@ -46,10 +46,10 @@ func BenchmarkLocalAMQPPolicyCanPublish(b *testing.B) {
 		b.Fatalf("AuthenticateLocal() authenticated=%v error=%v", ok, err)
 	}
 	identity := amqpbroker.LocalSessionIdentity{
-		PrincipalID:            principalID,
-		CredentialFingerprint:  credentialFingerprint,
-		PermissionsFingerprint: permissionsFingerprint,
-		CertificateURI:         certificateURI,
+		PrincipalID:            authentication.PrincipalID,
+		CredentialFingerprint:  authentication.CredentialFingerprint,
+		PermissionsFingerprint: authentication.PermissionsFingerprint,
+		CertificateURI:         authentication.CertificateURI,
 	}
 
 	b.ReportAllocs()

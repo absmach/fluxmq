@@ -36,9 +36,14 @@ type reloadRaceLocalPolicy struct {
 	retired       atomic.Bool
 }
 
-func (p *reloadRaceLocalPolicy) AuthenticateLocal(_ context.Context, _, _, _ string, _ amqpbroker.VerifiedPeerIdentity) (string, string, string, string, bool, error) {
+func (p *reloadRaceLocalPolicy) AuthenticateLocal(_ context.Context, _, _, _ string, _ amqpbroker.VerifiedPeerIdentity) (amqpbroker.LocalAuthentication, bool, error) {
 	close(p.authenticated)
-	return "atom-audit-publisher", "old-credential-fingerprint", "old-permissions-fingerprint", testLocalCertificateURI, true, nil
+	return amqpbroker.LocalAuthentication{
+		PrincipalID:            "atom-audit-publisher",
+		CredentialFingerprint:  "old-credential-fingerprint",
+		PermissionsFingerprint: "old-permissions-fingerprint",
+		CertificateURI:         testLocalCertificateURI,
+	}, true, nil
 }
 
 func (p *reloadRaceLocalPolicy) CanPublishLocal(amqpbroker.LocalSessionIdentity, string, string) amqpbroker.LocalPublishGrant {
@@ -195,7 +200,7 @@ func TestRetiredLocalCredentialDuringHandshakeReleasesConnectionSlot(t *testing.
 	s := New(Config{
 		HandshakeTimeout: 2 * time.Second,
 		MaxConnections:   1,
-		ConnectionPolicy: amqpbroker.NewLocalPublishOnlyConnectionPolicy(
+		ConnectionPolicy: amqpbroker.NewLocalConnectionPolicy(
 			localPolicy,
 			localPolicy,
 			localPolicy,

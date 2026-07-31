@@ -108,7 +108,7 @@ server:
       max_connections: 10000
     tls: {}
     mtls: {}
-    internal:
+    local:
       addr: ":5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
@@ -135,12 +135,12 @@ server:
 
 ### Listener Fields
 
-These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.internal` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks.
+These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.local` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks. `server.amqp091.internal` and `server.amqp091.service` are deprecated aliases for it.
 
 | Field             | Description                                                                                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `addr`            | Listener bind address (`"<host>:<port>"` or `":<port>"`). Empty string disables that listener.                                                 |
-| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on `server.amqp091.internal`, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
+| `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on a local-principal listener, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
 | `read_timeout`    | Bounds the phase before an MQTT session starts (`time.Duration`, `>= 0`). On TCP that is the TLS handshake, protocol sniff and CONNECT; on WebSocket it also bounds the HTTP request and TLS handshake that precede the upgrade. Once the session starts it sets its own read deadlines from the negotiated keep-alive. TCP and WebSocket listeners. |
 | `write_timeout`   | Bounds a single socket write for the life of the connection (`time.Duration`, `>= 0`). TCP and WebSocket listeners.                            |
 | `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
@@ -743,10 +743,11 @@ auth:
 | `external.identity_cache_ttl`                   | `0`     | External identity cache TTL; zero selects the broker default (`24h`), while a negative value disables TTL eviction. |
 | `local_principals[].name`                       | —       | Unique SASL username for the local principal. |
 | `local_principals[].certificate_uri_san`        | —       | Exact URI SAN required on a CA-verified client certificate. |
+| `local_principals[].role`                       | `publisher` | Capability of the principal on every local listener: `publisher` may only publish; `service` may also consume and relay an origin identity. |
 | `local_principals[].current_secret_file`        | —       | File containing an active high-entropy printable value of at least 32 characters, without embedded CR/LF or NUL. One terminal newline is stripped. |
 | `local_principals[].previous_secret_file`       | `""`    | Optional old secret with the same printable-value requirements, accepted during rotation overlap. |
-| `local_principals[].permissions.publish`        | `[]`    | Exact AMQP publish targets. `exchange` must be `""` (the default exchange); `routing_key` must be exact and non-empty. |
-| `local_principals[].permissions.subscribe`      | `[]`    | Unsupported for local principals; it must remain empty. Local principals are publish-only. |
+| `local_principals[].permissions.publish`        | `[]`    | AMQP publish targets. `exchange` must be `""` (the default exchange). Each entry sets exactly one of `routing_key` (exact, and a protected stream under `queues`) or `routing_key_prefix` (a plain string prefix, no queue required). |
+| `local_principals[].permissions.subscribe`      | `[]`    | Exact queue names the principal may consume. Requires `role: service`; declaring entries on a `publisher` is rejected at load. |
 
 Valid `external.protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
 The old flat `auth.url`, `auth.transport`, `auth.timeout`, `auth.protocols`, and

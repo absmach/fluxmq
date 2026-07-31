@@ -32,7 +32,7 @@ server:
   amqp091:
     plain:
       addr: ":5682"
-    internal:
+    local:
       addr: ":5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
@@ -56,7 +56,7 @@ server:
 ## Key Fields
 
 - Listener families: `tcp`, `websocket`, `http`, `coap`, `amqp`, `amqp091`.
-- `amqp091.internal` is a private mTLS listener reserved for
+- `amqp091.local` is a private mTLS listener reserved for
   `auth.local_principals`; it never uses external auth or blocking hooks and
   requires a positive `max_connections` cap. It carries service-to-service
   traffic from a fixed set of statically configured internal producers, such as
