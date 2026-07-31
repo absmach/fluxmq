@@ -5,7 +5,7 @@ description: Comprehensive YAML configuration reference for server, broker, stor
 
 # Configuration Reference
 
-**Last Updated:** 2026-07-29
+**Last Updated:** 2026-08-01
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 
@@ -724,12 +724,13 @@ auth:
   local_principals:
     - name: "atom-audit-publisher"
       certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      role: "publisher"
       current_secret_file: "/run/secrets/atom_audit_secret_current"
       previous_secret_file: "/run/secrets/atom_audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom-audit"
+            routing_key: "atom.events"
         subscribe: []
 ```
 

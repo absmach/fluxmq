@@ -27,7 +27,7 @@ const (
 	testLocalSAN       = "spiffe://absmach/atom/audit-publisher"
 	testLocalSecret    = "0123456789abcdef0123456789abcdef"
 	testNextSecret     = "abcdef0123456789abcdef0123456789"
-	testAuditQueue     = "atom-audit"
+	testAuditQueue     = "atom.events"
 )
 
 func TestLocalAMQPPolicyAdapter(t *testing.T) {
@@ -80,7 +80,7 @@ func TestLocalAMQPPolicyAdapter(t *testing.T) {
 	if !adapter.CanPublishLocal(identity, "", testAuditQueue).Allowed() {
 		t.Fatal("exact configured publish target was denied")
 	}
-	if adapter.CanPublishLocal(identity, "events", testAuditQueue).Allowed() || adapter.CanPublishLocal(identity, "", "atom-audit.other").Allowed() {
+	if adapter.CanPublishLocal(identity, "events", testAuditQueue).Allowed() || adapter.CanPublishLocal(identity, "", "atom.events.other").Allowed() {
 		t.Fatal("non-exact publish target was allowed")
 	}
 
@@ -160,7 +160,7 @@ func TestLocalAMQPPolicyAdapterRevokesChangedPermissions(t *testing.T) {
 		t.Fatal("freshly authenticated session was not active")
 	}
 
-	principalConfig.Permissions.Publish[0].RoutingKey = "atom-audit-v2"
+	principalConfig.Permissions.Publish[0].RoutingKey = "atom.events.v2"
 	changed, err := store.Reload([]config.LocalPrincipalConfig{principalConfig})
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -171,7 +171,7 @@ func TestLocalAMQPPolicyAdapterRevokesChangedPermissions(t *testing.T) {
 	if adapter.IsSessionActive(identity) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if adapter.CanPublishLocal(identity, "", "atom-audit-v2").Allowed() {
+	if adapter.CanPublishLocal(identity, "", "atom.events.v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 }
@@ -200,7 +200,7 @@ func TestValidateLocalPrincipalPublishTargets(t *testing.T) {
 			Publish: []config.LocalPublishPermission{{RoutingKey: testAuditQueue}},
 		},
 	}
-	expected := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
+	expected := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom.events/#")
 	expected.Reserved = true
 	expected.Type = queueTypes.QueueTypeStream
 	expected.Retention = queueTypes.RetentionPolicy{
@@ -391,7 +391,7 @@ func TestReloadLocalPrincipalsRejectsInvalidTargetBeforeSwap(t *testing.T) {
 		t.Fatal("initial principal did not authenticate")
 	}
 
-	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
+	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom.events/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
 	queueStore := newDurableTestQueueStore()
@@ -448,7 +448,7 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 		t.Fatal("initial principal did not authenticate")
 	}
 
-	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
+	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom.events/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
 	securityQueue := queueTypes.DefaultQueueConfig("atom-security", "$queue/atom-security/#")
@@ -525,7 +525,7 @@ func TestReloadLocalPrincipalsRestoresProtectionWhenSecretLoadFails(t *testing.T
 		t.Fatalf("localauth.New() error = %v", err)
 	}
 
-	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom-audit/#")
+	auditQueue := queueTypes.DefaultQueueConfig(testAuditQueue, "$queue/atom.events/#")
 	auditQueue.Reserved = true
 	auditQueue.Type = queueTypes.QueueTypeStream
 	securityQueue := queueTypes.DefaultQueueConfig("atom-security", "$queue/atom-security/#")

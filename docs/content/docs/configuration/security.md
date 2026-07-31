@@ -5,7 +5,7 @@ description: External auth, local principals, TLS/mTLS listeners, and rate limit
 
 # Security Configuration
 
-**Last Updated:** 2026-07-29
+**Last Updated:** 2026-08-01
 
 ## External Auth Callout
 
@@ -60,7 +60,7 @@ Valid protocol keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
 When the `protocols` map is omitted or empty, all protocols require external
 auth. When the map is present, only protocols set to `true` get external auth;
 all others allow connections without external authentication. Do not disable
-external auth merely to carry internal traffic. Use an internal listener with
+external auth merely to carry internal traffic. Use a local listener with
 a local principal instead.
 
 ## Internal AMQP Local Principals
@@ -93,18 +93,20 @@ auth:
   local_principals:
     - name: "atom-audit-publisher"
       certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      role: "publisher"
       current_secret_file: "/run/secrets/atom_audit_secret_current"
       previous_secret_file: "/run/secrets/atom_audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom-audit"
+            routing_key: "atom.events"
         subscribe: []
 ```
 
-The internal listener requires a CA-verified certificate URI SAN, SASL
+The local listener requires a CA-verified certificate URI SAN, SASL
 username, and local secret to match one configured principal. Permissions are
-exact-match allowlists. Port `5683` must remain on a private network and must
+explicit allowlists of exact routing keys, routing-key prefixes, and exact
+subscription queues. Port `5683` must remain on a private network and must
 not be published to the host or Internet.
 
 An **exact** publish target is single-node only. It is appended and synced on
@@ -126,14 +128,15 @@ otherwise apply the target immediately while the node stayed clustered and its
 listener stayed active. Such a reload is refused; make the changes in separate
 steps, restarting in between.
 
-Publish permissions support only the default exchange (`exchange: ""`) and an
-exact, non-empty routing key. Other exchanges and wildcard routing keys are
-rejected when the configuration is loaded. At publish time the ACL is applied
-to the resolved exchange, so a client may address the default exchange as `""`
-or as `amq.default`.
+Publish permissions support only the default exchange (`exchange: ""`) and
+set exactly one of an exact, non-empty `routing_key` or a non-empty plain
+`routing_key_prefix`. Other exchanges and AMQP wildcard syntax are rejected
+when the configuration is loaded. At publish time the ACL is applied to the
+resolved exchange, so a client may address the default exchange as `""` or as
+`amq.default`.
 
-A publish target must be a pre-provisioned protected stream on a queue store
-that provides real crash durability; the in-memory queue store cannot back one.
+An exact publish target must be a pre-provisioned protected stream on a queue
+store that provides real crash durability; the in-memory queue store cannot back one.
 Publisher confirms are sent only after the append and its durability barrier
 complete. The wait for that barrier is bounded: an fsync cannot be cancelled
 once started, so FluxMQ stops waiting after the internal publish timeout and
@@ -165,7 +168,8 @@ state passed between first-party services. They are not part of the client
 API, and no client may set or read one.
 
 The boundary is the listener's trust policy, not the protocol. Only the AMQP
-0.9.1 `internal` and `service` listeners are trusted, because they admit solely
+0.9.1 `local` listener and its deprecated `internal` and `service` aliases are
+trusted, because they admit solely
 mTLS peers whose verified certificate URI SAN matches a principal declared in
 FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
 1.0, and AMQP 0.9.1 on the remote listener — is treated as a tenant or device:

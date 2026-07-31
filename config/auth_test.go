@@ -18,7 +18,7 @@ import (
 const (
 	testPrincipalName = "atom-audit-publisher"
 	testPrincipalSAN  = "spiffe://absmach/atom/audit-publisher"
-	testAuditQueue    = "atom-audit"
+	testAuditQueue    = "atom.events"
 	testInternalAddr  = ":5683"
 	testServiceAddr   = ":5684"
 	testServerCert    = "server.crt"
@@ -49,7 +49,7 @@ auth:
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom-audit
+            routing_key: atom.events
         subscribe: []
 `, testPrincipalName, testPrincipalSAN, current, previous)
 	if err := os.WriteFile(filename, []byte(contents), 0o600); err != nil {
@@ -654,7 +654,7 @@ func TestLoadAcceptsPublishPermissionFields(t *testing.T) {
 		name       string
 		permission string
 	}{
-		{name: "exact routing key", permission: "routing_key: \"atom-audit\""},
+		{name: "exact routing key", permission: "routing_key: \"atom.events\""},
 		{name: "routing key prefix", permission: "routing_key_prefix: \"m.\""},
 	}
 

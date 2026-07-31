@@ -51,11 +51,11 @@ FLUXMQ_NODE_URLS=http://my-broker:8082
 
 ## Dedicated local-principal AMQP listener
 
-`compose.local-principal.yaml` is a production-shaped overlay for an Atom audit
+`compose.local-principal.yaml` is a production-shaped overlay for an Atom event
 publisher. It keeps remote AMQP over TLS on port `5682`, enables an mTLS-only
-internal listener on container port `5683`, explicitly disables FluxMQ's
+local listener on container port `5683`, explicitly disables FluxMQ's
 otherwise-default MQTT, WebSocket, and AMQP 1.0 listeners, mounts local
-credentials as Docker secrets, and pre-provisions the `atom-audit` stream.
+credentials as Docker secrets, and pre-provisions the `atom.events` stream.
 
 The overlay requires Docker Compose 2.24.4 or newer because it uses
 `!override` to remove the base file's unused host port mappings.
@@ -112,16 +112,16 @@ Attach Atom to the Compose project's `atom-internal` network and connect to
 `fluxmq:5683`; the server certificate must be valid for the name the Atom AMQP
 client verifies. Do not attach public services to that network. If the subnet
 conflicts with your environment, change the Compose subnet, FluxMQ static
-address, and `server.amqp091.internal.addr` together.
+address, and `server.amqp091.local.addr` together.
 
-The internal listener requires all three credentials:
+The local listener requires all three credentials:
 
 - SASL username `atom-audit-publisher`;
 - the secret from `ATOM_AUDIT_SECRET_CURRENT_FILE`;
 - a client certificate signed by `ATOM_CLIENT_CA_FILE` with URI SAN
   `spiffe://absmach/atom/audit-publisher`.
 
-It may publish only to the default exchange with routing key `atom-audit`.
+It may publish only to the default exchange with routing key `atom.events`.
 Subscriptions and topology operations are denied. Confirmed delivery remains
 at least once: Atom must reuse a stable event ID on retries, and consumers must
 deduplicate it. See

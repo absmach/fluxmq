@@ -33,9 +33,9 @@ var (
 
 const (
 	node1                = "node-1"
-	testAuditQueueName   = "atom-audit"
-	testAuditQueueTopic  = "$queue/atom-audit"
-	testAuditQueueFilter = "$queue/atom-audit/#"
+	testAuditQueueName   = "atom.events"
+	testAuditQueueTopic  = "$queue/atom.events"
+	testAuditQueueFilter = "$queue/atom.events/#"
 )
 
 type targetCheckingDeliverer struct {
@@ -871,12 +871,12 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 	}); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
 	}
-	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom-audit sync:atom-audit]" {
-		t.Fatalf("operations = %v, want append then sync for atom-audit", operations)
+	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom.events sync:atom.events]" {
+		t.Fatalf("operations = %v, want append then sync for atom.events", operations)
 	}
 	auditTail, err := base.Tail(ctx, testAuditQueueName)
 	if err != nil || auditTail != 1 {
-		t.Fatalf("atom-audit tail = %d, error = %v, want 1", auditTail, err)
+		t.Fatalf("atom.events tail = %d, error = %v, want 1", auditTail, err)
 	}
 	overlapTail, err := base.Tail(ctx, "overlap")
 	if err != nil || overlapTail != 0 {
@@ -945,8 +945,8 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 		wantErr        error
 		wantOperations string
 	}{
-		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom-audit]"},
-		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom-audit sync:atom-audit]"},
+		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom.events]"},
+		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom.events sync:atom.events]"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

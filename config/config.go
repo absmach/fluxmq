@@ -1795,9 +1795,9 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 
 // ValidateLocalPrincipals checks the declarative rules for local principals:
 // unique non-blank names and absolute URI SANs, readable high-entropy secret
-// files, and exact publish-only permissions. It is the single definition of
-// those rules, shared with the runtime store that loads the same section, so
-// startup validation and a SIGHUP reload cannot drift apart.
+// files, roles, and exact-or-prefix publish permissions. It is the single
+// definition of those rules, shared with the runtime store that loads the same
+// section, so startup validation and a SIGHUP reload cannot drift apart.
 func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 	names := make(map[string]struct{}, len(principals))
 	uriSANs := make(map[string]struct{}, len(principals))

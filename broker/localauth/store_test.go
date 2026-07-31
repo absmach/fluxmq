@@ -22,7 +22,7 @@ const (
 	currentSecret  = "0123456789abcdef0123456789abcdef"
 	previousSecret = "abcdef0123456789abcdef0123456789"
 	nextSecret     = "fedcba9876543210fedcba9876543210"
-	auditQueue     = "atom-audit"
+	auditQueue     = "atom.events"
 )
 
 func TestAuthenticateAndAuthorize(t *testing.T) {
@@ -62,13 +62,13 @@ func TestAuthenticateAndAuthorize(t *testing.T) {
 		t.Fatal("wrong certificate URI SAN was accepted")
 	}
 
-	if !store.AuthorizePublish(authentication, "", "atom-audit").Allowed() {
+	if !store.AuthorizePublish(authentication, "", "atom.events").Allowed() {
 		t.Fatal("configured publish target was denied")
 	}
-	if store.AuthorizePublish(authentication, "events", "atom-audit").Allowed() {
+	if store.AuthorizePublish(authentication, "events", "atom.events").Allowed() {
 		t.Fatal("wrong exchange was allowed")
 	}
-	if store.AuthorizePublish(authentication, "", "atom-audit.other").Allowed() {
+	if store.AuthorizePublish(authentication, "", "atom.events.other").Allowed() {
 		t.Fatal("prefix routing key was allowed")
 	}
 }
@@ -137,7 +137,7 @@ func TestReloadIsAtomicAndRevokesRemovedCredentials(t *testing.T) {
 	if store.IsActive(oldAuthentication) {
 		t.Fatal("removed previous credential remains active")
 	}
-	if store.AuthorizePublish(oldAuthentication, "", "atom-audit").Allowed() {
+	if store.AuthorizePublish(oldAuthentication, "", "atom.events").Allowed() {
 		t.Fatal("session authenticated before reload can still publish with a retired credential")
 	}
 	if !store.IsActive(newAuthentication) {
@@ -165,7 +165,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 		t.Fatal("initial authentication failed")
 	}
 
-	principal.Permissions.Publish[0].RoutingKey = "atom-audit-v2"
+	principal.Permissions.Publish[0].RoutingKey = "atom.events.v2"
 	changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -176,7 +176,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if store.IsActive(authentication) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if store.AuthorizePublish(authentication, "", "atom-audit-v2").Allowed() {
+	if store.AuthorizePublish(authentication, "", "atom.events.v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 
@@ -184,7 +184,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if !ok {
 		t.Fatal("authentication against the replacement ACL failed")
 	}
-	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "atom-audit-v2").Allowed() {
+	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "atom.events.v2").Allowed() {
 		t.Fatal("session authenticated against the replacement ACL is not active")
 	}
 }
@@ -306,7 +306,7 @@ func TestConcurrentAuthenticationAndReload(t *testing.T) {
 			for range 500 {
 				authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 				if ok {
-					_ = store.AuthorizePublish(authentication, "", "atom-audit")
+					_ = store.AuthorizePublish(authentication, "", "atom.events")
 				}
 			}
 		}()
@@ -330,7 +330,7 @@ func principalConfig(current, previous string) config.LocalPrincipalConfig {
 		CurrentSecretFile:  current,
 		PreviousSecretFile: previous,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom.events"}},
 		},
 	}
 }

@@ -122,7 +122,7 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom-audit
+            routing_key: atom.events
         subscribe: []
 `, secretPath))
 	initial, err := config.Load(path)
@@ -211,7 +211,7 @@ func TestReloadLocalPrincipalsRegisterRollback(t *testing.T) {
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom-audit
+            routing_key: atom.events
         subscribe: []
 `, secretPath))
 	initial, err := config.Load(path)

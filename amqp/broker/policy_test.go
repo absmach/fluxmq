@@ -23,6 +23,7 @@ import (
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ const (
 	testPermissionsFP  = "permissions-fingerprint"
 	testCertificateURI = "spiffe://absmach/atom/audit-publisher"
 	testConnectionID   = "test-conn"
-	testAuditQueue     = "atom-audit"
+	testAuditQueue     = "atom.events"
 	testServiceQueue   = "$queue/m"
 	testConsumerTag    = "reader"
 	testSiblingTag     = "sibling-reader"
@@ -488,7 +489,7 @@ func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
 // a queue. Two routing keys would otherwise carry it there: one under a
 // "$queue/"-shaped prefix, and one that happens to name a configured stream.
 func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
-	const streamQueue = "atom-audit"
+	const streamQueue = "atom.events"
 
 	tests := []struct {
 		name       string
@@ -497,7 +498,7 @@ func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
 	}{
 		{
 			name:       "routing key naming a configured stream",
-			prefix:     "atom-",
+			prefix:     "atom.",
 			routingKey: streamQueue,
 		},
 		{
@@ -540,7 +541,7 @@ func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
 // pre-provisioned rather than declared on its own channel, so the lookup has to
 // reach global queue state.
 func TestPassiveDeclareResolvesProvisionedQueue(t *testing.T) {
-	const provisioned = "atom-audit"
+	const provisioned = "atom.events"
 
 	authz := &localAuthorizerStub{allowQueue: provisioned}
 	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
@@ -859,7 +860,7 @@ func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	if qm.publishCalls != 0 {
 		t.Fatalf("general queue publish calls = %d, want 0", qm.publishCalls)
 	}
-	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/atom-audit" {
+	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/atom.events" {
 		t.Fatalf("unexpected exact stream publish: calls=%d queue=%q request=%+v", qm.exactPublishCalls, qm.exactStreamName, qm.exactPublish)
 	}
 }
@@ -1358,7 +1359,7 @@ func TestExplicitExternalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	conn.broker.SetCrossDeliver(func(context.Context, string, string, []byte, byte, map[string]string) {
 		delivered++
 	})
-	if err := conn.broker.router.Subscribe("mqtt-client", testAuditQueue, 1, storage.SubscribeOptions{}); err != nil {
+	if err := conn.broker.router.Subscribe("mqtt-client", topics.AMQPTopicToMQTT(testAuditQueue), 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("subscribe test route: %v", err)
 	}
 

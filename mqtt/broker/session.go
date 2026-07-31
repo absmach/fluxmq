@@ -541,8 +541,15 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 			continue
 		}
 
-		// Note: No need to add to cluster since it was already there
-		// The subscription exists in etcd from the previous node
+		// The old owner removes the cluster subscription while closing the
+		// transferred session. Re-register it so publishers on other nodes can
+		// discover the subscriber after takeover.
+		if b.cluster != nil {
+			ctx := context.Background()
+			if err := b.cluster.AddSubscription(ctx, s.ID, sub.Filter, byte(sub.Qos), opts); err != nil {
+				return fmt.Errorf("failed to restore subscription in cluster: %w", err)
+			}
+		}
 	}
 
 	return nil
