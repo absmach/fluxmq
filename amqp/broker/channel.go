@@ -276,8 +276,6 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
 	case *codec.BasicConsume:
 		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
-	case *codec.BasicGet:
-		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
 	case *codec.BasicQos, *codec.BasicCancel, *codec.BasicAck, *codec.BasicNack, *codec.BasicReject:
 		// Channel-scoped consumer lifecycle. These name no queue of their own;
 		// they can only affect a consumer the subscribe ACL already allowed.
@@ -303,14 +301,26 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 	}
 }
 
-// authorizeLocalSubscribe admits a queue-scoped consumer operation only on a
-// listener that permits consumers and only for a queue the principal's own
-// subscribe ACL names.
+// authorizeLocalSubscribe admits a queue-scoped consumer operation only for a
+// principal whose role permits consumers and whose subscribe ACL names the
+// queue.
+//
+// The ACL names queues, so the wire value is resolved first and the resolved
+// queue name is what gets authorized: a client addresses "$queue/m" while the
+// ACL says "m", and comparing the two directly would refuse every legitimate
+// consumer. A filter that resolves to no queue is refused rather than admitted
+// as a pub/sub subscription, because no ACL entry grants one.
 func (ch *Channel) authorizeLocalSubscribe(queue, principalID string, decoded any) (bool, error) {
 	if !ch.conn.permitsConsumers() {
 		return ch.denyLocalMethod(decoded, principalID)
 	}
-	if ch.conn.canSubscribeLocal(queue) {
+
+	route := ch.conn.broker.routeResolver.Resolve(queue)
+	reason := "subscribe_acl_mismatch"
+	switch {
+	case route.Kind != corebroker.RouteQueue:
+		reason = "not_a_queue_address"
+	case ch.conn.canSubscribeLocal(route.QueueName):
 		return true, nil
 	}
 
@@ -319,9 +329,10 @@ func (ch *Channel) authorizeLocalSubscribe(queue, principalID string, decoded an
 	ch.conn.logger.Warn("amqp091_local_authorization",
 		"auth_mode", "local",
 		"outcome", "denied",
-		"reason", "subscribe_acl_mismatch",
+		"reason", reason,
 		"principal_id", principalID,
-		"queue", queue)
+		"queue", queue,
+		"resolved_queue", route.QueueName)
 	return false, ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", classID, methodID)
 }
 
@@ -627,6 +638,15 @@ func (ch *Channel) completePublish() {
 
 	// Route through resolver for default-exchange queue operations.
 	resolver := ch.conn.broker.routeResolver
+	// A prefix grant is checked against no queues entry, so it must not be able
+	// to reach one. Without this it could route into a queue two ways: a routing
+	// key under a "$queue/"-shaped prefix, or one that happens to name a
+	// configured stream. Both would write to a queue on a permission that never
+	// established the durability contract a queue publish carries.
+	if grant == LocalPublishGrantPrefix {
+		ch.publishToPubSub(topics.AMQPTopicToMQTT(topic), body, props, method, header)
+		return
+	}
 	if exchangeName == "" {
 		route := resolver.Resolve(topic)
 		switch route.Kind {
@@ -700,26 +720,39 @@ func (ch *Channel) completePublish() {
 		if exchangeName == "" {
 			pubsubTopic = topics.AMQPTopicToMQTT(topic)
 		}
-		// Publish to the topic-based router (pub/sub)
-		if method.Mandatory {
-			subs, err := ch.conn.broker.router.Match(pubsubTopic)
-			if err != nil || len(subs) == 0 {
-				if err != nil {
-					ch.conn.logger.Error("router match failed", "topic", pubsubTopic, "error", err)
-				}
-				ch.sendBasicReturn(method, header, body)
-				if ch.confirmMode {
-					ch.sendPublisherAck()
-				}
-				return
-			}
-		}
-		if err := ch.conn.broker.Publish(pubsubTopic, body, props); err != nil {
-			publishFailed = true
-		}
+		ch.publishToPubSub(pubsubTopic, body, props, method, header)
+		return
 	}
 
 	// Publisher confirms
+	if ch.confirmMode {
+		if publishFailed {
+			ch.sendPublisherNack()
+		} else {
+			ch.sendPublisherAck()
+		}
+	}
+}
+
+// publishToPubSub delivers through the topic router and settles the publisher
+// confirm. It is the only delivery path a routing-key-prefix grant may take,
+// because such a grant is authorized against no queue.
+func (ch *Channel) publishToPubSub(pubsubTopic string, body []byte, props map[string]string, method *codec.BasicPublish, header *codec.ContentHeader) {
+	if method.Mandatory {
+		subs, err := ch.conn.broker.router.Match(pubsubTopic)
+		if err != nil || len(subs) == 0 {
+			if err != nil {
+				ch.conn.logger.Error("router match failed", "topic", pubsubTopic, "error", err)
+			}
+			ch.sendBasicReturn(method, header, body)
+			if ch.confirmMode {
+				ch.sendPublisherAck()
+			}
+			return
+		}
+	}
+
+	publishFailed := ch.conn.broker.Publish(pubsubTopic, body, props) != nil
 	if ch.confirmMode {
 		if publishFailed {
 			ch.sendPublisherNack()
@@ -1149,12 +1182,33 @@ func (ch *Channel) handleExchangeUnbind(m *codec.ExchangeUnbind) error {
 
 // Queue methods
 
+// queueExists reports whether a passive declaration should succeed. The
+// channel-local map only holds queues this channel declared, so a
+// pre-provisioned queue — the only kind a local principal may consume — is
+// found through the queue manager instead.
+func (ch *Channel) queueExists(name string) bool {
+	if name == "" {
+		return false
+	}
+
+	ch.exchangeMu.RLock()
+	_, declared := ch.queues[name]
+	ch.exchangeMu.RUnlock()
+	if declared {
+		return true
+	}
+
+	qm := ch.conn.broker.queueManager
+	if qm == nil {
+		return false
+	}
+	cfg, err := qm.GetQueue(context.Background(), name)
+	return err == nil && cfg != nil
+}
+
 func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 	if m.Passive {
-		ch.exchangeMu.RLock()
-		_, exists := ch.queues[m.Queue]
-		ch.exchangeMu.RUnlock()
-		if !exists {
+		if !ch.queueExists(m.Queue) {
 			return ch.sendChannelClose(codec.NotFound,
 				"queue not found", codec.ClassQueue, codec.MethodQueueDeclare)
 		}

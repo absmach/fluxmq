@@ -1221,7 +1221,12 @@ func TestCancelConsumerByQueue(t *testing.T) {
 // consumers, and only for a queue its own subscribe ACL names. Both roles run on
 // the same listener policy, so the capability comes from the principal alone.
 func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
-	const allowedQueue = "m"
+	// The ACL names a queue; a client addresses it through the queue prefix, and
+	// authorization resolves the wire value before comparing.
+	const (
+		allowedQueue   = "m"
+		allowedAddress = "$queue/m"
+	)
 
 	tests := []struct {
 		name        string
@@ -1232,42 +1237,45 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 		{
 			name:        "service consumes a permitted queue",
 			role:        LocalRoleService,
-			method:      &codec.BasicConsume{Queue: allowedQueue},
+			method:      &codec.BasicConsume{Queue: allowedAddress},
 			wantAllowed: true,
 		},
 		{
 			name:   "service is refused a queue outside its ACL",
 			role:   LocalRoleService,
-			method: &codec.BasicConsume{Queue: testOtherTarget},
+			method: &codec.BasicConsume{Queue: "$queue/" + testOtherTarget},
 		},
 		{
-			name:        "service gets from a permitted queue",
-			role:        LocalRoleService,
-			method:      &codec.BasicGet{Queue: allowedQueue},
-			wantAllowed: true,
-		},
-		{
-			name:   "service is refused getting from a queue outside its ACL",
+			// basic.get is not implemented and always answers empty, so it is
+			// refused rather than advertised as an authorized read.
+			name:   "service is refused basic.get while it is unimplemented",
 			role:   LocalRoleService,
-			method: &codec.BasicGet{Queue: testOtherTarget},
+			method: &codec.BasicGet{Queue: allowedAddress},
+		},
+		{
+			// The ACL grants queues, so a filter that resolves to no queue has
+			// nothing that could authorize it.
+			name:   "service is refused a bare name that is not a queue address",
+			role:   LocalRoleService,
+			method: &codec.BasicConsume{Queue: allowedQueue},
 		},
 		{
 			name:        "service passively declares a permitted queue",
 			role:        LocalRoleService,
-			method:      &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
+			method:      &codec.QueueDeclare{Queue: allowedAddress, Passive: true},
 			wantAllowed: true,
 		},
 		{
 			name:   "service is refused passively declaring a queue outside its ACL",
 			role:   LocalRoleService,
-			method: &codec.QueueDeclare{Queue: testOtherTarget, Passive: true},
+			method: &codec.QueueDeclare{Queue: "$queue/" + testOtherTarget, Passive: true},
 		},
 		{
 			// A non-passive declare rewrites queue configuration, which the
 			// subscribe ACL does not grant even for a queue it names.
 			name:   "service is refused declaring a permitted queue non-passively",
 			role:   LocalRoleService,
-			method: &codec.QueueDeclare{Queue: allowedQueue},
+			method: &codec.QueueDeclare{Queue: allowedAddress},
 		},
 		{
 			name:        "service acknowledges a delivery",
@@ -1278,17 +1286,17 @@ func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
 		{
 			name:   "publish-only principal may not consume",
 			role:   LocalRolePublisher,
-			method: &codec.BasicConsume{Queue: allowedQueue},
+			method: &codec.BasicConsume{Queue: allowedAddress},
 		},
 		{
 			name:   "publish-only principal may not declare a queue",
 			role:   LocalRolePublisher,
-			method: &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
+			method: &codec.QueueDeclare{Queue: allowedAddress, Passive: true},
 		},
 		{
 			name:   "publish-only principal may not get",
 			role:   LocalRolePublisher,
-			method: &codec.BasicGet{Queue: allowedQueue},
+			method: &codec.BasicGet{Queue: allowedAddress},
 		},
 		{
 			name:   "publish-only principal may not acknowledge",

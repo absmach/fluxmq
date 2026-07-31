@@ -238,6 +238,29 @@ func TestClassifyFieldDefault(t *testing.T) {
 	}
 }
 
+// Local-principal ACLs are runtime-safe while the listener that serves them is
+// not. That asymmetry is what keeps a reload from applying node-local durable
+// grants inside a still-clustered runtime: a local listener cannot be brought
+// up without a restart, and startup refuses to bring one up alongside
+// clustering at all. Making a listener field runtime-safe would open that
+// window, so pin both classifications.
+func TestLocalListenerCannotStartWithoutRestart(t *testing.T) {
+	for _, field := range []string{
+		"Server",
+		"Server.AMQP091",
+		"Server.AMQP091.Local",
+		"Server.AMQP091.Local.Addr",
+		"Cluster.Enabled",
+	} {
+		if got := ClassifyField(field); got != RestartRequired {
+			t.Errorf("ClassifyField(%q) = %s, want %s", field, got, RestartRequired)
+		}
+	}
+	if got := ClassifyField("Auth.LocalPrincipals"); got != RuntimeSafe {
+		t.Errorf("ClassifyField(\"Auth.LocalPrincipals\") = %s, want %s", got, RuntimeSafe)
+	}
+}
+
 func TestReloadClassString(t *testing.T) {
 	if RuntimeSafe.String() != "runtime_safe" {
 		t.Errorf("RuntimeSafe.String() = %q", RuntimeSafe.String())

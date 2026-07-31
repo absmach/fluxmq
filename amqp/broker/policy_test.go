@@ -478,6 +478,92 @@ func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
 	}
 }
 
+// A prefix grant is authorized against no queues entry, so it must never reach
+// a queue. Two routing keys would otherwise carry it there: one under a
+// "$queue/"-shaped prefix, and one that happens to name a configured stream.
+func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
+	const streamQueue = "atom-audit"
+
+	tests := []struct {
+		name       string
+		prefix     string
+		routingKey string
+	}{
+		{
+			name:       "routing key naming a configured stream",
+			prefix:     "atom-",
+			routingKey: streamQueue,
+		},
+		{
+			name:       "routing key under a queue-shaped prefix",
+			prefix:     "$queue/",
+			routingKey: "$queue/" + streamQueue,
+		},
+		{
+			name:       "routing key under a queue-shaped prefix targeting a commit",
+			prefix:     "$queue/",
+			routingKey: "$queue/" + streamQueue + "/$commit",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowRoutingKeyPrefix: tc.prefix}
+			conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+			bindLocalIdentityAs(conn, LocalRoleService)
+			qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: streamQueue, Type: qtypes.QueueTypeStream}}
+			conn.broker.queueManager = qm
+
+			ch := newChannel(conn, 1)
+			ch.pendingMethod = &codec.BasicPublish{RoutingKey: tc.routingKey}
+			ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+			ch.pendingBody = []byte("{}")
+			ch.completePublish()
+
+			if qm.exactPublishCalls != 0 {
+				t.Fatalf("durable stream publish calls = %d, want 0", qm.exactPublishCalls)
+			}
+			if qm.publishCalls != 0 {
+				t.Fatalf("queue publish calls = %d, want 0; a prefix grant must stay on the pub/sub path", qm.publishCalls)
+			}
+		})
+	}
+}
+
+// A local principal may only declare passively, and the queues it consumes are
+// pre-provisioned rather than declared on its own channel, so the lookup has to
+// reach global queue state.
+func TestPassiveDeclareResolvesProvisionedQueue(t *testing.T) {
+	const provisioned = "atom-audit"
+
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	conn.broker.queueManager = &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeStream},
+	}
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleQueueDeclare(&codec.QueueDeclare{Queue: provisioned, Passive: true}); err != nil {
+		t.Fatalf("passive declare of a provisioned queue: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("expected one frame, got %d", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := decoded.(*codec.QueueDeclareOk); !ok {
+		t.Fatalf("expected QueueDeclareOk, got %T", decoded)
+	}
+}
+
 func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))

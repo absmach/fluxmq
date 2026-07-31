@@ -242,13 +242,18 @@ subscribe targets need no matching `queues` entry: the durability contract those
 carry exists because local publishes are acknowledged as crash-durable, which
 does not apply to reading.
 
-A subscribe permission grants reads and nothing else. `basic.consume` and
-`basic.get` are allowed for the queues it names, and `queue.declare` is allowed
-only in its passive form, to assert that a queue exists. A non-passive declare
-creates a queue and rewrites the type, retention, TTL and durability of one that
-already exists, which is a configuration write: services consume queues that
-were provisioned for them, so they never need it. `queue.bind`, `queue.unbind`,
-`queue.purge`, and `queue.delete` are refused on both listeners.
+A subscribe permission grants reads and nothing else. `basic.consume` is
+allowed for the queues it names, and `queue.declare` is allowed only in its
+passive form, to assert that a queue exists. A non-passive declare creates a
+queue and rewrites the type, retention, TTL and durability of one that already
+exists, which is a configuration write: services consume queues that were
+provisioned for them, so they never need it. `basic.get`, `queue.bind`,
+`queue.unbind`, `queue.purge`, and `queue.delete` are refused.
+
+`subscribe` names queues, but a client addresses one through the queue prefix,
+so `subscribe: [m]` authorizes `basic.consume` on `$queue/m`. The wire value is
+resolved before it is matched, and an address that resolves to no queue —
+a bare `m`, or a pub/sub filter — is refused, because no entry grants one.
 
 #### Publish targets: exact keys and prefixes
 
@@ -265,12 +270,15 @@ a tenant identifier, a channel identifier, a subtopic — which cannot be
 enumerated in broker configuration. The Rules Engine republishing a rule output
 to `m.<domain>.c.<channel>.<subtopic>` is the motivating case.
 
-The permission that matched decides how the publication is delivered, on either
-listener. An exact target is appended to its protected stream and synced before
-the publisher confirm; a prefix match is routed as an ordinary topic publish and
-carries no durability barrier. This is a property of the permission, not of the
-port the principal connected to, so one `permissions.publish` entry means the
-same thing everywhere.
+The permission that matched decides how the publication is delivered. An exact
+target is appended to its protected stream and synced before the publisher
+confirm; a prefix match is always routed as an ordinary topic publish and
+carries no durability barrier. A prefix grant can never reach a queue, whatever
+routing key it covers — not through a `$queue/`-shaped prefix, and not through a
+routing key that happens to name a configured stream — because it was authorized
+against no `queues` entry. This is a property of the permission, not of the port
+the principal connected to, so one `permissions.publish` entry means the same
+thing everywhere.
 
 A prefix is a wildcard by construction and must never be written as one:
 `m.#` is rejected, because accepting it would silently grant the literal `#`
