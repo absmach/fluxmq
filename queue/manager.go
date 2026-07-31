@@ -1329,7 +1329,7 @@ func (m *Manager) subscribeWithCursor(ctx context.Context, queueName, pattern st
 		if mode == types.GroupModeStream {
 			groupID = clientID
 		} else {
-			groupID = extractGroupFromClientID(clientID)
+			groupID = DefaultConsumerGroupID(clientID)
 		}
 	}
 
@@ -1454,7 +1454,7 @@ func (m *Manager) subscribe(ctx context.Context, queueName, pattern string, clie
 
 	// Default group ID to client prefix
 	if groupID == "" {
-		groupID = extractGroupFromClientID(clientID)
+		groupID = DefaultConsumerGroupID(clientID)
 	}
 
 	// Create unique group ID that includes the pattern
@@ -1513,7 +1513,7 @@ func (m *Manager) subscribe(ctx context.Context, queueName, pattern string, clie
 // Unsubscribe removes a consumer from a stream.
 func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, clientID, groupID string) error {
 	if groupID == "" {
-		groupID = extractGroupFromClientID(clientID)
+		groupID = DefaultConsumerGroupID(clientID)
 	}
 
 	patternGroupID := groupID

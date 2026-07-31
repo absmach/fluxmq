@@ -1457,6 +1457,9 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	if isStream && groupID == "" {
 		groupID = tag
 	}
+	if queueName != "" && groupID == "" {
+		groupID = queuepkg.DefaultConsumerGroupID(clientID)
+	}
 
 	cons := &consumer{
 		tag:        tag,
@@ -1479,28 +1482,26 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	// as soon as the manager registers it. A failed subscription removes this
 	// reservation before the channel reports the failure.
 	ch.consumers[tag] = cons
+	ch.conn.retainQueueRegistration(cons)
+	ch.conn.broker.stats.IncrementConsumers()
 	ch.consumersMu.Unlock()
 
-	ch.conn.broker.stats.IncrementConsumers()
-	// rollbackConsumer drops the reservation and reports whether another
-	// consumer on this channel still holds the same registration. The manager
-	// unregisters a client from a queue and group rather than a single consumer,
-	// so compensating for a failed subscribe while a sibling remains would stop
-	// delivering to that sibling without telling anyone.
-	rollbackConsumer := func() (siblingRemains bool) {
+	// rollbackConsumer drops the reservation and reports whether it released the
+	// last owner of the connection-level queue-manager registration.
+	rollbackConsumer := func() (registrationUnused bool) {
 		ch.consumersMu.Lock()
-		defer ch.consumersMu.Unlock()
-
+		removed := false
 		if current, exists := ch.consumers[tag]; exists && current == cons {
 			delete(ch.consumers, tag)
-			ch.conn.broker.stats.DecrementConsumers()
+			removed = true
 		}
-		for _, other := range ch.consumers {
-			if other.queueName == queueName && other.groupID == groupID && other.pattern == pattern {
-				return true
-			}
+		ch.consumersMu.Unlock()
+		if !removed {
+			return false
 		}
-		return false
+
+		ch.conn.broker.stats.DecrementConsumers()
+		return ch.conn.releaseQueueRegistration(cons)
 	}
 
 	// Subscribe to the queue via queue manager
@@ -1550,11 +1551,11 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		}
 
 		if subscribeErr != nil {
-			siblingRemains := rollbackConsumer()
+			registrationUnused := rollbackConsumer()
 			// A manager can fail after partially registering group state. Cleanup is
-			// best effort; errors raised before registration need no cleanup, and a
-			// sibling consumer sharing this registration owns it now.
-			if subscriptionStarted && !siblingRemains &&
+			// best effort; errors raised before registration need no cleanup, and an
+			// in-use connection registration must remain intact.
+			if subscriptionStarted && registrationUnused &&
 				!errors.Is(subscribeErr, qstorage.ErrQueueNotFound) && !errors.Is(subscribeErr, queuepkg.ErrQueueNotStream) {
 				_ = qm.Unsubscribe(context.Background(), queueName, pattern, clientID, subGroupID)
 			}
@@ -1603,8 +1604,10 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 		defer cancel()
 
 		qm := ch.conn.broker.queueManager
-		if qm != nil && cons.queueName != "" {
-			qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on consumer cancel
+		if cons.queueName != "" {
+			if registrationUnused := ch.conn.releaseQueueRegistration(cons); registrationUnused && qm != nil {
+				qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on final consumer cancel
+			}
 		}
 
 		if cons.queueName == "" {
@@ -1829,8 +1832,10 @@ func (ch *Channel) cleanup() {
 
 	for _, cons := range consumers {
 		ch.conn.broker.stats.DecrementConsumers()
-		if qm != nil && cons.queueName != "" {
-			qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup during channel close
+		if cons.queueName != "" {
+			if registrationUnused := ch.conn.releaseQueueRegistration(cons); registrationUnused && qm != nil {
+				qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup for the final owner during channel close
+			}
 		}
 		if cons.queueName == "" {
 			if cons.mqttFilter == "" {
@@ -1860,23 +1865,24 @@ func (ch *Channel) cancelConsumerByQueue(queueName, groupID string) {
 	}
 
 	ch.consumersMu.Lock()
-	var toCancel []string
+	var toCancel []*consumer
 	for tag, cons := range ch.consumers {
 		if cons.queueName == queueName && cons.groupID == groupID {
-			toCancel = append(toCancel, tag)
+			toCancel = append(toCancel, cons)
 			delete(ch.consumers, tag)
 		}
 	}
 	ch.consumersMu.Unlock()
 
-	for _, tag := range toCancel {
+	for _, cons := range toCancel {
+		ch.conn.releaseQueueRegistration(cons)
 		ch.conn.broker.stats.DecrementConsumers()
 		if err := ch.conn.writeMethod(ch.id, &codec.BasicCancel{
-			ConsumerTag: tag,
+			ConsumerTag: cons.tag,
 			NoWait:      true,
 		}); err != nil {
 			ch.conn.logger.Warn("failed to send server-initiated basic.cancel",
-				slog.String("consumer_tag", tag),
+				slog.String("consumer_tag", cons.tag),
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
 		}

@@ -65,6 +65,9 @@ type Connection struct {
 	channels   map[uint16]*Channel
 	channelsMu sync.RWMutex
 
+	queueRegistrations   map[queueRegistration]int
+	queueRegistrationsMu sync.Mutex
+
 	writeMu   sync.Mutex
 	closed    atomic.Bool
 	closeCh   chan struct{}
@@ -75,20 +78,30 @@ type Connection struct {
 	logger *slog.Logger
 }
 
+// queueRegistration identifies the queue-manager registration shared by all
+// matching Basic.Consume instances on one AMQP connection. The queue manager
+// registers the connection client ID, not an AMQP channel or consumer tag.
+type queueRegistration struct {
+	queueName string
+	pattern   string
+	groupID   string
+}
+
 func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *ConnectionPolicy) *Connection {
 	c := &Connection{
-		broker:     b,
-		conn:       netConn,
-		reader:     bufio.NewReaderSize(netConn, 65536),
-		writer:     bufio.NewWriterSize(netConn, 65536),
-		ctx:        ctx,
-		policy:     policy,
-		frameMax:   defaultFrameMax,
-		channelMax: defaultChannelMax,
-		heartbeat:  defaultHeartbeat,
-		channels:   make(map[uint16]*Channel),
-		closeCh:    make(chan struct{}),
-		logger:     b.logger,
+		broker:             b,
+		conn:               netConn,
+		reader:             bufio.NewReaderSize(netConn, 65536),
+		writer:             bufio.NewWriterSize(netConn, 65536),
+		ctx:                ctx,
+		policy:             policy,
+		frameMax:           defaultFrameMax,
+		channelMax:         defaultChannelMax,
+		heartbeat:          defaultHeartbeat,
+		channels:           make(map[uint16]*Channel),
+		queueRegistrations: make(map[queueRegistration]int),
+		closeCh:            make(chan struct{}),
+		logger:             b.logger,
 	}
 	c.connID = b.nextConnectionID(netConn.RemoteAddr())
 	if policy.usesLocalPrincipalAuth() {
@@ -97,6 +110,43 @@ func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *Con
 		}
 	}
 	return c
+}
+
+func (c *Connection) retainQueueRegistration(cons *consumer) {
+	if cons == nil || cons.queueName == "" {
+		return
+	}
+
+	key := queueRegistration{queueName: cons.queueName, pattern: cons.pattern, groupID: cons.groupID}
+	c.queueRegistrationsMu.Lock()
+	if c.queueRegistrations == nil {
+		c.queueRegistrations = make(map[queueRegistration]int)
+	}
+	c.queueRegistrations[key]++
+	c.queueRegistrationsMu.Unlock()
+}
+
+// releaseQueueRegistration reports whether the released consumer was the last
+// owner of the connection-level queue-manager registration.
+func (c *Connection) releaseQueueRegistration(cons *consumer) bool {
+	if cons == nil || cons.queueName == "" {
+		return false
+	}
+
+	key := queueRegistration{queueName: cons.queueName, pattern: cons.pattern, groupID: cons.groupID}
+	c.queueRegistrationsMu.Lock()
+	defer c.queueRegistrationsMu.Unlock()
+
+	owners, exists := c.queueRegistrations[key]
+	if !exists {
+		return false
+	}
+	if owners > 1 {
+		c.queueRegistrations[key] = owners - 1
+		return false
+	}
+	delete(c.queueRegistrations, key)
+	return true
 }
 
 func (c *Connection) connectionPolicy() *ConnectionPolicy {

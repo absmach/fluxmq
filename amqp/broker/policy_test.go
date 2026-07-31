@@ -698,12 +698,112 @@ func TestLocalConsumeFailureKeepsSiblingSubscription(t *testing.T) {
 			assert.Equal(t, tc.withSibling, siblingRemains, "the sibling must survive its neighbour's failure")
 
 			if tc.wantUnsubscribe {
-				assert.Equal(t, []string{provisioned + "/"}, qm.unsubscribes)
+				defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+				assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
 			} else {
 				assert.Empty(t, qm.unsubscribes, "compensating here would revoke the sibling's registration")
 			}
 		})
 	}
+}
+
+// Queue-manager ownership is connection-scoped. The implicit queue-mode group
+// and its explicit spelling are also the same registration, even when the
+// Basic.Consume instances live on different AMQP channels.
+func TestLocalConsumeFailureKeepsCrossChannelImplicitGroupSubscription(t *testing.T) {
+	const provisioned = "m"
+
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+	}
+	conn.broker.queueManager = qm
+
+	siblingChannel := newChannel(conn, 1)
+	failingChannel := newChannel(conn, 2)
+	require.NoError(t, siblingChannel.handleMethod(&codec.BasicConsume{
+		Queue:       testServiceQueue,
+		ConsumerTag: testSiblingTag,
+		NoWait:      true,
+	}))
+
+	qm.existingSubErr = errors.New("group store unavailable")
+	defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+	require.NoError(t, failingChannel.handleMethod(&codec.BasicConsume{
+		Queue:       testServiceQueue,
+		ConsumerTag: testConsumerTag,
+		NoWait:      true,
+		Arguments:   map[string]any{"x-consumer-group": defaultGroupID},
+	}))
+
+	siblingChannel.consumersMu.RLock()
+	_, siblingRemains := siblingChannel.consumers[testSiblingTag]
+	siblingChannel.consumersMu.RUnlock()
+	failingChannel.consumersMu.RLock()
+	_, failedRemains := failingChannel.consumers[testConsumerTag]
+	failingChannel.consumersMu.RUnlock()
+
+	assert.True(t, siblingRemains)
+	assert.False(t, failedRemains)
+	assert.Empty(t, qm.unsubscribes, "the cross-channel sibling still owns the canonical registration")
+	assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
+}
+
+func TestSharedQueueRegistrationUnsubscribesOnlyAfterFinalConsumer(t *testing.T) {
+	const provisioned = "m"
+
+	newConsumers := func(t *testing.T) (*Connection, *mockChannelQueueManager, *Channel, *Channel) {
+		t.Helper()
+		authz := &localAuthorizerStub{allowQueue: provisioned}
+		conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+		bindLocalIdentityAs(conn, LocalRoleService)
+		qm := &mockChannelQueueManager{
+			queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+		}
+		conn.broker.queueManager = qm
+
+		first := newChannel(conn, 1)
+		second := newChannel(conn, 2)
+		require.NoError(t, first.handleMethod(&codec.BasicConsume{
+			Queue:       testServiceQueue,
+			ConsumerTag: testConsumerTag,
+			NoWait:      true,
+		}))
+		require.NoError(t, second.handleMethod(&codec.BasicConsume{
+			Queue:       testServiceQueue,
+			ConsumerTag: testSiblingTag,
+			NoWait:      true,
+		}))
+		return conn, qm, first, second
+	}
+
+	t.Run("basic cancel", func(t *testing.T) {
+		conn, qm, first, second := newConsumers(t)
+
+		require.NoError(t, first.handleMethod(&codec.BasicCancel{ConsumerTag: testConsumerTag, NoWait: true}))
+		assert.Empty(t, qm.unsubscribes, "the second channel still owns the registration")
+		assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
+
+		require.NoError(t, second.handleMethod(&codec.BasicCancel{ConsumerTag: testSiblingTag, NoWait: true}))
+		defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+		assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
+		assert.Equal(t, uint64(0), conn.broker.stats.GetConsumers())
+	})
+
+	t.Run("channel cleanup", func(t *testing.T) {
+		conn, qm, first, second := newConsumers(t)
+
+		first.cleanup()
+		assert.Empty(t, qm.unsubscribes, "the second channel still owns the registration")
+		assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
+
+		second.cleanup()
+		defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+		assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
+		assert.Equal(t, uint64(0), conn.broker.stats.GetConsumers())
+	})
 }
 
 func TestLocalStreamConsumeCannotChangeClassicQueueType(t *testing.T) {

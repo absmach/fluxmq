@@ -32,6 +32,12 @@ func extractGroupFromClientID(clientID string) string {
 	return clientID
 }
 
+// DefaultConsumerGroupID returns the queue-mode consumer group used when a
+// subscriber does not provide one explicitly.
+func DefaultConsumerGroupID(clientID string) string {
+	return extractGroupFromClientID(clientID)
+}
+
 var messageIDCounter atomic.Uint64
 
 func generateMessageID() string {
