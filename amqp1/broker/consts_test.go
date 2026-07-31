@@ -4,6 +4,10 @@
 package broker
 
 const (
-	testKeyOperation = "operation"
-	testKeyType      = "type"
+	testKeyOperation  = "operation"
+	testKeyType       = "type"
+	testIngestAddress = "test.ingest"
+	testTraceValue    = "abc"
+	testTraceKey      = "trace"
+	testRuleTrace     = `["rule-a"]`
 )

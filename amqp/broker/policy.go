@@ -72,6 +72,7 @@ type LocalSessionIdentity struct {
 // NewLocalPublishOnlyConnectionPolicy and do not mutate them after serving.
 type ConnectionPolicy struct {
 	mode           ConnectionPolicyMode
+	trusted        bool
 	externalAuth   *corebroker.AuthEngine
 	hooks          *corebroker.BlockingHookEngine
 	localAuth      LocalPrincipalAuthenticator
@@ -80,11 +81,37 @@ type ConnectionPolicy struct {
 	maxMessageSize uint64
 }
 
+// carriesReservedProperties reports whether connections under this policy may
+// exchange broker-internal properties with the broker.
+//
+// This is deliberately a field of its own rather than a test on mode: trust is
+// a statement about who authenticated the peer, while mode is a statement about
+// which operations the peer may perform. A future listener may be trusted and
+// still permit subscribe. A nil policy is the embedded-caller compatibility
+// path and is never trusted.
+func (p *ConnectionPolicy) carriesReservedProperties() bool {
+	return p != nil && p.trusted
+}
+
+// propagatesOriginIdentity reports whether a publisher under this policy may
+// state the external identity and origin protocol of a message it relays,
+// rather than having its own authenticated identity stamped on it.
+//
+// Only a trusted service may: for an externally authenticated client, naming
+// another principal is impersonation. A local principal may not either. Its
+// identity is fixed by FluxMQ's configuration and its publications are audit
+// records, so a relayed origin would make the record disagree with the peer
+// that actually authenticated.
+func (p *ConnectionPolicy) propagatesOriginIdentity() bool {
+	return p.carriesReservedProperties() && p.mode != ConnectionPolicyLocalPublishOnly
+}
+
 // NewExternalConnectionPolicy constructs a policy using only the existing
 // external auth engine and blocking hooks.
 func NewExternalConnectionPolicy(auth *corebroker.AuthEngine, hooks *corebroker.BlockingHookEngine, maxMessageSize uint64) *ConnectionPolicy {
 	return &ConnectionPolicy{
 		mode:           ConnectionPolicyExternal,
+		trusted:        false,
 		externalAuth:   auth,
 		hooks:          hooks,
 		maxMessageSize: maxMessageSize,
@@ -93,6 +120,11 @@ func NewExternalConnectionPolicy(auth *corebroker.AuthEngine, hooks *corebroker.
 
 // NewLocalPublishOnlyConnectionPolicy constructs a fail-closed local-principal
 // policy. It never invokes an external auth engine or blocking hook.
+//
+// The policy is trusted: the listener admits only mTLS peers whose verified
+// certificate URI SAN matches a principal declared in FluxMQ's own
+// configuration, so a reserved property arriving on it came from a first-party
+// service rather than from a tenant or device.
 func NewLocalPublishOnlyConnectionPolicy(
 	auth LocalPrincipalAuthenticator,
 	authz LocalPrincipalAuthorizer,
@@ -101,6 +133,7 @@ func NewLocalPublishOnlyConnectionPolicy(
 ) *ConnectionPolicy {
 	return &ConnectionPolicy{
 		mode:           ConnectionPolicyLocalPublishOnly,
+		trusted:        true,
 		localAuth:      auth,
 		localAuthz:     authz,
 		localSessions:  sessions,

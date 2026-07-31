@@ -144,6 +144,54 @@ See [Internal AMQP Local Principals](/deployment/internal-amqp-local-principals)
 for the complete production configuration, rotation process, tests, and
 rollout contract.
 
+## Reserved Message Properties
+
+Message property names beginning with `_flux.` are reserved for broker-internal
+state passed between first-party services. They are not part of the client
+API, and no client may set or read one.
+
+The boundary is the listener's trust policy, not the protocol. Only the AMQP
+0.9.1 internal listener described above is trusted, because it admits solely
+mTLS peers whose verified certificate URI SAN matches a principal declared in
+FluxMQ's own configuration. Every other connection — MQTT, HTTP, CoAP, AMQP
+1.0, and AMQP 0.9.1 on the remote listener — is treated as a tenant or device:
+
+- **Ingress**: reserved properties supplied by an untrusted publisher are
+  dropped before routing, so a reserved value can never be forged by a client.
+- **Egress**: reserved properties are omitted from deliveries to untrusted
+  consumers, so a client cannot observe state another service set.
+
+Local principals are publish-only, so no connection currently consumes
+reserved properties; today they travel from a trusted service into the broker
+only. Speaking AMQP does not by itself confer trust, and an externally
+authenticated AMQP client is never treated as a service.
+
+The admin API (`server.api`) is exempt because it is an operator plane, not a
+client plane: it is unauthenticated and already exposes session inspection and
+configuration reload, so a caller that can reach it holds broker-administrator
+capability. Its queue append and read operations therefore pass properties
+through unchanged. Keep that listener on a private network.
+
+## Origin Identity
+
+Every published message carries `client_id`, `external_id`, and `protocol`
+properties describing who published it and over which transport. These are
+stamped from the authenticated connection, so a publisher cannot attribute its
+message to another principal or claim it arrived over another protocol.
+
+A trusted AMQP 0.9.1 service relaying a message on behalf of an original
+publisher may override `external_id` and `protocol` to preserve the true
+origin, by setting them as message headers. The same trust rule as reserved
+properties applies, with one addition: a **local principal may not** relay an
+origin either. Its identity is fixed by configuration and its publications are
+audit records, so relaying would make the record disagree with the peer that
+actually authenticated. Untrusted connections on every protocol — including
+AMQP 0.9.1 remote and AMQP 1.0 — have any supplied value discarded and
+replaced with their own authenticated identity.
+
+Ordinary user properties are unaffected and continue to flow in both
+directions on every protocol that supports them.
+
 ## Blocking Hooks
 
 Blocking hooks are optional synchronous callouts for operations that need an

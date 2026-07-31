@@ -473,19 +473,41 @@ func (ch *Channel) completePublish() {
 	}
 
 	clientID := PrefixedClientID(ch.conn.connID)
-	if ch.conn.connectionPolicy().mode == ConnectionPolicyLocalPublishOnly {
-		if principalID := ch.conn.externalID(clientID); principalID != "" {
-			props[corebroker.ExternalIDProperty] = principalID
-		}
-	} else if v, ok := header.Properties.Headers[corebroker.ExternalIDProperty].(string); ok && v != "" {
-		props[corebroker.ExternalIDProperty] = v
+	policy := ch.conn.connectionPolicy()
+
+	// A relayed origin identity is honored only from a trusted service. Anyone
+	// else gets their own authenticated identity stamped, so a publisher cannot
+	// attribute a message to another principal or to another protocol.
+	relayedID := ""
+	if policy.propagatesOriginIdentity() {
+		relayedID, _ = header.Properties.Headers[corebroker.ExternalIDProperty].(string)
+	}
+	if relayedID != "" {
+		props[corebroker.ExternalIDProperty] = relayedID
 	} else if externalID := ch.conn.externalID(clientID); externalID != "" {
 		props[corebroker.ExternalIDProperty] = externalID
 	}
-	if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
-		props[corebroker.ProtocolProperty] = v
-	} else {
-		props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
+
+	props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
+	if policy.propagatesOriginIdentity() {
+		if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
+			props[corebroker.ProtocolProperty] = v
+		}
+	}
+
+	// Broker-internal properties are accepted only from a trusted listener.
+	// An externally authenticated client is a tenant or device regardless of
+	// which protocol it speaks, so its reserved headers are dropped here rather
+	// than forwarded as broker state.
+	if policy.carriesReservedProperties() {
+		for key, value := range header.Properties.Headers {
+			if !corebroker.IsReservedProperty(key) {
+				continue
+			}
+			if v, ok := value.(string); ok {
+				props[key] = v
+			}
+		}
 	}
 
 	exchangeName := normalizeExchange(method.Exchange)
@@ -500,7 +522,6 @@ func (ch *Channel) completePublish() {
 	props = corebroker.AddClientIDProperty(props, clientID)
 	originalTopic := topic
 
-	policy := ch.conn.connectionPolicy()
 	if policy.mode == ConnectionPolicyLocalPublishOnly {
 		// Re-evaluate at completion so an ACL reduction made while content frames
 		// are in flight takes effect immediately.
@@ -818,8 +839,15 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		return err
 	}
 
+	// Broker-internal properties are revealed only to a trusted listener, so an
+	// externally authenticated consumer cannot observe state another service set.
+	carryReserved := ch.conn.connectionPolicy().carriesReservedProperties()
+
 	headers := make(map[string]any)
 	for k, v := range props {
+		if !carryReserved && corebroker.IsReservedProperty(k) {
+			continue
+		}
 		switch k {
 		case "content-type", "content-encoding", "correlation-id", "reply-to", qtypes.PropMessageID, "type":
 			continue

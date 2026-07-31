@@ -345,6 +345,43 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 	}
 }
 
+// A local principal's identity is fixed by configuration, so its publications
+// are stamped with the authenticated principal even though the listener is
+// trusted. Relaying another origin would make an audit record disagree with the
+// peer that actually authenticated.
+func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentity(conn)
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+	ch.pendingHeader = &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		BodySize: 2,
+		Properties: codec.BasicProperties{
+			Headers: map[string]any{
+				corebroker.ExternalIDProperty: "pub-123",
+				corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
+			},
+		},
+	}
+	ch.pendingBody = []byte("{}")
+	ch.completePublish()
+
+	if qm.exactPublishCalls != 1 {
+		t.Fatalf("exact stream publish calls = %d, want 1", qm.exactPublishCalls)
+	}
+	if got := qm.exactPublish.Properties[corebroker.ExternalIDProperty]; got != testLocalPrincipal {
+		t.Fatalf("external_id = %q, want %q", got, testLocalPrincipal)
+	}
+	if got := qm.exactPublish.Properties[corebroker.ProtocolProperty]; got != corebroker.ProtocolAMQP091 {
+		t.Fatalf("protocol = %q, want %q", got, corebroker.ProtocolAMQP091)
+	}
+}
+
 func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
@@ -810,6 +847,50 @@ func TestLocalPublishRejectsCredentialRetiredDuringContent(t *testing.T) {
 	}
 	if got := decodeSingleChannelClose(t, buf); got.ReplyCode != codec.AccessRefused {
 		t.Fatalf("reply code = %d, want %d", got.ReplyCode, codec.AccessRefused)
+	}
+}
+
+// Reserved properties are gated on who authenticated the peer, so only the
+// mTLS internal listener may exchange them. A missing policy is the embedded
+// caller path and must fail closed.
+func TestConnectionPolicyReservedPropertyTrust(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy *ConnectionPolicy
+		want   bool
+	}{
+		{
+			name:   "local publish only policy is trusted",
+			policy: NewLocalPublishOnlyConnectionPolicy(nil, nil, nil, 0),
+			want:   true,
+		},
+		{
+			name:   "external policy is not trusted",
+			policy: NewExternalConnectionPolicy(nil, nil, 0),
+			want:   false,
+		},
+		{
+			name:   "nil policy is not trusted",
+			policy: nil,
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.policy.carriesReservedProperties(); got != tc.want {
+				t.Fatalf("carriesReservedProperties() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A connection with no policy resolves to the untrusted external default, so an
+// embedded caller never silently becomes a trusted service.
+func TestAbsentPolicyResolvesUntrusted(t *testing.T) {
+	conn, _ := newPolicyTestConnection(t, nil)
+	if conn.connectionPolicy().carriesReservedProperties() {
+		t.Fatal("connection with no policy must not carry reserved properties")
 	}
 }
 
