@@ -18,6 +18,7 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrAlreadyExists = errors.New("already exists")
 	ErrLocked        = errors.New("resource is locked")
+	ErrClosed        = errors.New("store is closed")
 )
 
 // Store is the composite storage interface providing access to all storage backends.
@@ -40,7 +41,9 @@ type Store interface {
 	// Ping verifies the storage backend is reachable and operational.
 	Ping() error
 
-	// Close closes all storage backends.
+	// Close closes all storage backends. It is safe to call while operations
+	// are in flight and safe to call more than once. Operations that race with
+	// Close either complete or return ErrClosed; they never panic.
 	Close() error
 }
 

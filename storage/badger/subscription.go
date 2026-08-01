@@ -19,12 +19,18 @@ var _ storage.SubscriptionStore = (*SubscriptionStore)(nil)
 //
 // Key format: sub:{clientID}:{filter}.
 type SubscriptionStore struct {
-	db    *badger.DB
+	db    *db
 	count atomic.Int64 // Cached subscription count
 }
 
 // NewSubscriptionStore creates a new BadgerDB subscription store.
-func NewSubscriptionStore(db *badger.DB) *SubscriptionStore {
+// The store guards handle against use after close; closing handle directly
+// bypasses that guard and lets BadgerDB panic on a racing operation.
+func NewSubscriptionStore(handle *badger.DB) *SubscriptionStore {
+	return newSubscriptionStore(newDB(handle))
+}
+
+func newSubscriptionStore(db *db) *SubscriptionStore {
 	s := &SubscriptionStore{db: db}
 	s.refreshCount()
 	return s

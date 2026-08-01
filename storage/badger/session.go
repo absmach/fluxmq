@@ -16,11 +16,17 @@ var _ storage.SessionStore = (*SessionStore)(nil)
 
 // SessionStore implements storage.SessionStore using BadgerDB.
 type SessionStore struct {
-	db *badger.DB
+	db *db
 }
 
 // NewSessionStore creates a new BadgerDB session store.
-func NewSessionStore(db *badger.DB) *SessionStore {
+// The store guards handle against use after close; closing handle directly
+// bypasses that guard and lets BadgerDB panic on a racing operation.
+func NewSessionStore(handle *badger.DB) *SessionStore {
+	return newSessionStore(newDB(handle))
+}
+
+func newSessionStore(db *db) *SessionStore {
 	return &SessionStore{db: db}
 }
 

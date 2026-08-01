@@ -18,11 +18,17 @@ var _ storage.RetainedStore = (*RetainedStore)(nil)
 //
 // Key format: retained:{topic}.
 type RetainedStore struct {
-	db *badger.DB
+	db *db
 }
 
 // NewRetainedStore creates a new BadgerDB retained message store.
-func NewRetainedStore(db *badger.DB) *RetainedStore {
+// The store guards handle against use after close; closing handle directly
+// bypasses that guard and lets BadgerDB panic on a racing operation.
+func NewRetainedStore(handle *badger.DB) *RetainedStore {
+	return newRetainedStore(newDB(handle))
+}
+
+func newRetainedStore(db *db) *RetainedStore {
 	return &RetainedStore{db: db}
 }
 

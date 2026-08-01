@@ -6,6 +6,10 @@ FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+# VERSION is stamped into the binary and reported at startup. The Build workflow
+# passes the git tag; local builds fall back to "dev".
+ARG VERSION=dev
+
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -14,7 +18,7 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags "-s -w" -o /out/fluxmq ./cmd
+    go build -trimpath -ldflags "-s -w -X github.com/absmach/fluxmq.Version=${VERSION}" -o /out/fluxmq ./cmd
 
 FROM alpine:3.24
 
