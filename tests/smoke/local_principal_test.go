@@ -38,7 +38,7 @@ import (
 const (
 	localUsername = "atom-audit-publisher"
 	localURISAN   = "spiffe://absmach/atom/audit-publisher"
-	auditQueue    = "atom-audit"
+	auditQueue    = "atom.events"
 )
 
 func TestLocalPrincipalRealProcess(t *testing.T) {
@@ -107,7 +107,7 @@ func TestLocalPrincipalRealProcess(t *testing.T) {
 	assertDialRejected(t, ports.internal, untrustedTLS, localUsername, currentSecret)
 	assertSubscribeDenied(t, ports.internal, validTLS, currentSecret)
 	assertTopologyDenied(t, ports.internal, validTLS, currentSecret)
-	assertPublishDenied(t, ports.internal, validTLS, currentSecret, "", "not-atom-audit")
+	assertPublishDenied(t, ports.internal, validTLS, currentSecret, "", "not-atom.events")
 	assertPublishDenied(t, ports.internal, validTLS, currentSecret, "events", auditQueue)
 
 	if got := callout.total(); got != 0 {
@@ -237,7 +237,7 @@ func writeSmokeConfig(t *testing.T, path string, cfg smokeConfig) {
     plain:
       addr: "127.0.0.1:%d"
       max_connections: 32
-    internal:
+    local:
       addr: "127.0.0.1:%d"
       max_connections: 8
       cert_file: %q
@@ -271,6 +271,7 @@ auth:
   local_principals:
     - name: %q
       certificate_uri_san: %q
+      role: "publisher"
       current_secret_file: %q%s
       permissions:
         publish:
@@ -289,7 +290,7 @@ hooks:
 queues:
   - name: %q
     topics:
-      - "$queue/atom-audit/#"
+      - "$queue/atom.events/#"
     reserved: true
     type: "stream"
     retention:

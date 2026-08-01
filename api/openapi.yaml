@@ -630,11 +630,15 @@ components:
         publish_denied:
           type: integer
           format: uint64
-          description: Local-principal publications denied by the exact-match ACL
+          description: Local-principal publications denied by the publish ACL
+        subscribe_denied:
+          type: integer
+          format: uint64
+          description: Local-principal consumer operations denied by the subscribe ACL
         operation_denied:
           type: integer
           format: uint64
-          description: Non-publish AMQP operations denied on the internal listener
+          description: AMQP operations denied because the principal's role does not permit them
 
     AMQPLocalReloadStats:
       type: object

@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,16 +35,19 @@ func (f CredentialFingerprint) String() string {
 	return hex.EncodeToString(f[:8])
 }
 
-// PermissionsFingerprint identifies the exact publish ACL bound to a session.
-// It is comparable and contains no credential material.
+// PermissionsFingerprint identifies the role and the exact publish and
+// subscribe ACLs bound to a session. It is comparable and contains no
+// credential material. All three share one fingerprint so that narrowing any of
+// them revokes the session, exactly as a credential rotation does.
 type PermissionsFingerprint [sha256.Size]byte
 
 // Authentication describes a successfully authenticated local principal.
 type Authentication struct {
-	Principal                     string
-	CertificateURISAN             string
-	CredentialFingerprint         CredentialFingerprint
-	PublishPermissionsFingerprint PermissionsFingerprint
+	Principal              string
+	CertificateURISAN      string
+	Role                   string
+	CredentialFingerprint  CredentialFingerprint
+	PermissionsFingerprint PermissionsFingerprint
 }
 
 // PublishTarget is an exact AMQP exchange and routing-key pair.
@@ -64,11 +68,17 @@ type snapshot struct {
 }
 
 type principal struct {
-	certificateURISAN  string
-	current            CredentialFingerprint
-	previous           *CredentialFingerprint
-	publish            map[PublishTarget]struct{}
-	publishPermissions PermissionsFingerprint
+	certificateURISAN string
+	role              string
+	current           CredentialFingerprint
+	previous          *CredentialFingerprint
+	publish           map[PublishTarget]struct{}
+	// publishPrefixes is sorted, so the fingerprint is stable and matching is
+	// deterministic. It holds a handful of entries at most, which is why a
+	// linear scan is preferred to another map.
+	publishPrefixes []string
+	subscribe       map[string]struct{}
+	permissions     PermissionsFingerprint
 }
 
 // New loads and validates a local-principal snapshot.
@@ -137,31 +147,81 @@ func (s *Store) Authenticate(username, secret, certificateURISAN string) (Authen
 	}
 
 	return Authentication{
-		Principal:                     username,
-		CertificateURISAN:             certificateURISAN,
-		CredentialFingerprint:         candidate,
-		PublishPermissionsFingerprint: principal.publishPermissions,
+		Principal:              username,
+		CertificateURISAN:      certificateURISAN,
+		Role:                   principal.role,
+		CredentialFingerprint:  candidate,
+		PermissionsFingerprint: principal.permissions,
 	}, true
 }
 
 // IsActive reports whether an authenticated session is still valid in the
-// latest snapshot. It detects removed principals, SAN or publish-permission
-// changes, and retired credentials.
+// latest snapshot. It detects removed principals, SAN or permission changes,
+// and retired credentials.
 func (s *Store) IsActive(authentication Authentication) bool {
 	current := s.current.Load()
 	return authenticationActive(current, authentication)
 }
 
-// CanPublishAuthenticated checks the session credential and exact publish ACL
-// against one immutable snapshot. Loading both independently would leave a
-// revocation race when a reload lands between the two checks.
-func (s *Store) CanPublishAuthenticated(authentication Authentication, exchange, routingKey string) bool {
+// PublishGrant reports which kind of publish permission matched. The caller
+// needs the kind and not merely a yes or no, because an exact target names a
+// durable stream while a prefix names no queue at all.
+type PublishGrant uint8
+
+const (
+	// PublishGrantNone means no permission matched.
+	PublishGrantNone PublishGrant = iota
+	// PublishGrantExactTarget matched an exact exchange and routing-key pair,
+	// which must also appear under queues as a protected durable stream.
+	PublishGrantExactTarget
+	// PublishGrantPrefix matched a routing-key prefix, which is checked against
+	// no queues entry.
+	PublishGrantPrefix
+)
+
+// Allowed reports whether the grant authorizes the publication.
+func (g PublishGrant) Allowed() bool {
+	return g != PublishGrantNone
+}
+
+// AuthorizePublish checks the session credential and publish ACL against one
+// immutable snapshot, returning the matching grant. Loading both independently
+// would leave a revocation race when a reload lands between the two checks, and
+// returning the grant rather than a bool spares the caller a second lookup that
+// would reopen the same race.
+func (s *Store) AuthorizePublish(authentication Authentication, exchange, routingKey string) PublishGrant {
+	current := s.current.Load()
+	if !authenticationActive(current, authentication) {
+		return PublishGrantNone
+	}
+	principal := current.principals[authentication.Principal]
+	if _, allowed := principal.publish[PublishTarget{Exchange: exchange, RoutingKey: routingKey}]; allowed {
+		return PublishGrantExactTarget
+	}
+	// A prefix permission grants the default exchange only, matching the
+	// exchange restriction config already enforces on every publish permission.
+	if exchange != "" {
+		return PublishGrantNone
+	}
+	for _, publishPrefix := range principal.publishPrefixes {
+		if strings.HasPrefix(routingKey, publishPrefix) {
+			return PublishGrantPrefix
+		}
+	}
+	return PublishGrantNone
+}
+
+// CanSubscribeAuthenticated checks the session credential and exact subscribe
+// ACL against one immutable snapshot, for the same reason AuthorizePublish
+// does: loading both independently would leave a revocation race when a reload
+// lands between the two checks.
+func (s *Store) CanSubscribeAuthenticated(authentication Authentication, queue string) bool {
 	current := s.current.Load()
 	if !authenticationActive(current, authentication) {
 		return false
 	}
 	principal := current.principals[authentication.Principal]
-	_, allowed := principal.publish[PublishTarget{Exchange: exchange, RoutingKey: routingKey}]
+	_, allowed := principal.subscribe[queue]
 	return allowed
 }
 
@@ -173,7 +233,7 @@ func authenticationActive(current *snapshot, authentication Authentication) bool
 	if !ok || principal.certificateURISAN != authentication.CertificateURISAN {
 		return false
 	}
-	if subtle.ConstantTimeCompare(authentication.PublishPermissionsFingerprint[:], principal.publishPermissions[:]) != 1 {
+	if subtle.ConstantTimeCompare(authentication.PermissionsFingerprint[:], principal.permissions[:]) != 1 {
 		return false
 	}
 	if subtle.ConstantTimeCompare(authentication.CredentialFingerprint[:], principal.current[:]) == 1 {
@@ -210,16 +270,31 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 		}
 
 		publish := make(map[PublishTarget]struct{}, len(principalConfig.Permissions.Publish))
+		var publishPrefixes []string
 		for _, permission := range principalConfig.Permissions.Publish {
+			if permission.IsPrefix() {
+				publishPrefixes = append(publishPrefixes, permission.RoutingKeyPrefix)
+				continue
+			}
 			publish[PublishTarget{Exchange: permission.Exchange, RoutingKey: permission.RoutingKey}] = struct{}{}
 		}
+		sort.Strings(publishPrefixes)
 
+		subscribe := make(map[string]struct{}, len(principalConfig.Permissions.Subscribe))
+		for _, queue := range principalConfig.Permissions.Subscribe {
+			subscribe[queue] = struct{}{}
+		}
+
+		role := principalConfig.EffectiveRole()
 		principals[principalConfig.Name] = &principal{
-			certificateURISAN:  principalConfig.CertificateURISAN,
-			current:            current,
-			previous:           previous,
-			publish:            publish,
-			publishPermissions: fingerprintPublishPermissions(publish),
+			certificateURISAN: principalConfig.CertificateURISAN,
+			role:              role,
+			current:           current,
+			previous:          previous,
+			publish:           publish,
+			publishPrefixes:   publishPrefixes,
+			subscribe:         subscribe,
+			permissions:       fingerprintPermissions(role, publish, publishPrefixes, subscribe),
 		}
 	}
 
@@ -240,7 +315,7 @@ func snapshotsEqual(left, right *snapshot) bool {
 }
 
 func principalsEqual(left, right *principal) bool {
-	if left.certificateURISAN != right.certificateURISAN || left.current != right.current {
+	if left.certificateURISAN != right.certificateURISAN || left.role != right.role || left.current != right.current {
 		return false
 	}
 	if (left.previous == nil) != (right.previous == nil) {
@@ -254,6 +329,17 @@ func principalsEqual(left, right *principal) bool {
 	}
 	for target := range left.publish {
 		if _, ok := right.publish[target]; !ok {
+			return false
+		}
+	}
+	if !slices.Equal(left.publishPrefixes, right.publishPrefixes) {
+		return false
+	}
+	if len(left.subscribe) != len(right.subscribe) {
+		return false
+	}
+	for queue := range left.subscribe {
+		if _, ok := right.subscribe[queue]; !ok {
 			return false
 		}
 	}
@@ -307,7 +393,7 @@ func loadFingerprint(field, filename string, required bool) (CredentialFingerpri
 	return fingerprint, nil
 }
 
-func fingerprintPublishPermissions(publish map[PublishTarget]struct{}) PermissionsFingerprint {
+func fingerprintPermissions(role string, publish map[PublishTarget]struct{}, publishPrefixes []string, subscribe map[string]struct{}) PermissionsFingerprint {
 	targets := make([]PublishTarget, 0, len(publish))
 	for target := range publish {
 		targets = append(targets, target)
@@ -319,10 +405,29 @@ func fingerprintPublishPermissions(publish map[PublishTarget]struct{}) Permissio
 		return targets[i].Exchange < targets[j].Exchange
 	})
 
-	serialized := make([]byte, 0)
+	queues := make([]string, 0, len(subscribe))
+	for queue := range subscribe {
+		queues = append(queues, queue)
+	}
+	sort.Strings(queues)
+
+	// The role leads, and each ACL is length-prefixed and preceded by its own
+	// count, so no rearrangement of entries between them can produce a colliding
+	// digest. Narrowing a role therefore revokes sessions the way an ACL change
+	// does, which is the property that keeps a capability from outliving it.
+	serialized := appendLengthPrefixed(nil, role)
+	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(targets)))
 	for _, target := range targets {
 		serialized = appendLengthPrefixed(serialized, target.Exchange)
 		serialized = appendLengthPrefixed(serialized, target.RoutingKey)
+	}
+	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(publishPrefixes)))
+	for _, publishPrefix := range publishPrefixes {
+		serialized = appendLengthPrefixed(serialized, publishPrefix)
+	}
+	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(queues)))
+	for _, queue := range queues {
+		serialized = appendLengthPrefixed(serialized, queue)
 	}
 	return PermissionsFingerprint(sha256.Sum256(serialized))
 }

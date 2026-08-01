@@ -1,4 +1,4 @@
-# Production-shaped single-node configuration for the dedicated Atom audit
+# Production-shaped single-node configuration for the dedicated Atom event
 # publisher listener. Use with compose.local-principal.yaml.
 
 server:
@@ -38,7 +38,7 @@ server:
 
     # Bind only to FluxMQ's fixed address on the private atom-internal Docker
     # network. Do not replace this with :5683 in a multi-network container.
-    internal:
+    local:
       addr: "172.30.0.2:5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
@@ -80,18 +80,19 @@ auth:
   local_principals:
     - name: "atom-audit-publisher"
       certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      role: "publisher"
       current_secret_file: "/run/secrets/atom_audit_secret_current"
       previous_secret_file: "/run/secrets/atom_audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom-audit"
+            routing_key: "atom.events"
         subscribe: []
 
 queues:
-  - name: "atom-audit"
+  - name: "atom.events"
     topics:
-      - "$queue/atom-audit/#"
+      - "$queue/atom.events/#"
     reserved: true
     type: "stream"
     retention:

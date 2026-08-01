@@ -31,6 +31,7 @@ Key principles:
 - **Routing is shared.** All protocols route through the same queue manager and topic index. An MQTT publish and an AMQP 0.9.1 publish to the same `$queue/` topic land in the same queue log.
 - **Delivery semantics come from the queue type.** A durable queue delivers with PEL tracking and ack/nack/reject regardless of whether the consumer is MQTT or AMQP. A stream queue delivers with cursor semantics regardless of protocol.
 - **Protocol-specific features are scoped to the adapter.** AMQP 0.9.1 exchanges exist only as per-connection routing tables. MQTT shared subscriptions use a separate code path from queue consumer groups. AMQP 1.0 link capabilities map to queue properties.
+- **The `_flux.` property namespace is reserved.** Properties with that prefix carry broker-internal state between first-party services. Clients may not set or read them on any protocol; see [Reserved Message Properties](/configuration/security#reserved-message-properties).
 
 ## MQTT (3.1.1 / 5.0)
 

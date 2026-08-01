@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +34,7 @@ func TestEncodePublish_V5RetransmitCarriesProperties(t *testing.T) {
 		PayloadFormat:   &pf,
 		MessageExpiry:   &expiry,
 		Expiry:          time.Now().Add(60 * time.Second),
-		UserProperties:  map[string]string{"trace": "abc"},
+		UserProperties:  map[string]string{testTraceKey: testTraceVal},
 	}
 	msg.SetPayloadFromBytes([]byte("payload"))
 
@@ -73,4 +75,66 @@ func TestEncodePublish_V3FirstSendNoDup(t *testing.T) {
 	require.Equal(t, "t", pub.TopicName)
 	require.False(t, pub.FixedHeader.Dup, "first send must not set the DUP flag")
 	require.Equal(t, byte(2), pub.FixedHeader.QoS)
+}
+
+const (
+	testRuleTrace = `["rule-a"]`
+	testTraceVal  = "abc"
+	testTraceKey  = "trace"
+)
+
+// Broker-internal properties travel between services in the property bag. They
+// must never be encoded into a v5 PUBLISH, or every subscribing device would
+// read the internal state services pass to one another.
+func TestEncodePublish_V5OmitsReservedProperties(t *testing.T) {
+	reserved := broker.ReservedPropertyPrefix + "re.trace"
+
+	tests := []struct {
+		name           string
+		properties     map[string]string
+		userProperties map[string]string
+		want           map[string]string
+	}{
+		{
+			name:       "reserved mapped property is omitted",
+			properties: map[string]string{reserved: testRuleTrace, "tenant": "acme"},
+			want:       map[string]string{"tenant": "acme"},
+		},
+		{
+			name:           "reserved user property is omitted",
+			userProperties: map[string]string{reserved: testRuleTrace, testTraceKey: testTraceVal},
+			want:           map[string]string{testTraceKey: testTraceVal},
+		},
+		{
+			name:       "only reserved properties yields none",
+			properties: map[string]string{reserved: testRuleTrace},
+			want:       map[string]string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &storage.Message{
+				Topic:          testTopic,
+				QoS:            1,
+				Properties:     tc.properties,
+				UserProperties: tc.userProperties,
+			}
+			msg.SetPayloadFromBytes([]byte("payload"))
+
+			pkt := EncodePublish(msg, 1, packets.V5, false)
+			pub, ok := pkt.(*v5.Publish)
+			require.True(t, ok, "expected a v5 publish packet")
+			t.Cleanup(pkt.Release)
+
+			got := map[string]string{}
+			if pub.Properties != nil {
+				for _, user := range pub.Properties.User {
+					got[user.Key] = user.Value
+				}
+			}
+			assert.Equal(t, tc.want, got)
+			assert.NotContains(t, got, reserved)
+		})
+	}
 }

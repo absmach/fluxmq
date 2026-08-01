@@ -26,7 +26,9 @@ const (
 
 	listenerNameTLS      = "tls"
 	listenerNameMTLS     = "mtls"
+	listenerNameLocal    = "local"
 	listenerNameInternal = "internal"
+	listenerNameService  = "service"
 
 	protocolMQTT    = "mqtt"
 	protocolAMQP    = "amqp"
@@ -45,6 +47,7 @@ const (
 	storageTypeBadger = "badger"
 
 	writePolicyForward = "forward"
+	writePolicyLocal   = "local"
 	queueModeSync      = "sync"
 
 	authURLField               = "url"
@@ -100,25 +103,76 @@ type ExternalAuthConfig struct {
 	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
 }
 
+// Local principal roles. A role is the capability a principal carries on every
+// listener it authenticates to, so it cannot be widened by choosing a port.
+const (
+	// LocalRolePublisher may only publish. It runs no consumer and may not
+	// relay an origin identity, because its publications are its own records.
+	LocalRolePublisher = "publisher"
+	// LocalRoleService may additionally consume, subject to its subscribe ACL,
+	// and may relay the origin identity of messages it did not author.
+	LocalRoleService = "service"
+)
+
+var knownLocalRoles = map[string]struct{}{
+	LocalRolePublisher: {},
+	LocalRoleService:   {},
+}
+
 // LocalPrincipalConfig configures a principal authenticated by FluxMQ itself.
 type LocalPrincipalConfig struct {
-	Name               string                 `yaml:"name"`
-	CertificateURISAN  string                 `yaml:"certificate_uri_san"`
+	Name              string `yaml:"name"`
+	CertificateURISAN string `yaml:"certificate_uri_san"`
+	// Role is the principal's capability, defaulting to the least privileged
+	// one. It lives here rather than on a listener because nothing binds a
+	// principal to a listener: a capability granted by a port would be granted
+	// to every principal that can reach it.
+	Role               string                 `yaml:"role,omitempty"`
 	CurrentSecretFile  string                 `yaml:"current_secret_file"`
 	PreviousSecretFile string                 `yaml:"previous_secret_file,omitempty"`
 	Permissions        LocalPermissionsConfig `yaml:"permissions"`
 }
 
-// LocalPermissionsConfig contains exact-match publish and subscribe ACLs.
+// EffectiveRole returns the configured role, defaulting to the least
+// privileged one when unset.
+func (c LocalPrincipalConfig) EffectiveRole() string {
+	if c.Role == "" {
+		return LocalRolePublisher
+	}
+	return c.Role
+}
+
+// LocalPermissionsConfig contains the publish and subscribe ACLs of one local
+// principal. Subscribe entries are exact queue names.
 type LocalPermissionsConfig struct {
 	Publish   []LocalPublishPermission `yaml:"publish"`
 	Subscribe []string                 `yaml:"subscribe"`
 }
 
-// LocalPublishPermission grants publish access to one exact AMQP target.
+// LocalPublishPermission grants publish access to an AMQP target, named either
+// exactly or by routing-key prefix. Exactly one of RoutingKey and
+// RoutingKeyPrefix must be set.
+//
+// An exact permission is what a durable-stream publisher needs: the routing key
+// names the queue it appends to, so it must also appear under queues.
+//
+// A prefix permission exists because a service publishes to topics derived from
+// its own runtime data — a tenant identifier, a channel identifier — which
+// cannot be enumerated in broker configuration. It grants every routing key
+// under the prefix and is checked against no queue, so it authorizes topic
+// publishing rather than a durable append. Keep the prefix as narrow as the
+// service's topic namespace allows: it is what separates one service's reach
+// from another's.
 type LocalPublishPermission struct {
-	Exchange   string `yaml:"exchange"`
-	RoutingKey string `yaml:"routing_key"`
+	Exchange         string `yaml:"exchange"`
+	RoutingKey       string `yaml:"routing_key,omitempty"`
+	RoutingKeyPrefix string `yaml:"routing_key_prefix,omitempty"`
+}
+
+// IsPrefix reports whether the permission grants a routing-key prefix rather
+// than one exact routing key.
+func (p LocalPublishPermission) IsPrefix() bool {
+	return p.RoutingKeyPrefix != ""
 }
 
 // UnmarshalYAML keeps the auth subtree strict without changing the historical
@@ -154,10 +208,52 @@ func validateAuthYAML(node *yaml.Node) error {
 	})
 }
 
+// ValidateAgainstRuntime checks the rules that depend on what the process is
+// actually running rather than on what the new file asks for.
+//
+// Validate sees one config and answers for a fresh start. A reload is different:
+// its runtime-safe fields take effect immediately while restart-required ones do
+// not, so the two halves of a cross-field rule can come from different
+// configurations. Clustering is restart-required and local principals are
+// runtime-safe, so a reload that disables clustering and adds an exact publish
+// target in the same edit would pass Validate and then apply the target inside a
+// still-clustered runtime, writing records no other node forwards. Ask the
+// cluster question of the running config.
+func ValidateAgainstRuntime(running, next *Config) error {
+	if running == nil || next == nil || !running.Cluster.Enabled {
+		return nil
+	}
+	// Listener changes are restart-required too. Ask whether the running
+	// process has a local listener; removing it from the desired file does not
+	// stop that listener before the runtime-safe principal snapshot is applied.
+	if len(running.Server.AMQP091.LocalListeners()) == 0 {
+		return nil
+	}
+	name, target, found := firstExactPublishTarget(next.Auth.LocalPrincipals)
+	if !found {
+		return nil
+	}
+	return fmt.Errorf("auth.local_principals %q grants the exact publish target %q, which cannot be applied while the running node is clustered: clustering is restart-required, so disabling it in the same reload does not take effect until restart; restart the node to change both together", name, target)
+}
+
+// firstExactPublishTarget reports the first principal granting an exact publish
+// target, naming it so the operator can find the entry to change.
+func firstExactPublishTarget(principals []LocalPrincipalConfig) (principal, target string, found bool) {
+	for _, candidate := range principals {
+		for _, permission := range candidate.Permissions.Publish {
+			if !permission.IsPrefix() {
+				return candidate.Name, permission.RoutingKey, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
 	return validateYAMLMapping(node, path, map[string]func(*yaml.Node) error{
 		"name":                 nil,
 		"certificate_uri_san":  nil,
+		"role":                 nil,
 		"current_secret_file":  nil,
 		"previous_secret_file": nil,
 		"permissions": func(permissions *yaml.Node) error {
@@ -165,8 +261,9 @@ func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
 				"publish": func(publish *yaml.Node) error {
 					return validateYAMLSequence(publish, path+".permissions.publish", func(entry *yaml.Node, entryPath string) error {
 						return validateYAMLMapping(entry, entryPath, map[string]func(*yaml.Node) error{
-							"exchange":    nil,
-							"routing_key": nil,
+							"exchange":           nil,
+							"routing_key":        nil,
+							"routing_key_prefix": nil,
 						})
 					})
 				},
@@ -489,10 +586,55 @@ type AMQP091ListenerConfig struct {
 
 // AMQP091Config groups AMQP 0.9.1 listeners by mode.
 type AMQP091Config struct {
-	Plain    AMQP091ListenerConfig `yaml:"plain"`
-	TLS      AMQP091ListenerConfig `yaml:"tls"`
-	MTLS     AMQP091ListenerConfig `yaml:"mtls"`
+	Plain AMQP091ListenerConfig `yaml:"plain"`
+	TLS   AMQP091ListenerConfig `yaml:"tls"`
+	MTLS  AMQP091ListenerConfig `yaml:"mtls"`
+	// Local admits principals declared in auth.local_principals over mTLS. It
+	// confers no capability of its own: what a principal may do comes from its
+	// role. Configure more than one only to place them on separate networks.
+	Local AMQP091ListenerConfig `yaml:"local"`
+	// Internal and Service are deprecated aliases for Local, kept so existing
+	// configurations keep working. They behave identically to it and to each
+	// other; new configurations should use Local.
 	Internal AMQP091ListenerConfig `yaml:"internal"`
+	Service  AMQP091ListenerConfig `yaml:"service"`
+}
+
+// LocalListeners returns every configured local-principal listener with the
+// configuration key that named it, so callers do not have to know which of the
+// deprecated aliases an operator used.
+func (c AMQP091Config) LocalListeners() []NamedAMQP091Listener {
+	candidates := []NamedAMQP091Listener{
+		{Name: listenerNameLocal, Config: c.Local},
+		{Name: listenerNameInternal, Config: c.Internal},
+		{Name: listenerNameService, Config: c.Service},
+	}
+	listeners := make([]NamedAMQP091Listener, 0, len(candidates))
+	for _, candidate := range candidates {
+		if hasAddr(candidate.Config.Addr) {
+			listeners = append(listeners, candidate)
+		}
+	}
+	return listeners
+}
+
+// DeprecatedLocalListenerNames returns the deprecated keys an operator used, so
+// startup can name them in a warning.
+func (c AMQP091Config) DeprecatedLocalListenerNames() []string {
+	var names []string
+	if hasAddr(c.Internal.Addr) {
+		names = append(names, listenerNameInternal)
+	}
+	if hasAddr(c.Service.Addr) {
+		names = append(names, listenerNameService)
+	}
+	return names
+}
+
+// NamedAMQP091Listener pairs a listener with the configuration key that named it.
+type NamedAMQP091Listener struct {
+	Name   string
+	Config AMQP091ListenerConfig
 }
 
 // DefaultMaxInflightMessages is the fallback for Session.MaxInflightMessages
@@ -857,7 +999,9 @@ func Default() *Config {
 				MTLS: AMQP091ListenerConfig{
 					MaxConnections: 10000,
 				},
+				Local:    AMQP091ListenerConfig{},
 				Internal: AMQP091ListenerConfig{},
+				Service:  AMQP091ListenerConfig{},
 			},
 			HealthAddr:      ":8081",
 			HealthEnabled:   true,
@@ -1288,7 +1432,9 @@ func (c *Config) Validate() error {
 		{name: listenerNamePlain, cfg: c.Server.AMQP091.Plain, requireClientAuth: false},
 		{name: listenerNameTLS, cfg: c.Server.AMQP091.TLS, requireClientAuth: false},
 		{name: listenerNameMTLS, cfg: c.Server.AMQP091.MTLS, requireClientAuth: true},
+		{name: listenerNameLocal, cfg: c.Server.AMQP091.Local, requireClientAuth: true, requireExactClientAuth: true},
 		{name: listenerNameInternal, cfg: c.Server.AMQP091.Internal, requireClientAuth: true, requireExactClientAuth: true},
+		{name: listenerNameService, cfg: c.Server.AMQP091.Service, requireClientAuth: true, requireExactClientAuth: true},
 	}
 
 	for _, slot := range amqp091Slots {
@@ -1300,7 +1446,7 @@ func (c *Config) Validate() error {
 		}
 		hasMessagingListener = true
 
-		if slot.name == listenerNameInternal && slot.cfg.MaxConnections <= 0 {
+		if slot.requireExactClientAuth && slot.cfg.MaxConnections <= 0 {
 			return fmt.Errorf("server.amqp091.%s.max_connections must be positive", slot.name)
 		}
 		if slot.cfg.MaxConnections < 0 {
@@ -1330,18 +1476,28 @@ func (c *Config) Validate() error {
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
 	}
-	if hasAddr(c.Server.AMQP091.Internal.Addr) {
+	// Every local-principal listener authenticates against the same store, so a
+	// listener under any of the keys requires the store to be populated.
+	for _, listener := range c.Server.AMQP091.LocalListeners() {
 		if len(c.Auth.LocalPrincipals) == 0 {
-			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.internal.addr is configured")
+			return fmt.Errorf("auth.local_principals must contain at least one principal when server.amqp091.%s.addr is configured", listener.Name)
 		}
-		// A local publication is appended and synced on the receiving node only,
-		// and is deliberately never forwarded to other nodes: forwarding would
-		// acknowledge a publisher on a barrier no single node established. In a
-		// cluster that makes the records unreachable from consumers attached
-		// elsewhere, with nothing to signal it, so refuse the combination rather
-		// than serve a listener whose records only some readers can see.
+		// An exact publish target is appended and synced on the receiving node
+		// only, and is deliberately never forwarded to other nodes: forwarding
+		// would acknowledge a publisher on a barrier no single node established.
+		// In a cluster that makes those records unreachable from consumers
+		// attached elsewhere, with nothing to signal it, so refuse the
+		// combination rather than serve a principal whose records only some
+		// readers can see.
+		//
+		// The permission decides this, not the listener, exactly as it decides
+		// how a publication is routed. A prefix permission names no queue and is
+		// an ordinary topic publish, which the cluster forwards like any other,
+		// so a principal holding only prefix permissions may run clustered.
 		if c.Cluster.Enabled {
-			return fmt.Errorf("server.amqp091.internal.addr cannot be combined with cluster.enabled: local-principal publications are durable on the receiving node only and are not forwarded to other nodes; run the internal listener on a single-node deployment")
+			if name, target, found := firstExactPublishTarget(c.Auth.LocalPrincipals); found {
+				return fmt.Errorf("auth.local_principals %q grants the exact publish target %q, which cannot be combined with cluster.enabled: an exact target is durable on the receiving node only and is not forwarded to other nodes; grant permissions.publish[].routing_key_prefix instead, or run server.amqp091.%s on a single-node deployment", name, target, listener.Name)
+			}
 		}
 	}
 	for proto := range c.Hooks.Protocols {
@@ -1459,7 +1615,7 @@ func (c *Config) Validate() error {
 
 		if c.Cluster.Raft.WritePolicy != "" {
 			switch strings.ToLower(c.Cluster.Raft.WritePolicy) {
-			case "local", "reject", writePolicyForward:
+			case writePolicyLocal, "reject", writePolicyForward:
 			default:
 				return fmt.Errorf("cluster.raft.write_policy must be one of: local, reject, forward")
 			}
@@ -1639,9 +1795,9 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 
 // ValidateLocalPrincipals checks the declarative rules for local principals:
 // unique non-blank names and absolute URI SANs, readable high-entropy secret
-// files, and exact publish-only permissions. It is the single definition of
-// those rules, shared with the runtime store that loads the same section, so
-// startup validation and a SIGHUP reload cannot drift apart.
+// files, roles, and exact-or-prefix publish permissions. It is the single
+// definition of those rules, shared with the runtime store that loads the same
+// section, so startup validation and a SIGHUP reload cannot drift apart.
 func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 	names := make(map[string]struct{}, len(principals))
 	uriSANs := make(map[string]struct{}, len(principals))
@@ -1659,6 +1815,13 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			return fmt.Errorf("%s.name %q is duplicated", prefix, name)
 		}
 		names[name] = struct{}{}
+
+		if _, known := knownLocalRoles[principal.EffectiveRole()]; !known {
+			return fmt.Errorf("%s.role %q is unknown (valid: %s, %s)", prefix, principal.Role, LocalRolePublisher, LocalRoleService)
+		}
+		if principal.EffectiveRole() == LocalRolePublisher && len(principal.Permissions.Subscribe) != 0 {
+			return fmt.Errorf("%s.permissions.subscribe requires role %q; a publisher runs no consumer", prefix, LocalRoleService)
+		}
 
 		uriSAN := strings.TrimSpace(principal.CertificateURISAN)
 		if uriSAN == "" {
@@ -1689,14 +1852,28 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			if permission.Exchange != "" {
 				return fmt.Errorf("%s.exchange must be empty; local principals may publish only through the AMQP default exchange", permissionPrefix)
 			}
-			if permission.RoutingKey == "" {
-				return fmt.Errorf("%s.routing_key cannot be empty", permissionPrefix)
-			}
 			if containsWildcard(permission.Exchange) {
 				return fmt.Errorf("%s.exchange must be an exact value without wildcards", permissionPrefix)
 			}
-			if containsWildcard(permission.RoutingKey) {
-				return fmt.Errorf("%s.routing_key must be an exact value without wildcards", permissionPrefix)
+			if permission.RoutingKey != "" && permission.RoutingKeyPrefix != "" {
+				return fmt.Errorf("%s cannot set both routing_key and routing_key_prefix", permissionPrefix)
+			}
+			// A prefix is a wildcard by construction, so it must never be written
+			// as one: accepting "m.#" would silently grant the literal "#" too.
+			if permission.IsPrefix() {
+				if containsWildcard(permission.RoutingKeyPrefix) {
+					return fmt.Errorf("%s.routing_key_prefix must not contain wildcards; it already matches every routing key beneath it", permissionPrefix)
+				}
+				if strings.TrimSpace(permission.RoutingKeyPrefix) != permission.RoutingKeyPrefix {
+					return fmt.Errorf("%s.routing_key_prefix cannot have leading or trailing whitespace", permissionPrefix)
+				}
+			} else {
+				if permission.RoutingKey == "" {
+					return fmt.Errorf("%s must set either routing_key or routing_key_prefix", permissionPrefix)
+				}
+				if containsWildcard(permission.RoutingKey) {
+					return fmt.Errorf("%s.routing_key must be an exact value without wildcards", permissionPrefix)
+				}
 			}
 			if _, exists := publishTargets[permission]; exists {
 				return fmt.Errorf("%s duplicates an earlier publish permission", permissionPrefix)
@@ -1704,8 +1881,22 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			publishTargets[permission] = struct{}{}
 		}
 
-		if len(principal.Permissions.Subscribe) != 0 {
-			return fmt.Errorf("%s.permissions.subscribe is unsupported; local principals are publish-only", prefix)
+		subscribeQueues := make(map[string]struct{}, len(principal.Permissions.Subscribe))
+		for j, queue := range principal.Permissions.Subscribe {
+			permissionPrefix := fmt.Sprintf("%s.permissions.subscribe[%d]", prefix, j)
+			if queue == "" {
+				return fmt.Errorf("%s cannot be empty", permissionPrefix)
+			}
+			if strings.TrimSpace(queue) != queue {
+				return fmt.Errorf("%s cannot have leading or trailing whitespace", permissionPrefix)
+			}
+			if containsWildcard(queue) {
+				return fmt.Errorf("%s must be an exact queue name without wildcards", permissionPrefix)
+			}
+			if _, exists := subscribeQueues[queue]; exists {
+				return fmt.Errorf("%s duplicates an earlier subscribe permission", permissionPrefix)
+			}
+			subscribeQueues[queue] = struct{}{}
 		}
 	}
 

@@ -82,6 +82,7 @@ type amqpLocalAuthenticationStats struct {
 
 type amqpLocalAuthorizationStats struct {
 	PublishDenied   uint64 `json:"publish_denied"`
+	SubscribeDenied uint64 `json:"subscribe_denied"`
 	OperationDenied uint64 `json:"operation_denied"`
 }
 
@@ -198,6 +199,7 @@ func (s *Server) buildStatsResponse() statsResponse {
 				},
 				Authorization: amqpLocalAuthorizationStats{
 					PublishDenied:   ast.GetLocalPublishDenials(),
+					SubscribeDenied: ast.GetLocalSubscribeDenials(),
 					OperationDenied: ast.GetLocalOperationDenials(),
 				},
 				Reloads: amqpLocalReloadStats{

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -125,7 +126,11 @@ func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
 			}
 		}
 	}
-	userCount += len(msg.UserProperties)
+	for k := range msg.UserProperties {
+		if !broker.IsReservedProperty(k) {
+			userCount++
+		}
+	}
 
 	if userCount > 0 {
 		props.User = make([]v5.User, 0, userCount)
@@ -138,6 +143,9 @@ func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
 			}
 		}
 		for k, v := range msg.UserProperties {
+			if broker.IsReservedProperty(k) {
+				continue
+			}
 			props.User = append(props.User, v5.User{Key: k, Value: v})
 		}
 	}
@@ -148,6 +156,7 @@ func isReservedUserPropertyKey(key string) bool {
 	case "content-type", "response-topic", "correlation-id", "payload-format":
 		return true
 	default:
-		return false
+		// Broker-internal properties are never revealed to a subscribing device.
+		return broker.IsReservedProperty(key)
 	}
 }

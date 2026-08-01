@@ -212,6 +212,10 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 		if props != nil {
 			amqpMsg.ApplicationProperties = make(map[string]any, len(props))
 			for k, v := range props {
+				// Broker-internal state is never revealed to a remote receiver.
+				if corebroker.IsReservedProperty(k) {
+					continue
+				}
 				amqpMsg.ApplicationProperties[k] = v
 			}
 		}

@@ -106,3 +106,24 @@ func TestExternalIDFromProperties(t *testing.T) {
 		ExternalIDProperty: testDeviceID,
 	}))
 }
+
+func TestIsReservedProperty(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{name: "reserved key", key: ReservedPropertyPrefix + "re.trace", want: true},
+		{name: "prefix alone", key: ReservedPropertyPrefix, want: true},
+		{name: "client property", key: "trace", want: false},
+		{name: "origin property", key: ExternalIDProperty, want: false},
+		{name: "prefix not at start", key: "x" + ReservedPropertyPrefix + "re.trace", want: false},
+		{name: "empty key", key: "", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsReservedProperty(tc.key))
+		})
+	}
+}

@@ -22,6 +22,7 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/bufpool"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
@@ -148,7 +149,7 @@ func (ch *Channel) handleMethod(decoded any) error {
 		}
 	}
 
-	if ch.conn.connectionPolicy().mode == ConnectionPolicyLocalPublishOnly {
+	if ch.conn.connectionPolicy().usesLocalPrincipalAuth() {
 		allowed, err := ch.authorizeLocalMethod(decoded)
 		if err != nil {
 			return err
@@ -264,8 +265,27 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 	switch method := decoded.(type) {
 	case *codec.ChannelFlow, *codec.ChannelClose, *codec.ChannelCloseOk, *codec.ConfirmSelect:
 		return true, nil
+	case *codec.QueueDeclare:
+		// A non-passive declare creates the queue and, when it already exists,
+		// rewrites its type, retention, TTL and durability. That is a
+		// configuration write, and the subscribe ACL grants reads: a principal
+		// permitted to consume a queue must not be able to reshape it. Services
+		// consume pre-provisioned queues, so they only need to assert existence.
+		if !method.Passive {
+			return ch.denyLocalMethod(decoded, principalID)
+		}
+		return ch.authorizeLocalQueueName(method.Queue, principalID, decoded)
+	case *codec.BasicConsume:
+		return ch.authorizeLocalSubscribe(method.Queue, principalID, decoded)
+	case *codec.BasicQos, *codec.BasicCancel, *codec.BasicAck, *codec.BasicNack, *codec.BasicReject:
+		// Channel-scoped consumer lifecycle. These name no queue of their own;
+		// they can only affect a consumer the subscribe ACL already allowed.
+		if ch.conn.permitsConsumers() {
+			return true, nil
+		}
+		return ch.denyLocalMethod(decoded, principalID)
 	case *codec.BasicPublish:
-		if ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
+		if ch.conn.canPublishLocal(method.Exchange, method.RoutingKey).Allowed() {
 			return true, nil
 		}
 		ch.conn.broker.stats.IncrementLocalPublishDenials()
@@ -278,17 +298,79 @@ func (ch *Channel) authorizeLocalMethod(decoded any) (bool, error) {
 			"routing_key", method.RoutingKey)
 		return false, ch.sendChannelClose(codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
 	default:
-		classID, methodID := methodIdentifier(decoded)
-		ch.conn.broker.stats.IncrementLocalOperationDenials()
-		ch.conn.logger.Warn("amqp091_local_authorization",
-			"auth_mode", "local",
-			"outcome", "denied",
-			"reason", "operation_not_permitted",
-			"principal_id", principalID,
-			"class_id", classID,
-			"method_id", methodID)
-		return false, ch.sendChannelClose(codec.AccessRefused, "operation not permitted for local publisher", classID, methodID)
+		return ch.denyLocalMethod(decoded, principalID)
 	}
+}
+
+// authorizeLocalQueueName authorizes AMQP methods whose queue field is the
+// queue name itself. Queue.Declare uses the bare name "m"; unlike
+// Basic.Consume, its field is not a "$queue/m" subscription address.
+func (ch *Channel) authorizeLocalQueueName(queue, principalID string, decoded any) (bool, error) {
+	if !ch.conn.permitsConsumers() {
+		return ch.denyLocalMethod(decoded, principalID)
+	}
+	if queue != "" && ch.conn.canSubscribeLocal(queue) {
+		return true, nil
+	}
+
+	classID, methodID := methodIdentifier(decoded)
+	ch.conn.broker.stats.IncrementLocalSubscribeDenials()
+	ch.conn.logger.Warn("amqp091_local_authorization",
+		"auth_mode", "local",
+		"outcome", "denied",
+		"reason", "subscribe_acl_mismatch",
+		"principal_id", principalID,
+		"queue", queue,
+		"resolved_queue", queue)
+	return false, ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", classID, methodID)
+}
+
+// authorizeLocalSubscribe admits a queue-scoped consumer operation only for a
+// principal whose role permits consumers and whose subscribe ACL names the
+// queue.
+//
+// The ACL names queues, so the wire value is resolved first and the resolved
+// queue name is what gets authorized: a client addresses "$queue/m" while the
+// ACL says "m", and comparing the two directly would refuse every legitimate
+// consumer. A filter that resolves to no queue is refused rather than admitted
+// as a pub/sub subscription, because no ACL entry grants one.
+func (ch *Channel) authorizeLocalSubscribe(queue, principalID string, decoded any) (bool, error) {
+	if !ch.conn.permitsConsumers() {
+		return ch.denyLocalMethod(decoded, principalID)
+	}
+
+	route := ch.conn.broker.routeResolver.Resolve(queue)
+	reason := "subscribe_acl_mismatch"
+	switch {
+	case route.Kind != corebroker.RouteQueue:
+		reason = "not_a_queue_address"
+	case ch.conn.canSubscribeLocal(route.QueueName):
+		return true, nil
+	}
+
+	classID, methodID := methodIdentifier(decoded)
+	ch.conn.broker.stats.IncrementLocalSubscribeDenials()
+	ch.conn.logger.Warn("amqp091_local_authorization",
+		"auth_mode", "local",
+		"outcome", "denied",
+		"reason", reason,
+		"principal_id", principalID,
+		"queue", queue,
+		"resolved_queue", route.QueueName)
+	return false, ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", classID, methodID)
+}
+
+func (ch *Channel) denyLocalMethod(decoded any, principalID string) (bool, error) {
+	classID, methodID := methodIdentifier(decoded)
+	ch.conn.broker.stats.IncrementLocalOperationDenials()
+	ch.conn.logger.Warn("amqp091_local_authorization",
+		"auth_mode", "local",
+		"outcome", "denied",
+		"reason", "operation_not_permitted",
+		"principal_id", principalID,
+		"class_id", classID,
+		"method_id", methodID)
+	return false, ch.sendChannelClose(codec.AccessRefused, "operation not permitted for local principal", classID, methodID)
 }
 
 func (ch *Channel) sendChannelClose(code uint16, text string, classID, methodID uint16) error {
@@ -473,19 +555,41 @@ func (ch *Channel) completePublish() {
 	}
 
 	clientID := PrefixedClientID(ch.conn.connID)
-	if ch.conn.connectionPolicy().mode == ConnectionPolicyLocalPublishOnly {
-		if principalID := ch.conn.externalID(clientID); principalID != "" {
-			props[corebroker.ExternalIDProperty] = principalID
-		}
-	} else if v, ok := header.Properties.Headers[corebroker.ExternalIDProperty].(string); ok && v != "" {
-		props[corebroker.ExternalIDProperty] = v
+	policy := ch.conn.connectionPolicy()
+
+	// A relayed origin identity is honored only from a trusted service. Anyone
+	// else gets their own authenticated identity stamped, so a publisher cannot
+	// attribute a message to another principal or to another protocol.
+	relayedID := ""
+	if ch.conn.propagatesOriginIdentity() {
+		relayedID, _ = header.Properties.Headers[corebroker.ExternalIDProperty].(string)
+	}
+	if relayedID != "" {
+		props[corebroker.ExternalIDProperty] = relayedID
 	} else if externalID := ch.conn.externalID(clientID); externalID != "" {
 		props[corebroker.ExternalIDProperty] = externalID
 	}
-	if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
-		props[corebroker.ProtocolProperty] = v
-	} else {
-		props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
+
+	props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
+	if ch.conn.propagatesOriginIdentity() {
+		if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
+			props[corebroker.ProtocolProperty] = v
+		}
+	}
+
+	// Broker-internal properties are accepted only from a trusted listener.
+	// An externally authenticated client is a tenant or device regardless of
+	// which protocol it speaks, so its reserved headers are dropped here rather
+	// than forwarded as broker state.
+	if policy.carriesReservedProperties() {
+		for key, value := range header.Properties.Headers {
+			if !corebroker.IsReservedProperty(key) {
+				continue
+			}
+			if v, ok := value.(string); ok {
+				props[key] = v
+			}
+		}
 	}
 
 	exchangeName := normalizeExchange(method.Exchange)
@@ -500,11 +604,13 @@ func (ch *Channel) completePublish() {
 	props = corebroker.AddClientIDProperty(props, clientID)
 	originalTopic := topic
 
-	policy := ch.conn.connectionPolicy()
-	if policy.mode == ConnectionPolicyLocalPublishOnly {
+	grant := LocalPublishGrantNone
+	if policy.usesLocalPrincipalAuth() {
 		// Re-evaluate at completion so an ACL reduction made while content frames
-		// are in flight takes effect immediately.
-		if !ch.conn.canPublishLocal(method.Exchange, method.RoutingKey) {
+		// are in flight takes effect immediately. The grant this returns is also
+		// what selects the delivery path below, so both come from one snapshot.
+		grant = ch.conn.canPublishLocal(method.Exchange, method.RoutingKey)
+		if !grant.Allowed() {
 			ch.conn.broker.stats.IncrementLocalPublishDenials()
 			ch.conn.logger.Warn("amqp091_local_authorization",
 				"auth_mode", "local",
@@ -539,7 +645,13 @@ func (ch *Channel) completePublish() {
 			}
 		}
 	}
-	if policy.mode == ConnectionPolicyLocalPublishOnly {
+	// The permission that authorized the publication decides how it is routed,
+	// not the listener it arrived on. An exact routing key names a protected
+	// durable stream and is appended and synced before the publisher is
+	// confirmed; a prefix names no queue and is an ordinary topic publish. Both
+	// listeners must agree, or one permissions.publish entry would mean two
+	// different delivery contracts depending on which port the principal used.
+	if grant == LocalPublishGrantExactTarget {
 		if exchangeName != "" {
 			ch.rejectLocalStreamPublish(fmt.Errorf("local durable stream publish requires the default exchange"))
 			return
@@ -550,6 +662,15 @@ func (ch *Channel) completePublish() {
 
 	// Route through resolver for default-exchange queue operations.
 	resolver := ch.conn.broker.routeResolver
+	// A prefix grant is checked against no queues entry, so it must not be able
+	// to reach one. Without this it could route into a queue two ways: a routing
+	// key under a "$queue/"-shaped prefix, or one that happens to name a
+	// configured stream. Both would write to a queue on a permission that never
+	// established the durability contract a queue publish carries.
+	if grant == LocalPublishGrantPrefix {
+		ch.publishToPubSub(topics.AMQPTopicToMQTT(topic), body, props, method, header)
+		return
+	}
 	if exchangeName == "" {
 		route := resolver.Resolve(topic)
 		switch route.Kind {
@@ -623,26 +744,39 @@ func (ch *Channel) completePublish() {
 		if exchangeName == "" {
 			pubsubTopic = topics.AMQPTopicToMQTT(topic)
 		}
-		// Publish to the topic-based router (pub/sub)
-		if method.Mandatory {
-			subs, err := ch.conn.broker.router.Match(pubsubTopic)
-			if err != nil || len(subs) == 0 {
-				if err != nil {
-					ch.conn.logger.Error("router match failed", "topic", pubsubTopic, "error", err)
-				}
-				ch.sendBasicReturn(method, header, body)
-				if ch.confirmMode {
-					ch.sendPublisherAck()
-				}
-				return
-			}
-		}
-		if err := ch.conn.broker.Publish(pubsubTopic, body, props); err != nil {
-			publishFailed = true
-		}
+		ch.publishToPubSub(pubsubTopic, body, props, method, header)
+		return
 	}
 
 	// Publisher confirms
+	if ch.confirmMode {
+		if publishFailed {
+			ch.sendPublisherNack()
+		} else {
+			ch.sendPublisherAck()
+		}
+	}
+}
+
+// publishToPubSub delivers through the topic router and settles the publisher
+// confirm. It is the only delivery path a routing-key-prefix grant may take,
+// because such a grant is authorized against no queue.
+func (ch *Channel) publishToPubSub(pubsubTopic string, body []byte, props map[string]string, method *codec.BasicPublish, header *codec.ContentHeader) {
+	if method.Mandatory {
+		subs, err := ch.conn.broker.router.Match(pubsubTopic)
+		if err != nil || len(subs) == 0 {
+			if err != nil {
+				ch.conn.logger.Error("router match failed", "topic", pubsubTopic, "error", err)
+			}
+			ch.sendBasicReturn(method, header, body)
+			if ch.confirmMode {
+				ch.sendPublisherAck()
+			}
+			return
+		}
+	}
+
+	publishFailed := ch.conn.broker.Publish(pubsubTopic, body, props) != nil
 	if ch.confirmMode {
 		if publishFailed {
 			ch.sendPublisherNack()
@@ -818,8 +952,15 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		return err
 	}
 
+	// Broker-internal properties are revealed only to a trusted listener, so an
+	// externally authenticated consumer cannot observe state another service set.
+	carryReserved := ch.conn.connectionPolicy().carriesReservedProperties()
+
 	headers := make(map[string]any)
 	for k, v := range props {
+		if !carryReserved && corebroker.IsReservedProperty(k) {
+			continue
+		}
 		switch k {
 		case "content-type", "content-encoding", "correlation-id", "reply-to", qtypes.PropMessageID, "type":
 			continue
@@ -1065,12 +1206,33 @@ func (ch *Channel) handleExchangeUnbind(m *codec.ExchangeUnbind) error {
 
 // Queue methods
 
+// queueExists reports whether a passive declaration should succeed. The
+// channel-local map only holds queues this channel declared, so a
+// pre-provisioned queue — the only kind a local principal may consume — is
+// found through the queue manager instead.
+func (ch *Channel) queueExists(name string) bool {
+	if name == "" {
+		return false
+	}
+
+	ch.exchangeMu.RLock()
+	_, declared := ch.queues[name]
+	ch.exchangeMu.RUnlock()
+	if declared {
+		return true
+	}
+
+	qm := ch.conn.broker.queueManager
+	if qm == nil {
+		return false
+	}
+	cfg, err := qm.GetQueue(context.Background(), name)
+	return err == nil && cfg != nil
+}
+
 func (ch *Channel) handleQueueDeclare(m *codec.QueueDeclare) error {
 	if m.Passive {
-		ch.exchangeMu.RLock()
-		_, exists := ch.queues[m.Queue]
-		ch.exchangeMu.RUnlock()
-		if !exists {
+		if !ch.queueExists(m.Queue) {
 			return ch.sendChannelClose(codec.NotFound,
 				"queue not found", codec.ClassQueue, codec.MethodQueueDeclare)
 		}
@@ -1295,14 +1457,11 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	if isStream && groupID == "" {
 		groupID = tag
 	}
-
-	ch.consumersMu.Lock()
-	if _, exists := ch.consumers[tag]; exists {
-		ch.consumersMu.Unlock()
-		return ch.sendChannelClose(codec.NotAllowed,
-			fmt.Sprintf("consumer tag %q already exists", tag), codec.ClassBasic, codec.MethodBasicConsume)
+	if queueName != "" && groupID == "" {
+		groupID = queuepkg.DefaultConsumerGroupID(clientID)
 	}
-	ch.consumers[tag] = &consumer{
+
+	cons := &consumer{
 		tag:        tag,
 		queue:      queueFilter,
 		mqttFilter: mqttFilter,
@@ -1312,14 +1471,51 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		noAck:      m.NoAck,
 		exclusive:  m.Exclusive,
 	}
+
+	ch.consumersMu.Lock()
+	if _, exists := ch.consumers[tag]; exists {
+		ch.consumersMu.Unlock()
+		return ch.sendChannelClose(codec.NotAllowed,
+			fmt.Sprintf("consumer tag %q already exists", tag), codec.ClassBasic, codec.MethodBasicConsume)
+	}
+	// Reserve the consumer before subscribing because queue delivery can begin
+	// as soon as the manager registers it. A failed subscription removes this
+	// reservation before the channel reports the failure.
+	ch.consumers[tag] = cons
+	ch.conn.retainQueueRegistration(cons)
+	ch.conn.broker.stats.IncrementConsumers()
 	ch.consumersMu.Unlock()
 
-	ch.conn.broker.stats.IncrementConsumers()
+	// rollbackConsumer drops the reservation and reports whether it released the
+	// last owner of the connection-level queue-manager registration.
+	rollbackConsumer := func() (registrationUnused bool) {
+		ch.consumersMu.Lock()
+		removed := false
+		if current, exists := ch.consumers[tag]; exists && current == cons {
+			delete(ch.consumers, tag)
+			removed = true
+		}
+		ch.consumersMu.Unlock()
+		if !removed {
+			return false
+		}
+
+		ch.conn.broker.stats.DecrementConsumers()
+		return ch.conn.releaseQueueRegistration(cons)
+	}
 
 	// Subscribe to the queue via queue manager
-	if qm != nil && (isQueue || isStream) && queueName != "" {
-		clientID := PrefixedClientID(ch.conn.connID)
+	if (isQueue || isStream) && queueName != "" {
+		if qm == nil {
+			rollbackConsumer()
+			return ch.sendChannelClose(codec.InternalError, "queue manager unavailable", codec.ClassBasic, codec.MethodBasicConsume)
+		}
+
 		subGroupID := groupID
+		var (
+			subscribeErr        error
+			subscriptionStarted bool
+		)
 		if isStream {
 			cursor := streamCursor
 			if cursor == nil {
@@ -1329,11 +1525,49 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 			if autoCommit := extractAutoCommit(m.Arguments); autoCommit != nil {
 				cursor.AutoCommit = autoCommit
 			}
-			if err := qm.SubscribeWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor); err != nil {
-				ch.conn.logger.Error("queue subscribe with cursor failed", "queue", queueName, "error", err)
+			if ch.conn.connectionPolicy().usesLocalPrincipalAuth() {
+				existing, ok := qm.(corebroker.ExistingQueueSubscriber)
+				if !ok {
+					subscribeErr = fmt.Errorf("queue manager does not support non-mutating subscriptions")
+				} else {
+					subscriptionStarted = true
+					subscribeErr = existing.SubscribeExistingWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor)
+				}
+			} else {
+				subscriptionStarted = true
+				subscribeErr = qm.SubscribeWithCursor(context.Background(), queueName, pattern, clientID, subGroupID, "", cursor)
 			}
-		} else if err := qm.Subscribe(context.Background(), queueName, pattern, clientID, subGroupID, ""); err != nil {
-			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", err)
+		} else if ch.conn.connectionPolicy().usesLocalPrincipalAuth() {
+			existing, ok := qm.(corebroker.ExistingQueueSubscriber)
+			if !ok {
+				subscribeErr = fmt.Errorf("queue manager does not support non-mutating subscriptions")
+			} else {
+				subscriptionStarted = true
+				subscribeErr = existing.SubscribeExisting(context.Background(), queueName, pattern, clientID, subGroupID, "")
+			}
+		} else {
+			subscriptionStarted = true
+			subscribeErr = qm.Subscribe(context.Background(), queueName, pattern, clientID, subGroupID, "")
+		}
+
+		if subscribeErr != nil {
+			registrationUnused := rollbackConsumer()
+			// A manager can fail after partially registering group state. Cleanup is
+			// best effort; errors raised before registration need no cleanup, and an
+			// in-use connection registration must remain intact.
+			if subscriptionStarted && registrationUnused &&
+				!errors.Is(subscribeErr, qstorage.ErrQueueNotFound) && !errors.Is(subscribeErr, queuepkg.ErrQueueNotStream) {
+				_ = qm.Unsubscribe(context.Background(), queueName, pattern, clientID, subGroupID)
+			}
+			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", subscribeErr)
+			switch {
+			case errors.Is(subscribeErr, qstorage.ErrQueueNotFound):
+				return ch.sendChannelClose(codec.NotFound, "queue not found", codec.ClassBasic, codec.MethodBasicConsume)
+			case errors.Is(subscribeErr, queuepkg.ErrQueueNotStream):
+				return ch.sendChannelClose(codec.PreconditionFailed, "queue is not a stream", codec.ClassBasic, codec.MethodBasicConsume)
+			default:
+				return ch.sendChannelClose(codec.InternalError, "queue subscription failed", codec.ClassBasic, codec.MethodBasicConsume)
+			}
 		}
 	}
 
@@ -1370,8 +1604,10 @@ func (ch *Channel) handleBasicCancel(m *codec.BasicCancel) error {
 		defer cancel()
 
 		qm := ch.conn.broker.queueManager
-		if qm != nil && cons.queueName != "" {
-			qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on consumer cancel
+		if cons.queueName != "" {
+			if registrationUnused := ch.conn.releaseQueueRegistration(cons); registrationUnused && qm != nil {
+				qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup on final consumer cancel
+			}
 		}
 
 		if cons.queueName == "" {
@@ -1596,8 +1832,10 @@ func (ch *Channel) cleanup() {
 
 	for _, cons := range consumers {
 		ch.conn.broker.stats.DecrementConsumers()
-		if qm != nil && cons.queueName != "" {
-			qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup during channel close
+		if cons.queueName != "" {
+			if registrationUnused := ch.conn.releaseQueueRegistration(cons); registrationUnused && qm != nil {
+				qm.Unsubscribe(ctx, cons.queueName, cons.pattern, clientID, cons.groupID) //nolint:errcheck // best-effort cleanup for the final owner during channel close
+			}
 		}
 		if cons.queueName == "" {
 			if cons.mqttFilter == "" {
@@ -1627,23 +1865,28 @@ func (ch *Channel) cancelConsumerByQueue(queueName, groupID string) {
 	}
 
 	ch.consumersMu.Lock()
-	var toCancel []string
+	var toCancel []*consumer
 	for tag, cons := range ch.consumers {
-		if cons.queueName == queueName && cons.groupID == groupID {
-			toCancel = append(toCancel, tag)
+		// The manager reports the group it registered, which a pattern
+		// qualifies. Comparing the raw group would never match a patterned
+		// consumer, leaving it uncancelled and its registration held.
+		if cons.queueName == queueName &&
+			corebroker.EffectiveConsumerGroupID(cons.groupID, cons.pattern) == groupID {
+			toCancel = append(toCancel, cons)
 			delete(ch.consumers, tag)
 		}
 	}
 	ch.consumersMu.Unlock()
 
-	for _, tag := range toCancel {
+	for _, cons := range toCancel {
+		ch.conn.releaseQueueRegistration(cons)
 		ch.conn.broker.stats.DecrementConsumers()
 		if err := ch.conn.writeMethod(ch.id, &codec.BasicCancel{
-			ConsumerTag: tag,
+			ConsumerTag: cons.tag,
 			NoWait:      true,
 		}); err != nil {
 			ch.conn.logger.Warn("failed to send server-initiated basic.cancel",
-				slog.String("consumer_tag", tag),
+				slog.String("consumer_tag", cons.tag),
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
 		}

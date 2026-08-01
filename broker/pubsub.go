@@ -18,6 +18,28 @@ const (
 	ProtocolProperty    = "protocol"
 )
 
+// ReservedPropertyPrefix marks message properties that carry broker-internal
+// state between trusted services.
+//
+// Trust is a property of the connection's listener policy, never of its
+// protocol. A connection carries reserved properties only when its policy
+// marks it trusted. Every other connection has them stripped on ingress, so it
+// cannot forge one, and on egress, so it cannot observe one another service
+// set. MQTT, HTTP, CoAP, and AMQP 1.0 have no trusted listener and are
+// therefore stripped in both directions. The AMQP 0.9.1 local listener is the
+// trusted one, under whichever configuration key names it.
+//
+// Trust decides only whether reserved properties cross the boundary at all.
+// What a session may then do with them — publish, consume, relay an origin —
+// comes from the authenticated principal's role, so a listener grants no
+// capability of its own.
+const ReservedPropertyPrefix = "_flux."
+
+// IsReservedProperty reports whether key names a broker-internal property.
+func IsReservedProperty(key string) bool {
+	return strings.HasPrefix(key, ReservedPropertyPrefix)
+}
+
 // Origin protocol identifiers written into ProtocolProperty by ingress
 // handlers so downstream consumers can tell where a message came from.
 const (

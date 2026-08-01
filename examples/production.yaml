@@ -8,7 +8,7 @@
 #   - TLS certificate + key, plus CA bundle for client mTLS
 #   - External auth callout reachable on auth.internal:9090 (or disable)
 #   - Atom client CA + 32-byte local-principal secret files when enabling
-#     the internal AMQP audit listener
+#     the local AMQP event listener
 #   - OTLP-compatible collector reachable on otel.internal:4317
 #   - Persistent volume mounted at /var/lib/fluxmq
 #
@@ -85,7 +85,7 @@ server:
       key_file: "/etc/fluxmq/certs/server.key"
     # Private, mTLS-only listener for local service principals. Never expose
     # this port through a public load balancer.
-    internal:
+    local:
       addr: ":5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_internal_server_cert"
@@ -160,17 +160,18 @@ auth:
     identity_cache_size: 50000
     identity_cache_ttl: "1h"
 
-  # Local principals are valid only on server.amqp091.internal. Unknown
+  # Local principals are valid only on server.amqp091.local. Unknown
   # principals fail closed and never fall back to auth.external.
   local_principals:
     - name: "atom-audit-publisher"
       certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      role: "publisher"
       current_secret_file: "/run/secrets/atom_audit_secret_current"
       previous_secret_file: "/run/secrets/atom_audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom-audit"
+            routing_key: "atom.events"
         subscribe: []
 
 # Optional blocking hooks. Enable only when an external policy/normalization
@@ -243,9 +244,9 @@ log:
 # Pre-provisioned stream used by the restricted Atom publisher. The publisher
 # is not permitted to declare or mutate broker topology.
 queues:
-  - name: "atom-audit"
+  - name: "atom.events"
     topics:
-      - "$queue/atom-audit/#"
+      - "$queue/atom.events/#"
     reserved: true
     type: "stream"
     retention:

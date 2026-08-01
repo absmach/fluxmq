@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"testing"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestExtractAllProperties_CorrelationDataBase64(t *testing.T) {
@@ -75,5 +77,62 @@ func TestExtractAllProperties_NilProps(t *testing.T) {
 
 	if len(result) != 0 {
 		t.Errorf("expected empty map for nil props, got %v", result)
+	}
+}
+
+const (
+	testRuleTrace   = `["rule-a"]`
+	testTraceVal    = "abc"
+	testTraceKey    = "trace"
+	testTenantValue = "acme"
+	testTenantKey   = "tenant"
+)
+
+// A publishing device must not be able to set broker-internal properties: they
+// are the channel services use to pass state that authenticates nothing on its
+// own, so a forged one would let a client drive service behaviour.
+func TestExtractAllProperties_StripsReservedUserProperties(t *testing.T) {
+	tests := []struct {
+		name   string
+		user   []v5.User
+		want   map[string]string
+		absent []string
+	}{
+		{
+			name: "reserved property is dropped",
+			user: []v5.User{
+				{Key: corebroker.ReservedPropertyPrefix + "re.trace", Value: testRuleTrace},
+			},
+			want:   map[string]string{},
+			absent: []string{corebroker.ReservedPropertyPrefix + "re.trace"},
+		},
+		{
+			name: "ordinary properties are kept",
+			user: []v5.User{
+				{Key: testTraceKey, Value: testTraceVal},
+				{Key: testTenantKey, Value: testTenantValue},
+			},
+			want: map[string]string{testTraceKey: testTraceVal, testTenantKey: testTenantValue},
+		},
+		{
+			name: "reserved dropped alongside ordinary",
+			user: []v5.User{
+				{Key: testTraceKey, Value: testTraceVal},
+				{Key: corebroker.ReservedPropertyPrefix + "re.trace", Value: testRuleTrace},
+			},
+			want:   map[string]string{testTraceKey: testTraceVal},
+			absent: []string{corebroker.ReservedPropertyPrefix + "re.trace"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractAllProperties(&v5.PublishProperties{User: tc.user})
+
+			assert.Equal(t, tc.want, got)
+			for _, key := range tc.absent {
+				assert.NotContains(t, got, key)
+			}
+		})
 	}
 }

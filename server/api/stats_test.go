@@ -86,6 +86,7 @@ func TestStatsAMQPOnly(t *testing.T) {
 	ab.GetStats().IncrementLocalAuthSuccess()
 	ab.GetStats().IncrementLocalAuthFailures()
 	ab.GetStats().IncrementLocalPublishDenials()
+	ab.GetStats().IncrementLocalSubscribeDenials()
 	ab.GetStats().IncrementLocalOperationDenials()
 	ab.GetStats().IncrementLocalReloadSuccess()
 	ab.GetStats().IncrementLocalReloadFailures()
@@ -129,7 +130,7 @@ func TestStatsAMQPOnly(t *testing.T) {
 	if local.Authentication.Success != 1 || local.Authentication.Failure != 1 {
 		t.Fatalf("unexpected local authentication stats: %+v", local.Authentication)
 	}
-	if local.Authorization.PublishDenied != 1 || local.Authorization.OperationDenied != 1 {
+	if local.Authorization.PublishDenied != 1 || local.Authorization.SubscribeDenied != 1 || local.Authorization.OperationDenied != 1 {
 		t.Fatalf("unexpected local authorization stats: %+v", local.Authorization)
 	}
 	if local.Reloads.Success != 1 || local.Reloads.Failure != 1 || local.Reloads.ForcedDisconnects != 2 {

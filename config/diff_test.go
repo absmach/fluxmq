@@ -238,6 +238,29 @@ func TestClassifyFieldDefault(t *testing.T) {
 	}
 }
 
+// Local-principal ACLs are runtime-safe while clustering and the listener that
+// serves them are not. That asymmetry is why a reload cannot be validated
+// against the file alone: an exact publish target would apply immediately while
+// a clustering change in the same edit waits for restart. ValidateAgainstRuntime
+// closes that window; these classifications are what make it necessary, so pin
+// them and fail loudly if any of them moves.
+func TestLocalListenerCannotStartWithoutRestart(t *testing.T) {
+	for _, field := range []string{
+		"Server",
+		"Server.AMQP091",
+		"Server.AMQP091.Local",
+		"Server.AMQP091.Local.Addr",
+		"Cluster.Enabled",
+	} {
+		if got := ClassifyField(field); got != RestartRequired {
+			t.Errorf("ClassifyField(%q) = %s, want %s", field, got, RestartRequired)
+		}
+	}
+	if got := ClassifyField("Auth.LocalPrincipals"); got != RuntimeSafe {
+		t.Errorf("ClassifyField(\"Auth.LocalPrincipals\") = %s, want %s", got, RuntimeSafe)
+	}
+}
+
 func TestReloadClassString(t *testing.T) {
 	if RuntimeSafe.String() != "runtime_safe" {
 		t.Errorf("RuntimeSafe.String() = %q", RuntimeSafe.String())

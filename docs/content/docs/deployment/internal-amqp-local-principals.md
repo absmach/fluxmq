@@ -6,10 +6,10 @@ description: Implemented production design for a dedicated mTLS AMQP 0.9.1 liste
 # Internal AMQP Local Principals
 
 **Status:** implemented
-**Last Updated:** 2026-07-29
+**Last Updated:** 2026-08-01
 
 This document describes the implementation and acceptance contract for publishing
-Atom audit events to FluxMQ without sending those publications through Atom's
+Atom domain events to FluxMQ without sending those publications through Atom's
 own external authorization callout.
 
 ## What this feature is for
@@ -17,7 +17,7 @@ own external authorization callout.
 Local principals are a service-to-service ingress for a small, fixed set of
 first-party producers that are part of the deployment itself — audit and event
 streams, internal telemetry, and similar broker-adjacent pipelines. Every
-identity, its certificate URI SAN, and its exact publish target are declared in
+identity, its certificate URI SAN, and its publish ACLs are declared in
 FluxMQ's own configuration and mounted secrets, so the set of local principals
 is known before the process starts and changes only through a deliberate
 configuration change plus `SIGHUP`.
@@ -27,9 +27,10 @@ It is deliberately not a general client authentication mechanism:
 - there is no registration, discovery, or self-service enrollment;
 - there is no per-tenant, per-user, or dynamic identity — adding a principal is
   a configuration and secret-provisioning change, not an API call;
-- the ACL grants exactly one `(default exchange, routing key)` pair per entry,
-  with no wildcards, patterns, or hierarchy;
-- the principal is publish-only into a pre-provisioned protected stream, so it
+- each publish ACL entry grants either one exact routing key or one plain
+  routing-key prefix on the default exchange, without AMQP wildcards;
+- the Atom principal has an explicit `publisher` role and writes into a
+  pre-provisioned protected stream, so it
   cannot consume, discover topology, or create anything;
 - it scales to a handful of principals, not to a client population. Remote
   clients, devices, and tenants continue to authenticate through
@@ -46,10 +47,10 @@ Run two independent AMQP 0.9.1 authentication paths in one FluxMQ process:
 
 ```text
 remote clients -> remote AMQP listener -> auth.external -> shared queues/storage
-Atom publisher -> internal AMQP :5683 -> auth.local_principals -> shared queues/storage
+Atom publisher -> local AMQP :5683 -> auth.local_principals -> shared queues/storage
 ```
 
-The remote listener never reads the local-principal store. The internal
+The remote listener never reads the local-principal store. The local
 listener never calls external authentication, authorization, or blocking
 hooks. Unknown local identities fail closed; there is no fallback between the
 two paths.
@@ -94,7 +95,7 @@ server:
       min_version: "TLS1.2"
 
     # Private listener. Never expose it through a public load balancer.
-    internal:
+    local:
       addr: ":5683"
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
@@ -102,6 +103,9 @@ server:
       ca_file: "/run/secrets/atom_client_ca"
       client_auth: "require"
       min_version: "TLS1.2"
+
+cluster:
+  enabled: false
 
 auth:
   external:
@@ -120,12 +124,13 @@ auth:
   local_principals:
     - name: "atom-audit-publisher"
       certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+      role: "publisher"
       current_secret_file: "/run/secrets/atom_audit_secret_current"
       previous_secret_file: "/run/secrets/atom_audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom-audit"
+            routing_key: "atom.events"
         subscribe: []
 ```
 
@@ -135,8 +140,10 @@ example 32 random bytes encoded as hex or base64. Do not use raw binary: the
 value must not contain embedded CR/LF or NUL characters. FluxMQ strips one
 terminal newline, stores only a digest in memory, and uses a constant-time
 comparison. Principal names and certificate URI SANs must be unique. Publish
-ACLs support only the default exchange (`exchange: ""`) and exact, non-empty
-routing keys; other exchanges and wildcards are invalid.
+ACLs support only the default exchange (`exchange: ""`); each entry sets
+exactly one of an exact `routing_key` or a plain `routing_key_prefix`.
+Other exchanges and AMQP wildcards are invalid. Atom must use the exact form
+shown above because its target is a crash-durable stream.
 
 The remote listener requires the separately deployed external auth service;
 FluxMQ does not bundle `fluxmq-auth`. Because authentication calls carry client
@@ -146,22 +153,22 @@ client-certificate settings; terminate mTLS in a sidecar when it is required.
 An external-auth outage fails the remote path closed but does not invoke or
 interrupt the internal local-principal path.
 
-Authentication on the internal listener requires all of the following to
+Authentication on the local listener requires all of the following to
 match the same principal:
 
 - the SASL username;
 - the SASL secret;
 - the URI SAN in a client certificate verified by the configured CA.
 
-## Atom audit stream policy
+## Atom event stream policy
 
 Provision the stream before starting the publisher:
 
 ```yaml
 queues:
-  - name: "atom-audit"
+  - name: "atom.events"
     topics:
-      - "$queue/atom-audit/#"
+      - "$queue/atom.events/#"
     reserved: true
     type: "stream"
     retention:
@@ -180,8 +187,8 @@ default seven-day message TTL cannot shorten the advertised 30-day replay
 availability.
 
 At startup and before activating a local-principal snapshot on `SIGHUP`,
-FluxMQ validates every local publish ACL target against both the configured and
-persisted queue definition. Startup aborts, or reload is rejected while the
+FluxMQ validates every exact local publish ACL target against both the
+configured and persisted queue definition. Startup aborts, or reload is rejected while the
 previous snapshot remains active, if a target is missing, the queue store
 lacks durable-sync support, or the persisted target is not the configured
 reserved, durable, non-replicated stream with matching retention and message
@@ -190,8 +197,8 @@ stop FluxMQ, reconcile it with the YAML queue definition through a controlled
 storage migration or restore, and then restart before retrying the reload.
 
 While FluxMQ is running, the queue manager protects only the streams named by
-local-principal publish ACLs. It rejects create/update/delete operations that
-would change a protected stream's topics, type, durability, reserved flag,
+exact local-principal publish ACLs. It rejects create/update/delete operations
+that would change a protected stream's topics, type, durability, reserved flag,
 replication mode, retention window, retention byte/message limits, maximum
 message size, or message TTL. AMQP `QueueDeclare` attempts that would change
 the contract close the channel with `406 Precondition Failed`; the admin API
@@ -205,24 +212,22 @@ contract because stream depth is not currently enforced; the effective
 retention byte/message limits are protected instead.
 
 Local durable confirms currently support single-node, non-replicated streams
-only. Enabling replication on a local publish target fails startup. Supporting
-a clustered audit stream requires a future end-to-end quorum durability
+only. Enabling replication on an exact local publish target fails startup.
+Supporting a clustered event stream requires a future end-to-end quorum durability
 barrier before FluxMQ can ACK the publication.
 
-The internal listener therefore cannot run on a clustered node, and FluxMQ
-refuses that configuration at startup: `server.amqp091.internal.addr` together
-with `cluster.enabled` is a validation error. A local publication is appended
-and synced on the receiving node only and is never forwarded to other nodes,
-because forwarding would acknowledge a publisher on a barrier no single node
-established. In a cluster those records would be unreachable from consumers
-attached to any other node, with nothing to signal it, so the combination fails
-closed instead. Note that `cluster.enabled` defaults to true, so a deployment
-enabling the internal listener must set it to false explicitly, as the shipped
-`config-local-principal.yaml` does.
+An exact publish permission therefore cannot run on a clustered node: its
+publication is appended and synced on the receiving node only and is never
+forwarded. FluxMQ rejects any local-principal listener combined with
+`cluster.enabled` when a principal holds an exact target. Prefix-only
+principals remain valid in a cluster because those publications use ordinary
+topic routing and no queue durability barrier. Atom uses the exact form, and
+`cluster.enabled` defaults to true, so its deployment must set it to false
+explicitly, as the shipped `config-local-principal.yaml` does.
 
 The `atom-audit-publisher` may open connections and channels, enable publisher
 confirms, and publish only to the default exchange with the exact routing key
-`atom-audit`. It cannot consume, get, declare or modify queues or exchanges,
+`atom.events`. It cannot consume, get, declare or modify queues or exchanges,
 bind topology, purge, delete, or use transactions. A denied channel operation
 returns AMQP `403 Access Refused`.
 
@@ -230,8 +235,10 @@ The ACL is evaluated against the exchange the router resolves, so a client may
 name the default exchange either as `""` or as its `amq.default` alias. The
 configuration itself accepts only `exchange: ""`.
 
-Local principals are publish-only. `permissions.subscribe` is unsupported and
-must remain empty (`[]`).
+A principal with the default `publisher` role is publish-only:
+`permissions.subscribe` is rejected at load for it and must stay empty (`[]`).
+Consuming requires `role: service`, described in
+[Principal Roles](/configuration/security#principal-roles).
 
 FluxMQ resolves the preconfigured stream through the shared queue manager; the
 publisher never needs `QueueDeclare` permission. A publisher confirm is an ACK
@@ -263,7 +270,7 @@ not interruptible. An fsync that has already started cannot be cancelled, so
 FluxMQ enforces the deadline by giving up on the wait: when the append and sync
 do not complete within the internal publish timeout, or the process is shutting
 down, the publication is NACKed and the connection stays responsive instead of
-a stalled disk holding an internal-listener slot open. The abandoned append can
+a stalled disk holding a local-listener slot open. The abandoned append can
 still complete afterwards and become visible to consumers. A NACK therefore
 never proves the record was not written, and the at-least-once retry and
 deduplication rules below apply to it.
@@ -309,20 +316,20 @@ process restart.
 
 ## Implemented behavior
 
-- Bind a dedicated `server.amqp091.internal` mTLS listener on port `5683`.
+- Bind a dedicated `server.amqp091.local` mTLS listener on port `5683`.
 - Pass listener-scoped authentication, authorization, and hook policies into
   AMQP connections instead of selecting them from broker-global state.
 - Keep remote AMQP on `auth.external`; do not add a local lookup to that path.
 - Add a reloadable, immutable local-principal snapshot with active-connection
   revocation.
-- Enforce an internal-listener operation allowlist, including AMQP topology
+- Enforce a local-listener operation allowlist, including AMQP topology
   methods that are outside publish/subscribe authorization today.
 - Resolve statically configured streams through the shared queue manager.
 - Enforce listener connection limits, TLS handshake timeouts, and message-size
   limits before allocating a message body.
 - Add bounded admin statistics and structured logs for local authentication, denials,
   reloads, and active connections. Never log secrets, hashes, or certificates.
-- Include successful internal-listener initialization and binding in
+- Include successful local-listener initialization and binding in
   readiness.
 
 The bounded counters are returned by `GET /api/v1/stats` under
@@ -333,11 +340,11 @@ The bounded counters are returned by `GET /api/v1/stats` under
 Unit and component tests plus the real-process smoke test prove:
 
 - remote AMQP calls only `auth.external` and never checks local identities;
-- internal AMQP never calls external auth or blocking hooks, including when
+- local AMQP never calls external auth or blocking hooks, including when
   those services are unavailable;
 - valid mTLS, URI SAN, username, and current/previous secret combinations work;
 - invalid CA, SAN, username, or secret combinations fail closed;
-- only the exact `atom-audit` publication succeeds;
+- only the exact `atom.events` publication succeeds;
 - consumption and every topology-changing operation are denied;
 - secret reload is atomic and removed credentials disconnect active sessions;
 - the stream accepts publication without a queue declaration;
@@ -355,12 +362,12 @@ make smoke-local-auth
 
 It starts a real FluxMQ process, creates test PKI, exercises both listener
 paths and negative credentials/ACLs, reloads credentials, restarts the broker,
-and verifies stream replay. This smoke test passed on 2026-07-29.
+and verifies stream replay. This smoke test passed on 2026-08-01.
 
 ### Manual rabtap deployment smoke
 
 Run this smoke after deploying the Compose overlay, and before enabling the
-Atom audit publisher. It complements `make smoke-local-auth` by proving that an
+Atom event publisher. It complements `make smoke-local-auth` by proving that an
 independent AMQP 0.9.1 client can publish, receive a durable confirmation, and
 replay the event through the externally authorized listener.
 
@@ -383,8 +390,8 @@ Before running the commands, verify all of the following:
 - The local secret is printable, at least 32 characters, and URI-safe. Hex is
   recommended. Use a short-lived smoke credential because AMQP URI credentials
   can be visible to local process inspection and may appear in client errors.
-- A remote reader accepted by `auth.external` may subscribe to `atom-audit`.
-  The internal principal is deliberately unable to perform the replay.
+- A remote reader accepted by `auth.external` may subscribe to `atom.events`.
+  The local principal is deliberately unable to perform the replay.
 
 The CA passed to `rabtap --tls-ca-file` verifies the FluxMQ **server**
 certificate. It is the opposite trust direction from `ATOM_CLIENT_CA_FILE`,
@@ -402,7 +409,7 @@ newline:
 ```bash
 export AUDIT_EVENT_ID="rabtap-smoke-1"
 export AUDIT_SECRET="$(tr -d '\r\n' </secure/atom/audit-secret-current)"
-export INTERNAL_AMQP_URI="amqps://atom-audit-publisher:${AUDIT_SECRET}@fluxmq:5683/"
+export LOCAL_AMQP_URI="amqps://atom-audit-publisher:${AUDIT_SECRET}@fluxmq:5683/"
 ```
 
 Publish through the default exchange to the one permitted routing key:
@@ -410,9 +417,9 @@ Publish through the default exchange to the one permitted routing key:
 ```bash
 printf '{"id":"%s","action":"entity.create"}\n' "${AUDIT_EVENT_ID}" |
   rabtap pub \
-    --uri="${INTERNAL_AMQP_URI}" \
+    --uri="${LOCAL_AMQP_URI}" \
     --exchange='' \
-    --routingkey='atom-audit' \
+    --routingkey='atom.events' \
     --confirms \
     --mandatory \
     --property='ContentType=application/json' \
@@ -428,7 +435,7 @@ ACK, which this listener sends only after the exact stream append and durable
 sync succeed.
 
 `--mandatory` is kept for parity with the remote listener but does not add a
-check here: the internal listener routes only to its protected stream, so an
+check here: the local listener routes only to its protected stream, so an
 unroutable or rejected publication is reported as a NACK rather than a
 `Basic.Return`. Treat the confirm result, not a returned message, as the
 authoritative outcome.
@@ -439,16 +446,16 @@ exit non-zero with AMQP `403 Access Refused`:
 ```bash
 printf 'denied\n' |
   rabtap pub \
-    --uri="${INTERNAL_AMQP_URI}" \
+    --uri="${LOCAL_AMQP_URI}" \
     --exchange='' \
-    --routingkey='not-atom-audit' \
+    --routingkey='not-atom.events' \
     --confirms \
     --tls-ca-file=/secure/fluxmq/server-ca.crt \
     --tls-cert-file=/secure/atom/audit-publisher.crt \
     --tls-key-file=/secure/atom/audit-publisher.key
 
-rabtap sub atom-audit \
-  --uri="${INTERNAL_AMQP_URI}" \
+rabtap sub atom.events \
+  --uri="${LOCAL_AMQP_URI}" \
   --limit=1 \
   --idle-timeout=3s \
   --tls-ca-file=/secure/fluxmq/server-ca.crt \
@@ -460,7 +467,7 @@ An optional topology guard check must also fail with AMQP `403`:
 
 ```bash
 rabtap queue create forbidden \
-  --uri="${INTERNAL_AMQP_URI}" \
+  --uri="${LOCAL_AMQP_URI}" \
   --tls-ca-file=/secure/fluxmq/server-ca.crt \
   --tls-cert-file=/secure/atom/audit-publisher.crt \
   --tls-key-file=/secure/atom/audit-publisher.key
@@ -478,7 +485,7 @@ docker compose \
 
 curl --fail http://127.0.0.1:8081/health
 
-rabtap sub atom-audit \
+rabtap sub atom.events \
   --uri='amqps://remote-reader:REMOTE_SECRET@fluxmq:5682/' \
   --offset=first \
   --args='x-consumer-group=rabtap-smoke-unique' \
@@ -506,16 +513,16 @@ For a review bot or release operator, the minimum evidence to retain is:
   topology mutation;
 - the replayed event body after restart;
 - external-auth logs showing remote authentication/authorization and no
-  internal-listener callout;
+  local-listener callout;
 - `GET /api/v1/stats` counters showing one accepted message plus the expected
   `publish_denied` and `operation_denied` increments.
 
 Roll out in this order:
 
-1. Deploy the breaking nested auth configuration with the internal listener
+1. Deploy the breaking nested auth configuration with the local listener
    disabled and verify the remote path.
 2. Mount the CA, server certificate, current local secret, and pre-provision
-   `atom-audit`.
+   `atom.events`.
 3. Enable port `5683` only on a private network shared with Atom.
 4. Run `make smoke-local-auth` against the release source.
 5. As deployment-specific rollout gates, validate the rendered Compose or
@@ -524,7 +531,7 @@ Roll out in this order:
 6. As a deployment-specific performance gate, load test both paths and set an
    acceptable remote-auth latency budget for that environment. FluxMQ must not
    add a local-principal lookup or callout to the remote path.
-7. Enable the Atom audit publisher in a separate deployment change.
+7. Enable the Atom event publisher in a separate deployment change.
 
 The feature is implemented and covered by the real-process acceptance smoke.
 A particular production deployment is ready only after its container startup,

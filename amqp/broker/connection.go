@@ -65,6 +65,9 @@ type Connection struct {
 	channels   map[uint16]*Channel
 	channelsMu sync.RWMutex
 
+	queueRegistrations   map[queueRegistration]int
+	queueRegistrationsMu sync.Mutex
+
 	writeMu   sync.Mutex
 	closed    atomic.Bool
 	closeCh   chan struct{}
@@ -75,28 +78,75 @@ type Connection struct {
 	logger *slog.Logger
 }
 
+// queueRegistration identifies the queue-manager registration shared by all
+// matching Basic.Consume instances on one AMQP connection. The queue manager
+// registers the connection client ID, not an AMQP channel or consumer tag.
+type queueRegistration struct {
+	queueName string
+	pattern   string
+	groupID   string
+}
+
 func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *ConnectionPolicy) *Connection {
 	c := &Connection{
-		broker:     b,
-		conn:       netConn,
-		reader:     bufio.NewReaderSize(netConn, 65536),
-		writer:     bufio.NewWriterSize(netConn, 65536),
-		ctx:        ctx,
-		policy:     policy,
-		frameMax:   defaultFrameMax,
-		channelMax: defaultChannelMax,
-		heartbeat:  defaultHeartbeat,
-		channels:   make(map[uint16]*Channel),
-		closeCh:    make(chan struct{}),
-		logger:     b.logger,
+		broker:             b,
+		conn:               netConn,
+		reader:             bufio.NewReaderSize(netConn, 65536),
+		writer:             bufio.NewWriterSize(netConn, 65536),
+		ctx:                ctx,
+		policy:             policy,
+		frameMax:           defaultFrameMax,
+		channelMax:         defaultChannelMax,
+		heartbeat:          defaultHeartbeat,
+		channels:           make(map[uint16]*Channel),
+		queueRegistrations: make(map[queueRegistration]int),
+		closeCh:            make(chan struct{}),
+		logger:             b.logger,
 	}
 	c.connID = b.nextConnectionID(netConn.RemoteAddr())
-	if policy != nil && policy.mode == ConnectionPolicyLocalPublishOnly {
+	if policy.usesLocalPrincipalAuth() {
 		if tlsConn, ok := netConn.(*tls.Conn); ok {
 			c.peer = verifiedPeerIdentity(tlsConn)
 		}
 	}
 	return c
+}
+
+func (c *Connection) retainQueueRegistration(cons *consumer) {
+	if cons == nil || cons.queueName == "" {
+		return
+	}
+
+	key := queueRegistration{queueName: cons.queueName, pattern: cons.pattern, groupID: cons.groupID}
+	c.queueRegistrationsMu.Lock()
+	if c.queueRegistrations == nil {
+		c.queueRegistrations = make(map[queueRegistration]int)
+	}
+	c.queueRegistrations[key]++
+	c.queueRegistrationsMu.Unlock()
+}
+
+// releaseQueueRegistration reports whether the released consumer was the last
+// owner of the connection-level queue-manager registration.
+func (c *Connection) releaseQueueRegistration(cons *consumer) bool {
+	if cons == nil || cons.queueName == "" {
+		return false
+	}
+
+	key := queueRegistration{queueName: cons.queueName, pattern: cons.pattern, groupID: cons.groupID}
+	c.queueRegistrationsMu.Lock()
+	defer c.queueRegistrationsMu.Unlock()
+
+	owners, exists := c.queueRegistrations[key]
+	if !exists {
+		return false
+	}
+	if owners > 1 {
+		c.queueRegistrations[key] = owners - 1
+		return false
+	}
+	delete(c.queueRegistrations, key)
+	return true
 }
 
 func (c *Connection) connectionPolicy() *ConnectionPolicy {
@@ -152,12 +202,46 @@ func (c *Connection) localSessionIdentity() (LocalSessionIdentity, bool) {
 // canPublishLocal authorizes the exchange name the router will actually use.
 // Authorizing the raw wire value would let the ACL and the routing decision
 // disagree about which exchange a publication targets.
-func (c *Connection) canPublishLocal(exchange, routingKey string) bool {
+func (c *Connection) canPublishLocal(exchange, routingKey string) LocalPublishGrant {
 	policy := c.connectionPolicy()
-	if policy.mode != ConnectionPolicyLocalPublishOnly || policy.localAuthz == nil || c.localIdentity == nil {
-		return false
+	if !policy.usesLocalPrincipalAuth() || policy.localAuthz == nil || c.localIdentity == nil {
+		return LocalPublishGrantNone
 	}
 	return policy.localAuthz.CanPublishLocal(*c.localIdentity, normalizeExchange(exchange), routingKey)
+}
+
+// localRole returns the capability bound to this session at authentication.
+// An unauthenticated connection gets the zero value, the least privileged role.
+func (c *Connection) localRole() LocalPrincipalRole {
+	if c.localIdentity == nil {
+		return LocalRolePublisher
+	}
+	return c.localIdentity.Role
+}
+
+// permitsConsumers reports whether this session's principal may run consumers
+// at all. It is a property of the authenticated principal, not of the listener,
+// so the same principal has the same answer on every local listener.
+func (c *Connection) permitsConsumers() bool {
+	return c.connectionPolicy().usesLocalPrincipalAuth() && c.localRole().PermitsConsumers()
+}
+
+// propagatesOriginIdentity reports whether this session may relay the origin
+// identity of a message rather than having its own stamped on it.
+func (c *Connection) propagatesOriginIdentity() bool {
+	return c.connectionPolicy().carriesReservedProperties() &&
+		(!c.connectionPolicy().usesLocalPrincipalAuth() || c.localRole().PropagatesOriginIdentity())
+}
+
+// canSubscribeLocal authorizes a consumer for a local-principal session. A
+// principal whose role permits consumers is still refused a queue its own
+// subscribe ACL does not name.
+func (c *Connection) canSubscribeLocal(queue string) bool {
+	policy := c.connectionPolicy()
+	if !c.permitsConsumers() || policy.localAuthz == nil || c.localIdentity == nil {
+		return false
+	}
+	return policy.localAuthz.CanSubscribeLocal(*c.localIdentity, queue)
 }
 
 func (c *Connection) registerAndValidate() error {
@@ -165,7 +249,7 @@ func (c *Connection) registerAndValidate() error {
 	c.registered = true
 	c.broker.stats.IncrementConnections()
 
-	if c.connectionPolicy().mode != ConnectionPolicyLocalPublishOnly {
+	if !c.connectionPolicy().usesLocalPrincipalAuth() {
 		return nil
 	}
 	c.broker.stats.IncrementLocalConnections()
@@ -370,7 +454,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 	case saslMechanismPlain, saslMechanismAMQPlain:
 		_, username, password, err := sasl.ParsePLAIN([]byte(start.Response))
 		if err != nil {
-			if policy.mode == ConnectionPolicyLocalPublishOnly {
+			if policy.usesLocalPrincipalAuth() {
 				c.recordLocalAuthFailure("invalid_sasl_response")
 			}
 			_ = c.sendConnectionClose(codec.AccessRefused, "invalid auth response", codec.ClassConnection, codec.MethodConnectionStartOk)
@@ -379,7 +463,7 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 
 		return c.authenticateCredentials(mechanism, username, password)
 	default:
-		if policy.mode == ConnectionPolicyLocalPublishOnly {
+		if policy.usesLocalPrincipalAuth() {
 			c.recordLocalAuthFailure("unsupported_sasl_mechanism")
 		}
 		_ = c.sendConnectionClose(codec.CommandInvalid, "unsupported auth mechanism", codec.ClassConnection, codec.MethodConnectionStartOk)
@@ -390,13 +474,13 @@ func (c *Connection) authenticate(start *codec.ConnectionStartOk) error {
 func (c *Connection) authenticateCredentials(mechanism, username, password string) error {
 	policy := c.connectionPolicy()
 	clientID := PrefixedClientID(c.connID)
-	if policy.mode == ConnectionPolicyLocalPublishOnly {
+	if policy.usesLocalPrincipalAuth() {
 		if policy.localAuth == nil {
 			c.recordLocalAuthFailure("authenticator_unavailable")
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("%s local auth unavailable", mechanism)
 		}
-		principalID, credentialFingerprint, permissionsFingerprint, certificateURI, ok, err := policy.localAuth.AuthenticateLocal(
+		authentication, ok, err := policy.localAuth.AuthenticateLocal(
 			c.ctx, clientID, username, password, c.peer,
 		)
 		if err != nil {
@@ -409,17 +493,19 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("%s local auth rejected for user %q", mechanism, username)
 		}
-		if principalID == "" || credentialFingerprint == "" || permissionsFingerprint == "" || certificateURI == "" ||
-			c.peer.CertificateFingerprint == "" || !containsURISAN(c.peer, certificateURI) {
+		if authentication.PrincipalID == "" || authentication.CredentialFingerprint == "" ||
+			authentication.PermissionsFingerprint == "" || authentication.CertificateURI == "" ||
+			c.peer.CertificateFingerprint == "" || !containsURISAN(c.peer, authentication.CertificateURI) {
 			c.recordLocalAuthFailure("identity_binding_rejected")
 			_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 			return fmt.Errorf("%s local auth rejected for user %q", mechanism, username)
 		}
 		c.localIdentity = &LocalSessionIdentity{
-			PrincipalID:            principalID,
-			CredentialFingerprint:  credentialFingerprint,
-			PermissionsFingerprint: permissionsFingerprint,
-			CertificateURI:         certificateURI,
+			PrincipalID:            authentication.PrincipalID,
+			Role:                   authentication.Role,
+			CredentialFingerprint:  authentication.CredentialFingerprint,
+			PermissionsFingerprint: authentication.PermissionsFingerprint,
+			CertificateURI:         authentication.CertificateURI,
 			CertificateFingerprint: c.peer.CertificateFingerprint,
 		}
 		c.broker.stats.IncrementLocalAuthSuccess()
@@ -428,7 +514,8 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 			"outcome", "success",
 			"reason", "credentials_and_certificate_verified",
 			"client_id", clientID,
-			"principal_id", principalID)
+			"principal_id", authentication.PrincipalID,
+			"role", authentication.Role.String())
 		return nil
 	}
 

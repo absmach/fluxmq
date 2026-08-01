@@ -382,7 +382,7 @@ func TestTransferFromClientClientIDProperty(t *testing.T) {
 		Name:                 testSendLink,
 		Handle:               0,
 		Role:                 performatives.RoleSender,
-		Target:               &performatives.Target{Address: "test.ingest"},
+		Target:               &performatives.Target{Address: testIngestAddress},
 		InitialDeliveryCount: 0,
 	}
 	body, err := attach.Encode()
@@ -398,8 +398,8 @@ func TestTransferFromClientClientIDProperty(t *testing.T) {
 	assert.Equal(t, performatives.DescriptorFlow, desc)
 
 	msg := &message.Message{
-		Properties:            &message.Properties{To: "test.ingest"},
-		ApplicationProperties: map[string]any{"trace": "abc"},
+		Properties:            &message.Properties{To: testIngestAddress},
+		ApplicationProperties: map[string]any{testTraceKey: testTraceValue},
 		Data:                  [][]byte{[]byte("payload")},
 	}
 	msgBytes, err := msg.Encode()
@@ -418,11 +418,277 @@ func TestTransferFromClientClientIDProperty(t *testing.T) {
 
 	select {
 	case gotProps := <-propsCh:
-		require.Equal(t, "abc", gotProps["trace"])
+		require.Equal(t, testTraceValue, gotProps[testTraceKey])
 		require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.ClientIDProperty])
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for cross-deliver callback")
 	}
+}
+
+// AMQP 1.0 has no trusted listener, so every connection is a remote client:
+// reserved properties are dropped on ingress and cannot be forged.
+func TestTransferFromClientDropsReservedProperties(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+
+	require.NoError(t, b.router.Subscribe("mqtt-client", "test/ingest", 1, storage.SubscribeOptions{}))
+
+	propsCh := make(chan map[string]string, 1)
+	b.SetCrossDeliver(func(_ context.Context, _ string, _ string, _ []byte, _ byte, props map[string]string) {
+		propsCh <- cloneStringMap(props)
+	})
+
+	doAMQPHandshake(t, c, "sender-client")
+	doBeginSession(t, c, 0)
+
+	attach := &performatives.Attach{
+		Name:                 testSendLink,
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: testIngestAddress},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	desc, err := readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	desc, err = readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
+	msg := &message.Message{
+		Properties:            &message.Properties{To: testIngestAddress},
+		ApplicationProperties: map[string]any{reserved: testRuleTrace, testTraceKey: testTraceValue},
+		Data:                  [][]byte{[]byte("payload")},
+	}
+	msgBytes, err := msg.Encode()
+	require.NoError(t, err)
+
+	did := uint32(0)
+	mf := uint32(0)
+	transfer := &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &did,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &mf,
+		Settled:       true,
+	}
+	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
+
+	select {
+	case gotProps := <-propsCh:
+		assert.NotContains(t, gotProps, reserved, "reserved property must not be forgeable by a remote sender")
+		assert.Equal(t, testTraceValue, gotProps[testTraceKey])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cross-deliver callback")
+	}
+}
+
+// Identity and origin protocol come from the authenticated connection. AMQP 1.0
+// has no trusted listener, so a sender may not attribute its publication to
+// another principal or claim it arrived over another protocol.
+func TestTransferFromClientRejectsForgedIdentity(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	require.NoError(t, b.router.Subscribe("mqtt-client", "test/ingest", 1, storage.SubscribeOptions{}))
+
+	propsCh := make(chan map[string]string, 1)
+	b.SetCrossDeliver(func(_ context.Context, _ string, _ string, _ []byte, _ byte, props map[string]string) {
+		propsCh <- cloneStringMap(props)
+	})
+
+	doAMQPHandshake(t, c, "sender-client")
+	doBeginSession(t, c, 0)
+
+	attach := &performatives.Attach{
+		Name:                 testSendLink,
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: testIngestAddress},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	desc, err := readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorAttach, desc)
+
+	desc, err = readDescriptor(t, c)
+	require.NoError(t, err)
+	assert.Equal(t, performatives.DescriptorFlow, desc)
+
+	msg := &message.Message{
+		Properties: &message.Properties{To: testIngestAddress},
+		ApplicationProperties: map[string]any{
+			corebroker.ExternalIDProperty: "victim-tenant",
+			corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
+			corebroker.ClientIDProperty:   "someone-else",
+		},
+		Data: [][]byte{[]byte("payload")},
+	}
+	msgBytes, err := msg.Encode()
+	require.NoError(t, err)
+
+	did := uint32(0)
+	mf := uint32(0)
+	transfer := &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &did,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &mf,
+		Settled:       true,
+	}
+	require.NoError(t, c.WriteTransfer(0, transfer, msgBytes))
+
+	select {
+	case gotProps := <-propsCh:
+		// No auth engine is configured, so no external identity resolves and the
+		// forged one must be discarded rather than left in place.
+		assert.NotContains(t, gotProps, corebroker.ExternalIDProperty)
+		assert.Equal(t, corebroker.ProtocolAMQP1, gotProps[corebroker.ProtocolProperty])
+		assert.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.ClientIDProperty])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for cross-deliver callback")
+	}
+}
+
+// Pub/sub egress mirrors ingress: a remote receiver never observes
+// broker-internal state, while ordinary properties are delivered.
+func TestPublishOmitsReservedPropertiesFromDelivery(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+
+	doAMQPHandshake(t, c, "pubsub-client")
+	doBeginSession(t, c, 0)
+
+	attachReceiver(t, b, c, "pubsub-client", "test/pubsub")
+
+	props := map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue}
+	go b.Publish(context.Background(), "test/pubsub", []byte("hello amqp"), props)
+
+	msg := readDeliveredMessage(t, c)
+	assert.NotContains(t, msg.ApplicationProperties, reserved)
+	assert.Equal(t, testTraceValue, msg.ApplicationProperties[testTraceKey])
+}
+
+// Queue delivery is a second egress path and must apply the same boundary.
+func TestDeliverToClientOmitsReservedProperties(t *testing.T) {
+	b, c := setupBrokerAndPipe(t)
+	defer b.Close()
+	defer c.Close()
+
+	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+
+	doAMQPHandshake(t, c, "queue-client")
+	doBeginSession(t, c, 0)
+
+	attachReceiver(t, b, c, "queue-client", "test/pubsub")
+
+	stored := &storage.Message{
+		Topic:      "test/pubsub",
+		Payload:    []byte("hello queue"),
+		Properties: map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue},
+	}
+	go b.DeliverToClient(context.Background(), corebroker.AMQP1ClientPrefix+"queue-client", stored) //nolint:errcheck // delivery error surfaces as a read timeout below
+
+	msg := readDeliveredMessage(t, c)
+	assert.NotContains(t, msg.ApplicationProperties, reserved)
+	assert.Equal(t, testTraceValue, msg.ApplicationProperties[testTraceKey])
+}
+
+// attachReceiver attaches a receiver link on handle 0 for address and grants it
+// credit, returning once the broker has applied the credit so the caller can
+// publish without racing the Flow.
+func attachReceiver(t *testing.T, b *Broker, c *amqpconn.Connection, containerID, address string) {
+	t.Helper()
+
+	attach := &performatives.Attach{
+		Name:   testRecvLink,
+		Handle: 0,
+		Role:   performatives.RoleReceiver,
+		Source: &performatives.Source{Address: address},
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	desc, err := readDescriptor(t, c)
+	require.NoError(t, err)
+	require.Equal(t, performatives.DescriptorAttach, desc)
+
+	h := uint32(0)
+	dc := uint32(0)
+	lc := uint32(10)
+	flow := &performatives.Flow{
+		IncomingWindow: 65535,
+		NextOutgoingID: 0,
+		OutgoingWindow: 65535,
+		Handle:         &h,
+		DeliveryCount:  &dc,
+		LinkCredit:     &lc,
+	}
+	body, err = flow.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+
+	require.Eventually(t, func() bool {
+		return senderLinkCredit(b, containerID, 0, 0) > 0
+	}, 2*time.Second, time.Millisecond, "broker did not apply link credit")
+}
+
+// senderLinkCredit reads the broker-side credit of a sender link, so tests can
+// wait for a Flow to be applied instead of sleeping.
+func senderLinkCredit(b *Broker, containerID string, channel uint16, handle uint32) uint32 {
+	val, ok := b.connections.Load(containerID)
+	if !ok {
+		return 0
+	}
+	conn := val.(*Connection)
+
+	conn.sessionsMu.RLock()
+	sess, ok := conn.sessions[channel]
+	conn.sessionsMu.RUnlock()
+	if !ok {
+		return 0
+	}
+
+	sess.linksMu.RLock()
+	link, ok := sess.links[handle]
+	sess.linksMu.RUnlock()
+	if !ok {
+		return 0
+	}
+
+	link.mu.Lock()
+	defer link.mu.Unlock()
+	return link.credit
+}
+
+// readDeliveredMessage reads one Transfer and decodes its message body.
+func readDeliveredMessage(t *testing.T, c *amqpconn.Connection) *message.Message {
+	t.Helper()
+
+	_, desc, _, payload, err := c.ReadPerformative()
+	require.NoError(t, err)
+	require.Equal(t, performatives.DescriptorTransfer, desc)
+
+	msg, err := message.Decode(payload)
+	require.NoError(t, err)
+	return msg
 }
 
 func TestQueueTransferCarriesClientID(t *testing.T) {
@@ -461,7 +727,7 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 
 	msg := &message.Message{
 		Properties:            &message.Properties{To: "$queue/orders/process"},
-		ApplicationProperties: map[string]any{"trace": "abc"},
+		ApplicationProperties: map[string]any{testTraceKey: testTraceValue},
 		Data:                  [][]byte{[]byte("payload")},
 	}
 	msgBytes, err := msg.Encode()
@@ -481,7 +747,7 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 	select {
 	case publish := <-mockQM.publishCh:
 		require.Equal(t, PrefixedClientID("sender-client"), publish.ClientID)
-		require.Equal(t, "abc", publish.Properties["trace"])
+		require.Equal(t, testTraceValue, publish.Properties[testTraceKey])
 		require.Equal(t, PrefixedClientID("sender-client"), publish.Properties[corebroker.ClientIDProperty])
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for queue publish")

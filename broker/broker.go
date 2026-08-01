@@ -32,6 +32,15 @@ type QueueSubscriber interface {
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
 }
 
+// ExistingQueueSubscriber manages subscriptions without creating queues or
+// changing their configured type. Protocol authorization paths that grant read
+// access only use this interface so consuming cannot become an administrative
+// queue mutation.
+type ExistingQueueSubscriber interface {
+	SubscribeExisting(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
+	SubscribeExistingWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error
+}
+
 // QueueAcknowledger handles queue delivery acknowledgments.
 type QueueAcknowledger interface {
 	// Ack acknowledges successful processing of a message by a consumer group.

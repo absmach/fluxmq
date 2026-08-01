@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,8 +20,12 @@ import (
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -29,7 +34,10 @@ const (
 	testPermissionsFP  = "permissions-fingerprint"
 	testCertificateURI = "spiffe://absmach/atom/audit-publisher"
 	testConnectionID   = "test-conn"
-	testAuditQueue     = "atom-audit"
+	testAuditQueue     = "atom.events"
+	testServiceQueue   = "$queue/m"
+	testConsumerTag    = "reader"
+	testSiblingTag     = "sibling-reader"
 )
 
 type localAuthenticatorStub struct {
@@ -40,6 +48,7 @@ type localAuthenticatorStub struct {
 	secret         string
 	peer           VerifiedPeerIdentity
 	principalID    string
+	role           LocalPrincipalRole
 	credentialFP   string
 	permissionsFP  string
 	certificateURI string
@@ -47,7 +56,7 @@ type localAuthenticatorStub struct {
 	err            error
 }
 
-func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (string, string, string, string, bool, error) {
+func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, username, secret string, peer VerifiedPeerIdentity) (LocalAuthentication, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -55,21 +64,45 @@ func (s *localAuthenticatorStub) AuthenticateLocal(_ context.Context, clientID, 
 	s.username = username
 	s.secret = secret
 	s.peer = peer
-	return s.principalID, s.credentialFP, s.permissionsFP, s.certificateURI, s.authenticated, s.err
+	return LocalAuthentication{
+		PrincipalID:            s.principalID,
+		Role:                   s.role,
+		CredentialFingerprint:  s.credentialFP,
+		PermissionsFingerprint: s.permissionsFP,
+		CertificateURI:         s.certificateURI,
+	}, s.authenticated, s.err
 }
 
 type localAuthorizerStub struct {
-	allowExchange   string
-	allowRoutingKey string
-	retired         bool
-	lastIdentity    LocalSessionIdentity
-	calls           int
+	allowExchange         string
+	allowRoutingKey       string
+	allowRoutingKeyPrefix string
+	allowQueue            string
+	retired               bool
+	lastIdentity          LocalSessionIdentity
+	calls                 int
+	subscribeCalls        int
 }
 
-func (s *localAuthorizerStub) CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) bool {
+func (s *localAuthorizerStub) CanPublishLocal(identity LocalSessionIdentity, exchange, routingKey string) LocalPublishGrant {
 	s.calls++
 	s.lastIdentity = identity
-	return !s.retired && exchange == s.allowExchange && routingKey == s.allowRoutingKey
+	if s.retired {
+		return LocalPublishGrantNone
+	}
+	if exchange == s.allowExchange && routingKey == s.allowRoutingKey {
+		return LocalPublishGrantExactTarget
+	}
+	if s.allowRoutingKeyPrefix != "" && exchange == "" && strings.HasPrefix(routingKey, s.allowRoutingKeyPrefix) {
+		return LocalPublishGrantPrefix
+	}
+	return LocalPublishGrantNone
+}
+
+func (s *localAuthorizerStub) CanSubscribeLocal(identity LocalSessionIdentity, queue string) bool {
+	s.subscribeCalls++
+	s.lastIdentity = identity
+	return !s.retired && queue != "" && queue == s.allowQueue
 }
 
 func (s *localAuthorizerStub) IsSessionActive(identity LocalSessionIdentity) bool {
@@ -134,7 +167,14 @@ func newPolicyTestConnection(t *testing.T, policy *ConnectionPolicy) (*Connectio
 }
 
 func bindLocalIdentity(conn *Connection) {
+	bindLocalIdentityAs(conn, LocalRolePublisher)
+}
+
+// bindLocalIdentityAs binds an authenticated identity carrying role, which is
+// what decides a session's capability now that listeners no longer do.
+func bindLocalIdentityAs(conn *Connection, role LocalPrincipalRole) {
 	conn.localIdentity = &LocalSessionIdentity{
+		Role:                   role,
 		PrincipalID:            testLocalPrincipal,
 		CredentialFingerprint:  testCredentialFP,
 		PermissionsFingerprint: testPermissionsFP,
@@ -169,7 +209,7 @@ func TestLocalAuthenticationBindsVerifiedIdentity(t *testing.T) {
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	globalExternal := &externalAuthenticatorStub{}
 	conn.broker.SetAuthEngine(corebroker.NewAuthEngine(globalExternal, nil))
 	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
@@ -206,7 +246,7 @@ func TestLocalAuthenticationRejectsUnverifiedSelectedURI(t *testing.T) {
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
 	if err := conn.authenticate(start); err == nil {
 		t.Fatal("expected authentication rejection")
@@ -256,7 +296,7 @@ func TestLocalPublishOnlyMethodAllowlist(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
 	for _, tc := range denied {
 		t.Run(tc.name, func(t *testing.T) {
-			conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+			conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 			bindLocalIdentity(conn)
 			ch := newChannel(conn, 1)
 			if err := ch.handleMethod(tc.method); err != nil {
@@ -275,7 +315,7 @@ func TestLocalPublishOnlyMethodAllowlist(t *testing.T) {
 
 func TestServerClosedChannelIgnoresPublishAfterDeniedMethod(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	ch := newChannel(conn, 1)
 
@@ -317,12 +357,12 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 		// amq.default names the same default exchange the router resolves "" to,
 		// so the ACL must reach the same decision for both spellings.
 		{"explicit default alias", "amq.default", testAuditQueue, true},
-		{"wrong routing key", "", "other", false},
+		{"wrong routing key", "", testOtherTarget, false},
 		{"wrong exchange", "events", testAuditQueue, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+			conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 			bindLocalIdentity(conn)
 			ch := newChannel(conn, 1)
 			err := ch.handleMethod(&codec.BasicPublish{Exchange: tc.exchange, RoutingKey: tc.routingKey})
@@ -345,9 +385,463 @@ func TestLocalPublishRequiresExactExchangeAndRoutingKey(t *testing.T) {
 	}
 }
 
+// A local principal's identity is fixed by configuration, so its publications
+// are stamped with the authenticated principal even though the listener is
+// trusted. Relaying another origin would make an audit record disagree with the
+// peer that actually authenticated.
+func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
+	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentity(conn)
+	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+	ch.pendingHeader = &codec.ContentHeader{
+		ClassID:  codec.ClassBasic,
+		BodySize: 2,
+		Properties: codec.BasicProperties{
+			Headers: map[string]any{
+				corebroker.ExternalIDProperty: "pub-123",
+				corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
+			},
+		},
+	}
+	ch.pendingBody = []byte("{}")
+	ch.completePublish()
+
+	if qm.exactPublishCalls != 1 {
+		t.Fatalf("exact stream publish calls = %d, want 1", qm.exactPublishCalls)
+	}
+	if got := qm.exactPublish.Properties[corebroker.ExternalIDProperty]; got != testLocalPrincipal {
+		t.Fatalf("external_id = %q, want %q", got, testLocalPrincipal)
+	}
+	if got := qm.exactPublish.Properties[corebroker.ProtocolProperty]; got != corebroker.ProtocolAMQP091 {
+		t.Fatalf("protocol = %q, want %q", got, corebroker.ProtocolAMQP091)
+	}
+}
+
+// The matched permission, not the listener, selects the delivery path. An exact
+// target names a protected stream and is appended durably; a prefix names no
+// queue and is published as an ordinary topic. Routing by listener instead would
+// make one permissions.publish entry mean two different contracts.
+func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
+	const prefixedKey = "m.domain.c.channel"
+
+	tests := []struct {
+		name             string
+		role             LocalPrincipalRole
+		routingKey       string
+		wantDurableCalls int
+	}{
+		{
+			name:             "publisher exact target appends durably",
+			role:             LocalRolePublisher,
+			routingKey:       testAuditQueue,
+			wantDurableCalls: 1,
+		},
+		{
+			name:             "service exact target appends durably",
+			role:             LocalRoleService,
+			routingKey:       testAuditQueue,
+			wantDurableCalls: 1,
+		},
+		{
+			name:             "service prefix publishes as an ordinary topic",
+			role:             LocalRoleService,
+			routingKey:       prefixedKey,
+			wantDurableCalls: 0,
+		},
+		{
+			name:             "publisher prefix publishes as an ordinary topic",
+			role:             LocalRolePublisher,
+			routingKey:       prefixedKey,
+			wantDurableCalls: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue, allowRoutingKeyPrefix: "m."}
+			conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+			bindLocalIdentityAs(conn, tc.role)
+			qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+			conn.broker.queueManager = qm
+
+			ch := newChannel(conn, 1)
+			ch.pendingMethod = &codec.BasicPublish{RoutingKey: tc.routingKey}
+			ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+			ch.pendingBody = []byte("{}")
+			ch.completePublish()
+
+			if qm.exactPublishCalls != tc.wantDurableCalls {
+				t.Fatalf("durable stream publish calls = %d, want %d", qm.exactPublishCalls, tc.wantDurableCalls)
+			}
+			if tc.wantDurableCalls > 0 && qm.exactStreamName != tc.routingKey {
+				t.Fatalf("durable stream = %q, want %q", qm.exactStreamName, tc.routingKey)
+			}
+		})
+	}
+}
+
+// A prefix grant is authorized against no queues entry, so it must never reach
+// a queue. Two routing keys would otherwise carry it there: one under a
+// "$queue/"-shaped prefix, and one that happens to name a configured stream.
+func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
+	const streamQueue = "atom.events"
+
+	tests := []struct {
+		name       string
+		prefix     string
+		routingKey string
+	}{
+		{
+			name:       "routing key naming a configured stream",
+			prefix:     "atom.",
+			routingKey: streamQueue,
+		},
+		{
+			name:       "routing key under a queue-shaped prefix",
+			prefix:     "$queue/",
+			routingKey: "$queue/" + streamQueue,
+		},
+		{
+			name:       "routing key under a queue-shaped prefix targeting a commit",
+			prefix:     "$queue/",
+			routingKey: "$queue/" + streamQueue + "/$commit",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowRoutingKeyPrefix: tc.prefix}
+			conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+			bindLocalIdentityAs(conn, LocalRoleService)
+			qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: streamQueue, Type: qtypes.QueueTypeStream}}
+			conn.broker.queueManager = qm
+
+			ch := newChannel(conn, 1)
+			ch.pendingMethod = &codec.BasicPublish{RoutingKey: tc.routingKey}
+			ch.pendingHeader = &codec.ContentHeader{ClassID: codec.ClassBasic, BodySize: 2}
+			ch.pendingBody = []byte("{}")
+			ch.completePublish()
+
+			if qm.exactPublishCalls != 0 {
+				t.Fatalf("durable stream publish calls = %d, want 0", qm.exactPublishCalls)
+			}
+			if qm.publishCalls != 0 {
+				t.Fatalf("queue publish calls = %d, want 0; a prefix grant must stay on the pub/sub path", qm.publishCalls)
+			}
+		})
+	}
+}
+
+// A local principal may only declare passively, and the queues it consumes are
+// pre-provisioned rather than declared on its own channel, so the lookup has to
+// reach global queue state.
+func TestPassiveDeclareResolvesProvisionedQueue(t *testing.T) {
+	const provisioned = "atom.events"
+
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	conn.broker.queueManager = &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeStream},
+	}
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.QueueDeclare{Queue: provisioned, Passive: true}); err != nil {
+		t.Fatalf("passive declare of a provisioned queue: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("expected one frame, got %d", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := decoded.(*codec.QueueDeclareOk); !ok {
+		t.Fatalf("expected QueueDeclareOk, got %T", decoded)
+	}
+}
+
+func TestLocalConsumeUsesNonMutatingQueueSubscription(t *testing.T) {
+	const provisioned = "m"
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+	}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testConsumerTag}); err != nil {
+		t.Fatalf("consume provisioned queue: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if qm.existingSubs != 1 || qm.existingCursorSubs != 0 {
+		t.Fatalf("existing subscription calls = %d/%d, want 1/0", qm.existingSubs, qm.existingCursorSubs)
+	}
+	if qm.subscribeCalls != 0 || qm.cursorSubscribeCalls != 0 {
+		t.Fatalf("mutating subscription calls = %d/%d, want 0/0", qm.subscribeCalls, qm.cursorSubscribeCalls)
+	}
+	frames := readFramesFrom(t, buf, 0)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want one BasicConsumeOk", len(frames))
+	}
+	decoded, err := frames[0].Decode()
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := decoded.(*codec.BasicConsumeOk); !ok {
+		t.Fatalf("method = %T, want *codec.BasicConsumeOk", decoded)
+	}
+}
+
+func TestLocalConsumeFailureRollsBackAndClosesChannel(t *testing.T) {
+	const provisioned = "m"
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		getQueueErr:    qstorage.ErrQueueNotFound,
+		existingSubErr: qstorage.ErrQueueNotFound,
+	}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testConsumerTag}); err != nil {
+		t.Fatalf("consume missing queue: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	ch.consumersMu.RLock()
+	consumerCount := len(ch.consumers)
+	ch.consumersMu.RUnlock()
+	if consumerCount != 0 {
+		t.Fatalf("consumer registrations = %d, want 0 after failed subscribe", consumerCount)
+	}
+	if got := conn.broker.stats.GetConsumers(); got != 0 {
+		t.Fatalf("consumer stat = %d, want 0 after failed subscribe", got)
+	}
+	closeMethod := decodeSingleChannelClose(t, buf)
+	if closeMethod.ReplyCode != codec.NotFound {
+		t.Fatalf("reply code = %d, want %d", closeMethod.ReplyCode, codec.NotFound)
+	}
+	if closeMethod.ClassID != codec.ClassBasic || closeMethod.MethodID != codec.MethodBasicConsume {
+		t.Fatalf("close method = %d/%d, want basic.consume", closeMethod.ClassID, closeMethod.MethodID)
+	}
+}
+
+// The manager unregisters a client from a queue and group, not a single
+// consumer, so a failed consume must not compensate while a sibling consumer
+// still holds that registration. It would otherwise stop delivering to a
+// consumer whose own subscribe succeeded, without reporting anything.
+func TestLocalConsumeFailureKeepsSiblingSubscription(t *testing.T) {
+	const provisioned = "m"
+
+	tests := []struct {
+		name            string
+		withSibling     bool
+		wantUnsubscribe bool
+	}{
+		{
+			name:            "sole consumer compensates",
+			wantUnsubscribe: true,
+		},
+		{
+			name:        "sibling on the same registration is left alone",
+			withSibling: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowQueue: provisioned}
+			conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+			bindLocalIdentityAs(conn, LocalRoleService)
+			qm := &mockChannelQueueManager{
+				queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+			}
+			conn.broker.queueManager = qm
+
+			ch := newChannel(conn, 1)
+			if tc.withSibling {
+				// A consumer whose own subscribe succeeded, sharing the queue and
+				// group the failing one is about to use.
+				require.NoError(t, ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testSiblingTag}))
+				require.Empty(t, qm.unsubscribes, "a successful consume must not unsubscribe")
+			}
+
+			// The second subscribe fails after the manager began registering, which
+			// is the only case that still compensates.
+			qm.existingSubErr = errors.New("group store unavailable")
+			require.NoError(t, ch.handleMethod(&codec.BasicConsume{Queue: testServiceQueue, ConsumerTag: testConsumerTag}))
+
+			ch.consumersMu.RLock()
+			_, failedRemains := ch.consumers[testConsumerTag]
+			_, siblingRemains := ch.consumers[testSiblingTag]
+			ch.consumersMu.RUnlock()
+
+			assert.False(t, failedRemains, "the failed consumer must not stay registered")
+			assert.Equal(t, tc.withSibling, siblingRemains, "the sibling must survive its neighbour's failure")
+
+			if tc.wantUnsubscribe {
+				defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+				assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
+			} else {
+				assert.Empty(t, qm.unsubscribes, "compensating here would revoke the sibling's registration")
+			}
+		})
+	}
+}
+
+// Queue-manager ownership is connection-scoped. The implicit queue-mode group
+// and its explicit spelling are also the same registration, even when the
+// Basic.Consume instances live on different AMQP channels.
+func TestLocalConsumeFailureKeepsCrossChannelImplicitGroupSubscription(t *testing.T) {
+	const provisioned = "m"
+
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+	}
+	conn.broker.queueManager = qm
+
+	siblingChannel := newChannel(conn, 1)
+	failingChannel := newChannel(conn, 2)
+	require.NoError(t, siblingChannel.handleMethod(&codec.BasicConsume{
+		Queue:       testServiceQueue,
+		ConsumerTag: testSiblingTag,
+		NoWait:      true,
+	}))
+
+	qm.existingSubErr = errors.New("group store unavailable")
+	defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+	require.NoError(t, failingChannel.handleMethod(&codec.BasicConsume{
+		Queue:       testServiceQueue,
+		ConsumerTag: testConsumerTag,
+		NoWait:      true,
+		Arguments:   map[string]any{"x-consumer-group": defaultGroupID},
+	}))
+
+	siblingChannel.consumersMu.RLock()
+	_, siblingRemains := siblingChannel.consumers[testSiblingTag]
+	siblingChannel.consumersMu.RUnlock()
+	failingChannel.consumersMu.RLock()
+	_, failedRemains := failingChannel.consumers[testConsumerTag]
+	failingChannel.consumersMu.RUnlock()
+
+	assert.True(t, siblingRemains)
+	assert.False(t, failedRemains)
+	assert.Empty(t, qm.unsubscribes, "the cross-channel sibling still owns the canonical registration")
+	assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
+}
+
+func TestSharedQueueRegistrationUnsubscribesOnlyAfterFinalConsumer(t *testing.T) {
+	const provisioned = "m"
+
+	newConsumers := func(t *testing.T) (*Connection, *mockChannelQueueManager, *Channel, *Channel) {
+		t.Helper()
+		authz := &localAuthorizerStub{allowQueue: provisioned}
+		conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+		bindLocalIdentityAs(conn, LocalRoleService)
+		qm := &mockChannelQueueManager{
+			queueCfg: &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+		}
+		conn.broker.queueManager = qm
+
+		first := newChannel(conn, 1)
+		second := newChannel(conn, 2)
+		require.NoError(t, first.handleMethod(&codec.BasicConsume{
+			Queue:       testServiceQueue,
+			ConsumerTag: testConsumerTag,
+			NoWait:      true,
+		}))
+		require.NoError(t, second.handleMethod(&codec.BasicConsume{
+			Queue:       testServiceQueue,
+			ConsumerTag: testSiblingTag,
+			NoWait:      true,
+		}))
+		return conn, qm, first, second
+	}
+
+	t.Run("basic cancel", func(t *testing.T) {
+		conn, qm, first, second := newConsumers(t)
+
+		require.NoError(t, first.handleMethod(&codec.BasicCancel{ConsumerTag: testConsumerTag, NoWait: true}))
+		assert.Empty(t, qm.unsubscribes, "the second channel still owns the registration")
+		assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
+
+		require.NoError(t, second.handleMethod(&codec.BasicCancel{ConsumerTag: testSiblingTag, NoWait: true}))
+		defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+		assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
+		assert.Equal(t, uint64(0), conn.broker.stats.GetConsumers())
+	})
+
+	t.Run("channel cleanup", func(t *testing.T) {
+		conn, qm, first, second := newConsumers(t)
+
+		first.cleanup()
+		assert.Empty(t, qm.unsubscribes, "the second channel still owns the registration")
+		assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
+
+		second.cleanup()
+		defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+		assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
+		assert.Equal(t, uint64(0), conn.broker.stats.GetConsumers())
+	})
+}
+
+func TestLocalStreamConsumeCannotChangeClassicQueueType(t *testing.T) {
+	const provisioned = "m"
+	authz := &localAuthorizerStub{allowQueue: provisioned}
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+	bindLocalIdentityAs(conn, LocalRoleService)
+	qm := &mockChannelQueueManager{
+		queueCfg:       &qtypes.QueueConfig{Name: provisioned, Type: qtypes.QueueTypeClassic},
+		existingSubErr: queue.ErrQueueNotStream,
+	}
+	conn.broker.queueManager = qm
+
+	ch := newChannel(conn, 1)
+	if err := ch.handleMethod(&codec.BasicConsume{
+		Queue:       testServiceQueue,
+		ConsumerTag: testConsumerTag,
+		Arguments:   map[string]any{"x-stream-offset": "first"},
+	}); err != nil {
+		t.Fatalf("consume classic queue with stream cursor: %v", err)
+	}
+	if err := conn.writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	closeMethod := decodeSingleChannelClose(t, buf)
+	if closeMethod.ReplyCode != codec.PreconditionFailed {
+		t.Fatalf("reply code = %d, want %d", closeMethod.ReplyCode, codec.PreconditionFailed)
+	}
+	if qm.existingCursorSubs != 1 || qm.cursorSubscribeCalls != 0 {
+		t.Fatalf("cursor subscription calls = existing:%d mutating:%d, want 1/0", qm.existingCursorSubs, qm.cursorSubscribeCalls)
+	}
+}
+
 func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	hook := &hookCounter{}
 	conn.broker.SetBlockingHooks(corebroker.NewBlockingHookEngine(hook, corebroker.HookFailDeny, nil, nil, nil))
@@ -366,14 +860,14 @@ func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	if qm.publishCalls != 0 {
 		t.Fatalf("general queue publish calls = %d, want 0", qm.publishCalls)
 	}
-	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/atom-audit" {
+	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/atom.events" {
 		t.Fatalf("unexpected exact stream publish: calls=%d queue=%q request=%+v", qm.exactPublishCalls, qm.exactStreamName, qm.exactPublish)
 	}
 }
 
 func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{exactPublishErr: errors.New("disk full")}
 	conn.broker.queueManager = qm
@@ -403,7 +897,7 @@ func TestLocalDurableStreamAppendFailureNacksConfirm(t *testing.T) {
 
 func TestLocalDurableStreamPublishIsBounded(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -506,7 +1000,7 @@ func TestLocalDurableStreamPublishBoundsAbandonedAppends(t *testing.T) {
 	})
 
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &stalledStreamQueueManager{
 		release: make(chan struct{}),
@@ -596,7 +1090,7 @@ func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
 	t.Cleanup(func() { localPublishTimeout = previousTimeout })
 
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &blockingStreamQueueManager{
 		entered: make(chan struct{}),
@@ -636,7 +1130,7 @@ func TestLocalDurableStreamPublishNacksWhenBarrierStalls(t *testing.T) {
 
 func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	ctx, cancel := context.WithCancel(context.Background())
 	conn.ctx = ctx
@@ -656,7 +1150,7 @@ func TestLocalDurableStreamPublishNacksOnConnectionShutdown(t *testing.T) {
 
 func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{exactPublishErr: queue.ErrQueueMessageTooLarge}
 	conn.broker.queueManager = qm
@@ -686,7 +1180,7 @@ func TestLocalDurableStreamOversizeFailureNacksConfirm(t *testing.T) {
 
 func TestLocalDurableStreamSuccessAcksExactQueueOnly(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{}
 	conn.broker.queueManager = qm
@@ -716,7 +1210,7 @@ func TestLocalDurableStreamSuccessAcksExactQueueOnly(t *testing.T) {
 
 func TestLocalPublishRechecksAuthorizationAfterContent(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -746,7 +1240,7 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 		authenticated:  true,
 	}
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, _ := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(authn, authz, authz, 0))
+	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	transport := &memoryConn{}
 	conn.conn = transport
 	conn.writer = bufio.NewWriter(transport)
@@ -791,7 +1285,7 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 
 func TestLocalPublishRejectsCredentialRetiredDuringContent(t *testing.T) {
 	authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
-	conn, buf := newPolicyTestConnection(t, NewLocalPublishOnlyConnectionPolicy(nil, authz, authz, 0))
+	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
 	bindLocalIdentity(conn)
 	qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
 	conn.broker.queueManager = qm
@@ -813,6 +1307,50 @@ func TestLocalPublishRejectsCredentialRetiredDuringContent(t *testing.T) {
 	}
 }
 
+// Reserved properties are gated on who authenticated the peer, so only the
+// mTLS internal listener may exchange them. A missing policy is the embedded
+// caller path and must fail closed.
+func TestConnectionPolicyReservedPropertyTrust(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy *ConnectionPolicy
+		want   bool
+	}{
+		{
+			name:   "local publish only policy is trusted",
+			policy: NewLocalConnectionPolicy(nil, nil, nil, 0),
+			want:   true,
+		},
+		{
+			name:   "external policy is not trusted",
+			policy: NewExternalConnectionPolicy(nil, nil, 0),
+			want:   false,
+		},
+		{
+			name:   "nil policy is not trusted",
+			policy: nil,
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.policy.carriesReservedProperties(); got != tc.want {
+				t.Fatalf("carriesReservedProperties() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A connection with no policy resolves to the untrusted external default, so an
+// embedded caller never silently becomes a trusted service.
+func TestAbsentPolicyResolvesUntrusted(t *testing.T) {
+	conn, _ := newPolicyTestConnection(t, nil)
+	if conn.connectionPolicy().carriesReservedProperties() {
+		t.Fatal("connection with no policy must not carry reserved properties")
+	}
+}
+
 func TestExplicitExternalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	conn, _ := newPolicyTestConnection(t, NewExternalConnectionPolicy(nil, nil, 0))
 	hook := &hookCounter{}
@@ -821,7 +1359,7 @@ func TestExplicitExternalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	conn.broker.SetCrossDeliver(func(context.Context, string, string, []byte, byte, map[string]string) {
 		delivered++
 	})
-	if err := conn.broker.router.Subscribe("mqtt-client", testAuditQueue, 1, storage.SubscribeOptions{}); err != nil {
+	if err := conn.broker.router.Subscribe("mqtt-client", topics.AMQPTopicToMQTT(testAuditQueue), 1, storage.SubscribeOptions{}); err != nil {
 		t.Fatalf("subscribe test route: %v", err)
 	}
 

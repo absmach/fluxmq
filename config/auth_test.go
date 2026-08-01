@@ -10,13 +10,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
 	testPrincipalName = "atom-audit-publisher"
 	testPrincipalSAN  = "spiffe://absmach/atom/audit-publisher"
-	testAuditQueue    = "atom-audit"
+	testAuditQueue    = "atom.events"
 	testInternalAddr  = ":5683"
+	testServiceAddr   = ":5684"
 	testServerCert    = "server.crt"
 	testServerKey     = "server.key"
 	testClientCA      = "clients.crt"
@@ -45,7 +49,7 @@ auth:
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom-audit
+            routing_key: atom.events
         subscribe: []
 `, testPrincipalName, testPrincipalSAN, current, previous)
 	if err := os.WriteFile(filename, []byte(contents), 0o600); err != nil {
@@ -239,13 +243,108 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			wantError: "exchange must be empty; local principals may publish only through the AMQP default exchange",
 		},
 		{
-			name: "subscribe permissions are unsupported",
+			name: "publish permission cannot set both an exact key and a prefix",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{
+					{RoutingKey: testAuditQueue, RoutingKeyPrefix: "m."},
+				}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "cannot set both routing_key and routing_key_prefix",
+		},
+		{
+			name: "publish permission must set one of them",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{{}}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must set either routing_key or routing_key_prefix",
+		},
+		{
+			name: "publish prefix cannot contain wildcards",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{{RoutingKeyPrefix: "m.#"}}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must not contain wildcards",
+		},
+		{
+			name: "publish prefix cannot have surrounding whitespace",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Permissions.Publish = []LocalPublishPermission{{RoutingKeyPrefix: " m."}}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "cannot have leading or trailing whitespace",
+		},
+		{
+			name: "subscribe permission cannot be empty",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{""}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "permissions.subscribe[0] cannot be empty",
+		},
+		{
+			name: "subscribe permission cannot contain wildcards",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{testAuditQueue + ".*"}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must be an exact queue name without wildcards",
+		},
+		{
+			name: "subscribe permission cannot have surrounding whitespace",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{" " + testAuditQueue}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "cannot have leading or trailing whitespace",
+		},
+		{
+			name: "subscribe permission requires the service role",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
 				principal.Permissions.Subscribe = []string{testAuditQueue}
 				return []LocalPrincipalConfig{principal}
 			},
-			wantError: "subscribe is unsupported; local principals are publish-only",
+			wantError: "permissions.subscribe requires role \"service\"",
+		},
+		{
+			name: "unknown role is rejected",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = "administrator"
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "role \"administrator\" is unknown",
+		},
+		{
+			name: "role defaults to the least privileged one",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = ""
+				return []LocalPrincipalConfig{principal}
+			},
+		},
+		{
+			name: "subscribe permission cannot be duplicated",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{testAuditQueue, testAuditQueue}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "duplicates an earlier subscribe permission",
 		},
 	}
 
@@ -370,6 +469,9 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 					Name:              testPrincipalName,
 					CertificateURISAN: testPrincipalSAN,
 					CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
+					Permissions: LocalPermissionsConfig{
+						Publish: []LocalPublishPermission{{RoutingKey: testAuditQueue}},
+					},
 				}}
 			}
 			err := cfg.Validate()
@@ -386,6 +488,154 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 	}
 }
 
+// The service listener authenticates against the same principal store and
+// publishes through the same single-node durable path as the internal one, so
+// it carries the same deployment requirements.
+// local is the current key; internal and service are deprecated aliases that
+// must stay exactly equivalent, or an operator migrating between them would get
+// a different security posture from the same file.
+func TestValidateLocalAMQP091Listeners(t *testing.T) {
+	keys := map[string]func(*Config) *AMQP091ListenerConfig{
+		listenerNameLocal:    func(c *Config) *AMQP091ListenerConfig { return &c.Server.AMQP091.Local },
+		listenerNameInternal: func(c *Config) *AMQP091ListenerConfig { return &c.Server.AMQP091.Internal },
+		listenerNameService:  func(c *Config) *AMQP091ListenerConfig { return &c.Server.AMQP091.Service },
+	}
+
+	configureValid := func(listener *AMQP091ListenerConfig) {
+		listener.Addr = testServiceAddr
+		listener.MaxConnections = 32
+		listener.TLS.CertFile = testServerCert
+		listener.TLS.KeyFile = testServerKey
+		listener.TLS.ClientCAFile = testClientCA
+		listener.TLS.ClientAuth = clientAuthRequire
+	}
+
+	tests := []struct {
+		name           string
+		configure      func(*AMQP091ListenerConfig)
+		clusterEnabled bool
+		withPrincipal  bool
+		publish        []LocalPublishPermission
+		wantError      string
+	}{
+		{
+			name:      "disabled by default",
+			configure: func(*AMQP091ListenerConfig) {},
+		},
+		{
+			name: "requires exact client auth mode",
+			configure: func(listener *AMQP091ListenerConfig) {
+				configureValid(listener)
+				listener.TLS.ClientAuth = "verify-if-given"
+			},
+			wantError: "client_auth must be \"require\"",
+		},
+		{
+			name:      "requires a positive connection limit",
+			configure: func(listener *AMQP091ListenerConfig) { configureValid(listener); listener.MaxConnections = 0 },
+			wantError: "max_connections must be positive",
+		},
+		{
+			name:      "requires a local principal",
+			configure: configureValid,
+			wantError: "auth.local_principals must contain at least one principal when server.amqp091.",
+		},
+		{
+			// An exact target is appended on the receiving node only, so a
+			// cluster would hide those records from consumers elsewhere.
+			name:           "rejects clustering with an exact publish target",
+			configure:      configureValid,
+			clusterEnabled: true,
+			withPrincipal:  true,
+			publish:        []LocalPublishPermission{{RoutingKey: testAuditQueue}},
+			wantError:      "cannot be combined with cluster.enabled",
+		},
+		{
+			// A prefix names no queue and is an ordinary topic publish, which
+			// the cluster forwards like any other, so it may run clustered.
+			name:           "allows clustering with prefix permissions only",
+			configure:      configureValid,
+			clusterEnabled: true,
+			withPrincipal:  true,
+			publish:        []LocalPublishPermission{{RoutingKeyPrefix: "m."}},
+		},
+		{
+			name:          "valid mandatory mTLS",
+			configure:     configureValid,
+			withPrincipal: true,
+		},
+	}
+
+	for key, selector := range keys {
+		for _, tt := range tests {
+			t.Run(key+"/"+tt.name, func(t *testing.T) {
+				runLocalListenerCase(t, selector, tt.configure, tt.clusterEnabled, tt.withPrincipal, tt.publish, tt.wantError)
+			})
+		}
+	}
+}
+
+// The keys name listeners, not capabilities, so configuring several is a
+// network-placement choice and every one of them must be served.
+func TestLocalListenersEnumeratesEveryKey(t *testing.T) {
+	cfg := Default()
+	cfg.Server.AMQP091.Local.Addr = ":5683"
+	cfg.Server.AMQP091.Internal.Addr = ":5684"
+	cfg.Server.AMQP091.Service.Addr = ":5685"
+
+	listeners := cfg.Server.AMQP091.LocalListeners()
+	names := make([]string, 0, len(listeners))
+	for _, listener := range listeners {
+		names = append(names, listener.Name)
+	}
+	assert.Equal(t, []string{listenerNameLocal, listenerNameInternal, listenerNameService}, names)
+
+	assert.Equal(t, []string{listenerNameInternal, listenerNameService}, cfg.Server.AMQP091.DeprecatedLocalListenerNames(),
+		"only the aliases are reported for the deprecation warning")
+}
+
+func TestLocalListenersOmitsUnconfiguredKeys(t *testing.T) {
+	cfg := Default()
+	cfg.Server.AMQP091.Local.Addr = ":5683"
+
+	listeners := cfg.Server.AMQP091.LocalListeners()
+	require.Len(t, listeners, 1)
+	assert.Equal(t, listenerNameLocal, listeners[0].Name)
+	assert.Empty(t, cfg.Server.AMQP091.DeprecatedLocalListenerNames())
+}
+
+func runLocalListenerCase(
+	t *testing.T,
+	selector func(*Config) *AMQP091ListenerConfig,
+	configure func(*AMQP091ListenerConfig),
+	clusterEnabled, withPrincipal bool,
+	publish []LocalPublishPermission,
+	wantError string,
+) {
+	t.Helper()
+	cfg := Default()
+	cfg.Cluster.Enabled = clusterEnabled
+	configure(selector(cfg))
+	if withPrincipal {
+		cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
+			Name:              testPrincipalName,
+			CertificateURISAN: testPrincipalSAN,
+			CurrentSecretFile: writeSecret(t, t.TempDir(), "current", strings.Repeat("a", 32)),
+			Permissions:       LocalPermissionsConfig{Publish: publish},
+		}}
+	}
+	err := cfg.Validate()
+	if wantError == "" {
+		if err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), wantError) {
+		t.Fatalf("Validate() error = %v, want it to contain %q", err, wantError)
+	}
+}
+
 func writeSecret(t *testing.T, dir, name, contents string) string {
 	t.Helper()
 	filename := filepath.Join(dir, name)
@@ -393,4 +643,98 @@ func writeSecret(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write secret: %v", err)
 	}
 	return filename
+}
+
+// The auth subtree is decoded strictly, so a permission field the allowlist
+// omits is rejected at parse time however valid the struct would be. Parsing
+// real YAML is the only thing that catches that; validating a struct built in
+// Go never reaches the decoder.
+func TestLoadAcceptsPublishPermissionFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		permission string
+	}{
+		{name: "exact routing key", permission: "routing_key: \"atom.events\""},
+		{name: "routing key prefix", permission: "routing_key_prefix: \"m.\""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			secret := filepath.Join(dir, "secret")
+			require.NoError(t, os.WriteFile(secret, []byte(strings.Repeat("a", 32)), 0o600))
+
+			filename := filepath.Join(dir, "config.yaml")
+			body := "auth:\n" +
+				"  local_principals:\n" +
+				"    - name: \"svc\"\n" +
+				"      certificate_uri_san: \"spiffe://absmach/svc\"\n" +
+				"      role: \"service\"\n" +
+				"      current_secret_file: \"" + secret + "\"\n" +
+				"      permissions:\n" +
+				"        publish:\n" +
+				"          - " + tc.permission + "\n" +
+				"        subscribe:\n" +
+				"          - \"m\"\n"
+			require.NoError(t, os.WriteFile(filename, []byte(body), 0o600))
+
+			cfg, err := Load(filename)
+			require.NoError(t, err)
+			require.Len(t, cfg.Auth.LocalPrincipals, 1)
+			require.Len(t, cfg.Auth.LocalPrincipals[0].Permissions.Publish, 1)
+			assert.Equal(t, []string{"m"}, cfg.Auth.LocalPrincipals[0].Permissions.Subscribe)
+		})
+	}
+}
+
+// Clustering is restart-required while local principals are runtime-safe, so a
+// reload that disables clustering and adds an exact publish target in one edit
+// would otherwise apply the target inside a still-clustered runtime.
+func TestValidateAgainstRuntimeRefusesExactTargetWhileClustered(t *testing.T) {
+	dir := t.TempDir()
+	secret := writeSecret(t, dir, "current", strings.Repeat("a", 32))
+
+	withPermission := func(clusterEnabled bool, permission LocalPublishPermission) *Config {
+		cfg := Default()
+		cfg.Cluster.Enabled = clusterEnabled
+		cfg.Server.AMQP091.Local.Addr = testInternalAddr
+		cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
+			Name:              testPrincipalName,
+			CertificateURISAN: testPrincipalSAN,
+			CurrentSecretFile: secret,
+			Permissions:       LocalPermissionsConfig{Publish: []LocalPublishPermission{permission}},
+		}}
+		return cfg
+	}
+
+	prefixOnly := LocalPublishPermission{RoutingKeyPrefix: "m."}
+	exact := LocalPublishPermission{RoutingKey: testAuditQueue}
+
+	t.Run("adding an exact target under a clustered runtime is refused", func(t *testing.T) {
+		err := ValidateAgainstRuntime(withPermission(true, prefixOnly), withPermission(false, exact))
+		require.Error(t, err, "the desired config disables clustering, but the running node has not restarted")
+		assert.Contains(t, err.Error(), "while the running node is clustered")
+	})
+
+	t.Run("keeping only prefixes under a clustered runtime is allowed", func(t *testing.T) {
+		assert.NoError(t, ValidateAgainstRuntime(withPermission(true, prefixOnly), withPermission(true, prefixOnly)))
+	})
+
+	t.Run("an exact target on an unclustered runtime is allowed", func(t *testing.T) {
+		assert.NoError(t, ValidateAgainstRuntime(withPermission(false, prefixOnly), withPermission(false, exact)))
+	})
+
+	t.Run("removing the running listener does not make the reload safe", func(t *testing.T) {
+		next := withPermission(false, exact)
+		next.Server.AMQP091.Local = AMQP091ListenerConfig{}
+		err := ValidateAgainstRuntime(withPermission(true, prefixOnly), next)
+		require.Error(t, err, "the running listener remains active until restart")
+		assert.Contains(t, err.Error(), "while the running node is clustered")
+	})
+
+	t.Run("no running local listener means no local publication to strand", func(t *testing.T) {
+		running := withPermission(true, prefixOnly)
+		running.Server.AMQP091.Local = AMQP091ListenerConfig{}
+		assert.NoError(t, ValidateAgainstRuntime(running, withPermission(false, exact)))
+	})
 }

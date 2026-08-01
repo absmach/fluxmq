@@ -18,24 +18,40 @@ import (
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-const eventsExchange = "events"
+const (
+	eventsExchange   = "events"
+	testRuleTrace    = `["rule-a"]`
+	testCustomHeader = "x-custom"
+	testOtherTarget  = "other"
+	testHeaderValue  = "value"
+)
 
 type mockChannelQueueManager struct {
-	lastCursor        *qtypes.CursorOption
-	lastPublish       qtypes.PublishRequest
-	publishCalls      int
-	exactStreamName   string
-	exactPublish      qtypes.PublishRequest
-	exactPublishCalls int
-	exactPublishErr   error
-	exactPublishCtx   context.Context
-	queueCfg          *qtypes.QueueConfig
-	createdQueues     []qtypes.QueueConfig
-	updatedQueues     []qtypes.QueueConfig
-	createQueueErr    error
-	updateQueueErr    error
+	lastCursor           *qtypes.CursorOption
+	lastPublish          qtypes.PublishRequest
+	publishCalls         int
+	exactStreamName      string
+	exactPublish         qtypes.PublishRequest
+	exactPublishCalls    int
+	exactPublishErr      error
+	exactPublishCtx      context.Context
+	queueCfg             *qtypes.QueueConfig
+	getQueueErr          error
+	subscribeErr         error
+	subscribeCalls       int
+	cursorSubscribeCalls int
+	existingSubErr       error
+	existingSubs         int
+	existingCursorSubs   int
+	unsubscribes         []string
+	createdQueues        []qtypes.QueueConfig
+	updatedQueues        []qtypes.QueueConfig
+	createQueueErr       error
+	updateQueueErr       error
 }
 
 func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
@@ -56,15 +72,29 @@ func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, qu
 }
 
 func (m *mockChannelQueueManager) Subscribe(context.Context, string, string, string, string, string) error {
-	return nil
+	m.subscribeCalls++
+	return m.subscribeErr
 }
 
 func (m *mockChannelQueueManager) SubscribeWithCursor(_ context.Context, _ string, _ string, _ string, _ string, _ string, cursor *qtypes.CursorOption) error {
+	m.cursorSubscribeCalls++
 	m.lastCursor = cursor
-	return nil
+	return m.subscribeErr
 }
 
-func (m *mockChannelQueueManager) Unsubscribe(context.Context, string, string, string, string) error {
+func (m *mockChannelQueueManager) SubscribeExisting(context.Context, string, string, string, string, string) error {
+	m.existingSubs++
+	return m.existingSubErr
+}
+
+func (m *mockChannelQueueManager) SubscribeExistingWithCursor(_ context.Context, _ string, _ string, _ string, _ string, _ string, cursor *qtypes.CursorOption) error {
+	m.existingCursorSubs++
+	m.lastCursor = cursor
+	return m.existingSubErr
+}
+
+func (m *mockChannelQueueManager) Unsubscribe(_ context.Context, queueName, _, _, groupID string) error {
+	m.unsubscribes = append(m.unsubscribes, queueName+"/"+groupID)
 	return nil
 }
 
@@ -86,7 +116,7 @@ func (m *mockChannelQueueManager) CreateQueue(_ context.Context, cfg qtypes.Queu
 }
 
 func (m *mockChannelQueueManager) GetQueue(context.Context, string) (*qtypes.QueueConfig, error) {
-	return m.queueCfg, nil
+	return m.queueCfg, m.getQueueErr
 }
 
 func (m *mockChannelQueueManager) UpdateQueue(_ context.Context, cfg qtypes.QueueConfig) error {
@@ -112,7 +142,18 @@ func (n *normalizingHookProvider) HandleHook(_ context.Context, req corebroker.B
 	}
 }
 
+// newTestChannel builds a channel with no listener policy, which
+// Connection.connectionPolicy resolves to the untrusted external mode.
 func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
+	t.Helper()
+	return newTestChannelWithPolicy(t, nil)
+}
+
+// newTestChannelWithPolicy builds a channel served under policy. Trust is set
+// on the policy directly rather than through a constructor so the reserved
+// property boundary can be exercised independently of the local-principal
+// authentication and publish-only machinery.
+func newTestChannelWithPolicy(t *testing.T, policy *ConnectionPolicy) (*Channel, *bytes.Buffer) {
 	t.Helper()
 
 	buf := &bytes.Buffer{}
@@ -120,6 +161,7 @@ func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
 	b := New(nil, logger)
 	c := &Connection{
 		broker:   b,
+		policy:   policy,
 		writer:   bufio.NewWriter(buf),
 		frameMax: defaultFrameMax,
 		logger:   logger,
@@ -128,6 +170,12 @@ func newTestChannel(t *testing.T) (*Channel, *bytes.Buffer) {
 	}
 	ch := newChannel(c, 1)
 	return ch, buf
+}
+
+// trustedTestPolicy marks a connection as service-to-service without making it
+// publish-only, matching the decoupling of trust from operation mode.
+func trustedTestPolicy() *ConnectionPolicy {
+	return &ConnectionPolicy{mode: ConnectionPolicyExternal, trusted: true}
 }
 
 func readFramesFrom(t *testing.T, buf *bytes.Buffer, start int) []*codec.Frame {
@@ -796,7 +844,7 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 
 func TestQueueRedeclareProtectedQueueClosesChannel(t *testing.T) {
 	ch, buf := newTestChannel(t)
-	existing := qtypes.DefaultQueueConfig("atom-audit", "$queue/atom-audit/#")
+	existing := qtypes.DefaultQueueConfig("atom.events", "$queue/atom.events/#")
 	existing.Type = qtypes.QueueTypeStream
 	existing.Reserved = true
 	mockQM := &mockChannelQueueManager{
@@ -836,62 +884,262 @@ func TestQueueRedeclareProtectedQueueClosesChannel(t *testing.T) {
 	}
 }
 
-func TestPublishCustomHeadersPropagatedToCrossDeliver(t *testing.T) {
-	ch, _ := newTestChannel(t)
+// A trusted service relaying a message may state the identity and protocol it
+// came from. Anyone else is stamped with their own authenticated identity, so a
+// publisher cannot attribute a message to another principal or protocol. See
+// TestPublishReservedHeadersIngressTrustBoundary for the reserved-prefix
+// headers under the same boundary.
+func TestPublishOriginHeadersTrustBoundary(t *testing.T) {
+	const (
+		relayedID = "pub-123"
+		authedID  = "amqp-tenant-7"
+	)
 
-	if err := ch.conn.broker.router.Subscribe("mqtt-client", testTelemetryRoom1, 1, storage.SubscribeOptions{}); err != nil {
-		t.Fatalf("subscribe failed: %v", err)
-	}
-
-	var gotProps map[string]string
-	ch.conn.broker.SetCrossDeliver(func(_ context.Context, _ string, _ string, _ []byte, _ byte, props map[string]string) {
-		gotProps = props
-	})
-
-	if err := ch.handleMethod(&codec.BasicPublish{
-		Exchange:   "",
-		RoutingKey: testTelemetryRoom1AM,
-	}); err != nil {
-		t.Fatalf("handleMethod failed: %v", err)
-	}
-
-	payload := []byte("hello")
-	header := &codec.ContentHeader{
-		ClassID:  codec.ClassBasic,
-		Weight:   0,
-		BodySize: uint64(len(payload)),
-		Properties: codec.BasicProperties{
-			Headers: map[string]any{
-				corebroker.ExternalIDProperty: "pub-123",
-				corebroker.ProtocolProperty:   "http",
-			},
+	tests := []struct {
+		name         string
+		policy       *ConnectionPolicy
+		wantID       string
+		wantProtocol string
+	}{
+		{
+			name:         "trusted policy relays origin identity and protocol",
+			policy:       trustedTestPolicy(),
+			wantID:       relayedID,
+			wantProtocol: corebroker.ProtocolHTTP,
+		},
+		{
+			name:         "external policy stamps authenticated identity",
+			policy:       NewExternalConnectionPolicy(nil, nil, 0),
+			wantID:       authedID,
+			wantProtocol: corebroker.ProtocolAMQP091,
+		},
+		{
+			name:         "absent policy stamps authenticated identity",
+			policy:       nil,
+			wantID:       authedID,
+			wantProtocol: corebroker.ProtocolAMQP091,
 		},
 	}
-	var headerBuf bytes.Buffer
-	if err := header.WriteContentHeader(&headerBuf); err != nil {
-		t.Fatalf("WriteContentHeader failed: %v", err)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch, _ := newTestChannelWithPolicy(t, tc.policy)
+			clientID := PrefixedClientID(ch.conn.connID)
+
+			// Both identity sources are populated so the assertion shows which one
+			// the publish path chose rather than which one happened to be set.
+			engine := corebroker.NewAuthEngine(nil, nil)
+			engine.SetExternalID(clientID, authedID)
+			ch.conn.broker.SetAuthEngine(engine)
+			if tc.policy != nil {
+				tc.policy.externalAuth = engine
+			}
+
+			require.NoError(t, ch.conn.broker.router.Subscribe("mqtt-client", testTelemetryRoom1, 1, storage.SubscribeOptions{}))
+
+			var gotProps map[string]string
+			ch.conn.broker.SetCrossDeliver(func(_ context.Context, _ string, _ string, _ []byte, _ byte, props map[string]string) {
+				gotProps = props
+			})
+			require.NoError(t, ch.handleMethod(&codec.BasicPublish{Exchange: "", RoutingKey: testTelemetryRoom1AM}))
+
+			payload := []byte("hello")
+			header := &codec.ContentHeader{
+				ClassID:  codec.ClassBasic,
+				Weight:   0,
+				BodySize: uint64(len(payload)),
+				Properties: codec.BasicProperties{
+					Headers: map[string]any{
+						corebroker.ExternalIDProperty: relayedID,
+						corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
+					},
+				},
+			}
+			var headerBuf bytes.Buffer
+			require.NoError(t, header.WriteContentHeader(&headerBuf))
+
+			ch.handleHeaderFrame(&codec.Frame{Type: codec.FrameHeader, Channel: 1, Payload: headerBuf.Bytes()})
+			ch.handleBodyFrame(&codec.Frame{Type: codec.FrameBody, Channel: 1, Payload: payload})
+
+			require.NotNil(t, gotProps, "expected cross-deliver call")
+			assert.Equal(t, tc.wantID, gotProps[corebroker.ExternalIDProperty])
+			assert.Equal(t, tc.wantProtocol, gotProps[corebroker.ProtocolProperty])
+		})
+	}
+}
+
+// A trusted listener carries reserved properties inward so a service can pass
+// internal state to whichever service consumes the message next. An externally
+// authenticated publisher is a tenant or device whatever protocol it speaks, so
+// its reserved headers are dropped and cannot be forged. Everything else a
+// client sets stays out of the property bag either way.
+func TestPublishReservedHeadersIngressTrustBoundary(t *testing.T) {
+	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+
+	tests := []struct {
+		name    string
+		policy  *ConnectionPolicy
+		headers map[string]any
+		want    map[string]string
+		absent  []string
+	}{
+		{
+			name:    "trusted policy carries reserved header",
+			policy:  trustedTestPolicy(),
+			headers: map[string]any{reserved: testRuleTrace},
+			want:    map[string]string{reserved: testRuleTrace},
+		},
+		{
+			name:    "trusted policy drops unreserved header",
+			policy:  trustedTestPolicy(),
+			headers: map[string]any{testCustomHeader: testHeaderValue},
+			absent:  []string{testCustomHeader},
+		},
+		{
+			name:    "trusted policy drops non-string reserved header",
+			policy:  trustedTestPolicy(),
+			headers: map[string]any{reserved: int64(1)},
+			absent:  []string{reserved},
+		},
+		{
+			name:    "trusted policy carries reserved alongside dropped custom header",
+			policy:  trustedTestPolicy(),
+			headers: map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
+			want:    map[string]string{reserved: testRuleTrace},
+			absent:  []string{testCustomHeader},
+		},
+		{
+			name:    "external policy drops forged reserved header",
+			policy:  NewExternalConnectionPolicy(nil, nil, 0),
+			headers: map[string]any{reserved: testRuleTrace},
+			absent:  []string{reserved},
+		},
+		{
+			name:    "external policy drops forged reserved header alongside custom header",
+			policy:  NewExternalConnectionPolicy(nil, nil, 0),
+			headers: map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
+			absent:  []string{reserved, testCustomHeader},
+		},
+		{
+			name:    "absent policy drops forged reserved header",
+			policy:  nil,
+			headers: map[string]any{reserved: testRuleTrace},
+			absent:  []string{reserved},
+		},
 	}
 
-	ch.handleHeaderFrame(&codec.Frame{
-		Type:    codec.FrameHeader,
-		Channel: 1,
-		Payload: headerBuf.Bytes(),
-	})
-	ch.handleBodyFrame(&codec.Frame{
-		Type:    codec.FrameBody,
-		Channel: 1,
-		Payload: payload,
-	})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch, _ := newTestChannelWithPolicy(t, tc.policy)
+			require.NoError(t, ch.conn.broker.router.Subscribe("mqtt-client", testTelemetryRoom1, 1, storage.SubscribeOptions{}))
 
-	if gotProps == nil {
-		t.Fatal("expected cross-deliver call, got none")
+			var gotProps map[string]string
+			ch.conn.broker.SetCrossDeliver(func(_ context.Context, _ string, _ string, _ []byte, _ byte, props map[string]string) {
+				gotProps = props
+			})
+			require.NoError(t, ch.handleMethod(&codec.BasicPublish{Exchange: "", RoutingKey: testTelemetryRoom1AM}))
+
+			payload := []byte("hello")
+			header := &codec.ContentHeader{
+				ClassID:    codec.ClassBasic,
+				Weight:     0,
+				BodySize:   uint64(len(payload)),
+				Properties: codec.BasicProperties{Headers: tc.headers},
+			}
+			var headerBuf bytes.Buffer
+			require.NoError(t, header.WriteContentHeader(&headerBuf))
+
+			ch.handleHeaderFrame(&codec.Frame{Type: codec.FrameHeader, Channel: 1, Payload: headerBuf.Bytes()})
+			ch.handleBodyFrame(&codec.Frame{Type: codec.FrameBody, Channel: 1, Payload: payload})
+
+			require.NotNil(t, gotProps, "expected cross-deliver call")
+			for key, value := range tc.want {
+				assert.Equal(t, value, gotProps[key])
+			}
+			for _, key := range tc.absent {
+				assert.NotContains(t, gotProps, key)
+			}
+		})
 	}
-	if gotProps[corebroker.ExternalIDProperty] != "pub-123" {
-		t.Fatalf("expected external_id=%q, got %q", "pub-123", gotProps[corebroker.ExternalIDProperty])
+}
+
+// Egress mirrors ingress: an externally authenticated consumer must not observe
+// broker-internal state another service set, while ordinary properties are
+// delivered as headers to everyone.
+func TestDeliveryReservedHeadersEgressTrustBoundary(t *testing.T) {
+	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+
+	tests := []struct {
+		name   string
+		policy *ConnectionPolicy
+		want   map[string]any
+		absent []string
+	}{
+		{
+			name:   "trusted policy reveals reserved property",
+			policy: trustedTestPolicy(),
+			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
+		},
+		{
+			// The reason the boundary has an inward direction at all: without a
+			// first-party consumer that may read them, reserved properties would
+			// be write-only. Trust is the listener's, so both roles see them; the
+			// role decides only whether a consumer can be run in the first place.
+			name:   "local policy reveals reserved property to a first-party consumer",
+			policy: NewLocalConnectionPolicy(nil, nil, nil, 0),
+			want:   map[string]any{reserved: testRuleTrace, testCustomHeader: testHeaderValue},
+		},
+		{
+			name:   "external policy hides reserved property",
+			policy: NewExternalConnectionPolicy(nil, nil, 0),
+			want:   map[string]any{testCustomHeader: testHeaderValue},
+			absent: []string{reserved},
+		},
+		{
+			name:   "absent policy hides reserved property",
+			policy: nil,
+			want:   map[string]any{testCustomHeader: testHeaderValue},
+			absent: []string{reserved},
+		},
 	}
-	if gotProps[corebroker.ProtocolProperty] != "http" {
-		t.Fatalf("expected protocol=%q, got %q", "http", gotProps[corebroker.ProtocolProperty])
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch, buf := newTestChannelWithPolicy(t, tc.policy)
+			cons := &consumer{tag: testCtag1, noAck: true}
+
+			props := map[string]string{
+				reserved:         testRuleTrace,
+				testCustomHeader: testHeaderValue,
+			}
+			require.NoError(t, ch.sendDelivery(cons, testTelemetryRoom1, []byte("hello"), props))
+			require.NoError(t, ch.conn.writer.Flush())
+
+			headers := deliveryHeadersFrom(t, buf)
+			for key, value := range tc.want {
+				assert.Equal(t, value, headers[key])
+			}
+			for _, key := range tc.absent {
+				assert.NotContains(t, headers, key)
+			}
+		})
 	}
+}
+
+// deliveryHeadersFrom decodes the content header frame of a single BasicDeliver
+// written to buf and returns its application headers.
+func deliveryHeadersFrom(t *testing.T, buf *bytes.Buffer) map[string]any {
+	t.Helper()
+
+	frames := readFramesFrom(t, buf, 0)
+	require.GreaterOrEqual(t, len(frames), 2, "expected method and header frames")
+	require.Equal(t, codec.FrameHeader, frames[1].Type)
+
+	decoded, err := frames[1].Decode()
+	require.NoError(t, err)
+	header, ok := decoded.(*codec.ContentHeader)
+	require.True(t, ok, "expected content header, got %T", decoded)
+	return header.Properties.Headers
 }
 
 func TestCancelConsumerByQueue(t *testing.T) {
@@ -943,6 +1191,46 @@ func TestCancelConsumerByQueue(t *testing.T) {
 		}
 	})
 
+	// A pattern qualifies the group the manager registers, so stale cleanup
+	// reports "group@pattern". Matching the raw group would leave a patterned
+	// consumer uncancelled, still holding its registration and refcount.
+	t.Run("cancels a pattern-scoped consumer by its effective group", func(t *testing.T) {
+		ch, buf := newTestChannel(t)
+
+		ch.consumers[testCtag1] = &consumer{
+			tag:       testCtag1,
+			queueName: testEvents,
+			groupID:   testWorkers,
+			pattern:   "images",
+		}
+		// Same queue and group, no pattern: a distinct registration that the
+		// manager reports under the bare group and must not be swept up here.
+		ch.consumers["ctag-2"] = &consumer{
+			tag:       "ctag-2",
+			queueName: testEvents,
+			groupID:   testWorkers,
+		}
+
+		beforeLen := buf.Len()
+		ch.cancelConsumerByQueue(testEvents, testWorkers+"@images")
+
+		ch.consumersMu.RLock()
+		_, patterned := ch.consumers[testCtag1]
+		_, unpatterned := ch.consumers["ctag-2"]
+		ch.consumersMu.RUnlock()
+
+		assert.False(t, patterned, "the pattern-scoped consumer must be cancelled")
+		assert.True(t, unpatterned, "the unpatterned consumer is a different group")
+
+		frames := readFramesFrom(t, buf, beforeLen)
+		require.Len(t, frames, 1, "expected one basic.cancel")
+		decoded, err := frames[0].Decode()
+		require.NoError(t, err)
+		cancel, ok := decoded.(*codec.BasicCancel)
+		require.True(t, ok, "expected *codec.BasicCancel, got %T", decoded)
+		assert.Equal(t, testCtag1, cancel.ConsumerTag)
+	})
+
 	t.Run("no-op when no consumers match", func(t *testing.T) {
 		ch, buf := newTestChannel(t)
 
@@ -989,4 +1277,173 @@ func TestCancelConsumerByQueue(t *testing.T) {
 			t.Fatal("expected no frames to be written on closed channel")
 		}
 	})
+}
+
+// The consumer lifecycle is admitted only to a principal whose role permits
+// consumers, and only for a queue its own subscribe ACL names. Both roles run on
+// the same listener policy, so the capability comes from the principal alone.
+func TestAuthorizeLocalMethodConsumerLifecycle(t *testing.T) {
+	// The ACL names a queue. Basic.Consume addresses it through the queue prefix
+	// and is resolved before comparison; passive Queue.Declare uses the bare AMQP
+	// queue name.
+	const (
+		allowedQueue   = "m"
+		allowedAddress = "$queue/m"
+	)
+
+	tests := []struct {
+		name        string
+		role        LocalPrincipalRole
+		method      any
+		wantAllowed bool
+	}{
+		{
+			name:        "service consumes a permitted queue",
+			role:        LocalRoleService,
+			method:      &codec.BasicConsume{Queue: allowedAddress},
+			wantAllowed: true,
+		},
+		{
+			name:   "service is refused a queue outside its ACL",
+			role:   LocalRoleService,
+			method: &codec.BasicConsume{Queue: "$queue/" + testOtherTarget},
+		},
+		{
+			// basic.get is not implemented and always answers empty, so it is
+			// refused rather than advertised as an authorized read.
+			name:   "service is refused basic.get while it is unimplemented",
+			role:   LocalRoleService,
+			method: &codec.BasicGet{Queue: allowedAddress},
+		},
+		{
+			// The ACL grants queues, so a filter that resolves to no queue has
+			// nothing that could authorize it.
+			name:   "service is refused a bare name that is not a queue address",
+			role:   LocalRoleService,
+			method: &codec.BasicConsume{Queue: allowedQueue},
+		},
+		{
+			name:        "service passively declares a permitted queue",
+			role:        LocalRoleService,
+			method:      &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
+			wantAllowed: true,
+		},
+		{
+			name:   "service is refused passively declaring a queue outside its ACL",
+			role:   LocalRoleService,
+			method: &codec.QueueDeclare{Queue: testOtherTarget, Passive: true},
+		},
+		{
+			// A non-passive declare rewrites queue configuration, which the
+			// subscribe ACL does not grant even for a queue it names.
+			name:   "service is refused declaring a permitted queue non-passively",
+			role:   LocalRoleService,
+			method: &codec.QueueDeclare{Queue: allowedQueue},
+		},
+		{
+			name:        "service acknowledges a delivery",
+			role:        LocalRoleService,
+			method:      &codec.BasicAck{},
+			wantAllowed: true,
+		},
+		{
+			name:   "publish-only principal may not consume",
+			role:   LocalRolePublisher,
+			method: &codec.BasicConsume{Queue: allowedAddress},
+		},
+		{
+			name:   "publish-only principal may not declare a queue",
+			role:   LocalRolePublisher,
+			method: &codec.QueueDeclare{Queue: allowedQueue, Passive: true},
+		},
+		{
+			name:   "publish-only principal may not get",
+			role:   LocalRolePublisher,
+			method: &codec.BasicGet{Queue: allowedAddress},
+		},
+		{
+			name:   "publish-only principal may not acknowledge",
+			role:   LocalRolePublisher,
+			method: &codec.BasicAck{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &localAuthorizerStub{allowQueue: allowedQueue}
+			ch, _ := newTestChannelWithPolicy(t, NewLocalConnectionPolicy(nil, authz, nil, 0))
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: "rules-engine", Role: tc.role}
+
+			allowed, err := ch.authorizeLocalMethod(tc.method)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAllowed, allowed)
+		})
+	}
+}
+
+// Capability is carried by the authenticated principal, so the same connection
+// policy yields different answers per role. The listener contributes only trust
+// and the choice of credential store.
+func TestLocalRoleCapabilities(t *testing.T) {
+	policy := NewLocalConnectionPolicy(nil, nil, nil, 0)
+	assert.True(t, policy.carriesReservedProperties())
+	assert.True(t, policy.usesLocalPrincipalAuth())
+
+	tests := []struct {
+		name                string
+		role                LocalPrincipalRole
+		wantConsumers       bool
+		wantPropagateOrigin bool
+	}{
+		{
+			name:                "service consumes and relays origin",
+			role:                LocalRoleService,
+			wantConsumers:       true,
+			wantPropagateOrigin: true,
+		},
+		{
+			name: "publisher does neither",
+			role: LocalRolePublisher,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch, _ := newTestChannelWithPolicy(t, policy)
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: testLocalPrincipal, Role: tc.role}
+
+			assert.Equal(t, tc.wantConsumers, ch.conn.permitsConsumers())
+			assert.Equal(t, tc.wantPropagateOrigin, ch.conn.propagatesOriginIdentity(),
+				"an audit publisher must not attribute its records to another origin")
+		})
+	}
+}
+
+// Nothing binds a principal to a listener, so a capability the listener granted
+// would be granted to every principal able to reach that port. A publisher must
+// therefore stay a publisher on whichever local listener it authenticates to.
+func TestLocalCapabilityIsIndependentOfListener(t *testing.T) {
+	listeners := map[string]*ConnectionPolicy{
+		"first local listener":  NewLocalConnectionPolicy(nil, nil, nil, 0),
+		"second local listener": NewLocalConnectionPolicy(nil, nil, nil, 0),
+	}
+
+	for name, policy := range listeners {
+		t.Run(name, func(t *testing.T) {
+			ch, _ := newTestChannelWithPolicy(t, policy)
+			ch.conn.localIdentity = &LocalSessionIdentity{PrincipalID: testLocalPrincipal, Role: LocalRolePublisher}
+
+			assert.False(t, ch.conn.permitsConsumers())
+			assert.False(t, ch.conn.propagatesOriginIdentity())
+		})
+	}
+}
+
+// An unauthenticated connection has no role, and the zero value is the least
+// privileged one, so a capability cannot be reached before authentication.
+func TestLocalCapabilityDeniedWithoutIdentity(t *testing.T) {
+	ch, _ := newTestChannelWithPolicy(t, NewLocalConnectionPolicy(nil, nil, nil, 0))
+
+	assert.False(t, ch.conn.permitsConsumers())
+	assert.False(t, ch.conn.propagatesOriginIdentity())
 }

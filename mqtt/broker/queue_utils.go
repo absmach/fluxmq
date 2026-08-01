@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"strconv"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
@@ -34,6 +35,12 @@ func extractAllProperties(props *v5.PublishProperties) map[string]string {
 
 	if props.User != nil {
 		for _, prop := range props.User {
+			// A device may not set broker-internal properties. They authenticate
+			// nothing, so a service reading one must be able to rely on it having
+			// come from another service rather than from a publishing client.
+			if corebroker.IsReservedProperty(prop.Key) {
+				continue
+			}
 			result[prop.Key] = prop.Value
 		}
 	}

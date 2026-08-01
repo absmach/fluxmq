@@ -30,6 +30,7 @@ type Stats struct {
 	localAuthSuccess       atomic.Uint64
 	localAuthFailures      atomic.Uint64
 	localPublishDenials    atomic.Uint64
+	localSubscribeDenials  atomic.Uint64
 	localOperationDenials  atomic.Uint64
 	localConnections       atomic.Uint64
 	localReloadSuccess     atomic.Uint64
@@ -71,6 +72,10 @@ func (s *Stats) IncrementLocalPublishDenials() {
 	s.localPublishDenials.Add(1)
 }
 
+func (s *Stats) IncrementLocalSubscribeDenials() {
+	s.localSubscribeDenials.Add(1)
+}
+
 func (s *Stats) IncrementLocalOperationDenials() {
 	s.localOperationDenials.Add(1)
 }
@@ -110,6 +115,10 @@ func (s *Stats) GetLocalAuthSuccess() uint64   { return s.localAuthSuccess.Load(
 func (s *Stats) GetLocalAuthFailures() uint64  { return s.localAuthFailures.Load() }
 func (s *Stats) GetLocalPublishDenials() uint64 {
 	return s.localPublishDenials.Load()
+}
+
+func (s *Stats) GetLocalSubscribeDenials() uint64 {
+	return s.localSubscribeDenials.Load()
 }
 
 func (s *Stats) GetLocalOperationDenials() uint64 {

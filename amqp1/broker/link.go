@@ -280,22 +280,26 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	if auth != nil {
 		externalID = auth.ExternalID(clientID)
 	}
+	// AMQP 1.0 has no trusted listener: every connection authenticates as a
+	// remote client, so broker-internal properties are dropped on ingress and
+	// cannot be forged by a publisher.
 	props := make(map[string]string, len(msg.ApplicationProperties)+1)
 	for k, v := range msg.ApplicationProperties {
+		if corebroker.IsReservedProperty(k) {
+			continue
+		}
 		if s, ok := v.(string); ok {
 			props[k] = s
 		}
 	}
+	// Identity and origin are stamped from the authenticated connection, never
+	// read from the message: a sender may not attribute its publication to
+	// another principal or to another protocol.
 	props = corebroker.AddClientIDProperty(props, clientID)
-	if _, set := props[corebroker.ProtocolProperty]; !set {
-		props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP1
-	}
-	if _, set := props[corebroker.ExternalIDProperty]; !set {
-		if auth != nil {
-			if externalID := auth.ExternalID(clientID); externalID != "" {
-				props[corebroker.ExternalIDProperty] = externalID
-			}
-		}
+	props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP1
+	delete(props, corebroker.ExternalIDProperty)
+	if externalID != "" {
+		props[corebroker.ExternalIDProperty] = externalID
 	}
 	hookReq, ok := l.session.conn.broker.ApplyPublishHooks(l.session.conn.ctx, clientID, externalID, topic, data, props)
 	if !ok {
@@ -384,6 +388,10 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 	if len(props) > 0 {
 		msg.ApplicationProperties = make(map[string]any, len(props))
 		for k, v := range props {
+			// Broker-internal state is never revealed to a remote receiver.
+			if corebroker.IsReservedProperty(k) {
+				continue
+			}
 			msg.ApplicationProperties[k] = v
 		}
 	}

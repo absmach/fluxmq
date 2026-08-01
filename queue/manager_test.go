@@ -33,9 +33,9 @@ var (
 
 const (
 	node1                = "node-1"
-	testAuditQueueName   = "atom-audit"
-	testAuditQueueTopic  = "$queue/atom-audit"
-	testAuditQueueFilter = "$queue/atom-audit/#"
+	testAuditQueueName   = "atom.events"
+	testAuditQueueTopic  = "$queue/atom.events"
+	testAuditQueueFilter = "$queue/atom.events/#"
 )
 
 type targetCheckingDeliverer struct {
@@ -871,12 +871,12 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 	}); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
 	}
-	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom-audit sync:atom-audit]" {
-		t.Fatalf("operations = %v, want append then sync for atom-audit", operations)
+	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom.events sync:atom.events]" {
+		t.Fatalf("operations = %v, want append then sync for atom.events", operations)
 	}
 	auditTail, err := base.Tail(ctx, testAuditQueueName)
 	if err != nil || auditTail != 1 {
-		t.Fatalf("atom-audit tail = %d, error = %v, want 1", auditTail, err)
+		t.Fatalf("atom.events tail = %d, error = %v, want 1", auditTail, err)
 	}
 	overlapTail, err := base.Tail(ctx, "overlap")
 	if err != nil || overlapTail != 0 {
@@ -945,8 +945,8 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 		wantErr        error
 		wantOperations string
 	}{
-		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom-audit]"},
-		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom-audit sync:atom-audit]"},
+		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom.events]"},
+		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom.events sync:atom.events]"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1083,6 +1083,41 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
+	}
+}
+
+func TestSubscribeExistingDoesNotCreateMissingQueue(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+
+	err := mgr.SubscribeExisting(context.Background(), "missing", "", testClientOneID, testGroupWorkers, "")
+	if !errors.Is(err, storage.ErrQueueNotFound) {
+		t.Fatalf("SubscribeExisting() error = %v, want %v", err, storage.ErrQueueNotFound)
+	}
+	if _, err := logStore.GetQueue(context.Background(), "missing"); !errors.Is(err, storage.ErrQueueNotFound) {
+		t.Fatalf("missing queue was created: GetQueue() error = %v", err)
+	}
+}
+
+func TestSubscribeExistingWithCursorDoesNotChangeQueueType(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
+	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
+		t.Fatalf("CreateQueue() error = %v", err)
+	}
+
+	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
+	err := mgr.SubscribeExistingWithCursor(context.Background(), testQueueEvents, "", testClientOneID, "streamer", "", cursor)
+	if !errors.Is(err, ErrQueueNotStream) {
+		t.Fatalf("SubscribeExistingWithCursor() error = %v, want %v", err, ErrQueueNotStream)
+	}
+	stored, err := mgr.GetQueue(context.Background(), testQueueEvents)
+	if err != nil {
+		t.Fatalf("GetQueue() error = %v", err)
+	}
+	if stored.Type != types.QueueTypeClassic {
+		t.Fatalf("queue type = %q, want %q", stored.Type, types.QueueTypeClassic)
 	}
 }
 

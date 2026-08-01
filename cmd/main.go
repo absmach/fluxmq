@@ -105,28 +105,54 @@ type localAMQPPolicy struct {
 	store *localauth.Store
 }
 
-func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, username, secret string, peer amqpbroker.VerifiedPeerIdentity) (string, string, string, string, bool, error) {
+func (p *localAMQPPolicy) AuthenticateLocal(_ context.Context, _ string, username, secret string, peer amqpbroker.VerifiedPeerIdentity) (amqpbroker.LocalAuthentication, bool, error) {
 	if p == nil || p.store == nil {
-		return "", "", "", "", false, nil
+		return amqpbroker.LocalAuthentication{}, false, nil
 	}
 	for _, uriSAN := range peer.URISANs {
 		authentication, ok := p.store.Authenticate(username, secret, uriSAN)
 		if !ok {
 			continue
 		}
-		return authentication.Principal,
-			hex.EncodeToString(authentication.CredentialFingerprint[:]),
-			hex.EncodeToString(authentication.PublishPermissionsFingerprint[:]),
-			authentication.CertificateURISAN,
-			true,
-			nil
+		return amqpbroker.LocalAuthentication{
+			PrincipalID:            authentication.Principal,
+			Role:                   localPrincipalRole(authentication.Role),
+			CredentialFingerprint:  hex.EncodeToString(authentication.CredentialFingerprint[:]),
+			PermissionsFingerprint: hex.EncodeToString(authentication.PermissionsFingerprint[:]),
+			CertificateURI:         authentication.CertificateURISAN,
+		}, true, nil
 	}
-	return "", "", "", "", false, nil
+	return amqpbroker.LocalAuthentication{}, false, nil
 }
 
-func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) bool {
+// localPrincipalRole maps a configured role name onto the broker capability.
+// An unrecognized name falls back to the least privileged role rather than
+// failing open; configuration validation rejects such names at load.
+func localPrincipalRole(role string) amqpbroker.LocalPrincipalRole {
+	if role == config.LocalRoleService {
+		return amqpbroker.LocalRoleService
+	}
+	return amqpbroker.LocalRolePublisher
+}
+
+func (p *localAMQPPolicy) CanPublishLocal(identity amqpbroker.LocalSessionIdentity, exchange, routingKey string) amqpbroker.LocalPublishGrant {
 	authentication, ok := localAuthentication(identity)
-	return ok && p != nil && p.store != nil && p.store.CanPublishAuthenticated(authentication, exchange, routingKey)
+	if !ok || p == nil || p.store == nil {
+		return amqpbroker.LocalPublishGrantNone
+	}
+	switch p.store.AuthorizePublish(authentication, exchange, routingKey) {
+	case localauth.PublishGrantExactTarget:
+		return amqpbroker.LocalPublishGrantExactTarget
+	case localauth.PublishGrantPrefix:
+		return amqpbroker.LocalPublishGrantPrefix
+	default:
+		return amqpbroker.LocalPublishGrantNone
+	}
+}
+
+func (p *localAMQPPolicy) CanSubscribeLocal(identity amqpbroker.LocalSessionIdentity, queue string) bool {
+	authentication, ok := localAuthentication(identity)
+	return ok && p != nil && p.store != nil && p.store.CanSubscribeAuthenticated(authentication, queue)
 }
 
 func (p *localAMQPPolicy) IsSessionActive(identity amqpbroker.LocalSessionIdentity) bool {
@@ -151,10 +177,11 @@ func localAuthentication(identity amqpbroker.LocalSessionIdentity) (localauth.Au
 	var permissionsFingerprint localauth.PermissionsFingerprint
 	copy(permissionsFingerprint[:], rawPermissionsFingerprint)
 	return localauth.Authentication{
-		Principal:                     identity.PrincipalID,
-		CertificateURISAN:             identity.CertificateURI,
-		CredentialFingerprint:         credentialFingerprint,
-		PublishPermissionsFingerprint: permissionsFingerprint,
+		Principal:              identity.PrincipalID,
+		CertificateURISAN:      identity.CertificateURI,
+		Role:                   identity.Role.String(),
+		CredentialFingerprint:  credentialFingerprint,
+		PermissionsFingerprint: permissionsFingerprint,
 	}, true
 }
 
@@ -261,6 +288,11 @@ func localPrincipalPublishTargetContracts(principals []config.LocalPrincipalConf
 	targets := make(map[string]struct{})
 	for _, principal := range principals {
 		for _, permission := range principal.Permissions.Publish {
+			// A prefix permission authorizes topic publishing, not an append to
+			// one durable stream, so there is no single queue to contract with.
+			if permission.IsPrefix() {
+				continue
+			}
 			targets[permission.RoutingKey] = struct{}{}
 		}
 	}
@@ -369,7 +401,9 @@ func main() {
 		"amqp091_plain_listener", cfg.Server.AMQP091.Plain.Addr,
 		"amqp091_tls_listener", cfg.Server.AMQP091.TLS.Addr,
 		"amqp091_mtls_listener", cfg.Server.AMQP091.MTLS.Addr,
+		"amqp091_local_listener", cfg.Server.AMQP091.Local.Addr,
 		"amqp091_internal_listener", cfg.Server.AMQP091.Internal.Addr,
+		"amqp091_service_listener", cfg.Server.AMQP091.Service.Addr,
 		"admin_api_addr", cfg.Server.AdminAPIAddr,
 		"health_enabled", cfg.Server.HealthEnabled,
 		"cluster_enabled", cfg.Cluster.Enabled,
@@ -1147,7 +1181,7 @@ func main() {
 	}
 
 	// AMQP 0.9.1 servers. The public listeners receive only the external
-	// callout policy; the internal listener receives only the local-principal
+	// callout policy; the local listeners receive only the local-principal
 	// policy. There is deliberately no fallback between these policies.
 	maxAMQP091MessageSize := uint64(0)
 	if cfg.Broker.MaxMessageSize > 0 {
@@ -1158,7 +1192,10 @@ func main() {
 		amqp091ExternalHooks,
 		maxAMQP091MessageSize,
 	)
-	internalAMQP091Policy := amqpbroker.NewLocalPublishOnlyConnectionPolicy(
+	// Both local listeners share one policy. They differ only in network
+	// placement: capability comes from the authenticated principal's role, so a
+	// principal cannot widen itself by choosing a port.
+	localAMQP091Policy := amqpbroker.NewLocalConnectionPolicy(
 		localPolicyAdapter,
 		localPolicyAdapter,
 		localPolicyAdapter,
@@ -1172,7 +1209,21 @@ func main() {
 		{name: listenerPlain, cfg: cfg.Server.AMQP091.Plain, policy: externalAMQP091Policy},
 		{name: listenerTLS, cfg: cfg.Server.AMQP091.TLS, policy: externalAMQP091Policy},
 		{name: listenerMTLS, cfg: cfg.Server.AMQP091.MTLS, policy: externalAMQP091Policy},
-		{name: "internal", cfg: cfg.Server.AMQP091.Internal, policy: internalAMQP091Policy},
+	}
+	// Every local-principal listener gets the same policy under whichever key
+	// named it. They differ only in network placement.
+	for _, listener := range cfg.Server.AMQP091.LocalListeners() {
+		amqp091Slots = append(amqp091Slots, struct {
+			name   string
+			cfg    config.AMQP091ListenerConfig
+			policy *amqpbroker.ConnectionPolicy
+		}{name: listener.Name, cfg: listener.Config, policy: localAMQP091Policy})
+	}
+	if deprecated := cfg.Server.AMQP091.DeprecatedLocalListenerNames(); len(deprecated) > 0 {
+		slog.Warn("Deprecated AMQP 0.9.1 listener key",
+			"keys", strings.Join(deprecated, ","),
+			"replacement", "server.amqp091.local",
+			"reason", "local listeners are equivalent; capability comes from the principal role")
 	}
 
 	var amqp091Ready []<-chan struct{}

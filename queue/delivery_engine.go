@@ -204,10 +204,7 @@ func (e *DeliveryEngine) deliverQueueConfig(ctx context.Context, queueConfig *ty
 			return 0, false
 		}
 
-		patternGroupID := primaryGroup
-		if pattern != "" {
-			patternGroupID = primaryGroup + "@" + pattern
-		}
+		patternGroupID := corebroker.EffectiveConsumerGroupID(primaryGroup, pattern)
 
 		if val, ok := primaryCommitted[patternGroupID]; ok {
 			return val, true
@@ -426,10 +423,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 		var workCommitted uint64
 		var hasWorkCommitted bool
 		if group.Mode == types.GroupModeStream && config.PrimaryGroup != "" {
-			patternGroupID := config.PrimaryGroup
-			if group.Pattern != "" {
-				patternGroupID = config.PrimaryGroup + "@" + group.Pattern
-			}
+			patternGroupID := corebroker.EffectiveConsumerGroupID(config.PrimaryGroup, group.Pattern)
 			if committed, err := e.consumerManager.GetCommittedOffset(ctx, config.Name, patternGroupID); err == nil {
 				workCommitted = committed
 				hasWorkCommitted = true

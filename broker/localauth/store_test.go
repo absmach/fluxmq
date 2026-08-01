@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -20,6 +22,7 @@ const (
 	currentSecret  = "0123456789abcdef0123456789abcdef"
 	previousSecret = "abcdef0123456789abcdef0123456789"
 	nextSecret     = "fedcba9876543210fedcba9876543210"
+	auditQueue     = "atom.events"
 )
 
 func TestAuthenticateAndAuthorize(t *testing.T) {
@@ -59,13 +62,13 @@ func TestAuthenticateAndAuthorize(t *testing.T) {
 		t.Fatal("wrong certificate URI SAN was accepted")
 	}
 
-	if !store.CanPublishAuthenticated(authentication, "", "atom-audit") {
+	if !store.AuthorizePublish(authentication, "", "atom.events").Allowed() {
 		t.Fatal("configured publish target was denied")
 	}
-	if store.CanPublishAuthenticated(authentication, "events", "atom-audit") {
+	if store.AuthorizePublish(authentication, "events", "atom.events").Allowed() {
 		t.Fatal("wrong exchange was allowed")
 	}
-	if store.CanPublishAuthenticated(authentication, "", "atom-audit.other") {
+	if store.AuthorizePublish(authentication, "", "atom.events.other").Allowed() {
 		t.Fatal("prefix routing key was allowed")
 	}
 }
@@ -134,7 +137,7 @@ func TestReloadIsAtomicAndRevokesRemovedCredentials(t *testing.T) {
 	if store.IsActive(oldAuthentication) {
 		t.Fatal("removed previous credential remains active")
 	}
-	if store.CanPublishAuthenticated(oldAuthentication, "", "atom-audit") {
+	if store.AuthorizePublish(oldAuthentication, "", "atom.events").Allowed() {
 		t.Fatal("session authenticated before reload can still publish with a retired credential")
 	}
 	if !store.IsActive(newAuthentication) {
@@ -162,7 +165,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 		t.Fatal("initial authentication failed")
 	}
 
-	principal.Permissions.Publish[0].RoutingKey = "atom-audit-v2"
+	principal.Permissions.Publish[0].RoutingKey = "atom.events.v2"
 	changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -173,7 +176,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if store.IsActive(authentication) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if store.CanPublishAuthenticated(authentication, "", "atom-audit-v2") {
+	if store.AuthorizePublish(authentication, "", "atom.events.v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 
@@ -181,7 +184,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if !ok {
 		t.Fatal("authentication against the replacement ACL failed")
 	}
-	if !store.IsActive(reauthenticated) || !store.CanPublishAuthenticated(reauthenticated, "", "atom-audit-v2") {
+	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "atom.events.v2").Allowed() {
 		t.Fatal("session authenticated against the replacement ACL is not active")
 	}
 }
@@ -255,13 +258,24 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			wantError: "exchange must be empty; local principals may publish only through the AMQP default exchange",
 		},
 		{
-			name: "subscribe ACL is unsupported",
+			name: "subscribe ACL entry cannot be empty",
 			configs: func() []config.LocalPrincipalConfig {
 				principal := principalConfig(current, "")
-				principal.Permissions.Subscribe = []string{"atom-audit"}
+				principal.Role = config.LocalRoleService
+				principal.Permissions.Subscribe = []string{""}
 				return []config.LocalPrincipalConfig{principal}
 			},
-			wantError: "subscribe is unsupported; local principals are publish-only",
+			wantError: "permissions.subscribe[0] cannot be empty",
+		},
+		{
+			name: "subscribe ACL entry cannot be duplicated",
+			configs: func() []config.LocalPrincipalConfig {
+				principal := principalConfig(current, "")
+				principal.Role = config.LocalRoleService
+				principal.Permissions.Subscribe = []string{auditQueue, auditQueue}
+				return []config.LocalPrincipalConfig{principal}
+			},
+			wantError: "duplicates an earlier subscribe permission",
 		},
 	}
 
@@ -292,7 +306,7 @@ func TestConcurrentAuthenticationAndReload(t *testing.T) {
 			for range 500 {
 				authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 				if ok {
-					_ = store.CanPublishAuthenticated(authentication, "", "atom-audit")
+					_ = store.AuthorizePublish(authentication, "", "atom.events")
 				}
 			}
 		}()
@@ -316,7 +330,7 @@ func principalConfig(current, previous string) config.LocalPrincipalConfig {
 		CurrentSecretFile:  current,
 		PreviousSecretFile: previous,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom-audit"}},
+			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom.events"}},
 		},
 	}
 }
@@ -328,4 +342,212 @@ func writeSecret(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write secret: %v", err)
 	}
 	return filename
+}
+
+// A principal may consume only the queues its own ACL names, and narrowing that
+// ACL must revoke sessions that authenticated under the wider one.
+func TestSubscribeACL(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	withSubscribe := func(queues ...string) []config.LocalPrincipalConfig {
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = queues
+		return []config.LocalPrincipalConfig{principal}
+	}
+
+	store, err := New(withSubscribe(auditQueue, "m"))
+	require.NoError(t, err)
+
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok, "current secret was rejected")
+
+	t.Run("named queue is allowed", func(t *testing.T) {
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "m"))
+	})
+	t.Run("unnamed queue is refused", func(t *testing.T) {
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "other"))
+	})
+	t.Run("empty queue is refused", func(t *testing.T) {
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, ""))
+	})
+
+	t.Run("narrowing the ACL revokes the session", func(t *testing.T) {
+		changed, err := store.Reload(withSubscribe(auditQueue))
+		require.NoError(t, err)
+		require.True(t, changed, "dropping a subscribe target must be seen as a change")
+
+		assert.False(t, store.IsActive(authentication),
+			"a session bound to the wider ACL must not survive it")
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueue),
+			"the retired session must not consume even a still-permitted queue")
+	})
+
+	t.Run("publish ACL is unaffected by subscribe permissions", func(t *testing.T) {
+		reauthenticated, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		assert.True(t, store.AuthorizePublish(reauthenticated, "", auditQueue).Allowed())
+		assert.False(t, store.CanSubscribeAuthenticated(reauthenticated, "m"))
+	})
+}
+
+// The two ACLs share one fingerprint, so swapping a target between them must
+// not produce the same digest.
+// The role is a capability, so narrowing it must revoke sessions that
+// authenticated under the wider one, exactly as narrowing an ACL does.
+// Otherwise a demoted service would keep consuming until it reconnected.
+func TestReloadRevokesNarrowedRole(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+	principal := principalConfig(current, "")
+	principal.Role = config.LocalRoleService
+	principal.Permissions.Subscribe = []string{auditQueue}
+
+	store, err := New([]config.LocalPrincipalConfig{principal})
+	require.NoError(t, err)
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok)
+	require.Equal(t, config.LocalRoleService, authentication.Role)
+	require.True(t, store.CanSubscribeAuthenticated(authentication, auditQueue))
+
+	narrowed := principalConfig(current, "")
+	changed, err := store.Reload([]config.LocalPrincipalConfig{narrowed})
+	require.NoError(t, err)
+	require.True(t, changed, "demoting a service to a publisher must be seen as a change")
+
+	assert.False(t, store.IsActive(authentication))
+	assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueue))
+
+	reauthenticated, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok)
+	assert.Equal(t, config.LocalRolePublisher, reauthenticated.Role)
+}
+
+// A role and an ACL entry spelling the same string must not collide in the
+// digest, or a change from one to the other would leave sessions alive.
+func TestPermissionsFingerprintSeparatesRoleFromACLs(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, role string, subscribe []string) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Role = role
+		principal.Permissions.Subscribe = subscribe
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	service := fingerprintFor(t, config.LocalRoleService, nil)
+	publisher := fingerprintFor(t, config.LocalRolePublisher, nil)
+	assert.NotEqual(t, service, publisher, "a role change must change the fingerprint")
+
+	roleNamedQueue := fingerprintFor(t, config.LocalRoleService, []string{config.LocalRoleService})
+	assert.NotEqual(t, service, roleNamedQueue,
+		"a queue spelled like the role must not collide with the role itself")
+}
+
+func TestPermissionsFingerprintSeparatesACLs(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, publish []config.LocalPublishPermission, subscribe []string) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Permissions.Publish = publish
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = subscribe
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	publishOnly := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKey: "shared"}}, nil)
+	subscribeOnly := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKey: "other"}}, []string{"shared"})
+
+	assert.NotEqual(t, publishOnly, subscribeOnly,
+		"a target moved between the publish and subscribe ACLs must change the fingerprint")
+}
+
+// A service publishes to topics derived from its own runtime data, so its ACL
+// names a routing-key prefix rather than keys that cannot be enumerated in
+// configuration. The prefix must bound the grant, not dissolve it.
+func TestPublishPrefixACL(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	principal := principalConfig(current, "")
+	principal.Permissions.Publish = []config.LocalPublishPermission{
+		{RoutingKey: auditQueue},
+		{RoutingKeyPrefix: "m."},
+	}
+	store, err := New([]config.LocalPrincipalConfig{principal})
+	require.NoError(t, err)
+
+	authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+	require.True(t, ok)
+
+	// The grant kind matters as much as the yes or no: an exact target is
+	// appended to a durable stream, a prefix is published as an ordinary topic.
+	tests := []struct {
+		name       string
+		exchange   string
+		routingKey string
+		want       PublishGrant
+	}{
+		{name: "exact permission still matches", routingKey: auditQueue, want: PublishGrantExactTarget},
+		{name: "key under the prefix", routingKey: "m.domain.c.channel.temp", want: PublishGrantPrefix},
+		{name: "prefix itself", routingKey: "m.", want: PublishGrantPrefix},
+		{name: "key outside the prefix", routingKey: "other.domain", want: PublishGrantNone},
+		{name: "prefix must match at the start", routingKey: "x.m.domain", want: PublishGrantNone},
+		{name: "partial prefix is not enough", routingKey: "m", want: PublishGrantNone},
+		{name: "prefix does not reach another exchange", exchange: "events", routingKey: "m.domain", want: PublishGrantNone},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, store.AuthorizePublish(authentication, tc.exchange, tc.routingKey))
+		})
+	}
+
+	t.Run("dropping the prefix revokes the session", func(t *testing.T) {
+		narrowed := principalConfig(current, "")
+		narrowed.Permissions.Publish = []config.LocalPublishPermission{{RoutingKey: auditQueue}}
+		changed, err := store.Reload([]config.LocalPrincipalConfig{narrowed})
+		require.NoError(t, err)
+		require.True(t, changed, "dropping a prefix permission must be seen as a change")
+
+		assert.False(t, store.IsActive(authentication))
+		assert.False(t, store.AuthorizePublish(authentication, "", "m.domain.c.channel.temp").Allowed())
+	})
+}
+
+// A prefix and an exact key spelling the same grant must not share a digest,
+// or narrowing one into the other would leave sessions alive.
+func TestPermissionsFingerprintSeparatesPrefixFromExact(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, publish []config.LocalPublishPermission) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Permissions.Publish = publish
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	exact := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKey: "m."}})
+	prefixed := fingerprintFor(t, []config.LocalPublishPermission{{RoutingKeyPrefix: "m."}})
+
+	assert.NotEqual(t, exact, prefixed,
+		"the same string as an exact key and as a prefix are different grants")
 }
