@@ -1333,10 +1333,7 @@ func (m *Manager) subscribeWithCursor(ctx context.Context, queueName, pattern st
 		}
 	}
 
-	patternGroupID := groupID
-	if pattern != "" {
-		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
-	}
+	patternGroupID := corebroker.EffectiveConsumerGroupID(groupID, pattern)
 
 	autoCommit := true
 	if cursor != nil && cursor.AutoCommit != nil {
@@ -1458,10 +1455,7 @@ func (m *Manager) subscribe(ctx context.Context, queueName, pattern string, clie
 	}
 
 	// Create unique group ID that includes the pattern
-	patternGroupID := groupID
-	if pattern != "" {
-		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
-	}
+	patternGroupID := corebroker.EffectiveConsumerGroupID(groupID, pattern)
 
 	// Get or create consumer group (queue mode always auto-commits)
 	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, types.GroupModeQueue, true)
@@ -1516,10 +1510,7 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 		groupID = DefaultConsumerGroupID(clientID)
 	}
 
-	patternGroupID := groupID
-	if pattern != "" {
-		patternGroupID = fmt.Sprintf("%s@%s", groupID, pattern)
-	}
+	patternGroupID := corebroker.EffectiveConsumerGroupID(groupID, pattern)
 
 	// Unregister consumer locally
 	if err := m.consumerManager.UnregisterConsumer(ctx, queueName, patternGroupID, clientID); err != nil {

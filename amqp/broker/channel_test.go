@@ -1191,6 +1191,46 @@ func TestCancelConsumerByQueue(t *testing.T) {
 		}
 	})
 
+	// A pattern qualifies the group the manager registers, so stale cleanup
+	// reports "group@pattern". Matching the raw group would leave a patterned
+	// consumer uncancelled, still holding its registration and refcount.
+	t.Run("cancels a pattern-scoped consumer by its effective group", func(t *testing.T) {
+		ch, buf := newTestChannel(t)
+
+		ch.consumers[testCtag1] = &consumer{
+			tag:       testCtag1,
+			queueName: testEvents,
+			groupID:   testWorkers,
+			pattern:   "images",
+		}
+		// Same queue and group, no pattern: a distinct registration that the
+		// manager reports under the bare group and must not be swept up here.
+		ch.consumers["ctag-2"] = &consumer{
+			tag:       "ctag-2",
+			queueName: testEvents,
+			groupID:   testWorkers,
+		}
+
+		beforeLen := buf.Len()
+		ch.cancelConsumerByQueue(testEvents, testWorkers+"@images")
+
+		ch.consumersMu.RLock()
+		_, patterned := ch.consumers[testCtag1]
+		_, unpatterned := ch.consumers["ctag-2"]
+		ch.consumersMu.RUnlock()
+
+		assert.False(t, patterned, "the pattern-scoped consumer must be cancelled")
+		assert.True(t, unpatterned, "the unpatterned consumer is a different group")
+
+		frames := readFramesFrom(t, buf, beforeLen)
+		require.Len(t, frames, 1, "expected one basic.cancel")
+		decoded, err := frames[0].Decode()
+		require.NoError(t, err)
+		cancel, ok := decoded.(*codec.BasicCancel)
+		require.True(t, ok, "expected *codec.BasicCancel, got %T", decoded)
+		assert.Equal(t, testCtag1, cancel.ConsumerTag)
+	})
+
 	t.Run("no-op when no consumers match", func(t *testing.T) {
 		ch, buf := newTestChannel(t)
 

@@ -132,6 +132,21 @@ func ParseQueueFilter(filter string) (queueName, pattern string) {
 	return rest, ""
 }
 
+// EffectiveConsumerGroupID returns the group identifier a queue consumer is
+// actually registered under. A pattern-scoped consumer is a distinct group from
+// an unpatterned one on the same queue, so the pattern qualifies the ID.
+//
+// This is the identifier the queue manager reports back — in stale-consumer
+// cleanup, for instance — so a protocol handler matching its own consumers
+// against a manager-supplied group has to build the same string rather than
+// compare the raw group it was asked to subscribe with.
+func EffectiveConsumerGroupID(groupID, pattern string) string {
+	if pattern == "" {
+		return groupID
+	}
+	return groupID + "@" + pattern
+}
+
 func parseAckSuffix(topic string) (AckKind, string, bool) {
 	if base, ok := strings.CutSuffix(topic, "/$ack"); ok {
 		return AckAccept, base, true

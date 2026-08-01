@@ -1867,7 +1867,11 @@ func (ch *Channel) cancelConsumerByQueue(queueName, groupID string) {
 	ch.consumersMu.Lock()
 	var toCancel []*consumer
 	for tag, cons := range ch.consumers {
-		if cons.queueName == queueName && cons.groupID == groupID {
+		// The manager reports the group it registered, which a pattern
+		// qualifies. Comparing the raw group would never match a patterned
+		// consumer, leaving it uncancelled and its registration held.
+		if cons.queueName == queueName &&
+			corebroker.EffectiveConsumerGroupID(cons.groupID, cons.pattern) == groupID {
 			toCancel = append(toCancel, cons)
 			delete(ch.consumers, tag)
 		}
