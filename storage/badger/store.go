@@ -15,7 +15,7 @@ var _ storage.Store = (*Store)(nil)
 
 // Store is the composite BadgerDB store implementing all storage interfaces.
 type Store struct {
-	db *badger.DB
+	db *db
 
 	messages      *MessageStore
 	sessions      *SessionStore
@@ -50,18 +50,22 @@ func New(cfg Config) (*Store, error) {
 	opts.NumLevelZeroTables = 5
 	opts.NumLevelZeroTablesStall = 15
 
-	db, err := badger.Open(opts)
+	handle, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
 	}
 
+	// One guarded handle is shared by every sub-store, so closing the store
+	// closes them all at once.
+	db := newDB(handle)
+
 	s := &Store{
 		db:            db,
-		messages:      NewMessageStore(db),
-		sessions:      NewSessionStore(db),
-		subscriptions: NewSubscriptionStore(db),
-		retained:      NewRetainedStore(db),
-		wills:         NewWillStore(db),
+		messages:      newMessageStore(db),
+		sessions:      newSessionStore(db),
+		subscriptions: newSubscriptionStore(db),
+		retained:      newRetainedStore(db),
+		wills:         newWillStore(db),
 		gcStopCh:      make(chan struct{}),
 		gcDone:        make(chan struct{}),
 	}

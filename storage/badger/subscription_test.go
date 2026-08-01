@@ -5,7 +5,6 @@ package badger
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/absmach/fluxmq/storage"
@@ -426,10 +425,7 @@ func TestSubscriptionStore_GetByFilterWildcard(t *testing.T) {
 // Helper functions
 
 func setupSubscriptionStore(t *testing.T) *SubscriptionStore {
-	tmpDir, err := os.MkdirTemp("", "badger-sub-test-*")
-	require.NoError(t, err)
-
-	store, err := New(Config{Dir: tmpDir})
+	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
 	return &SubscriptionStore{db: store.db}
@@ -437,8 +433,6 @@ func setupSubscriptionStore(t *testing.T) *SubscriptionStore {
 
 func cleanupSubscriptionStore(t *testing.T, store *SubscriptionStore) {
 	if store != nil && store.db != nil {
-		dir := store.db.Opts().Dir
-		store.db.Close()
-		os.RemoveAll(dir)
+		store.db.Close() //nolint:errcheck // test teardown
 	}
 }

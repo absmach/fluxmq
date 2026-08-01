@@ -20,11 +20,17 @@ var _ storage.MessageStore = (*MessageStore)(nil)
 //   - Inflight: {clientID}/inflight/{packetID}
 //   - Offline queue: {clientID}/queue/{seq}
 type MessageStore struct {
-	db *badger.DB
+	db *db
 }
 
 // NewMessageStore creates a new BadgerDB message store.
-func NewMessageStore(db *badger.DB) *MessageStore {
+// The store guards handle against use after close; closing handle directly
+// bypasses that guard and lets BadgerDB panic on a racing operation.
+func NewMessageStore(handle *badger.DB) *MessageStore {
+	return newMessageStore(newDB(handle))
+}
+
+func newMessageStore(db *db) *MessageStore {
 	return &MessageStore{db: db}
 }
 

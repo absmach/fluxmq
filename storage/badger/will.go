@@ -19,7 +19,7 @@ var _ storage.WillStore = (*WillStore)(nil)
 //
 // Key format: will:{clientID}.
 type WillStore struct {
-	db *badger.DB
+	db *db
 }
 
 // willEntry wraps a will message with disconnect timestamp for delay calculation.
@@ -29,7 +29,13 @@ type willEntry struct {
 }
 
 // NewWillStore creates a new BadgerDB will message store.
-func NewWillStore(db *badger.DB) *WillStore {
+// The store guards handle against use after close; closing handle directly
+// bypasses that guard and lets BadgerDB panic on a racing operation.
+func NewWillStore(handle *badger.DB) *WillStore {
+	return newWillStore(newDB(handle))
+}
+
+func newWillStore(db *db) *WillStore {
 	return &WillStore{db: db}
 }
 

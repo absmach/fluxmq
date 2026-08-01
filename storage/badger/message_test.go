@@ -5,7 +5,6 @@ package badger
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/absmach/fluxmq/storage"
@@ -259,10 +258,7 @@ func TestMessageStore_LargePayload(t *testing.T) {
 // Helper functions
 
 func setupMessageStore(t *testing.T) *MessageStore {
-	tmpDir, err := os.MkdirTemp("", "badger-msg-test-*")
-	require.NoError(t, err)
-
-	store, err := New(Config{Dir: tmpDir})
+	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
 	return &MessageStore{db: store.db}
@@ -270,8 +266,6 @@ func setupMessageStore(t *testing.T) *MessageStore {
 
 func cleanupMessageStore(t *testing.T, store *MessageStore) {
 	if store != nil && store.db != nil {
-		dir := store.db.Opts().Dir
-		store.db.Close()
-		os.RemoveAll(dir)
+		store.db.Close() //nolint:errcheck // test teardown
 	}
 }

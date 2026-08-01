@@ -5,7 +5,6 @@ package badger
 
 import (
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -275,10 +274,7 @@ func TestSessionStore_GetExpiredEmpty(t *testing.T) {
 // Helper functions
 
 func setupSessionStore(t *testing.T) *SessionStore {
-	tmpDir, err := os.MkdirTemp("", "badger-test-*")
-	require.NoError(t, err)
-
-	store, err := New(Config{Dir: tmpDir})
+	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
 	return &SessionStore{db: store.db}
@@ -286,8 +282,6 @@ func setupSessionStore(t *testing.T) *SessionStore {
 
 func cleanupSessionStore(t *testing.T, store *SessionStore) {
 	if store != nil && store.db != nil {
-		dir := store.db.Opts().Dir
-		store.db.Close()
-		os.RemoveAll(dir)
+		store.db.Close() //nolint:errcheck // test teardown
 	}
 }

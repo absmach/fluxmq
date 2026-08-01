@@ -5,7 +5,6 @@ package badger
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/absmach/fluxmq/storage"
@@ -264,10 +263,7 @@ func TestRetainedStore_UpdateExisting(t *testing.T) {
 }
 
 func setupRetainedStore(t *testing.T) *RetainedStore {
-	tmpDir, err := os.MkdirTemp("", "badger-retained-test-*")
-	require.NoError(t, err)
-
-	store, err := New(Config{Dir: tmpDir})
+	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
 	return &RetainedStore{db: store.db}
@@ -275,8 +271,6 @@ func setupRetainedStore(t *testing.T) *RetainedStore {
 
 func cleanupRetainedStore(t *testing.T, store *RetainedStore) {
 	if store != nil && store.db != nil {
-		dir := store.db.Opts().Dir
-		store.db.Close()
-		os.RemoveAll(dir)
+		store.db.Close() //nolint:errcheck // test teardown
 	}
 }

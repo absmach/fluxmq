@@ -5,7 +5,6 @@ package badger
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -263,10 +262,7 @@ func TestWillStore_QoSLevels(t *testing.T) {
 }
 
 func setupWillStore(t *testing.T) *WillStore {
-	tmpDir, err := os.MkdirTemp("", "badger-will-test-*")
-	require.NoError(t, err)
-
-	store, err := New(Config{Dir: tmpDir})
+	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
 	return &WillStore{db: store.db}
@@ -274,8 +270,6 @@ func setupWillStore(t *testing.T) *WillStore {
 
 func cleanupWillStore(t *testing.T, store *WillStore) {
 	if store != nil && store.db != nil {
-		dir := store.db.Opts().Dir
-		store.db.Close()
-		os.RemoveAll(dir)
+		store.db.Close() //nolint:errcheck // test teardown
 	}
 }
