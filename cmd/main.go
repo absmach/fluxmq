@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/absmach/fluxmq"
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
@@ -379,7 +380,7 @@ func main() {
 	}
 	localPolicyAdapter := &localAMQPPolicy{store: localPrincipalStore}
 
-	slog.Info("Starting MQTT broker", "version", "0.1.0")
+	slog.Info("Starting MQTT broker", "version", fluxmq.Version)
 	slog.Info("Configuration loaded",
 		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
 		"tcp_v5_listener", cfg.Server.TCP.V5.Addr,

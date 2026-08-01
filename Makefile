@@ -6,7 +6,10 @@ BINARY := fluxmq
 GO := go
 
 # Build flags
-LDFLAGS := -s -w
+# VERSION is stamped into the binary and reported at startup. It defaults to the
+# current git description and can be overridden: make build VERSION=v0.50.0
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X github.com/absmach/fluxmq.Version=$(VERSION)
 GOFLAGS := -trimpath
 DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
 DASHBOARD_IMAGE_LATEST := ghcr.io/absmach/fluxmq-dashboard:latest
@@ -30,7 +33,7 @@ $(BUILD_DIR)/$(BINARY): cmd/main.go $(shell find . -name '*.go' -not -path './bu
 # Build Docker image (latest tag)
 .PHONY: docker
 docker:
-	docker build -f deployments/docker/Dockerfile -t $(DOCKER_IMAGE_LATEST) .
+	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t $(DOCKER_IMAGE_LATEST) .
 
 # Build dashboard Docker image (latest tag)
 .PHONY: docker-dashboard

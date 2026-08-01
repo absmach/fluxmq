@@ -61,6 +61,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the release tag into the binary; branch builds carry the commit.
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
           # Manifest-list digest is needed to sign and attest the image.
           provenance: mode=max
           sbom: true
