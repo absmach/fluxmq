@@ -109,6 +109,17 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if publisher, ok := b.queueLinkManager.(corebroker.TopicQueuePublisher); ok {
+		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
+			ClientID:   corebroker.ClientIDFromProperties(props),
+			Topic:      topic,
+			Payload:    payload,
+			Properties: props,
+		}); err != nil {
+			b.logger.Error("AMQP pub/sub queue capture failed", "topic", topic, "error", err)
+			return
+		}
+	}
 	subs, err := b.router.Match(topic)
 	if err != nil {
 		b.logger.Error("AMQP router match failed", "topic", topic, "error", err)

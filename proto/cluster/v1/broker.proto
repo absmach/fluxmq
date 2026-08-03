@@ -212,6 +212,8 @@ message RouteQueueMessageRequest {
   bytes payload = 4;
   map<string, string> properties = 5;
   int64 sequence = 6;
+  // Canonical queue delivery topic. Empty means legacy queue-root delivery.
+  string topic = 7;
 }
 
 message RouteQueueMessageResponse {

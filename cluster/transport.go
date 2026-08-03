@@ -1345,6 +1345,7 @@ func encodeRouteQueueMessage(clientID, queueName string, msg *QueueMessage) *clu
 		ClientId:   clientID,
 		QueueName:  queueName,
 		MessageId:  msg.MessageID,
+		Topic:      msg.Topic,
 		Payload:    msg.Payload,
 		Properties: properties,
 		Sequence:   msg.Sequence,
@@ -1360,6 +1361,7 @@ func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) *QueueMes
 	msg := &QueueMessage{
 		MessageID:      wire.MessageId,
 		QueueName:      wire.QueueName,
+		Topic:          wire.Topic,
 		Payload:        wire.Payload,
 		Sequence:       wire.Sequence,
 		UserProperties: make(map[string]string, len(rawProps)),

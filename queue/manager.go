@@ -283,6 +283,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if m.distributionMode == DistributionReplicate && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
 		m.logger.Warn("distribution_mode=replicate requires raft to be enabled; falling back to forward")
 		m.distributionMode = DistributionForward
+		m.delivery.distributionMode = DistributionForward
 	}
 
 	if err := m.syncQueueReplicationAssignments(ctx); err != nil {
@@ -808,7 +809,7 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 
 // Publish adds a message to all queues whose topic patterns match the topic.
 // This is the NATS JetQueue-style "multi-queue" routing.
-// It also forwards the publish to remote nodes that have consumers for the topic.
+// The delivery engine routes appended records to remote consumers when needed.
 func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
 	publish = normalizePublishRequest(publish)
 
@@ -821,12 +822,41 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		return nil
 	}
 
-	allReplicated := true
+	return m.publishToTargets(ctx, publish, targets)
+}
+
+// PublishToMatchingQueues captures an ordinary pub/sub publish in existing
+// queues whose configured topic patterns match it. Unlike Publish, it never
+// auto-creates a queue when no pattern matches.
+func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error {
+	targets, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+
+	// Protocol brokers release or reuse their message buffers after this call.
+	// Take ownership of independent data before appending or forwarding it.
+	publish.Payload = append([]byte(nil), publish.Payload...)
+	if len(publish.Properties) > 0 {
+		properties := make(map[string]string, len(publish.Properties))
+		for key, value := range publish.Properties {
+			properties[key] = value
+		}
+		publish.Properties = properties
+	}
+	publish = normalizePublishRequest(publish)
+
+	return m.publishToTargets(ctx, publish, targets)
+}
+
+func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
 	localTargets := make([]queuePublishTarget, 0, len(targets))
 	forwardTargets := make(map[string][]string)
 	for _, target := range targets {
 		replicated := target.config != nil && target.config.Replication.Enabled
-		allReplicated = allReplicated && replicated
 
 		if !replicated || m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
 			localTargets = append(localTargets, target)
@@ -871,14 +901,15 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		}
 	}
 
-	// Forward to remote nodes that have consumers
+	// Preserve legacy forwarding for queues known only by remote nodes.
 	if m.cluster != nil {
-		unknownOnly := allReplicated
-		if m.distributionMode == DistributionReplicate {
-			// Legacy explicit replicate mode remains stronger than per-queue inference.
-			unknownOnly = true
-		}
-		m.forwardToRemoteNodes(ctx, publish, unknownOnly)
+		// Known local queues already have exactly one delivery path: the
+		// delivery engine routes non-replicated records to remote consumers,
+		// while Raft makes replicated records available on the consumer node.
+		// Forwarding the publish as well would append a second copy remotely.
+		// Keep legacy forwarding only for cluster consumers whose queue is not
+		// known on this node.
+		m.forwardToRemoteNodes(ctx, publish, true)
 	}
 
 	return nil
@@ -999,24 +1030,28 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 		return targets, nil
 	}
 
-	// Find all matching queues
-	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
+	targets, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find matching queues: %w", err)
+		return nil, err
 	}
 
-	if len(queues) == 0 {
+	if len(targets) == 0 {
 		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", publish.Topic))
 		queueName, queuePattern := autoQueueFromTopic(publish.Topic)
 		if _, err := m.GetOrCreateQueue(ctx, queueName, queuePattern); err != nil {
 			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
 			return nil, err
 		}
-		// After creating, find it again.
-		queues, err = m.queueStore.FindMatchingQueues(ctx, publish.Topic)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find matching queues after creation: %w", err)
-		}
+		return m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	}
+
+	return targets, nil
+}
+
+func (m *Manager) resolveMatchingPublishTargets(ctx context.Context, topic string) ([]queuePublishTarget, error) {
+	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find matching queues: %w", err)
 	}
 
 	targets := make([]queuePublishTarget, 0, len(queues))
@@ -2172,10 +2207,7 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 		}
 	}
 
-	topic := queueName
-	if topic != "" && !strings.HasPrefix(topic, "$queue/") {
-		topic = "$queue/" + topic
-	}
+	topic := queueDeliveryTopic(queueName, msg.Topic)
 
 	deliveryMsg := &brokerstorage.Message{
 		Topic:      topic,

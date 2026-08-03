@@ -591,7 +591,7 @@ func createDeliveryMessage(msg *types.Message, groupID string, queueName string)
 	props := createRouteProperties(msg, groupID, queueName)
 
 	deliveryMsg := &brokerstorage.Message{
-		Topic:      msg.Topic,
+		Topic:      queueDeliveryTopic(queueName, msg.Topic),
 		QoS:        1,
 		Properties: props,
 	}
@@ -633,6 +633,7 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 		MessageID:      queueName + ":" + strconv.FormatUint(msg.Sequence, 10),
 		QueueName:      queueName,
 		GroupID:        groupID,
+		Topic:          queueDeliveryTopic(queueName, msg.Topic),
 		Payload:        msg.StablePayload(),
 		Sequence:       int64(msg.Sequence),
 		UserProperties: userProps,
@@ -653,6 +654,31 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 	}
 
 	return routeMsg
+}
+
+// queueDeliveryTopic converts a queue's stored source topic into the canonical
+// queue address expected by protocol consumers. Explicit queue publishes are
+// already canonical. Ordinary pub/sub captures retain their original path
+// after the queue root, so a capture of m/domain/... in queue m is delivered as
+// $queue/m/domain/....
+func queueDeliveryTopic(queueName, topic string) string {
+	queueName = strings.Trim(strings.TrimSpace(queueName), "/")
+	topic = strings.TrimPrefix(strings.TrimSpace(topic), "/")
+	if queueName == "" {
+		return topic
+	}
+
+	root := "$queue/" + queueName
+	switch {
+	case topic == "", topic == queueName:
+		return root
+	case topic == root, strings.HasPrefix(topic, root+"/"):
+		return topic
+	case strings.HasPrefix(topic, queueName+"/"):
+		return "$queue/" + topic
+	default:
+		return root + "/" + topic
+	}
 }
 
 func decorateStreamProperties(properties map[string]string, msg *types.Message, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {

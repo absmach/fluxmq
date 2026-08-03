@@ -1287,13 +1287,15 @@ func (x *EnqueueRemoteResponse) GetMessageId() string {
 }
 
 type RouteQueueMessageRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClientId      string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	QueueName     string                 `protobuf:"bytes,2,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
-	Properties    map[string]string      `protobuf:"bytes,5,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Sequence      int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ClientId   string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	QueueName  string                 `protobuf:"bytes,2,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
+	MessageId  string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Payload    []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
+	Properties map[string]string      `protobuf:"bytes,5,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Sequence   int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	// Canonical queue delivery topic. Empty means legacy queue-root delivery.
+	Topic         string `protobuf:"bytes,7,opt,name=topic,proto3" json:"topic,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1368,6 +1370,13 @@ func (x *RouteQueueMessageRequest) GetSequence() int64 {
 		return x.Sequence
 	}
 	return 0
+}
+
+func (x *RouteQueueMessageRequest) GetTopic() string {
+	if x != nil {
+		return x.Topic
+	}
+	return ""
 }
 
 type RouteQueueMessageResponse struct {
@@ -2505,7 +2514,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +
-	"message_id\x18\x03 \x01(\tR\tmessageId\"\xc7\x02\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\"\xdd\x02\n" +
 	"\x18RouteQueueMessageRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +
@@ -2516,7 +2525,8 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\n" +
 	"properties\x18\x05 \x03(\v2;.fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntryR\n" +
 	"properties\x12\x1a\n" +
-	"\bsequence\x18\x06 \x01(\x03R\bsequence\x1a=\n" +
+	"\bsequence\x18\x06 \x01(\x03R\bsequence\x12\x14\n" +
+	"\x05topic\x18\a \x01(\tR\x05topic\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"}\n" +

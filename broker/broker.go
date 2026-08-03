@@ -22,6 +22,14 @@ type QueuePublisher interface {
 	Publish(ctx context.Context, publish types.PublishRequest) error
 }
 
+// TopicQueuePublisher captures an ordinary pub/sub publish in every existing
+// queue whose configured topic pattern matches it. It never creates a queue.
+// Implementations must copy payload and properties they retain before
+// returning because protocol brokers may release or reuse them afterwards.
+type TopicQueuePublisher interface {
+	PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error
+}
+
 // QueueSubscriber manages queue subscriptions.
 type QueueSubscriber interface {
 	// Subscribe adds a consumer to a queue with optional pattern matching.

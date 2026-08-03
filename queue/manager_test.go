@@ -36,6 +36,7 @@ const (
 	testAuditQueueName   = "atom.events"
 	testAuditQueueTopic  = "$queue/atom.events"
 	testAuditQueueFilter = "$queue/atom.events/#"
+	testCapturedTopic    = "m/domain/c/channel/tst"
 )
 
 type targetCheckingDeliverer struct {
@@ -1083,6 +1084,194 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
+	}
+}
+
+func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("messages", "m/#")); err != nil {
+		t.Fatalf("CreateQueue messages failed: %v", err)
+	}
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("other", "other/#")); err != nil {
+		t.Fatalf("CreateQueue other failed: %v", err)
+	}
+
+	payload := []byte("original")
+	properties := map[string]string{"source": "device"}
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		ClientID:   "mqtt-publisher",
+		Topic:      testCapturedTopic,
+		Payload:    payload,
+		Properties: properties,
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+
+	payload[0] = 'X'
+	properties["source"] = "mutated"
+
+	messageCount, err := logStore.Count(ctx, "messages")
+	if err != nil {
+		t.Fatalf("Count messages failed: %v", err)
+	}
+	if messageCount != 1 {
+		t.Fatalf("expected one captured message, got %d", messageCount)
+	}
+	otherCount, err := logStore.Count(ctx, "other")
+	if err != nil {
+		t.Fatalf("Count other failed: %v", err)
+	}
+	if otherCount != 0 {
+		t.Fatalf("expected no message in unrelated queue, got %d", otherCount)
+	}
+
+	stored, err := logStore.Read(ctx, "messages", 0)
+	if err != nil {
+		t.Fatalf("Read captured message failed: %v", err)
+	}
+	if got := string(stored.GetPayload()); got != "original" {
+		t.Fatalf("captured payload = %q, want original", got)
+	}
+	if got := stored.Properties["source"]; got != "device" {
+		t.Fatalf("captured source = %q, want device", got)
+	}
+	if got := stored.Properties[corebroker.ClientIDProperty]; got != "mqtt-publisher" {
+		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   "unmatched/topic",
+		Payload: []byte("ignored"),
+	}); err != nil {
+		t.Fatalf("unmatched PublishToMatchingQueues failed: %v", err)
+	}
+	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); err != storage.ErrQueueNotFound {
+		t.Fatalf("unmatched publish created a queue: %v", err)
+	}
+}
+
+func TestPublishToMatchingQueuesRoutesCapturedStreamToRemoteConsumerOnce(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   "messages",
+			GroupID:     "rules-engine@#",
+			ConsumerID:  "amqp091:remote@1",
+			ClientID:    "amqp091:remote",
+			Pattern:     "#",
+			Mode:        string(types.GroupModeStream),
+			ProxyNodeID: testNode2,
+		},
+	})
+
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), nil, mockCl)
+	ctx := context.Background()
+	config := types.DefaultQueueConfig("messages", "m/#")
+	config.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(ctx, config); err != nil {
+		t.Fatalf("CreateQueue messages failed: %v", err)
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+	mgr.deliverMessages()
+
+	routed := mockCl.GetRoutedMessages()
+	if len(routed) != 1 {
+		t.Fatalf("expected one remote delivery, got %d", len(routed))
+	}
+	if routed[0].nodeID != testNode2 {
+		t.Fatalf("remote delivery node = %q, want %q", routed[0].nodeID, testNode2)
+	}
+	if routed[0].queueName != "messages" {
+		t.Fatalf("remote delivery queue = %q, want messages", routed[0].queueName)
+	}
+	if got := routed[0].message.Topic; got != "$queue/messages/"+testCapturedTopic {
+		t.Fatalf("remote delivery topic = %q, want canonical queue address", got)
+	}
+	if calls := mockCl.GetForwardCalls(); len(calls) != 0 {
+		t.Fatalf("ordinary topic capture was also forwarded for remote append: %d calls", len(calls))
+	}
+}
+
+func TestPublishToExistingQueueDoesNotForwardSecondAppend(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   "writers",
+			GroupID:     "timescale-writer@#",
+			ConsumerID:  "amqp091:remote@1",
+			ClientID:    "amqp091:remote",
+			Pattern:     "#",
+			Mode:        string(types.GroupModeStream),
+			ProxyNodeID: testNode2,
+		},
+	})
+
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), nil, mockCl)
+	ctx := context.Background()
+	config := types.DefaultQueueConfig("writers", "$queue/writers/#")
+	config.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(ctx, config); err != nil {
+		t.Fatalf("CreateQueue writers failed: %v", err)
+	}
+
+	if err := mgr.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/writers/domain/c/channel/tst",
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	mgr.deliverMessages()
+
+	if calls := mockCl.GetForwardCalls(); len(calls) != 0 {
+		t.Fatalf("known queue publish was forwarded for a second append: %d calls", len(calls))
+	}
+	if routed := mockCl.GetRoutedMessages(); len(routed) != 1 {
+		t.Fatalf("expected one routed queue delivery, got %d", len(routed))
+	}
+}
+
+func TestStartPropagatesDistributionFallbackToDeliveryEngine(t *testing.T) {
+	config := DefaultConfig()
+	config.DistributionMode = DistributionReplicate
+	mgr := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		nil,
+		config,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		newMockCluster("node-1"),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		if err := mgr.Stop(); err != nil {
+			t.Errorf("Stop failed: %v", err)
+		}
+	})
+
+	if mgr.distributionMode != DistributionForward {
+		t.Fatalf("manager distribution mode = %q, want %q", mgr.distributionMode, DistributionForward)
+	}
+	if mgr.delivery.distributionMode != DistributionForward {
+		t.Fatalf("delivery distribution mode = %q, want %q", mgr.delivery.distributionMode, DistributionForward)
 	}
 }
 
@@ -2456,6 +2645,39 @@ func TestDeliverQueueMessage(t *testing.T) {
 	}
 	if deliveredMsg.Properties[types.PropQueueName] != testQueueTest {
 		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties[types.PropQueueName])
+	}
+}
+
+func TestDeliverQueueMessageCanonicalizesCapturedTopic(t *testing.T) {
+	var deliveredMsg *brokerstorage.Message
+	manager := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		DeliveryTargetFunc(func(_ context.Context, _ string, msg *brokerstorage.Message) error {
+			deliveredMsg = msg
+			return nil
+		}),
+		DefaultConfig(),
+		nil,
+		nil,
+	)
+
+	err := manager.DeliverQueueMessage(context.Background(), "target-client", &cluster.QueueMessage{
+		MessageID: "m:1",
+		QueueName: "m",
+		GroupID:   "rules-engine",
+		Topic:     testCapturedTopic,
+		Payload:   []byte("payload"),
+		Sequence:  1,
+	})
+	if err != nil {
+		t.Fatalf("DeliverQueueMessage failed: %v", err)
+	}
+	if deliveredMsg == nil {
+		t.Fatal("expected delivered message")
+	}
+	if want := "$queue/" + testCapturedTopic; deliveredMsg.Topic != want {
+		t.Fatalf("delivered topic = %q, want %q", deliveredMsg.Topic, want)
 	}
 }
 

@@ -82,6 +82,21 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 		}
 	}
 
+	// A configured stream may bind an ordinary topic pattern (for example
+	// m/#). Capture it only on the ingress node; cluster-forwarded pub/sub
+	// deliveries use ForwardPublish and therefore cannot append duplicates.
+	if publisher, ok := b.queueManager.(broker.TopicQueuePublisher); ok {
+		if err := publisher.PublishToMatchingQueues(ctx, types.PublishRequest{
+			ClientID:   msg.ClientID,
+			Topic:      msg.Topic,
+			Payload:    msg.GetPayload(),
+			Properties: msg.Properties,
+		}); err != nil {
+			msg.ReleasePayload()
+			return fmt.Errorf("capture pub/sub publish in matching queues: %w", err)
+		}
+	}
+
 	// Webhook: message published
 	if b.telemetry.webhooks != nil {
 		payload := ""

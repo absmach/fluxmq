@@ -279,6 +279,17 @@ func (b *Broker) RecordLocalPrincipalReload(success bool) {
 // Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.
 // It returns an error if cluster routing fails, so callers in confirm mode can NACK.
 func (b *Broker) Publish(topic string, payload []byte, props map[string]string) error {
+	if publisher, ok := b.queueManager.(corebroker.TopicQueuePublisher); ok {
+		if err := publisher.PublishToMatchingQueues(context.Background(), qtypes.PublishRequest{
+			ClientID:   corebroker.ClientIDFromProperties(props),
+			Topic:      topic,
+			Payload:    payload,
+			Properties: props,
+		}); err != nil {
+			return fmt.Errorf("capture pub/sub publish in matching queues: %w", err)
+		}
+	}
+
 	subs, err := b.router.Match(topic)
 	if err != nil {
 		b.logger.Error("router match failed", "topic", topic, "error", err)

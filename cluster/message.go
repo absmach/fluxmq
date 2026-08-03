@@ -20,6 +20,7 @@ type QueueMessage struct {
 	MessageID      string
 	QueueName      string
 	GroupID        string
+	Topic          string
 	Payload        []byte
 	Sequence       int64
 	UserProperties map[string]string
