@@ -824,26 +824,28 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		return nil
 	}
 
-	return m.publishToTargets(ctx, publish, targets)
+	return m.publishToTargets(ctx, publish, targets, fanoutStrict)
 }
 
 // PublishToMatchingQueues captures an ordinary pub/sub publish in existing
 // queues whose configured topic patterns match it. Unlike Publish, it never
 // auto-creates a queue when no pattern matches.
 func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error {
-	// Every way this can lose a message counts, not only a failed append.
-	// Failing to resolve targets, or dropping one whose configuration cannot be
-	// read, loses exactly as much as an append error does, and the counter is
-	// documented as the signal that a queue is dropping the traffic bound to it.
+	// Every way this can lose a message counts, not only a failed append:
+	// failing to resolve targets, or dropping one whose configuration cannot be
+	// read, loses exactly as much as an append error does.
+	//
+	// The counter is per publish, not per queue, so the increment is decided
+	// once at the end however many targets were affected.
 	targets, unresolved, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
 	if err != nil {
 		m.metrics.RecordCaptureFailure()
 		return err
 	}
-	if unresolved > 0 {
-		m.metrics.RecordCaptureFailure()
-	}
 	if len(targets) == 0 {
+		if unresolved > 0 {
+			m.metrics.RecordCaptureFailure()
+		}
 		return nil
 	}
 
@@ -858,24 +860,41 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 	publish.Properties = maps.Clone(publish.Properties)
 	publish = normalizePublishRequest(publish)
 
-	if err := m.publishToTargets(ctx, publish, targets); err != nil {
-		// Callers must not fail the publish over this, so the counter is the
-		// only durable signal that a queue is dropping the traffic bound to it.
+	// Callers must not fail the publish over this, so the counter is the only
+	// durable signal that a queue is dropping the traffic bound to it.
+	err = m.publishToTargets(ctx, publish, targets, fanoutBestEffort)
+	if unresolved > 0 || err != nil {
 		m.metrics.RecordCaptureFailure()
-		return err
 	}
-	return nil
+	return err
 }
 
+// fanoutPolicy decides what a failing target means for the targets beside it.
+type fanoutPolicy uint8
+
+const (
+	// fanoutStrict abandons the publish at the first target that cannot be
+	// written. It is what an addressed publish needs: a write policy that
+	// rejects a publication promises nothing was written, so the caller can
+	// retry against the leader without duplicating a record this node already
+	// appended. A leader rejection is therefore reported before any append runs.
+	fanoutStrict fanoutPolicy = iota
+	// fanoutBestEffort attempts every target and joins the failures. It is what
+	// topic capture needs: the fanout is broker policy applied to whichever
+	// queues happen to match, not something the publisher asked for, so one
+	// unavailable queue must not suppress capture into unrelated healthy ones.
+	// Nothing retries a capture, so a partial write is the best available
+	// outcome rather than a duplicate risk.
+	fanoutBestEffort
+)
+
 // publishToTargets routes one publish to every queue whose pattern matched it.
-//
-// Targets are independent, so a failing one must not decide the fate of the
-// others: every target is classified, every local append is attempted, and every
-// leader is forwarded to, with the failures joined into one error. Returning at
-// the first problem would let a single unavailable queue suppress a publish into
-// unrelated healthy ones, which matters most for topic capture, where the fanout
-// is broker policy rather than something the publisher asked for.
-func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
+func (m *Manager) publishToTargets(
+	ctx context.Context,
+	publish types.PublishRequest,
+	targets []queuePublishTarget,
+	policy fanoutPolicy,
+) error {
 	localTargets := make([]queuePublishTarget, 0, len(targets))
 	forwardTargets := make(map[string][]string)
 	errs := make([]error, 0)
@@ -914,16 +933,28 @@ func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishReq
 		}
 	}
 
+	// A classification failure is reported before anything is written, so a
+	// strict caller that rejects a publication really did reject it.
+	if policy == fanoutStrict && len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
 	// Store locally in queues handled by this node. publishLocalToTargets
 	// already attempts every target and joins their errors.
 	if err := m.publishLocalToTargets(ctx, publish, localTargets); err != nil {
 		errs = append(errs, err)
+		if policy == fanoutStrict {
+			return errors.Join(errs...)
+		}
 	}
 
 	// Forward leader-owned queue targets to appropriate remote leaders.
 	for leaderID, targetQueues := range forwardTargets {
 		if err := m.forwardPublishToLeader(ctx, publish, leaderID, targetQueues); err != nil {
 			errs = append(errs, err)
+			if policy == fanoutStrict {
+				return errors.Join(errs...)
+			}
 		}
 	}
 

@@ -240,10 +240,12 @@ keeps delivering.
 
 That makes the failure invisible to the publisher by design, so watch it from
 the operator plane instead. `GET /api/v1/stats` reports `queues.capture_failures`,
-which counts every publish a matching queue did not store — whether the append
-failed, the queue's configuration could not be read, or the matching queues could
-not be resolved at all. A non-zero and rising value means a queue is dropping the
-traffic its pattern binds.
+which counts every publish that did not reach all of its matching queues —
+whether the append failed, a matched queue's configuration could not be read, or
+the matching queues could not be resolved at all. It is counted once per publish
+however many queues were affected, so it measures how often capture is lossy
+rather than how many records were lost. A non-zero and rising value means a queue
+is dropping the traffic its pattern binds.
 
 A publish matching several queues is attempted against each of them
 independently, so one failing queue neither stops the others nor hides them.

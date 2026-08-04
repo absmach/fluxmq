@@ -741,9 +741,12 @@ components:
           type: integer
           format: int64
           description: |
-            Pub/sub publishes that a queue bound to their topic could not store.
-            A queue's `topics` pattern is matched against ordinary publishes, and
-            capture never fails the publish, so this counter is the only signal
+            Pub/sub publishes that did not reach every queue whose `topics`
+            pattern matched them, whether the append failed, a matched queue's
+            configuration could not be read, or the matching queues could not be
+            resolved. Counted once per publish however many queues were affected,
+            so it measures how often capture is lossy rather than how many records
+            were lost. Capture never fails the publish, so this is the only signal
             that a queue is dropping the traffic its pattern binds.
           example: 0
         claims:

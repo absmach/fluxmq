@@ -39,6 +39,7 @@ const (
 	testCapturedTopic    = "m/domain/c/channel/tst"
 	testCaptureQueue     = "messages"
 	testCapturePublisher = "mqtt-publisher"
+	testReplicatedQueue  = "replicated"
 )
 
 type targetCheckingDeliverer struct {
@@ -3573,8 +3574,8 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 	logStore := memlog.New()
 	coordinator := &mockQueueCoordinator{
 		enabled:           true,
-		replicatedByQueue: map[string]bool{"replicated": true},
-		leaderByQueue:     map[string]bool{"replicated": false},
+		replicatedByQueue: map[string]bool{testReplicatedQueue: true},
+		leaderByQueue:     map[string]bool{testReplicatedQueue: false},
 	}
 
 	config := DefaultConfig()
@@ -3585,7 +3586,7 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 
 	// A replicated queue with no reachable leader, which the reject policy
 	// refuses, alongside two ordinary queues that must still be appended to.
-	replicated := types.DefaultQueueConfig("replicated", "m/#")
+	replicated := types.DefaultQueueConfig(testReplicatedQueue, "m/#")
 	replicated.Replication.Enabled = true
 	if err := mgr.CreateQueue(ctx, replicated); err != nil {
 		t.Fatalf("CreateQueue replicated failed: %v", err)
@@ -3653,5 +3654,77 @@ func TestPublishToMatchingQueuesCountsUnresolvedTargets(t *testing.T) {
 
 	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
 		t.Fatalf("capture failures = %d, want 1; a dropped target was invisible", got)
+	}
+}
+
+// An addressed publish under the reject write policy promises that nothing was
+// written: the caller is expected to retry against the leader, so a local append
+// that happened anyway would be duplicated by that retry. Capture shares the
+// fanout code but not that promise.
+func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
+	logStore := memlog.New()
+	coordinator := &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{testReplicatedQueue: true},
+		leaderByQueue:     map[string]bool{testReplicatedQueue: false},
+	}
+
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyReject
+	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mgr.raftCoordinator = coordinator
+	ctx := context.Background()
+
+	replicated := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
+	replicated.Replication.Enabled = true
+	if err := mgr.CreateQueue(ctx, replicated); err != nil {
+		t.Fatalf("CreateQueue replicated failed: %v", err)
+	}
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("local", "$queue/replicated/#")); err != nil {
+		t.Fatalf("CreateQueue local failed: %v", err)
+	}
+
+	err := mgr.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/replicated/item",
+		Payload: []byte("payload"),
+	})
+	if err == nil {
+		t.Fatal("expected the reject write policy to refuse the publish")
+	}
+
+	count, countErr := logStore.Count(ctx, "local")
+	if countErr != nil {
+		t.Fatalf("Count local failed: %v", countErr)
+	}
+	if count != 0 {
+		t.Fatalf("local queue stored %d messages; a rejected publish must write nothing", count)
+	}
+}
+
+// The counter's unit is the publish, not the queue, so a publish that misses
+// several matching queues in several ways still moves it exactly once.
+func TestPublishToMatchingQueuesCountsOncePerPublish(t *testing.T) {
+	logStore := memlog.New()
+	store := &unreadableQueueStore{QueueStore: &appendFailingStore{QueueStore: logStore, failQueue: "broken"}, failQueue: testCaptureQueue}
+	mgr := NewManager(store, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	// One target whose configuration cannot be read and one whose append fails,
+	// so both counted paths are exercised by a single publish.
+	for _, name := range []string{testCaptureQueue, "broken"} {
+		if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(name, "m/#")); err != nil {
+			t.Fatalf("CreateQueue %s failed: %v", name, err)
+		}
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err == nil {
+		t.Fatal("expected the failing append to be reported")
+	}
+
+	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
+		t.Fatalf("capture failures = %d, want 1; the counter is per publish", got)
 	}
 }

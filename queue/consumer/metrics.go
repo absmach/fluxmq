@@ -29,7 +29,7 @@ type Metrics struct {
 	DLQCount uint64 // Messages moved to DLQ
 
 	// Capture metrics
-	CaptureFailures uint64 // Pub/sub publishes a matching queue failed to store
+	CaptureFailures uint64 // Pub/sub publishes not stored by every matching queue
 
 	// Latency tracking (in nanoseconds)
 	TotalClaimLatency uint64 // Sum of claim latencies
@@ -89,9 +89,15 @@ func (m *Metrics) RecordDLQ() {
 	atomic.AddUint64(&m.DLQCount, 1)
 }
 
-// RecordCaptureFailure records one pub/sub publish that matched a queue but
-// could not be appended to it. Capture never fails the publish, so this counter
-// is the only signal that a queue is dropping the traffic bound to it.
+// RecordCaptureFailure records one pub/sub publish that did not reach every
+// queue whose topic pattern matched it, whether the append failed, a matched
+// queue's configuration could not be read, or the matching queues could not be
+// resolved at all.
+//
+// The unit is the publish, not the queue: a publish that misses several matching
+// queues counts once, so the counter measures how often capture is lossy rather
+// than how many records were lost. Capture never fails the publish, so this is
+// the only signal that a queue is dropping the traffic bound to it.
 func (m *Metrics) RecordCaptureFailure() {
 	atomic.AddUint64(&m.CaptureFailures, 1)
 }
