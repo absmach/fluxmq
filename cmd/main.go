@@ -434,6 +434,15 @@ func main() {
 
 	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
+
+	// Declared here rather than beside their construction because the deferred
+	// teardown that releases them has to be registered before b.Close, which is
+	// what stops the queue manager they belong to.
+	var (
+		qm            *queue.Manager
+		queueLogStore *logStorage.Adapter
+		stopCluster   func() error
+	)
 	if cfg.Cluster.Enabled {
 		// Build transport TLS config if enabled
 		var transportTLS *cluster.TransportTLSConfig
@@ -469,7 +478,10 @@ func main() {
 		}
 		etcdCluster = ec
 		cl = etcdCluster
-		defer cl.Stop() //nolint:errcheck // best-effort deferred shutdown
+		// Stopped by the gated teardown rather than deferred here: a capture
+		// worker that outlives the queue manager may still be forwarding
+		// through this cluster.
+		stopCluster = cl.Stop
 
 		if err := cl.Start(); err != nil {
 			slog.Error("Failed to start cluster", "error", err)
@@ -545,6 +557,35 @@ func main() {
 		broker.WithTransportConfig(cfg.Cluster.Transport),
 		broker.WithBrokerConfig(cfg.Broker),
 	)
+	// Registered before b.Close so that it runs after it: defers are LIFO, and
+	// b.Close is what stops the queue manager. Reading the shutdown state any
+	// earlier would always see a manager that has not stopped yet.
+	//
+	// A capture worker can outlive Manager.Stop when an append will not return —
+	// the queue store takes no context, so the wait is bounded rather than
+	// indefinite. Anything that worker still uses must then be left alone:
+	// closing the store underneath it corrupts a segment it holds, and stopping
+	// the cluster underneath it pulls out the transport its forward is using.
+	// Leaking both into process exit is the cheaper failure.
+	defer func() {
+		if qm != nil && !qm.ShutdownComplete() {
+			slog.Error("queue resources left open: capture workers are still writing",
+				"queue_log_store", "not closed",
+				"cluster", "not stopped")
+			return
+		}
+		if queueLogStore != nil {
+			if err := queueLogStore.Close(); err != nil {
+				slog.Error("Failed to close queue log storage", "error", err)
+			}
+		}
+		if stopCluster != nil {
+			if err := stopCluster(); err != nil {
+				slog.Error("Failed to stop cluster", "error", err)
+			}
+		}
+	}()
+
 	defer b.Close()
 
 	// Configure maximum QoS level
@@ -709,11 +750,8 @@ func main() {
 	amqp091Broker.SetRouter(sharedRouter)
 	amqpBroker.SetRouter(sharedRouter)
 
-	var (
-		qm                       *queue.Manager
-		queueLogStore            *logStorage.Adapter
-		configuredQueueContracts []queueTypes.QueueConfig
-	)
+	// qm and queueLogStore are declared with the deferred teardown above.
+	var configuredQueueContracts []queueTypes.QueueConfig
 
 	if metrics != nil {
 		amqpMetrics, err := amqp1broker.NewMetrics()
@@ -742,21 +780,10 @@ func main() {
 			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
 		}
-		// Releasing the store is conditional on the queue manager having fully
-		// stopped. A capture worker can outlive Stop when an append will not
-		// return — the store takes no context, so the wait is bounded rather
-		// than indefinite — and closing underneath that worker is a
-		// use-after-close on a segment it still holds. Leaking the handle into
-		// process exit is the cheaper failure.
-		defer func() {
-			if qm != nil && !qm.ShutdownComplete() {
-				slog.Error("queue log store left open: capture workers are still writing")
-				return
-			}
-			if err := queueLogStore.Close(); err != nil {
-				slog.Error("Failed to close queue log storage", "error", err)
-			}
-		}()
+		// The store is released by the deferred teardown registered before
+		// b.Close, so that it runs after the broker has stopped the queue
+		// manager. Registering it here would run it first: defers are LIFO, and
+		// this is registered later than b.Close.
 
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
