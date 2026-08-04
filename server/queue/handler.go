@@ -57,6 +57,40 @@ func NewHandler(manager *queue.Manager, queueStore storage.QueueStore, groupStor
 	}
 }
 
+// createQueueErrorCode maps a queue creation failure onto a Connect status.
+//
+// A rejected topic filter is the caller's mistake, not a conflict and not a
+// server fault: it has to read as InvalidArgument so a client can tell a bad
+// request from a name that is taken. The previous mapping reported every
+// failure, including a storage error, as AlreadyExists.
+func createQueueErrorCode(err error) connect.Code {
+	switch {
+	case errors.Is(err, types.ErrInvalidConfig):
+		return connect.CodeInvalidArgument
+	case errors.Is(err, queue.ErrProtectedQueueMutation):
+		return connect.CodeFailedPrecondition
+	case errors.Is(err, storage.ErrQueueAlreadyExists):
+		return connect.CodeAlreadyExists
+	default:
+		return connect.CodeInternal
+	}
+}
+
+// updateQueueErrorCode maps a queue update failure onto a Connect status, for
+// the same reasons as createQueueErrorCode.
+func updateQueueErrorCode(err error) connect.Code {
+	switch {
+	case errors.Is(err, types.ErrInvalidConfig):
+		return connect.CodeInvalidArgument
+	case errors.Is(err, queue.ErrProtectedQueueMutation):
+		return connect.CodeFailedPrecondition
+	case errors.Is(err, storage.ErrQueueNotFound):
+		return connect.CodeNotFound
+	default:
+		return connect.CodeInternal
+	}
+}
+
 // --- Queue Management ---.
 func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.CreateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	msg := req.Msg
@@ -72,10 +106,7 @@ func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.
 	}
 
 	if err := h.manager.CreateQueue(ctx, config); err != nil {
-		if errors.Is(err, queue.ErrProtectedQueueMutation) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-		}
-		return nil, connect.NewError(connect.CodeAlreadyExists, err)
+		return nil, connect.NewError(createQueueErrorCode(err), err)
 	}
 
 	return connect.NewResponse(h.queueToProto(&config)), nil
@@ -177,13 +208,7 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 
 	if h.manager != nil {
 		if err := h.manager.UpdateQueue(ctx, updated); err != nil {
-			if errors.Is(err, queue.ErrProtectedQueueMutation) {
-				return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-			}
-			if err == storage.ErrQueueNotFound {
-				return nil, connect.NewError(connect.CodeNotFound, err)
-			}
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(updateQueueErrorCode(err), err)
 		}
 		current, err := h.queueStore.GetQueue(ctx, updated.Name)
 		if err != nil {

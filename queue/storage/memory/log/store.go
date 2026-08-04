@@ -92,6 +92,15 @@ func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error
 
 // UpdateQueue updates an existing queue's configuration.
 func (s *Store) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	// Matches the disk-backed adapter: an update can introduce a filter that
+	// never matches just as a creation can. Only the filters are checked, not
+	// the whole configuration, because this is also how a stored configuration
+	// is replaced wholesale — including with one that has drifted from its
+	// contract, which the queue manager is what detects.
+	if err := types.ValidateTopicFilters(config.Topics); err != nil {
+		return err
+	}
+
 	val, exists := s.logs.Load(config.Name)
 	if !exists {
 		return storage.ErrQueueNotFound
