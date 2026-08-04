@@ -10,6 +10,10 @@ import "strings"
 // - filter can contain '+' (single level wildcard) and '#' (multi-level wildcard at end).
 // - topic must not contain wildcards.
 // - '$' prefix topics are special (no wildcards starting with $ match them unless explicit).
+// It walks levels with strings.Cut rather than splitting both sides, so it
+// allocates nothing. Queue topic matching calls it once per registered pattern
+// on the publish path of every protocol, where two slices per call became two
+// per pattern per message.
 func TopicMatch(filter, topic string) bool {
 	if filter == "" || topic == "" {
 		return false
@@ -18,42 +22,48 @@ func TopicMatch(filter, topic string) bool {
 		return true
 	}
 
-	filterLevels := strings.Split(filter, "/")
-	topicLevels := strings.Split(topic, "/")
-
 	// Special check for '$' topics - wildcards cannot match $ topics unless filter also starts with $
-	if strings.HasPrefix(topic, "$") {
-		if len(filter) == 0 || filter[0] != '$' {
+	if topic[0] == '$' {
+		if filter[0] != '$' {
 			return false
 		}
-		if filterLevels[0] == "+" || filterLevels[0] == "#" {
+		if firstLevel, _, _ := strings.Cut(filter, "/"); firstLevel == "+" || firstLevel == "#" {
 			return false
 		}
 	}
 
-	for i, fLevel := range filterLevels {
-		if fLevel == "#" {
+	remainingTopic := topic
+	topicExhausted := false
+	for {
+		filterLevel, filterRest, filterHasMore := strings.Cut(filter, "/")
+
+		if filterLevel == "#" {
 			// Multi-level wildcard matches everything from this point
 			return true
 		}
-
-		if i >= len(topicLevels) {
+		if topicExhausted {
 			// Filter has more levels than topic (and it's not #)
 			return false
 		}
 
-		tLevel := topicLevels[i]
+		topicLevel, topicRest, topicHasMore := strings.Cut(remainingTopic, "/")
 
-		if fLevel == "+" {
-			// Matches any single level
-			continue
-		}
-
-		if fLevel != tLevel {
+		// '+' matches any single level.
+		if filterLevel != "+" && filterLevel != topicLevel {
 			return false
 		}
-	}
 
-	// If we consumed all filter levels (none were #), we must have consumed all topic levels
-	return len(filterLevels) == len(topicLevels)
+		if !filterHasMore {
+			// All filter levels consumed (none were #), so the topic must be
+			// consumed too.
+			return !topicHasMore
+		}
+
+		filter = filterRest
+		if topicHasMore {
+			remainingTopic = topicRest
+			continue
+		}
+		topicExhausted = true
+	}
 }
