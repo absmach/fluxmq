@@ -742,7 +742,21 @@ func main() {
 			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
 		}
-		defer queueLogStore.Close()
+		// Releasing the store is conditional on the queue manager having fully
+		// stopped. A capture worker can outlive Stop when an append will not
+		// return — the store takes no context, so the wait is bounded rather
+		// than indefinite — and closing underneath that worker is a
+		// use-after-close on a segment it still holds. Leaking the handle into
+		// process exit is the cheaper failure.
+		defer func() {
+			if qm != nil && !qm.ShutdownComplete() {
+				slog.Error("queue log store left open: capture workers are still writing")
+				return
+			}
+			if err := queueLogStore.Close(); err != nil {
+				slog.Error("Failed to close queue log storage", "error", err)
+			}
+		}()
 
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()

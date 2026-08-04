@@ -275,10 +275,20 @@ being dropped. Raise `queue_manager.capture_workers` where many queues bind
 ordinary topics and one of them may block.
 
 On shutdown the dispatcher drains what it has queued, bounded by
-`queue_manager.capture_drain_timeout`. An append already in progress cannot be
-interrupted — the queue store takes no context — so a worker still inside one when
-the budget expires is left to finish while shutdown proceeds. Anything not
-written is counted in `capture_dropped` like any other loss.
+`queue_manager.capture_drain_timeout`. Anything it could not write is counted in
+`capture_dropped` like any other loss.
+
+An append already in progress cannot be interrupted — the queue store takes no
+context — so a worker may still be inside one when that budget expires. The
+broker then reports an unclean shutdown and **deliberately leaves the queue store
+open**, because closing it underneath an in-flight append would corrupt a segment
+that worker still holds. The handle is leaked into process exit instead, which is
+the cheaper failure. A log line names the cause when this happens. Raise
+`capture_drain_timeout` if a slow store makes it routine.
+
+The one job a worker is still writing is not counted in `capture_dropped`: its
+outcome is genuinely unknown, since the append may yet succeed, and the worker
+accounts for it either way once the store returns.
 
 A publisher that needs a persistence guarantee does not rely on capture at all.
 Use an exact publish target, whose append is synced before the publisher confirm

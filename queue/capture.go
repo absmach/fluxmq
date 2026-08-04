@@ -242,14 +242,20 @@ func (d *captureDispatcher) drain(ctx context.Context, lane chan captureJob) {
 }
 
 // Stop refuses further jobs, drains what is queued, and returns within
-// drainTimeout whether or not the workers finished.
+// drainTimeout whether or not the workers finished. It reports whether they did.
 //
 // A worker already inside an append cannot be interrupted: the store takes no
 // context and the write is not cancellable. Waiting on it would let one stalled
 // queue hold shutdown open indefinitely — the same failure dispatching capture
-// exists to prevent, moved to a different moment — so the wait is bounded and a
-// worker still wedged when the budget expires is left to finish on its own.
-func (d *captureDispatcher) Stop() {
+// exists to prevent, moved to a different moment — so the wait is bounded.
+//
+// A false return means a worker is still inside the queue store. It is then not
+// safe to tear down anything that worker touches: the store guards writes that
+// *start* after it closes, but an append already in flight holds a segment
+// obtained beforehand, and closing underneath it is a use-after-close. The
+// caller must leave those resources alone rather than free them; leaking a
+// handle into process exit is cheaper than writing into a closing segment.
+func (d *captureDispatcher) Stop() bool {
 	// Close acceptance first, and under the write lock, so no enqueue is in
 	// flight when the lanes stop being read.
 	d.closedMu.Lock()
@@ -264,13 +270,15 @@ func (d *captureDispatcher) Stop() {
 		close(drained)
 	}()
 
+	quiesced := true
 	timer := time.NewTimer(d.drainTimeout)
 	defer timer.Stop()
 	select {
 	case <-drained:
 	case <-timer.C:
+		quiesced = false
 		if d.logger != nil {
-			d.logger.Warn("capture drain timed out; a queue store is still blocking a worker",
+			d.logger.Warn("capture drain timed out; a queue store is still blocking a worker, so its resources must not be released",
 				slog.Duration("timeout", d.drainTimeout))
 		}
 	}
@@ -279,9 +287,16 @@ func (d *captureDispatcher) Stop() {
 	// visible in the same counter as any other. Acceptance is already closed, so
 	// no lane can grow while this runs; a worker racing for the same job only
 	// means one of the two accounts for it.
+	//
+	// A job a worker is still inside is deliberately not counted here. Its
+	// outcome is genuinely unknown — the append may yet succeed — and the worker
+	// accounts for it either way when the store returns. Counting it as dropped
+	// would be a guess, and the wrong one whenever the write lands.
 	for _, lane := range d.lanes {
 		d.sweep(lane)
 	}
+
+	return quiesced
 }
 
 // sweep counts every job left in a lane.

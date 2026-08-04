@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
@@ -43,6 +44,10 @@ var (
 	// ErrQueueNotProtected is returned when the exact durable stream publish
 	// path is used for a queue without a registered immutable contract.
 	ErrQueueNotProtected = errors.New("queue has no protected contract")
+	// ErrCaptureStillRunning is returned by Stop when a capture worker is still
+	// inside the queue store after the drain timeout. The manager's resources —
+	// the queue store especially — must not be released while that is true.
+	ErrCaptureStillRunning = errors.New("capture workers did not finish; queue resources left open")
 	// ErrProtectedQueueMutation is returned when a create, update, or delete
 	// would violate a registered queue contract.
 	ErrProtectedQueueMutation = errors.New("protected queue mutation rejected")
@@ -115,6 +120,11 @@ type Manager struct {
 
 	// capture writes topic captures off the publish path.
 	capture *captureDispatcher
+
+	// shutdownComplete records that Stop finished with no capture worker left
+	// inside the queue store, which is what makes the manager's resources safe
+	// to release. See ShutdownComplete.
+	shutdownComplete atomic.Bool
 
 	// Metrics
 	metrics *consumer.Metrics
@@ -428,19 +438,36 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 }
 
 // Stop stops the manager and all workers.
+// Stop shuts the manager down and reports whether that completed cleanly.
+//
+// Capture drains first. Its workers append through the queue store, schedule
+// delivery, and on replicated queues call the Raft coordinator, so those have to
+// outlive the drain rather than the other way round.
+//
+// A returned ErrCaptureStillRunning means a capture worker is still inside the
+// queue store and could not be interrupted. Everything it touches — the store
+// above all — must then be left alone: closing it underneath an in-flight append
+// is a use-after-close, and leaking the handle into process exit is the cheaper
+// outcome.
 func (m *Manager) Stop() error {
-	m.delivery.Stop()
+	// Bounded: a stalled store delays shutdown by at most the drain timeout.
+	quiesced := m.capture.Stop()
 
-	// Drain queued capture before the stores go away. The dispatcher bounds its
-	// own wait and counts whatever it could not write, so a stalled store
-	// delays shutdown by at most that bound instead of indefinitely.
-	m.capture.Stop()
+	m.delivery.Stop()
 
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
 	})
 
 	m.wg.Wait()
+
+	if !quiesced {
+		// Deliberately skip the Raft coordinator too: a worker still running may
+		// be mid-append on a replicated queue and would then be using it.
+		m.logger.Error("queue manager stopped with capture still running; its resources were left open",
+			slog.String("reason", "a queue store did not return within the capture drain timeout"))
+		return ErrCaptureStillRunning
+	}
 
 	// Stop Raft manager if enabled
 	if m.raftCoordinator != nil {
@@ -449,8 +476,22 @@ func (m *Manager) Stop() error {
 		}
 	}
 
+	m.shutdownComplete.Store(true)
 	m.logger.Info("queue-based queue manager stopped")
 	return nil
+}
+
+// ShutdownComplete reports whether Stop finished with every capture worker out
+// of the queue store.
+//
+// It gates releasing anything the manager shares with those workers, the queue
+// store above all. An append already in flight cannot be cancelled — the store
+// takes no context — so Stop bounds its wait rather than hanging, and a worker
+// may outlive it. Closing the store then would be a use-after-close on a segment
+// that worker still holds. Callers that own such a resource must consult this
+// and leak the handle instead; the process is exiting either way.
+func (m *Manager) ShutdownComplete() bool {
+	return m.shutdownComplete.Load()
 }
 
 // SetRaftManager sets the Raft replication manager.

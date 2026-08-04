@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -327,5 +328,73 @@ func TestCaptureStopIsBoundedByDrainTimeout(t *testing.T) {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop waited on an uninterruptible append instead of its drain timeout")
+	}
+}
+
+// Stop bounds its wait, so a worker can outlive it. When that happens the
+// manager must say so, because everything the worker is still using — the queue
+// store above all — has to be left open rather than closed underneath it.
+//
+// TestCaptureStopIsBoundedByDrainTimeout releases the store during cleanup, so
+// it proves the bound but never reaches this question.
+func TestManagerStopReportsCaptureStillUsingTheStore(t *testing.T) {
+	blocking := &blockingQueueStore{
+		QueueStore: memlog.New(),
+		release:    make(chan struct{}),
+		entered:    make(chan struct{}),
+	}
+	config := DefaultConfig()
+	config.CaptureWorkers = 1
+	config.CaptureDrainTimeout = 200 * time.Millisecond
+	mgr := NewManager(blocking, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	// Released only after the assertions, so the worker is genuinely still
+	// inside the store while Stop is examined.
+	t.Cleanup(func() { close(blocking.release) })
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture worker never reached the store")
+	}
+
+	err := mgr.Stop()
+	if !errors.Is(err, ErrCaptureStillRunning) {
+		t.Fatalf("Stop() error = %v, want %v", err, ErrCaptureStillRunning)
+	}
+	if mgr.ShutdownComplete() {
+		t.Fatal("ShutdownComplete reported true while a worker is still inside the store; the caller would close it")
+	}
+}
+
+// The ordinary path must still report a clean stop, or callers would leak the
+// store on every shutdown.
+func TestManagerStopReportsCleanShutdown(t *testing.T) {
+	mgr := NewManager(memlog.New(), newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if err := mgr.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if !mgr.ShutdownComplete() {
+		t.Fatal("ShutdownComplete reported false after a clean stop; the caller would leak the store")
 	}
 }
