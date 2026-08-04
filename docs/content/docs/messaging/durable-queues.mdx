@@ -255,6 +255,16 @@ exact publish target, whose append is synced before the publisher confirm and
 does fail the publish — see
 [Local principals and capture](/configuration/security#local-principals-and-capture).
 
+<Callout type="warn">
+  A failing queue is isolated; a *slow* one is not. Capture runs on the publish
+  path before subscribers are delivered to, and the append honours no
+  cancellation, so a queue whose storage stalls delays every subscriber of a
+  matching topic — and the publishing client's acknowledgement — for as long as
+  the append takes. Keep queues bound to high-rate ordinary topics on storage
+  that cannot block, and watch `queues.capture_failures` alongside publish
+  latency rather than on its own.
+</Callout>
+
 ### Delivery address of a captured message
 
 Consumers address queues through `$queue/`, so a captured message is rewritten

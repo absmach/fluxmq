@@ -54,3 +54,48 @@ func BenchmarkTopicIndexFindMatching(b *testing.B) {
 		})
 	}
 }
+
+// Scaling "$queue/" patterns measures the partition, which short-circuits them
+// to no work at all, so it flatters the matcher. The sensitive dimension is the
+// number of *ordinary* patterns: those are the half an ordinary publish actually
+// scans, and the scan is linear in them under a shared read lock.
+//
+// This is the benchmark to beat with an indexed matcher, and the case a
+// deployment binding many queues to ordinary topics pays on every publish.
+func BenchmarkTopicIndexFindMatchingOrdinaryPatternScale(b *testing.B) {
+	// A handful of queue-addressed queues alongside them, so the partition is
+	// present but is not the variable under test.
+	const queueAddressedQueues = 8
+
+	newIndex := func(ordinaryPatterns int) *TopicIndex {
+		index := NewTopicIndex()
+		for i := range queueAddressedQueues {
+			index.AddQueue(fmt.Sprintf("queue-%d", i), []string{fmt.Sprintf("$queue/queue-%d/#", i)})
+		}
+		for i := range ordinaryPatterns {
+			index.AddQueue(fmt.Sprintf("bound-%d", i), []string{fmt.Sprintf("t%d/+/events/#", i)})
+		}
+		return index
+	}
+
+	for _, patterns := range []int{8, 64, 512, 2048, 8192} {
+		index := newIndex(patterns)
+		for _, tc := range []struct {
+			name  string
+			topic string
+		}{
+			{name: "no_match", topic: benchOrdinaryTopic},
+			// Matching one pattern still scans all of them, so the two cases
+			// differ only by the result allocation.
+			{name: "one_match", topic: "t3/acme/events/temp"},
+		} {
+			b.Run(fmt.Sprintf("%s/%d_ordinary_patterns", tc.name, patterns), func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					index.FindMatching(tc.topic)
+				}
+			})
+		}
+	}
+}

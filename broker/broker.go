@@ -35,6 +35,14 @@ type QueuePublisher interface {
 // covers. Callers log and continue delivering. A publisher that needs a
 // persistence guarantee uses an exact publish target, whose durable append is
 // synced before the confirm and does fail the publish.
+//
+// That isolates a failing queue's errors, not its latency. Implementations run
+// on the publish path before subscriber delivery, and the append honours no
+// cancellation, so a slow or stuck store delays every subscriber of a matching
+// topic and the publisher's acknowledgement with it. Decoupling capture from
+// delivery requires a bounded dispatcher and an overflow policy, which is a
+// contract change rather than a fix; until then, treat a queue whose store can
+// block as able to stall the pub/sub path its pattern covers.
 type TopicQueuePublisher interface {
 	PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error
 }
