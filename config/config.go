@@ -12,7 +12,6 @@ import (
 	"time"
 
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
-	"github.com/absmach/fluxmq/topics"
 	"gopkg.in/yaml.v3"
 )
 
@@ -152,35 +151,27 @@ type LocalPermissionsConfig struct {
 }
 
 // NormalizeLocalSubscribeEntry converts one subscribe ACL entry into the
-// canonical filter form the runtime matches queue names against.
+// canonical form the runtime matches queue names against.
 //
-// A queue name is a dot-separated namespace and is one level of a consumer
-// address, never several: "$queue/atom.events/#" addresses queue "atom.events",
-// so "/" cannot separate anything inside a queue name and is rejected in an
-// entry. Both spellings of the single-level wildcard are accepted, because
-// which of "*" and "+" is idiomatic depends on which protocol a service speaks
-// rather than on what it is asking for: "atom.*" and "atom.+" are one grant.
+// Only the wildcard spelling is normalized: "*" becomes "+". Which of the two a
+// service writes follows the protocol it speaks rather than what it is asking
+// for, so "m.*.events" and "m.+.events" are one grant.
 //
-// The canonical form is slash-separated so that queue names and patterns are
-// matched by the same topic matcher the rest of the broker uses. That form is
-// internal; it is not a spelling configuration may use.
+// Separators are deliberately left alone. A queue name is a name, not an
+// address: nothing constrains the characters in one, so a queue may legitimately
+// be called "atom.events" or "a/b" or "$internal". Translating "." to "/" would
+// make "a.b" and "a/b" the same key and let a grant on one authorize the other.
 //
-// A wildcard grant is bounded by its non-wildcard levels, which is what
-// separates one service's reach from another's. Unlike routing_key_prefix,
-// which is a wildcard by construction and so must never be written as one, a
-// subscribe pattern says exactly what it grants, so it is spelled out.
+// The consequence is that "*", "+" and "#" cannot appear literally in a queue
+// name an ACL entry names. That is the same trade every wildcard syntax makes.
 //
 // Config validation and the runtime store share this function, so a pattern
 // cannot pass the startup check and then be matched differently at runtime.
 func NormalizeLocalSubscribeEntry(entry string) string {
-	return topics.AMQPFilterToMQTT(entry)
-}
-
-// NormalizeLocalSubscribeQueue converts a resolved queue name into the space
-// normalized subscribe entries are expressed in. It translates separators only:
-// a queue name is a name, so a wildcard character in one is a literal.
-func NormalizeLocalSubscribeQueue(queue string) string {
-	return topics.AMQPTopicToMQTT(queue)
+	if !strings.Contains(entry, "*") {
+		return entry
+	}
+	return strings.ReplaceAll(entry, "*", "+")
 }
 
 // LocalSubscribeEntryIsPattern reports whether a normalized subscribe entry
@@ -191,8 +182,68 @@ func LocalSubscribeEntryIsPattern(normalized string) bool {
 
 // MatchLocalSubscribeQueue reports whether a normalized subscribe pattern grants
 // a queue.
+//
+// Levels are separated by "."; "+" matches exactly one level and "#" matches
+// zero or more trailing levels, so "atom.#" grants "atom" itself. The queue name
+// is matched literally, so a "/" or "$" in it is an ordinary character rather
+// than structure.
 func MatchLocalSubscribeQueue(normalizedPattern, queue string) bool {
-	return topics.TopicMatch(normalizedPattern, NormalizeLocalSubscribeQueue(queue))
+	if normalizedPattern == "" || queue == "" {
+		return false
+	}
+	if normalizedPattern == queue {
+		return true
+	}
+
+	remainingQueue := queue
+	queueExhausted := false
+	for {
+		level, patternRest, patternHasMore := strings.Cut(normalizedPattern, ".")
+
+		if level == "#" {
+			return true
+		}
+		if queueExhausted {
+			return false
+		}
+
+		queueLevel, queueRest, queueHasMore := strings.Cut(remainingQueue, ".")
+
+		if level != "+" && level != queueLevel {
+			return false
+		}
+		if !patternHasMore {
+			return !queueHasMore
+		}
+
+		normalizedPattern = patternRest
+		if queueHasMore {
+			remainingQueue = queueRest
+			continue
+		}
+		queueExhausted = true
+	}
+}
+
+// localSubscribeQueuePrefix is the address prefix a client uses to reach a
+// queue. It is duplicated from the routing resolver rather than imported to
+// keep config free of a dependency on the broker packages that read it.
+const localSubscribeQueuePrefix = "$queue/"
+
+// validateLocalSubscribeEntry checks wildcard placement in a normalized entry.
+// It mirrors MQTT filter rules over "." levels: "#" must be the whole final
+// level and "+" must be a whole level.
+func validateLocalSubscribeEntry(normalized string) error {
+	levels := strings.Split(normalized, ".")
+	for i, level := range levels {
+		if strings.Contains(level, "#") && (level != "#" || i != len(levels)-1) {
+			return fmt.Errorf("%q must be the entire final level", "#")
+		}
+		if strings.Contains(level, "+") && level != "+" {
+			return fmt.Errorf("%q must be an entire level", "+")
+		}
+	}
+	return nil
 }
 
 // LocalPublishPermission grants publish access to an AMQP target, named either
@@ -1947,24 +1998,16 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			if strings.TrimSpace(queue) != queue {
 				return fmt.Errorf("%s cannot have leading or trailing whitespace", permissionPrefix)
 			}
-			// The ACL names queues, and a queue name is one level of a consumer
-			// address rather than the address itself. Writing "$queue/m" or
-			// "$queue/#" here would name no queue and so grant nothing at all,
-			// which a wildcard makes easy to do without noticing.
-			if strings.HasPrefix(queue, "$") {
+			// The ACL names queues, and a client reaches one through the queue
+			// prefix, so "$queue/m" here would name no queue and grant nothing at
+			// all. Only that prefix is rejected: "$" is otherwise an ordinary
+			// character and a queue may legitimately be named "$internal".
+			if rest, isAddress := strings.CutPrefix(queue, localSubscribeQueuePrefix); isAddress {
 				return fmt.Errorf("%s must name a queue rather than a queue address; write %q, not %q",
-					permissionPrefix, strings.ReplaceAll(strings.TrimPrefix(queue, "$queue/"), "/", "."), queue)
-			}
-			// "/" separates the levels of a consumer address, not the levels of a
-			// queue name, so an entry using it reads as an address it is not:
-			// "atom/+" looks like "$queue/atom/+" but would mean a two-part queue
-			// name beginning with "atom".
-			if strings.Contains(queue, "/") {
-				return fmt.Errorf("%s must separate queue-name levels with %q rather than %q; write %q",
-					permissionPrefix, ".", "/", strings.ReplaceAll(queue, "/", "."))
+					permissionPrefix, strings.TrimSuffix(rest, "/#"), queue)
 			}
 			normalized := NormalizeLocalSubscribeEntry(queue)
-			if err := topics.ValidateTopicFilter(normalized); err != nil {
+			if err := validateLocalSubscribeEntry(normalized); err != nil {
 				return fmt.Errorf("%s is not a valid queue pattern: %w", permissionPrefix, err)
 			}
 			if _, exists := subscribeQueues[normalized]; exists {

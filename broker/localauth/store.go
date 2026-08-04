@@ -221,16 +221,18 @@ func (s *Store) AuthorizePublish(authentication Authentication, exchange, routin
 // loading both independently would leave a revocation race when a reload lands
 // between the two checks.
 //
-// queue is a resolved queue name, never a consumer address. An entry naming it
-// exactly is one map lookup; the wildcard entries are scanned only when that
-// misses, so granting patterns costs a principal nothing until it uses them.
+// queue is a resolved queue name, never a consumer address, and is matched
+// literally: nothing constrains the characters in a queue name, so no separator
+// translation happens on either side. An entry naming it exactly is one map
+// lookup; the wildcard entries are scanned only when that misses, so granting
+// patterns costs a principal nothing until it uses them.
 func (s *Store) CanSubscribeAuthenticated(authentication Authentication, queue string) bool {
 	current := s.current.Load()
 	if !authenticationActive(current, authentication) {
 		return false
 	}
 	principal := current.principals[authentication.Principal]
-	if _, allowed := principal.subscribe[config.NormalizeLocalSubscribeQueue(queue)]; allowed {
+	if _, allowed := principal.subscribe[queue]; allowed {
 		return true
 	}
 	for _, pattern := range principal.subscribePatterns {

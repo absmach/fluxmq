@@ -473,6 +473,34 @@ func TestSubscribeACLWildcards(t *testing.T) {
 		})
 	}
 
+	// Nothing constrains the characters in a queue name, so a name is matched
+	// literally. Translating separators would make distinct queues collide and
+	// would let a grant on one authorize the other.
+	t.Run("names that are not dot-separated are matched literally", func(t *testing.T) {
+		store := storeWith(t, "a.b", "$internal", "x/y")
+		authentication := authenticate(t, store)
+
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "a.b"))
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "$internal"),
+			"a queue may legitimately be named with a leading $")
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "x/y"),
+			"a queue may legitimately contain a slash")
+
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "a/b"),
+			"a.b and a/b are different queues and must not alias")
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "x.y"),
+			"x/y and x.y are different queues and must not alias")
+	})
+
+	t.Run("a pattern does not reach across a literal separator", func(t *testing.T) {
+		store := storeWith(t, "a.+")
+		authentication := authenticate(t, store)
+
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "a.b"))
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "a/b"),
+			"a/b is a single level and is not beneath a.")
+	})
+
 	t.Run("the queue asked for is never read as a pattern", func(t *testing.T) {
 		store := storeWith(t, auditQueue)
 		authentication := authenticate(t, store)

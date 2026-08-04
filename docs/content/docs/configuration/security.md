@@ -256,7 +256,7 @@ distinction they drew no longer means anything.
 
 `subscribe` names queues, either exactly or by pattern; duplicates, blank
 entries, surrounding whitespace, malformed wildcards, and entries written as
-queue addresses (`$queue/m`, `atom/+`) are rejected at load. A principal declaring no
+queue addresses (`$queue/m`) are rejected at load. A principal declaring no
 `subscribe` entry is refused a consumer even with the `service` role, and one
 declaring no `publish` entry cannot publish. Unlike exact publish targets,
 subscribe targets need no matching `queues` entry: the durability contract those
@@ -283,10 +283,16 @@ protocol it speaks rather than what it is asking for, so `m.*.events` and
 `m.+.events` are one grant. As in MQTT, `#` also matches its own root, so
 `audit.#` grants `audit` itself.
 
-`/` is rejected. It separates the levels of a consumer *address*, not of a queue
-name: `$queue/atom.events/#` addresses the single queue `atom.events`, so a
-queue name has no `/` in it and an entry written `atom/+` would read as an
-address it is not.
+Only `.` separates levels. A queue name is a name rather than an address, and
+nothing constrains the characters in one, so `/` and a leading `$` are ordinary
+characters: a queue may legitimately be called `a/b` or `$internal`, and an entry
+names it literally. An entry written `atom/+` is therefore a malformed
+single-level name rather than a pattern, and is rejected as one. Only the
+`$queue/` address prefix is refused, because an entry beginning with it names no
+queue and would grant nothing.
+
+The trade is that `*`, `+` and `#` cannot appear literally in a queue name an
+entry names, which is the same trade every wildcard syntax makes.
 
 The wildcard applies only to the ACL. The queue a client asks for is always
 treated as a literal name, so a caller cannot widen an exact grant by asking for

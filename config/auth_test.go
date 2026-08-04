@@ -24,6 +24,7 @@ const (
 	testServerCert    = "server.crt"
 	testServerKey     = "server.key"
 	testClientCA      = "clients.crt"
+	testBadPattern    = "is not a valid queue pattern"
 )
 
 func TestLoadNestedAuth(t *testing.T) {
@@ -309,14 +310,32 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			},
 		},
 		{
-			name: "subscribe permission rejects a queue-address separator",
+			name: "subscribe permission accepts a queue name with a leading dollar",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{"$internal"}
+				return []LocalPrincipalConfig{principal}
+			},
+		},
+		{
+			name: "subscribe permission accepts a queue name containing a slash",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{"a/b"}
+				return []LocalPrincipalConfig{principal}
+			},
+		},
+		{
+			name: "subscribe permission rejects an MQTT-shaped wildcard",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
 				principal.Role = LocalRoleService
 				principal.Permissions.Subscribe = []string{"atom/+"}
 				return []LocalPrincipalConfig{principal}
 			},
-			wantError: `must separate queue-name levels with "." rather than "/"; write "atom.+"`,
+			wantError: testBadPattern,
 		},
 		{
 			name: "subscribe permission rejects a malformed wildcard",
@@ -326,7 +345,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 				principal.Permissions.Subscribe = []string{testAuditQueue + ".#.tail"}
 				return []LocalPrincipalConfig{principal}
 			},
-			wantError: "is not a valid queue pattern",
+			wantError: testBadPattern,
 		},
 		{
 			name: "subscribe permission rejects a partial-level wildcard",
@@ -336,14 +355,14 @@ func TestValidateLocalPrincipals(t *testing.T) {
 				principal.Permissions.Subscribe = []string{testAuditQueue + ".ev*"}
 				return []LocalPrincipalConfig{principal}
 			},
-			wantError: "is not a valid queue pattern",
+			wantError: testBadPattern,
 		},
 		{
 			name: "subscribe permission rejects a queue address",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
 				principal.Role = LocalRoleService
-				principal.Permissions.Subscribe = []string{"$queue/" + testAuditQueue}
+				principal.Permissions.Subscribe = []string{"$queue/" + testAuditQueue + "/#"}
 				return []LocalPrincipalConfig{principal}
 			},
 			wantError: "must name a queue rather than a queue address",
