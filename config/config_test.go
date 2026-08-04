@@ -526,3 +526,60 @@ func TestNormalizeProtocolMode(t *testing.T) {
 		})
 	}
 }
+
+// The capture knobs bound how much unwritten capture a stalled queue store can
+// hold, so a negative value is a configuration error rather than a default.
+// Zero is not: it selects the built-in default, which is what an unset field
+// decodes to.
+func TestValidateQueueManagerCaptureBounds(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*QueueManagerConfig)
+		wantError string
+	}{
+		{
+			name:      "defaults are valid",
+			configure: func(*QueueManagerConfig) {},
+		},
+		{
+			name:      "zero selects the default",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth, q.CaptureDrainTimeout = 0, 0, 0 },
+		},
+		{
+			name:      "explicit values are valid",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth = 2, 64 },
+		},
+		{
+			name:      "negative workers rejected",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = -1 },
+			wantError: "queue_manager.capture_workers must be >= 0",
+		},
+		{
+			name:      "negative depth rejected",
+			configure: func(q *QueueManagerConfig) { q.CaptureQueueDepth = -1 },
+			wantError: "queue_manager.capture_queue_depth must be >= 0",
+		},
+		{
+			name:      "negative drain timeout rejected",
+			configure: func(q *QueueManagerConfig) { q.CaptureDrainTimeout = -1 },
+			wantError: "queue_manager.capture_drain_timeout must be >= 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.configure(&cfg.QueueManager)
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantError)
+			}
+		})
+	}
+}

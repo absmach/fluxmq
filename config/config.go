@@ -530,6 +530,16 @@ type QueueManagerConfig struct {
 	// AutoCommitInterval controls how often stream groups auto-commit offsets.
 	// Zero means commit on every delivery batch.
 	AutoCommitInterval time.Duration `yaml:"auto_commit_interval"`
+
+	// Topic capture runs off the publish path so a stalled queue store cannot
+	// delay subscribers. These bound that machinery. Zero selects the default.
+	//
+	// CaptureQueueDepth counts jobs rather than bytes, so the memory ceiling is
+	// capture_workers x capture_queue_depth payloads. A deployment capturing
+	// large messages should lower it.
+	CaptureWorkers      int           `yaml:"capture_workers"`
+	CaptureQueueDepth   int           `yaml:"capture_queue_depth"`
+	CaptureDrainTimeout time.Duration `yaml:"capture_drain_timeout"`
 }
 
 // RateLimitConfig holds rate limiting configuration.
@@ -1834,6 +1844,15 @@ func (c *Config) Validate() error {
 
 	if c.QueueManager.AutoCommitInterval < 0 {
 		return fmt.Errorf("queue_manager.auto_commit_interval must be >= 0")
+	}
+	if c.QueueManager.CaptureWorkers < 0 {
+		return fmt.Errorf("queue_manager.capture_workers must be >= 0")
+	}
+	if c.QueueManager.CaptureQueueDepth < 0 {
+		return fmt.Errorf("queue_manager.capture_queue_depth must be >= 0")
+	}
+	if c.QueueManager.CaptureDrainTimeout < 0 {
+		return fmt.Errorf("queue_manager.capture_drain_timeout must be >= 0")
 	}
 
 	// Queue validation

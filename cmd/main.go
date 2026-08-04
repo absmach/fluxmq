@@ -747,6 +747,16 @@ func main() {
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
 		queueCfg.AutoCommitInterval = cfg.QueueManager.AutoCommitInterval
+		// Zero leaves the dispatcher default in place.
+		if cfg.QueueManager.CaptureWorkers > 0 {
+			queueCfg.CaptureWorkers = cfg.QueueManager.CaptureWorkers
+		}
+		if cfg.QueueManager.CaptureQueueDepth > 0 {
+			queueCfg.CaptureQueueDepth = cfg.QueueManager.CaptureQueueDepth
+		}
+		if cfg.QueueManager.CaptureDrainTimeout > 0 {
+			queueCfg.CaptureDrainTimeout = cfg.QueueManager.CaptureDrainTimeout
+		}
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {

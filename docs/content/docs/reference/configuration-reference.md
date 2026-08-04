@@ -240,11 +240,19 @@ session:
 ```yaml
 queue_manager:
   auto_commit_interval: "5s"
+  capture_workers: 4
+  capture_queue_depth: 1024
+  capture_drain_timeout: "5s"
 ```
 
-| Field                  | Default | Description                                                                 |
-| ---------------------- | ------- | --------------------------------------------------------------------------- |
-| `auto_commit_interval` | `5s`    | Stream-group auto-commit cadence. `0` means commit on every delivery batch. |
+| Field                   | Default | Description                                                                 |
+| ----------------------- | ------- | --------------------------------------------------------------------------- |
+| `auto_commit_interval`  | `5s`    | Stream-group auto-commit cadence. `0` means commit on every delivery batch. |
+| `capture_workers`       | `4`     | Lanes writing captured publishes off the publish path. A queue is always handled by the same lane, so its appends keep publish order and a stalled queue holds up only its own lane. `0` selects the default. |
+| `capture_queue_depth`   | `1024`  | Per-lane backlog, counted in **jobs, not bytes**. The memory ceiling is `capture_workers × capture_queue_depth` payloads, so lower it when capturing large messages. When a lane fills, the newest job is dropped and counted in `queues.capture_dropped`. `0` selects the default. |
+| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. `0` selects the default. |
+
+Capture never blocks the publish path: see [Capturing Ordinary Topics](/messaging/durable-queues#capturing-ordinary-topics).
 
 ## Queues
 

@@ -23,7 +23,8 @@ const (
 	// than bytes. It bounds how long a stalled store can absorb publishes before
 	// jobs are dropped, so memory stays flat instead of growing with the stall —
 	// but the ceiling is workers x depth payloads, so a deployment capturing
-	// large messages should lower it rather than assume the default is small.
+	// large messages should lower queue_manager.capture_queue_depth rather than
+	// assume the default is small.
 	defaultCaptureQueueDepth = 1024
 	// defaultCaptureDrainTimeout bounds how long Stop waits for queued capture
 	// to be written. Anything still queued after it is counted as dropped

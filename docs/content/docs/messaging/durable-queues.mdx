@@ -217,6 +217,11 @@ normal subscribers **and** has the message persisted in `messages`. Capture is i
 addition to pub/sub delivery, never instead of it: the publisher does not opt in,
 does not address the queue, and cannot tell that it happened.
 
+It also does not wait for it. The persistence happens shortly after the publish
+rather than as part of it, so a message is delivered to subscribers and
+acknowledged before it is necessarily in the queue — see
+[When capture fails](#when-capture-fails).
+
 Three consequences worth knowing:
 
 - **The queue's `topics` pattern is what grants persistence.** No publisher-side
