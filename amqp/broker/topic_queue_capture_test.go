@@ -30,7 +30,7 @@ func TestPublishCapturesAMQP091PubSubTopic(t *testing.T) {
 	b.queueManager = qm
 
 	props := map[string]string{corebroker.ClientIDProperty: "amqp091:publisher"}
-	if err := b.Publish("m/domain/c/channel/tst", []byte("payload"), props); err != nil {
+	if err := b.Publish(context.Background(), "m/domain/c/channel/tst", []byte("payload"), props); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func TestPublishSurvivesQueueCaptureFailure(t *testing.T) {
 		delivered++
 	})
 
-	if err := b.Publish("m/domain/c/channel/tst", []byte("payload"), nil); err != nil {
+	if err := b.Publish(context.Background(), "m/domain/c/channel/tst", []byte("payload"), nil); err != nil {
 		t.Fatalf("capture failure must not fail the publish, got %v", err)
 	}
 	if qm.calls != 1 {

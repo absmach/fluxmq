@@ -176,7 +176,7 @@ func TestPublishDispatchesToLocalAndCross(t *testing.T) {
 		gotClientID = clientID
 	})
 
-	if err := b.Publish(testTelemetryRoom1, []byte("hello"), map[string]string{qtypes.PropMessageID: "m1"}); err != nil {
+	if err := b.Publish(context.Background(), testTelemetryRoom1, []byte("hello"), map[string]string{qtypes.PropMessageID: "m1"}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 

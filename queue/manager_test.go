@@ -38,6 +38,7 @@ const (
 	testAuditQueueFilter = "$queue/atom.events/#"
 	testCapturedTopic    = "m/domain/c/channel/tst"
 	testCaptureQueue     = "messages"
+	testCapturePublisher = "mqtt-publisher"
 )
 
 type targetCheckingDeliverer struct {
@@ -1103,7 +1104,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	payload := []byte("original")
 	properties := map[string]string{"source": "device"}
 	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		ClientID:   "mqtt-publisher",
+		ClientID:   testCapturePublisher,
 		Topic:      testCapturedTopic,
 		Payload:    payload,
 		Properties: properties,
@@ -1139,7 +1140,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	if got := stored.Properties["source"]; got != "device" {
 		t.Fatalf("captured source = %q, want device", got)
 	}
-	if got := stored.Properties[corebroker.ClientIDProperty]; got != "mqtt-publisher" {
+	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
 		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
 	}
 
@@ -3518,5 +3519,48 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("healthy queue stored %d messages, want 1", count)
+	}
+}
+
+// PublishToMatchingQueues stores what it is given, so it must take ownership of
+// the caller's payload and properties. An empty non-nil map is still the
+// caller's map, and normalizing the request writes a client ID into whatever it
+// is handed, so cloning only non-empty maps would mutate a protocol broker's
+// own state.
+func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	properties := map[string]string{}
+	payload := []byte("original")
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		ClientID:   testCapturePublisher,
+		Topic:      testCapturedTopic,
+		Payload:    payload,
+		Properties: properties,
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+
+	if len(properties) != 0 {
+		t.Fatalf("caller's property map was written to: %v", properties)
+	}
+
+	// The stored copy must survive the caller reusing its buffer.
+	payload[0] = 'X'
+	stored, err := logStore.Read(ctx, testCaptureQueue, 0)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if got := string(stored.GetPayload()); got != "original" {
+		t.Fatalf("stored payload = %q, want original", got)
+	}
+	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
+		t.Fatalf("stored client ID = %q, want mqtt-publisher", got)
 	}
 }

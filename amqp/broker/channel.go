@@ -783,7 +783,7 @@ func (ch *Channel) publishToPubSub(pubsubTopic string, body []byte, props map[st
 		}
 	}
 
-	publishFailed := ch.conn.broker.Publish(pubsubTopic, body, props) != nil
+	publishFailed := ch.conn.broker.Publish(ch.conn.publishContext(), pubsubTopic, body, props) != nil
 	if ch.confirmMode {
 		if publishFailed {
 			ch.sendPublisherNack()

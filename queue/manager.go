@@ -4,10 +4,12 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -839,14 +841,13 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 
 	// Protocol brokers release or reuse their message buffers after this call.
 	// Take ownership of independent data before appending or forwarding it.
-	publish.Payload = append([]byte(nil), publish.Payload...)
-	if len(publish.Properties) > 0 {
-		properties := make(map[string]string, len(publish.Properties))
-		for key, value := range publish.Properties {
-			properties[key] = value
-		}
-		publish.Properties = properties
-	}
+	//
+	// The map is cloned whenever it exists rather than only when it holds
+	// entries: an empty non-nil map is still the caller's, and
+	// normalizePublishRequest writes the client ID into whatever it is given.
+	// Clone leaves a nil map nil, which that call then replaces outright.
+	publish.Payload = bytes.Clone(publish.Payload)
+	publish.Properties = maps.Clone(publish.Properties)
 	publish = normalizePublishRequest(publish)
 
 	if err := m.publishToTargets(ctx, publish, targets); err != nil {
@@ -909,13 +910,7 @@ func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishReq
 
 	// Preserve legacy forwarding for queues known only by remote nodes.
 	if m.cluster != nil {
-		// Known local queues already have exactly one delivery path: the
-		// delivery engine routes non-replicated records to remote consumers,
-		// while Raft makes replicated records available on the consumer node.
-		// Forwarding the publish as well would append a second copy remotely.
-		// Keep legacy forwarding only for cluster consumers whose queue is not
-		// known on this node.
-		m.forwardToRemoteNodes(ctx, publish, true)
+		m.forwardToRemoteNodes(ctx, publish)
 	}
 
 	return nil
@@ -1230,8 +1225,14 @@ func autoQueueFromTopic(topic string) (queueName, pattern string) {
 	return topic, topic
 }
 
-// forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
-func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest, unknownOnly bool) {
+// forwardToRemoteNodes forwards a publish to nodes holding consumers for a
+// queue this node does not know.
+//
+// A queue known here already has exactly one delivery path: the delivery engine
+// routes non-replicated records to remote consumers, and Raft makes replicated
+// records available on the consumer's node. Forwarding such a publish as well
+// would append a second copy remotely, so only unknown queues are forwarded.
+func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest) {
 	// Get all consumers from the cluster
 	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
 	if err != nil {
@@ -1269,7 +1270,7 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 			continue
 		}
 
-		if unknownOnly && queueExists(c.QueueName) {
+		if queueExists(c.QueueName) {
 			continue
 		}
 
