@@ -99,3 +99,29 @@ func BenchmarkTopicIndexFindMatchingOrdinaryPatternScale(b *testing.B) {
 		}
 	}
 }
+
+// The same scan also served publishes addressed to a queue, where the cost grew
+// with the number of configured queues rather than with traffic. That case is
+// indexed by the same trie, so it should be flat too — and it is the dimension a
+// broker with many queues actually grows along.
+func BenchmarkTopicIndexFindMatchingQueueAddressScale(b *testing.B) {
+	newIndex := func(queues int) *TopicIndex {
+		index := NewTopicIndex()
+		for i := range queues {
+			name := fmt.Sprintf("queue-%d", i)
+			index.AddQueue(name, []string{"$queue/" + name + "/#"})
+		}
+		return index
+	}
+
+	for _, queues := range []int{8, 512, 8192} {
+		index := newIndex(queues)
+		b.Run(fmt.Sprintf("one_match/%d_queues", queues), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				index.FindMatching("$queue/queue-7/items")
+			}
+		})
+	}
+}
