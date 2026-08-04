@@ -36,6 +36,7 @@ type Server struct {
 	broker        *mqttbroker.Broker
 	amqpBroker    *amqpbroker.Broker
 	cluster       cluster.Cluster
+	queueManager  *queue.Manager
 	reloadManager *reload.Manager
 	httpServer    *http.Server
 	logger        *slog.Logger
@@ -48,11 +49,12 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 	}
 
 	s := &Server{
-		config:     config,
-		broker:     broker,
-		amqpBroker: amqp,
-		cluster:    cl,
-		logger:     logger,
+		config:       config,
+		broker:       broker,
+		amqpBroker:   amqp,
+		cluster:      cl,
+		queueManager: manager,
+		logger:       logger,
 	}
 
 	mux := http.NewServeMux()

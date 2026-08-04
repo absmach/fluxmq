@@ -229,6 +229,25 @@ Three consequences worth knowing:
   `$queue/<name>/...` takes the queue route directly; the capture step is skipped
   for it.
 
+### When capture fails
+
+A capture that cannot be stored never fails the publish. The publisher did not
+ask for persistence, is told nothing about it, and the append carries no
+durability barrier, so failing the publish would deny every subscriber the
+message without buying any guarantee — one queue's storage error would silence
+pub/sub across every topic its pattern covers. The broker logs the failure and
+keeps delivering.
+
+That makes the failure invisible to the publisher by design, so watch it from
+the operator plane instead. `GET /api/v1/stats` reports `queues.capture_failures`,
+the count of publishes a matching queue could not store. A non-zero and rising
+value means a queue is dropping the traffic its pattern binds.
+
+A publisher that needs a persistence guarantee does not rely on capture. Use an
+exact publish target, whose append is synced before the publisher confirm and
+does fail the publish — see
+[Local principals and capture](/configuration/security#local-principals-and-capture).
+
 ### Delivery address of a captured message
 
 Consumers address queues through `$queue/`, so a captured message is rewritten

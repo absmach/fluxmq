@@ -97,6 +97,40 @@ type byProtocolStats struct {
 	AMQP *amqpStats `json:"amqp,omitempty"`
 }
 
+// queueStats reports the queue manager's counters. Queues are shared by every
+// protocol, so this sits beside by_protocol rather than inside it.
+type queueStats struct {
+	// CaptureFailures counts pub/sub publishes that a queue bound to their
+	// topic could not store. Capture never fails the publish, so without this
+	// counter a queue silently dropping the traffic its pattern binds would
+	// leave no trace outside the logs.
+	CaptureFailures uint64            `json:"capture_failures"`
+	Claims          queueAttemptStats `json:"claims"`
+	Steals          queueAttemptStats `json:"steals"`
+	Acknowledgments queueAckStats     `json:"acknowledgments"`
+	Pending         queuePendingStats `json:"pending"`
+}
+
+type queueAttemptStats struct {
+	Attempts  uint64 `json:"attempts"`
+	Successes uint64 `json:"successes"`
+	Failures  uint64 `json:"failures"`
+}
+
+type queueAckStats struct {
+	Ack    uint64 `json:"ack"`
+	Nack   uint64 `json:"nack"`
+	Reject uint64 `json:"reject"`
+	DLQ    uint64 `json:"dlq"`
+}
+
+// queuePendingStats describes the pending entry list, which only classic queues
+// maintain: a stream group tracks a cursor instead.
+type queuePendingStats struct {
+	Current   uint64 `json:"current"`
+	HighWater uint64 `json:"high_water"`
+}
+
 type statsResponse struct {
 	UptimeSeconds float64         `json:"uptime_seconds"`
 	Connections   connectionStats `json:"connections"`
@@ -104,6 +138,7 @@ type statsResponse struct {
 	Bytes         byteStats       `json:"bytes"`
 	Errors        errorStats      `json:"errors"`
 	ByProtocol    byProtocolStats `json:"by_protocol"`
+	Queues        *queueStats     `json:"queues,omitempty"`
 }
 
 func (s *Server) buildStatsResponse() statsResponse {
@@ -207,6 +242,33 @@ func (s *Server) buildStatsResponse() statsResponse {
 					Failure:           ast.GetLocalReloadFailures(),
 					ForcedDisconnects: ast.GetLocalForcedDisconnects(),
 				},
+			},
+		}
+	}
+
+	if s.queueManager != nil {
+		qm := s.queueManager.GetMetrics()
+		resp.Queues = &queueStats{
+			CaptureFailures: qm.CaptureFailures,
+			Claims: queueAttemptStats{
+				Attempts:  qm.ClaimAttempts,
+				Successes: qm.ClaimSuccesses,
+				Failures:  qm.ClaimFailures,
+			},
+			Steals: queueAttemptStats{
+				Attempts:  qm.StealAttempts,
+				Successes: qm.StealSuccesses,
+				Failures:  qm.StealFailures,
+			},
+			Acknowledgments: queueAckStats{
+				Ack:    qm.AckCount,
+				Nack:   qm.NackCount,
+				Reject: qm.RejectCount,
+				DLQ:    qm.DLQCount,
+			},
+			Pending: queuePendingStats{
+				Current:   qm.PELSize,
+				HighWater: qm.PELHighWater,
 			},
 		}
 	}

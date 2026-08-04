@@ -4,7 +4,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,10 @@ import (
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
+	"github.com/absmach/fluxmq/queue"
+	qstorage "github.com/absmach/fluxmq/queue/storage"
+	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
+	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage/memory"
 )
 
@@ -217,5 +223,73 @@ func TestStatsRejectsPost(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+// appendFailingQueueStore stands in for a queue whose storage is unavailable.
+type appendFailingQueueStore struct {
+	qstorage.QueueStore
+}
+
+func (s *appendFailingQueueStore) Append(_ context.Context, _ string, _ *qtypes.Message) (uint64, error) {
+	return 0, errors.New("storage unavailable")
+}
+
+// A queue silently dropping the traffic its topic pattern binds is the failure
+// mode capture introduces, and the counter is its only signal, so it has to
+// reach the operator plane rather than stopping at GetMetrics.
+func TestStatsReportsQueueMetrics(t *testing.T) {
+	store := memory.New()
+	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
+	logStore := &appendFailingQueueStore{QueueStore: memlog.New()}
+	manager := queue.NewManager(logStore, nil, nil, queue.DefaultConfig(), slog.Default(), nil)
+	srv := New(Config{}, b, nil, nil, manager, nil, nil, slog.Default())
+
+	ctx := context.Background()
+	if err := manager.CreateQueue(ctx, qtypes.DefaultQueueConfig("messages", "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	if err := manager.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
+		Topic:   "m/acme/temp",
+		Payload: []byte("payload"),
+	}); err == nil {
+		t.Fatal("expected the capture to fail")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp statsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Queues == nil {
+		t.Fatal("expected a queues section when a queue manager is configured")
+	}
+	if resp.Queues.CaptureFailures != 1 {
+		t.Fatalf("capture_failures = %d, want 1", resp.Queues.CaptureFailures)
+	}
+}
+
+func TestStatsOmitsQueuesWithoutManager(t *testing.T) {
+	store := memory.New()
+	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
+	srv := New(Config{}, b, nil, nil, nil, nil, nil, slog.Default())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, present := body["queues"]; present {
+		t.Fatal("queues must be omitted when no queue manager is configured")
 	}
 }
