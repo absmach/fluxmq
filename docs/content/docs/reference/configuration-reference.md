@@ -309,16 +309,24 @@ queues:
 | `type`          | Queue mode: `classic` or `stream`. Empty value falls back to default mode. |
 | `primary_group` | For stream queues: consumer group used for status reporting.               |
 
-Queue patterns are validated when the configuration loads. A malformed filter — a
+Queue patterns are validated wherever a queue is created. A malformed filter — a
 `#` that is not the final level, a wildcard sharing a level with other characters
-— is a startup error naming the queue, the filter and its position, because such a
-filter can never match and would leave the queue silently receiving nothing.
+— can never match, and would leave the queue silently receiving nothing, so it is
+refused:
 
-This can turn a configuration that previously started into one that does not, and
-that is deliberate. Earlier releases matched a misplaced `#` against *every*
-topic, since the matcher returned a match on seeing one regardless of position, so
-a queue bound to `#/events` was capturing all traffic on the broker rather than
-the events it named. Fix the filter rather than work around the error.
+- in this file, as a startup error naming the queue, the filter and its position;
+- through the admin API, as a rejected create or update.
+
+A queue **already persisted** with such a filter is not refused, because the data
+is on disk and startup is not where it can be fixed. It is reported at startup
+instead, naming the queue and the filter, and the queue keeps working through
+whichever of its filters are valid.
+
+Refusing these can turn a configuration that previously started into one that does
+not, and that is deliberate. Earlier releases matched a misplaced `#` against
+*every* topic, since the matcher returned a match on seeing one regardless of
+position, so a queue bound to `#/events` was capturing all traffic on the broker
+rather than the events it named. Fix the filter rather than work around the error.
 
 ### `queues[].retention`
 

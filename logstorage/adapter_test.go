@@ -291,3 +291,71 @@ func TestMkdirAllSyncedCreatesNestedDirectories(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
 	require.Error(t, MkdirAllSynced(file, 0o755), "a file in the path must not be reported as a directory")
 }
+
+// The disk-backed adapter is the production store, so it must refuse a binding
+// that can never match rather than persist one.
+func TestAdapterRejectsFiltersThatCannotMatch(t *testing.T) {
+	adapter, err := NewAdapter(t.TempDir(), DefaultAdapterConfig())
+	if err != nil {
+		t.Fatalf("NewAdapter failed: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	ctx := context.Background()
+	if err := adapter.CreateQueue(ctx, types.DefaultQueueConfig("black-holed", "#/events")); err == nil {
+		t.Fatal("CreateQueue persisted a filter that can never match")
+	}
+
+	if err := adapter.CreateQueue(ctx, types.DefaultQueueConfig("working", "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	if err := adapter.UpdateQueue(ctx, types.DefaultQueueConfig("working", "m/#/events")); err == nil {
+		t.Fatal("UpdateQueue persisted a filter that can never match")
+	}
+}
+
+// A queue persisted before filters were validated must not be bound silently.
+// Startup cannot refuse it — the data is already on disk — so it is reported,
+// and the queue keeps working through whichever of its filters are valid.
+func TestAdapterReportsPersistedFiltersThatCannotMatch(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write the bad filter behind the adapter's validation, as a release that
+	// did not validate would have left it.
+	queueStore, err := NewQueueConfigStore(dir)
+	if err != nil {
+		t.Fatalf("NewQueueConfigStore failed: %v", err)
+	}
+	legacy := types.DefaultQueueConfig("legacy", "#/events", "m/#")
+	if err := queueStore.Save(legacy); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	if err := queueStore.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	var reported []string
+	config := DefaultAdapterConfig()
+	config.RecoveryLogger = func(msg string, args ...any) {
+		reported = append(reported, msg)
+	}
+
+	adapter, err := NewAdapter(dir, config)
+	if err != nil {
+		t.Fatalf("NewAdapter failed: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if len(reported) != 1 {
+		t.Fatalf("reported %d malformed filters, want 1: %v", len(reported), reported)
+	}
+
+	// The queue still matches through its valid filter.
+	matched, err := adapter.FindMatchingQueues(context.Background(), "m/acme")
+	if err != nil {
+		t.Fatalf("FindMatchingQueues failed: %v", err)
+	}
+	if len(matched) != 1 || matched[0] != "legacy" {
+		t.Fatalf("FindMatchingQueues = %v, want [legacy]", matched)
+	}
+}
