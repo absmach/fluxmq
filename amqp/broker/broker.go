@@ -279,9 +279,16 @@ func (b *Broker) RecordLocalPrincipalReload(success bool) {
 // Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.
 // It returns an error if cluster routing fails, so callers in confirm mode can NACK.
 //
-// ctx is the publishing connection's context, so closing the connection or
-// shutting the broker down unblocks queue capture, cross-protocol delivery, and
-// cluster routing rather than leaving them to run against a peer that is gone.
+// ctx bounds queue capture, cross-protocol delivery, and cluster routing so
+// none of them outlive the broker. It is the listener context the connection
+// was accepted under, so it is cancelled at server shutdown rather than when
+// the publishing peer disconnects.
+//
+// That is deliberate. The same context is handed to crossDeliver, which
+// delivers to other subscribers, so cancelling it when the publisher goes away
+// would drop a message the publisher already handed over into clients that are
+// still connected. A publication outlives its publisher by design; only broker
+// shutdown ends it.
 func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, props map[string]string) error { //nolint:contextcheck // ctx is propagated to capture, cross-deliver and cluster route
 	if ctx == nil {
 		ctx = context.Background()

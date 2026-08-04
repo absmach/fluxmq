@@ -32,12 +32,12 @@ Persistent queues are built around a simple model:
 
 ## Do MQTT Producers Need `$queue/`?
 
-Yes. In FluxMQ, MQTT publishes are routed to the queue manager only when the topic starts with `$queue/`.
+To *address* a queue, yes. To have a message stored in one, not necessarily.
 
-- Publish to `sensors/temp` goes through normal pub/sub routing (subscriptions, retained, cluster pub/sub).
-- Publish to `$queue/orders/...` goes through the queue manager (log storage + consumer groups + acks).
+- Publish to `$queue/orders/...` goes through the queue manager: log storage, consumer groups, and acks. The `$queue/` prefix is what activates queue semantics, whether the target is an ephemeral, durable, or stream queue.
+- Publish to `sensors/temp` goes through normal pub/sub routing — subscriptions, retained, cluster pub/sub — **and** is additionally appended to any queue whose configured `topics` pattern matches it.
 
-The `$queue/` prefix is what activates queue semantics — whether the target is an ephemeral, durable, or stream queue. If you configured a queue with topic bindings that match a non-`$queue/` topic, MQTT publishes to that topic will still *not* be enqueued, because the MQTT broker does not route non-`$queue/` publishes into the queue manager.
+So a queue bound to `sensors/#` captures ordinary publishes to `sensors/temp` without the publisher addressing it or knowing it exists. Only a `$queue/` publish is *routed* to the queue manager; a matching pattern is what gets an ordinary publish *stored*. See [Capturing Ordinary Topics](#capturing-ordinary-topics).
 
 ## Architecture
 
@@ -240,8 +240,13 @@ keeps delivering.
 
 That makes the failure invisible to the publisher by design, so watch it from
 the operator plane instead. `GET /api/v1/stats` reports `queues.capture_failures`,
-the count of publishes a matching queue could not store. A non-zero and rising
-value means a queue is dropping the traffic its pattern binds.
+which counts every publish a matching queue did not store — whether the append
+failed, the queue's configuration could not be read, or the matching queues could
+not be resolved at all. A non-zero and rising value means a queue is dropping the
+traffic its pattern binds.
+
+A publish matching several queues is attempted against each of them
+independently, so one failing queue neither stops the others nor hides them.
 
 A publisher that needs a persistence guarantee does not rely on capture. Use an
 exact publish target, whose append is synced before the publisher confirm and

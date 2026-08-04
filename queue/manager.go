@@ -831,9 +831,17 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 // queues whose configured topic patterns match it. Unlike Publish, it never
 // auto-creates a queue when no pattern matches.
 func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error {
-	targets, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	// Every way this can lose a message counts, not only a failed append.
+	// Failing to resolve targets, or dropping one whose configuration cannot be
+	// read, loses exactly as much as an append error does, and the counter is
+	// documented as the signal that a queue is dropping the traffic bound to it.
+	targets, unresolved, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
 	if err != nil {
+		m.metrics.RecordCaptureFailure()
 		return err
+	}
+	if unresolved > 0 {
+		m.metrics.RecordCaptureFailure()
 	}
 	if len(targets) == 0 {
 		return nil
@@ -859,9 +867,18 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 	return nil
 }
 
+// publishToTargets routes one publish to every queue whose pattern matched it.
+//
+// Targets are independent, so a failing one must not decide the fate of the
+// others: every target is classified, every local append is attempted, and every
+// leader is forwarded to, with the failures joined into one error. Returning at
+// the first problem would let a single unavailable queue suppress a publish into
+// unrelated healthy ones, which matters most for topic capture, where the fanout
+// is broker policy rather than something the publisher asked for.
 func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
 	localTargets := make([]queuePublishTarget, 0, len(targets))
 	forwardTargets := make(map[string][]string)
+	errs := make([]error, 0)
 	for _, target := range targets {
 		replicated := target.config != nil && target.config.Replication.Enabled
 
@@ -877,15 +894,16 @@ func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishReq
 
 		switch m.writePolicy {
 		case WritePolicyReject:
-			leaderAddr := m.raftCoordinator.LeaderForQueue(target.name)
-			if leaderAddr == "" {
-				return fmt.Errorf("raft leader unavailable")
+			if leaderAddr := m.raftCoordinator.LeaderForQueue(target.name); leaderAddr != "" {
+				errs = append(errs, fmt.Errorf("queue %q: raft leader is at %s", target.name, leaderAddr))
+				continue
 			}
-			return fmt.Errorf("raft leader is at %s", leaderAddr)
+			errs = append(errs, fmt.Errorf("queue %q: raft leader unavailable", target.name))
 		case WritePolicyForward:
 			leaderID := m.raftCoordinator.LeaderIDForQueue(target.name)
 			if leaderID == "" {
-				return fmt.Errorf("raft leader unavailable")
+				errs = append(errs, fmt.Errorf("queue %q: raft leader unavailable", target.name))
+				continue
 			}
 			forwardTargets[leaderID] = append(forwardTargets[leaderID], target.name)
 		case WritePolicyLocal:
@@ -896,15 +914,16 @@ func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishReq
 		}
 	}
 
-	// Store locally in queues handled by this node.
+	// Store locally in queues handled by this node. publishLocalToTargets
+	// already attempts every target and joins their errors.
 	if err := m.publishLocalToTargets(ctx, publish, localTargets); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 
 	// Forward leader-owned queue targets to appropriate remote leaders.
 	for leaderID, targetQueues := range forwardTargets {
 		if err := m.forwardPublishToLeader(ctx, publish, leaderID, targetQueues); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 
@@ -913,7 +932,7 @@ func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishReq
 		m.forwardToRemoteNodes(ctx, publish)
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // PublishToDurableStream appends to exactly queueName and establishes a
@@ -1031,7 +1050,7 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 		return targets, nil
 	}
 
-	targets, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	targets, _, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
 	if err != nil {
 		return nil, err
 	}
@@ -1043,23 +1062,31 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
 			return nil, err
 		}
-		return m.resolveMatchingPublishTargets(ctx, publish.Topic)
+		created, _, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+		return created, err
 	}
 
 	return targets, nil
 }
 
-func (m *Manager) resolveMatchingPublishTargets(ctx context.Context, topic string) ([]queuePublishTarget, error) {
+// resolveMatchingPublishTargets returns the queues whose patterns match the
+// topic. It also reports how many matched but could not be resolved: their
+// configuration was unreadable, so the publish will not reach them. Dropping
+// those silently is what made a capture loss invisible, so the count is returned
+// rather than only logged.
+func (m *Manager) resolveMatchingPublishTargets(ctx context.Context, topic string) ([]queuePublishTarget, int, error) {
 	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find matching queues: %w", err)
+		return nil, 0, fmt.Errorf("failed to find matching queues: %w", err)
 	}
 
+	unresolved := 0
 	targets := make([]queuePublishTarget, 0, len(queues))
 	for _, queueName := range queues {
 		queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 		if err != nil {
 			m.logger.Warn("failed to get queue config", slog.String("queue", queueName), slog.String("error", err.Error()))
+			unresolved++
 			continue
 		}
 		targets = append(targets, queuePublishTarget{
@@ -1068,7 +1095,7 @@ func (m *Manager) resolveMatchingPublishTargets(ctx context.Context, topic strin
 		})
 	}
 
-	return targets, nil
+	return targets, unresolved, nil
 }
 
 func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
