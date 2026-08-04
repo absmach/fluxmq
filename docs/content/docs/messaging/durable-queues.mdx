@@ -180,6 +180,7 @@ FluxMQ uses **topic patterns on queues** to decide where a publish should be sto
 
 - Each queue has one or more topic patterns (MQTT wildcard syntax).
 - On publish, the queue manager calls `FindMatchingQueues(topic)` and appends the message to every matching queue.
+- Patterns are matched against **every** publish, not only `$queue/...` addresses. See [Capturing Ordinary Topics](#capturing-ordinary-topics).
 - If **no queue matches**, FluxMQ creates an **[ephemeral queue](/concepts/queues#ephemeral-queue)** whose name and pattern equal the topic, then appends. Ephemeral queues are in-memory, best-effort, and cleaned up after the last consumer disconnects.
 - If no queues are configured at all, FluxMQ creates a reserved `mqtt` queue that matches `$queue/#` so queue publishes always have a landing zone.
 
@@ -197,6 +198,58 @@ flowchart LR
   Deliver --> Local[Local consumers MQTT/AMQP]
   Deliver --> Remote[Remote consumers via cluster]"
 />
+
+## Capturing Ordinary Topics
+
+A queue's `topics` patterns are not restricted to `$queue/...`. A pattern may
+bind an ordinary pub/sub topic, and every publish matching it is appended to the
+queue — on MQTT, AMQP 0.9.1 and AMQP 1.0 alike, whatever the publisher intended.
+
+```yaml
+queues:
+  - name: "messages"
+    topics:
+      - "m/#"          # captures ordinary pub/sub traffic, not just $queue/messages/...
+```
+
+With that queue configured, an MQTT client publishing `m/acme/c/temp` reaches its
+normal subscribers **and** has the message persisted in `messages`. Capture is in
+addition to pub/sub delivery, never instead of it: the publisher does not opt in,
+does not address the queue, and cannot tell that it happened.
+
+Three consequences worth knowing:
+
+- **The queue's `topics` pattern is what grants persistence.** No publisher-side
+  permission distinguishes "publish this topic" from "persist this topic" — see
+  [Local principals and capture](/configuration/security#local-principals-and-capture).
+- **Only the ingress node captures.** A publish forwarded to another node for
+  fan-out arrives through the cluster's forward path, which delivers to local
+  subscribers without re-appending, so a message is stored once per matching queue.
+- **Explicit queue publishes are not captured twice.** A publish addressed to
+  `$queue/<name>/...` takes the queue route directly; the capture step is skipped
+  for it.
+
+### Delivery address of a captured message
+
+Consumers address queues through `$queue/`, so a captured message is rewritten
+into that space before delivery. The source topic is preserved after the queue
+root:
+
+| Queue (pattern) | Published topic | Consumer receives |
+| --- | --- | --- |
+| `messages` (`m/#`) | `m/acme/temp` | `$queue/messages/m/acme/temp` |
+| `messages` (`m/#`) | `$queue/messages/x` | `$queue/messages/x` (already canonical) |
+| `m` (`m/#`) | `m/acme/temp` | `$queue/m/acme/temp` |
+
+<Callout type="warn">
+  The last row is a rough edge. When the published topic already begins with the
+  queue's own name, that leading level is absorbed rather than repeated, so
+  `$queue/m/acme/temp` is ambiguous between a capture of `m/acme/temp` in queue
+  `m` and an explicit publish to `$queue/m/acme/temp`. Consumers that need the
+  exact source topic should not reconstruct it from the delivery address. Naming
+  a queue differently from the first level of its pattern avoids the case
+  entirely.
+</Callout>
 
 ## Walkthrough: Queue Message Lifecycle
 

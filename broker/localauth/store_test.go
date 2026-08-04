@@ -23,6 +23,9 @@ const (
 	previousSecret = "abcdef0123456789abcdef0123456789"
 	nextSecret     = "fedcba9876543210fedcba9876543210"
 	auditQueue     = "atom.events"
+	auditQueueRoot = "atom"
+	auditQueueDeep = "atom.events.raw"
+	otherQueue     = "other.events"
 )
 
 func TestAuthenticateAndAuthorize(t *testing.T) {
@@ -330,7 +333,7 @@ func principalConfig(current, previous string) config.LocalPrincipalConfig {
 		CurrentSecretFile:  current,
 		PreviousSecretFile: previous,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom.events"}},
+			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: auditQueue}},
 		},
 	}
 }
@@ -390,6 +393,155 @@ func TestSubscribeACL(t *testing.T) {
 		assert.True(t, store.AuthorizePublish(reauthenticated, "", auditQueue).Allowed())
 		assert.False(t, store.CanSubscribeAuthenticated(reauthenticated, "m"))
 	})
+}
+
+// A subscribe entry may name a family of queues rather than one, and the two
+// spellings of the single-level wildcard must mean the same grant: which of "*"
+// and "+" a service writes follows the protocol it speaks, not what it is asking
+// for.
+func TestSubscribeACLWildcards(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	storeWith := func(t *testing.T, queues ...string) *Store {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = queues
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		return store
+	}
+
+	authenticate := func(t *testing.T, store *Store) Authentication {
+		t.Helper()
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok, "current secret was rejected")
+		return authentication
+	}
+
+	grants := []struct {
+		name    string
+		entry   string
+		allowed []string
+		refused []string
+	}{
+		{
+			name:    "single level AMQP wildcard",
+			entry:   auditQueueRoot + ".*",
+			allowed: []string{auditQueue, "atom.audit"},
+			refused: []string{auditQueueRoot, auditQueueDeep, otherQueue},
+		},
+		{
+			name:    "single level MQTT wildcard",
+			entry:   auditQueueRoot + ".+",
+			allowed: []string{auditQueue, "atom.audit"},
+			refused: []string{auditQueueRoot, auditQueueDeep, otherQueue},
+		},
+		{
+			name:    "multi level wildcard covers its own root",
+			entry:   auditQueueRoot + ".#",
+			allowed: []string{auditQueueRoot, auditQueue, auditQueueDeep},
+			refused: []string{"atomic", otherQueue},
+		},
+		{
+			name:    "interior wildcard",
+			entry:   "m.*.c.#",
+			allowed: []string{"m.acme.c", "m.acme.c.temp", "m.acme.c.temp.reading"},
+			refused: []string{"m.acme.x.temp", "m.c.temp", "m.acme"},
+		},
+		{
+			name:    "exact entry still grants only itself",
+			entry:   auditQueue,
+			allowed: []string{auditQueue},
+			refused: []string{auditQueueRoot, "atom.other", auditQueueDeep},
+		},
+	}
+
+	for _, grant := range grants {
+		t.Run(grant.name, func(t *testing.T) {
+			store := storeWith(t, grant.entry)
+			authentication := authenticate(t, store)
+			for _, queue := range grant.allowed {
+				assert.True(t, store.CanSubscribeAuthenticated(authentication, queue),
+					"%q must grant %q", grant.entry, queue)
+			}
+			for _, queue := range grant.refused {
+				assert.False(t, store.CanSubscribeAuthenticated(authentication, queue),
+					"%q must not grant %q", grant.entry, queue)
+			}
+		})
+	}
+
+	t.Run("the queue asked for is never read as a pattern", func(t *testing.T) {
+		store := storeWith(t, auditQueue)
+		authentication := authenticate(t, store)
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, ""))
+		// Only the ACL side carries wildcards. A caller must not be able to widen
+		// an exact grant by asking for a queue whose name reads as a filter.
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueueRoot+".#"))
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueueRoot+".*"))
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "#"))
+	})
+
+	t.Run("both spellings of one grant are one grant", func(t *testing.T) {
+		store := storeWith(t, auditQueueRoot+".*")
+		authentication := authenticate(t, store)
+
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = []string{auditQueueRoot + ".+"}
+		changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		assert.False(t, changed, "respelling a wildcard is not a permission change")
+		assert.True(t, store.IsActive(authentication),
+			"respelling a wildcard must not revoke the sessions it authenticated")
+	})
+
+	t.Run("narrowing a wildcard to one queue revokes the session", func(t *testing.T) {
+		store := storeWith(t, auditQueueRoot+".*")
+		authentication := authenticate(t, store)
+		require.True(t, store.CanSubscribeAuthenticated(authentication, auditQueue))
+
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = []string{auditQueue}
+		changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		require.True(t, changed, "replacing a pattern with one queue must be seen as a change")
+
+		assert.False(t, store.IsActive(authentication),
+			"a session bound to the wider pattern must not survive it")
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueue),
+			"the retired session must not consume even a still-permitted queue")
+	})
+}
+
+// A queue named exactly and the same queue reached through a pattern are
+// different grants, so a change from one to the other must revoke sessions.
+func TestPermissionsFingerprintSeparatesSubscribePatternFromExact(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, subscribe ...string) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = subscribe
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	exact := fingerprintFor(t, auditQueueRoot)
+	pattern := fingerprintFor(t, auditQueueRoot+".#")
+	assert.NotEqual(t, exact, pattern,
+		"a pattern must not share a digest with the exact queue it happens to grant")
+
+	assert.Equal(t, fingerprintFor(t, auditQueueRoot+".*"), fingerprintFor(t, auditQueueRoot+".+"),
+		"two spellings of one wildcard must share a digest")
 }
 
 // The two ACLs share one fingerprint, so swapping a target between them must

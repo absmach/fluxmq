@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
+	"github.com/absmach/fluxmq/topics"
 	"gopkg.in/yaml.v3"
 )
 
@@ -143,10 +144,55 @@ func (c LocalPrincipalConfig) EffectiveRole() string {
 }
 
 // LocalPermissionsConfig contains the publish and subscribe ACLs of one local
-// principal. Subscribe entries are exact queue names.
+// principal. A subscribe entry is a dot-separated queue name or a pattern
+// matching queue names; see NormalizeLocalSubscribeEntry.
 type LocalPermissionsConfig struct {
 	Publish   []LocalPublishPermission `yaml:"publish"`
 	Subscribe []string                 `yaml:"subscribe"`
+}
+
+// NormalizeLocalSubscribeEntry converts one subscribe ACL entry into the
+// canonical filter form the runtime matches queue names against.
+//
+// A queue name is a dot-separated namespace and is one level of a consumer
+// address, never several: "$queue/atom.events/#" addresses queue "atom.events",
+// so "/" cannot separate anything inside a queue name and is rejected in an
+// entry. Both spellings of the single-level wildcard are accepted, because
+// which of "*" and "+" is idiomatic depends on which protocol a service speaks
+// rather than on what it is asking for: "atom.*" and "atom.+" are one grant.
+//
+// The canonical form is slash-separated so that queue names and patterns are
+// matched by the same topic matcher the rest of the broker uses. That form is
+// internal; it is not a spelling configuration may use.
+//
+// A wildcard grant is bounded by its non-wildcard levels, which is what
+// separates one service's reach from another's. Unlike routing_key_prefix,
+// which is a wildcard by construction and so must never be written as one, a
+// subscribe pattern says exactly what it grants, so it is spelled out.
+//
+// Config validation and the runtime store share this function, so a pattern
+// cannot pass the startup check and then be matched differently at runtime.
+func NormalizeLocalSubscribeEntry(entry string) string {
+	return topics.AMQPFilterToMQTT(entry)
+}
+
+// NormalizeLocalSubscribeQueue converts a resolved queue name into the space
+// normalized subscribe entries are expressed in. It translates separators only:
+// a queue name is a name, so a wildcard character in one is a literal.
+func NormalizeLocalSubscribeQueue(queue string) string {
+	return topics.AMQPTopicToMQTT(queue)
+}
+
+// LocalSubscribeEntryIsPattern reports whether a normalized subscribe entry
+// carries a wildcard and so must be matched rather than looked up.
+func LocalSubscribeEntryIsPattern(normalized string) bool {
+	return strings.ContainsAny(normalized, "+#")
+}
+
+// MatchLocalSubscribeQueue reports whether a normalized subscribe pattern grants
+// a queue.
+func MatchLocalSubscribeQueue(normalizedPattern, queue string) bool {
+	return topics.TopicMatch(normalizedPattern, NormalizeLocalSubscribeQueue(queue))
 }
 
 // LocalPublishPermission grants publish access to an AMQP target, named either
@@ -1491,9 +1537,18 @@ func (c *Config) Validate() error {
 		// readers can see.
 		//
 		// The permission decides this, not the listener, exactly as it decides
-		// how a publication is routed. A prefix permission names no queue and is
-		// an ordinary topic publish, which the cluster forwards like any other,
-		// so a principal holding only prefix permissions may run clustered.
+		// how a publication is routed. A prefix permission cannot name a queue,
+		// so it never takes that single-node durable path and a principal
+		// holding only prefix permissions may run clustered.
+		//
+		// A prefix publication may still be captured by a queue whose own topics
+		// pattern matches it, and that append is likewise not forwarded to nodes
+		// that already know the queue — remote consumers are served by the
+		// delivery engine instead. That is not what this rule gates: capture
+		// applies to every publisher on every protocol, so refusing a local
+		// principal for it would single out the one publisher whose behavior is
+		// declared in configuration. What is gated here is the durable-stream
+		// path, which bypasses cluster distribution entirely by design.
 		if c.Cluster.Enabled {
 			if name, target, found := firstExactPublishTarget(c.Auth.LocalPrincipals); found {
 				return fmt.Errorf("auth.local_principals %q grants the exact publish target %q, which cannot be combined with cluster.enabled: an exact target is durable on the receiving node only and is not forwarded to other nodes; grant permissions.publish[].routing_key_prefix instead, or run server.amqp091.%s on a single-node deployment", name, target, listener.Name)
@@ -1881,6 +1936,8 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			publishTargets[permission] = struct{}{}
 		}
 
+		// Entries are deduplicated on their normalized form, so the same grant
+		// written in two spellings is rejected rather than counted twice.
 		subscribeQueues := make(map[string]struct{}, len(principal.Permissions.Subscribe))
 		for j, queue := range principal.Permissions.Subscribe {
 			permissionPrefix := fmt.Sprintf("%s.permissions.subscribe[%d]", prefix, j)
@@ -1890,13 +1947,30 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 			if strings.TrimSpace(queue) != queue {
 				return fmt.Errorf("%s cannot have leading or trailing whitespace", permissionPrefix)
 			}
-			if containsWildcard(queue) {
-				return fmt.Errorf("%s must be an exact queue name without wildcards", permissionPrefix)
+			// The ACL names queues, and a queue name is one level of a consumer
+			// address rather than the address itself. Writing "$queue/m" or
+			// "$queue/#" here would name no queue and so grant nothing at all,
+			// which a wildcard makes easy to do without noticing.
+			if strings.HasPrefix(queue, "$") {
+				return fmt.Errorf("%s must name a queue rather than a queue address; write %q, not %q",
+					permissionPrefix, strings.ReplaceAll(strings.TrimPrefix(queue, "$queue/"), "/", "."), queue)
 			}
-			if _, exists := subscribeQueues[queue]; exists {
+			// "/" separates the levels of a consumer address, not the levels of a
+			// queue name, so an entry using it reads as an address it is not:
+			// "atom/+" looks like "$queue/atom/+" but would mean a two-part queue
+			// name beginning with "atom".
+			if strings.Contains(queue, "/") {
+				return fmt.Errorf("%s must separate queue-name levels with %q rather than %q; write %q",
+					permissionPrefix, ".", "/", strings.ReplaceAll(queue, "/", "."))
+			}
+			normalized := NormalizeLocalSubscribeEntry(queue)
+			if err := topics.ValidateTopicFilter(normalized); err != nil {
+				return fmt.Errorf("%s is not a valid queue pattern: %w", permissionPrefix, err)
+			}
+			if _, exists := subscribeQueues[normalized]; exists {
 				return fmt.Errorf("%s duplicates an earlier subscribe permission", permissionPrefix)
 			}
-			subscribeQueues[queue] = struct{}{}
+			subscribeQueues[normalized] = struct{}{}
 		}
 	}
 

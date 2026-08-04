@@ -291,14 +291,72 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			wantError: "permissions.subscribe[0] cannot be empty",
 		},
 		{
-			name: "subscribe permission cannot contain wildcards",
+			name: "subscribe permission accepts an AMQP-style wildcard",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
 				principal.Role = LocalRoleService
 				principal.Permissions.Subscribe = []string{testAuditQueue + ".*"}
 				return []LocalPrincipalConfig{principal}
 			},
-			wantError: "must be an exact queue name without wildcards",
+		},
+		{
+			name: "subscribe permission accepts an MQTT-style wildcard",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{testAuditQueue + ".+"}
+				return []LocalPrincipalConfig{principal}
+			},
+		},
+		{
+			name: "subscribe permission rejects a queue-address separator",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{"atom/+"}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: `must separate queue-name levels with "." rather than "/"; write "atom.+"`,
+		},
+		{
+			name: "subscribe permission rejects a malformed wildcard",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{testAuditQueue + ".#.tail"}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "is not a valid queue pattern",
+		},
+		{
+			name: "subscribe permission rejects a partial-level wildcard",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{testAuditQueue + ".ev*"}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "is not a valid queue pattern",
+		},
+		{
+			name: "subscribe permission rejects a queue address",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{"$queue/" + testAuditQueue}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "must name a queue rather than a queue address",
+		},
+		{
+			name: "subscribe permission rejects one spelling duplicating another",
+			principals: func() []LocalPrincipalConfig {
+				principal := valid()
+				principal.Role = LocalRoleService
+				principal.Permissions.Subscribe = []string{testAuditQueue + ".*", testAuditQueue + ".+"}
+				return []LocalPrincipalConfig{principal}
+			},
+			wantError: "duplicates an earlier subscribe permission",
 		},
 		{
 			name: "subscribe permission cannot have surrounding whitespace",

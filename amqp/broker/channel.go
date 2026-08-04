@@ -663,10 +663,17 @@ func (ch *Channel) completePublish() {
 	// Route through resolver for default-exchange queue operations.
 	resolver := ch.conn.broker.routeResolver
 	// A prefix grant is checked against no queues entry, so it must not be able
-	// to reach one. Without this it could route into a queue two ways: a routing
-	// key under a "$queue/"-shaped prefix, or one that happens to name a
-	// configured stream. Both would write to a queue on a permission that never
-	// established the durability contract a queue publish carries.
+	// to *address* one. Without this it could route into a queue two ways: a
+	// routing key under a "$queue/"-shaped prefix, or one that happens to name a
+	// configured stream. Both would take a queue-publish path on a permission
+	// that never established the durability contract that path carries.
+	//
+	// This does not keep the publication out of every queue, and is not meant
+	// to. A queue whose own topics pattern matches an ordinary topic captures
+	// every publish on it, whatever protocol or principal it came from, so a
+	// prefix publication is persisted exactly as an equivalent MQTT publish
+	// would be. Persistence is decided by queue configuration; this branch
+	// decides only that a prefix may not name a queue itself.
 	if grant == LocalPublishGrantPrefix {
 		ch.publishToPubSub(topics.AMQPTopicToMQTT(topic), body, props, method, header)
 		return
