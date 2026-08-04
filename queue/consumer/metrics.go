@@ -29,7 +29,8 @@ type Metrics struct {
 	DLQCount uint64 // Messages moved to DLQ
 
 	// Capture metrics
-	CaptureFailures uint64 // Pub/sub publishes not stored by every matching queue
+	CaptureFailures uint64 // Matching queues a captured publish failed to reach
+	CaptureDropped  uint64 // Capture jobs discarded without being attempted
 
 	// Latency tracking (in nanoseconds)
 	TotalClaimLatency uint64 // Sum of claim latencies
@@ -89,17 +90,29 @@ func (m *Metrics) RecordDLQ() {
 	atomic.AddUint64(&m.DLQCount, 1)
 }
 
-// RecordCaptureFailure records one pub/sub publish that did not reach every
-// queue whose topic pattern matched it, whether the append failed, a matched
-// queue's configuration could not be read, or the matching queues could not be
-// resolved at all.
+// RecordCaptureFailure records one matching queue a captured publish failed to
+// reach, whether its append failed or its configuration could not be read.
 //
-// The unit is the publish, not the queue: a publish that misses several matching
-// queues counts once, so the counter measures how often capture is lossy rather
-// than how many records were lost. Capture never fails the publish, so this is
-// the only signal that a queue is dropping the traffic bound to it.
+// The unit is the queue, not the publish: a publish matching three queues and
+// failing two counts twice, so the counter measures records lost rather than how
+// often capture was lossy. Capture runs off the publish path and never fails the
+// publish, so this and CaptureDropped are the only signals it has.
+//
+// One case is coarser: when the matching queues cannot be resolved at all, the
+// set of queues that would have matched is unknown, so it counts once.
 func (m *Metrics) RecordCaptureFailure() {
 	atomic.AddUint64(&m.CaptureFailures, 1)
+}
+
+// RecordCaptureDropped records one capture job discarded before it was
+// attempted, because the backlog was full or shutdown drained past its deadline.
+//
+// It is deliberately separate from CaptureFailures: a failure means the append
+// was tried and did not succeed, while a drop means it was never tried. Both
+// lose a message, but only a rising drop count says capture cannot keep up with
+// the publish rate.
+func (m *Metrics) RecordCaptureDropped() {
+	atomic.AddUint64(&m.CaptureDropped, 1)
 }
 
 // UpdatePELSize updates the current PEL size.
@@ -172,6 +185,7 @@ func (m *Metrics) Snapshot() Metrics {
 		RejectCount:       atomic.LoadUint64(&m.RejectCount),
 		DLQCount:          atomic.LoadUint64(&m.DLQCount),
 		CaptureFailures:   atomic.LoadUint64(&m.CaptureFailures),
+		CaptureDropped:    atomic.LoadUint64(&m.CaptureDropped),
 		TotalClaimLatency: atomic.LoadUint64(&m.TotalClaimLatency),
 		TotalStealLatency: atomic.LoadUint64(&m.TotalStealLatency),
 		TotalAckLatency:   atomic.LoadUint64(&m.TotalAckLatency),
@@ -193,6 +207,7 @@ func (m *Metrics) Reset() {
 	atomic.StoreUint64(&m.RejectCount, 0)
 	atomic.StoreUint64(&m.DLQCount, 0)
 	atomic.StoreUint64(&m.CaptureFailures, 0)
+	atomic.StoreUint64(&m.CaptureDropped, 0)
 	atomic.StoreUint64(&m.TotalClaimLatency, 0)
 	atomic.StoreUint64(&m.TotalStealLatency, 0)
 	atomic.StoreUint64(&m.TotalAckLatency, 0)

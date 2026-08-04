@@ -339,6 +339,49 @@ func (t *brokerDeliveryTarget) HasDeliveryTarget(clientID string) bool {
 	return t.mqtt != nil && t.mqtt.Get(clientID) != nil
 }
 
+// releaseShutdownResources releases resources shared with the queue manager in
+// dependency order. The broker has already called Manager.Stop before this
+// runs. If capture did not quiesce, every dependency is deliberately left open:
+// an in-flight worker may still be appending locally or forwarding through the
+// cluster, and the cluster itself owns references into the broker store.
+func releaseShutdownResources(
+	shutdownComplete bool,
+	stopCluster func() error,
+	closeQueueLogStore func() error,
+	closeBrokerStore func() error,
+	logger *slog.Logger,
+) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if !shutdownComplete {
+		logger.Error("queue resources left open: capture workers are still running",
+			"cluster", "not stopped",
+			"queue_log_store", "not closed",
+			"broker_store", "not closed")
+		return
+	}
+
+	// Stop ingress before closing either store: cluster RPC handlers call the
+	// queue manager and the cluster's hybrid stores use the broker store.
+	if stopCluster != nil {
+		if err := stopCluster(); err != nil {
+			logger.Error("Failed to stop cluster; dependent stores left open", "error", err)
+			return
+		}
+	}
+	if closeQueueLogStore != nil {
+		if err := closeQueueLogStore(); err != nil {
+			logger.Error("Failed to close queue log storage", "error", err)
+		}
+	}
+	if closeBrokerStore != nil {
+		if err := closeBrokerStore(); err != nil {
+			logger.Error("Failed to close broker storage", "error", err)
+		}
+	}
+}
+
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
 	flag.Parse()
@@ -410,7 +453,10 @@ func main() {
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
 
-	var store storage.Store
+	var (
+		store            storage.Store
+		closeBrokerStore func() error
+	)
 	switch cfg.Storage.Type {
 	case "memory":
 		store = memory.New()
@@ -425,7 +471,7 @@ func main() {
 			os.Exit(1)
 		}
 		store = badgerStore
-		defer store.Close()
+		closeBrokerStore = store.Close
 		slog.Info("Using BadgerDB persistent storage", "dir", cfg.Storage.BadgerDir)
 	default:
 		slog.Error("Unknown storage type", "type", cfg.Storage.Type)
@@ -434,6 +480,15 @@ func main() {
 
 	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
+
+	// Declared here rather than beside their construction because the deferred
+	// teardown that releases them has to be registered before b.Close, which is
+	// what stops the queue manager they belong to.
+	var (
+		qm            *queue.Manager
+		queueLogStore *logStorage.Adapter
+		stopCluster   func() error
+	)
 	if cfg.Cluster.Enabled {
 		// Build transport TLS config if enabled
 		var transportTLS *cluster.TransportTLSConfig
@@ -469,7 +524,10 @@ func main() {
 		}
 		etcdCluster = ec
 		cl = etcdCluster
-		defer cl.Stop() //nolint:errcheck // best-effort deferred shutdown
+		// Stopped by the gated teardown rather than deferred here: a capture
+		// worker that outlives the queue manager may still be forwarding
+		// through this cluster.
+		stopCluster = cl.Stop
 
 		if err := cl.Start(); err != nil {
 			slog.Error("Failed to start cluster", "error", err)
@@ -545,6 +603,31 @@ func main() {
 		broker.WithTransportConfig(cfg.Cluster.Transport),
 		broker.WithBrokerConfig(cfg.Broker),
 	)
+	// Registered before b.Close so that it runs after it: defers are LIFO, and
+	// b.Close is what stops the queue manager. Reading the shutdown state any
+	// earlier would always see a manager that has not stopped yet.
+	//
+	// A capture worker can outlive Manager.Stop when an append will not return —
+	// the queue store takes no context, so the wait is bounded rather than
+	// indefinite. Anything that worker still uses must then be left alone:
+	// closing the store underneath it corrupts a segment it holds, and stopping
+	// the cluster underneath it pulls out the transport its forward is using.
+	// Leaking their dependencies into process exit is the cheaper failure.
+	defer func() {
+		var closeQueueLogStore func() error
+		if queueLogStore != nil {
+			closeQueueLogStore = queueLogStore.Close
+		}
+		shutdownComplete := qm == nil || qm.ShutdownComplete()
+		releaseShutdownResources(
+			shutdownComplete,
+			stopCluster,
+			closeQueueLogStore,
+			closeBrokerStore,
+			logger,
+		)
+	}()
+
 	defer b.Close()
 
 	// Configure maximum QoS level
@@ -709,17 +792,14 @@ func main() {
 	amqp091Broker.SetRouter(sharedRouter)
 	amqpBroker.SetRouter(sharedRouter)
 
-	var (
-		qm                       *queue.Manager
-		queueLogStore            *logStorage.Adapter
-		configuredQueueContracts []queueTypes.QueueConfig
-	)
+	// qm and queueLogStore are declared with the deferred teardown above.
+	var configuredQueueContracts []queueTypes.QueueConfig
 
 	if metrics != nil {
 		amqpMetrics, err := amqp1broker.NewMetrics()
 		if err != nil {
 			slog.Error("Failed to create AMQP metrics", "error", err)
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // exitAfterDefer: fatal initialization errors terminate immediately
 		}
 		amqpBroker.SetMetrics(amqpMetrics)
 		slog.Info("AMQP OTel metrics enabled")
@@ -742,11 +822,24 @@ func main() {
 			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
 		}
-		defer queueLogStore.Close()
+		// The store is released by the deferred teardown registered before
+		// b.Close, so that it runs after the broker has stopped the queue
+		// manager. Registering it here would run it first: defers are LIFO, and
+		// this is registered later than b.Close.
 
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
 		queueCfg.AutoCommitInterval = cfg.QueueManager.AutoCommitInterval
+		// Zero leaves the dispatcher default in place.
+		if cfg.QueueManager.CaptureWorkers > 0 {
+			queueCfg.CaptureWorkers = cfg.QueueManager.CaptureWorkers
+		}
+		if cfg.QueueManager.CaptureQueueDepth > 0 {
+			queueCfg.CaptureQueueDepth = cfg.QueueManager.CaptureQueueDepth
+		}
+		if cfg.QueueManager.CaptureDrainTimeout > 0 {
+			queueCfg.CaptureDrainTimeout = cfg.QueueManager.CaptureDrainTimeout
+		}
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {

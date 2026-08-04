@@ -36,13 +36,13 @@ type QueuePublisher interface {
 // persistence guarantee uses an exact publish target, whose durable append is
 // synced before the confirm and does fail the publish.
 //
-// That isolates a failing queue's errors, not its latency. Implementations run
-// on the publish path before subscriber delivery, and the append honours no
-// cancellation, so a slow or stuck store delays every subscriber of a matching
-// topic and the publisher's acknowledgement with it. Decoupling capture from
-// delivery requires a bounded dispatcher and an overflow policy, which is a
-// contract change rather than a fix; until then, treat a queue whose store can
-// block as able to stall the pub/sub path its pattern covers.
+// Implementations must not perform the storage work on the caller's goroutine.
+// The append honours no cancellation, so running it inline let a queue whose
+// store stalls delay every subscriber of a matching topic and the publisher's
+// acknowledgement with it. The queue manager resolves the matching queues
+// synchronously — an in-memory lookup — and dispatches the appends, so a
+// returned error reports only that resolution failed. An append that fails or is
+// dropped afterwards is reported through the capture counters instead.
 type TopicQueuePublisher interface {
 	PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error
 }

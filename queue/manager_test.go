@@ -1104,14 +1104,16 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 
 	payload := []byte("original")
 	properties := map[string]string{"source": "device"}
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		ClientID:   testCapturePublisher,
-		Topic:      testCapturedTopic,
-		Payload:    payload,
-		Properties: properties,
-	}); err != nil {
-		t.Fatalf("PublishToMatchingQueues failed: %v", err)
-	}
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			ClientID:   testCapturePublisher,
+			Topic:      testCapturedTopic,
+			Payload:    payload,
+			Properties: properties,
+		}); err != nil {
+			t.Fatalf("PublishToMatchingQueues failed: %v", err)
+		}
+	})
 
 	payload[0] = 'X'
 	properties["source"] = "mutated"
@@ -1180,12 +1182,14 @@ func TestPublishToMatchingQueuesRoutesCapturedStreamToRemoteConsumerOnce(t *test
 		t.Fatalf("CreateQueue messages failed: %v", err)
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err != nil {
-		t.Fatalf("PublishToMatchingQueues failed: %v", err)
-	}
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			Topic:   testCapturedTopic,
+			Payload: []byte("payload"),
+		}); err != nil {
+			t.Fatalf("PublishToMatchingQueues failed: %v", err)
+		}
+	})
 	mgr.deliverMessages()
 
 	routed := mockCl.GetRoutedMessages()
@@ -3494,23 +3498,29 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 		t.Fatalf("initial capture failures = %d, want 0", got)
 	}
 
-	err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
+	// The append now happens off the publish path, so the caller is told
+	// nothing; the counter is the report.
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			Topic:   testCapturedTopic,
+			Payload: []byte("payload"),
+		}); err != nil {
+			t.Fatalf("capture must not fail the publish: %v", err)
+		}
 	})
-	if err == nil {
-		t.Fatal("expected the capture failure to be reported to the caller")
-	}
 	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
 		t.Fatalf("capture failures = %d, want 1", got)
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   "h/acme/temp",
-		Payload: []byte("payload"),
-	}); err != nil {
-		t.Fatalf("healthy queue capture failed: %v", err)
-	}
+	mgr.capture = newCaptureDispatcher(0, 0, 0, mgr.metrics, mgr.logger, mgr.applyCaptureJob)
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			Topic:   "h/acme/temp",
+			Payload: []byte("payload"),
+		}); err != nil {
+			t.Fatalf("healthy queue capture failed: %v", err)
+		}
+	})
 	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
 		t.Fatalf("a healthy capture changed the failure counter to %d", got)
 	}
@@ -3539,14 +3549,16 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 
 	properties := map[string]string{}
 	payload := []byte("original")
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		ClientID:   testCapturePublisher,
-		Topic:      testCapturedTopic,
-		Payload:    payload,
-		Properties: properties,
-	}); err != nil {
-		t.Fatalf("PublishToMatchingQueues failed: %v", err)
-	}
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			ClientID:   testCapturePublisher,
+			Topic:      testCapturedTopic,
+			Payload:    payload,
+			Properties: properties,
+		}); err != nil {
+			t.Fatalf("PublishToMatchingQueues failed: %v", err)
+		}
+	})
 
 	if len(properties) != 0 {
 		t.Fatalf("caller's property map was written to: %v", properties)
@@ -3597,13 +3609,14 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 		}
 	}
 
-	err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			Topic:   testCapturedTopic,
+			Payload: []byte("payload"),
+		}); err != nil {
+			t.Fatalf("capture must not fail the publish: %v", err)
+		}
 	})
-	if err == nil {
-		t.Fatal("expected the refused replicated target to be reported")
-	}
 
 	for _, name := range []string{"healthy-a", "healthy-b"} {
 		count, countErr := logStore.Count(ctx, name)
@@ -3701,9 +3714,10 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 	}
 }
 
-// The counter's unit is the publish, not the queue, so a publish that misses
-// several matching queues in several ways still moves it exactly once.
-func TestPublishToMatchingQueuesCountsOncePerPublish(t *testing.T) {
+// Each matching queue a captured publish fails to reach counts. Capture jobs are
+// dispatched per queue, so the unit is the queue rather than the publish: a
+// publish that misses two of its matching queues counts twice.
+func TestPublishToMatchingQueuesCountsEachLostTarget(t *testing.T) {
 	logStore := memlog.New()
 	store := &unreadableQueueStore{QueueStore: &appendFailingStore{QueueStore: logStore, failQueue: "broken"}, failQueue: testCaptureQueue}
 	mgr := NewManager(store, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
@@ -3717,14 +3731,26 @@ func TestPublishToMatchingQueuesCountsOncePerPublish(t *testing.T) {
 		}
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err == nil {
-		t.Fatal("expected the failing append to be reported")
-	}
+	flushCapture(t, mgr, func() {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			Topic:   testCapturedTopic,
+			Payload: []byte("payload"),
+		}); err != nil {
+			t.Fatalf("capture must not fail the publish: %v", err)
+		}
+	})
 
-	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
-		t.Fatalf("capture failures = %d, want 1; the counter is per publish", got)
+	if got := mgr.GetMetrics().CaptureFailures; got != 2 {
+		t.Fatalf("capture failures = %d, want 2; each lost queue counts", got)
 	}
+}
+
+// flushCapture runs fn with the capture dispatcher live, then drains every job
+// it queued. Stop drains synchronously and waits for its workers, so assertions
+// afterwards see the finished state without polling or sleeping.
+func flushCapture(t *testing.T, mgr *Manager, fn func()) {
+	t.Helper()
+	mgr.capture.Start(context.Background())
+	fn()
+	mgr.capture.Stop()
 }

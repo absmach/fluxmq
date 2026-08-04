@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,72 @@ const (
 	testNextSecret     = "abcdef0123456789abcdef0123456789"
 	testAuditQueue     = "audit.events"
 )
+
+func TestReleaseShutdownResourcesInDependencyOrder(t *testing.T) {
+	var calls []string
+	record := func(name string) func() error {
+		return func() error {
+			calls = append(calls, name)
+			return nil
+		}
+	}
+
+	releaseShutdownResources(
+		true,
+		record("cluster"),
+		record("queue-store"),
+		record("broker-store"),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	if got, want := strings.Join(calls, ","), "cluster,queue-store,broker-store"; got != want {
+		t.Fatalf("shutdown order = %q, want %q", got, want)
+	}
+}
+
+func TestReleaseShutdownResourcesLeavesDependenciesOpenWhileCaptureRuns(t *testing.T) {
+	called := false
+	closer := func() error {
+		called = true
+		return nil
+	}
+
+	releaseShutdownResources(
+		false,
+		closer,
+		closer,
+		closer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	if called {
+		t.Fatal("a capture dependency was released while a worker could still be using it")
+	}
+}
+
+func TestReleaseShutdownResourcesKeepsStoresOpenWhenClusterStopFails(t *testing.T) {
+	var calls []string
+	releaseShutdownResources(
+		true,
+		func() error {
+			calls = append(calls, "cluster")
+			return errors.New("cluster still serving requests")
+		},
+		func() error {
+			calls = append(calls, "queue-store")
+			return nil
+		},
+		func() error {
+			calls = append(calls, "broker-store")
+			return nil
+		},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	if got, want := strings.Join(calls, ","), "cluster"; got != want {
+		t.Fatalf("shutdown calls = %q, want %q", got, want)
+	}
+}
 
 func TestLocalAMQPPolicyAdapter(t *testing.T) {
 	dir := t.TempDir()

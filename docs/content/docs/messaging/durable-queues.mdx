@@ -217,6 +217,11 @@ normal subscribers **and** has the message persisted in `messages`. Capture is i
 addition to pub/sub delivery, never instead of it: the publisher does not opt in,
 does not address the queue, and cannot tell that it happened.
 
+It also does not wait for it. The persistence happens shortly after the publish
+rather than as part of it, so a message is delivered to subscribers and
+acknowledged before it is necessarily in the queue — see
+[When capture fails](#when-capture-fails).
+
 Three consequences worth knowing:
 
 - **The queue's `topics` pattern is what grants persistence.** No publisher-side
@@ -231,39 +236,82 @@ Three consequences worth knowing:
 
 ### When capture fails
 
-A capture that cannot be stored never fails the publish. The publisher did not
+Capture does not run on the publish path. Matching queues are resolved on the
+publishing goroutine — an in-memory index lookup — and the storage work is handed
+to a bounded dispatcher. Enqueueing never blocks, so neither the publishing
+client's acknowledgement nor the subscribers of a matching topic wait on a queue's
+storage, however slow it is.
+
+A capture that then fails does not fail the publish either. The publisher did not
 ask for persistence, is told nothing about it, and the append carries no
-durability barrier, so failing the publish would deny every subscriber the
-message without buying any guarantee — one queue's storage error would silence
-pub/sub across every topic its pattern covers. The broker logs the failure and
-keeps delivering.
+durability barrier, so failing the publish would deny every subscriber the message
+without buying any guarantee. Each matching queue is a separate job, so one
+failing queue neither stops the others nor hides them.
 
-That makes the failure invisible to the publisher by design, so watch it from
-the operator plane instead. `GET /api/v1/stats` reports `queues.capture_failures`,
-which counts every publish that did not reach all of its matching queues —
-whether the append failed, a matched queue's configuration could not be read, or
-the matching queues could not be resolved at all. It is counted once per publish
-however many queues were affected, so it measures how often capture is lossy
-rather than how many records were lost. A non-zero and rising value means a queue
-is dropping the traffic its pattern binds.
+Both properties make loss invisible to the publisher by design, so watch it from
+the operator plane. `GET /api/v1/stats` reports two counters under `queues`:
 
-A publish matching several queues is attempted against each of them
-independently, so one failing queue neither stops the others nor hides them.
+| Counter | Meaning |
+| --- | --- |
+| `capture_failures` | The append was attempted and did not succeed, or the queue's configuration could not be read. Counted per queue, so a publish missing two of its matching queues counts twice. |
+| `capture_dropped` | The append was never attempted, because the backlog was full or shutdown drained past its deadline. |
 
-A publisher that needs a persistence guarantee does not rely on capture. Use an
-exact publish target, whose append is synced before the publisher confirm and
-does fail the publish — see
-[Local principals and capture](/configuration/security#local-principals-and-capture).
+They answer different questions. A rising `capture_dropped` means capture cannot
+keep up with the publish rate, or a queue's store has stalled long enough to fill
+its backlog. A rising `capture_failures` means the store is reachable but
+rejecting writes.
+
+When a backlog fills, the **newest** job is dropped. A saturated queue therefore
+holds a contiguous prefix of the stream: a consumer knows it has everything up to
+the moment capture saturated, rather than a log with a hole in the middle.
+
+Ordering is preserved per queue. A queue is always handled by the same dispatcher
+lane, so its appends land in publish order even though the work is asynchronous.
+
+Lanes are shared rather than one per queue, so the broker's goroutine count does
+not follow its queue count. The trade is that a stalled queue also stalls the
+unrelated queues hashed to the same lane, until its backlog fills and jobs start
+being dropped. Raise `queue_manager.capture_workers` where many queues bind
+ordinary topics and one of them may block.
+
+On shutdown the dispatcher drains what it has queued, bounded by
+`queue_manager.capture_drain_timeout`. Anything it could not write is counted in
+`capture_dropped` like any other loss.
+
+An append already in progress cannot be interrupted — the queue store takes no
+context — so a worker may still be inside one when that budget expires. The broker
+then reports an unclean shutdown and **deliberately releases nothing that worker
+could still be using**, because closing a store underneath an in-flight append
+corrupts a segment it holds. Three things are left as they are:
+
+| Left open | Why it is reachable from a stuck capture |
+| --- | --- |
+| Cluster | A capture job forwards to nodes holding queues this one does not know, so a worker may still be using the transport. |
+| Queue log store | The append itself. |
+| Broker store | The cluster holds it, so it is reachable through the forward above. |
+
+They are leaked into process exit instead, which is the cheaper failure. A log
+line names the cause.
 
 <Callout type="warn">
-  A failing queue is isolated; a *slow* one is not. Capture runs on the publish
-  path before subscribers are delivered to, and the append honours no
-  cancellation, so a queue whose storage stalls delays every subscriber of a
-  matching topic — and the publishing client's acknowledgement — for as long as
-  the append takes. Keep queues bound to high-rate ordinary topics on storage
-  that cannot block, and watch `queues.capture_failures` alongside publish
-  latency rather than on its own.
+  On the `badger` storage backend this means the **broker** store is not closed
+  cleanly either, so session and retained writes are not flushed and the next
+  start replays the value log to recover them. A queue whose storage stalls
+  therefore costs more than that queue: raise `capture_drain_timeout` if a slow
+  store makes unclean shutdown routine, rather than treating it as harmless.
 </Callout>
+
+When shutdown is clean, the three are released in that same order — cluster
+first, so no request arrives for a store that is closing.
+
+The one job a worker is still writing is not counted in `capture_dropped`: its
+outcome is genuinely unknown, since the append may yet succeed, and the worker
+accounts for it either way once the store returns.
+
+A publisher that needs a persistence guarantee does not rely on capture at all.
+Use an exact publish target, whose append is synced before the publisher confirm
+and does fail the publish — see
+[Local principals and capture](/configuration/security#local-principals-and-capture).
 
 ### Delivery address of a captured message
 

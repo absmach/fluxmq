@@ -100,11 +100,15 @@ type byProtocolStats struct {
 // queueStats reports the queue manager's counters. Queues are shared by every
 // protocol, so this sits beside by_protocol rather than inside it.
 type queueStats struct {
-	// CaptureFailures counts pub/sub publishes that a queue bound to their
-	// topic could not store. Capture never fails the publish, so without this
-	// counter a queue silently dropping the traffic its pattern binds would
-	// leave no trace outside the logs.
+	// CaptureFailures counts matching queues a captured publish failed to
+	// reach, and CaptureDropped counts capture jobs discarded before they were
+	// attempted. Capture runs off the publish path and never fails the publish,
+	// so without these a queue silently dropping the traffic its pattern binds
+	// would leave no trace outside the logs. A rising CaptureDropped says
+	// capture cannot keep up; a rising CaptureFailures says the store is
+	// rejecting writes.
 	CaptureFailures uint64            `json:"capture_failures"`
+	CaptureDropped  uint64            `json:"capture_dropped"`
 	Claims          queueAttemptStats `json:"claims"`
 	Steals          queueAttemptStats `json:"steals"`
 	Acknowledgments queueAckStats     `json:"acknowledgments"`
@@ -250,6 +254,7 @@ func (s *Server) buildStatsResponse() statsResponse {
 		qm := s.queueManager.GetMetrics()
 		resp.Queues = &queueStats{
 			CaptureFailures: qm.CaptureFailures,
+			CaptureDropped:  qm.CaptureDropped,
 			Claims: queueAttemptStats{
 				Attempts:  qm.ClaimAttempts,
 				Successes: qm.ClaimSuccesses,
