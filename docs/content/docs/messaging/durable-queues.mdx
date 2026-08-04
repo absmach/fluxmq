@@ -268,9 +268,17 @@ the moment capture saturated, rather than a log with a hole in the middle.
 Ordering is preserved per queue. A queue is always handled by the same dispatcher
 lane, so its appends land in publish order even though the work is asynchronous.
 
-On shutdown the dispatcher drains what it has queued, bounded by a timeout so a
-stalled store cannot hold shutdown open. Anything still queued when that expires
-is counted in `capture_dropped` like any other loss.
+Lanes are shared rather than one per queue, so the broker's goroutine count does
+not follow its queue count. The trade is that a stalled queue also stalls the
+unrelated queues hashed to the same lane, until its backlog fills and jobs start
+being dropped. Raise `queue_manager.capture_workers` where many queues bind
+ordinary topics and one of them may block.
+
+On shutdown the dispatcher drains what it has queued, bounded by
+`queue_manager.capture_drain_timeout`. An append already in progress cannot be
+interrupted — the queue store takes no context — so a worker still inside one when
+the budget expires is left to finish while shutdown proceeds. Anything not
+written is counted in `capture_dropped` like any other loss.
 
 A publisher that needs a persistence guarantee does not rely on capture at all.
 Use an exact publish target, whose append is synced before the publisher confirm

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,5 +188,144 @@ func TestCapturePreservesPerQueueOrder(t *testing.T) {
 		if got := msg.GetPayload()[0]; got != byte(i%256) {
 			t.Fatalf("offset %d holds payload %d, want %d; capture reordered a queue", i, got, i%256)
 		}
+	}
+}
+
+// countingQueueStore records how many appends actually reached storage.
+type countingQueueStore struct {
+	storage.QueueStore
+	appended atomic.Int64
+}
+
+func (s *countingQueueStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	s.appended.Add(1)
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+// Every capture is either written or counted as dropped. A job accepted by a
+// send that raced shutdown would be neither: it would sit in a lane no worker
+// reads again, lost with nothing to show for it.
+func TestCaptureAccountsForEveryJobAcrossShutdown(t *testing.T) {
+	const publishers = 8
+	const perPublisher = 250
+
+	counting := &countingQueueStore{QueueStore: memlog.New()}
+	mgr := NewManager(counting, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	mgr.capture.Start(ctx)
+
+	// Publish hard from several goroutines while shutdown runs underneath them,
+	// so sends land on both sides of the moment acceptance closes.
+	var wg sync.WaitGroup
+	for range publishers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perPublisher {
+				if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+					Topic:   testCapturedTopic,
+					Payload: []byte("payload"),
+				}); err != nil {
+					t.Errorf("PublishToMatchingQueues failed: %v", err)
+					return
+				}
+			}
+		}()
+	}
+
+	mgr.capture.Stop()
+	wg.Wait()
+	// Publishes that finished after Stop are refused and counted; sweep anything
+	// their sends left behind.
+	mgr.capture.Stop()
+
+	written := counting.appended.Load()
+	dropped := int64(mgr.GetMetrics().CaptureDropped)
+	if total := written + dropped; total != publishers*perPublisher {
+		t.Fatalf("wrote %d and dropped %d, accounting for %d of %d publishes; %d went missing",
+			written, dropped, total, publishers*perPublisher, publishers*perPublisher-total)
+	}
+}
+
+// The window between checking for shutdown and sending is a few instructions
+// wide, so the concurrent test above rarely lands in it. This states the
+// guarantee that closes it directly: once Stop has returned, no job is ever
+// accepted, so none can be stranded in a lane nothing reads.
+func TestCaptureRefusesAndCountsJobsAfterStop(t *testing.T) {
+	counting := &countingQueueStore{QueueStore: memlog.New()}
+	mgr := NewManager(counting, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	mgr.capture.Start(ctx)
+	mgr.capture.Stop()
+
+	const after = 5
+	for range after {
+		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+			Topic:   testCapturedTopic,
+			Payload: []byte("payload"),
+		}); err != nil {
+			t.Fatalf("PublishToMatchingQueues failed: %v", err)
+		}
+	}
+
+	if got := mgr.GetMetrics().CaptureDropped; got != after {
+		t.Fatalf("capture dropped = %d, want %d; a job after shutdown was accepted rather than counted", got, after)
+	}
+	if got := counting.appended.Load(); got != 0 {
+		t.Fatalf("%d appends ran after shutdown", got)
+	}
+}
+
+// Shutdown must not wait on an append that cannot be interrupted. The store
+// takes no context, so a wedged worker would otherwise hold the broker open for
+// as long as the storage stall lasts.
+func TestCaptureStopIsBoundedByDrainTimeout(t *testing.T) {
+	blocking := &blockingQueueStore{
+		QueueStore: memlog.New(),
+		release:    make(chan struct{}),
+		entered:    make(chan struct{}),
+	}
+	config := DefaultConfig()
+	config.CaptureWorkers = 1
+	config.CaptureDrainTimeout = 200 * time.Millisecond
+	mgr := NewManager(blocking, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	mgr.capture.Start(ctx)
+	t.Cleanup(func() { close(blocking.release) })
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture worker never reached the store")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		mgr.capture.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop waited on an uninterruptible append instead of its drain timeout")
 	}
 }
