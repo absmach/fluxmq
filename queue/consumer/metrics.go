@@ -28,6 +28,9 @@ type Metrics struct {
 	// DLQ metrics
 	DLQCount uint64 // Messages moved to DLQ
 
+	// Capture metrics
+	CaptureFailures uint64 // Pub/sub publishes a matching queue failed to store
+
 	// Latency tracking (in nanoseconds)
 	TotalClaimLatency uint64 // Sum of claim latencies
 	TotalStealLatency uint64 // Sum of steal latencies
@@ -84,6 +87,13 @@ func (m *Metrics) RecordReject() {
 // RecordDLQ records a message moved to DLQ.
 func (m *Metrics) RecordDLQ() {
 	atomic.AddUint64(&m.DLQCount, 1)
+}
+
+// RecordCaptureFailure records one pub/sub publish that matched a queue but
+// could not be appended to it. Capture never fails the publish, so this counter
+// is the only signal that a queue is dropping the traffic bound to it.
+func (m *Metrics) RecordCaptureFailure() {
+	atomic.AddUint64(&m.CaptureFailures, 1)
 }
 
 // UpdatePELSize updates the current PEL size.
@@ -155,6 +165,7 @@ func (m *Metrics) Snapshot() Metrics {
 		NackCount:         atomic.LoadUint64(&m.NackCount),
 		RejectCount:       atomic.LoadUint64(&m.RejectCount),
 		DLQCount:          atomic.LoadUint64(&m.DLQCount),
+		CaptureFailures:   atomic.LoadUint64(&m.CaptureFailures),
 		TotalClaimLatency: atomic.LoadUint64(&m.TotalClaimLatency),
 		TotalStealLatency: atomic.LoadUint64(&m.TotalStealLatency),
 		TotalAckLatency:   atomic.LoadUint64(&m.TotalAckLatency),
@@ -175,6 +186,7 @@ func (m *Metrics) Reset() {
 	atomic.StoreUint64(&m.NackCount, 0)
 	atomic.StoreUint64(&m.RejectCount, 0)
 	atomic.StoreUint64(&m.DLQCount, 0)
+	atomic.StoreUint64(&m.CaptureFailures, 0)
 	atomic.StoreUint64(&m.TotalClaimLatency, 0)
 	atomic.StoreUint64(&m.TotalStealLatency, 0)
 	atomic.StoreUint64(&m.TotalAckLatency, 0)

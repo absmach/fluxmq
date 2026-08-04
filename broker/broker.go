@@ -26,6 +26,15 @@ type QueuePublisher interface {
 // queue whose configured topic pattern matches it. It never creates a queue.
 // Implementations must copy payload and properties they retain before
 // returning because protocol brokers may release or reuse them afterwards.
+//
+// A returned error reports that capture failed; it must not fail the publish.
+// Capture is a broker-side policy the publisher never asked for and gets no
+// signal about, and it carries no durability barrier, so failing the publish
+// would deny every subscriber a message without buying any guarantee — one
+// queue's storage error would silence pub/sub across every topic its pattern
+// covers. Callers log and continue delivering. A publisher that needs a
+// persistence guarantee uses an exact publish target, whose durable append is
+// synced before the confirm and does fail the publish.
 type TopicQueuePublisher interface {
 	PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error
 }

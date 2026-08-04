@@ -849,7 +849,13 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 	}
 	publish = normalizePublishRequest(publish)
 
-	return m.publishToTargets(ctx, publish, targets)
+	if err := m.publishToTargets(ctx, publish, targets); err != nil {
+		// Callers must not fail the publish over this, so the counter is the
+		// only durable signal that a queue is dropping the traffic bound to it.
+		m.metrics.RecordCaptureFailure()
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) publishToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {

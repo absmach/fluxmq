@@ -109,6 +109,8 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// A capture failure never fails the publish: see
+	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueLinkManager.(corebroker.TopicQueuePublisher); ok {
 		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
 			ClientID:   corebroker.ClientIDFromProperties(props),
@@ -116,8 +118,7 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 			Payload:    payload,
 			Properties: props,
 		}); err != nil {
-			b.logger.Error("AMQP pub/sub queue capture failed", "topic", topic, "error", err)
-			return
+			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
 	}
 	subs, err := b.router.Match(topic)
