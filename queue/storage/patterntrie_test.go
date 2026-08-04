@@ -171,8 +171,10 @@ func TestPatternTrieKeepsPatternWhileAnotherQueueUsesIt(t *testing.T) {
 // configured with "#/a" captured every publish on the broker. The trie treats
 // the pattern as the literal path it is, so it captures nothing.
 //
-// Neither answer is useful, and nothing validates queue patterns at load, so
-// this pins the behaviour rather than leaving it to whichever matcher is in use.
+// Such a pattern is now rejected by queue configuration validation, so it should
+// never reach the index. This pins the trie's behaviour anyway, as defence in
+// depth: an index that captured everything on a pattern that reached it by some
+// other path would be far worse than one that captures nothing.
 func TestPatternTrieIgnoresMisplacedMultiLevelWildcard(t *testing.T) {
 	index := NewTopicIndex()
 	index.AddQueue("malformed", []string{"#/a"})

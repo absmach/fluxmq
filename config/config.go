@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
+	"github.com/absmach/fluxmq/topics"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1867,6 +1868,16 @@ func (c *Config) Validate() error {
 		seenQueues[q.Name] = true
 		if len(q.Topics) == 0 {
 			return fmt.Errorf("queues[%d].topics cannot be empty", i)
+		}
+		// A malformed filter is not a harmless typo: it never matches, so the
+		// queue is bound to nothing and silently receives no traffic. Refuse it
+		// at load rather than let it be deployed and discovered by absence.
+		for j, filter := range q.Topics {
+			if err := topics.ValidateTopicFilter(filter); err != nil {
+				return fmt.Errorf(
+					"queues[%d].topics[%d] %q is not a valid topic filter: %w; %q must be the final level and %q must occupy a whole level",
+					i, j, filter, err, "#", "+")
+			}
 		}
 		if q.Replication.Enabled {
 			if q.Replication.Group != "" && strings.TrimSpace(q.Replication.Group) == "" {

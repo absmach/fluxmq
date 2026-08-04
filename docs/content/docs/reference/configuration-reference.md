@@ -309,14 +309,16 @@ queues:
 | `type`          | Queue mode: `classic` or `stream`. Empty value falls back to default mode. |
 | `primary_group` | For stream queues: consumer group used for status reporting.               |
 
-Queue patterns are not validated when the configuration loads, so a malformed
-filter is accepted and simply never matches. Check a `#` is the last level: a
-binding such as `#/events` matches nothing at all.
+Queue patterns are validated when the configuration loads. A malformed filter — a
+`#` that is not the final level, a wildcard sharing a level with other characters
+— is a startup error naming the queue, the filter and its position, because such a
+filter can never match and would leave the queue silently receiving nothing.
 
-Earlier releases matched such a pattern against *every* topic, because the matcher
-returned a match on seeing `#` regardless of position. A queue bound that way was
-capturing all traffic on the broker. If a queue appears to have stopped receiving
-after upgrading, that binding is where to look.
+This can turn a configuration that previously started into one that does not, and
+that is deliberate. Earlier releases matched a misplaced `#` against *every*
+topic, since the matcher returned a match on seeing one regardless of position, so
+a queue bound to `#/events` was capturing all traffic on the broker rather than
+the events it named. Fix the filter rather than work around the error.
 
 ### `queues[].retention`
 

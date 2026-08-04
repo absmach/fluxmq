@@ -4,6 +4,7 @@
 package types
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -276,4 +277,44 @@ func TestFromInput_Replication(t *testing.T) {
 	assert.Equal(t, ReplicationAsync, config.Replication.Mode)
 	assert.Equal(t, 3, config.Replication.MinInSyncReplicas)
 	assert.Equal(t, 2*time.Second, config.Replication.AckTimeout)
+}
+
+// A malformed topic filter matches nothing, so a queue bound to one silently
+// receives no traffic and looks identical to a queue nobody publishes to. It is
+// rejected rather than accepted and left to be discovered by absence.
+func TestQueueConfigRejectsMalformedTopicFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		topics []string
+		valid  bool
+	}{
+		{name: "queue address", topics: []string{"$queue/orders/#"}, valid: true},
+		{name: "ordinary pattern", topics: []string{"m/+/events"}, valid: true},
+		{name: "match all", topics: []string{"#"}, valid: true},
+		{name: "multi level wildcard not final", topics: []string{"#/events"}},
+		{name: "multi level wildcard mid pattern", topics: []string{"m/#/events"}},
+		{name: "multi level wildcard sharing a level", topics: []string{"m/a#"}},
+		{name: "single level wildcard sharing a level", topics: []string{"m/a+/b"}},
+		{name: "empty filter", topics: []string{""}},
+		{name: "one bad among good", topics: []string{"m/#", "#/events"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultQueueConfig("q", tt.topics...)
+			err := config.Validate()
+			if tt.valid {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Validate() accepted a filter that can never match")
+			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Validate() error = %v, want it to wrap ErrInvalidConfig", err)
+			}
+		})
+	}
 }
