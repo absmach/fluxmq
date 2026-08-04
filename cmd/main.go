@@ -339,6 +339,49 @@ func (t *brokerDeliveryTarget) HasDeliveryTarget(clientID string) bool {
 	return t.mqtt != nil && t.mqtt.Get(clientID) != nil
 }
 
+// releaseShutdownResources releases resources shared with the queue manager in
+// dependency order. The broker has already called Manager.Stop before this
+// runs. If capture did not quiesce, every dependency is deliberately left open:
+// an in-flight worker may still be appending locally or forwarding through the
+// cluster, and the cluster itself owns references into the broker store.
+func releaseShutdownResources(
+	shutdownComplete bool,
+	stopCluster func() error,
+	closeQueueLogStore func() error,
+	closeBrokerStore func() error,
+	logger *slog.Logger,
+) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if !shutdownComplete {
+		logger.Error("queue resources left open: capture workers are still running",
+			"cluster", "not stopped",
+			"queue_log_store", "not closed",
+			"broker_store", "not closed")
+		return
+	}
+
+	// Stop ingress before closing either store: cluster RPC handlers call the
+	// queue manager and the cluster's hybrid stores use the broker store.
+	if stopCluster != nil {
+		if err := stopCluster(); err != nil {
+			logger.Error("Failed to stop cluster; dependent stores left open", "error", err)
+			return
+		}
+	}
+	if closeQueueLogStore != nil {
+		if err := closeQueueLogStore(); err != nil {
+			logger.Error("Failed to close queue log storage", "error", err)
+		}
+	}
+	if closeBrokerStore != nil {
+		if err := closeBrokerStore(); err != nil {
+			logger.Error("Failed to close broker storage", "error", err)
+		}
+	}
+}
+
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
 	flag.Parse()
@@ -410,7 +453,10 @@ func main() {
 		"cluster_enabled", cfg.Cluster.Enabled,
 		"log_level", cfg.Log.Level)
 
-	var store storage.Store
+	var (
+		store            storage.Store
+		closeBrokerStore func() error
+	)
 	switch cfg.Storage.Type {
 	case "memory":
 		store = memory.New()
@@ -425,7 +471,7 @@ func main() {
 			os.Exit(1)
 		}
 		store = badgerStore
-		defer store.Close()
+		closeBrokerStore = store.Close
 		slog.Info("Using BadgerDB persistent storage", "dir", cfg.Storage.BadgerDir)
 	default:
 		slog.Error("Unknown storage type", "type", cfg.Storage.Type)
@@ -566,24 +612,20 @@ func main() {
 	// indefinite. Anything that worker still uses must then be left alone:
 	// closing the store underneath it corrupts a segment it holds, and stopping
 	// the cluster underneath it pulls out the transport its forward is using.
-	// Leaking both into process exit is the cheaper failure.
+	// Leaking their dependencies into process exit is the cheaper failure.
 	defer func() {
-		if qm != nil && !qm.ShutdownComplete() {
-			slog.Error("queue resources left open: capture workers are still writing",
-				"queue_log_store", "not closed",
-				"cluster", "not stopped")
-			return
-		}
+		var closeQueueLogStore func() error
 		if queueLogStore != nil {
-			if err := queueLogStore.Close(); err != nil {
-				slog.Error("Failed to close queue log storage", "error", err)
-			}
+			closeQueueLogStore = queueLogStore.Close
 		}
-		if stopCluster != nil {
-			if err := stopCluster(); err != nil {
-				slog.Error("Failed to stop cluster", "error", err)
-			}
-		}
+		shutdownComplete := qm == nil || qm.ShutdownComplete()
+		releaseShutdownResources(
+			shutdownComplete,
+			stopCluster,
+			closeQueueLogStore,
+			closeBrokerStore,
+			logger,
+		)
 	}()
 
 	defer b.Close()
@@ -757,7 +799,7 @@ func main() {
 		amqpMetrics, err := amqp1broker.NewMetrics()
 		if err != nil {
 			slog.Error("Failed to create AMQP metrics", "error", err)
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // exitAfterDefer: fatal initialization errors terminate immediately
 		}
 		amqpBroker.SetMetrics(amqpMetrics)
 		slog.Info("AMQP OTel metrics enabled")
