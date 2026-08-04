@@ -36,9 +36,9 @@ import (
 )
 
 const (
-	localUsername = "atom-audit-publisher"
-	localURISAN   = "spiffe://absmach/atom/audit-publisher"
-	auditQueue    = "atom.events"
+	localUsername = "audit-publisher"
+	localURISAN   = "spiffe://example.org/audit-publisher"
+	auditQueue    = "audit.events"
 )
 
 func TestLocalPrincipalRealProcess(t *testing.T) {
@@ -107,7 +107,7 @@ func TestLocalPrincipalRealProcess(t *testing.T) {
 	assertDialRejected(t, ports.internal, untrustedTLS, localUsername, currentSecret)
 	assertSubscribeDenied(t, ports.internal, validTLS, currentSecret)
 	assertTopologyDenied(t, ports.internal, validTLS, currentSecret)
-	assertPublishDenied(t, ports.internal, validTLS, currentSecret, "", "not-atom.events")
+	assertPublishDenied(t, ports.internal, validTLS, currentSecret, "", "not-audit.events")
 	assertPublishDenied(t, ports.internal, validTLS, currentSecret, "events", auditQueue)
 
 	if got := callout.total(); got != 0 {
@@ -290,7 +290,7 @@ hooks:
 queues:
   - name: %q
     topics:
-      - "$queue/atom.events/#"
+      - "$queue/audit.events/#"
     reserved: true
     type: "stream"
     retention:
@@ -691,8 +691,8 @@ func newTestPKI(t *testing.T, dir string) testPKI {
 		ca:              writeCertificate(t, dir, "ca", ca.pem, nil),
 		caFile:          writePEM(t, filepath.Join(dir, "ca.crt"), ca.pem, 0o644),
 		server:          issueCertificate(t, dir, "server", ca, true, ""),
-		validClient:     issueCertificate(t, dir, "atom", ca, false, localURISAN),
-		wrongSANClient:  issueCertificate(t, dir, "wrong-san", ca, false, "spiffe://absmach/atom/not-audit-publisher"),
+		validClient:     issueCertificate(t, dir, "audit", ca, false, localURISAN),
+		wrongSANClient:  issueCertificate(t, dir, "wrong-san", ca, false, "spiffe://example.org/not-audit-publisher"),
 		untrustedClient: issueCertificate(t, dir, "untrusted", untrustedCA, false, localURISAN),
 	}
 }

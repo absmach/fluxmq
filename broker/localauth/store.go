@@ -77,8 +77,13 @@ type principal struct {
 	// deterministic. It holds a handful of entries at most, which is why a
 	// linear scan is preferred to another map.
 	publishPrefixes []string
-	subscribe       map[string]struct{}
-	permissions     PermissionsFingerprint
+	// subscribe holds the wildcard-free subscribe entries in normalized form,
+	// so the common case stays one map lookup.
+	subscribe map[string]struct{}
+	// subscribePatterns holds the wildcard entries, sorted for the same reasons
+	// publishPrefixes is, and scanned only when the exact lookup misses.
+	subscribePatterns []string
+	permissions       PermissionsFingerprint
 }
 
 // New loads and validates a local-principal snapshot.
@@ -211,18 +216,31 @@ func (s *Store) AuthorizePublish(authentication Authentication, exchange, routin
 	return PublishGrantNone
 }
 
-// CanSubscribeAuthenticated checks the session credential and exact subscribe
-// ACL against one immutable snapshot, for the same reason AuthorizePublish
-// does: loading both independently would leave a revocation race when a reload
-// lands between the two checks.
+// CanSubscribeAuthenticated checks the session credential and the subscribe ACL
+// against one immutable snapshot, for the same reason AuthorizePublish does:
+// loading both independently would leave a revocation race when a reload lands
+// between the two checks.
+//
+// queue is a resolved queue name, never a consumer address, and is matched
+// literally: nothing constrains the characters in a queue name, so no separator
+// translation happens on either side. An entry naming it exactly is one map
+// lookup; the wildcard entries are scanned only when that misses, so granting
+// patterns costs a principal nothing until it uses them.
 func (s *Store) CanSubscribeAuthenticated(authentication Authentication, queue string) bool {
 	current := s.current.Load()
 	if !authenticationActive(current, authentication) {
 		return false
 	}
 	principal := current.principals[authentication.Principal]
-	_, allowed := principal.subscribe[queue]
-	return allowed
+	if _, allowed := principal.subscribe[queue]; allowed {
+		return true
+	}
+	for _, pattern := range principal.subscribePatterns {
+		if config.MatchLocalSubscribeQueue(pattern, queue) {
+			return true
+		}
+	}
+	return false
 }
 
 func authenticationActive(current *snapshot, authentication Authentication) bool {
@@ -280,10 +298,20 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 		}
 		sort.Strings(publishPrefixes)
 
+		// Entries are stored normalized, so two spellings of one grant are one
+		// grant here too and rewriting a config from one to the other does not
+		// revoke the sessions it authenticated.
 		subscribe := make(map[string]struct{}, len(principalConfig.Permissions.Subscribe))
+		var subscribePatterns []string
 		for _, queue := range principalConfig.Permissions.Subscribe {
-			subscribe[queue] = struct{}{}
+			normalized := config.NormalizeLocalSubscribeEntry(queue)
+			if config.LocalSubscribeEntryIsPattern(normalized) {
+				subscribePatterns = append(subscribePatterns, normalized)
+				continue
+			}
+			subscribe[normalized] = struct{}{}
 		}
+		sort.Strings(subscribePatterns)
 
 		role := principalConfig.EffectiveRole()
 		principals[principalConfig.Name] = &principal{
@@ -294,7 +322,8 @@ func buildSnapshot(configs []config.LocalPrincipalConfig, generation uint64) (*s
 			publish:           publish,
 			publishPrefixes:   publishPrefixes,
 			subscribe:         subscribe,
-			permissions:       fingerprintPermissions(role, publish, publishPrefixes, subscribe),
+			subscribePatterns: subscribePatterns,
+			permissions:       fingerprintPermissions(role, publish, publishPrefixes, subscribe, subscribePatterns),
 		}
 	}
 
@@ -343,7 +372,7 @@ func principalsEqual(left, right *principal) bool {
 			return false
 		}
 	}
-	return true
+	return slices.Equal(left.subscribePatterns, right.subscribePatterns)
 }
 
 func loadOptionalFingerprint(field, filename string) (*CredentialFingerprint, error) {
@@ -393,7 +422,13 @@ func loadFingerprint(field, filename string, required bool) (CredentialFingerpri
 	return fingerprint, nil
 }
 
-func fingerprintPermissions(role string, publish map[PublishTarget]struct{}, publishPrefixes []string, subscribe map[string]struct{}) PermissionsFingerprint {
+func fingerprintPermissions(
+	role string,
+	publish map[PublishTarget]struct{},
+	publishPrefixes []string,
+	subscribe map[string]struct{},
+	subscribePatterns []string,
+) PermissionsFingerprint {
 	targets := make([]PublishTarget, 0, len(publish))
 	for target := range publish {
 		targets = append(targets, target)
@@ -415,6 +450,10 @@ func fingerprintPermissions(role string, publish map[PublishTarget]struct{}, pub
 	// count, so no rearrangement of entries between them can produce a colliding
 	// digest. Narrowing a role therefore revokes sessions the way an ACL change
 	// does, which is the property that keeps a capability from outliving it.
+	//
+	// Exact subscribe entries and subscribe patterns occupy separate blocks, so
+	// replacing a pattern with the one queue it currently happens to match is a
+	// different grant and revokes the sessions authenticated under the wider one.
 	serialized := appendLengthPrefixed(nil, role)
 	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(targets)))
 	for _, target := range targets {
@@ -428,6 +467,10 @@ func fingerprintPermissions(role string, publish map[PublishTarget]struct{}, pub
 	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(queues)))
 	for _, queue := range queues {
 		serialized = appendLengthPrefixed(serialized, queue)
+	}
+	serialized = binary.BigEndian.AppendUint64(serialized, uint64(len(subscribePatterns)))
+	for _, pattern := range subscribePatterns {
+		serialized = appendLengthPrefixed(serialized, pattern)
 	}
 	return PermissionsFingerprint(sha256.Sum256(serialized))
 }

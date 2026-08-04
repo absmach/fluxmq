@@ -1,5 +1,5 @@
 # Overlay for deployments/docker/compose.yaml. Port 5683 is deliberately not
-# published to the host and is bound only to FluxMQ's atom-internal interface.
+# published to the host and is bound only to FluxMQ's local-internal interface.
 services:
   fluxmq:
     # Requires Docker Compose 2.24.4+ for !override. Do not retain the base
@@ -14,12 +14,12 @@ services:
     secrets:
       - fluxmq_server_cert
       - fluxmq_server_key
-      - atom_client_ca
-      - atom_audit_secret_current
-      - atom_audit_secret_previous
+      - local_client_ca
+      - audit_secret_current
+      - audit_secret_previous
     networks:
       default: {}
-      atom-internal:
+      local-internal:
         ipv4_address: 172.30.0.2
 
 secrets:
@@ -27,15 +27,15 @@ secrets:
     file: ${FLUXMQ_SERVER_CERT_FILE:?set FLUXMQ_SERVER_CERT_FILE}
   fluxmq_server_key:
     file: ${FLUXMQ_SERVER_KEY_FILE:?set FLUXMQ_SERVER_KEY_FILE}
-  atom_client_ca:
-    file: ${ATOM_CLIENT_CA_FILE:?set ATOM_CLIENT_CA_FILE}
-  atom_audit_secret_current:
-    file: ${ATOM_AUDIT_SECRET_CURRENT_FILE:?set ATOM_AUDIT_SECRET_CURRENT_FILE}
-  atom_audit_secret_previous:
-    file: ${ATOM_AUDIT_SECRET_PREVIOUS_FILE:?set ATOM_AUDIT_SECRET_PREVIOUS_FILE}
+  local_client_ca:
+    file: ${LOCAL_CLIENT_CA_FILE:?set LOCAL_CLIENT_CA_FILE}
+  audit_secret_current:
+    file: ${AUDIT_SECRET_CURRENT_FILE:?set AUDIT_SECRET_CURRENT_FILE}
+  audit_secret_previous:
+    file: ${AUDIT_SECRET_PREVIOUS_FILE:?set AUDIT_SECRET_PREVIOUS_FILE}
 
 networks:
-  atom-internal:
+  local-internal:
     internal: true
     ipam:
       config:

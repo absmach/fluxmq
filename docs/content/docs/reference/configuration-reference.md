@@ -722,15 +722,15 @@ auth:
     identity_cache_ttl: "1h"
 
   local_principals:
-    - name: "atom-audit-publisher"
-      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+    - name: "audit-publisher"
+      certificate_uri_san: "spiffe://example.org/audit-publisher"
       role: "publisher"
-      current_secret_file: "/run/secrets/atom_audit_secret_current"
-      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      current_secret_file: "/run/secrets/audit_secret_current"
+      previous_secret_file: "/run/secrets/audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom.events"
+            routing_key: "audit.events"
         subscribe: []
 ```
 
@@ -748,7 +748,7 @@ auth:
 | `local_principals[].current_secret_file`        | —       | File containing an active high-entropy printable value of at least 32 characters, without embedded CR/LF or NUL. One terminal newline is stripped. |
 | `local_principals[].previous_secret_file`       | `""`    | Optional old secret with the same printable-value requirements, accepted during rotation overlap. |
 | `local_principals[].permissions.publish`        | `[]`    | AMQP publish targets. `exchange` must be `""` (the default exchange). Each entry sets exactly one of `routing_key` (exact, and a protected stream under `queues`) or `routing_key_prefix` (a plain string prefix, no queue required). |
-| `local_principals[].permissions.subscribe`      | `[]`    | Exact queue names the principal may consume. Requires `role: service`; declaring entries on a `publisher` is rejected at load. |
+| `local_principals[].permissions.subscribe`      | `[]`    | Queue names the principal may consume, exact or wildcard. Levels are separated by `.`; `*`/`+` match one level and `#` matches zero or more, so `m.*.events` and `m.+.events` are one grant. Entries must name queues, not queue addresses: `m`, not `$queue/m` or `m/+`. Requires `role: service`; declaring entries on a `publisher` is rejected at load. |
 
 Valid `external.protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
 The old flat `auth.url`, `auth.transport`, `auth.timeout`, `auth.protocols`, and

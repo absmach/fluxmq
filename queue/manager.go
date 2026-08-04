@@ -4,10 +4,12 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -283,6 +285,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if m.distributionMode == DistributionReplicate && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
 		m.logger.Warn("distribution_mode=replicate requires raft to be enabled; falling back to forward")
 		m.distributionMode = DistributionForward
+		m.delivery.distributionMode = DistributionForward
 	}
 
 	if err := m.syncQueueReplicationAssignments(ctx); err != nil {
@@ -808,7 +811,7 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 
 // Publish adds a message to all queues whose topic patterns match the topic.
 // This is the NATS JetQueue-style "multi-queue" routing.
-// It also forwards the publish to remote nodes that have consumers for the topic.
+// The delivery engine routes appended records to remote consumers when needed.
 func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
 	publish = normalizePublishRequest(publish)
 
@@ -821,12 +824,82 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		return nil
 	}
 
-	allReplicated := true
+	return m.publishToTargets(ctx, publish, targets, fanoutStrict)
+}
+
+// PublishToMatchingQueues captures an ordinary pub/sub publish in existing
+// queues whose configured topic patterns match it. Unlike Publish, it never
+// auto-creates a queue when no pattern matches.
+func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error {
+	// Every way this can lose a message counts, not only a failed append:
+	// failing to resolve targets, or dropping one whose configuration cannot be
+	// read, loses exactly as much as an append error does.
+	//
+	// The counter is per publish, not per queue, so the increment is decided
+	// once at the end however many targets were affected.
+	targets, unresolved, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	if err != nil {
+		m.metrics.RecordCaptureFailure()
+		return err
+	}
+	if len(targets) == 0 {
+		if unresolved > 0 {
+			m.metrics.RecordCaptureFailure()
+		}
+		return nil
+	}
+
+	// Protocol brokers release or reuse their message buffers after this call.
+	// Take ownership of independent data before appending or forwarding it.
+	//
+	// The map is cloned whenever it exists rather than only when it holds
+	// entries: an empty non-nil map is still the caller's, and
+	// normalizePublishRequest writes the client ID into whatever it is given.
+	// Clone leaves a nil map nil, which that call then replaces outright.
+	publish.Payload = bytes.Clone(publish.Payload)
+	publish.Properties = maps.Clone(publish.Properties)
+	publish = normalizePublishRequest(publish)
+
+	// Callers must not fail the publish over this, so the counter is the only
+	// durable signal that a queue is dropping the traffic bound to it.
+	err = m.publishToTargets(ctx, publish, targets, fanoutBestEffort)
+	if unresolved > 0 || err != nil {
+		m.metrics.RecordCaptureFailure()
+	}
+	return err
+}
+
+// fanoutPolicy decides what a failing target means for the targets beside it.
+type fanoutPolicy uint8
+
+const (
+	// fanoutStrict abandons the publish at the first target that cannot be
+	// written. It is what an addressed publish needs: a write policy that
+	// rejects a publication promises nothing was written, so the caller can
+	// retry against the leader without duplicating a record this node already
+	// appended. A leader rejection is therefore reported before any append runs.
+	fanoutStrict fanoutPolicy = iota
+	// fanoutBestEffort attempts every target and joins the failures. It is what
+	// topic capture needs: the fanout is broker policy applied to whichever
+	// queues happen to match, not something the publisher asked for, so one
+	// unavailable queue must not suppress capture into unrelated healthy ones.
+	// Nothing retries a capture, so a partial write is the best available
+	// outcome rather than a duplicate risk.
+	fanoutBestEffort
+)
+
+// publishToTargets routes one publish to every queue whose pattern matched it.
+func (m *Manager) publishToTargets(
+	ctx context.Context,
+	publish types.PublishRequest,
+	targets []queuePublishTarget,
+	policy fanoutPolicy,
+) error {
 	localTargets := make([]queuePublishTarget, 0, len(targets))
 	forwardTargets := make(map[string][]string)
+	errs := make([]error, 0)
 	for _, target := range targets {
 		replicated := target.config != nil && target.config.Replication.Enabled
-		allReplicated = allReplicated && replicated
 
 		if !replicated || m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
 			localTargets = append(localTargets, target)
@@ -840,15 +913,16 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 
 		switch m.writePolicy {
 		case WritePolicyReject:
-			leaderAddr := m.raftCoordinator.LeaderForQueue(target.name)
-			if leaderAddr == "" {
-				return fmt.Errorf("raft leader unavailable")
+			if leaderAddr := m.raftCoordinator.LeaderForQueue(target.name); leaderAddr != "" {
+				errs = append(errs, fmt.Errorf("queue %q: raft leader is at %s", target.name, leaderAddr))
+				continue
 			}
-			return fmt.Errorf("raft leader is at %s", leaderAddr)
+			errs = append(errs, fmt.Errorf("queue %q: raft leader unavailable", target.name))
 		case WritePolicyForward:
 			leaderID := m.raftCoordinator.LeaderIDForQueue(target.name)
 			if leaderID == "" {
-				return fmt.Errorf("raft leader unavailable")
+				errs = append(errs, fmt.Errorf("queue %q: raft leader unavailable", target.name))
+				continue
 			}
 			forwardTargets[leaderID] = append(forwardTargets[leaderID], target.name)
 		case WritePolicyLocal:
@@ -859,29 +933,37 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 		}
 	}
 
-	// Store locally in queues handled by this node.
+	// A classification failure is reported before anything is written, so a
+	// strict caller that rejects a publication really did reject it.
+	if policy == fanoutStrict && len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	// Store locally in queues handled by this node. publishLocalToTargets
+	// already attempts every target and joins their errors.
 	if err := m.publishLocalToTargets(ctx, publish, localTargets); err != nil {
-		return err
+		errs = append(errs, err)
+		if policy == fanoutStrict {
+			return errors.Join(errs...)
+		}
 	}
 
 	// Forward leader-owned queue targets to appropriate remote leaders.
 	for leaderID, targetQueues := range forwardTargets {
 		if err := m.forwardPublishToLeader(ctx, publish, leaderID, targetQueues); err != nil {
-			return err
+			errs = append(errs, err)
+			if policy == fanoutStrict {
+				return errors.Join(errs...)
+			}
 		}
 	}
 
-	// Forward to remote nodes that have consumers
+	// Preserve legacy forwarding for queues known only by remote nodes.
 	if m.cluster != nil {
-		unknownOnly := allReplicated
-		if m.distributionMode == DistributionReplicate {
-			// Legacy explicit replicate mode remains stronger than per-queue inference.
-			unknownOnly = true
-		}
-		m.forwardToRemoteNodes(ctx, publish, unknownOnly)
+		m.forwardToRemoteNodes(ctx, publish)
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // PublishToDurableStream appends to exactly queueName and establishes a
@@ -999,31 +1081,43 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 		return targets, nil
 	}
 
-	// Find all matching queues
-	queues, err := m.queueStore.FindMatchingQueues(ctx, publish.Topic)
+	targets, _, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find matching queues: %w", err)
+		return nil, err
 	}
 
-	if len(queues) == 0 {
+	if len(targets) == 0 {
 		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", publish.Topic))
 		queueName, queuePattern := autoQueueFromTopic(publish.Topic)
 		if _, err := m.GetOrCreateQueue(ctx, queueName, queuePattern); err != nil {
 			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
 			return nil, err
 		}
-		// After creating, find it again.
-		queues, err = m.queueStore.FindMatchingQueues(ctx, publish.Topic)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find matching queues after creation: %w", err)
-		}
+		created, _, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+		return created, err
 	}
 
+	return targets, nil
+}
+
+// resolveMatchingPublishTargets returns the queues whose patterns match the
+// topic. It also reports how many matched but could not be resolved: their
+// configuration was unreadable, so the publish will not reach them. Dropping
+// those silently is what made a capture loss invisible, so the count is returned
+// rather than only logged.
+func (m *Manager) resolveMatchingPublishTargets(ctx context.Context, topic string) ([]queuePublishTarget, int, error) {
+	queues, err := m.queueStore.FindMatchingQueues(ctx, topic)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to find matching queues: %w", err)
+	}
+
+	unresolved := 0
 	targets := make([]queuePublishTarget, 0, len(queues))
 	for _, queueName := range queues {
 		queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 		if err != nil {
 			m.logger.Warn("failed to get queue config", slog.String("queue", queueName), slog.String("error", err.Error()))
+			unresolved++
 			continue
 		}
 		targets = append(targets, queuePublishTarget{
@@ -1032,7 +1126,7 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 		})
 	}
 
-	return targets, nil
+	return targets, unresolved, nil
 }
 
 func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
@@ -1189,8 +1283,14 @@ func autoQueueFromTopic(topic string) (queueName, pattern string) {
 	return topic, topic
 }
 
-// forwardToRemoteNodes forwards a publish to nodes that have consumers for the topic.
-func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest, unknownOnly bool) {
+// forwardToRemoteNodes forwards a publish to nodes holding consumers for a
+// queue this node does not know.
+//
+// A queue known here already has exactly one delivery path: the delivery engine
+// routes non-replicated records to remote consumers, and Raft makes replicated
+// records available on the consumer's node. Forwarding such a publish as well
+// would append a second copy remotely, so only unknown queues are forwarded.
+func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest) {
 	// Get all consumers from the cluster
 	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
 	if err != nil {
@@ -1228,7 +1328,7 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 			continue
 		}
 
-		if unknownOnly && queueExists(c.QueueName) {
+		if queueExists(c.QueueName) {
 			continue
 		}
 
@@ -2172,10 +2272,7 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 		}
 	}
 
-	topic := queueName
-	if topic != "" && !strings.HasPrefix(topic, "$queue/") {
-		topic = "$queue/" + topic
-	}
+	topic := queueDeliveryTopic(queueName, msg.Topic)
 
 	deliveryMsg := &brokerstorage.Message{
 		Topic:      topic,

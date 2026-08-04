@@ -844,7 +844,7 @@ func TestQueueDeclareStreamWithTTL(t *testing.T) {
 
 func TestQueueRedeclareProtectedQueueClosesChannel(t *testing.T) {
 	ch, buf := newTestChannel(t)
-	existing := qtypes.DefaultQueueConfig("atom.events", "$queue/atom.events/#")
+	existing := qtypes.DefaultQueueConfig("audit.events", "$queue/audit.events/#")
 	existing.Type = qtypes.QueueTypeStream
 	existing.Reserved = true
 	mockQM := &mockChannelQueueManager{

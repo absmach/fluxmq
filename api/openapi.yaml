@@ -687,12 +687,85 @@ components:
         amqp:
           $ref: "#/components/schemas/AMQPStats"
 
+    QueueAttemptStats:
+      type: object
+      properties:
+        attempts:
+          type: integer
+          format: int64
+        successes:
+          type: integer
+          format: int64
+        failures:
+          type: integer
+          format: int64
+
+    QueueAckStats:
+      type: object
+      properties:
+        ack:
+          type: integer
+          format: int64
+        nack:
+          type: integer
+          format: int64
+        reject:
+          type: integer
+          format: int64
+        dlq:
+          type: integer
+          format: int64
+          description: Messages moved to a dead-letter queue
+
+    QueuePendingStats:
+      type: object
+      description: |
+        Pending entry list size. Only classic queues maintain one; a stream
+        consumer group tracks a cursor instead.
+      properties:
+        current:
+          type: integer
+          format: int64
+        high_water:
+          type: integer
+          format: int64
+
+    QueueStats:
+      type: object
+      description: |
+        Queue manager counters. Queues are shared by every protocol, so this
+        section sits beside `by_protocol` rather than inside it. Omitted when
+        the node runs no queue manager.
+      properties:
+        capture_failures:
+          type: integer
+          format: int64
+          description: |
+            Pub/sub publishes that did not reach every queue whose `topics`
+            pattern matched them, whether the append failed, a matched queue's
+            configuration could not be read, or the matching queues could not be
+            resolved. Counted once per publish however many queues were affected,
+            so it measures how often capture is lossy rather than how many records
+            were lost. Capture never fails the publish, so this is the only signal
+            that a queue is dropping the traffic its pattern binds.
+          example: 0
+        claims:
+          $ref: "#/components/schemas/QueueAttemptStats"
+        steals:
+          $ref: "#/components/schemas/QueueAttemptStats"
+        acknowledgments:
+          $ref: "#/components/schemas/QueueAckStats"
+        pending:
+          $ref: "#/components/schemas/QueuePendingStats"
+
     StatsResponse:
       type: object
       description: |
         Top-level fields are aggregated totals across all protocols.
         The `by_protocol` section contains per-protocol breakdowns with
         protocol-specific fields (e.g. MQTT subscriptions, AMQP channels).
+        The `queues` section is cross-protocol and is present only when the
+        node runs a queue manager.
       properties:
         uptime_seconds:
           type: number
@@ -709,6 +782,8 @@ components:
           $ref: "#/components/schemas/ErrorStats"
         by_protocol:
           $ref: "#/components/schemas/ByProtocolStats"
+        queues:
+          $ref: "#/components/schemas/QueueStats"
 
     # ── Cluster ──
 

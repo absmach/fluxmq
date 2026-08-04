@@ -22,6 +22,31 @@ type QueuePublisher interface {
 	Publish(ctx context.Context, publish types.PublishRequest) error
 }
 
+// TopicQueuePublisher captures an ordinary pub/sub publish in every existing
+// queue whose configured topic pattern matches it. It never creates a queue.
+// Implementations must copy payload and properties they retain before
+// returning because protocol brokers may release or reuse them afterwards.
+//
+// A returned error reports that capture failed; it must not fail the publish.
+// Capture is a broker-side policy the publisher never asked for and gets no
+// signal about, and it carries no durability barrier, so failing the publish
+// would deny every subscriber a message without buying any guarantee — one
+// queue's storage error would silence pub/sub across every topic its pattern
+// covers. Callers log and continue delivering. A publisher that needs a
+// persistence guarantee uses an exact publish target, whose durable append is
+// synced before the confirm and does fail the publish.
+//
+// That isolates a failing queue's errors, not its latency. Implementations run
+// on the publish path before subscriber delivery, and the append honours no
+// cancellation, so a slow or stuck store delays every subscriber of a matching
+// topic and the publisher's acknowledgement with it. Decoupling capture from
+// delivery requires a bounded dispatcher and an overflow policy, which is a
+// contract change rather than a fix; until then, treat a queue whose store can
+// block as able to stall the pub/sub path its pattern covers.
+type TopicQueuePublisher interface {
+	PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error
+}
+
 // QueueSubscriber manages queue subscriptions.
 type QueueSubscriber interface {
 	// Subscribe adds a consumer to a queue with optional pattern matching.

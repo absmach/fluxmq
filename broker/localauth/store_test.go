@@ -17,12 +17,15 @@ import (
 )
 
 const (
-	principalName  = "atom-audit-publisher"
-	principalSAN   = "spiffe://absmach/atom/audit-publisher"
+	principalName  = "audit-publisher"
+	principalSAN   = "spiffe://example.org/audit-publisher"
 	currentSecret  = "0123456789abcdef0123456789abcdef"
 	previousSecret = "abcdef0123456789abcdef0123456789"
 	nextSecret     = "fedcba9876543210fedcba9876543210"
-	auditQueue     = "atom.events"
+	auditQueue     = "audit.events"
+	auditQueueRoot = "audit"
+	auditQueueDeep = "audit.events.raw"
+	otherQueue     = "other.events"
 )
 
 func TestAuthenticateAndAuthorize(t *testing.T) {
@@ -58,17 +61,17 @@ func TestAuthenticateAndAuthorize(t *testing.T) {
 	if _, ok := store.Authenticate("unknown", currentSecret, principalSAN); ok {
 		t.Fatal("unknown principal was accepted")
 	}
-	if _, ok := store.Authenticate(principalName, currentSecret, "spiffe://absmach/atom/other"); ok {
+	if _, ok := store.Authenticate(principalName, currentSecret, "spiffe://example.org/other"); ok {
 		t.Fatal("wrong certificate URI SAN was accepted")
 	}
 
-	if !store.AuthorizePublish(authentication, "", "atom.events").Allowed() {
+	if !store.AuthorizePublish(authentication, "", "audit.events").Allowed() {
 		t.Fatal("configured publish target was denied")
 	}
-	if store.AuthorizePublish(authentication, "events", "atom.events").Allowed() {
+	if store.AuthorizePublish(authentication, "events", "audit.events").Allowed() {
 		t.Fatal("wrong exchange was allowed")
 	}
-	if store.AuthorizePublish(authentication, "", "atom.events.other").Allowed() {
+	if store.AuthorizePublish(authentication, "", "audit.events.other").Allowed() {
 		t.Fatal("prefix routing key was allowed")
 	}
 }
@@ -137,7 +140,7 @@ func TestReloadIsAtomicAndRevokesRemovedCredentials(t *testing.T) {
 	if store.IsActive(oldAuthentication) {
 		t.Fatal("removed previous credential remains active")
 	}
-	if store.AuthorizePublish(oldAuthentication, "", "atom.events").Allowed() {
+	if store.AuthorizePublish(oldAuthentication, "", "audit.events").Allowed() {
 		t.Fatal("session authenticated before reload can still publish with a retired credential")
 	}
 	if !store.IsActive(newAuthentication) {
@@ -165,7 +168,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 		t.Fatal("initial authentication failed")
 	}
 
-	principal.Permissions.Publish[0].RoutingKey = "atom.events.v2"
+	principal.Permissions.Publish[0].RoutingKey = "audit.events.v2"
 	changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -176,7 +179,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if store.IsActive(authentication) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if store.AuthorizePublish(authentication, "", "atom.events.v2").Allowed() {
+	if store.AuthorizePublish(authentication, "", "audit.events.v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 
@@ -184,7 +187,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if !ok {
 		t.Fatal("authentication against the replacement ACL failed")
 	}
-	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "atom.events.v2").Allowed() {
+	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "audit.events.v2").Allowed() {
 		t.Fatal("session authenticated against the replacement ACL is not active")
 	}
 }
@@ -204,10 +207,10 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			name: "duplicate principal",
 			configs: func() []config.LocalPrincipalConfig {
 				first, second := principalConfig(current, ""), principalConfig(current, "")
-				second.CertificateURISAN = "spiffe://absmach/atom/other"
+				second.CertificateURISAN = "spiffe://example.org/other"
 				return []config.LocalPrincipalConfig{first, second}
 			},
-			wantError: "name \"atom-audit-publisher\" is duplicated",
+			wantError: "name \"audit-publisher\" is duplicated",
 		},
 		{
 			name: "duplicate URI SAN",
@@ -216,7 +219,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 				second.Name = "other"
 				return []config.LocalPrincipalConfig{first, second}
 			},
-			wantError: "certificate_uri_san \"spiffe://absmach/atom/audit-publisher\" is duplicated",
+			wantError: "certificate_uri_san \"spiffe://example.org/audit-publisher\" is duplicated",
 		},
 		{
 			name: "weak secret",
@@ -243,7 +246,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			name: "wildcard publish ACL",
 			configs: func() []config.LocalPrincipalConfig {
 				principal := principalConfig(current, "")
-				principal.Permissions.Publish[0].RoutingKey = "atom.#"
+				principal.Permissions.Publish[0].RoutingKey = "audit.#"
 				return []config.LocalPrincipalConfig{principal}
 			},
 			wantError: "without wildcards",
@@ -306,7 +309,7 @@ func TestConcurrentAuthenticationAndReload(t *testing.T) {
 			for range 500 {
 				authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 				if ok {
-					_ = store.AuthorizePublish(authentication, "", "atom.events")
+					_ = store.AuthorizePublish(authentication, "", "audit.events")
 				}
 			}
 		}()
@@ -330,7 +333,7 @@ func principalConfig(current, previous string) config.LocalPrincipalConfig {
 		CurrentSecretFile:  current,
 		PreviousSecretFile: previous,
 		Permissions: config.LocalPermissionsConfig{
-			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: "atom.events"}},
+			Publish: []config.LocalPublishPermission{{Exchange: "", RoutingKey: auditQueue}},
 		},
 	}
 }
@@ -390,6 +393,183 @@ func TestSubscribeACL(t *testing.T) {
 		assert.True(t, store.AuthorizePublish(reauthenticated, "", auditQueue).Allowed())
 		assert.False(t, store.CanSubscribeAuthenticated(reauthenticated, "m"))
 	})
+}
+
+// A subscribe entry may name a family of queues rather than one, and the two
+// spellings of the single-level wildcard must mean the same grant: which of "*"
+// and "+" a service writes follows the protocol it speaks, not what it is asking
+// for.
+func TestSubscribeACLWildcards(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	storeWith := func(t *testing.T, queues ...string) *Store {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = queues
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		return store
+	}
+
+	authenticate := func(t *testing.T, store *Store) Authentication {
+		t.Helper()
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok, "current secret was rejected")
+		return authentication
+	}
+
+	grants := []struct {
+		name    string
+		entry   string
+		allowed []string
+		refused []string
+	}{
+		{
+			name:    "single level AMQP wildcard",
+			entry:   auditQueueRoot + ".*",
+			allowed: []string{auditQueue, "audit.alerts"},
+			refused: []string{auditQueueRoot, auditQueueDeep, otherQueue},
+		},
+		{
+			name:    "single level MQTT wildcard",
+			entry:   auditQueueRoot + ".+",
+			allowed: []string{auditQueue, "audit.alerts"},
+			refused: []string{auditQueueRoot, auditQueueDeep, otherQueue},
+		},
+		{
+			name:    "multi level wildcard covers its own root",
+			entry:   auditQueueRoot + ".#",
+			allowed: []string{auditQueueRoot, auditQueue, auditQueueDeep},
+			refused: []string{"atomic", otherQueue},
+		},
+		{
+			name:    "interior wildcard",
+			entry:   "m.*.c.#",
+			allowed: []string{"m.acme.c", "m.acme.c.temp", "m.acme.c.temp.reading"},
+			refused: []string{"m.acme.x.temp", "m.c.temp", "m.acme"},
+		},
+		{
+			name:    "exact entry still grants only itself",
+			entry:   auditQueue,
+			allowed: []string{auditQueue},
+			refused: []string{auditQueueRoot, "audit.other", auditQueueDeep},
+		},
+	}
+
+	for _, grant := range grants {
+		t.Run(grant.name, func(t *testing.T) {
+			store := storeWith(t, grant.entry)
+			authentication := authenticate(t, store)
+			for _, queue := range grant.allowed {
+				assert.True(t, store.CanSubscribeAuthenticated(authentication, queue),
+					"%q must grant %q", grant.entry, queue)
+			}
+			for _, queue := range grant.refused {
+				assert.False(t, store.CanSubscribeAuthenticated(authentication, queue),
+					"%q must not grant %q", grant.entry, queue)
+			}
+		})
+	}
+
+	// Nothing constrains the characters in a queue name, so a name is matched
+	// literally. Translating separators would make distinct queues collide and
+	// would let a grant on one authorize the other.
+	t.Run("names that are not dot-separated are matched literally", func(t *testing.T) {
+		store := storeWith(t, "a.b", "$internal", "x/y")
+		authentication := authenticate(t, store)
+
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "a.b"))
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "$internal"),
+			"a queue may legitimately be named with a leading $")
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "x/y"),
+			"a queue may legitimately contain a slash")
+
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "a/b"),
+			"a.b and a/b are different queues and must not alias")
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "x.y"),
+			"x/y and x.y are different queues and must not alias")
+	})
+
+	t.Run("a pattern does not reach across a literal separator", func(t *testing.T) {
+		store := storeWith(t, "a.+")
+		authentication := authenticate(t, store)
+
+		assert.True(t, store.CanSubscribeAuthenticated(authentication, "a.b"))
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "a/b"),
+			"a/b is a single level and is not beneath a.")
+	})
+
+	t.Run("the queue asked for is never read as a pattern", func(t *testing.T) {
+		store := storeWith(t, auditQueue)
+		authentication := authenticate(t, store)
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, ""))
+		// Only the ACL side carries wildcards. A caller must not be able to widen
+		// an exact grant by asking for a queue whose name reads as a filter.
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueueRoot+".#"))
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueueRoot+".*"))
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, "#"))
+	})
+
+	t.Run("both spellings of one grant are one grant", func(t *testing.T) {
+		store := storeWith(t, auditQueueRoot+".*")
+		authentication := authenticate(t, store)
+
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = []string{auditQueueRoot + ".+"}
+		changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		assert.False(t, changed, "respelling a wildcard is not a permission change")
+		assert.True(t, store.IsActive(authentication),
+			"respelling a wildcard must not revoke the sessions it authenticated")
+	})
+
+	t.Run("narrowing a wildcard to one queue revokes the session", func(t *testing.T) {
+		store := storeWith(t, auditQueueRoot+".*")
+		authentication := authenticate(t, store)
+		require.True(t, store.CanSubscribeAuthenticated(authentication, auditQueue))
+
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = []string{auditQueue}
+		changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		require.True(t, changed, "replacing a pattern with one queue must be seen as a change")
+
+		assert.False(t, store.IsActive(authentication),
+			"a session bound to the wider pattern must not survive it")
+		assert.False(t, store.CanSubscribeAuthenticated(authentication, auditQueue),
+			"the retired session must not consume even a still-permitted queue")
+	})
+}
+
+// A queue named exactly and the same queue reached through a pattern are
+// different grants, so a change from one to the other must revoke sessions.
+func TestPermissionsFingerprintSeparatesSubscribePatternFromExact(t *testing.T) {
+	dir := t.TempDir()
+	current := writeSecret(t, dir, "current", currentSecret)
+
+	fingerprintFor := func(t *testing.T, subscribe ...string) PermissionsFingerprint {
+		t.Helper()
+		principal := principalConfig(current, "")
+		principal.Role = config.LocalRoleService
+		principal.Permissions.Subscribe = subscribe
+		store, err := New([]config.LocalPrincipalConfig{principal})
+		require.NoError(t, err)
+		authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
+		require.True(t, ok)
+		return authentication.PermissionsFingerprint
+	}
+
+	exact := fingerprintFor(t, auditQueueRoot)
+	pattern := fingerprintFor(t, auditQueueRoot+".#")
+	assert.NotEqual(t, exact, pattern,
+		"a pattern must not share a digest with the exact queue it happens to grant")
+
+	assert.Equal(t, fingerprintFor(t, auditQueueRoot+".*"), fingerprintFor(t, auditQueueRoot+".+"),
+		"two spellings of one wildcard must share a digest")
 }
 
 // The two ACLs share one fingerprint, so swapping a target between them must

@@ -278,7 +278,34 @@ func (b *Broker) RecordLocalPrincipalReload(success bool) {
 
 // Publish routes a message to local AMQP 0.9.1 subscribers and remote cluster nodes.
 // It returns an error if cluster routing fails, so callers in confirm mode can NACK.
-func (b *Broker) Publish(topic string, payload []byte, props map[string]string) error {
+//
+// ctx bounds queue capture, cross-protocol delivery, and cluster routing so
+// none of them outlive the broker. It is the listener context the connection
+// was accepted under, so it is cancelled at server shutdown rather than when
+// the publishing peer disconnects.
+//
+// That is deliberate. The same context is handed to crossDeliver, which
+// delivers to other subscribers, so cancelling it when the publisher goes away
+// would drop a message the publisher already handed over into clients that are
+// still connected. A publication outlives its publisher by design; only broker
+// shutdown ends it.
+func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, props map[string]string) error { //nolint:contextcheck // ctx is propagated to capture, cross-deliver and cluster route
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// A capture failure never fails the publish: see
+	// corebroker.TopicQueuePublisher.
+	if publisher, ok := b.queueManager.(corebroker.TopicQueuePublisher); ok {
+		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
+			ClientID:   corebroker.ClientIDFromProperties(props),
+			Topic:      topic,
+			Payload:    payload,
+			Properties: props,
+		}); err != nil {
+			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
+		}
+	}
+
 	subs, err := b.router.Match(topic)
 	if err != nil {
 		b.logger.Error("router match failed", "topic", topic, "error", err)
@@ -297,7 +324,7 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 			continue
 		}
 		if b.crossDeliver != nil {
-			b.crossDeliver(context.Background(), sub.ClientID, topic, payload, sub.QoS, props)
+			b.crossDeliver(ctx, sub.ClientID, topic, payload, sub.QoS, props)
 		}
 	}
 
@@ -306,9 +333,11 @@ func (b *Broker) Publish(topic string, payload []byte, props map[string]string) 
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		// Derive from the caller's ctx so a closed connection or broker
+		// shutdown cancels in-flight cluster routes, but cap with a timeout.
+		routeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := cl.RoutePublish(ctx, topic, payload, 1, false, props); err != nil {
+		if err := cl.RoutePublish(routeCtx, topic, payload, 1, false, props); err != nil {
 			b.logger.Error("AMQP 0.9.1 cluster route publish failed", "topic", topic, "error", err)
 			return fmt.Errorf("cluster route publish: %w", err)
 		}

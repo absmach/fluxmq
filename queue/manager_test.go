@@ -33,9 +33,13 @@ var (
 
 const (
 	node1                = "node-1"
-	testAuditQueueName   = "atom.events"
-	testAuditQueueTopic  = "$queue/atom.events"
-	testAuditQueueFilter = "$queue/atom.events/#"
+	testAuditQueueName   = "audit.events"
+	testAuditQueueTopic  = "$queue/audit.events"
+	testAuditQueueFilter = "$queue/audit.events/#"
+	testCapturedTopic    = "m/domain/c/channel/tst"
+	testCaptureQueue     = "messages"
+	testCapturePublisher = "mqtt-publisher"
+	testReplicatedQueue  = "replicated"
 )
 
 type targetCheckingDeliverer struct {
@@ -776,8 +780,8 @@ func TestNarrowProtectedQueueContractsDoesNotReadStorage(t *testing.T) {
 	base := memlog.New()
 	audit := protectedAuditQueueConfig()
 	security := protectedAuditQueueConfig()
-	security.Name = "atom-security"
-	security.Topics = []string{"$queue/atom-security/#"}
+	security.Name = "audit-security"
+	security.Topics = []string{"$queue/audit-security/#"}
 	for _, contract := range []types.QueueConfig{audit, security} {
 		if err := base.CreateQueue(ctx, contract); err != nil {
 			t.Fatalf("create queue %q: %v", contract.Name, err)
@@ -871,12 +875,12 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 	}); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
 	}
-	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom.events sync:atom.events]" {
-		t.Fatalf("operations = %v, want append then sync for atom.events", operations)
+	if operations := store.Operations(); fmt.Sprint(operations) != "[append:audit.events sync:audit.events]" {
+		t.Fatalf("operations = %v, want append then sync for audit.events", operations)
 	}
 	auditTail, err := base.Tail(ctx, testAuditQueueName)
 	if err != nil || auditTail != 1 {
-		t.Fatalf("atom.events tail = %d, error = %v, want 1", auditTail, err)
+		t.Fatalf("audit.events tail = %d, error = %v, want 1", auditTail, err)
 	}
 	overlapTail, err := base.Tail(ctx, "overlap")
 	if err != nil || overlapTail != 0 {
@@ -945,8 +949,8 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 		wantErr        error
 		wantOperations string
 	}{
-		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom.events]"},
-		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom.events sync:atom.events]"},
+		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:audit.events]"},
+		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:audit.events sync:audit.events]"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1083,6 +1087,194 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
+	}
+}
+
+func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue messages failed: %v", err)
+	}
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("other", "other/#")); err != nil {
+		t.Fatalf("CreateQueue other failed: %v", err)
+	}
+
+	payload := []byte("original")
+	properties := map[string]string{"source": "device"}
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		ClientID:   testCapturePublisher,
+		Topic:      testCapturedTopic,
+		Payload:    payload,
+		Properties: properties,
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+
+	payload[0] = 'X'
+	properties["source"] = "mutated"
+
+	messageCount, err := logStore.Count(ctx, testCaptureQueue)
+	if err != nil {
+		t.Fatalf("Count messages failed: %v", err)
+	}
+	if messageCount != 1 {
+		t.Fatalf("expected one captured message, got %d", messageCount)
+	}
+	otherCount, err := logStore.Count(ctx, "other")
+	if err != nil {
+		t.Fatalf("Count other failed: %v", err)
+	}
+	if otherCount != 0 {
+		t.Fatalf("expected no message in unrelated queue, got %d", otherCount)
+	}
+
+	stored, err := logStore.Read(ctx, testCaptureQueue, 0)
+	if err != nil {
+		t.Fatalf("Read captured message failed: %v", err)
+	}
+	if got := string(stored.GetPayload()); got != "original" {
+		t.Fatalf("captured payload = %q, want original", got)
+	}
+	if got := stored.Properties["source"]; got != "device" {
+		t.Fatalf("captured source = %q, want device", got)
+	}
+	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
+		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   "unmatched/topic",
+		Payload: []byte("ignored"),
+	}); err != nil {
+		t.Fatalf("unmatched PublishToMatchingQueues failed: %v", err)
+	}
+	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); err != storage.ErrQueueNotFound {
+		t.Fatalf("unmatched publish created a queue: %v", err)
+	}
+}
+
+func TestPublishToMatchingQueuesRoutesCapturedStreamToRemoteConsumerOnce(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   testCaptureQueue,
+			GroupID:     "rules-engine@#",
+			ConsumerID:  "amqp091:remote@1",
+			ClientID:    "amqp091:remote",
+			Pattern:     "#",
+			Mode:        string(types.GroupModeStream),
+			ProxyNodeID: testNode2,
+		},
+	})
+
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), nil, mockCl)
+	ctx := context.Background()
+	config := types.DefaultQueueConfig(testCaptureQueue, "m/#")
+	config.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(ctx, config); err != nil {
+		t.Fatalf("CreateQueue messages failed: %v", err)
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+	mgr.deliverMessages()
+
+	routed := mockCl.GetRoutedMessages()
+	if len(routed) != 1 {
+		t.Fatalf("expected one remote delivery, got %d", len(routed))
+	}
+	if routed[0].nodeID != testNode2 {
+		t.Fatalf("remote delivery node = %q, want %q", routed[0].nodeID, testNode2)
+	}
+	if routed[0].queueName != testCaptureQueue {
+		t.Fatalf("remote delivery queue = %q, want messages", routed[0].queueName)
+	}
+	if got := routed[0].message.Topic; got != "$queue/messages/"+testCapturedTopic {
+		t.Fatalf("remote delivery topic = %q, want canonical queue address", got)
+	}
+	if calls := mockCl.GetForwardCalls(); len(calls) != 0 {
+		t.Fatalf("ordinary topic capture was also forwarded for remote append: %d calls", len(calls))
+	}
+}
+
+func TestPublishToExistingQueueDoesNotForwardSecondAppend(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mockCl := newMockCluster("node-1")
+	mockCl.SetQueueConsumers([]*cluster.QueueConsumerInfo{
+		{
+			QueueName:   "writers",
+			GroupID:     "timescale-writer@#",
+			ConsumerID:  "amqp091:remote@1",
+			ClientID:    "amqp091:remote",
+			Pattern:     "#",
+			Mode:        string(types.GroupModeStream),
+			ProxyNodeID: testNode2,
+		},
+	})
+
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), nil, mockCl)
+	ctx := context.Background()
+	config := types.DefaultQueueConfig("writers", "$queue/writers/#")
+	config.Type = types.QueueTypeStream
+	if err := mgr.CreateQueue(ctx, config); err != nil {
+		t.Fatalf("CreateQueue writers failed: %v", err)
+	}
+
+	if err := mgr.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/writers/domain/c/channel/tst",
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	mgr.deliverMessages()
+
+	if calls := mockCl.GetForwardCalls(); len(calls) != 0 {
+		t.Fatalf("known queue publish was forwarded for a second append: %d calls", len(calls))
+	}
+	if routed := mockCl.GetRoutedMessages(); len(routed) != 1 {
+		t.Fatalf("expected one routed queue delivery, got %d", len(routed))
+	}
+}
+
+func TestStartPropagatesDistributionFallbackToDeliveryEngine(t *testing.T) {
+	config := DefaultConfig()
+	config.DistributionMode = DistributionReplicate
+	mgr := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		nil,
+		config,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		newMockCluster("node-1"),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		if err := mgr.Stop(); err != nil {
+			t.Errorf("Stop failed: %v", err)
+		}
+	})
+
+	if mgr.distributionMode != DistributionForward {
+		t.Fatalf("manager distribution mode = %q, want %q", mgr.distributionMode, DistributionForward)
+	}
+	if mgr.delivery.distributionMode != DistributionForward {
+		t.Fatalf("delivery distribution mode = %q, want %q", mgr.delivery.distributionMode, DistributionForward)
 	}
 }
 
@@ -2459,6 +2651,39 @@ func TestDeliverQueueMessage(t *testing.T) {
 	}
 }
 
+func TestDeliverQueueMessageCanonicalizesCapturedTopic(t *testing.T) {
+	var deliveredMsg *brokerstorage.Message
+	manager := NewManager(
+		memlog.New(),
+		newMockGroupStore(),
+		DeliveryTargetFunc(func(_ context.Context, _ string, msg *brokerstorage.Message) error {
+			deliveredMsg = msg
+			return nil
+		}),
+		DefaultConfig(),
+		nil,
+		nil,
+	)
+
+	err := manager.DeliverQueueMessage(context.Background(), "target-client", &cluster.QueueMessage{
+		MessageID: "m:1",
+		QueueName: "m",
+		GroupID:   "rules-engine",
+		Topic:     testCapturedTopic,
+		Payload:   []byte("payload"),
+		Sequence:  1,
+	})
+	if err != nil {
+		t.Fatalf("DeliverQueueMessage failed: %v", err)
+	}
+	if deliveredMsg == nil {
+		t.Fatal("expected delivered message")
+	}
+	if want := "$queue/" + testCapturedTopic; deliveredMsg.Topic != want {
+		t.Fatalf("delivered topic = %q, want %q", deliveredMsg.Topic, want)
+	}
+}
+
 func TestGetOrCreateQueue_CreatesEphemeral(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
@@ -3232,5 +3457,274 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 	}
 	if string(msg.GetPayload()) != "data" {
 		t.Fatalf("expected 'data', got %s", string(msg.GetPayload()))
+	}
+}
+
+// appendFailingStore fails Append for one queue, standing in for a queue whose
+// storage is unavailable while the rest of the broker is healthy.
+type appendFailingStore struct {
+	storage.QueueStore
+	failQueue string
+}
+
+func (s *appendFailingStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+	if queueName == s.failQueue {
+		return 0, errors.New("storage unavailable")
+	}
+	return s.QueueStore.Append(ctx, queueName, msg)
+}
+
+// Capture never fails the publish, so the counter is the only durable signal
+// that a queue is dropping the traffic its pattern binds. A capture that cannot
+// be stored must therefore be both reported to the caller and counted.
+func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
+	logStore := memlog.New()
+	store := &appendFailingStore{QueueStore: logStore, failQueue: testCaptureQueue}
+	mgr := NewManager(store, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue messages failed: %v", err)
+	}
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("healthy", "h/#")); err != nil {
+		t.Fatalf("CreateQueue healthy failed: %v", err)
+	}
+
+	if got := mgr.GetMetrics().CaptureFailures; got != 0 {
+		t.Fatalf("initial capture failures = %d, want 0", got)
+	}
+
+	err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	})
+	if err == nil {
+		t.Fatal("expected the capture failure to be reported to the caller")
+	}
+	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
+		t.Fatalf("capture failures = %d, want 1", got)
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   "h/acme/temp",
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("healthy queue capture failed: %v", err)
+	}
+	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
+		t.Fatalf("a healthy capture changed the failure counter to %d", got)
+	}
+	count, err := logStore.Count(ctx, "healthy")
+	if err != nil {
+		t.Fatalf("Count healthy failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("healthy queue stored %d messages, want 1", count)
+	}
+}
+
+// PublishToMatchingQueues stores what it is given, so it must take ownership of
+// the caller's payload and properties. An empty non-nil map is still the
+// caller's map, and normalizing the request writes a client ID into whatever it
+// is handed, so cloning only non-empty maps would mutate a protocol broker's
+// own state.
+func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
+	logStore := memlog.New()
+	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	properties := map[string]string{}
+	payload := []byte("original")
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		ClientID:   testCapturePublisher,
+		Topic:      testCapturedTopic,
+		Payload:    payload,
+		Properties: properties,
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+
+	if len(properties) != 0 {
+		t.Fatalf("caller's property map was written to: %v", properties)
+	}
+
+	// The stored copy must survive the caller reusing its buffer.
+	payload[0] = 'X'
+	stored, err := logStore.Read(ctx, testCaptureQueue, 0)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if got := string(stored.GetPayload()); got != "original" {
+		t.Fatalf("stored payload = %q, want original", got)
+	}
+	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
+		t.Fatalf("stored client ID = %q, want mqtt-publisher", got)
+	}
+}
+
+// Matching queues are independent targets. A publish reaching one that cannot
+// accept it must still reach the others: capture is broker policy applied to
+// every matching queue, so letting the first failure decide the outcome would
+// let one unavailable queue silently suppress capture into healthy ones.
+func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
+	logStore := memlog.New()
+	coordinator := &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{testReplicatedQueue: true},
+		leaderByQueue:     map[string]bool{testReplicatedQueue: false},
+	}
+
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyReject
+	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mgr.raftCoordinator = coordinator
+	ctx := context.Background()
+
+	// A replicated queue with no reachable leader, which the reject policy
+	// refuses, alongside two ordinary queues that must still be appended to.
+	replicated := types.DefaultQueueConfig(testReplicatedQueue, "m/#")
+	replicated.Replication.Enabled = true
+	if err := mgr.CreateQueue(ctx, replicated); err != nil {
+		t.Fatalf("CreateQueue replicated failed: %v", err)
+	}
+	for _, name := range []string{"healthy-a", "healthy-b"} {
+		if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(name, "m/#")); err != nil {
+			t.Fatalf("CreateQueue %s failed: %v", name, err)
+		}
+	}
+
+	err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	})
+	if err == nil {
+		t.Fatal("expected the refused replicated target to be reported")
+	}
+
+	for _, name := range []string{"healthy-a", "healthy-b"} {
+		count, countErr := logStore.Count(ctx, name)
+		if countErr != nil {
+			t.Fatalf("Count %s failed: %v", name, countErr)
+		}
+		if count != 1 {
+			t.Fatalf("queue %s stored %d messages, want 1; a failing target suppressed a healthy one", name, count)
+		}
+	}
+	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
+		t.Fatalf("capture failures = %d, want 1", got)
+	}
+}
+
+// unreadableQueueStore resolves a queue in the topic index but fails to return
+// its configuration, so the target is dropped before any append is attempted.
+type unreadableQueueStore struct {
+	storage.QueueStore
+	failQueue string
+}
+
+func (s *unreadableQueueStore) GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error) {
+	if queueName == s.failQueue {
+		return nil, errors.New("configuration unreadable")
+	}
+	return s.QueueStore.GetQueue(ctx, queueName)
+}
+
+// A target dropped before the append is as much a lost message as a failed
+// append, so it must move the counter the monitoring contract points operators at.
+func TestPublishToMatchingQueuesCountsUnresolvedTargets(t *testing.T) {
+	logStore := memlog.New()
+	store := &unreadableQueueStore{QueueStore: logStore, failQueue: testCaptureQueue}
+	mgr := NewManager(store, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(testCaptureQueue, "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err != nil {
+		t.Fatalf("PublishToMatchingQueues failed: %v", err)
+	}
+
+	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
+		t.Fatalf("capture failures = %d, want 1; a dropped target was invisible", got)
+	}
+}
+
+// An addressed publish under the reject write policy promises that nothing was
+// written: the caller is expected to retry against the leader, so a local append
+// that happened anyway would be duplicated by that retry. Capture shares the
+// fanout code but not that promise.
+func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
+	logStore := memlog.New()
+	coordinator := &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{testReplicatedQueue: true},
+		leaderByQueue:     map[string]bool{testReplicatedQueue: false},
+	}
+
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyReject
+	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mgr.raftCoordinator = coordinator
+	ctx := context.Background()
+
+	replicated := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
+	replicated.Replication.Enabled = true
+	if err := mgr.CreateQueue(ctx, replicated); err != nil {
+		t.Fatalf("CreateQueue replicated failed: %v", err)
+	}
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("local", "$queue/replicated/#")); err != nil {
+		t.Fatalf("CreateQueue local failed: %v", err)
+	}
+
+	err := mgr.Publish(ctx, types.PublishRequest{
+		Topic:   "$queue/replicated/item",
+		Payload: []byte("payload"),
+	})
+	if err == nil {
+		t.Fatal("expected the reject write policy to refuse the publish")
+	}
+
+	count, countErr := logStore.Count(ctx, "local")
+	if countErr != nil {
+		t.Fatalf("Count local failed: %v", countErr)
+	}
+	if count != 0 {
+		t.Fatalf("local queue stored %d messages; a rejected publish must write nothing", count)
+	}
+}
+
+// The counter's unit is the publish, not the queue, so a publish that misses
+// several matching queues in several ways still moves it exactly once.
+func TestPublishToMatchingQueuesCountsOncePerPublish(t *testing.T) {
+	logStore := memlog.New()
+	store := &unreadableQueueStore{QueueStore: &appendFailingStore{QueueStore: logStore, failQueue: "broken"}, failQueue: testCaptureQueue}
+	mgr := NewManager(store, newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	// One target whose configuration cannot be read and one whose append fails,
+	// so both counted paths are exercised by a single publish.
+	for _, name := range []string{testCaptureQueue, "broken"} {
+		if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(name, "m/#")); err != nil {
+			t.Fatalf("CreateQueue %s failed: %v", name, err)
+		}
+	}
+
+	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
+		Topic:   testCapturedTopic,
+		Payload: []byte("payload"),
+	}); err == nil {
+		t.Fatal("expected the failing append to be reported")
+	}
+
+	if got := mgr.GetMetrics().CaptureFailures; got != 1 {
+		t.Fatalf("capture failures = %d, want 1; the counter is per publish", got)
 	}
 }

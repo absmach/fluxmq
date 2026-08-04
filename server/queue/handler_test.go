@@ -179,7 +179,7 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 func TestProtectedQueueAdminUpdateAndDeleteFailPrecondition(t *testing.T) {
 	ctx := context.Background()
 	store := memlog.New()
-	contract := types.DefaultQueueConfig("atom.events", "$queue/atom.events/#")
+	contract := types.DefaultQueueConfig("audit.events", "$queue/audit.events/#")
 	contract.Type = types.QueueTypeStream
 	contract.Reserved = true
 	contract.Retention.RetentionTime = 30 * 24 * time.Hour

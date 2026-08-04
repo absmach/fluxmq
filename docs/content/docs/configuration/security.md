@@ -85,29 +85,29 @@ server:
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
       key_file: "/run/secrets/fluxmq_server_key"
-      ca_file: "/run/secrets/atom_client_ca"
+      ca_file: "/run/secrets/local_client_ca"
       client_auth: "require"
       min_version: "TLS1.2"
 
 auth:
   local_principals:
-    - name: "atom-audit-publisher"
-      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+    - name: "audit-publisher"
+      certificate_uri_san: "spiffe://example.org/audit-publisher"
       role: "publisher"
-      current_secret_file: "/run/secrets/atom_audit_secret_current"
-      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      current_secret_file: "/run/secrets/audit_secret_current"
+      previous_secret_file: "/run/secrets/audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom.events"
+            routing_key: "audit.events"
         subscribe: []
 ```
 
 The local listener requires a CA-verified certificate URI SAN, SASL
 username, and local secret to match one configured principal. Permissions are
-explicit allowlists of exact routing keys, routing-key prefixes, and exact
-subscription queues. Port `5683` must remain on a private network and must
-not be published to the host or Internet.
+explicit allowlists of exact routing keys, routing-key prefixes, and
+subscription queues named exactly or by pattern. Port `5683` must remain on a
+private network and must not be published to the host or Internet.
 
 An **exact** publish target is single-node only. It is appended and synced on
 the receiving node and never forwarded, so granting one together with
@@ -115,10 +115,19 @@ the receiving node and never forwarded, so granting one together with
 consumers cannot reach. `cluster.enabled` defaults to true, so a principal
 holding an exact target needs it set to false explicitly.
 
-A **prefix** publish target names no queue and is an ordinary topic publish,
-which the cluster forwards like any other message, so a principal holding only
-prefix permissions runs clustered without restriction. The permission decides
-this, exactly as it decides how the publication is routed.
+A **prefix** publish target cannot name a queue, so it never takes that
+single-node durable path: it is an ordinary topic publish, which the cluster
+forwards like any other message, and a principal holding only prefix permissions
+runs clustered without restriction. The permission decides this, exactly as it
+decides how the publication is routed.
+
+A prefix publication may still be captured by a queue whose `topics` pattern
+matches it, and that append is not forwarded to nodes that already know the
+queue — remote consumers are served by the delivery engine instead. The startup
+rule does not gate that, deliberately: capture applies to every publisher on
+every protocol, so refusing a local principal for it would single out the one
+publisher whose behavior is declared in configuration. What the rule gates is
+the durable-stream path, which bypasses cluster distribution by design.
 
 The same rule is applied to reloads against the running node rather than the
 new file. `auth.local_principals` reloads at runtime while `cluster.enabled` and
@@ -245,13 +254,60 @@ warning naming any that are still in use. They exist because capability used to
 be a property of the listener; it is now a property of the principal, so the
 distinction they drew no longer means anything.
 
-`subscribe` names exact queues; wildcards, duplicates, blank entries, and
-surrounding whitespace are rejected at load. A principal declaring no
+`subscribe` names queues, either exactly or by pattern; duplicates, blank
+entries, surrounding whitespace, malformed wildcards, and entries written as
+queue addresses (`$queue/m`) are rejected at load. A principal declaring no
 `subscribe` entry is refused a consumer even with the `service` role, and one
 declaring no `publish` entry cannot publish. Unlike exact publish targets,
 subscribe targets need no matching `queues` entry: the durability contract those
 carry exists because local publishes are acknowledged as crash-durable, which
 does not apply to reading.
+
+#### Subscribe patterns
+
+A queue name is a dot-separated namespace, and a service often consumes a family
+of queues whose names it cannot enumerate in broker configuration for the same
+reason a publisher cannot enumerate tenant identifiers. A subscribe entry may
+therefore carry wildcards:
+
+```yaml
+        subscribe:
+          - m.*.events    # one level:      m.acme.events, not m.acme.eu.events
+          - audit.#       # zero or more:   audit, audit.write, audit.write.raw
+          - audit.events   # exact
+```
+
+Levels are separated by `.`, `#` is the multi-level wildcard, and `*` and `+`
+are both the single-level one — which of those two a service writes follows the
+protocol it speaks rather than what it is asking for, so `m.*.events` and
+`m.+.events` are one grant. As in MQTT, `#` also matches its own root, so
+`audit.#` grants `audit` itself.
+
+Only `.` separates levels. A queue name is a name rather than an address, and
+nothing constrains the characters in one, so `/` and a leading `$` are ordinary
+characters: a queue may legitimately be called `a/b` or `$internal`, and an entry
+names it literally. An entry written `audit/+` is therefore a malformed
+single-level name rather than a pattern, and is rejected as one. Only the
+`$queue/` address prefix is refused, because an entry beginning with it names no
+queue and would grant nothing.
+
+The trade is that `*`, `+` and `#` cannot appear literally in a queue name an
+entry names, which is the same trade every wildcard syntax makes.
+
+The wildcard applies only to the ACL. The queue a client asks for is always
+treated as a literal name, so a caller cannot widen an exact grant by asking for
+a queue whose name reads as a filter.
+
+Keep a pattern as narrow as the service's queue namespace allows: its
+non-wildcard levels are what separate one service's reach from another's. Unlike
+`routing_key_prefix`, which is a wildcard by construction and so must never be
+written as one, a subscribe pattern states exactly what it grants.
+
+Patterns join the permissions fingerprint in their own right, so an exact entry
+and a pattern that happens to match the same queue today are different grants:
+replacing `audit.#` with `audit.events` revokes the sessions authenticated under
+the wider one, as narrowing any ACL does. Respelling `*` as `+` is not a change
+and revokes nothing.
 
 A subscribe permission grants reads and nothing else. `basic.consume` is
 allowed for the queues it names, and `queue.declare` is allowed only in its
@@ -291,12 +347,39 @@ to `m.<domain>.c.<channel>.<subtopic>` is the motivating case.
 The permission that matched decides how the publication is delivered. An exact
 target is appended to its protected stream and synced before the publisher
 confirm; a prefix match is always routed as an ordinary topic publish and
-carries no durability barrier. A prefix grant can never reach a queue, whatever
-routing key it covers — not through a `$queue/`-shaped prefix, and not through a
-routing key that happens to name a configured stream — because it was authorized
-against no `queues` entry. This is a property of the permission, not of the port
-the principal connected to, so one `permissions.publish` entry means the same
-thing everywhere.
+carries no durability barrier. A prefix grant can never *address* a queue,
+whatever routing key it covers — not through a `$queue/`-shaped prefix, and not
+through a routing key that happens to name a configured stream — because it was
+authorized against no `queues` entry. This is a property of the permission, not
+of the port the principal connected to, so one `permissions.publish` entry means
+the same thing everywhere.
+
+#### Local principals and capture
+
+Not addressing a queue is not the same as not reaching one. A queue whose
+`topics` pattern matches an ordinary topic captures every publish on it, and a
+prefix-authorized publication is an ordinary topic publish like any other. A
+principal holding `routing_key_prefix: "m."` is therefore persisted into a queue
+configured as `topics: ["m/#"]`, exactly as an MQTT client publishing the same
+topic would be. See [Capturing Ordinary Topics](/messaging/durable-queues#capturing-ordinary-topics).
+
+This is deliberate, and it is why the two mechanisms answer different questions:
+
+- **`permissions.publish` decides what a principal may publish.** It is about
+  topics and routing keys, and it is the only thing the ACL constrains.
+- **`queues[].topics` decides what gets persisted, for every publisher.** It is
+  not part of any ACL and applies uniformly across protocols and auth modes.
+
+The practical consequence is that a principal's write reach is not readable from
+its ACL alone. Adding a queue pattern grants persistence to every publisher
+already permitted on those topics, with no ACL edit, no permissions-fingerprint
+change, and therefore no session revocation. **Treat `queues[].topics` as a
+security-relevant setting** and review it alongside the ACLs it silently widens.
+
+The exact-target path is unaffected: it names one protected stream, requires a
+matching `queues` entry, and is appended and synced before the confirm. That
+contract is what the exact form exists to carry, and pattern capture neither
+provides nor weakens it.
 
 A prefix is a wildcard by construction and must never be written as one:
 `m.#` is rejected, because accepting it would silently grant the literal `#`
