@@ -250,7 +250,7 @@ queue_manager:
 | `auto_commit_interval`  | `5s`    | Stream-group auto-commit cadence. `0` means commit on every delivery batch. |
 | `capture_workers`       | `4`     | Lanes writing captured publishes off the publish path. A queue is always handled by the same lane, so its appends keep publish order. Lanes are shared: queues are hashed onto them, so a stalled queue also stalls the unrelated queues sharing its lane until its backlog fills. Raise this where many queues bind ordinary topics and one may block. `0` selects the default. |
 | `capture_queue_depth`   | `1024`  | Per-lane backlog, counted in **jobs, not bytes**. The memory ceiling is `capture_workers × capture_queue_depth` payloads, so lower it when capturing large messages. When a lane fills, the newest job is dropped and counted in `queues.capture_dropped`. `0` selects the default. |
-| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. `0` selects the default. |
+| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. If a worker is still inside an append when it expires, shutdown is reported unclean and the cluster, queue log store and broker store are all left open, since the worker may still be using them — on `badger` that means the broker store is not flushed and the next start replays. Raise this if that becomes routine. `0` selects the default. |
 
 Capture never blocks the publish path: see [Capturing Ordinary Topics](/messaging/durable-queues#capturing-ordinary-topics).
 

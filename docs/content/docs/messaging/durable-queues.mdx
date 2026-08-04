@@ -279,12 +279,30 @@ On shutdown the dispatcher drains what it has queued, bounded by
 `capture_dropped` like any other loss.
 
 An append already in progress cannot be interrupted — the queue store takes no
-context — so a worker may still be inside one when that budget expires. The
-broker then reports an unclean shutdown and **deliberately leaves the queue store
-open**, because closing it underneath an in-flight append would corrupt a segment
-that worker still holds. The handle is leaked into process exit instead, which is
-the cheaper failure. A log line names the cause when this happens. Raise
-`capture_drain_timeout` if a slow store makes it routine.
+context — so a worker may still be inside one when that budget expires. The broker
+then reports an unclean shutdown and **deliberately releases nothing that worker
+could still be using**, because closing a store underneath an in-flight append
+corrupts a segment it holds. Three things are left as they are:
+
+| Left open | Why it is reachable from a stuck capture |
+| --- | --- |
+| Cluster | A capture job forwards to nodes holding queues this one does not know, so a worker may still be using the transport. |
+| Queue log store | The append itself. |
+| Broker store | The cluster holds it, so it is reachable through the forward above. |
+
+They are leaked into process exit instead, which is the cheaper failure. A log
+line names the cause.
+
+<Callout type="warn">
+  On the `badger` storage backend this means the **broker** store is not closed
+  cleanly either, so session and retained writes are not flushed and the next
+  start replays the value log to recover them. A queue whose storage stalls
+  therefore costs more than that queue: raise `capture_drain_timeout` if a slow
+  store makes unclean shutdown routine, rather than treating it as harmless.
+</Callout>
+
+When shutdown is clean, the three are released in that same order — cluster
+first, so no request arrives for a store that is closing.
 
 The one job a worker is still writing is not counted in `capture_dropped`: its
 outcome is genuinely unknown, since the append may yet succeed, and the worker
